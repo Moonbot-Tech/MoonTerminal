@@ -69,7 +69,7 @@ impl SettingsView {
                         t!("telegram.mini_settings_loss_at_least").to_string(),
                     )),
             )
-            .child(
+            .child(crate::settings::common::cap_prose(
                 div().text_color(muted).child(
                     t!(
                         "telegram.notify_editor.charts_hint",
@@ -77,7 +77,8 @@ impl SettingsView {
                     )
                     .to_string(),
                 ),
-            )
+                cx,
+            ))
             .into_any_element()
     }
 }

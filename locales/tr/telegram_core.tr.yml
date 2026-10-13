@@ -4,7 +4,6 @@ _version: 1
 
 telegram_core.section: "Çekirdekteki Telegram"
 
-telegram_core.intro: "Seçilen çekirdekteki yerleşik Telegram okuyucusunu yönetin. Durum çekirdeğe aittir, bu terminale değil."
 
 telegram_core.core_pick: "Çekirdek"
 
@@ -38,7 +37,6 @@ telegram_core.disconnected: "Çekirdek bağlı değil."
 
 telegram_core.no_snapshot: "Durum anlık görüntüsü yok."
 
-telegram_core.proxy_section: "Proxy"
 
 telegram_core.proxy_kind_none: "Proxy yok"
 
@@ -56,7 +54,6 @@ telegram_core.proxy_password: "Parola"
 
 telegram_core.proxy_secret: "Gizli anahtar"
 
-telegram_core.proxy_save: "Proxy'yi kaydet"
 
 telegram_core.proxy_secret_hint: "Çekirdek kayıtlı parolayı veya gizli anahtarı geri vermez, yeniden yazın. Boş bırakmak eskisini tutmaz, siler."
 
@@ -73,7 +70,6 @@ telegram_core.phone_hint: "Uluslararası biçim, örneğin +905551234567."
 
 telegram_core.phone_send: "Numarayı gönder"
 
-telegram_core.login_qr: "Bunun yerine QR ile gir"
 
 telegram_core.login_phone: "Bunun yerine telefon numarası kullan"
 
@@ -184,3 +180,17 @@ telegram_core.code_kind.fragment: "Fragment: %{url}"
 telegram_core.code_kind.unsupported: "Bu teslim yöntemi desteklenmiyor."
 
 telegram_core.code_kind.other: "%{kind}"
+
+# Settings redesign (phases 3-5)
+tgcore.steps.phone: "Telefon numarası"
+tgcore.steps.code: "Telegram'dan gelen kod"
+tgcore.steps.password: "Bulut parolası"
+tgcore.steps.done: "Bağlandı"
+tgcore.steps.email: "Giriş e-postası"
+tgcore.steps.registration: "Hesap kayıtlı değil"
+tgcore.steps.premium_required: "Telegram Premium gerekli"
+tgcore.steps.waiting: "Çekirdek bekleniyor…"
+tgcore.steps.unknown: "Bilinmeyen giriş adımı"
+tgcore.qr_login: "QR koduyla giriş yap"
+tgcore.proxy.title: "Proxy"
+tgcore.proxy.send: "Çekirdeğe gönder"

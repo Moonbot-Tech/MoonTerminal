@@ -271,3 +271,36 @@ fn a_standalone_file_opens_only_on_its_own_machine() {
         AccessError::NoKey
     ));
 }
+
+/// A password slot added after a snapshot is gone again once the snapshot is restored, with the
+/// rewrite flag it had; a snapshot of an unopened vault restores nothing.
+#[test]
+fn restoring_a_header_snapshot_undoes_slot_edits_made_after_it() {
+    let file_key = wrap::new_file_key().unwrap();
+    let mut vault = Vault::Open(Material {
+        key: Zeroizing::new(*file_key),
+        header: Header::new(),
+        needs_rewrite: false,
+    });
+    let before = snapshot_of(&vault);
+    if let Vault::Open(material) = &mut vault {
+        material
+            .header
+            .set_password_slot(Some(test_password_slot(&file_key, "pw")));
+        material.needs_rewrite = true;
+    }
+    restore_into(&mut vault, before);
+    let Vault::Open(material) = &vault else {
+        panic!("vault stays open");
+    };
+    assert!(!material.header.has_password_slot());
+    assert!(!material.needs_rewrite);
+
+    let mut unopened = Vault::Unopened;
+    restore_into(&mut unopened, snapshot_of(&Vault::Unopened));
+    assert!(matches!(unopened, Vault::Unopened));
+    assert_eq!(
+        format!("{:?}", snapshot_of(&vault)),
+        "HeaderSnapshot(<redacted>)"
+    );
+}

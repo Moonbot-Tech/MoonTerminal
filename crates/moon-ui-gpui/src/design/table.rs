@@ -31,20 +31,6 @@ pub fn table_head_h(cx: &App) -> f32 {
     MoonTheme::active_tokens(cx).table_header_height()
 }
 
-/// The unfitted `MoonDataTable` header-base tier metric, in `Pixels`, for a caller that draws its
-/// own header row rather than letting `MoonDataTable` draw it. Standard renders today's base
-/// number exactly; fitting remains the caller's responsibility because this helper does not apply
-/// the component's font-height adjustment.
-///
-/// Args:
-///     cx: Application context used to read active theme tokens.
-///
-/// Returns:
-///     The tier's header base put through the UI-zoom channel.
-pub fn table_head_base_px(cx: &App) -> Pixels {
-    ui_px(cx, MoonTheme::active_tokens(cx).table_header_base())
-}
-
 /// Return the current text-container width scale relative to the theme base.
 ///
 /// [`ui_value`] of [`BODY_TEXT`], divided by [`base_text`]: 14 / 11 at the default typography.

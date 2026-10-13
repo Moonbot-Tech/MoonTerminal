@@ -9,7 +9,7 @@ use rusqlite::{Connection, types::Value};
 
 use super::groups::group_quote_scope;
 use super::strategy_meta::{StrategyMetadata, SummaryMetadata, read_metadata};
-use super::{CoreSeries, DayPoint, GroupStat, KindCore, KindStat, PeriodStats, Query, TopTrade};
+use super::{CoreSeries, DayPoint, GroupStat, PeriodStats, Query, TopTrade};
 use crate::db::metrics::profit_factor;
 use crate::db::read_fail::{read_fail, read_fail_on};
 use crate::db::report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS};
@@ -36,7 +36,6 @@ pub(super) struct SummaryParts {
     pub(super) strategies: Vec<GroupStat>,
     pub(super) coins: Vec<GroupStat>,
     pub(super) best_hour: Option<(u32, f64, i64)>,
-    pub(super) kinds: Vec<KindStat>,
 }
 
 /// Raw-money fields accumulated independently of the active Analytics lens.
@@ -175,6 +174,12 @@ struct TradeRow {
 struct CoreAccumulator {
     name: String,
     buckets: HashMap<i64, (f64, i64)>,
+    /// Count of strictly profitable trades for the core.
+    wins: i64,
+    /// Sum of strictly positive trade profits.
+    win_sum: f64,
+    /// Absolute sum of non-positive trade profits.
+    loss_sum: f64,
 }
 
 /// Intermediate current-period state filled by one chronological row stream.
@@ -285,6 +290,12 @@ impl Accumulator {
         let core_bucket = core.buckets.entry(bucket_start).or_default();
         core_bucket.0 += profit;
         core_bucket.1 += 1;
+        if profit > 0.0 {
+            core.wins += 1;
+            core.win_sum += profit;
+        } else {
+            core.loss_sum -= profit;
+        }
 
         let strategy_key = match (&row.strategy_text, row.core_uid) {
             (Some(strategy_text), Some(core_uid)) => format!("{strategy_text}@{core_uid}"),
@@ -609,7 +620,6 @@ fn current_stream_sql(src: &str, true_time: &str, inline_raw: &str) -> String {
 ///     raw_src: Optional lens-neutral source used only for Percent raw enrichments.
 ///     q: Concrete Summary query.
 ///     bucket: Hour, day, or week bucket size.
-///     include_kinds: Whether the one-day kind chart is visible.
 ///     has_names: Whether the attached strategy database can enrich labels.
 ///
 /// Returns:
@@ -621,7 +631,6 @@ pub(super) fn read(
     q: &Query,
     axis: &crate::db::ReportAxis,
     bucket: i64,
-    include_kinds: bool,
     has_names: bool,
 ) -> ReadResult<SummaryParts> {
     // Widen the window at wide spans so the SQL scan count stays bounded too, not only the
@@ -643,7 +652,6 @@ pub(super) fn read(
         axis,
         StreamReadConfig {
             bucket,
-            include_kinds,
             has_names,
             query_window_secs,
         },
@@ -655,8 +663,6 @@ pub(super) fn read(
 struct StreamReadConfig {
     /// Hour, day, or week bucket size.
     bucket: i64,
-    /// Whether the one-day kind chart is visible.
-    include_kinds: bool,
     /// Whether the attached strategy database can enrich labels.
     has_names: bool,
     /// Positive maximum true-UTC span sorted by one statement execution.
@@ -696,7 +702,6 @@ fn read_with_window(
     const CTX: &str = "analytics: summary current stream";
     let StreamReadConfig {
         bucket,
-        include_kinds,
         has_names,
         query_window_secs,
     } = config;
@@ -801,11 +806,6 @@ fn read_with_window(
         .max_by(|left, right| left.1.0.total_cmp(&right.1.0))
         .map(|(hour, (profit, trades))| (hour as u32, *profit, *trades));
     let core_days = finish_cores(&accumulator.cores, &accumulator.days);
-    let kinds = if include_kinds {
-        finish_kinds(&accumulator.strategies, metadata.groups.as_ref())
-    } else {
-        Vec::new()
-    };
     let strategies = finish_groups(
         accumulator.strategies,
         (!raw_strategies.is_empty()).then_some(&raw_strategies),
@@ -833,7 +833,6 @@ fn read_with_window(
         strategies,
         coins,
         best_hour,
-        kinds,
     })
 }
 
@@ -912,6 +911,9 @@ fn finish_cores(cores: &HashMap<u64, CoreAccumulator>, days: &[DayPoint]) -> Vec
                 name: core.name.clone(),
                 total: per_bucket.iter().sum(),
                 trades: per_bucket_trades.iter().sum(),
+                wins: core.wins,
+                win_sum: core.win_sum,
+                loss_sum: core.loss_sum,
                 per_bucket,
                 per_bucket_trades,
             }
@@ -1081,59 +1083,4 @@ fn finish_top(
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|error| read_fail("analytics: summary top rows", error))?;
     Ok((best, worst))
-}
-
-/// Fold strategy/core aggregates into the one-day kind chart.
-///
-/// Args:
-///     groups: Strategy aggregates carrying core identity and profit.
-///     metadata: Optional version metadata supplying strategy kinds.
-///
-/// Returns:
-///     Kind aggregates ordered by profit, each with ordered core contributions.
-fn finish_kinds(
-    groups: &HashMap<String, GroupAccumulator>,
-    metadata: Option<&HashMap<(i64, i64), StrategyMetadata>>,
-) -> Vec<KindStat> {
-    let mut kinds = HashMap::<String, HashMap<i64, KindCore>>::new();
-    for group in groups.values() {
-        let pair = group.strategy_id.zip(group.strategy_core);
-        let kind = metadata
-            .and_then(|all| pair.and_then(|pair| all.get(&pair)))
-            .map(|item| item.kind.clone())
-            .unwrap_or_default();
-        let core_uid = group.strategy_core.unwrap_or_default();
-        let core = kinds
-            .entry(kind)
-            .or_default()
-            .entry(core_uid)
-            .or_insert(KindCore {
-                uid: core_uid as u64,
-                name: group.core_name.clone().unwrap_or_default(),
-                profit: 0.0,
-                trades: 0,
-            });
-        if let Some(name) = &group.core_name {
-            if name > &core.name {
-                core.name = name.clone();
-            }
-        }
-        core.profit += group.profit;
-        core.trades += group.n;
-    }
-    let mut output = kinds
-        .into_iter()
-        .map(|(kind, cores)| {
-            let mut cores = cores.into_values().collect::<Vec<_>>();
-            cores.sort_by(|left, right| right.profit.total_cmp(&left.profit));
-            KindStat {
-                kind,
-                profit: cores.iter().map(|core| core.profit).sum(),
-                trades: cores.iter().map(|core| core.trades).sum(),
-                cores,
-            }
-        })
-        .collect::<Vec<_>>();
-    output.sort_by(|left, right| right.profit.total_cmp(&left.profit));
-    output
 }

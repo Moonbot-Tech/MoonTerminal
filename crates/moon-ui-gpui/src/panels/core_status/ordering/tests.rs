@@ -1,4 +1,4 @@
-//! Tests for the By IP group sort comparator.
+//! Tests for flat-row order and exchange-section aggregates.
 //!
 //! Explicit imports (no `use super::*`) per the crate's test convention: the panel's parent module
 //! re-exports `gpui::*`, whose own `test` would shadow the built-in attribute.
@@ -12,15 +12,9 @@ use moon_core::feed::{ConnStatus, CoreTimeOffsetStatus};
 use moon_core::session::{CoreStartupStatus, CoreSysStatus};
 use moon_core::venue::CoreVenue;
 
-use super::{
-    FlatLine, GroupSortField, compare_flat_rows, compare_groups, flat_lines, restore_flat_sort,
-    restore_group_sort,
-};
+use super::{FlatLine, compare_flat_rows, flat_lines, restore_flat_sort, section_aggregate};
 use crate::backend::core_warn::LatencySeverity;
-use crate::panels::core_status::model::{
-    ApiKeyState, CoreStatusRow, GroupUpdate, GroupVersion, ServerConnectivity, ServerKey,
-    ServerStatusGroup, TzOffsetGroup,
-};
+use crate::panels::core_status::model::{ApiKeyState, CoreStatusRow};
 
 /// Build one core row carrying only an API-key state: `Some(days)` is a dated key, `None` is a core
 /// nothing is known about (no answer, or an answer with no usable date).
@@ -34,7 +28,6 @@ fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
         sys: CoreSysStatus::default(),
         endpoint: None,
         ping_warn: false,
-        exch_warn: false,
         ping_sev: LatencySeverity::Normal,
         exch_sev: LatencySeverity::Normal,
         api_key: days.map_or(ApiKeyState::Unknown, ApiKeyState::Days),
@@ -80,150 +73,6 @@ fn version_orders_the_letter_after_the_number() {
     );
     assert_eq!(compare_flat_rows(&bare, &named, "version"), Ordering::Less);
     assert_eq!(compare_flat_rows(&older, &bare, "version"), Ordering::Less);
-}
-
-/// Build a minimal server group with the fields the comparator reads; `rtts` sets each core's
-/// round-trip (and whether it is Ready), so `worst_latency`'s Ready gate can be exercised.
-fn group(
-    name: &str,
-    cpu: Option<u8>,
-    proc_mb: Option<u64>,
-    free_mb: Option<u16>,
-    rtts: &[(u32, bool)],
-) -> ServerStatusGroup {
-    let cores = rtts
-        .iter()
-        .enumerate()
-        .map(|(i, &(rtt, ready))| CoreStatusRow {
-            fault: None,
-            mode_suggestion: None,
-            id: i as u64,
-            name: format!("c{i}"),
-            status: if ready {
-                ConnStatus::Ready
-            } else {
-                ConnStatus::Disconnected
-            },
-            sys: CoreSysStatus {
-                round_trip_ms: Some(rtt),
-                ..CoreSysStatus::default()
-            },
-            endpoint: None,
-            ping_warn: false,
-            exch_warn: false,
-            ping_sev: LatencySeverity::Normal,
-            exch_sev: LatencySeverity::Normal,
-            api_key: ApiKeyState::Unknown,
-            api_warn: false,
-            api_notice: false,
-            api_quota: None,
-            api_quota_warn: false,
-            startup: CoreStartupStatus::default(),
-            time_offset: CoreTimeOffsetStatus::default(),
-            server_version: None,
-            server_version_suffix: None,
-            version_behind: None,
-            update: None,
-        })
-        .collect::<Vec<_>>();
-    let ready_count = cores
-        .iter()
-        .filter(|c| c.status == ConnStatus::Ready)
-        .count();
-    ServerStatusGroup {
-        key: ServerKey::Unknown(0),
-        display_name: name.to_string(),
-        cpu_warn: false,
-        mem_warn: false,
-        conn_warn: false,
-        ping_warn: false,
-        exch_warn: false,
-        api_warn: false,
-        api_notice: false,
-        api_key: ApiKeyState::Unknown,
-        version: GroupVersion::Absent,
-        version_behind: None,
-        update: GroupUpdate::Idle,
-        tz_offset: TzOffsetGroup::Absent,
-        address: None,
-        cores,
-        ready_count,
-        connectivity: ServerConnectivity::Online,
-        system_cpu_percent: cpu,
-        process_memory_mb: proc_mb,
-        free_physical_memory_mb: free_mb,
-        logical_cpu_count: None,
-        startup: None,
-    }
-}
-
-/// CPU sorts by the system percentage, and an absent percentage sorts below any value (so unknown
-/// servers group at the ascending end).
-#[test]
-fn cpu_orders_by_system_percent() {
-    let hot = group("hot", Some(80), None, None, &[]);
-    let cool = group("cool", Some(20), None, None, &[]);
-    let unknown = group("unknown", None, None, None, &[]);
-
-    assert_eq!(
-        compare_groups(&hot, &cool, GroupSortField::Cpu),
-        Ordering::Greater
-    );
-    assert_eq!(
-        compare_groups(&unknown, &cool, GroupSortField::Cpu),
-        Ordering::Less,
-        "no CPU reading sorts below a known one"
-    );
-}
-
-/// Memory sorts by the FREE share of the reconstructed total (process RAM + free), not the raw free
-/// megabytes: 100 MB free of 200 total (50%) ranks above 150 MB free of 600 total (25%).
-#[test]
-fn mem_orders_by_free_percentage() {
-    let roomy = group("roomy", Some(0), Some(100), Some(100), &[]); // 100/(100+100) = 50%
-    let tight = group("tight", Some(0), Some(450), Some(150), &[]); // 150/(450+150) = 25%
-
-    assert_eq!(
-        compare_groups(&roomy, &tight, GroupSortField::Mem),
-        Ordering::Greater,
-        "higher free share ranks higher despite fewer absolute free MB elsewhere"
-    );
-}
-
-/// Ping sorts by the WORST round-trip among READY cores only: a disconnected core's high stale RTT
-/// must not count.
-#[test]
-fn ping_uses_worst_ready_core_only() {
-    // Ready 120 ms, plus a disconnected core stuck at 9000 ms that must be ignored.
-    let a = group("a", None, None, None, &[(120, true), (9000, false)]);
-    // Ready 300 ms.
-    let b = group("b", None, None, None, &[(300, true)]);
-
-    assert_eq!(
-        compare_groups(&a, &b, GroupSortField::Ping),
-        Ordering::Less,
-        "a's worst READY ping (120) is below b's (300); the stale 9000 is ignored"
-    );
-}
-
-/// Name uses natural order, and any field falls back to the name when it ties, so equal metrics keep
-/// a stable order instead of reshuffling.
-#[test]
-fn name_is_natural_and_the_tiebreak() {
-    let s2 = group("Server 2", Some(50), None, None, &[]);
-    let s10 = group("Server 10", Some(50), None, None, &[]);
-
-    assert_eq!(
-        compare_groups(&s2, &s10, GroupSortField::Name),
-        Ordering::Less,
-        "Server 2 < Server 10 in natural order"
-    );
-    // Equal CPU → the comparator falls back to the natural name order.
-    assert_eq!(
-        compare_groups(&s2, &s10, GroupSortField::Cpu),
-        Ordering::Less,
-        "equal CPU breaks the tie by name"
-    );
 }
 
 /// The key column shows text ("9", "∞", "истёк"), but it must sort by the URGENCY behind it.
@@ -278,22 +127,6 @@ fn an_expired_key_sorts_ahead_of_every_live_one() {
     );
 }
 
-/// The server row sorts by the very key it displays — the one aggregation already picked — so the
-/// column cannot order by one number while showing another.
-#[test]
-fn a_server_sorts_by_the_key_it_displays() {
-    let mut urgent = group("a", None, None, None, &[]);
-    urgent.api_key = ApiKeyState::Days(3);
-    let mut relaxed = group("b", None, None, None, &[]);
-    relaxed.api_key = ApiKeyState::Days(20);
-
-    assert_eq!(
-        compare_groups(&urgent, &relaxed, GroupSortField::ApiKey),
-        Ordering::Less,
-        "3 days beats the other server's soonest (20)"
-    );
-}
-
 /// `ordering.rs:restore_flat_sort` must retain the version key and direction, and reject retired
 /// keys. Removing `"version"` from `KEYS` silently discards a user's selected build sort at restart.
 ///
@@ -317,26 +150,64 @@ fn flat_sort_restore_validates_key_and_direction() {
     );
 }
 
-/// `ordering.rs:restore_group_sort` must preserve a valid choice and default unknown keys to Name.
+/// Median ping is the middle Ready sample. An even count is the half-up mean of the two middle
+/// samples: 10, 20, 30, 40 becomes 25, not the upper-middle 30.
 ///
-/// Mutation: let `from_key` fall through to CPU or discard the stored direction. By-IP would
-/// restart on a different column/order, and an exact tuple assertion reddens.
+/// Breaks when the median stays on index `len / 2` for an even count, or sorts the wrong way
+/// and averages the wrong pair.
 #[test]
-fn by_ip_sort_restore_keeps_valid_choice_and_historical_default() {
-    assert_eq!(
-        restore_group_sort(Some(TableSortPreference {
-            column: "api_key".to_string(),
-            ascending: false,
-        })),
-        (GroupSortField::ApiKey, false)
-    );
-    assert_eq!(
-        restore_group_sort(Some(TableSortPreference {
-            column: "retired".to_string(),
-            ascending: false,
-        })),
-        (GroupSortField::Name, true)
-    );
+fn section_aggregate_median_averages_the_two_middle_ready_pings() {
+    let odd = [
+        ping_row(1, ConnStatus::Ready, Some(30)),
+        ping_row(2, ConnStatus::Ready, Some(10)),
+        ping_row(3, ConnStatus::Ready, Some(20)),
+    ];
+    let odd_refs: Vec<_> = odd.iter().collect();
+    let odd_agg = section_aggregate(&odd_refs);
+    assert_eq!(odd_agg.cores, 3);
+    assert_eq!(odd_agg.median_ping_ms, Some(20));
+    assert_eq!(odd_agg.not_connected, 0);
+
+    let even = [
+        ping_row(1, ConnStatus::Ready, Some(10)),
+        ping_row(2, ConnStatus::Ready, Some(40)),
+        ping_row(3, ConnStatus::Ready, Some(20)),
+        ping_row(4, ConnStatus::Ready, Some(30)),
+    ];
+    let even_refs: Vec<_> = even.iter().collect();
+    assert_eq!(section_aggregate(&even_refs).median_ping_ms, Some(25));
+}
+
+/// Unknown pings and pings on cores that are not Ready stay out of the median. Those cores still
+/// count as not connected.
+///
+/// Breaks when a disconnected core's stale ping becomes the median, or a Ready core with no ping
+/// is reported as not connected.
+#[test]
+fn section_aggregate_skips_unknown_pings_and_counts_cores_that_are_not_ready() {
+    let rows = [
+        ping_row(1, ConnStatus::Ready, None),
+        ping_row(2, ConnStatus::Ready, Some(15)),
+        ping_row(3, ConnStatus::Disconnected, Some(999)),
+        ping_row(4, ConnStatus::Failed("down".to_string()), None),
+    ];
+    let refs: Vec<_> = rows.iter().collect();
+    let agg = section_aggregate(&refs);
+    assert_eq!(agg.cores, 4);
+    assert_eq!(agg.median_ping_ms, Some(15));
+    assert_eq!(agg.not_connected, 2);
+
+    let unknown = [ping_row(1, ConnStatus::Ready, None)];
+    let unknown_refs: Vec<_> = unknown.iter().collect();
+    assert_eq!(section_aggregate(&unknown_refs).median_ping_ms, None);
+}
+
+/// One core row with a chosen connection and core ping. Other fields stay at the quiet default.
+fn ping_row(id: u64, status: ConnStatus, ping: Option<u32>) -> CoreStatusRow {
+    let mut row = row_with_key(id, None);
+    row.status = status;
+    row.sys.round_trip_ms = ping;
+    row
 }
 
 /// `ordering.rs:flat_lines` must retain every source row once while partitioning by venue identity.

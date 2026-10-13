@@ -1,15 +1,14 @@
 //! Snapshot-owned Summary derivations reused by hover-triggered renders.
 
-use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{Context, Hsla};
-use moon_core::db::analytics::{DayPoint, Summary};
+use moon_core::db::analytics::Summary;
 use moon_ui::MoonPalette;
 
-use super::{charts, cumulative};
+use super::charts;
 use crate::analytics::AnalyticsView;
 use crate::load_state::Note;
 
@@ -57,95 +56,18 @@ pub(in crate::analytics) struct SummaryDerived {
     pub(super) cum: Rc<[f64]>,
     /// Pixel-math copy of the total curve.
     pub(super) pts: Rc<[f32]>,
-    /// Stable absolute-contribution order shared by the canvas and legend.
-    pub(super) order: Rc<[usize]>,
-    /// Colourless running core curves aligned to order, with the original f32 sums.
-    pub(super) curves: Rc<[Rc<[f32]>]>,
-    /// Shared range over the total then each drawn core, in original fold order.
-    pub(super) vmin: f32,
-    /// Upper shared range bound, floored exactly like the original canvas input.
-    pub(super) vmax: f32,
-    /// Total-curve swing indices; width-dependent placement still runs during rendering.
-    pub(super) swings: Rc<[usize]>,
-    /// Daily text and width-keyed thinning, scoped to this retained snapshot.
-    pub(super) daily: DailyLabels,
-}
-
-/// Formatting is suffix-keyed; only the thinning result remembers measured width bits.
-#[derive(Clone)]
-pub(super) struct DailyLabels {
-    /// Unit used by the retained strings, unset until render arms the profit unit.
-    suffix: Option<String>,
-    /// Candidate text for each bucket; drawn labels borrow this rather than reformatting.
-    pub(super) texts: Rc<[String]>,
-    /// Last longest-by-character candidate, matching Iterator::max_by_key's tie rule.
-    widest: Option<usize>,
-    /// Snapshot-only profits consumed by the unchanged thinning algorithm.
-    profits: Rc<[f64]>,
-    /// Interior mutability keeps the chart renderer's shared borrow without scheduling work.
-    thinning: RefCell<DailyThinning>,
-}
-
-/// One thinning result keyed on the current measured width's exact bits.
-#[derive(Clone, Default)]
-struct DailyThinning {
-    /// None until the first actual chart render measures a candidate label.
-    width_bits: Option<u32>,
-    /// Set membership used by the bar-building loop.
-    labelled: Rc<BTreeSet<usize>>,
-}
-
-impl DailyLabels {
-    /// Retain bucket profits once; formatting waits for the active render unit.
-    fn new(days: &[DayPoint]) -> Self {
-        Self {
-            suffix: None,
-            texts: Rc::from([]),
-            widest: None,
-            profits: days.iter().map(|d| d.profit).collect(),
-            thinning: RefCell::new(DailyThinning::default()),
-        }
-    }
-
-    /// Refresh formatted candidates only on a suffix change; returns whether text derived.
-    fn ensure_texts(&mut self, suffix: &str) -> bool {
-        if self.suffix.as_deref() == Some(suffix) {
-            return false;
-        }
-        self.texts = self
-            .profits
-            .iter()
-            .map(|&profit| format!("{}{}", moon_core::util::fmt::compact(profit, 0), suffix))
-            .collect();
-        self.widest = self
-            .texts
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, text)| text.chars().count())
-            .map(|(i, _)| i);
-        self.suffix = Some(suffix.to_owned());
-        true
-    }
-
-    /// Measure exactly one cached widest string each render, without caching the width itself.
-    pub(super) fn label_w(&self, measure: impl FnOnce(&str) -> f32) -> f32 {
-        self.widest.map(|i| measure(&self.texts[i])).unwrap_or(0.0)
-    }
-
-    /// Return retained thinning and whether it was rebuilt for different measured width bits.
-    pub(super) fn ensure_labelled(&self, label_w: f32) -> (Rc<BTreeSet<usize>>, bool) {
-        let mut cached = self.thinning.borrow_mut();
-        if cached.width_bits == Some(label_w.to_bits()) {
-            return (cached.labelled.clone(), false);
-        }
-        cached.labelled = Rc::new(
-            charts::thinned_labels(&self.profits, charts::PLOT_W_NOMINAL, label_w)
-                .into_iter()
-                .collect(),
-        );
-        cached.width_bits = Some(label_w.to_bits());
-        (cached.labelled.clone(), true)
-    }
+    /// Running curve of EVERY core, indexed like `Summary::core_days`.
+    pub(super) core_curves: Rc<[Rc<[f32]>]>,
+    /// Running peak of the total curve, for the drawdown band.
+    pub(super) peaks: Rc<[f32]>,
+    /// Bucket of the peak that opens the maximum drawdown.
+    pub(super) dd_peak_ix: Option<usize>,
+    /// Bucket at the bottom of the maximum drawdown.
+    pub(super) dd_trough_ix: Option<usize>,
+    /// Bucket with the largest profit.
+    pub(super) day_max_ix: Option<usize>,
+    /// Bucket with the smallest profit.
+    pub(super) day_min_ix: Option<usize>,
 }
 
 impl SummaryDerived {
@@ -172,13 +94,12 @@ impl SummaryDerived {
             })
             .collect();
         let pts: Rc<[f32]> = cum.iter().map(|&v| v as f32).collect();
-        let order: Rc<[usize]> = cumulative::drawn_core_order(&data.core_days).into();
-        let curves: Rc<[Rc<[f32]>]> = order
+        let core_curves: Rc<[Rc<[f32]>]> = data
+            .core_days
             .iter()
-            .map(|&ci| {
+            .map(|core| {
                 let mut c = 0.0f32;
-                data.core_days[ci]
-                    .per_bucket
+                core.per_bucket
                     .iter()
                     .take(data.days.len())
                     .map(|v| {
@@ -188,15 +109,20 @@ impl SummaryDerived {
                     .collect()
             })
             .collect();
-        let mut vmax = pts.iter().copied().fold(0.0f32, f32::max);
-        let mut vmin = pts.iter().copied().fold(0.0f32, f32::min);
-        for curve in curves.iter() {
-            for &v in curve.iter() {
-                vmax = vmax.max(v);
-                vmin = vmin.min(v);
-            }
-        }
-        let swings = cumulative::swing_labels(&pts).into();
+        let (peaks, dd_peak_ix, dd_trough_ix) = drawdown_marks(&pts);
+        let profit_ix = |better: fn(f64, f64) -> bool| {
+            data.days
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.profit.is_finite())
+                .fold(None::<(usize, f64)>, |best, (i, d)| match best {
+                    Some((_, v)) if !better(d.profit, v) => best,
+                    _ => Some((i, d.profit)),
+                })
+                .map(|(i, _)| i)
+        };
+        let day_max_ix = profit_ix(|a, b| a > b);
+        let day_min_ix = profit_ix(|a, b| a < b);
         let mut by_uid = HashMap::new();
         for (index, (uid, _)) in configured.iter().enumerate() {
             by_uid.entry(*uid).or_insert(index);
@@ -212,14 +138,44 @@ impl SummaryDerived {
             colors,
             cum,
             pts,
-            order,
-            curves,
-            vmin: vmin.min(0.0),
-            vmax: vmax.max(1e-6),
-            swings,
-            daily: DailyLabels::new(&data.days),
+            core_curves,
+            peaks,
+            dd_peak_ix,
+            dd_trough_ix,
+            day_max_ix,
+            day_min_ix,
         }
     }
+}
+
+/// Running peak of a curve plus the peak and trough buckets of its deepest drawdown.
+///
+/// Args:
+///     pts: Cumulative total curve.
+///
+/// Returns:
+///     The running peak per bucket, then the bucket of the peak opening the maximum drawdown and
+///     the bucket at its bottom; both `None` when the curve never falls below a prior peak.
+pub(super) fn drawdown_marks(pts: &[f32]) -> (Rc<[f32]>, Option<usize>, Option<usize>) {
+    let mut peak = f32::NEG_INFINITY;
+    let mut peak_ix = 0;
+    let mut deepest = (0.0f32, None);
+    let peaks = pts
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| {
+            if v > peak {
+                peak = v;
+                peak_ix = i;
+            }
+            if peak - v > deepest.0 {
+                deepest = (peak - v, Some((peak_ix, i)));
+            }
+            peak
+        })
+        .collect();
+    let (peak_ix, trough_ix) = deepest.1.unzip();
+    (peaks, peak_ix, trough_ix)
 }
 
 /// Resolve configured RGBs in linear time, retaining iter().find's FIRST duplicate id.
@@ -270,6 +226,17 @@ fn ensure_derived(
     (cached, changed)
 }
 
+/// Derive a snapshot outside a view, for tests of the blocks that render from it.
+#[cfg(test)]
+pub(in crate::analytics) fn derive_for_test(
+    data: Arc<Summary>,
+    p: MoonPalette,
+) -> Rc<SummaryDerived> {
+    let mut slot = None;
+    ensure_derived(&mut slot, data, std::iter::empty(), p);
+    slot.expect("derived")
+}
+
 impl AnalyticsView {
     /// Return ready Summary derivations or its exact placeholder, without scheduling repaint work.
     pub(in crate::analytics) fn ensure_summary_derived(
@@ -284,9 +251,6 @@ impl AnalyticsView {
             backend.config.servers.iter().map(|s| (s.id, s.color)),
             MoonPalette::active(cx),
         );
-        Rc::make_mut(cached)
-            .daily
-            .ensure_texts(crate::analytics::pnl_suffix());
         Ok(cached.clone())
     }
 }

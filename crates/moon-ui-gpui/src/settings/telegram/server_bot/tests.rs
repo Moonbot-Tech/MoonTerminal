@@ -25,9 +25,9 @@ fn an_empty_or_bad_address_is_refused() {
 fn station_and_telegram_tabs_both_show_the_shared_job_result() {
     let telegram = include_str!("../../telegram.rs");
     let bot_sections = telegram
-        .find(".children(self.server_bot_sections(cx))")
+        .find("cards.extend(self.server_bot_sections(card_w, cx))")
         .unwrap();
-    assert!(telegram[bot_sections..].contains(".child(self.server_bot_progress(false, cx))"));
+    assert!(telegram[bot_sections..].contains("self.server_bot_progress(false, cx)"));
     let station = include_str!("../server_bot.rs");
     let section = station
         .split("fn server_bot_section(")

@@ -37,22 +37,31 @@ fn an_empty_list_reads_as_clean_only_when_every_core_answered() {
     let _locale = crate::test_locale::force("en");
     // Asserted against the KEYS, not against each other: two strings merely differing would still
     // pass with the branch inverted, which is the exact failure this guards.
-    let clean = t!("core_status.problems_empty").to_string();
+    let clean = format!(
+        "{} {}",
+        t!("core_status.empty.no_problems_title"),
+        t!("core_status.empty.no_problems_body", n = 4)
+    );
     let neutral = t!("core_status.problems_nothing_listed").to_string();
     assert_ne!(clean, neutral, "the fixture itself must distinguish them");
 
     assert_eq!(
-        empty_text(&scope(4, 0)),
+        empty_text(&scope(4, 0), 0),
         clean,
         "every core answered, none reported"
     );
+    assert_ne!(
+        empty_text(&scope(4, 0), 2),
+        clean,
+        "findings on screen are not the clean bill"
+    );
     assert_eq!(
-        empty_text(&scope(4, 1)),
+        empty_text(&scope(4, 1), 0),
         neutral,
         "one silent core forbids the clean bill"
     );
     assert_eq!(
-        empty_text(&scope(0, 0)),
+        empty_text(&scope(0, 0), 0),
         neutral,
         "an empty scope says nothing about anyone's health"
     );

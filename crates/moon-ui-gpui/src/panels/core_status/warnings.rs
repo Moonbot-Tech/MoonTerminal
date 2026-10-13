@@ -15,29 +15,27 @@ use super::*;
 use crate::backend::core_warn::{WarnAxis, WarnEpisode};
 
 /// Warnings column ids in source order. A dragged order is stored under these ids.
-pub(super) const ORDER_KEYS: &[&str] = &["time", "dur", "peak", "type", "server", "core"];
+pub(super) const ORDER_KEYS: &[&str] = &["time", "dur", "type", "peak", "where"];
 
-/// Build the unsortable Warnings columns with fixed measurement fields and a flexible Core tail.
+/// Build the unsortable Warnings columns. `where` absorbs spare width.
 ///
 /// Returns:
-///     Ordered column descriptors whose non-resizable Core column absorbs spare table width.
+///     Ordered column descriptors.
 fn columns() -> Vec<MoonDataTableColumn> {
-    let mut core =
-        MoonDataTableColumn::new("core", t!("core_status.col.core").to_string(), 130.0).fill();
-    core.resizable = false;
+    let mut place =
+        MoonDataTableColumn::new("where", t!("core_status.warn.where").to_string(), 180.0).fill();
+    place.resizable = false;
 
     vec![
         MoonDataTableColumn::new("time", t!("core_status.col.time").to_string(), 150.0).no_grow(),
         MoonDataTableColumn::new("dur", t!("core_status.col.dur").to_string(), 120.0)
             .right()
             .no_grow(),
+        MoonDataTableColumn::new("type", t!("core_status.col.type").to_string(), 140.0).no_grow(),
         MoonDataTableColumn::new("peak", t!("core_status.col.peak").to_string(), 90.0)
             .right()
             .no_grow(),
-        MoonDataTableColumn::new("type", t!("core_status.col.type").to_string(), 80.0).no_grow(),
-        MoonDataTableColumn::new("server", t!("core_status.col.server").to_string(), 110.0)
-            .no_grow(),
-        core,
+        place,
     ]
 }
 
@@ -50,10 +48,11 @@ fn columns() -> Vec<MoonDataTableColumn> {
 ///     core_names: Core display name per core id.
 ///     state: Persisted table interaction state.
 ///     zone: User-selected display time zone.
+///     now_ms: Injected clock for an episode that is still open.
 ///     cx: Panel context.
 ///
 /// Returns:
-///     A full-size data-table host, or the localized empty state.
+///     The alarms table, or the title-and-body empty state when there are no episodes.
 pub(super) fn warnings_table(
     id: &'static str,
     episodes: Rc<Vec<WarnEpisode>>,
@@ -61,25 +60,92 @@ pub(super) fn warnings_table(
     core_names: Rc<HashMap<CoreId, String>>,
     state: &Entity<MoonDataTableState>,
     zone: chrono_tz::Tz,
+    now_ms: i64,
     cx: &Context<CoreStatusView>,
-) -> impl IntoElement {
-    let empty = episodes.is_empty();
+) -> AnyElement {
+    if episodes.is_empty() {
+        return alarms_empty(cx).into_any_element();
+    }
     let row_count = episodes.len();
     let p = MoonPalette::active(cx);
 
     crate::panels::common::data_table_host(
         SharedString::from(format!("{id}-host")),
-        empty,
-        t!("core_status.warn_empty").to_string(),
+        false,
+        String::new(),
         p,
         cx,
-        MoonDataTable::new(id, row_count, move |ix, _window, _app| {
-            warn_row(&episodes[ix], &server_names, &core_names, zone)
+        MoonDataTable::new(id, row_count, move |ix, _window, app| {
+            warn_row(
+                &episodes[ix],
+                &server_names,
+                &core_names,
+                zone,
+                now_ms,
+                MoonPalette::active(app),
+                app,
+            )
         })
         .columns(columns())
         .state(state)
         .style(design::table_style(p)),
     )
+    .into_any_element()
+}
+
+/// Title and body shown when the last 24 hours recorded nothing.
+fn alarms_empty(cx: &App) -> impl IntoElement {
+    let p = MoonPalette::active(cx);
+    v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap(design::ui_px(cx, 6.0))
+        .child(
+            div()
+                .flex_none()
+                .w(design::ui_px(cx, 40.0))
+                .h(design::ui_px(cx, 40.0))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(design::moon_alpha(p.green, 0.18))
+                .text_color(rgb(p.green))
+                .font_weight(FontWeight::BOLD)
+                .text_size(design::t_body_lg(cx))
+                .child("✓"),
+        )
+        .child(
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(design::t_body_lg(cx))
+                .text_color(rgb(p.text))
+                .child(t!("core_status.empty.no_alarms_title").to_string()),
+        )
+        .child(
+            div()
+                .text_size(design::t_body(cx))
+                .text_color(rgb(p.text_muted))
+                .child(t!("core_status.empty.no_alarms_body").to_string()),
+        )
+}
+
+/// Duration cell text. An open episode is only the word "ongoing", in the active locale.
+///
+/// Args:
+///     start_ms: Episode start. Used when the episode has ended.
+///     end_ms: Episode end, or `None` while it is still open.
+///     now_ms: Injected clock. The open cell does not print a clock.
+///
+/// Returns:
+///     The localized ongoing word, or the closed duration.
+pub(super) fn dur_text(start_ms: i64, end_ms: Option<i64>, now_ms: i64) -> String {
+    if end_ms.is_none() {
+        let _ = (start_ms, now_ms);
+        return t!("core_status.warn_ongoing").to_string();
+    }
+    crate::panels::common::warn_duration_text(start_ms, end_ms)
 }
 
 /// Render one warning episode row in column order.
@@ -89,6 +155,9 @@ pub(super) fn warnings_table(
 ///     server_names: Display names keyed by server IP.
 ///     core_names: Display names keyed by core id.
 ///     zone: Selected IANA display zone used by the start timestamp.
+///     now_ms: Injected clock passed to [`dur_text`].
+///     p: Active palette. An open duration is red; an unreachable type dot is red.
+///     cx: Application context used to scale the type dot.
 ///
 /// Returns:
 ///     Complete warning table row.
@@ -97,6 +166,9 @@ fn warn_row(
     server_names: &HashMap<IpAddr, String>,
     core_names: &HashMap<CoreId, String>,
     zone: chrono_tz::Tz,
+    now_ms: i64,
+    p: MoonPalette,
+    cx: &App,
 ) -> MoonDataRow {
     let server = episode
         .server_ip
@@ -106,20 +178,45 @@ fn warn_row(
         .core_id
         .and_then(|id| core_names.get(&id).cloned())
         .unwrap_or_else(|| "—".to_string());
+    let ongoing = episode.end_ms.is_none();
+    let duration = dur_text(episode.start_ms, episode.end_ms, now_ms);
+    let mut dur_cell = MoonDataCell::text(duration);
+    if ongoing {
+        dur_cell = dur_cell.text_color(p.red);
+    }
+    let dot = if episode.axis == WarnAxis::Unreachable {
+        p.red
+    } else {
+        p.amber
+    };
     MoonDataRow::new([
         MoonDataCell::text(moon_core::util::display_time::format_minute(
             episode.start_ms / 1000,
             zone,
         )),
-        MoonDataCell::text(crate::panels::common::warn_duration_text(
-            episode.start_ms,
-            episode.end_ms,
-        )),
+        dur_cell,
+        MoonDataCell::element(
+            h_flex()
+                .items_center()
+                .gap(design::ui_px(cx, 6.0))
+                .child(design::status_dot_sized(dot, 8.0, cx))
+                .child(axis_label(episode.axis)),
+        ),
         MoonDataCell::text(peak(episode)),
-        MoonDataCell::text(axis_label(episode.axis)),
-        MoonDataCell::text(server),
-        MoonDataCell::text(core),
+        MoonDataCell::text(where_text(&server, &core)),
     ])
+}
+
+/// Server and core display names in one cell. A missing side is omitted, never joined as a dash.
+fn where_text(server: &str, core: &str) -> String {
+    let server_real = !server.is_empty() && server != "—";
+    let core_real = !core.is_empty() && core != "—";
+    match (server_real, core_real) {
+        (true, true) => format!("{server} · {core}"),
+        (true, false) => server.to_string(),
+        (false, true) => core.to_string(),
+        (false, false) => "—".to_string(),
+    }
 }
 
 /// Localized axis label (CPU / RAM / ping / exch ping / Link / key).
@@ -160,3 +257,6 @@ fn peak(episode: &WarnEpisode) -> String {
         WarnAxis::Unreachable => "—".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,42 +1,21 @@
-//! Core table for the Connections tab: server rows with an active toggle, name, key, endpoint, group,
-//! chart bundle, feed count, color, delete, reconnect, and status controls; shared column layout
-//! and headers; feed-flag dropdown; and server add/delete actions.
-//!
-//! The row-level pieces here (`server_row`, `feed_popover`, `srv_check`, `paste_key_affix`,
-//! `status_dot`) are FREE functions taking a weak `SettingsView` handle rather than `&self`/
-//! `cx.listener`: they are called from `MoonVirtualList`'s row factory, which only ever hands out
-//! `&mut App` -- there is no `Context<SettingsView>` to make a strong listener from, and a strong
-//! `cx.entity()` captured into a closure MoonUI retains for the list's whole life would close
-//! `SettingsView -> element -> closure -> SettingsView` and leak the window (see
-//! `strategies/tree/moon.rs::moon_tree_el` for the same shape). `add_server` and `delete_server`
-//! stay ordinary `&mut self` methods; the row buttons reach them through `weak.update`.
+//! The core rows' shared model pieces: the feed flags and their count, the field writers the
+//! core card calls (`set_core_active`, `set_for_station`, `apply_pasted_key`), the live status
+//! dot, the first-run attention hint, and the add/delete/rebuild actions behind the Cores page.
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonColorPicker, MoonDropdown,
-    MoonInput, MoonInputState, MoonMenuItem, MoonPalette, MoonText, MoonTone, MoonTooltipView,
-    StyledExt, h_flex,
-};
+use moon_ui::{MoonPalette, MoonTooltipView};
 use rust_i18n::t;
 
-use super::columns::{CONN_TABLE_INSET, ConnColAlign, ConnColId, MicroTriggerMetrics};
-use super::{ConnRow, ConnRowIds, SettingsView, build_conn, sync_groups_from_servers};
+use super::{SettingsView, build_conn, sync_groups_from_servers};
 use crate::design;
-use crate::panels::common::{RadioMark, radio_items};
-use moon_core::config::{
-    AppConfig, FeedFlags, Secret, ServerConfig, TotalMode, TransportVersion, WorkspaceMembership,
-};
+use moon_core::config::{FeedFlags, Secret, ServerConfig, TotalMode, WorkspaceMembership};
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
 
 /// The eight client-side filters on incoming core data, each with a label key, getter, and
 /// setter. The ninth item of the menu, `FeedFlags::log_delivery`, is a request to the core and is
-/// built apart from these (`feed_popover`).
-///
-/// `feed_popover` localizes each `conn.tip.*` key and appends the localized client-side-filter
-/// note from `conn.filter_note`. The constant stores static keys rather than rendered labels.
-const FEED_FLAGS: [(&str, fn(&FeedFlags) -> bool, fn(&mut FeedFlags, bool)); 8] = [
+/// built apart from these. The constant stores static locale keys rather than rendered labels.
+pub(super) const FEED_FLAGS: [(&str, fn(&FeedFlags) -> bool, fn(&mut FeedFlags, bool)); 8] = [
     ("conn.tip.orders", |f| f.orders, |f, v| f.orders = v),
     ("conn.tip.detects", |f| f.detects, |f, v| f.detects = v),
     ("conn.tip.reports", |f| f.reports, |f, v| f.reports = v),
@@ -46,6 +25,57 @@ const FEED_FLAGS: [(&str, fn(&FeedFlags) -> bool, fn(&mut FeedFlags, bool)); 8] 
     ("conn.tip.alerts", |f| f.alerts, |f, v| f.alerts = v),
     ("conn.tip.arb", |f| f.arb, |f, v| f.arb = v),
 ];
+
+/// How many of the nine data kinds a core sends: the eight client-side filters plus
+/// `log_delivery`. The `n/9` the table trigger and the Cores list tag show.
+pub(super) fn feed_count(feed: &FeedFlags) -> u8 {
+    let on = FEED_FLAGS.iter().filter(|(_, g, _)| g(feed)).count() + usize::from(feed.log_delivery);
+    on as u8
+}
+
+/// Every one of the nine data kinds: eight filters, then `log_delivery`.
+pub(super) const FEED_TOTAL: u8 = FEED_FLAGS.len() as u8 + 1;
+
+/// Read data kind `ix` (0..8 the filters, 8 `log_delivery`).
+pub(super) fn feed_get(feed: &FeedFlags, ix: usize) -> bool {
+    match FEED_FLAGS.get(ix) {
+        Some((_, get, _)) => get(feed),
+        None => feed.log_delivery,
+    }
+}
+
+/// Set data kind `ix` (0..8 the filters, 8 `log_delivery`).
+pub(super) fn feed_set(feed: &mut FeedFlags, ix: usize, on: bool) {
+    match FEED_FLAGS.get(ix) {
+        Some((_, _, set)) => set(feed, on),
+        None => feed.log_delivery = on,
+    }
+}
+
+/// Whether the station dials this core's typed address too. One writer for the table's cloud
+/// glyph and the card's "и для станции" box, so both move the same field.
+pub(super) fn set_for_station(s: &mut ServerConfig, on: bool) -> bool {
+    let changed = s.endpoint_to_station != on;
+    s.endpoint_to_station = on;
+    changed
+}
+
+/// Switch a core on or off in the draft: the table's "Акт" box and the card's switch.
+pub(super) fn set_core_active(s: &mut ServerConfig, on: bool) -> bool {
+    let changed = s.active != on;
+    s.active = on;
+    changed
+}
+
+/// Put a pasted key into a draft row: the key, the transport mode it seeds while the row has none,
+/// and a voided manual-strategy id (a new key can name another Moonbot, where ids differ).
+pub(super) fn apply_pasted_key(s: &mut ServerConfig, text: &str) {
+    s.transport = moon_core::config::seeded_transport(s.transport, text);
+    s.key = Secret::new(text.to_string());
+    if let Some(manual) = s.manual_strategy.as_mut() {
+        manual.id = 0;
+    }
+}
 
 /// Fixed pitch of one core, group, or exchange row in the virtualized Connections list.
 ///
@@ -112,7 +142,7 @@ impl StatusFallback {
 ///
 /// Returns:
 ///     A status dot with a tooltip appropriate to the available connection evidence.
-fn status_dot(
+pub(super) fn status_dot(
     row_key: u64,
     core_id: CoreId,
     active: bool,
@@ -181,322 +211,6 @@ fn status_dot(
             cx.new(|_| MoonTooltipView::new(tip).max_width(320.0))
                 .into()
         })
-}
-
-/// Build a checkbox bound to a boolean field of draft server `servers[i]`, driven by a weak view
-/// handle rather than `cx.listener` -- see the module doc comment.
-///
-/// Deliberately NOT a change to `SettingsView::draft_checkbox`: that shared helper is used by every
-/// other tab, which are not virtualized and keep their strong `cx.listener`.
-///
-/// Args:
-///     weak: Weak owner used by the retained checkbox callback.
-///     id: Stable element identity.
-///     init: Initial checked value.
-///     apply: Draft mutation that reports whether it changed the configuration.
-///
-/// Returns:
-///     A checkbox whose change callback updates the Settings draft through the weak handle.
-fn draft_checkbox_weak(
-    weak: &WeakEntity<SettingsView>,
-    id: impl Into<SharedString>,
-    init: bool,
-    apply: impl Fn(&mut AppConfig, bool) -> bool + 'static,
-) -> MoonCheckbox {
-    let weak = weak.clone();
-    MoonCheckbox::new(id.into())
-        .checked(init)
-        .on_change(move |ch: &bool, _window, cx| {
-            let v = *ch;
-            let _ = weak.update(cx, |this, ctx| {
-                let changed = this.backend.update(ctx, |b, bcx| {
-                    let mut changed = false;
-                    if let Some(p) = b.preview.as_mut()
-                        && apply(p, v)
-                    {
-                        bcx.notify();
-                        changed = true;
-                    }
-                    changed
-                });
-                if changed {
-                    ctx.notify();
-                }
-            });
-        })
-}
-
-/// Build a checkbox bound to a boolean field of draft server `servers[i]`.
-///
-/// Args:
-///     view: Settings state used to read the current draft value.
-///     weak: Weak owner used by the checkbox callback.
-///     cx: Application context.
-///     i: Draft index of the server being edited.
-///     id: Stable element identity.
-///     label: Optional checkbox label.
-///     get: Accessor for the draft field.
-///     set: Mutator for the draft field.
-///
-/// Returns:
-///     A compact checkbox synchronized with the selected draft-server field.
-#[allow(clippy::too_many_arguments)]
-fn srv_check(
-    view: &SettingsView,
-    weak: &WeakEntity<SettingsView>,
-    cx: &App,
-    i: usize,
-    id: SharedString,
-    label: &'static str,
-    get: fn(&ServerConfig) -> bool,
-    set: fn(&mut ServerConfig, bool),
-) -> impl IntoElement {
-    let cur = {
-        let b = view.backend.read(cx);
-        b.preview
-            .as_ref()
-            .unwrap_or(&b.config)
-            .servers
-            .get(i)
-            .map(get)
-            .unwrap_or(false)
-    };
-    let mut checkbox = draft_checkbox_weak(weak, id, cur, move |p, v| {
-        if let Some(s) = p.servers.get_mut(i)
-            && get(s) != v
-        {
-            set(s, v);
-            return true;
-        }
-        false
-    });
-    if !label.is_empty() {
-        checkbox = checkbox.label(label);
-    }
-    checkbox
-}
-
-/// Word the address cell's hover: the endpoint in effect, what is wrong with it, and how the field
-/// works.
-///
-/// Args:
-///     cell: The row's endpoint as derived from the draft.
-///
-/// Returns:
-///     The localized tooltip text, one fact per line.
-fn endpoint_tip(cell: &super::endpoints::EndpointCell) -> String {
-    let mut lines = Vec::with_capacity(3);
-    if cell.invalid {
-        lines.push(t!("conn.endpoint_invalid").to_string());
-    } else if !cell.text.is_empty() {
-        lines.push(cell.text.clone());
-    }
-    if cell.localhost_fallback {
-        lines.push(t!("conn.endpoint_no_address").to_string());
-    }
-    if let Some(name) = &cell.duplicate_name {
-        lines.push(t!("conn.endpoint_duplicate", name = name).to_string());
-    }
-    lines.push(t!("conn.endpoint_hint").to_string());
-    lines.join("\n")
-}
-
-/// Whether row `i` sends its endpoint override to the station, or `None` while the row has no
-/// override to send — the glyph that toggles it is then not drawn at all.
-///
-/// Args:
-///     view: Settings state whose draft is read.
-///     i: Draft index of the server.
-///     cx: Application context.
-///
-/// Returns:
-///     `Some(ServerConfig::endpoint_to_station)` for a row with a non-blank override.
-fn station_flag(view: &SettingsView, i: usize, cx: &App) -> Option<bool> {
-    let b = view.backend.read(cx);
-    b.preview
-        .as_ref()
-        .unwrap_or(&b.config)
-        .servers
-        .get(i)
-        .filter(|s| !s.endpoint_override.trim().is_empty())
-        .map(|s| s.endpoint_to_station)
-}
-
-/// Build the station glyph beside a filled address field: lit when the station dials the typed
-/// address too, muted when it keeps the key's. A click flips `ServerConfig::endpoint_to_station`
-/// in the draft; Save then offers the station's cores again through the core comparison.
-///
-/// Off by default: an address typed for a terminal on the core's own LAN is exactly the one a
-/// station on a VPS cannot reach, so only the user knows which way a row goes.
-///
-/// Args:
-///     weak: Weak owner used to update the Settings draft.
-///     i: Draft index of the server being edited.
-///     id: The glyph's element id.
-///     on: Whether the station currently gets the override.
-///     p: Active palette.
-///     cx: Application context.
-///
-/// Returns:
-///     A clickable glyph with its own tooltip.
-fn station_affix(
-    weak: &WeakEntity<SettingsView>,
-    i: usize,
-    id: SharedString,
-    on: bool,
-    p: MoonPalette,
-    cx: &App,
-) -> impl IntoElement {
-    let weak = weak.clone();
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .justify_center()
-        .px(px(2.0))
-        .cursor_pointer()
-        .tooltip(move |_window, cx| {
-            let tip = if on {
-                t!("conn.endpoint_to_station_on")
-            } else {
-                t!("conn.endpoint_to_station_off")
-            };
-            cx.new(|_| MoonTooltipView::new(tip.to_string()).max_width(320.0))
-                .into()
-        })
-        .child(
-            MoonText::new("☁")
-                .color(if on { p.accent } else { p.text_muted })
-                .rendered_metrics(design::text_metrics(cx, 0.0, 11.0))
-                .uppercase(false)
-                .render(),
-        )
-        .on_click(move |_, _, cx| {
-            let _ = weak.update(cx, |this, ctx| {
-                this.backend.update(ctx, |b, bcx| {
-                    if let Some(s) = b.preview.as_mut().and_then(|p| p.servers.get_mut(i)) {
-                        s.endpoint_to_station = !s.endpoint_to_station;
-                        bcx.notify();
-                    }
-                });
-                ctx.notify();
-            });
-        })
-}
-
-/// Build a Paste glyph control beside the key field, styled like its built-in affixes.
-///
-/// Clicking reads a nonempty key from the clipboard and updates both input state and
-/// `servers[i].key`; `set_value` does not emit Change, so the draft is updated directly. Pasting
-/// is also when the key gets to speak for `servers[i].transport`, as MoonBot fills its own radio
-/// on paste -- but only while that row has no mode of its own, which is what
-/// `config::seeded_transport` decides and documents.
-///
-/// Args:
-///     weak: Weak owner used to update the Settings draft.
-///     i: Draft index of the server being edited.
-///     row_key: Stable identity for the control.
-///     key_state: Input state that mirrors the pasted key.
-///     address_state: Address input whose placeholder shows the key's endpoint; `set_value` emits
-///         no Change, so the subscription that otherwise keeps it in step never fires for a paste.
-///     p: Active palette.
-///
-/// Returns:
-///     A clipboard-paste control for the server-key input.
-fn paste_key_affix(
-    weak: &WeakEntity<SettingsView>,
-    i: usize,
-    row_key: u64,
-    key_state: Entity<MoonInputState>,
-    address_state: Entity<MoonInputState>,
-    p: MoonPalette,
-    cx: &App,
-) -> impl IntoElement {
-    let weak = weak.clone();
-    div()
-        .id(("paste-key", row_key))
-        .flex()
-        .items_center()
-        .justify_center()
-        .px(px(2.0))
-        .cursor_pointer()
-        .tooltip(|_window, cx| {
-            cx.new(|_| MoonTooltipView::new(t!("conn.paste_key_tip").to_string()).max_width(320.0))
-                .into()
-        })
-        .child(
-            MoonText::new("⧉")
-                .color(p.text_muted)
-                .rendered_metrics(design::text_metrics(cx, 0.0, 11.0))
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        )
-        .on_click(move |_, window, cx| {
-            let Some(text) = cx
-                .read_from_clipboard()
-                .and_then(|it| it.text())
-                .filter(|t| !t.trim().is_empty())
-            else {
-                return;
-            };
-            let text = text.trim().to_string();
-            key_state.update(cx, |st, c| st.set_value(text.clone(), window, c));
-            let placeholder = super::address_placeholder(&text);
-            address_state.update(cx, |st, c| st.set_placeholder(placeholder, window, c));
-            let _ = weak.update(cx, |this, ctx| {
-                this.backend.update(ctx, |b, bcx| {
-                    if let Some(pv) = b.preview.as_mut()
-                        && let Some(s) = pv.servers.get_mut(i)
-                    {
-                        s.transport = moon_core::config::seeded_transport(s.transport, &text);
-                        s.key = Secret::new(text.clone());
-                        // A new key can point this row at a DIFFERENT Moonbot, and strategy ids
-                        // are unique per host, not globally — so the pinned id would silently
-                        // name whatever strategy inherited that number there. The NAME survives
-                        // and re-pins itself against the new host's list.
-                        if let Some(manual) = s.manual_strategy.as_mut() {
-                            manual.id = 0;
-                        }
-                        bcx.notify();
-                    }
-                });
-                // A nonempty-to-nonempty paste must refresh every duplicate marker.
-                ctx.notify();
-            });
-        })
-}
-
-/// Rendered-width inputs a Micro `MoonDropdown` trigger resolves itself against.
-///
-/// MIRRORS MoonUI, which exposes no accessor for either number: `MoonDropdown` resolves a
-/// `Scaled(w)` trigger to `max(w * tokens.font(fs) / fs, tokens.ui(14.0) + measure(ellipsis +
-/// caret))`, and `button_text_metrics` gives a Micro trigger `fs = 10.0`. The two terms follow
-/// DIFFERENT sliders -- the first the Font delta, the second UI geometry -- which is why the
-/// floor cannot be folded into the scale.
-///
-/// The glyph run inside that floor is measured within MoonUI; here it is OVER-estimated at two
-/// ems, deliberately and in the safe direction: a column wider than its trigger merely centres
-/// it, while a column narrower than its trigger is the misalignment this module exists to
-/// prevent. If MoonUI's Micro metrics or trigger padding move, this must follow by hand -- the
-/// same standing caveat `design::glyph_btn_w` carries.
-///
-/// Args:
-///     cx: Application context used to read active theme tokens.
-///
-/// Returns:
-///     The scale and floor every core-table column is laid out against.
-fn micro_trigger_metrics(cx: &App) -> MicroTriggerMetrics {
-    /// Design-reference font size this table uses when measuring a dense trigger.
-    const MICRO_TRIGGER_FONT: f32 = 10.0;
-    /// MoonUI's `DROPDOWN_TRIGGER_PAD_X`, its trigger's horizontal visual padding.
-    const TRIGGER_PAD_X: f32 = 14.0;
-
-    MicroTriggerMetrics {
-        scale: design::font_value(cx, MICRO_TRIGGER_FONT) / MICRO_TRIGGER_FONT,
-        min_width: design::ui_value(cx, TRIGGER_PAD_X)
-            + 2.0 * design::font_value(cx, MICRO_TRIGGER_FONT),
-    }
 }
 
 impl SettingsView {
@@ -592,16 +306,14 @@ impl SettingsView {
                 bcx.notify();
             }
         });
-        let rows = build_conn(&self.backend, window, cx);
-        self.conn = rows;
-        // Every row just got a fresh key, so any open popup now names a row that no longer exists.
-        // Shut it rather than leave it pointing at nothing.
-        self.feed_open = None;
-        self.proto_open = None;
-        self.preset_open = None;
-        self.total_open = None;
-        self.picking = None;
-        self.focused_conn_row = None;
+        // The new core is the last row: its card opens at once.
+        let last = self
+            .backend
+            .read(cx)
+            .preview
+            .as_ref()
+            .map(|p| p.servers.len() - 1);
+        self.rebuild_conn(last, None, window, cx);
         // The hint MOVES with this row: it pointed at this button, and the thing the newcomer needs
         // next is the empty key field that just appeared. Re-arming restarts the clock so the ring
         // is at full strength on the control that now matters.
@@ -628,923 +340,38 @@ impl SettingsView {
                 bcx.notify();
             }
         });
-        let rows = build_conn(&self.backend, window, cx);
-        self.conn = rows;
-        // See `add_server`: the keys the open menu was named by are gone.
-        self.feed_open = None;
-        self.proto_open = None;
-        self.preset_open = None;
-        self.total_open = None;
-        self.picking = None;
-        self.focused_conn_row = None;
+        self.rebuild_conn(self.conn_selected_index(), Some(i), window, cx);
         cx.notify();
     }
-}
 
-/// Wrap one control in an interactive div carrying a wrapping tooltip.
-///
-/// Used where the control itself has no tooltip prop -- `MoonDropdown` has none -- and where a
-/// cryptic label (`V0`, `9/9`) would otherwise be decodable only by finding its column heading.
-/// gpui needs an id on an interactive element, so the caller supplies one from [`ConnRowIds`].
-///
-/// Args:
-///     id: Element id of the wrapper, distinct from the control's own.
-///     tip: Already-localized tooltip text.
-///     max_w: Wrap width; the transport explanation is long enough to need more than the default.
-///     control: The control to wrap.
-///
-/// Returns:
-///     The control under a hover tooltip, occupying the same cell.
-fn with_tip(
-    id: SharedString,
-    tip: SharedString,
-    max_w: f32,
-    control: impl IntoElement,
-) -> impl IntoElement {
-    div()
-        .id(id)
-        .tooltip(move |_window, cx| {
-            cx.new(|_| MoonTooltipView::new(tip.clone()).max_width(max_w))
-                .into()
-        })
-        .child(control)
-}
-
-/// Build the `Data n/9` dropdown ported from egui's `feed_button`.
-///
-/// The trigger reports enabled feed flags; its nine checkbox items update the draft.
-///
-/// The menu is CONTROLLED through `SettingsView::feed_open` so the items exist only for
-/// the row whose menu is actually open. MoonUI cannot do this for us: `MoonDropdown::items`
-/// consumes the whole `Vec<MoonMenuItem>` into `MoonMenuLevel::from_parts` before it ever looks
-/// at the open flag, so there is no lazy-item API to reach for.
-///
-/// Args:
-///     view: Current Settings state, read for the draft feed flags.
-///     weak: Weak callback owner that avoids a retained-element cycle.
-///     i: Draft index of the server this dropdown edits.
-///     row_key: Owning row's identity, the value `feed_open` is compared against.
-///     ids: The row's precomputed element-id strings.
-///     cx: Application context.
-///
-/// Returns:
-///     The feed-flag dropdown wrapped in its cell tooltip.
-fn feed_popover(
-    view: &SettingsView,
-    weak: &WeakEntity<SettingsView>,
-    i: usize,
-    row_key: u64,
-    ids: &ConnRowIds,
-    cx: &App,
-) -> impl IntoElement {
-    let (feed, core_id) = {
-        let b = view.backend.read(cx);
-        let s = b.preview.as_ref().unwrap_or(&b.config).servers.get(i);
-        (s.map(|s| s.feed).unwrap_or_default(), s.map(|s| s.id))
-    };
-    // The eight client-side filters plus the one request to the core, `log_delivery`.
-    let on =
-        FEED_FLAGS.iter().filter(|(_, g, _)| g(&feed)).count() + usize::from(feed.log_delivery);
-    let total = FEED_FLAGS.len() + 1;
-    let tinted = on < total;
-    let open = view.feed_open == Some(row_key);
-
-    // Only the OPEN row pays for menu items. Everything below this point is skipped 55 times
-    // out of 56 on a page with one menu open, and 56 times out of 56 with none.
-    let mut items = Vec::new();
-    if open {
-        for (ix, (key, get, set)) in FEED_FLAGS.iter().copied().enumerate() {
-            let cur = get(&feed);
-            let backend = view.backend.clone();
-            items.push(
-                MoonMenuItem::with_key(
-                    format!("feed-{row_key}-{ix}"),
-                    format!("{} ({})", t!(key), t!("conn.filter_note")),
-                )
-                .checked(cur)
-                // Make states explicit: enabled items are green and checked, while disabled
-                // items are muted and unchecked, so the user need not infer the missing flag
-                // from a count such as `8/9`.
-                .tone(if cur {
-                    MoonTone::Positive
-                } else {
-                    MoonTone::Muted
-                })
-                .on_click(move |_, _, cx| {
-                    backend.update(cx, |b, bcx| {
-                        if let Some(p) = b.preview.as_mut()
-                            && let Some(s) = p.servers.get_mut(i)
-                        {
-                            set(&mut s.feed, !cur);
-                            bcx.notify();
-                        }
-                    });
-                }),
-            );
-        }
-        // The one item that is not a client-side filter: it asks the core to stop the stream, so
-        // its section label says what goes quiet with it, and once the feed has seen an older core
-        // keep sending anyway the item says so too, rather than letting the unchecked box read as
-        // "stopped".
-        let cur = feed.log_delivery;
-        let ignored = !cur
-            && core_id.is_some_and(|id| {
-                view.backend
-                    .read(cx)
-                    .session
-                    .store()
-                    .core(id)
-                    .is_some_and(|c| c.log_delivery_ignored)
-            });
-        // Its own section, under a label that says what goes quiet with it, so the item line stays
-        // short enough for the menu width and the verdict is never the part cut off.
-        items.push(MoonMenuItem::separator());
-        items.push(MoonMenuItem::label(t!("conn.log_delivery_section")));
-        let label = if ignored {
-            format!(
-                "{} ({})",
-                t!("conn.tip.log_delivery"),
-                t!("conn.log_delivery_ignored")
-            )
-        } else {
-            t!("conn.tip.log_delivery").to_string()
-        };
-        let backend = view.backend.clone();
-        items.push(
-            MoonMenuItem::with_key(format!("feed-{row_key}-log-delivery"), label)
-                .checked(cur)
-                .tone(if cur {
-                    MoonTone::Positive
-                } else {
-                    MoonTone::Muted
-                })
-                .on_click(move |_, _, cx| {
-                    backend.update(cx, |b, bcx| {
-                        if let Some(p) = b.preview.as_mut()
-                            && let Some(s) = p.servers.get_mut(i)
-                        {
-                            s.feed.log_delivery = !cur;
-                            bcx.notify();
-                        }
-                    });
-                }),
-        );
+    /// Draft index of the selected core.
+    pub(in crate::settings) fn conn_selected_index(&self) -> Option<usize> {
+        let key = self.conn_selected?;
+        self.conn.iter().position(|r| r.row_key == key)
     }
 
-    // WEAK, not a strong entity: `on_open_change` takes a plain `Fn(bool, &mut Window, &mut App)`
-    // that MoonUI stores for the life of the element, and a strong handle there would close
-    // SettingsView -> element -> closure -> SettingsView and keep the window alive forever.
-    let view_weak = weak.clone();
-    // `9/9` is a count with no visible denominator meaning: the column tooltip already explains
-    // what the categories are and what the amber tint means, so reuse it on the cell.
-    let dropdown = MoonDropdown::new(ids.feed.clone())
-        .label(format!("{on}/{total}"))
-        .trigger_caret(true)
-        .trigger_variant(if tinted {
-            MoonButtonVariant::Amber
-        } else {
-            MoonButtonVariant::Neutral
-        })
-        .trigger_size(MoonButtonSize::density(cx))
-        .trigger_width_scaled(ConnColId::Data.spec().basis)
-        .menu_width_scaled(272.0)
-        .close_on_select(false)
-        .items(items)
-        .open(open)
-        // In CONTROLLED mode MoonUI deliberately does not repaint the parent view for us -- it
-        // only does that when it owns the open flag itself -- so this handler both stores the
-        // new state and asks for the repaint that makes it visible.
-        .on_open_change(move |now_open, _window, app| {
-            let _ = view_weak.update(app, |this, cx| {
-                this.feed_open = now_open.then_some(row_key);
-                cx.notify();
-            });
-        });
-    with_tip(
-        ids.feed_tip.clone(),
-        t!("conn.tip.flags").to_string().into(),
-        320.0,
-        dropdown,
-    )
-}
-
-/// Build the MoonProto transport selector for one server row.
-///
-/// The mode is seeded from the core's own key (`config::seeded_transport`) and is the user's
-/// from then on, mirroring MoonBot's `V0 / V1 / V2` radio: MoonBot lets a core's switch move
-/// without issuing a new key, so a terminal that could only read the key would force a re-export
-/// of every key to follow one switch. A dash means nothing is pinned yet -- no key, or a legacy
-/// export that carries no mode -- and the connection then follows the key, as before.
-///
-/// The choice lands in the DRAFT, like every other field here: it takes effect on Save, which
-/// respawns the core by itself because `session::conn_sig` hashes the mode.
-///
-/// Args:
-///     view: Settings state read for the row's current draft value.
-///     weak: Weak owner the select handler closes over.
-///     i: Draft index of the server being edited.
-///     row_key: Owning row's identity, the value `proto_open` is compared against.
-///     ids: Precomputed element ids for the row.
-///     cx: Application context.
-///
-/// Returns:
-///     The transport dropdown, wrapped in its row-level explanatory tooltip.
-fn proto_dropdown(
-    view: &SettingsView,
-    weak: &WeakEntity<SettingsView>,
-    i: usize,
-    row_key: u64,
-    ids: &ConnRowIds,
-    cx: &App,
-) -> impl IntoElement {
-    let cur = {
-        let b = view.backend.read(cx);
-        b.preview
-            .as_ref()
-            .unwrap_or(&b.config)
-            .servers
-            .get(i)
-            .and_then(|s| s.transport)
-    };
-    let open = view.proto_open == Some(row_key);
-
-    // Only the OPEN row pays for menu items, exactly as `feed_popover` above: three items, three
-    // boxed handlers and a `Vec` per row per frame is what `SettingsView::feed_open` exists to
-    // avoid, and a wheel notch over the page rebuilds every row.
-    let items = if open {
-        // WEAK, not a strong entity, for the reason stated on `server_row`: MoonUI keeps this
-        // handler for the element's whole life, and a strong handle would leak the Settings
-        // window.
-        let weak_select = weak.clone();
-        // `Option<TransportVersion>` is the item value, so an unset row marks nothing as current
-        // instead of pretending it is pinned to V0. Key and label are both the mode's own
-        // `&'static str`, so neither allocates.
-        radio_items(
-            TransportVersion::ALL.into_iter().map(|v| {
-                (
-                    Some(v),
-                    SharedString::from(v.label()),
-                    SharedString::from(v.label()),
-                )
-            }),
-            cur,
-            RadioMark::Check,
-            move |app, v| {
-                let _ = weak_select.update(app, |this, ctx| {
-                    let changed = this.backend.update(ctx, |b, bcx| {
-                        let Some(s) = b.preview.as_mut().and_then(|p| p.servers.get_mut(i)) else {
-                            return false;
-                        };
-                        if s.transport == v {
-                            return false;
-                        }
-                        s.transport = v;
-                        bcx.notify();
-                        true
-                    });
-                    if changed {
-                        ctx.notify();
-                    }
-                });
-            },
-        )
-    } else {
-        Vec::new()
-    };
-
-    let view_weak = weak.clone();
-    // `V0` alone says nothing: the existing column tooltip is the only thing that explains the
-    // MoonProto trio, and a reader looking at a row should not have to find the heading first.
-    let dropdown = MoonDropdown::new(ids.proto.clone())
-        .label(cur.map_or(SharedString::from("-"), |v| SharedString::from(v.label())))
-        .trigger_caret(true)
-        .trigger_variant(MoonButtonVariant::Neutral)
-        .trigger_size(MoonButtonSize::density(cx))
-        .trigger_width_scaled(ConnColId::Proto.spec().basis)
-        .menu_width_scaled(96.0)
-        .items(items)
-        .open(open)
-        // Controlled mode leaves the repaint to us, as on the feed menu beside it.
-        .on_open_change(move |now_open, _window, app| {
-            let _ = view_weak.update(app, |this, cx| {
-                this.proto_open = now_open.then_some(row_key);
-                cx.notify();
-            });
-        });
-    with_tip(
-        ids.proto_tip.clone(),
-        t!("conn.tip.proto").to_string().into(),
-        320.0,
-        dropdown,
-    )
-}
-
-/// Build the workspace-preset selector for one server row.
-///
-/// Modelled line-for-line on [`proto_dropdown`] above, one difference only: the value is a
-/// bare `WorkspaceMembership` rather than an `Option<TransportVersion>`, because every row
-/// always has one -- there is no unset state to represent with a dash. Its three items are the
-/// whole enforcement of "a core may not be excluded from both presets": `WorkspaceMembership`
-/// has no fourth variant, so there is nothing else to offer.
-/// The popup fits its localized rows, including check marks and padding, without a width cap.
-///
-/// Args:
-///     view: Settings state read for the row's current draft value.
-///     weak: Weak owner the select handler closes over.
-///     i: Draft index of the server being edited.
-///     ids: Precomputed element ids for the row.
-///     cx: Application context.
-///
-/// Returns:
-///     A compact dropdown bound to draft `servers[i].workspace_membership`.
-fn preset_dropdown(
-    view: &SettingsView,
-    weak: &WeakEntity<SettingsView>,
-    i: usize,
-    row_key: u64,
-    ids: &ConnRowIds,
-    cx: &App,
-) -> impl IntoElement {
-    let cur = {
-        let b = view.backend.read(cx);
-        b.preview
-            .as_ref()
-            .unwrap_or(&b.config)
-            .servers
-            .get(i)
-            .map(|s| s.workspace_membership)
-            .unwrap_or_default()
-    };
-    let open = view.preset_open == Some(row_key);
-
-    // Only the OPEN row pays for menu items, exactly as `proto_dropdown` above.
-    let items = if open {
-        let weak_select = weak.clone();
-        radio_items(
-            WorkspaceMembership::ALL.into_iter().map(|m| {
-                (
-                    m,
-                    SharedString::from(m.code()),
-                    SharedString::from(preset_label(m)),
-                )
-            }),
-            cur,
-            RadioMark::Check,
-            move |app, m| {
-                let _ = weak_select.update(app, |this, ctx| {
-                    let changed = this.backend.update(ctx, |b, bcx| {
-                        let Some(s) = b.preview.as_mut().and_then(|p| p.servers.get_mut(i)) else {
-                            return false;
-                        };
-                        if s.workspace_membership == m {
-                            return false;
-                        }
-                        s.workspace_membership = m;
-                        bcx.notify();
-                        true
-                    });
-                    if changed {
-                        ctx.notify();
-                    }
-                });
-            },
-        )
-    } else {
-        Vec::new()
-    };
-
-    let view_weak = weak.clone();
-    MoonDropdown::new(ids.preset.clone())
-        .label(SharedString::from(preset_label(cur)))
-        .trigger_caret(true)
-        .trigger_variant(MoonButtonVariant::Neutral)
-        .trigger_size(MoonButtonSize::density(cx))
-        .trigger_width_scaled(ConnColId::Preset.spec().basis)
-        .fit_menu_width(0.0, f32::INFINITY)
-        .items(items)
-        .open(open)
-        // Controlled mode leaves the repaint to us, as on the transport menu beside it.
-        .on_open_change(move |now_open, _window, app| {
-            let _ = view_weak.update(app, |this, cx| {
-                this.preset_open = now_open.then_some(row_key);
-                cx.notify();
-            });
-        })
-}
-
-/// Localized label for one workspace-membership value, shared by the trigger and its menu items.
-fn preset_label(m: WorkspaceMembership) -> String {
-    match m {
-        WorkspaceMembership::Both => t!("conn.preset.both"),
-        WorkspaceMembership::ClassicOnly => t!("conn.preset.classic"),
-        WorkspaceMembership::AutoOnly => t!("conn.preset.auto"),
-    }
-    .to_string()
-}
-
-/// Compact dropdown for how one core counts toward the Assets footer total.
-///
-/// A twin of [`preset_dropdown`]: controlled, items built only for the open row, writing the
-/// draft so the choice lands on Save like every other column. Changing it never respawns a feed
-/// (`AppConfig::structural_sig` neutralizes `total_mode`).
-/// The popup fits its localized rows, including check marks and padding, without a width cap.
-///
-/// Args:
-///     view: Settings state read for the row's current draft value.
-///     weak: Weak owner the select handler closes over.
-///     i: Draft index of the server being edited.
-///     ids: Precomputed element ids for the row.
-///     cx: Application context.
-///
-/// Returns:
-///     A compact dropdown bound to draft `servers[i].total_mode`.
-fn total_dropdown(
-    view: &SettingsView,
-    weak: &WeakEntity<SettingsView>,
-    i: usize,
-    row_key: u64,
-    ids: &ConnRowIds,
-    cx: &App,
-) -> impl IntoElement {
-    let cur = {
-        let b = view.backend.read(cx);
-        b.preview
-            .as_ref()
-            .unwrap_or(&b.config)
-            .servers
-            .get(i)
-            .map(|s| s.total_mode)
-            .unwrap_or_default()
-    };
-    let open = view.total_open == Some(row_key);
-
-    let items = if open {
-        let weak_select = weak.clone();
-        radio_items(
-            TotalMode::ALL.into_iter().map(|m| {
-                (
-                    m,
-                    SharedString::from(m.code()),
-                    SharedString::from(total_label(m)),
-                )
-            }),
-            cur,
-            RadioMark::Check,
-            move |app, m| {
-                let _ = weak_select.update(app, |this, ctx| {
-                    let changed = this.backend.update(ctx, |b, bcx| {
-                        let Some(s) = b.preview.as_mut().and_then(|p| p.servers.get_mut(i)) else {
-                            return false;
-                        };
-                        if s.total_mode == m {
-                            return false;
-                        }
-                        s.total_mode = m;
-                        bcx.notify();
-                        true
-                    });
-                    if changed {
-                        ctx.notify();
-                    }
-                });
-            },
-        )
-    } else {
-        Vec::new()
-    };
-
-    let view_weak = weak.clone();
-    MoonDropdown::new(ids.total.clone())
-        .label(SharedString::from(total_label(cur)))
-        .trigger_caret(true)
-        .trigger_variant(MoonButtonVariant::Neutral)
-        .trigger_size(MoonButtonSize::density(cx))
-        .trigger_width_scaled(ConnColId::Total.spec().basis)
-        .fit_menu_width(0.0, f32::INFINITY)
-        .items(items)
-        .open(open)
-        .on_open_change(move |now_open, _window, app| {
-            let _ = view_weak.update(app, |this, cx| {
-                this.total_open = now_open.then_some(row_key);
-                cx.notify();
-            });
-        })
-}
-
-/// Localized label for one footer-total mode, shared by the trigger and its menu items.
-fn total_label(m: TotalMode) -> String {
-    match m {
-        TotalMode::Auto => t!("conn.total.auto"),
-        TotalMode::Exclude => t!("conn.total.exclude"),
-        TotalMode::Separate => t!("conn.total.separate"),
-    }
-    .to_string()
-}
-
-/// Render a server row ported from egui's `servers_panel`.
-///
-/// A free function, not a method: `MoonVirtualList`'s row factory is `'static` and outlives the
-/// render, so a strong `cx.entity()` capture would close `SettingsView -> element -> closure ->
-/// SettingsView` and leak the window -- the same cycle `strategies/tree/moon.rs::moon_tree_el`
-/// guards for `MoonTree`. Every interactive child below reaches `SettingsView` only through `weak`.
-///
-/// Columns contain the active toggle, name, key, draft endpoint, transport mode, group, chart bundle,
-/// feed flags, color, delete, reconnect, and status controls.
-///
-/// Args:
-///     view: Current Settings state, read (never mutated) while building the row.
-///     weak: Weak callback owner every listener below closes over.
-///     row: The row's persistent editor state, including its precomputed `ConnRowIds`.
-///     i: Draft index of the server this row edits.
-///     core_id: The server's live core identity.
-///     active: Whether the draft server is enabled.
-///     status: Latest live connection status, if known.
-///     endpoint: Endpoint and duplicate peer derived from the current draft.
-///     cx: Application context used for rendering.
-///
-/// Returns:
-///     One core row with stable element IDs and draft-derived endpoint warnings.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn server_row(
-    view: &SettingsView,
-    weak: &WeakEntity<SettingsView>,
-    row: &ConnRow,
-    i: usize,
-    core_id: CoreId,
-    active: bool,
-    status: Option<ConnStatus>,
-    endpoint: &super::endpoints::EndpointCell,
-    cx: &App,
-) -> AnyElement {
-    crate::diag::bump(&crate::diag::SETTINGS_CONN_ROW_BUILD);
-    let p = MoonPalette::active(cx);
-    let ids = &row.ids;
-    let row_key = row.row_key;
-    // Whether this row's key field is still blank, for the first-run ring below.
-    // Whitespace counts as blank so this agrees with `config::key_is_readable` and with the
-    // `empty` flag the connection verdict computes (`raw.trim().is_empty()`).
-    let key_empty = row.key.read(cx).value().trim().is_empty();
-    let key_unreadable = !moon_core::config::key_is_readable(&row.key.read(cx).value());
-    // Show reconnect only when the draft server is active. Session status still comes from
-    // the live saved runtime and may not yet match unsaved draft activity.
-    let recon: AnyElement = if active {
-        let weak_recon = weak.clone();
-        div()
-            .id(("rec-tip", row_key))
-            .tooltip(|_window, cx| {
-                cx.new(|_| MoonTooltipView::new(t!("conn.reconnect").to_string()))
-                    .into()
-            })
-            .child(
-                MoonButton::new(ids.rec.clone())
-                    .ghost()
-                    .width(24.0)
-                    .label("↻")
-                    .on_click(move |_, _, cx| {
-                        let _ = weak_recon.update(cx, |this, ctx| {
-                            this.backend.update(ctx, |b, bcx| {
-                                b.reconnect_request.push(core_id);
-                                bcx.notify();
-                            });
-                        });
-                    })
-                    .render(),
-            )
-            .into_any_element()
-    } else {
-        div().w(px(24.0)).into_any_element()
-    };
-    // The row is BUILT from `ConnColId::ALL` rather than merely numbered to agree with it: the
-    // array below takes its LENGTH from that list, so a column added, dropped or reordered in
-    // `columns.rs` without the same move here is a compile error -- not a heading that quietly
-    // slides one column to the right, which is exactly how this table drifted before.
-    let micro = micro_trigger_metrics(cx);
-    let cells: [AnyElement; ConnColId::ALL.len()] = [
-        srv_check(
-            view,
-            weak,
-            cx,
-            i,
-            ids.act.clone(),
-            "",
-            |s| s.active,
-            |s, v| s.active = v,
-        )
-        .into_any_element(),
-        MoonInput::new(ids.name.clone())
-            .state(&row.name)
-            .small()
-            .into_any_element(),
-        // Place the key field and Paste glyph side by side. The fork fixes built-in affix order,
-        // so the button cannot be inserted between visibility and clear. `set_value` emits no
-        // Change event, so Paste also writes directly to draft.
-        h_flex()
-            .w_full()
-            .gap_1()
-            .items_center()
-            .child(
-                div()
-                    .flex_grow_1()
-                    .min_w_0()
-                    // `relative()` hosts the first-run ring below; it changes no layout, because
-                    // the ring is an inset overlay.
-                    .relative()
-                    // `.id` is outside `.when`: it changes `Div` into `Stateful<Div>`, so it cannot
-                    // live in a `when` that must return the same type. The tooltip stays gated.
-                    .id(("key-bad", row_key))
-                    .when(key_unreadable, |d| {
-                        d.tooltip(|_window, cx| {
-                            cx.new(|_| {
-                                MoonTooltipView::new(t!("conn.key_unreadable").to_string())
-                                    .max_width(320.0)
-                            })
-                            .into()
-                        })
-                    })
-                    .child(
-                        MoonInput::new(ids.key.clone())
-                            .state(&row.key)
-                            .small()
-                            .mask_toggle()
-                            // Allow the key to be cleared quickly before replacement.
-                            .cleanable(true)
-                            .when(key_unreadable, |i| i.tone(MoonTone::Danger).selected(true)),
-                    )
-                    // Only an EMPTY key is worth pointing at: once the newcomer has pasted
-                    // something the field has done its job, and a ring around a filled input
-                    // reads as an error rather than as a hint.
-                    .children(view.conn_hint(cx).filter(|_| key_empty).and_then(|at| {
-                        crate::pulse::attention_ring(MoonPalette::active(cx).accent, at)
-                    })),
-            )
-            .child(paste_key_affix(
-                weak,
-                i,
-                row_key,
-                row.key.clone(),
-                row.address.clone(),
-                p,
-                cx,
-            ))
-            .into_any_element(),
-        // The address cell edits the endpoint override (#616): empty follows the key, whose
-        // endpoint is the placeholder. Red for a field that is not an address, amber for a row
-        // that would dial localhost only because its key names no address, or for a duplicate.
-        // The hover always states the endpoint in effect and why, so a truncated or placeholder
-        // value is never the only place the user can read it. The station glyph beside a filled
-        // field says whether the station dials it too; it sits OUTSIDE the hover area, so its own
-        // tooltip is never stacked on the cell's.
-        h_flex()
-            .w_full()
-            .gap_1()
-            .items_center()
-            .child(
-                div()
-                    .id(ids.address_tip.clone())
-                    .flex_grow_1()
-                    .min_w_0()
-                    .tooltip({
-                        // Worded on hover only: the row factory runs for every mounted row on every
-                        // rebuild, and the hover is the one place the wording is needed.
-                        let cell = endpoint.clone();
-                        move |_window, cx| {
-                            let tip = endpoint_tip(&cell);
-                            cx.new(|_| MoonTooltipView::new(tip).max_width(360.0))
-                                .into()
-                        }
-                    })
-                    .child(
-                        MoonInput::new(ids.address.clone())
-                            .state(&row.address)
-                            .small()
-                            .cleanable(true)
-                            .when(endpoint.invalid, |i| {
-                                i.tone(MoonTone::Danger).selected(true)
-                            })
-                            .when(
-                                !endpoint.invalid
-                                    && (endpoint.localhost_fallback
-                                        || endpoint.duplicate_name.is_some()),
-                                |i| i.tone(MoonTone::Warning).selected(true),
-                            ),
-                    ),
-            )
-            .children(
-                station_flag(view, i, cx)
-                    .map(|on| station_affix(weak, i, ids.address_station.clone(), on, p, cx)),
-            )
-            .into_any_element(),
-        proto_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),
-        preset_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),
-        total_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),
-        MoonInput::new(ids.group.clone())
-            .state(&row.group)
-            .small()
-            .into_any_element(),
-        // Both placeholders here live on the STATE instead, in `super::conn_input`: MoonUI honours
-        // `MoonInput::placeholder` only for a widget that creates its own state, so setting it
-        // beside `.state(..)` drops it silently -- which is why this column drew as a blank box.
-        MoonInput::new(ids.bundle.clone())
-            .state(&row.bundle)
-            .small()
-            .into_any_element(),
-        feed_popover(view, weak, i, row_key, ids, cx).into_any_element(),
-        MoonColorPicker::new(&row.color)
-            .colors(design::picker_palette())
-            .into_any_element(),
-        {
-            let weak_del = weak.clone();
-            MoonButton::new(ids.del.clone())
-                .danger()
-                .width(24.0)
-                .label("x")
-                .on_click(move |_, window, cx| {
-                    let _ = weak_del.update(cx, |this, ctx| this.delete_server(i, window, ctx));
-                })
-                .render()
-                .into_any_element()
-        },
-        recon,
-        status_dot(row_key, core_id, active, status.as_ref(), weak.clone(), p).into_any_element(),
-    ];
-    h_flex()
-        .w_full()
-        .gap_1()
-        .items_center()
-        .py_0p5()
-        // The list's scrollbar is an overlay that reserves no width of its own, so the status dot,
-        // the reconnect glyph and the delete button rendered beneath it. The header subtracts the
-        // same gutter, or the two stop lining up.
-        .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
-        .children(
-            ConnColId::ALL
-                .into_iter()
-                .zip(cells)
-                .map(|(col, content)| SettingsView::cell(col, micro).child(content)),
-        )
-        .into_any_element()
-}
-
-impl SettingsView {
-    /// Build one column's cell from the SHARED specification in [`super::columns`].
+    /// Rebuild every core row's editor state after the draft's core list changed.
     ///
-    /// Both [`server_row`] and [`Self::conn_col_head_row`] call this with the same [`ConnColId`],
-    /// so a column's width, growth and alignment cannot differ between the header and the rows.
-    ///
-    /// `min_w_0()` is the load-bearing part: gpui's default `min_size: auto` is the CONTENT-based
-    /// automatic minimum, which clamps a flex item UP to its child's min-content width. A control
-    /// that renders wider than its column would then eat free space in the rows that the header
-    /// still had -- and since only the header can hand that space to its growing columns,
-    /// every column after them drifted, further with each one. Pinned to the basis, an oversized
-    /// child overlaps instead of shifting the grid.
+    /// Every row gets a new key, so in this order and before anything (a paste affix, an open
+    /// menu) can name a row: open menus and the focused row are dropped, then the selection is
+    /// moved onto the new keys — the same core when it survived, the one that took its place when
+    /// it was deleted, else the first.
     ///
     /// Args:
-    ///     col: Which column to build.
-    ///     micro: Micro dropdown trigger metrics, from [`micro_trigger_metrics`].
-    ///
-    /// Returns:
-    ///     The empty cell, ready for its control or label.
-    fn cell(col: ConnColId, micro: MicroTriggerMetrics) -> Div {
-        let spec = col.spec();
-        let d = div().flex_basis(px(col.width(micro))).min_w_0();
-        // Centred on the header AND on the row, so the two centre on one axis.
-        let d = if spec.align == ConnColAlign::Center {
-            d.flex().items_center().justify_center()
-        } else {
-            d
-        };
-        // A cap, where a column has one, bounds growth WITHOUT freezing the column: it still
-        // shrinks when the window is too narrow for the row, which `flex_grow_0().flex_shrink_0()`
-        // below would not.
-        let d = match col.max_width(micro) {
-            Some(max) => d.max_w(px(max)),
-            None => d,
-        };
-        if spec.grow {
-            d.flex_grow_1()
-        } else {
-            d.flex_grow_0().flex_shrink_0()
-        }
-    }
-
-    /// Build one column heading, with its tooltip, ported from egui's `head_tip`.
-    ///
-    /// The heading reads like every other table header in the app: muted, unadorned, its tooltip
-    /// found by hovering rather than advertised. It used to be underlined in `text_soft` and set
-    /// in full-strength `text`, which made a sort-and-tooltip heading look like a hyperlink --
-    /// the one place in this codebase that did (`grep -n "underline()"`). The reference is
-    /// MoonUI's own `MoonDataTable` header (`moon/data_table/header.rs`), which paints
-    /// `style.header_text` -- `p.text_muted` -- and attaches its tooltip with no visual
-    /// affordance at all; Report and Orders are drawn by it.
-    ///
-    /// Losing the affordance costs nothing here, because the two cryptic cells that actually
-    /// needed decoding -- `V0` and `8/8` -- now carry their own tooltips on the row itself.
-    ///
-    /// A column with no `label` -- colour, delete, reconnect, status -- yields the bare cell,
-    /// which still has to be emitted: the header's growing columns only receive the same free
-    /// space the rows give them when the trailing widths are reserved too.
-    ///
-    /// Args:
-    ///     col: Which column to head.
-    ///     micro: Micro dropdown trigger metrics, from [`micro_trigger_metrics`].
-    ///     p: Active palette.
-    ///     cx: Application context used for the label's text size.
-    ///
-    /// Returns:
-    ///     The column's header cell.
-    fn col_head(
-        col: ConnColId,
-        micro: MicroTriggerMetrics,
-        p: MoonPalette,
-        cx: &App,
-    ) -> AnyElement {
-        let spec = col.spec();
-        let base = Self::cell(col, micro);
-        let Some(label_key) = spec.label else {
-            return base.into_any_element();
-        };
-        let tip: SharedString = t!(spec.tip.unwrap_or(label_key)).to_string().into();
-        // The id and the tooltip go on `base` ITSELF, never on a wrapper: `base` carries the
-        // column's `flex_basis`, cap and grow policy, so anything wrapped around it would become
-        // the flex item instead and the heading would drift off its own column.
-        base.id(spec.id)
-            .child(
-                div()
-                    .ml(px(spec.head_pad))
-                    .min_w_0()
-                    // A label longer than its column ellipsises INSIDE the column; it may not
-                    // widen it, or the heading would push the grid it is describing.
-                    .truncate()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_muted))
-                    .child(t!(label_key).to_string()),
-            )
-            .tooltip(move |_window, cx| {
-                cx.new(|_| MoonTooltipView::new(tip.clone()).max_width(320.0))
-                    .into()
-            })
-            .into_any_element()
-    }
-
-    /// Build an arbitrary-width help label with a wrapping tooltip.
-    ///
-    /// Used for section or group headings that need an explanation on hover rather than a column.
-    /// Bold `text` at full strength, matching `settings/common.rs:section`, and NOT underlined:
-    /// a heading is not a link. Same reasoning as [`Self::col_head`] above.
-    ///
-    /// Args:
-    ///     id: Stable identity for the tooltip wrapper.
-    ///     label: Visible heading text.
-    ///     tip: Already-localized explanatory tooltip text.
-    ///     p: Active palette supplying the heading colour.
-    ///
-    /// Returns:
-    ///     The full-strength heading label wrapped in its explanatory tooltip.
-    pub(super) fn hint_label(
-        id: &'static str,
-        label: impl Into<SharedString>,
-        tip: SharedString,
-        p: MoonPalette,
-    ) -> impl IntoElement {
-        with_tip(
-            SharedString::from(id),
-            tip,
-            360.0,
-            div()
-                .font_bold()
-                .text_color(rgb(p.text))
-                .child(label.into()),
-        )
-    }
-
-    /// Render the core table header over the columns it names.
-    ///
-    /// Every cell comes from [`super::columns`], in the same order and with the same widths
-    /// `server_row` uses, and the row is inset by the same [`CONN_TABLE_INSET`] `tab.rs` gives a
-    /// core row -- the two used to carry that number separately. A muted bottom rule in the
-    /// palette's own border colour separates the heading from the tree below it.
-    ///
-    /// Args:
-    ///     p: Active palette.
-    ///     cx: Application context used for label sizing.
-    ///
-    /// Returns:
-    ///     The one header row, drawn above the virtualized list.
-    pub(super) fn conn_col_head_row(p: MoonPalette, cx: &App) -> impl IntoElement {
-        // Measured ONCE, as `server_row` does and as `ConnColId::width` asks for -- not
-        // once per column.
-        let micro = micro_trigger_metrics(cx);
-        h_flex()
-            .w_full()
-            .gap_1()
-            .items_center()
-            .pl(px(CONN_TABLE_INSET))
-            // The same gutter every row of the list below reserves for its overlay scrollbar, so
-            // the headings stay over their own columns.
-            .pr(design::ui_px(cx, design::MOON_SCROLLBAR_OVERLAY_W))
-            .pb(px(3.0))
-            .border_b_1()
-            .border_color(rgb(p.border))
-            .children(ConnColId::ALL.map(|col| Self::col_head(col, micro, p, cx)))
+    ///     selected_index: Draft index to select, as it was before the change.
+    ///     removed: Draft index the change deleted.
+    ///     window: Settings window the editors are built in.
+    ///     cx: Settings context.
+    pub(in crate::settings) fn rebuild_conn(
+        &mut self,
+        selected_index: Option<usize>,
+        removed: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.picking = None;
+        self.conn = build_conn(&self.backend, window, cx);
+        let keys: Vec<u64> = self.conn.iter().map(|r| r.row_key).collect();
+        self.conn_selected = super::entries::reselect(selected_index, removed, &keys);
     }
 }

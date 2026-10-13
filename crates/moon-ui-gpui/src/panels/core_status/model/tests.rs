@@ -3,11 +3,10 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use moon_core::feed::{ConnStatus, CoreEndpoint, CoreTimeOffsetStatus};
-use moon_core::session::{CoreStartupState, CoreStartupStatus, CoreSysStatus};
+use moon_core::session::{CoreStartupStatus, CoreSysStatus};
 
 use super::{
-    CoreStatusRow, GroupVersion, ServerConnectivity, ServerKey, aggregate_servers, group_version,
-    version_behind_of,
+    CoreStatusRow, GroupVersion, ServerKey, aggregate_servers, group_version, version_behind_of,
 };
 
 /// Build one core snapshot for aggregation tests.
@@ -30,7 +29,6 @@ fn row(
             port,
         }),
         ping_warn: false,
-        exch_warn: false,
         ping_sev: crate::backend::core_warn::LatencySeverity::Normal,
         exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
         api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
@@ -363,34 +361,6 @@ fn cores_within_server_ordered_by_name() {
     );
 }
 
-/// `model.rs:connectivity` must treat a partially ready server as degraded; classifying any ready
-/// child as online hides a failed sibling.
-#[test]
-fn partial_readiness_is_degraded() {
-    let rows = [
-        row(
-            41,
-            Some([203, 0, 113, 5]),
-            3000,
-            ConnStatus::Ready,
-            CoreSysStatus::default(),
-        ),
-        row(
-            42,
-            Some([203, 0, 113, 5]),
-            3001,
-            ConnStatus::Failed("offline".to_string()),
-            CoreSysStatus::default(),
-        ),
-    ];
-
-    let server = &aggregate_servers(&rows, None)[0];
-
-    assert_eq!(server.ready_count, 1);
-    assert_eq!(server.connectivity, ServerConnectivity::Degraded);
-    // The connectivity WARNING (conn_warn) now comes from the backend engine, tested beside it.
-}
-
 /// One core row carrying only an API-key state.
 fn key_row(id: u64, address: [u8; 4], key: super::ApiKeyState) -> CoreStatusRow {
     CoreStatusRow {
@@ -556,96 +526,4 @@ fn a_count_without_a_date_reaches_the_column() {
         super::ApiKeyState::of(Some(dateless), 40 * 86_400_000),
         super::ApiKeyState::Days(2)
     );
-}
-
-/// Build one core row for `group_startup` tests, varying only connection status and the startup
-/// snapshot.
-fn startup_row(status: ConnStatus, startup: CoreStartupStatus) -> CoreStatusRow {
-    CoreStatusRow {
-        fault: None,
-        mode_suggestion: None,
-        id: 1,
-        name: "Core 1".to_string(),
-        status,
-        sys: CoreSysStatus::default(),
-        endpoint: None,
-        ping_warn: false,
-        exch_warn: false,
-        ping_sev: crate::backend::core_warn::LatencySeverity::Normal,
-        exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
-        api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
-        api_warn: false,
-        api_notice: false,
-        api_quota: None,
-        api_quota_warn: false,
-        startup,
-        time_offset: CoreTimeOffsetStatus::default(),
-        server_version: None,
-        server_version_suffix: None,
-        version_behind: None,
-        update: None,
-    }
-}
-
-/// `group_startup`: one still-starting core among otherwise-`Ready` ones reports THAT core's
-/// progress — the unfinished core must not be averaged or overwritten away by its finished
-/// siblings.
-#[test]
-fn one_still_starting_core_reports_its_own_progress() {
-    let rows = [
-        startup_row(
-            ConnStatus::Ready,
-            CoreStartupStatus {
-                state: CoreStartupState::Ready,
-                elapsed_ms: 9_000,
-                ..Default::default()
-            },
-        ),
-        startup_row(
-            ConnStatus::Stage("connecting…".to_string()),
-            CoreStartupStatus {
-                state: CoreStartupState::Connecting,
-                completed_mask: 0b0000_0011,
-                elapsed_ms: 3_000,
-                ..Default::default()
-            },
-        ),
-    ];
-
-    let cell = super::group_startup(&rows);
-    assert_eq!(
-        cell,
-        Some(super::StartupCell::Progress {
-            done: 2,
-            total: moon_core::session::INIT_STEPS_TOTAL,
-            elapsed_ms: 3_000,
-        })
-    );
-}
-
-/// `group_startup`: once every core has settled, the group reports the LONGEST elapsed time any of
-/// them took, not the first or the shortest.
-#[test]
-fn an_all_ready_group_reports_the_maximum_elapsed() {
-    let rows = [
-        startup_row(
-            ConnStatus::Ready,
-            CoreStartupStatus {
-                state: CoreStartupState::Ready,
-                elapsed_ms: 4_000,
-                ..Default::default()
-            },
-        ),
-        startup_row(
-            ConnStatus::Ready,
-            CoreStartupStatus {
-                state: CoreStartupState::Ready,
-                elapsed_ms: 11_000,
-                ..Default::default()
-            },
-        ),
-    ];
-
-    let cell = super::group_startup(&rows);
-    assert_eq!(cell, Some(super::StartupCell::Done { elapsed_ms: 11_000 }));
 }

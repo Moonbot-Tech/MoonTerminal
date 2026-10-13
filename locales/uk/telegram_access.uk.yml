@@ -7,7 +7,6 @@ telegram.access_owner_summary: "Власник: усі ядра, повний д
 telegram.access_viewer_summary: "Спостерігач: ядер: %{count}, лише перегляд"
 telegram.access_waiting: "Спостерігач: ядер не призначено, доступу до даних немає"
 telegram.access_no_cores: "Для цього чату ще не призначено ядер. Попросіть власника вибрати їх у MoonTerminal: Налаштування → Telegram."
-telegram.access_edit: "Налаштувати"
 telegram.access_collapse: "Згорнути"
 telegram.access_name: "Назва чату в терміналі"
 telegram.access_name_placeholder: "Наприклад, Олексій — клієнт"

@@ -128,9 +128,9 @@ pub(super) struct RosterWidthEnv {
 /// GPUI drag payload identifying the panel whose roster divider is being dragged. Carries no
 /// visual.
 ///
-/// `view` is the same guard `ByIpResizeDrag` uses and for the same reason: a docked tab and the
-/// global window each register a listener for this payload type, so without the check a drag
-/// started in one would resize the roster of the other.
+/// `view` guards the payload: a docked tab and the global window each register a listener for
+/// this payload type, so without the check a drag started in one would resize the roster of
+/// the other.
 #[derive(Clone, Debug)]
 struct RosterResizeDrag {
     /// Entity id of the panel that owns the handle being dragged.
@@ -541,8 +541,8 @@ impl AssetsView {
 
     /// Restore automatic width for the roster column.
     ///
-    /// Mirrors the `MoonDataTable` and By-IP divider gesture: a plain double-click drops the
-    /// column back to its default width. One column, so there is no Shift-to-reset-all variant.
+    /// Mirrors the `MoonDataTable` divider gesture: a plain double-click drops the column back
+    /// to its default width. One column, so there is no Shift-to-reset-all variant.
     ///
     /// "No stored width" and "stored width equal to the default" are deliberately NOT normalized:
     /// a drag landing exactly on the default persists that number and pins it across a future
@@ -879,10 +879,8 @@ impl AssetsView {
 
 /// Build the divider strip pinned to the roster column's right edge.
 ///
-/// Mirrors `core_status::by_ip_header::resize_handle`, with one difference: this function already
-/// has a `Context<AssetsView>` (it is called from within `bottom()`), so its handlers use
-/// `cx.listener` directly instead of `window.listener_for` — the free-function workaround
-/// `by_ip_header`'s header needs because it has no `Context` of its own.
+/// This function already has a `Context<AssetsView>` (it is called from within `bottom()`), so
+/// its handlers use `cx.listener` directly instead of `window.listener_for`.
 ///
 /// Args:
 ///     anchor_base: The roster's current BASE (pre-drag) width, baked in as the drag's starting
@@ -913,8 +911,8 @@ fn roster_resize_handle(anchor_base: f32, p: MoonPalette, cx: &Context<AssetsVie
         .tooltip(crate::panels::common::text_tooltip(
             t!("assets.roster_resize").to_string(),
         ))
-        // One column, so no Shift variant — unlike the By-IP divider, there is nothing else to
-        // reset and the tooltip must not promise one.
+        // One column, so no Shift variant: there is nothing else to reset and the tooltip
+        // must not promise one.
         .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
             if event.click_count() >= 2 {
                 this.reset_roster_col(cx);

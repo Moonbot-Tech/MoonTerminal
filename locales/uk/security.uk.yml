@@ -10,12 +10,9 @@ security.mismatch: "Паролі не збігаються"
 
 # --- Launch gate ---
 security.launch: "Пароль під час запуску"
-security.launch_hint: "Локальна засувка: запитується під час кожного запуску. Довжина будь-яка. Ключі ядер вона НЕ шифрує — хто має доступ до файлів, прочитає їх і без неї."
 
 # --- servers.enc encryption password ---
 security.file: "Пароль шифрування servers.enc"
-security.file_hint: "Запитується лише там, де файл не відкривається ключем машини: на новій машині або після втрати сховища ключів ОС. Введений правильно, він запам'ятовується для цієї машини і більше не запитується."
-security.file_warning: "Цей пароль не відновити. Втративши його разом із ключем машини, ви втратите ядра."
 security.rule: "Щонайменше %{min} символів і два різні класи символів."
 security.bits: "≈%{bits} біт"
 
@@ -35,8 +32,6 @@ security.issue.low_entropy: "Надто передбачуваний — зро�
 
 # --- Machine key slots ---
 security.machines: "Машин із доступом: %{used} з %{max}"
-security.machines_unknown: "Машин із доступом: — з %{max}"
-security.forget_machines: "Забути інші"
 security.machines_forgotten: "Доступ інших машин відкликано"
 
 # --- Apply results ---
@@ -64,3 +59,19 @@ login.throttled: "Після кількох помилок введення сп
 login.err.empty: "Введіть пароль"
 login.err.backend: "Не вдалося перевірити пароль — подробиці в журналі"
 login.err.wrong: "Неправильний пароль"
+
+# Settings redesign (phases 3-5)
+security.machines.title: "Комп'ютери з доступом"
+security.machines.label: "Відкривають файл без пароля"
+security.machines.count: "%{n} з %{max}"
+security.machines.keep_only: "Залишити тільки цей…"
+security.machines.keep_only_off: "Доступ має лише цей комп'ютер — відкликати нічого."
+security.machines.hint: "Відкликання зберігається одразу."
+security.machines.confirm_title: "Залишити доступ тільки цьому комп'ютеру?"
+security.machines.confirm_body: "Інші комп'ютери більше не відкриють файл підключень без пароля. Зміна зберігається одразу."
+security.machines.confirm_btn: "Залишити тільки цей"
+security.unrecoverable: "Відновити неможливо. Забудете пароль на новому комп'ютері — ключі ядер доведеться вводити знову."
+security.launch.title: "Пароль під час запуску"
+security.launch.hint: "Запитується під час кожного старту. Ключі ядер не шифрує."
+security.file.title: "Шифрування файлу підключень"
+security.file.hint: "Потрібен лише на комп'ютері, де файл не відкривається сам."

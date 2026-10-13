@@ -118,6 +118,8 @@ pub(crate) struct StationJobs {
     /// The zone the last zone push carried: after it ends the zone is pushed again only when the
     /// header clock moved meanwhile, so a station that refuses it is not asked again at once.
     zone_pushed: Option<String>,
+    /// The startup read was attempted: it is never repeated, whatever it found.
+    prefetched: bool,
     task: Option<Task<()>>,
 }
 
@@ -198,6 +200,74 @@ impl StationJobs {
         self.bot_read_ms = Some(moon_core::util::time::now_unix_ms_i64());
     }
 
+    /// The read that refreshes the station's bot and core listing, and the kind it runs as: a
+    /// recovery read toward an outstanding hand-over's destination, else a quiet read of `known`.
+    ///
+    /// Args:
+    ///     known: The configured station, if any (`known_target`).
+    ///
+    /// Returns:
+    ///     `None` while a job runs or when no station is configured and nothing is pending.
+    fn bot_read(&self, known: Option<moon_remote::ssh::Target>) -> Option<(job::Job, Kind)> {
+        if self.running {
+            return None;
+        }
+        if let Some(pending) = &self.pending {
+            return Some((
+                job::Job::BotState {
+                    target: pending.target(),
+                },
+                Kind::Recovery,
+            ));
+        }
+        known.map(|target| (job::Job::BotState { target }, Kind::Quiet))
+    }
+
+    /// The startup read that warms the Telegram and Station pages before Settings opens.
+    ///
+    /// Latched: the first call marks the attempt, so later calls (another startup path, a loop
+    /// tick) return nothing even when the first found no station or a running job.
+    ///
+    /// Args:
+    ///     known: The configured station, if any (`known_target`).
+    ///
+    /// Returns:
+    ///     The read to start, at most once per process.
+    fn prefetch_read(
+        &mut self,
+        known: Option<moon_remote::ssh::Target>,
+    ) -> Option<(job::Job, Kind)> {
+        if std::mem::replace(&mut self.prefetched, true) {
+            return None;
+        }
+        self.bot_read(known)
+    }
+
+    /// Apply a quiet read's end: bot state and core identities, or the reason the read failed,
+    /// while the user's outcome stays untouched.
+    fn apply_quiet(&mut self, done: job::Done) {
+        match done {
+            job::Done::Ok { bot: Some(bot), .. } | job::Done::Installed { bot: Some(bot), .. } => {
+                self.observe_bot(bot);
+                self.bot_error = None;
+            }
+            job::Done::Ok { .. }
+            | job::Done::Installed { .. }
+            | job::Done::BotOff { .. }
+            | job::Done::AddressProbed(_)
+            | job::Done::InstallProbed(_)
+            | job::Done::AddressChanged
+            | job::Done::Removed { .. } => {}
+            job::Done::NeedsAdminPassword => {
+                self.bot_error = Some(t!("telegram.server.needs_old_admin").to_string());
+            }
+            job::Done::Failed { reason, .. } => {
+                log::warn!("station quiet bot read failed: {reason}");
+                self.bot_error = Some(reason);
+            }
+        }
+    }
+
     /// The server was forgotten: nothing learnt about it applies to the next one.
     fn clear_known(&mut self, outcome: Result<String, String>) {
         let st = self;
@@ -251,20 +321,17 @@ impl Backend {
     /// Read the station's bot quietly, or reconcile an outstanding hand-over at its original
     /// destination. Ordinary reads preserve the outcome; recovery updates it. A running job waits.
     pub(crate) fn station_refresh_bot(&mut self, cx: &mut Context<Self>) {
-        if self.station.running {
-            return;
+        if let Some((job, kind)) = self.station.bot_read(known_target()) {
+            self.station_begin(job, false, kind, cx);
         }
-        if let Some(pending) = &self.station.pending {
-            self.station_begin(
-                job::Job::BotState {
-                    target: pending.target(),
-                },
-                false,
-                Kind::Recovery,
-                cx,
-            );
-        } else if let Some(target) = known_target() {
-            self.station_begin(job::Job::BotState { target }, false, Kind::Quiet, cx);
+    }
+
+    /// Warm the Telegram and Station Settings pages once at startup with the same read their
+    /// opening fires, so they show the station's bot, chats, notifications, menu, layout, cores
+    /// and tape window at once. Nothing without a configured station; never repeated.
+    pub(crate) fn station_prefetch(&mut self, cx: &mut Context<Self>) {
+        if let Some((job, kind)) = self.station.prefetch_read(known_target()) {
+            self.station_begin(job, false, kind, cx);
         }
     }
 
@@ -537,25 +604,7 @@ impl Backend {
         if kind == Kind::Quiet {
             // A quiet read refreshes bot state and core identities while preserving the user's
             // outcome; a failed read records its error instead.
-            match done {
-                job::Done::Ok { bot: Some(bot), .. }
-                | job::Done::Installed { bot: Some(bot), .. } => {
-                    self.station.observe_bot(bot);
-                    self.station.bot_error = None;
-                }
-                job::Done::Ok { .. }
-                | job::Done::Installed { .. }
-                | job::Done::BotOff { .. }
-                | job::Done::AddressProbed(_)
-                | job::Done::InstallProbed(_)
-                | job::Done::AddressChanged
-                | job::Done::Removed { .. } => {}
-                job::Done::NeedsAdminPassword => {
-                    self.station.bot_error =
-                        Some(t!("telegram.server.needs_old_admin").to_string());
-                }
-                job::Done::Failed { reason, .. } => self.station.bot_error = Some(reason),
-            }
+            self.station.apply_quiet(done);
             return true;
         }
         if kind == Kind::User {

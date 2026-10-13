@@ -2,26 +2,89 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-# --- Top bar and footer ---
+# --- Top bar ---
 core_status.all_cores: "Todos os núcleos"
 core_status.cores_n: "Núcleos: %{n}"
+# Short reason beside a problem core's name. `%{dur}` is the existing elapsed figure.
+core_status.row.reason_for: "%{reason} · %{dur}"
+# Exchange heading: count, median core ping, and how many are not Ready.
+core_status.section.aggregate_one: "%{n} núcleo · ping mediano %{ping} ms · %{k} sem ligação"
+core_status.section.aggregate_few: "%{n} núcleos · ping mediano %{ping} ms · %{k} sem ligação"
+core_status.section.aggregate_many: "%{n} núcleos · ping mediano %{ping} ms · %{k} sem ligação"
+core_status.section.aggregate_ok_one: "%{n} núcleo · ping mediano %{ping} ms · todos ligados"
+core_status.section.aggregate_ok_few: "%{n} núcleos · ping mediano %{ping} ms · todos ligados"
+core_status.section.aggregate_ok_many: "%{n} núcleos · ping mediano %{ping} ms · todos ligados"
+core_status.section.aggregate_nomed_one: "%{n} núcleo · %{k} sem ligação"
+core_status.section.aggregate_nomed_few: "%{n} núcleos · %{k} sem ligação"
+core_status.section.aggregate_nomed_many: "%{n} núcleos · %{k} sem ligação"
+core_status.section.aggregate_ok_nomed_one: "%{n} núcleo · todos ligados"
+core_status.section.aggregate_ok_nomed_few: "%{n} núcleos · todos ligados"
+core_status.section.aggregate_ok_nomed_many: "%{n} núcleos · todos ligados"
 # Hover on a Flat-view exchange heading while a column sort is on. MoonUI draws one unqualified
 # sort arrow for the whole table, so this is where the section-scoped meaning is spelled out.
 core_status.section_sort_hint: "Ordenado dentro de cada corretora"
-core_status.cores: "Núcleos"
 core_status.empty: "Sem dados de núcleo"
-core_status.mode.by_ip: "Por IP"
-core_status.mode.flat: "Lista"
+core_status.mode.flat: "Núcleos"
+core_status.mode.servers: "Servidores"
 core_status.mode.problems: "Problemas"
-core_status.mode.warnings: "Alertas"
+core_status.mode.warnings: "Alarmes"
 core_status.mode.updates: "Atualizações"
-core_status.warn_empty: "Nenhum alerta registrado"
+core_status.mode.flat_short: "Núcl."
+core_status.mode.servers_short: "Serv."
+core_status.mode.problems_short: "Probl."
+core_status.mode.warnings_short: "Alarm."
+core_status.mode.updates_short: "Atu."
+core_status.updates.behind_n: "Atualizar os atrasados (%{n})"
+core_status.updates.legend_newest_one: "%{build} — %{n} núcleo (a mais nova)"
+core_status.updates.legend_newest_few: "%{build} — %{n} núcleos (a mais nova)"
+core_status.updates.legend_newest_many: "%{build} — %{n} núcleos (a mais nova)"
+core_status.updates.legend_build_one: "%{build} — %{n} núcleo"
+core_status.updates.legend_build_few: "%{build} — %{n} núcleos"
+core_status.updates.legend_build_many: "%{build} — %{n} núcleos"
+core_status.updates.up_to_date_title: "Todos os núcleos estão na compilação mais nova"
+core_status.updates.up_to_date_body: "%{build} é a mais nova entre os seus núcleos."
+core_status.updates.hint: "A atualização corre um servidor de cada vez; o núcleo reinicia durante cerca de 20 s."
+core_status.warn.where: "Onde"
+core_status.empty.no_cores_title: "Ainda não há núcleos"
+core_status.empty.no_cores_body: "Adicione um núcleo em Definições → Núcleos — a ligação, a carga e a versão aparecem aqui."
+core_status.empty.open_settings: "Abrir Definições"
+core_status.empty.no_problems_title: "Sem problemas"
+core_status.empty.no_problems_body: "Todos os %{n} núcleos estão online, o ping está normal e as versões estão atuais."
+core_status.empty.no_alarms_title: "Não houve alertas nas últimas 24 horas"
+core_status.empty.no_alarms_body: "Os limiares de CPU, ping, memória e chave API definem-se na engrenagem ao lado dos modos."
+core_status.servers.cpu: "CPU"
+core_status.servers.ram_free: "RAM livre"
+core_status.search.placeholder: "Núcleo, servidor ou IP"
+core_status.columns.menu: "Colunas"
+core_status.health.verdict_bad: "Precisam de atenção: %{n} de %{total}"
+core_status.health.verdict_ok_single: "O núcleo está online"
+core_status.health.verdict_ok_one: "%{total} núcleo está online"
+core_status.health.verdict_ok_few: "Todos os %{total} núcleos estão online"
+core_status.health.verdict_ok_many: "Todos os %{total} núcleos estão online"
+core_status.health.sub_online_one: "%{n} online"
+core_status.health.sub_online_few: "%{n} online"
+core_status.health.sub_online_many: "%{n} online"
+core_status.health.sub_servers_one: "%{n} servidor"
+core_status.health.sub_servers_few: "%{n} servidores"
+core_status.health.sub_servers_many: "%{n} servidores"
+core_status.health.chip_offline: "Offline e falhas"
+core_status.health.chip_ping: "Ping do núcleo acima do normal ×%{k}"
+core_status.health.chip_version: "Versão atrasada"
+core_status.health.chip_api: "Chave de API a expirar"
+core_status.health.chip_alarms: "Alarmes em 24 h"
+core_status.same.title: "Igual em todos:"
+core_status.same.tz_off: "UTC"
+core_status.same.cpus: "CPUs lógicas"
+core_status.same.api_key: "Chave de API"
+core_status.same.api_quota: "Cota de API"
+core_status.same.version: "MoonBot"
+core_status.same.no_expiry: "sem validade"
+core_status.same.not_set: "não definida"
 # Warnings-list columns.
 core_status.col.time: "Hora"
 core_status.col.dur: "Duração"
 core_status.col.type: "Tipo"
 core_status.col.peak: "Pico"
-core_status.footer: "Servidores: %{servers}  Núcleos: %{cores}  Online: %{online}"
 
 # --- Server tree ---
 core_status.server_n: "Servidor %{n}"
@@ -56,12 +119,6 @@ core_status.col.version: "MoonBot"
 # server what the latest MoonBot is. Both numbers arrive as typed builds and are dotted by
 # `util::fmt::core_build` at the call site.
 core_status.version_behind: "Build do MoonBot desatualizada: %{have}. A mais nova entre os seus núcleos é %{newest}"
-# The same fact on a COLLAPSED server row. It fires ONLY where the group is `Uniform` -- every core
-# on the server agreed on one build -- so it CAN name the "have", and that number is the one already
-# printed on the row. A `Mixed` group is never marked at all (its ellipsis states no build, so it
-# has none to be behind with), which is why this string must not tell the user to expand anything:
-# expanding a Uniform group reveals N cores all reporting the number they can already see.
-core_status.version_behind_group: "Todo núcleo neste servidor roda %{have}; existe uma build mais nova: %{newest}"
 core_status.col.api_key: "API (d)"
 # Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
 # lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
@@ -80,18 +137,6 @@ core_status.col_tip.api_key: "Dias até a chave de API da corretora expirar"
 # second venue starts publishing a quota.
 core_status.col.api_quota: "Limite de API"
 
-# --- By IP column header (the fixed caption row above the server tree) ---
-# CPU column: percentage plus the machine's logical-core count in parentheses.
-core_status.hdr.cpu: "CPU (núcleos)"
-# Memory column: free share and the reconstructed total RAM.
-core_status.hdr.mem: "Mem. livre"
-# IP column heading (the abbreviation is identical across locales).
-core_status.hdr.ip: "IP"
-# Hover on a By-IP column divider. It has to name the double-click gestures: nothing else in the
-# panel advertises them, and the Shift variant is the only reset a detached window offers.
-core_status.col_resize: "Arraste para redimensionar. Um clique duplo restaura esta coluna, Shift+clique duplo restaura todas"
-# API-key column heading in the By-IP tree; carries the unit its cells omit.
-core_status.hdr.api_key: "API (d)"
 # The same axis named as a KIND in the Warnings episode list, where no unit belongs.
 core_status.axis_api: "API"
 # Unit for a request count in the Warnings peak column.
@@ -290,8 +335,6 @@ core_status.fault.f.core: "Núcleo"
 core_status.col.problem_category: "Categoria"
 core_status.col.problem_kind: "Tipo"
 core_status.col.problem_title: "Problema"
-# Shown only when EVERY core in scope delivered a list and all of them were empty.
-core_status.problems_empty: "Os núcleos não informam problemas"
 # Shown when at least one core has never delivered a list — it is older than the extension, or its
 # list has not arrived yet. Deliberately NOT phrased as a clean bill: an absent list is not proof
 # that a core is healthy.

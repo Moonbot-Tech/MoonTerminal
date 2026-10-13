@@ -20,6 +20,10 @@ pub(crate) struct AnalyticsSessionState {
     /// the figures silently switched off. Expanding it is a look-at-it-now action, not a
     /// preference — it survives closing the window and nothing more.
     pub(super) undated_expanded: bool,
+    /// Whether the Summary compares against the previous equal-length period.
+    ///
+    /// Process-lifetime like `undated_expanded`; not persisted to the layout.
+    pub(super) compare_prev: bool,
 }
 
 /// Effective Auto-workspace scope inherited from the last live singleton owner.
@@ -181,6 +185,7 @@ impl Default for AnalyticsSessionState {
             core_caption: toolbar::CoreSelectionCaption::default(),
             strat_mode: tuner::StratMode::Filters,
             undated_expanded: false,
+            compare_prev: true,
         }
     }
 }

@@ -3,11 +3,13 @@
 //! The slots themselves live beside the data they address — `moon_core::config::KeySlot`,
 //! `GestureSlot` and `MoveKindSlot`, with the accessors on `HotkeysConfig` — and what each slot IS
 //! lives beside the dispatcher (`crate::hotkeys::meta`). This page owns only what is the page's:
-//! [`registry`] says which rows it shows and in what order, [`tab`] draws them, [`clash`] captions
-//! the ones that collide, and [`pull`] and [`pull_gestures`] hold the pure preview/apply logic
-//! behind the "pull layout from core" button — the keys and the mouse gestures respectively.
+//! [`registry`] says which rows it shows and in what order, [`page`] draws them as free builders
+//! over a row model, [`tab`] fills that model and supplies the editors, [`clash`] captions the
+//! ones that collide, and [`pull`] and [`pull_gestures`] hold the pure preview/apply logic behind
+//! "Взять раскладку с ядра…" — the keys and the mouse gestures respectively.
 
 mod clash;
+mod page;
 mod pull;
 mod pull_gestures;
 mod registry;
@@ -15,6 +17,7 @@ mod tab;
 
 use moon_core::config::{GestureSlot, HotkeysConfig, MouseGestureBinding};
 
+pub(in crate::settings) use clash::conflict_count;
 pub(in crate::settings) use registry::HotkeyGroup;
 
 /// Writes one gesture the way the EDITOR must: carrying the mirror "same for move" demands.

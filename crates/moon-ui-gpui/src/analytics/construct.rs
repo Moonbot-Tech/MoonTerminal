@@ -322,6 +322,8 @@ impl AnalyticsView {
             data_period: saved_period.unwrap_or(Period::CurMonth),
             data_range: saved_period.unwrap_or(Period::CurMonth).range(bound_zone),
             data_dirty: false,
+            summary_catching_up: false,
+            data_as_of: None,
             cores: Vec::new(),
             last_cores_at: None,
             core_refresh_needed: false,
@@ -358,11 +360,14 @@ impl AnalyticsView {
             latest_reads: bg::LatestReads::default(),
             busy_since: None,
             seq: 0,
-            hover_daily_bucket: None,
-            hover_cum_bucket: None,
-            hover_kind: None,
+            hover_profit_bucket: None,
             summary_popup_hover: summary::PopupHover::default(),
-            show_all_core_ranks: saved_cores_show_all,
+            // The reused layout flag now means "ranking unfolded".
+            summary_ui: summary::SummaryUi {
+                unfolded: saved_cores_show_all,
+                ..Default::default()
+            },
+            compare_prev: session.compare_prev,
             sel_strategy: None,
             sel_extra: Vec::new(),
             strat_search: String::new(),

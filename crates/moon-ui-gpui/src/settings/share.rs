@@ -9,21 +9,13 @@ use gpui::*;
 use moon_core::config::{AppConfig, BadgesConfig, ChartThemeSet, HotkeysConfig, OrdersStyleSet};
 
 impl SettingsView {
-    /// Returns whether the active tab has a portable file and should show Copy/Paste actions.
-    pub(super) fn shareable(&self) -> bool {
-        matches!(
-            self.active,
-            Tab::Interface | Tab::Lines | Tab::Badges | Tab::Hotkeys
-        )
-    }
-
     /// Serializes the active tab's draft slice in its file format and copies it to the clipboard.
     pub(super) fn copy_tab(&mut self, cx: &mut Context<Self>) {
         let text = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
             match self.active {
-                Tab::Interface => d.theme.to_share_string(),
+                Tab::Appearance => d.theme.to_share_string(),
                 Tab::Lines => d.orders.to_share_string(),
                 Tab::Hotkeys => d.hotkeys.to_share_string(),
                 Tab::Badges => d.badges.to_share_string(),
@@ -54,7 +46,7 @@ impl SettingsView {
         };
 
         let applied = match self.active {
-            Tab::Interface => {
+            Tab::Appearance => {
                 let cur = self.draft_snapshot(cx, |d| d.theme.clone());
                 ChartThemeSet::parse_share(&text, &cur)
                     .map(|set| self.apply_draft(cx, move |d| d.theme = set))
@@ -82,7 +74,7 @@ impl SettingsView {
             // Rebuild editor states initialized from the draft during `build`, matching the
             // add/remove pattern used by badge and server editors.
             match self.active {
-                Tab::Interface => self.iface = interface::build(&self.backend, window, cx),
+                Tab::Appearance => self.iface = interface::build(&self.backend, window, cx),
                 Tab::Lines => self.lines = lines::build(&self.backend, window, cx),
                 Tab::Badges => self.badges = badges::build(&self.backend, window, cx),
                 _ => {}

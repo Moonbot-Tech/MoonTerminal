@@ -54,8 +54,7 @@ fn terminal_text_uses_no_legacy_font_channel_outside_documented_mirrors() {
                 .to_string_lossy()
                 .replace('\\', "/");
             let code = code_only(&std::fs::read_to_string(path).ok()?);
-            (!(matches!(rel.as_str(), "design.rs" | "settings/connections/table.rs")
-                || rel.starts_with("design/"))
+            (!(rel == "design.rs" || rel.starts_with("design/"))
                 && (code.contains("tokens.font(") || code.contains("design::font_value(")))
             .then_some(rel)
         })
@@ -72,7 +71,13 @@ fn terminal_text_uses_no_legacy_font_channel_outside_documented_mirrors() {
 /// follow the tier, so the rows stop aligning.
 #[test]
 fn settings_and_analytics_tabs_do_not_pin_custom_button_metrics() {
-    for path in ["settings/render.rs", "analytics/toolbar.rs"] {
+    // The Settings buttons live in the page header, the save bar and the sidebar, not in render.rs.
+    for path in [
+        "settings/render.rs",
+        "settings/frame.rs",
+        "settings/nav.rs",
+        "analytics/toolbar.rs",
+    ] {
         assert!(
             !code_only(&read_src(path)).contains("MoonButtonSize::Custom {"),
             "{path} must use the control tier instead of a custom button size"
@@ -117,14 +122,14 @@ fn toolbar_strip_text_uses_rendered_text_metrics() {
 /// Breakage: dropping `.max_w(` or `flex_1()` either fills the window again or refuses to shrink
 /// on a narrow Settings pane; a bare `.width(px(N))` reintroduces the hard-coded pixel regression.
 #[test]
-fn settings_slider_row_caps_the_track_through_tier_adapters() {
+fn settings_slider_field_caps_the_track_through_tier_adapters() {
     let common = read_src("settings/common.rs");
-    let body = code_only(braced_body(&common, "pub(super) fn slider_row("));
+    let body = code_only(braced_body(&common, "pub(super) fn slider_field("));
     for needle in [
         ".flex_1()",
         ".min_w(px(scale_w))",
         ".max_w(px(track_max))",
-        ".max_w(px(row_max))",
+        ".max_w_full()",
         "slider_track_max_w(",
         "design::ui_text_width_zoomed(",
         "design::ui_value(cx, 22.0)",
@@ -134,11 +139,11 @@ fn settings_slider_row_caps_the_track_through_tier_adapters() {
     ] {
         assert!(
             body.contains(needle),
-            "slider_row must keep {needle:?} so the track stays tier-derived and shrinks"
+            "slider_field must keep {needle:?} so the track stays tier-derived and shrinks"
         );
     }
     assert!(
         !body.contains(".width("),
-        "slider_row must not pin a hard-coded .width("
+        "slider_field must not pin a hard-coded .width("
     );
 }

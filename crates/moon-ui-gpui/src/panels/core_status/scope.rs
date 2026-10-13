@@ -169,7 +169,7 @@ impl CoreStatusView {
         }
     }
 
-    /// Build this panel's scope marker for the footer and empty-state text.
+    /// Build this panel's scope marker for the health strip and empty-state text.
     ///
     /// Args:
     ///     b: Backend snapshot containing workspace authority and live group membership.

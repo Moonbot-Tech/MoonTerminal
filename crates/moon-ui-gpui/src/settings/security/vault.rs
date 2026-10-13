@@ -15,7 +15,7 @@ pub(super) const MAX_MACHINE_SLOTS: usize = crypto::MAX_MACHINE_SLOTS;
 
 /// What the current `servers.enc` says about access, as far as the UI needs to know.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct VaultState {
+pub(in crate::settings) struct VaultState {
     /// A launch password is stored and will be asked for at startup.
     pub launch_password_set: bool,
     /// A password key slot exists, so the file can be opened on a machine with no keyring entry.
@@ -78,7 +78,18 @@ impl VaultError {
 /// Runs Argon2id when a file password is set — see the note in `crypto` about not doing that on a
 /// UI thread once the operation grows a progress indicator. It is accepted here because it happens
 /// on an explicit Save click, at most once per click.
+///
+/// All or nothing: a failure on the second password puts back the slots the first one changed.
 pub(super) fn apply(change: VaultChange) -> Result<(), VaultError> {
+    let before = snapshot();
+    let result = apply_both(change);
+    if result.is_err() {
+        restore(before);
+    }
+    result
+}
+
+fn apply_both(change: VaultChange) -> Result<(), VaultError> {
     if let Some(request) = change.file_password {
         crypto::set_password(request.as_deref()).map_err(map_error)?;
     }
@@ -86,6 +97,19 @@ pub(super) fn apply(change: VaultChange) -> Result<(), VaultError> {
         crypto::set_launch_password(request.as_deref()).map_err(map_error)?;
     }
     Ok(())
+}
+
+/// The key slots as they are now, to put back if a change made after it never reaches disk.
+pub(in crate::settings) struct Snapshot(crypto::HeaderSnapshot);
+
+/// Take a [`Snapshot`] of the current key slots.
+pub(super) fn snapshot() -> Snapshot {
+    Snapshot(crypto::header_snapshot())
+}
+
+/// Put the key slots of `snapshot` back, undoing every slot edit made since it was taken.
+pub(super) fn restore(snapshot: Snapshot) {
+    crypto::restore_header(snapshot.0);
 }
 
 /// Drop every machine key slot except this machine's.

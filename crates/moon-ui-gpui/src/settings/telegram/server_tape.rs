@@ -21,12 +21,14 @@ use moon_core::station_api::{CatchupSwitches, TapeCatchup, TapeWindow};
 use moon_remote::ssh::Target;
 use moon_remote::station::bot::BotState;
 use moon_ui::{
-    MoonButton, MoonCheckbox, MoonDisclosure, MoonDisclosureDirection, MoonPalette, MoonTag,
-    MoonTone, h_flex, rgba_from, v_flex,
+    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDisclosure, MoonDisclosureDirection,
+    MoonDropdown, MoonInputEvent, MoonInputState, MoonNumberInput, MoonPalette, MoonTag, MoonTone,
+    h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
 use super::super::SettingsView;
+use super::super::frame::{RemoteBar, SaveBar};
 use crate::backend::station::job::Job;
 use crate::design;
 
@@ -54,6 +56,11 @@ pub(in crate::settings) struct TapeEd {
     venues_open: bool,
     /// The pending re-read of a running catch-up.
     reread: Option<Task<()>>,
+    /// The long-position field, made on the first render that has a window.
+    long_input: Option<Entity<MoonInputState>>,
+    /// The minutes the field last showed from the draft; a draft that moved past it (a station
+    /// read) is written into the field, a field that moved past it is written into the draft.
+    long_shown: Option<u32>,
 }
 
 /// Take a new read into `seen`; an untouched draft follows it, an edited one stays. A read
@@ -75,6 +82,12 @@ fn reported_switches(catchup: &TapeCatchup) -> Option<CatchupSwitches> {
         auto: catchup.auto?,
         archives: catchup.archives.unwrap_or(true),
     })
+}
+
+/// What the long-position field shows after the user typed `typed`, clamped to `kept`: the same
+/// number when it was in range; `None` when it was not, so the next sync writes `kept` back.
+pub(super) fn long_shown_after(typed: u32, kept: u32) -> Option<u32> {
+    (typed == kept).then_some(kept)
 }
 
 impl TapeEd {
@@ -104,7 +117,7 @@ fn reported_catchup(bot: Option<&BotState>) -> Option<&TapeCatchup> {
 
 /// The locale key of `base` for count `n`: Slavic one/few/many, one or many for the other
 /// languages (each dictionary carries all three forms).
-pub(super) fn plural_key(base: &str, n: u64) -> String {
+pub(in crate::settings) fn plural_key(base: &str, n: u64) -> String {
     let form = if matches!(rust_i18n::locale().as_ref(), "ru" | "uk") {
         if (11..=14).contains(&(n % 100)) {
             "many"
@@ -363,8 +376,7 @@ pub(super) fn catchup_breakdown(catchup: &TapeCatchup) -> Option<String> {
 /// The breakdown under the tiles: one muted wrapping text, never a row of separate pieces.
 pub(super) fn tape_breakdown(text: String, cx: &App) -> AnyElement {
     let p = MoonPalette::active(cx);
-    div()
-        .w_full()
+    crate::settings::common::cap_prose(div().w_full(), cx)
         .min_w_0()
         .font_family(design::ui_font())
         .text_size(design::t_caption(cx))
@@ -452,20 +464,23 @@ pub(super) fn tape_tiles(tiles: &[Tile], width: f32, cx: &App) -> AnyElement {
             .border_1()
             .border_color(rgba_from(p.border, 1.0))
             .debug_selector(move || format!("server-tape-tile-{index}"))
-            .child(
-                div()
-                    .font_family(design::mono())
-                    .text_size(design::t_body_lg(cx))
-                    .text_color(rgba_from(p.text, 1.0))
-                    .child(tile.value.to_string()),
-            )
+            // The mockup's tile: a small muted caption over a prominent mono value.
             .child(
                 div()
                     .min_w_0()
                     .font_family(design::ui_font())
-                    .text_color(rgba_from(p.text, 1.0))
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgba_from(p.text_muted, 1.0))
                     .debug_selector(move || format!("server-tape-tile-label-{index}"))
                     .child(t!(tile.label).to_string()),
+            )
+            .child(
+                div()
+                    .font_family(design::mono())
+                    .text_size(design::t_title(cx))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgba_from(p.text, 1.0))
+                    .child(tile.value.to_string()),
             )
             .child(
                 div()
@@ -588,7 +603,8 @@ pub(super) fn venue_reach_table(
         )
         .child(
             div()
-                .min_w_0()
+                .flex_none()
+                .whitespace_nowrap()
                 .font_family(design::ui_font())
                 .child(t!("telegram.server.catchup_venues").to_string()),
         );
@@ -745,6 +761,8 @@ pub(super) fn catchup_switches(
     on_archives: impl Fn(&bool, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> AnyElement {
+    let auto_label = t!("telegram.server.catchup_auto").to_string();
+    let archives_label = t!("telegram.server.catchup_archives").to_string();
     v_flex()
         .flex_1()
         .flex_basis(design::font_w_px(cx, 220.0))
@@ -752,35 +770,39 @@ pub(super) fn catchup_switches(
         .max_w_full()
         .gap(design::ui_px(cx, 8.0))
         .debug_selector(|| "server-tape-switches".into())
-        .child(
+        .child(crate::settings::common::checkbox_with_caption(
+            "server-tape-auto",
+            &auto_label,
             MoonCheckbox::new("server-tape-auto")
                 .checked(switches.auto)
                 .disabled(!editable)
-                .label(t!("telegram.server.catchup_auto").to_string())
-                .description(t!("telegram.server.catchup_auto_hint").to_string())
+                .label(auto_label.clone())
                 .on_change(on_auto),
-        )
-        .child(
+            t!("telegram.server.catchup_auto_hint").to_string(),
+            cx,
+        ))
+        .child(crate::settings::common::checkbox_with_caption(
+            "server-tape-archives",
+            &archives_label,
             MoonCheckbox::new("server-tape-archives")
                 .checked(switches.archives)
                 .disabled(!editable || !switches.auto)
-                .label(t!("telegram.server.catchup_archives").to_string())
-                .description(
-                    if switches.auto {
-                        t!("telegram.server.catchup_archives_hint")
-                    } else {
-                        t!("telegram.server.catchup_archives_needs_auto")
-                    }
-                    .to_string(),
-                )
+                .label(archives_label.clone())
                 .on_change(on_archives),
-        )
+            if switches.auto {
+                t!("telegram.server.catchup_archives_hint")
+            } else {
+                t!("telegram.server.catchup_archives_needs_auto")
+            }
+            .to_string(),
+            cx,
+        ))
         .into_any_element()
 }
 
 /// The page that renders the tape block, whose open state keeps a running catch-up re-read.
 pub(super) fn shows_tape_block(page: super::super::Tab) -> bool {
-    page == super::super::Tab::Station
+    page == super::super::Tab::StOverview
 }
 
 impl SettingsView {
@@ -817,19 +839,103 @@ impl SettingsView {
         }
     }
 
-    fn server_tape_margin(&mut self, delta: i32, cx: &mut Context<Self>) {
+    fn server_tape_margin(&mut self, secs: u32, cx: &mut Context<Self>) {
         if let Some(draft) = self.telegram.server.tape.draft.as_mut() {
-            draft.margin_s = storage_cfg::step_trade_margin_s(draft.margin_s, delta);
+            draft.margin_s = storage_cfg::snap_trade_margin_s(secs);
             cx.notify();
         }
     }
 
-    fn server_tape_long(&mut self, delta: i32, cx: &mut Context<Self>) {
-        if let Some(draft) = self.telegram.server.tape.draft.as_mut() {
-            draft.long_position_min =
-                storage_cfg::step_long_position_min(draft.long_position_min, delta);
-            cx.notify();
+    /// Keep the long-position field and the draft in step: made once, subscribed once, and
+    /// rewritten only when a station read moved the draft.
+    pub(in crate::settings) fn server_tape_input_sync(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let draft = self.telegram.server.tape.draft.map(|d| d.long_position_min);
+        let input = match self.telegram.server.tape.long_input.clone() {
+            Some(input) => input,
+            None => {
+                let input =
+                    super::super::common::number_state(draft.unwrap_or_default(), window, cx);
+                cx.subscribe(&input, |this, state, ev: &MoonInputEvent, cx| {
+                    if !matches!(ev, MoonInputEvent::Change) {
+                        return;
+                    }
+                    let Some(v) = MoonNumberInput::read_value(&state, cx) else {
+                        return;
+                    };
+                    let typed = v.round().max(0.0) as u32;
+                    let v = storage_cfg::clamp_long_position_min(typed);
+                    let ed = &mut this.telegram.server.tape;
+                    if let Some(draft) = ed.draft.as_mut() {
+                        draft.long_position_min = v;
+                        // An out-of-range number is shown clamped: forgetting what the field
+                        // shows makes the next render write the draft's value back into it.
+                        ed.long_shown = long_shown_after(typed, v);
+                        cx.notify();
+                    }
+                })
+                .detach();
+                self.telegram.server.tape.long_input = Some(input.clone());
+                self.telegram.server.tape.long_shown = draft;
+                input
+            }
+        };
+        if let Some(v) = draft
+            && self.telegram.server.tape.long_shown != Some(v)
+        {
+            self.telegram.server.tape.long_shown = Some(v);
+            input.update(cx, |st, cx| st.set_value(v.to_string(), window, cx));
         }
+    }
+
+    /// The window pick: one of the margin steps, as on the Storage page.
+    fn server_tape_margin_picker(
+        &self,
+        secs: u32,
+        enabled: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let current = storage_cfg::snap_trade_margin_s(secs);
+        let steps = storage_cfg::TRADE_MARGIN_STEPS_S;
+        let selected = steps.iter().position(|step| *step == current).unwrap_or(0);
+        let options = steps
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(i, step)| {
+                (
+                    i,
+                    SharedString::from(format!("server-tape-margin-{step}")),
+                    SharedString::from(Self::trades_margin_label(step)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let view = cx.entity().downgrade();
+        let items = crate::panels::radio_items(
+            options,
+            selected,
+            crate::panels::RadioMark::Check,
+            move |app, row: usize| {
+                let secs = storage_cfg::TRADE_MARGIN_STEPS_S
+                    .get(row)
+                    .copied()
+                    .unwrap_or(current);
+                let _ = view.update(app, |this, cx| this.server_tape_margin(secs, cx));
+            },
+        );
+        MoonDropdown::new("server-tape-margin")
+            .label(SharedString::from(Self::trades_margin_label(current)))
+            .trigger_caret(true)
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::density(cx))
+            .trigger_width(design::font_w(cx, 120.0))
+            .menu_width_scaled(140.0)
+            .disabled(!enabled)
+            .items(items)
+            .into_any_element()
     }
 
     fn server_tape_switch(&mut self, edit: impl FnOnce(&mut CatchupSwitches)) {
@@ -844,6 +950,41 @@ impl SettingsView {
     /// what the station reported.
     ///
     /// `width` is the settings column's width, which decides the venue table's shape.
+    /// The Trade tape page's one write bar: the draft's window and catch-up switches go to the
+    /// station together, only while they differ from what it last reported and no job runs.
+    pub(in crate::settings) fn station_tape_bar(&self, cx: &Context<Self>) -> SaveBar {
+        let Some(target) = self.telegram.server.known().cloned() else {
+            return SaveBar::None;
+        };
+        let ed = &self.telegram.server.tape;
+        let Some(draft) = ed.draft else {
+            return SaveBar::None;
+        };
+        let busy = self.backend.read(cx).station.busy();
+        let changed = ed.seen != Some(draft) || ed.draft_switches != ed.seen_switches;
+        let catchup = job_switches(ed.seen_switches, ed.draft_switches);
+        let view = cx.entity().downgrade();
+        SaveBar::Remote(RemoteBar {
+            msg: t!(if changed {
+                "settings.savebar.dirty_other"
+            } else {
+                "settings.mode.remote"
+            })
+            .to_string(),
+            dirty: changed && !busy,
+            apply: std::rc::Rc::new(move |_, app| {
+                let job = Job::Tape {
+                    target: target.clone(),
+                    tape: draft,
+                    catchup,
+                };
+                let _ = view.update(app, |this, cx| this.server_bot_run(Ok(job), cx));
+            }),
+            revert: None,
+            label: t!("telegram.server.tape_set").to_string(),
+        })
+    }
+
     pub(super) fn server_tape_block(
         &self,
         target: &Target,
@@ -870,14 +1011,6 @@ impl SettingsView {
         let changed = ed
             .draft
             .is_some_and(|draft| ed.seen != Some(draft) || switches_changed);
-        let margin_changed = ed
-            .draft
-            .zip(ed.seen)
-            .is_some_and(|(draft, seen)| draft.margin_s != seen.margin_s);
-        let long_changed = ed
-            .draft
-            .zip(ed.seen)
-            .is_some_and(|(draft, seen)| draft.long_position_min != seen.long_position_min);
         let status = tape_status(TapeFacts {
             known,
             dirty: changed,
@@ -885,7 +1018,7 @@ impl SettingsView {
             older_service: older,
         });
         let sentence = |text: String, color: u32| {
-            div()
+            crate::settings::common::cap_prose(div(), cx)
                 .font_family(design::ui_font())
                 .text_size(design::t_caption(cx))
                 .text_color(rgba_from(color, 1.0))
@@ -925,14 +1058,6 @@ impl SettingsView {
             }
             TapeStatus::Older => (t!("telegram.server.tape_unknown").to_string(), p.text_muted),
         };
-        let margin_text = match ed.draft {
-            Some(draft) => Self::trades_margin_label(draft.margin_s),
-            None => UNKNOWN_VALUE.to_string(),
-        };
-        let long_text = match ed.draft {
-            Some(draft) => t!("storage.trades_min", min = draft.long_position_min).to_string(),
-            None => UNKNOWN_VALUE.to_string(),
-        };
         let row = |label: String, control: AnyElement, explanation: Option<String>| {
             h_flex()
                 .w_full()
@@ -960,25 +1085,7 @@ impl SettingsView {
                         .child(sentence(explanation, p.text_muted))
                 }))
         };
-        let mut write = MoonButton::new("server-tape-set")
-            .primary()
-            .size(design::CONTROL_TIER)
-            .label(t!("telegram.server.tape_set").to_string())
-            .disabled(busy || !changed);
-        if let Some(draft) = ed.draft {
-            let target = target.clone();
-            let catchup = job_switches(ed.seen_switches, ed.draft_switches);
-            write = write.on_click(cx.listener(move |this, _, _, cx| {
-                this.server_bot_run(
-                    Ok(Job::Tape {
-                        target: target.clone(),
-                        tape: draft,
-                        catchup,
-                    }),
-                    cx,
-                );
-            }));
-        }
+        let _ = target;
         let catchup = reported_catchup(backend.station.bot.as_ref());
         let state = catchup_state(catchup);
         let zone = crate::chartdx::axes::display_zone();
@@ -1065,34 +1172,30 @@ impl SettingsView {
             })
             .child(row(
                 t!("storage.trades_margin").to_string(),
-                self.stepper_controls_styled(
-                    cx,
-                    "server-tape-margin",
-                    known && !busy,
-                    margin_text,
-                    1,
-                    3,
-                    Self::server_tape_margin,
-                    true,
-                    margin_changed,
-                )
-                .into_any_element(),
+                match ed.draft {
+                    Some(draft) => {
+                        self.server_tape_margin_picker(draft.margin_s, known && !busy, cx)
+                    }
+                    None => sentence(UNKNOWN_VALUE.to_string(), p.text_muted).into_any_element(),
+                },
                 Some(t!("telegram.server.tape_margin_hint").to_string()),
             ))
             .child(row(
                 t!("storage.trades_long_position").to_string(),
-                self.stepper_controls_styled(
-                    cx,
-                    "server-tape-long",
-                    known && !busy,
-                    long_text,
-                    1,
-                    5,
-                    Self::server_tape_long,
-                    true,
-                    long_changed,
-                )
-                .into_any_element(),
+                match (&ed.long_input, ed.draft) {
+                    (Some(input), Some(_)) => super::super::general::num_input_on(
+                        "server-tape-long",
+                        input,
+                        {
+                            let r = storage_cfg::LONG_POSITION_MIN_RANGE;
+                            f64::from(*r.start())..=f64::from(*r.end())
+                        },
+                        1.0,
+                        None,
+                        known && !busy,
+                    ),
+                    _ => sentence(UNKNOWN_VALUE.to_string(), p.text_muted).into_any_element(),
+                },
                 Some(t!("telegram.server.tape_long_hint").to_string()),
             ))
             .when_some(switches, |block, switches| {
@@ -1113,7 +1216,6 @@ impl SettingsView {
                     .pt(design::ui_px(cx, 8.0))
                     .border_t_1()
                     .border_color(rgba_from(p.border, 1.0))
-                    .child(write.render())
                     .child(
                         div()
                             .flex_1()

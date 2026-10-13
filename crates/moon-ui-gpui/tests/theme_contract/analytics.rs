@@ -509,145 +509,129 @@ fn profit_monitor_controls_and_all_choice_persistence_stay_wired() {
     }
 }
 
-/// The per-core Summary ranking must stay virtualized in both modes and use MoonUI's progress
-/// primitive for magnitude bars.
+/// The Summary cores card must virtualize its long list behind an always-visible scrollbar, fold
+/// through MoonUI's disclosure caret, and draw its contribution bars from the one shared scale.
 ///
-/// Breakage: replacing either `MoonVirtualList` with eager rows lets the elastic card clip its
-/// leaders at minimum window height; dropping `MoonScrollbarVisibility::Always` makes overflow
-/// undiscoverable until the pointer happens to cross it; hand-building the progress track forks
-/// MoonUI's scaling and theme behavior.
+/// Breakage: replacing `MoonVirtualList` with eager rows lays out hundreds of cores on every
+/// frame; dropping `MoonScrollbarVisibility::Always` hides the overflow until the pointer crosses
+/// it; a second `.pr(scrollbar_gutter)` double-indents the rows; a hand-built caret forks MoonUI's
+/// fold glyph; a bar scaled per filter makes the same core change length when the filter changes.
 #[test]
 fn per_core_summary_rankings_stay_virtualized_and_moonui_first() {
-    let charts = read_src("analytics/summary/charts/ranking.rs");
-    let overview = code_only(braced_body(&charts, "fn core_rank_overview("));
-    let all = code_only(braced_body(&charts, "fn core_rank_all("));
-    let row = code_only(braced_body(&charts, "fn core_rank_row("));
+    let cores = read_src("analytics/summary/cores.rs");
+    let card = code_only(braced_body(&cores, "pub(in crate::analytics) fn cores_el("));
+    let fold = code_only(braced_body(&cores, "fn fold_row_el("));
+    let row = code_only(braced_body(&cores, "fn core_row_el("));
+    let models = code_only(braced_body(
+        &cores,
+        "pub(in crate::analytics) fn row_models(",
+    ));
+    let flat: String = card.split_whitespace().collect();
 
-    for (name, body, id) in [
-        ("overview", overview, "an-core-rank-overview"),
-        ("all", all, "an-core-rank-all"),
-    ] {
-        assert!(
-            body.contains(&format!("MoonVirtualList::new(\"{id}\""))
-                && body.contains(".scrollbar_visibility(MoonScrollbarVisibility::Always)"),
-            "the {name} ranking must use its own virtual list with an always-visible scrollbar"
-        );
-        assert_eq!(
-            body.matches(".pr(scrollbar_gutter)").count(),
-            1,
-            "the {name} ranking must reserve the overlay gutter once at its outer right edge"
-        );
-    }
     assert!(
-        row.contains("MoonProgress::new(")
-            && row.contains(".value(row.magnitude_pct)")
-            && row.contains(".color(super::sign_color(p, row.total))"),
-        "each ranking row must delegate normalized, sign-aware bars to MoonProgress"
+        flat.contains("MoonVirtualList::new(\"an-sum-cores-list\""),
+        "the long cores list must render through its own virtual list"
+    );
+    assert!(
+        card.contains(".scrollbar_visibility(MoonScrollbarVisibility::Always)"),
+        "the cores list must keep an always-visible scrollbar"
+    );
+    assert_eq!(
+        card.matches(".pr(scrollbar_gutter)").count(),
+        1,
+        "the cores list must reserve the overlay gutter once at its outer right edge"
+    );
+    assert!(
+        card.contains("MoonSegmentedControl::new(\"an-sum-core-filter\")")
+            && card.contains("\"an-sum-cores-scroll\"")
+            && card.contains(".overflow_x_scroll()"),
+        "the card must filter through MoonUI's segmented control and scroll its table sideways"
+    );
+    assert!(
+        fold.contains("MoonDisclosure::button(\"an-sum-fold\", unfolded)"),
+        "the fold must use MoonUI's disclosure caret"
+    );
+    assert!(
+        models.contains("bar: scale.bar(c.total)")
+            && row.contains(".left(relative(zero_frac))")
+            && row.contains(".id((\"an-sum-core\", uid))")
+            && row.contains("on_pick(uid, window, app)"),
+        "every row must draw its bar from the shared scale's zero and pick its own core on click"
     );
 }
 
-/// The Summary triptych must share one card height, while Insights mirrors the neighbouring trade
-/// tables and keeps the complete conclusion behind each populated row.
+/// The Summary side column must draw each insight as a striped row: a tone stripe, a text column
+/// whose category, subject and reason lines each end in an ellipsis, and a never-shortened value
+/// behind a thin rule in one shared column; plus ONE trades table switched by the best/worst
+/// control.
 ///
-/// Breakage: restoring `items_start` makes the Insights border shorter than its two neighbours;
-/// changing `analytics/summary/mod.rs:insights_card` back to caption-sized semibold body cells makes
-/// the third card visibly diverge from Top/Worst; dropping a slot or tooltip hides period facts.
+/// Breakage: bringing back the MoonTag pills or dropping the stripe loses the tone the mockup
+/// gives every row; letting the subject wrap instead of truncating pushes the row taller and
+/// into the value column; truncating the value cuts the figure the row exists to show; sizing the
+/// value cell per row breaks the shared right edge; a second trades card (the old best/worst
+/// pair) or a missing `analytics.sum.trades.*` label brings back the two-table layout the mockup
+/// replaced.
 #[test]
-fn summary_triptych_and_insight_rows_keep_their_visual_contract() {
-    let summary = read_src("analytics/summary/mod.rs");
-    let tab = code_only(braced_body(&summary, "pub(super) fn summary_tab("));
-    let rows = code_only(braced_body(&summary, "fn insight_rows("));
-    let card = code_only(braced_body(&summary, "fn insights_card("));
-    let header = chain_between(
-        &card,
-        "let mut list = v_flex().w_full().gap_0().child(",
-        ");\n    for (ix, row)",
-        "Insights table header",
+fn summary_side_column_keeps_insight_why_lines_and_one_trades_table() {
+    let side = read_src("analytics/summary/side.rs");
+    let ins = code_only(braced_body(
+        &side,
+        "pub(in crate::analytics) fn insights_el(",
+    ));
+    let trades = code_only(braced_body(&side, "pub(in crate::analytics) fn trades_el("));
+    let value = chain_between(
+        &ins,
+        "format!(\"sum-ins-value-{i}\")",
+        ".child(it.value.clone())",
+        "insight value cell",
     );
-    let body = chain_between(
-        &card,
-        "let mut element = h_flex()",
-        "if let Some(tooltip)",
-        "Insights body row",
-    );
-    let shell = chain_between(
-        &card,
-        "v_flex()\n        .flex_1()",
-        ".child(list)",
-        "Insights card shell",
+    let line = chain_between(
+        &ins,
+        "format!(\"sum-ins-{part}-{i}\")",
+        "};",
+        "insight text line",
     );
 
     assert!(
-        tab.contains(
-            ".items_stretch()\n                    .child(top_card(\n                        \"an-top-best\",\n                        t!(\"analytics.best_trades\")"
-        ) && tab.contains(".child(insights_card(&data, p, cx))"),
-        "the trade/insight triptych must stretch all three cards to one height"
+        !side.contains("MoonTag")
+            && ins.contains("format!(\"sum-ins-stripe-{i}\")")
+            && ins.contains(".bg(moon(tone))")
+            && ins.contains("let (tone, cat) = category(it.tag, p);"),
+        "each insight must open with a tone stripe and a tone-coloured category line, not a pill"
     );
     assert!(
-        rows.contains("[strategy, contribution, risk, quality, hour]")
-            && rows.contains("main: \"—\".to_string()")
-            && rows.contains("metric: String::new()")
-            && rows.contains("metric_color: p.text_muted")
-            && rows.contains("tooltip: None"),
-        "Insights must retain five stable slots with fully neutral placeholders for missing facts"
-    );
-    for tooltip_key in [
-        "analytics.ins.best_strategy",
-        "analytics.ins.top_coin",
-        "analytics.ins.worst_coin",
-        "\"analytics.ins.pf\",",
-        "analytics.ins.best_hour",
-    ] {
-        assert!(
-            rows.contains(tooltip_key),
-            "the populated Insight row must retain the full {tooltip_key:?} tooltip"
-        );
-    }
-    assert!(
-        header.contains(".h(design::fit_h_px(cx, 22.0, 12.0, 5.0))")
-            && header.contains(".px(design::ui_px(cx, 8.0))")
-            && header.contains(".gap(design::ui_px(cx, 8.0))")
-            && header.contains(".text_size(design::t_caption(cx))")
-            && header.contains(".bg(moon(p.table_head))")
-            && header.contains(".max_w(label_w)")
-            && header.contains(".max_w(metric_w)")
-            && header.contains(".text_right()")
-            && header.contains("analytics.ins.col.insight")
-            && header.contains("analytics.ins.col.detail")
-            && header.contains("analytics.ins.col.result"),
-        "Insights must use a trade-table header with columns aligned to its body"
+        line.contains(".min_w_0()") && line.contains(".truncate()"),
+        "the category, subject and reason lines must end in an ellipsis instead of wrapping"
     );
     assert!(
-        body.contains(".h(row_h)")
-            && body.contains(".px(design::ui_px(cx, 8.0))")
-            && body.contains(".gap(design::ui_px(cx, 8.0))")
-            && body.contains(".bg(moon(p.table_body))")
-            && body.contains(".border_t_1()")
-            && body.contains(".max_w(label_w)")
-            && body.contains(".max_w(metric_w)")
-            && body.matches(".truncate()").count() == 3
-            && body.contains(".text_right()")
-            && body.contains(".text_color(moon(row.metric_color))")
-            && !body.contains(".text_size(design::t_caption(cx))")
-            && !body.contains(".font_weight(FontWeight::SEMIBOLD)"),
-        "Insights body rows must share trade-table geometry and normal body typography"
+        ins.contains("line(\"what\")")
+            && ins.contains(".child(it.what.clone())")
+            && ins.contains("line(\"why\")")
+            && ins.contains(".child(why.clone())"),
+        "an insight must draw its subject and, when it has one, its reason line"
     );
     assert!(
-        shell.contains(".rounded(design::ui_px(cx, 8.0))")
-            && shell.contains(".bg(moon(p.panel))")
-            && shell.contains(".border_1()")
-            && shell.contains(".overflow_hidden()")
-            && shell.contains(".px(design::ui_px(cx, 12.0))")
-            && shell.contains(".py(design::ui_px(cx, 8.0))")
-            && shell.contains(".text_size(design::t_title(cx))")
-            && shell.contains(".font_weight(FontWeight::SEMIBOLD)")
-            && !shell.contains(".gap(")
-            && !shell.contains("analytics.insights_sub"),
-        "Insights must share the trade cards' frame and one-line title instead of an inset layout"
+        value.contains(".flex_none()")
+            && value.contains(".w(px(value_w) + gap)")
+            && value.contains(".border_l_1()")
+            && !value.contains(".truncate()"),
+        "the insight value must keep its full text in one shared column behind a rule"
     );
     assert!(
-        card.contains("text_tooltip(tooltip)") && !card.contains(".flex_none()"),
-        "Insight truncation must stay safe and expose each complete conclusion on hover"
+        ins.contains("analytics.sum.ins.none"),
+        "an empty period must say there is nothing to show"
+    );
+    assert_eq!(
+        side.matches("\"an-sum-trades\"").count(),
+        1,
+        "the side column must hold exactly one trades switch"
+    );
+    assert!(
+        trades.contains("analytics.sum.trades.best5")
+            && trades.contains("analytics.sum.trades.worst5")
+            && trades.contains("\"an-sum-trades-scroll\"")
+            && trades.contains(".overflow_x_scroll()"),
+        "one trades table must switch best/worst and scroll sideways when narrow"
     );
 }
 
@@ -1523,11 +1507,11 @@ fn automatic_strategy_refresh_keeps_the_visible_snapshot() {
     );
 }
 
-/// `analytics/load.rs:reload_summary` must retain only time-ordered chart hovers across a catch-up.
-/// Moving a time-bucket clear back outside the scope-reset branch closes a valid popup on every
-/// landed trade, while retaining profit-ordered `hover_kind` can show another kind's data.
+/// `analytics/load.rs:reload_summary` must keep the profit chart's hovered bucket across a
+/// same-scope catch-up and clear it only when the scope or the resolved range moves. Moving the
+/// clear outside that branch closes a valid popup on every landed trade.
 #[test]
-fn report_catch_up_keeps_time_bucket_hovers_but_clears_profit_ordered_kind_hover() {
+fn report_catch_up_keeps_the_profit_chart_hover() {
     let analytics = read_src("analytics/load.rs");
     let reload = braced_body(&analytics, "fn reload_summary(");
     let before_request = chain_between(
@@ -1538,35 +1522,21 @@ fn report_catch_up_keeps_time_bucket_hovers_but_clears_profit_ordered_kind_hover
     );
     assert!(
         before_request.contains("if !after_report || range_moved {"),
-        "a resolved period rollover must clear time-bucket hovers even for an automatic catch-up"
+        "a resolved period rollover must clear the chart hover even for an automatic catch-up"
     );
     let scope_reset = code_only(braced_body(
         before_request,
         "if !after_report || range_moved",
     ));
-
-    for assignment in [
-        "self.hover_daily_bucket = None;",
-        "self.hover_cum_bucket = None;",
-    ] {
-        assert!(
-            scope_reset.contains(assignment),
-            "{assignment} must belong only to the manual scope-reset branch"
-        );
-        assert_eq!(
-            before_request.matches(assignment).count(),
-            1,
-            "{assignment} must not also clear a report-driven catch-up"
-        );
-    }
+    let assignment = "self.hover_profit_bucket = None;";
     assert!(
-        !scope_reset.contains("self.hover_kind = None;"),
-        "kind hovers are ordered by profit and must clear during a same-scope catch-up"
+        scope_reset.contains(assignment),
+        "{assignment} must belong only to the manual scope-reset branch"
     );
     assert_eq!(
-        before_request.matches("self.hover_kind = None;").count(),
+        before_request.matches(assignment).count(),
         1,
-        "kind hover must have one unconditional clear before the replacement request"
+        "{assignment} must not also clear a report-driven catch-up"
     );
 }
 
@@ -1619,6 +1589,35 @@ fn summary_catch_up_preserves_only_a_retryable_busy_snapshot() {
             && !decision.contains("if !preserve_snapshot || data_error.is_none() {")
             && decision.contains("this.data.apply(data);"),
         "only a retryable Busy failure may retain the Summary snapshot"
+    );
+    let publish = chain_between(
+        &decision,
+        "if !preserve_snapshot {",
+        "}",
+        "Summary publication branch",
+    );
+    assert!(
+        publish.contains("this.data.apply(data);") && publish.contains("this.data_as_of = Some("),
+        "the snapshot time must be stamped exactly where a Summary is published"
+    );
+    let drop = chain_between(
+        reload,
+        "self.data = ProfitLoadState::default();",
+        "}",
+        "Summary drop path",
+    );
+    assert!(
+        drop.contains("self.data_as_of = None;"),
+        "dropping the Summary must drop its snapshot time too, or the next face prints a stale clock"
+    );
+    assert!(
+        decision.contains("this.summary_catching_up = preserve_snapshot;"),
+        "the catch-up banner must follow the kept snapshot alone, never data_dirty"
+    );
+    assert!(
+        !analytics.contains("summary_catching_up = this.data_dirty")
+            && !analytics.contains("summary_catching_up = self.data_dirty"),
+        "metadata staleness must not raise the catch-up banner"
     );
 }
 
@@ -1881,6 +1880,45 @@ fn the_analytics_render_root_schedules_no_repaints() {
     assert!(
         src.contains("mod render;"),
         "the Analytics module must wire the extracted render implementation"
+    );
+
+    // The Summary tab body and every face it assembles are built at render time too.
+    let summary_src = read_src("analytics/summary/mod.rs");
+    let states_src = read_src("analytics/summary/states.rs");
+    for (name, body) in [
+        (
+            "summary_tab",
+            braced_body(&summary_src, "pub(super) fn summary_tab("),
+        ),
+        (
+            "summary_data_page",
+            braced_body(&summary_src, "fn summary_data_page("),
+        ),
+        ("states.rs", states_src.as_str()),
+    ] {
+        for scheduler in [
+            "cx.notify(",
+            "cx.spawn(",
+            "spawn_in(",
+            ".timer(",
+            "on_next_frame(",
+        ] {
+            assert!(
+                !code_only(body).contains(scheduler),
+                "{name} runs at render and must schedule nothing: found {scheduler}"
+            );
+        }
+    }
+    let skeleton = code_only(braced_body(
+        &states_src,
+        "pub(in crate::analytics) fn skeleton_el(",
+    ));
+    assert!(
+        states_src.contains("MoonSkeleton::new(")
+            && states_src.contains(".animated(false)")
+            && !states_src.contains(".animated(true)")
+            && skeleton.contains("block("),
+        "the loading skeleton must be static: an animated skeleton repaints every frame"
     );
 
     // Guard the render root as well as its predicate so scheduling cannot move one line outward.
@@ -2224,24 +2262,27 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
         "the default conversion must be offered first"
     );
 
-    // MoonUI-first: the row is a MoonSelect over that table, not a hand-built trigger, and it
-    // carries the hint. Both caveats of the expert setting — rates come from Binance/Bybit spot,
-    // and the tuner is re-valued too — live in `general.valuation_mode_hint`.
+    // MoonUI-first: the row is a MoonSelect over that table, not a hand-built trigger, under
+    // its label and hint.
     let general = read_src("settings/general.rs");
     let tab = braced_body(&general, "pub(super) fn general_tab(");
+    assert!(
+        tab.contains("select_control(&self.valuation,"),
+        "the General tab must present the conversion setting through its select row"
+    );
     for needle in [
-        "\"general.valuation_mode\"",
-        "&self.valuation",
-        "settings_hint(\n                \"general.valuation_mode_hint\",\n                &t!(\"general.valuation_mode_hint\"),",
+        "\"general.valuation.label\"",
+        "\"general.valuation.hint\"",
+        "\"general.valuation.more\"",
     ] {
         assert!(
-            tab.contains(needle),
-            "the General tab must present the conversion setting: missing {needle}"
+            general.contains(needle),
+            "the General page must label the conversion setting: missing {needle}"
         );
     }
     // The row it is built from is MoonUI's select, not a hand-rolled trigger.
     assert!(
-        braced_body(&general, "fn labeled_select<").contains("MoonSelect::new(state)"),
+        braced_body(&general, "fn select_control<").contains("MoonSelect::new(state)"),
         "the General tab's enum rows must be MoonUI selects"
     );
 
@@ -2295,7 +2336,7 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
     );
     let mut named_source = 0;
     for (lang, tuner_word) in hints {
-        let hint = locale_value("general", lang, "general.valuation_mode_hint");
+        let hint = locale_value("general", lang, "general.valuation.more");
         let hits = hint.matches("Binance/Bybit").count();
         assert_eq!(
             hits, 1,
@@ -2787,35 +2828,48 @@ fn the_run_column_stays_wired_and_marks_what_the_core_has_not_confirmed() {
     );
 }
 
-/// Changing the maximum-drawdown policy to `Up` makes a deeper drawdown look green, while giving
-/// duration either directional policy falsely presents a longer or shorter hold as good or bad.
+/// `analytics/summary/model.rs` is the one table of better/worse directions. Changing the
+/// maximum-drawdown rule to `Up` makes a deeper drawdown look green, letting `Down` call a rise
+/// better inverts it, and giving hold time a delta line at all claims a longer or shorter hold is
+/// good or bad — it has no direction, so it stays a muted caption with no rule.
 #[test]
-fn kpi_row_keeps_its_non_up_metric_policies() {
-    let summary = read_src("analytics/summary/mod.rs");
-    let row = code_only(braced_body(
-        &summary,
-        "fn kpi_row(&self, d: &Summary, p: MoonPalette, cx: &Context<Self>)",
+fn delta_rule_table_keeps_drawdown_down_and_duration_neither() {
+    let model = read_src("analytics/summary/model.rs");
+    let band = code_only(braced_body(
+        &model,
+        "pub(in crate::analytics) fn new(d: &Summary, spark: Rc<[f32]>, compare: bool)",
     ));
-
-    for (label, policy, consequence) in [
-        (
-            "t!(\"analytics.kpi.maxdd\")",
-            "DeltaGood::Down,",
-            "a deeper maximum drawdown would render as an improvement",
+    let tone = code_only(braced_body(
+        &model,
+        "pub(in crate::analytics) fn tone(self, sign: DeltaSign) -> DeltaTone",
+    ));
+    let dd = chain_between(
+        &band,
+        "dd_line: line(",
+        "dd_of_profit",
+        "drawdown delta line",
+    );
+    assert!(
+        dd.contains("cur.max_dd")
+            && dd.contains("DeltaRule::Down")
+            && dd.contains("DeltaFmt::Drawdown"),
+        "the drawdown delta must use the Down rule: a deeper drawdown is the worse direction"
+    );
+    assert!(
+        tone.contains(
+            "Self::Down => sign.pick(DeltaTone::Worse, DeltaTone::Better, DeltaTone::Neutral)"
         ),
-        (
-            "t!(\"analytics.kpi.duration\")",
-            "DeltaGood::Neither,",
-            "a neutral duration change would claim a good or bad direction",
-        ),
-    ] {
-        chain_between(&row, label, policy, "KPI policy");
-        assert!(
-            row.split_once(label)
-                .is_some_and(|(_, after_label)| after_label.contains(policy)),
-            "{label} must be followed by {policy} so {consequence}"
-        );
-    }
+        "under Down a rise must read worse and a fall better"
+    );
+    assert_eq!(
+        band.matches("DeltaRule::Down").count(),
+        1,
+        "only the drawdown shrinks for the better"
+    );
+    assert!(
+        band.contains("hold_min: cur.avg_dur_min,") && !band.contains("line(cur.avg_dur_min"),
+        "hold time must stay a direction-less caption, never a judged delta line"
+    );
 }
 
 /// `analytics/toolbar.rs:notice_strip` and `period_bar` must keep the expanded undated message
@@ -2858,15 +2912,25 @@ fn undated_notice_uses_an_info_alert_and_a_direct_period_bar_tail() {
     );
 }
 
-/// `analytics/summary/mod.rs:summary_tab` and `top_card` must consume the one resolved color set
-/// and expose an unresolved strategy's full id through the standard tooltip. Bypassing either path
-/// lets chart surfaces disagree on a core color or leaves a shortened deleted-strategy id without
-/// a way for the user to recover its complete value.
+/// `analytics/summary/mod.rs:summary_tab`, `cores.rs` and `side.rs:trades_el` must consume the
+/// one resolved color set and expose an unresolved strategy's full id through the standard
+/// tooltip. Bypassing either path lets chart surfaces disagree on a core color or leaves a
+/// shortened deleted-strategy id without a way for the user to recover its complete value.
+/// The trade coin keeps its whole width and the strategy cell truncates as a direct row child:
+/// truncating the coin cuts the ticker, and wrapping the strategy in another flex collapses the
+/// row to an ellipsis.
 #[test]
 fn summary_uses_resolved_core_colors_and_tooltips_unresolved_top_strategies() {
     let summary = read_src("analytics/summary/mod.rs");
-    let tab = code_only(braced_body(&summary, "pub(super) fn summary_tab("));
-    let top = code_only(braced_body(&summary, "fn top_card("));
+    // The data page `summary_tab` delegates to is where the blocks are built.
+    let tab = code_only(braced_body(&summary, "fn summary_data_page("));
+    let cores = read_src("analytics/summary/cores.rs");
+    let side = read_src("analytics/summary/side.rs");
+    let trades = code_only(braced_body(&side, "pub(in crate::analytics) fn trades_el("));
+    let cells = code_only(braced_body(
+        &side,
+        "pub(in crate::analytics) fn trade_cells(",
+    ));
 
     assert!(
         tab.contains("&derived.colors")
@@ -2878,9 +2942,39 @@ fn summary_uses_resolved_core_colors_and_tooltips_unresolved_top_strategies() {
         "Summary must consume the cached distinct per-core colors resolved from configured RGBs"
     );
     assert!(
-        top.contains("strat_display_ex(")
-            && top.contains("text_tooltip_value(id)")
-            && top.contains("an-top-strat"),
-        "an unresolved top strategy must use the extended label and expose its full id by tooltip"
+        cores.contains("core_color(colors, ix, p)") && cores.contains("core_color(colors, *ix, p)"),
+        "the cores card must colour its squares and concentration bar from the resolved color set"
+    );
+    assert!(
+        cells.contains("strat_display_ex(")
+            && trades.contains("text_tooltip_value(tip)")
+            && trades.contains("let tip = strategy_tip(&c.strategy);")
+            && trades.contains("an-sum-trade-strat")
+            && side.contains("Some(id) => format!(")
+            && !trades.contains("if let Some(id) = c.strategy.full_id"),
+        "every trade strategy cell must carry a tooltip with its full label, and an unresolved one          its full id too"
+    );
+    let coin = chain_between(
+        &trades,
+        "format!(\"sum-trades-coin-{ix}\")",
+        "crate::panels::common::side_badge(",
+        "trade coin cell",
+    );
+    let strat = chain_between(
+        &trades,
+        ".id((\"an-sum-trade-strat\", ix))",
+        ".tooltip(",
+        "trade strategy cell",
+    );
+    assert!(
+        coin.contains(".flex_none()") && !coin.contains(".truncate()"),
+        "the trade coin must keep its whole width and never shorten"
+    );
+    assert!(
+        strat.contains(".flex_1()")
+            && strat.contains(".min_w_0()")
+            && strat.contains(".truncate()")
+            && trades.contains(".child(strategy_cell.child(c.strategy.text))"),
+        "the strategy cell must truncate as a direct child of the row: an intermediate flex around          truncating text collapses the line to an ellipsis"
     );
 }

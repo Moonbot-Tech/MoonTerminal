@@ -1,5 +1,5 @@
-//! Security block of the General tab: the launch password and the `servers.enc` encryption
-//! password, each behind its own checkbox.
+//! Security page: the launch password and the `servers.enc` encryption password, each in its own
+//! card behind its own checkbox, and the machines that open the file without a password.
 //!
 //! The two are deliberately separate settings because they protect different things, and saying so
 //! in the UI is part of the feature:
@@ -20,9 +20,12 @@ mod vault;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use std::rc::Rc;
+
+use moon_core::config::AppConfig;
 use moon_ui::{
-    MoonButton, MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonProgress,
-    h_flex, rgba_from, v_flex,
+    MoonAlert, MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputEvent,
+    MoonInputState, MoonPalette, MoonProgress, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -31,9 +34,11 @@ use crate::{Backend, design};
 use strength::{Issue, Level};
 
 /// Label column width in unscaled pixels, shared by every password row so the fields line up.
-const LABEL_W: f32 = 150.0;
-/// Password field width in unscaled pixels.
-const FIELD_W: f32 = 240.0;
+const LABEL_W: f32 = 90.0;
+/// Widest a password field grows, in unscaled pixels; narrower cards shrink it.
+const FIELD_W: f32 = 320.0;
+/// Narrowest a password card gets before the two cards stack, in unscaled pixels.
+const CARD_MIN_W: f32 = 300.0;
 
 /// One password and its confirmation field.
 ///
@@ -90,6 +95,22 @@ pub(super) struct SecurityEd {
     vault: vault::VaultState,
     /// Result of the last Save or machine-slot action.
     status: Option<SecurityStatus>,
+    /// Key slots as they were before a change was accepted into key material that no config write
+    /// has stored yet. Set by [`SettingsView::apply_security`] and the machine revocation; a
+    /// successful write drops it, a failed one or a discard puts it back, so key material never
+    /// keeps a change that is not on disk for some later, unrelated write to persist.
+    pub(super) unpersisted: Option<vault::Snapshot>,
+}
+
+/// What [`SettingsView::apply_security`] did with the password draft.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum SecurityApply {
+    /// No password change was asked for.
+    Nothing,
+    /// The change is in key material and waits for the config write.
+    Accepted,
+    /// The change was refused; the locale key names why.
+    Rejected(&'static str),
 }
 
 impl SecurityEd {
@@ -158,10 +179,54 @@ impl SecurityEd {
         self.pending(cx).is_some()
     }
 
+    /// Whether the Security page holds work a Save still has to do: a typed request, or an
+    /// accepted change whose config write has not succeeded yet.
+    pub(super) fn has_unsaved(&self, cx: &App) -> bool {
+        self.unpersisted.is_some() || self.has_pending_request(cx)
+    }
+
     /// Empty every password field after the draft has been accepted.
-    fn clear_fields(&self, window: &mut Window, cx: &mut App) {
+    pub(super) fn clear_fields(&self, window: &mut Window, cx: &mut App) {
         self.launch.clear(window, cx);
         self.file.clear(window, cx);
+    }
+
+    /// Put both checkboxes back on what the file carries, so a revert drops a ticked or unticked
+    /// box together with the typed passwords.
+    pub(super) fn revert_toggles(&mut self) {
+        (self.launch_on, self.file_on) = saved_toggles(&self.vault);
+    }
+}
+
+/// The checkbox states a fresh Security page shows for `vault`: ticked where a password is stored.
+pub(super) fn saved_toggles(vault: &vault::VaultState) -> (bool, bool) {
+    (vault.launch_password_set, vault.file_password_set)
+}
+
+/// What a config write means for key slots changed before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Settle {
+    /// Nothing was waiting for the write.
+    Nothing,
+    /// The slots reached disk: forget the snapshot, empty the password fields.
+    Commit,
+    /// The slots did not reach disk: put the snapshot back, keep the typed passwords for a retry.
+    Rollback,
+}
+
+/// Decide what a finished config write does to accepted key-slot changes.
+///
+/// Args:
+///     held: A pre-change snapshot is held, i.e. a change waits for this write.
+///     write_ok: The config write succeeded.
+///
+/// Returns:
+///     What to do with the held snapshot.
+pub(super) fn settle(held: bool, write_ok: bool) -> Settle {
+    match (held, write_ok) {
+        (false, _) => Settle::Nothing,
+        (true, true) => Settle::Commit,
+        (true, false) => Settle::Rollback,
     }
 }
 
@@ -177,8 +242,29 @@ fn resolve_pair(
     block: Block,
     cx: &App,
 ) -> Result<Option<Option<String>>, (Block, &'static str)> {
-    let require_strength = block == Block::File;
     let (value, confirm) = pair.read(cx);
+    resolve(value, confirm, enabled, stored, block)
+}
+
+/// The request one password block makes, from its typed texts and checkbox.
+///
+/// Args:
+///     value: The password field.
+///     confirm: The confirmation field.
+///     enabled: The block's checkbox.
+///     stored: The file already carries this password.
+///     block: Which block, for the error anchor and the strength rule.
+///
+/// Returns:
+///     `Ok(None)` when nothing changes, `Ok(Some(None))` to remove, `Ok(Some(Some(pw)))` to set.
+pub(super) fn resolve(
+    value: String,
+    confirm: String,
+    enabled: bool,
+    stored: bool,
+    block: Block,
+) -> Result<Option<Option<String>>, (Block, &'static str)> {
+    let require_strength = block == Block::File;
     match (enabled, stored) {
         (false, true) => Ok(Some(None)),
         (true, _) if !value.is_empty() || !confirm.is_empty() => {
@@ -233,6 +319,7 @@ pub(super) fn build(
         },
         vault,
         status: None,
+        unpersisted: None,
     }
 }
 
@@ -249,27 +336,33 @@ fn password_row(
     h_flex()
         .gap(design::ui_px(cx, 10.0))
         .items_center()
+        .w_full()
         .child(
             div()
                 .w(design::font_w_px(cx, LABEL_W))
+                .flex_none()
                 .text_color(rgba_from(color, 1.0))
                 .child(label),
         )
         .child(
-            div().w(design::font_w_px(cx, FIELD_W)).child(
-                MoonInput::new(id)
-                    .state(state)
-                    .size(design::INPUT_SIZE)
-                    .disabled(!enabled)
-                    // The Settings root renders prose in the UI face and `MoonInput` inherits it.
-                    // A secret must not: the eye below reveals it, and a key is read character by
-                    // character, where a proportional face merges 0 with O and l with 1. Same pin
-                    // as `window/login.rs`'s password field, for the same reason.
-                    .mono(true)
-                    // The eye is what makes a masked field usable; without it the only way to
-                    // check a long password is to retype it.
-                    .mask_toggle(),
-            ),
+            div()
+                .flex_1()
+                .min_w_0()
+                .max_w(design::font_w_px(cx, FIELD_W))
+                .child(
+                    MoonInput::new(id)
+                        .state(state)
+                        .size(design::INPUT_SIZE)
+                        .disabled(!enabled)
+                        // The Settings root renders prose in the UI face and `MoonInput` inherits it.
+                        // A secret must not: the eye below reveals it, and a key is read character by
+                        // character, where a proportional face merges 0 with O and l with 1. Same pin
+                        // as `window/login.rs`'s password field, for the same reason.
+                        .mono(true)
+                        // The eye is what makes a masked field usable; without it the only way to
+                        // check a long password is to retype it.
+                        .mask_toggle(),
+                ),
         )
 }
 
@@ -306,119 +399,171 @@ impl SettingsView {
             }))
     }
 
-    /// Build the launch-password group: checkbox, both fields, and the mismatch line.
-    fn launch_group(&self, cx: &Context<Self>) -> impl IntoElement {
+    /// Build the launch-password card: title and checkbox, both fields, and the mismatch line.
+    fn launch_group(&self, cx: &Context<Self>) -> AnyElement {
         let on = self.security.launch_on;
         let (value, confirm) = self.security.launch.read(cx);
-        v_flex()
-            .gap(design::ui_px(cx, 4.0))
-            .child(
-                self.security_checkbox(cx, "sec-launch", on, |ed, v| ed.launch_on = v)
-                    .label(t!("security.launch").to_string())
-                    .description(t!("security.launch_hint").to_string()),
-            )
-            .when(on, |this| {
-                this.child(password_row(
+        let mut rows = Vec::new();
+        if on {
+            rows.push(
+                password_row(
                     cx,
                     "sec-launch-pw",
                     t!("security.password").to_string(),
                     &self.security.launch.value,
                     true,
-                ))
-                .child(password_row(
+                )
+                .into_any_element(),
+            );
+            rows.push(
+                password_row(
                     cx,
                     "sec-launch-confirm",
                     t!("security.confirm").to_string(),
                     &self.security.launch.confirm,
                     true,
-                ))
-                .children(mismatch_line(cx, &value, &confirm))
-                .children(self.security_status_line(cx, Some(Block::Launch)))
-            })
+                )
+                .into_any_element(),
+            );
+            rows.extend(mismatch_line(cx, &value, &confirm));
+            rows.extend(self.security_status_line(cx, Some(Block::Launch)));
+        }
+        password_card(
+            "security-launch-card",
+            t!("security.launch.title").to_string(),
+            t!("security.launch.hint").to_string(),
+            self.security_checkbox(cx, "sec-launch", on, |ed, v| ed.launch_on = v)
+                .into_any_element(),
+            rows,
+            cx,
+        )
     }
 
-    /// Build the encryption-password group: checkbox, both fields, strength meter, and the
-    /// machine-slot row.
-    fn file_group(&self, cx: &Context<Self>) -> impl IntoElement {
+    /// Build the encryption-password card: title and checkbox, both fields, the strength meter,
+    /// and the warning that this password cannot be recovered.
+    fn file_group(&self, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         let on = self.security.file_on;
         let (value, confirm) = self.security.file.read(cx);
-        v_flex()
-            .gap(design::ui_px(cx, 4.0))
-            .child(
-                self.security_checkbox(cx, "sec-file", on, |ed, v| ed.file_on = v)
-                    .label(t!("security.file").to_string())
-                    .description(t!("security.file_hint").to_string()),
-            )
-            .when(on, |this| {
-                this.child(password_row(
+        let mut rows = Vec::new();
+        if on {
+            rows.push(
+                password_row(
                     cx,
                     "sec-file-pw",
                     t!("security.password").to_string(),
                     &self.security.file.value,
                     true,
-                ))
-                .child(strength_meter(&value, p, cx))
-                .child(password_row(
+                )
+                .into_any_element(),
+            );
+            rows.push(strength_meter(&value, p, cx).into_any_element());
+            rows.push(
+                password_row(
                     cx,
                     "sec-file-confirm",
                     t!("security.confirm").to_string(),
                     &self.security.file.confirm,
                     true,
-                ))
-                .children(mismatch_line(cx, &value, &confirm))
-                .children(self.security_status_line(cx, Some(Block::File)))
-                .child(
-                    div()
-                        .text_color(rgba_from(p.text_muted, 1.0))
-                        .child(t!("security.file_warning").to_string()),
                 )
-            })
-            .child(self.machines_row(cx))
+                .into_any_element(),
+            );
+            rows.extend(mismatch_line(cx, &value, &confirm));
+            rows.extend(self.security_status_line(cx, Some(Block::File)));
+            rows.push(unrecoverable_alert());
+        }
+        password_card(
+            "security-file-card",
+            t!("security.file.title").to_string(),
+            t!("security.file.hint").to_string(),
+            self.security_checkbox(cx, "sec-file", on, |ed, v| ed.file_on = v)
+                .into_any_element(),
+            rows,
+            cx,
+        )
     }
 
-    /// Build the row reporting how many machines can open `servers.enc` silently.
+    /// Build the control reporting how many machines can open `servers.enc` silently, with the
+    /// button that revokes all but this one.
     ///
     /// Visible even with no password set, because the count is the honest answer to "who else can
     /// open this file" and it is the only place that question is asked.
     ///
-    /// The count reads as a fact about the user's file, so in the preview build it shows a dash
-    /// rather than the stub's number: nothing here has counted anything yet.
-    fn machines_row(&self, cx: &Context<Self>) -> impl IntoElement {
+    /// The count reads as a fact about the user's file, so with no file open it shows a dash
+    /// rather than a number: nothing here has counted anything yet.
+    fn machines_row(&self, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         let used = self.security.vault.machine_slots;
-        // With no file open the count is not zero, it is unknown; printing "0 of 8" would be a
-        // statement about the user's file that we did not read.
-        let text = if self.security.vault.editable {
-            t!(
-                "security.machines",
-                used = used,
-                max = vault::MAX_MACHINE_SLOTS
-            )
+        let editable = self.security.vault.editable;
+        let count = if editable {
+            used.to_string()
         } else {
-            t!("security.machines_unknown", max = vault::MAX_MACHINE_SLOTS)
+            "\u{2014}".to_string()
         };
+        let text = t!(
+            "security.machines.count",
+            n = count,
+            max = vault::MAX_MACHINE_SLOTS
+        );
         h_flex()
-            .mt(design::ui_px(cx, 6.0))
             .gap(design::ui_px(cx, 10.0))
             .items_center()
             .child(
                 div()
-                    // MIXED NODE: the locale string welds the prose label to the used/max slot
-                    // FIGURES, and half a node cannot be styled. The figure wins.
+                    // MIXED NODE: the locale string welds "of" to the used/max slot FIGURES, and
+                    // half a node cannot be styled. The figure wins.
                     .font_family(design::mono())
-                    .text_color(rgba_from(p.text_soft, 1.0))
+                    .text_color(rgba_from(p.text, 1.0))
                     .child(text.to_string()),
             )
             .child(
                 MoonButton::new("sec-forget-machines")
-                    .outline()
+                    .variant(MoonButtonVariant::OutlineRed)
+                    .size(design::CONTROL_TIER)
                     // One slot means only this machine, so there is nothing to forget.
-                    .disabled(used <= 1 || !self.security.vault.editable)
-                    .label(format!("  {}  ", t!("security.forget_machines")))
-                    .on_click(cx.listener(|this, _, window, cx| this.forget_machines(window, cx)))
+                    .disabled(used <= 1 || !editable)
+                    .when(!editable, |b| {
+                        b.tooltip(t!("security.not_editable").to_string())
+                    })
+                    .when(editable && used <= 1, |b| {
+                        b.tooltip(t!("security.machines.keep_only_off").to_string())
+                    })
+                    .label(t!("security.machines.keep_only").to_string())
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.confirm_forget_machines(window, cx)),
+                    )
                     .render(),
             )
+            .into_any_element()
+    }
+
+    /// Ask before revoking every other machine: the revocation is written at once and there is
+    /// no Save to back out of.
+    fn confirm_forget_machines(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let this = cx.entity().downgrade();
+        let forget: super::common::Action = Rc::new(move |window, cx| {
+            let _ = this.update(cx, |view, cx| view.forget_machines(window, cx));
+        });
+        super::common::confirm(
+            window,
+            cx,
+            super::common::Confirm {
+                title: t!("security.machines.confirm_title").to_string(),
+                body: t!("security.machines.confirm_body").to_string(),
+                buttons: vec![
+                    super::common::ConfirmBtn {
+                        label: t!("dialogs.cancel").to_string(),
+                        kind: super::common::ConfirmKind::Cancel,
+                        on: Rc::new(|_, _| {}),
+                    },
+                    super::common::ConfirmBtn {
+                        label: t!("security.machines.confirm_btn").to_string(),
+                        kind: super::common::ConfirmKind::DangerSolid,
+                        on: forget,
+                    },
+                ],
+            },
+        );
     }
 
     /// Build the message line for one anchor, or nothing when the last action said nothing there.
@@ -434,12 +579,18 @@ impl SettingsView {
         )
     }
 
-    /// Handle the "forget other machines" button.
+    /// Revoke every other machine and write that at once.
     ///
-    /// Saves immediately rather than waiting for the Save button. Revocation is a security action
+    /// Writes immediately rather than waiting for the Save button. Revocation is a security action
     /// the user expects to have taken effect when it reports success; leaving it in memory meant
     /// closing Settings silently kept every revoked machine's access.
-    fn forget_machines(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// What is written is the SAVED configuration, never the draft: the key slots ride along in
+    /// `servers.enc`, so any config write stores them, and writing the draft here would quietly
+    /// save every other pending edit too. The draft stays as it was, still dirty, still the
+    /// user's to save or drop. Typed passwords stay in their fields for the same reason.
+    fn forget_machines(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let before = vault::snapshot();
         if let Err(error) = vault::forget_other_machines() {
             self.security.status = Some(SecurityStatus {
                 key: error.message_key(),
@@ -450,10 +601,26 @@ impl SettingsView {
             return;
         }
         self.security.vault = vault::state();
-        self.save(window, cx);
-        // `save` reports the configuration write in the footer; this line reports what the write
-        // meant here. A failed write leaves the revocation in memory only, and says so.
-        let saved = matches!(self.status, Some((super::StatusMsg::Key(_), false)));
+        // An earlier held snapshot is older and covers this revocation too.
+        self.security.unpersisted.get_or_insert(before);
+        let saved =
+            self.backend
+                .update(cx, |b, bcx| match write_saved(&b.config, AppConfig::save) {
+                    Ok(written) => {
+                        b.config = written;
+                        bcx.notify();
+                        true
+                    }
+                    Err(error) => {
+                        log::warn!("settings: writing the machine revocation failed: {error:#}");
+                        false
+                    }
+                });
+        match settle(self.security.unpersisted.is_some(), saved) {
+            Settle::Nothing => {}
+            Settle::Commit => self.security.unpersisted = None,
+            Settle::Rollback => self.discard_security_slots(),
+        }
         self.security.status = Some(SecurityStatus {
             key: if saved {
                 "security.machines_forgotten"
@@ -473,52 +640,51 @@ impl SettingsView {
     /// what persists the resulting key slots, and reports into the security block's own status
     /// line, so a security failure neither blocks the other settings nor makes a successful save
     /// look failed.
-    /// Returns whether a change was accepted into key material and is now waiting for the config
-    /// write. The caller reports the outcome once that write has actually happened — see
-    /// [`Self::report_security_saved`].
-    pub(super) fn apply_security(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// Returns what happened to the draft. An accepted change marks the page unpersisted until a
+    /// config write stores it; the caller reports the outcome once that write has actually
+    /// happened — see [`Self::report_security_saved`].
+    pub(super) fn apply_security(&mut self, cx: &mut Context<Self>) -> SecurityApply {
         let Some(request) = self.security.pending(cx) else {
-            return false;
+            return SecurityApply::Nothing;
         };
-        let (status, accepted) = match request {
+        let (status, outcome) = match request {
             Err((block, key)) => (
                 SecurityStatus {
                     key,
                     error: true,
                     block: Some(block),
                 },
-                false,
+                SecurityApply::Rejected(key),
             ),
-            Ok(change) => match vault::apply(change) {
-                Ok(()) => {
+            Ok(change) => match (vault::snapshot(), vault::apply(change)) {
+                (before, Ok(())) => {
                     self.security.vault = vault::state();
-                    // Empty the fields once they have been accepted. Leaving them filled makes
-                    // every later Save re-submit the same password, which re-derives the key and
-                    // replaces the slot for no reason — a visible pause and a new slot per click.
-                    self.security.clear_fields(window, cx);
-                    // No status yet: the passwords are in memory, not on disk.
+                    // The fields are emptied only once the write stores the change (see
+                    // `report_security_saved`); a failed write rolls the slots back and keeps
+                    // them for the retry. No status yet: the passwords are in memory only.
+                    self.security.unpersisted.get_or_insert(before);
                     (
                         SecurityStatus {
                             key: "security.pending_write",
                             error: false,
                             block: None,
                         },
-                        true,
+                        SecurityApply::Accepted,
                     )
                 }
-                Err(error) => (
+                (_, Err(error)) => (
                     SecurityStatus {
                         key: error.message_key(),
                         error: true,
                         block: None,
                     },
-                    false,
+                    SecurityApply::Rejected(error.message_key()),
                 ),
             },
         };
         self.security.status = Some(status);
         cx.notify();
-        accepted
+        outcome
     }
 
     /// Report what happened to an accepted password change once the config write has finished.
@@ -527,7 +693,23 @@ impl SettingsView {
     /// accepted the password, and the file write either stored it or did not. Reporting "saved"
     /// from the first alone put a green line over a password that a failed write left only in
     /// memory — where it survives until the process exits and then is gone.
-    pub(super) fn report_security_saved(&mut self, saved: bool, cx: &mut Context<Self>) {
+    pub(super) fn report_security_saved(
+        &mut self,
+        saved: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match settle(self.security.unpersisted.is_some(), saved) {
+            Settle::Nothing => return,
+            // Empty the fields once they are on disk. Leaving them filled makes every later Save
+            // re-submit the same password, which re-derives the key and replaces the slot for no
+            // reason: a visible pause and a new slot per click.
+            Settle::Commit => {
+                self.security.unpersisted = None;
+                self.security.clear_fields(window, cx);
+            }
+            Settle::Rollback => self.discard_security_slots(),
+        }
         self.security.status = Some(SecurityStatus {
             key: if saved {
                 "security.applied"
@@ -540,32 +722,171 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Build the complete security block for the General tab.
-    pub(super) fn security_section(&self, cx: &Context<Self>) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
-        v_flex()
-            .w_full()
-            .gap(design::ui_px(cx, 4.0))
-            .child(super::section(&t!("security.title"), p, cx))
-            // Without an opened config file there is no key material to attach a password to.
-            // Say so instead of collecting one that cannot be stored.
-            .when(!self.security.vault.editable, |this| {
-                this.child(
-                    div()
-                        .text_color(rgba_from(p.amber, 1.0))
-                        .child(t!("security.not_editable").to_string()),
-                )
-            })
-            .child(self.launch_group(cx))
-            .child(super::separator(p, cx))
-            .child(self.file_group(cx))
-            // Outcome of the last Save or slot action. Anchored to the section, not the window
-            // footer, which reports only whether the configuration itself was written.
-            .children(self.security_status_line(cx, None))
+    /// Put back the key slots of an accepted change that never reached disk. Called on a failed
+    /// write and whenever the window drops its draft (revert, close without saving).
+    pub(super) fn discard_security_slots(&mut self) {
+        if let Some(before) = self.security.unpersisted.take() {
+            vault::restore(before);
+            self.security.vault = vault::state();
+        }
+    }
+
+    /// Build the Security page body from the two password cards and the machines row.
+    pub(super) fn security_section(&self, cx: &Context<Self>) -> AnyElement {
+        security_body(
+            SecurityParts {
+                not_editable: !self.security.vault.editable,
+                launch: self.launch_group(cx),
+                file: self.file_group(cx),
+                machines: self.machines_row(cx),
+                // Outcome of the last Save or slot action. Anchored to the page, not the window
+                // footer, which reports only whether the configuration itself was written.
+                status: self.security_status_line(cx, None),
+            },
+            cx,
+        )
     }
 }
 
-/// Build the strength meter: a bar plus its verdict, or nothing while the field is empty.
+/// Write the saved configuration as it stands, leaving the draft alone.
+///
+/// Args:
+///     saved: The configuration on disk, as the backend holds it.
+///     write: The writer, [`AppConfig::save`] outside tests.
+///
+/// Returns:
+///     The written configuration (the writer may normalize it), or the write's error.
+fn write_saved(
+    saved: &AppConfig,
+    write: impl FnOnce(&mut AppConfig) -> anyhow::Result<()>,
+) -> anyhow::Result<AppConfig> {
+    let mut written = saved.clone();
+    write(&mut written)?;
+    Ok(written)
+}
+
+/// The parts of the Security page, built by the view and laid out by [`security_body`].
+pub(super) struct SecurityParts {
+    /// No config file is open, so there is no key material to attach a password to.
+    pub(super) not_editable: bool,
+    pub(super) launch: AnyElement,
+    pub(super) file: AnyElement,
+    pub(super) machines: AnyElement,
+    pub(super) status: Option<AnyElement>,
+}
+
+/// The Security page body: two password cards side by side (stacked when the body is narrow),
+/// then the machines with access.
+pub(super) fn security_body(parts: SecurityParts, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let noop: super::common::Action = Rc::new(|_, _| {});
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap(design::ui_px(cx, 16.0))
+        // Say so instead of collecting a password that cannot be stored.
+        .when(parts.not_editable, |this| {
+            this.child(
+                div()
+                    .text_color(rgba_from(p.amber, 1.0))
+                    .child(t!("security.not_editable").to_string()),
+            )
+        })
+        .child(
+            h_flex()
+                .w_full()
+                .flex_wrap()
+                .items_start()
+                .gap(design::ui_px(cx, 14.0))
+                .debug_selector(|| "security-cards".into())
+                .child(parts.launch)
+                .child(parts.file),
+        )
+        .child(super::general::page_section(
+            "security-machines",
+            t!("security.machines.title").to_string(),
+            vec![
+                div()
+                    .debug_selector(|| "security-machines-row".into())
+                    .child(super::common::hint_row(
+                        "security-machines-row",
+                        t!("security.machines.label").to_string(),
+                        Some(t!("security.machines.hint").to_string()),
+                        None,
+                        parts.machines,
+                        false,
+                        noop,
+                        cx,
+                    ))
+                    .into_any_element(),
+            ],
+            cx,
+        ))
+        .children(parts.status)
+        .into_any_element()
+}
+
+/// One password card: title and hint beside the block's checkbox, then the block's rows.
+fn password_card(
+    id: &'static str,
+    title: String,
+    hint: String,
+    toggle: AnyElement,
+    rows: Vec<AnyElement>,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let header = h_flex()
+        .w_full()
+        .items_start()
+        .gap(design::ui_px(cx, 12.0))
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(design::ui_px(cx, 2.0))
+                .child(
+                    div()
+                        .debug_selector(move || format!("{id}-title"))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .debug_selector(move || format!("{id}-hint"))
+                        .text_color(rgba_from(p.text_muted, 1.0))
+                        .child(hint),
+                ),
+        )
+        .child(div().flex_none().child(toggle))
+        .into_any_element();
+    let mut children = vec![header];
+    children.extend(rows);
+    super::general::page_box(children, cx)
+        .flex_1()
+        .min_w(design::font_w_px(cx, CARD_MIN_W))
+        .gap(design::ui_px(cx, 8.0))
+        .py(design::ui_px(cx, 10.0))
+        .debug_selector(move || id.to_string())
+        .into_any_element()
+}
+
+/// The red note that the encryption password cannot be recovered.
+fn unrecoverable_alert() -> AnyElement {
+    div()
+        .debug_selector(|| "security-unrecoverable".into())
+        .child(
+            MoonAlert::error(
+                "sec-unrecoverable",
+                t!("security.unrecoverable").to_string(),
+            )
+            .render(),
+        )
+        .into_any_element()
+}
+
+/// Build the strength meter under the password field: a bar, its verdict and entropy, and what
+/// to change.
 fn strength_meter(password: &str, p: MoonPalette, cx: &App) -> impl IntoElement {
     let verdict = strength::estimate(password);
     let (color, level_key) = match verdict.level {
@@ -589,39 +910,66 @@ fn strength_meter(password: &str, p: MoonPalette, cx: &App) -> impl IntoElement 
         Some(Issue::LowEntropy) => t!("security.issue.low_entropy").to_string(),
         None => t!("security.issue.none").to_string(),
     };
-    v_flex()
-        .gap(design::ui_px(cx, 2.0))
+    // Indented to the field column, so the bar reads as part of the field above it.
+    h_flex()
+        .w_full()
+        .gap(design::ui_px(cx, 10.0))
+        .child(div().w(design::font_w_px(cx, LABEL_W)).flex_none())
         .child(
-            h_flex()
-                .gap(design::ui_px(cx, 10.0))
-                .items_center()
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .max_w(design::font_w_px(cx, FIELD_W))
+                .gap(design::ui_px(cx, 2.0))
                 .child(
-                    div().w(design::font_w_px(cx, LABEL_W)).child(
-                        MoonProgress::new("sec-file-strength")
-                            .value(verdict.percent())
-                            .color(color)
-                            .height(design::ui_value(cx, 4.0))
-                            .render(),
-                    ),
+                    h_flex()
+                        .w_full()
+                        .flex_wrap()
+                        .gap(design::ui_px(cx, 8.0))
+                        .items_center()
+                        .child(
+                            div().flex_1().min_w(design::ui_px(cx, 60.0)).child(
+                                MoonProgress::new("sec-file-strength")
+                                    .value(verdict.percent())
+                                    .color(color)
+                                    .height(design::ui_value(cx, 4.0))
+                                    .render(),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgba_from(color, 1.0))
+                                .child(t!(level_key).to_string()),
+                        )
+                        .child(
+                            div()
+                                // MIXED NODE: an entropy FIGURE welded to its unit in one locale
+                                // string.
+                                .font_family(design::mono())
+                                .text_color(rgba_from(p.text_muted, 1.0))
+                                .text_size(design::t_caption(cx))
+                                .child(
+                                    t!("security.bits", bits = verdict.bits.round() as i32)
+                                        .to_string(),
+                                ),
+                        ),
                 )
                 .child(
                     div()
-                        .text_color(rgba_from(color, 1.0))
-                        .child(t!(level_key).to_string()),
-                )
-                .child(
-                    div()
-                        // MIXED NODE: an entropy FIGURE welded to its unit in one locale string.
-                        .font_family(design::mono())
                         .text_color(rgba_from(p.text_muted, 1.0))
                         .text_size(design::t_caption(cx))
-                        .child(t!("security.bits", bits = verdict.bits.round() as i32).to_string()),
+                        .child(note),
                 ),
         )
-        .child(
-            div()
-                .text_color(rgba_from(p.text_muted, 1.0))
-                .text_size(design::t_caption(cx))
-                .child(note),
-        )
 }
+
+impl SettingsView {
+    /// The Security page: two password cards and the machines with access.
+    pub(super) fn security_page(&self, cx: &Context<Self>) -> super::frame::PageParts {
+        let body = self.security_section(cx);
+        self.page_parts(super::Tab::Security, body, Vec::new(), cx)
+    }
+}
+
+#[cfg(test)]
+mod tests;

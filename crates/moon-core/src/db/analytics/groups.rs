@@ -98,31 +98,6 @@ impl GroupStat {
     }
 }
 
-/// One core's share of a strategy type — the popup behind a `KindStat` bar.
-#[derive(Clone, Debug)]
-pub struct KindCore {
-    pub uid: u64,
-    pub name: String,
-    pub profit: f64,
-    pub trades: i64,
-}
-
-/// Profit of ONE strategy type (`SignalType`) over the period, with the per-core split
-/// behind it. Built only for single-day periods, where a per-day series would be one bar:
-/// the chart then groups by type instead of by day, and the popup opens the cores.
-///
-/// The type comes from the strategies DB; without it every trade lands in one unnamed
-/// group (`kind` empty) rather than the chart disappearing.
-#[derive(Clone, Debug)]
-pub struct KindStat {
-    /// `SignalType` of the strategy; empty when unknown (UI shows a dash).
-    pub kind: String,
-    pub profit: f64,
-    pub trades: i64,
-    /// Cores that traded this type, most profitable first.
-    pub cores: Vec<KindCore>,
-}
-
 /// Which STRATEGIES traded any of `coins`, as the very keys the strategy list rows carry
 /// (`strategyid@core_uid`).
 ///

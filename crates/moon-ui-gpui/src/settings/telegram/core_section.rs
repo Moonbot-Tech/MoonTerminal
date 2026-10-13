@@ -94,7 +94,10 @@ impl SettingsView {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
         MoonGroupBox::new("telegram-core-section")
-            .title(t!("telegram_core.section").to_string())
+            .child(crate::settings::common::group_title(
+                t!("telegram_core.section").to_string(),
+                cx,
+            ))
             .padding(14.0)
             .gap(10.0)
             .child(self.core_picker_row(cx, p))
@@ -180,7 +183,7 @@ impl SettingsView {
             )
             .child(
                 MoonButton::new("telegram-core-disc")
-                    .outline()
+                    .variant(moon_ui::MoonButtonVariant::Neutral)
                     .padding_x(12.0)
                     .mono(false)
                     .label(t!("telegram_core.details").to_string())
@@ -406,12 +409,11 @@ impl SettingsView {
         }
         v_flex()
             .gap(design::ui_px(cx, 8.0))
-            .child(
-                div()
-                    .font_family(design::ui_font())
-                    .text_color(rgba_from(p.text, 1.0))
-                    .child(t!("telegram_core.proxy_section").to_string()),
-            )
+            .child(super::super::common::section(
+                &t!("tgcore.proxy.title"),
+                p,
+                cx,
+            ))
             .child(kind_row)
             .child(fields)
             .child(
@@ -427,7 +429,7 @@ impl SettingsView {
                     .padding_x(12.0)
                     .disabled(!can_edit)
                     .mono(false)
-                    .label(t!("telegram_core.proxy_save").to_string())
+                    .label(t!("tgcore.proxy.send").to_string())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.save_proxy(core, window, cx);
                     }))

@@ -276,7 +276,7 @@ impl SettingsView {
                     .child(div().text_color(rgba_from(p.red, 1.0)).child(e.clone()))
                     .child(
                         MoonButton::new("import-close")
-                            .outline()
+                            .variant(moon_ui::MoonButtonVariant::Neutral)
                             .label(t!("import.cancel").to_string())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.import = None;
@@ -436,7 +436,7 @@ impl SettingsView {
                 )
                 .child(
                     MoonButton::new("import-cancel")
-                        .outline()
+                        .variant(moon_ui::MoonButtonVariant::Neutral)
                         .label(t!("import.cancel").to_string())
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.import = None;

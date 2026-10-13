@@ -2,70 +2,6 @@
 
 use super::*;
 
-/// Which buckets keep a value label once the bars are denser than the labels are wide.
-///
-/// The LAST bucket is seeded before anything else, so the period's own end always carries its
-/// number — including a zero one, which ordering by magnitude ranks dead last and which the
-/// reader most wants to see, because "where did this period finish" is the question the right
-/// edge of the chart answers. Every other candidate then has to clear that label rather than the
-/// other way round, so the guarantee costs a neighbour rather than an overlap.
-///
-/// The rest is greedy by descending |value|: the biggest day is labelled next, and every later
-/// candidate is kept only if its column sits at least one label-width from every column already
-/// kept. That is what replaced the old all-or-nothing `days.len() <= 45` cutoff, which drew a
-/// slab of colliding digits just under the limit and NOTHING at all just over it — so on «Все»
-/// the chart said nothing about its own extremes.
-///
-/// Selecting by magnitude rather than by every N-th bucket is deliberate: the days worth naming
-/// on a profit chart are the big ones, and an every-N-th rule names whichever days the stride
-/// happens to land on.
-///
-/// Args:
-///     vals: Per-bucket profit, ordered, one entry per bar.
-///     plot_w: Width the bars are laid out across, in pixels.
-///     label_w: Width of one label, in pixels.
-///
-/// Returns:
-///     Indices into `vals` to label, ascending. Always contains the last index.
-pub(in crate::analytics::summary) fn thinned_labels(
-    vals: &[f64],
-    plot_w: f32,
-    label_w: f32,
-) -> Vec<usize> {
-    let n = vals.len();
-    if n == 0 {
-        return Vec::new();
-    }
-    let last = n - 1;
-    // Bars are equal flex cells, so bucket `i` is centred at (i+0.5)/n of the width — the same
-    // mapping the hover popup uses. The last one is the exception: its label is right-aligned to
-    // the plot's edge instead of centred on its column (`daily_bars`), because a centred label
-    // there would hang half its width outside the card. Its centre therefore sits half a label
-    // in from that edge, and the separation test has to use THAT, or the neighbour it clears on
-    // paper still collides on screen.
-    let x = |i: usize| {
-        if i == last {
-            plot_w - label_w / 2.0
-        } else {
-            (i as f32 + 0.5) / n as f32 * plot_w
-        }
-    };
-    let mut order: Vec<usize> = (0..n).collect();
-    // Index as the tie-break, so two equal days never swap between frames.
-    order.sort_by(|&a, &b| vals[b].abs().total_cmp(&vals[a].abs()).then(a.cmp(&b)));
-    let mut kept: Vec<usize> = vec![last];
-    for i in order {
-        if i == last {
-            continue;
-        }
-        if kept.iter().all(|&j| (x(i) - x(j)).abs() >= label_w) {
-            kept.push(i);
-        }
-    }
-    kept.sort_unstable();
-    kept
-}
-
 /// FALLBACK color for a core's series (cycled from the palette) — used when
 /// the server has no color in its settings (e.g. the core is already gone from
 /// the config). The primary source is `ServerConfig.color` (see core_colors in
@@ -235,19 +171,6 @@ pub(in crate::analytics::summary) fn bucket_label(
         }
     } else {
         super::dm(secs, zone)
-    }
-}
-
-/// A core's colour looked up by uid — the per-type popup knows uids, not series indices.
-pub(in crate::analytics::summary) fn core_color_by_uid(
-    cores: &[CoreSeries],
-    colors: &[Hsla],
-    uid: u64,
-    p: MoonPalette,
-) -> Hsla {
-    match cores.iter().position(|c| c.uid == uid) {
-        Some(ci) => core_color(colors, ci, p),
-        None => moon(fallback_core_color(p, uid as usize)),
     }
 }
 

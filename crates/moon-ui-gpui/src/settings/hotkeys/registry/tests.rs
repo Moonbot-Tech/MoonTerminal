@@ -285,11 +285,9 @@ fn the_gesture_marks_name_exactly_the_gestures_the_pull_writes() {
             spec.title()
         );
     }
-    // The two rows that are not slots and so have no meta of their own. Both are written by the
-    // pull, so both must carry the mark that says so — the mirror switch especially, since it
-    // decides whether the four short rows follow the long ones at all.
+    // The pull also writes the mirror switch and every move row's kind — the two non-slot facts
+    // that decide how the short rows follow the long ones.
     assert!(written.contains(&GestureTarget::SameForMove));
-    assert_eq!(meta::SAME_FOR_MOVE.origin, Origin::Shared);
     for row in MoveKindSlot::ALL {
         assert!(
             written.contains(&GestureTarget::Kind(row)),

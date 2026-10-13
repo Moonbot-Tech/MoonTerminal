@@ -178,16 +178,113 @@ fn cores_of(config: &AppConfig) -> Vec<CoreEntry> {
         .collect()
 }
 
+/// What one Save achieved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum SaveOutcome {
+    /// The config is on disk and any password change was accepted.
+    Saved,
+    /// The config may be on disk, but a password change was refused; the reason is localized.
+    Rejected(String),
+    /// The config write failed; nothing new reached disk.
+    WriteFailed(String),
+}
+
+/// Combine the password step and the config write into one outcome.
+///
+/// A failed write wins: nothing new is on disk, whatever the passwords did.
+///
+/// Args:
+///     security: What the password step did.
+///     write: The config write's result, its error already rendered.
+///
+/// Returns:
+///     The outcome `save` reports.
+pub(super) fn save_outcome(
+    security: &super::security::SecurityApply,
+    write: Result<(), String>,
+) -> SaveOutcome {
+    match (write, security) {
+        (Err(error), _) => SaveOutcome::WriteFailed(error),
+        (Ok(()), super::security::SecurityApply::Rejected(key)) => {
+            SaveOutcome::Rejected(rust_i18n::t!(*key).to_string())
+        }
+        (Ok(()), _) => SaveOutcome::Saved,
+    }
+}
+
+/// The draft a Settings window holds right after it opens on `config`, or after a revert.
+///
+/// The group list is synchronized from the servers exactly as on open, so a revert lands on the
+/// same draft a fresh window would and reads clean.
+///
+/// Args:
+///     config: The saved config.
+///
+/// Returns:
+///     A fresh draft equal, for every saved field, to `config`.
+pub(super) fn reverted(config: &AppConfig) -> AppConfig {
+    let mut draft = config.clone();
+    super::connections::sync_groups_from_servers(&draft.servers, &mut draft.groups);
+    draft
+}
+
 impl SettingsView {
+    /// Drop every unsaved edit: the draft goes back to the saved config, the saved theme is
+    /// reinstalled, typed passwords are cleared, and the editors that snapshot the draft when
+    /// built are built again. Nothing is written to disk.
+    ///
+    /// Args:
+    ///     window: Settings window the editors are rebuilt in.
+    ///     cx: Settings context.
+    pub(super) fn revert_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.backend.update(cx, |b, bcx| {
+            b.preview = Some(reverted(&b.config));
+            crate::install_moon_theme_for_config(&b.config, bcx);
+            bcx.notify();
+        });
+        self.security.clear_fields(window, cx);
+        self.discard_security_slots();
+        self.security.revert_toggles();
+        // Row keys are reissued by the rebuild, so anything naming a row goes first.
+        self.picking = None;
+        let selected = self.conn_selected_index();
+        self.rebuild_conn(selected, None, window, cx);
+        self.iface = super::interface::build(&self.backend, window, cx);
+        self.lines = super::lines::build(&self.backend, window, cx);
+        self.badges = super::badges::build(&self.backend, window, cx);
+        self.ui_zoom = super::general::build_zoom(&self.backend, cx);
+        // Selectors keep their own selection and do not re-read the draft on render.
+        let saved = self.backend.read(cx).config.clone();
+        self.theme_mode
+            .update(cx, |s, _| s.set_selected_value(&saved.ui_theme_mode));
+        self.lang
+            .update(cx, |s, _| s.set_selected_value(&saved.language));
+        self.valuation.update(cx, |s, _| {
+            s.set_selected_value(&saved.report_valuation_mode)
+        });
+        self.mode
+            .update(cx, |s, _| s.set_selected_value(&saved.market_mode));
+        self.core_sort
+            .update(cx, |s, _| s.set_selected_value(&saved.core_sort));
+        let token = saved.telegram.token.expose().to_string();
+        self.telegram.reseed(token, window, cx);
+        self.status = None;
+        cx.notify();
+    }
+
     /// Validate and save the draft, then apply it without closing the Settings window.
     ///
     /// A failed save changes neither the active config nor the draft.
-    pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// Returns:
+    ///     [`SaveOutcome::Saved`] only when the config reached disk and any password change was
+    ///     accepted; the window must stay open on anything else.
+    pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> SaveOutcome {
         // Passwords FIRST. Applying them only changes key material in memory; the config write
         // below is what puts the resulting key slots on disk. Running it afterwards would leave
         // the passwords for a write that already happened, and quitting there would lose them with
         // no error anywhere. Whether they actually reached disk is reported after that write.
-        let security_pending = self.apply_security(window, cx);
+        let security = self.apply_security(cx);
         // Compare the saved candidate with this snapshot to select live updates and required
         // rebuilds.
         let before = self.backend.read(cx).config.clone();
@@ -207,6 +304,7 @@ impl SettingsView {
             res
         });
         let saved = res.is_ok();
+        let write = res.as_ref().map(|_| ()).map_err(|e| e.to_string());
         match res {
             Ok(()) => {
                 let after = self.backend.read(cx).config.clone();
@@ -218,10 +316,9 @@ impl SettingsView {
         }
         // The key slots ride along in `servers.enc`, so they reached disk exactly when this write
         // did — and a password that did not is worth saying out loud.
-        if security_pending {
-            self.report_security_saved(saved, cx);
-        }
+        self.report_security_saved(saved, window, cx);
         cx.notify();
+        save_outcome(&security, write)
     }
 
     /// Apply saved settings at the narrowest required boundary.
@@ -539,3 +636,230 @@ impl SettingsView {
 
 #[cfg(test)]
 mod tests;
+
+/// What a close request does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CloseDecision {
+    /// Close at once.
+    Allow,
+    /// Keep the window and ask what to do with the unsaved work.
+    Ask,
+}
+
+/// Decide a close request.
+///
+/// Args:
+///     dirty: Something a Save would still write exists.
+///     confirmed: The user already chose to close without saving.
+///
+/// Returns:
+///     [`CloseDecision::Ask`] only for unsaved work the user has not chosen to drop.
+pub(super) fn close_decision(dirty: bool, confirmed: bool) -> CloseDecision {
+    if dirty && !confirmed {
+        CloseDecision::Ask
+    } else {
+        CloseDecision::Allow
+    }
+}
+
+/// What "Save and close" does once the config Save has run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SaveClose {
+    /// Everything is stored: close now.
+    Close,
+    /// The station draft was sent: close when the station answers.
+    WaitStation,
+    /// Something did not go through: keep the window and its error in view.
+    Stay,
+    /// The config is saved but the station draft could not be sent (no station known, or a job
+    /// already running): stay and say so.
+    StationNotStarted,
+}
+
+/// Decide "Save and close" after the config Save.
+///
+/// Args:
+///     saved: The config Save came out [`SaveOutcome::Saved`].
+///     station_pending: The station draft still waits to be applied.
+///     station_started: The station apply job was started for it.
+///
+/// Returns:
+///     What the window does next.
+pub(super) fn save_close(saved: bool, station_pending: bool, station_started: bool) -> SaveClose {
+    match (saved, station_pending, station_started) {
+        (false, _, _) => SaveClose::Stay,
+        (true, false, _) => SaveClose::Close,
+        (true, true, true) => SaveClose::WaitStation,
+        (true, true, false) => SaveClose::StationNotStarted,
+    }
+}
+
+/// Where a window waiting to close on the station's answer stands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum StationClose {
+    /// The station is still applying.
+    Wait,
+    /// The station applied the draft: close.
+    Close,
+    /// The station refused, or nothing is running: stay, with the reason when there is one.
+    Stay(Option<String>),
+}
+
+/// Map the station's apply state to the waiting window's next step.
+///
+/// Args:
+///     applying: The station's apply job is running.
+///     applied: How the last apply came out.
+///
+/// Returns:
+///     The step.
+pub(super) fn station_close(
+    applying: bool,
+    applied: Option<&Result<String, String>>,
+) -> StationClose {
+    match (applying, applied) {
+        (true, _) => StationClose::Wait,
+        (false, Some(Ok(_))) => StationClose::Close,
+        (false, Some(Err(reason))) => StationClose::Stay(Some(reason.clone())),
+        (false, None) => StationClose::Stay(None),
+    }
+}
+
+/// The close dialog's body.
+///
+/// Args:
+///     pages: Pages with unsaved edits, in navigation order.
+///     station_pending: The station draft waits to be applied.
+///
+/// Returns:
+///     The localized text: the pages when there are any, otherwise the generic line when other
+///     work is unsaved, and the station line when the station draft is pending.
+pub(super) fn close_body(pages: &[super::Tab], other: bool, station_pending: bool) -> String {
+    let mut lines = Vec::new();
+    if !pages.is_empty() {
+        let names = pages
+            .iter()
+            .map(|t| t.title())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let n = pages.len();
+        let key = super::telegram::plural_key("settings.close.body", n as u64);
+        lines.push(rust_i18n::t!(&key, n = n, pages = names).to_string());
+    } else if other {
+        lines.push(rust_i18n::t!("settings.close.body_other").to_string());
+    }
+    if station_pending {
+        lines.push(rust_i18n::t!("settings.close.station_pending").to_string());
+    }
+    lines.join("\n")
+}
+
+impl SettingsView {
+    /// Answer the window's close request: close a clean window, otherwise ask first.
+    ///
+    /// Args:
+    ///     window: The Settings window.
+    ///     cx: Settings context.
+    ///
+    /// Returns:
+    ///     Whether the window may close now.
+    pub(super) fn should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        match close_decision(self.has_unsaved(cx), self.close_confirmed) {
+            CloseDecision::Allow => true,
+            CloseDecision::Ask => {
+                let pages = self.dirty_page_set(cx).iter().collect::<Vec<_>>();
+                let body = close_body(&pages, self.draft_dirty, self.station_draft_pending());
+                self.ask_close(body, window, cx);
+                false
+            }
+        }
+    }
+
+    /// Close the window once the station has applied the draft "Save and close" sent; stay with
+    /// the station's reason when it refused. Run on every frame while that wait is on.
+    pub(super) fn close_after_station_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.close_after_station {
+            return;
+        }
+        let station = &self.backend.read(cx).station;
+        match station_close(station.applying, station.applied.as_ref()) {
+            StationClose::Wait => {}
+            StationClose::Close => {
+                self.close_after_station = false;
+                self.close_confirmed = true;
+                cx.defer_in(window, |_, window, _| window.remove_window());
+            }
+            StationClose::Stay(reason) => {
+                self.close_after_station = false;
+                self.status = Some((
+                    match reason {
+                        Some(reason) => super::StatusMsg::Text(reason),
+                        None => super::StatusMsg::Key("settings.close.station_no_answer"),
+                    },
+                    true,
+                ));
+            }
+        }
+    }
+
+    /// Ask what to do with unsaved work: stay, close without saving, or save and close. The window
+    /// closes after a save only when everything reached disk.
+    fn ask_close(&mut self, body: String, window: &mut Window, cx: &mut Context<Self>) {
+        use super::common::{Confirm, ConfirmBtn, ConfirmKind, confirm};
+        let discard = cx.entity().downgrade();
+        let save = cx.entity().downgrade();
+        confirm(
+            window,
+            cx,
+            Confirm {
+                title: rust_i18n::t!("settings.close.title").to_string(),
+                body,
+                buttons: vec![
+                    ConfirmBtn {
+                        label: rust_i18n::t!("settings.close.stay").to_string(),
+                        kind: ConfirmKind::Cancel,
+                        on: std::rc::Rc::new(|_, _| {}),
+                    },
+                    ConfirmBtn {
+                        label: rust_i18n::t!("settings.close.discard").to_string(),
+                        kind: ConfirmKind::Danger,
+                        on: std::rc::Rc::new(move |window, app| {
+                            let _ = discard.update(app, |this, _| {
+                                this.close_confirmed = true;
+                                // Key material must not keep a password nobody saved.
+                                this.discard_security_slots();
+                            });
+                            window.remove_window();
+                        }),
+                    },
+                    ConfirmBtn {
+                        label: rust_i18n::t!("settings.close.save_close").to_string(),
+                        kind: ConfirmKind::Primary,
+                        on: std::rc::Rc::new(move |window, app| {
+                            let step = save.update(app, |this, cx| {
+                                let saved = this.save(window, cx) == SaveOutcome::Saved;
+                                let pending = this.station_draft_pending();
+                                let started = saved && pending && this.apply_station_access(cx);
+                                let step = save_close(saved, pending, started);
+                                this.close_confirmed |= step == SaveClose::Close;
+                                this.close_after_station = step == SaveClose::WaitStation;
+                                if step == SaveClose::StationNotStarted {
+                                    this.status = Some((
+                                        super::StatusMsg::Key("settings.close.station_busy"),
+                                        true,
+                                    ));
+                                }
+                                step
+                            });
+                            // Anything short of everything stored keeps the window and its error
+                            // in view; a sent station draft closes it from its answer.
+                            if matches!(step, Ok(SaveClose::Close)) {
+                                window.remove_window();
+                            }
+                        }),
+                    },
+                ],
+            },
+        );
+    }
+}

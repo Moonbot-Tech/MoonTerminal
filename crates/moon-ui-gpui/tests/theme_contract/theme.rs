@@ -326,8 +326,10 @@ fn popover_contents_do_not_paint_a_second_surface() {
             "panels/assets/settings.rs",
             r#".id("assets-wallets-settings-popup")"#,
         ),
+        // The Cores page's group icon picker: declared on the page, its grid built in the shared
+        // tree helpers.
         (
-            "settings/connections/tab.rs",
+            "settings/connections/page.rs",
             "settings/connections/tab.rs",
             r#".id("icon-picker")"#,
         ),
@@ -419,24 +421,6 @@ fn popover_contents_do_not_paint_a_second_surface() {
              add its content root so the no-second-chrome rule covers it too"
         );
     }
-}
-
-/// `settings/connections/table.rs:SettingsView::cell` must apply a column's resolved cap through
-/// `max_w`. Deleting that match lets Group consume wide-window space past its 140px cap and
-/// truncates the uncapped Name field.
-#[test]
-fn connections_cells_apply_their_resolved_growth_cap() {
-    let table = read_src("settings/connections/table.rs");
-    let cell = code_only(braced_body(
-        &table,
-        "fn cell(col: ConnColId, micro: MicroTriggerMetrics) -> Div",
-    ));
-
-    assert!(
-        cell.contains("let d = match col.max_width(micro) {")
-            && cell.contains("Some(max) => d.max_w(px(max)),"),
-        "SettingsView::cell must resolve ConnColId::max_width and apply it with Div::max_w"
-    );
 }
 
 // --- Goal A: header/toolbar chrome polish -----------------------------------------------------
@@ -680,116 +664,248 @@ fn settings_dirty_signature_covers_or_explicitly_excludes_every_config_field() {
 }
 
 /// `connections/mod.rs:build_conn` must put key and bundle placeholders on their input state,
-/// while `table.rs:server_row` keeps state-bound widgets free of widget placeholders. Breakage:
+/// while `cores.rs:core_card` keeps its state-bound inputs free of widget placeholders. Breakage:
 /// moving either placeholder back to `MoonInput` drops it silently, leaving an empty field blank.
 #[test]
 fn connections_placeholders_live_on_state_not_state_bound_widgets() {
     let connections = read_src("settings/connections/mod.rs");
     let build_conn = code_only(braced_body(&connections, "fn build_conn("));
-    let table = read_src("settings/connections/table.rs");
-    let server_row = code_only(braced_body(&table, "fn server_row("));
+    let cores = read_src("settings/connections/cores.rs");
+    let card = code_only(braced_body(&cores, "pub(crate) fn core_card("));
 
     assert!(
         build_conn.contains("conn.key_ph") && build_conn.contains("conn.bundle_ph"),
         "connections/mod.rs:build_conn must seed both state-owned placeholders"
     );
     assert!(
-        !server_row.contains(".placeholder("),
-        "connections/table.rs:server_row must not put placeholders on state-bound MoonInput widgets"
+        !card.contains(".placeholder("),
+        "connections/cores.rs:core_card must not put placeholders on state-bound MoonInput widgets"
     );
 }
 
-/// `connections/table.rs` must retain tooltip keys beside the compact protocol and feed controls.
-/// Breakage: removing either key leaves `V0` or `8/8` undecodable without searching for a header.
+/// `connections/cores.rs:core_card` must keep the explanations of its compact controls: the
+/// protocol's long text and the feed-flags hint. Breakage: removing either leaves `V0` or `8 из 9`
+/// undecodable on the card.
 #[test]
 fn connections_compact_cells_keep_their_explanatory_tooltips() {
-    let table = read_src("settings/connections/table.rs");
-    let proto = code_only(braced_body(&table, "fn proto_dropdown("));
-    let feed = code_only(braced_body(&table, "fn feed_popover("));
+    let cores = read_src("settings/connections/cores.rs");
+    let card = code_only(braced_body(&cores, "pub(crate) fn core_card("));
 
     assert!(
-        proto.contains("conn.tip.proto"),
-        "connections/table.rs:proto_dropdown must retain the protocol tooltip"
+        card.contains("conn.tip.proto"),
+        "connections/cores.rs:core_card must keep the protocol's explanation"
     );
     assert!(
-        feed.contains("conn.tip.flags"),
-        "connections/table.rs:feed_popover must retain the feed-flags tooltip"
-    );
-}
-
-/// `connections/table.rs:col_head` and `hint_label` must use muted, non-underlined headings.
-/// Breakage: restoring underlines makes static headers look like hyperlinks and obscures hierarchy.
-#[test]
-fn connections_headers_are_muted_labels_not_links() {
-    let table = read_src("settings/connections/table.rs");
-    let col_head = code_only(braced_body(&table, "fn col_head("));
-    let hint_label = code_only(braced_body(&table, "fn hint_label("));
-
-    assert!(
-        !col_head.contains(".underline()") && col_head.contains("p.text_muted"),
-        "connections/table.rs:col_head must be muted and un-underlined"
-    );
-    assert!(
-        !hint_label.contains(".underline()"),
-        "connections/table.rs:hint_label must not look like a link"
+        card.contains("conn.card.feeds_hint"),
+        "connections/cores.rs:core_card must keep the feed-flags hint"
     );
 }
 
 /// Restoring a fixed or capped popup width clips the longest localized option beside its check.
-/// Keep both Connections menus on MoonUI's content measurement at the active menu density.
+/// Every core-card menu (protocol, total mode, group) goes through `cores.rs:dropdown`, which must
+/// stay on MoonUI's content measurement at the active menu density.
 #[test]
 fn connections_total_and_preset_menus_fit_all_localized_rows() {
-    let table = read_src("settings/connections/table.rs");
-    for signature in ["fn total_dropdown(", "fn preset_dropdown("] {
-        let body = code_only(braced_body(&table, signature));
+    let cores = read_src("settings/connections/cores.rs");
+    let body = code_only(braced_body(&cores, "fn dropdown("));
+    assert!(
+        body.contains(".fit_menu_width(0.0, f32::INFINITY)"),
+        "cores.rs:dropdown must fit its localized labels, check column and padding without a width cap"
+    );
+    for fixed_width in [".menu_width(", ".menu_width_scaled("] {
         assert!(
-            body.contains(".fit_menu_width(0.0, f32::INFINITY)"),
-            "{signature} must fit its localized labels, check column and padding without a width cap"
+            !body.contains(fixed_width),
+            "cores.rs:dropdown must not override its content-fitted popup with {fixed_width}"
         );
-        for fixed_width in [".menu_width(", ".menu_width_scaled("] {
-            assert!(
-                !body.contains(fixed_width),
-                "{signature} must not override its content-fitted popup with {fixed_width}"
-            );
-        }
     }
 }
 
-/// `settings/render.rs` must show dirty and clean captions and leave Save enabled in either state.
-/// Breakage: disabling Save when clean rejects the explicit no-fence contract, while removing the
-/// neutral variant or caption hides whether the current draft has changes.
+/// `settings/frame.rs:save_bar` must disable Save exactly when nothing is unsaved and say so; the
+/// dirty arm is chosen by `SettingsView::config_unsaved` through `bar_dirty` — what Save writes,
+/// including edits no page names (they read "Есть несохранённые изменения"), never a station draft
+/// its own pages apply.
+/// The approved mockup wins over the earlier no-fence rule (coordinator ruling): clean ->
+/// disabled Save + "Все изменения сохранены"; dirty -> enabled Save beside the page list. J3:
+/// accepted-but-unwritten security work counts as dirty, so it can never strand a password behind
+/// a disabled button (see the dirty-predicate contract below). Breakage: a Save disabled while
+/// something is dirty strands the edit; an enabled clean Save hides that nothing is pending.
 #[test]
-fn settings_save_button_exposes_dirty_state_without_a_disabled_fence() {
-    let render = read_src("settings/render.rs");
-    let save = code_only(chain_between(
-        &render,
-        "MoonButton::new(\"save\")",
-        ".render()",
-        "settings save button",
-    ));
+fn settings_save_button_is_disabled_exactly_when_clean() {
+    let frame = read_src("settings/frame.rs");
+    let bar = code_only(braced_body(&frame, "pub(super) fn save_bar("));
+    let dirty_arm = chain_between(
+        &bar,
+        "dirty: true,",
+        "SaveBar::Draft { .. } =>",
+        "settings dirty draft bar",
+    );
+    let clean_arm = chain_between(
+        &bar,
+        "SaveBar::Draft { .. } =>",
+        "SaveBar::Remote(",
+        "settings clean draft bar",
+    );
 
     assert!(
-        render.contains("settings.dirty")
-            && render.contains("settings.clean")
-            && render.contains("MoonButtonVariant::Neutral"),
-        "settings/render.rs must distinguish dirty and clean captions with a neutral clean variant"
+        dirty_arm.contains("MoonButton::new(\"save\")") && !dirty_arm.contains(".disabled("),
+        "settings/frame.rs:save_bar must keep Save enabled while any page is dirty"
     );
     assert!(
-        !save.contains(".disabled("),
-        "settings/render.rs:MoonButton::new(\"save\") must remain enabled when clean"
+        dirty_arm.contains("settings.savebar.revert"),
+        "settings/frame.rs:save_bar must offer revert beside a dirty Save"
+    );
+    assert!(
+        clean_arm.contains("MoonButton::new(\"save\")")
+            && clean_arm.contains(".disabled(true)")
+            && clean_arm.contains("settings.savebar.clean"),
+        "settings/frame.rs:save_bar must disable a clean Save and say the changes are saved"
+    );
+    assert!(
+        dirty_arm.contains("settings.savebar.dirty_other"),
+        "settings/frame.rs:save_bar must name unsaved work that no page carries"
+    );
+    let parts = code_only(braced_body(&frame, "pub(super) fn page_parts("));
+    let unsaved = code_only(braced_body(&frame, "pub(super) fn has_unsaved(&self"));
+    assert!(
+        parts.contains("dirty: self.config_unsaved(cx)"),
+        "settings/frame.rs:page_parts must pick the bar's arm from config_unsaved"
+    );
+    let config_unsaved = code_only(braced_body(&frame, "pub(super) fn config_unsaved(&self"));
+    assert!(
+        config_unsaved.contains("bar_dirty("),
+        "settings/frame.rs:config_unsaved must decide through bar_dirty, which leaves a station draft out of the bar"
+    );
+    assert!(
+        unsaved.contains("self.draft_dirty")
+            && unsaved.contains("self.dirty_page_set(cx)")
+            && unsaved.contains("self.station_draft_pending()"),
+        "settings/frame.rs:has_unsaved must cover the draft, the pages and the station draft"
     );
 }
 
-/// `settings/render.rs:SettingsView::render` must include the password-only security draft in
-/// Save's dirty predicate. Breakage: comparing only `AppConfig` paints a password change Neutral,
-/// so the HOT-path indicator says no changes while Save writes new key slots to `servers.enc`.
+/// `settings/frame.rs:dirty_page_set` must count the Security page dirty while a password change
+/// is typed OR accepted but not yet written (J3), and `page_parts` must feed that set into the
+/// draft bar. Breakage: comparing only `AppConfig` renders a password change clean, so Save is
+/// disabled while it would write new key slots, and a failed key-slot write looks saved.
 #[test]
 fn settings_save_dirty_predicate_includes_the_pending_security_draft() {
-    let render = read_src("settings/render.rs");
-    let body = code_only(braced_body(&render, "fn render("));
+    let frame = read_src("settings/frame.rs");
+    let set = code_only(braced_body(&frame, "pub(super) fn dirty_page_set("));
+    let parts = code_only(braced_body(&frame, "pub(super) fn page_parts("));
+    let security = read_src("settings/security.rs");
+    let unsaved = code_only(braced_body(&security, "pub(super) fn has_unsaved("));
 
     assert!(
-        body.contains("self.security.has_pending_request(cx)"),
-        "settings/render.rs:SettingsView::render must include the pending security request in Save's dirty predicate"
+        set.contains("self.security.has_unsaved(cx)") && set.contains("Tab::Security"),
+        "settings/frame.rs:dirty_page_set must mark Security dirty from security.has_unsaved"
+    );
+    assert!(
+        unsaved.contains("self.unpersisted") && unsaved.contains("self.has_pending_request(cx)"),
+        "settings/security.rs:has_unsaved must cover both a typed request and unwritten accepted work"
+    );
+    assert!(
+        parts.contains("self.dirty_page_set(cx)"),
+        "settings/frame.rs:page_parts must build the draft bar from dirty_page_set"
+    );
+}
+
+/// `settings/mod.rs:page_sig` must give every field `draft_sig` hashes to exactly one page, or
+/// list it once in `NO_PAGE_FIELDS`; the Telegram aggregate is split field by field. Breakage: a
+/// field left out of both makes its edit dirty the draft with no page dot, and a field listed
+/// twice puts the dot on two pages.
+#[test]
+fn settings_page_signature_assigns_every_draft_field_exactly_once() {
+    fn uses(body: &str, path: &str) -> usize {
+        body.match_indices(path)
+            .filter(|(at, _)| {
+                body[at + path.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'))
+            })
+            .count()
+    }
+    fn struct_fields(source: &str, signature: &str) -> Vec<String> {
+        code_only(braced_body(source, signature))
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("pub ")?.split_once(':'))
+            .map(|(field, _)| field.trim().to_string())
+            .collect()
+    }
+
+    let settings = read_src("settings/mod.rs");
+    let draft = code_only(braced_body(&settings, "fn draft_sig("));
+    let page = code_only(braced_body(&settings, "fn page_sig("));
+    let no_page = {
+        let start = settings
+            .find("const NO_PAGE_FIELDS")
+            .expect("settings/mod.rs must declare NO_PAGE_FIELDS");
+        let end = start
+            + settings[start..]
+                .find("];")
+                .expect("NO_PAGE_FIELDS must close");
+        &settings[start..end]
+    };
+
+    let mut fields: Vec<String> = draft
+        .match_indices("cfg.")
+        .map(|(at, _)| {
+            draft[at + 4..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect::<String>()
+        })
+        .collect();
+    fields.sort();
+    fields.dedup();
+    assert!(fields.len() > 10, "draft_sig fields not found: {fields:?}");
+    assert!(
+        draft.contains("canonical_groups(cfg)") && uses(&page, "canonical_groups(cfg)") == 1,
+        "page_sig must hash canonical_groups(cfg) exactly once"
+    );
+
+    for field in fields.iter().filter(|f| *f != "telegram") {
+        let count = uses(&page, &format!("cfg.{field}")) + uses(no_page, &format!("\"{field}\""));
+        assert_eq!(
+            count, 1,
+            "AppConfig::{field} must be owned by exactly one page in page_sig or NO_PAGE_FIELDS"
+        );
+    }
+
+    let schema = read_core_src("config/schema.rs");
+    let menu = read_core_src("config/telegram_menu.rs");
+    let telegram = struct_fields(&schema, "pub struct TelegramConfig");
+    let bot = struct_fields(&menu, "pub struct BotSettings");
+    assert!(telegram.contains(&"bot".to_string()) && !bot.is_empty());
+    for field in telegram.iter().filter(|f| *f != "bot") {
+        assert_eq!(
+            uses(&page, &format!("cfg.telegram.{field}")),
+            1,
+            "TelegramConfig::{field} must be owned by exactly one page in page_sig"
+        );
+    }
+    for field in &bot {
+        assert_eq!(
+            uses(&page, &format!("cfg.telegram.bot.{field}")),
+            1,
+            "BotSettings::{field} must be owned by exactly one page in page_sig"
+        );
+    }
+}
+
+/// `settings/hotkeys/tab.rs:confirm_core_pull` writes the core's layout into the Settings DRAFT
+/// only. Breakage: writing `b.config.hotkeys` or calling `.save(` makes "Взять раскладку с ядра"
+/// persist past Revert and close-without-saving, the bug the page rebuild removed.
+#[test]
+fn the_core_pull_writes_the_draft_only() {
+    let tab = read_src("settings/hotkeys/tab.rs");
+    let body = code_only(braced_body(&tab, "fn confirm_core_pull("));
+    assert!(
+        body.contains("b.preview.as_mut()"),
+        "settings/hotkeys/tab.rs:confirm_core_pull must write the draft"
+    );
+    assert!(
+        !body.contains("b.config.hotkeys") && !body.contains(".save("),
+        "settings/hotkeys/tab.rs:confirm_core_pull must not touch the saved config or hotkeys.toml"
     );
 }

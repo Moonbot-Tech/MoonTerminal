@@ -37,8 +37,11 @@ impl ChartWindow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CoreStatusMode {
     /// Expandable server rows grouped by endpoint address.
-    ByIp,
-    /// Existing one-row-per-core telemetry table.
+    ///
+    /// The persisted code stays `"by-ip"`. The variant name is Servers because that is the
+    /// view the toolbar selects; the grouped tree itself stays until a later batch.
+    Servers,
+    /// One row per core. This is what a fresh panel opens on.
     Flat,
     /// What the cores themselves currently report as confirmed problems.
     Problems,
@@ -51,17 +54,6 @@ pub(super) enum CoreStatusMode {
 /// How many recent warning episodes the Warnings list shows.
 pub(super) const WARN_LIST_LIMIT: usize = 500;
 
-/// Position of the dead separator cell in the mode strip: after the three LIVE views (By-IP, Flat,
-/// Problems) and before the two HISTORY views (Warnings, Updates).
-///
-/// Named because it is load-bearing in two places that must agree — the item list and the
-/// click-index match. A literal in both is how a separator quietly becomes a mode.
-pub(super) const MODE_DIVIDER_INDEX: usize = 3;
-
-/// Unscaled width of that separator cell. Wide enough to read as a gap with a rule in it, narrow
-/// enough not to read as a missing button.
-pub(super) const MODE_DIVIDER_WIDTH: f32 = 13.0;
-
 /// How many recent update-history rows the Updates list shows, after scope filtering. Matches
 /// `HISTORY_CAP` in `crates/moon-core/src/session/core_update.rs`: the backing history itself
 /// never holds more than this, so the cap only ever bites when scoping filters less than the
@@ -69,9 +61,9 @@ pub(super) const MODE_DIVIDER_WIDTH: f32 = 13.0;
 pub(super) const UPDATE_LIST_LIMIT: usize = 2_000;
 
 impl Default for CoreStatusMode {
-    /// Return the server-by-IP presentation a panel opens on when nothing was ever remembered.
+    /// Return the one-row-per-core table a panel opens on when nothing was ever remembered.
     fn default() -> Self {
-        Self::ByIp
+        Self::Flat
     }
 }
 
@@ -86,7 +78,7 @@ impl CoreStatusMode {
     ///     The stable, non-localized persistence code for this presentation.
     pub(super) const fn code(self) -> &'static str {
         match self {
-            Self::ByIp => "by-ip",
+            Self::Servers => "by-ip",
             Self::Flat => "flat",
             Self::Problems => "problems",
             Self::Warnings => "warnings",
@@ -104,9 +96,11 @@ impl CoreStatusMode {
     ///     code: Persisted machine code, potentially hand-edited.
     ///
     /// Returns:
-    ///     The matching presentation, or By IP for an empty or unrecognized code.
+    ///     The matching presentation, or [`Self::Flat`] for an empty or unrecognized code.
+    ///     A stored `"by-ip"` restores [`Self::Servers`] even though a fresh panel is Flat.
     pub(super) fn from_code(code: &str) -> Self {
         match code.trim() {
+            "by-ip" => Self::Servers,
             "flat" => Self::Flat,
             "problems" => Self::Problems,
             "warnings" => Self::Warnings,

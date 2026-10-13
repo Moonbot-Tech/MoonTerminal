@@ -2,10 +2,7 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-telegram.segment_terminal_bot: "Telegram bot"
-telegram.segment_core_reader: "Telegram on core"
 
-telegram.intro: "Connect your bot and pair your chat for Telegram reports. Mini App is enabled separately."
 telegram.state.connected: "Bot connected"
 telegram.pair_copy: "Copy command"
 telegram.mini_copy_url: "Copy Mini App address"
@@ -21,11 +18,6 @@ telegram.bot_mini_wait: "Mini App is not available yet. Check its status in Sett
 telegram.bot_mini_disabled_station: "Mini App is off on the station. Its owner turns it on in the terminal: Settings → Telegram, the «Mini App on the server» box. Then send /miniapp."
 telegram.bot_mini_wait_station: "Mini App is not available yet: the station is still opening access to it. Send /miniapp again in a minute."
 
-telegram.tab: "Telegram"
-
-station.tab: "Station"
-
-telegram.server.on_station: "The bot runs on the station on a Linux server. The station's install, status and actions are in the Station tab."
 
 telegram.section_bot: "Bot of this terminal"
 telegram.section_mini_app: "Mini App"
@@ -38,8 +30,6 @@ telegram.onboarding: "Create a bot: send /newbot to @BotFather. Paste the token 
 telegram.mini_app: "Enable Mini App"
 telegram.mini_app_hint: "After saving, send /miniapp for the launch button. /start opens report navigation. Keep the terminal running."
 
-telegram.paired_none: "No paired chats"
-telegram.paired_count: "Paired chats: %{count}"
 
 telegram.state.disabled: "Disabled: set a bot token to turn Telegram on."
 telegram.state.unsaved: "Changes pending. Press Save to apply them."
@@ -61,7 +51,6 @@ telegram.rate_limited: "Telegram rate limit: retry after %{seconds}s."
 
 telegram.stopped: "Stopped"
 
-telegram.pair_code: "/pair %{code}\nSend this command to your bot in a private chat. The code works once and expires after 10 minutes."
 
 telegram.pair_new: "Get pairing code"
 
@@ -237,7 +226,6 @@ telegram.server.transfer_hint: "The terminal's bot moves to the server: its toke
 telegram.server.mini_app: "Mini App on the server"
 telegram.server.mini_app_hint: "The Mini App is reached through a Cloudflare tunnel: where Cloudflare is blocked it will not open, so switch it off there. Switching restarts the station."
 telegram.server.access_apply: "Apply on the server"
-telegram.server.access_revert: "Discard edits"
 telegram.server.groups_same: "Core groups on the station match the terminal: %{names}."
 telegram.server.groups_differ: "Core groups on the station: %{station} · in this terminal: %{terminal}. The bot's report by core uses the station's."
 telegram.server.groups_send: "Send groups to the station"
@@ -295,6 +283,9 @@ telegram.server.cores_removed: "%{name}: key removed from the station; its repor
 telegram.server.cores_pushed: "Sent to station: %{n}. The station restarted; cores are connecting."
 telegram.server.install_partial: "Station installed. Cores configured: %{n}. Skipped cores (no key): %{names}."
 telegram.server.cores_unsupported: "The station does not report its cores yet — update it to compare them with the terminal."
+telegram.server.cores_loading: "Reading the station's cores…"
+telegram.server.cores_not_read: "The station has not sent its core list yet."
+telegram.server.cores_read_again: "Read again"
 telegram.server.bot_no_api: "The station does not answer: it is starting, or its service is older than this terminal — press «Update the service»."
 telegram.server.cores_hint: "The keys of every active core go to the server encrypted; with them the server can trade."
 telegram.server.install: "Install"
@@ -446,6 +437,7 @@ telegram.server.forgotten: "Server %{addr} is forgotten."
 telegram.server.running: "Working: %{job}…"
 telegram.server.no_known_server: "No known server: open the Station tab and set up a server."
 telegram.server.change_address: "Change address"
+telegram.server.wait_station: "The station is answering a request; this unlocks when it finishes."
 telegram.server.address_hint: "New server IP or hostname. The administrator and key login are kept; verify the host fingerprint first."
 telegram.server.address_probe: "Check new address"
 telegram.server.address_review: "The address is still unchanged: review and confirm the fingerprint in the Station tab."
@@ -464,7 +456,6 @@ telegram.server.remove_unsupported: "The installed helper does not support stati
 telegram.server.removed: "Station and its secrets removed from the server; server forgotten in the terminal."
 telegram.server.remove_unconfirmed: "The server did not confirm station removal. The access record was kept: check the service and retry removal."
 telegram.server.remove_local_failed: "The station and its secrets were removed from the server, but the terminal could not forget the server. The access record was kept."
-telegram.server.confirm: "Confirm"
 telegram.server.cancel: "Cancel"
 telegram.server.done: "Done."
 telegram.server.needs_old_admin: "The server was set up by an older version: moon still has a password. Enter it once and retry — after that the login is by key only."
@@ -503,3 +494,27 @@ telegram.server.install_confirm: "Trust this key and install"
 telegram.server.chats_hint: "Add chats by code; the first is the owner, others see assigned cores after Apply on the server."
 telegram.server.cores_changed: "The station changed — refresh the list and try again."
 telegram.server.cores_not_configured: "The station is not configured — install it again, then send the cores."
+
+# Settings redesign (phases 3-5)
+telegram.host.local: "The bot runs in this terminal"
+telegram.host.station: "The bot runs on the station"
+telegram.where.label: "Where the bot runs"
+telegram.where.local: "In the terminal, while it is open"
+telegram.where.move: "Move to the station…"
+telegram.chats.col_chat: "Chat"
+telegram.chats.col_role: "Role"
+telegram.chats.configure: "Set up"
+telegram.chats.pair: "+ Connect a chat"
+telegram.chats.unpair_all: "Disconnect every chat…"
+telegram.chats.unpair_title: "Disconnect every chat?"
+telegram.chats.unpair_body: "The bot will stop answering in them. To get a chat back, connect it again."
+telegram.pair.hint: "Send the bot the code in the chat you want; the chat shows up in the list."
+telegram.notify.sec.closed: "Closed trades"
+telegram.notify.sec.core: "Core status"
+telegram.notify.sec.auto: "Scheduled reports"
+telegram.host.chats_n_one: "%{n} chat"
+telegram.host.chats_n_few: "%{n} chats"
+telegram.host.chats_n_many: "%{n} chats"
+telegram.maint.row_version: "Version"
+telegram.maint.row_resetup: "Reconfigure"
+telegram.maint.row_address: "Server address"

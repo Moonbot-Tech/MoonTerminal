@@ -175,8 +175,7 @@ pub struct AssetsView {
     /// standalone or detached views with wallets. Each mode retains independent widths.
     widths_id: String,
     /// Roster column's own width bag — NOT a `MoonDataTable`, just a single-entry width store
-    /// reusing `MoonDataTableState` the way `core_status`'s By-IP width bag does
-    /// (`panels/core_status/mod.rs`'s `by_ip_col_widths`). Persists through
+    /// reusing `MoonDataTableState` as a single-entry width store. Persists through
     /// [`crate::persistence::table_persist`] under [`Self::roster_widths_id`].
     roster_widths: Entity<MoonDataTableState>,
     /// Contextual width-storage ID for the roster bag: `assets-roster:dock` for a dock tab,

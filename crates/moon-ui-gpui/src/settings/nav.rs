@@ -1,0 +1,431 @@
+//! Left navigation of the Settings window: the page filter, the sidebar, and the one-line page
+//! picker that replaces the sidebar when the window is too narrow for both.
+//!
+//! [`nav_model`] is the pure part — which pages show, in what order, with which markers — so the
+//! filter and the markers are testable without a window. The builders only draw a model.
+
+use std::rc::Rc;
+
+use gpui::prelude::FluentBuilder;
+use gpui::*;
+use moon_ui::{
+    MoonButton, MoonIcon, MoonInput, MoonInputSize, MoonInputState, MoonPalette, MoonSelect,
+    MoonSelectItem, MoonSelectState, MoonSidebar, MoonSidebarGroup, MoonSidebarMenu,
+    MoonSidebarMenuItem, MoonTag, MoonTooltipView, h_flex, rgba_from, v_flex,
+};
+use rust_i18n::t;
+
+use super::{NavGroup, Tab, TabSet};
+use crate::design;
+
+/// The sidebar's narrowest width in logical pixels at 100% zoom; [`nav_w`] widens it for a
+/// language whose page names need more.
+pub(super) const NAV_W: f32 = 232.0;
+/// MoonUI's sidebar menu item draws its label at `text_sm`: 0.875 rem.
+pub(super) const ITEM_TEXT_REMS: f32 = 0.875;
+/// What a MoonUI sidebar item draws beside its label, in rems: the sidebar's `px_3` on both
+/// sides, the item's `p_2` on both sides, its `size_4` icon and the `gap_x_2` after it, and the
+/// suffix's own `gap_x_2`.
+const ITEM_CHROME_REMS: f32 = 1.5 + 1.0 + 1.0 + 0.5 + 0.5;
+
+/// A MoonUI sidebar item's height in rems: its `text_sm` line (1.25) and its `p_2` above and below.
+pub(super) const ITEM_ROW_REMS: f32 = 1.25 + 1.0;
+
+/// The sidebar's width in layout pixels: [`NAV_W`], or wider when the active language's longest
+/// page name would otherwise truncate.
+///
+/// The need is the name at the body tier, the item's chrome and the widest suffix an item
+/// carries — the unsaved dot and a three-digit count — plus the sidebar's 1 px border.
+///
+/// Args:
+///     cx: Application context for the language, text measure and scale.
+///
+/// Returns:
+///     The width, already scaled.
+pub(super) fn nav_w(cx: &App) -> f32 {
+    let rem = f32::from(nav_rem(cx));
+    let widest = Tab::ALL
+        .into_iter()
+        .map(|tab| design::ui_body_text_width(cx, &tab.title(), 400.0))
+        .fold(0.0_f32, f32::max);
+    let suffix = 2.0 * design::ui_value(cx, 6.0)
+        + design::ui_text_width_zoomed(cx, "999", design::BODY_TEXT - 2.0, 400.0, true);
+    let need = widest + ITEM_CHROME_REMS * rem + suffix + 1.0;
+    need.ceil().max(design::ui_value(cx, NAV_W))
+}
+
+/// The rem size the sidebar draws at: the one that puts its item labels on the body text tier
+/// ([`design::t_body`]), the size the main window's lists use.
+///
+/// The sidebar's MoonUI parts size everything in rems — item text and height, icons, paddings,
+/// the group headings (`text_xs`, still smaller than the items) and the search field — so one
+/// rem keeps the whole column in proportion.
+pub(super) fn nav_rem(cx: &App) -> Pixels {
+    design::t_body(cx) / ITEM_TEXT_REMS
+}
+
+/// The search field's size: as tall as a sidebar item and at the body text tier.
+///
+/// MoonInput sizes itself in token pixels, so the sidebar's rem never reaches it. Its box comes
+/// from `Custom`'s base `height` (see [`design::dense_input_size`]), handed here as the base
+/// that scales to the item row.
+pub(super) fn nav_search_size(cx: &App) -> MoonInputSize {
+    let row = f32::from(nav_rem(cx)) * ITEM_ROW_REMS;
+    let height = row / design::ui_value(cx, 1.0);
+    MoonInputSize::Custom {
+        height,
+        radius: 4.0,
+        font_size: design::body_font_base(cx, 0.0),
+        line_height: height * 0.6,
+        pad_x: 7.0,
+        pad_y: 0.0,
+        gap: 6.0,
+    }
+}
+
+/// Window width below which the [`NAV_W`] sidebar gives way to [`nav_picker`].
+pub(super) const NAV_BREAKPOINT: f32 = 760.0;
+
+/// Whether a window `width` wide shows the page picker instead of the sidebar.
+///
+/// The breakpoint moves with the sidebar: what [`nav_w`] adds over [`NAV_W`] for a language with
+/// long page names is added to [`NAV_BREAKPOINT`], so the page body never gets narrower than it
+/// does beside the narrowest sidebar.
+///
+/// Args:
+///     width: Window width in logical pixels.
+///     cx: Application context for the language and scale.
+///
+/// Returns:
+///     `true` below the breakpoint.
+pub(super) fn nav_hidden(width: f32, cx: &App) -> bool {
+    width < NAV_BREAKPOINT + (nav_w(cx) - design::ui_value(cx, NAV_W))
+}
+
+/// Number drawn after a page name in the navigation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NavCount {
+    /// Informational, muted: how many of something the page holds.
+    Plain(u32),
+    /// Something on the page needs attention.
+    Warn(u32),
+}
+
+/// Counts shown beside page names, recomputed only when the settings signature moves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct NavCounts {
+    /// Cores in the draft.
+    pub(super) cores: u32,
+    /// Hotkey rows that never fire because another holder takes their binding first.
+    pub(super) hotkey_conflicts: u32,
+    /// Cores whose station copy differs from the terminal's; `None` while unknown.
+    pub(super) station_diverging: Option<u32>,
+}
+
+impl NavCounts {
+    /// The marker for `tab`, or `None` when the page shows no number.
+    fn count(&self, tab: Tab) -> Option<NavCount> {
+        match tab {
+            Tab::Cores => Some(NavCount::Plain(self.cores)),
+            Tab::Hotkeys => {
+                (self.hotkey_conflicts > 0).then_some(NavCount::Warn(self.hotkey_conflicts))
+            }
+            Tab::StCores => self
+                .station_diverging
+                .filter(|n| *n > 0)
+                .map(NavCount::Warn),
+            _ => None,
+        }
+    }
+}
+
+/// One page entry of the navigation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct NavItem {
+    pub(super) tab: Tab,
+    pub(super) title: String,
+    pub(super) group: NavGroup,
+    /// The page has unsaved draft changes.
+    pub(super) dirty: bool,
+    pub(super) count: Option<NavCount>,
+}
+
+/// The pages the navigation shows for one filter, in [`Tab::ALL`] order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct NavModel {
+    pub(super) query: String,
+    pub(super) items: Vec<NavItem>,
+}
+
+/// Build the navigation for `query`.
+///
+/// A page shows when the trimmed query is empty, or when its title or its keywords contain the
+/// query, ignoring case. Pages not mounted yet never show.
+///
+/// Args:
+///     query: Text typed into the search box.
+///     dirty: Pages with unsaved draft changes.
+///     counts: Numbers drawn beside page names.
+///
+/// Returns:
+///     The filtered pages with their markers.
+pub(super) fn nav_model(query: &str, dirty: TabSet, counts: &NavCounts) -> NavModel {
+    let q = query.trim().to_lowercase();
+    let items = Tab::ALL
+        .into_iter()
+        .filter_map(|tab| {
+            let title = tab.title();
+            let hit = q.is_empty()
+                || title.to_lowercase().contains(&q)
+                || tab.keywords().to_lowercase().contains(&q);
+            hit.then(|| NavItem {
+                tab,
+                title,
+                group: tab.group(),
+                dirty: dirty.contains(tab),
+                count: counts.count(tab),
+            })
+        })
+        .collect();
+    NavModel { query: q, items }
+}
+
+/// Click handler shared by every navigation entry.
+pub(super) type OnPick = Rc<dyn Fn(Tab, &mut Window, &mut App)>;
+
+/// Draw the sidebar: search box, the model's pages under their group titles, and the MoonBot
+/// import button at the bottom.
+///
+/// Args:
+///     model: Pages to draw.
+///     active: Page on screen, drawn selected.
+///     query: Search box state; typing in it rebuilds the model.
+///     on_pick: Called with the page a click selects.
+///     on_import: Called by the footer button.
+///     cx: Application context for theme and scale.
+///
+/// Returns:
+///     The sidebar, [`nav_w`] wide.
+pub(super) fn nav_sidebar(
+    model: &NavModel,
+    active: Tab,
+    query: &Entity<MoonInputState>,
+    on_pick: OnPick,
+    on_import: Rc<dyn Fn(&mut Window, &mut App)>,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let search = MoonInput::new("settings-nav-search")
+        .state(query)
+        .size(nav_search_size(cx))
+        .cleanable(true)
+        .prefix(
+            svg()
+                .path("icons/search.svg")
+                .size(design::t_body(cx))
+                .text_color(rgba_from(p.text_muted, 1.0)),
+        );
+    let header = v_flex()
+        .w_full()
+        .gap(design::ui_px(cx, 8.0))
+        .child(search)
+        .when(model.items.is_empty(), |el| {
+            el.child(
+                div()
+                    .px(design::ui_px(cx, 8.0))
+                    .text_color(rgba_from(p.text_muted, 1.0))
+                    .child(t!("settings.search.empty").to_string()),
+            )
+        });
+    let groups = NavGroup::ALL.into_iter().filter_map(|group| {
+        let entries: Vec<MoonSidebarMenuItem> = model
+            .items
+            .iter()
+            .filter(|item| item.group == group)
+            .map(|item| menu_item(item, active, on_pick.clone()))
+            .collect();
+        (!entries.is_empty()).then(|| {
+            // The mockup's section headers are small muted capitals.
+            MoonSidebarGroup::new(group.title().to_uppercase())
+                .child(MoonSidebarMenu::new().children(entries))
+        })
+    });
+    let footer = import_entry("settings-nav-import", true, on_import);
+    let sidebar = MoonSidebar::new("settings-nav")
+        .collapsible(false)
+        .w(px(nav_w(cx)))
+        .h_full()
+        .header(header)
+        .children(groups)
+        .footer(footer);
+    design::rem_scope(nav_rem(cx), sidebar).into_any_element()
+}
+
+/// The one MoonBot import control, with its hint: the sidebar's footer link (`ghost`), or the
+/// General page's header button while the narrow window hides the sidebar.
+///
+/// Args:
+///     id: Element id; the tooltip derives its own from it.
+///     ghost: The sidebar's borderless look rather than a header button.
+///     on_import: Called on click.
+///
+/// Returns:
+///     The tipped button.
+pub(super) fn import_entry(
+    id: &'static str,
+    ghost: bool,
+    on_import: Rc<dyn Fn(&mut Window, &mut App)>,
+) -> AnyElement {
+    let button = MoonButton::new(id).label(t!("import.button").to_string());
+    let button = if ghost {
+        button.ghost()
+    } else {
+        button.variant(moon_ui::MoonButtonVariant::Neutral)
+    };
+    let button = button
+        .on_click(move |_, window, cx| on_import(window, cx))
+        .render()
+        .into_any_element();
+    tipped(
+        SharedString::from(format!("{id}-tip")),
+        t!("import.hint").to_string(),
+        button,
+    )
+}
+
+/// The sidebar icon of `tab`, one of the icons MoonUI ships.
+fn tab_icon(tab: Tab) -> &'static str {
+    match tab {
+        Tab::Cores => "icons/cpu.svg",
+        Tab::TgBot => "icons/bot.svg",
+        Tab::TgNotify => "icons/bell.svg",
+        Tab::TgMessages => "icons/inbox.svg",
+        Tab::TgCore => "icons/network.svg",
+        Tab::StOverview => "icons/layout-dashboard.svg",
+        Tab::StCores => "icons/memory-stick.svg",
+        Tab::StTape => "icons/trending-up.svg",
+        Tab::StMaint => "icons/settings-2.svg",
+        Tab::Appearance => "icons/palette.svg",
+        Tab::Lines => "icons/chart-labels.svg",
+        Tab::Badges => "icons/star.svg",
+        Tab::Hotkeys => "icons/square-terminal.svg",
+        Tab::General => "icons/settings.svg",
+        Tab::Security => "icons/eye-off.svg",
+        Tab::Storage => "icons/hard-drive.svg",
+        Tab::Sounds => "icons/play.svg",
+    }
+}
+
+/// One sidebar entry with its icon, unsaved dot and count.
+fn menu_item(item: &NavItem, active: Tab, on_pick: OnPick) -> MoonSidebarMenuItem {
+    let tab = item.tab;
+    let dirty = item.dirty;
+    let count = item.count;
+    MoonSidebarMenuItem::new(item.title.clone())
+        .icon(MoonIcon::empty().path(tab_icon(tab)))
+        .active(tab == active)
+        .on_click(move |_, window, cx| on_pick(tab, window, cx))
+        .when(dirty || count.is_some(), |entry| {
+            entry.suffix(move |_, cx| suffix(tab, dirty, count, cx))
+        })
+}
+
+/// The unsaved dot and the count after a page name, each explained by a tooltip.
+fn suffix(tab: Tab, dirty: bool, count: Option<NavCount>, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let dot = dirty.then(|| {
+        tipped(
+            SharedString::from(format!("settings-nav-dirty-{}", tab.id())),
+            t!("settings.nav.unsaved").to_string(),
+            div()
+                .size(design::ui_px(cx, 6.0))
+                .rounded_full()
+                .bg(rgba_from(p.blue, 1.0))
+                .into_any_element(),
+        )
+    });
+    let number = count.map(|count| match count {
+        NavCount::Plain(n) => div()
+            .font_family(design::mono())
+            .text_size(design::t_caption(cx))
+            .text_color(rgba_from(p.text_muted, 1.0))
+            .child(n.to_string())
+            .into_any_element(),
+        NavCount::Warn(n) => tipped(
+            SharedString::from(format!("settings-nav-warn-{}", tab.id())),
+            match tab {
+                Tab::StCores => t!("settings.nav.diverging"),
+                _ => t!("settings.nav.conflicts"),
+            }
+            .to_string(),
+            MoonTag::warning()
+                .mono(true)
+                .label(n.to_string())
+                .into_any_element(),
+        ),
+    });
+    h_flex()
+        .flex_none()
+        .items_center()
+        .gap(design::ui_px(cx, 6.0))
+        .children(dot)
+        .children(number)
+        .into_any_element()
+}
+
+/// `el` with a one-line tooltip.
+pub(super) fn tipped(id: SharedString, text: String, el: AnyElement) -> AnyElement {
+    div()
+        .id(id)
+        .flex_none()
+        .tooltip(move |_window, cx| cx.new(|_| MoonTooltipView::new(text.clone())).into())
+        .child(el)
+        .into_any_element()
+}
+
+/// Picker caption for one page: "Group · Page", then " •" when unsaved and " (N)" for a count.
+pub(super) fn picker_label(item: &NavItem) -> String {
+    let mut label = format!("{} · {}", item.group.title(), item.title);
+    if item.dirty {
+        label.push_str(" •");
+    }
+    if let Some(NavCount::Plain(n) | NavCount::Warn(n)) = item.count {
+        label.push_str(&format!(" ({n})"));
+    }
+    label
+}
+
+/// Picker entries for every page of `model`.
+pub(super) fn picker_items(model: &NavModel) -> Vec<MoonSelectItem<Tab>> {
+    model
+        .items
+        .iter()
+        .map(|item| MoonSelectItem::new(item.tab, picker_label(item)))
+        .collect()
+}
+
+/// Draw the narrow-window page picker: one full-width searchable select.
+///
+/// Args:
+///     state: Picker state; its items come from [`picker_items`].
+///     cx: Application context for scale.
+///
+/// Returns:
+///     The picker row.
+pub(super) fn nav_picker(state: &Entity<MoonSelectState<Tab>>, cx: &App) -> AnyElement {
+    div()
+        .w_full()
+        .flex_none()
+        .px(design::ui_px(cx, 18.0))
+        .pt(design::ui_px(cx, 12.0))
+        .child(
+            MoonSelect::new(state)
+                .id("settings-nav-picker")
+                .searchable(true)
+                .search_placeholder(t!("settings.search.placeholder").to_string()),
+        )
+        .into_any_element()
+}
+
+#[cfg(test)]
+mod tests;

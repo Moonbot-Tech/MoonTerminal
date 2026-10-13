@@ -7,8 +7,39 @@ use moon_core::session::core_update::{
 use moon_ui::MoonPalette;
 use rust_i18n::t;
 
-use super::model::{ApiKeyState, GroupUpdate, GroupVersion, TzOffsetGroup};
-use super::time_offset::{TzOffsetCell, tz_offset_cell_text};
+/// The `_one` / `_few` / `_many` form of a count-dependent Core Status string.
+///
+/// Slavic locales (`ru`, `uk`) use one/few/many, including the 11..=14 exception. Every other
+/// shipped language uses one when `n` is 1 and many otherwise. The dictionaries carry all three
+/// forms in every language, matching the split already used by the tuner and the station tape.
+/// This copy lives here because those two are private to their modules.
+///
+/// Args:
+///     base: Message key without its form suffix.
+///     n: The count the noun agrees with.
+///
+/// Returns:
+///     The full key of the form to draw.
+pub(super) fn plural_key(base: &str, n: u64) -> String {
+    let form = if matches!(rust_i18n::locale().as_ref(), "ru" | "uk") {
+        if (11..=14).contains(&(n % 100)) {
+            "many"
+        } else {
+            match n % 10 {
+                1 => "one",
+                2..=4 => "few",
+                _ => "many",
+            }
+        }
+    } else if n == 1 {
+        "one"
+    } else {
+        "many"
+    };
+    format!("{base}_{form}")
+}
+
+use super::model::{ApiKeyState, GroupVersion};
 use crate::backend::core_warn::LatencySeverity;
 use crate::conn_diag::fault_short;
 
@@ -122,20 +153,6 @@ pub(super) fn ping(value: Option<u32>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-/// Format a latency in milliseconds WITHOUT the unit, e.g. `142`, for the By IP tree where the
-/// column header carries the unit. `-` when unavailable.
-///
-/// Args:
-///     value: Round-trip time from `Event::KernelHealth`.
-///
-/// Returns:
-///     Bare millisecond number, or an ASCII unavailable marker.
-pub(super) fn ping_plain(value: Option<u32>) -> String {
-    value
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_string())
-}
-
 /// Format one core's API-key state for its column.
 ///
 /// A bare number: the unit lives in the column heading, so a column of counts reads as a column
@@ -223,6 +240,25 @@ pub(super) struct BuildParts {
     pub(super) tag: Option<String>,
 }
 
+/// Number and letter joined the way a build caption prints them.
+///
+/// An empty tag is omitted. [`build_parts`] already drops a blank letter, and the three
+/// captions that used to format this themselves (the version bar, the server card, and the
+/// Updates newest label) share this one function so a letter cannot appear in one and not
+/// the others.
+///
+/// Args:
+///     parts: Split build. The unknown bucket's number is the dash.
+///
+/// Returns:
+///     `7.71`, or `7.71 R3` when a letter is present.
+pub(super) fn build_label(parts: &BuildParts) -> String {
+    match &parts.tag {
+        Some(tag) if !tag.is_empty() => format!("{} {tag}", parts.number),
+        _ => parts.number.clone(),
+    }
+}
+
 /// Split one core's reported build into the number slot and the optional letter tag.
 ///
 /// The dotted number comes from [`moon_core::util::fmt::core_build`]. The letter is the same
@@ -248,6 +284,19 @@ pub(super) fn build_parts(version: Option<u32>, suffix: Option<&str>) -> BuildPa
         number: moon_core::util::fmt::core_build(version),
         tag: (!trimmed.is_empty()).then(|| trimmed.to_string()),
     }
+}
+
+/// Grouping identity for one reported build: the number and the trimmed letter tag.
+///
+/// Args:
+///     version: Reported build number.
+///     suffix: Letter reported with that build.
+///
+/// Returns:
+///     The number and the tag [`build_parts`] would paint beside it. A blank suffix and a
+///     missing suffix both yield `None`.
+pub(super) fn build_key(version: u32, suffix: Option<&str>) -> (u32, Option<String>) {
+    (version, build_parts(Some(version), suffix).tag)
 }
 
 /// Split a server row's rolled-up build the same way [`build_parts`] splits one core.
@@ -279,8 +328,8 @@ pub(super) fn group_build_parts(version: &GroupVersion) -> BuildParts {
 
 /// Format one core's reported MoonBot build as the single string a hover names.
 ///
-/// No noun — that lives in the column heading, exactly as [`api_expiry_text`] drops "дн" and
-/// [`ping_plain`] drops "ms"; the fault tooltip spells out "MoonBot %{server}" because that one is
+/// No noun — that lives in the column heading, exactly as [`api_expiry_text`] drops its unit;
+/// the fault tooltip spells out "MoonBot %{server}" because that one is
 /// a sentence and a column is not. The column itself does not paint this string: it paints
 /// [`build_parts`], so the digits stay put and the letter is a tag.
 ///
@@ -303,28 +352,6 @@ pub(super) fn version_text(version: Option<u32>, suffix: Option<&str>) -> String
     version
         .map(|version| moon_core::util::fmt::core_build_named(version, suffix))
         .unwrap_or_else(|| "-".to_string())
-}
-
-/// Format a server row's rolled-up clock offset.
-///
-/// `Mixed` is the same ellipsis [`group_build_parts`] uses for a disagreeing build: it carries
-/// exactly one instruction — expand the group — and neither a number nor the never-measured marker
-/// would say that. `Absent` reuses the never-measured cell text: no core on the server has ever
-/// measured an offset, which is exactly what a lone `Unknown` core also means.
-///
-/// Args:
-///     group: The server's rolled-up agreement state.
-///
-/// Returns:
-///     The text to show on the collapsed server row.
-pub(super) fn tz_offset_group_text(group: TzOffsetGroup) -> String {
-    match group {
-        TzOffsetGroup::Uniform(offset_secs) => {
-            tz_offset_cell_text(TzOffsetCell::Measured { offset_secs })
-        }
-        TzOffsetGroup::Mixed => "\u{2026}".to_string(),
-        TzOffsetGroup::Absent => tz_offset_cell_text(TzOffsetCell::Unknown),
-    }
 }
 
 /// Colour for an API-key cell.
@@ -376,6 +403,27 @@ pub(super) fn lat_level(sev: LatencySeverity) -> LoadLevel {
         LatencySeverity::Normal => LoadLevel::Normal,
         LatencySeverity::Warning => LoadLevel::Warning,
         LatencySeverity::Critical => LoadLevel::Critical,
+    }
+}
+
+/// Colour level for the core-ping cell.
+///
+/// The engine severity stays the source of the colour, and a sustained ping warning lifts it to
+/// at least [`LoadLevel::Warning`] so the cell cannot stay quiet while `ping_warn` is set. A
+/// critical severity is never lowered.
+///
+/// Args:
+///     warn: Whether this core has a sustained above-baseline client-to-core ping.
+///     sev: The engine's latency severity for that same ping.
+///
+/// Returns:
+///     The load level the ping cell is drawn in.
+pub(super) fn ping_cell_level(warn: bool, sev: LatencySeverity) -> LoadLevel {
+    let level = lat_level(sev);
+    if warn {
+        level.max(LoadLevel::Warning)
+    } else {
+        level
     }
 }
 
@@ -546,6 +594,20 @@ pub(super) fn notice_color(p: MoonPalette) -> u32 {
     p.blue
 }
 
+/// Amber used by the Flat MoonBot and API cells, and by the same two facts on a server card.
+///
+/// This is a local choice for those cells. [`notice_color`] and [`version_color`] stay blue
+/// everywhere else: amber there still means something is wrong right now.
+///
+/// Args:
+///     p: Active Moon palette.
+///
+/// Returns:
+///     The palette amber.
+pub(super) fn card_attention_color(p: MoonPalette) -> u32 {
+    p.amber
+}
+
 /// Colour for a reported-build cell: [`notice_color`] when this build is behind the fleet's
 /// newest, `text_soft` for a build that is current, `text_muted` for absence or disagreement.
 ///
@@ -593,36 +655,11 @@ pub(super) fn version_behind_tooltip(
     .to_string()
 }
 
-/// Hover text for a collapsed server row whose cores all agree on a build that is behind the
-/// fleet's newest.
-///
-/// It NAMES the group's own build rather than telling the user to expand the group. A group is
-/// only ever marked when [`GroupVersion::Uniform`] holds -- a `Mixed` group states no build, so it
-/// has none to be behind with -- and expanding a Uniform group therefore reveals N cores all
-/// reporting the number already printed on the collapsed row. "Expand me" is the ELLIPSIS cell's
-/// instruction, and this is not that cell.
-///
-/// Args:
-///     have: The build number every core on this server reported.
-///     suffix: The letter those cores agreed on. The newest build stays a bare number.
-///     newest: The newest build currently reported across the fleet.
-///
-/// Returns:
-///     Localized hover text naming both builds.
-pub(super) fn version_behind_group_tooltip(have: u32, suffix: Option<&str>, newest: u32) -> String {
-    t!(
-        "core_status.version_behind_group",
-        have = moon_core::util::fmt::core_build_named(have, suffix),
-        newest = moon_core::util::fmt::core_build(newest)
-    )
-    .to_string()
-}
-
 /// Small `Copy` visual for one update-queue state: a glyph, the load level to color it, and the
 /// locale key naming it for a hover.
 ///
 /// The moon-core -> UI localization boundary the module doc describes: `moon-core` hands back a
-/// typed [`CoreUpdatePhase`]/[`GroupUpdate`], never a `String`, and this is the one place that
+/// typed [`CoreUpdatePhase`], never a `String`, and this is the one place that
 /// turns it into something to paint. The glyph lives here rather than in the dictionaries, per
 /// `locales/README.md` -- the same reason `∞` lives in [`api_expiry_text`].
 #[derive(Debug, Clone, Copy)]
@@ -714,36 +751,6 @@ pub(super) fn update_badge(phase: Option<&CoreUpdatePhase>) -> Option<UpdateBadg
             glyph: "!",
             level: LoadLevel::Critical,
             locale_key: update_failure_locale_key(*failure),
-        }),
-    }
-}
-
-/// Badge for a collapsed server row's rolled-up update state — see [`GroupUpdate`].
-///
-/// Args:
-///     update: The group's rollup over its own cores.
-///
-/// Returns:
-///     `None` while `Idle`, so a server with no update activity draws no badge at all.
-pub(super) fn update_badge_for_group(update: GroupUpdate) -> Option<UpdateBadge> {
-    match update {
-        GroupUpdate::Idle => None,
-        GroupUpdate::Active(_) => Some(UpdateBadge {
-            glyph: "\u{21bb}", // ↻
-            level: LoadLevel::Notice,
-            locale_key: "core_update.summary.updating",
-        }),
-        // No dedicated `summary.held` key exists (see the phase list in `branch-P3.md`); a held
-        // core is a queued one blocked behind a stalled lane, so it borrows `summary.queued`.
-        GroupUpdate::Held(_) => Some(UpdateBadge {
-            glyph: "\u{2016}", // ‖
-            level: LoadLevel::Warning,
-            locale_key: "core_update.summary.queued",
-        }),
-        GroupUpdate::Failed(_) => Some(UpdateBadge {
-            glyph: "!",
-            level: LoadLevel::Critical,
-            locale_key: "core_update.summary.failed",
         }),
     }
 }

@@ -89,7 +89,7 @@ fn cell_weight_never_grows_a_third_font_weight() {
 fn the_side_badge_is_the_one_shared_helper_in_both_panels() {
     for (rel, what) in [
         ("panels/report/columns.rs", "Report"),
-        ("analytics/summary/mod.rs", "Analytics"),
+        ("analytics/summary/side.rs", "Analytics"),
     ] {
         let src = read_src(rel);
         assert!(

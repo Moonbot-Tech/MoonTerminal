@@ -16,15 +16,17 @@ mod apply;
 mod badges;
 mod common;
 mod connections;
+mod frame;
 mod general;
-mod groups;
 mod hotkeys;
 mod import_preview;
 mod interface;
+#[cfg(test)]
+mod layout_probe;
 mod lines;
+mod nav;
 mod render;
 mod security;
-mod segment;
 mod share;
 mod sound_folder;
 mod storage;
@@ -35,12 +37,11 @@ mod trade_sounds;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    IndexPath, MoonBackgroundPolicy, MoonCheckbox, MoonSelectEvent, MoonSelectItem,
-    MoonSelectState, MoonSliderState, MoonVirtualListScrollHandle, Root,
+    IndexPath, MoonBackgroundPolicy, MoonCheckbox, MoonInputEvent, MoonInputState, MoonSelectEvent,
+    MoonSelectItem, MoonSelectState, MoonSliderState, Root,
 };
 use rust_i18n::t;
 
@@ -52,74 +53,259 @@ use moon_core::market::MarketDataMode;
 use moon_core::session::CoreId;
 
 use badges::BadgesEd;
-use common::{
-    collapse_block, color_row, draft_color, draft_slider, open_folder, section, separator,
-    slider_row,
-};
-use connections::{ConnEntry, ConnRow};
+use common::{color_row, draft_color, draft_slider, open_folder};
+use connections::ConnRow;
 use interface::Iface;
 use lines::Lines;
 
 const SETTINGS_HEADER_H: f32 = 30.0;
 
-/// One Settings page, including immediate preferences outside the config draft.
-///
-/// The strip does not draw one button per page. [`groups::TabGroup`] is the button, and
-/// Interface and General each cover three of these pages.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// One Settings page, in navigation order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
-    Connections,
-    General,
-    Hotkeys,
-    Interface,
+    Cores,
+    TgBot,
+    TgNotify,
+    TgMessages,
+    TgCore,
+    StOverview,
+    StCores,
+    StTape,
+    StMaint,
+    Appearance,
     Lines,
     Badges,
+    Hotkeys,
+    General,
+    Security,
     Storage,
-    Station,
-    Telegram,
-    TradeSounds,
+    Sounds,
 }
 
 impl Tab {
-    /// Returns the stable, deliberately untranslated tab ID used by `MoonButton::new` and keys.
+    /// Every page in navigation order.
+    pub(crate) const ALL: [Tab; 17] = [
+        Tab::Cores,
+        Tab::TgBot,
+        Tab::TgNotify,
+        Tab::TgMessages,
+        Tab::TgCore,
+        Tab::StOverview,
+        Tab::StCores,
+        Tab::StTape,
+        Tab::StMaint,
+        Tab::Appearance,
+        Tab::Lines,
+        Tab::Badges,
+        Tab::Hotkeys,
+        Tab::General,
+        Tab::Security,
+        Tab::Storage,
+        Tab::Sounds,
+    ];
+
+    /// Stable, untranslated page id used for element ids.
     fn id(self) -> &'static str {
         match self {
-            Tab::Connections => "Подключения",
-            Tab::General => "Общие",
-            Tab::Hotkeys => "Хоткеи",
-            Tab::Interface => "Интерфейс",
-            Tab::Lines => "Линии",
-            Tab::Badges => "Бейджи",
-            Tab::Storage => "Хранилище",
-            Tab::Station => "station",
-            Tab::Telegram => "Telegram",
-            Tab::TradeSounds => "trade-sounds",
+            Tab::Cores => "cores",
+            Tab::TgBot => "tg-bot",
+            Tab::TgNotify => "tg-notify",
+            Tab::TgMessages => "tg-msg",
+            Tab::TgCore => "tg-core",
+            Tab::StOverview => "st-over",
+            Tab::StCores => "st-cores",
+            Tab::StTape => "st-tape",
+            Tab::StMaint => "st-maint",
+            Tab::Appearance => "appearance",
+            Tab::Lines => "lines",
+            Tab::Badges => "badges",
+            Tab::Hotkeys => "hotkeys",
+            Tab::General => "general",
+            Tab::Security => "security",
+            Tab::Storage => "storage",
+            Tab::Sounds => "sounds",
         }
     }
-    /// Returns the localized tab label from the `tab.*` namespace.
+
+    /// Localized page name.
     fn title(self) -> String {
         match self {
-            Tab::Connections => t!("tab.connections"),
-            Tab::General => t!("tab.general"),
-            Tab::Hotkeys => t!("tab.hotkeys"),
-            Tab::Interface => t!("tab.interface"),
-            Tab::Lines => t!("tab.lines"),
-            Tab::Badges => t!("tab.badges"),
-            Tab::Storage => t!("tab.storage"),
-            Tab::Station => t!("station.tab"),
-            Tab::Telegram => t!("telegram.tab"),
-            Tab::TradeSounds => t!("trade_sounds.tab"),
+            Tab::Cores => t!("settings.page.cores.title"),
+            Tab::TgBot => t!("settings.page.tg_bot.title"),
+            Tab::TgNotify => t!("settings.page.tg_notify.title"),
+            Tab::TgMessages => t!("settings.page.tg_msg.title"),
+            Tab::TgCore => t!("settings.page.tg_core.title"),
+            Tab::StOverview => t!("settings.page.st_over.title"),
+            Tab::StCores => t!("settings.page.st_cores.title"),
+            Tab::StTape => t!("settings.page.st_tape.title"),
+            Tab::StMaint => t!("settings.page.st_maint.title"),
+            Tab::Appearance => t!("settings.page.appearance.title"),
+            Tab::Lines => t!("settings.page.lines.title"),
+            Tab::Badges => t!("settings.page.badges.title"),
+            Tab::Hotkeys => t!("settings.page.hotkeys.title"),
+            Tab::General => t!("settings.page.general.title"),
+            Tab::Security => t!("settings.page.security.title"),
+            Tab::Storage => t!("settings.page.storage.title"),
+            Tab::Sounds => t!("settings.page.sounds.title"),
         }
         .to_string()
     }
-    /// Returns the caption inside a group's inner switch. A group's lead page gets its own
-    /// name there, so the switch never repeats the strip button above it.
-    fn segment_title(self) -> String {
+
+    /// Localized one-line page description.
+    fn desc(self) -> String {
         match self {
-            Tab::Interface => t!("tab.interface_colors").to_string(),
-            Tab::General => t!("tab.general_main").to_string(),
-            _ => self.title(),
+            Tab::Cores => t!("settings.page.cores.desc"),
+            Tab::TgBot => t!("settings.page.tg_bot.desc"),
+            Tab::TgNotify => t!("settings.page.tg_notify.desc"),
+            Tab::TgMessages => t!("settings.page.tg_msg.desc"),
+            Tab::TgCore => t!("settings.page.tg_core.desc"),
+            Tab::StOverview => t!("settings.page.st_over.desc"),
+            Tab::StCores => t!("settings.page.st_cores.desc"),
+            Tab::StTape => t!("settings.page.st_tape.desc"),
+            Tab::StMaint => t!("settings.page.st_maint.desc"),
+            Tab::Appearance => t!("settings.page.appearance.desc"),
+            Tab::Lines => t!("settings.page.lines.desc"),
+            Tab::Badges => t!("settings.page.badges.desc"),
+            Tab::Hotkeys => t!("settings.page.hotkeys.desc"),
+            Tab::General => t!("settings.page.general.desc"),
+            Tab::Security => t!("settings.page.security.desc"),
+            Tab::Storage => t!("settings.page.storage.desc"),
+            Tab::Sounds => t!("settings.page.sounds.desc"),
         }
+        .to_string()
+    }
+
+    /// Localized search keywords, lowercase and space-separated.
+    fn keywords(self) -> String {
+        match self {
+            Tab::Cores => t!("settings.page.cores.keywords"),
+            Tab::TgBot => t!("settings.page.tg_bot.keywords"),
+            Tab::TgNotify => t!("settings.page.tg_notify.keywords"),
+            Tab::TgMessages => t!("settings.page.tg_msg.keywords"),
+            Tab::TgCore => t!("settings.page.tg_core.keywords"),
+            Tab::StOverview => t!("settings.page.st_over.keywords"),
+            Tab::StCores => t!("settings.page.st_cores.keywords"),
+            Tab::StTape => t!("settings.page.st_tape.keywords"),
+            Tab::StMaint => t!("settings.page.st_maint.keywords"),
+            Tab::Appearance => t!("settings.page.appearance.keywords"),
+            Tab::Lines => t!("settings.page.lines.keywords"),
+            Tab::Badges => t!("settings.page.badges.keywords"),
+            Tab::Hotkeys => t!("settings.page.hotkeys.keywords"),
+            Tab::General => t!("settings.page.general.keywords"),
+            Tab::Security => t!("settings.page.security.keywords"),
+            Tab::Storage => t!("settings.page.storage.keywords"),
+            Tab::Sounds => t!("settings.page.sounds.keywords"),
+        }
+        .to_string()
+    }
+
+    /// Navigation group the page is listed under.
+    fn group(self) -> NavGroup {
+        match self {
+            Tab::Cores => NavGroup::Connections,
+            Tab::TgBot | Tab::TgNotify | Tab::TgMessages | Tab::TgCore => NavGroup::Telegram,
+            Tab::StOverview | Tab::StCores | Tab::StTape | Tab::StMaint => NavGroup::Station,
+            Tab::Appearance | Tab::Lines | Tab::Badges => NavGroup::Appearance,
+            Tab::Hotkeys => NavGroup::Control,
+            Tab::General | Tab::Security | Tab::Storage | Tab::Sounds => NavGroup::Common,
+        }
+    }
+
+    /// How an edit on this page takes effect.
+    ///
+    /// Args:
+    ///     station: Whether the Telegram bot runs on a known station.
+    pub(crate) fn save_mode(self, station: bool) -> SaveMode {
+        match self {
+            // TgCore's settings live in the core itself, not in the terminal's config.
+            Tab::StOverview | Tab::StCores | Tab::StTape | Tab::StMaint | Tab::TgCore => {
+                SaveMode::Remote
+            }
+            Tab::TgBot | Tab::TgMessages | Tab::TgNotify if station => SaveMode::Remote,
+            Tab::Storage | Tab::Sounds | Tab::TgNotify => SaveMode::Live,
+            Tab::Cores
+            | Tab::Appearance
+            | Tab::Lines
+            | Tab::Badges
+            | Tab::Hotkeys
+            | Tab::General
+            | Tab::Security
+            | Tab::TgBot
+            | Tab::TgMessages => SaveMode::Draft,
+        }
+    }
+}
+
+/// Heading a run of pages in the navigation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NavGroup {
+    Connections,
+    Telegram,
+    Station,
+    Appearance,
+    Control,
+    Common,
+}
+
+impl NavGroup {
+    /// Every group in navigation order.
+    pub(crate) const ALL: [NavGroup; 6] = [
+        NavGroup::Connections,
+        NavGroup::Telegram,
+        NavGroup::Station,
+        NavGroup::Appearance,
+        NavGroup::Control,
+        NavGroup::Common,
+    ];
+
+    /// Localized group heading.
+    fn title(self) -> String {
+        match self {
+            NavGroup::Connections => t!("settings.nav.group.connections"),
+            NavGroup::Telegram => t!("settings.nav.group.telegram"),
+            NavGroup::Station => t!("settings.nav.group.station"),
+            NavGroup::Appearance => t!("settings.nav.group.appearance"),
+            NavGroup::Control => t!("settings.nav.group.control"),
+            NavGroup::Common => t!("settings.nav.group.common"),
+        }
+        .to_string()
+    }
+}
+
+/// How an edit on a page takes effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SaveMode {
+    /// Kept in the draft until Save.
+    Draft,
+    /// Written as soon as it is made.
+    Live,
+    /// Sent to the station by the page's own action.
+    Remote,
+}
+
+/// A set of pages, one bit per [`Tab`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TabSet(u32);
+
+impl TabSet {
+    fn bit(tab: Tab) -> u32 {
+        1 << Tab::ALL.iter().position(|t| *t == tab).unwrap_or(0)
+    }
+
+    pub(crate) fn insert(&mut self, tab: Tab) {
+        self.0 |= Self::bit(tab);
+    }
+
+    pub(crate) fn contains(self, tab: Tab) -> bool {
+        self.0 & Self::bit(tab) != 0
+    }
+
+    pub(crate) fn iter(self) -> impl Iterator<Item = Tab> {
+        Tab::ALL.into_iter().filter(move |t| self.contains(*t))
+    }
+
+    pub(crate) fn len(self) -> usize {
+        self.0.count_ones() as usize
     }
 }
 
@@ -177,8 +363,33 @@ pub(crate) enum StatusMsg {
 pub struct SettingsView {
     backend: Entity<Backend>,
     active: Tab,
-    /// Interface and General sub-page last chosen in this window. Not persisted.
-    subpages: groups::SubpageMemory,
+    /// Navigation search box; its text filters the page list.
+    nav_query: Entity<MoonInputState>,
+    /// Narrow-window page picker; its items follow [`Self::nav_pick_labels`].
+    nav_pick: Entity<MoonSelectState<Tab>>,
+    /// Captions the picker was last filled with, so it is refilled only when one changes.
+    nav_pick_labels: Vec<String>,
+    /// Numbers beside page names, recomputed only when [`Self::last_sig`] moves.
+    nav_counts: nav::NavCounts,
+    /// Pages whose config fields differ from the saved config; empty while the draft is clean.
+    dirty_pages: TabSet,
+    /// Per-page signatures of the SAVED config, refreshed only when a Save moves it.
+    saved_page_sigs: SavedPageSigs,
+    /// Keys of the `hint_row`s whose long help is unfolded. Not persisted.
+    more_open: HashSet<&'static str>,
+    /// The user chose to close without saving; the next close request goes through.
+    close_confirmed: bool,
+    // Per-page UI state for the pages rebuilt in phases 3-5. Each page's branch adds fields
+    // inside its own struct; these lines stay as they are.
+    appearance_ui: interface::AppearanceUi,
+    lines_ui: lines::LinesUi,
+    badges_ui: badges::BadgesUi,
+    general_ui: general::GeneralUi,
+    telegram_ui: telegram::TelegramUi,
+    storage_ui: storage::StorageUi,
+    sounds_ui: trade_sounds::SoundsUi,
+    /// "Save and close" sent the station draft and waits for the station's answer to close.
+    close_after_station: bool,
     /// Save status as `(message, is_error)`.
     status: Option<(StatusMsg, bool)>,
     iface: Iface,
@@ -209,13 +420,16 @@ pub struct SettingsView {
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Order selector shared by every core list on the Connections tab.
     core_sort: Entity<MoonSelectState<CoreSortMode>>,
-    /// Expanded line-style sections on the Lines tab, ported from `CollapsingHeader`.
-    open_lines: HashSet<&'static str>,
-    /// Active Hotkeys sub-tab, matching Moonbot's hotkey pages.
+    /// Active Hotkeys category, matching Moonbot's hotkey pages.
     hotkeys_group: hotkeys::HotkeyGroup,
-    /// The Hotkeys table row the pointer is on, by its row id, or `None`; that row shows its
-    /// description. See `hotkeys::tab::table_row`.
-    hotkeys_hover_row: Option<String>,
+    /// Hotkeys search box: a command name, a MoonBot name or a key; searches every category.
+    hotkeys_query: Entity<MoonInputState>,
+    /// The Hotkeys table shows only the rows with a conflict or a bare-key warning.
+    hotkeys_conflicts_only: bool,
+    /// Hotkeys rows (by row id) whose gesture editor "+ жест" revealed while still unset.
+    hotkeys_gesture_open: HashSet<String>,
+    /// The built-in combos block on the Hotkeys page is unfolded.
+    hotkeys_builtin_open: bool,
     /// Core and `core_config_recv_rev` baseline of an in-flight "pull hotkey layout from core"
     /// request, or `None` when none is pending. The baseline is the revision seen when the pull
     /// was requested; the request is settled once the store's revision has moved past it.
@@ -226,57 +440,9 @@ pub struct SettingsView {
     icons: IconSet,
     /// Group whose icon picker is open, or `None` when closed; ported from egui's `picking`.
     picking: Option<String>,
-    /// `ConnRow::row_key` of the row whose feed `n/9` menu is open, or `None` when every menu is
-    /// shut.
-    ///
-    /// The dropdown is CONTROLLED from here so its menu items are built for the open row
-    /// alone. Built unconditionally they cost eight `MoonMenuItem`, sixteen locale lookups and
-    /// sixteen formatted strings PER ROW PER FRAME while the menu is closed -- and a wheel notch
-    /// over the Settings body rebuilds every row, so at 56 cores that was the single largest block
-    /// of per-frame allocation on the page.
-    ///
-    /// Keyed on the row key rather than the draft `ServerConfig.id`, which is reissued after a
-    /// delete (`connections::NEXT_ROW_KEY` explains why) -- otherwise a replacement row could open
-    /// its menu by inheritance.
-    feed_open: Option<u64>,
-    /// Row key of the connections row whose transport-mode menu is open, or `None`.
-    ///
-    /// CONTROLLED for the same reason as [`Self::feed_open`], one row above: its three items are
-    /// a `Vec` plus one boxed handler each, and building them for every row of a 56-row list on
-    /// every frame is exactly the per-frame allocation that flag was introduced to remove.
-    proto_open: Option<u64>,
-    /// Row key of the connections row whose workspace-preset menu is open, or `None`.
-    ///
-    /// CONTROLLED for the same reason as [`Self::proto_open`]: its three items are a `Vec` plus
-    /// one boxed handler each, built only for the row whose menu is actually open.
-    preset_open: Option<u64>,
-    /// Row key of the connections row whose footer-total-mode menu is open, or `None`.
-    ///
-    /// CONTROLLED for the same reason as [`Self::preset_open`].
-    total_open: Option<u64>,
-    /// Row key of the connections row whose input currently has keyboard focus, or `None`.
-    ///
-    /// Tracked so `connections::on_conn_visible_range` can blur a focused input the instant its row
-    /// scrolls out of the virtualized list's mounted range -- otherwise a keystroke could target a
-    /// field that is no longer on screen.
-    focused_conn_row: Option<u64>,
-    /// Retained vertical scroll position of the virtualized Connections core list.
-    ///
-    /// Constructed once here, in `new`, and passed to `MoonVirtualList::track_scroll`. Constructing
-    /// it inside `render` would reset the list to row 0 on every backend notify.
-    conn_scroll: MoonVirtualListScrollHandle,
-    /// The Connections tab's flattened entries from the last render, cached so a focus or
-    /// visible-range event outside `render` can look up a row's position without recomputing the
-    /// whole flatten pass.
-    conn_entries: Rc<Vec<ConnEntry>>,
-    /// `ConnRow::row_key` of a row whose field the user just EDITED, consumed by the next frame.
-    ///
-    /// The scroll-follow exists for exactly one situation -- a keystroke re-ranks the list and
-    /// carries the field being typed into out of view -- so it keys on the EDIT, not on the list
-    /// order. Keying it on order instead made any unrelated reshuffle (a venue resolving for some
-    /// other core, say) yank the viewport back while the user was calmly scrolling with a row still
-    /// focused. See `connections::follow_edited_conn_row`.
-    conn_edit_pending: Option<u64>,
+    /// Row key of the core whose card the Cores page shows. Re-validated by every rebuild of the
+    /// core rows (`rebuild_conn`) and on every frame (`valid_selection`).
+    conn_selected: Option<u64>,
     /// Signature of data consumed by Settings: draft/configuration fields plus session statuses.
     last_sig: u64,
     /// Whether the CONFIG draft differed from the saved config as of the last backend
@@ -364,6 +530,15 @@ impl SettingsView {
 
         // The zoom slider reinstalls the draft theme only on release; dragging keeps its percentage caption live.
         let ui_zoom = general::build_zoom(&backend, cx);
+        let draft = {
+            let b = backend.read(cx);
+            b.preview.as_ref().unwrap_or(&b.config).clone()
+        };
+        let appearance_ui = interface::AppearanceUi::init(&draft, window, cx);
+        let lines_ui = lines::LinesUi::init(&draft, window, cx);
+        let general_ui = general::GeneralUi::init(&draft, window, cx);
+        let storage_ed = storage::build();
+        let storage_ui = storage::StorageUi::init(&storage_ed.cfg, window, cx);
         let trade_volume = trade_sounds::build_volume(&backend, cx);
 
         // Persist the Settings window position and size in layout so it reopens in the same place.
@@ -567,8 +742,43 @@ impl SettingsView {
         )
         .detach();
 
+        let nav_query = cx.new(|cx| {
+            MoonInputState::new(window, cx)
+                .placeholder(t!("settings.search.placeholder").to_string())
+        });
+        cx.subscribe(&nav_query, |_, _, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
+        let hotkeys_query = cx.new(|cx| {
+            MoonInputState::new(window, cx)
+                .placeholder(t!("hotkeys.search.placeholder").to_string())
+        });
+        cx.subscribe(&hotkeys_query, |_, _, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
+        let nav_pick = cx.new(|cx| {
+            let mut state = MoonSelectState::new(Vec::new(), None, window, cx);
+            state.set_selected_value(&tab);
+            state
+        });
+        cx.subscribe(&nav_pick, |this, _, ev: &MoonSelectEvent<Tab>, cx| {
+            if let MoonSelectEvent::Confirm(Some(tab)) = ev {
+                this.show_page(*tab, cx);
+            }
+        })
+        .detach();
+
         let initial_sig = settings_sig(backend.read(cx));
+        let initial_counts = nav_counts(backend.read(cx));
         let initial_dirty = backend_dirty(backend.read(cx));
+        let initial_saved = SavedPageSigs::of(&backend.read(cx).config);
+        let initial_pages = backend_dirty_pages(backend.read(cx), initial_dirty, &initial_saved);
         cx.observe(&backend, |this, backend, cx| {
             let b = backend.read(cx);
             let sig = settings_sig(b);
@@ -578,13 +788,45 @@ impl SettingsView {
             // It flips at most once per clean-to-dirty transition, so this costs one repaint,
             // not one per keystroke.
             let dirty = backend_dirty(b);
+            let mut changed = false;
             if sig != this.last_sig || dirty != this.draft_dirty {
+                if sig != this.last_sig {
+                    let diverging = this.nav_counts.station_diverging;
+                    this.nav_counts = nav_counts(b);
+                    this.nav_counts.station_diverging = diverging;
+                }
                 this.last_sig = sig;
                 this.draft_dirty = dirty;
+                changed = true;
+            }
+            // The station's count moves with the station's answers, not with the draft.
+            let diverging = this.station_diverging_count(cx);
+            if diverging != this.nav_counts.station_diverging {
+                this.nav_counts.station_diverging = diverging;
+                changed = true;
+            }
+            // Per-page dirt is hashed only while the draft is dirty at all, and then on every
+            // notify: an edit to a field `settings_sig` skips moves no other trigger.
+            // The saved side moves only on Save, so its page signatures are cached and every
+            // notify hashes the draft alone.
+            this.saved_page_sigs.refresh(&b.config);
+            let pages = backend_dirty_pages(b, dirty, &this.saved_page_sigs);
+            if pages != this.dirty_pages {
+                this.dirty_pages = pages;
+                changed = true;
+            }
+            if changed {
                 cx.notify();
             }
         })
         .detach();
+
+        // Closing with unsaved work asks first; see `SettingsView::should_close`.
+        let view = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, app| {
+            view.update(app, |this, cx| this.should_close(window, cx))
+                .unwrap_or(true)
+        });
 
         // Dropping the window view discards the draft and restores the saved theme, cancelling
         // unsaved live-preview changes as in the egui implementation.
@@ -605,7 +847,10 @@ impl SettingsView {
             conn_hint_armed: false,
             backend,
             active: tab,
-            subpages: groups::SubpageMemory::for_initial(tab),
+            nav_query,
+            nav_pick,
+            nav_pick_labels: Vec::new(),
+            nav_counts: initial_counts,
             status: None,
             iface,
             lines,
@@ -618,23 +863,30 @@ impl SettingsView {
             valuation,
             mode,
             core_sort,
-            open_lines: HashSet::new(),
             hotkeys_group: hotkeys::HotkeyGroup::Presets,
-            hotkeys_hover_row: None,
+            hotkeys_query,
+            hotkeys_conflicts_only: false,
+            hotkeys_gesture_open: HashSet::new(),
+            hotkeys_builtin_open: false,
             core_pull: None,
-            storage: storage::build(),
+            storage: storage_ed,
             icons: IconSet::discover(),
             picking: None,
-            feed_open: None,
-            proto_open: None,
-            preset_open: None,
-            total_open: None,
-            focused_conn_row: None,
-            conn_scroll: MoonVirtualListScrollHandle::new(),
-            conn_entries: Rc::new(Vec::new()),
-            conn_edit_pending: None,
+            conn_selected: None,
             last_sig: initial_sig,
             draft_dirty: initial_dirty,
+            dirty_pages: initial_pages,
+            saved_page_sigs: initial_saved,
+            more_open: HashSet::new(),
+            close_confirmed: false,
+            appearance_ui,
+            lines_ui,
+            badges_ui: Default::default(),
+            general_ui,
+            telegram_ui: Default::default(),
+            storage_ui,
+            sounds_ui: Default::default(),
+            close_after_station: false,
             idle_last_secs: std::cell::Cell::new(0),
             import: None,
             security: security_ed,
@@ -917,6 +1169,165 @@ fn backend_dirty(b: &Backend) -> bool {
         .is_some_and(|draft| draft_dirty(&b.config, draft))
 }
 
+/// `draft_sig` fields no page owns: they have no control in the window, so a change to one
+/// dirties the draft without putting a dot on any page. Read as source by `theme_contract`.
+#[allow(dead_code)]
+const NO_PAGE_FIELDS: [&str; 4] = [
+    "charts_stack_scroll",
+    "charts_stack_compress",
+    "chart_stack_height",
+    "chart_memory_percent",
+];
+
+/// Signature of the config fields one page edits, or `None` for a page that edits none.
+///
+/// Every field `draft_sig` hashes belongs to exactly one page here or to [`NO_PAGE_FIELDS`];
+/// `theme_contract` holds the two lists together. Secrets stream through [`hash_json`] like in
+/// `draft_sig`, so no plaintext copy is built.
+///
+/// Args:
+///     cfg: Saved config or live draft; both sides go through this identically.
+///     tab: Page whose fields are hashed.
+///
+/// Returns:
+///     A signature equal for two configs that agree on the page's fields.
+fn page_sig(cfg: &AppConfig, tab: Tab) -> Option<u64> {
+    let mut h = DefaultHasher::new();
+    match tab {
+        Tab::Cores => {
+            hash_json(&mut h, &cfg.servers);
+            hash_json(&mut h, &canonical_groups(cfg));
+            hash_json(&mut h, &cfg.core_groups);
+            cfg.market_mode.code().hash(&mut h);
+            cfg.core_sort.hash(&mut h);
+        }
+        Tab::Hotkeys => hash_json(&mut h, &cfg.hotkeys),
+        Tab::Appearance => {
+            hash_json(&mut h, &cfg.theme);
+            cfg.ui_theme_mode.hash(&mut h);
+            cfg.ui_scale.to_bits().hash(&mut h);
+            cfg.order_book_width_px.to_bits().hash(&mut h);
+        }
+        Tab::Lines => hash_json(&mut h, &cfg.orders),
+        Tab::Badges => hash_json(&mut h, &cfg.badges),
+        Tab::General => {
+            cfg.language.code().hash(&mut h);
+            cfg.report_valuation_mode.hash(&mut h);
+            cfg.charts_split_by_core.hash(&mut h);
+            cfg.separate_control_zones.hash(&mut h);
+            cfg.main_idle_close_secs.hash(&mut h);
+            cfg.log_to_file.hash(&mut h);
+            cfg.log_retention_days.hash(&mut h);
+        }
+        Tab::TgBot => {
+            hash_json(&mut h, &cfg.telegram.token);
+            hash_json(&mut h, &cfg.telegram.authorized_chat_ids);
+            hash_json(&mut h, &cfg.telegram.owner_chat_id);
+            hash_json(&mut h, &cfg.telegram.chat_access);
+            hash_json(&mut h, &cfg.telegram.mini_app_enabled);
+            hash_json(&mut h, &cfg.telegram.bot.report_view);
+            hash_json(&mut h, &cfg.telegram.bot.period_basis);
+            hash_json(&mut h, &cfg.telegram.bot.extensions);
+        }
+        Tab::TgMessages => {
+            hash_json(&mut h, &cfg.telegram.bot.menu);
+            hash_json(&mut h, &cfg.telegram.bot.message_layout);
+        }
+        Tab::TgNotify
+        | Tab::TgCore
+        | Tab::StOverview
+        | Tab::StCores
+        | Tab::StTape
+        | Tab::StMaint
+        | Tab::Security
+        | Tab::Storage
+        | Tab::Sounds => return None,
+    }
+    Some(h.finish())
+}
+
+/// Pages whose config fields differ between `saved` and `draft`.
+///
+/// Args:
+///     saved: The config as it sits on disk.
+///     draft: The Settings window's live draft.
+///
+/// Returns:
+///     Every page whose [`page_sig`] differs.
+#[cfg(test)]
+fn dirty_pages(saved: &AppConfig, draft: &AppConfig) -> TabSet {
+    SavedPageSigs::of(saved).dirty(draft)
+}
+
+/// [`page_sig`] of every page of the saved config, keyed by the saved config's [`draft_sig`].
+#[derive(Clone, Debug)]
+struct SavedPageSigs {
+    sig: u64,
+    pages: [Option<u64>; 17],
+}
+
+impl SavedPageSigs {
+    /// Signatures of `saved`.
+    fn of(saved: &AppConfig) -> Self {
+        Self {
+            sig: draft_sig(saved),
+            pages: Tab::ALL.map(|tab| page_sig(saved, tab)),
+        }
+    }
+
+    /// Re-hash when `saved` is no longer the config these signatures were taken from.
+    fn refresh(&mut self, saved: &AppConfig) {
+        if draft_sig(saved) != self.sig {
+            *self = Self::of(saved);
+        }
+    }
+
+    /// Pages whose fields differ in `draft`.
+    fn dirty(&self, draft: &AppConfig) -> TabSet {
+        let mut set = TabSet::default();
+        for (tab, saved) in Tab::ALL.into_iter().zip(self.pages) {
+            if let Some(sig) = page_sig(draft, tab)
+                && saved != Some(sig)
+            {
+                set.insert(tab);
+            }
+        }
+        set
+    }
+}
+
+/// [`dirty_pages`] of the backend's draft, skipped while the draft is clean.
+///
+/// Args:
+///     b: Backend holding the draft.
+///     dirty: Whether the draft differs from the saved config at all.
+///     saved: Cached page signatures of the saved config.
+///
+/// Returns:
+///     The dirty pages, empty when `dirty` is false or no draft exists.
+fn backend_dirty_pages(b: &Backend, dirty: bool, saved: &SavedPageSigs) -> TabSet {
+    match b.preview.as_ref() {
+        Some(draft) if dirty => saved.dirty(draft),
+        _ => TabSet::default(),
+    }
+}
+
+/// Numbers drawn beside page names, read from the draft.
+///
+/// Args:
+///     b: Backend holding the draft or the saved config.
+///
+/// Returns:
+///     Core count and hotkey conflicts; the station count stays unknown for now.
+fn nav_counts(b: &Backend) -> nav::NavCounts {
+    let cfg = b.preview.as_ref().unwrap_or(&b.config);
+    nav::NavCounts {
+        cores: u32::try_from(cfg.servers.len()).unwrap_or(u32::MAX),
+        hotkey_conflicts: hotkeys::conflict_count(&cfg.hotkeys),
+        station_diverging: None,
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -933,7 +1344,7 @@ pub fn open(
     owner_display: Option<DisplayId>,
     cx: &mut App,
 ) {
-    open_on_tab(backend, owner, owner_display, Tab::Connections, cx);
+    open_on_tab(backend, owner, owner_display, Tab::Cores, cx);
 }
 
 /// Open the settings window on a named tab, for a control that sends the trader somewhere precise.
@@ -967,9 +1378,7 @@ pub fn open_on_tab(
         return;
     }
     backend.update(cx, |b, _| {
-        let mut preview = b.config.clone();
-        connections::sync_groups_from_servers(&preview.servers, &mut preview.groups);
-        b.preview = Some(preview);
+        b.preview = Some(apply::reverted(&b.config));
     });
     // Restore geometry saved by `SettingsView`, as the Strategies and Assets windows do.
     let saved = backend.read(cx).layout.settings_window;

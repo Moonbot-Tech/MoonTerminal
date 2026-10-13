@@ -8,7 +8,7 @@ use gpui::*;
 use moon_ui::{
     MoonAlert, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant,
     MoonDateTimePicker, MoonDropdown, MoonInput, MoonMenuItem, MoonPalette, MoonSegmentItem,
-    MoonSegmentedControl, h_flex,
+    MoonSegmentedControl, MoonToggle, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -74,6 +74,8 @@ const KIND_TRIGGER_W: f32 = 182.0;
 const METRIC_TRIGGER_W: f32 = 152.0;
 /// Unscaled horizontal spacing between neighboring toolbar controls.
 const TOOLBAR_GAP: f32 = 6.0;
+/// Narrowest Summary filter chip at the design reference size.
+const CHIP_MIN_W: f32 = 72.0;
 
 /// Unscaled width of the strategy-name mask field.
 ///
@@ -106,9 +108,88 @@ const PERIOD_COUNTER_RESERVED_W: f32 = 90.0;
 /// note degrades to a shortened sentence rather than to a lone ellipsis. Only the note yields on
 /// this bar; the counter and the custom-range group still never do.
 const UNDATED_TAIL_RESERVED_W: f32 = 120.0;
+/// Unscaled width of the compare toggle's switch track plus its gap to the label.
+const COMPARE_TOGGLE_TRACK_W: f32 = 40.0;
 
 #[cfg(test)]
 mod tests;
+
+/// Whole civil days in a resolved `[from, to)` range, tolerating one DST hour either way.
+///
+/// Args:
+///     range: Resolved bounds in Unix seconds.
+///
+/// Returns:
+///     The day count, or `None` for an empty or non-whole-day range.
+pub(super) fn whole_days(range: (i64, i64)) -> Option<usize> {
+    let secs = range.1 - range.0;
+    let days = (secs + 43_200).div_euclid(86_400);
+    (days > 0 && (secs - days * 86_400).abs() <= 3_600).then_some(days as usize)
+}
+
+/// Label of the Summary's compare toggle: "compare with the previous N days", or the generic
+/// previous-period wording for a range that is not whole days.
+pub(super) fn compare_label(range: (i64, i64)) -> String {
+    match whole_days(range) {
+        Some(n) => {
+            let key = super::tuner::plural_key("analytics.sum.compare_days", n);
+            t!(key, n = n).to_string()
+        }
+        None => t!("analytics.sum.compare_prev").to_string(),
+    }
+}
+
+/// Text of the Summary's trade counter and whether it is a muted placeholder.
+///
+/// Loading reads "counting trades…"; a failed read shows a muted ellipsis (the body already
+/// says what failed); a ready snapshot shows its count, zero included.
+///
+/// Args:
+///     state: The Summary's load state.
+///
+/// Returns:
+///     The counter text and `true` when it stands in for a figure.
+pub(super) fn summary_counter(
+    state: &ProfitLoadState<moon_core::db::analytics::Summary>,
+) -> (String, bool) {
+    match state {
+        ProfitLoadState::Loading => (t!("analytics.sum.counting").to_string(), true),
+        ProfitLoadState::Failed(_) => ("…".to_string(), true),
+        ProfitLoadState::Ready { data, .. } => (
+            t!("analytics.trades_count", n = data.cur.n).to_string(),
+            false,
+        ),
+        ProfitLoadState::Split(totals) => (
+            t!("analytics.trades_count", n = totals.orders).to_string(),
+            false,
+        ),
+        ProfitLoadState::NotReady => (String::new(), true),
+    }
+}
+
+/// Which Summary filter chips are highlighted, in core, side, kind, metric order.
+///
+/// Args:
+///     cores_set: Whether a core selection or a workspace pin narrows the cores.
+///     side: Side filter.
+///     emu: Order-kind filter; `None` is all kinds.
+///     metric: Profit metric choice.
+///
+/// Returns:
+///     `true` for every filter that differs from its default.
+pub(super) fn chip_is_set(
+    cores_set: bool,
+    side: SideFilter,
+    emu: Option<bool>,
+    metric: MetricChoice,
+) -> [bool; 4] {
+    [
+        cores_set,
+        side != SideFilter::All,
+        emu.is_some(),
+        metric != MetricChoice::Native,
+    ]
+}
 
 /// Whether the Analytics period-preset strip stays an inline row at `available` width, or must
 /// collapse into a single dropdown trigger instead.
@@ -542,13 +623,28 @@ impl AnalyticsView {
         } else {
             design::glyph_btn_w(cx) + design::ui_value(cx, TOOLBAR_GAP)
         };
-        let filters_min_w = clear_core_filter_w
-            + (crate::controls::CORE_COMBO_TRIGGER_W
+        let summary_chips = self.tab == Tab::Summary;
+        // Summary chips may wrap onto a second line (J3), so the group's floor is its widest
+        // single chip; other tabs keep the atomic one-line group.
+        let chips_w = if summary_chips {
+            [
+                crate::controls::CORE_COMBO_TRIGGER_W,
+                SIDE_TRIGGER_W,
+                KIND_TRIGGER_W,
+                METRIC_TRIGGER_W,
+            ]
+            .into_iter()
+            .fold(0.0, f32::max)
+                * action_trigger_scale
+        } else {
+            (crate::controls::CORE_COMBO_TRIGGER_W
                 + SIDE_TRIGGER_W
                 + KIND_TRIGGER_W
                 + METRIC_TRIGGER_W)
                 * action_trigger_scale
-            + design::ui_value(cx, TOOLBAR_GAP * 4.0);
+                + design::ui_value(cx, TOOLBAR_GAP * 4.0)
+        };
+        let filters_min_w = clear_core_filter_w + chips_w;
         let clear_core_filter = (!workspace_pinned && !self.sel_cores.is_empty()).then(|| {
             MoonButton::new("an-core-clear")
                 .width(design::glyph_btn_w(cx))
@@ -559,13 +655,17 @@ impl AnalyticsView {
                 .render()
         });
         let selectors = h_flex()
-            .flex_none()
             .gap(design::ui_px(cx, TOOLBAR_GAP))
             .children(clear_core_filter)
             .child(self.core_combo(cx))
             .child(self.side_combo(cx))
             .child(self.kind_combo(cx))
             .child(self.metric_combo(cx));
+        let selectors = if summary_chips {
+            selectors.flex_shrink(1.0).min_w_0().flex_wrap()
+        } else {
+            selectors.flex_none()
+        };
         // Right alignment keeps the selected core beside its selector. `flex_1 + min_w_0 +
         // truncate` lets the caption yield all optional width before the atomic selector group
         // wraps. `flatten_lines` folds a hard break that the one-line caption would otherwise clip.
@@ -628,7 +728,7 @@ impl AnalyticsView {
     ///
     /// Returns:
     ///     Metric dropdown element labeled with the exact current unit when known.
-    fn metric_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn metric_combo(&self, cx: &Context<Self>) -> MoonDropdown {
         let active_unit = match self.tab {
             Tab::Summary => self.data.unit(),
             Tab::Strategies => self.strategy_data.unit(),
@@ -680,14 +780,15 @@ impl AnalyticsView {
                 view.update(app, |t, c| t.set_metric_choice(m, c));
             },
         );
-        MoonDropdown::new("an-metric")
+        let dropdown = MoonDropdown::new("an-metric")
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(METRIC_TRIGGER_W)
             .fit_menu_width(120.0, 240.0)
-            .items(items)
+            .items(items);
+        self.summary_chip(dropdown, self.chips_set()[3], METRIC_TRIGGER_W)
     }
 
     /// Render the shared exchange-grouped core multi-selector with batch toggles.
@@ -697,7 +798,7 @@ impl AnalyticsView {
     ///
     /// Returns:
     ///     The configured fixed-trigger dropdown.
-    fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn core_combo(&self, cx: &Context<Self>) -> MoonDropdown {
         let view = cx.entity();
         let filter_pin = self.core_filter_pin();
         let workspace_pinned = filter_pin.is_some();
@@ -738,7 +839,7 @@ impl AnalyticsView {
         let toggle_view = view.clone();
         let extras =
             crate::controls::core_combo_extras(!workspace_pinned, &view, &self.backend, cx);
-        crate::controls::core_combo(
+        let dropdown = crate::controls::core_combo(
             "an-core",
             &cores,
             venues,
@@ -758,12 +859,17 @@ impl AnalyticsView {
                 });
             },
         )
-        .disabled(workspace_pinned)
+        .disabled(workspace_pinned);
+        self.summary_chip(
+            dropdown,
+            self.chips_set()[0],
+            crate::controls::CORE_COMBO_TRIGGER_W,
+        )
     }
 
     /// Side combo (All/Long/Short). Analytics keeps it a field of its own; the Report folds the
     /// same choice into its merged scope field.
-    fn side_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn side_combo(&self, cx: &Context<Self>) -> MoonDropdown {
         // The caption rides INSIDE the label, exactly as the core selector's "Cores: N" does
         // (`report.cores_n` below): MoonUI's trigger has no caption slot, and its segment API
         // drops the caret, the mono family and the label fitting all at once.
@@ -797,18 +903,19 @@ impl AnalyticsView {
                 view.update(app, |t, c| t.set_side(side, c));
             },
         );
-        MoonDropdown::new("an-side")
+        let dropdown = MoonDropdown::new("an-side")
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(SIDE_TRIGGER_W)
             .menu_width_scaled(120.0)
-            .items(items)
+            .items(items);
+        self.summary_chip(dropdown, self.chips_set()[1], SIDE_TRIGGER_W)
     }
 
     /// Order kind combo (All / Real / Emulated) — as in the Report.
-    fn kind_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn kind_combo(&self, cx: &Context<Self>) -> MoonDropdown {
         let cur = t!(
             "analytics.filter.kind_v",
             v = match self.emu {
@@ -843,14 +950,45 @@ impl AnalyticsView {
                 view.update(app, |t, c| t.set_emu(k, c));
             },
         );
-        MoonDropdown::new("an-kind")
+        let dropdown = MoonDropdown::new("an-kind")
             .label(cur)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(KIND_TRIGGER_W)
             .menu_width_scaled(138.0)
-            .items(items)
+            .items(items);
+        self.summary_chip(dropdown, self.chips_set()[2], KIND_TRIGGER_W)
+    }
+
+    /// Which of the core, side, kind and metric filters differ from their defaults.
+    fn chips_set(&self) -> [bool; 4] {
+        chip_is_set(
+            self.core_filter_pin().is_some() || !self.sel_cores.is_empty(),
+            self.side,
+            self.emu,
+            MetricChoice::of(self.metric, self.prefer_usdt),
+        )
+    }
+
+    /// Restyle a filter trigger as a Summary chip: ghost, highlighted when set, as wide as its
+    /// own "Label value" up to the old fixed width. Other tabs keep today's triggers (D1).
+    ///
+    /// Args:
+    ///     dropdown: The tab-agnostic filter dropdown.
+    ///     set: Whether the filter differs from its default.
+    ///     max_w: The filter's former fixed design width, now the chip's ceiling.
+    ///
+    /// Returns:
+    ///     The chip on the Summary tab, the unchanged dropdown elsewhere.
+    fn summary_chip(&self, dropdown: MoonDropdown, set: bool, max_w: f32) -> MoonDropdown {
+        if self.tab != Tab::Summary {
+            return dropdown;
+        }
+        // Keeps the bordered Soft trigger: a borderless chip stops reading as a dropdown.
+        dropdown
+            .selected(set)
+            .fit_trigger_width(CHIP_MIN_W.min(max_w), max_w)
     }
 
     /// One bound of a custom period: a "с"/"по" caption plus the moonui date+time field, which
@@ -1191,7 +1329,7 @@ impl AnalyticsView {
         p: MoonPalette,
         chrome_width: f32,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         // Highlight follows the ACTIVE tab's period (Summary/Tuning are independent).
         let active = self.active_period();
         // Keep the divider inside the custom-range group so it cannot wrap onto a line by itself.
@@ -1254,6 +1392,23 @@ impl AnalyticsView {
                 0.0
             }
             + design::ui_value(cx, design::CHROME_GAP) * 2.0;
+        // Summary only: the previous-period comparison toggle after the counter. It joins the row
+        // when the row still fits with the presets collapsed; otherwise it takes its own line (J3).
+        let compare = (self.tab == Tab::Summary).then(|| {
+            let label = compare_label(self.data_range);
+            let w = design::ui_caption_text_width(cx, &label, 400.0)
+                + design::ui_value(cx, COMPARE_TOGGLE_TRACK_W)
+                + design::ui_value(cx, design::CHROME_GAP);
+            (label, w)
+        });
+        let compare_inline = compare.as_ref().is_some_and(|(_, w)| {
+            fixed_w + w + design::ui_value(cx, PRESET_CELL_MAX_W) <= chrome_width
+        });
+        let fixed_w = fixed_w
+            + match &compare {
+                Some((_, w)) if compare_inline => *w,
+                _ => 0.0,
+            };
         let available_for_presets = (chrome_width - fixed_w).max(0.0);
         let fitted_presets = self.fitted_preset_items(cx);
         let presets_row_w: f32 = fitted_presets
@@ -1293,6 +1448,7 @@ impl AnalyticsView {
                         (t!("common.db_read_failed_short").to_string(), true)
                     }
                 },
+                Tab::Summary => (summary_counter(&self.data).0, false),
                 _ => match &self.data {
                     ProfitLoadState::Loading => ("…".to_string(), false),
                     ProfitLoadState::Ready { data, .. } => (
@@ -1325,7 +1481,7 @@ impl AnalyticsView {
         } else {
             p.text_muted
         }));
-        h_flex()
+        let row = h_flex()
             .flex_none()
             .w_full()
             .min_h(design::fit_h_px(cx, 34.0, 13.0, 10.5))
@@ -1363,6 +1519,35 @@ impl AnalyticsView {
                     .render()
             }))
             .children(has_note.then(|| design::chrome_divider(cx, p)))
-            .child(counter_cell.child(counter))
+            .child(counter_cell.child(counter));
+        let Some((label, _)) = compare else {
+            return row.into_any_element();
+        };
+        let toggle = MoonToggle::new("an-sum-compare")
+            .checked(self.compare_prev)
+            .label(label)
+            .mono(false)
+            .on_change(cx.listener(|this, _: &bool, _, cx| this.toggle_compare_prev(cx)));
+        if compare_inline {
+            return row
+                .child(div().flex_none().child(toggle))
+                .into_any_element();
+        }
+        // Own line: the bottom rule moves to the wrapper so it still closes the whole chrome.
+        v_flex()
+            .flex_none()
+            .w_full()
+            .border_b_1()
+            .border_color(moon(p.border))
+            .child(row.border_b_0())
+            .child(
+                h_flex()
+                    .w_full()
+                    .px(design::ui_px(cx, 10.0))
+                    .pb(design::ui_px(cx, 8.0))
+                    .justify_end()
+                    .child(toggle),
+            )
+            .into_any_element()
     }
 }

@@ -106,9 +106,9 @@ pub const RAIL_ROW_SELECTED_ALPHA: f32 = 0.18;
 /// Hover background alpha for a rail row, applied over the accent colour.
 ///
 /// Raised from the previous 0.10 to be visibly stronger on the light theme (owner's choice, not a
-/// measured precedent: `panels/assets/table.rs:901` and `panels/core_status/by_ip_header.rs:124`
-/// also use 0.14, but both are column-resize drag-handle hover strips with a mandatory
-/// `.occlude()`, a different interaction from a virtualized list row).
+/// measured precedent: the assets roster resize handle also uses 0.14, but that strip is a
+/// column-resize drag handle with a mandatory `.occlude()`, a different interaction from a
+/// virtualized list row).
 pub const RAIL_ROW_HOVER_ALPHA: f32 = 0.14;
 
 /// Flex-shrink factor for the summary bar's alarm segment (`проблем: N`), against its
@@ -126,12 +126,4 @@ fn dot(size: f32, fill: impl Into<gpui::Fill>, cx: &App) -> impl IntoElement {
         .h(ui_px(cx, size))
         .rounded(ui_px(cx, 999.0))
         .bg(fill)
-}
-
-/// Drawn width of a [`status_dot`], for a layout that must reserve its column.
-///
-/// One source with the dot itself: a row that leaves a gap for it and the dot that fills the gap
-/// cannot drift apart when the UI scale changes.
-pub fn status_dot_w(cx: &App) -> f32 {
-    ui_value(cx, 5.0)
 }

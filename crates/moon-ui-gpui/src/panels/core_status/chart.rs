@@ -220,7 +220,7 @@ pub(super) fn server_chart(
 
 /// Paint one series (x-fraction points) as an optional bottom-filled area plus a stroked line on a
 /// 0..100 % Y.
-fn paint_series(
+pub(super) fn paint_series(
     window: &mut Window,
     origin: Point<Pixels>,
     w: f32,

@@ -9,10 +9,8 @@ use std::net::IpAddr;
 
 use moon_core::config::TransportVersion;
 use moon_core::feed::{ConnFault, ConnStatus, CoreEndpoint, CoreTimeOffsetStatus};
-use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
+use moon_core::session::core_update::CoreUpdatePhase;
 use moon_core::session::{ApiKeyExpiry, CoreId, CoreStartupStatus, CoreSysStatus};
-
-use super::startup::{StartupCell, startup_cell};
 
 /// Cached display data for one core before server aggregation.
 #[derive(Clone)]
@@ -45,8 +43,6 @@ pub(super) struct CoreStatusRow {
     /// Whether this specific core has a sustained above-baseline client↔core ping (the per-core ping
     /// warning), so its own row can show the cause the server-level badge only hints at.
     pub(super) ping_warn: bool,
-    /// Whether this core has a sustained above-baseline core→exchange ping (the exch-ping warning).
-    pub(super) exch_warn: bool,
     /// This core's current client↔core-ping colour severity (relative to its own baseline and the
     /// axis thresholds), computed by the engine so colour and warning always agree.
     pub(super) ping_sev: crate::backend::core_warn::LatencySeverity,
@@ -200,8 +196,8 @@ impl ApiKeyState {
 
 /// What one server's cores agree on about their MoonBot build.
 ///
-/// An AGREEMENT rollup, not an attention-first or urgency-min one like [`group_startup`] and
-/// [`soonest_key`]. Those need an ordering in which one value is WORSE; there is none here, because
+/// An AGREEMENT rollup, not an attention-first or urgency-min one like [`soonest_key`].
+/// That one needs an ordering in which one value is WORSE; there is none here, because
 /// no minimum-version constant exists anywhere in this workspace and inventing one was specifically
 /// rejected (`moon_core::feed::conn_verdict`). A build number is a fact, not a severity.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,106 +275,6 @@ pub(super) fn version_behind_of(have: Option<u32>, fleet_newest: Option<u32>) ->
         .map(|(_, newest)| newest)
 }
 
-/// What one server's cores agree on about their measured clock offset.
-///
-/// An AGREEMENT rollup, mirroring [`GroupVersion`] in shape and in reasoning: a collapsed group
-/// must not assert a clock on behalf of a core nobody measured, so a silent sibling beside a
-/// measured core is `Mixed`, never `Uniform`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TzOffsetGroup {
-    /// Every core on the server has a measured offset, and all agree.
-    Uniform(i32),
-    /// At least one core has a measured offset, but they do not all agree — INCLUDING the case
-    /// where one measured and a sibling never has.
-    Mixed,
-    /// No core on the server has ever measured an offset.
-    Absent,
-}
-
-/// Roll one server's measured offsets up into the value its collapsed row shows.
-///
-/// Args:
-///     cores: The group's core rows, already collected.
-///
-/// Returns:
-///     `Uniform` only when every core has measured and all agree, `Mixed` on any disagreement or
-///     any silent sibling beside a measured one, `Absent` when nothing was ever measured.
-pub(super) fn group_tz_offset(cores: &[CoreStatusRow]) -> TzOffsetGroup {
-    let mut reported: Option<i32> = None;
-    let mut any_silent = false;
-    for core in cores {
-        match core.time_offset.offset_secs {
-            None => any_silent = true,
-            Some(offset) => match reported {
-                Some(seen) if seen != offset => return TzOffsetGroup::Mixed,
-                _ => reported = Some(offset),
-            },
-        }
-    }
-    match (reported, any_silent) {
-        (None, _) => TzOffsetGroup::Absent,
-        (Some(_), true) => TzOffsetGroup::Mixed,
-        (Some(offset), false) => TzOffsetGroup::Uniform(offset),
-    }
-}
-
-/// What one server's cores are doing in the update queue, rolled up for the collapsed row.
-///
-/// Unlike [`GroupVersion`] this is not an agreement rollup -- there is no shared fact to assert
-/// on a core's behalf, only a count of cores this row CAN see in each bucket ([`group_update`]
-/// never counts a core it has no phase for), so a silent sibling simply contributes to no bucket
-/// rather than needing its own `Mixed`-style state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum GroupUpdate {
-    /// No core on the server is tracked in the queue at all.
-    Idle,
-    /// At least one core is queued and not blocked, or has an in-flight update attempt. Carries the
-    /// count.
-    Active(usize),
-    /// At least one core is queued behind a STALLED lane and no core is `Failed`. Carries the
-    /// count.
-    Held(usize),
-    /// At least one core's last attempt ended `Failed`. Carries the count; takes priority over
-    /// `Held` and `Active` because a failure is the state that most needs the operator's attention.
-    Failed(usize),
-}
-
-/// Roll one server's per-core update phases up into the single state its collapsed row shows.
-///
-/// Args:
-///     cores: The group's core rows, already collected.
-///
-/// Returns:
-///     `Failed` if any core's last attempt failed, else `Held` if any is blocked behind a stalled
-///     lane, else `Active` if any is queued or in flight, else `Idle`.
-pub(super) fn group_update(cores: &[CoreStatusRow]) -> GroupUpdate {
-    let mut failed = 0usize;
-    let mut held = 0usize;
-    let mut active = 0usize;
-    for core in cores {
-        match &core.update {
-            Some(CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(_))) => failed += 1,
-            Some(CoreUpdatePhase::Queued { held: true, .. }) => held += 1,
-            Some(
-                CoreUpdatePhase::Queued { held: false, .. }
-                | CoreUpdatePhase::Sent { .. }
-                | CoreUpdatePhase::Waiting { .. }
-                | CoreUpdatePhase::Verifying { .. },
-            ) => active += 1,
-            Some(CoreUpdatePhase::Done(_)) | None => {}
-        }
-    }
-    if failed > 0 {
-        GroupUpdate::Failed(failed)
-    } else if held > 0 {
-        GroupUpdate::Held(held)
-    } else if active > 0 {
-        GroupUpdate::Active(active)
-    } else {
-        GroupUpdate::Idle
-    }
-}
-
 /// Stable grouping identity for a known host or one isolated unknown core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum ServerKey {
@@ -415,17 +311,6 @@ impl ServerKey {
             Self::Unknown(core) => format!("server:unknown:{core}"),
         }
     }
-}
-
-/// Coarse server connectivity derived from all processes on the machine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ServerConnectivity {
-    /// Every process in the visible server group is ready.
-    Online,
-    /// At least one process is ready or still connecting, but the group is not fully ready.
-    Degraded,
-    /// No process is ready or connecting.
-    Offline,
 }
 
 /// Aggregated display snapshot for one server and its ordered core children.
@@ -473,21 +358,10 @@ pub(super) struct ServerStatusGroup {
     /// [`Self::version`] -- re-stating the `Uniform`-only rule in a second place, where it could
     /// drift from this one.
     pub(super) version_behind: Option<(u32, u32)>,
-    /// What this server's cores are doing in the update queue — see [`group_update`]. Counts only
-    /// cores this row can actually see a phase for.
-    pub(super) update: GroupUpdate,
-    /// What this server's cores agree on about their measured clock offset — see
-    /// [`group_tz_offset`]. A collapsed group shows this, so it must never assert a clock on
-    /// behalf of a core nobody measured.
-    pub(super) tz_offset: TzOffsetGroup,
     /// Shared endpoint address, or `None` for an isolated unknown endpoint.
     pub(super) address: Option<IpAddr>,
     /// Cores ordered attention-first, retaining canonical input order within each partition.
     pub(super) cores: Vec<CoreStatusRow>,
-    /// Number of ready cores.
-    pub(super) ready_count: usize,
-    /// Coarse group connectivity.
-    pub(super) connectivity: ServerConnectivity,
     /// Freshest available whole-machine CPU sample.
     pub(super) system_cpu_percent: Option<u8>,
     /// Sum of the latest process-memory samples, widened beyond MoonProto's per-process `u16`.
@@ -496,9 +370,6 @@ pub(super) struct ServerStatusGroup {
     pub(super) free_physical_memory_mb: Option<u16>,
     /// Freshest available logical-CPU count.
     pub(super) logical_cpu_count: Option<u8>,
-    /// What this server's startup column shows, rolled up from its cores — see [`group_startup`].
-    /// A collapsed group must still tell the truth, so this is not merely the first core's value.
-    pub(super) startup: Option<StartupCell>,
 }
 
 impl ServerStatusGroup {
@@ -553,20 +424,15 @@ pub(super) fn aggregate_servers(
                 api_key: ApiKeyState::Unknown,
                 version: GroupVersion::Absent,
                 version_behind: None,
-                update: GroupUpdate::Idle,
-                tz_offset: TzOffsetGroup::Absent,
                 address: match key {
                     ServerKey::Address(address) => Some(address),
                     ServerKey::Unknown(_) => None,
                 },
                 cores: Vec::new(),
-                ready_count: 0,
-                connectivity: ServerConnectivity::Offline,
                 system_cpu_percent: None,
                 process_memory_mb: None,
                 free_physical_memory_mb: None,
                 logical_cpu_count: None,
-                startup: None,
             });
             position
         });
@@ -581,56 +447,6 @@ pub(super) fn aggregate_servers(
     // unknown-endpoint servers last.
     groups.sort_by_key(|group| (group.address.is_none(), group.address));
     groups
-}
-
-/// Roll one server's startup column up from its cores.
-///
-/// A collapsed group hides its rows, so this cannot be "whatever the first core says". Two rules,
-/// in order:
-///
-/// 1. If ANY core is still coming up, show THAT core's progress — the unfinished one is the reason
-///    somebody opened this panel, and it must not be averaged away by its finished siblings. Ties
-///    break on the least progress, then the longest elapsed, so the worst case wins.
-/// 2. Otherwise, if every core has finished, show the LONGEST time any of them took: "this machine
-///    took N seconds to come up". A mean would understate the slow core and a first-match would be
-///    arbitrary.
-///
-/// Args:
-///     cores: The group's core rows, already collected.
-///
-/// Returns:
-///     The cell to render on the server row, or `None` when no core reports anything.
-pub(super) fn group_startup(cores: &[CoreStatusRow]) -> Option<StartupCell> {
-    let cells: Vec<StartupCell> = cores
-        .iter()
-        .map(|core| startup_cell(&core.status, &core.startup))
-        .collect();
-    let worst_progress = cells
-        .iter()
-        .filter_map(|cell| match *cell {
-            StartupCell::Progress {
-                done,
-                total,
-                elapsed_ms,
-            } => Some((done, total, elapsed_ms)),
-            _ => None,
-        })
-        .min_by_key(|(done, _, elapsed_ms)| (*done, std::cmp::Reverse(*elapsed_ms)));
-    if let Some((done, total, elapsed_ms)) = worst_progress {
-        return Some(StartupCell::Progress {
-            done,
-            total,
-            elapsed_ms,
-        });
-    }
-    cells
-        .iter()
-        .filter_map(|cell| match *cell {
-            StartupCell::Done { elapsed_ms } => Some(elapsed_ms),
-            _ => None,
-        })
-        .max()
-        .map(|elapsed_ms| StartupCell::Done { elapsed_ms })
 }
 
 /// Order flat-mode rows attention-first.
@@ -655,12 +471,6 @@ pub(super) fn ordered_flat_rows(rows: &[CoreStatusRow]) -> Vec<CoreStatusRow> {
 /// Returns:
 ///     Nothing; summary fields are updated in place.
 fn finish_group(group: &mut ServerStatusGroup, fleet_newest: Option<u32>) {
-    group.ready_count = group
-        .cores
-        .iter()
-        .filter(|row| row.status == ConnStatus::Ready)
-        .count();
-    group.connectivity = connectivity(&group.cores, group.ready_count);
     group.system_cpu_percent =
         freshest_metric(&group.cores, |sys| sys.system_cpu_percent).map(|(_, value)| value);
     group.free_physical_memory_mb =
@@ -673,7 +483,6 @@ fn finish_group(group: &mut ServerStatusGroup, fleet_newest: Option<u32>) {
     group.api_key = soonest_key(&group.cores);
     group.api_warn = group.cores.iter().any(|core| core.api_warn);
     group.api_notice = group.cores.iter().any(|core| core.api_notice);
-    group.startup = group_startup(&group.cores);
     group.version = group_version(&group.cores);
     // A collapsed row may only be marked about the build it actually DISPLAYS. `Mixed` prints an
     // ellipsis and `Absent` a dash: both are "no answer", and colouring either would turn a
@@ -686,8 +495,6 @@ fn finish_group(group: &mut ServerStatusGroup, fleet_newest: Option<u32>) {
             .map(|newest| (*number, newest)),
         GroupVersion::Mixed | GroupVersion::Absent => None,
     };
-    group.update = group_update(&group.cores);
-    group.tz_offset = group_tz_offset(&group.cores);
 
     let mut has_process_memory = false;
     let mut process_memory_mb = 0u64;
@@ -735,28 +542,6 @@ fn freshest_metric<T: Copy>(
         .iter()
         .filter_map(|row| read(&row.sys).map(|value| (row.sys.updated_ms, value)))
         .max_by_key(|(updated_ms, _)| *updated_ms)
-}
-
-/// Reduce per-core connection states into the server badge state.
-///
-/// Args:
-///     cores: All core snapshots in the group.
-///     ready_count: Precomputed count of ready cores.
-///
-/// Returns:
-///     Online, degraded, or offline connectivity.
-fn connectivity(cores: &[CoreStatusRow], ready_count: usize) -> ServerConnectivity {
-    if ready_count == cores.len() && !cores.is_empty() {
-        ServerConnectivity::Online
-    } else if ready_count > 0
-        || cores
-            .iter()
-            .any(|row| matches!(row.status, ConnStatus::Connecting | ConnStatus::Stage(_)))
-    {
-        ServerConnectivity::Degraded
-    } else {
-        ServerConnectivity::Offline
-    }
 }
 
 #[cfg(test)]

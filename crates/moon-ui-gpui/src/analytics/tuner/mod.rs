@@ -38,6 +38,8 @@ pub(in crate::analytics) use strat_columns::restore_strat_columns;
 // ————— one folder per axis —————
 /// "By coin": the coin table, its row cache, its loads and its working coin lists.
 mod coins;
+/// Locale plural-form picker shared with the Summary's period-row toggle (D2).
+pub(in crate::analytics) use coins::plural_key;
 /// "By filter": the threshold grid, its histogram and its auto-suggestion.
 mod filter;
 /// "By time": the weekly schedule grid, the hour profile and the sliders.

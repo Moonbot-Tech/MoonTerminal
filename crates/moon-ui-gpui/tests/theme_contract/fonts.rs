@@ -245,48 +245,68 @@ fn sells_zone_cursor_badge_uses_the_ui_face() {
 #[test]
 fn settings_values_and_connections_repin_the_mono_family() {
     let general = read_src("settings/general.rs");
+    let common = read_src("settings/common.rs");
+    // Both number-field builders draw through `NumField`, whose render re-pins the mono face.
+    for (source, signature) in [
+        (&common, "pub(super) fn num_input("),
+        (&general, "pub(super) fn num_input_on("),
+    ] {
+        assert!(
+            code_only(braced_body(source, signature)).contains("NumField {"),
+            "settings number fields must draw through NumField: {signature}"
+        );
+    }
     assert!(
-        code_only(braced_body(
-            &general,
-            "pub(super) fn stepper_controls_styled("
-        ))
-        .contains(".font_family(design::mono())"),
-        "settings counters must keep their compared values mono"
+        code_only(braced_body(&common, "impl RenderOnce for NumField"))
+            .contains(".font_family(design::mono())"),
+        "settings number fields must keep their compared values mono: NumField"
     );
     let badges = read_src("settings/badges.rs");
     let badge_row = code_only(braced_body(&badges, "fn badge_row("));
+    // The ordinal, name and code inputs share one mono builder; the short code and the status
+    // badge carry their own.
+    assert_eq!(
+        badge_row.matches("input(format!(\"badge-").count(),
+        3,
+        "the ordinal, name and code inputs must go through the row's mono input builder"
+    );
     assert_eq!(
         badge_row.matches(".mono(true)").count(),
-        5,
-        "the ordinal, name, code, optional short-code, and status badge values must all stay mono after Settings becomes proportional"
+        3,
+        "the shared input builder, the optional short-code, and the status badge values must all stay mono after Settings becomes proportional"
     );
     let common = read_src("settings/common.rs");
     assert!(
-        code_only(braced_body(&common, "pub(super) fn slider_row("))
+        code_only(braced_body(&common, "pub(super) fn slider_field("))
             .contains(".font_family(design::mono())"),
         "slider endpoints and current numeric value must share a mono container after Settings becomes proportional"
     );
     let settings = read_src("settings/render.rs");
     let render = render_root(&settings, "impl Render for SettingsView");
-    // The bounded branch hosts two tabs; only Connections holds a data table that must stay mono,
-    // so the pin is gated on it rather than applied to the branch.
+    // The bounded branch hosts Cores. It pins no face on the whole page:
+    // labels and captions are prose in the UI face, and every value sets mono itself.
     let bounded = chain_between(&render, "if bounded {", "} else {", "Settings bounded body");
-    let gate = ".when(self.active == Tab::Connections, |el| {";
-    let (before_gate, gated) = bounded
-        .split_once(gate)
-        .expect("Settings bounded body: the mono pin must be gated on Connections");
-    let gated = gated
-        .split_once("})")
-        .expect("Settings bounded body: the Connections gate must close")
-        .0;
     assert!(
-        gated.contains(".font_family(design::mono())"),
-        "Settings Connections must pin mono at its branch because its table inherits the Settings root otherwise"
+        !bounded.contains(".font_family(design::mono())"),
+        "Settings bounded body must not pin mono: it would paint the Cores labels in the data face"
     );
-    assert!(
-        !before_gate.contains(".font_family(design::mono())"),
-        "the mono pin belongs inside the Connections gate: Trade sounds shares the branch and sets its own faces per element"
-    );
+    let cores = read_src("settings/connections/cores.rs");
+    for input in [
+        "core-card-name-input",
+        "core-card-key",
+        "core-card-addr",
+        "core-card-bundle-input",
+    ] {
+        let at = cores
+            .find(&format!("MoonInput::new(\"{input}\")"))
+            .unwrap_or_else(|| panic!("Cores card input {input} is missing"));
+        // The builder chain right after the constructor: `.state(..)` then `.mono(true)`.
+        let builder = &cores[at..(at + 160).min(cores.len())];
+        assert!(
+            builder.contains(".mono(true)"),
+            "Cores card input {input} holds a value and must stay mono"
+        );
+    }
 
     let security = read_src("settings/security.rs");
     assert!(
@@ -312,16 +332,16 @@ fn settings_values_and_connections_repin_the_mono_family() {
     );
 
     let hotkeys = read_src("settings/hotkeys/tab.rs");
-    let pull_row = code_only(braced_body(&hotkeys, "fn core_pull_row("));
-    let pull_slot = chain_between(
-        &pull_row,
-        "let id = format!(\"core-pull-{}\", registry::key_id(row.slot));",
-        "MoonHotkeyInput::new",
-        "core hotkey slot identity",
-    );
+    let pull_line = code_only(braced_body(&hotkeys, "fn pull_change_line("));
     assert!(
-        pull_slot.contains(".font_family(design::mono())"),
-        "settings/hotkeys/tab.rs:core_pull_row must keep the compared slot identity mono"
+        pull_line.contains(".font_family(design::mono())"),
+        "settings/hotkeys/tab.rs:pull_change_line must keep the compared bindings mono"
+    );
+    let page = read_src("settings/hotkeys/page.rs");
+    let row = code_only(braced_body(&page, "fn table_row("));
+    assert!(
+        row.contains(".font_family(design::mono())"),
+        "settings/hotkeys/page.rs:table_row must set the MoonBot command name in mono"
     );
 
     let tree = read_src("strategies/tree/mod.rs");
@@ -460,4 +480,31 @@ fn prose_tooltips_use_the_ui_family_and_values_stay_mono() {
             "{path} must build tuner tooltips through text_tooltip so the face cannot drift"
         );
     }
+}
+
+/// A core name in the Summary per-core table is a value, so its cell and its width measurement
+/// are both mono.
+///
+/// Breakage: switching the name cell back to `design::ui_font()` draws core names in the UI face
+/// beside mono figures; measuring it with the UI width helper clips or pads the name column.
+#[test]
+fn summary_core_names_keep_the_mono_family() {
+    let cores = read_src("analytics/summary/cores.rs");
+    let row = code_only(braced_body(&cores, "fn core_row_el("));
+    let name_cell = chain_between(
+        &row,
+        "\"sum-cores-name-{k}\"",
+        "sum-cores-trades-",
+        "core name cell",
+    );
+    assert!(
+        name_cell.contains(".font_family(design::mono())")
+            && !name_cell.contains("design::ui_font()"),
+        "the Summary core-name cell must draw names in the mono family"
+    );
+    let measure = code_only(braced_body(&cores, "fn of("));
+    assert!(
+        measure.contains("c.name.max(square + mono(&r.name"),
+        "the Summary core-name column must be measured in the mono family it draws in"
+    );
 }

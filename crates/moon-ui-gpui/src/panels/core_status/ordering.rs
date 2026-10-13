@@ -8,100 +8,35 @@ use std::net::IpAddr;
 use std::rc::Rc;
 
 use moon_core::feed::ConnStatus;
-use moon_core::session::{CoreId, CoreSysStatus};
+use moon_core::session::CoreId;
 use moon_core::venue::{Brand, CoreVenue};
 use rust_i18n::t;
 
 use moon_core::session::core_order::{self, ExchangeSection};
 
-use super::model::{CoreStatusRow, GroupVersion, ServerStatusGroup, TzOffsetGroup};
+use super::model::{CoreStatusRow, ServerStatusGroup};
 use super::startup::{StartupCell, startup_cell};
 use super::time_offset::{tz_offset_cell, tz_offset_rank};
-
-/// Which By IP column the server list is sorted on. Warnings always pin to the top regardless of the
-/// field (handled by the caller), so this only orders within the warned and the quiet partitions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum GroupSortField {
-    /// Server display name — the default, in natural order.
-    Name,
-    /// Whole-machine system CPU percent.
-    Cpu,
-    /// Free-memory share of the reconstructed machine total (the "Память своб." column).
-    Mem,
-    /// Worst client↔core round-trip among the server's ready cores.
-    Ping,
-    /// Worst core→exchange latency among the server's ready cores.
-    Exch,
-    /// Ready core count.
-    Cores,
-    /// The server's most urgent API key, by [`ApiKeyState::urgency`] — which may be a day count,
-    /// or neither when nothing is known or every key is unlimited.
-    ApiKey,
-    /// Startup: still-coming-up servers first, then the ones that took longest. One header click
-    /// answers "which machines are slow to come up", which is the question the column exists for.
-    Startup,
-    /// The server's rolled-up MoonBot build, by [`version_group_rank`] — the agreed build, or
-    /// neither when its cores disagree or none reported.
-    Version,
-    /// The server's rolled-up clock offset, by [`tz_offset_group_rank`] — the agreed offset, or
-    /// neither when its cores disagree or none has ever measured one.
-    TzOffset,
-}
-
-impl GroupSortField {
-    /// Return the stable persistence key for one By-IP sort column.
-    pub(super) fn key(self) -> &'static str {
-        match self {
-            Self::Name => "name",
-            Self::Cpu => "cpu",
-            Self::Mem => "mem",
-            Self::Ping => "ping",
-            Self::Exch => "exch",
-            Self::Cores => "cores",
-            Self::ApiKey => "api_key",
-            Self::Startup => "startup",
-            Self::Version => "version",
-            Self::TzOffset => "tz_off",
-        }
-    }
-
-    /// Resolve a persisted By-IP key without treating an unknown value as Name.
-    pub(super) fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "name" => Some(Self::Name),
-            "cpu" => Some(Self::Cpu),
-            "mem" => Some(Self::Mem),
-            "ping" => Some(Self::Ping),
-            "exch" => Some(Self::Exch),
-            "cores" => Some(Self::Cores),
-            "api_key" => Some(Self::ApiKey),
-            "startup" => Some(Self::Startup),
-            "version" => Some(Self::Version),
-            "tz_off" => Some(Self::TzOffset),
-            _ => None,
-        }
-    }
-}
 
 /// Restore a valid Flat-mode sort, leaving `None` as the historical attention order.
 pub(super) fn restore_flat_sort(
     preference: Option<moon_core::config::TableSortPreference>,
 ) -> Option<(String, bool)> {
     const KEYS: [&str; 15] = [
-        "server",
-        "core",
         "status",
-        "cpu_proc",
-        "cpu_sys",
-        "mem_used",
-        "free_phys",
+        "core",
+        "server",
+        "version",
         "ping",
         "ping_exch",
+        "cpu_proc",
+        "cpu_sys",
         "cpus",
+        "mem_used",
+        "free_phys",
         "api_key",
         "api_quota",
         "startup",
-        "version",
         "tz_off",
     ];
     preference.and_then(|preference| {
@@ -110,94 +45,87 @@ pub(super) fn restore_flat_sort(
     })
 }
 
-/// Restore a valid By-IP sort, falling back to its historical Name-ascending order.
-pub(super) fn restore_group_sort(
-    preference: Option<moon_core::config::TableSortPreference>,
-) -> (GroupSortField, bool) {
-    preference
-        .and_then(|preference| {
-            GroupSortField::from_key(&preference.column).map(|field| (field, preference.ascending))
-        })
-        .unwrap_or((GroupSortField::Name, true))
+/// Median ping and connectivity of one exchange section.
+///
+/// `median_ping_ms` is the middle Ready ping. An odd count takes that one sample. An even count
+/// takes the mean of the two middle samples, rounded half up (`(a + b + 1) / 2`). Only Ready
+/// cores with a known core ping contribute. A core that is not Ready counts as not connected
+/// even when a stale ping is still stored on the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SectionAggregate {
+    /// Cores in the section, whatever their connection.
+    pub(super) cores: usize,
+    /// Middle Ready ping, in milliseconds, or `None` when no Ready core has a ping.
+    /// An even count is the half-up mean of the two middle samples.
+    pub(super) median_ping_ms: Option<u32>,
+    /// Cores whose connection is not [`ConnStatus::Ready`].
+    pub(super) not_connected: usize,
 }
 
-/// Worst (highest) latency among a group's READY cores for one accessor, matching the value the
-/// server row surfaces. `None` when no ready core has the reading.
-fn worst_latency(
-    group: &ServerStatusGroup,
-    read: impl Fn(&CoreSysStatus) -> Option<u32>,
-) -> Option<u32> {
-    group
-        .cores
-        .iter()
-        .filter(|core| core.status == ConnStatus::Ready)
-        .filter_map(|core| read(&core.sys))
-        .max()
-}
-
-/// Free-memory percentage of the reconstructed machine total (process RAM sum + free physical),
-/// matching the "Память своб." column. `None` until free memory has arrived, so such servers group
-/// together at the ascending end.
-fn free_pct(group: &ServerStatusGroup) -> Option<u64> {
-    let free_mb = u64::from(group.free_physical_memory_mb?);
-    let total_mb = group.process_memory_mb.unwrap_or(0) + free_mb;
-    if total_mb == 0 {
-        return Some(0);
-    }
-    Some(free_mb * 100 / total_mb)
-}
-
-/// Compare two server groups on one sort field, ascending. The caller reverses for descending and
-/// applies the warnings-first pin separately; a name tiebreak keeps the order stable when the field
-/// ties (so equal metrics don't reshuffle each tick).
+/// Summarise one exchange section for its heading.
 ///
 /// Args:
-///     a: First group.
-///     b: Second group.
-///     field: The active sort column.
+///     rows: The cores that belong to the section, in any order.
 ///
 /// Returns:
-///     The ascending ordering for that field, then by name.
-pub(super) fn compare_groups(
-    a: &ServerStatusGroup,
-    b: &ServerStatusGroup,
-    field: GroupSortField,
-) -> Ordering {
-    match field {
-        GroupSortField::Name => Ordering::Equal,
-        GroupSortField::Cpu => a.system_cpu_percent.cmp(&b.system_cpu_percent),
-        GroupSortField::Mem => free_pct(a).cmp(&free_pct(b)),
-        GroupSortField::Ping => worst_latency(a, |sys| sys.round_trip_ms)
-            .cmp(&worst_latency(b, |sys| sys.round_trip_ms)),
-        GroupSortField::Exch => worst_latency(a, |sys| sys.order_api_latency_ms.map(u32::from))
-            .cmp(&worst_latency(b, |sys| {
-                sys.order_api_latency_ms.map(u32::from)
-            })),
-        GroupSortField::Cores => a
-            .ready_count
-            .cmp(&b.ready_count)
-            .then_with(|| a.cores.len().cmp(&b.cores.len())),
-        // The very key the server row displays, ordered the same way — so the column cannot sort by
-        // one thing and show another. Not Ready-gated, unlike the latencies: a key keeps ageing
-        // while its core is down.
-        GroupSortField::ApiKey => a.api_key.urgency().cmp(&b.api_key.urgency()),
-        // Rank on the SAME cell the server row displays, so the column cannot sort by one thing and
-        // show another. `startup_rank` puts unfinished startups first because they are the ones
-        // still costing the user time.
-        GroupSortField::Startup => startup_rank(a.startup).cmp(&startup_rank(b.startup)),
-        // Ranks the SAME rolled-up value the server row displays, by the same rule as every other
-        // heading here. Not Ready-gated: the store already drops a build the moment its core leaves
-        // Ready, so a stale one cannot reach this comparison.
-        GroupSortField::Version => {
-            version_group_rank(&a.version).cmp(&version_group_rank(&b.version))
+///     The count, the median Ready ping, and how many cores are not connected.
+pub(super) fn section_aggregate(rows: &[&CoreStatusRow]) -> SectionAggregate {
+    let mut pings: Vec<u32> = rows
+        .iter()
+        .filter(|row| row.status == ConnStatus::Ready)
+        .filter_map(|row| row.sys.round_trip_ms)
+        .collect();
+    pings.sort_unstable();
+    let median_ping_ms = match pings.len() {
+        0 => None,
+        n if n % 2 == 1 => Some(pings[n / 2]),
+        n => {
+            let lower = u64::from(pings[n / 2 - 1]);
+            let upper = u64::from(pings[n / 2]);
+            Some((lower + upper).div_ceil(2) as u32)
         }
-        // Ranks the SAME rolled-up value the server row displays, by the same rule the per-core
-        // column sorts by, so the two modes cannot disagree about which core sits where.
-        GroupSortField::TzOffset => {
-            tz_offset_group_rank(a.tz_offset).cmp(&tz_offset_group_rank(b.tz_offset))
+    };
+    let not_connected = rows
+        .iter()
+        .filter(|row| row.status != ConnStatus::Ready)
+        .count();
+    SectionAggregate {
+        cores: rows.len(),
+        median_ping_ms,
+        not_connected,
+    }
+}
+
+/// The heading sentence for one [`SectionAggregate`].
+///
+/// The median clause is omitted when no Ready core has a ping. A section with nothing offline
+/// says that everyone is connected instead of printing a zero.
+///
+/// Args:
+///     aggregate: The summary from [`section_aggregate`].
+///
+/// Returns:
+///     The localized caption that follows the exchange name.
+pub(super) fn section_aggregate_text(aggregate: &SectionAggregate) -> String {
+    let n = aggregate.cores as u64;
+    match (aggregate.median_ping_ms, aggregate.not_connected) {
+        (Some(ping), 0) => {
+            let key = super::presentation::plural_key("core_status.section.aggregate_ok", n);
+            t!(key.as_str(), n = aggregate.cores, ping = ping).to_string()
+        }
+        (Some(ping), k) => {
+            let key = super::presentation::plural_key("core_status.section.aggregate", n);
+            t!(key.as_str(), n = aggregate.cores, ping = ping, k = k).to_string()
+        }
+        (None, 0) => {
+            let key = super::presentation::plural_key("core_status.section.aggregate_ok_nomed", n);
+            t!(key.as_str(), n = aggregate.cores).to_string()
+        }
+        (None, k) => {
+            let key = super::presentation::plural_key("core_status.section.aggregate_nomed", n);
+            t!(key.as_str(), n = aggregate.cores, k = k).to_string()
         }
     }
-    .then_with(|| natural_cmp(&a.display_name, &b.display_name))
 }
 
 /// Rank one startup cell for sorting: unfinished startups first (least progress, then longest
@@ -244,44 +172,6 @@ fn version_rank(version: Option<u32>, suffix: Option<&str>) -> (u8, u32, Option<
     match version {
         Some(version) => (0, version, suffix),
         None => (1, 0, None),
-    }
-}
-
-/// Rank a server's rolled-up build: an agreed build first, ascending, then disagreement, then
-/// nothing reported. The number is the only key: a letter never reorders a server row.
-///
-/// `Mixed` outranks `Absent` because a mixed group has something to look at — expanding it shows
-/// real numbers — while an absent one does not.
-///
-/// Args:
-///     version: The group's agreement state.
-///
-/// Returns:
-///     Sort category and the agreed number within the uniform category.
-fn version_group_rank(version: &GroupVersion) -> (u8, u32) {
-    match version {
-        GroupVersion::Uniform { number, .. } => (0, *number),
-        GroupVersion::Mixed => (1, 0),
-        GroupVersion::Absent => (2, 0),
-    }
-}
-
-/// Rank a server's rolled-up clock offset: an agreed offset first, ordered by the offset itself,
-/// then disagreement, then nothing ever measured.
-///
-/// `Mixed` outranks `Absent` for the same reason [`version_group_rank`] orders them that way: a
-/// mixed group has something to look at by expanding it, while an absent one does not.
-///
-/// Args:
-///     group: Rollup state for one server's core clock offsets.
-///
-/// Returns:
-///     Sort category and offset within the uniform category.
-fn tz_offset_group_rank(group: TzOffsetGroup) -> (u8, i32) {
-    match group {
-        TzOffsetGroup::Uniform(offset_secs) => (0, offset_secs),
-        TzOffsetGroup::Mixed => (1, 0),
-        TzOffsetGroup::Absent => (2, 0),
     }
 }
 
@@ -487,11 +377,13 @@ pub(super) struct FlatSection {
     pub(super) brand: Option<Brand>,
     /// How many cores this section holds.
     ///
-    /// Drawn right-aligned at the far end of the band, unless that is also the caption cell, where
-    /// it follows the caption. This makes a heading read unmistakably as a GROUP rather than as
-    /// another core: MoonUI's sort arrow cannot say that it orders rows WITHIN a section, so the
-    /// heading has to carry that meaning itself.
+    /// The heading draws [`Self::aggregate`], which carries this same count. The field stays so
+    /// the ordering tests can read the partition size without parsing that sentence. The binary
+    /// target does not read it.
+    #[allow(dead_code)]
     pub(super) members: usize,
+    /// Count, median ping, and not-connected tally for the caption.
+    pub(super) aggregate: SectionAggregate,
 }
 
 /// Lay already-sorted flat rows out as exchange sections followed by their members.
@@ -525,6 +417,14 @@ pub(super) fn flat_lines(
     // One heading plus every member, so the exact final length is known up front.
     let mut lines = Vec::with_capacity(rows.len() + sections.len());
     for (venue, members) in sections {
+        let member_rows: Vec<&CoreStatusRow> = members
+            .iter()
+            .filter_map(|index| rows.get(*index))
+            .collect();
+        // The caption count is the partition size. A missing index must not shrink it: the
+        // heading was built to name every member, and `section_row` no longer overwrites this.
+        let mut aggregate = section_aggregate(&member_rows);
+        aggregate.cores = members.len();
         lines.push(FlatLine::Section(FlatSection {
             // Through the shared bucketing rule rather than re-deciding here what "unidentified"
             // means, so the heading and the partition it heads cannot drift apart.
@@ -534,6 +434,7 @@ pub(super) fn flat_lines(
             // brand is the same whichever member the partition handed back.
             brand: venue.and_then(CoreVenue::brand),
             members: members.len(),
+            aggregate,
         }));
         lines.extend(members.into_iter().map(FlatLine::Core));
     }

@@ -9,13 +9,14 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeVariant, MoonButton, MoonColorPicker, MoonColorPickerState, MoonInput,
-    MoonInputEvent, MoonInputState, MoonPalette, MoonTooltipView, StyledExt, h_flex, rgba_from,
-    v_flex,
+    MoonAlert, MoonBadge, MoonBadgeVariant, MoonButton, MoonColorPickerState, MoonDisclosure,
+    MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
-use super::{SettingsView, separator};
+use std::rc::Rc;
+
+use super::SettingsView;
 use crate::{Backend, design};
 use moon_core::config::BadgeEntry;
 
@@ -245,11 +246,19 @@ impl SettingsView {
     }
 
     /// Render one badge editor card.
+    /// Render one badge row of the table.
     ///
-    /// The row contains ordinal, name, active state, code, optional short code, color, preview,
-    /// outline controls with optional long/short colors, and delete action.
-    fn badge_row(&self, cx: &Context<Self>, idx: usize, row: &BadgeRowEd) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
+    /// Columns: [ordinal, expert only], shown, name, code, short code (or the button that adds
+    /// one), colour, outline, a preview, delete. With the outline on, its long and short colours
+    /// take a second line under the row.
+    fn badge_row(
+        &self,
+        cx: &Context<Self>,
+        idx: usize,
+        row: &BadgeRowEd,
+        wrapped: bool,
+    ) -> AnyElement {
+        let expert = self.badges_ui.expert_open;
         let (active, distinguish, outline, code, color) = {
             let b = self.backend.read(cx);
             let is_light = b
@@ -273,201 +282,507 @@ impl SettingsView {
                 .unwrap_or((true, false, false, "UNK".to_string(), [0x97, 0x92, 0x8A]))
         };
         let bcol = design::rgb_to_u32(color);
-
-        let active_chk = self
-            .draft_checkbox(
-                cx,
-                SharedString::from(format!("badge-active-{idx}")),
-                active,
-                move |p, v| {
-                    if let Some(e) = p.badges.entries.get_mut(idx)
-                        && e.active != v
-                    {
-                        e.active = v;
-                        return true;
-                    }
-                    false
-                },
-            )
-            .label(t!("badges.col_active").to_string());
-
-        let distinguish_chk = self
-            .draft_checkbox(
-                cx,
-                SharedString::from(format!("badge-dist-{idx}")),
-                distinguish,
-                move |p, v| {
-                    if let Some(e) = p.badges.entries.get_mut(idx)
-                        && e.distinguish_dir != v
-                    {
-                        e.distinguish_dir = v;
-                        return true;
-                    }
-                    false
-                },
-            )
-            .label(t!("badges.distinguish").to_string());
-
-        let outline_chk = self
-            .draft_checkbox(
-                cx,
-                SharedString::from(format!("badge-outline-{idx}")),
-                outline,
-                move |p, v| {
-                    if let Some(e) = p.badges.entries.get_mut(idx)
-                        && e.outline != v
-                    {
-                        e.outline = v;
-                        return true;
-                    }
-                    false
-                },
-            )
-            .label(t!("badges.use_outline").to_string());
-
-        // Keep everything on one row. Color pickers use `flex_none` at their natural 128px width
-        // so they do not overlap the next badge. Outline colors appear to the right as L for long
-        // and S for short when the outline checkbox is enabled.
-        let cap = |t: &str| {
-            div()
-                .flex_none()
-                .text_color(rgba_from(p.text_soft, 1.0))
-                .child(t.to_string())
+        let set_flag = move |get: fn(&mut BadgeEntry) -> &mut bool, v: bool| {
+            move |p: &mut moon_core::config::AppConfig, _: bool| {
+                if let Some(e) = p.badges.entries.get_mut(idx)
+                    && *get(e) != v
+                {
+                    *get(e) = v;
+                    return true;
+                }
+                false
+            }
         };
-        // Explain cryptic row fields with tooltips because Badges has no column header.
-        let tip = |id: &str, key: &'static str, el: gpui::Div| {
-            el.id(SharedString::from(format!("{id}-{idx}")))
-                .tooltip(move |_w, cx| {
-                    cx.new(|_| MoonTooltipView::new(t!(key).to_string()).max_width(320.0))
-                        .into()
-                })
+        let active_chk = self.draft_checkbox(
+            cx,
+            SharedString::from(format!("badge-active-{idx}")),
+            active,
+            move |p, v| {
+                if let Some(e) = p.badges.entries.get_mut(idx)
+                    && e.active != v
+                {
+                    e.active = v;
+                    return true;
+                }
+                false
+            },
+        );
+        let outline_chk = self.draft_checkbox(
+            cx,
+            SharedString::from(format!("badge-outline-{idx}")),
+            outline,
+            move |p, v| {
+                if let Some(e) = p.badges.entries.get_mut(idx)
+                    && e.outline != v
+                {
+                    e.outline = v;
+                    return true;
+                }
+                false
+            },
+        );
+        // A separate short code is an opt-in: "+ separate" turns it on, the cross turns it off.
+        let flip_short = move |on: bool| {
+            let apply = set_flag(|e| &mut e.distinguish_dir, on);
+            cx.listener(move |this: &mut SettingsView, _: &ClickEvent, _, cx| {
+                let changed = this.backend.update(cx, |b, bcx| {
+                    let changed = b.preview.as_mut().is_some_and(|p| apply(p, on));
+                    if changed {
+                        bcx.notify();
+                    }
+                    changed
+                });
+                if changed {
+                    cx.notify();
+                }
+            })
         };
-        let row_el = h_flex()
-            .gap(px(6.0))
-            .items_center()
-            .child(
-                tip(
-                    "badge-ord-tip",
-                    "badges.ordinal_tip",
-                    div().flex_none().w(px(42.0)),
-                )
+        let short = if distinguish {
+            h_flex()
+                .gap(design::ui_px(cx, 4.0))
+                .items_center()
                 .child(
-                    MoonInput::new(SharedString::from(format!("badge-ord-{idx}")))
-                        .state(&row.ordinal)
-                        .size(design::INPUT_SIZE)
-                        .mono(true),
-                ),
-            )
-            .child(
-                div().flex_none().w(px(120.0)).child(
-                    MoonInput::new(SharedString::from(format!("badge-name-{idx}")))
-                        .state(&row.name)
-                        .size(design::INPUT_SIZE)
-                        .mono(true),
-                ),
-            )
-            .child(active_chk)
-            .child(
-                tip(
-                    "badge-code-tip",
-                    "badges.code_tip",
-                    div().flex_none().w(px(44.0)),
-                )
-                .child(
-                    MoonInput::new(SharedString::from(format!("badge-code-{idx}")))
-                        .state(&row.code)
-                        .size(design::INPUT_SIZE)
-                        .mono(true),
-                ),
-            )
-            .child(distinguish_chk)
-            .when(distinguish, |el| {
-                el.child(
-                    tip(
-                        "badge-codeshort-tip",
-                        "badges.code_short_tip",
-                        div().flex_none().w(px(44.0)),
-                    )
-                    .child(
+                    div().w(design::ui_px(cx, BADGE_COLS.code)).child(
                         MoonInput::new(SharedString::from(format!("badge-codeshort-{idx}")))
                             .state(&row.code_short)
                             .size(design::INPUT_SIZE)
                             .mono(true),
                     ),
                 )
-            })
-            .child(
-                div()
-                    .flex_none()
-                    .child(MoonColorPicker::new(&row.color).colors(design::picker_palette())),
+                .child(
+                    MoonButton::new(SharedString::from(format!("badge-codeshort-off-{idx}")))
+                        .ghost()
+                        .width(22.0)
+                        .label("\u{00d7}")
+                        .on_click(flip_short(false))
+                        .render(),
+                )
+                .into_any_element()
+        } else {
+            MoonButton::new(SharedString::from(format!("badge-codeshort-on-{idx}")))
+                .ghost()
+                .size(design::CONTROL_TIER)
+                .label(t!("badges.short_separate").to_string())
+                .on_click(flip_short(true))
+                .render()
+                .into_any_element()
+        };
+        let outline_colors = outline.then(|| {
+            (
+                super::common::swatch_picker(&row.outline_long).into_any_element(),
+                super::common::swatch_picker(&row.outline_short).into_any_element(),
             )
-            .child(
-                div().flex_none().w(px(42.0)).flex().justify_center().child(
-                    MoonBadge::new(code)
-                        .size(moon_ui::MoonSize::Xs.into())
-                        .variant(MoonBadgeVariant::Soft)
-                        .bg_color(bcol)
-                        .text_color(bcol)
-                        .mono(true),
-                ),
-            )
-            .child(outline_chk)
-            .when(outline, |el| {
-                el.child(cap("L"))
-                    .child(div().flex_none().child(
-                        MoonColorPicker::new(&row.outline_long).colors(design::picker_palette()),
-                    ))
-                    .child(cap("S"))
-                    .child(div().flex_none().child(
-                        MoonColorPicker::new(&row.outline_short).colors(design::picker_palette()),
-                    ))
-            })
-            .child(
-                MoonButton::new(SharedString::from(format!("badge-del-{idx}")))
-                    .danger()
-                    .width(24.0)
-                    .label("x")
-                    .on_click(cx.listener(move |this, _, w, cx| this.delete_badge(idx, w, cx)))
-                    .render(),
-            );
-
-        // Omitting `w_full` makes the card fit its contents, so enabling outline colors widens
-        // its border. The parent list keeps cards left-aligned.
-        div()
-            .px_1()
-            .py_0p5()
-            .rounded(design::r_button(cx))
-            .border_1()
-            .border_color(rgba_from(p.border, 1.0))
-            .child(row_el)
+        });
+        let input = |id: String, state: &Entity<moon_ui::MoonInputState>| {
+            MoonInput::new(SharedString::from(id))
+                .state(state)
+                .size(design::INPUT_SIZE)
+                .mono(true)
+                .into_any_element()
+        };
+        let cells = BadgeCells {
+            ordinal: expert.then(|| input(format!("badge-ord-{idx}"), &row.ordinal)),
+            active: active_chk.into_any_element(),
+            name: input(format!("badge-name-{idx}"), &row.name),
+            code: input(format!("badge-code-{idx}"), &row.code),
+            short,
+            color: super::common::swatch_picker(&row.color).into_any_element(),
+            outline: outline_chk.into_any_element(),
+            look: MoonBadge::new(code)
+                .size(moon_ui::MoonSize::Xs.into())
+                .variant(MoonBadgeVariant::Soft)
+                .bg_color(bcol)
+                .text_color(bcol)
+                .mono(true)
+                .into_any_element(),
+            delete: MoonButton::new(SharedString::from(format!("badge-del-{idx}")))
+                .ghost()
+                .width(24.0)
+                .label("\u{2715}")
+                .tooltip(t!("badges.delete").to_string())
+                .on_click(cx.listener(move |this, _, w, cx| this.delete_badge(idx, w, cx)))
+                .render()
+                .into_any_element(),
+        };
+        badge_row_el(idx, cells, outline_colors, wrapped, cx)
     }
 
-    /// Render the Badges tab as one card per kind followed by the Add Type button.
-    pub(super) fn badges_tab(&self, cx: &Context<Self>) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
-        let mut col = v_flex()
-            .w_full()
-            .items_start()
-            .gap_1()
-            .child(div().font_bold().child(t!("badges.title").to_string()))
-            .child(
-                div()
-                    .text_size(design::t_caption(cx))
-                    .text_color(rgba_from(p.text_soft, 1.0))
-                    .child(t!("badges.theme_hint").to_string()),
-            );
+    /// Render the Badges page body: the table, Add, and the expert disclosure.
+    pub(super) fn badges_tab(&self, body_width: f32, cx: &Context<Self>) -> AnyElement {
+        let expert = self.badges_ui.expert_open;
+        let content_w = body_width - 2.0 * design::ui_value(cx, super::render::BODY_PAD);
+        let wrapped = badges_wrapped(content_w, expert, cx);
         // Use `row.idx`, the position in `entries`, rather than enumerating visible rows. The
         // hidden `Unknown` entry can make the visible list shorter and would shift edits.
-        for row in self.badges.rows.iter() {
-            col = col.child(self.badge_row(cx, row.idx, row));
-        }
-        col.child(separator(p, cx)).child(
-            div().mt_1().child(
-                MoonButton::new("badge-add")
-                    .label(t!("badges.add").to_string())
-                    .on_click(cx.listener(|this, _, w, cx| this.add_badge(w, cx)))
-                    .render(),
-            ),
+        let rows = self
+            .badges
+            .rows
+            .iter()
+            .map(|row| self.badge_row(cx, row.idx, row, wrapped))
+            .collect();
+        let add = MoonButton::new("badge-add")
+            .variant(moon_ui::MoonButtonVariant::Neutral)
+            .label(format!("+ {}", t!("badges.add")))
+            .on_click(cx.listener(|this, _, w, cx| this.add_badge(w, cx)))
+            .render()
+            .into_any_element();
+        let this = cx.entity().downgrade();
+        let toggle: super::common::Action = Rc::new(move |_, cx| {
+            let _ = this.update(cx, |view, cx| {
+                view.badges_ui.expert_open = !view.badges_ui.expert_open;
+                cx.notify();
+            });
+        });
+        badges_body(
+            content_w,
+            badges_table(expert, wrapped, rows, cx),
+            add,
+            expert,
+            toggle,
+            cx,
         )
     }
 }
+
+/// Badge table column widths in pixels.
+struct BadgeCols {
+    ordinal: f32,
+    active: f32,
+    name: f32,
+    code: f32,
+    short: f32,
+    color: f32,
+    outline: f32,
+    look: f32,
+    delete: f32,
+}
+
+/// The MoonUI colour picker's trigger is a fixed 128 px, so the colour column is too; a body
+/// narrower than the columns wraps each row into two lines rather than squeezing them.
+const BADGE_COLS: BadgeCols = BadgeCols {
+    ordinal: 44.0,
+    active: 34.0,
+    name: 140.0,
+    code: 52.0,
+    short: 110.0,
+    color: 128.0,
+    outline: 64.0,
+    look: 48.0,
+    delete: 28.0,
+};
+
+/// Gap between badge table columns, in pixels.
+const BADGE_GAP: f32 = 8.0;
+
+/// Left indent of a row's outline colours: under the colour column.
+fn badge_outline_indent(expert: bool) -> f32 {
+    let c = &BADGE_COLS;
+    let before = [c.active, c.name, c.code, c.short];
+    let ord = if expert { c.ordinal + BADGE_GAP } else { 0.0 };
+    ord + before.iter().map(|w| w + BADGE_GAP).sum::<f32>()
+}
+
+/// Horizontal room the table's box takes beyond its columns: padding and border.
+const BADGE_BOX_PAD: f32 = 26.0;
+
+/// Whether rows wrap into two lines: the one-line table, at the UI zoom, is wider than the
+/// body's content.
+///
+/// Args:
+///     content_w: The body's content width in logical pixels.
+///     expert: Whether the ordinal column shows.
+///     cx: Application context for the UI zoom.
+pub(super) fn badges_wrapped(content_w: f32, expert: bool, cx: &App) -> bool {
+    wraps_at(content_w, expert, design::ui_value(cx, 1.0))
+}
+
+/// [`badges_wrapped`] at an explicit zoom factor.
+fn wraps_at(content_w: f32, expert: bool, zoom: f32) -> bool {
+    content_w < (badge_table_w(expert) + BADGE_BOX_PAD) * zoom + picker_excess(zoom)
+}
+
+/// The colour picker's trigger stays 128 px at every zoom: how much it outgrows its scaled
+/// column below 100%.
+fn picker_excess(zoom: f32) -> f32 {
+    (BADGE_COLS.color - BADGE_COLS.color * zoom).max(0.0)
+}
+
+/// The colour column: scaled with the zoom, never narrower than the picker's fixed trigger.
+fn color_cell_w(cx: &App) -> Pixels {
+    px(design::ui_value(cx, BADGE_COLS.color).max(BADGE_COLS.color))
+}
+
+/// A badge row's cells, built by the page; [`badge_row_el`] places them.
+pub(super) struct BadgeCells {
+    pub(super) ordinal: Option<AnyElement>,
+    pub(super) active: AnyElement,
+    pub(super) name: AnyElement,
+    pub(super) code: AnyElement,
+    pub(super) short: AnyElement,
+    pub(super) color: AnyElement,
+    pub(super) outline: AnyElement,
+    pub(super) look: AnyElement,
+    pub(super) delete: AnyElement,
+}
+
+/// One badge row: one line when the table fits, else what the badge is over how it looks.
+///
+/// Args:
+///     idx: The entry's position, for the row's selector.
+///     cells: The row's controls.
+///     outline_colors: The long and short outline pickers when the outline is on.
+///     wrapped: Whether the row takes two lines.
+///     cx: Application context for theme.
+pub(super) fn badge_row_el(
+    idx: usize,
+    cells: BadgeCells,
+    outline_colors: Option<(AnyElement, AnyElement)>,
+    wrapped: bool,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let c = &BADGE_COLS;
+    let expert = cells.ordinal.is_some();
+    let cell = |w: f32, el: AnyElement| div().w(design::ui_px(cx, w)).flex_none().child(el);
+    let line = || h_flex().gap(design::ui_px(cx, BADGE_GAP)).items_center();
+    let ordinal = cells.ordinal.map(|el| cell(c.ordinal, el));
+    let one = [
+        cell(c.active, cells.active),
+        cell(c.name, cells.name),
+        cell(c.code, cells.code),
+        cell(c.short, cells.short),
+    ];
+    let two = [
+        div().w(color_cell_w(cx)).flex_none().child(cells.color),
+        cell(c.outline, cells.outline),
+        cell(c.look, cells.look).flex().justify_center(),
+        cell(c.delete, cells.delete),
+    ];
+    let lines = if wrapped {
+        v_flex()
+            .gap(design::ui_px(cx, 4.0))
+            .child(line().children(one))
+            .child(line().children(two).children(ordinal))
+            .into_any_element()
+    } else {
+        line()
+            .children(ordinal)
+            .children(one)
+            .children(two)
+            .into_any_element()
+    };
+    // Under the colour column: the line's start when wrapped, past line one's columns when not.
+    let indent = if wrapped {
+        0.0
+    } else {
+        badge_outline_indent(expert)
+    };
+    let soft = rgba_from(p.text_soft, 1.0);
+    let cap = |text: &str| div().flex_none().text_color(soft).child(text.to_string());
+    v_flex()
+        .debug_selector(move || format!("badge-row-{idx}"))
+        .py(design::ui_px(cx, 4.0))
+        .border_t_1()
+        .border_color(rgba_from(p.border, 1.0))
+        .child(lines)
+        .children(outline_colors.map(|(long, short)| {
+            h_flex()
+                .pt(design::ui_px(cx, 4.0))
+                .pl(design::ui_px(cx, indent))
+                .gap(design::ui_px(cx, 6.0))
+                .items_center()
+                .child(cap("L"))
+                .child(long)
+                .child(cap("S"))
+                .child(short)
+        }))
+        .into_any_element()
+}
+
+/// The table's full width for the visible columns, in pixels.
+fn badge_table_w(expert: bool) -> f32 {
+    let c = &BADGE_COLS;
+    let cols = [
+        c.active, c.name, c.code, c.short, c.color, c.outline, c.look, c.delete,
+    ];
+    let ord = if expert { c.ordinal + BADGE_GAP } else { 0.0 };
+    ord + cols.iter().sum::<f32>() + BADGE_GAP * (cols.len() - 1) as f32
+}
+
+/// The badge table: column headers over the rows. Wrapped, the header names line one only.
+fn badges_table(expert: bool, wrapped: bool, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let head = |w: f32, key: &'static str| {
+        div()
+            .w(design::ui_px(cx, w))
+            .flex_none()
+            .truncate()
+            .child(t!(key).to_string())
+    };
+    let c = &BADGE_COLS;
+    let header = h_flex()
+        .gap(design::ui_px(cx, BADGE_GAP))
+        .pb(design::ui_px(cx, 4.0))
+        .text_size(design::t_caption(cx))
+        .text_color(rgba_from(p.text_muted, 1.0))
+        .when(expert && !wrapped, |el| {
+            el.child(div().w(design::ui_px(cx, c.ordinal)).flex_none().child("#"))
+        })
+        .child(head(c.active, "badges.col.active"))
+        .child(head(c.name, "badges.col.type"))
+        .child(head(c.code, "badges.col.code"))
+        .child(head(c.short, "badges.col.short_code"))
+        .when(!wrapped, |el| {
+            el.child(
+                div()
+                    .w(color_cell_w(cx))
+                    .flex_none()
+                    .truncate()
+                    .child(t!("badges.col.color").to_string()),
+            )
+            .child(head(c.outline, "badges.col.outline"))
+            .child(head(c.look, "badges.col.look"))
+            .child(div().w(design::ui_px(cx, c.delete)).flex_none())
+        });
+    div()
+        .w_full()
+        .min_w_0()
+        .debug_selector(|| "badges-table".into())
+        .child(
+            super::general::page_box(Vec::new(), cx)
+                .debug_selector(|| "badges-table-box".into())
+                // The card takes the page's width; the table inside keeps its own column widths.
+                .w_full()
+                .py(design::ui_px(cx, 8.0))
+                .child(header)
+                .children(rows),
+        )
+        .into_any_element()
+}
+
+/// The Badges page body.
+///
+/// Args:
+///     content_w: The body's content width in logical pixels.
+///     table: The badge table.
+///     add: The Add button.
+///     expert_open: Whether the expert disclosure is unfolded.
+///     toggle: Folds or unfolds it.
+///     cx: Application context for theme and scale.
+fn badges_body(
+    content_w: f32,
+    table: AnyElement,
+    add: AnyElement,
+    expert_open: bool,
+    toggle: super::common::Action,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let on_caret = toggle.clone();
+    let title = t!("badges.expert.title").to_string();
+    let (title_w, hint_w) = expert_widths(content_w, &title, cx);
+    let disclosure = h_flex()
+        .id("badges-expert")
+        .debug_selector(|| "badges-expert".into())
+        .w_full()
+        .flex_wrap()
+        .gap(design::ui_px(cx, 6.0))
+        .items_center()
+        .px(design::ui_px(cx, EXPERT_PAD_X))
+        .py(design::ui_px(cx, 6.0))
+        .border_1()
+        .border_color(rgba_from(p.border, 1.0))
+        .rounded(design::r_container(cx))
+        .cursor_pointer()
+        .on_click(move |_, window, cx| toggle(window, cx))
+        .child(
+            MoonDisclosure::button("badges-expert-caret", expert_open)
+                .size(design::DISCLOSURE_GLYPH)
+                .box_size(design::DISCLOSURE_BOX)
+                .on_toggle(move |_, window, cx| on_caret(window, cx)),
+        )
+        .child(
+            super::common::prose("badges-expert-title".into(), title, false, cx)
+                .flex_none()
+                .w(px(title_w))
+                .max_w_full(),
+        )
+        .child(
+            super::common::prose(
+                "badges-expert-hint".into(),
+                t!("badges.expert.hint").to_string(),
+                false,
+                cx,
+            )
+            .flex_none()
+            .w(px(hint_w))
+            .text_color(rgba_from(p.text_muted, 1.0)),
+        );
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap(design::ui_px(cx, 12.0))
+        .child(table)
+        .child(div().debug_selector(|| "badges-add".into()).child(add))
+        .child(disclosure)
+        .when(expert_open, |el| {
+            el.child(
+                div().debug_selector(|| "badges-expert-warn".into()).child(
+                    MoonAlert::warning("badges-expert-warn", t!("badges.expert.warn").to_string())
+                        .render(),
+                ),
+            )
+        })
+        .into_any_element()
+}
+
+/// Horizontal padding of the expert disclosure row, unscaled.
+const EXPERT_PAD_X: f32 = 10.0;
+
+/// Widths of the expert disclosure's title and caption on a body `content_w` wide.
+///
+/// Both are explicit: GPUI paints a text with the lines of its LAST measure, and a content-sized
+/// flex item is last measured at its min-content width, which stacked the caption one word per
+/// line on a full-width card. The caption takes the rest of the row beside the title; a row too
+/// narrow for its longest word wraps it under the title at the full row width instead.
+///
+/// Args:
+///     content_w: The body's content width in logical pixels.
+///     title: The disclosure title.
+///     cx: Application context for scale and text measures.
+///
+/// Returns:
+///     The title's and the caption's widths in logical pixels.
+fn expert_widths(content_w: f32, title: &str, cx: &App) -> (f32, f32) {
+    let title_w = design::ui_body_text_width(cx, title, 400.0) + 2.0;
+    // The row's padding, border and the caret with the two gaps beside it.
+    let row_w = (content_w - 2.0 * design::ui_value(cx, EXPERT_PAD_X) - 2.0).max(0.0);
+    let caret = design::ui_value(cx, design::DISCLOSURE_BOX + 2.0 * 6.0);
+    let beside = row_w - caret - title_w;
+    let floor = super::common::longest_word_w(&t!("badges.expert.hint"), false, cx);
+    let hint_w = if beside >= floor { beside } else { row_w };
+    (title_w.min(row_w), hint_w)
+}
+
+impl SettingsView {
+    /// The Detect badges page, Copy and Paste in its header.
+    pub(super) fn badges_page(
+        &self,
+        body_width: f32,
+        cx: &Context<Self>,
+    ) -> super::frame::PageParts {
+        let body = self.badges_tab(body_width, cx);
+        self.page_parts(super::Tab::Badges, body, self.share_actions(cx), cx)
+    }
+}
+
+/// UI state of the Badges page that the draft does not hold. Branch-owned: fields are added here,
+/// never on `SettingsView`.
+#[derive(Default)]
+pub(super) struct BadgesUi {
+    /// Whether the expert disclosure (type ordinals) is unfolded. Per Settings session.
+    pub(super) expert_open: bool,
+}
+
+#[cfg(test)]
+mod tests;

@@ -4,7 +4,6 @@ _version: 1
 
 telegram_core.section: "Telegram no núcleo"
 
-telegram_core.intro: "Controle o leitor de Telegram embutido no núcleo selecionado. O estado pertence ao núcleo, não a este terminal."
 
 telegram_core.core_pick: "Núcleo"
 
@@ -38,7 +37,6 @@ telegram_core.disconnected: "O núcleo não está conectado."
 
 telegram_core.no_snapshot: "Sem snapshot de estado."
 
-telegram_core.proxy_section: "Proxy"
 
 telegram_core.proxy_kind_none: "Sem proxy"
 
@@ -56,7 +54,6 @@ telegram_core.proxy_password: "Senha"
 
 telegram_core.proxy_secret: "Segredo"
 
-telegram_core.proxy_save: "Salvar proxy"
 
 telegram_core.proxy_secret_hint: "O núcleo nunca devolve uma senha ou segredo salvos, então digite de novo. Deixar vazio apaga, em vez de manter o valor antigo."
 
@@ -73,7 +70,6 @@ telegram_core.phone_hint: "Formato internacional, por exemplo +5511912345678."
 
 telegram_core.phone_send: "Enviar número"
 
-telegram_core.login_qr: "Entrar por QR"
 
 telegram_core.login_phone: "Usar um número de telefone"
 
@@ -184,3 +180,17 @@ telegram_core.code_kind.fragment: "Fragment: %{url}"
 telegram_core.code_kind.unsupported: "Este método de entrega não é suportado."
 
 telegram_core.code_kind.other: "%{kind}"
+
+# Settings redesign (phases 3-5)
+tgcore.steps.phone: "Número de telefone"
+tgcore.steps.code: "Código do Telegram"
+tgcore.steps.password: "Senha na nuvem"
+tgcore.steps.done: "Conectado"
+tgcore.steps.email: "E-mail de acesso"
+tgcore.steps.registration: "A conta não está registrada"
+tgcore.steps.premium_required: "É preciso Telegram Premium"
+tgcore.steps.waiting: "Aguardando o núcleo…"
+tgcore.steps.unknown: "Etapa de login desconhecida"
+tgcore.qr_login: "Entrar com QR code"
+tgcore.proxy.title: "Proxy"
+tgcore.proxy.send: "Enviar ao núcleo"

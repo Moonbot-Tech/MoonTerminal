@@ -10,12 +10,9 @@ security.mismatch: "Las contraseñas no coinciden"
 
 # --- Launch gate ---
 security.launch: "Contraseña al iniciar"
-security.launch_hint: "Un pestillo local que se pide en cada inicio. Cualquier longitud. NO cifra las claves de los núcleos: quien acceda a los archivos las lee igual."
 
 # --- servers.enc encryption password ---
 security.file: "Contraseña de cifrado de servers.enc"
-security.file_hint: "Se pide solo donde el archivo no se abre con la clave de la máquina: en una máquina nueva o tras perder el llavero del sistema. Una vez introducida correctamente se recuerda para esta máquina."
-security.file_warning: "Esta contraseña no se puede recuperar. Perderla junto con la clave de la máquina significa perder los núcleos."
 security.rule: "Al menos %{min} caracteres y dos clases de caracteres distintas."
 security.bits: "≈%{bits} bits"
 
@@ -35,8 +32,6 @@ security.issue.low_entropy: "Demasiado predecible: hágala más larga y variada"
 
 # --- Machine key slots ---
 security.machines: "Máquinas con acceso: %{used} de %{max}"
-security.machines_unknown: "Máquinas con acceso: — de %{max}"
-security.forget_machines: "Olvidar las demás"
 security.machines_forgotten: "Acceso revocado para las demás máquinas"
 
 # --- Apply results ---
@@ -64,3 +59,19 @@ login.throttled: "La entrada se ralentiza tras varios fallos"
 login.err.empty: "Introduzca una contraseña"
 login.err.backend: "No se pudo comprobar la contraseña; consulte el registro"
 login.err.wrong: "Contraseña incorrecta"
+
+# Settings redesign (phases 3-5)
+security.machines.title: "Equipos con acceso"
+security.machines.label: "Abren el archivo sin contraseña"
+security.machines.count: "%{n} de %{max}"
+security.machines.keep_only: "Dejar solo este…"
+security.machines.keep_only_off: "Solo este equipo tiene acceso; no hay nada que revocar."
+security.machines.hint: "La revocación se guarda al instante."
+security.machines.confirm_title: "¿Dejar el acceso solo a este equipo?"
+security.machines.confirm_body: "Los demás equipos ya no abrirán el archivo de conexiones sin contraseña. El cambio se guarda al instante."
+security.machines.confirm_btn: "Dejar solo este"
+security.unrecoverable: "No se puede recuperar. Si olvidas la contraseña en un equipo nuevo, tendrás que volver a introducir las claves de los núcleos."
+security.launch.title: "Contraseña al iniciar"
+security.launch.hint: "Se pide en cada inicio. No cifra las claves de los núcleos."
+security.file.title: "Cifrado del archivo de conexiones"
+security.file.hint: "Solo hace falta en un equipo donde el archivo no se abre solo."

@@ -160,6 +160,12 @@ pub struct AnalyticsView {
     data_range: (i64, i64),
     /// Whether `data` predates the latest committed report generation.
     data_dirty: bool,
+    /// Whether the Summary on screen is a snapshot kept by a writer-driven catch-up whose
+    /// correction is still scheduled; drives the catch-up banner. Never derived from
+    /// `data_dirty`, which undated/cores metadata failures also raise.
+    summary_catching_up: bool,
+    /// Unix seconds at which the Summary on screen was published.
+    data_as_of: Option<i64>,
     /// Cores from the replica (for the combo box) plus multi-selection (empty = all), using
     /// the same controls as Orders and Report.
     cores: Vec<(u64, String)>,
@@ -269,20 +275,15 @@ pub struct AnalyticsView {
     busy_since: Option<std::time::Instant>,
     /// Request sequence number used to discard stale results.
     seq: u64,
-    /// Hovered bucket of the "Daily profit" chart — popup of that DAY's per-core values.
-    pub(super) hover_daily_bucket: Option<usize>,
-    /// Hovered bucket of the cumulative chart — popup of the per-core RUNNING TOTALS. Its
-    /// own state: one shared field would pop both charts open at once.
-    pub(super) hover_cum_bucket: Option<usize>,
-    /// Hovered bar of the "by strategy type" chart (single-day periods only) — popup of the
-    /// cores behind that type.
-    pub(super) hover_kind: Option<usize>,
+    /// Bucket of the combined profit chart the crosshair and popup point at.
+    pub(super) hover_profit_bucket: Option<usize>,
     /// Delayed dismissal shared by chart buckets and their scrollable popup.
     summary_popup_hover: summary::PopupHover,
-    /// Whether the Summary's per-core card shows every ranked core instead of the compact
-    /// leaders/outsiders overview. A display lens, persisted as `layout.analytics_cores_show_all`
-    /// so the choice survives a restart.
-    pub(super) show_all_core_ranks: bool,
+    /// Display-only choices of the Summary tab (chart lines, trade side, ranking filter/fold).
+    pub(in crate::analytics) summary_ui: summary::SummaryUi,
+    /// Whether the Summary compares against the previous equal-length period; mirrors
+    /// [`AnalyticsSessionState::compare_prev`], which owns its lifetime.
+    pub(super) compare_prev: bool,
     /// Strategies tab: selected per-core row key (`strategyid@core_uid`), plus its name and
     /// details. Legacy bare strategy IDs remain parseable.
     pub(super) sel_strategy: Option<(String, String)>,

@@ -276,9 +276,13 @@ impl SettingsView {
         row.into_any_element()
     }
     /// Stack the editor and phone under the bot menu and reuse the existing save path.
+    ///
+    /// `card_w` is the card's outer width on the page; the preview bubble's width is computed
+    /// from it rather than sized by its content.
     pub(in crate::settings) fn message_layout_box(
         &self,
         side: ChatsOf,
+        card_w: f32,
         cx: &Context<Self>,
     ) -> AnyElement {
         let p = MoonPalette::active(cx);
@@ -333,6 +337,7 @@ impl SettingsView {
         body = body.child(preview::phone(
             content,
             self.layout_ed(side).preview.clone(),
+            card_w,
         ));
         let base = match side {
             ChatsOf::Terminal => Some(
@@ -382,9 +387,6 @@ impl SettingsView {
                         ),
                     ),
             )
-            .when(side == ChatsOf::Station, |footer| {
-                footer.child(self.server_access_actions("tgl", cx))
-            })
             .when(side == ChatsOf::Terminal, |footer| {
                 footer.child(
                     div()
@@ -393,7 +395,10 @@ impl SettingsView {
                 )
             });
         MoonGroupBox::new(control_id(side, "box"))
-            .title(t!("telegram.layout.title").to_string())
+            .child(crate::settings::common::group_title(
+                t!("telegram.layout.title").to_string(),
+                cx,
+            ))
             .padding(14.0)
             .child(body.child(footer))
             .into_any_element()

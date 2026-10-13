@@ -10,12 +10,9 @@ security.mismatch: "Mật khẩu không khớp"
 
 # --- Launch gate ---
 security.launch: "Mật khẩu khi mở"
-security.launch_hint: "Chốt cục bộ, hỏi mỗi lần khởi động. Độ dài tùy ý. Nó KHÔNG mã hóa khóa core — ai có quyền đọc file vẫn đọc được."
 
 # --- servers.enc encryption password ---
 security.file: "Mật khẩu mã hóa servers.enc"
-security.file_hint: "Chỉ hỏi khi file không mở được bằng khóa máy: máy mới, hoặc mất kho khóa của hệ điều hành. Nhập đúng một lần thì máy này nhớ và không hỏi lại."
-security.file_warning: "Không khôi phục được mật khẩu này. Mất nó cùng khóa máy là mất các core."
 security.rule: "Ít nhất %{min} ký tự và hai lớp ký tự khác nhau."
 security.bits: "≈%{bits} bit"
 
@@ -35,8 +32,6 @@ security.issue.low_entropy: "Quá dễ đoán — hãy dài hơn và đa dạng 
 
 # --- Machine key slots ---
 security.machines: "Máy có quyền: %{used} / %{max}"
-security.machines_unknown: "Máy có quyền: — / %{max}"
-security.forget_machines: "Quên các máy khác"
 security.machines_forgotten: "Đã thu hồi quyền của các máy khác"
 
 # --- Apply results ---
@@ -64,3 +59,19 @@ login.throttled: "Nhập chậm lại sau nhiều lần sai"
 login.err.empty: "Nhập mật khẩu"
 login.err.backend: "Không kiểm tra được mật khẩu; xem log"
 login.err.wrong: "Sai mật khẩu"
+
+# Settings redesign (phases 3-5)
+security.machines.title: "Máy tính có quyền truy cập"
+security.machines.label: "Mở tệp không cần mật khẩu"
+security.machines.count: "%{n} / %{max}"
+security.machines.keep_only: "Chỉ giữ máy này…"
+security.machines.keep_only_off: "Chỉ máy tính này có quyền truy cập; không có gì để thu hồi."
+security.machines.hint: "Việc thu hồi được lưu ngay."
+security.machines.confirm_title: "Chỉ giữ quyền truy cập cho máy này?"
+security.machines.confirm_body: "Các máy khác sẽ không mở được tệp kết nối khi không có mật khẩu. Thay đổi được lưu ngay."
+security.machines.confirm_btn: "Chỉ giữ máy này"
+security.unrecoverable: "Không thể khôi phục. Quên mật khẩu trên máy mới thì phải nhập lại khóa lõi."
+security.launch.title: "Mật khẩu khi khởi động"
+security.launch.hint: "Hỏi mỗi lần khởi động. Không mã hóa khóa lõi."
+security.file.title: "Mã hóa tệp kết nối"
+security.file.hint: "Chỉ cần trên máy mà tệp không tự mở được."

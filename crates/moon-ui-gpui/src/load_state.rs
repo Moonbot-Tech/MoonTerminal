@@ -437,7 +437,7 @@ pub(crate) fn note_el(
 ///
 /// Returns:
 ///     Detail block with a Copy affordance.
-fn fail_detail_el(
+pub(crate) fn fail_detail_el(
     path: SharedString,
     operation: SharedString,
     code: FailCode,

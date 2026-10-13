@@ -10,8 +10,7 @@
 use std::collections::HashMap;
 
 /// Key inside `layout.table_column_widths`'s roster bag. NEVER rename: it is a persisted map key,
-/// and a rename orphans every width a user has already dragged (mirrors `ByIpCol::key`'s
-/// warning in `core_status/by_ip_widths.rs`).
+/// and a rename orphans every width a user has already dragged. The key stays stable.
 pub(super) const WIDTH_KEY: &str = "roster";
 
 /// Default BASE width. Renders within 0.02 px of the old fixed `420.0` at the shipped default
@@ -28,8 +27,7 @@ pub(super) const MIN_BASE_W: f32 = 203.1;
 /// Widest a user may drag the roster, in base units. Renders ~851 px at the shipped default; on a
 /// ~1280 px window that still leaves ~430 px, ~140 px per wallet column — the point past which a
 /// ticker plus an amount stops being readable. A cap is needed at all because nothing else stops
-/// a drag from starving the `flex_1` wallet columns (same argument as
-/// `core_status::by_ip_widths::MAX_COL_W`).
+/// a drag from starving the `flex_1` wallet columns.
 pub(super) const MAX_BASE_W: f32 = 720.0;
 
 /// Resolve the roster's BASE width: `auto`, overridden by a finite stored value clamped to
@@ -39,8 +37,7 @@ pub(super) const MAX_BASE_W: f32 = 720.0;
 /// `self` — it returns the NaN unchanged (it panics only on a NaN or inverted BOUND) — so
 /// clamping would launder a corrupt entry into `design::font_w_px` and on into GPUI layout as a
 /// NaN width. The guard is what stops that, not the clamp. `layout.toml` is hand-editable
-/// untrusted input rather than something only the drag handler ever writes (precedent:
-/// `core_status::by_ip_widths::ByIpWidths::resolved`).
+/// untrusted input rather than something only the drag handler ever writes.
 ///
 /// The user's drag still WINS over the content measurement, and the double-click that removes the
 /// entry drops the column back onto `auto` — which is what makes the content width the "default"

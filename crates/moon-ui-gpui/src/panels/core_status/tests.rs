@@ -6,11 +6,11 @@
 use super::ordering::natural_cmp;
 use super::{CoreStatusMode, mode_ctx_id};
 
-/// `mod.rs:CoreStatusMode::default` must remain By IP; changing it to Flat makes every newly opened
-/// Core Status panel bypass the server overview.
+/// `mode.rs:CoreStatusMode::default` must stay Flat. A fresh panel that opened on Servers would
+/// hide the one-row table the toolbar calls Ядра.
 #[test]
-fn new_core_status_panels_default_to_by_ip() {
-    assert_eq!(CoreStatusMode::default(), CoreStatusMode::ByIp);
+fn new_core_status_panels_default_to_flat() {
+    assert_eq!(CoreStatusMode::default(), CoreStatusMode::Flat);
 }
 
 /// `mod.rs:mode_ctx_id` must preserve the dock/window suffix chosen by its argument. Hard-coding
@@ -23,13 +23,13 @@ fn core_status_mode_contexts_are_distinct_for_dock_and_window() {
     assert_ne!(mode_ctx_id(false), mode_ctx_id(true));
 }
 
-/// `mod.rs:CoreStatusMode::code/from_code` must retain the documented stable vocabulary. Changing
-/// a code mapping or rejecting surrounding whitespace would reopen a persisted Flat or Warnings
-/// panel on By IP after restart.
+/// `mode.rs:CoreStatusMode::code/from_code` must keep the persisted vocabulary. Renaming the
+/// Servers variant's code, or treating `"by-ip"` as unknown, would reopen a stored server view
+/// on the Flat table. An unknown code follows the fresh-panel default, Flat.
 #[test]
 fn core_status_mode_codes_round_trip_and_unknown_codes_fall_back() {
     for (mode, code) in [
-        (CoreStatusMode::ByIp, "by-ip"),
+        (CoreStatusMode::Servers, "by-ip"),
         (CoreStatusMode::Flat, "flat"),
         (CoreStatusMode::Problems, "problems"),
         (CoreStatusMode::Warnings, "warnings"),
@@ -40,8 +40,12 @@ fn core_status_mode_codes_round_trip_and_unknown_codes_fall_back() {
     }
 
     assert_eq!(CoreStatusMode::from_code(" flat "), CoreStatusMode::Flat);
+    assert_eq!(
+        CoreStatusMode::from_code(" by-ip "),
+        CoreStatusMode::Servers
+    );
     for code in ["", "garbage", "tree"] {
-        assert_eq!(CoreStatusMode::from_code(code), CoreStatusMode::ByIp);
+        assert_eq!(CoreStatusMode::from_code(code), CoreStatusMode::Flat);
     }
 }
 

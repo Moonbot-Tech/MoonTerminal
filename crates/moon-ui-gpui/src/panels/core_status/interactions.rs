@@ -12,17 +12,16 @@ use moon_ui::{
     MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
 
-use super::by_ip_header::ByIpDragAnchor;
-use super::by_ip_widths::{ByIpCol, MAX_COL_W, MIN_COL_W};
-use super::model::ServerKey;
+use super::health::HealthFilter;
+use super::model::{CoreStatusRow, ServerKey};
 use super::update_menu;
-use super::{ChartWindow, CoreStatusMode, CoreStatusView, ordering, server_view};
+use super::{ChartWindow, CoreStatusMode, CoreStatusView, ordering};
 use crate::design;
 use moon_core::feed::UpdateTarget;
 use moon_core::session::CoreId;
 use rust_i18n::t;
 
-/// Which of the footer's three bulk buttons opened the confirm.
+/// Which of the three bulk buttons opened the confirm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FleetUpdateKind {
     /// Every offerable core in the panel's scope, or in its selection.
@@ -33,7 +32,7 @@ pub(super) enum FleetUpdateKind {
     Named,
 }
 
-/// Exactly what a footer bulk update would enqueue, resolved before the confirm opens.
+/// Exactly what a bulk update would enqueue, resolved before the confirm opens.
 pub(super) struct FleetUpdatePlan {
     /// Cores to enqueue, in on-screen order.
     pub(super) cores: Rc<[CoreId]>,
@@ -41,92 +40,47 @@ pub(super) struct FleetUpdatePlan {
     /// confirm says so.
     pub(super) lanes: usize,
 }
+
+/// Cores a bulk update may command when the mode is Updates: every core in the panel scope.
+///
+/// Other modes return `None` and the caller keeps the on-screen list. Selection and Ctrl+A stay
+/// on [`CoreStatusView::visible_order`], which is empty in Updates, so this scope never becomes
+/// a selection.
+///
+/// Args:
+///     mode: The panel's current presentation.
+///     rows: Unfiltered cores in the panel scope.
+///
+/// Returns:
+///     Every scoped core id in row order, or `None` when the mode is not Updates.
+pub(super) fn updates_scope_ids(
+    mode: CoreStatusMode,
+    rows: &[CoreStatusRow],
+) -> Option<Vec<CoreId>> {
+    if mode == CoreStatusMode::Updates {
+        Some(rows.iter().map(|row| row.id).collect())
+    } else {
+        None
+    }
+}
+
+/// How many scoped cores reported a build behind the fleet's newest.
+///
+/// The same predicate as the version health chip: `version_behind` is set only for a reported
+/// build that is behind.
+///
+/// Args:
+///     rows: Scoped core snapshots.
+///
+/// Returns:
+///     The count.
+pub(super) fn behind_in_scope(rows: &[CoreStatusRow]) -> usize {
+    rows.iter()
+        .filter(|row| row.version_behind.is_some())
+        .count()
+}
+
 impl CoreStatusView {
-    /// Record where a By IP header divider drag began.
-    ///
-    /// Called once per drag, from the handle's `on_drag` constructor, which GPUI runs a single time
-    /// after the drag threshold is crossed. The anchor is in LOGICAL (pre-shrink) width space — see
-    /// [`Self::drag_by_ip_col`] for why that matters.
-    ///
-    /// Args:
-    ///     anchor: The column, the pointer x, and the column's logical width at the grab.
-    ///
-    /// Returns:
-    ///     Nothing; no repaint, because nothing has moved yet.
-    pub(super) fn begin_by_ip_resize(&mut self, anchor: ByIpDragAnchor) {
-        self.by_ip_drag = Some(anchor);
-    }
-
-    /// Apply a live By IP divider drag: the anchored width plus the pointer's travel since the grab.
-    ///
-    /// Deliberately NOT `pointer_x - cell_origin_x`, which is how MoonUI's data table does it. The
-    /// By IP header puts a `flex_1` spacer between IP and CPU, so every column right of it is
-    /// right-anchored: widening one moves its OWN left edge left by the same amount, and the next
-    /// event measures against the moved origin. That loop triples the sensitivity per frame. An
-    /// anchor captured once at the grab is immune to relayout.
-    ///
-    /// The anchor is the LOGICAL width, so on a shrunk panel the column tracks the pointer at the
-    /// shrink factor's speed rather than 1:1. That is the correct trade: anchoring on the PAINTED
-    /// width would write back an already-scaled value, the resolver would scale it a second time,
-    /// and the column would jump narrower on the first pixel of the drag.
-    ///
-    /// Args:
-    ///     col: Column whose divider is being dragged.
-    ///     pointer_x: Current pointer x, in window pixels.
-    ///     cx: View context; the width bag's observer persists and repaints.
-    ///
-    /// Returns:
-    ///     Nothing. A drag for a different column than the live anchor, or with no anchor at all, is
-    ///     ignored rather than guessed at.
-    pub(super) fn drag_by_ip_col(&mut self, col: ByIpCol, pointer_x: f32, cx: &mut Context<Self>) {
-        let Some(anchor) = self.by_ip_drag else {
-            return;
-        };
-        if anchor.col != col {
-            return;
-        }
-        let width = (anchor.width + (pointer_x - anchor.mouse_x)).clamp(MIN_COL_W, MAX_COL_W);
-        self.by_ip_col_widths.update(cx, |state, cx| {
-            if state.column_widths.get(col.key()).copied() == Some(width) {
-                return;
-            }
-            state.set_column_width(col.key(), width);
-            cx.notify();
-        });
-    }
-
-    /// Restore automatic width for one By IP column, or for every one of them.
-    ///
-    /// Mirrors the `MoonDataTable` divider gesture so the two views answer the same input: a plain
-    /// double-click drops this column back to its design width, Shift+double-click drops all of them
-    /// (the toolbar button's equivalent, and the only route to it in a detached window — see
-    /// `toolbar_buttons`).
-    ///
-    /// An already-clear bag changes nothing and must NOT notify: the observer would otherwise arm
-    /// `layout_dirty` and schedule a layout write for a double-click that did nothing.
-    ///
-    /// Args:
-    ///     col: Column to reset when `all` is false.
-    ///     all: Reset every column instead of just `col`.
-    ///     cx: View context; the width bag's observer persists and repaints.
-    ///
-    /// Returns:
-    ///     Nothing.
-    pub(super) fn reset_by_ip_col(&mut self, col: ByIpCol, all: bool, cx: &mut Context<Self>) {
-        self.by_ip_col_widths.update(cx, |state, cx| {
-            let changed = if all {
-                let had_any = !state.column_widths.is_empty();
-                state.column_widths.clear();
-                had_any
-            } else {
-                state.column_widths.remove(col.key()).is_some()
-            };
-            if changed {
-                cx.notify();
-            }
-        });
-    }
-
     /// Switch the detached-window chart span and repaint.
     ///
     /// Args:
@@ -157,44 +111,6 @@ impl CoreStatusView {
             self.chart_core = None;
             cx.notify();
         }
-    }
-
-    /// Chart one specific core (from a core-row click in the expanded server list) instead of the
-    /// server aggregate. Clicking the already-charted core clears it, reverting to the server.
-    ///
-    /// Args:
-    ///     id: Clicked core identity.
-    ///     cx: View context used to repaint.
-    ///
-    /// Returns:
-    ///     Nothing; only the selection and a repaint change.
-    pub(super) fn select_chart_core(&mut self, id: CoreId, cx: &mut Context<Self>) {
-        self.chart_core = if self.chart_core == Some(id) {
-            None
-        } else {
-            Some(id)
-        };
-        cx.notify();
-    }
-
-    /// Toggle one server's expansion from a chevron click (the headless tree does not do it).
-    ///
-    /// Args:
-    ///     key: Server identity whose folder to expand or collapse.
-    ///     cx: View context used to update the tree state and repaint.
-    ///
-    /// Returns:
-    ///     Nothing; the tree's expanded set flips for this server.
-    pub(super) fn toggle_server_expand(&mut self, key: ServerKey, cx: &mut Context<Self>) {
-        let id = SharedString::from(key.tree_id());
-        self.tree_state.update(cx, |state, cx| {
-            let mut ids = state.expanded_ids().into_iter().collect::<HashSet<_>>();
-            if !ids.remove(&id) {
-                ids.insert(id);
-            }
-            state.set_expanded(ids, cx);
-        });
-        cx.notify();
     }
 
     /// Apply a flat-table header sort from a column click.
@@ -259,39 +175,6 @@ impl CoreStatusView {
             crate::persistence::table_persist::set_sort(&self.backend, &id, preference, cx);
             cx.notify();
         }
-    }
-
-    /// Apply a By IP header sort from a column click: flip direction on the active column, else select
-    /// the newly clicked column ascending. Warnings still pin to the top (enforced in `rebuild_cache`).
-    ///
-    /// Args:
-    ///     field: The column the header click chose.
-    ///     cx: View context; the cache is rebuilt so the tree reorders, then a repaint is requested.
-    ///
-    /// Returns:
-    ///     Nothing; the group sort state, group order, and tree change.
-    pub(super) fn set_group_sort(
-        &mut self,
-        field: super::ordering::GroupSortField,
-        cx: &mut Context<Self>,
-    ) {
-        let (current, ascending) = self.group_sort;
-        self.group_sort = if current == field {
-            (field, !ascending)
-        } else {
-            (field, true)
-        };
-        let preference =
-            (self.group_sort != (super::ordering::GroupSortField::Name, true)).then(|| {
-                moon_core::config::TableSortPreference {
-                    column: self.group_sort.0.key().to_string(),
-                    ascending: self.group_sort.1,
-                }
-            });
-        let id = crate::persistence::table_persist::ctx_id("core-status-by-ip", self.detached);
-        crate::persistence::table_persist::set_sort(&self.backend, &id, preference, cx);
-        self.rebuild_cache(cx);
-        cx.notify();
     }
 
     /// Toggle one core in the retained Classic filter, or toggle its All item.
@@ -494,12 +377,17 @@ impl CoreStatusView {
     ///     cx: View context used to repaint.
     ///
     /// Returns:
-    ///     Nothing; the changed mode is persisted while data caches and visibility state are retained.
+    ///     Nothing. A real mode change is persisted. A health chip is cleared even when the mode
+    ///     does not change, and that clear does not write the mode.
     pub(super) fn set_mode(&mut self, mode: CoreStatusMode, cx: &mut Context<Self>) {
-        if self.mode != mode {
+        let mode_changed = self.mode != mode;
+        if !mode_changed && self.health_filter.is_none() {
+            return;
+        }
+        if mode_changed {
             self.mode = mode;
             // The selection belongs to the rows that were on screen when it was made. Problems,
-            // Warnings and Updates draw no core rows at all, and By-IP and Flat draw different
+            // Warnings and Updates draw no core rows at all, and Servers and Flat draw different
             // ones, so carrying it across a mode change would leave a set nothing highlights --
             // in a panel where the next gesture enqueues a build onto live cores.
             self.core_selection.clear();
@@ -511,37 +399,147 @@ impl CoreStatusView {
                 mode.code(),
                 cx,
             );
+        }
+        self.health_filter = None;
+        cx.notify();
+    }
+
+    /// Apply one health-chip click.
+    ///
+    /// The same chip a second time clears the filter. A click from Warnings or Updates moves
+    /// the panel to Flat first, which clears any chip, and the chosen chip is then restored.
+    /// Flat and Problems keep their mode.
+    ///
+    /// Args:
+    ///     filter: The chip the operator clicked.
+    ///     cx: View context used to repaint.
+    ///
+    /// Returns:
+    ///     Nothing. The next Flat projection reads the chip.
+    pub(super) fn toggle_health_filter(&mut self, filter: HealthFilter, cx: &mut Context<Self>) {
+        let next = health_filter_click(self.mode, self.health_filter, filter);
+        if next.mode != self.mode {
+            self.set_mode(next.mode, cx);
+        }
+        if self.health_filter != next.filter {
+            self.health_filter = next.filter;
             cx.notify();
         }
     }
 
-    /// Every selectable core this panel is drawing RIGHT NOW, in on-screen order.
-    ///
-    /// The one place a scope comes from. Both presentations map their rows onto cores here, and
-    /// both report the same shape -- `None` for a line that is not a selectable core (a Flat
-    /// exchange heading, a By-IP server row), which the click algorithm ignores. A mode that draws
-    /// no core rows at all reports NOTHING, which is what stops a selection made in By-IP from
-    /// being acted on while the Problems list is on screen.
-    ///
-    /// A COLLAPSED server group contributes nothing either. That is deliberate and it is the
-    /// safety property: a bulk update must never reach a core the user cannot see, so a selection
-    /// resolved through this list shrinks visibly (the footer's own count says so) rather than
-    /// silently keeping targets off screen.
+    /// Open the alarms list and drop any health chip.
     ///
     /// Args:
-    ///     cx: Application context used to read the sort, the venues and the tree expansion.
+    ///     cx: View context used to repaint.
+    ///
+    /// Returns:
+    ///     Nothing. The mode is Warnings and the chip is clear.
+    pub(super) fn open_alarms(&mut self, cx: &mut Context<Self>) {
+        let (mode, filter) = open_alarms_state();
+        if self.mode != mode {
+            self.set_mode(mode, cx);
+        }
+        if self.health_filter != filter {
+            self.health_filter = filter;
+            cx.notify();
+        }
+    }
+
+    /// Store the toolbar search in the form the projection compares.
+    ///
+    /// Args:
+    ///     text: Raw field text, including a still-uncommitted edit.
+    ///     cx: View context used to repaint.
+    ///
+    /// Returns:
+    ///     Nothing. An unchanged comparison form does not repaint.
+    pub(super) fn set_search(&mut self, text: String, cx: &mut Context<Self>) {
+        let query = super::cache::normalize_query(&text);
+        if self.search_query == query {
+            return;
+        }
+        self.search_query = query;
+        cx.notify();
+    }
+
+    /// Check or uncheck one Flat column and store the columns that stay visible.
+    ///
+    /// The stored list is the canonical order, never empty. No stored entry means every column
+    /// is user-visible, so the first uncheck starts from that full list. The last checked
+    /// column cannot be removed.
+    ///
+    /// Args:
+    ///     key: Flat column id from [`super::table::order_keys`].
+    ///     cx: View context used to persist the layout and repaint.
+    ///
+    /// Returns:
+    ///     Nothing. An unknown key, or the last visible column, is left as it was.
+    pub(super) fn toggle_flat_column(&mut self, key: &str, cx: &mut Context<Self>) {
+        let order = super::table::order_keys();
+        if !order.contains(&key) {
+            return;
+        }
+        let widths_id = self.widths_id.clone();
+        let stored = crate::persistence::table_persist::visible(self.backend.read(cx), &widths_id);
+        let mut set: HashSet<String> = match stored.as_ref() {
+            None => order.iter().copied().map(str::to_string).collect(),
+            Some(keys) => {
+                let have: HashSet<&str> = keys.iter().map(String::as_str).collect();
+                order
+                    .iter()
+                    .copied()
+                    .filter(|column| have.contains(*column))
+                    .map(str::to_string)
+                    .collect()
+            }
+        };
+        if set.contains(key) {
+            if set.len() == 1 {
+                return;
+            }
+            set.remove(key);
+        } else {
+            set.insert(key.to_string());
+        }
+        let keys: Vec<String> = order
+            .iter()
+            .copied()
+            .filter(|column| set.contains(*column))
+            .map(str::to_string)
+            .collect();
+        crate::persistence::table_persist::set_visible(&self.backend, &widths_id, keys, cx);
+        cx.notify();
+    }
+
+    /// Every selectable core this panel is drawing RIGHT NOW, in on-screen order.
+    ///
+    /// Flat and Servers map their rows onto cores. `None` is a line that is not a selectable core
+    /// (a Flat exchange heading), which the click algorithm ignores. Problems and Warnings draw no
+    /// core rows, so they report nothing: a selection made on Servers is not acted on while those
+    /// lists are showing.
+    ///
+    /// Updates also reports nothing here, so Ctrl+A does not select the fleet. The update buttons
+    /// do not read this list. They read [`Self::visible_cores`], which in Updates mode is every
+    /// core in the panel scope.
+    ///
+    /// Args:
+    ///     cx: Application context used to read the sort and the venues.
     ///
     /// Returns:
     ///     One entry per rendered row in the current presentation.
     pub(super) fn visible_order(&self, cx: &App) -> Vec<Option<CoreId>> {
         match self.mode {
             CoreStatusMode::Flat => {
-                let (rows, lines) = self.flat_view(cx);
+                let hidden = self.user_hidden_columns(cx);
+                let (rows, lines, _) = self.flat_view(&hidden, cx);
                 ordering::flat_order(&lines, &rows)
             }
-            CoreStatusMode::ByIp => {
-                let expanded = self.tree_state.read(cx).expanded_ids();
-                server_view::visible_tree_order(&self.cached_groups, &expanded)
+            CoreStatusMode::Servers => {
+                super::servers_view::card_core_order(&super::servers_view::shown_server_groups(
+                    &self.cached_groups,
+                    &self.search_query,
+                    self.ip_masked,
+                ))
             }
             CoreStatusMode::Problems | CoreStatusMode::Warnings | CoreStatusMode::Updates => {
                 Vec::new()
@@ -661,6 +659,9 @@ impl CoreStatusView {
     /// Returns:
     ///     Cores in on-screen order.
     pub(super) fn visible_cores(&self, cx: &App) -> Vec<CoreId> {
+        if let Some(scope) = updates_scope_ids(self.mode, &self.cached_rows) {
+            return scope;
+        }
         self.visible_order(cx).into_iter().flatten().collect()
     }
 
@@ -1442,3 +1443,51 @@ fn problem_confirm_dialog(
                 ),
         )
 }
+
+/// The mode and chip a health-chip click leaves behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct HealthChipClick {
+    /// Presentation after the click. Only Flat stays; every other mode moves to Flat.
+    pub(super) mode: CoreStatusMode,
+    /// Chip after the click. The same chip a second time is `None`.
+    pub(super) filter: Option<HealthFilter>,
+}
+
+/// Resolve one health-chip click without a view.
+///
+/// Args:
+///     mode: Presentation that is showing.
+///     current: Chip that is already on, if any.
+///     clicked: Chip the operator clicked.
+///
+/// Returns:
+///     The mode and chip to store. Flat keeps `mode`. Any other mode, including Problems,
+///     becomes Flat so the chip actually filters the table.
+pub(super) fn health_filter_click(
+    mode: CoreStatusMode,
+    current: Option<HealthFilter>,
+    clicked: HealthFilter,
+) -> HealthChipClick {
+    let filter = if current == Some(clicked) {
+        None
+    } else {
+        Some(clicked)
+    };
+    let mode = if matches!(mode, CoreStatusMode::Flat) {
+        mode
+    } else {
+        CoreStatusMode::Flat
+    };
+    HealthChipClick { mode, filter }
+}
+
+/// Mode and chip the alarms control selects.
+///
+/// Returns:
+///     Warnings, and no health chip.
+pub(super) fn open_alarms_state() -> (CoreStatusMode, Option<HealthFilter>) {
+    (CoreStatusMode::Warnings, None)
+}
+
+#[cfg(test)]
+mod tests;

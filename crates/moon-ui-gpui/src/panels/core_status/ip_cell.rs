@@ -1,4 +1,4 @@
-//! What one By-IP address cell shows, resolved away from the renderer.
+//! What one server address cell shows, resolved away from the renderer.
 //!
 //! The cell has THREE states and they mean different things, which is the whole reason this is a
 //! module and not an `if` inside the row: the terminal knows the address and shows it, it knows
@@ -8,14 +8,21 @@
 //! from a panel that had failed to draw. That is the question this module exists to answer.
 //!
 //! Masking is a PANEL-WIDE, transient user act rather than a per-server one, and it is not the
-//! default. A view whose entire purpose is "По IP" shows addresses; hiding them is something the
-//! user does deliberately before sharing a screen, from the one control in the column header.
+//! default. The panel shows addresses; hiding them is something the user does deliberately
+//! before sharing a screen, from the toolbar IP button.
 //! Nothing here is persisted, so a fresh panel always comes up showing addresses.
 //!
 //! The length-hiding property of the mask lives with the mask CONSTANT in the renderer, not here:
 //! this module decides only WHICH state a cell is in.
 
 use std::net::IpAddr;
+
+/// Fixed-length mask. The length is the point: a revealed address must not change the cell's width
+/// by being longer or shorter than what was hidden.
+pub(super) const IP_MASK: &str = "************";
+
+/// Visible "no address" glyph. An empty cell used to look the same as a mask that failed to draw.
+pub(super) const IP_ABSENT: &str = "\u{2014}";
 
 /// What one server's IP cell shows this frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +48,21 @@ pub(super) enum IpCell {
 ///
 /// Returns:
 ///     The state this frame's cell renders.
+/// The text one [`IpCell`] paints.
+///
+/// Args:
+///     cell: Resolved state from [`ip_cell`].
+///
+/// Returns:
+///     The address, the fixed mask, or the absent glyph.
+pub(super) fn ip_text(cell: IpCell) -> String {
+    match cell {
+        IpCell::Shown(address) => address.to_string(),
+        IpCell::Masked => IP_MASK.to_string(),
+        IpCell::Unknown => IP_ABSENT.to_string(),
+    }
+}
+
 pub(super) fn ip_cell(address: Option<IpAddr>, masked: bool) -> IpCell {
     match address {
         None => IpCell::Unknown,
