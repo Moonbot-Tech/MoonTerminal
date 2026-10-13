@@ -347,6 +347,7 @@ pub(super) fn scroll_wheel(
     if cx.has_active_drag() {
         return;
     } // Do not interfere with a dock-panel drag/drop operation.
+    this.use_track.note_input(Instant::now());
     if this.main_stack_scroll && this.window_pos_in_glass_zone(e.position) {
         return;
     }
@@ -997,6 +998,8 @@ pub(super) fn mouse_move(
     if cx.has_active_drag() {
         return;
     } // Do not intercept pointer motion during a dock-panel drag.
+    // A timestamp only, no repaint: this runs at mousemove rate.
+    this.use_track.note_input(Instant::now());
     let Some((pos, within)) = this.chart_local(e.position) else {
         return;
     };
@@ -1235,6 +1238,9 @@ pub(super) fn hover(
     let self_id = cx.entity_id();
     let weak = cx.entity().downgrade();
     let hov = *hovered;
+    // Leaving counts as the last input, so the idle window starts when the pointer goes.
+    this.use_track.pointer_over = hov;
+    this.use_track.note_input(Instant::now());
     // Recorded on ENTER only, under this panel's own OS window: the chart shot resolves through it
     // once the pointer has left, and it must not answer a keystroke that arrived at a DIFFERENT
     // window. Dead entries are dropped on the way past - a closed chart leaves a weak handle that

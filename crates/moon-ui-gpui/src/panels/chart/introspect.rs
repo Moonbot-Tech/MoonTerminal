@@ -15,6 +15,12 @@ impl ChartPanel {
         self.chart.stalest_detect_ms()
     }
 
+    /// Whether the reader is using this chart now: pointer over it, or input within
+    /// `in_use::IN_USE_WINDOW`. The detect cap does not replace such a chart.
+    pub fn in_use(&self) -> bool {
+        self.use_track.hold_for(Instant::now()).is_some()
+    }
+
     /// Returns whether any pane is pinned. The stack sorts pinned charts first, and
     /// `prune_ttl` skips them.
     pub fn is_pinned(&self) -> bool {
@@ -202,5 +208,10 @@ impl ChartPanel {
     pub fn set_scene_visible(&mut self, visible: bool) {
         self.scene_visible = visible;
         self.chart.set_scene_visible(visible);
+        // A hidden chart gets no hover-leave, so a pointer resting on it when its tab was switched
+        // away would otherwise hold it against both automatic closes forever.
+        if !visible {
+            self.use_track.pointer_over = false;
+        }
     }
 }
