@@ -31,7 +31,7 @@ use moon_core::feed::{Diagnosis, FailureClass, diagnose};
 use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
 use moon_ui::{
     MoonBadge, MoonBadgeVariant, MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn,
-    MoonProgress, MoonTone,
+    MoonProgress, MoonTone, v_flex,
 };
 
 /// Canonical Flat column order before data-only API columns are filtered.
@@ -148,6 +148,11 @@ pub(super) fn projected_column_keys(
 /// The wrapper and its child both take a zero minimum width and hide overflow, so a wide row
 /// cannot expand the slot, get measured as wide, and then put the dropped columns back.
 ///
+/// The child is a flex COLUMN, not a block box: the table arrives inside
+/// [`crate::panels::common::data_table_host`], which sizes itself with `flex_1`. In a block
+/// parent that `flex_1` does nothing, the host keeps its auto height of zero, and the table
+/// draws no header and no rows while the strip above still counts every core.
+///
 /// Args:
 ///     table: The flat table, already built for the current drop level.
 ///     on_width: Called with the host width in pixels during prepaint.
@@ -173,9 +178,10 @@ pub(super) fn flat_measure_host(
             .size_full(),
         )
         .child(
-            div()
+            v_flex()
                 .size_full()
                 .min_w(px(0.0))
+                .min_h(px(0.0))
                 .overflow_hidden()
                 .child(table),
         )
@@ -827,6 +833,10 @@ fn section_row(
     let summary = ordering::section_aggregate_text(&section.aggregate);
     // The sort arrow MoonUI draws says nothing about being section-scoped, so the hover says it.
     // The caption itself no longer needs the hover to be readable — the banner gives it the row.
+    // Layout-test handles for the heading and its two texts, keyed like the element id.
+    let banner_selector = format!("cs-section-{key}");
+    let label_selector = format!("cs-section-{key}-label");
+    let aggregate_selector = format!("cs-section-{key}-agg");
     let mut hover = format!("{} - {}", section.label, summary);
     if sorted {
         hover.push('\n');
@@ -872,6 +882,7 @@ fn section_row(
     .banner(
         h_flex()
             .id(SharedString::from(format!("cs-exchange-{key}")))
+            .debug_selector(move || banner_selector)
             .size_full()
             .items_center()
             .pl(px(CELL_PAD_LEFT))
@@ -903,14 +914,18 @@ fn section_row(
                                     .truncate()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(rgb(p.text))
+                                    .debug_selector(move || label_selector)
                                     .child(section.label.clone()),
                             )
-                            .child(section_aggregate_line(
-                                &summary,
-                                section.aggregate.not_connected,
-                                p,
-                                cx,
-                            )),
+                            .child(
+                                section_aggregate_line(
+                                    &summary,
+                                    section.aggregate.not_connected,
+                                    p,
+                                    cx,
+                                )
+                                .debug_selector(move || aggregate_selector),
+                            ),
                     ),
             )
             .tooltip(crate::panels::common::text_tooltip(hover)),

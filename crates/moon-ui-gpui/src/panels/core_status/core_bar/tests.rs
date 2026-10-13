@@ -86,6 +86,22 @@ fn toolbar_slots_stay_inside_the_row_in_every_locale(cx: &mut gpui::TestAppConte
                     "{name} left the toolbar at {at}: {slot:?} / {row:?}"
                 );
             }
+            // The scope control is set apart from the view switch by its own padded rule, so
+            // it never reads as one more segment.
+            let rule_pad = visual.update(|_, app| f32::from(design::ui_px(app, 8.0)));
+            assert!(
+                layout_fixture::width_of(slots[0]) + 0.5 >= 170.0 + rule_pad,
+                "scope slot lost its separating pad at {at}: {:?}",
+                slots[0]
+            );
+            if (f32::from(slots[0].origin.y) - f32::from(slots[1].origin.y)).abs() <= 0.5 {
+                assert!(
+                    f32::from(slots[1].origin.x) - f32::from(slots[0].right()) + 0.5 >= rule_pad,
+                    "view switch touches the scope rule at {at}: {:?} / {:?}",
+                    slots[0],
+                    slots[1]
+                );
+            }
             let search_floor = visual.update(|_, app| f32::from(design::ui_px(app, 140.0)));
             assert!(
                 layout_fixture::width_of(slots[2]) + 0.5 >= search_floor,

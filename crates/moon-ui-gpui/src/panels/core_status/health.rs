@@ -145,7 +145,7 @@ pub(super) struct Verdict {
 /// Summarise the strip from the rows and the chip counts.
 ///
 /// Attention walks the rows through [`row_matches`], so a core on two chips counts once, and
-/// is at least the number of cores that are not Ready. Tone is Bad when anyone is offline,
+/// also counts every core that is not Ready. Tone is Bad when anyone is offline,
 /// Ok only when every core is online and nothing needs attention, and Warn otherwise.
 /// `alarms_24h` does not affect the tone. Online is Ready only.
 ///
@@ -162,12 +162,16 @@ pub(super) fn verdict(rows: &[CoreStatusRow], counts: &HealthCounts, servers: us
         .iter()
         .filter(|row| matches!(row.status, ConnStatus::Ready))
         .count();
-    let chip_attention = rows
+    // A connecting core matches no chip, so a core counts when it is not Ready OR hits a chip.
+    // One walk over the union: a max of the two tallies would undercount a fleet holding one
+    // connecting core and one slow Ready core.
+    let attention = rows
         .iter()
-        .filter(|row| FILTERS.iter().any(|filter| row_matches(row, *filter)))
+        .filter(|row| {
+            !matches!(row.status, ConnStatus::Ready)
+                || FILTERS.iter().any(|filter| row_matches(row, *filter))
+        })
         .count();
-    // A connecting core matches no chip, so chip attention alone would still say Ok.
-    let attention = chip_attention.max(total.saturating_sub(online));
     let tone = if counts.offline_failed > 0 {
         Tone::Bad
     } else if online == total && attention == 0 {
@@ -181,6 +185,48 @@ pub(super) fn verdict(rows: &[CoreStatusRow], counts: &HealthCounts, servers: us
         total,
         online,
         servers,
+    }
+}
+
+/// Counts printed on the five view segments.
+///
+/// Every figure comes from the same rows and chip counts as the strip, so a segment and the
+/// chip that names the same thing cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct SegmentCounts {
+    /// Visible cores.
+    pub(super) cores: usize,
+    /// Distinct servers among the visible cores.
+    pub(super) servers: usize,
+    /// Distinct cores needing attention, the same figure the verdict names.
+    pub(super) problems: usize,
+    /// Alarm starts inside the last 24 hours, the same figure as the alarms chip.
+    pub(super) alarms: usize,
+    /// Cores behind the fleet build, the same figure as the version chip.
+    pub(super) updates: usize,
+}
+
+/// Derive the segment counts from the strip's own figures.
+///
+/// Args:
+///     verdict: Verdict for the visible rows. Its `total` and `attention` become the Cores and
+///         Problems counts.
+///     counts: Chip counts for the same rows.
+///     servers: Server groups the panel shows, one per distinct server key.
+///
+/// Returns:
+///     The five counts. A healthy fleet reads `problems == 0`.
+pub(super) fn segment_counts(
+    verdict: &Verdict,
+    counts: &HealthCounts,
+    servers: usize,
+) -> SegmentCounts {
+    SegmentCounts {
+        cores: verdict.total,
+        servers,
+        problems: verdict.attention,
+        alarms: counts.alarms_24h,
+        updates: counts.version_behind,
     }
 }
 

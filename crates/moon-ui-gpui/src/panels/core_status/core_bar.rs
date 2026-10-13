@@ -35,8 +35,7 @@ impl CoreStatusView {
         &self,
         cores: &OrderedCores,
         hidden: &HashSet<String>,
-        version_behind: usize,
-        alarms_24h: usize,
+        segments: &super::health::SegmentCounts,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let scope = self.effective_scope(self.backend.read(cx));
@@ -114,7 +113,7 @@ impl CoreStatusView {
         };
         let bar = toolbar_row(
             combo,
-            self.mode_switch(version_behind, alarms_24h, cx),
+            self.mode_switch(segments, cx),
             self.search_field(cx),
             self.toolbar_tail(hidden, cx),
             cx,
@@ -158,24 +157,23 @@ impl CoreStatusView {
     /// Segmented view switcher with the counts the mockup puts on each view.
     ///
     /// Args:
-    ///     cx: View context used to read scope counts and wire the click.
+    ///     segments: Counts derived from the strip's own figures ([`super::health::segment_counts`]).
+    ///     cx: View context used to wire the click.
     ///
     /// Returns:
     ///     A filled joined strip. Alarms shows the 24-hour count. Updates shows its count at zero.
     fn mode_switch(
         &self,
-        lagging: usize,
-        alarms_24h: usize,
+        segments: &super::health::SegmentCounts,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let problems = self.count_problem_cores(self.backend.read(cx));
         let weak_view = cx.entity().downgrade();
         mode_switch_control(
-            self.cached_rows.len(),
-            self.cached_groups.len(),
-            problems,
-            alarms_24h,
-            lagging,
+            segments.cores,
+            segments.servers,
+            segments.problems,
+            segments.alarms,
+            segments.updates,
             self.mode,
             self.toolbar_measured_w,
             move |index, _, app| {
@@ -266,6 +264,9 @@ impl CoreStatusView {
     }
 }
 
+/// Space between the scope control and its separating rule, in design pixels.
+const SCOPE_RULE_PAD: f32 = 8.0;
+
 /// Toolbar row. The four slots wrap onto a second line; nothing is clipped to stay on one.
 ///
 /// Args:
@@ -298,10 +299,15 @@ pub(super) fn toolbar_row(
         .py(design::ui_px(cx, 8.0))
         .bg(rgb(p.panel_high))
         .font_family(design::ui_font())
+        // The scope control filters which cores the panel covers; it is not a view. A rule on
+        // its right edge keeps it from reading as a sixth segment of the switch beside it.
         .child(
             div()
                 .debug_selector(|| "cs-toolbar-scope".into())
                 .flex_none()
+                .pr(design::ui_px(cx, SCOPE_RULE_PAD))
+                .border_r_1()
+                .border_color(rgb(p.border))
                 .child(scope),
         )
         .child(
@@ -334,7 +340,7 @@ pub(super) fn toolbar_row(
 /// Args:
 ///     flat_n: Cores in the flat snapshot.
 ///     server_n: Server cards.
-///     problem_n: Cores the Problems view would list.
+///     problem_n: Distinct cores needing attention, the verdict's own figure.
 ///     alarms: Alarms in the last 24 hours. Shown on the Alarms segment, including zero.
 ///     lagging: Cores behind the fleet build. Shown on Updates, including zero.
 ///     mode: The view on screen.

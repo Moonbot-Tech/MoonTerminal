@@ -7,7 +7,9 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex};
+use moon_ui::{
+    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex,
+};
 use rust_i18n::t;
 
 use super::health::{self, HealthFilter, Tone};
@@ -77,21 +79,29 @@ pub(super) fn health_strip(
     let ping = on_filter.clone();
     let version = on_filter.clone();
     let api = on_filter.clone();
+    let facts = chip_facts(counts, ping_factor);
+    let tip = chips_tooltip(&facts);
+    let [f_off, f_ping, f_ver, f_api, f_alarms] = facts;
+    // One row, clipped at the right: the order is the clip priority (offline first, alarms
+    // last), and the tooltip names every chip so a clipped one stays reachable. The row never
+    // wraps — a second line would push the toolbar down whenever the dock narrows.
     let chips = h_flex()
+        .id("cs-health-chips")
         .debug_selector(|| "cs-health-chips".into())
         .min_w(px(0.0))
-        .max_w_full()
-        .flex_1()
-        .flex_wrap()
-        .justify_end()
+        .flex_shrink(1.0)
+        .overflow_hidden()
         .items_center()
         .gap(design::ui_px(cx, 6.0))
+        .font_family(design::ui_font())
+        .tooltip(crate::panels::common::text_tooltip(tip))
         .child(health_chip(
             cx,
             "core-status-health-offline",
-            t!("core_status.health.chip_offline").to_string(),
-            counts.offline_failed,
+            f_off.label,
+            f_off.count,
             p.red,
+            MoonButtonVariant::OutlineRed,
             quiet,
             active == Some(HealthFilter::Offline),
             move |_, _, app| offline(HealthFilter::Offline, app),
@@ -99,9 +109,10 @@ pub(super) fn health_strip(
         .child(health_chip(
             cx,
             "core-status-health-ping",
-            t!("core_status.health.chip_ping", k = ping_factor).to_string(),
-            counts.ping_high,
-            p.yellow,
+            f_ping.label,
+            f_ping.count,
+            p.amber,
+            MoonButtonVariant::OutlineAmber,
             quiet,
             active == Some(HealthFilter::Ping),
             move |_, _, app| ping(HealthFilter::Ping, app),
@@ -109,9 +120,10 @@ pub(super) fn health_strip(
         .child(health_chip(
             cx,
             "core-status-health-version",
-            t!("core_status.health.chip_version").to_string(),
-            counts.version_behind,
-            p.yellow,
+            f_ver.label,
+            f_ver.count,
+            p.amber,
+            MoonButtonVariant::OutlineAmber,
             quiet,
             active == Some(HealthFilter::Version),
             move |_, _, app| version(HealthFilter::Version, app),
@@ -119,9 +131,10 @@ pub(super) fn health_strip(
         .child(health_chip(
             cx,
             "core-status-health-api",
-            t!("core_status.health.chip_api").to_string(),
-            counts.api_expiring,
-            p.yellow,
+            f_api.label,
+            f_api.count,
+            p.amber,
+            MoonButtonVariant::OutlineAmber,
             quiet,
             active == Some(HealthFilter::ApiExpiry),
             move |_, _, app| api(HealthFilter::ApiExpiry, app),
@@ -129,9 +142,10 @@ pub(super) fn health_strip(
         .child(health_chip(
             cx,
             "core-status-health-alarms",
-            t!("core_status.health.chip_alarms").to_string(),
-            counts.alarms_24h,
-            p.yellow,
+            f_alarms.label,
+            f_alarms.count,
+            p.amber,
+            MoonButtonVariant::OutlineAmber,
             quiet,
             false,
             move |_, _, app| on_alarms(app),
@@ -143,10 +157,8 @@ pub(super) fn health_strip(
         .w_full()
         .min_w(px(0.0))
         .flex_none()
-        .flex_wrap()
         .items_center()
         .gap_x(design::ui_px(cx, 14.0))
-        .gap_y(design::ui_px(cx, 8.0))
         .px(design::ui_px(cx, 12.0))
         .py(design::ui_px(cx, 10.0))
         .border_b_1()
@@ -154,7 +166,7 @@ pub(super) fn health_strip(
         .child(
             h_flex()
                 .debug_selector(|| "cs-health-verdict".into())
-                .min_w(px(0.0))
+                .min_w(design::ui_px(cx, VERDICT_MIN_W))
                 .flex_1()
                 .items_center()
                 .gap(design::ui_px(cx, 10.0))
@@ -204,27 +216,92 @@ pub(super) fn health_strip(
         .children(scope_tail)
 }
 
+/// Narrowest the verdict gets while chips are clipped, in design pixels: the mark plus the
+/// start of the sentence, so the verdict never collapses to its mark alone.
+const VERDICT_MIN_W: f32 = 180.0;
+
+/// One chip's text, in strip order. The same facts build the chips and their tooltip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ChipFact {
+    /// Translated chip name. A sentence, so it draws in the interface face.
+    pub(super) label: String,
+    /// Members of the chip. Drawn in the mono face.
+    pub(super) count: usize,
+}
+
+/// The five chips in clip-priority order: offline, ping, version, API key, alarms.
+///
+/// Args:
+///     counts: Chip counts.
+///     ping_factor: `LatWarn.yellow`, printed in the ping label.
+///
+/// Returns:
+///     One fact per chip. GPUI-free, so the order and the tooltip are testable without a window.
+pub(super) fn chip_facts(counts: &health::HealthCounts, ping_factor: u8) -> [ChipFact; 5] {
+    let fact = |label: String, count: usize| ChipFact { label, count };
+    [
+        fact(
+            t!("core_status.health.chip_offline").to_string(),
+            counts.offline_failed,
+        ),
+        fact(
+            t!("core_status.health.chip_ping", k = ping_factor).to_string(),
+            counts.ping_high,
+        ),
+        fact(
+            t!("core_status.health.chip_version").to_string(),
+            counts.version_behind,
+        ),
+        fact(
+            t!("core_status.health.chip_api").to_string(),
+            counts.api_expiring,
+        ),
+        fact(
+            t!("core_status.health.chip_alarms").to_string(),
+            counts.alarms_24h,
+        ),
+    ]
+}
+
+/// Tooltip over the chip row: every chip on its own line, so a clipped chip stays readable.
+///
+/// Args:
+///     facts: The facts the chips were built from.
+///
+/// Returns:
+///     `label: count` lines in strip order.
+pub(super) fn chips_tooltip(facts: &[ChipFact]) -> String {
+    facts
+        .iter()
+        .map(|fact| format!("{}: {}", fact.label, fact.count))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// One chip: a label plus a count that is never the part that gets cut off.
 ///
 /// Args:
 ///     cx: Application context used to size the button.
 ///     id: Element id, unique in the strip. Also the layout selector.
-///     label: Translated chip name.
-///     count: Members of the chip. Zero selects the dim bordered variant.
+///     label: Translated chip name, drawn in the face the chip row sets (the interface font).
+///     count: Members of the chip. Zero selects the muted variant; the count is mono.
 ///     hot_color: Count colour when the chip has members.
-///     quiet_color: Count colour when the chip is empty.
+///     hot_variant: Severity-tinted outline when the chip has members.
+///     quiet_color: Label colour, and the count colour when the chip is empty.
 ///     selected: Whether this chip is the active filter.
 ///     on_click: Click handler. An empty chip still fires it.
 ///
 /// Returns:
 ///     The button, content-sized, so a layout test can see the chip box. The count is its own
 ///     segment, so the label ellipsizes before the number.
+#[allow(clippy::too_many_arguments)]
 fn health_chip(
     cx: &App,
     id: &'static str,
     label: String,
     count: usize,
     hot_color: u32,
+    hot_variant: MoonButtonVariant,
     quiet_color: u32,
     selected: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -280,6 +357,7 @@ fn health_chip(
                         .h_full()
                         .flex_none()
                         .overflow_hidden()
+                        .font_family(design::mono())
                         .debug_selector(move || count_id)
                         .child(measure_count),
                 ),
@@ -287,12 +365,17 @@ fn health_chip(
         .child(
             MoonButton::new(id)
                 .text_segment(label, quiet_color, 400.0)
-                .text_segment(count_text, if dim { quiet_color } else { hot_color }, 600.0)
+                .segment(
+                    MoonButtonSegment::new(count_text)
+                        .color(if dim { quiet_color } else { hot_color })
+                        .weight(600.0)
+                        .mono(true),
+                )
                 .size(MoonButtonSize::density(cx))
                 .variant(if dim {
                     MoonButtonVariant::Panel
                 } else {
-                    MoonButtonVariant::Neutral
+                    hot_variant
                 })
                 .selected(selected)
                 .on_click(on_click)

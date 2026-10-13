@@ -5,7 +5,9 @@
 use moon_core::feed::{ConnFault, ConnFaultKind, ConnStatus, CoreTimeOffsetStatus};
 use moon_core::session::{CoreStartupStatus, CoreSysStatus};
 
-use super::{HealthCounts, HealthFilter, Tone, Verdict, health_counts, row_matches, verdict};
+use super::{
+    HealthCounts, HealthFilter, Tone, Verdict, health_counts, row_matches, segment_counts, verdict,
+};
 use crate::backend::core_warn::LatencySeverity;
 use crate::panels::core_status::model::{ApiKeyState, CoreStatusRow};
 
@@ -221,8 +223,95 @@ fn chip_counts_follow_row_matches_and_attention_is_distinct_cores() {
 
     let summary = verdict(&rows, &counts, 4);
     assert_eq!(summary.tone, Tone::Bad);
-    assert_eq!(summary.attention, 6);
+    // Six chip cores (A1-A4, A6, A7) plus A8, which is not Ready and hits no chip.
+    assert_eq!(summary.attention, 7);
     assert_eq!(summary.total, 8);
     assert_eq!(summary.online, 4);
     assert_eq!(summary.servers, 4);
+}
+
+/// A healthy fleet shows `Problems · 0`: the segment counts cores needing attention, the same
+/// figure as the verdict, never every core that merely reports a findings list.
+#[test]
+fn a_healthy_fleet_has_no_problem_segment_count() {
+    let rows: Vec<CoreStatusRow> = (1..=63)
+        .map(|id| {
+            let mut core = row("CORE", ConnStatus::Ready);
+            core.id = id;
+            core
+        })
+        .collect();
+    let now = 1_700_000_000_000;
+    let counts = health_counts(&rows, &[], now);
+    let summary = verdict(&rows, &counts, 63);
+    let segments = segment_counts(&summary, &counts, 63);
+    assert_eq!(segments.cores, 63);
+    assert_eq!(segments.problems, 0);
+    assert_eq!(segments.alarms, 0);
+    assert_eq!(segments.updates, 0);
+}
+
+/// Problems is the distinct attention count, Alarms is the 24-hour chip figure and Updates is
+/// the version chip figure; a core on two chips is one problem.
+#[test]
+fn segment_counts_agree_with_the_strip_chips() {
+    let mut offline = row("CORE-A1", ConnStatus::Failed(String::new()));
+    offline.version_behind = Some(1);
+    offline.id = 1;
+    let mut slow = row("CORE-A2", ConnStatus::Ready);
+    slow.ping_warn = true;
+    slow.version_behind = Some(2);
+    slow.id = 2;
+    let mut quiet = row("CORE-A3", ConnStatus::Ready);
+    quiet.id = 3;
+    let rows = [offline, slow, quiet];
+    let day: i64 = 24 * 60 * 60 * 1000;
+    let now = 1_700_000_000_000;
+    let counts = health_counts(&rows, &[now - 1, now - 2, now - day - 1], now);
+    let summary = verdict(&rows, &counts, 2);
+    let segments = segment_counts(&summary, &counts, 2);
+    assert_eq!(segments.cores, 3);
+    assert_eq!(segments.problems, 2);
+    assert_eq!(segments.problems, summary.attention);
+    assert_eq!(segments.alarms, 2);
+    assert_eq!(segments.alarms, counts.alarms_24h);
+    assert_eq!(segments.updates, counts.version_behind);
+    assert_eq!(segments.updates, 2);
+}
+
+/// Servers counts distinct server keys: three cores on two addresses are two servers, and
+/// a core whose endpoint is unknown is a server of its own.
+#[test]
+fn server_segment_counts_distinct_servers() {
+    let at = |id: u64, last: u8| {
+        let mut core = row("CORE", ConnStatus::Ready);
+        core.id = id;
+        core.endpoint = Some(moon_core::feed::CoreEndpoint {
+            address: std::net::IpAddr::from([10, 0, 0, last]),
+            port: 4242,
+        });
+        core
+    };
+    let mut unknown = row("CORE", ConnStatus::Ready);
+    unknown.id = 9;
+    let rows = [at(1, 1), at(2, 1), at(3, 2), unknown];
+    let groups = crate::panels::core_status::model::aggregate_servers(&rows, None);
+    let counts = health_counts(&rows, &[], 0);
+    let summary = verdict(&rows, &counts, groups.len());
+    assert_eq!(segment_counts(&summary, &counts, groups.len()).servers, 3);
+}
+
+/// One connecting core with no chip and one slow Ready core are two problems, not one.
+#[test]
+fn problems_count_the_union_of_not_ready_and_chip_cores() {
+    let mut connecting = row("CORE-A1", ConnStatus::Connecting);
+    connecting.id = 1;
+    let mut slow = row("CORE-A2", ConnStatus::Ready);
+    slow.ping_warn = true;
+    slow.id = 2;
+    let rows = [connecting, slow];
+    let counts = health_counts(&rows, &[], 0);
+    let summary = verdict(&rows, &counts, 1);
+    assert_eq!(summary.attention, 2);
+    assert_eq!(segment_counts(&summary, &counts, 1).problems, 2);
 }

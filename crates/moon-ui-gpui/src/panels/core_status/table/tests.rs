@@ -1,16 +1,20 @@
 //! Column projection for the flat Core Status table.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use gpui::{
     Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
 };
 use moon_core::feed::{ConnStatus, CoreTimeOffsetStatus};
+use moon_core::session::core_order::ExchangeSection;
 use moon_core::session::{CoreStartupStatus, CoreSysStatus};
+use moon_core::venue::CoreVenue;
 use moon_ui::{MoonDataTable, MoonDataTableWidthPolicy, MoonPalette, MoonRect, v_flex};
 
 use super::super::columns_fit;
 use super::super::layout_fixture::{self, LOCALES, WIDTHS};
+use super::super::ordering::{self, FlatLine};
 use super::super::same_line::same_line;
 use super::super::uniform::UniformFact;
 use super::{
@@ -504,4 +508,171 @@ fn flat_columns_and_same_line_stay_inside_every_locale(cx: &mut gpui::TestAppCon
         level,
         "drop level oscillated on the second pass"
     );
+}
+
+/// Core count of the dock-shaped fixture: enough rows that the list must scroll in a 420 px dock.
+const DOCK_CORES: u64 = 44;
+
+/// `DOCK_CORES` healthy cores split across two exchanges, laid out by the production
+/// [`ordering::flat_lines`] so both exchange headings are real lines.
+fn dock_fixture() -> (Vec<CoreStatusRow>, Vec<FlatLine>) {
+    let rows: Vec<CoreStatusRow> = (1..=DOCK_CORES)
+        .map(|id| {
+            let mut row = sample_row(ConnStatus::Ready);
+            row.id = id;
+            row.name = format!("CORE-{id:02}");
+            row
+        })
+        .collect();
+    let venues: HashMap<u64, CoreVenue> = rows
+        .iter()
+        .map(|row| {
+            let code = if row.id % 2 == 0 { 2 } else { 13 };
+            (row.id, CoreVenue::identify(code, "", None))
+        })
+        .collect();
+    let lines = ordering::flat_lines(&rows, &venues);
+    (rows, lines)
+}
+
+/// The Flat table mounted the way `render.rs` mounts it: a fixed strip, then the `flex_1`
+/// content slot, then [`flat_measure_host`] around [`data_table_host`] around the table.
+struct DockProbe {
+    rows: Rc<Vec<CoreStatusRow>>,
+    lines: Rc<Vec<FlatLine>>,
+    keys: Vec<&'static str>,
+}
+
+impl Render for DockProbe {
+    /// Paint the production row and heading builders inside the production host chain.
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let rows = self.rows.clone();
+        let lines = self.lines.clone();
+        let keys = self.keys.clone();
+        let count = keys.len();
+        let names: HashMap<ServerKey, String> = HashMap::new();
+        let table = MoonDataTable::new(
+            "cs-dock-table",
+            lines.len(),
+            move |ix, _, app| match &lines[ix] {
+                FlatLine::Section(section) => {
+                    super::section_row(section, false, false, count, p, app)
+                }
+                FlatLine::Core(row) => {
+                    super::core_status_row(&rows[*row], &keys, &names, None, false, p, app)
+                }
+            },
+        )
+        .columns(super::columns(&self.keys))
+        .style(design::table_style(p));
+        v_flex()
+            .size_full()
+            // The panel root sets the mono face; headings inherit it.
+            .font_family(design::mono())
+            .child(div().w_full().h(px(56.0)).flex_none())
+            .child(
+                v_flex()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_hidden()
+                    .debug_selector(|| "cs-dock-slot".into())
+                    .child(flat_measure_host(
+                        crate::panels::common::data_table_host(
+                            "cs-dock-host",
+                            false,
+                            String::new(),
+                            p,
+                            cx,
+                            table,
+                        ),
+                        |_, _| {},
+                    )),
+            )
+    }
+}
+
+/// The Flat view must lay its rows out with real height inside the dock's content slot.
+///
+/// The measuring host wrapped `data_table_host` in a block box, so the host's `flex_1` had no
+/// flex parent to grow in and the table resolved to zero height: header, headings and rows
+/// all vanished while the strip above still counted every core.
+#[gpui::test]
+fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
+    // Section captions translate, and the first lookup must not run on the 2 MiB test stack.
+    crate::test_locale::warm();
+    layout_fixture::install_dark(cx);
+    let (rows, lines) = dock_fixture();
+    let sections = lines
+        .iter()
+        .filter(|line| matches!(line, FlatLine::Section(_)))
+        .count();
+    assert_eq!(sections, 2, "fixture must span two exchanges");
+    let rows = Rc::new(rows);
+    let lines = Rc::new(lines);
+    for code in LOCALES {
+        let _locale = crate::test_locale::force(code);
+        for width in WIDTHS {
+            let keys = visible_column_keys(&rows, &HashSet::new(), &[]);
+            let mut visual = layout_fixture::open(cx, width, 420.0, {
+                let rows = rows.clone();
+                let lines = lines.clone();
+                move |_, _| DockProbe { rows, lines, keys }
+            });
+            layout_fixture::draw(&mut visual);
+            let at = format!("{code} @ {width}");
+            let slot = visual.debug_bounds("cs-dock-slot").expect("content slot");
+            assert!(
+                layout_fixture::height_of(slot) > 100.0,
+                "content slot collapsed at {at}: {slot:?}"
+            );
+            // Lines 0 and 1 are the first heading and its first core, both above the fold.
+            let first_core = match &lines[1] {
+                FlatLine::Core(index) => rows[*index].id,
+                FlatLine::Section(_) => panic!("a heading must be followed by its members"),
+            };
+            let ping = visual
+                .debug_bounds(layout_fixture::leak_selector(format!(
+                    "cs-ping-{first_core}"
+                )))
+                .unwrap_or_else(|| panic!("first core row was never laid out at {at}"));
+            assert!(
+                layout_fixture::height_of(ping) > 4.0 && layout_fixture::inside(ping, slot),
+                "first core row has no height or left the slot at {at}: {ping:?} / {slot:?}"
+            );
+            // The first heading is on screen: its caption and its aggregate draw unclipped.
+            let FlatLine::Section(section) = &lines[0] else {
+                panic!("the first line must be a heading");
+            };
+            let key = match section.section {
+                ExchangeSection::Venue(id) => format!("cs-section-{}-{}", id.code, id.dex),
+                ExchangeSection::Unidentified => "cs-section-unknown".to_string(),
+            };
+            let banner = visual
+                .debug_bounds(layout_fixture::leak_selector(key.clone()))
+                .unwrap_or_else(|| panic!("heading was never laid out at {at}"));
+            assert!(
+                layout_fixture::height_of(banner) > 4.0 && layout_fixture::inside(banner, slot),
+                "heading has no height or left the slot at {at}: {banner:?} / {slot:?}"
+            );
+            let summary = ordering::section_aggregate_text(&section.aggregate);
+            for (suffix, text, weight) in [
+                ("label", section.label.as_str(), 600.0),
+                ("agg", summary.as_str(), 400.0),
+            ] {
+                let bounds = visual
+                    .debug_bounds(layout_fixture::leak_selector(format!("{key}-{suffix}")))
+                    .unwrap_or_else(|| panic!("heading {suffix} at {at}"));
+                let measured =
+                    visual.update(|_, app| design::mono_caption_text_width(app, text, weight));
+                assert!(
+                    layout_fixture::inside(bounds, banner)
+                        && layout_fixture::width_of(bounds) + 0.5 >= measured,
+                    "heading {suffix} clipped at {at}: measured {measured}, box {bounds:?}, banner {banner:?}"
+                );
+            }
+        }
+    }
 }

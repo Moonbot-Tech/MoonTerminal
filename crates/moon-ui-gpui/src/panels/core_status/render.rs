@@ -505,13 +505,8 @@ impl Render for CoreStatusView {
             on_filter,
             on_alarms,
         );
-        let core_bar = self.core_bar(
-            &cores,
-            &hidden,
-            counts.version_behind,
-            counts.alarms_24h,
-            cx,
-        );
+        let segments = health::segment_counts(&verdict, &counts, groups.len());
+        let core_bar = self.core_bar(&cores, &hidden, &segments, cx);
         let same = matches!(self.mode, CoreStatusMode::Flat)
             .then(|| same_line::same_line(&self.flat_cache.borrow().uniform_facts(), cx))
             .flatten()
