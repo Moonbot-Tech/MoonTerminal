@@ -326,13 +326,38 @@ on another screen. Therefore chart windows open only through
 independent, and the separate taskbar button is suppressed by the shared mechanism (see below).
 Trade windows follow that same ownership rule through `trade_window_options(...)`.
 
+Whether a group's detached charts FOLLOW its main window is decided by the cores, not by the
+terminal (#850): MoonBot's "Charts windows on top of other windows" checkbox,
+`ChartsSettings.stay_on_top` (default on), projected as `CoreConfig.charts_stay_on_top`. The group
+follows when ANY of its cores has it on; a core whose settings have not arrived counts as on
+(`window::chart_follow::ChartFollow::for_group`). There is no terminal-side setting.
+
+- Following: activating the group's main window raises that group's detached charts IN PLACE,
+  just beneath the main window, above the apps that covered them (`windowing::raise_charts_below`:
+  `SetWindowPos` after the main HWND with `SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE`). No move, no
+  cascade, a minimized chart is not restored, and the main window keeps focus. The charts stay
+  unowned, so a chart click still does not pull the main window across monitors, FancyZones still
+  snaps them, and minimizing the main window does not minimize them. Their taskbar buttons are
+  suppressed as below.
+- Independent (every core of the group off): the main window's activation leaves the charts where
+  they are, and each chart keeps the taskbar button Windows gives an unowned window, so it can be
+  raised on its own. Each chart host watches its group's mode and, when it changes, cancels its
+  own deletion burst and gives the button back (`windowing::show_window_in_taskbar`) or arms a new
+  burst; the main window never touches chart taskbar buttons, so the two cannot race.
+
+The raise is Windows-only: GPUI's one cross-platform way to bring a window forward,
+`activate_window`, also steals focus from the main window, so macOS and Linux leave the charts as
+they are. `ChartTabs::gather_windows` is a different action — it MOVES the charts into a cascade.
+Trade windows and Profit Monitor do not follow the checkbox.
+
 Final taskbar policy:
 
 - `trading_window_options` - the visible main application window;
 - `tool_window_options`, `debug_window_options`,
   `detached_panel_window_options` - hidden from the taskbar when there is an owner; on
   restore without an owner they become independent and may get a taskbar entry;
-- `detached_chart_window_options` - always independent, but hidden from the taskbar;
+- `detached_chart_window_options` - always independent; hidden from the taskbar while the group
+  follows its main window, shown when it is independent (see the follow rule above);
 - `trade_window_options` - the same combination, plus a minimum size;
 - `profit_monitor_window_options` - the same combination: always independent, but hidden from the taskbar;
 - `login_window_options` - always independent, and shown on the taskbar.
@@ -358,8 +383,8 @@ The login prompt is the other exception to tool-window ownership. It draws
 `tool_window_options`. It can be the first and only window of the session, so it stays
 independent, keeps a taskbar button, and carries the application icon.
 
-Detached charts, trade windows, and Profit Monitor suppress the taskbar button with ONE
-mechanism: `WindowTaskbarVisibility::Hidden` plus `hide_window_from_taskbar_soon`.
+Detached charts (while their group follows its main window), trade windows, and Profit Monitor
+suppress the taskbar button with ONE mechanism: `WindowTaskbarVisibility::Hidden` plus `hide_window_from_taskbar_soon`.
 `WindowTaskbarVisibility::Hidden` by itself is not a guarantee: it only clears `WS_EX_APPWINDOW`,
 which an unowned top-level window does not even need in order to get a button. `ITaskbarList::DeleteTab` removes
 an already existing item and is NOT a permanent window state: the shell publishes the item shortly

@@ -35,6 +35,10 @@ pub struct CoreConfig {
     /// Read-only `trading.moonbot_config.auto_margin_borrow`: a spot account may fund another
     /// quote by borrowing, so the terminal must not refuse it solely on quote currency.
     pub auto_margin_borrow: bool,
+    /// Read-only `visual.charts_settings.stay_on_top`: MoonBot's "Charts windows on top of other
+    /// windows" checkbox (default on). The terminal reads it to decide whether a group's detached
+    /// chart windows rise with the group's main window; it never writes it back.
+    pub charts_stay_on_top: bool,
     /// `trading.auto_start` and `trading.auto_start_2`.
     pub auto_start: AutoStartSettings,
     /// `visual.blink_config`.

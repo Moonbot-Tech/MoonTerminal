@@ -25,6 +25,7 @@ pub(crate) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let mo = &cfg.trading.multi_orders;
     CoreConfig {
         auto_margin_borrow: t.moonbot_config.auto_margin_borrow,
+        charts_stay_on_top: v.charts_settings.stay_on_top,
         // The list verbatim: its separator rules live with the readers — see
         // `feed::fav_markets_list` — so the projection carries the core's own string unchanged.
         fav_markets: t.fav_markets.clone(),

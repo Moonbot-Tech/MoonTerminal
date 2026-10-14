@@ -101,6 +101,12 @@ pub(crate) struct DetachedChartHost {
     modifier_watch: moon_ui::MoonHotkeyModifierWatch,
     /// Exact cancellation authority for this window's current background taskbar-hide burst.
     taskbar_hide: crate::window::windowing::TaskbarHideTask,
+    /// Whether this window's taskbar button was last deleted, so turning independent (#850)
+    /// re-adds it exactly once.
+    taskbar_hidden: bool,
+    /// The follow mode the taskbar policy was last applied for, so a checkbox change on a core
+    /// resyncs this window's button without waiting for its next activation.
+    taskbar_mode: crate::window::chart_follow::ChartFollow,
 }
 
 impl DetachedChartHost {
@@ -197,10 +203,37 @@ impl DetachedChartHost {
         // Apply the shared independent-window taskbar policy now and after every activation.
         // Active transitions also own Auto singleton scope independently of idle-chart polling;
         // `hide_window_from_taskbar_soon` owns the delayed retry rationale.
-        let taskbar_hide = crate::window::windowing::hide_window_from_taskbar_soon(window);
+        // Following the main window, the button is deleted; an independent group's chart keeps it
+        // (#850, `backend::chart_follow`).
+        let mut taskbar_hidden = false;
+        let taskbar_mode = backend.read(cx).chart_follow(&group);
+        let taskbar_hide = crate::backend::chart_follow::chart_taskbar_policy(
+            taskbar_mode,
+            window,
+            &mut taskbar_hidden,
+        );
+        cx.observe_in(&backend, window, |this, _, window, cx| {
+            let mode = this.backend.read(cx).chart_follow(&this.group);
+            if mode != this.taskbar_mode {
+                this.taskbar_mode = mode;
+                this.taskbar_hide.cancel();
+                this.taskbar_hide = crate::backend::chart_follow::chart_taskbar_policy(
+                    mode,
+                    window,
+                    &mut this.taskbar_hidden,
+                );
+            }
+        })
+        .detach();
         cx.observe_window_activation(window, |this, window, cx| {
             this.taskbar_hide.cancel();
-            this.taskbar_hide = crate::window::windowing::hide_window_from_taskbar_soon(window);
+            let mode = this.backend.read(cx).chart_follow(&this.group);
+            this.taskbar_mode = mode;
+            this.taskbar_hide = crate::backend::chart_follow::chart_taskbar_policy(
+                mode,
+                window,
+                &mut this.taskbar_hidden,
+            );
             if !window.is_window_active() {
                 // See the group window: the state a returning window is re-told is not a press.
                 this.modifier_watch.forget();
@@ -419,6 +452,8 @@ impl DetachedChartHost {
             focus,
             modifier_watch: moon_ui::MoonHotkeyModifierWatch::default(),
             taskbar_hide,
+            taskbar_hidden,
+            taskbar_mode,
         }
     }
 

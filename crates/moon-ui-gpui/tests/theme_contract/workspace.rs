@@ -351,7 +351,7 @@ fn detached_chart_activation_and_activity_refresh_auto_singleton_ownership() {
         "detached chart activation observer",
     );
     assert!(
-        activation.contains("hide_window_from_taskbar_soon(window)")
+        activation.contains("chart_follow::chart_taskbar_policy(")
             && activation.contains("if window.is_window_active()")
             && activation.contains("b.focus_singleton_owner(&group, bcx)"),
         "native detached-chart activation must focus its Auto owner independently of idle polling"

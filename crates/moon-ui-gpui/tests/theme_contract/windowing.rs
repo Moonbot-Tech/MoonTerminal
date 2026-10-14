@@ -71,7 +71,7 @@ fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
     // prose, which must not satisfy a check about actually calling it.
     assert!(
         chart_tabs_windows.contains("detached_chart_window_options(")
-            && code_only(&chart_detached_host).contains("hide_window_from_taskbar_soon(window)")
+            && code_only(&chart_detached_host).contains("chart_follow::chart_taskbar_policy(")
             && !chart_tabs_windows.contains("owner: Option<AnyWindowHandle>")
             && !chart_tabs_windows.contains("detached_panel_window_options("),
         "detached chart windows must use the independent chart factory and must not carry owner in the chart lifecycle"
@@ -165,10 +165,20 @@ fn profit_monitor_and_detached_chart_windows_rearm_taskbar_hide_on_activation() 
          republishing the taskbar item when the window is restored from minimized"
     );
 
+    // A detached chart's burst goes through the follow policy (#850): it deletes the button only
+    // while the group follows its main window, and gives it back once the group turns independent.
     let host_ctor = code_only(braced_body(&chart_detached_host, "pub(super) fn new("));
     let host_rearms = host_ctor
-        .matches("hide_window_from_taskbar_soon(window)")
+        .matches("chart_follow::chart_taskbar_policy(")
         .count();
+    let follow = code_only(&read_src("backend/chart_follow.rs"));
+    let policy = braced_body(&follow, "pub(crate) fn chart_taskbar_policy(");
+    assert!(
+        policy.contains("mode.hides_chart_taskbar_buttons()")
+            && policy.contains("windowing::hide_window_from_taskbar_soon(window)")
+            && policy.contains("windowing::show_window_in_taskbar(window)"),
+        "the chart taskbar policy must hide the button while following and restore it when independent"
+    );
     let host_activation = host_ctor
         .split("cx.observe_window_activation(window,")
         .nth(1)
@@ -178,7 +188,7 @@ fn profit_monitor_and_detached_chart_windows_rearm_taskbar_hide_on_activation() 
         .find("this.taskbar_hide.cancel();")
         .expect("activation must cancel the previous taskbar burst");
     let host_rearm = host_activation
-        .find("this.taskbar_hide = crate::window::windowing::hide_window_from_taskbar_soon(window)")
+        .find("this.taskbar_hide = crate::backend::chart_follow::chart_taskbar_policy(")
         .expect("activation must arm one replacement taskbar burst");
     assert!(
         host_rearms >= 2 && host_cancel < host_rearm,
