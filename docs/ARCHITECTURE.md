@@ -12,6 +12,12 @@ experimental migration plans.
 - `moon-tg` — the Telegram bot and Mini App over `moon-core`'s transport: chat reports, labels,
   Mini App routes, pairing. The terminal and the station each host it through `TgHost`.
 - `moon-ui-gpui` — the `moonterminal` binary: GPUI shell, panels, debug-tools, chart integration.
+- `moon-station` — the headless `moon-station` binary for a Linux server: report replica, order
+  traces and the trade tape around every trade, without a window; it hosts `moon-tg` too.
+- `moon-remote` — prepares a Linux server for `moon-station` over SSH: a library the terminal calls
+  (including pulling data back from a station), plus a `moon-remote` command-line binary.
+- `build-support` — not a crate: `git_meta.rs`, included through `#[path]` by the build scripts of
+  `moon-ui-gpui` and `moon-station`, so both binaries embed the same Git revision and release base.
 - `Moonbot-Tech/MoonUI` — external git dependency: standalone GPUI runtime + Moon UI components.
 
 Legacy UI/runtime packages are not active dependencies. New shared UI/runtime changes
