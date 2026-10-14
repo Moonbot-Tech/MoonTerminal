@@ -316,6 +316,10 @@ struct Backend {
     /// Whether `follow` was turned off by the toolbar or `ToggleLive`. A pan/zoom leave leaves
     /// this false so the idle auto-return may restore Live; a deliberate Pause does not.
     follow_persistent: bool,
+    /// Bumped every time the application-wide Live comes back on. The per-chart Live scope
+    /// re-anchors a chart on a bump it has not yet seen, so a chart hidden through the whole
+    /// Pause and Live still returns to `now` when it is next drawn (#688).
+    live_resume_gen: u64,
     /// Newest pan/zoom/Y-drag on any live chart, Unix milliseconds. Historical trade windows
     /// never write it. The 100 ms coordination tick feeds this to
     /// [`moon_chart::view::should_return_to_live`].

@@ -171,7 +171,7 @@ pub(super) fn menu_folder_key(target: &MenuTarget, core: CoreId) -> Option<(Core
 ///     The destination core and folder path, or `None` for rows that must not accept a drop.
 pub(in crate::strategies::tree) fn drop_dest(node: &NodeData) -> Option<(CoreId, Vec<String>)> {
     match node {
-        NodeData::Exchange { .. } => None,
+        NodeData::Exchange { .. } | NodeData::StoppedSection { .. } => None,
         NodeData::Core { core, .. } => Some((*core, Vec::new())),
         NodeData::Folder { core, path, .. } => Some((*core, path.clone())),
         NodeData::Strategy { .. }

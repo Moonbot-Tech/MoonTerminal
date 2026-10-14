@@ -287,6 +287,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         last_chart_close: None,
         follow: true,
         follow_persistent: false,
+        live_resume_gen: 0,
         last_live_chart_interaction_ms: None,
         order_size_rev: 0,
         order_size_edit_req: None,

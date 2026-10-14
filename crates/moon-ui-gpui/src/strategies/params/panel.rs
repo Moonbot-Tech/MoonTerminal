@@ -61,6 +61,23 @@ impl StrategiesView {
             edit_notes,
         } = model
         else {
+            if matches!(model, ParamsPanelModel::NoSelection) {
+                // Nothing selected: the group overview instead of a bare hint. Clicks go through
+                // a weak handle so a closed window is not kept alive by a retained element.
+                let overview = self.overview_model_cached(cx);
+                let weak = cx.entity().downgrade();
+                let on_click: overview::OverviewHandler = Rc::new(move |click, window, app| {
+                    if let Some(view) = weak.upgrade() {
+                        view.update(app, |view, cx| view.overview_click(click, window, cx));
+                    }
+                });
+                let panel = overview::overview_panel(&overview, self.filter.quick, on_click, cx);
+                return col
+                    .id("strat-overview-scroll")
+                    .overflow_y_scroll()
+                    .child(panel)
+                    .into_any_element();
+            }
             let text = match model {
                 ParamsPanelModel::NoSelection => t!("strat.no_selection").to_string(),
                 ParamsPanelModel::NoSchema => t!("strat.no_schema").to_string(),

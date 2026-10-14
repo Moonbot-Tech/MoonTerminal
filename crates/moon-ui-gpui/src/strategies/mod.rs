@@ -16,6 +16,7 @@ mod fields;
 mod filter;
 mod full_params;
 pub(crate) mod logic;
+mod overview;
 mod param_entries;
 mod params;
 mod rules;
@@ -279,6 +280,12 @@ pub struct StrategiesView {
     /// Selection alone does not bring a row on screen: only `MoonTreeState::scroll_to_item`
     /// does, and it needs the tree's item index, which exists only inside render.
     pending_scroll: Option<Key>,
+    /// Whether the operator folded the «Stopped» section at the top of the tree.
+    stopped_collapsed: bool,
+    /// A core the overview asked to bring on screen, scrolled to by the next render.
+    pending_core_scroll: Option<CoreId>,
+    /// The group overview, retained while the tree's store signature is unchanged.
+    overview_cache: Option<overview::OverviewCache>,
     /// Live `strat-tree-scroll` rectangle shared with an in-flight drag preview.
     ///
     /// Recreating this cell each frame would leave a mid-drag `DragChip` holding an empty
@@ -434,6 +441,17 @@ impl Render for StrategiesView {
             };
             self.tree_state.update(cx, |st, c| {
                 let item = MoonTreeItem::new(item_id, "");
+                st.set_selected_item(Some(&item), c);
+                if let Some(ix) = st.selected_index() {
+                    st.scroll_to_item(ix, ScrollStrategy::Center);
+                }
+                st.set_selected_item(None, c);
+            });
+        }
+        // A core the overview selected: same index trick, on the core's own row.
+        if let Some(core) = self.pending_core_scroll.take() {
+            self.tree_state.update(cx, |st, c| {
+                let item = MoonTreeItem::new(tree::moon::id_core(core), "");
                 st.set_selected_item(Some(&item), c);
                 if let Some(ix) = st.selected_index() {
                     st.scroll_to_item(ix, ScrollStrategy::Center);

@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// Slack past `AUTO_RESUME_LIVE_MS` before the per-chart idle check runs, so a timer that fires a
+/// little early still finds the pane due.
+const IDLE_RETURN_SLACK_MS: u64 = 50;
+
 impl ChartPanel {
     /// Where and when a click last closed a chart anywhere in the process, for `render_input`.
     pub(in crate::panels) fn backend_close_mark(&self, cx: &App) -> Option<(f64, (f32, f32))> {
@@ -92,18 +96,62 @@ impl ChartPanel {
         if !self.historical {
             let follow = self.chart.follow();
             let now = now_unix_ms();
+            // Under the per-chart Live scope a gesture stays on this chart: the toolbar flag is
+            // the clock alone and only the toolbar writes it (#688).
+            let per_chart = self.chart.live_per_chart();
+            if per_chart {
+                self.arm_idle_return(cx);
+            }
             self.backend.update(cx, |b, bcx| {
                 b.last_live_chart_interaction_ms = Some(now);
-                if b.follow != follow {
-                    b.follow = follow;
+                if !per_chart && b.follow != follow {
                     if follow {
-                        b.follow_persistent = false;
+                        b.raise_follow();
+                    } else {
+                        b.follow = false;
                     }
                     bcx.notify();
                 }
             });
         }
         self.camera_dirty = true;
+    }
+
+    /// Arms the per-chart Live scope's idle auto-return for this panel (#688): once
+    /// [`moon_chart::view::AUTO_RESUME_LIVE_MS`] pass with no further gesture, a pane left off the
+    /// live edge goes back to following. A panel already following needs no timer, and any
+    /// earlier wait is dropped, which cancels it, so the clock always runs from the last gesture.
+    ///
+    /// The application-wide scope never arms this: its auto-return is `Backend::tick_auto_live`.
+    fn arm_idle_return(&mut self, cx: &mut Context<Self>) {
+        if self.chart.follow() {
+            self.idle_return_task = None;
+            return;
+        }
+        // A beat past the threshold, so the check cannot land a hair before it on a coarse timer.
+        let delay = std::time::Duration::from_millis(
+            moon_chart::view::AUTO_RESUME_LIVE_MS as u64 + IDLE_RETURN_SLACK_MS,
+        );
+        self.idle_return_task = Some(cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(delay).await;
+            let _ = cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    this.idle_return_task = None;
+                    if this.chart.tick_idle_return(now_unix_ms()) {
+                        this.camera_dirty = true;
+                        this.view_dirty = true;
+                        cx.notify();
+                    }
+                    // An interaction that re-stamped the view without re-arming (an unchanged
+                    // scale sync) leaves the pane not yet due: wait again rather than give up.
+                    if this.chart.live_per_chart() {
+                        this.arm_idle_return(cx);
+                    }
+                })
+                .is_ok()
+            });
+        }));
     }
 
     /// Returns the tab caption. Numbered AddToChart and Custom panels use `N · market`, falling back

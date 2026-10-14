@@ -5,18 +5,47 @@ use super::*;
 impl ChartEngine {
     /// Opens a market in the full-screen pane.
     pub fn open(&mut self, core: CoreId, market: &str) {
-        self.container
+        let created = self
+            .container
             .borrow_mut()
             .open_manual(core, market, self.epoch);
+        if created {
+            self.seat_new_pane(moon_chart::paint::now_unix_ms());
+        }
         self.data.borrow_mut().mark_view_dirty();
     }
 
     /// Opens or extends an AddToChart market in this pane with a TTL.
     pub fn push_auto(&mut self, core: CoreId, market: &str, ttl_ms: f64, now_ms: f64) {
-        self.container
+        let created = self
+            .container
             .borrow_mut()
             .push_auto(core, market, now_ms, ttl_ms, self.epoch);
+        if created {
+            self.seat_new_pane(now_ms);
+        }
         self.data.borrow_mut().mark_view_dirty();
+    }
+
+    /// Gives a freshly constructed pane the engine's current Live state, anchored at `now` (#688).
+    ///
+    /// A new view follows with its anchor at the process epoch. An engine the application-wide
+    /// Pause already parked never re-applies that Pause (`set_follow` returns on an unchanged
+    /// flag), so without this the new market ran live under a toolbar showing Pause. It is parked
+    /// here at `now` instead. A per-chart engine is left to the next `apply_live`, whose per-pane
+    /// check freezes the new view at `now` the same way.
+    ///
+    /// Args:
+    ///     now_ms: Current Unix time in milliseconds.
+    fn seat_new_pane(&mut self, now_ms: f64) {
+        if self.live_per_chart || self.follow || self.data.borrow().historical {
+            return;
+        }
+        for pane in self.container.borrow_mut().panes_mut() {
+            if pane.view.follow {
+                pane.view.park_at_live_edge(now_ms);
+            }
+        }
     }
 
     /// Removes expired AddToChart panes and returns their markets.

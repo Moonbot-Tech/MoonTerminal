@@ -106,6 +106,7 @@ fn retired_keys_leave_the_persistence_pipeline_quietly() {
         merged.chart_memory_percent,
         merged.core_sort,
         merged.report_valuation_mode,
+        merged.live_scope,
         merged.next_uid.get(),
         merged.telegram,
     );
@@ -143,6 +144,7 @@ fn global_book_width_survives_runtime_reconciliation_and_save() {
         merged.chart_memory_percent,
         merged.core_sort,
         merged.report_valuation_mode,
+        merged.live_scope,
         merged.next_uid.get(),
         merged.telegram,
     );
@@ -427,6 +429,7 @@ fn a_clean_core_group_list_round_trips_through_merge_and_split() {
         merged.chart_memory_percent,
         merged.core_sort,
         merged.report_valuation_mode,
+        merged.live_scope,
         merged.next_uid.get(),
         TelegramConfig::default(),
     );
@@ -501,6 +504,7 @@ fn the_station_tick_round_trips_and_an_older_file_reads_it_off() {
         merged.chart_memory_percent,
         merged.core_sort,
         merged.report_valuation_mode,
+        merged.live_scope,
         merged.next_uid.get(),
         TelegramConfig::default(),
     );
@@ -559,6 +563,7 @@ fn the_endpoint_override_round_trips_through_servers_enc() {
         merged.chart_memory_percent,
         merged.core_sort,
         merged.report_valuation_mode,
+        merged.live_scope,
         merged.next_uid.get(),
         TelegramConfig::default(),
     );
@@ -633,6 +638,7 @@ fn the_transport_survives_a_split() {
         100,
         crate::config::CoreSortMode::default(),
         crate::db::valuation::ValuationMode::default(),
+        crate::config::LiveScope::default(),
         8,
         TelegramConfig::default(),
     );
@@ -696,6 +702,7 @@ id = 2981",
         100,
         crate::config::CoreSortMode::default(),
         crate::db::valuation::ValuationMode::default(),
+        crate::config::LiveScope::default(),
         8,
         TelegramConfig::default(),
     );
@@ -746,6 +753,7 @@ fn the_total_mode_survives_a_split_and_reload() {
             100,
             crate::config::CoreSortMode::default(),
             crate::db::valuation::ValuationMode::default(),
+            crate::config::LiveScope::default(),
             8,
             TelegramConfig::default(),
         );

@@ -1279,7 +1279,9 @@ impl StrategiesView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
-            .fit_trigger_width(96.0, 110.0)
+            // Room for the longest shipped "+ Create" plus its caret: at 110 the caption was cut to
+            // an ellipsis at the default width in several locales.
+            .fit_trigger_width(96.0, 160.0)
             .fit_menu_width(180.0, 560.0)
             .items(items)
             .into_any_element()

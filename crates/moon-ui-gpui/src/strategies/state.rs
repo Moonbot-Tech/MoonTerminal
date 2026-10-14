@@ -576,6 +576,7 @@ impl StrategiesView {
                     dir: s.dir,
                     exchange: s.exchange,
                     active_only: prefs.active_only,
+                    quick: None,
                 },
                 None => StrategyFilter {
                     active_only: prefs.active_only,
@@ -660,6 +661,9 @@ impl StrategiesView {
             tree_cache: None,
             pane_cache: PaneCache::default(),
             pending_scroll: None,
+            stopped_collapsed: false,
+            pending_core_scroll: None,
+            overview_cache: None,
             tree_field_bounds: std::rc::Rc::new(std::cell::Cell::new(None)),
             params_scroll: MoonVirtualListScrollHandle::new(),
             pending_param_scroll: None,

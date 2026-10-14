@@ -19,6 +19,7 @@ pub(crate) mod ui;
 mod tests;
 
 use super::*;
+use crate::strategies::filter::QuickFilter;
 use moon_core::session::core_order;
 
 use moon_ui::{MoonButtonIconSlot, MoonDisclosureDirection};
@@ -297,6 +298,9 @@ impl StrategiesView {
                     ),
             )
             .child(div().w_full().h(px(1.0)).bg(border))
+            .when_some(self.filter.quick, |el, quick| {
+                el.child(self.quick_filter_strip(quick, cx))
+            })
             // Tree; MoonTree handles its own virtualization and scrolling.
             .child(
                 constrain_folder_drag_to_tree(div())
@@ -412,6 +416,48 @@ impl StrategiesView {
     }
 
     /// Render the kind-filter combo box with "all kinds" and the kinds currently present.
+    /// The strip under the toolbar naming the quick filter in force, with a remove control.
+    ///
+    /// Args:
+    ///     quick: Quick filter in force.
+    ///     cx: View context used for palette, geometry and the remove listener.
+    ///
+    /// Returns:
+    ///     One row: the filter's name and a cross that clears it.
+    fn quick_filter_strip(&self, quick: QuickFilter, cx: &Context<Self>) -> AnyElement {
+        let p = MoonPalette::active(cx);
+        h_flex()
+            .debug_selector(|| "strat-quick-strip".into())
+            .w_full()
+            .px(design::ui_px(cx, 8.0))
+            .py(design::ui_px(cx, 4.0))
+            .child(
+                h_flex()
+                    .id("strat-quick-chip")
+                    .min_w_0()
+                    .gap(design::ui_px(cx, 6.0))
+                    .px(design::ui_px(cx, 8.0))
+                    .py(design::ui_px(cx, 2.0))
+                    .rounded(design::ui_px(cx, 10.0))
+                    .border_1()
+                    .border_color(moon(p.accent))
+                    .cursor_pointer()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.accent))
+                    .font_family(design::ui_font())
+                    .child(div().min_w_0().truncate().child(quick.label()))
+                    .child(div().flex_none().child("\u{2715}"))
+                    .tooltip(crate::panels::common::text_tooltip(
+                        t!("strat.quick_chip_remove_tip").to_string(),
+                    ))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                        this.filter.quick = None;
+                        this.on_filter_changed(cx);
+                    })),
+            )
+            .into_any_element()
+    }
+
     fn combo_kind(
         &self,
         current: String,
@@ -596,12 +642,24 @@ impl StrategiesView {
         pane: &LeftPaneFrame,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let start_label = t!("strat.start_checked").to_string();
-        let stop_label = t!("strat.stop_checked").to_string();
-        // The button says the verb; the tooltip says what it acts on. Deriving the tooltip from the
-        // caption instead would drop the object the moment the caption is shortened to fit.
-        let start_tip = t!("strat.start_checked_tip").to_string();
-        let stop_tip = t!("strat.stop_checked_tip").to_string();
+        // The buttons name their target: "Start (N)", N being exactly the strategies the captured
+        // plan acts on — the same plan the click dispatches, so the count cannot describe a
+        // different set. With nothing to act on they are disabled and say what to do instead.
+        let targets = pane.plan.target_count();
+        let core_count = pane.plan.core_count();
+        let (start_label, stop_label) = pane_cache::start_stop_labels(targets);
+        // The button says the verb; the tooltip says the whole sentence. Deriving the tooltip from
+        // the caption instead would drop the object the moment the caption is shortened to fit.
+        let (start_tip, stop_tip) = match targets {
+            0 => {
+                let none = t!("strat.start_stop_none_tip").to_string();
+                (none.clone(), none)
+            }
+            n => (
+                t!("strat.start_checked_tip_n", n = n, k = core_count).to_string(),
+                t!("strat.stop_checked_tip_n", n = n, k = core_count).to_string(),
+            ),
+        };
         // The same count the cached width was measured against, so the rendered label and the
         // density decision cannot describe different states.
         let staged = pane.staged;
@@ -609,26 +667,9 @@ impl StrategiesView {
 
         // Measured behind the pane cache: one full set of labels is ~40 uncached per-glyph
         // advances, and this row is rebuilt on every hover repaint.
-        let measured_label_width = pane.footer_label_width;
-        // Five native leading icons remain in both densities. The full state additionally reserves
-        // their label gaps, six group gaps, outer padding, and the hairline divider.
-        //
-        // The two move buttons are counted separately below because they never take a label: they
-        // cost their own width and one group gap each in BOTH densities, and leaving them out of
-        // this sum would let the labelled state be chosen for a row that no longer fits it.
-        let action_icon_width = design::action_icon_px(cx);
-        // Labeled footer buttons set `.padding_x(7.0)`, which replaces the tier's pad_x rather
-        // than adding to it — so this 7-unit inset is the pad they actually draw, not a second
-        // copy on top of Sm/Md/Lg's 8/12/16.
-        let labeled_pad = design::ui_value(cx, 7.0) * 2.0 * 5.0;
-        let fixed_width = 5.0 * action_icon_width
-            + design::ui_value(cx, 5.0 * 6.0 + 6.0 * design::CHROME_GAP + 16.0)
-            + 1.0
-            + labeled_pad
-            + 2.0 * design::glyph_btn_w(cx)
-            + 2.0 * design::ui_value(cx, design::CHROME_GAP);
-        let show_labels =
-            ui::footer_labels_fit(self.panels.tree_w, fixed_width, measured_label_width);
+        let density =
+            pane_cache::footer_density(self.panels.tree_w, &pane.footer_widths, targets, cx);
+        let show_labels = density.toolbar_labels();
 
         // Each callback owns the exact plan this rendered button described. A workspace change
         // before dispatch cannot silently reduce that old multi-core action to a surviving subset.
@@ -640,6 +681,7 @@ impl StrategiesView {
             .primary()
             .leading_icon(MoonButtonIconSlot::new("icons/play.svg"))
             .tooltip(format!("▶ {start_tip}"))
+            .disabled(targets == 0)
             .on_click({
                 let plan = plan.clone();
                 cx.listener(move |this, _, _, cx| {
@@ -650,18 +692,27 @@ impl StrategiesView {
             .outline()
             .leading_icon(MoonButtonIconSlot::new("icons/pause.svg"))
             .tooltip(format!("■ {stop_tip}"))
+            .disabled(targets == 0)
             .on_click({
                 let plan = plan.clone();
                 cx.listener(move |this, _, _, cx| {
                     this.apply_start_stop(plan.as_ref(), false, cx);
                 })
             });
-        if show_labels {
-            start = start.padding_x(7.0).label(start_label);
-            stop = stop.padding_x(7.0).label(stop_label);
-        } else {
-            start = start.width(icon_width);
-            stop = stop.width(icon_width);
+        match density {
+            pane_cache::FooterDensity::Full | pane_cache::FooterDensity::Verbs => {
+                start = start.padding_x(7.0).label(start_label);
+                stop = stop.padding_x(7.0).label(stop_label);
+            }
+            // Too narrow for the verb: the count alone, the verb being the icon beside it.
+            pane_cache::FooterDensity::Counts => {
+                start = start.padding_x(7.0).label(targets.to_string());
+                stop = stop.padding_x(7.0).label(targets.to_string());
+            }
+            pane_cache::FooterDensity::Icons => {
+                start = start.width(icon_width);
+                stop = stop.width(icon_width);
+            }
         }
 
         let group_gap = if show_labels {

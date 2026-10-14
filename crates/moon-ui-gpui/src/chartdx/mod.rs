@@ -211,5 +211,12 @@ pub struct ChartEngine {
     orders: OrdersStyle,
     scale: Option<f32>,
     follow: bool,
+    /// Whether the per-chart Live scope is in force (#688): the toolbar flag freezes this engine's
+    /// clock instead of parking its panes, and a pan never leaves this engine.
+    live_per_chart: bool,
+    /// The backend Live-resume generation this engine last applied; `None` until the first
+    /// frame. A newer one under the per-chart scope re-anchors every pane, even one this engine
+    /// never saw paused because it was not drawn (#688).
+    seen_resume_gen: Option<u64>,
     present_rate_hz: f32,
 }

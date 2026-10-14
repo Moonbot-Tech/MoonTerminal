@@ -131,12 +131,14 @@ impl Container {
     ///
     /// The terminal invariant is one market per `ChartEngine`; a multi-chart stack lives outside as
     /// a list of separate `ChartPanel` instances.
-    pub fn open_manual(&mut self, core: CoreId, market: &str, epoch_ms: f64) {
+    ///
+    /// Returns whether a NEW view was constructed, as opposed to re-tagging the open one.
+    pub fn open_manual(&mut self, core: CoreId, market: &str, epoch_ms: f64) -> bool {
         if self.find(core, market).is_some() {
             if let Some(p) = self.pane.as_mut() {
                 p.source = PaneSource::Manual;
             }
-            return;
+            return false;
         }
         let view = self.new_view(epoch_ms);
         self.pane = Some(Pane {
@@ -146,11 +148,14 @@ impl Container {
             view,
             pinned: false,
         });
+        true
     }
 
     /// Apply an AddToChart detect to one chart by extending TTL or replacing this `ChartPanel` market.
     ///
     /// The external `AddChartStack`, not an internal tiled canvas, owns multiple charts.
+    ///
+    /// Returns whether a NEW view was constructed, as opposed to extending the open one's TTL.
     pub fn push_auto(
         &mut self,
         core: CoreId,
@@ -158,7 +163,7 @@ impl Container {
         now_ms: f64,
         ttl_ms: f64,
         epoch_ms: f64,
-    ) {
+    ) -> bool {
         match self.find(core, market) {
             Some(_) => {
                 if let Some(p) = self.pane.as_mut() {
@@ -167,6 +172,7 @@ impl Container {
                         ttl_ms,
                     };
                 }
+                false
             }
             None => {
                 let view = self.new_view(epoch_ms);
@@ -180,6 +186,7 @@ impl Container {
                     view,
                     pinned: false,
                 });
+                true
             }
         }
     }

@@ -214,6 +214,9 @@ pub struct ChartPanel {
     /// AddToChart or Custom panel. Custom panes are normally pinned after population. Time-based
     /// expiry must not depend on backend data observations.
     ttl_timer_armed: bool,
+    /// The per-chart Live scope's idle auto-return for this panel (#688), re-armed by every
+    /// gesture that leaves a pane off the live edge; replacing it cancels the previous wait.
+    idle_return_task: Option<Task<()>>,
     /// Whether the reader is using this chart, which holds back its automatic closes.
     use_track: in_use::UseTrack,
     order_drag: Option<OrderDrag>,

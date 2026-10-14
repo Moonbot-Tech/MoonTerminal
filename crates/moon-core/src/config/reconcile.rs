@@ -13,7 +13,7 @@ use super::schema::{
     TelegramConfig, UiThemeMode, clamp_chart_memory_percent, clamp_chart_stack_height,
     repair_ui_scale,
 };
-use super::servers::{self, CoreSortMode};
+use super::servers::{self, CoreSortMode, LiveScope};
 use super::uid_counter::UidCounter;
 use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
@@ -60,6 +60,8 @@ pub struct Merged {
     pub core_sort: CoreSortMode,
     /// Which conversion every quote-money surface applies.
     pub report_valuation_mode: ValuationMode,
+    /// Whether a pan reaches every chart or only its own.
+    pub live_scope: LiveScope,
     /// Durable uid counter, already advanced past any uid handed out during this merge.
     pub next_uid: UidCounter,
     /// Legacy hotkeys from settings.toml (schema < v13), used only for one-time migration
@@ -107,6 +109,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     let chart_memory_percent = clamp_chart_memory_percent(meta.chart_memory_percent);
     let core_sort = meta.core_sort;
     let report_valuation_mode = meta.report_valuation_mode;
+    let live_scope = meta.live_scope;
     let hotkeys = meta.hotkeys;
     let mut telegram = sf.telegram;
     dirty |= telegram.adopt_legacy_owner();
@@ -225,6 +228,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
         chart_memory_percent,
         core_sort,
         report_valuation_mode,
+        live_scope,
         next_uid,
         hotkeys,
         dirty,
@@ -261,6 +265,7 @@ pub fn split(
     chart_memory_percent: u16,
     core_sort: CoreSortMode,
     report_valuation_mode: ValuationMode,
+    live_scope: LiveScope,
     next_uid: u64,
     telegram: TelegramConfig,
 ) -> (ServersFile, SettingsFile) {
@@ -299,6 +304,7 @@ pub fn split(
         core_groups: core_groups.to_vec(),
         core_sort,
         report_valuation_mode,
+        live_scope,
         next_uid,
         servers: servers
             .iter()

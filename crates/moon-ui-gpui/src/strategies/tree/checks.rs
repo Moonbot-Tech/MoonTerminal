@@ -182,12 +182,14 @@ impl StrategiesView {
         // Prepared before the store borrow, from the live filter: the click acts on what the row
         // covers NOW. That is a narrower set than the row's caption counts, which ignores search
         // and active-only on purpose — see `subtree_check_targets`.
-        let filter = self.filter.prepare();
         let targets = {
             let store = self.backend.read(cx).session.store();
             let Some(cd) = store.core(core) else {
                 return;
             };
+            // Scoped to this core so a per-core quick filter (open orders, unconfirmed edits)
+            // covers exactly the rows the tree draws under it.
+            let filter = self.filter.prepare_for_core(cd);
             subtree_check_targets(&cd.strategies, path, &filter)
         };
         let checked = !subtree_displayed_all_checked(&targets, &self.staged, core);

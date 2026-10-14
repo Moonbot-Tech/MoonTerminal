@@ -120,8 +120,9 @@ pub use quiet::{QuietCfg, QuietWarnBypass};
 pub use schema::{TelegramConfig, UiThemeMode};
 pub use secrets::Secret;
 pub use servers::{
-    ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ManualStratState, ServerConfig,
-    StratSlot, TotalMode, TransportVersion, WorkspaceMembership, key_is_readable, seeded_transport,
+    ChartBucket, CoreSortMode, FeedFlags, LiveScope, MANUAL_STRAT_SLOTS, ManualStratState,
+    ServerConfig, StratSlot, TotalMode, TransportVersion, WorkspaceMembership, key_is_readable,
+    seeded_transport,
 };
 pub use station_cores::{StationCoreSelection, select_station_cores};
 pub use store::{CoreKeyEntry, read_core_keys};
@@ -331,6 +332,9 @@ pub struct AppConfig {
     /// Which conversion every quote-money surface applies (`settings.toml`). Defaults to
     /// `Historical`, the at-trade-time rate; the current-rate mode is deliberately opt-in.
     pub report_valuation_mode: ValuationMode,
+    /// Whether a pan reaches every chart or only its own (`settings.toml`). Defaults to
+    /// `AllCharts`, the original application-wide Live flag (#688).
+    pub live_scope: LiveScope,
     /// Next uid candidate after config entries and the supplied durable-store floor are reconciled.
     ///
     /// Private to `config`: a `pub` field could be overwritten with a stale counter from
@@ -395,6 +399,7 @@ impl AppConfig {
             chart_memory_percent: Default::default(),
             core_sort: Default::default(),
             report_valuation_mode: Default::default(),
+            live_scope: Default::default(),
             hotkeys: Default::default(),
             theme: Default::default(),
             orders: Default::default(),
@@ -514,6 +519,7 @@ impl AppConfig {
                 chart_memory_percent: merged.chart_memory_percent,
                 core_sort: merged.core_sort,
                 report_valuation_mode: merged.report_valuation_mode,
+                live_scope: merged.live_scope,
                 next_uid: merged.next_uid,
                 hotkeys,
                 theme,
@@ -836,6 +842,7 @@ impl AppConfig {
             chart_memory_percent: settings.chart_memory_percent,
             core_sort: settings.core_sort,
             report_valuation_mode: settings.report_valuation_mode,
+            live_scope: settings.live_scope,
             // The counter starts above the highest uid issued above, before applying the optional
             // store floor. This mode can share `data/` with encrypted-config runs.
             next_uid: UidCounter::new(next, uid_floor),
@@ -944,6 +951,7 @@ impl AppConfig {
             self.chart_memory_percent,
             self.core_sort,
             self.report_valuation_mode,
+            self.live_scope,
             self.next_uid.get(),
             self.telegram.clone(),
         );
@@ -1095,6 +1103,8 @@ impl AppConfig {
             // The conversion applied to quote money is a read-side presentation choice: it changes
             // no session, window, or connection.
             ValuationMode::default(),
+            // Live scope is input behaviour on charts already open: no session or window.
+            LiveScope::default(),
             // The uid counter advances on save and does not describe structure by itself.
             0,
             // Telegram credentials are not a session/window reconnect trigger, and the token

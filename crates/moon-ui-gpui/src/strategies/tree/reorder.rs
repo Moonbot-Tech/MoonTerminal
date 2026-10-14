@@ -33,7 +33,7 @@ use moon_core::session::{CoreId, CoreStore};
 use moon_core::venue::CoreVenue;
 
 use super::super::StrategiesView;
-use super::super::filter::PreparedFilter;
+use super::super::filter::{PreparedFilter, StrategyFilter};
 use super::super::logic::selected_keys;
 use super::ops::{self, MoveStep};
 
@@ -185,7 +185,7 @@ impl StrategiesView {
         folder: &[String],
         step: MoveStep,
     ) -> Option<Vec<u64>> {
-        if !self.filter.core_matches(venues.get(&core)) {
+        if !self.filter.core_matches(venues.get(&core)) || reorder_blocked(&self.filter) {
             return None;
         }
         let filter = self.filter.prepare();
@@ -264,6 +264,9 @@ impl StrategiesView {
         // Search forces every core and folder open, exactly as the tree build reads it.
         let searching = filter.searching();
         let mut cores: Vec<MovableCore<'a>> = Vec::new();
+        if reorder_blocked(&self.filter) {
+            return MoveScope { filter, cores };
+        }
         for (core, id) in selected_keys(self) {
             if let Some(entry) = cores.iter_mut().find(|entry| entry.core == core) {
                 entry.selected.insert(id);
@@ -445,6 +448,23 @@ impl StrategiesView {
         });
         before != self.pending_order.len()
     }
+}
+
+/// Whether reordering is refused outright under the filter in force.
+///
+/// A quick filter hides rows the move would step over, and two of them (open orders, unconfirmed
+/// edits) can only be answered per core, so a move planned against the unscoped predicate could
+/// swap a visible strategy with a hidden neighbour. A reorder is a write to the core, so it fails
+/// CLOSED: the move buttons, their menu entries and the chord are disabled until the quick-filter
+/// chip is removed, rather than scoped to rows the predicate may not see.
+///
+/// Args:
+///     filter: The window's stored filter.
+///
+/// Returns:
+///     `true` while any quick filter is in force.
+pub(super) fn reorder_blocked(filter: &StrategyFilter) -> bool {
+    filter.quick.is_some()
 }
 
 #[cfg(test)]

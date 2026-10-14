@@ -509,6 +509,21 @@ pub fn toolbar(
     } else {
         t!("toolbar.pause").to_string()
     };
+    // Under the per-chart Live scope the segment shows the clock alone, not any one chart's
+    // state, and its tooltip says so (#688).
+    let live_tip = {
+        let b = backend.read(cx);
+        if b.preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .live_scope
+            .per_chart()
+        {
+            t!("toolbar.live_tip_each").to_string()
+        } else {
+            t!("toolbar.live_tip").to_string()
+        }
+    };
     let backend_live = backend.clone();
     // §5 SESSION — Live is fenced off from the trading parameters to its left: it governs whether
     // the chart follows the market, not anything about an order.
@@ -518,7 +533,7 @@ pub fn toolbar(
                 .width(design::font_w(cx, LIVE_W))
                 .variant(MoonButtonVariant::Soft)
                 // Keep the localized interaction hint reachable without adding another row label.
-                .tooltip(t!("toolbar.live_tip").to_string())
+                .tooltip(live_tip)
                 .segment(
                     MoonButtonSegment::new("●")
                         .color(live_tone)

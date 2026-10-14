@@ -76,6 +76,7 @@ impl Render for ChartPanel {
             theme,
             orders_style,
             follow,
+            live_scope,
             prospective_usd,
             candle_view,
             chart_graphics,
@@ -122,7 +123,8 @@ impl Render for ChartPanel {
             (
                 theme,
                 orders,
-                b.follow,
+                (b.follow, b.live_resume_gen()),
+                eff.live_scope,
                 prospective,
                 candle_view,
                 chart_graphics,
@@ -156,7 +158,9 @@ impl Render for ChartPanel {
             | self.chart.set_line_labels(self.line_labels)
             | self.chart.set_cursor_labels(self.cursor_labels)
             | self.chart.set_prospective_usd(prospective_usd)
-            | self.chart.set_follow(follow, now_unix_ms());
+            | self
+                .chart
+                .apply_live(live_scope, follow.0, follow.1, now_unix_ms());
         // While compare lock is active, preserve the anchor's Y window, overriding scale each
         // frame. The engine's set_locked_y is idempotent and returns false when unchanged; the
         // panel's set_locked_y handles clearing the lock and restoring configured/automatic scale.

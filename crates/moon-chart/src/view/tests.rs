@@ -1470,3 +1470,126 @@ fn x_sync_tracks_the_live_clock_and_supersedes_retained_framing() {
     view.ensure_default_window(1200.0, 60.0, None);
     assert_eq!(view.px_per_ms, 0.25);
 }
+
+/// Process launch for the #688 tests: hours before `NOW_688`, as after a long session.
+const LAUNCH_688: f64 = 1_700_000_000_000.0;
+/// Wall clock for the #688 tests, six hours after launch.
+const NOW_688: f64 = LAUNCH_688 + 6.0 * 3_600_000.0;
+
+/// One pixel of time at the view's current scale: the anchor is quantized to whole pixels.
+fn one_px_ms(view: &ChartView) -> f64 {
+    1.0 / view.px_per_ms as f64
+}
+
+/// Catches `park_at_live_edge` parking a never-prepared view where it stands (#688): a chart
+/// opened while the toolbar shows Pause would open at the process-launch timestamp, hours behind
+/// the market on an empty plot, and could never rejoin on its own.
+#[test]
+fn pause_parks_a_never_prepared_view_at_now_not_at_launch() {
+    let mut view = ChartView::new(LAUNCH_688);
+    view.park_at_live_edge(NOW_688);
+    assert!(!view.follow);
+    assert!(
+        view.manual_persistent(),
+        "the application-wide Pause stays sticky"
+    );
+    assert!((view.right_time_ms - NOW_688).abs() <= one_px_ms(&view));
+}
+
+/// Catches `park_at_live_edge` dragging a view the user had already panned into history back to
+/// `now`: only a following view is pinned, a parked one keeps its position.
+#[test]
+fn pause_leaves_a_view_in_history_where_it_was() {
+    let mut view = ChartView::new(LAUNCH_688);
+    view.resume_live(NOW_688);
+    view.pan_x_px(5_000.0, NOW_688, 1_000.0);
+    let parked_at = view.right_time_ms;
+    assert!(parked_at < NOW_688 - 1_000.0);
+    view.park_at_live_edge(NOW_688 + 60_000.0);
+    assert_eq!(view.right_time_ms, parked_at);
+}
+
+/// Catches the per-chart Pause stamping a manual park (#688): a chart at the live edge must stay
+/// "at the edge, clock stopped" — following, rejoin-able, not walking — pinned at the Pause's `now`.
+#[test]
+fn per_chart_pause_freezes_the_clock_without_a_manual_park() {
+    let mut view = ChartView::new(LAUNCH_688);
+    view.resume_live(NOW_688);
+    assert!(view.set_clock_frozen(true, NOW_688));
+    assert!(view.follow, "a frozen chart is still at the edge");
+    assert!(!view.manual_persistent());
+    assert!(!view.is_live(NOW_688), "nothing may walk a frozen anchor");
+    let pinned = view.right_time_ms;
+    view.follow_edge(NOW_688 + 30_000.0, NOW_688 + 30_000.0);
+    assert_eq!(
+        view.right_time_ms, pinned,
+        "the anchor advanced under Pause"
+    );
+    assert!(!view.set_clock_frozen(true, NOW_688 + 1.0), "idempotent");
+}
+
+/// Catches a chart opened under the per-chart Pause freezing at the launch timestamp (#688).
+#[test]
+fn per_chart_pause_pins_a_never_prepared_view_at_now() {
+    let mut view = ChartView::new(LAUNCH_688);
+    view.set_clock_frozen(true, NOW_688);
+    assert!((view.right_time_ms - NOW_688).abs() <= one_px_ms(&view));
+    assert!(view.follow);
+}
+
+/// Catches the per-chart Live failing to re-anchor a chart the user had panned into history:
+/// MoonBot's button brings every chart back to `now` (#688).
+#[test]
+fn per_chart_live_reanchors_a_panned_view_to_now() {
+    let mut view = ChartView::new(LAUNCH_688);
+    view.resume_live(NOW_688);
+    view.set_clock_frozen(true, NOW_688);
+    view.pan_x_px(5_000.0, NOW_688, 1_000.0);
+    assert!(!view.follow);
+    let later = NOW_688 + 90_000.0;
+    assert!(view.set_clock_frozen(false, later));
+    assert!(view.follow && view.is_live(later));
+    assert_eq!(view.right_time_ms, later);
+}
+
+/// Catches the plain wheel walking a frozen chart's anchor to `now` (#688, #680): on a chart at the
+/// edge it stays a scale-only gesture, and the clock it scales under is stopped.
+#[test]
+fn plain_wheel_on_a_frozen_view_scales_only() {
+    let mut view = ChartView::new(LAUNCH_688);
+    view.ensure_default_window(1_000.0, 60.0, None);
+    view.resume_live(NOW_688);
+    view.set_clock_frozen(true, NOW_688);
+    let pinned = view.right_time_ms;
+    view.zoom_x_at(1.25, 1_000.0, 500.0, NOW_688 + 45_000.0, XZoom::Plain);
+    assert!(view.follow, "plain wheel keeps a chart at the edge");
+    assert_eq!(view.right_time_ms, pinned);
+}
+
+/// Catches the per-chart idle auto-return firing early, on a toolbar Pause, or on a chart that never
+/// left the edge: only a pan/zoom leave idle for `AUTO_RESUME_LIVE_MS` is due (#657, #688).
+#[test]
+fn idle_return_is_due_only_after_an_idle_pan_leave() {
+    let mut view = ChartView::new(LAUNCH_688);
+    view.resume_live(NOW_688);
+    assert!(!view.idle_return_due(NOW_688 + super::AUTO_RESUME_LIVE_MS));
+    view.pan_x_px(5_000.0, NOW_688, 1_000.0);
+    assert!(!view.idle_return_due(NOW_688 + super::AUTO_RESUME_LIVE_MS - 1.0));
+    assert!(view.idle_return_due(NOW_688 + super::AUTO_RESUME_LIVE_MS));
+    view.set_manual_persistent();
+    assert!(!view.idle_return_due(NOW_688 + 10.0 * super::AUTO_RESUME_LIVE_MS));
+}
+
+/// Catches a time-scale sync from another chart walking an anchor the per-chart Pause froze (#688).
+#[test]
+fn x_sync_keeps_a_frozen_anchor() {
+    let mut view = ChartView::new(LAUNCH_688);
+    view.resume_live(NOW_688);
+    view.set_clock_frozen(true, NOW_688);
+    let pinned = view.right_time_ms;
+    assert!(view.set_px_per_ms_sync(view.px_per_ms * 2.0, NOW_688 + 60_000.0));
+    assert_eq!(
+        view.right_time_ms, pinned,
+        "the sync resumed a paused chart"
+    );
+}

@@ -19,8 +19,8 @@ use super::*;
 ///     color: Heading text color.
 ///     weight: Heading font weight.
 ///     target: Core, folder, or Deleted collection toggled by the row.
-///     engine: The core's confirmed global strategy engine; only a core heading draws the marker,
-///         and only for `Some(false)`.
+///     engine: The core's confirmed global strategy engine; only a core heading draws it, as the
+///         status pill at the row's start.
 ///     step: Local unscaled text-size step read from the tree's own preference.
 ///     app: Application context used for palette and sizing tokens.
 ///
@@ -45,6 +45,20 @@ pub(super) fn core_folder_row(
     app: &App,
 ) -> AnyElement {
     let p = MoonPalette::active(app);
+    // A core holding no strategy is a destination, not a working unit: its counters fade with its
+    // caption so the eye skips it in a column of busy cores.
+    let dim = matches!(&target, ToggleTarget::Core(_)) && counts.empty;
+    // Every heading at once, so the counter column stays one column across cores and folders.
+    let compact = compact_headings(view.read(app).panels.tree_w);
+    let (primary, primary_w, orders, orders_w) = match compact {
+        true => (
+            counts.primary_short,
+            COUNTS_SLOT_W_COMPACT,
+            counts.orders_short,
+            ORDERS_SLOT_W_COMPACT,
+        ),
+        false => (counts.primary, COUNTS_SLOT_W, counts.orders, ORDERS_SLOT_W),
+    };
     // In this core/folder row type, only actual folders receive the egui-style context menu for
     // rename, copy, paste, create, and delete; core and Deleted headings do not.
     // The bulk checkbox stages this row's own subtree, which the core root spells as the empty
@@ -117,6 +131,18 @@ pub(super) fn core_folder_row(
             // as every sibling at its depth.
             None => checks::bulk_check_slot(&check_row_id),
         })
+        // Status first: a core row opens with its engine word, so a column of cores reads as a
+        // column of states before it reads as a column of names. Folders and Deleted carry none —
+        // the engine belongs to the core, and a folder repeating it would be sixty copies of one
+        // fact.
+        .when(matches!(&target, ToggleTarget::Core(_)), |row| {
+            row.child(engine_pill(
+                EnginePill::from_engine(engine),
+                compact,
+                step,
+                app,
+            ))
+        })
         // Folder mark after the checkbox, in the same place a strategy row draws its
         // status dot. The caret slot above stays one disclosure box wide, so the
         // checkbox column does not move and strategy rows keep their indent.
@@ -139,22 +165,6 @@ pub(super) fn core_folder_row(
                     .render(),
             ),
         )
-        .when(
-            matches!(engine, Some(false)) && matches!(&target, ToggleTarget::Core(_)),
-            |row| {
-                row.child(
-                    div().flex_none().child(
-                        MoonText::new(rust_i18n::t!("strat.tree_engine_stopped_tag").to_string())
-                            .mono(false)
-                            .uppercase(false)
-                            .color(p.amber)
-                            .font_size(design::body_font_base(app, step))
-                            .line_height(ROW_LINE_BASE + step)
-                            .render(),
-                    ),
-                )
-            },
-        )
         // The counters, muted and right-aligned in fixed slots after the flexible caption, so they
         // land on one column across every row instead of wherever each name happened to end.
         //
@@ -169,21 +179,15 @@ pub(super) fn core_folder_row(
                 .items_center()
                 .gap(design::ui_px(app, COUNTS_GAP))
                 .child(counts_slot(
-                    counts.primary,
-                    COUNTS_SLOT_W,
-                    p.text_muted,
+                    primary,
+                    primary_w,
+                    if dim { p.text_faint } else { p.text_muted },
                     step,
                     app,
                 ))
                 // One tier softer than the fraction beside it: the two numbers mean different
                 // things, and drawn in one colour "57/57 (50)" reads as a single three-part figure.
-                .child(counts_slot(
-                    counts.orders,
-                    ORDERS_SLOT_W,
-                    p.text_soft,
-                    step,
-                    app,
-                ))
+                .child(counts_slot(orders, orders_w, p.text_soft, step, app))
                 .tooltip(crate::panels::common::text_tooltip(counts.tip)),
         )
         .children({

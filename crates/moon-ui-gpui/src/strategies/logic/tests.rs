@@ -129,6 +129,7 @@ fn filter(search: &str, kind: Option<u8>, dir: Option<bool>, active_only: bool) 
         dir,
         exchange: None,
         active_only,
+        quick: None,
     }
     .prepare()
 }
@@ -785,6 +786,7 @@ fn search_filter(search: &str) -> StrategyFilter {
         dir: None,
         exchange: None,
         active_only: false,
+        quick: None,
     }
 }
 

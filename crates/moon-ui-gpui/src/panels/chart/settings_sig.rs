@@ -44,6 +44,10 @@ pub(super) struct ChartSettingsSig {
     pub(super) theme: ChartTheme,
     pub(super) orders: OrdersStyleSet,
     pub(super) follow: bool,
+    /// The Live scope and the Live-resume generation (#688): render is the only place either
+    /// reaches the engine, so an idle chart must be woken by a change to them.
+    pub(super) live_scope: moon_core::config::LiveScope,
+    pub(super) live_resume_gen: u64,
     /// The panel's EFFECTIVE chart-drawing settings. In the signature because a panel following the
     /// global default is changed from a DIFFERENT entity — the popup writes `layout.chart_graphics`
     /// — and without this, an otherwise idle chart never re-renders, while `render` is the only
@@ -81,6 +85,8 @@ impl PartialEq for ChartSettingsSig {
             && self.theme == other.theme
             && self.orders == other.orders
             && self.follow == other.follow
+            && self.live_scope == other.live_scope
+            && self.live_resume_gen == other.live_resume_gen
             && self.chart_graphics == other.chart_graphics
             && self.candle_view == other.candle_view
             && (std::rc::Rc::ptr_eq(&self.chart_labels, &other.chart_labels)
@@ -112,6 +118,8 @@ pub(super) fn chart_settings_sig(
         theme: effective.chart_theme().clone(),
         orders: effective.orders.clone(),
         follow: backend.follow,
+        live_scope: effective.live_scope,
+        live_resume_gen: backend.live_resume_gen(),
         // From `layout`, not from the previewed config: layout.toml has no Settings-window draft.
         // NORMALIZED, because this value is COMPARED: a hand-edited `nan` never equals itself and
         // would make every backend notification look like a settings change.

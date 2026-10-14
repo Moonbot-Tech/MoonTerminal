@@ -9,6 +9,11 @@ pub(crate) enum NodeData {
         label: String,
         logo: Option<Arc<RenderImage>>,
     },
+    /// Collapsible heading gathering the cores whose engine reported stopped, above every venue.
+    StoppedSection {
+        /// How many cores the section lists.
+        count: usize,
+    },
     Core {
         core: CoreId,
         label: String,

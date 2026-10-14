@@ -609,6 +609,64 @@ impl<'de> Deserialize<'de> for TotalMode {
     }
 }
 
+/// How far a pan on one chart reaches the application-wide Live/Pause flag (#688).
+///
+/// `AllCharts` is the original arrangement: a chart's consolidated follow state is published to
+/// the toolbar flag and pushed back down into every other chart. `EachChart` is MoonBot's: a pan
+/// stays on its own chart, and the toolbar flag only stops or restarts the clock every chart's
+/// anchor advances by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LiveScope {
+    /// One Live flag for the whole application; a pan on any chart pauses every chart.
+    #[default]
+    AllCharts,
+    /// Every chart follows the live edge on its own; the toolbar only freezes the clock.
+    EachChart,
+}
+
+impl LiveScope {
+    /// Every scope, in the order the Settings dropdown lists them.
+    pub const ALL: [Self; 2] = [Self::AllCharts, Self::EachChart];
+
+    /// Stable code persisted in `settings.toml`.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::AllCharts => "all",
+            Self::EachChart => "each",
+        }
+    }
+
+    /// Parse a `settings.toml` code, returning `None` for an unknown code.
+    ///
+    /// `Deserialize` maps an unknown code to `Default` (`AllCharts`).
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code.trim() {
+            "all" => Some(Self::AllCharts),
+            "each" => Some(Self::EachChart),
+            _ => None,
+        }
+    }
+
+    /// Whether every chart keeps its own follow state (`EachChart`).
+    pub const fn per_chart(self) -> bool {
+        matches!(self, Self::EachChart)
+    }
+}
+
+impl Serialize for LiveScope {
+    /// Serialize the stable lowercase code used by `settings.toml`.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for LiveScope {
+    /// Read a live-scope code; anything else becomes the default (see [`forgiving_code`]).
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        forgiving_code(d, "a live scope (all / each)", Self::from_code)
+    }
+}
+
 /// User-selected order for every core list in the application.
 ///
 /// The choice is stored globally; `session::core_order` performs ranking.

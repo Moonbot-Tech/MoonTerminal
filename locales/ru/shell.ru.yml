@@ -63,6 +63,7 @@ toolbar.scale_auto_short: "А"
 toolbar.live: "Live"
 toolbar.pause: "Пауза"
 toolbar.live_tip: "Live: график бежит за рынком. Пауза: заморожен, можно листать (ЛКМ-перетаскивание, колесо)."
+toolbar.live_tip_each: "Live: все графики бегут за рынком. Пауза: время на всех графиках остановлено. Каждый график листается отдельно (ЛКМ-перетаскивание, колесо)."
 toolbar.strategies: "Стратегии"
 toolbar.screener: "Скринер"
 # Overflow button at the right end of a narrow toolbar: holds the launchers that did not fit.

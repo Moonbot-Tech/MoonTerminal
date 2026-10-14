@@ -5,8 +5,8 @@ use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 
 use super::{
-    FolderFill, NodeData, RowCounts, ToggleTarget, disclosure_caret_shift, disclosure_caret_x,
-    drop_dest, heading_chrome, id_exchange, tree_row_indent,
+    EnginePill, FolderFill, NodeData, ORDERS_NONE, RowCounts, ToggleTarget, disclosure_caret_shift,
+    disclosure_caret_x, drop_dest, heading_chrome, id_exchange, tree_row_indent,
 };
 
 /// Hiding empty folders during search would lose both a matching empty folder and an empty child
@@ -448,17 +448,254 @@ fn preview_closures_wire_drag_chip_confinement() {
 }
 
 /// `tree/moon/counts.rs::RowCounts::subtree`: dropping the open-orders tooltip clause would leave the
-/// displayed `(N)` count unexplained, so users could no longer tell what the second counter means.
+/// displayed "N ord." count unexplained, so users could no longer tell what the second counter means.
 #[test]
 fn subtree_tooltip_names_counts_and_open_orders_when_present() {
     let _locale = crate::test_locale::force("en");
-    let with_orders = RowCounts::subtree(1, 2, 3, None);
+    let with_orders = RowCounts::subtree(1, 2, Some(3), None);
     let counts_tip = rust_i18n::t!("strat.tree_counts_tip").to_string();
     let orders_tip = rust_i18n::t!("strat.tree_open_orders_tip").to_string();
     assert!(with_orders.tip.to_string().contains(&counts_tip));
     assert!(with_orders.tip.to_string().contains(&orders_tip));
 
-    let without_orders = RowCounts::subtree(1, 2, 0, None);
+    let without_orders = RowCounts::subtree(1, 2, Some(0), None);
     assert_eq!(without_orders.tip.to_string(), counts_tip);
-    assert!(without_orders.orders.is_empty());
+    assert_eq!(without_orders.orders, ORDERS_NONE);
+}
+
+/// `RowCounts::subtree`: the counters name what they count. A refactor back to `57/57 (50)`
+/// would hand the operator a three-part figure again; a folder drawing a dash would read as a
+/// folder with orders that failed to arrive.
+#[test]
+fn subtree_counts_are_spelled_with_words_and_folders_leave_orders_blank() {
+    let _locale = crate::test_locale::force("en");
+    let core = RowCounts::subtree(54, 57, Some(50), Some(true));
+    assert_eq!(core.primary, "54 of 57 on");
+    assert_eq!(core.orders, "50 ord.");
+    let folder = RowCounts::subtree(3, 4, None, Some(true));
+    assert_eq!(folder.primary, "3 of 4 on");
+    assert!(folder.orders.is_empty());
+    // A stopped engine runs nothing, whatever is ticked — the same zero as before the rewording.
+    let stopped = RowCounts::subtree(38, 38, Some(0), Some(false));
+    assert_eq!(stopped.primary, "0 of 38 on");
+}
+
+/// `EnginePill::from_engine`: the pill must follow the CONFIRMED engine state only; an
+/// unconfirmed core claiming "running" would tell the operator strategies trade when they may not.
+#[test]
+fn engine_pill_claims_nothing_for_an_unconfirmed_core() {
+    assert_eq!(EnginePill::from_engine(Some(true)), EnginePill::Running);
+    assert_eq!(EnginePill::from_engine(Some(false)), EnginePill::Stopped);
+    assert_eq!(EnginePill::from_engine(None), EnginePill::Unknown);
+    assert!(EnginePill::Unknown.label().is_empty());
+}
+
+/// Only a core that REPORTED its engine stopped moves into the Stopped section; running and
+/// unconfirmed cores stay with the rest, and both halves keep canonical order.
+#[test]
+fn the_stopped_partition_moves_only_reported_stops() {
+    let (stopped, others) = super::build::partition_stopped(
+        [Some(true), Some(false), None, Some(false), Some(true)].into_iter(),
+    );
+    assert_eq!(stopped, vec![1, 3]);
+    assert_eq!(others, vec![0, 2, 4]);
+    let (stopped, others) = super::build::partition_stopped(std::iter::empty());
+    assert!(stopped.is_empty() && others.is_empty());
+}
+
+/// The core row's own source, scanned so the layout harness below cannot drift from it.
+const HEADINGS_SRC: &str = include_str!("headings.rs");
+
+/// The harness rebuilds a core heading from the SAME pieces `core_folder_row` draws, in its order;
+/// the full row needs a live window entity for its checkbox and run cell, so it cannot be mounted
+/// in a test. This pins those pieces to the production row.
+#[test]
+fn the_core_row_harness_uses_the_production_pieces() {
+    for piece in [
+        "EnginePill::from_engine(engine),",
+        "compact_headings(view.read(app).panels.tree_w)",
+        "COUNTS_SLOT_W_COMPACT,",
+        "COUNTS_SLOT_W,",
+        "ORDERS_SLOT_W),",
+        ".gap(design::ui_px(app, HEADING_GAP))",
+        ".gap(design::ui_px(app, COUNTS_GAP))",
+        "div().flex_1().min_w_0().truncate().child(",
+        "trading: true,",
+    ] {
+        assert!(
+            HEADINGS_SRC.contains(piece),
+            "core_folder_row no longer has {piece}"
+        );
+    }
+}
+
+/// Layout of a core heading in every locale.
+mod core_row_layout {
+    use gpui::{
+        Bounds, Context, InteractiveElement, IntoElement, ParentElement, Pixels, Render, Styled,
+        VisualTestContext, Window, div, px,
+    };
+    use moon_core::config::{Language, UiThemeMode};
+    use moon_ui::{MoonPalette, MoonText, MoonTheme, h_flex};
+
+    use super::super::{
+        COUNTS_GAP, COUNTS_SLOT_W, COUNTS_SLOT_W_COMPACT, EnginePill, HEADING_GAP, ORDERS_SLOT_W,
+        ORDERS_SLOT_W_COMPACT, RowCounts, compact_headings, counts_slot, engine_pill, row_h,
+    };
+    use crate::controls::core_run::{RunSlots, reserved_cell};
+    use crate::design;
+
+    /// The narrowest tree pane the split allows (`split.rs`).
+    const MIN_TREE_W: f32 = 240.0;
+    /// The window's default tree width (`PanelsLayout::default`).
+    const DEFAULT_TREE_W: f32 = 418.0;
+    /// The narrowest tree that still draws the worded row: the hardest case for it.
+    const COMPACT_EDGE_W: f32 = super::super::COMPACT_TREE_W;
+
+    struct Host {
+        pill: EnginePill,
+        width: f32,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let step = 0.0;
+            // Widest realistic figures: three-digit strategy counts, two-digit orders.
+            let counts = RowCounts::subtree(999, 999, Some(99), Some(true));
+            let slots = RunSlots {
+                status: false,
+                trading: true,
+                auto: false,
+            };
+            let compact = compact_headings(self.width);
+            let (primary, primary_w, orders, orders_w) = match compact {
+                true => (
+                    counts.primary_short.clone(),
+                    COUNTS_SLOT_W_COMPACT,
+                    counts.orders_short.clone(),
+                    ORDERS_SLOT_W_COMPACT,
+                ),
+                false => (
+                    counts.primary.clone(),
+                    COUNTS_SLOT_W,
+                    counts.orders.clone(),
+                    ORDERS_SLOT_W,
+                ),
+            };
+            let p = MoonPalette::active(cx);
+            let square = design::ui_px(cx, design::DISCLOSURE_BOX);
+            div().w(px(self.width)).child(
+                h_flex()
+                    .debug_selector(|| "row".into())
+                    .w_full()
+                    .h(row_h(cx, step))
+                    .pr(design::ui_px(cx, 6.0))
+                    .items_center()
+                    .gap(design::ui_px(cx, HEADING_GAP))
+                    // Caret box and checkbox column, as fixed squares.
+                    .child(div().flex_none().size(square))
+                    .child(div().flex_none().size(square))
+                    .child(
+                        div()
+                            .debug_selector(|| "pill".into())
+                            .flex_none()
+                            .child(engine_pill(self.pill, compact, step, cx)),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "name".into())
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(
+                                MoonText::new("CORE_A with a long synthetic name")
+                                    .mono(true)
+                                    .uppercase(false)
+                                    .render(),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .debug_selector(|| "counts".into())
+                            .flex_none()
+                            .items_center()
+                            .gap(design::ui_px(cx, COUNTS_GAP))
+                            .child(counts_slot(primary, primary_w, p.text_muted, step, cx))
+                            .child(counts_slot(orders, orders_w, p.text_soft, step, cx)),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "run".into())
+                            .flex_none()
+                            .children(reserved_cell(slots, cx)),
+                    ),
+            )
+        }
+    }
+
+    fn inside(child: Bounds<Pixels>, parent: Bounds<Pixels>) -> bool {
+        child.origin.x + px(0.5) >= parent.origin.x && child.right() <= parent.right() + px(0.5)
+    }
+
+    fn before(left: Bounds<Pixels>, right: Bounds<Pixels>) -> bool {
+        left.right() <= right.origin.x + px(0.5)
+    }
+
+    /// Every locale and pill: pill, name, counters and the run button sit left to right without
+    /// overlapping and inside the row, and only the name gives way — at the default tree width,
+    /// and at the narrowest the split allows.
+    #[gpui::test]
+    fn the_core_row_fits_in_every_locale(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+                cx,
+            );
+        });
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for pill in [
+                EnginePill::Running,
+                EnginePill::Stopped,
+                EnginePill::Unknown,
+            ] {
+                for width in [DEFAULT_TREE_W, COMPACT_EDGE_W, MIN_TREE_W] {
+                    let window = cx.open_window(gpui::size(px(width), px(200.0)), |_, _| Host {
+                        pill,
+                        width,
+                    });
+                    let mut visual = VisualTestContext::from_window(window.into(), cx);
+                    for _ in 0..3 {
+                        visual.update(|window, cx| {
+                            let _ = window.draw(cx);
+                        });
+                    }
+                    let at = format!("{} {pill:?} {width}px", language.code());
+                    let mut get = |id: &'static str| {
+                        visual
+                            .debug_bounds(id)
+                            .unwrap_or_else(|| panic!("{id} not laid out ({at})"))
+                    };
+                    let row = get("row");
+                    let pill_b = get("pill");
+                    let name = get("name");
+                    let counts = get("counts");
+                    let run = get("run");
+                    for (id, b) in [("pill", pill_b), ("counts", counts), ("run", run)] {
+                        assert!(inside(b, row), "{id} left the row ({at})");
+                    }
+                    assert!(before(pill_b, name), "pill overlaps the name ({at})");
+                    assert!(before(name, counts), "name overlaps the counters ({at})");
+                    assert!(before(counts, run), "counters overlap the button ({at})");
+                    if !compact_headings(width) {
+                        assert!(
+                            f32::from(name.size.width) >= 40.0,
+                            "name squeezed to {:.1}px in the worded row ({at})",
+                            f32::from(name.size.width)
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
