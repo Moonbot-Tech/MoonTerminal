@@ -1,6 +1,21 @@
 # Telegram Settings tab and later bot/Mini App strings.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+telegram.station.chat_uptime: "çalışma %{uptime}"
+telegram.station.chat_updated: "Güncellendi %{date}, %{time} UTC"
+telegram.station.chat_connecting: "bağlanıyor"
+telegram.station.chat_offline: "%{count} çevrimdışı"
+telegram.station.chat_bot: "bot"
+telegram.station.chat_auto_update: "oto güncelleme"
+telegram.station.chat_cpu: "İşlemci"
+telegram.station.chat_peak: "zirve"
+telegram.station.chat_station: "istasyon"
+telegram.station.chat_server: "sunucu"
+telegram.station.chat_free: "Boş: %{resources}"
+telegram.station.chat_memory_free: "bellek %{free}/%{total} GB"
+telegram.station.chat_disk_free: "disk %{free}/%{total} GB"
+telegram.station.chat_memory_used: "İstasyon belleği %{size} MB (zirve %{peak})"
+telegram.station.chat_tape: "Bant: işlem çevresi %{margin} · uzun %{long} dk sonrası"
 
 
 telegram.state.connected: "Bot bağlı"
@@ -323,9 +338,9 @@ telegram.station.free_of: "%{total} içinden %{free} boş"
 telegram.station.section_files: "En büyük dosyalar"
 telegram.station.files_more: "ve %{count} tane daha"
 telegram.station.no_readings: "İşlemci ve bellek: hizmet onları göremiyor — İstasyon sekmesinde “Yeniden kur”a basın."
-telegram.station.just_started: "Hizmet yeni başladı. İşlemci yükü satırları ilk tam dakikadan sonra görünür."
+telegram.station.just_started: "İşlemci yükü ilk tam dakikadan sonra görünür."
 telegram.station.no_host: "Sunucu rakamları: istasyonun hizmeti bu terminalden eski — güncelleyin."
-telegram.station.update_available: "İstasyonun yeni bir sürümü çıktı: %{version}."
+telegram.station.update_available: "İstasyonun yeni bir sürümü çıktı: %{version}"
 telegram.station.update_button: "%{version} sürümüne güncelle"
 telegram.station.release_unversioned: "Bu istasyon derlemesi bir sürümden değil: yalnızca terminalden güncellenir."
 telegram.station.release_unreadable: "Yeni sürüm denetlenemedi: %{error}"

@@ -1,6 +1,21 @@
 # Telegram Settings tab and later bot/Mini App strings.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+telegram.station.chat_uptime: "работает %{uptime}"
+telegram.station.chat_updated: "Обновлено %{date} в %{time} UTC"
+telegram.station.chat_connecting: "подключаются"
+telegram.station.chat_offline: "%{count} не на связи"
+telegram.station.chat_bot: "бот"
+telegram.station.chat_auto_update: "автообновление"
+telegram.station.chat_cpu: "Процессор"
+telegram.station.chat_peak: "пик"
+telegram.station.chat_station: "станция"
+telegram.station.chat_server: "сервер"
+telegram.station.chat_free: "Свободно: %{resources}"
+telegram.station.chat_memory_free: "память %{free}/%{total} ГБ"
+telegram.station.chat_disk_free: "диск %{free}/%{total} ГБ"
+telegram.station.chat_memory_used: "Станция занимает %{size} МБ памяти (пик %{peak})"
+telegram.station.chat_tape: "Лента: вокруг сделки %{margin} · долгая от %{long} мин"
 
 
 telegram.state.connected: "Бот подключён"
@@ -323,9 +338,9 @@ telegram.station.free_of: "свободно %{free} из %{total}"
 telegram.station.section_files: "Крупные файлы"
 telegram.station.files_more: "и ещё %{count}"
 telegram.station.no_readings: "Процессор и память: служба их не видит — нажми «Настроить заново» на вкладке «Станция»."
-telegram.station.just_started: "Служба только что запустилась. Строки нагрузки процессора появятся после первой полной минуты."
+telegram.station.just_started: "Нагрузка процессора появится после первой полной минуты."
 telegram.station.no_host: "Показатели сервера: служба станции старше этого терминала — обнови её."
-telegram.station.update_available: "Вышла новая версия станции: %{version}."
+telegram.station.update_available: "Вышла новая версия станции: %{version}"
 telegram.station.update_button: "Обновить до %{version}"
 telegram.station.release_unversioned: "Эта сборка станции не из релиза: обновляется только из терминала."
 telegram.station.release_unreadable: "Новую версию проверить не удалось: %{error}"
