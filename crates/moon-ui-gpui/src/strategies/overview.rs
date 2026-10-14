@@ -586,7 +586,7 @@ fn block(
         .into_any_element()
 }
 
-/// One clickable list line: a name and a muted trailing fact sharing the available row width.
+/// One clickable list line: the full name first, with a muted fact wrapping below when needed.
 ///
 /// Args:
 ///     id: Element id, derived from the line's identity.
@@ -607,12 +607,18 @@ fn line(
     cx: &App,
 ) -> AnyElement {
     let p = MoonPalette::active(cx);
+    // Explicit preferred widths keep intrinsic flex probes from leaving the text laid out at
+    // near-zero width inside the wrapping overview blocks. Oversized cells can still shrink.
+    let name_width = px(design::mono_body_text_width(cx, &name, 400.0).ceil());
+    let meta_width = px(design::mono_body_text_width(cx, &meta, 400.0).ceil());
+    let name_id = format!("{id}-name");
     let meta_id = format!("{id}-meta");
     h_flex()
         .id(id)
         .w_full()
         .min_w_0()
-        .items_center()
+        .flex_wrap()
+        .items_start()
         .gap(design::ui_px(cx, 10.0))
         .px(design::ui_px(cx, 12.0))
         .py(design::ui_px(cx, 6.0))
@@ -624,22 +630,23 @@ fn line(
         .text_size(design::t_body(cx))
         .child(
             div()
-                .flex_1()
+                .debug_selector(move || name_id.clone())
+                .flex_initial()
+                .w(name_width)
                 .min_w_0()
-                .truncate()
+                .whitespace_normal()
                 .text_color(moon(p.text))
                 .child(name),
         )
         .child(
             div()
                 .debug_selector(move || meta_id.clone())
-                // A percentage max-width on a non-shrinking text node can resolve against its
-                // intrinsic width and reduce even "empty" to an inert ellipsis. Allocate a real
-                // half-row slot, so the metadata has known space before text truncation runs.
-                .flex_1()
+                // Natural-width cells keep the name intact before the fact yields to a new row.
+                .flex_initial()
+                .w(meta_width)
                 .min_w_0()
                 .text_right()
-                .truncate()
+                .whitespace_normal()
                 .text_color(moon(p.text_muted))
                 .child(meta),
         )

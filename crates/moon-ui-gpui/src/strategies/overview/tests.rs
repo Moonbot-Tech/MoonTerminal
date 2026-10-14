@@ -6,8 +6,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    Bounds, Context, IntoElement, ParentElement, Pixels, Render, Styled, VisualTestContext, Window,
-    div, px,
+    Bounds, Context, InteractiveElement, IntoElement, ParentElement, Pixels, Render, Styled,
+    VisualTestContext, Window, div, px,
 };
 use moon_core::config::{Language, UiThemeMode};
 use moon_core::feed::{StrategyEditPhase, StrategyEditRow, StrategyRow};
@@ -15,8 +15,8 @@ use moon_core::session::store::CoreData;
 use moon_ui::MoonTheme;
 
 use super::{
-    OverviewModel, PENDING_LISTED, PendingEdit, STOPPED_LISTED, StoppedCore, overview_model,
-    overview_panel, toggle_quick,
+    OverviewClick, OverviewModel, PENDING_LISTED, PendingEdit, STOPPED_LISTED, StoppedCore, line,
+    overview_model, overview_panel, toggle_quick,
 };
 use crate::strategies::filter::QuickFilter;
 use crate::test_locale::force;
@@ -173,6 +173,7 @@ fn bounds(visual: &mut VisualTestContext, id: impl Into<String>, at: &str) -> Bo
         .unwrap_or_else(|| panic!("{id} not laid out ({at})"))
 }
 
+/// Whether the complete child rectangle is contained, allowing subpixel rounding.
 fn inside(child: Bounds<Pixels>, parent: Bounds<Pixels>) -> bool {
     child.origin.x + px(0.5) >= parent.origin.x
         && child.right() <= parent.right() + px(0.5)
@@ -181,8 +182,8 @@ fn inside(child: Bounds<Pixels>, parent: Bounds<Pixels>) -> bool {
 }
 
 /// Every locale, full and empty: tiles, figures, blocks and chips stay inside the minimum pane.
-/// Reintroducing the percentage cap on stopped metadata must fail: each short trailing fact
-/// needs enough laid-out width for its real text instead of reducing to a lone ellipsis.
+/// Reintroducing truncation on stopped metadata must fail: each short trailing fact
+/// needs enough laid-out width for its real text.
 #[gpui::test]
 fn the_overview_fits_the_narrowest_pane_in_every_locale(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
@@ -225,9 +226,10 @@ fn the_overview_fits_the_narrowest_pane_in_every_locale(cx: &mut gpui::TestAppCo
                 assert!(inside(value, tile), "tile {index} figure clipped ({at})");
             }
             for id in ["ov-block-pending", "ov-block-stopped"] {
+                let block = bounds(&mut visual, id, &at);
                 assert!(
-                    inside(bounds(&mut visual, id, &at), root),
-                    "{id} escaped ({at})"
+                    inside(block, root),
+                    "{id} escaped ({at}): block={block:?} root={root:?}"
                 );
                 let none = visual.debug_bounds(leak(format!("{id}-none")));
                 assert_eq!(none.is_some(), !full, "{id} empty state ({at})");
@@ -251,6 +253,110 @@ fn the_overview_fits_the_narrowest_pane_in_every_locale(cx: &mut gpui::TestAppCo
             for filter in QuickFilter::ALL {
                 let chip = bounds(&mut visual, format!("ov-chip-{}", filter.key()), &at);
                 assert!(inside(chip, root), "chip {} escaped ({at})", filter.key());
+            }
+        }
+    }
+}
+
+/// Production rows beside independent, explicitly wrapping text references.
+struct LineHost {
+    width: f32,
+    name: String,
+    meta: String,
+}
+
+impl Render for LineHost {
+    /// Draw the real row and full-text oracles in the same font and available content width.
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let reference = |id: &'static str, text: &str| {
+            let natural = crate::design::mono_body_text_width(cx, text, 400.0).ceil();
+            div()
+                .debug_selector(move || id.into())
+                .w(px(natural.min(self.width - 24.0)))
+                .font_family(crate::design::mono())
+                .text_size(crate::design::t_body(cx))
+                .whitespace_normal()
+                .child(text.to_string())
+        };
+        div()
+            .w(px(self.width))
+            .child(line(
+                "ov-test".into(),
+                self.name.clone(),
+                self.meta.clone(),
+                OverviewClick::Core(1),
+                Rc::new(|_, _, _| {}),
+                cx,
+            ))
+            .child(reference("name-reference", &self.name))
+            .child(reference("meta-reference", &self.meta))
+    }
+}
+
+/// An equal split or ellipsis would hide distinguishing last tokens; compare the production
+/// cells with complete text at natural width and wrapped width, in every locale and row state.
+#[gpui::test]
+fn list_names_and_facts_remain_complete(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            cx,
+        );
+    });
+    for language in Language::ALL {
+        let _locale = force(language.code());
+        for width in [240.0, PANE_W - 48.0, 800.0] {
+            for tail in ["LLM", "API"] {
+                for meta in [
+                    rust_i18n::t!("strat.overview_core_empty").to_string(),
+                    rust_i18n::t!("strat.overview_core_strats", n = 12345).to_string(),
+                    format!(
+                        "CORE_ALPHA$18 ~ EX-XX / UNIT_LONG ACC # 46 {tail} - {}",
+                        rust_i18n::t!("strat.overview_pending_timed_out")
+                    ),
+                ] {
+                    let name = format!("CORE_ALPHA$18 ~ EX-XX / UNIT_LONG ACC # 46 {tail}");
+                    let at = format!("{} width={width} tail={tail} meta={meta}", language.code());
+                    let natural =
+                        cx.update(|cx| crate::design::mono_body_text_width(cx, &name, 400.0));
+                    let window = cx.open_window(gpui::size(px(width), px(1000.0)), |_, _| {
+                        LineHost { width, name, meta }
+                    });
+                    let mut visual = VisualTestContext::from_window(window.into(), cx);
+                    for _ in 0..3 {
+                        visual.update(|window, cx| {
+                            let _ = window.draw(cx);
+                        });
+                    }
+                    let name = bounds(&mut visual, "ov-test-name", &at);
+                    let meta = bounds(&mut visual, "ov-test-meta", &at);
+                    for (actual, reference) in [(name, "name-reference"), (meta, "meta-reference")]
+                    {
+                        let expected = bounds(&mut visual, reference, &at);
+                        assert!(
+                            (f32::from(actual.size.width - expected.size.width)).abs() <= 1.0
+                                && (f32::from(actual.size.height - expected.size.height)).abs()
+                                    <= 0.5,
+                            "incomplete text: {reference} actual={actual:?} expected={expected:?} ({at})"
+                        );
+                        assert!(
+                            actual.origin.x >= px(12.0) && actual.right() <= px(width - 12.0 + 0.5),
+                            "text outside row content ({at})"
+                        );
+                    }
+                    assert!(
+                        meta.origin.y >= name.bottom() || meta.origin.x >= name.right(),
+                        "name and fact overlap ({at})"
+                    );
+                    if natural <= width - 24.0 {
+                        assert!(
+                            (f32::from(name.size.width) - natural).abs() <= 1.0,
+                            "name lost its natural width ({at})"
+                        );
+                    } else {
+                        assert!(name.size.height > px(20.0), "long name did not wrap ({at})");
+                    }
+                }
             }
         }
     }
