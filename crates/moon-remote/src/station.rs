@@ -37,7 +37,7 @@ pub struct CoreKey {
     pub endpoint_override: String,
 }
 
-pub use moon_core::station_api::{CatchupSwitches, TapeWindow};
+pub use moon_core::station_api::{CatchupSwitches, TapeKeep, TapeWindow};
 
 /// This terminal's window around a trade, from its `storage.toml` (Settings -> Storage): what a
 /// new station starts with. Read only when the file exists: loading a missing one would write a
@@ -238,17 +238,19 @@ pub fn with_telegram(current: &str, change: &BotChange, off: bool) -> anyhow::Re
     Ok(toml::to_string_pretty(&file)?)
 }
 
-/// Merge the window and supported switches into `[tape]`, preserving unknown fields and sections.
-/// Return `None` when requested fields match; absent switches preserve stored choices.
+/// Merge the window and supported choices into `[tape]`, preserving unknown fields and sections.
+/// Return `None` when requested fields match; absent choices preserve stored values.
 ///
 /// Args:
 ///     current: The server's `station.toml`.
 ///     tape: The terminal's window around a trade.
 ///     switches: Recovery choices, only for stations reporting switch support.
+///     keep: Retention choices, only for stations reporting retention support.
 pub fn with_tape(
     current: &str,
     tape: TapeWindow,
     switches: Option<CatchupSwitches>,
+    keep: Option<TapeKeep>,
 ) -> anyhow::Result<Option<String>> {
     let mut file: toml::Table = toml::from_str(current).context("the server's station.toml")?;
     let mut wanted = toml::Table::try_from(tape)?;
@@ -257,6 +259,16 @@ pub fn with_tape(
         wanted.insert(
             "archive_catchup".into(),
             toml::Value::Boolean(switches.archives),
+        );
+    }
+    if let Some(keep) = keep {
+        wanted.insert(
+            "max_age_days".into(),
+            toml::Value::Integer(i64::from(keep.max_age_days)),
+        );
+        wanted.insert(
+            "record_emulator".into(),
+            toml::Value::Boolean(keep.record_emulator),
         );
     }
     let section = file
@@ -274,7 +286,7 @@ pub fn with_tape(
     Ok(Some(toml::to_string_pretty(&file)?))
 }
 
-/// Set the station's window and optional supported recovery switches: `[tape]`
+/// Set the station's window and optional supported recovery and retention choices: `[tape]`
 /// in its `station.toml`, then a reload (SIGHUP) — the station applies the window without a
 /// restart, its cores and bot stay connected. A station already on that window is not touched; a
 /// stopped one takes it at its next start. A server without `station.toml` yet gets a window with
@@ -283,6 +295,7 @@ pub fn push_tape(
     target: &Target,
     tape: TapeWindow,
     switches: Option<CatchupSwitches>,
+    keep: Option<TapeKeep>,
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
     // On the steps the station records with, so what it reports back can equal what was sent.
@@ -302,7 +315,7 @@ pub fn push_tape(
         return Ok(());
     }
     let wrote = edit_config(&conn, true, |current| match current {
-        Some(current) => with_tape(current, tape, switches),
+        Some(current) => with_tape(current, tape, switches, keep),
         None => Ok(None),
     })?;
     let window = format!(
@@ -334,19 +347,22 @@ pub fn push_tape(
     }
     // The file may already say it while the station does not: an earlier re-read that failed.
     if wrote
-        || reported_tape(&conn)?.is_none_or(|(window, choices)| {
-            window != tape || switches.is_some_and(|wanted| choices != Some(wanted))
+        || reported_tape(&conn)?.is_none_or(|(window, choices, retained)| {
+            window != tape
+                || switches.is_some_and(|wanted| choices != Some(wanted))
+                || keep.is_some_and(|wanted| retained != Some(wanted))
         })
     {
         script::checked(conn.run(&script::helper("reload", &[]), &[], STEP_TIMEOUT)?)?;
     }
-    confirm_tape(&conn, tape, switches, &window, say)
+    confirm_tape(&conn, tape, switches, keep, &window, say)
 }
 
-/// Reported window and recovery choices; absent choices identify pre-switch stations.
-fn reported_tape(
-    conn: &AdminConn,
-) -> anyhow::Result<Option<(TapeWindow, Option<CatchupSwitches>)>> {
+/// Reported tape choices; each optional group identifies support independently.
+type ReportedTape = (TapeWindow, Option<CatchupSwitches>, Option<TapeKeep>);
+
+/// Read retention only when both fields were reported, preserving old-station compatibility.
+fn reported_tape(conn: &AdminConn) -> anyhow::Result<Option<ReportedTape>> {
     match api::call(conn, &Request::Status)? {
         Answer::Status(status) => Ok(status.tape.map(|tape| {
             let switches = status.tape_catchup.as_ref().and_then(|catchup| {
@@ -355,7 +371,13 @@ fn reported_tape(
                     archives: catchup.archives?,
                 })
             });
-            (tape, switches)
+            let keep = status.tape_catchup.as_ref().and_then(|catchup| {
+                Some(TapeKeep {
+                    max_age_days: catchup.max_age_days?,
+                    record_emulator: catchup.record_emulator?,
+                })
+            });
+            (tape, switches, keep)
         })),
         other => anyhow::bail!("the station answered a status request with {other:?}"),
     }
@@ -376,42 +398,48 @@ fn reload_unreported(window: &str) -> String {
 /// What one status read says about the requested tape settings.
 #[derive(Debug, PartialEq, Eq)]
 enum TapeVerdict {
-    /// The station reports the window and every sent switch.
+    /// The station reports the window and every sent choice.
     Applied,
-    /// The station reports no window and no switches were sent: it predates the report.
+    /// The station reports no window and no optional choices were sent.
     Unreported,
-    /// Switches were sent but the station reports none: it predates them and never will.
+    /// Choices were sent but the station reports no support for them.
     Outdated,
     /// Not there yet; look again until the deadline.
     Pending,
 }
 
-/// Judge one status read against the requested window and switches.
+/// Judge one status read against the requested window, switches and retention.
 fn tape_verdict(
-    reported: Option<(TapeWindow, Option<CatchupSwitches>)>,
+    reported: Option<ReportedTape>,
     tape: TapeWindow,
     switches: Option<CatchupSwitches>,
+    keep: Option<TapeKeep>,
 ) -> TapeVerdict {
-    match (reported, switches) {
-        (Some((applied, choices)), _)
-            if applied == tape && switches.is_none_or(|wanted| choices == Some(wanted)) =>
+    match (reported, switches, keep) {
+        (Some((applied, choices, retained)), _, _)
+            if applied == tape
+                && switches.is_none_or(|wanted| choices == Some(wanted))
+                && keep.is_none_or(|wanted| retained == Some(wanted)) =>
         {
             TapeVerdict::Applied
         }
-        (None, None) => TapeVerdict::Unreported,
-        (None, Some(_)) | (Some((_, None)), Some(_)) => TapeVerdict::Outdated,
+        (None, None, None) => TapeVerdict::Unreported,
+        (None, _, _) | (Some((_, None, _)), Some(_), _) | (Some((_, _, None)), _, Some(_)) => {
+            TapeVerdict::Outdated
+        }
         _ => TapeVerdict::Pending,
     }
 }
 
-/// Wait until the station reports the requested window and any sent switches. A station whose
+/// Wait until the station reports the requested window and any sent choices. A station whose
 /// re-read failed (its log says why) keeps the old window: that is an error here, not a success.
-/// A station that reports no switches after they were sent fails at once. A failed look is only
+/// A station that reports no support for sent choices fails at once. A failed look is only
 /// one look until the deadline.
 fn confirm_tape(
     conn: &AdminConn,
     tape: TapeWindow,
     switches: Option<CatchupSwitches>,
+    keep: Option<TapeKeep>,
     window: &str,
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
@@ -419,7 +447,7 @@ fn confirm_tape(
     loop {
         let last_chance = std::time::Instant::now() >= deadline;
         match reported_tape(conn) {
-            Ok(reported) => match tape_verdict(reported, tape, switches) {
+            Ok(reported) => match tape_verdict(reported, tape, switches, keep) {
                 TapeVerdict::Applied => {
                     say(Progress::step(
                         Step::TapeApplied,
@@ -432,14 +460,14 @@ fn confirm_tape(
                     return Ok(());
                 }
                 TapeVerdict::Outdated => anyhow::bail!(
-                    "the station does not report catch-up switches: update it, then write again"
+                    "the station does not report the requested tape choices: update it, then write again"
                 ),
                 TapeVerdict::Pending => match reported {
-                    Some((applied, choices)) => anyhow::ensure!(
+                    Some((applied, choices, retained)) => anyhow::ensure!(
                         !last_chance,
                         "the station still records with margin {} s, long position from {} min: \
                          it did not take the new tape settings (its journal says why); switches \
-                         {choices:?}, expected {switches:?}",
+                         {choices:?}, expected {switches:?}; retention {retained:?}, expected {keep:?}",
                         applied.margin_s,
                         applied.long_position_min
                     ),

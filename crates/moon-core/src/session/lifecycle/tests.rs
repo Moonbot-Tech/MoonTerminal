@@ -4,6 +4,41 @@ use super::*;
 use crate::db::{ReportAxis, ReportStamp};
 use crate::market::tape_recorder::TradeId;
 
+/// A later resolved or empty page must not erase the protecting identity skipped earlier.
+#[test]
+fn skipped_rows_keep_the_listing_incomplete() {
+    let mut listing = ListingProgress::default();
+    listing.page(1000, 1000);
+    assert!(listing.complete());
+    listing.page(1000, 999);
+    listing.page(1000, 1000);
+    listing.page(0, 0);
+    assert!(!listing.complete());
+    let mut complete = ListingProgress::default();
+    complete.page(1000, 1000);
+    complete.page(40, 40);
+    assert!(complete.complete());
+}
+
+/// Older replicas without the emulator column must remain readable, while null means plain.
+#[test]
+fn catchup_sql_reads_emulator_flag() {
+    for with_column in [false, true] {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE orders_rep(core_uid INTEGER, newrecid INTEGER, coin TEXT, buydate INTEGER, closedate INTEGER); INSERT INTO orders_rep VALUES(1,1,'XALPHA',10,20),(1,2,'XALPHA',10,20),(1,3,'XALPHA',10,20);").unwrap();
+        if with_column {
+            conn.execute_batch("ALTER TABLE orders_rep ADD COLUMN emulator INTEGER; UPDATE orders_rep SET emulator=1 WHERE newrecid=1; UPDATE orders_rep SET emulator=0 WHERE newrecid=2;").unwrap();
+        }
+        let rows = catchup_page(&conn, &catchup_sql(&conn).unwrap(), 1, 0, None).unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.rec_id, row.emulator))
+                .collect::<Vec<_>>(),
+            vec![(3, false), (2, false), (1, with_column)]
+        );
+    }
+}
+
 /// Losing the sync trigger or hourly boundary would leave closed trades without recovery.
 #[test]
 fn sync_edge_and_hourly_boundary_are_due() {
@@ -25,6 +60,9 @@ fn sync_edge_and_hourly_boundary_are_due() {
 /// Open rows and rows past the 365-day boundary must never reach the tape planner.
 #[test]
 fn mapping_excludes_open_and_old_rows() {
+    let _guard = crate::market::tape_recorder::catchup::tests::SWITCH_LOCK
+        .lock()
+        .unwrap();
     let now = 40_000_000_000;
     let axis = ReportAxis::identity_core_local();
     let mut row = CatchupRow {
@@ -33,6 +71,7 @@ fn mapping_excludes_open_and_old_rows() {
         buy: ReportStamp::Seconds(1),
         close: ReportStamp::Millis(now - 364 * 86_400_000),
         closedate: 1,
+        emulator: false,
     };
     assert!(catchup_stamps(&row, &axis, 1, now).is_some());
     row.close = ReportStamp::Millis(now - 366 * 86_400_000);
@@ -101,6 +140,9 @@ fn nullable_partial_rows_do_not_abort_replica_pages() {
 /// A core-local close near the depth boundary must be judged on UTC rather than raw seconds.
 #[test]
 fn depth_bound_and_millisecond_stamps_follow_measured_axis() {
+    let _guard = crate::market::tape_recorder::catchup::tests::SWITCH_LOCK
+        .lock()
+        .unwrap();
     let now = 40_000_000_000;
     let cutoff = now - crate::market::trade_replay::venue_caps::ARCHIVE_DEPTH_MS;
     let axis = ReportAxis::from_measured(
@@ -120,6 +162,7 @@ fn depth_bound_and_millisecond_stamps_follow_measured_axis() {
         buy: ReportStamp::Seconds((cutoff - 60_000) / 1000 + 7200),
         close: ReportStamp::Millis(cutoff + 7_200_001),
         closedate: cutoff / 1000 + 7200,
+        emulator: false,
     };
     assert_eq!(
         catchup_stamps(&row, &axis, 1, now),
@@ -165,4 +208,31 @@ fn listing_is_background_and_single_per_core() {
         "duplicate listing"
     )));
     release.send(()).unwrap();
+}
+/// Unattributable rows do not own a market window and cannot indefinitely veto maintenance.
+#[test]
+fn permanently_unattributable_rows_do_not_block_the_listing() {
+    let mut listing = ListingProgress::default();
+    // One unknown coin and one invalid stamp among otherwise resolved rows.
+    listing.resolved_page(1000, 998, 2);
+    listing.resolved_page(40, 40, 0);
+    assert!(listing.complete());
+    listing.resolved_page(1, 0, 0);
+    assert!(
+        !listing.complete(),
+        "a transient catalog gap still protects tape"
+    );
+}
+
+/// The protecting query reaches straddlers older than a year without listing all old rows.
+#[test]
+fn protecting_listing_reads_only_retention_straddlers() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, newrecid INTEGER, coin TEXT, buydate INTEGER, closedate INTEGER);
+        INSERT INTO orders_rep VALUES (1,1,'XALPHA',10,30),(1,2,'XALPHA',21,30),(1,3,'XALPHA',1,19);").unwrap();
+    let rows = catchup_page(&conn, &listing_sql(&conn, true).unwrap(), 1, 20, None).unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.rec_id).collect::<Vec<_>>(),
+        vec![1]
+    );
 }

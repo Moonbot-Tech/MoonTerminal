@@ -22,6 +22,7 @@
 //! packed.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::super::coverage::Coverage;
 use super::{Table, codec};
@@ -30,6 +31,112 @@ use crate::feed::types::Tick;
 /// What to keep, per `(exchange_key, market)` as the file spells them; a key absent from the
 /// map keeps nothing of that market.
 pub type KeepMap = HashMap<(String, String), Coverage>;
+
+/// Compaction policy after a committed retention delete.
+#[derive(Clone, Copy, Debug)]
+pub enum Compact {
+    Incremental,
+    Full,
+}
+
+/// A committed delete can succeed even when releasing its disk pages must wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompactFail {
+    NoRoom,
+    NotShrinkable,
+    Deferred,
+    Other,
+}
+
+/// Shared counters read without waiting for the cache worker.
+#[derive(Default)]
+pub struct TrimProgress {
+    pub done: AtomicU64,
+    pub total: AtomicU64,
+}
+
+/// Durable deletion and its separately reported physical compaction outcome.
+#[derive(Debug)]
+pub struct TrimOutcome {
+    pub report: TrimReport,
+    pub compacted: Result<(), CompactFail>,
+    pub bytes_before: u64,
+    pub bytes_after: u64,
+}
+
+/// Read main and WAL lengths; zero means an in-memory or otherwise unknown file size.
+pub(super) fn disk_bytes(conn: &rusqlite::Connection) -> u64 {
+    let Some(path) = conn.path().filter(|path| !path.is_empty()) else {
+        return 0;
+    };
+    [path.to_string(), format!("{path}-wal")]
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum()
+}
+
+/// Release pages after commit; checkpoint contention is a retryable outcome.
+pub(super) fn compact(conn: &rusqlite::Connection, policy: Compact) -> Result<(), CompactFail> {
+    match policy {
+        Compact::Full => conn.execute_batch("VACUUM").map_err(compact_failure)?,
+        Compact::Incremental => incremental_vacuum(conn, "PRAGMA incremental_vacuum")?,
+    }
+    checkpoint(conn)
+}
+
+/// Release a bounded batch of pages; the cache queue may serve live work before the next step.
+pub(super) fn compact_step(conn: &rusqlite::Connection) -> Result<bool, CompactFail> {
+    incremental_vacuum(conn, "PRAGMA incremental_vacuum(128)")?;
+    let remaining: i64 = conn
+        .query_row("PRAGMA freelist_count", [], |r| r.get(0))
+        .map_err(compact_failure)?;
+    if remaining != 0 {
+        Ok(true)
+    } else {
+        checkpoint(conn).map(|()| false)
+    }
+}
+
+/// Drain incremental-vacuum rows so both bounded and complete passes actually release pages.
+fn incremental_vacuum(conn: &rusqlite::Connection, pragma: &str) -> Result<(), CompactFail> {
+    let mode: i64 = conn
+        .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
+        .map_err(|_| CompactFail::Other)?;
+    if mode != 2 {
+        return Err(CompactFail::NotShrinkable);
+    }
+    let vacuum = || -> rusqlite::Result<()> {
+        let mut stmt = conn.prepare(pragma)?;
+        let mut rows = stmt.query([])?;
+        while rows.next()?.is_some() {}
+        Ok(())
+    };
+    vacuum().map_err(compact_failure)
+}
+
+/// Preserve the physical-compaction error categories shared by both vacuum paths.
+fn compact_failure(error: rusqlite::Error) -> CompactFail {
+    match error.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::DiskFull) => CompactFail::NoRoom,
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+            CompactFail::Deferred
+        }
+        _ => CompactFail::Other,
+    }
+}
+
+/// A busy checkpoint means deletion committed but physical compaction still needs a retry.
+fn checkpoint(conn: &rusqlite::Connection) -> Result<(), CompactFail> {
+    let busy: i64 = conn
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+        .map_err(|_| CompactFail::Other)?;
+    if busy == 0 {
+        Ok(())
+    } else {
+        Err(CompactFail::Deferred)
+    }
+}
 
 /// What one pass counted — and, when it applied, did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -119,6 +226,16 @@ pub(super) fn trim(
     keep: &KeepMap,
     apply: bool,
 ) -> rusqlite::Result<TrimReport> {
+    trim_progress(conn, keep, apply, None)
+}
+
+/// Clip rows atomically while publishing progress for a non-blocking caller.
+pub(super) fn trim_progress(
+    conn: &rusqlite::Connection,
+    keep: &KeepMap,
+    apply: bool,
+    progress: Option<&TrimProgress>,
+) -> rusqlite::Result<TrimReport> {
     let mut rows = Vec::new();
     for table in Table::ALL {
         let mut stmt = conn.prepare(&format!(
@@ -142,6 +259,9 @@ pub(super) fn trim(
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.extend(found);
     }
+    if let Some(p) = progress {
+        p.total.store(rows.len() as u64, Ordering::Relaxed);
+    }
     let tx = if apply {
         Some(conn.unchecked_transaction()?)
     } else {
@@ -149,6 +269,9 @@ pub(super) fn trim(
     };
     let mut report = TrimReport::default();
     for row in rows {
+        if let Some(p) = progress {
+            p.done.fetch_add(1, Ordering::Relaxed);
+        }
         report.spans_total += 1;
         report.bytes_total += row.bytes;
         let own = Coverage::one((row.from_ms, row.to_ms));
@@ -168,22 +291,20 @@ pub(super) fn trim(
         if kept.is_empty() {
             whole(&mut report);
             if let Some(tx) = &tx {
-                tx.execute(&delete, [row.rowid])?;
+                tx.prepare_cached(&delete)?.execute([row.rowid])?;
             }
             continue;
         }
-        let (blob, source, updated_ms): (Vec<u8>, i64, i64) = conn.query_row(
-            &format!(
+        let (blob, source, updated_ms): (Vec<u8>, i64, i64) = conn
+            .prepare_cached(&format!(
                 "SELECT ticks, source, updated_ms FROM {} WHERE rowid = ?1",
                 row.table.name()
-            ),
-            [row.rowid],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )?;
+            ))?
+            .query_row([row.rowid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         // The row goes first: the first piece usually starts where the row did, and the key
         // is `(exchange, market, from_ms)`.
         if let Some(tx) = &tx {
-            tx.execute(&delete, [row.rowid])?;
+            tx.prepare_cached(&delete)?.execute([row.rowid])?;
         }
         let ticks = match row.table.decode(&blob) {
             Ok(ticks) => ticks,
@@ -207,9 +328,9 @@ pub(super) fn trim(
             if let Some(tx) = &tx {
                 let piece = codec::encode(&inside);
                 kept_bytes += piece.len() as i64;
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO packs(exchange, market, from_ms, to_ms, ticks, prints, source, updated_ms)
-                     VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")?.execute(
                     rusqlite::params![
                         row.exchange,
                         row.market,

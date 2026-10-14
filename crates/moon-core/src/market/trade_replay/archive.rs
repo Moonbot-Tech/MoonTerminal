@@ -22,6 +22,31 @@ pub const MAX_DAY_BYTES: u64 = 256 * 1024 * 1024;
 // Reserve room for tape filing after the compressed day has been extracted.
 const EXTRACT_HEADROOM: u64 = 4;
 static DISK_GUARD: Mutex<Option<fn(u64) -> bool>> = Mutex::new(None);
+
+thread_local! { static PACING: std::cell::Cell<Option<fn()>> = const { std::cell::Cell::new(None) }; }
+
+/// Scope pacing to the catch-up thread; terminal archive requests retain their own policy.
+pub(crate) fn with_pacing<T>(pace: fn(), run: impl FnOnce() -> T) -> T {
+    /// Restore the previous hook even if a decoder unwinds.
+    struct Restore(Option<fn()>);
+    impl Drop for Restore {
+        /// The hook belongs only to this recovery operation.
+        fn drop(&mut self) {
+            PACING.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(PACING.with(|slot| slot.replace(Some(pace))));
+    run()
+}
+
+/// Poll the optional caller's pacing between bounded download and decode operations.
+pub(super) fn pace() {
+    PACING.with(|slot| {
+        if let Some(pace) = slot.get() {
+            pace();
+        }
+    });
+}
 /// Host locks remain reusable across fills and do not serialize distinct archive services.
 type DownloadLocks = Mutex<HashMap<&'static str, Arc<Mutex<()>>>>;
 static DOWNLOAD: OnceLock<DownloadLocks> = OnceLock::new();
@@ -193,6 +218,7 @@ fn fill_with(
             if !guard(MAX_DAY_BYTES) {
                 return Err(ArchiveError::NoRoom);
             }
+            pace();
             {
                 let download = download_lock(route.host());
                 let _download = download.lock().unwrap_or_else(|error| error.into_inner());
@@ -394,15 +420,16 @@ fn extract(
     spans: &Coverage,
     out: &mut Vec<Tick>,
 ) -> Result<(), ArchiveError> {
+    pace();
     match route.format() {
         ArchiveFormat::ZipCsv => {
             let mut archive = zip::ZipArchive::new(file).map_err(corrupt)?;
-            let csv = archive.by_index(0).map_err(corrupt)?;
+            let csv = PacedRead::new(archive.by_index(0).map_err(corrupt)?);
             csv::parse_binance_agg(BufReader::new(csv), spans, out).map_err(decode_error)?;
         }
         ArchiveFormat::GzCsv => {
             csv::parse_bybit_trading(
-                BufReader::new(flate2::read::MultiGzDecoder::new(file)),
+                BufReader::new(PacedRead::new(flate2::read::MultiGzDecoder::new(file))),
                 spans,
                 out,
             )
@@ -410,6 +437,33 @@ fn extract(
         }
     }
     Ok(())
+}
+
+/// Pace decompression and parsing by decoded bytes without holding a download host lock.
+struct PacedRead<R> {
+    reader: R,
+    bytes: usize,
+}
+
+impl<R> PacedRead<R> {
+    /// Start a fresh decode budget for each daily archive.
+    fn new(reader: R) -> Self {
+        Self { reader, bytes: 0 }
+    }
+}
+
+impl<R: Read> Read for PacedRead<R> {
+    /// Bound CPU work to roughly one megabyte of decoded CSV between pacing samples.
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.bytes >= 1_048_576 {
+            pace();
+            self.bytes = 0;
+        }
+        let len = buffer.len().min(64 * 1024);
+        let received = self.reader.read(&mut buffer[..len])?;
+        self.bytes += received;
+        Ok(received)
+    }
 }
 
 /// Compression reader failures describe a damaged published file, not HTTP transport.

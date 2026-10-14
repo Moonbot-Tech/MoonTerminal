@@ -868,6 +868,7 @@ impl SettingsView {
         let upsert_n = upsert.len();
         let view = cx.entity().downgrade();
         SaveBar::Remote(RemoteBar {
+            tone: None,
             msg,
             dirty,
             apply: Rc::new(move |_, app| {

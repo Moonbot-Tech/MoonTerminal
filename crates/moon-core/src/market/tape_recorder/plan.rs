@@ -62,6 +62,8 @@ struct Trade {
     long_position_ms: i64,
     /// Handed to the comparison once settled ([`KeyTask::take_settled`]).
     reported: bool,
+    /// Unknown flags stay recordable for older cores.
+    emulator: Option<bool>,
 }
 
 impl Trade {
@@ -155,9 +157,18 @@ impl KeyTask {
         }
     }
 
-    /// A trade opened.
-    pub(super) fn opened(&mut self, id: TradeId, open_ms: i64, margin_ms: i64, long_ms: i64) {
-        if !self.trades.iter().any(|t| t.id == id) {
+    /// Start a trade window and merge carried metadata on duplicate opens.
+    pub(super) fn opened(
+        &mut self,
+        id: TradeId,
+        open_ms: i64,
+        margin_ms: i64,
+        long_ms: i64,
+        emulator: Option<bool>,
+    ) {
+        if let Some(trade) = self.trades.iter_mut().find(|t| t.id == id) {
+            trade.emulator = emulator.or(trade.emulator);
+        } else {
             self.trades.push(Trade {
                 id,
                 open_ms,
@@ -165,13 +176,14 @@ impl KeyTask {
                 margin_ms,
                 long_position_ms: long_ms,
                 reported: false,
+                emulator,
             });
         }
     }
 
     /// A trade closed: its window is reshaped around both ends.
     ///
-    /// The settings are the ones in force at the close, like the close-time capture's.
+    /// Close-time settings reshape the window; absent metadata preserves the opening flag.
     pub(super) fn closed(
         &mut self,
         id: TradeId,
@@ -179,7 +191,13 @@ impl KeyTask {
         close_ms: i64,
         margin_ms: i64,
         long_ms: i64,
+        emulator: Option<bool>,
     ) {
+        let emulator = emulator.or(self
+            .trades
+            .iter()
+            .find(|trade| trade.id == id)
+            .and_then(|trade| trade.emulator));
         let trade = Trade {
             id,
             open_ms,
@@ -187,10 +205,13 @@ impl KeyTask {
             margin_ms,
             long_position_ms: long_ms,
             reported: false,
+            emulator,
         };
         match self.trades.iter().position(|t| t.id == id) {
             // A second closing upsert of a trade already settled is not a new window.
-            Some(index) if self.trades[index].close_ms.is_some() => {}
+            Some(index) if self.trades[index].close_ms.is_some() => {
+                self.trades[index].emulator = emulator;
+            }
             Some(index) => self.trades[index] = trade,
             None => self.trades.push(trade),
         }
@@ -205,6 +226,27 @@ impl KeyTask {
             }
         }
         out
+    }
+
+    /// Protect live plain or unclassified trades even before the report listing catches up.
+    pub(super) fn real_needed(&self) -> Coverage {
+        Coverage::from_spans(
+            self.trades
+                .iter()
+                .filter(|t| t.emulator != Some(true))
+                .flat_map(|t| t.needed().spans().to_vec()),
+        )
+    }
+
+    /// Drop emulator-only needs and buffered prints; shared plain-trade windows survive.
+    pub(super) fn discard_emulator(&mut self) {
+        self.trades.retain(|trade| trade.emulator != Some(true));
+        let needed = self.needed();
+        self.buffer
+            .retain(|tick| needed.contains_ms(tick.time_ms as i64));
+        if self.trades.is_empty() {
+            self.stop();
+        }
     }
 
     /// Written or lost — nothing left to record there.

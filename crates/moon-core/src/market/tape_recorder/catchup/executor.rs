@@ -725,6 +725,7 @@ pub(super) fn fetch_rest(
     to: i64,
     cursor: Option<rest::TradeCursor>,
 ) -> Result<rest::TradePage, rest::FetchError> {
+    super::pacing::wait();
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
     rest::fetch_trades(
         AGENT.get_or_init(rest::agent),
@@ -743,5 +744,7 @@ pub(super) fn fetch_archive(
     spans: &Coverage,
     budget: u64,
 ) -> (Result<archive::ArchiveFill, archive::ArchiveError>, u64) {
-    archive::fill_counted(route, market, spans, gate::shared(), budget)
+    archive::with_pacing(super::pacing::wait, || {
+        archive::fill_counted(route, market, spans, gate::shared(), budget)
+    })
 }

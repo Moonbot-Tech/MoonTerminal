@@ -10,7 +10,7 @@ use moon_remote::progress::{Progress, Step};
 use moon_remote::setup::{self, FirstAccess, NeedsAdminPassword, Setup};
 use moon_remote::ssh::Target;
 use moon_remote::station::bot::{self, BotState};
-use moon_remote::station::{self, BotChange, CoreKey, TapeWindow};
+use moon_remote::station::{self, BotChange, CoreKey, TapeKeep, TapeWindow};
 use rust_i18n::t;
 use zeroize::Zeroizing;
 
@@ -113,11 +113,12 @@ pub(crate) enum Job {
         addresses: Vec<Option<String>>,
         eligible: Vec<u64>,
     },
-    /// Set the station's tape window and recovery choices when supported.
+    /// Set the station's tape window, recovery and retention choices when supported.
     Tape {
         target: Target,
         tape: TapeWindow,
         catchup: Option<CatchupSwitches>,
+        keep: Option<TapeKeep>,
     },
     /// Switch the station's own updates from the release: `[update] auto`, then a reload.
     AutoUpdate { target: Target, on: bool },
@@ -599,8 +600,9 @@ fn run(
             target,
             tape,
             catchup,
+            keep,
         } => {
-            station::push_tape(&target, tape, catchup, say)?;
+            station::push_tape(&target, tape, catchup, keep, say)?;
             Ok(Done::Ok {
                 transferred: false,
                 bot: None,

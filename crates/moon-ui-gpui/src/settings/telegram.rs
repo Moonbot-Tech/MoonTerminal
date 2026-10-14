@@ -386,6 +386,7 @@ impl SettingsView {
             })
         };
         SaveBar::Remote(RemoteBar {
+            tone: None,
             msg,
             dirty: pending && !station.busy(),
             apply,

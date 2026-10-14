@@ -12,12 +12,166 @@ use moon_core::market::trade_replay::venue_caps;
 use moon_core::station_api::{CatchupFailReason, CatchupSwitches, TapeCatchup};
 
 use super::{
-    CatchupState, TapeEd, TapeFacts, TapeStatus, catchup_breakdown, catchup_sentence,
+    CatchupState, TapeEd, TapeFacts, TapeStatus, TileValue, catchup_breakdown, catchup_sentence,
     catchup_state, catchup_switches, catchup_tiles, clock, follow, job_switches, plural_key,
     reported_switches, tape_breakdown, tape_status, tape_status_strip, tape_tiles,
     venue_reach_table,
 };
 use crate::design;
+
+/// Preset prefixes typed inside custom numbers must not clear the field on the next render.
+#[test]
+fn custom_days_preserve_typed_preset_prefixes() {
+    use moon_core::station_api::TapeKeep;
+    let mut ed = TapeEd {
+        draft_keep: Some(TapeKeep {
+            max_age_days: 1825,
+            record_emulator: true,
+        }),
+        ..TapeEd::default()
+    };
+    assert_eq!(ed.days_writeback().as_deref(), Some("1825"));
+    for value in [3, 30, 300, 1, 18, 180, 1800, 3, 36, 365, 3650] {
+        ed.draft_keep.as_mut().unwrap().max_age_days = value;
+        ed.days_shown = Some(value);
+        assert_eq!(ed.days_writeback(), None, "typed {value} was overwritten");
+    }
+    ed.draft_keep.as_mut().unwrap().max_age_days = 1825;
+    assert_eq!(ed.days_writeback().as_deref(), Some("1825"));
+}
+
+/// Remaining on Trade Tape must keep polling after a post-write read sees a running purge.
+#[test]
+fn purge_polling_includes_the_trade_tape_page() {
+    assert!(super::shows_tape_block(crate::settings::Tab::StTape));
+    assert!(!super::shows_tape_block(crate::settings::Tab::TgBot));
+}
+
+/// Destructive writes that widen the tape window must disclose both deletion and requeue cost.
+#[test]
+fn combined_retention_and_window_edit_keeps_the_widen_warning() {
+    let _locale = crate::test_locale::force("en");
+    let mut probe = full_probe("draft", 860.0);
+    probe.ed.draft.as_mut().unwrap().margin_s = 600;
+    for confirm in [false, true] {
+        probe.ed.confirm = confirm;
+        let (text, warning) = super::keep::bar_message(&probe.ed, Some(&probe.c), false);
+        assert!(
+            warning && text.contains("75%") && text.contains("18920") && text.contains("about"),
+            "{text}"
+        );
+        if !confirm {
+            assert!(text.contains("delete"), "{text}");
+        }
+    }
+}
+
+/// A stored singular trade and Slavic counts ending in one must select the right noun forms.
+#[test]
+fn retention_counts_select_locale_plurals() {
+    for (language, n, expected) in [
+        ("en", 1, "tape for 1 trade"),
+        ("ru", 21, "лента 21 сделки"),
+        ("ru", 25, "лента 25 сделок"),
+        ("uk", 21, "стрічка 21 угоди"),
+    ] {
+        let _locale = crate::test_locale::force(language);
+        let mut c = catchup();
+        c.tape_trades = Some(n);
+        let tile = super::keep::db_tile(&c);
+        let super::TileHint::Text(text) = tile.hint else {
+            panic!("missing tape count");
+        };
+        assert_eq!(text, expected);
+    }
+}
+
+/// Finishing retention while auto is off must not promise a pass that cannot start.
+#[test]
+fn completed_purge_with_auto_off_does_not_promise_catchup() {
+    let _locale = crate::test_locale::force("en");
+    let mut probe = full_probe("done", 860.0);
+    probe.c.auto = Some(false);
+    assert_eq!(catchup_state(Some(&probe.c)), CatchupState::Off);
+    let text = super::keep::purge_sentence(&probe.c, chrono_tz::UTC).unwrap();
+    assert!(text.contains("off") && text.contains("412"), "{text}");
+    assert!(!text.contains("next pass"), "{text}");
+}
+
+/// Stale failures yield to newer passes, and a busy reader is a neutral compaction retry.
+#[test]
+fn deferred_compaction_is_pending_and_old_failures_expire() {
+    use moon_core::station_api::{PurgeFail, TapePurge};
+    let _locale = crate::test_locale::force("en");
+    let mut probe = full_probe("done", 860.0);
+    let at = probe.c.last_pass_ms.unwrap() + 1000;
+    probe.c.purge = Some(TapePurge::Failed {
+        at_ms: at,
+        reason: PurgeFail::Deferred,
+    });
+    assert_ne!(catchup_state(Some(&probe.c)), CatchupState::PurgeFailed);
+    assert!(
+        super::keep::purge_sentence(&probe.c, chrono_tz::UTC)
+            .unwrap()
+            .contains("deferred")
+    );
+    probe.c.last_pass_ms = Some(at + 1);
+    assert!(super::keep::purge_sentence(&probe.c, chrono_tz::UTC).is_none());
+}
+
+/// A later catch-up pass must not hide a failed deletion or a permanent compaction warning.
+#[test]
+fn review_purge_failures_remain_visible_after_catchup() {
+    use super::keep::{KeepState, keep_state};
+    use moon_core::station_api::{PurgeFail, TapePurge};
+    let _locale = crate::test_locale::force("en");
+    let mut probe = full_probe("done", 860.0);
+    let at = probe.c.last_pass_ms.unwrap();
+    for reason in [
+        PurgeFail::DeleteFailed,
+        PurgeFail::DeleteNoRoom,
+        PurgeFail::NoRoom,
+        PurgeFail::NotShrinkable,
+        PurgeFail::Other,
+    ] {
+        probe.c.purge = Some(TapePurge::Failed { at_ms: at, reason });
+        probe.c.last_pass_ms = Some(at + 1);
+        assert_eq!(keep_state(Some(&probe.c)), KeepState::Failed { reason });
+        assert!(super::keep::purge_sentence(&probe.c, chrono_tz::UTC).is_some());
+    }
+}
+
+/// A full-disk rollback must never claim the tape was deleted or merely left uncompressed.
+#[test]
+fn disk_full_rollback_copy_reports_untouched_tape() {
+    let _locale = crate::test_locale::force("ru");
+    let probe = full_probe("delete_no_room", 860.0);
+    assert_eq!(
+        super::keep::purge_sentence(&probe.c, chrono_tz::UTC).unwrap(),
+        "Чистка не удалась: нет места на диске, лента не тронута; станция повторит сама."
+    );
+}
+
+/// A stale local Saved message would collapse the remote warning to one line and hide its cost.
+#[gpui::test]
+fn local_save_status_does_not_hide_remote_tape_warning(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let window = cx.open_window(gpui::size(px(380.0), px(4000.0)), |_, _| {
+        full_probe("widen", 380.0)
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    for _ in 0..3 {
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    }
+    let text = visual.debug_bounds("server-tape-widen-warning").unwrap();
+    assert!(
+        f32::from(text.size.height) > 30.0,
+        "warning was replaced with a short local status"
+    );
+}
 
 /// Swapping the priority would name a job over dashes that have no window, or tell the user
 /// an unsaved draft is the thing to do while the write button is already disabled.
@@ -46,6 +200,27 @@ fn station_tape_status_picks_one_line() {
 fn station_tape_russian_copy_is_the_approved_wording() {
     let _locale = crate::test_locale::force("ru");
     let text = |key: &str| rust_i18n::t!(key).to_string();
+    assert_eq!(text("telegram.server.keep_title"), "Что хранить");
+    assert_eq!(
+        text("telegram.server.keep_note_forever"),
+        "Ничего не удаляется. Докачка в любом случае берёт не старше года: старше биржи и архивы не отдают."
+    );
+    assert_eq!(
+        text("telegram.server.keep_bar_lengthen"),
+        "Не сохранено. Ничего не удалится: срок стал длиннее."
+    );
+    assert_eq!(
+        text("telegram.server.keep_delete_failed"),
+        "Чистка не удалась, лента не тронута; станция повторит сама."
+    );
+    assert_eq!(
+        text("telegram.server.keep_cpu_note"),
+        "Докачка берёт не больше 75% процессора станции — бот, отчёты и запись вживую не тормозят."
+    );
+    assert_eq!(
+        super::keep::keep_note(1825),
+        "Лента сделок старше 5 лет удаляется, и дальше по мере старения. Докачка берёт не старше года."
+    );
     assert_eq!(
         text("telegram.server.tape_hint"),
         "Станция круглосуточно записывает трейды рынка вокруг каждой сделки — даже когда терминал выключен. По этим записям тюнер потом проверяет варианты входа и выхода. Здесь задаётся, сколько записывать."
@@ -118,6 +293,7 @@ fn catchup() -> TapeCatchup {
         last_pass_ms: Some(1_700_000_000_000),
         archive_bytes: 0,
         failed_by: Vec::new(),
+        ..TapeCatchup::default()
     }
 }
 
@@ -219,8 +395,11 @@ fn station_catchup_tiles_swap_failed_for_no_route() {
     let c = catchup();
     let tiles = catchup_tiles(CatchupState::Done, &c);
     assert_eq!(
-        tiles.iter().map(|tile| tile.value).collect::<Vec<_>>(),
-        [41, 0, 17, 3]
+        tiles
+            .iter()
+            .map(|tile| tile.value.clone())
+            .collect::<Vec<_>>(),
+        [41, 0, 17, 3].map(TileValue::Count)
     );
     assert_eq!(tiles[3].label, "telegram.server.catchup_tile_no_route");
     let failed = TapeCatchup {
@@ -228,7 +407,7 @@ fn station_catchup_tiles_swap_failed_for_no_route() {
         ..c.clone()
     };
     let tiles = catchup_tiles(CatchupState::Errors, &failed);
-    assert_eq!(tiles[3].value, 5);
+    assert_eq!(tiles[3].value, TileValue::Count(5));
     assert_eq!(tiles[3].label, "telegram.server.catchup_tile_failed");
     assert!(catchup_tiles(CatchupState::Off, &c).is_empty());
     assert!(catchup_tiles(CatchupState::NoData, &c).is_empty());
@@ -662,4 +841,677 @@ fn an_out_of_range_long_position_is_written_back_clamped() {
     assert_eq!(long_shown_after(15, clamp_long_position_min(15)), Some(15));
     assert_eq!(long_shown_after(500, clamp_long_position_min(500)), None);
     assert_eq!(long_shown_after(0, clamp_long_position_min(0)), None);
+}
+
+/// A legacy capability read must erase edits and target-bound confirmation instead of sending
+/// unsupported TOML keys to a station that rejects them.
+#[test]
+fn keep_reaches_only_new_stations() {
+    use super::keep::{job_keep, reported_keep};
+    use moon_core::station_api::TapeKeep;
+    let keep = TapeKeep {
+        max_age_days: 1825,
+        record_emulator: true,
+    };
+    let mut ed = TapeEd::default();
+    ed.take_keep(Some(Some(keep)));
+    ed.draft_keep = Some(TapeKeep {
+        max_age_days: 30,
+        ..keep
+    });
+    ed.confirm = true;
+    ed.take_keep(None);
+    assert_eq!(
+        job_keep(ed.seen_keep, ed.draft_keep).unwrap().max_age_days,
+        30
+    );
+    let old = catchup();
+    assert_eq!(reported_keep(&old), None);
+    ed.take_keep(Some(reported_keep(&old)));
+    assert_eq!(job_keep(ed.seen_keep, ed.draft_keep), None);
+    assert!(!ed.confirm);
+    ed.take_keep(Some(Some(keep)));
+    let narrowed = TapeKeep {
+        max_age_days: 30,
+        ..keep
+    };
+    ed.draft_keep = Some(narrowed);
+    ed.confirm = true;
+    ed.take_keep(Some(Some(narrowed)));
+    assert!(
+        !ed.confirm,
+        "another terminal already acknowledged the same policy"
+    );
+    assert_eq!(
+        reported_keep(&TapeCatchup {
+            max_age_days: Some(1825),
+            record_emulator: None,
+            ..old
+        }),
+        None
+    );
+}
+
+/// Emulator trades have one category even when old; unknown histograms never read as zero.
+#[test]
+fn purge_counts_from_station_ages() {
+    use super::keep::{PurgeCounts, purge_counts};
+    use moon_core::station_api::{TapeAge, TapeKeep};
+    let c = TapeCatchup {
+        tape_trades: Some(30),
+        tape_ages: vec![
+            TapeAge {
+                days: 10,
+                plain: 3,
+                emulator: 4,
+            },
+            TapeAge {
+                days: 31,
+                plain: 10,
+                emulator: 13,
+            },
+        ],
+        ..catchup()
+    };
+    let keep = TapeKeep {
+        max_age_days: 30,
+        record_emulator: false,
+    };
+    assert_eq!(
+        purge_counts(&c, keep),
+        Some(PurgeCounts {
+            older: 10,
+            emulator: 17,
+            total: 27
+        })
+    );
+    assert_eq!(
+        purge_counts(
+            &c,
+            TapeKeep {
+                max_age_days: 0,
+                ..keep
+            }
+        )
+        .unwrap()
+        .total,
+        17
+    );
+    assert_eq!(
+        purge_counts(
+            &TapeCatchup {
+                tape_ages: Vec::new(),
+                ..c.clone()
+            },
+            keep
+        ),
+        None
+    );
+    assert_eq!(
+        purge_counts(
+            &TapeCatchup {
+                tape_trades: None,
+                ..c
+            },
+            keep
+        ),
+        None
+    );
+}
+
+/// Extending a period, including forever, must dispatch directly; emulator removal still asks.
+#[test]
+fn lengthening_writes_without_confirmation() {
+    use crate::backend::station::job::Job;
+    use moon_core::station_api::{TapeKeep, TapeWindow};
+    use moon_remote::ssh::Target;
+    let target = Target {
+        host: "CORE_A".into(),
+        port: 22,
+    };
+    for days in [365, 1825, 0] {
+        let mut ed = TapeEd {
+            seen_keep: Some(TapeKeep {
+                max_age_days: 180,
+                record_emulator: true,
+            }),
+            draft_keep: Some(TapeKeep {
+                max_age_days: days,
+                record_emulator: true,
+            }),
+            draft: Some(TapeWindow {
+                margin_s: 60,
+                long_position_min: 120,
+            }),
+            ..TapeEd::default()
+        };
+        let Some(Job::Tape {
+            keep: Some(keep), ..
+        }) = ed.prepare_write(target.clone(), false, None)
+        else {
+            panic!("lengthening must write");
+        };
+        assert_eq!(keep.max_age_days, days);
+        assert!(!ed.confirm);
+        assert!(ed.awaiting_keep.is_none());
+    }
+}
+
+/// A larger margin or long threshold warns, a smaller window does not, and an unknown rate
+/// omits the timing clause rather than presenting a made-up completion time.
+#[test]
+fn widen_warning_only_when_the_window_grows() {
+    use super::keep::widen_warning;
+    use moon_core::station_api::TapeWindow;
+    let _locale = crate::test_locale::force("en");
+    let seen = TapeWindow {
+        margin_s: 60,
+        long_position_min: 120,
+    };
+    assert!(
+        widen_warning(
+            seen,
+            TapeWindow {
+                margin_s: 30,
+                long_position_min: 60
+            },
+            Some(100),
+            Some(10)
+        )
+        .is_none()
+    );
+    let widened = TapeWindow {
+        margin_s: 600,
+        ..seen
+    };
+    let no_rate = widen_warning(seen, widened, Some(100), None).unwrap();
+    assert!(
+        no_rate.contains("up to 100") && !no_rate.contains("about"),
+        "{no_rate}"
+    );
+    let rate = widen_warning(seen, widened, Some(100), Some(10)).unwrap();
+    assert!(rate.contains("about 10h"), "{rate}");
+    assert!(
+        widen_warning(
+            seen,
+            TapeWindow {
+                long_position_min: 240,
+                ..seen
+            },
+            Some(100),
+            Some(0)
+        )
+        .is_some()
+    );
+}
+
+/// The fixture renders the production builder, including its real keep, confirmation, disk,
+/// switch and reach controls; no Backend, service or persisted data is constructed.
+struct FullTapeProbe {
+    ed: TapeEd,
+    c: TapeCatchup,
+    width: f32,
+    sent: Vec<crate::backend::station::job::Job>,
+}
+
+impl Render for FullTapeProbe {
+    /// Feed the exact production composition with synthetic reports and capture writes locally.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use super::block::{Actions, Controls, Snapshot, server_tape_block};
+        use crate::settings::frame::{RemoteBar, SaveBar, save_bar};
+        use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown};
+        if self.ed.days_input.is_none() {
+            self.ed.days_input = Some(crate::settings::common::number_state(1825, window, cx));
+            self.ed.long_input = Some(crate::settings::common::number_state(120, window, cx));
+        }
+        let days = cx.entity();
+        let emu = days.clone();
+        let yes = days.clone();
+        let cancel = days.clone();
+        let apply = days.clone();
+        let actions = Actions {
+            days: Rc::new(move |n, _, app| {
+                days.update(app, |this, cx| {
+                    if let Some(keep) = this.ed.draft_keep.as_mut() {
+                        keep.max_age_days = n;
+                    }
+                    cx.notify();
+                })
+            }),
+            emulator: Rc::new(move |on, _, app| {
+                emu.update(app, |this, cx| {
+                    if let Some(keep) = this.ed.draft_keep.as_mut() {
+                        keep.record_emulator = on;
+                    }
+                    cx.notify();
+                })
+            }),
+            confirm: Rc::new(move |_, app| {
+                yes.update(app, |this, cx| {
+                    if let Some(job) = this.ed.prepare_write(
+                        moon_remote::ssh::Target {
+                            host: "CORE_A".into(),
+                            port: 22,
+                        },
+                        true,
+                        this.c.purge,
+                    ) {
+                        this.sent.push(job);
+                    }
+                    cx.notify();
+                })
+            }),
+            cancel: Rc::new(move |_, app| {
+                cancel.update(app, |this, cx| {
+                    this.ed.confirm = false;
+                    cx.notify();
+                })
+            }),
+        };
+        let locked = self.ed.confirm
+            || self.ed.awaiting_keep.is_some()
+            || matches!(
+                self.c.purge,
+                Some(moon_core::station_api::TapePurge::Running { .. })
+            );
+        let margin = MoonDropdown::new("server-tape-margin")
+            .label(crate::settings::SettingsView::trades_margin_label(
+                self.ed.draft.map_or(60, |d| d.margin_s),
+            ))
+            .trigger_caret(true)
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::density(cx))
+            .trigger_width(design::font_w(cx, 120.0))
+            .disabled(locked)
+            .into_any_element();
+        let long = crate::settings::general::num_input_on(
+            "server-tape-long",
+            self.ed.long_input.as_ref().unwrap(),
+            1.0..=240.0,
+            1.0,
+            None,
+            !locked,
+        );
+        let switches = catchup_switches(
+            self.ed.draft_switches.unwrap(),
+            !locked,
+            |_, _, _| {},
+            |_, _, _| {},
+            cx,
+        );
+        let venues = venue_reach_table(
+            true,
+            &venue_caps::reach_table(),
+            self.width,
+            Rc::new(|_, _| {}),
+            cx,
+        );
+        let block = server_tape_block(
+            &self.ed,
+            Snapshot {
+                catchup: Some(&self.c),
+                busy: false,
+                width: self.width,
+                read_at: None,
+            },
+            Controls {
+                margin,
+                long,
+                switches: Some(switches),
+                venues,
+            },
+            actions,
+            cx,
+        );
+        let changed = self.ed.draft != self.ed.seen
+            || self.ed.draft_keep != self.ed.seen_keep
+            || self.ed.draft_switches != self.ed.seen_switches;
+        let (msg, warning) = super::keep::bar_message(&self.ed, Some(&self.c), false);
+        let bar = save_bar(
+            SaveBar::Remote(RemoteBar {
+                tone: warning.then_some(moon_ui::MoonTone::Warning),
+                msg,
+                dirty: changed && !locked,
+                apply: Rc::new(move |_, app| {
+                    apply.update(app, |this, cx| {
+                        if let Some(job) = this.ed.prepare_write(
+                            moon_remote::ssh::Target {
+                                host: "CORE_A".into(),
+                                port: 22,
+                            },
+                            false,
+                            this.c.purge,
+                        ) {
+                            this.sent.push(job);
+                        }
+                        cx.notify();
+                    })
+                }),
+                revert: None,
+                label: rust_i18n::t!("telegram.server.tape_set").to_string(),
+            }),
+            Some(("Saved".into(), false)),
+            Rc::new(|_, _| {}),
+            Rc::new(|_, _| {}),
+            cx,
+        );
+        div()
+            .w(px(self.width))
+            .flex()
+            .flex_col()
+            .debug_selector(|| "probe-col".into())
+            .child(block)
+            .children(bar)
+    }
+}
+
+/// Reports independently define all acceptance states, including every maintenance failure.
+fn full_probe(state: &str, width: f32) -> FullTapeProbe {
+    use moon_core::station_api::{PurgeFail, TapeAge, TapeKeep, TapePurge, TapeWindow};
+    let window = TapeWindow {
+        margin_s: 60,
+        long_position_min: 120,
+    };
+    let keep = TapeKeep {
+        max_age_days: 1825,
+        record_emulator: true,
+    };
+    let mut ed = TapeEd {
+        seen: Some(window),
+        draft: Some(window),
+        seen_keep: Some(keep),
+        draft_keep: Some(keep),
+        seen_switches: Some(CatchupSwitches {
+            auto: true,
+            archives: true,
+        }),
+        draft_switches: Some(CatchupSwitches {
+            auto: true,
+            archives: true,
+        }),
+        ..TapeEd::default()
+    };
+    let mut c = TapeCatchup {
+        max_age_days: Some(1825),
+        record_emulator: Some(true),
+        db_bytes: Some(696_254_464),
+        tape_trades: Some(18_920),
+        tape_ages: vec![TapeAge {
+            days: 200,
+            plain: 4880,
+            emulator: 1330,
+        }],
+        catchup_rate_per_hour: Some(800),
+        ..catchup()
+    };
+    match state {
+        "draft" | "confirm" | "confirm_unknown" => {
+            ed.draft_keep = Some(TapeKeep {
+                max_age_days: 180,
+                record_emulator: false,
+            });
+            ed.confirm = state != "draft";
+            if state == "confirm_unknown" {
+                c.tape_ages.clear();
+            }
+        }
+        "forever" => {
+            ed.draft_keep = Some(TapeKeep {
+                max_age_days: 0,
+                ..keep
+            })
+        }
+        "custom" => {
+            ed.draft_keep = Some(TapeKeep {
+                max_age_days: 1234,
+                ..keep
+            })
+        }
+        "purging" => {
+            c.purge = Some(TapePurge::Running {
+                done: 42,
+                total: 100,
+            })
+        }
+        "done" => {
+            c.purge = Some(TapePurge::Done {
+                at_ms: c.last_pass_ms.unwrap() + 1000,
+                freed_bytes: 433_061_888,
+            });
+            c.pending = 412;
+        }
+        "failed" | "delete_failed" | "delete_no_room" | "deferred" | "not_shrinkable" | "other" => {
+            c.purge = Some(TapePurge::Failed {
+                at_ms: c.last_pass_ms.unwrap() + 1000,
+                reason: match state {
+                    "delete_failed" => PurgeFail::DeleteFailed,
+                    "delete_no_room" => PurgeFail::DeleteNoRoom,
+                    "deferred" => PurgeFail::Deferred,
+                    "not_shrinkable" => PurgeFail::NotShrinkable,
+                    "other" => PurgeFail::Other,
+                    _ => PurgeFail::NoRoom,
+                },
+            })
+        }
+        "old" => {
+            c.max_age_days = None;
+            c.record_emulator = None;
+            c.db_bytes = None;
+            c.tape_trades = None;
+            ed.forget_keep();
+        }
+        "widen" | "widen_unknown_rate" => {
+            ed.draft = Some(TapeWindow {
+                margin_s: 600,
+                ..window
+            });
+            if state == "widen_unknown_rate" {
+                c.catchup_rate_per_hour = None;
+            }
+        }
+        _ => {}
+    }
+    FullTapeProbe {
+        ed,
+        c,
+        width,
+        sent: Vec::new(),
+    }
+}
+
+/// Dropping a wrap or sizing a tile by its label alone spills the real keep page at narrow zooms.
+#[gpui::test]
+fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for state in [
+            "clean",
+            "draft",
+            "confirm",
+            "confirm_unknown",
+            "forever",
+            "custom",
+            "purging",
+            "done",
+            "failed",
+            "delete_failed",
+            "delete_no_room",
+            "deferred",
+            "not_shrinkable",
+            "other",
+            "old",
+            "widen",
+            "widen_unknown_rate",
+        ] {
+            for (zoom, column) in [
+                (1.0, 860.0),
+                (1.0, 420.0),
+                (1.25, 860.0),
+                (1.25, 420.0),
+                (2.0, 244.0),
+            ] {
+                let width = zoom * column;
+                let window = cx.open_window(gpui::size(px(width), px(12000.0)), |_, _| {
+                    full_probe(state, width)
+                });
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let col = visual.debug_bounds("probe-col").unwrap();
+                let at = format!("{} {state} {zoom} {column}", language.code());
+                for sel in [
+                    "server-tape-block",
+                    "server-tape-keep",
+                    "server-tape-days-chips",
+                    "server-tape-days-note",
+                    "server-tape-strip",
+                    "server-tape-sentence",
+                    "server-tape-tile-db",
+                    "server-tape-switches",
+                    "server-tape-auto-caption",
+                    "server-tape-emu-caption",
+                ] {
+                    let b = visual
+                        .debug_bounds(sel)
+                        .unwrap_or_else(|| panic!("missing {sel}: {at}"));
+                    assert!(
+                        b.origin.x + px(0.5) >= col.origin.x && b.right() <= col.right() + px(0.5),
+                        "{sel} escaped {at}"
+                    );
+                    assert!(
+                        b.origin.y >= col.origin.y && b.bottom() <= col.bottom() + px(0.5),
+                        "{sel} clipped {at}"
+                    );
+                }
+                for sel in [
+                    "server-tape-confirm",
+                    "server-tape-purge-progress",
+                    "server-tape-keep-old",
+                    "server-tape-widen-warning",
+                ] {
+                    let b = visual.debug_bounds(sel);
+                    let expected = match sel {
+                        "server-tape-confirm" => matches!(state, "confirm" | "confirm_unknown"),
+                        "server-tape-purge-progress" => state == "purging",
+                        "server-tape-keep-old" => state == "old",
+                        "server-tape-widen-warning" => {
+                            matches!(state, "widen" | "widen_unknown_rate")
+                        }
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(b.is_some(), expected, "{sel} state visibility {at}");
+                    if let Some(b) = b {
+                        assert!(b.right() <= col.right() + px(0.5), "{sel} escaped {at}");
+                    }
+                }
+                for (sel, key) in [
+                    ("server-tape-auto-caption", "telegram.server.keep_cpu_note"),
+                    (
+                        "server-tape-emu-caption",
+                        "telegram.server.keep_emu_caption",
+                    ),
+                ] {
+                    let b = visual.debug_bounds(sel).expect("caption rendered");
+                    let need = visual.update(|_, cx| {
+                        design::ui_caption_text_width(cx, &rust_i18n::t!(key), 400.0)
+                    });
+                    let line = visual.update(|_, cx| f32::from(design::t_caption(cx)));
+                    let lines = (need / f32::from(b.size.width)).floor().max(1.0);
+                    assert!(
+                        f32::from(b.size.height) + 0.5 >= lines * line,
+                        "{sel} text clipped {at}"
+                    );
+                }
+                let db = visual.debug_bounds("server-tape-tile-db").unwrap();
+                let first = visual
+                    .debug_bounds("server-tape-tile-0")
+                    .expect("first count tile");
+                if language == Language::En && column == 860.0 {
+                    assert!(
+                        (f32::from(db.origin.y) - f32::from(first.origin.y)).abs() < 0.5,
+                        "five tiles should share the wide row {at}"
+                    );
+                }
+                if column == 420.0 {
+                    let tiles = visual.debug_bounds("server-tape-tiles").expect("tile grid");
+                    assert!(
+                        (f32::from(db.size.width) - f32::from(tiles.size.width)).abs() < 1.0,
+                        "disk tile must span the narrow row {at}"
+                    );
+                }
+                let label = visual.update(|_, cx| {
+                    design::ui_caption_text_width(
+                        cx,
+                        &rust_i18n::t!("telegram.server.keep_db"),
+                        400.0,
+                    )
+                });
+                assert!(
+                    f32::from(db.size.width) + 0.5 >= label.min(f32::from(col.size.width)),
+                    "DB label clipped {at}"
+                );
+            }
+        }
+    }
+}
+
+/// The real buttons must ask first, preserve the draft on Cancel, then dispatch both keep keys.
+#[gpui::test]
+fn narrowing_write_opens_confirm_cancel_closes_confirm_sends_keep(cx: &mut gpui::TestAppContext) {
+    use crate::backend::station::job::Job;
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let window = cx.open_window(gpui::size(px(860.0), px(4000.0)), |_, _| {
+        full_probe("draft", 860.0)
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    for name in [
+        "settings-remote-apply",
+        "server-tape-confirm-cancel",
+        "settings-remote-apply",
+        "server-tape-confirm-yes",
+    ] {
+        for _ in 0..3 {
+            visual.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        let button = visual
+            .debug_bounds(name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        visual.simulate_click(button.center(), gpui::Modifiers::none());
+        window
+            .update(&mut visual, |probe, _, _| {
+                if name == "server-tape-confirm-yes" {
+                    assert_eq!(probe.sent.len(), 1);
+                    let Job::Tape {
+                        keep: Some(keep),
+                        target,
+                        ..
+                    } = &probe.sent[0]
+                    else {
+                        panic!("wrong job");
+                    };
+                    assert_eq!((keep.max_age_days, keep.record_emulator), (180, false));
+                    assert_eq!(target.host, "CORE_A");
+                    assert!(!probe.ed.confirm);
+                    assert!(probe.ed.awaiting_keep.is_some());
+                    probe.ed.forget_keep();
+                    assert!(
+                        probe.ed.days_input.is_none(),
+                        "the old target's custom field must be discarded"
+                    );
+                    assert!(probe.ed.draft_keep.is_none() && probe.ed.awaiting_keep.is_none());
+                } else {
+                    assert!(probe.sent.is_empty());
+                    assert_eq!(probe.ed.confirm, name == "settings-remote-apply");
+                }
+            })
+            .unwrap();
+    }
 }

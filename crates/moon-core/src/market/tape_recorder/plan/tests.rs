@@ -24,10 +24,11 @@ fn prints(from: i64, to: i64, step: i64) -> Vec<Tick> {
         .collect()
 }
 
+/// Repeated archive requests would overwrite a live ring; one open must seed only once.
 #[test]
 fn an_open_selects_the_pair_and_is_seeded_once() {
     let mut task = KeyTask::new();
-    task.opened(ID, T0, MARGIN, LONG);
+    task.opened(ID, T0, MARGIN, LONG, None);
     assert!(task.wants_pair());
     assert!(task.needs_seed());
 
@@ -59,7 +60,7 @@ fn an_open_selects_the_pair_and_is_seeded_once() {
 fn a_resumed_trade_records_only_what_the_file_lacks() {
     let mut whole = KeyTask::new();
     whole.filed_before(&[(T0 - MARGIN, T0 + LONG)]);
-    whole.opened(ID, T0, MARGIN, LONG);
+    whole.opened(ID, T0, MARGIN, LONG, None);
     assert!(whole.knows(ID));
     assert!(
         !whole.wants_pair(),
@@ -69,7 +70,7 @@ fn a_resumed_trade_records_only_what_the_file_lacks() {
     let mut part = KeyTask::new();
     // Filed up to the restart at T0 + 60 s; the station came back at T0 + 180 s.
     part.filed_before(&[(T0 - MARGIN, T0 + 60_000)]);
-    part.opened(ID, T0, MARGIN, LONG);
+    part.opened(ID, T0, MARGIN, LONG, None);
     assert!(part.wants_pair());
     assert!(part.needs_seed());
     part.seed_asked(T0 + 180_000, 0);
@@ -80,10 +81,11 @@ fn a_resumed_trade_records_only_what_the_file_lacks() {
     assert_eq!(filing.file.spans(), &[(T0 + 100_000, T0 + 200_000)]);
 }
 
+/// A short ring must report its missing run-up instead of claiming exhaustive coverage.
 #[test]
 fn a_hot_ring_names_the_run_up_it_no_longer_holds() {
     let mut task = KeyTask::new();
-    task.opened(ID, T0, MARGIN, LONG);
+    task.opened(ID, T0, MARGIN, LONG, None);
     task.seed_asked(T0 + 1_000, 0);
     // BTC-level churn: the ring starts 12 s before the entry.
     let lost = task.seeded(prints(T0 - 12_000, T0 + 1_000, 10), T0 + 1_000, 0);
@@ -92,10 +94,11 @@ fn a_hot_ring_names_the_run_up_it_no_longer_holds() {
     assert_eq!(filing.file.spans(), &[(T0 - 12_000, T0 + 40_000)]);
 }
 
+/// Premature or duplicate flushes would misfile prints and erase the tail still waiting.
 #[test]
 fn live_rows_are_buffered_until_enough_of_them_is_due() {
     let mut task = KeyTask::new();
-    task.opened(ID, T0, MARGIN, LONG);
+    task.opened(ID, T0, MARGIN, LONG, None);
     task.seed_asked(T0, 0);
     task.seeded(prints(T0 - 60_000, T0, 1_000), T0, 0);
     task.flush(T0, false).unwrap();
@@ -118,10 +121,11 @@ fn live_rows_are_buffered_until_enough_of_them_is_due() {
     assert_eq!(rest.ticks.len(), 6);
 }
 
+/// A quiet market still proves coverage; skipping empty spans would refetch forever.
 #[test]
 fn a_quiet_market_is_filed_as_silent_up_to_the_frontier() {
     let mut task = KeyTask::new();
-    task.closed(ID, T0, T0 + 5_000, MARGIN, LONG);
+    task.closed(ID, T0, T0 + 5_000, MARGIN, LONG, None);
     task.seed_asked(T0 + 6_000, 0);
     // The last print was ten minutes before the entry; nothing has printed since.
     task.seeded(
@@ -144,16 +148,17 @@ fn a_quiet_market_is_filed_as_silent_up_to_the_frontier() {
     );
 }
 
+/// Releasing a short position at its close would lose the last millisecond of its margin.
 #[test]
 fn a_short_position_keeps_the_pair_until_its_trail_is_filed() {
     let mut task = KeyTask::new();
-    task.opened(ID, T0, MARGIN, LONG);
+    task.opened(ID, T0, MARGIN, LONG, None);
     task.seed_asked(T0, 0);
     task.seeded(prints(T0 - 60_000, T0, 1_000), T0, 0);
     task.flush(T0 + 50_000, false).unwrap();
 
     let close = T0 + 60_000;
-    task.closed(ID, T0, close, MARGIN, LONG);
+    task.closed(ID, T0, close, MARGIN, LONG, None);
     assert_eq!(task.needed().spans(), &[(T0 - MARGIN, close + MARGIN)]);
     assert!(!task.needs_seed(), "the exit is inside the live recording");
     assert_eq!(task.deadline(), Some(close + MARGIN));
@@ -168,10 +173,11 @@ fn a_short_position_keeps_the_pair_until_its_trail_is_filed() {
     assert!(task.is_done());
 }
 
+/// A long position must release its entry and reacquire the missing exit window.
 #[test]
 fn a_long_position_lets_the_pair_go_and_seeds_again_at_the_exit() {
     let mut task = KeyTask::new();
-    task.opened(ID, T0, MARGIN, LONG);
+    task.opened(ID, T0, MARGIN, LONG, None);
     task.seed_asked(T0, 0);
     task.seeded(prints(T0 - 60_000, T0, 1_000), T0, 0);
     task.flush(T0 + LONG, false).unwrap();
@@ -183,7 +189,7 @@ fn a_long_position_lets_the_pair_go_and_seeds_again_at_the_exit() {
     task.stop();
 
     let close = T0 + 3_600_000;
-    task.closed(ID, T0 + 1_000, close, MARGIN, LONG);
+    task.closed(ID, T0 + 1_000, close, MARGIN, LONG, None);
     assert_eq!(
         task.needed().spans(),
         &[
@@ -205,17 +211,18 @@ fn a_long_position_lets_the_pair_go_and_seeds_again_at_the_exit() {
     assert!(task.is_done());
 }
 
+/// Settling one shared trade must not release the other trade's unfinished trail.
 #[test]
 fn trades_of_one_key_share_the_pair_until_the_last_trail() {
     let other = TradeId { core: 2, rec_id: 7 };
     let mut task = KeyTask::new();
-    task.opened(ID, T0, MARGIN, LONG);
-    task.opened(other, T0 + 1_000, MARGIN, LONG);
+    task.opened(ID, T0, MARGIN, LONG, None);
+    task.opened(other, T0 + 1_000, MARGIN, LONG, None);
     task.seed_asked(T0 + 1_000, 0);
     task.seeded(prints(T0 - 60_000, T0 + 1_000, 1_000), T0 + 1_000, 0);
 
-    task.closed(other, T0 + 1_000, T0 + 9_000, MARGIN, LONG);
-    task.closed(ID, T0, T0 + 20_000, MARGIN, LONG);
+    task.closed(other, T0 + 1_000, T0 + 9_000, MARGIN, LONG, None);
+    task.closed(ID, T0, T0 + 20_000, MARGIN, LONG, None);
     assert!(!task.needs_seed(), "the same subscription records both");
     assert_eq!(task.deadline(), Some(T0 + 20_000 + MARGIN));
 
@@ -227,10 +234,11 @@ fn trades_of_one_key_share_the_pair_until_the_last_trail() {
     assert!(task.is_done());
 }
 
+/// An overwritten ring gap must remain missing rather than become recorded coverage.
 #[test]
 fn a_ring_that_overwrote_unread_rows_leaves_an_honest_gap() {
     let mut task = KeyTask::new();
-    task.opened(ID, T0, MARGIN, LONG);
+    task.opened(ID, T0, MARGIN, LONG, None);
     task.seed_asked(T0, 0);
     task.seeded(prints(T0 - 60_000, T0 + 10_000, 1_000), T0, 0);
     // Rows between the newest drained print and the first one read after the overwrite are gone.
@@ -244,10 +252,11 @@ fn a_ring_that_overwrote_unread_rows_leaves_an_honest_gap() {
     );
 }
 
+/// A failed seed must not suppress live prints or repeatedly request the same missing past.
 #[test]
 fn an_archive_that_never_comes_records_the_live_rows_alone() {
     let mut task = KeyTask::new();
-    task.opened(ID, T0, MARGIN, LONG);
+    task.opened(ID, T0, MARGIN, LONG, None);
     task.seed_asked(T0 + 2_000, 0);
     let lost = task.seed_failed();
     assert_eq!(lost.spans(), &[(T0 - MARGIN, T0 + 1_999)]);
@@ -261,13 +270,14 @@ fn an_archive_that_never_comes_records_the_live_rows_alone() {
     assert_eq!(filing.file.spans(), &[(T0 + 2_000, T0 + 40_000)]);
 }
 
+/// A closing trade can need a past exit window that the live frontier never filed.
 #[test]
 fn a_need_behind_the_frontier_is_seeded_again() {
     let other = TradeId { core: 2, rec_id: 9 };
     let mut task = KeyTask::new();
     // A long position whose entry side is done; another trade keeps the pair selected.
-    task.opened(ID, T0, MARGIN, LONG);
-    task.opened(other, T0 + LONG - 1_000, MARGIN, LONG);
+    task.opened(ID, T0, MARGIN, LONG, None);
+    task.opened(other, T0 + LONG - 1_000, MARGIN, LONG, None);
     task.seed_asked(T0, 0);
     task.seeded(prints(T0 - 60_000, T0, 1_000), T0, 0);
     task.flush(T0 + LONG + 60_000, true);
@@ -275,7 +285,7 @@ fn a_need_behind_the_frontier_is_seeded_again() {
     // The first trade closes; its exit window lies in rows drained while nothing needed them.
     let close = T0 + 2 * LONG + 60_000;
     task.flush(close + 5_000, true);
-    task.closed(ID, T0, close, MARGIN, LONG);
+    task.closed(ID, T0, close, MARGIN, LONG, None);
     assert!(task.needs_seed());
     task.seed_asked(close + 6_000, 0);
     let lost = task.seeded(
@@ -289,22 +299,23 @@ fn a_need_behind_the_frontier_is_seeded_again() {
 
     // An archive that cannot reach the hole names it lost instead of asking again.
     let mut hole = KeyTask::new();
-    hole.opened(ID, T0, MARGIN, LONG);
-    hole.opened(other, T0 + LONG - 1_000, MARGIN, LONG);
+    hole.opened(ID, T0, MARGIN, LONG, None);
+    hole.opened(other, T0 + LONG - 1_000, MARGIN, LONG, None);
     hole.seed_asked(T0, 0);
     hole.seeded(prints(T0 - 60_000, T0, 1_000), T0, 0);
     hole.flush(close + 5_000, true);
-    hole.closed(ID, T0, close, MARGIN, LONG);
+    hole.closed(ID, T0, close, MARGIN, LONG, None);
     hole.seed_asked(close + 6_000, 0);
     let lost = hole.seed_failed();
     assert_eq!(lost.spans(), &[(close - MARGIN, close + 5_000)]);
     assert!(!hole.needs_seed());
 }
 
+/// A donor that never answers must release the selected key after its give-up deadline.
 #[test]
 fn a_recording_that_never_happens_is_given_up_past_the_deadline() {
     let mut task = KeyTask::new();
-    task.closed(ID, T0, T0 + 10_000, MARGIN, LONG);
+    task.closed(ID, T0, T0 + 10_000, MARGIN, LONG, None);
     let deadline = T0 + 10_000 + MARGIN;
     assert!(!task.overdue(deadline + GIVE_UP_MS));
     assert!(task.overdue(deadline + GIVE_UP_MS + 1));
@@ -317,10 +328,11 @@ fn a_recording_that_never_happens_is_given_up_past_the_deadline() {
     );
 }
 
+/// A stale unmatched open must not keep its market selected forever.
 #[test]
 fn an_open_whose_exit_never_came_is_forgotten() {
     let mut task = KeyTask::new();
-    task.opened(ID, T0, MARGIN, LONG);
+    task.opened(ID, T0, MARGIN, LONG, None);
     task.give_up();
     assert!(!task.is_done(), "an open trade keeps the key");
     task.drop_stale_opens(T0 + 1);

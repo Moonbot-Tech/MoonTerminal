@@ -25,8 +25,12 @@ pub(crate) struct RecorderCatchup {
     pending: HashMap<TradeId, CatchupTrade>,
     latched: HashMap<TradeId, Latch>,
     complete: HashSet<TradeId>,
-    /// Close times bound settled IDs and refusal latches to the same depth as enumeration.
-    closed: HashMap<TradeId, i64>,
+    /// Retained coverage can outlive catch-up's shorter archive-reach settlement horizon.
+    tape_complete: HashSet<TradeId>,
+    /// Resolved identities also protect retained tape during later purge planning.
+    pub(super) known: HashMap<TradeId, CatchupTrade>,
+    /// Disabled emulator trades remain known but never enter the fetch queue.
+    emulator: HashMap<TradeId, CatchupTrade>,
     worker: Option<Sender<Pass>>,
     active: bool,
     hour: Option<i64>,
@@ -35,6 +39,13 @@ pub(crate) struct RecorderCatchup {
     switch_gen: u64,
     /// Markets whose fetched tape the disk reserve refused to file during the running pass.
     refused: HashSet<(String, String)>,
+    /// Poll-only maintenance runs before another historical pass may start.
+    retention: super::super::retention::Retention,
+    /// Completion timestamps support a rolling catch-up throughput estimate.
+    completions: std::collections::VecDeque<(i64, u32)>,
+    rate_started: Option<i64>,
+    /// Settlements cannot synchronously read coverage behind cache maintenance.
+    deferred_finish: Option<(PassResult, i64)>,
 }
 
 /// One serial fetch pass; continuation pages in the same UTC hour share the archive budget.
@@ -44,16 +55,383 @@ struct Pass {
 }
 
 impl RecorderCatchup {
+    /// Merge protecting listings and live closes independently of the fetch queue.
+    pub(crate) fn protect(&mut self, trades: Vec<CatchupTrade>) {
+        self.known
+            .extend(trades.into_iter().map(|trade| (trade.id, trade)));
+        if self.maintenance_busy() {
+            self.retention.recount_dirty = true;
+        }
+    }
+    /// Whether cache maintenance can currently delay synchronous readers.
+    pub(crate) fn maintenance_busy(&self) -> bool {
+        use super::super::retention::Phase;
+        matches!(
+            self.retention.phase,
+            Phase::Inventory { .. } | Phase::Trim { .. } | Phase::Recount { .. }
+        )
+    }
+
+    /// Poll retention without waiting on the cache worker; queued narrowing keeps catch-up paused.
+    pub(crate) fn retention_tick(
+        &mut self,
+        cache: &TradeCache,
+        now: i64,
+        live: &HashMap<super::super::Key, Coverage>,
+    ) -> bool {
+        use super::super::retention::{self, Phase};
+        use crate::market::trade_replay::trade_cache::{Compact, CompactFail, TrimProgress};
+        use crate::station_api::{PurgeFail, TapePurge};
+        use std::sync::{Arc, atomic::Ordering, mpsc::TryRecvError};
+        if !super::enabled() {
+            return false;
+        }
+        let wanted = super::take_purge_wanted();
+        if wanted {
+            STATUS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .purge = Some(TapePurge::Running { done: 0, total: 0 });
+        }
+        if super::record_emulator() {
+            self.retention.emulator_deferred = false;
+        }
+        let deferred = self.retention.emulator_deferred
+            && super::listings_complete(super::relist_gen())
+            && self.retention.retry_at.is_none_or(|at| now >= at);
+        let hourly = super::retention_edge_ms(now).is_some()
+            && self.retention.hour != Some(now.div_euclid(HOUR_MS))
+            && self.retention.retry_at.is_none_or(|at| now >= at);
+        let retry = self.retention.retry_at.is_some_and(|at| now >= at);
+        if wanted || hourly || retry || deferred {
+            if matches!(self.retention.phase, Phase::Idle) {
+                self.retention.phase = Phase::Listing {
+                    since: now,
+                    generation: super::relist_gen(),
+                };
+            } else if wanted {
+                // Preserve a narrowing request arriving during maintenance for the next pass.
+                super::PURGE_WANTED.store(true, Ordering::Relaxed);
+            }
+        }
+        let window = (
+            crate::market::trade_replay::margin_ms(),
+            crate::market::trade_replay::long_position_ms(),
+        );
+        let phase = std::mem::replace(&mut self.retention.phase, Phase::Idle);
+        let mut status = None;
+        self.retention.phase = match phase {
+            Phase::Idle => Phase::Idle,
+            Phase::Listing { since, generation } => {
+                let since = if generation == super::relist_gen() {
+                    since
+                } else {
+                    now
+                };
+                let generation = if generation == super::relist_gen() {
+                    generation
+                } else {
+                    super::relist_gen()
+                };
+                let complete = super::listings_complete(generation);
+                if !self.active && (complete || now.saturating_sub(since) >= 600_000) {
+                    self.retention.hour = Some(now.div_euclid(HOUR_MS));
+                    status = Some(TapePurge::Running { done: 0, total: 0 });
+                    Phase::Inventory {
+                        rx: cache.inventory_start(),
+                        generation,
+                        complete,
+                    }
+                } else {
+                    Phase::Listing { since, generation }
+                }
+            }
+            Phase::Inventory {
+                rx,
+                generation,
+                complete,
+            } => match rx.try_recv() {
+                Ok(Ok(inventory)) if generation == super::relist_gen() => {
+                    self.retention.emulator_deferred = !complete && !super::record_emulator();
+                    let incomplete = if complete {
+                        HashSet::new()
+                    } else {
+                        inventory
+                            .keys
+                            .iter()
+                            .cloned()
+                            .chain(live.keys().cloned())
+                            .chain(
+                                self.known
+                                    .values()
+                                    .map(|t| (t.exchange.clone(), t.market.clone())),
+                            )
+                            .collect()
+                    };
+                    let known: Vec<_> = self.known.values().cloned().collect();
+                    let keep = retention::keep_map(
+                        &inventory,
+                        &known,
+                        live,
+                        &incomplete,
+                        retention::KeepPolicy {
+                            edge: super::retention_edge_ms(now),
+                            listed_from: super::edge_ms(now),
+                            record_emulator: super::record_emulator(),
+                            margin_ms: window.0,
+                            long_ms: window.1,
+                        },
+                    );
+                    let progress = Arc::new(TrimProgress::default());
+                    let rx = cache.trim_start(
+                        Arc::new(keep),
+                        Compact::Incremental,
+                        Some(progress.clone()),
+                    );
+                    Phase::Trim { rx, progress }
+                }
+                Ok(Ok(_)) => Phase::Listing {
+                    since: now,
+                    generation: super::relist_gen(),
+                },
+                Err(TryRecvError::Empty) => Phase::Inventory {
+                    rx,
+                    generation,
+                    complete,
+                },
+                result => {
+                    status = Some(self.retention_delete_failed(result, now));
+                    Phase::Idle
+                }
+            },
+            Phase::Trim { rx, progress } => match rx.try_recv() {
+                Ok(Ok(outcome)) => {
+                    self.sync_switches();
+                    self.complete.clear();
+                    self.tape_complete.clear();
+                    let reads = self
+                        .known
+                        .values()
+                        .cloned()
+                        .map(|t| {
+                            let rx =
+                                cache.held_spans_start(&t.exchange, &t.market, i64::MIN, i64::MAX);
+                            (t, rx)
+                        })
+                        .collect();
+                    Phase::Recount {
+                        reads,
+                        complete: HashSet::new(),
+                        failure: outcome.compacted.err(),
+                        freed: outcome.bytes_before.saturating_sub(outcome.bytes_after),
+                    }
+                }
+                Err(TryRecvError::Empty) => {
+                    status = Some(TapePurge::Running {
+                        done: progress.done.load(Ordering::Relaxed),
+                        total: progress.total.load(Ordering::Relaxed),
+                    });
+                    Phase::Trim { rx, progress }
+                }
+                result => {
+                    status = Some(self.retention_delete_failed(result, now));
+                    Phase::Idle
+                }
+            },
+            Phase::Recount {
+                reads,
+                mut complete,
+                mut failure,
+                freed,
+            } => {
+                let mut pending_reads = Vec::new();
+                for (trade, rx) in reads {
+                    match rx.try_recv() {
+                        Ok(Ok(spans)) => {
+                            let focus = super::needed(&trade, window.0, window.1);
+                            if Coverage::from_spans(spans).covers(&focus) {
+                                complete.insert(trade.id);
+                            }
+                        }
+                        Err(TryRecvError::Empty) => pending_reads.push((trade, rx)),
+                        _ => {
+                            failure = Some(CompactFail::Other);
+                        }
+                    }
+                }
+                if self.retention.recount_dirty {
+                    self.retention.recount_dirty = false;
+                    let reads = self
+                        .known
+                        .values()
+                        .cloned()
+                        .map(|trade| {
+                            let rx = cache.held_spans_start(
+                                &trade.exchange,
+                                &trade.market,
+                                i64::MIN,
+                                i64::MAX,
+                            );
+                            (trade, rx)
+                        })
+                        .collect();
+                    Phase::Recount {
+                        reads,
+                        complete: HashSet::new(),
+                        failure,
+                        freed,
+                    }
+                } else if !pending_reads.is_empty() {
+                    Phase::Recount {
+                        reads: pending_reads,
+                        complete,
+                        failure,
+                        freed,
+                    }
+                } else {
+                    self.tape_complete = complete.clone();
+                    self.complete = complete;
+                    self.pending = self
+                        .known
+                        .iter()
+                        .filter(|(id, t)| {
+                            !self.complete.contains(id)
+                                && self.latched.get(id) != Some(&Latch::Permanent)
+                                && (!t.emulator || super::record_emulator())
+                                && t.close_ms >= super::edge_ms(now)
+                        })
+                        .map(|(id, t)| (*id, t.clone()))
+                        .collect();
+                    self.publish_pending();
+                    self.retention.hour = Some(now.div_euclid(HOUR_MS));
+                    self.retention.retry_at = failure
+                        .filter(|failure| *failure != CompactFail::NotShrinkable)
+                        .map(|_| now + 60_000);
+                    status = Some(match failure {
+                        None => TapePurge::Done {
+                            at_ms: now,
+                            freed_bytes: freed,
+                        },
+                        Some(f) => TapePurge::Failed {
+                            at_ms: now,
+                            reason: match f {
+                                CompactFail::NoRoom => PurgeFail::NoRoom,
+                                CompactFail::NotShrinkable => PurgeFail::NotShrinkable,
+                                CompactFail::Deferred => PurgeFail::Deferred,
+                                CompactFail::Other => PurgeFail::Other,
+                            },
+                        },
+                    });
+                    self.retention.summary_minute = None;
+                    Phase::Idle
+                }
+            }
+        };
+        if self.retention.summary_minute != Some(now.div_euclid(60_000)) {
+            self.publish_storage(now);
+            self.retention.summary_minute = Some(now.div_euclid(60_000));
+        }
+        let purging = !matches!(self.retention.phase, Phase::Idle)
+            || super::PURGE_WANTED.load(Ordering::Relaxed);
+        if purging && !matches!(status, Some(TapePurge::Running { .. })) {
+            // Listing, inventory, recount and queued passes must not expose a prior Done.
+            status = Some(TapePurge::Running { done: 0, total: 0 });
+        }
+        if let Some(purge) = status {
+            STATUS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .purge = Some(purge);
+        }
+        if !self.maintenance_busy() {
+            if let Some((result, at)) = self.deferred_finish.take() {
+                self.finish(cache, result, at);
+            }
+        }
+        purging
+    }
+
+    /// Inventory and delete failures share room-pressure reporting and the same retry backoff.
+    fn retention_delete_failed<T>(
+        &mut self,
+        result: Result<rusqlite::Result<T>, mpsc::TryRecvError>,
+        now: i64,
+    ) -> crate::station_api::TapePurge {
+        use crate::station_api::{PurgeFail, TapePurge};
+        let no_room = matches!(result, Ok(Err(ref error))
+            if error.sqlite_error_code() == Some(rusqlite::ErrorCode::DiskFull));
+        self.retention.retry_at = Some(now + if no_room { HOUR_MS } else { 60_000 });
+        TapePurge::Failed {
+            at_ms: now,
+            reason: if no_room {
+                PurgeFail::DeleteNoRoom
+            } else {
+                PurgeFail::DeleteFailed
+            },
+        }
+    }
+
+    /// Report complete known trades by close age, and main plus WAL bytes once per minute.
+    fn publish_storage(&self, now: i64) {
+        self.publish_storage_at(now, &crate::config::paths::tape_recorder_db_path());
+    }
+
+    /// Read a specified cache file so reporting can be verified against isolated fixtures.
+    fn publish_storage_at(&self, now: i64, path: &std::path::Path) {
+        let mut ages = std::collections::BTreeMap::<u16, (u32, u32)>::new();
+        let mut count = 0u32;
+        for trade in self
+            .known
+            .values()
+            .filter(|t| self.tape_complete.contains(&t.id))
+        {
+            count = count.saturating_add(1);
+            let days = (now.saturating_sub(trade.close_ms).max(0) / 86_400_000).min(u16::MAX as i64)
+                as u16;
+            let row = ages.entry(days).or_default();
+            if trade.emulator {
+                row.1 += 1;
+            } else {
+                row.0 += 1;
+            }
+        }
+        let mut wal = path.as_os_str().to_os_string();
+        wal.push("-wal");
+        let bytes = [path, std::path::Path::new(&wal)]
+            .iter()
+            .filter_map(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .sum();
+        let mut status = STATUS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        status.db_bytes = Some(bytes);
+        status.tape_trades = Some(count);
+        status.tape_ages = ages
+            .into_iter()
+            .map(|(days, (plain, emulator))| crate::station_api::TapeAge {
+                days,
+                plain,
+                emulator,
+            })
+            .collect();
+    }
     /// Merge session pages without duplicating a trade already waiting for recovery.
     pub(crate) fn submit(&mut self, trades: Vec<CatchupTrade>) {
         if !self.active {
             self.sync_switches();
         }
         for trade in trades {
+            self.known.insert(trade.id, trade.clone());
+            if trade.emulator && !super::record_emulator() {
+                self.pending.remove(&trade.id);
+                self.emulator.insert(trade.id, trade);
+                continue;
+            }
+            self.emulator.remove(&trade.id);
             if !self.complete.contains(&trade.id)
                 && self.latched.get(&trade.id) != Some(&Latch::Permanent)
             {
-                self.closed.insert(trade.id, trade.close_ms);
                 self.pending.insert(trade.id, trade);
             }
         }
@@ -71,6 +449,7 @@ impl RecorderCatchup {
         archives: bool,
     ) -> CatchupPlan {
         self.prune(now_ms);
+        self.route_emulator();
         let ready: Vec<_> = self.pending.values().cloned().collect();
         let batch = if archives {
             super::plan(&ready, held, &self.latched, now_ms, margin, long)
@@ -83,6 +462,7 @@ impl RecorderCatchup {
         }
         for &id in &batch.complete_ids {
             self.complete.insert(id);
+            self.tape_complete.insert(id);
             self.pending.remove(&id);
         }
         batch
@@ -96,6 +476,10 @@ impl RecorderCatchup {
     /// Evicted tape invalidates settled IDs so the next session listing checks coverage again.
     pub(crate) fn evicted(&mut self) {
         self.complete.clear();
+        self.tape_complete.clear();
+        if self.maintenance_busy() {
+            self.retention.recount_dirty = true;
+        }
     }
 
     /// Reconsider permanent refusals and completed IDs when source choices change.
@@ -104,26 +488,58 @@ impl RecorderCatchup {
         if self.switch_gen != generation {
             self.latched.retain(|_, latch| *latch != Latch::Permanent);
             self.complete.clear();
+            self.tape_complete.clear();
+            for trade in self.known.values() {
+                self.pending.insert(trade.id, trade.clone());
+            }
             self.switch_gen = generation;
         }
+        self.route_emulator();
+        self.publish_pending();
         (auto, archives)
     }
 
-    /// Release old settled identities even when no pending work remains to start another pass.
+    /// Keep disabled emulator rows out of pending and return them when recording is enabled.
+    fn route_emulator(&mut self) {
+        if super::record_emulator() {
+            self.pending.extend(self.emulator.drain());
+        } else {
+            self.pending.retain(|id, trade| {
+                if trade.emulator {
+                    self.emulator.insert(*id, trade.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+    }
+
+    /// Expire catch-up settlements at archive reach while retaining protection until its own edge.
     fn prune(&mut self, now_ms: i64) {
-        let cutoff =
-            now_ms.saturating_sub(crate::market::trade_replay::venue_caps::ARCHIVE_DEPTH_MS);
+        let cutoff = super::retention_edge_ms(now_ms).unwrap_or(i64::MIN);
+        let catchup_cutoff = super::edge_ms(now_ms);
+        for trade in self
+            .known
+            .values()
+            .filter(|trade| trade.close_ms < catchup_cutoff)
+        {
+            self.complete.remove(&trade.id);
+            self.latched.remove(&trade.id);
+        }
         let expired: Vec<_> = self
-            .closed
+            .known
             .iter()
-            .filter(|(_, close)| **close < cutoff)
+            .filter(|(_, trade)| trade.close_ms < cutoff)
             .map(|(&id, _)| id)
             .collect();
         for id in expired {
             self.complete.remove(&id);
             self.latched.remove(&id);
             if !self.pending.contains_key(&id) {
-                self.closed.remove(&id);
+                self.known.remove(&id);
+                self.emulator.remove(&id);
+                self.tape_complete.remove(&id);
             }
         }
     }
@@ -187,6 +603,7 @@ impl RecorderCatchup {
             .is_some_and(|worker| worker.send(pass).is_ok())
         {
             self.active = true;
+            self.rate_started.get_or_insert(now_ms);
             let mut status = STATUS
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -208,6 +625,10 @@ impl RecorderCatchup {
 
     /// Settle after all filing commands; a reserve refusal or failed write must remain missing.
     pub(crate) fn finish(&mut self, cache: &TradeCache, result: PassResult, now_ms: i64) {
+        if self.maintenance_busy() {
+            self.deferred_finish = Some((result, now_ms));
+            return;
+        }
         self.archive_bytes = result.archive_bytes;
         let mut filled = 0_u32;
         let mut failed = 0_u32;
@@ -235,6 +656,7 @@ impl RecorderCatchup {
                 if self.complete.insert(job.trade.id) {
                     filled += 1;
                 }
+                self.tape_complete.insert(job.trade.id);
             } else {
                 self.pending.insert(job.trade.id, job.trade.clone());
                 self.latched
@@ -255,6 +677,25 @@ impl RecorderCatchup {
         }
         self.refused.clear();
         self.active = false;
+        self.rate_started.get_or_insert(now_ms);
+        self.completions.push_back((now_ms, filled));
+        while self
+            .completions
+            .front()
+            .is_some_and(|(at, _)| *at < now_ms - HOUR_MS)
+        {
+            self.completions.pop_front();
+        }
+        let elapsed = now_ms
+            .saturating_sub(self.rate_started.unwrap_or(now_ms))
+            .clamp(1_000, HOUR_MS);
+        let per_hour = self
+            .completions
+            .iter()
+            .map(|(_, n)| u64::from(*n))
+            .sum::<u64>()
+            .saturating_mul(HOUR_MS as u64)
+            / elapsed as u64;
         let pending = self.pending.len().min(u32::MAX as usize) as u32;
         let report = pass_report(filled, pending, &failures);
         log::info!("{}", report.summary);
@@ -262,6 +703,7 @@ impl RecorderCatchup {
             log::warn!("{warn}");
         }
         self.sync_switches();
+        let pending = self.pending.len().min(u32::MAX as usize) as u32;
         let mut status = STATUS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -271,6 +713,7 @@ impl RecorderCatchup {
         status.running = false;
         status.archive_bytes = self.archive_bytes;
         status.pending = pending;
+        status.catchup_rate_per_hour = Some(per_hour.min(u32::MAX as u64) as u32);
     }
 
     /// Keep queued and retrying trades visible while a pass is running or waiting for its hour.
@@ -392,6 +835,7 @@ fn start_worker() -> Option<Sender<Pass>> {
                     |job, _, _, rest, archive| super::run_job(job, rest, archive),
                     |job, outcome| {
                         if !outcome.file.is_empty() {
+                            super::pacing::wait();
                             super::super::notify(super::super::Cmd::Backfilled {
                                 exchange: job.trade.exchange.clone(),
                                 market: job.trade.market.clone(),

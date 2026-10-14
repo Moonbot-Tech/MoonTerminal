@@ -360,6 +360,7 @@ impl SettingsView {
                 ed.access_draft = None;
                 ed.chats.close();
                 ed.tape.forget_switches();
+                ed.tape.forget_keep();
             }
             ed.known = known;
             if ed.known.is_none() {

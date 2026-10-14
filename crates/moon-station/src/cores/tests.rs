@@ -289,6 +289,22 @@ fn the_tape_window_comes_from_the_station_file() {
     assert!(from_station_file(&unknown, Some(&dir)).is_err());
 }
 
+/// Retention keys must parse without relaxing the strict tape schema for unknown keys.
+#[test]
+fn tape_keep_keys_parse() {
+    let dir = creds("tape_keep", &[(3, "k1")]);
+    let core = "[[core]]\nuid = 3\nname = \"CORE_A\"\n";
+    let configured = format!("{core}[tape]\nmax_age_days = 90\nrecord_emulator = false\n");
+    let station = from_station_file(&configured, Some(&dir)).unwrap();
+    assert_eq!(station.tape.max_age_days, Some(90));
+    assert_eq!(station.tape.record_emulator, Some(false));
+    let absent = from_station_file(core, Some(&dir)).unwrap();
+    assert_eq!(absent.tape.max_age_days, None);
+    assert_eq!(absent.tape.record_emulator, None);
+    let unknown = format!("{configured}unknown_keep = true\n");
+    assert!(from_station_file(&unknown, Some(&dir)).is_err());
+}
+
 /// `[telegram]` with the Mini App switches the station to the account profile and gives every
 /// core the account feed; without the section it stays light.
 #[test]

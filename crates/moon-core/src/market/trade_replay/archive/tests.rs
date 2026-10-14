@@ -1,6 +1,48 @@
 use super::*;
 use std::io::{Cursor, Write};
 
+thread_local! { static PACES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+/// Any pacing callback under the shared host lock would delay terminal-side archive users.
+fn assert_pacing_without_host_lock() {
+    assert!(
+        download_lock(ArchiveRoute::BybitTradingDaily.host())
+            .try_lock()
+            .is_ok()
+    );
+    PACES.with(|count| count.set(count.get() + 1));
+}
+
+/// Download and decode pacing must never sleep under a host lock, including transport reads.
+#[test]
+fn catchup_pacing_never_waits_under_the_host_lock() {
+    let root = root();
+    PACES.with(|count| count.set(0));
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(b"timestamp,side,size,price\n").unwrap();
+    for _ in 0..100_000 {
+        gz.write_all(b"1,Sell,2,10\n").unwrap();
+    }
+    let bytes = gz.finish().unwrap();
+    let filled = with_pacing(assert_pacing_without_host_lock, || {
+        fill_with(
+            ArchiveRoute::BybitTradingDaily,
+            "XALPHA",
+            &Coverage::one((0, 3000)),
+            &ReplayGate::default(),
+            (root.path(), vec![day()]),
+            (|_| true, u64::MAX),
+            |_| Ok(response(bytes.clone())),
+        )
+    })
+    .unwrap();
+    assert_eq!(filled.ticks.len(), 100_000);
+    assert!(
+        PACES.with(|count| count.get()) >= 3,
+        "expected job-edge, extraction, and in-decoder pacing"
+    );
+}
+
 /// Allocate isolated scratch storage without touching configured production data.
 fn root() -> Scratch {
     static NEXT: AtomicU64 = AtomicU64::new(0);

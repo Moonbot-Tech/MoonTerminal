@@ -343,6 +343,7 @@ fn station_tape_job_button_names_the_control_that_starts_it() {
                 target: target.clone(),
                 tape,
                 catchup: None,
+                keep: None,
             },
             false,
             JobButton::Key("telegram.server.tape_set"),

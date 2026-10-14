@@ -2105,6 +2105,7 @@ pub(super) fn run(
                                             coin,
                                             quote: server.market.clone(),
                                             buy,
+                                            emulator,
                                         });
                                     }
                                     Some(capture::RowEdge::Closed(rec_id, closed)) => {
@@ -2114,6 +2115,7 @@ pub(super) fn run(
                                             quote: server.market.clone(),
                                             buy: closed.buy,
                                             close: closed.close,
+                                            emulator: closed.emulator,
                                         });
                                     }
                                     None => {}
