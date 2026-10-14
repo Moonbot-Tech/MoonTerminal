@@ -224,6 +224,26 @@ impl WgpuLayers {
             );
             self.candle_buffers_dirty = false;
         }
+        if self.path_buffers_dirty
+            || self.path_buffer.buffer.is_none()
+            || self.path_style_uniform.buffer.is_none()
+        {
+            binds_dirty |= self.path_buffer.write(
+                device,
+                queue,
+                "moon_chart_path",
+                wgpu::BufferUsages::STORAGE,
+                &self.path_candles,
+            );
+            binds_dirty |= self.path_style_uniform.write(
+                device,
+                queue,
+                "moon_chart_path_style",
+                wgpu::BufferUsages::UNIFORM,
+                &[self.path_style],
+            );
+            self.path_buffers_dirty = false;
+        }
         if self.side_buffer_dirty || self.side_buffer.buffer.is_none() {
             binds_dirty |= self.side_buffer.write(
                 device,
@@ -478,6 +498,29 @@ impl WgpuLayers {
                 },
             ],
         });
+        // The path rides the candle layout; its volume uniform is the candle band's, never drawn.
+        let path_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("moon_chart_path_bind"),
+            layout: &pipelines.candle_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.view_uniform.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.path_style_uniform.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.path_buffer.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.volume_style_uniform.binding(),
+                },
+            ],
+        });
         let candle_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("moon_chart_candle_bind"),
             layout: &pipelines.candle_layout,
@@ -576,6 +619,7 @@ impl WgpuLayers {
             mark: mark_bind,
             book: book_bind,
             candle: candle_bind,
+            path: path_bind,
             side: side_bind,
             hvol: hvol_bind,
             zone: zone_bind,

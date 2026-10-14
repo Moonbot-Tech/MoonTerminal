@@ -40,6 +40,9 @@ pub struct PlatformLayers {
     background: BackgroundLayer,
     #[cfg(windows)]
     candles: CandleLayer,
+    /// The open candle's five-second path, drawn over its hidden body left of the raw dots.
+    #[cfg(windows)]
+    path_candles: CandleLayer,
     #[cfg(windows)]
     side_volume: SideVolumeLayer,
     #[cfg(windows)]
@@ -123,6 +126,8 @@ impl PlatformLayers {
             background: BackgroundLayer::new(BACKGROUND_3DLOGO_PNG),
             #[cfg(windows)]
             candles: CandleLayer::new(),
+            #[cfg(windows)]
+            path_candles: CandleLayer::with_capacity(super::candles::PATH_CAPACITY),
             #[cfg(windows)]
             side_volume: SideVolumeLayer::new(),
             #[cfg(windows)]
@@ -281,6 +286,47 @@ impl PlatformLayers {
         {
             let _ = from;
             self.set_candles(full);
+        }
+    }
+
+    /// Fully replaces the open candle's mini-candle path.
+    pub fn set_path_candles(&mut self, data: &[CandleGpu]) {
+        #[cfg(windows)]
+        self.path_candles.set(data);
+        #[cfg(target_os = "linux")]
+        self.wgpu.set_path_candles(data.to_vec());
+        #[cfg(target_os = "macos")]
+        self.metal.set_path_candles(data);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = data;
+        }
+    }
+
+    /// Re-applies the path's tail from `from` on: newly folded mini-candles only.
+    pub fn patch_path_candles(&mut self, from: usize, full: &[CandleGpu]) {
+        #[cfg(windows)]
+        self.path_candles.patch(from, full);
+        #[cfg(target_os = "macos")]
+        self.metal.patch_path_candles(from, full);
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = from;
+            self.set_path_candles(full);
+        }
+    }
+
+    /// Idempotently sets the path layer's style (the candle style without zones).
+    pub fn set_path_style(&mut self, style: CandleStyleGpu) {
+        #[cfg(windows)]
+        self.path_candles.set_style(style);
+        #[cfg(target_os = "linux")]
+        self.wgpu.set_path_style(style);
+        #[cfg(target_os = "macos")]
+        self.metal.set_path_style(style);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = style;
         }
     }
 
@@ -513,6 +559,7 @@ impl PlatformLayers {
         gpu: &gpui::RawGpuAccess,
     ) {
         self.candles.prepare(device, context, gpu);
+        self.path_candles.prepare(device, context, gpu);
         self.side_volume.prepare(device, context, gpu);
         self.hvol.prepare(device, context, gpu);
         self.combo.prepare(view, device, context, gpu);
@@ -613,6 +660,8 @@ impl PlatformLayers {
         // Draw candles below trade crosses; the combo layer is blitted on top.
         crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
         self.candles.render(view, context, rtv, gpu, panel_clip);
+        self.path_candles
+            .render(view, context, rtv, gpu, panel_clip);
         // The bought/sold half AFTER the candle layer: it covers the candle band's bucket that
         // straddles the split boundary, and its translucent fill over a body is the reference
         // terminal's look too.

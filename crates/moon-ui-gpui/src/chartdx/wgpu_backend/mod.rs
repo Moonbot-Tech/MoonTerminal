@@ -353,6 +353,7 @@ struct PreparedBindGroups {
     mark: wgpu::BindGroup,
     book: wgpu::BindGroup,
     candle: wgpu::BindGroup,
+    path: wgpu::BindGroup,
     side: wgpu::BindGroup,
     hvol: wgpu::BindGroup,
     zone: wgpu::BindGroup,
@@ -381,6 +382,10 @@ pub struct WgpuLayers {
     /// Complete stored candle series, replaced as a unit when its revision changes.
     candles: Vec<CandleGpu>,
     candle_style: CandleStyleGpu,
+    /// The open candle's five-second path: a second candle set on the same pipeline, its own
+    /// style, no volume band.
+    path_candles: Vec<CandleGpu>,
+    path_style: CandleStyleGpu,
     /// The sides band's buckets, replaced as a unit when its series is re-read.
     sides: Vec<SideVolumeGpu>,
     /// The horizontal volumes' per-pixel samples, replaced as a unit when they are retaken.
@@ -417,6 +422,8 @@ pub struct WgpuLayers {
     marker_buffer: BufferSlot,
     candle_buffer: BufferSlot,
     candle_style_uniform: BufferSlot,
+    path_buffer: BufferSlot,
+    path_style_uniform: BufferSlot,
     volume_style_uniform: BufferSlot,
     volume_style: VolumeStyleGpu,
     side_buffer: BufferSlot,
@@ -427,6 +434,7 @@ pub struct WgpuLayers {
     book_buffer_dirty: bool,
     userdata_buffers_dirty: bool,
     candle_buffers_dirty: bool,
+    path_buffers_dirty: bool,
     side_buffer_dirty: bool,
     hvol_buffers_dirty: bool,
 }

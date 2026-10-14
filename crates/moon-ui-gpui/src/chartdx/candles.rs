@@ -25,6 +25,9 @@ use super::types::{CandleGpu, CandleStyleGpu, ChartViewGpu, VolumeStyleGpu};
 /// reads as. On overflow only the newest tail is kept and the chart's left simply loses its
 /// candles while the grid and trades still draw there; `candle_dropped` counts them.
 const CANDLE_CAPACITY: u32 = super::figure_snap::DX11_CANDLE_WINDOW as u32;
+/// Instance capacity of the open candle's mini-candle path: the core keeps at most 25 000
+/// five-second mini-candles, so this holds all of them (~900 KB of VRAM).
+pub(crate) const PATH_CAPACITY: u32 = 32_768;
 const CANDLES_HLSL: &str = include_str!("shaders/candles.hlsl");
 
 struct CandlePipe {
@@ -52,14 +55,23 @@ pub struct CandleLayer {
     volume_style: VolumeStyleGpu,
     volume_dirty: bool,
     device_generation_seen: u64,
+    /// GPU instance capacity of this layer's buffer.
+    capacity: u32,
 }
 
 impl CandleLayer {
     /// Creates an empty layer with a CPU window sized to the DX11 instance buffer.
     pub fn new() -> Self {
+        Self::with_capacity(CANDLE_CAPACITY)
+    }
+
+    /// Creates an empty layer holding up to `capacity` instances. The open candle's mini-candle
+    /// path is a second layer of this kind: same shader, its own buffer and style, no volume band.
+    pub fn with_capacity(capacity: u32) -> Self {
         Self {
+            capacity,
             pipe: None,
-            window: CandleWindow::new(CANDLE_CAPACITY as usize),
+            window: CandleWindow::new(capacity as usize),
             count: 0,
             style: CandleStyleGpu::default(),
             style_dirty: true,
@@ -114,7 +126,7 @@ impl CandleLayer {
         }
         if self.pipe.is_none() {
             // A new buffer holds nothing, whatever the window thinks it uploaded before.
-            self.pipe = Some(Self::create_pipe(device));
+            self.pipe = Some(Self::create_pipe(device, self.capacity));
             self.window.invalidate_gpu();
         }
         let pipe = self.pipe.as_ref().unwrap();
@@ -231,17 +243,14 @@ impl CandleLayer {
         }
     }
 
-    fn create_pipe(device: &ID3D11Device) -> CandlePipe {
+    fn create_pipe(device: &ID3D11Device, capacity: u32) -> CandlePipe {
         let vs = super::gpu::make_vs(device, CANDLES_HLSL, "candles_vertex");
         let ps = super::gpu::make_ps(device, CANDLES_HLSL, "candles_fragment");
         let volume_vs = super::gpu::make_vs(device, CANDLES_HLSL, "volume_bars_vertex");
         let volume_ps = super::gpu::make_ps(device, CANDLES_HLSL, "volume_bars_fragment");
         let blend = create_alpha_blend(device);
-        let buffer = create_structured_default(
-            device,
-            std::mem::size_of::<CandleGpu>() as u32,
-            CANDLE_CAPACITY,
-        );
+        let buffer =
+            create_structured_default(device, std::mem::size_of::<CandleGpu>() as u32, capacity);
         let srv = create_srv(device, &buffer);
         let view_cb = create_dynamic_cb(device, std::mem::size_of::<ChartViewGpu>() as u32);
         let style_cb = create_dynamic_cb(device, std::mem::size_of::<CandleStyleGpu>() as u32);

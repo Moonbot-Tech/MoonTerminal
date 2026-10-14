@@ -372,6 +372,10 @@ pub struct MetalLayers {
     /// figure snaps expect of the native backends.
     candles: CandleWindow,
     candle_style: CandleStyleGpu,
+    /// The open candle's five-second path: a second candle set drawn with the same pipeline,
+    /// its own style and no volume band.
+    path_candles: CandleWindow,
+    path_style: CandleStyleGpu,
     /// The sides band's buckets, replaced as a unit when its series is re-read.
     sides: Vec<SideVolumeGpu>,
     /// The horizontal volumes' per-pixel samples, replaced as a unit when they are retaken.
@@ -410,6 +414,9 @@ pub struct MetalLayers {
     marker_buffer: BufferSlot,
     candle_buffer: BufferSlot,
     candle_style_uniform: BufferSlot,
+    path_buffer: BufferSlot,
+    path_style_uniform: BufferSlot,
+    path_style_dirty: bool,
     side_buffer: BufferSlot,
     hvol_buffer: BufferSlot,
     hvol_style_uniform: BufferSlot,
@@ -448,6 +455,8 @@ impl MetalLayers {
             price_line_capacity: MIN_COMBO_CAPACITY,
             candles: CandleWindow::new(usize::MAX),
             candle_style: CandleStyleGpu::default(),
+            path_candles: CandleWindow::new(usize::MAX),
+            path_style: CandleStyleGpu::default(),
             sides: Vec::new(),
             hvol: Vec::new(),
             hvol_style: HvolStyleGpu::default(),
@@ -480,6 +489,9 @@ impl MetalLayers {
             marker_buffer: BufferSlot::default(),
             candle_buffer: BufferSlot::default(),
             candle_style_uniform: BufferSlot::default(),
+            path_buffer: BufferSlot::default(),
+            path_style_uniform: BufferSlot::default(),
+            path_style_dirty: true,
             side_buffer: BufferSlot::default(),
             hvol_buffer: BufferSlot::default(),
             hvol_style_uniform: BufferSlot::default(),
@@ -543,6 +555,28 @@ impl MetalLayers {
         if self.candle_style != style {
             self.candle_style = style;
             self.candle_buffers_dirty = true;
+            self.base_cache.valid = false;
+        }
+    }
+
+    /// Replace the open candle's mini-candle path. Lives in the base cache, which must be rebaked.
+    pub fn set_path_candles(&mut self, data: &[CandleGpu]) {
+        self.path_candles.set(data);
+        self.base_cache.valid = false;
+    }
+
+    /// Append the path's newly folded mini-candles; only those slots are uploaded.
+    pub fn patch_path_candles(&mut self, from: usize, full: &[CandleGpu]) {
+        self.path_candles.patch(from, full);
+        self.base_cache.valid = false;
+    }
+
+    /// Idempotently set the path layer's style.
+    pub fn set_path_style(&mut self, style: CandleStyleGpu) {
+        self.path_candles.set_style_tf(style.tf_rel_ms);
+        if self.path_style != style {
+            self.path_style = style;
+            self.path_style_dirty = true;
             self.base_cache.valid = false;
         }
     }
@@ -888,6 +922,10 @@ impl MetalLayers {
         self.candle_buffer = BufferSlot::default();
         self.candle_style_uniform = BufferSlot::default();
         self.candles.invalidate_gpu();
+        self.path_buffer = BufferSlot::default();
+        self.path_style_uniform = BufferSlot::default();
+        self.path_candles.invalidate_gpu();
+        self.path_style_dirty = true;
         self.side_buffer = BufferSlot::default();
         self.hvol_buffer = BufferSlot::default();
         self.hvol_style_uniform = BufferSlot::default();
@@ -1041,6 +1079,23 @@ impl MetalLayers {
                 u64::from(slice.candles),
             );
             draw(encoder, &pipelines.candles, 18, u64::from(slice.candles));
+        }
+        // The open candle's mini-candle path, over its hidden body; no volume band of its own.
+        let path_slice = self.path_candles.draw_slice(left, right);
+        if path_slice.candles > 0 {
+            set_uniform(encoder, 0, self.view_uniform.buffer());
+            set_uniform(encoder, 1, self.path_style_uniform.buffer());
+            encoder.set_vertex_buffer(
+                2,
+                Some(self.path_buffer.buffer()),
+                (path_slice.start as usize * std::mem::size_of::<CandleGpu>()) as u64,
+            );
+            draw(
+                encoder,
+                &pipelines.candles,
+                18,
+                u64::from(path_slice.candles),
+            );
         }
         // The bought/sold half AFTER the candle layer: it covers the candle band's bucket that
         // straddles the split boundary, and draws the shared scale whether or not samples exist.
@@ -1834,6 +1889,31 @@ impl MetalLayers {
                     self.candle_buffer.write(device, "moon_chart_candles", rows);
                 }
             }
+        }
+        if self.path_buffer.buffer.is_none() {
+            self.path_candles.invalidate_gpu();
+        }
+        let (upload, rows, _dropped) = self.path_candles.take_upload();
+        match upload {
+            CandleUpload::None => {}
+            CandleUpload::Full => self.path_buffer.write(device, "moon_chart_path", rows),
+            CandleUpload::Range { first, len } => {
+                let recreated = self.path_buffer.write_range(
+                    device,
+                    "moon_chart_path",
+                    first,
+                    &rows[first..first + len],
+                    rows.len(),
+                );
+                if recreated {
+                    self.path_buffer.write(device, "moon_chart_path", rows);
+                }
+            }
+        }
+        if self.path_style_dirty || self.path_style_uniform.buffer.is_none() {
+            self.path_style_uniform
+                .write(device, "moon_chart_path_style", &[self.path_style]);
+            self.path_style_dirty = false;
         }
         if self.candle_buffers_dirty
             || self.candle_style_uniform.buffer.is_none()

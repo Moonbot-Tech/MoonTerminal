@@ -354,6 +354,18 @@ pub struct ChartCandle {
     pub quote_volume: f32,
 }
 
+/// One of the core's five-second mini-candles: the price range of prints the trade ring has
+/// already folded away. It carries no open or close, only the range.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PathMini {
+    pub t_open_ms: f64,
+    pub low: f32,
+    pub high: f32,
+}
+
+/// Width of one core mini-candle, in milliseconds.
+pub const PATH_MINI_MS: f64 = 5_000.0;
+
 /// Whether five wire-derived values are all finite and non-negative.
 ///
 /// The single guard shared by [`estimate_quote_volume`], [`estimate_base_volume`] and

@@ -16,6 +16,10 @@ pub struct ChartHistoryCursor {
     /// bucket. `None` means that copy held no trade. Cleared with the cursor.
     pub(super) displayed_oldest_ms: Option<i64>,
     pub(super) scan_trade_rows: Vec<TradeHistoryRow>,
+    /// Mini-candle ring cursor parked after the last mini-candle shipped as the open candle's
+    /// path. `None` until a full combo copy places it.
+    pub(super) path_minis: Option<SeqRingCursor>,
+    pub(super) path_rows: Vec<moonproto::state::MiniCandle>,
     /// Every trade copied or drained since the last full copy, blocked for the auto-Y price fit.
     pub(super) price_fit: price_fit::PriceFitIndex,
     /// Fixture candles last uploaded by this pane, retained for viewport-only fitting without SQL.
@@ -214,6 +218,8 @@ impl ChartHistoryCursor {
         self.trade_rows.clear();
         self.displayed_oldest_ms = None;
         self.scan_trade_rows.clear();
+        self.path_minis = None;
+        self.path_rows.clear();
         self.price_fit.clear();
         self.liq_rows.clear();
         self.last_price_rows.clear();
@@ -266,11 +272,15 @@ pub struct ChartHistoryBuffers {
     /// The historical prefix is extended with coarser timeframes, first 5-minute and then 1-day,
     /// whose candles require distinct widths. Empty means every candle uses the series timeframe.
     pub candle_tf_ms: Vec<f32>,
+    /// The core's five-second mini-candles older than the oldest raw trade in `ticks`, oldest
+    /// first. Filled only when `ChartHistoryRead::path_changed` is set, i.e. on a full combo read.
+    pub path_minis: Vec<crate::market::candles::PathMini>,
 }
 
 impl ChartHistoryBuffers {
     pub(super) fn clear(&mut self) {
         self.ticks.clear();
+        self.path_minis.clear();
         self.liquidations.clear();
         self.last_points.clear();
         self.mark_points.clear();
@@ -334,6 +344,9 @@ pub struct ChartHistoryRead {
     pub price_line_capacity: usize,
     pub combo_left_rel_ms: Option<f32>,
     pub combo_reset: bool,
+    /// What `out.path_minis` does to the pane's mini-candle path: `Replace` with every full combo
+    /// read (possibly with an empty list), `Append` when the ring folded more prints away since.
+    pub path_update: PriceLineUpdate,
     pub price_lines_changed: bool,
     pub clipped: bool,
     pub caught_up: bool,

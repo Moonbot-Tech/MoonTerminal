@@ -467,6 +467,7 @@ impl ChartDataState {
             if candles_off && pr.last_candle_rev != u64::MAX {
                 pr.figure_snap.clear_candles();
                 pr.layers.set_candles(&[]);
+                pr.clear_path();
                 pr.last_candle_rev = u64::MAX;
                 pr.candle_rows.clear();
                 pr.volume_samples.clear();
@@ -846,6 +847,51 @@ impl ChartDataState {
                         pixels_changed = true;
                     }
                 }
+                // The open candle's five-second path. A full combo read replaces it against the
+                // dots it just stamped; a later read appends only the mini-candles the ring folded
+                // away since, so a live tick never re-uploads it.
+                if history.path_update != PriceLineUpdate::None {
+                    let epoch = pane.view.epoch_ms;
+                    let hide_rel = moon_core::market::candles::hide_zone_start_rel(
+                        candle_cfg.hide_candles,
+                        now,
+                        candle_tf_ms,
+                        epoch,
+                        pr.combo_left_rel,
+                    );
+                    let hide_start_ms = if candles_off || hide_rel >= f32::MAX {
+                        f64::INFINITY
+                    } else {
+                        epoch + f64::from(hide_rel)
+                    };
+                    let replace = history.path_update == PriceLineUpdate::Replace;
+                    let (dots_left_ms, prev_mid) = if replace {
+                        pr.path_rows.clear();
+                        (epoch + f64::from(pr.combo_left_rel), None)
+                    } else {
+                        (f64::INFINITY, pr.path_last_mid)
+                    };
+                    let from = pr.path_rows.len();
+                    pr.path_bars.clear();
+                    pr.path_last_mid = moon_chart::open_candle_path::place_path(
+                        &pr.history_buffers.path_minis,
+                        hide_start_ms,
+                        dots_left_ms,
+                        epoch,
+                        prev_mid,
+                        &mut pr.path_bars,
+                    );
+                    pr.path_rows.extend(pr.path_bars.iter().map(path_bar_gpu));
+                    if replace {
+                        pr.layers.set_path_candles(&pr.path_rows);
+                    } else if pr.path_rows.len() > from {
+                        pr.layers.patch_path_candles(from, &pr.path_rows);
+                    }
+                    if replace || pr.path_rows.len() > from {
+                        pr.gpu_prepare_dirty = true;
+                        pixels_changed = true;
+                    }
+                }
                 if history.price_lines_changed {
                     // Each price line follows its OWN toggle, so one can be drawn without the
                     // other. Flipping either forces a history reset (`price_lines_toggle_changed`)
@@ -952,6 +998,7 @@ impl ChartDataState {
                     pr.layers.set_price_lines(&[], &[]);
                     pr.figure_snap.clear_candles();
                     pr.layers.set_candles(&[]);
+                    pr.clear_path();
                     pr.last_candle_rev = u64::MAX;
                     pr.candle_rows.clear();
                     pr.volume_samples.clear();
@@ -1374,6 +1421,39 @@ impl ChartDataState {
                 fill_alpha: self.theme.candle_fill_alpha.clamp(0.05, 1.0),
                 hide_start_rel,
             };
+            // The path layer draws the user's candle style without any zone: an outline style
+            // (or the combo, outlined in its trade zone) outlines the mini-candles, a filled style
+            // fills them, so the stretch reads like the bodies around it.
+            let next_path_style = CandleStyleGpu {
+                tf_rel_ms: moon_core::market::candles::PATH_MINI_MS as f32,
+                zone_start_rel: f32::MAX,
+                hide_start_rel: f32::MAX,
+                mode: next_candle_style.mode.min(1.0),
+                ..next_candle_style
+            };
+            // A bucket opening moves the hide boundary right and its body becomes visible again;
+            // the path bars in it go, once per bucket, never per tick.
+            if !pr.path_rows.is_empty() && pr.path_hide_rel != hide_start_rel {
+                pr.path_hide_rel = hide_start_rel;
+                let keep_from = pr
+                    .path_rows
+                    .partition_point(|r| r.t_open_rel < hide_start_rel);
+                if keep_from > 0 {
+                    pr.path_rows.drain(..keep_from);
+                    if pr.path_rows.is_empty() {
+                        pr.path_last_mid = None;
+                    }
+                    pr.layers.set_path_candles(&pr.path_rows);
+                    pr.gpu_prepare_dirty = true;
+                    pixels_changed = true;
+                }
+            }
+            if pr.path_style != next_path_style {
+                pr.path_style = next_path_style;
+                pr.layers.set_path_style(next_path_style);
+                pr.gpu_prepare_dirty = true;
+                pixels_changed = true;
+            }
             if pr.candle_style != next_candle_style {
                 pr.candle_style = next_candle_style;
                 pr.layers.set_candle_style(next_candle_style);
@@ -1941,3 +2021,22 @@ impl ChartDataState {
 
 #[cfg(test)]
 mod tests;
+
+/// One placed mini-candle as a candle instance: the range is the body (open and close are its
+/// ends, ordered by direction so the layer colours it), no volume, the path layer's own width.
+fn path_bar_gpu(bar: &moon_chart::open_candle_path::PathBar) -> CandleGpu {
+    let (open, close) = if bar.rising {
+        (bar.low, bar.high)
+    } else {
+        (bar.high, bar.low)
+    };
+    CandleGpu {
+        t_open_rel: bar.t_open_rel,
+        open,
+        high: bar.high,
+        low: bar.low,
+        close,
+        volume: 0.0,
+        tf_rel: 0.0,
+    }
+}

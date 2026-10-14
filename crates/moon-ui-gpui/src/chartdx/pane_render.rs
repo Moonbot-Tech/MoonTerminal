@@ -246,6 +246,15 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) last_zone_bucket: i64,
     /// Last candle style sent to the layer, compared before `set_candle_style`.
     pub(in crate::chartdx) candle_style: CandleStyleGpu,
+    /// The open candle's five-second path as uploaded to the path layer, oldest first.
+    pub(in crate::chartdx) path_rows: Vec<CandleGpu>,
+    /// Middle of the last path bar, so an append colours its first bar against it.
+    pub(in crate::chartdx) path_last_mid: Option<f32>,
+    /// Scratch for placing path bars; kept to avoid an allocation per append.
+    pub(in crate::chartdx) path_bars: Vec<moon_chart::open_candle_path::PathBar>,
+    pub(in crate::chartdx) path_style: CandleStyleGpu,
+    /// Hide boundary (rel ms) the path was last trimmed against; a bucket opening moves it right.
+    pub(in crate::chartdx) path_hide_rel: f32,
     /// Last price-line style sent to the layer, compared before `set_price_style`.
     pub(in crate::chartdx) price_style: PriceStyleGpu,
     /// Trade-tick style retained across resource recreation and compared before rebaking.
@@ -521,6 +530,14 @@ pub(in crate::chartdx) struct PaneRender {
 }
 
 impl PaneRender {
+    /// Drops the open candle's path everywhere it is kept.
+    pub(in crate::chartdx) fn clear_path(&mut self) {
+        self.path_rows.clear();
+        self.path_last_mid = None;
+        self.path_hide_rel = f32::NAN;
+        self.layers.set_path_candles(&[]);
+    }
+
     /// Creates a pane with no retained caption geometry or uploaded market state.
     ///
     /// The caption plate starts empty because `prepare_text` is its sole publisher; seeding a
@@ -605,6 +622,11 @@ impl PaneRender {
             applied_candle_cfg: moon_core::market::CandleViewCfg::default().history_inputs(),
             last_zone_bucket: i64::MIN,
             candle_style: CandleStyleGpu::default(),
+            path_rows: Vec::new(),
+            path_last_mid: None,
+            path_bars: Vec::new(),
+            path_style: CandleStyleGpu::default(),
+            path_hide_rel: f32::NAN,
             price_style: PriceStyleGpu::default(),
             tick_style: TickStyleGpu::default(),
             volume_style: VolumeStyleGpu::default(),
