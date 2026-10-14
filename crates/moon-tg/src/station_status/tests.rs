@@ -231,7 +231,7 @@ fn the_update_button_comes_only_with_a_newer_release() {
     };
     assert!(
         html.contains(
-            "<p>\u{26a0}\u{fe0f} A new version of the station is out: <b>v0.52.0</b>.</p>"
+            "<p>\u{26a0}\u{fe0f} A new version of the station is out: <b>v0.52.0</b></p>"
         )
     );
     assert_eq!(
@@ -341,7 +341,7 @@ fn automatic_rollback_verdict_describes_the_restored_service() {
     }
 }
 
-/// Dropping the first-minute line, or showing "the service cannot see them" beside it, makes a
+/// Dropping the short first-minute note, or showing "the service cannot see them" beside it, makes a
 /// restart look like the CPU meters failed. A station that already has a CPU window keeps the
 /// lines it shows today, and after a minute the old note still means the meters are unavailable.
 #[test]
@@ -356,9 +356,7 @@ fn the_first_minute_without_a_cpu_window_says_the_load_lines_are_coming() {
     assert!(text.contains("  Cores: 26 of 27 ready\n"), "{text}");
     assert!(text.contains("  telegram.json: 0 KB\n"), "{text}");
     assert!(
-        text.contains(
-            "The service just started. Processor load lines appear after the first full minute."
-        ),
+        text.contains("Processor load appears after the first full minute."),
         "{text}"
     );
     assert!(!text.contains("cannot see them"), "{text}");
@@ -372,9 +370,7 @@ fn the_first_minute_without_a_cpu_window_says_the_load_lines_are_coming() {
     ) else {
         panic!("the status is a rich message");
     };
-    assert!(html.contains(
-        "<p>The service just started. Processor load lines appear after the first full minute.</p>"
-    ));
+    assert!(html.contains("<p>Processor load appears after the first full minute.</p>"));
     assert!(!html.contains("cannot see them"));
 
     let settled = station_status_text(&status(Some(host(vec![
@@ -408,7 +404,10 @@ fn the_first_minute_without_a_cpu_window_says_the_load_lines_are_coming() {
     early.uptime_s = 30;
     let early_text = station_status_text(&status(Some(early)));
     assert!(early_text.contains("Station CPU, hour:"), "{early_text}");
-    assert!(!early_text.contains("just started"), "{early_text}");
+    assert!(
+        !early_text.contains("Processor load appears after the first full minute."),
+        "{early_text}"
+    );
 
     let mut blind = host(Vec::new());
     blind.uptime_s = 120;
@@ -416,7 +415,10 @@ fn the_first_minute_without_a_cpu_window_says_the_load_lines_are_coming() {
     blind.memory = None;
     let blind_text = station_status_text(&status(Some(blind)));
     assert!(blind_text.contains("cannot see them"), "{blind_text}");
-    assert!(!blind_text.contains("just started"), "{blind_text}");
+    assert!(
+        !blind_text.contains("Processor load appears after the first full minute."),
+        "{blind_text}"
+    );
 }
 
 /// The Service section says whether the station updates itself; a station older than the switch
@@ -438,10 +440,30 @@ fn the_service_section_shows_the_auto_update_switch() {
     assert_eq!(row(None), None);
 }
 
-/// Restoring section tables or expanding files makes the approved normal state exceed ten lines.
+/// Restoring section tables, decimal CPU cells or long startup copy breaks the compact mockup.
 #[test]
 fn compact_mockup_states_use_supported_html_in_every_locale() {
-    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi"] {
+    for (locale, startup_note) in [
+        (
+            "ru",
+            "Нагрузка процессора появится после первой полной минуты.",
+        ),
+        ("en", "Processor load appears after the first full minute."),
+        (
+            "es",
+            "La carga del procesador aparece tras el primer minuto completo.",
+        ),
+        (
+            "uk",
+            "Навантаження процесора з'явиться після першої повної хвилини.",
+        ),
+        ("tr", "İşlemci yükü ilk tam dakikadan sonra görünür."),
+        (
+            "pt",
+            "A carga do processador aparece após o primeiro minuto completo.",
+        ),
+        ("vi", "Tải bộ xử lý xuất hiện sau phút đầu tiên đầy đủ."),
+    ] {
         let _locale = crate::test_locale::force(locale);
         let mut normal = status(Some(host(vec![file("UNIT_01.db", GIB)])));
         normal.cores_ready = normal.cores_total;
@@ -467,8 +489,9 @@ fn compact_mockup_states_use_supported_html_in_every_locale() {
         assert!(html.contains("12.10") && html.contains("22:05 UTC"));
         assert!(html.contains("<b>27/27</b>"));
         assert!(html.contains(&format!("{} \u{2713}", t!("telegram.station.chat_bot"))));
-        assert!(html.contains("<td align=\"right\">87.0 %</td>"));
-        assert!(html.contains("<td align=\"right\">0.5 %</td>"));
+        assert!(html.contains("<td align=\"right\">87 %</td>"));
+        assert!(html.contains("<td align=\"right\">1 %</td>"));
+        assert!(!html.contains(".0 %"));
 
         let mut warning = normal.clone();
         warning.cores_ready = 22;
@@ -480,7 +503,7 @@ fn compact_mockup_states_use_supported_html_in_every_locale() {
         assert_supported_html(&html);
         assert!(html.contains("\u{1f7e1}"));
         assert_eq!(html.matches("\u{26a0}\u{fe0f}").count(), 2);
-        assert!(html.contains("<b>v0.2.0</b>"));
+        assert!(html.contains("<b>v0.2.0</b></p>"));
         assert!(html.contains("\u{2717}"));
         assert!(html.contains("<details><summary>"));
         assert_eq!(html.matches("<table compact>").count(), 1);
@@ -495,7 +518,10 @@ fn compact_mockup_states_use_supported_html_in_every_locale() {
         let html = chat::html(&starting, &ReleaseCheck::Current);
         assert_supported_html(&html);
         assert!(!html.contains("<table"));
-        assert!(html.contains(&escape(&t!("telegram.station.just_started"))));
+        assert!(
+            html.contains(&format!("<p>{startup_note}</p>")),
+            "{locale}: {html}"
+        );
         assert!(html.contains(&escape(&t!("telegram.station.chat_connecting"))));
         assert!(!html.contains(&escape(&t!("telegram.station.chat_offline", count = 15))));
 
@@ -510,12 +536,7 @@ fn compact_mockup_states_use_supported_html_in_every_locale() {
         assert!(!html.contains("<table"));
         assert!(
             !html.contains(
-                t!(
-                    "telegram.station.chat_disk_free",
-                    free = "15.5",
-                    total = "23.0"
-                )
-                .as_ref()
+                t!("telegram.station.chat_disk_free", free = "16", total = "23").as_ref()
             )
         );
     }
@@ -560,8 +581,76 @@ fn compact_files_and_day_peak_keep_aggregate_values() {
     assert!(html.contains("<summary>Largest files · 28.0 MB</summary>"));
     assert!(html.contains("and 2 more · 3.0 MB"));
     assert!(!html.contains("UNIT_01.db"));
-    assert!(html.contains("95.0 %"));
-    assert!(!html.contains("20.0 %"));
+    assert!(html.contains("95 %"));
+    assert!(!html.contains("20 %"));
+}
+
+/// Decimal formatting or truncation would widen the approved CPU/resource/file output in chat.
+#[test]
+fn compact_numbers_round_cpu_half_up_and_switch_gb_precision_in_every_locale() {
+    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi"] {
+        let _locale = crate::test_locale::force(locale);
+        let unit = if matches!(locale, "ru" | "uk") {
+            "ГБ"
+        } else {
+            "GB"
+        };
+        let mut machine = host(vec![
+            file("large.db", 150 * GIB),
+            file("threshold.db", 10 * GIB),
+            file("below.db", 10 * GIB - 1),
+            file("small.db", 3 * GIB + 7 * GIB / 10),
+            file("one.db", GIB),
+            file("omitted.db", 2 * GIB),
+            file("omitted-small.db", GIB / 2),
+        ]);
+        machine.cpu[0].station_avg_permille = 134;
+        machine.cpu[1].station_avg_permille = 285;
+        machine.cpu[1].station_peak_permille = 655;
+        machine.memory.as_mut().unwrap().available_bytes = 2 * GIB + 7 * GIB / 10;
+        machine.memory.as_mut().unwrap().total_bytes = 3 * GIB + 7 * GIB / 10;
+        machine.disk.as_mut().unwrap().free_bytes = 150 * GIB;
+        machine.disk.as_mut().unwrap().total_bytes = 154 * GIB;
+        let Response::Rich { html, .. } = station_status_reply(
+            &status(Some(machine)),
+            &ReleaseCheck::Newer("v0.58.4".into()),
+            crate::station_owner_navigation(&moon_core::config::TelegramConfig::default()),
+            false,
+        ) else {
+            panic!("compact status remains rich");
+        };
+        for cell in ["13 %", "29 %", "66 %"] {
+            assert!(
+                html.contains(&format!("<td align=\"right\">{cell}</td>")),
+                "{html}"
+            );
+        }
+        for expected in [
+            format!("<b>2.7</b>/3.7 {unit}"),
+            format!("<b>150</b>/154 {unit}"),
+            format!("large.db · 150 {unit}"),
+            format!("threshold.db · 10 {unit}"),
+            format!("below.db · 10.0 {unit}"),
+            format!("small.db · 3.7 {unit}"),
+            format!(" · 1.5 {unit}</p>"),
+            format!(" · 177 {unit}</summary>"),
+            "<b>v0.58.4</b></p>".into(),
+        ] {
+            assert!(
+                html.contains(&expected),
+                "{locale}: missing {expected}: {html}"
+            );
+        }
+        assert!(!html.contains("150.0") && !html.contains("154.0"));
+        assert!(!html.contains(".0 %"));
+
+        let html = chat::html(
+            &status(Some(host(vec![file("small.db", 3 * GIB + 7 * GIB / 10)]))),
+            &ReleaseCheck::Current,
+        );
+        assert!(html.contains(&format!("<b>0.3</b>/0.9 {unit}")), "{html}");
+        assert!(html.contains(&format!(" · 3.7 {unit}</summary>")), "{html}");
+    }
 }
 
 /// The ten-percent warning boundary must use bytes, not rounded GB or overflowing arithmetic.

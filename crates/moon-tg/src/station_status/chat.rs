@@ -1,8 +1,6 @@
 //! Compact chat presentation; the terminal's shared grouped facts remain unchanged.
 
-use super::{
-    LISTED_FILES, ReleaseCheck, duration, escape, file_name, one_line, percent, update_verdict,
-};
+use super::{LISTED_FILES, ReleaseCheck, duration, escape, file_name, one_line, update_verdict};
 use crate::t;
 use moon_core::station_api::{Host, Status};
 use moon_core::telegram::TelegramStatus;
@@ -150,7 +148,7 @@ fn service(status: &Status, html: &mut String) {
     paragraph(html, &line);
 }
 
-/// Show completed CPU windows and available resources, or the existing missing-readings note.
+/// Show compact whole-percent CPU windows and GB resources, or the missing-readings note.
 fn readings(host: &Host, html: &mut String) {
     let fresh = host.cpu.is_empty() && host.uptime_s < 60;
     if !fresh && host.memory.is_none() && host.uptime_s >= 60 {
@@ -195,8 +193,8 @@ fn readings(host: &Host, html: &mut String) {
         free.push(
             t!(
                 "telegram.station.chat_memory_free",
-                free = format!("<b>{:.1}</b>", memory.available_bytes as f64 / GIB),
-                total = format!("{:.1}", memory.total_bytes as f64 / GIB)
+                free = format!("<b>{}</b>", gigabytes(memory.available_bytes)),
+                total = gigabytes(memory.total_bytes)
             )
             .to_string(),
         );
@@ -206,8 +204,8 @@ fn readings(host: &Host, html: &mut String) {
         free.push(
             t!(
                 "telegram.station.chat_disk_free",
-                free = format!("<b>{:.1}</b>", disk.free_bytes as f64 / GIB),
-                total = format!("{:.1}", disk.total_bytes as f64 / GIB)
+                free = format!("<b>{}</b>", gigabytes(disk.free_bytes)),
+                total = gigabytes(disk.total_bytes)
             )
             .to_string(),
         );
@@ -239,7 +237,31 @@ pub(super) fn low_resource(free: u64, total: u64) -> bool {
     total > 0 && u128::from(free) * 10 < u128::from(total)
 }
 
-/// Keep the bounded largest-file list collapsed, with aggregate and omitted-entry sizes.
+/// Round CPU tenths half up without changing the terminal's more precise facts.
+fn percent(permille: u16) -> String {
+    ((u32::from(permille) + 5) / 10).to_string()
+}
+
+/// Keep one decimal below ten binary GB and whole numbers at or above that threshold.
+fn gigabytes(bytes: u64) -> String {
+    let value = bytes as f64 / GIB;
+    if value >= 10.0 {
+        format!("{:.0}", value.round())
+    } else {
+        format!("{value:.1}")
+    }
+}
+
+/// Apply compact GB precision to files while retaining existing smaller-unit formatting.
+fn size_text(bytes: u64) -> String {
+    if bytes as f64 >= GIB {
+        t!("common.size_gb", value = gigabytes(bytes)).to_string()
+    } else {
+        crate::size_text(bytes)
+    }
+}
+
+/// Keep the largest-file list collapsed, with compact aggregate and omitted-entry sizes.
 fn files(host: &Host, html: &mut String) {
     if host.files.is_empty() {
         return;
@@ -252,7 +274,7 @@ fn files(host: &Host, html: &mut String) {
     html.push_str(&format!(
         "<details><summary>{} · {}</summary>",
         escape(&t!("telegram.station.section_files")),
-        escape(&crate::size_text(total))
+        escape(&size_text(total))
     ));
     for file in files.iter().take(LISTED_FILES) {
         paragraph(
@@ -260,7 +282,7 @@ fn files(host: &Host, html: &mut String) {
             &format!(
                 "{} · {}",
                 escape(&file_name(&file.name)),
-                escape(&crate::size_text(file.bytes))
+                escape(&size_text(file.bytes))
             ),
         );
     }
@@ -277,7 +299,7 @@ fn files(host: &Host, html: &mut String) {
                     "telegram.station.files_more",
                     count = files.len() - LISTED_FILES
                 )),
-                escape(&crate::size_text(omitted))
+                escape(&size_text(omitted))
             ),
         );
     }
