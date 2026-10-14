@@ -35,7 +35,7 @@ pub(super) const HIDE_MS: i64 = 15_000;
 /// Horizontal slack around one button label. The button draws its own padding on top of the text.
 const BUTTON_CHROME: f32 = 56.0;
 /// Horizontal slack around one tag label.
-const TAG_CHROME: f32 = 36.0;
+const TAG_CHROME: f32 = 48.0;
 /// Gap between the tag, the text, and the buttons, in design pixels.
 const GAP: f32 = 8.0;
 /// Room for the dialog's close control, which sits over the header's trailing edge.
@@ -253,7 +253,7 @@ pub(super) struct PlacesFace {
 /// Returns:
 ///     The maximum title width, in pixels.
 pub(super) fn title_cap(cx: &App) -> f32 {
-    design::font_w(cx, 440.0)
+    design::font_w(cx, 600.0)
 }
 
 /// Width of the column, in pixels, from the strings it will draw.
