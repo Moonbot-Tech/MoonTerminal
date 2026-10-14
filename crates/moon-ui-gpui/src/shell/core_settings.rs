@@ -429,14 +429,20 @@ impl Shell {
             }
             GotoAction::ExpertPage => {
                 let owner_display = crate::window::windowing::window_display_id(window, cx);
-                crate::core_expert::open_core_expert_on(
-                    self.backend.clone(),
-                    Some(window.window_handle()),
-                    owner_display,
-                    reveal.core,
-                    reveal.coin,
-                    cx,
-                );
+                let backend = self.backend.clone();
+                let owner = window.window_handle();
+                // Open after this render. The drain runs from `Shell::render`, and a window opened
+                // mid-render draws at once and clears the element arena this frame still holds.
+                cx.defer(move |app| {
+                    crate::core_expert::open_core_expert_on(
+                        backend,
+                        Some(owner),
+                        owner_display,
+                        reveal.core,
+                        reveal.coin,
+                        app,
+                    );
+                });
             }
         }
     }
