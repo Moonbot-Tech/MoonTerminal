@@ -540,6 +540,22 @@ impl RenderState {
                             cfg: self.chart_labels.clone(),
                         });
                 }
+                if let Some(LabelAction::OpenFilterLine(slot)) = entry.action {
+                    let target = self.panes[idx]
+                        .labels
+                        .filter_line_targets
+                        .get(usize::from(slot))
+                        .cloned();
+                    if let Some(target) = target {
+                        self.panes[idx]
+                            .filter_line_hits
+                            .push(crate::chartdx::FilterLineHit {
+                                rect: [box_left, y, w, line_h],
+                                target,
+                                cfg: self.chart_labels.clone(),
+                            });
+                    }
+                }
                 grow_column_band(
                     &mut self.panes[idx].column_bands,
                     item,

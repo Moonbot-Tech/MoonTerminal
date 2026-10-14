@@ -1,10 +1,11 @@
-//! Hit targets for GPU-drawn strategy-filter collapse headers.
+//! Hit targets for GPU-drawn strategy-filter headers and blacklist lines.
 
 use std::rc::Rc;
 
 use moon_core::config::ChartLabelsCfg;
 
 use super::ChartEngine;
+use super::text::FilterLineTarget;
 
 /// The visible header rectangle and the configuration that gave its row index meaning.
 pub(super) struct FilterHeaderHit {
@@ -19,15 +20,73 @@ pub(super) struct FilterHeaderHit {
 impl FilterHeaderHit {
     /// Match only a nonempty drawn rectangle belonging to the configuration being edited.
     fn contains(&self, x: f32, y: f32, cfg: &ChartLabelsCfg) -> bool {
-        let [left, top, width, height] = self.rect;
-        width > 0.0
-            && height > 0.0
-            && x >= left
-            && x <= left + width
-            && y >= top
-            && y <= top + height
-            && self.cfg.as_ref() == cfg
+        rect_hit(self.rect, x, y, self.cfg.as_ref(), cfg)
     }
+}
+
+/// One drawn blacklist line and the profile that placed it.
+pub(super) struct FilterLineHit {
+    /// Window logical pixels, shared with the caption and the cursor overlay.
+    pub rect: [f32; 4],
+    /// Where a press on this rectangle opens.
+    pub target: FilterLineTarget,
+    /// A retained handle prevents a reordered profile from reusing a stale target.
+    pub cfg: Rc<ChartLabelsCfg>,
+}
+
+impl FilterLineHit {
+    /// Match only a nonempty drawn rectangle belonging to the configuration being edited.
+    ///
+    /// Args:
+    ///     x: Window logical x.
+    ///     y: Window logical y.
+    ///     cfg: Profile the press is editing.
+    ///
+    /// Returns:
+    ///     Whether the point lies inside this rectangle for that profile.
+    fn contains(&self, x: f32, y: f32, cfg: &ChartLabelsCfg) -> bool {
+        rect_hit(self.rect, x, y, self.cfg.as_ref(), cfg)
+    }
+}
+
+/// Whether a point lies in a nonempty rectangle drawn for this profile.
+///
+/// Args:
+///     rect: Window logical pixels, `[left, top, width, height]`.
+///     x: Window logical x.
+///     y: Window logical y.
+///     own_cfg: Profile the rectangle was drawn for.
+///     cfg: Profile the press is editing.
+///
+/// Returns:
+///     Whether the point is inside `rect` and the two profiles compare equal.
+fn rect_hit(
+    rect: [f32; 4],
+    x: f32,
+    y: f32,
+    own_cfg: &ChartLabelsCfg,
+    cfg: &ChartLabelsCfg,
+) -> bool {
+    let [left, top, width, height] = rect;
+    width > 0.0
+        && height > 0.0
+        && x >= left
+        && x <= left + width
+        && y >= top
+        && y <= top + height
+        && own_cfg == cfg
+}
+
+/// Whether a retained profile is still the one on screen.
+///
+/// Args:
+///     hit_cfg: Profile stored with the drawn rectangle.
+///     current: Profile the captions are using now.
+///
+/// Returns:
+///     Whether the two handles are the same allocation or their contents compare equal.
+fn profile_still_current(hit_cfg: &Rc<ChartLabelsCfg>, current: &Rc<ChartLabelsCfg>) -> bool {
+    Rc::ptr_eq(hit_cfg, current) || hit_cfg.as_ref() == current.as_ref()
 }
 
 /// Where one strategy-filter or arbitrage column was drawn, for the wheel that scrolls it.
@@ -139,6 +198,33 @@ impl ChartEngine {
             .map(|hit| hit.row)
     }
 
+    /// Resolve a blacklist-line press in window logical pixels against the current profile.
+    ///
+    /// Args:
+    ///     pane: Pane index.
+    ///     x: Window logical x.
+    ///     y: Window logical y.
+    ///     cfg: Profile the press is editing. A rectangle drawn for another profile misses.
+    ///
+    /// Returns:
+    ///     The parsed target, or `None` when the point misses, the pane is inactive, or the
+    ///     profile no longer matches the drawn rectangle.
+    pub(crate) fn filter_line_at(
+        &self,
+        pane: usize,
+        x: f32,
+        y: f32,
+        cfg: &ChartLabelsCfg,
+    ) -> Option<FilterLineTarget> {
+        let data = self.data.borrow();
+        let render = data.render.borrow();
+        let pane = render.panes.get(pane).filter(|pane| pane.active)?;
+        pane.filter_line_hits
+            .iter()
+            .find(|hit| hit.contains(x, y, cfg))
+            .map(|hit| hit.target.clone())
+    }
+
     /// Publish the last drawn header rectangles for the panel's pointing-hand cursor zones.
     pub(crate) fn filter_header_rects(&self, pane: usize) -> Vec<(f32, f32, f32, f32)> {
         let data = self.data.borrow();
@@ -148,11 +234,32 @@ impl ChartEngine {
         };
         pane.filter_header_hits
             .iter()
-            .filter(|hit| Rc::ptr_eq(&hit.cfg, &data.chart_labels) || hit.cfg == data.chart_labels)
+            .filter(|hit| profile_still_current(&hit.cfg, &data.chart_labels))
             .map(|hit| {
                 let [x, y, w, h] = hit.rect;
                 (x, y, w, h)
             })
+            .collect()
+    }
+
+    /// Drawn blacklist lines whose profile still matches the captions on screen.
+    ///
+    /// Args:
+    ///     pane: Pane index.
+    ///
+    /// Returns:
+    ///     Rectangles in window logical pixels and the target each one opens. Empty when the
+    ///     pane is inactive or the retained rectangles belong to a replaced profile.
+    pub(crate) fn filter_line_draws(&self, pane: usize) -> Vec<([f32; 4], FilterLineTarget)> {
+        let data = self.data.borrow();
+        let render = data.render.borrow();
+        let Some(pane) = render.panes.get(pane).filter(|pane| pane.active) else {
+            return Vec::new();
+        };
+        pane.filter_line_hits
+            .iter()
+            .filter(|hit| profile_still_current(&hit.cfg, &data.chart_labels))
+            .map(|hit| (hit.rect, hit.target.clone()))
             .collect()
     }
 }

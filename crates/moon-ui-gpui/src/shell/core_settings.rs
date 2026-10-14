@@ -9,15 +9,128 @@
 pub(crate) mod draft;
 pub(crate) mod editors;
 
+use std::time::Instant;
+
 use gpui::*;
 
-use moon_ui::MoonPalette;
+use moon_ui::{MoonButton, MoonPalette};
 
 use moon_core::session::CoreId;
+
+use rust_i18n::t;
 
 use crate::shell::core_settings_popup::{self, CoreSettingsTab};
 
 use super::Shell;
+
+/// A request to open one core's settings on its blacklist and highlight `coin`.
+///
+/// Chart filter lines and the places dialog both queue this on `Backend`. Nothing reads it until
+/// the shell drains it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CoreSettingsReveal {
+    /// Core whose settings should open.
+    pub core: CoreId,
+    /// Coin token to highlight in that core's blacklist.
+    pub coin: String,
+}
+
+/// Where a blacklist reveal is shown. There is no arm that changes the active trading core.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GotoAction {
+    /// The compact gear popup, only when it can write this core.
+    CompactPopup,
+    /// The application-wide expert window, bound to the requested core.
+    ExpertPage,
+}
+
+/// Coin highlighted on a blacklist, and when its amber outline started.
+#[derive(Clone, Debug)]
+pub(crate) struct CoinHighlight {
+    /// Token painted amber and named on the remove button.
+    pub(crate) coin: String,
+    /// When the outline started. Alpha is derived from this.
+    pub(crate) started: Instant,
+    /// Refusal text beside the remove button. `None` after a clean frame.
+    pub(crate) error: Option<String>,
+}
+
+/// What one frame of a blacklist reveal draws. The coin is borrowed from [`CoinHighlight`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BlacklistReveal<'a> {
+    /// Token painted amber.
+    pub(crate) coin: &'a str,
+    /// Outline strength, 1 down to 0.
+    pub(crate) alpha: f32,
+    /// Refusal text, when the last remove failed.
+    pub(crate) error: Option<&'a str>,
+}
+
+/// How long the amber blacklist outline takes to fade.
+/// Choose the compact popup or the expert page for one blacklist reveal.
+///
+/// The compact popup writes only through [`resolve_core_settings_write`], which requires the
+/// seeded core to be the active one, so it cannot host any other core. Expert mode and Auto
+/// Overview do not draw the popup at all.
+///
+/// Args:
+///     target: Core the reveal named.
+///     active: This shell's active trading core, if it has one.
+///     popup_available: Whether this shell still draws the gear as a popup.
+///
+/// Returns:
+///     [`GotoAction::CompactPopup`] only when the popup is available and `target` is active.
+pub(crate) fn core_settings_goto_action(
+    target: CoreId,
+    active: Option<CoreId>,
+    popup_available: bool,
+) -> GotoAction {
+    if popup_available && active == Some(target) {
+        GotoAction::CompactPopup
+    } else {
+        GotoAction::ExpertPage
+    }
+}
+
+/// Whether an open shell's group currently holds `core`.
+///
+/// Args:
+///     backend: Application state with the group-window tables and the live sessions.
+///     core: Core the reveal named.
+///
+/// Returns:
+///     `true` when some open or opening group window owns `core`.
+fn shell_group_owns_core(backend: &crate::Backend, core: CoreId) -> bool {
+    backend
+        .group_windows
+        .keys()
+        .chain(backend.opening_group_windows.iter())
+        .any(|group| backend.core_belongs_to_group(group, core))
+}
+
+/// Amber-outlined «Убрать <COIN>» button.
+///
+/// Args:
+///     id: Element id, unique on the surface that draws it.
+///     coin: Token the label names.
+///     on_click: Removal. The caller writes the seeded core and updates its own draft.
+///
+/// Returns:
+///     The button.
+pub(crate) fn coin_blacklist_remove_button(
+    id: impl Into<ElementId>,
+    coin: &str,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> AnyElement {
+    // MoonButton's handler also receives the click. Callers of this helper only need the window
+    // and the app, which is what a removal writes through.
+    MoonButton::new(id)
+        .outline()
+        .label(t!("coin_bl_places.remove_coin", coin = coin).to_string())
+        .size(crate::design::CONTROL_TIER)
+        .on_click(move |_event, window, app| on_click(window, app))
+        .into_any_element()
+}
 
 /// The core a core-settings write may address, or `None` when it must be dropped.
 ///
@@ -151,6 +264,8 @@ impl Shell {
         self.core_settings_draft = None;
         self.core_settings_seed = None;
         self.core_settings_editors.clear();
+        self.core_settings_bl_highlight = None;
+        self.core_settings_bl_expanded = false;
     }
 
     /// Close the compact popup because the gear now opens the expert window instead.
@@ -240,6 +355,152 @@ impl Shell {
         cx.notify();
     }
 
+    /// Take `Backend.core_settings_goto` when this shell should show it.
+    ///
+    /// The shell whose group owns the core consumes it. When no open shell's group owns the core,
+    /// the first shell to render consumes it and opens the expert page, which is application-wide.
+    /// A shell that does not own the core leaves the request for the shell that does.
+    ///
+    /// Args:
+    ///     window: This shell's window, used to seed the popup and to place the expert window.
+    ///     cx: View context.
+    pub(super) fn drain_core_settings_goto(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(peek) = self.backend.read(cx).core_settings_goto.clone() else {
+            return;
+        };
+        let consume = {
+            let backend = self.backend.read(cx);
+            let mine = backend.core_belongs_to_group(&self.group, peek.core);
+            mine || !shell_group_owns_core(backend, peek.core)
+        };
+        if !consume {
+            return;
+        }
+        let Some(reveal) = self
+            .backend
+            .update(cx, |backend, _| backend.core_settings_goto.take())
+        else {
+            return;
+        };
+        let active = self.backend.read(cx).active_trade_core(&self.group);
+        let popup_available = !self.gear_popup_unavailable(cx);
+        let mine = self
+            .backend
+            .read(cx)
+            .core_belongs_to_group(&self.group, reveal.core);
+        let action = if mine {
+            core_settings_goto_action(reveal.core, active, popup_available)
+        } else {
+            GotoAction::ExpertPage
+        };
+        match action {
+            GotoAction::CompactPopup => {
+                let already = self.core_settings_open;
+                self.set_core_settings_open(true, window, cx);
+                if already {
+                    self.stage_blacklist_text(cx);
+                }
+                self.set_core_settings_tab(CoreSettingsTab::General, cx);
+                self.core_settings_bl_expanded = true;
+                let text = self
+                    .core_settings_draft
+                    .as_ref()
+                    .map(|draft| draft.general.blacklist_text.clone());
+                self.blacklist_area.update(cx, |state, context| {
+                    if let Some(text) = text {
+                        state.set_value(text, window, context);
+                    }
+                });
+                // Focus after this render. The drain runs from `Shell::render`, and focusing
+                // the area in that pass fights the frame that is opening the popover.
+                let area = self.blacklist_area.clone();
+                let handle = window.window_handle();
+                cx.defer(move |app| {
+                    let _ = handle.update(app, move |_, window, app| {
+                        area.update(app, |state, cx| state.focus(window, cx));
+                    });
+                });
+                self.core_settings_bl_highlight = Some(CoinHighlight {
+                    coin: reveal.coin,
+                    started: Instant::now(),
+                    error: None,
+                });
+                cx.notify();
+            }
+            GotoAction::ExpertPage => {
+                let owner_display = crate::window::windowing::window_display_id(window, cx);
+                crate::core_expert::open_core_expert_on(
+                    self.backend.clone(),
+                    Some(window.window_handle()),
+                    owner_display,
+                    reveal.core,
+                    reveal.coin,
+                    cx,
+                );
+            }
+        }
+    }
+
+    /// Lift the highlighted coin from the seeded core and from the open draft.
+    ///
+    /// `Ok` including `Ok(false)` rewrites the draft with [`moon_core::symbol::coin_list::remove`]
+    /// and both blacklist editors, then clears the highlight. Other staged fields stay. `Err`
+    /// keeps the draft, the editors, and the highlight, and shows the failure beside the button.
+    /// No draft is created when none exists.
+    ///
+    /// Args:
+    ///     window: Window the editors need in order to take the rewritten text.
+    ///     cx: View context for the write and the repaint.
+    pub(super) fn remove_highlighted_core_coin(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(highlight) = self.core_settings_bl_highlight.clone() else {
+            return;
+        };
+        let Some(core) = resolve_core_settings_write(
+            self.core_settings_target,
+            self.backend.read(cx).active_trade_core(&self.group),
+        ) else {
+            return;
+        };
+        let coin = highlight.coin;
+        let outcome = self.backend.update(cx, |backend, _| {
+            crate::controls::coin_menu::write_core_blacklist(backend, core, &coin, true)
+        });
+        match outcome {
+            Ok(_) => {
+                if let Some(seed) = self.core_settings_seed.as_mut() {
+                    seed.general.blacklist_text =
+                        moon_core::symbol::coin_list::remove(&seed.general.blacklist_text, &coin);
+                }
+                if self.core_settings_draft.is_some() {
+                    let current = self
+                        .core_settings_draft
+                        .as_ref()
+                        .map(|draft| draft.general.blacklist_text.clone())
+                        .unwrap_or_default();
+                    let next = moon_core::symbol::coin_list::remove(&current, &coin);
+                    self.edit_core_draft(|draft| draft.general.blacklist_text = next.clone(), cx);
+                    let area = next.clone();
+                    self.blacklist_input
+                        .update(cx, |state, context| state.set_value(next, window, context));
+                    self.blacklist_area
+                        .update(cx, |state, context| state.set_value(area, window, context));
+                }
+                self.core_settings_bl_highlight = None;
+                cx.notify();
+            }
+            Err(_) => {
+                if let Some(item) = self.core_settings_bl_highlight.as_mut() {
+                    item.error = Some(t!("coin_bl_places.remove_failed", coin = coin).to_string());
+                }
+                cx.notify();
+            }
+        }
+    }
+
     /// Build content for the gear button's anchored `MoonPopover` while it is open.
     /// The popover owns trigger-relative positioning, avoiding the stale absolute coordinates used
     /// before the ticker was added to the header.
@@ -264,6 +525,13 @@ impl Shell {
         if self.refresh_untouched_core_draft(cx) {
             self.seed_blacklist_editors(window, cx);
         }
+        if self
+            .core_settings_bl_highlight
+            .as_ref()
+            .is_some_and(|item| crate::controls::coin_token::flash_alpha(item.started) > 0.0)
+        {
+            window.request_animation_frame();
+        }
         let widgets = self.core_settings_widgets(window, cx);
         let view = cx.entity();
         let cancel_view = view.clone();
@@ -287,6 +555,14 @@ impl Shell {
             window,
             cx,
         );
+        let reveal = self
+            .core_settings_bl_highlight
+            .as_ref()
+            .map(|item| BlacklistReveal {
+                coin: item.coin.as_str(),
+                alpha: crate::controls::coin_token::flash_alpha(item.started),
+                error: item.error.as_deref(),
+            });
         core_settings_popup::core_settings_content(
             &ctx,
             self.core_settings_tab,
@@ -295,6 +571,7 @@ impl Shell {
             &editors,
             self.core_settings_bl_expanded,
             self.core_settings_cancel_confirm,
+            reveal,
             &view,
             tab_strip,
             cx,

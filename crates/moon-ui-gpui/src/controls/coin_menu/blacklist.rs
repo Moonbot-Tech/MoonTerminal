@@ -88,7 +88,7 @@ pub(super) fn permanent_blacklist_item(
                         // the schema can change between the menu opening and the press.
                         if b.session.strategy_has_blacklist(core, sid) {
                             let lift = blacklist_contains(&strategy_blacklist(b, core, sid), &coin);
-                            write_strategy_blacklist(b, core, sid, &coin, lift);
+                            let _ = write_strategy_blacklist(b, core, sid, &coin, lift);
                         }
                     }
                 }
@@ -221,7 +221,7 @@ fn core_blacklist_writer(coin: &str) -> impl Fn(&mut Backend, &[CoreId]) + 'stat
             .iter()
             .all(|&core| blacklist_contains(&core_blacklist(b, core).1, &coin));
         for &core in cores {
-            write_core_blacklist(b, core, &coin, lift);
+            let _ = write_core_blacklist(b, core, &coin, lift);
         }
     }
 }

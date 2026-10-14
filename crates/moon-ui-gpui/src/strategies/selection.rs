@@ -28,6 +28,35 @@ pub(super) fn retire_strategy_for_folder(
     changed
 }
 
+/// Store a field reveal for `strategy` and close Distribution so the params pane can show it.
+///
+/// A reveal with no field clears a previous one and leaves the distribution pane as it is.
+///
+/// Args:
+///     field: Field the request named, or `None` when it named none.
+///     strategy: Strategy the request selected.
+fn store_field_reveal(view: &mut StrategiesView, field: Option<RevealField>, strategy: Key) {
+    view.pending_field_reveal =
+        field.map(|field| super::full_params::PendingFieldReveal { field, strategy });
+    if view.pending_field_reveal.is_some() {
+        view.dist.open = false;
+    }
+}
+
+/// Put `field` back on a request that [`StrategyRevealRequest::new`] starts without one.
+///
+/// The missing-name and deferred paths rebuild the request. `with_version` is how the version
+/// survives that rebuild; the field travels the same way, and only when the original named one.
+fn attach_field(
+    request: StrategyRevealRequest,
+    field: Option<RevealField>,
+) -> StrategyRevealRequest {
+    match field {
+        Some(field) => request.with_field(field),
+        None => request,
+    }
+}
+
 impl StrategiesView {
     /// Apply a strategy click with selection modifiers.
     /// Shift selects the `order` range from the anchor, Ctrl/Cmd toggles one key, and an
@@ -315,6 +344,8 @@ impl StrategiesView {
         // Expansion makes the row eligible for layout; render still needs this key to center the
         // corresponding item because only render owns the tree's item index.
         self.pending_scroll = Some(key);
+        // A name echo that carried no field clears one left by an earlier reveal.
+        store_field_reveal(self, request.field.clone(), key);
         self.pending_select = None;
         self.clamp_selected_section(cx);
         self.persist_session(cx);
@@ -442,6 +473,7 @@ impl StrategiesView {
             target,
             workspace_group,
             version,
+            field,
         } = request;
         let row = {
             let store = self.backend.read(cx).session.store();
@@ -463,16 +495,15 @@ impl StrategiesView {
                     // everything that could hide it rather than reveal it into a filtered-out
                     // list.
                     self.clear_filters_for_reveal(window, cx);
-                    self.pending_select = Some(StrategyRevealRequest::new(
-                        core,
-                        RevealTarget::Name(name),
-                        workspace_group,
+                    self.pending_select = Some(attach_field(
+                        StrategyRevealRequest::new(core, RevealTarget::Name(name), workspace_group),
+                        field,
                     ));
                     return None;
                 }
                 RevealTarget::Id(id) => id,
             };
-            return self.reveal_deleted(core, id, workspace_group, version, window, cx);
+            return self.reveal_deleted(core, id, workspace_group, version, field, window, cx);
         };
         // The exchange filter has to be asked separately: it selects CORES, and `filter.matches`
         // takes a `StrategyRow`, which carries no venue — so a target on a filtered-out exchange
@@ -493,6 +524,7 @@ impl StrategiesView {
         if let Some(vf) = version {
             self.reveal_version(key, vf, cx);
         }
+        store_field_reveal(self, field, key);
         self.clamp_selected_section(cx);
         self.persist_session(cx);
         Some(key)
@@ -505,6 +537,7 @@ impl StrategiesView {
     ///     id: Strategy id the request named.
     ///     workspace_group: The request's workspace authority, kept for a deferred retry.
     ///     version: Saved version the request asked to open, if any.
+    ///     field: Coins-blacklist field to land on once the row is selected, if the request named one.
     ///     window: The Strategies window, for the missing-target notice.
     ///     cx: View context.
     ///
@@ -517,16 +550,18 @@ impl StrategiesView {
         id: u64,
         workspace_group: Option<String>,
         version: Option<i64>,
+        field: Option<RevealField>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Key> {
         if !self.deleted_loaded || self.deleted_inflight {
             // The branch is being read; `ensure_deleted` starts the read on this very render if
             // it has not, and its completion repaints the window, which drains this again.
-            self.deferred_goto = Some(
+            self.deferred_goto = Some(attach_field(
                 StrategyRevealRequest::new(core, RevealTarget::Id(id), workspace_group)
                     .with_version(version),
-            );
+                field,
+            ));
             return None;
         }
         let kept = self
@@ -550,6 +585,9 @@ impl StrategiesView {
         if let Some(vf) = version {
             self.reveal_version(key, vf, cx);
         }
+        // The deleted-branch reveal does not persist the session. Closing the distribution
+        // pane here is visible now and is saved the next time something else persists.
+        store_field_reveal(self, field, key);
         Some(key)
     }
 

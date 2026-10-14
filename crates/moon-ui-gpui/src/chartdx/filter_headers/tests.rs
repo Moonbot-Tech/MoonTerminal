@@ -135,3 +135,35 @@ fn the_strip_belongs_to_the_filter_row_and_never_leaves_the_plot() {
         "a list drawn on the right opens no left strip"
     );
 }
+
+/// A press on a drawn blacklist line returns that line's target. A point outside the rectangle,
+/// or a profile that no longer matches the one the rectangle was drawn for, misses.
+#[test]
+fn filter_line_at_returns_the_target_inside_and_misses_outside_or_a_stale_profile() {
+    use std::rc::Rc;
+
+    let engine = super::super::ChartEngine::new(
+        1_700_000_000_000.0,
+        moon_core::config::ChartTheme::default(),
+    );
+    let cfg = Rc::new(filters_cfg());
+    let target = crate::chartdx::FilterLineTarget::GlobalBlacklist {
+        coin: "XALPHA".into(),
+    };
+    {
+        let data = engine.data.borrow();
+        let mut render = data.render.borrow_mut();
+        render.panes.push(crate::chartdx::PaneRender::new());
+        render.panes[0].active = true;
+        render.panes[0].filter_line_hits.push(super::FilterLineHit {
+            rect: [10.0, 20.0, 40.0, 12.0],
+            target: target.clone(),
+            cfg: Rc::clone(&cfg),
+        });
+    }
+    assert_eq!(engine.filter_line_at(0, 30.0, 26.0, &cfg), Some(target));
+    assert_eq!(engine.filter_line_at(0, 9.0, 26.0, &cfg), None);
+    let mut stale = (*cfg).clone();
+    stale.rows.swap(0, 1);
+    assert_eq!(engine.filter_line_at(0, 30.0, 26.0, &stale), None);
+}

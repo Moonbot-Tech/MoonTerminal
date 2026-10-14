@@ -1,10 +1,13 @@
 //! What the user does to the page and what OK does with it: staging edits, building the page's
 //! controls, switching pages, and the send to every selected core.
 
+use std::collections::BTreeSet;
+
 use gpui::*;
 
 use moon_core::feed::{CoreChangeSet, CoreConfig};
 use moon_core::session::CoreId;
+use rust_i18n::t;
 
 use crate::shell::editors::{self, CoreDraftHost, EditorStore};
 use crate::shell::send_core_config_to;
@@ -37,6 +40,81 @@ impl CoreExpertView {
         // shows what OK sends. A no-op for every ordinary staged field, which the page already holds.
         self.changes.overlay(draft);
         cx.notify();
+    }
+
+    /// Lift the highlighted coin from this window's anchor and from the page.
+    ///
+    /// `Ok` rewrites `blacklist_text` with [`moon_core::symbol::coin_list::remove`] and the
+    /// blacklist editor, then clears the highlight. When that field is not staged, the base and
+    /// the draft both lose the coin and the change set stays empty, so OK does not write the
+    /// anchor's text onto every selected core. When it is staged, only the staged value is
+    /// rewritten and the field stays staged. Other staged fields stay. `Err` keeps the page and
+    /// shows the failure under the button. No page is created when none exists.
+    ///
+    /// Args:
+    ///     cx: View context for the write and the repaint.
+    pub(super) fn remove_highlighted_blacklist(&mut self, cx: &mut Context<Self>) {
+        let Some(highlight) = self.bl_highlight.clone() else {
+            return;
+        };
+        let Some(core) = self.anchor else {
+            return;
+        };
+        let coin = highlight.coin;
+        let outcome = self.backend.update(cx, |backend, _| {
+            crate::controls::coin_menu::write_core_blacklist(backend, core, &coin, true)
+        });
+        match outcome {
+            Ok(_) => {
+                if self.draft.is_some() && self.base.is_some() {
+                    let mut base_text = self
+                        .base
+                        .as_ref()
+                        .map(|page| page.general.blacklist_text.clone())
+                        .unwrap_or_default();
+                    let mut draft_text = self
+                        .draft
+                        .as_ref()
+                        .map(|page| page.general.blacklist_text.clone())
+                        .unwrap_or_default();
+                    let mut staged_keys = BTreeSet::new();
+                    if moon_core::feed::index_of(BLACKLIST_FIELD)
+                        .is_some_and(|index| self.changes.contains(index))
+                    {
+                        staged_keys.insert(BLACKLIST_FIELD);
+                    }
+                    apply_blacklist_lift(&mut base_text, &mut draft_text, &mut staged_keys, &coin);
+                    let next = draft_text.clone();
+                    if staged_keys.contains(BLACKLIST_FIELD) {
+                        self.edit_draft(|draft| draft.general.blacklist_text = next.clone(), cx);
+                    } else {
+                        if let Some(base) = self.base.as_mut() {
+                            base.general.blacklist_text = base_text;
+                        }
+                        if let (Some(draft), Some(base)) = (self.draft.as_mut(), self.base.as_ref())
+                        {
+                            draft.general.blacklist_text = draft_text;
+                            // Equal to the base, so the field does not enter the set. The shadow
+                            // still copies the new text, or the next unrelated edit would stage it.
+                            self.changes.note_edit(draft, base);
+                            self.changes.overlay(draft);
+                        }
+                        cx.notify();
+                    }
+                    if let Some(input) = self.editors.input("exp-gen-bl-text") {
+                        input.update(cx, |state, context| state.sync_value(next, context));
+                    }
+                }
+                self.bl_highlight = None;
+                cx.notify();
+            }
+            Err(_) => {
+                if let Some(item) = self.bl_highlight.as_mut() {
+                    item.error = Some(t!("coin_bl_places.remove_failed", coin = coin).to_string());
+                }
+                cx.notify();
+            }
+        }
     }
 
     /// [`Self::edit_draft`] for a change made on a control, which may be drawn MIXED.
@@ -322,6 +400,93 @@ impl CoreExpertView {
     }
 }
 
+/// Key of the blacklist field in the core field table.
+///
+/// [`CoreChangeSet`] stores indices, and a test in this crate cannot build that set: its shadow
+/// is a [`moon_core::feed::CoreConfig`], whose constructor is crate-private. The lift consults
+/// this one key.
+const BLACKLIST_FIELD: &str = "general.blacklist_text";
+
+/// How lifting one coin rewrites the expert blacklist.
+///
+/// `rewrite_base` is true when `general.blacklist_text` is not staged. Both sides then hold
+/// the removed text, so a following `note_edit` sees no difference and the field stays out of
+/// the set. When the field is staged, only the draft changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct BlacklistLift {
+    /// Text the base holds after the lift.
+    pub base_text: String,
+    /// Text the draft holds after the lift.
+    pub draft_text: String,
+    /// Whether the caller writes the base as well as the draft.
+    pub rewrite_base: bool,
+}
+
+/// Decide the blacklist texts a coin lift leaves on the expert page.
+///
+/// Args:
+///     staged: Whether `general.blacklist_text` is already in the change set.
+///     base_text: The seeded snapshot's blacklist.
+///     draft_text: The page's blacklist, which is the staged value when `staged` is set.
+///     coin: Token to lift.
+///
+/// Returns:
+///     The texts to write, and whether the base is one of them.
+pub(super) fn blacklist_lift(
+    staged: bool,
+    base_text: &str,
+    draft_text: &str,
+    coin: &str,
+) -> BlacklistLift {
+    if staged {
+        BlacklistLift {
+            base_text: base_text.to_string(),
+            draft_text: moon_core::symbol::coin_list::remove(draft_text, coin),
+            rewrite_base: false,
+        }
+    } else {
+        let next = moon_core::symbol::coin_list::remove(draft_text, coin);
+        BlacklistLift {
+            base_text: next.clone(),
+            draft_text: next,
+            rewrite_base: true,
+        }
+    }
+}
+
+/// Rewrite the blacklist texts and the staged-key set for one coin lift.
+///
+/// An unstaged lift removes `coin` from both texts and drops [`BLACKLIST_FIELD`]. A staged lift
+/// rewrites only the draft and leaves that key in the set. Any other key is left as it was.
+/// The view still runs `note_edit` afterwards: that is what copies the new text into the change
+/// set's shadow, and the shadow needs the whole page.
+///
+/// Args:
+///     base_text: Seeded snapshot's blacklist. Replaced with the text the base should hold.
+///     draft_text: Page blacklist. Replaced with the text the draft should hold.
+///     staged_keys: Field keys currently staged. Membership of [`BLACKLIST_FIELD`] is the only
+///         part this function reads or writes.
+///     coin: Token to lift.
+///
+/// Returns:
+///     Nothing. The three mutable arguments hold the result.
+pub(super) fn apply_blacklist_lift(
+    base_text: &mut String,
+    draft_text: &mut String,
+    staged_keys: &mut BTreeSet<&'static str>,
+    coin: &str,
+) {
+    let staged = staged_keys.contains(BLACKLIST_FIELD);
+    let lift = blacklist_lift(staged, base_text, draft_text, coin);
+    *base_text = lift.base_text;
+    *draft_text = lift.draft_text;
+    if lift.rewrite_base {
+        staged_keys.remove(BLACKLIST_FIELD);
+    } else {
+        staged_keys.insert(BLACKLIST_FIELD);
+    }
+}
+
 impl CoreDraftHost for CoreExpertView {
     fn editors(&mut self) -> &mut EditorStore {
         &mut self.editors
@@ -340,3 +505,6 @@ impl CoreDraftHost for CoreExpertView {
         self.window
     }
 }
+
+#[cfg(test)]
+mod tests;

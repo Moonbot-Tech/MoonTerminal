@@ -36,6 +36,7 @@ use sections::section_display_title;
 use split::{PanelResizeDrag, PanelSplit};
 use tree::pane_cache::{LeftPaneFrame, PaneCache};
 pub(crate) use window::StrategyRevealRequest;
+pub(crate) use window::{RevealField, open_goto_field, open_goto_named_field};
 pub use window::{RevealTarget, open, open_goto, open_goto_version, reveal_name};
 use window::{STRATEGIES_HEADER_H, strategies_header};
 
@@ -291,7 +292,18 @@ pub struct StrategiesView {
     ///
     /// A one-shot request rather than a comparison against `selected_section`: clicking the section
     /// already on screen must scroll to it again.
-    pending_param_scroll: Option<usize>,
+    pending_param_scroll: Option<full_params::ParamScroll>,
+    /// Field reveal waiting for the selected strategy, including the strategy it named.
+    ///
+    /// `None` after a reveal that named no field, which also clears a field left by an earlier
+    /// one. The params pane consumes it once the schema can name the field.
+    pending_field_reveal: Option<full_params::PendingFieldReveal>,
+    /// Coins-blacklist reveal currently drawn on the field row.
+    field_flash: Option<full_params::FieldFlash>,
+    /// Field name the per-section list should scroll to on the next render of that section.
+    pending_section_scroll: Option<String>,
+    /// Scroll position of the per-section parameter list. Full mode uses [`Self::params_scroll`].
+    params_section_scroll: ScrollHandle,
     /// The "WL distribution" tab: whether it is open, and its cached model.
     dist: distribution::view::DistState,
     focus: FocusHandle,
@@ -465,6 +477,13 @@ impl Render for StrategiesView {
         // The right side is one of two tabs, and only the open one is built: the parameter panes
         // cost their model and element trees on every hover repaint, and the distribution its own.
         let right = if let Some(versions) = versions {
+            let section_changed = {
+                let store = self.backend.read(cx).session.store();
+                self.prepare_field_reveal(store)
+            };
+            if section_changed {
+                self.persist_session(cx);
+            }
             let (sections, params_model) = {
                 let store = self.backend.read(cx).session.store();
                 // Both panels read the same dependency values; build them once. The computed

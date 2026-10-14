@@ -663,6 +663,10 @@ impl StrategiesView {
             tree_field_bounds: std::rc::Rc::new(std::cell::Cell::new(None)),
             params_scroll: MoonVirtualListScrollHandle::new(),
             pending_param_scroll: None,
+            pending_field_reveal: None,
+            field_flash: None,
+            pending_section_scroll: None,
+            params_section_scroll: gpui::ScrollHandle::new(),
             dist: {
                 let mut dist = super::distribution::view::DistState::default();
                 dist.open = session.as_ref().is_some_and(|s| s.distribution_tab);

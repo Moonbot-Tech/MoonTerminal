@@ -29,6 +29,9 @@ pub(crate) use core_settings::draft::{
     fmt_hhmm, parse_hhmm, parse_num, send_core_config_to,
 };
 pub(crate) use core_settings::editors;
+pub(crate) use core_settings::{
+    BlacklistReveal, CoinHighlight, CoreSettingsReveal, coin_blacklist_remove_button,
+};
 pub(crate) mod core_settings_popup;
 mod docks;
 mod header;
@@ -218,6 +221,8 @@ pub(crate) struct Shell {
     /// Whether the core-settings coin blacklist uses its fixed-height multiline editor instead of
     /// the collapsed single-line field.
     core_settings_bl_expanded: bool,
+    /// Coin revealed on the compact popup's blacklist. Survives a deferred seed.
+    core_settings_bl_highlight: Option<core_settings::CoinHighlight>,
     /// Tab selected in the core-settings popup, retained across openings.
     core_settings_tab: core_settings_popup::CoreSettingsTab,
     /// Staged settings both tabs edit, committed by OK and dropped by Cancel or a core switch.

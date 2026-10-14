@@ -91,7 +91,7 @@ pub(crate) fn preview_row(
             let mut lines = Vec::new();
             match part.field {
                 ChartLabelField::StrategyFilters => {
-                    push_filter_rows(&mut lines, 0, row, &inputs.filter_lines, 0)
+                    push_filter_rows(&mut lines, &mut Vec::new(), 0, row, &inputs.filter_lines, 0)
                 }
                 _ => push_arb_rows(&mut lines, 0, &inputs, Some(&preview_roster), base, 0),
             }

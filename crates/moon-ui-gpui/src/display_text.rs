@@ -92,5 +92,36 @@ pub(crate) fn fmt_ban_left(remaining_ms: i64) -> String {
     fmt_duration_short((minutes * 60) as f64)
 }
 
+/// The `_one` / `_few` / `_many` form of a count-dependent string.
+///
+/// Slavic locales (`ru`, `uk`) use one/few/many, including the 11..=14 exception. Every other
+/// shipped language uses one when `n` is 1 and many otherwise. The dictionaries carry all three
+/// forms in every language. Callers that count with `usize` cast at the call.
+///
+/// Args:
+///     base: Message key without its form suffix.
+///     n: The count the noun agrees with.
+///
+/// Returns:
+///     The full key of the form to draw.
+pub(crate) fn plural_key(base: &str, n: u64) -> String {
+    let form = if matches!(rust_i18n::locale().as_ref(), "ru" | "uk") {
+        if (11..=14).contains(&(n % 100)) {
+            "many"
+        } else {
+            match n % 10 {
+                1 => "one",
+                2..=4 => "few",
+                _ => "many",
+            }
+        }
+    } else if n == 1 {
+        "one"
+    } else {
+        "many"
+    };
+    format!("{base}_{form}")
+}
+
 #[cfg(test)]
 mod tests;

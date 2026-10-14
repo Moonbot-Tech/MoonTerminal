@@ -1,4 +1,4 @@
-//! Unit checks for the core-settings write-address guard.
+//! Unit checks for the core-settings write-address guard, and for where a blacklist reveal is shown.
 //!
 //! Explicit imports throughout: the parent re-exports `gpui::*`, whose own `test` shadows the
 //! built-in attribute and makes `#[test]` expand recursively.
@@ -6,7 +6,7 @@
 use moon_core::session::CoreId;
 
 use super::draft::{fmt_hhmm, parse_num};
-use super::resolve_core_settings_write;
+use super::{GotoAction, core_settings_goto_action, resolve_core_settings_write};
 
 /// Dropping finite filtering or zero normalization changes the draft's wire comparisons.
 #[test]
@@ -77,4 +77,102 @@ fn resolve_core_settings_write_only_permits_the_seeded_core() {
         resolve_core_settings_write(Some(SEEDED), Some(ACTIVE_SAME)),
         Some(OTHER)
     );
+}
+
+/// The compact popup only when it can write this core. Every other case stays on the expert page.
+#[test]
+fn goto_action_uses_the_popup_only_for_the_active_core() {
+    let target = 2u64;
+    let other = 9u64;
+    assert_eq!(
+        core_settings_goto_action(target, Some(target), true),
+        GotoAction::CompactPopup
+    );
+    assert_eq!(
+        core_settings_goto_action(target, Some(other), true),
+        GotoAction::ExpertPage
+    );
+    assert_eq!(
+        core_settings_goto_action(target, None, true),
+        GotoAction::ExpertPage
+    );
+    assert_eq!(
+        core_settings_goto_action(target, Some(target), false),
+        GotoAction::ExpertPage
+    );
+}
+
+/// The drain must not name either active-core setter. The pin is the function, not the file:
+/// other shell code still switches cores for the header.
+#[test]
+fn drain_does_not_switch_the_active_core() {
+    assert_reveal_does_not_switch(
+        include_str!("../core_settings.rs"),
+        "pub(super) fn drain_core_settings_goto(",
+    );
+    assert_reveal_does_not_switch(
+        include_str!("../../core_expert.rs"),
+        "pub(crate) fn open_core_expert_on(",
+    );
+    assert_reveal_does_not_switch(
+        include_str!("../../core_expert/sync.rs"),
+        "pub(super) fn select_exact_core(",
+    );
+    assert_reveal_does_not_switch(
+        include_str!("../../core_expert/sync.rs"),
+        "pub(super) fn reveal_core_blacklist(",
+    );
+    assert_reveal_does_not_switch(
+        include_str!("../../panels/chart/filter_headers.rs"),
+        "pub(super) fn try_open_filter_line(",
+    );
+}
+
+/// The named function must not call either active-core setter.
+///
+/// Args:
+///     source: Rust source containing the target function.
+///     signature: Unique prefix that starts the target function.
+fn assert_reveal_does_not_switch(source: &str, signature: &str) {
+    let body = braced_body(source, signature);
+    assert!(
+        !body.contains("set_active_trade_core"),
+        "{signature} must not change the active trading core"
+    );
+    assert!(
+        !body.contains("select_auto_workspace_core"),
+        "{signature} must not change the auto workspace core"
+    );
+}
+
+/// Return the brace-balanced body that starts at `signature`.
+///
+/// Args:
+///     source: Rust source containing the target function.
+///     signature: Unique prefix that starts the target function.
+///
+/// Returns:
+///     The source slice from `signature` through its matching closing brace.
+fn braced_body<'a>(source: &'a str, signature: &str) -> &'a str {
+    let start = source
+        .find(signature)
+        .unwrap_or_else(|| panic!("expected `{signature}` in source"));
+    let open = source[start..]
+        .find('{')
+        .map(|offset| start + offset)
+        .unwrap_or_else(|| panic!("expected opening brace after `{signature}`"));
+    let mut depth = 0usize;
+    for (offset, ch) in source[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &source[start..=open + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("unbalanced brace after `{signature}`");
 }

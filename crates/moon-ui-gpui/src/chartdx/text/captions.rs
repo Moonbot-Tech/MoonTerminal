@@ -109,6 +109,7 @@ impl RenderState {
         // would otherwise keep a button standing where nothing was drawn.
         self.panes[idx].action_rects.clear();
         self.panes[idx].filter_header_hits.clear();
+        self.panes[idx].filter_line_hits.clear();
         self.panes[idx].column_bands.clear();
         self.panes[idx].filter_strip = None;
         // The wrapped lines belong to THIS pane's pass. Cleared rather than dropped so the
@@ -134,6 +135,7 @@ impl RenderState {
         self.panes[idx].arb_hits = hits;
         if let Err(error) = result {
             self.panes[idx].filter_header_hits.clear();
+            self.panes[idx].filter_line_hits.clear();
             self.panes[idx].column_bands.clear();
             // Nothing was drawn: the rectangles cleared before the pass stay cleared, so a press
             // cannot land on a button from a frame that was thrown away, and the build buffer goes

@@ -13,9 +13,71 @@
 //! strongly.
 
 use std::rc::Rc;
+use std::time::Instant;
 
 use super::param_entries::{FlatParams, ParamEntry};
 use super::*;
+
+/// One full-mode scroll the next render should apply.
+pub(super) enum ParamScroll {
+    /// Schema section heading, placed at the top of the list.
+    Section(usize),
+    /// Flat entry index of a field row, placed in the center.
+    Field(usize),
+}
+
+/// A coins-blacklist reveal the parameter pane is showing.
+///
+/// The outline fades. The token highlight and the remove button stay until the coin is gone
+/// from the field, the removal is accepted, or another strategy is selected.
+#[derive(Clone)]
+pub(super) struct FieldFlash {
+    pub(super) key: String,
+    pub(super) coin: String,
+    /// When the outline started. The alpha is derived from this, not from a frame counter.
+    pub(super) started: Instant,
+    /// Strategy that was selected when the reveal landed. A different selection drops the flash.
+    pub(super) strategy: Option<Key>,
+    /// Refusal text shown beside the remove button. `None` after a clean frame.
+    pub(super) error: Option<String>,
+}
+
+/// A field reveal waiting until the selected strategy's schema can name the field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PendingFieldReveal {
+    /// Schema field and coin token to land on.
+    pub field: super::RevealField,
+    /// Strategy the reveal named. A different selection drops it.
+    pub strategy: Key,
+}
+
+/// What to do with a pending field reveal given the strategy now selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FieldRevealDecision {
+    /// The selected strategy is the one the reveal named.
+    Consume,
+    /// The user selected a different strategy. Drop the request.
+    Drop,
+    /// Nothing is selected yet. Leave the request pending.
+    Wait,
+}
+
+/// Match a pending field reveal against the strategy on screen.
+///
+/// Args:
+///     selected: Strategy the params pane is showing, if one is selected.
+///     target: Strategy the reveal was stored for.
+///
+/// Returns:
+///     Consume when they are the same strategy, drop when the user picked another, wait when
+///     the pane has no selection yet.
+pub(super) fn field_reveal_decision(selected: Option<Key>, target: Key) -> FieldRevealDecision {
+    match selected {
+        Some(key) if key == target => FieldRevealDecision::Consume,
+        Some(_) => FieldRevealDecision::Drop,
+        None => FieldRevealDecision::Wait,
+    }
+}
 
 /// Return the uniform row pitch used by the full-mode virtual list.
 ///
@@ -61,6 +123,47 @@ fn resolve_scroll_target(flat: &FlatParams, section: usize) -> Option<usize> {
         .or_else(|| flat.entries.len().checked_sub(1))
 }
 
+/// Find a field row in a full-mode flatten.
+///
+/// The first matching name wins, which is the same rule `flatten_params` uses when a name occurs
+/// in two sections. An orphan row, present only on a version diff, comes back with `section: None`.
+///
+/// Args:
+///     flat: Flattened headings and field rows.
+///     key: Schema field name, compared exactly.
+///
+/// Returns:
+///     The owning section and the entry index of that field row. `None` when the name is absent.
+pub(super) fn resolve_field_target(flat: &FlatParams, key: &str) -> Option<(Option<usize>, usize)> {
+    flat.entries.iter().enumerate().find_map(|(ix, entry)| {
+        let ParamEntry::Field { section, field } = entry else {
+            return None;
+        };
+        (field.name == key).then_some((*section, ix))
+    })
+}
+
+/// Section index of a field, read from the schema itself.
+///
+/// Per-section mode uses this instead of a flatten. A changed-only filter can hide the field
+/// from that flatten while the section that declares it is still in the schema. The first
+/// section that contains the name wins.
+///
+/// Args:
+///     sections: Schema sections of the selected strategy kind.
+///     key: Schema field name, compared exactly.
+///
+/// Returns:
+///     The index of the first section that contains `key`, or `None` when none does.
+pub(super) fn resolve_owning_section(
+    sections: &[moon_core::feed::SchemaSection],
+    key: &str,
+) -> Option<usize> {
+    sections
+        .iter()
+        .position(|section| section.fields.iter().any(|field| field.name == key))
+}
+
 impl StrategiesView {
     /// Queue a full-mode scroll to a schema section for the next render.
     ///
@@ -78,8 +181,96 @@ impl StrategiesView {
         if !self.prefs.params_full {
             return;
         }
-        self.pending_param_scroll = Some(section);
+        self.pending_param_scroll = Some(ParamScroll::Section(section));
         cx.notify();
+    }
+
+    /// Drop a flash whose strategy is no longer the one on screen.
+    fn retire_stale_flash(&mut self) {
+        let current = selected_key(self);
+        if self
+            .field_flash
+            .as_ref()
+            .is_some_and(|flash| flash.strategy != current)
+        {
+            self.field_flash = None;
+        }
+    }
+
+    /// Turn a pending field reveal into a scroll plus a flash, once the schema can name the field.
+    ///
+    /// A missing schema leaves the request pending so the next render can try again. A schema that
+    /// has arrived and does not contain the key drops the request. Per-section mode selects the
+    /// owning section by field name and ignores the changed-only filter. Full mode flattens with
+    /// that filter and queues a centered scroll to the field's entry.
+    ///
+    /// Args:
+    ///     store: Live store that holds the selected strategy's schema.
+    ///
+    /// Returns:
+    ///     Whether the selected section changed and should be persisted. Persistence is the
+    ///     caller's job: it writes the backend, and this method still holds a store borrow.
+    pub(super) fn prepare_field_reveal(&mut self, store: &CoreStore) -> bool {
+        self.retire_stale_flash();
+        let Some(pending) = self.pending_field_reveal.clone() else {
+            return false;
+        };
+        match field_reveal_decision(selected_key(self), pending.strategy) {
+            FieldRevealDecision::Wait => return false,
+            FieldRevealDecision::Drop => {
+                self.pending_field_reveal = None;
+                return false;
+            }
+            FieldRevealDecision::Consume => {}
+        }
+        let reveal = pending.field;
+        let Some(sections) = selected_sections(self, store) else {
+            return false;
+        };
+        let mut section_changed = false;
+        if self.prefs.params_full {
+            let multi = multi_row_pairs(self, store).len() > 1;
+            let common = common_fields(self, store);
+            let differ = kinds_differ(self, store);
+            let orphans = t!("strat.params_other_fields").to_string();
+            let flat = param_entries::flatten_params(
+                sections,
+                self.version_changed_filter(),
+                multi,
+                common.as_ref(),
+                differ,
+                param_entries::ParamLabels {
+                    orphans: &orphans,
+                    section_title: &|raw| {
+                        super::section_display_title(raw, self.prefs.human_labels)
+                    },
+                },
+            );
+            let Some((_, ix)) = resolve_field_target(&flat, reveal.key) else {
+                self.pending_field_reveal = None;
+                return false;
+            };
+            self.pending_param_scroll = Some(ParamScroll::Field(ix));
+        } else {
+            let Some(section) = resolve_owning_section(sections, reveal.key) else {
+                self.pending_field_reveal = None;
+                return false;
+            };
+            if self.selected_section != section {
+                self.selected_section = section;
+                section_changed = true;
+            }
+            self.pending_section_scroll = Some(reveal.key.to_string());
+        }
+        self.field_flash = Some(FieldFlash {
+            key: reveal.key.to_string(),
+            coin: reveal.coin,
+            started: Instant::now(),
+            strategy: selected_key(self),
+            error: None,
+        });
+        self.pending_field_reveal = None;
+        section_changed
     }
 
     /// Render every surviving schema section as one virtualized full-mode parameter list.
@@ -117,11 +308,18 @@ impl StrategiesView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if let Some(section) = self.pending_param_scroll.take()
-            && let Some(ix) = resolve_scroll_target(&flat, section)
-        {
-            self.params_scroll
-                .scroll_to_item_strict(ix, ScrollStrategy::Top);
+        match self.pending_param_scroll.take() {
+            Some(ParamScroll::Section(section)) => {
+                if let Some(ix) = resolve_scroll_target(&flat, section) {
+                    self.params_scroll
+                        .scroll_to_item_strict(ix, ScrollStrategy::Top);
+                }
+            }
+            Some(ParamScroll::Field(ix)) => {
+                self.params_scroll
+                    .scroll_to_item_strict(ix, ScrollStrategy::Center);
+            }
+            None => {}
         }
 
         let frozen = self.viewing_version();
@@ -229,3 +427,6 @@ impl StrategiesView {
             .into_any_element()
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -272,6 +272,7 @@ impl Render for Shell {
         // longer the active one — its editors hold that core's values, not this one's. In Overview
         // it closes outright, on the predicate above.
         self.reconcile_core_settings_popup(cx);
+        self.drain_core_settings_goto(window, cx);
 
         if strands_focus {
             window.blur();

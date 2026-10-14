@@ -1,5 +1,6 @@
 use super::*;
 
+use super::filter_line::{FilterLineTarget, parse_filter_line};
 use super::format::colored_sign;
 
 /// Build the arbitrage column's lines for one module.
@@ -77,7 +78,7 @@ pub(super) fn push_arb_rows(
     let window = column_scroll::visible_window(cells.len(), first, moon_core::config::ARB_MAX_ROWS);
     let mut n = 0;
     if window.above > 0 {
-        out.push(plain_column_line(row_ix, n, more_above(window.above)));
+        out.push(plain_column_line(row_ix, n, more_above(window.above), None));
         n += 1;
     }
     for cell in cells
@@ -125,7 +126,7 @@ pub(super) fn push_arb_rows(
         n += 1;
     }
     if window.below > 0 {
-        out.push(plain_column_line(row_ix, n, more_below(window.below)));
+        out.push(plain_column_line(row_ix, n, more_below(window.below), None));
     }
 }
 
@@ -139,8 +140,22 @@ fn more_below(n: usize) -> String {
     t!("chart_labels.column.more_below", n = n).to_string()
 }
 
-/// A plain line at column slot `n` (a filter line or an indicator): no venue to click, no action.
-fn plain_column_line(row_ix: usize, n: usize, text: String) -> LabelText {
+/// A plain line at column slot `n` (a filter line or an indicator): no venue to click.
+///
+/// Args:
+///     row_ix: Label row this line belongs to.
+///     n: Slot inside the column, counted from the first emitted line.
+///     text: The line as it will be drawn.
+///     action: Navigation carried by a parsed blacklist line, or `None`.
+///
+/// Returns:
+///     The caption. It names no venue.
+fn plain_column_line(
+    row_ix: usize,
+    n: usize,
+    text: String,
+    action: Option<LabelAction>,
+) -> LabelText {
     LabelText {
         row: row_ix,
         part: ARB_PART_BASE + n,
@@ -152,7 +167,7 @@ fn plain_column_line(row_ix: usize, n: usize, text: String) -> LabelText {
         color: None,
         bar: None,
         volume_menu: false,
-        action: None,
+        action,
     }
 }
 
@@ -173,9 +188,20 @@ fn filter_header(row: &moon_core::config::ChartLabelRow, lines: &[String]) -> St
 ///
 /// The header has its own run; entries share [`moon_core::config::ARB_MAX_ROWS`] lines of the
 /// column range with the indicators of a scrolled window starting at `first`. Folding omits only
-/// these entries, preserving ordinary row captions.
+/// these entries, preserving ordinary row captions. Each real line is parsed; a blacklist suffix
+/// appends its target and stores the index on the caption. The "N above" and "N more" lines stay
+/// inert.
+///
+/// Args:
+///     out: Captions for this column, header first.
+///     targets: Pane-wide blacklist targets. A new entry's index is the caption's action.
+///     row_ix: Label row the column belongs to.
+///     row: The module, including whether it is folded.
+///     lines: Skip reasons as the core spelled them.
+///     first: First real line of the scrolled window.
 pub(super) fn push_filter_rows(
     out: &mut Vec<LabelText>,
+    targets: &mut Vec<FilterLineTarget>,
     row_ix: usize,
     row: &moon_core::config::ChartLabelRow,
     lines: &[String],
@@ -206,15 +232,20 @@ pub(super) fn push_filter_rows(
     let window = column_scroll::visible_window(lines.len(), first, moon_core::config::ARB_MAX_ROWS);
     let mut n = 0;
     if window.above > 0 {
-        out.push(plain_column_line(row_ix, n, more_above(window.above)));
+        out.push(plain_column_line(row_ix, n, more_above(window.above), None));
         n += 1;
     }
     for line in &lines[window.range.clone()] {
-        out.push(plain_column_line(row_ix, n, (*line).to_owned()));
+        let action = parse_filter_line(line).and_then(|target| {
+            let slot = u8::try_from(targets.len()).ok()?;
+            targets.push(target);
+            Some(LabelAction::OpenFilterLine(slot))
+        });
+        out.push(plain_column_line(row_ix, n, (*line).to_owned(), action));
         n += 1;
     }
     if window.below > 0 {
-        out.push(plain_column_line(row_ix, n, more_below(window.below)));
+        out.push(plain_column_line(row_ix, n, more_below(window.below), None));
     }
 }
 

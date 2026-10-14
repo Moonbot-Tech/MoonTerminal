@@ -708,6 +708,7 @@ pub(in crate::chartdx) use captions::{
 };
 pub(crate) use column_scroll::notch_steps;
 pub(in crate::chartdx) use column_scroll::{clamp_first, first_of};
+pub(crate) use labels::FilterLineTarget;
 /// The caption editor lives outside the chart and needs exactly one thing from the text pass:
 /// the real formatter, applied to sample values.
 pub(crate) use labels::preview_row;

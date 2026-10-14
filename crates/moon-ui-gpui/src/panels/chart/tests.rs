@@ -180,6 +180,7 @@ fn mouse_down_handlers_offer_a_press_to_their_layers_in_a_fixed_order() {
             "mouse_down_left",
             vec![
                 "try_toggle_strategy_filters",
+                "try_open_filter_line",
                 "try_open_arb_venue",
                 "try_fig_click",
                 "fig_delete_press",

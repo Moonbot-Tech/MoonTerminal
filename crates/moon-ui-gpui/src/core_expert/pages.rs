@@ -56,6 +56,8 @@ pub(super) struct PageCtx<'a> {
     pub(super) special_section: SpecialSection,
     /// Which row of the Telegram page's channel box is picked, for the same reason.
     pub(super) selected_channel: Option<usize>,
+    /// Coin highlighted on the General blacklist, when a reveal is showing.
+    pub(super) bl_reveal: Option<crate::shell::BlacklistReveal<'a>>,
 }
 
 /// Ids of the page's text boxes that hold a value on its way somewhere else rather than a setting.
@@ -134,7 +136,7 @@ pub(super) fn page(
     cx: &App,
 ) -> Option<AnyElement> {
     match tab {
-        ExpertTab::General => Some(general::body(view, store, draft, p, cx)),
+        ExpertTab::General => Some(general::body(view, store, draft, ctx.bl_reveal, p, cx)),
         ExpertTab::Login => Some(login::body(view, store, p, cx)),
         ExpertTab::Telegram => Some(telegram::body(
             view,

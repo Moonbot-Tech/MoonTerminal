@@ -421,6 +421,7 @@ impl Render for ChartPanel {
             // other reason the click is not handled here.
             .children(self.arb_cursor_zones())
             .children(self.cursor_zones(|pane| self.chart.filter_header_rects(pane)))
+            .children(self.filter_line_cursor_zones(cx))
             // The market buttons: real controls, placed where the caption layout reserved room for
             // them. See `market_actions`.
             .children(self.action_buttons(cx))

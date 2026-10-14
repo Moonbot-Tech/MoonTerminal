@@ -52,6 +52,17 @@ pub enum RevealTarget {
     Name(String),
 }
 
+/// One strategy field a reveal should scroll to, plus the coin token to highlight there.
+///
+/// `key` is the schema field name. `coin` is the token, not a pair.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RevealField {
+    /// Schema field name, for example `CoinsBlackList`.
+    pub key: &'static str,
+    /// Coin token to highlight inside that field.
+    pub coin: String,
+}
+
 /// One queued Strategies reveal plus immutable optional group workspace authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StrategyRevealRequest {
@@ -61,6 +72,9 @@ pub(crate) struct StrategyRevealRequest {
     /// A saved version to open in the Versions pane once the strategy is selected, by its
     /// `valid_from` key. `None` leaves the pane on live mode, as every reveal did before.
     pub(super) version: Option<i64>,
+    /// Coins-blacklist field to scroll to once the strategy is selected.
+    /// `None` leaves the params pane untouched, as every reveal did before.
+    pub(super) field: Option<RevealField>,
 }
 
 impl StrategyRevealRequest {
@@ -79,12 +93,25 @@ impl StrategyRevealRequest {
             target,
             workspace_group,
             version: None,
+            field: None,
         }
     }
 
     /// Ask the reveal to also open one saved version of the strategy.
     pub(super) fn with_version(mut self, version: Option<i64>) -> Self {
         self.version = version;
+        self
+    }
+
+    /// Ask the reveal to land on one field and highlight `field.coin` in it.
+    ///
+    /// Args:
+    ///     field: Schema key and coin token.
+    ///
+    /// Returns:
+    ///     The same request with that field attached.
+    pub(super) fn with_field(mut self, field: RevealField) -> Self {
+        self.field = Some(field);
         self
     }
 
@@ -198,6 +225,138 @@ pub fn open_goto_version(
         return;
     }
     open(backend, owner, owner_display, cx);
+}
+
+/// [`open_goto`] that also lands on one strategy field and names the coin to highlight there.
+///
+/// The places dialog is the caller: a strategy row's Open must select the strategy and then the
+/// `CoinsBlackList` field, not stop at the strategy row.
+///
+/// Args:
+///     backend: Shared state and singleton-window authority.
+///     core: Core captured by the navigation producer.
+///     strat_id: Exact strategy identity on `core`, live or retained in the Deleted branch.
+///     field: Schema key and coin token to reveal once the strategy is selected.
+///     workspace_group: Group owning the callback, or `None` for an unscoped caller.
+///     owner: Optional native owner window.
+///     owner_display: Display used when a new tool window is required.
+///     cx: Application context used to validate, queue, and open.
+///
+/// Returns:
+///     Nothing; a stale group-owned target is rejected without changing workspace state.
+#[allow(clippy::too_many_arguments)] // Mirrors `open_goto_version`'s producer-boundary shape plus the field.
+pub(crate) fn open_goto_field(
+    backend: Entity<Backend>,
+    core: CoreId,
+    strat_id: u64,
+    field: RevealField,
+    workspace_group: Option<String>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    cx: &mut App,
+) {
+    let queued = backend.update(cx, |b, bcx| {
+        if !workspace_allows_reveal(b, workspace_group.as_deref(), core) {
+            return false;
+        }
+        b.strategies_goto = Some(
+            StrategyRevealRequest::new(core, RevealTarget::Id(strat_id), workspace_group.clone())
+                .with_field(field),
+        );
+        bcx.notify();
+        true
+    });
+    if !queued {
+        return;
+    }
+    focus_reveal_scope(&backend, workspace_group.as_deref(), cx);
+    open(backend, owner, owner_display, cx);
+}
+
+/// [`open_goto_field`] for a strategy the caller can name but not yet number.
+///
+/// The chart's filter line is the caller: the caption carries the strategy name, and the id is
+/// known only when that name is already in the store. A miss still opens the window and parks
+/// [`RevealTarget::Name`] with the field attached, which is the path a name reveal already drains.
+///
+/// Args:
+///     backend: Shared state and singleton-window authority.
+///     core: Core captured by the navigation producer.
+///     name: Strategy name, compared exactly with the store.
+///     field: Schema key and coin token to reveal once the strategy is selected.
+///     workspace_group: Group owning the callback, or `None` for an unscoped caller.
+///     owner: Optional native owner window.
+///     owner_display: Display used when a new tool window is required.
+///     cx: Application context used to validate, queue, and open.
+///
+/// Returns:
+///     Nothing; a stale group-owned target is rejected without changing workspace state.
+#[allow(clippy::too_many_arguments)] // Mirrors `open_goto_field`'s producer-boundary shape.
+pub(crate) fn open_goto_named_field(
+    backend: Entity<Backend>,
+    core: CoreId,
+    name: String,
+    field: RevealField,
+    workspace_group: Option<String>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    cx: &mut App,
+) {
+    let queued = backend.update(cx, |b, bcx| {
+        if !workspace_allows_reveal(b, workspace_group.as_deref(), core) {
+            return false;
+        }
+        b.strategies_goto = Some(
+            StrategyRevealRequest::new(core, RevealTarget::Name(name), workspace_group.clone())
+                .with_field(field),
+        );
+        bcx.notify();
+        true
+    });
+    if !queued {
+        return;
+    }
+    focus_reveal_scope(&backend, workspace_group.as_deref(), cx);
+    open(backend, owner, owner_display, cx);
+}
+
+/// Group a field reveal must focus before the Strategies window opens.
+///
+/// The singleton lists only the current Auto owner's cores. A destination in another group
+/// hides the strategy until that group owns the window, which is what that group's toolbar
+/// does when it opens Strategies.
+///
+/// Args:
+///     destination: Group that owns the strategy, when the caller named one.
+///     current: The singleton's current Auto workspace owner, when it has one.
+///
+/// Returns:
+///     `destination` when it differs from `current`.
+pub(crate) fn reveal_scope_group<'a>(
+    destination: Option<&'a str>,
+    current: Option<&str>,
+) -> Option<&'a str> {
+    match destination {
+        Some(group) if current != Some(group) => Some(group),
+        _ => None,
+    }
+}
+
+/// Move singleton scope onto the reveal's group when that group is not already the owner.
+///
+/// Does not change the active trading core. A group with no live window is left alone;
+/// [`focus_singleton_owner`] refuses it.
+fn focus_reveal_scope(backend: &Entity<Backend>, destination: Option<&str>, cx: &mut App) {
+    let current = backend
+        .read(cx)
+        .singleton_workspace()
+        .map(|workspace| workspace.group);
+    let Some(group) = reveal_scope_group(destination, current.as_deref()) else {
+        return;
+    };
+    backend.update(cx, |backend, backend_cx| {
+        backend.focus_singleton_owner(group, backend_cx);
+    });
 }
 
 /// Ask an ALREADY-OPEN Strategies window to reveal a strategy by name.
