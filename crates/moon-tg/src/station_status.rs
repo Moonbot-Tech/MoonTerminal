@@ -8,6 +8,8 @@ use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, Reply
 use moon_core::telegram::commands::STATION_UPDATE_CALLBACK;
 use moon_core::telegram::runtime::Response;
 
+mod chat;
+
 /// What the station's look at the latest release found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReleaseCheck {
@@ -116,7 +118,7 @@ pub fn station_status_reply(
             .callback(),
         )]);
     }
-    let html = facts.html(release_line.as_deref());
+    let html = chat::html(status, release);
     if !crate::report::rich_message_fits(&html) {
         // Not expected with a bounded file list; plain text still answers the press.
         let mut text = facts.plain();
@@ -230,30 +232,6 @@ impl StatusFacts {
             sections,
             notes,
         }
-    }
-
-    /// Telegram rich HTML: a bold title, one compact two-column table per section, then notes
-    /// and the release line as paragraphs. Every dynamic value is escaped.
-    fn html(&self, release: Option<&str>) -> String {
-        let mut html = format!("<p><b>\u{1f4e1} {}</b></p>", escape(&self.title));
-        for section in &self.sections {
-            html.push_str(&format!(
-                "<p><b>{}</b></p><table compact>",
-                escape(&section.title)
-            ));
-            for (label, value) in &section.rows {
-                html.push_str(&format!(
-                    "<tr><td><b>{}</b></td><td align=\"right\">{}</td></tr>",
-                    escape(label),
-                    escape(&one_line(value))
-                ));
-            }
-            html.push_str("</table>");
-        }
-        for note in self.notes.iter().map(String::as_str).chain(release) {
-            html.push_str(&format!("<p>{}</p>", escape(&one_line(note))));
-        }
-        html
     }
 
     /// Plain lines: the title, then each section's heading and its indented `label: value` rows.

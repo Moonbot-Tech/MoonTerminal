@@ -229,7 +229,11 @@ fn the_update_button_comes_only_with_a_newer_release() {
     else {
         panic!("the status is a rich message");
     };
-    assert!(html.ends_with("<p>A new version of the station is out: v0.52.0.</p>"));
+    assert!(
+        html.contains(
+            "<p>\u{26a0}\u{fe0f} A new version of the station is out: <b>v0.52.0</b>.</p>"
+        )
+    );
     assert_eq!(
         navigation.1,
         crate::station_owner_navigation(&moon_core::config::TelegramConfig::default())
@@ -270,7 +274,7 @@ fn the_update_button_comes_only_with_a_newer_release() {
         ) else {
             panic!("the status is a rich message");
         };
-        assert!(html.ends_with(tail), "{html}");
+        assert!(html.contains(tail), "{html}");
         assert!(
             matches!(keyboard, ReplyMarkup::Inline(ref markup) if markup.inline_keyboard.is_empty()),
             "{check:?} from the keyboard brings no button at all"
@@ -432,4 +436,209 @@ fn the_service_section_shows_the_auto_update_switch() {
     assert_eq!(row(Some(true)).as_deref(), Some("on"));
     assert_eq!(row(Some(false)).as_deref(), Some("off"));
     assert_eq!(row(None), None);
+}
+
+/// Restoring section tables or expanding files makes the approved normal state exceed ten lines.
+#[test]
+fn compact_mockup_states_use_supported_html_in_every_locale() {
+    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi"] {
+        let _locale = crate::test_locale::force(locale);
+        let mut normal = status(Some(host(vec![file("UNIT_01.db", GIB)])));
+        normal.cores_ready = normal.cores_total;
+        normal.last_update = Some("2026-10-12T22:05Z health=ok".into());
+        normal.auto_update = Some(true);
+        normal.bot = Some(moon_core::station_api::BotStatus {
+            status: moon_core::telegram::TelegramStatus::Paired { chat_count: 1 },
+            mini_app_on: false,
+            mini_app: moon_core::telegram::runtime::mini_app::MiniAppStatus::Stopped,
+            pairing: None,
+        });
+        let html = chat::html(&normal, &ReleaseCheck::Current);
+        assert_supported_html(&html);
+        assert_eq!(html.matches("<table compact>").count(), 1, "{html}");
+        assert_eq!(html.matches("<tr>").count(), 3, "{html}");
+        assert!(html.contains("<details><summary>"));
+        assert!(!html.contains("<details open"));
+        let visible = html.split("<details>").next().unwrap();
+        assert_eq!(
+            visible.matches("<p>").count() + visible.matches("<tr>").count() + 1,
+            10
+        );
+        assert!(html.contains("12.10") && html.contains("22:05 UTC"));
+        assert!(html.contains("<b>27/27</b>"));
+        assert!(html.contains(&format!("{} \u{2713}", t!("telegram.station.chat_bot"))));
+        assert!(html.contains("<td align=\"right\">87.0 %</td>"));
+        assert!(html.contains("<td align=\"right\">0.5 %</td>"));
+
+        let mut warning = normal.clone();
+        warning.cores_ready = 22;
+        warning.auto_update = Some(false);
+        let machine = warning.host.as_mut().unwrap();
+        machine.memory.as_mut().unwrap().available_bytes = 20 * MIB;
+        machine.disk.as_mut().unwrap().free_bytes = GIB;
+        let html = chat::html(&warning, &ReleaseCheck::Newer("v0.2.0".into()));
+        assert_supported_html(&html);
+        assert!(html.contains("\u{1f7e1}"));
+        assert_eq!(html.matches("\u{26a0}\u{fe0f}").count(), 2);
+        assert!(html.contains("<b>v0.2.0</b>"));
+        assert!(html.contains("\u{2717}"));
+        assert!(html.contains("<details><summary>"));
+        assert_eq!(html.matches("<table compact>").count(), 1);
+
+        let mut starting = normal.clone();
+        starting.cores_ready = 12;
+        starting.last_update = None;
+        let machine = starting.host.as_mut().unwrap();
+        machine.uptime_s = 12;
+        machine.cpu.clear();
+        machine.files.clear();
+        let html = chat::html(&starting, &ReleaseCheck::Current);
+        assert_supported_html(&html);
+        assert!(!html.contains("<table"));
+        assert!(html.contains(&escape(&t!("telegram.station.just_started"))));
+        assert!(html.contains(&escape(&t!("telegram.station.chat_connecting"))));
+        assert!(!html.contains(&escape(&t!("telegram.station.chat_offline", count = 15))));
+
+        let mut blind = normal.clone();
+        let machine = blind.host.as_mut().unwrap();
+        machine.cpu.clear();
+        machine.memory = None;
+        machine.files.clear();
+        let html = chat::html(&blind, &ReleaseCheck::Current);
+        assert_supported_html(&html);
+        assert!(html.contains(&escape(&t!("telegram.station.no_readings"))));
+        assert!(!html.contains("<table"));
+        assert!(
+            !html.contains(
+                t!(
+                    "telegram.station.chat_disk_free",
+                    free = "15.5",
+                    total = "23.0"
+                )
+                .as_ref()
+            )
+        );
+    }
+}
+
+/// Catch unsupported/color tags and malformed nesting independently of renderer helpers.
+fn assert_supported_html(html: &str) {
+    let mut stack = Vec::new();
+    for part in html.split('<').skip(1) {
+        let tag = part.split_once('>').expect("closed tag").0;
+        let name = tag
+            .trim_start_matches('/')
+            .split_whitespace()
+            .next()
+            .unwrap();
+        assert!(
+            ["p", "b", "table", "tr", "th", "td", "details", "summary"].contains(&name),
+            "{tag}"
+        );
+        assert!(!tag.contains("style") && !tag.contains("class") && !tag.contains("color"));
+        if tag.starts_with('/') {
+            assert_eq!(stack.pop(), Some(name), "{html}");
+        } else {
+            stack.push(name);
+        }
+    }
+    assert!(stack.is_empty());
+}
+
+/// Losing omitted sizes or choosing the hour peak silently misstates disk use and day load.
+#[test]
+fn compact_files_and_day_peak_keep_aggregate_values() {
+    let _locale = crate::test_locale::force("en");
+    let mut machine = host(
+        (1..=7)
+            .map(|n| file(&format!("UNIT_{n:02}.db"), n * MIB))
+            .collect(),
+    );
+    machine.cpu[0].station_peak_permille = 200;
+    machine.cpu[1].station_peak_permille = 950;
+    let html = chat::html(&status(Some(machine)), &ReleaseCheck::Current);
+    assert!(html.contains("<summary>Largest files · 28.0 MB</summary>"));
+    assert!(html.contains("and 2 more · 3.0 MB"));
+    assert!(!html.contains("UNIT_01.db"));
+    assert!(html.contains("95.0 %"));
+    assert!(!html.contains("20.0 %"));
+}
+
+/// The ten-percent warning boundary must use bytes, not rounded GB or overflowing arithmetic.
+#[test]
+fn compact_resource_warning_is_strictly_below_ten_percent() {
+    assert!(!chat::low_resource(10, 100));
+    assert!(chat::low_resource(9, 100));
+    assert!(!chat::low_resource(0, 0));
+    assert!(!chat::low_resource(u64::MAX, u64::MAX));
+}
+
+/// An oversized version must still answer in plain text and retain the update/back keyboard.
+#[test]
+fn compact_oversized_message_uses_the_plain_fallback() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = status(None);
+    state.station_version = "x".repeat(33_000);
+    assert!(!crate::report::rich_message_fits(&chat::html(
+        &state,
+        &ReleaseCheck::Current
+    )));
+    let Response::Text { text, keyboard } = station_status_reply(
+        &state,
+        &ReleaseCheck::Newer("v0.2.0".into()),
+        crate::station_owner_navigation(&moon_core::config::TelegramConfig::default()),
+        true,
+    ) else {
+        panic!("oversized rich messages fall back");
+    };
+    assert!(text.contains("Service\n  Cores: 26 of 27 ready"));
+    let Some(ReplyMarkup::Inline(markup)) = keyboard else {
+        panic!("update and back remain available");
+    };
+    assert_eq!(markup.inline_keyboard.len(), 2);
+    assert_eq!(
+        markup.inline_keyboard[0][0].callback_data.as_deref(),
+        Some(STATION_UPDATE_CALLBACK)
+    );
+    assert_eq!(
+        markup.inline_keyboard[1][0].callback_data.as_deref(),
+        Some("m:s")
+    );
+}
+
+/// Compact success timestamps must not hide rollback, unknown-update or unavailable-bot diagnostics.
+#[test]
+fn compact_health_diagnostics_are_kept_and_escaped() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = status(Some(host(Vec::new())));
+    state.bot = Some(moon_core::station_api::BotStatus {
+        status: moon_core::telegram::TelegramStatus::Unavailable,
+        mini_app_on: false,
+        mini_app: moon_core::telegram::runtime::mini_app::MiniAppStatus::Stopped,
+        pairing: None,
+    });
+    for (raw, expected) in [
+        (
+            "2026-10-12T22:05:23Z update from release: health=ok",
+            "Updated 12.10 at 22:05 UTC",
+        ),
+        (
+            "2026-10-12T22:05Z rollback: health=ok",
+            "Previous version restored",
+        ),
+        ("2026-10-12T22:05Z future=<bad>", "future=&lt;bad&gt;"),
+        ("invalid health=ok", "Details: invalid health=ok"),
+    ] {
+        state.last_update = Some(raw.into());
+        let html = chat::html(&state, &ReleaseCheck::Current);
+        assert_supported_html(&html);
+        assert!(html.contains(expected), "{html}");
+        assert!(
+            html.contains(&crate::status_text(
+                &moon_core::telegram::TelegramStatus::Unavailable
+            )),
+            "{html}"
+        );
+        assert!(!html.contains("bot \u{2713}"));
+    }
 }

@@ -1,6 +1,21 @@
 # Telegram Settings tab and later bot/Mini App strings.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+telegram.station.chat_uptime: "работает %{uptime}"
+telegram.station.chat_updated: "Обновлено %{date} в %{time} UTC"
+telegram.station.chat_connecting: "подключаются"
+telegram.station.chat_offline: "%{count} не на связи"
+telegram.station.chat_bot: "бот"
+telegram.station.chat_auto_update: "автообновление"
+telegram.station.chat_cpu: "Процессор"
+telegram.station.chat_peak: "пик"
+telegram.station.chat_station: "станция"
+telegram.station.chat_server: "сервер"
+telegram.station.chat_free: "Свободно: %{resources}"
+telegram.station.chat_memory_free: "память %{free}/%{total} ГБ"
+telegram.station.chat_disk_free: "диск %{free}/%{total} ГБ"
+telegram.station.chat_memory_used: "Станция занимает %{size} МБ памяти (пик %{peak})"
+telegram.station.chat_tape: "Лента: вокруг сделки %{margin} · долгая от %{long} мин"
 
 
 telegram.state.connected: "Бот подключён"

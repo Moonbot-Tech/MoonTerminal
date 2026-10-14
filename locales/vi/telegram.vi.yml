@@ -1,6 +1,21 @@
 # Telegram Settings tab and later bot/Mini App strings.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+telegram.station.chat_uptime: "hoạt động %{uptime}"
+telegram.station.chat_updated: "Đã cập nhật %{date} lúc %{time} UTC"
+telegram.station.chat_connecting: "đang kết nối"
+telegram.station.chat_offline: "%{count} ngoại tuyến"
+telegram.station.chat_bot: "bot"
+telegram.station.chat_auto_update: "tự cập nhật"
+telegram.station.chat_cpu: "Bộ xử lý"
+telegram.station.chat_peak: "đỉnh"
+telegram.station.chat_station: "trạm"
+telegram.station.chat_server: "máy chủ"
+telegram.station.chat_free: "Trống: %{resources}"
+telegram.station.chat_memory_free: "bộ nhớ %{free}/%{total} GB"
+telegram.station.chat_disk_free: "đĩa %{free}/%{total} GB"
+telegram.station.chat_memory_used: "Trạm dùng %{size} MB bộ nhớ (đỉnh %{peak})"
+telegram.station.chat_tape: "Băng: quanh giao dịch %{margin} · dài từ %{long} phút"
 
 
 telegram.state.connected: "Bot đã nối"
