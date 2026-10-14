@@ -32,6 +32,8 @@ cbuffer CandleStyle : register(b1) {
     float  cs_neutral_in_zone; // 0/1 — use the neutral color in the zone
     float  cs_fill_alpha;      // body fill opacity
     float  cs_hide_start;      // rel ms: omit candles with t_open ≥ boundary (trades only)
+    float  cs_open_path;       // current candle opening with a resident finer path
+    float3 cs_path_pad;
 };
 
 struct Candle {
@@ -80,7 +82,9 @@ CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     uint part = vid / 6u;          // 0 body, 1 upper wick, 2 lower wick
     float2 corner = CORNERS[vid % 6u];
 
-    if (cd.t_open >= cs_hide_start) {
+    bool open_path = abs(cd.t_open - cs_open_path) < 0.5 &&
+        (cd.tf_rel <= 0.0 || abs(cd.tf_rel - cs_tf_rel) < 0.5);
+    if (cd.t_open >= cs_hide_start && !open_path) {
         return cull_out(); // Omit the candle in the "trades only" zone.
     }
     // A wider own timeframe is the coarse history tail and is muted. A narrower own width
@@ -97,7 +101,7 @@ CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     x1 = max(round(x1), x0 + 1.0);
 
     bool in_zone = cd.t_open >= cs_zone_start;
-    bool outline = (cs_mode >= 0.5 && cs_mode < 1.5) || (cs_mode >= 1.5 && in_zone);
+    bool outline = open_path || (cs_mode >= 0.5 && cs_mode < 1.5) || (cs_mode >= 1.5 && in_zone);
     if (part != 0u && in_zone && cs_wicks_in_zone < 0.5) {
         return cull_out();
     }

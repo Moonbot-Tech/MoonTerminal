@@ -87,12 +87,7 @@ fn an_unnamed_id_has_no_rank() {
 fn reorder_is_blocked_while_a_quick_filter_is_on() {
     use crate::strategies::filter::{QuickFilter, StrategyFilter};
     assert!(!super::reorder_blocked(&StrategyFilter::default()));
-    for q in [
-        QuickFilter::WithOrders,
-        QuickFilter::Unconfirmed,
-        QuickFilter::Disabled,
-        QuickFilter::Stopped,
-    ] {
+    for q in QuickFilter::ALL {
         let f = StrategyFilter {
             quick: Some(q),
             ..Default::default()

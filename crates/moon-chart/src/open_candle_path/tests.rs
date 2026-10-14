@@ -1,5 +1,6 @@
 use super::*;
 
+/// Builds a synthetic mini-candle without live market data.
 fn mini(t: f64, low: f32, high: f32) -> PathMini {
     PathMini {
         t_open_ms: t,
@@ -104,4 +105,125 @@ fn an_append_continues_the_colour_of_the_previous_bar() {
         out.iter().map(|b| b.rising).collect::<Vec<_>>(),
         [true, false, true]
     );
+}
+
+/// Provides cached prices independently of the path composition's range calculations.
+fn cached(t: f64, low: f32, high: f32) -> ChartCandle {
+    ChartCandle {
+        t_open_ms: t,
+        open: low,
+        high,
+        low,
+        close: high,
+        volume: 0.0,
+        quote_volume: 0.0,
+    }
+}
+
+/// Losing the minute prefix or using five-second widths for it leaves most of a daily candle blank.
+#[test]
+fn daily_open_path_spans_minutes_minis_and_the_dot_seam_without_hiding() {
+    let minutes: Vec<_> = (0..720)
+        .map(|i| cached(DAY + i as f64 * 60_000.0, 10.0, 12.0))
+        .collect();
+    let minis: Vec<_> = (0..24)
+        .map(|i| mini(DAY + 43_200_000.0 + i as f64 * 5_000.0, 11.0, 13.0))
+        .collect();
+    let dots = DAY + 43_320_000.0;
+    let mut out = Vec::new();
+    let mid = place_prefix(
+        Some(&minutes),
+        &[],
+        (DAY, minis[0].t_open_ms),
+        DAY as i64,
+        DAY,
+        &mut out,
+    );
+    place_path(&minis, DAY, dots, DAY, mid, &mut out);
+    assert_eq!(out.len(), 744);
+    assert_eq!((out[0].t_open_rel, out[0].duration_ms), (0.0, 60_000.0));
+    assert_eq!(out[720].duration_ms, 5_000.0);
+    for pair in out.windows(2) {
+        assert_eq!(pair[0].t_open_rel + pair[0].duration_ms, pair[1].t_open_rel);
+    }
+    assert_eq!(
+        out.last().unwrap().t_open_rel + out.last().unwrap().duration_ms,
+        43_320_000.0
+    );
+}
+
+/// A sub-minute path must not draw a minute bar over its current bucket or raw dots.
+#[test]
+fn one_minute_timeframe_uses_only_minis_before_the_dots() {
+    let mut out = Vec::new();
+    place_prefix(
+        Some(&[cached(DAY, 1.0, 2.0)]),
+        &[],
+        (DAY, DAY + 60_000.0),
+        60_000,
+        DAY,
+        &mut out,
+    );
+    place_path(
+        &[mini(DAY, 2.0, 3.0)],
+        DAY,
+        DAY + 5_000.0,
+        DAY,
+        None,
+        &mut out,
+    );
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].duration_ms, 5_000.0);
+}
+
+/// Sparse minute data must retain the uncovered five-minute portions, without double drawing.
+#[test]
+fn minute_rows_override_only_their_own_part_of_fallback_and_clip_the_mini_seam() {
+    let mut out = Vec::new();
+    place_prefix(
+        Some(&[cached(DAY + 60_000.0, 2.0, 3.0)]),
+        &[cached(DAY, 1.0, 4.0)],
+        (DAY, DAY + 185_000.0),
+        DAY as i64,
+        DAY,
+        &mut out,
+    );
+    assert_eq!(
+        out.iter()
+            .map(|b| (b.t_open_rel, b.duration_ms, b.low))
+            .collect::<Vec<_>>(),
+        [
+            (0.0, 60_000.0, 1.0),
+            (60_000.0, 60_000.0, 2.0),
+            (120_000.0, 65_000.0, 1.0)
+        ]
+    );
+}
+
+/// Unavailable and empty minute reads both allow honest fallback, while no data invents no path.
+#[test]
+fn unavailable_and_authoritative_empty_minute_reads_use_fallback() {
+    for minutes in [None, Some([].as_slice())] {
+        let mut out = Vec::new();
+        place_prefix(
+            minutes,
+            &[cached(DAY, 1.0, 4.0)],
+            (DAY, DAY + 300_000.0),
+            DAY as i64,
+            DAY,
+            &mut out,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].duration_ms, 300_000.0);
+        out.clear();
+        place_prefix(
+            minutes,
+            &[],
+            (DAY, DAY + 300_000.0),
+            DAY as i64,
+            DAY,
+            &mut out,
+        );
+        assert!(out.is_empty());
+    }
 }

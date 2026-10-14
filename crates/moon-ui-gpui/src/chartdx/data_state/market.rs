@@ -274,6 +274,9 @@ impl ChartDataState {
                 history_source_sig = mix_sig(history_source_sig, revs.meta);
             }
             history_source_sig = mix_sig(history_source_sig, pr.history_cursor.cache_completions());
+            if self.trade_replay.is_none() && self.candle_view.tf_ms() > 60_000 {
+                history_source_sig = mix_sig(history_source_sig, (now / 60_000.0) as u64);
+            }
             let history_source_changed = history_source_sig != pr.source_history_sig;
             // Changing the Liquidations toggle reuploads combo to add or remove liquidation crosses.
             let liq_toggle_changed = pr.liquidations_enabled != self.chart_graphics.liquidations;
@@ -847,10 +850,11 @@ impl ChartDataState {
                         pixels_changed = true;
                     }
                 }
-                // The open candle's five-second path. A full combo read replaces it against the
-                // dots it just stamped; a later read appends only the mini-candles the ring folded
-                // away since, so a live tick never re-uploads it.
-                if history.path_update != PriceLineUpdate::None {
+                // A cache reply or full combo read composes the open candle's finer prefix and
+                // mini-candles. Ordinary live reads append only newly folded mini-candles.
+                if !candles_off
+                    && (history.path_update != PriceLineUpdate::None || history.path_prefix_changed)
+                {
                     let epoch = pane.view.epoch_ms;
                     let hide_rel = moon_core::market::candles::hide_zone_start_rel(
                         candle_cfg.hide_candles,
@@ -859,28 +863,98 @@ impl ChartDataState {
                         epoch,
                         pr.combo_left_rel,
                     );
-                    let hide_start_ms = if candles_off || hide_rel >= f32::MAX {
-                        f64::INFINITY
+                    let open_ms = moon_core::market::candles::bucket_open_ms(now, candle_tf_ms);
+                    let path_start_ms = open_ms.min(epoch + f64::from(hide_rel));
+                    if history.path_prefix_changed {
+                        pr.path_prefix.clone_from(&pr.history_buffers.path_prefix);
+                    }
+                    if history.path_update == PriceLineUpdate::Replace {
+                        pr.path_minis.clear();
+                    }
+                    let copied_dots_left = if history.path_update == PriceLineUpdate::Replace
+                        && pr.combo_left_rel.is_finite()
+                    {
+                        epoch + f64::from(pr.combo_left_rel)
                     } else {
-                        epoch + f64::from(hide_rel)
+                        f64::INFINITY
                     };
-                    let replace = history.path_update == PriceLineUpdate::Replace;
+                    pr.path_minis
+                        .extend(pr.history_buffers.path_minis.iter().copied().filter(|m| {
+                            m.t_open_ms + moon_core::market::candles::PATH_MINI_MS
+                                <= copied_dots_left
+                        }));
+                    let replace = history.path_update == PriceLineUpdate::Replace
+                        || history.path_prefix_changed;
                     let (dots_left_ms, prev_mid) = if replace {
                         pr.path_rows.clear();
-                        (epoch + f64::from(pr.combo_left_rel), None)
+                        (
+                            if pr.combo_left_rel.is_finite() {
+                                let stamped_left = epoch + f64::from(pr.combo_left_rel);
+                                // Appends have already folded past the original full-copy edge.
+                                // A cache-only reply must retain those minis instead of trimming
+                                // them against the old stamp that has not been recopied yet.
+                                if history.path_update == PriceLineUpdate::Replace {
+                                    stamped_left
+                                } else {
+                                    pr.path_minis.last().map_or(stamped_left, |m| {
+                                        stamped_left.max(
+                                            m.t_open_ms + moon_core::market::candles::PATH_MINI_MS,
+                                        )
+                                    })
+                                }
+                            } else {
+                                now
+                            },
+                            None,
+                        )
                     } else {
                         (f64::INFINITY, pr.path_last_mid)
                     };
                     let from = pr.path_rows.len();
                     pr.path_bars.clear();
+                    let prev_mid = if replace {
+                        let end_ms = pr
+                            .path_minis
+                            .iter()
+                            .find(|m| m.t_open_ms >= open_ms)
+                            .map_or(dots_left_ms, |m| m.t_open_ms)
+                            .min(dots_left_ms);
+                        moon_chart::open_candle_path::place_prefix(
+                            pr.path_prefix.minutes.as_deref(),
+                            &pr.path_prefix.five,
+                            (open_ms, end_ms),
+                            candle_tf_ms,
+                            epoch,
+                            &mut pr.path_bars,
+                        )
+                    } else {
+                        prev_mid
+                    };
                     pr.path_last_mid = moon_chart::open_candle_path::place_path(
-                        &pr.history_buffers.path_minis,
-                        hide_start_ms,
+                        if replace {
+                            &pr.path_minis
+                        } else {
+                            &pr.history_buffers.path_minis
+                        },
+                        path_start_ms,
                         dots_left_ms,
                         epoch,
                         prev_mid,
                         &mut pr.path_bars,
                     );
+                    if replace {
+                        // Hidden closed buckets can precede the current bucket's cache prefix.
+                        // Keep the combined layer chronological for backend binary searches.
+                        pr.path_bars
+                            .sort_by(|a, b| a.t_open_rel.total_cmp(&b.t_open_rel));
+                        let mut previous = None;
+                        for bar in &mut pr.path_bars {
+                            let mid = (bar.low + bar.high) * 0.5;
+                            bar.rising = previous.is_none_or(|p| mid >= p);
+                            previous = Some(mid);
+                        }
+                        pr.path_last_mid = previous;
+                    }
                     pr.path_rows.extend(pr.path_bars.iter().map(path_bar_gpu));
                     if replace {
                         pr.layers.set_path_candles(&pr.path_rows);
@@ -1406,6 +1480,13 @@ impl ChartDataState {
                 pane.view.epoch_ms,
                 pr.combo_left_rel,
             );
+            let open_ms = moon_core::market::candles::bucket_open_ms(now, candle_tf_ms);
+            let open_rel = (open_ms - pane.view.epoch_ms) as f32;
+            let has_open_path = pr
+                .path_rows
+                .last()
+                .is_some_and(|r| r.t_open_rel >= open_rel)
+                || (pr.combo_left_rel.is_finite() && newest_trade.is_some_and(|t| t >= open_ms));
             let next_candle_style = CandleStyleGpu {
                 up: rgb4(self.theme.candle_up),
                 down: rgb4(self.theme.candle_down),
@@ -1422,24 +1503,40 @@ impl ChartDataState {
                 neutral_in_zone: candle_cfg.neutral_in_zone as u8 as f32,
                 fill_alpha: self.theme.candle_fill_alpha.clamp(0.05, 1.0),
                 hide_start_rel,
+                // A current candle inside the hidden zone stays hidden: its path alone shows.
+                open_path_rel: if self.trade_replay.is_none()
+                    && has_open_path
+                    && open_rel < hide_start_rel
+                {
+                    open_rel
+                } else {
+                    f32::MAX
+                },
+                path_pad: [0.0; 3],
             };
             // The path layer draws the user's candle style without any zone: an outline style
             // (or the combo, outlined in its trade zone) outlines the mini-candles, a filled style
             // fills them, so the stretch reads like the bodies around it.
             let next_path_style = CandleStyleGpu {
-                tf_rel_ms: moon_core::market::candles::PATH_MINI_MS as f32,
+                // Per-instance widths carry the real duration; 5m is the widest fallback and
+                // keeps the shaders from mistaking a 1m path bar for foreign-timeframe history.
+                tf_rel_ms: 300_000.0,
                 zone_start_rel: f32::MAX,
                 hide_start_rel: f32::MAX,
+                open_path_rel: f32::MAX,
                 mode: next_candle_style.mode.min(1.0),
                 ..next_candle_style
             };
-            // A bucket opening moves the hide boundary right and its body becomes visible again;
-            // the path bars in it go, once per bucket, never per tick.
-            if !pr.path_rows.is_empty() && pr.path_hide_rel != hide_start_rel {
-                pr.path_hide_rel = hide_start_rel;
+            // Closed ordinary candles lose their path once per bucket. Hidden closed candles
+            // retain the existing mini-candle behavior.
+            let path_start_rel = hide_start_rel.min(open_rel);
+            if !pr.path_rows.is_empty() && pr.path_start_rel != path_start_rel {
+                pr.path_start_rel = path_start_rel;
                 let keep_from = pr
                     .path_rows
-                    .partition_point(|r| r.t_open_rel < hide_start_rel);
+                    .partition_point(|r| r.t_open_rel < path_start_rel);
+                pr.path_minis
+                    .retain(|m| m.t_open_ms >= pane.view.epoch_ms + f64::from(path_start_rel));
                 if keep_from > 0 {
                     pr.path_rows.drain(..keep_from);
                     if pr.path_rows.is_empty() {
@@ -2025,7 +2122,7 @@ impl ChartDataState {
 mod tests;
 
 /// One placed mini-candle as a candle instance: the range is the body (open and close are its
-/// ends, ordered by direction so the layer colours it), no volume, the path layer's own width.
+/// ends, ordered by direction so the layer colours it), no volume, and its actual duration.
 fn path_bar_gpu(bar: &moon_chart::open_candle_path::PathBar) -> CandleGpu {
     let (open, close) = if bar.rising {
         (bar.low, bar.high)
@@ -2039,6 +2136,6 @@ fn path_bar_gpu(bar: &moon_chart::open_candle_path::PathBar) -> CandleGpu {
         low: bar.low,
         close,
         volume: 0.0,
-        tf_rel: 0.0,
+        tf_rel: bar.duration_ms,
     }
 }

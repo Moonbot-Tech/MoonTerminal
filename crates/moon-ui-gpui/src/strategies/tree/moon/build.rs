@@ -216,7 +216,7 @@ pub(crate) fn partition_stopped(
 
 /// Scope the prepared filter to one core, then build that core's root.
 ///
-/// The per-core quick filters need the core's open orders or edits, which a row does not carry;
+/// The open-orders quick filter needs the core's open orders, which a row does not carry;
 /// scoping right before the build is what lets every row predicate inside it answer.
 ///
 /// Args:

@@ -246,15 +246,18 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) last_zone_bucket: i64,
     /// Last candle style sent to the layer, compared before `set_candle_style`.
     pub(in crate::chartdx) candle_style: CandleStyleGpu,
-    /// The open candle's five-second path as uploaded to the path layer, oldest first.
+    /// The open candle's mixed-duration path as uploaded to the path layer, oldest first.
     pub(in crate::chartdx) path_rows: Vec<CandleGpu>,
+    /// Retained finer prefix and minis, recomposed only on a cache reply or full history copy.
+    pub(in crate::chartdx) path_prefix: moon_core::market::PathPrefixRows,
+    pub(in crate::chartdx) path_minis: Vec<moon_core::market::candles::PathMini>,
     /// Middle of the last path bar, so an append colours its first bar against it.
     pub(in crate::chartdx) path_last_mid: Option<f32>,
     /// Scratch for placing path bars; kept to avoid an allocation per append.
     pub(in crate::chartdx) path_bars: Vec<moon_chart::open_candle_path::PathBar>,
     pub(in crate::chartdx) path_style: CandleStyleGpu,
-    /// Hide boundary (rel ms) the path was last trimmed against; a bucket opening moves it right.
-    pub(in crate::chartdx) path_hide_rel: f32,
+    /// Open or hidden boundary the path was last trimmed against.
+    pub(in crate::chartdx) path_start_rel: f32,
     /// Last price-line style sent to the layer, compared before `set_price_style`.
     pub(in crate::chartdx) price_style: PriceStyleGpu,
     /// Trade-tick style retained across resource recreation and compared before rebaking.
@@ -533,8 +536,10 @@ impl PaneRender {
     /// Drops the open candle's path everywhere it is kept.
     pub(in crate::chartdx) fn clear_path(&mut self) {
         self.path_rows.clear();
+        self.path_minis.clear();
+        self.path_prefix = moon_core::market::PathPrefixRows::default();
         self.path_last_mid = None;
-        self.path_hide_rel = f32::NAN;
+        self.path_start_rel = f32::NAN;
         self.layers.set_path_candles(&[]);
     }
 
@@ -623,10 +628,12 @@ impl PaneRender {
             last_zone_bucket: i64::MIN,
             candle_style: CandleStyleGpu::default(),
             path_rows: Vec::new(),
+            path_prefix: moon_core::market::PathPrefixRows::default(),
+            path_minis: Vec::new(),
             path_last_mid: None,
             path_bars: Vec::new(),
             path_style: CandleStyleGpu::default(),
-            path_hide_rel: f32::NAN,
+            path_start_rel: f32::NAN,
             price_style: PriceStyleGpu::default(),
             tick_style: TickStyleGpu::default(),
             volume_style: VolumeStyleGpu::default(),

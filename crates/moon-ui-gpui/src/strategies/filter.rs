@@ -34,18 +34,11 @@ pub enum QuickFilter {
     WithOrders,
     /// Only strategies the core holds unchecked.
     Disabled,
-    /// Only strategies with an edit the core has not confirmed yet (pending or timed out).
-    Unconfirmed,
 }
 
 impl QuickFilter {
     /// Every quick filter, in the order the overview offers them.
-    pub const ALL: [Self; 4] = [
-        Self::Stopped,
-        Self::WithOrders,
-        Self::Disabled,
-        Self::Unconfirmed,
-    ];
+    pub const ALL: [Self; 3] = [Self::Stopped, Self::WithOrders, Self::Disabled];
 
     /// The chip's localized caption.
     pub fn label(self) -> String {
@@ -53,7 +46,6 @@ impl QuickFilter {
             Self::Stopped => rust_i18n::t!("strat.quick_stopped"),
             Self::WithOrders => rust_i18n::t!("strat.quick_with_orders"),
             Self::Disabled => rust_i18n::t!("strat.quick_disabled"),
-            Self::Unconfirmed => rust_i18n::t!("strat.quick_unconfirmed"),
         }
         .to_string()
     }
@@ -64,7 +56,6 @@ impl QuickFilter {
             Self::Stopped => "stopped",
             Self::WithOrders => "orders",
             Self::Disabled => "disabled",
-            Self::Unconfirmed => "unconfirmed",
         }
     }
 }
@@ -125,8 +116,7 @@ impl StrategyFilter {
         }
     }
 
-    /// Prepare the filter for one core, so the quick filters that need that core's orders or
-    /// edits can answer.
+    /// Prepare the filter for one core, so the open-orders quick filter can answer.
     ///
     /// Args:
     ///     cd: The core whose rows the prepared filter will be asked about.
@@ -179,8 +169,9 @@ pub struct PreparedFilter {
     query: Option<StrategyQuery>,
     /// Quick filter in force, or `None`.
     quick: Option<QuickFilter>,
-    /// Strategy ids of the core this filter was scoped to that pass a per-core quick filter
-    /// ([`QuickFilter::WithOrders`], [`QuickFilter::Unconfirmed`]); `None` when unscoped.
+    /// Strategy ids of the core this filter was scoped to that hold an open order
+    /// ([`QuickFilter::WithOrders`]); `None` when unscoped or when the quick filter is not
+    /// per-core.
     core_ids: Option<HashSet<u64>>,
 }
 
@@ -210,7 +201,7 @@ impl PreparedFilter {
             || self.active_only
             || matches!(
                 self.quick,
-                Some(QuickFilter::WithOrders | QuickFilter::Unconfirmed | QuickFilter::Disabled)
+                Some(QuickFilter::WithOrders | QuickFilter::Disabled)
             )
     }
 
@@ -225,10 +216,10 @@ impl PreparedFilter {
         self.quick != Some(QuickFilter::Stopped) || engine == Some(false)
     }
 
-    /// Scope the per-core quick filters to one core's open orders or open edits.
+    /// Scope the open-orders quick filter to one core.
     ///
-    /// A [`StrategyRow`] carries neither, so the tree build calls this once per core before asking
-    /// about that core's rows. An UNSCOPED filter lets those two quick filters pass every row:
+    /// A [`StrategyRow`] carries no orders, so the tree build calls this once per core before asking
+    /// about that core's rows. An UNSCOPED filter lets [`QuickFilter::WithOrders`] pass every row:
     /// callers that never scope it (the selection prune) narrow only, and failing open there keeps
     /// a selection the operator can still see rather than dropping it on a guess.
     ///
@@ -243,9 +234,6 @@ impl PreparedFilter {
                     .map(|order| order.strat_id)
                     .collect(),
             ),
-            Some(QuickFilter::Unconfirmed) => {
-                Some(cd.strategy_edits.iter().map(|edit| edit.id).collect())
-            }
             _ => None,
         };
     }
@@ -262,7 +250,7 @@ impl PreparedFilter {
         match self.quick {
             None | Some(QuickFilter::Stopped) => true,
             Some(QuickFilter::Disabled) => !row.checked,
-            Some(QuickFilter::WithOrders | QuickFilter::Unconfirmed) => self
+            Some(QuickFilter::WithOrders) => self
                 .core_ids
                 .as_ref()
                 .is_none_or(|ids| ids.contains(&row.id)),

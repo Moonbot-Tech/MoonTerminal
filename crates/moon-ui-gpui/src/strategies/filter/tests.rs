@@ -213,9 +213,9 @@ fn active_only_never_affects_counts() {
     assert!(f.counts(&row("off", 0, false, false)));
 }
 
-/// The quick filters: Disabled keeps unticked rows only; the per-core ones keep exactly the ids
-/// their core was scoped to, and an unscoped predicate (selection prune, no core in hand) fails
-/// open rather than hiding everything.
+/// The quick filters: Disabled keeps unticked rows only; WithOrders keeps exactly the ids its
+/// core was scoped to, and an unscoped predicate (selection prune, no core in hand) fails open
+/// rather than hiding everything.
 #[test]
 fn quick_filters_keep_their_rows_and_fail_open_when_unscoped() {
     use super::QuickFilter;
@@ -234,25 +234,14 @@ fn quick_filters_keep_their_rows_and_fail_open_when_unscoped() {
     let stopped = quick(QuickFilter::Stopped).prepare();
     assert!(stopped.matches(&on) && stopped.matches(&off));
 
-    for q in [QuickFilter::WithOrders, QuickFilter::Unconfirmed] {
-        let unscoped = quick(q).prepare();
-        assert!(unscoped.matches(&on), "{q:?} unscoped must fail open");
-        assert!(unscoped.narrows());
-    }
+    let unscoped = quick(QuickFilter::WithOrders).prepare();
+    assert!(unscoped.matches(&on), "WithOrders unscoped must fail open");
+    assert!(unscoped.narrows());
 
-    let mut cd = moon_core::session::store::CoreData::default();
-    cd.strategy_edits.push(moon_core::feed::StrategyEditRow {
-        id: 2,
-        phase: moon_core::feed::StrategyEditPhase::Pending,
-        submitted_at_ms: 0,
-        fields: Vec::new(),
-    });
     let mut other = off.clone();
     other.id = 2;
-    let scoped = quick(QuickFilter::Unconfirmed).prepare_for_core(&cd);
-    assert!(scoped.matches(&other));
-    assert!(!scoped.matches(&on));
     // No orders on the core: the orders filter keeps nothing on it.
+    let cd = moon_core::session::store::CoreData::default();
     let scoped = quick(QuickFilter::WithOrders).prepare_for_core(&cd);
     assert!(!scoped.matches(&on) && !scoped.matches(&other));
 }
@@ -275,11 +264,7 @@ fn the_stopped_chip_keeps_empty_stopped_cores_and_rejects_running_ones() {
     assert!(!stopped.core_matches_quick(Some(true)));
     assert!(!stopped.core_matches_quick(None));
 
-    for q in [
-        QuickFilter::WithOrders,
-        QuickFilter::Unconfirmed,
-        QuickFilter::Disabled,
-    ] {
+    for q in [QuickFilter::WithOrders, QuickFilter::Disabled] {
         let f = quick(q).prepare();
         assert!(f.narrows_rows(), "{q:?} narrows rows");
         assert!(f.core_matches_quick(Some(true)), "{q:?} is not core-level");
