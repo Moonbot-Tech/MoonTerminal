@@ -63,6 +63,7 @@ toolbar.scale_auto_short: "T"
 toolbar.live: "Live"
 toolbar.pause: "Tạm dừng"
 toolbar.live_tip: "Live: biểu đồ chạy theo thị trường. Tạm dừng: đứng yên, có thể cuộn (kéo chuột trái, con lăn)."
+toolbar.live_tip_each: "Live: mọi biểu đồ chạy theo thị trường. Tạm dừng: thời gian dừng trên mọi biểu đồ. Mỗi biểu đồ cuộn riêng (kéo chuột trái, con lăn)."
 toolbar.strategies: "Chiến lược"
 toolbar.screener: "Bộ lọc"
 # Overflow button at the right end of a narrow toolbar: holds the launchers that did not fit.

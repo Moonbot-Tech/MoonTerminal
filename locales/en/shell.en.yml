@@ -63,6 +63,7 @@ toolbar.scale_auto_short: "A"
 toolbar.live: "Live"
 toolbar.pause: "Pause"
 toolbar.live_tip: "Live: the chart follows the market. Pause: frozen, you can scroll (LMB drag, wheel)."
+toolbar.live_tip_each: "Live: every chart follows the market. Pause: time stops on every chart. Each chart scrolls on its own (LMB drag, wheel)."
 toolbar.strategies: "Strategies"
 toolbar.screener: "Screener"
 # Overflow button at the right end of a narrow toolbar: holds the launchers that did not fit.

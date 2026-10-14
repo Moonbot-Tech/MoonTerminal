@@ -88,6 +88,7 @@ fn general_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 valuation: stub("probe-valuation", 260.0, 28.0),
                 tab_per_core: stub("probe-split", 18.0, 18.0),
                 book_pan: stub("probe-pan", 18.0, 18.0),
+                live_scope: stub("probe-live-scope", 260.0, 28.0),
                 idle_on: stub("probe-idle-on", 18.0, 18.0),
                 idle_secs: stub("probe-idle-secs", 130.0, 28.0),
                 log_files: stub("probe-logf", 18.0, 18.0),
@@ -101,6 +102,7 @@ fn general_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 [
                     "probe-language",
                     "probe-valuation",
+                    "probe-live-scope",
                     "probe-idle-secs",
                     "probe-retention",
                 ]
@@ -110,6 +112,7 @@ fn general_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 ("general-valuation", "general.valuation.more"),
                 ("general-tab-per-core", "general.charts_split_by_core_hint"),
                 ("general-book-pan", "general.book_pan.more"),
+                ("general-live-scope", "general.live_scope.more"),
                 ("general-idle", "general.main_idle_close_hint"),
                 ("general-retention", "general.log_retention_hint"),
             ]
@@ -146,6 +149,7 @@ fn general_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
         "general.valuation.label",
         "general.charts_split_by_core",
         "general.book_pan.label",
+        "general.live_scope.label",
         "general.idle_close.label",
         "general.log_files.label",
         "general.log_retention.label",
@@ -157,6 +161,7 @@ fn general_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
             valuation: stub("probe-valuation", 260.0, 28.0),
             tab_per_core: stub("probe-split", 18.0, 18.0),
             book_pan: stub("probe-pan", 18.0, 18.0),
+            live_scope: stub("probe-live-scope", 260.0, 28.0),
             idle_on: stub("probe-idle-on", 18.0, 18.0),
             idle_secs: stub("probe-idle-secs", 130.0, 28.0),
             log_files: stub("probe-logf", 18.0, 18.0),

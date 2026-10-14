@@ -63,6 +63,7 @@ toolbar.scale_auto_short: "A"
 toolbar.live: "Live"
 toolbar.pause: "Pausa"
 toolbar.live_tip: "Live: el gráfico sigue al mercado. Pausa: congelado, puedes desplazarte (arrastrar con clic izquierdo, rueda)."
+toolbar.live_tip_each: "Live: todos los gráficos siguen al mercado. Pausa: el tiempo se detiene en todos. Cada gráfico se desplaza por separado (arrastrar con clic izquierdo, rueda)."
 toolbar.strategies: "Estrategias"
 toolbar.screener: "Screener"
 # Overflow button at the right end of a narrow toolbar: holds the launchers that did not fit.

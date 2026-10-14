@@ -63,6 +63,7 @@ toolbar.scale_auto_short: "O"
 toolbar.live: "Live"
 toolbar.pause: "Duraklat"
 toolbar.live_tip: "Live: grafik piyasayı izler. Duraklat: donuk, kaydırabilirsiniz (sol sürükleme, tekerlek)."
+toolbar.live_tip_each: "Live: tüm grafikler piyasayı izler. Duraklat: tüm grafiklerde zaman durur. Her grafik ayrı kaydırılır (sol sürükleme, tekerlek)."
 toolbar.strategies: "Stratejiler"
 toolbar.screener: "Tarayıcı"
 # Overflow button at the right end of a narrow toolbar: holds the launchers that did not fit.

@@ -114,6 +114,8 @@ impl ChartEngine {
             orders: OrdersStyle::default(),
             scale: None,
             follow: true,
+            live_per_chart: false,
+            seen_resume_gen: None,
             present_rate_hz: 60.0,
         }
     }

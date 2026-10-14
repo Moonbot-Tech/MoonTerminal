@@ -47,7 +47,7 @@ use rust_i18n::t;
 
 use crate::Backend;
 use crate::media::icons::IconSet;
-use moon_core::config::{AppConfig, CoreSortMode, GroupConfig, Language, UiThemeMode};
+use moon_core::config::{AppConfig, CoreSortMode, GroupConfig, Language, LiveScope, UiThemeMode};
 use moon_core::db::valuation::ValuationMode;
 use moon_core::market::MarketDataMode;
 use moon_core::session::CoreId;
@@ -326,6 +326,12 @@ const VALUATION_LABELS: [(&str, ValuationMode); 2] = [
     ("general.valuation_mode.current", ValuationMode::Current),
 ];
 
+/// Labels and values for the Live-scope selector (#688), the application-wide default first.
+const LIVE_SCOPE_LABELS: [(&str, LiveScope); 2] = [
+    ("general.live_scope.all", LiveScope::AllCharts),
+    ("general.live_scope.each", LiveScope::EachChart),
+];
+
 /// Labels and values for the interface-theme selector, ordered light to dark so the list reads
 /// as a brightness ramp rather than as the order the themes happened to be written in. The
 /// experimental colour-role modes follow the reviewed three, as the same light-to-dark pair.
@@ -416,6 +422,8 @@ pub struct SettingsView {
     lang: Entity<MoonSelectState<Language>>,
     /// Quote-money conversion selector for the General tab.
     valuation: Entity<MoonSelectState<ValuationMode>>,
+    /// Live-scope selector for the General tab's charts section (#688).
+    live_scope: Entity<MoonSelectState<LiveScope>>,
     /// Data-source selector for the Connections tab.
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Order selector shared by every core list on the Connections tab.
@@ -556,7 +564,7 @@ impl SettingsView {
         .detach();
 
         // Initialize the language dropdown, ported from egui's ComboBox, from the current draft.
-        let (cur_lang, cur_mode, cur_core_sort, cur_valuation, cur_theme_mode) = {
+        let (cur_lang, cur_mode, cur_core_sort, cur_valuation, cur_theme_mode, cur_live_scope) = {
             let b = backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
             (
@@ -565,6 +573,7 @@ impl SettingsView {
                 d.core_sort,
                 d.report_valuation_mode,
                 d.ui_theme_mode,
+                d.live_scope,
             )
         };
 
@@ -674,6 +683,40 @@ impl SettingsView {
                     this.backend.update(cx, |b, bcx| {
                         if let Some(p) = b.preview.as_mut() {
                             p.report_valuation_mode = mode;
+                            bcx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
+
+        // Live scope (#688). Consumed live from the draft by every chart, like the book-zone pan,
+        // and rolled back with the draft if Settings closes unsaved.
+        let live_scope_items = LIVE_SCOPE_LABELS
+            .iter()
+            .map(|(key, scope)| MoonSelectItem::new(*scope, t!(*key).to_string()))
+            .collect::<Vec<_>>();
+        let live_scope_idx = LIVE_SCOPE_LABELS
+            .iter()
+            .position(|(_, s)| *s == cur_live_scope)
+            .unwrap_or(0);
+        let live_scope = cx.new(|cx| {
+            MoonSelectState::new(
+                live_scope_items,
+                Some(IndexPath::new(live_scope_idx)),
+                window,
+                cx,
+            )
+        });
+        cx.subscribe(
+            &live_scope,
+            |this, _e, ev: &MoonSelectEvent<LiveScope>, cx| {
+                if let MoonSelectEvent::Confirm(Some(scope)) = ev {
+                    let scope = *scope;
+                    this.backend.update(cx, |b, bcx| {
+                        if let Some(p) = b.preview.as_mut() {
+                            p.live_scope = scope;
                             bcx.notify();
                         }
                     });
@@ -861,6 +904,7 @@ impl SettingsView {
             theme_mode,
             lang,
             valuation,
+            live_scope,
             mode,
             core_sort,
             hotkeys_group: hotkeys::HotkeyGroup::Presets,
@@ -911,6 +955,7 @@ fn settings_sig(b: &Backend) -> u64 {
     cfg.market_mode.code().hash(&mut h);
     cfg.core_sort.hash(&mut h);
     cfg.report_valuation_mode.hash(&mut h);
+    cfg.live_scope.hash(&mut h);
     cfg.charts_split_by_core.hash(&mut h);
     cfg.charts_stack_scroll.hash(&mut h);
     cfg.charts_stack_compress.hash(&mut h);
@@ -1128,6 +1173,7 @@ fn draft_sig(cfg: &AppConfig) -> u64 {
     cfg.market_mode.code().hash(&mut h);
     cfg.core_sort.hash(&mut h);
     cfg.report_valuation_mode.hash(&mut h);
+    cfg.live_scope.hash(&mut h);
     cfg.ui_theme_mode.hash(&mut h);
     cfg.charts_split_by_core.hash(&mut h);
     cfg.charts_stack_scroll.hash(&mut h);
@@ -1213,6 +1259,7 @@ fn page_sig(cfg: &AppConfig, tab: Tab) -> Option<u64> {
         Tab::General => {
             cfg.language.code().hash(&mut h);
             cfg.report_valuation_mode.hash(&mut h);
+            cfg.live_scope.hash(&mut h);
             cfg.charts_split_by_core.hash(&mut h);
             cfg.separate_control_zones.hash(&mut h);
             cfg.main_idle_close_secs.hash(&mut h);

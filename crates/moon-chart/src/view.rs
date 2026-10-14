@@ -431,6 +431,13 @@ pub struct ChartView {
     /// Last pan, zoom or Y-drag on this view, Unix milliseconds. [`should_return_to_live`] reads
     /// the newest stamp across open charts; a tick or a repaint never writes it.
     last_interaction_ms: Option<f64>,
+    /// Whether the clock that walks a live anchor to `now` is stopped for this view (#688).
+    ///
+    /// The per-chart Live scope's toolbar Pause: `follow` is left as it was, so a chart that was
+    /// at the live edge is still "at the edge, clock stopped" rather than parked by hand, and the
+    /// toolbar Live re-anchors it by [`Self::set_clock_frozen`]. The application-wide scope never
+    /// sets it; its Pause is [`Self::set_manual_persistent`].
+    clock_frozen: bool,
     /// Interval this view has been asked to frame, retained until a user gesture overrides it.
     frame_request: Option<FrameRequest>,
     /// Put the NEXT known price at the centre outright instead of easing toward it.
@@ -477,6 +484,7 @@ impl ChartView {
             last_update_ms: 0.0,
             manual_persistent: false,
             last_interaction_ms: None,
+            clock_frozen: false,
             frame_request: None,
             center_snap_pending: false,
         }
@@ -607,7 +615,8 @@ impl ChartView {
         self.px_per_ms = ppm;
         self.x_default_scale = false;
         self.x_init_pending = false;
-        if self.follow {
+        // A frozen clock keeps its paused anchor (#688): the sync is a zoom, not a resume.
+        if self.follow && !self.clock_frozen {
             self.right_time_ms = self.live_edge_ms(now_ms);
         }
         true
@@ -625,10 +634,84 @@ impl ChartView {
         now_ms + self.live_offset_ms
     }
 
-    /// Whether the view is currently live.
+    /// Whether the view's anchor is walking with `now`: following, and its clock not frozen.
     pub fn is_live(&self, now_ms: f64) -> bool {
         let _ = now_ms;
-        self.follow
+        self.follow && !self.clock_frozen
+    }
+
+    /// Whether the per-chart scope's toolbar Pause has stopped this view's clock.
+    pub fn clock_frozen(&self) -> bool {
+        self.clock_frozen
+    }
+
+    /// Whether following was turned off explicitly (toolbar Pause or a framed interval), which
+    /// refuses both the pull-back rejoin and the idle auto-return.
+    pub fn manual_persistent(&self) -> bool {
+        self.manual_persistent
+    }
+
+    /// Stops or restarts the clock this view's live anchor advances by — the per-chart scope's
+    /// toolbar Pause and Live (#688).
+    ///
+    /// Freezing pins a following view at `now` and leaves `follow` alone: no manual mark is
+    /// stamped, so the chart is still "at the edge" with the clock stopped. A view that was never
+    /// anchored (a chart opened while paused, still at the process epoch) is pinned at `now` too
+    /// rather than at the launch timestamp. Restarting re-anchors the view to `now` whatever it
+    /// was showing, including history the user had panned into — MoonBot's button.
+    ///
+    /// Args:
+    ///     frozen: Whether the clock should be stopped.
+    ///     now_ms: Current Unix time in milliseconds.
+    ///
+    /// Returns:
+    ///     Whether anything changed.
+    pub fn set_clock_frozen(&mut self, frozen: bool, now_ms: f64) -> bool {
+        if self.clock_frozen == frozen {
+            return false;
+        }
+        if frozen {
+            if self.follow {
+                self.right_time_ms = self.quantize_edge_ms(self.live_edge_ms(now_ms));
+            }
+            self.clock_frozen = true;
+        } else {
+            self.clock_frozen = false;
+            self.resume_live(now_ms);
+        }
+        true
+    }
+
+    /// The application-wide scope's toolbar Pause: park the view persistently, and pin a view
+    /// that was following at `now` first.
+    ///
+    /// The pin is what keeps a chart opened while the toolbar shows Pause off the process-launch
+    /// timestamp (#688): its view is constructed following with the anchor at the epoch, and
+    /// only a frame that follows ever moved it, so parking it as-is froze it hours in the past.
+    /// For a view already at the live edge the pin moves the anchor by less than one frame.
+    ///
+    /// Args:
+    ///     now_ms: Current Unix time in milliseconds.
+    pub fn park_at_live_edge(&mut self, now_ms: f64) {
+        if self.follow {
+            self.right_time_ms = self.quantize_edge_ms(self.live_edge_ms(now_ms));
+        }
+        self.set_manual_persistent();
+    }
+
+    /// Whether a pan/zoom leave on this view has sat idle long enough for the per-chart scope's
+    /// own auto-return to Live; see [`should_return_to_live`] for the rule.
+    ///
+    /// Args:
+    ///     now_ms: Current Unix time in milliseconds.
+    pub fn idle_return_due(&self, now_ms: f64) -> bool {
+        should_return_to_live(
+            self.last_interaction_ms,
+            now_ms,
+            self.follow,
+            self.manual_persistent,
+            1,
+        )
     }
 
     /// Stamp a view-changing gesture. Ticks, repaints and price motion never call this.
@@ -1077,7 +1160,10 @@ impl ChartView {
         // zoom, so one plain notch at mid-plot left the chart paused. Ctrl, Ctrl+Shift,
         // the super-zoom hotkeys, and a chart already in history keep the cursor anchor.
         if was_follow && zoom == XZoom::Plain {
-            self.right_time_ms = self.live_edge_ms(now_ms);
+            // A frozen clock keeps the anchor where the Pause pinned it: the wheel scales only.
+            if !self.clock_frozen {
+                self.right_time_ms = self.live_edge_ms(now_ms);
+            }
             self.follow = true;
             return;
         }

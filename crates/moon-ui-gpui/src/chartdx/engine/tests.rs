@@ -1,7 +1,7 @@
 //! Regression coverage for the toolbar's Live/Pause camera transition.
 
 use super::ChartEngine;
-use moon_core::config::ChartTheme;
+use moon_core::config::{ChartTheme, LiveScope};
 
 /// Resuming Live must preserve a manually chosen time scale at both narrow and wide plot widths.
 #[test]
@@ -287,4 +287,196 @@ fn a_stale_label_offset_is_reclamped_before_the_wheel_moves_it() {
     let data = engine.data.borrow();
     let st = data.render.borrow();
     assert_eq!(st.panes[0].label_scroll, vec![(0, 2)]);
+}
+
+/// Process launch for the #688 tests: the engine's epoch, hours before `NOW_688`.
+const LAUNCH_688: f64 = 1_700_000_000_000.0;
+/// Wall clock for the #688 tests, six hours after launch.
+const NOW_688: f64 = LAUNCH_688 + 6.0 * 3_600_000.0;
+
+/// Runs `f` on the engine's one pane view.
+fn with_view<R>(engine: &ChartEngine, f: impl FnOnce(&mut moon_chart::view::ChartView) -> R) -> R {
+    let mut container = engine.container.borrow_mut();
+    f(&mut container.panes_mut().first_mut().expect("one pane").view)
+}
+
+/// Whether the pane's anchor sits within one pixel of `at` (the anchor is pixel-quantized).
+fn anchored_at(engine: &ChartEngine, at: f64) -> bool {
+    with_view(engine, |v| {
+        (v.right_time_ms - at).abs() <= 1.0 / v.px_per_ms as f64
+    })
+}
+
+/// An engine created at launch with one market open, the way a chart panel starts.
+fn opened_engine() -> ChartEngine {
+    let mut engine = ChartEngine::new(LAUNCH_688, ChartTheme::default());
+    engine.open(42, "TESTUSDT");
+    engine
+}
+
+/// Catches the #688 new-chart bug in the DEFAULT scope: a chart whose first frame meets the
+/// toolbar's Pause must open parked at `now`, not at the process-launch timestamp.
+#[test]
+fn all_charts_new_chart_under_pause_opens_at_now() {
+    let mut engine = opened_engine();
+    assert!(engine.apply_live(LiveScope::AllCharts, false, 0, NOW_688));
+    assert!(anchored_at(&engine, NOW_688));
+    with_view(&engine, |v| {
+        assert!(!v.follow);
+        assert!(v.manual_persistent(), "default Pause stays the sticky park");
+        assert!(!v.clock_frozen(), "the default scope never freezes a clock");
+    });
+}
+
+/// Catches a market replacing the pane of an engine the default Pause already parked: it must
+/// open parked at `now`, not run live under a toolbar showing Pause (#688).
+#[test]
+fn all_charts_market_opened_into_a_paused_engine_is_parked_at_now() {
+    let mut engine = opened_engine();
+    engine.apply_live(LiveScope::AllCharts, false, 0, NOW_688);
+    let later = NOW_688 + 120_000.0;
+    engine.push_auto(42, "OTHERUSDT", 60_000.0, later);
+    assert!(anchored_at(&engine, later));
+    with_view(&engine, |v| assert!(!v.follow && v.manual_persistent()));
+    assert!(
+        !engine.apply_live(LiveScope::AllCharts, false, 0, later),
+        "nothing left to apply"
+    );
+}
+
+/// Catches the per-chart Pause parking charts instead of stopping their clock (#688): a chart at
+/// the edge stays following, frozen at the Pause's `now`, with no manual mark.
+#[test]
+fn each_chart_pause_freezes_without_parking() {
+    let mut engine = opened_engine();
+    engine.apply_live(LiveScope::EachChart, true, 0, NOW_688);
+    assert!(engine.live_per_chart());
+    assert!(engine.apply_live(LiveScope::EachChart, false, 0, NOW_688));
+    assert!(
+        anchored_at(&engine, NOW_688),
+        "a never-prepared chart froze at launch"
+    );
+    with_view(&engine, |v| {
+        assert!(v.follow && v.clock_frozen() && !v.manual_persistent());
+    });
+    assert!(engine.follow(), "the engine is still at the edge");
+}
+
+/// Catches the per-chart Live leaving a panned chart in history: it re-anchors every chart (#688).
+#[test]
+fn each_chart_live_reanchors_a_panned_chart() {
+    let mut engine = opened_engine();
+    engine.apply_live(LiveScope::EachChart, false, 0, NOW_688);
+    with_view(&engine, |v| v.pan_x_px(5_000.0, NOW_688, 1_000.0));
+    engine.sync_follow_from_views();
+    assert!(!engine.follow());
+    let later = NOW_688 + 30_000.0;
+    assert!(engine.apply_live(LiveScope::EachChart, true, 0, later));
+    with_view(&engine, |v| {
+        assert!(v.follow && v.is_live(later) && !v.clock_frozen())
+    });
+    assert!(anchored_at(&engine, later));
+}
+
+/// Catches a pan on one chart reaching another under the per-chart scope (#688): re-applying an
+/// unchanged toolbar flag must neither resume the panned chart nor touch the untouched one.
+#[test]
+fn each_chart_pan_stays_on_its_own_chart() {
+    let mut panned = opened_engine();
+    let mut other = opened_engine();
+    panned.apply_live(LiveScope::EachChart, true, 0, NOW_688);
+    other.apply_live(LiveScope::EachChart, true, 0, NOW_688);
+    with_view(&panned, |v| v.pan_x_px(5_000.0, NOW_688, 1_000.0));
+    panned.sync_follow_from_views();
+    let later = NOW_688 + 1_000.0;
+    panned.apply_live(LiveScope::EachChart, true, 0, later);
+    other.apply_live(LiveScope::EachChart, true, 0, later);
+    assert!(
+        !panned.follow(),
+        "the global flag dragged a panned chart back"
+    );
+    with_view(&panned, |v| {
+        assert!(!v.manual_persistent(), "a pan is never a sticky park")
+    });
+    assert!(other.follow());
+}
+
+/// Catches a chart opened under the per-chart Pause starting at launch time or unfrozen (#688).
+#[test]
+fn each_chart_new_chart_under_pause_opens_frozen_at_now() {
+    let mut engine = opened_engine();
+    engine.apply_live(LiveScope::EachChart, false, 0, NOW_688);
+    let later = NOW_688 + 120_000.0;
+    engine.push_auto(42, "OTHERUSDT", 60_000.0, later);
+    assert!(engine.apply_live(LiveScope::EachChart, false, 0, later));
+    assert!(anchored_at(&engine, later));
+    with_view(&engine, |v| assert!(v.follow && v.clock_frozen()));
+}
+
+/// Catches the per-chart idle auto-return (#657, kept by #688) being lost, firing early, or
+/// running under the default scope, whose auto-return is the backend's.
+#[test]
+fn each_chart_idle_return_resumes_only_its_own_idle_pane() {
+    let auto = moon_chart::view::AUTO_RESUME_LIVE_MS;
+    let mut engine = opened_engine();
+    engine.apply_live(LiveScope::EachChart, true, 0, NOW_688);
+    with_view(&engine, |v| v.pan_x_px(5_000.0, NOW_688, 1_000.0));
+    engine.sync_follow_from_views();
+    assert!(!engine.tick_idle_return(NOW_688 + auto - 1.0));
+    assert!(engine.tick_idle_return(NOW_688 + auto));
+    assert!(engine.follow());
+    assert!(anchored_at(&engine, NOW_688 + auto));
+
+    let mut default_scope = opened_engine();
+    default_scope.apply_live(LiveScope::AllCharts, true, 0, NOW_688);
+    with_view(&default_scope, |v| v.pan_x_px(5_000.0, NOW_688, 1_000.0));
+    assert!(!default_scope.tick_idle_return(NOW_688 + 10.0 * auto));
+}
+
+/// Catches switching back to the default scope under Pause leaving a clock frozen that nothing
+/// would ever thaw: every chart becomes the default sticky park at `now` instead (#688).
+#[test]
+fn switching_to_all_charts_under_pause_thaws_and_parks() {
+    let mut engine = opened_engine();
+    engine.apply_live(LiveScope::EachChart, false, 0, NOW_688);
+    let later = NOW_688 + 5_000.0;
+    assert!(engine.apply_live(LiveScope::AllCharts, false, 0, later));
+    assert!(!engine.live_per_chart());
+    with_view(&engine, |v| {
+        assert!(!v.clock_frozen() && !v.follow && v.manual_persistent());
+    });
+    assert!(anchored_at(&engine, later));
+}
+
+/// Catches either scope reaching a trade window: a historical viewer refuses the toolbar flag.
+#[test]
+fn historical_engine_refuses_both_scopes() {
+    let mut engine = opened_engine();
+    engine.set_historical(true);
+    let parked = with_view(&engine, |v| v.right_time_ms);
+    for scope in [LiveScope::AllCharts, LiveScope::EachChart] {
+        for follow in [true, false] {
+            assert!(!engine.apply_live(scope, follow, 0, NOW_688));
+        }
+    }
+    with_view(&engine, |v| assert!(!v.clock_frozen() && !v.follow));
+    assert_eq!(with_view(&engine, |v| v.right_time_ms), parked);
+}
+
+/// Catches a chart hidden through the whole toolbar Pause and Live staying in history under the
+/// per-chart scope (#688): it never drew the Pause, so only the resume generation tells it.
+#[test]
+fn each_chart_live_reanchors_a_chart_that_missed_the_pause() {
+    let mut engine = opened_engine();
+    engine.apply_live(LiveScope::EachChart, true, 0, NOW_688);
+    with_view(&engine, |v| v.pan_x_px(5_000.0, NOW_688, 1_000.0));
+    engine.sync_follow_from_views();
+    let later = NOW_688 + 30_000.0;
+    assert!(
+        !engine.apply_live(LiveScope::EachChart, true, 0, later),
+        "an unchanged generation must leave the panned chart alone"
+    );
+    assert!(engine.apply_live(LiveScope::EachChart, true, 1, later));
+    with_view(&engine, |v| assert!(v.follow && v.is_live(later)));
+    assert!(anchored_at(&engine, later));
 }

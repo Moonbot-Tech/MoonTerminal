@@ -63,6 +63,7 @@ toolbar.scale_auto_short: "А"
 toolbar.live: "Live"
 toolbar.pause: "Пауза"
 toolbar.live_tip: "Live: графік іде за ринком. Пауза: заморожений, можна гортати (перетягування лівою кнопкою, коліщатко)."
+toolbar.live_tip_each: "Live: усі графіки йдуть за ринком. Пауза: час на всіх графіках зупинено. Кожен графік гортається окремо (перетягування лівою кнопкою, коліщатко)."
 toolbar.strategies: "Стратегії"
 toolbar.screener: "Скринер"
 # Overflow button at the right end of a narrow toolbar: holds the launchers that did not fit.

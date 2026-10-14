@@ -193,8 +193,10 @@ impl ChartEngine {
                     p.view.resume_live(now_ms);
                 }
             } else {
-                // An explicit Live-button disable does not automatically rejoin on a timer.
-                p.view.set_manual_persistent();
+                // An explicit Live-button disable does not automatically rejoin on a timer. A pane
+                // that was following is pinned at `now` first, so one that never prepared a frame
+                // (a chart opened under Pause) is not parked at the process-launch epoch (#688).
+                p.view.park_at_live_edge(now_ms);
             }
         }
         self.data.borrow_mut().mark_view_dirty();
@@ -203,6 +205,104 @@ impl ChartEngine {
 
     pub fn follow(&self) -> bool {
         self.follow
+    }
+
+    /// Applies the toolbar's Live flag under the chosen Live scope (#688); the one entry point
+    /// `ChartPanel::render` uses every frame.
+    ///
+    /// `AllCharts` is [`Self::set_follow`] unchanged. `EachChart` never parks a pane: the flag
+    /// stops or restarts the clock on every pane (`ChartView::set_clock_frozen`) and the engine's
+    /// own follow is consolidated from its views, as after a pan. The per-pane check is
+    /// idempotent, so a pane opened while paused is frozen at `now` on the frame it appears.
+    /// Switching the scope back to `AllCharts` restarts every frozen clock first, so no pane is
+    /// left frozen with nothing that would ever thaw it.
+    ///
+    /// A HISTORICAL engine refuses both, exactly as `set_follow` does.
+    ///
+    /// Args:
+    ///     scope: The Live scope from Settings.
+    ///     follow: The toolbar's application-wide Live flag.
+    ///     resume_gen: `Backend::live_resume_gen`; a value newer than the last one applied means
+    ///         Live was turned back on, and the per-chart scope re-anchors every pane to `now`.
+    ///     now_ms: Current Unix time in milliseconds.
+    ///
+    /// Returns:
+    ///     Whether any view changed.
+    pub fn apply_live(
+        &mut self,
+        scope: moon_core::config::LiveScope,
+        follow: bool,
+        resume_gen: u64,
+        now_ms: f64,
+    ) -> bool {
+        if self.data.borrow().historical {
+            return false;
+        }
+        let resumed = self
+            .seen_resume_gen
+            .replace(resume_gen)
+            .is_some_and(|seen| seen != resume_gen);
+        let per_chart = scope.per_chart();
+        let mut changed = false;
+        if per_chart != self.live_per_chart {
+            self.live_per_chart = per_chart;
+            if !per_chart {
+                for p in self.container.borrow_mut().panes_mut() {
+                    changed |= p.view.set_clock_frozen(false, now_ms);
+                }
+                changed |= self.sync_follow_from_views();
+            }
+        }
+        if !per_chart {
+            return self.set_follow(follow, now_ms) | changed;
+        }
+        for p in self.container.borrow_mut().panes_mut() {
+            changed |= p.view.set_clock_frozen(!follow, now_ms);
+            if follow && resumed && !p.view.follow {
+                p.view.resume_live(now_ms);
+                changed = true;
+            }
+        }
+        changed |= self.sync_follow_from_views();
+        if changed {
+            self.data.borrow_mut().mark_view_dirty();
+        }
+        changed
+    }
+
+    /// The per-chart scope's own idle auto-return: a pane panned or zoomed off the live edge and
+    /// left alone for [`moon_chart::view::AUTO_RESUME_LIVE_MS`] goes back to following (#688).
+    ///
+    /// The application-wide scope keeps this decision on the backend flag
+    /// (`Backend::tick_auto_live`), so this does nothing there; nor while the clock is frozen,
+    /// where the toolbar Live re-anchors every pane anyway; nor for a historical viewer.
+    ///
+    /// Args:
+    ///     now_ms: Current Unix time in milliseconds.
+    ///
+    /// Returns:
+    ///     Whether a pane returned to Live.
+    pub fn tick_idle_return(&mut self, now_ms: f64) -> bool {
+        if !self.live_per_chart || self.data.borrow().historical {
+            return false;
+        }
+        let mut changed = false;
+        for p in self.container.borrow_mut().panes_mut() {
+            if !p.view.clock_frozen() && p.view.idle_return_due(now_ms) {
+                p.view.resume_live(now_ms);
+                changed = true;
+            }
+        }
+        if changed {
+            self.sync_follow_from_views();
+            self.data.borrow_mut().mark_view_dirty();
+        }
+        changed
+    }
+
+    /// Whether the per-chart Live scope was the last one applied to this engine.
+    pub fn live_per_chart(&self) -> bool {
+        self.live_per_chart
     }
 
     /// Moonbot's "Center chart" on every pane: the manual Y view is dropped, the last price snaps

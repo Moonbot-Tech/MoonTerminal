@@ -39,6 +39,16 @@ impl ChartPanel {
             self.mark_input_changed(cx);
             cx.notify();
         }
+        // Ctrl+Right resumes Live from Pause in either scope (#688). The per-chart scope never
+        // publishes a gesture, so the resume is raised here; the next render re-anchors every chart.
+        if self.chart.live_per_chart() && !self.historical {
+            self.backend.update(cx, |b, bcx| {
+                if !b.follow {
+                    b.raise_follow();
+                    bcx.notify();
+                }
+            });
+        }
     }
 
     /// Sets this panel's price scale, where `None` means Auto. Rendering applies it through the

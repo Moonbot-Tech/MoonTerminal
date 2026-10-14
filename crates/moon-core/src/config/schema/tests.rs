@@ -275,3 +275,26 @@ fn order_book_width_loads_old_settings_and_round_trips_saved_values() {
     let loaded: SettingsFile = toml::from_str(&output).expect("reload settings");
     assert_eq!(loaded.order_book_width_px, 340.0);
 }
+
+/// Catches the live-scope default drifting off `all` (#688): a profile written before the setting
+/// existed must keep the application-wide Live flag the owner chose as the default, and a scope
+/// only a newer build knows must degrade to it rather than fail the whole file.
+#[test]
+fn live_scope_defaults_to_all_charts_and_round_trips_each_chart() {
+    let old: SettingsFile = toml::from_str("ui_scale = 1.25\n").expect("pre-#688 settings");
+    assert_eq!(old.live_scope, LiveScope::AllCharts);
+
+    let unknown: SettingsFile = toml::from_str("live_scope = \"per-window\"\nui_scale = 1.25\n")
+        .expect("an unknown live scope must not fail the settings file");
+    assert_eq!(unknown.live_scope, LiveScope::AllCharts);
+    assert_eq!(unknown.ui_scale, 1.25);
+
+    let stored = SettingsFile {
+        live_scope: LiveScope::EachChart,
+        ..SettingsFile::default()
+    };
+    let text = toml::to_string(&stored).expect("save settings");
+    assert!(text.contains("live_scope = \"each\""), "{text}");
+    let reread: SettingsFile = toml::from_str(&text).expect("reload settings");
+    assert_eq!(reread.live_scope, LiveScope::EachChart);
+}

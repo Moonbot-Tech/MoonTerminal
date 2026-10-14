@@ -128,6 +128,8 @@ fn chart_settings_signature_changes_when_the_report_axis_changes() {
         theme: ChartTheme::default(),
         orders: OrdersStyleSet::default(),
         follow: false,
+        live_scope: moon_core::config::LiveScope::default(),
+        live_resume_gen: 0,
         chart_graphics: ChartGraphicsCfg::default(),
         candle_view: CandleViewCfg::default(),
         chart_labels: Rc::new(ChartLabelsCfg::default()),

@@ -14,7 +14,7 @@ use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::secrets::Secret;
 use super::servers::{
-    self, CoreSortMode, FeedFlags, TotalMode, TransportVersion, WorkspaceMembership,
+    self, CoreSortMode, FeedFlags, LiveScope, TotalMode, TransportVersion, WorkspaceMembership,
 };
 use super::toml_io::ConfigLoad;
 use crate::db::valuation::ValuationMode;
@@ -410,6 +410,12 @@ pub struct SettingsFile {
     /// materializes the key.
     #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub report_valuation_mode: ValuationMode,
+    /// Whether a pan on one chart pauses every chart (`all`) or only itself (`each`), #688.
+    ///
+    /// No schema bump: `AllCharts` is both the serde default and the intended default, so an
+    /// older file that omits it keeps today's behaviour, and a newer code degrades to it.
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
+    pub live_scope: LiveScope,
     /// Next uid to issue, persisted so deleted identities are not reused.
     ///
     /// Zero falls back to one past the highest surviving uid. This field is the only durable

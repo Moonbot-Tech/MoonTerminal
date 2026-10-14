@@ -188,6 +188,7 @@ pub(super) struct GeneralControls {
     pub(super) valuation: AnyElement,
     pub(super) tab_per_core: AnyElement,
     pub(super) book_pan: AnyElement,
+    pub(super) live_scope: AnyElement,
     pub(super) idle_on: AnyElement,
     pub(super) idle_secs: AnyElement,
     pub(super) log_files: AnyElement,
@@ -295,6 +296,13 @@ pub(super) fn general_body(
                     c.book_pan,
                 ),
                 row(
+                    "general-live-scope",
+                    s("general.live_scope.label"),
+                    s("general.live_scope.hint"),
+                    Some(s("general.live_scope.more")),
+                    c.live_scope,
+                ),
+                row(
                     "general-idle",
                     s("general.idle_close.label"),
                     s("general.idle_close.hint"),
@@ -328,11 +336,12 @@ pub(super) fn general_body(
 
 /// Every row id of the General page, top to bottom.
 #[cfg(test)]
-const GENERAL_ROWS: [&str; 7] = [
+const GENERAL_ROWS: [&str; 8] = [
     "general-language",
     "general-valuation",
     "general-tab-per-core",
     "general-book-pan",
+    "general-live-scope",
     "general-idle",
     "general-log-files",
     "general-retention",
@@ -435,6 +444,8 @@ impl SettingsView {
             language: select_control(&self.lang, 220.0, cx),
             // Which rate converts quote money to USDT, for Report and Analytics.
             valuation: select_control(&self.valuation, 260.0, cx),
+            // Whether a pan on one chart pauses every chart or only itself (#688).
+            live_scope: select_control(&self.live_scope, 260.0, cx),
             tab_per_core: self
                 .draft_checkbox(cx, "split", split, |p, v| {
                     if p.charts_split_by_core != v {

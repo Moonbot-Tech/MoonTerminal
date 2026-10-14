@@ -262,6 +262,8 @@ impl SettingsView {
         self.valuation.update(cx, |s, _| {
             s.set_selected_value(&saved.report_valuation_mode)
         });
+        self.live_scope
+            .update(cx, |s, _| s.set_selected_value(&saved.live_scope));
         self.mode
             .update(cx, |s, _| s.set_selected_value(&saved.market_mode));
         self.core_sort

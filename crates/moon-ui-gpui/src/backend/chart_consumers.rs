@@ -64,8 +64,7 @@ impl Backend {
         let incoming_live = !chart.is_historical();
         self.chart_consumers.push(chart);
         if live_before == 0 && incoming_live {
-            self.follow = true;
-            self.follow_persistent = false;
+            self.raise_follow();
         }
     }
 
@@ -92,8 +91,29 @@ impl Backend {
     /// Turning Pause on is a deliberate leave: the idle auto-return must not undo it. Turning
     /// Live on clears that mark so a later pan can auto-return again.
     pub(crate) fn toggle_follow(&mut self) {
-        self.follow = !self.follow;
-        self.follow_persistent = !self.follow;
+        if self.follow {
+            self.follow = false;
+            self.follow_persistent = true;
+        } else {
+            self.raise_follow();
+        }
+    }
+
+    /// Turn the application-wide Live back on and record the resume for the per-chart scope.
+    ///
+    /// Every backend path that restores Live goes through here so `live_resume_gen` misses none:
+    /// a per-chart engine re-anchors its panes on a generation it has not seen yet (#688).
+    pub(crate) fn raise_follow(&mut self) {
+        if !self.follow {
+            self.live_resume_gen = self.live_resume_gen.wrapping_add(1);
+        }
+        self.follow = true;
+        self.follow_persistent = false;
+    }
+
+    /// The generation of the latest Live resume; see [`Self::raise_follow`].
+    pub(crate) fn live_resume_gen(&self) -> u64 {
+        self.live_resume_gen
     }
 
     /// Restore Live when every live chart is gone, or when a pan/zoom leave has sat idle for
@@ -124,8 +144,7 @@ impl Backend {
         ) {
             return false;
         }
-        self.follow = true;
-        self.follow_persistent = false;
+        self.raise_follow();
         true
     }
 }

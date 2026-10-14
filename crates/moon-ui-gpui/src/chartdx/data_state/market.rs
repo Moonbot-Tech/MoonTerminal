@@ -358,7 +358,7 @@ impl ChartDataState {
             // the visible edge has to stay in the buffer, so the budget stops one margin short. A
             // pane too narrow for any slack (an order-book-only pane floors `chart_w` at 1 px) gets
             // a zero budget and the old per-pixel behaviour, which is the correct degradation.
-            let panned_off_edge = !pane.view.follow && price_window_changed;
+            let panned_off_edge = !pane.view.is_live(now) && price_window_changed;
             let pan_budget_px = (history_prefetch - marker_margin).max(0.0) as f64
                 * pane.view.px_per_ms.max(1e-9) as f64;
             let pan_reset_due = panned_off_edge
@@ -480,7 +480,7 @@ impl ChartDataState {
             let candle_params_opt = (!candles_off).then_some(&candle_params);
             let scan_price = force_history_reset
                 || price_window_changed
-                || (!pane.view.follow && history_source_changed);
+                || (!pane.view.is_live(now) && history_source_changed);
             let price_scan = scan_price.then_some(price_window);
             // Automatic Y refits on every camera pixel, so a panning pane reads even when the pan
             // budget has not run out: the price scan keeps its own windowed buffer and follows
@@ -1117,7 +1117,9 @@ impl ChartDataState {
             }
             pr.epoch_ms = pane.view.epoch_ms;
             pr.right_margin_frac = pane.view.right_margin_frac;
-            pr.follow = pane.view.follow;
+            // The camera walks only while the anchor does: a per-chart Pause (#688) stops the
+            // clock with `follow` still set, and the own-pass must stop with it.
+            pr.follow = pane.view.is_live(now);
             pr.last_edge_px = ((pane.view.right_time_ms - pane.view.epoch_ms)
                 * pane.view.px_per_ms.max(1e-9) as f64)
                 .round() as i64;
