@@ -36,6 +36,11 @@ use moon_core::session::CoreId;
 use crate::Backend;
 use crate::design;
 
+/// Shared strategy-engine glyphs for action controls and passive roster state.
+pub(crate) const ENGINE_PLAY_ICON: &str = "icons/play.svg";
+/// The stopped strategy-engine glyph, also used by the Auto rail's stop action.
+pub(crate) const ENGINE_PAUSE_ICON: &str = "icons/pause.svg";
+
 /// Design-reference edge of one slot in the run column.
 ///
 /// The unscaled edge of a dense-strip slot, so a slot is square and a column of them lines up

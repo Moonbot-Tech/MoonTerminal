@@ -24,7 +24,9 @@ core_expert.write_refused: "Отправлено в %{sent} из %{total} яде
 core_expert.cores_title: "Ядра"
 core_expert.cores_selected: "выбрано: %{n}"
 core_expert.cores_none: "Ядер нет: терминал не подключён ни к одному."
-core_expert.core_no_page: "нет страницы"
+core_expert.core_requesting: "запрос…"
+core_expert.core_offline: "нет связи"
+core_expert.rail_hint: "Ctrl — добавить ядро, Shift — диапазон. Клик по бирже выбирает все её ядра."
 # --- Banner: a write the session queue gave up on. ---
 core_expert.write_gave_up: "Ядро не подтвердило последнюю запись: ни одна из повторных отправок не получила ответа. Значения на странице могут не совпадать с тем, что держит ядро."
 # --- Footer: what Apply and OK will do, said before the click. ---

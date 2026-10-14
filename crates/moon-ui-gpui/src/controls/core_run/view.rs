@@ -346,7 +346,7 @@ fn trading_slot(
     let (icon, color, tip, start, stale) = match summary.trading_action() {
         TradingAction::Unknown => return slot_frame(cx).into_any_element(),
         TradingAction::Stop => (
-            "icons/pause.svg",
+            super::ENGINE_PAUSE_ICON,
             design::danger_color(palette),
             if many {
                 t!("core_run.trading_stop_group", n = summary.needing_stop)
@@ -359,14 +359,14 @@ fn trading_slot(
         // A scope where some cores trade and some do not: the press starts the rest, and the
         // tooltip says how many rather than leaving it to be guessed from a glyph.
         TradingAction::Start if summary.trading_mixed() => (
-            "icons/play.svg",
+            super::ENGINE_PLAY_ICON,
             palette.amber,
             t!("core_run.trading_start_partial", n = summary.needing_start),
             true,
             summary.trading_off_stale > 0,
         ),
         TradingAction::Start => (
-            "icons/play.svg",
+            super::ENGINE_PLAY_ICON,
             design::positive_color(palette),
             if many {
                 t!("core_run.trading_start_group", n = summary.needing_start)

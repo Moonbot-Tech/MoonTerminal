@@ -47,6 +47,7 @@ mod core_group_dialogs;
 mod core_groups;
 mod core_host;
 mod core_quick;
+pub(crate) mod core_rail;
 pub(crate) mod core_run;
 pub(crate) mod core_update;
 pub(crate) mod date_range;

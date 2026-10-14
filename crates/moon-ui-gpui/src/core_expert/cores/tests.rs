@@ -1,6 +1,6 @@
 // Explicit imports, never `use super::*`: the parent's imports include gpui-free modules only, but
 // the crate convention holds for every sibling test file (CONTRIBUTING.md).
-use super::{CoreRoster, RosterRow, RosterSection, anchor, keeps_changes, targets};
+use super::{CoreRoster, RosterRow, RosterSection, anchor, keeps_changes, select_section, targets};
 
 use moon_core::session::CoreId;
 
@@ -12,14 +12,19 @@ fn roster() -> CoreRoster {
         core,
         name: format!("core {core}").into(),
         has_page,
+        connected: true,
+        failed: false,
+        run: moon_core::session::CoreRunState::default(),
     };
     CoreRoster {
         sections: vec![
             RosterSection {
+                venue: None,
                 label: "A".into(),
                 rows: vec![row(1, true), row(2, true)],
             },
             RosterSection {
+                venue: None,
                 label: "B".into(),
                 rows: vec![row(3, true), row(4, false)],
             },
@@ -27,6 +32,25 @@ fn roster() -> CoreRoster {
         order: vec![Some(1), Some(2), Some(3), Some(4)],
         key: 0,
     }
+}
+
+/// Venue selection replaces disjoint targets, anchors its first row and preserves overlapping edits.
+#[test]
+fn venue_selection_obeys_the_existing_staged_change_boundary() {
+    let roster = roster();
+    let mut selection = RowSelection::default();
+    selection.select_only(Some(3));
+    let before = targets(&selection, &roster);
+    select_section(&mut selection, &roster.sections[0]);
+    assert_eq!(targets(&selection, &roster), vec![1, 2]);
+    assert_eq!(anchor(&selection, &roster), Some(1));
+    assert!(!keeps_changes(&before, &targets(&selection, &roster)));
+    selection.press(Some(3), roster.order(), false, true);
+    let before = targets(&selection, &roster);
+    select_section(&mut selection, &roster.sections[1]);
+    assert_eq!(targets(&selection, &roster), vec![3, 4]);
+    assert_eq!(anchor(&selection, &roster), Some(3));
+    assert!(keeps_changes(&before, &targets(&selection, &roster)));
 }
 
 /// The page follows the last click; a Shift range keeps it on the far end the user pointed at.
