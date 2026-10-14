@@ -9,18 +9,12 @@
 // cannot fail. What CAN fail is a producer growing an input nobody added to the key, which is what
 // the scans below are for.
 
-/// Reads `start_stop_plan`'s own source and demands that every piece of WINDOW state it touches
-/// maps to a named component of `PlanKey`.
+/// Reads `start_stop_plan`'s direct window-state accesses and maps them to `PlanKey` components.
+/// A new direct read must name its cache authority rather than relying on an unrelated hash.
 ///
-/// The map is explicit, and deliberately not "appears somewhere in `data_sig`": the plan key takes
-/// the signature's STORE half and its staged digest only, so a plan that grew a view-state
-/// condition — `filter.active_only`, `sel`, `selected_folder` — would be hashed by `data_sig` and
-/// still absent from this key. Reading the signature as a whole would call that covered and wave
-/// through the exact staleness this test exists for: a footer dispatching the pre-change target set
-/// until the store or staging moves.
-///
-/// Store reads (`cores`, `cd.strategies`) arrive as ARGUMENTS rather than through `self`, so this
-/// scan does not see them; they are the store half, kept complete by the tree's own contract test.
+/// Store data and filtered core visibility arrive as arguments. The tree's own contract test
+/// covers the store half; `the_plan_cache_tracks_filtered_tree_core_visibility` guards the
+/// navigation-derived scope and its filter/expansion signature separately.
 #[test]
 fn the_plan_key_covers_every_field_the_plan_reads() {
     let actions = include_str!("../../actions.rs");
@@ -116,6 +110,23 @@ fn the_footer_never_rebuilds_the_plan_per_frame() {
         );
     }
     assert!(include_str!("../pane_cache.rs").contains("self.start_stop_plan("));
+}
+
+/// Dropping the view signature would reuse the pre-filter engine scope after a chip, search,
+/// dropdown or stopped-section expansion changes which core rows the user sees.
+#[test]
+fn the_plan_cache_tracks_filtered_tree_core_visibility() {
+    let source = include_str!("../pane_cache.rs");
+    let plan = source.split_once("fn pane_plan(").unwrap().1;
+    let key = plan
+        .split_once("let key = PlanKey {")
+        .unwrap()
+        .1
+        .split_once("};")
+        .unwrap()
+        .0;
+    assert!(key.contains("view: sig.view"));
+    assert!(plan.contains("start_stop_core_scope(&self.filter, &self.nav_order)"));
 }
 
 /// `can_paste` used to re-derive the visible core list on every frame to answer a question its

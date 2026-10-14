@@ -180,8 +180,9 @@ fn inside(child: Bounds<Pixels>, parent: Bounds<Pixels>) -> bool {
         && child.bottom() <= parent.bottom() + px(0.5)
 }
 
-/// Every locale, full and empty: tiles, their figures, both blocks and the chips stay inside the
-/// pane at its minimum width, and an empty block says so instead of drawing an empty box.
+/// Every locale, full and empty: tiles, figures, blocks and chips stay inside the minimum pane.
+/// Reintroducing the percentage cap on stopped metadata must fail: each short trailing fact
+/// needs enough laid-out width for its real text instead of reducing to a lone ellipsis.
 #[gpui::test]
 fn the_overview_fits_the_narrowest_pane_in_every_locale(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
@@ -230,6 +231,22 @@ fn the_overview_fits_the_narrowest_pane_in_every_locale(cx: &mut gpui::TestAppCo
                 );
                 let none = visual.debug_bounds(leak(format!("{id}-none")));
                 assert_eq!(none.is_some(), !full, "{id} empty state ({at})");
+            }
+            if full {
+                for core in 0..STOPPED_LISTED {
+                    let meta = bounds(&mut visual, format!("ov-stopped:{core}-meta"), &at);
+                    let text = match core {
+                        0 => rust_i18n::t!("strat.overview_core_empty").to_string(),
+                        n => rust_i18n::t!("strat.overview_core_strats", n = n).to_string(),
+                    };
+                    let required = visual
+                        .update(|_, cx| crate::design::mono_body_text_width(cx, &text, 400.0));
+                    assert!(
+                        meta.size.width + px(0.5) >= px(required),
+                        "stopped metadata truncated ({at}): {text}"
+                    );
+                    assert!(inside(meta, root), "stopped metadata escaped ({at})");
+                }
             }
             for filter in QuickFilter::ALL {
                 let chip = bounds(&mut visual, format!("ov-chip-{}", filter.key()), &at);

@@ -21,10 +21,8 @@
 //!     active locale, which that half does not cover for a core whose venue has not arrived. It
 //!     inherits the same documented overshoot as the kinds list, and is retained for a different
 //!     reason: its captions are freshly allocated `String`s, not a whole-account walk.
-//!   * the Start/Stop plan reads the store, the staged checkboxes and the workspace generation, and
-//!     nothing else. Staging comes from [`TreeSig::staged`] rather than the view half: that half
-//!     also hashes the search text, and a plan the search box cannot change must not be rebuilt on
-//!     every keystroke.
+//!   * the Start/Stop plan reads the store, staged checkboxes, workspace generation and filtered
+//!     tree core scope. The view half covers filters and expansion, which determine that scope.
 //!   * the footer label width reads the dictionary and the typography.
 //!
 //! A stale plan here is not a cosmetic defect — it is the target set the Start and Stop buttons
@@ -75,6 +73,8 @@ struct PlanKey {
     store: u64,
     /// Staged checkboxes, which decide both the targets and the changes to send.
     staged: u64,
+    /// Filter and expansion state deciding which core rows the tree actually exposes.
+    view: u64,
     /// Auto workspace generation the plan is authorized against, or `None` in Classic.
     generation: Option<u64>,
 }
@@ -268,6 +268,7 @@ impl StrategiesView {
         let key = PlanKey {
             store: sig.store,
             staged: sig.staged,
+            view: sig.view,
             generation: self.action_workspace_generation(cx),
         };
         if let Some((cached, plan)) = &self.pane_cache.plan
@@ -278,7 +279,8 @@ impl StrategiesView {
         crate::diag::bump(&crate::diag::STRAT_PANE_BUILD);
         let built = {
             let store = self.backend.read(cx).session.store();
-            Arc::new(self.start_stop_plan(cores, store, cx))
+            let visible = actions::start_stop_core_scope(&self.filter, &self.nav_order);
+            Arc::new(self.start_stop_plan(cores, store, visible.as_ref(), cx))
         };
         self.pane_cache.plan = Some((key, Arc::clone(&built)));
         built

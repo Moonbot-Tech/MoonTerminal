@@ -1,9 +1,156 @@
 //! Atomic authority tests for delayed Strategies actions.
 
 use super::{
-    FieldEditPlan, buy_refresh_enabled, field_edit_plan_authorized, strategy_action_authorized,
-    strategy_targets_exist,
+    FieldEditPlan, StartStopPlan, buy_refresh_enabled, field_edit_plan_authorized,
+    start_stop_core_scope, start_stop_payload, strategy_action_authorized, strategy_targets_exist,
 };
+use crate::strategies::filter::{QuickFilter, StrategyFilter};
+use crate::strategies::tree::ops::NavNode;
+use moon_core::feed::StrategyRow;
+use moon_core::session::store::CoreData;
+use std::collections::HashMap;
+
+/// Two cores with synthetic rows; CORE_A has both checked and unchecked strategies.
+fn bulk_cores() -> (Vec<(u64, String)>, HashMap<u64, CoreData>) {
+    let make_row = |id, checked| StrategyRow {
+        id,
+        name: format!("UNIT_{id:02}"),
+        kind: "Test".into(),
+        kind_ordinal: 0,
+        folder_path: String::new(),
+        checked,
+        is_short: false,
+        fields: Vec::new(),
+    };
+    let mut data = HashMap::new();
+    let mut core_a = CoreData::default();
+    core_a.strategies = vec![make_row(1, true), make_row(2, true), make_row(3, false)];
+    data.insert(7, core_a);
+    let mut core_b = CoreData::default();
+    core_b.strategies = vec![make_row(4, true)];
+    data.insert(8, core_b);
+    (vec![(7, "CORE_A".into()), (8, "CORE_B".into())], data)
+}
+
+/// Ignoring the visible core set would count and dispatch CORE_B under a filter showing CORE_A.
+/// A core row alone is sufficient even with its subtree folded; engine actions cover that core's
+/// whole checked set, and hidden-core staging must survive unchanged.
+#[test]
+fn filtered_bulk_payload_counts_and_dispatches_only_visible_cores() {
+    let (cores, data) = bulk_cores();
+    let filter = StrategyFilter {
+        quick: Some(QuickFilter::Stopped),
+        ..Default::default()
+    };
+    let visible = start_stop_core_scope(&filter, &[NavNode::Core(7)]);
+    let mut staged = HashMap::from([((7, 2), false), ((7, 3), true), ((8, 4), false)]);
+    let (targets, actions) =
+        start_stop_payload(&cores, |core| data.get(&core), &staged, visible.as_ref());
+    let plan = StartStopPlan {
+        workspace_generation: None,
+        targets,
+        actions,
+    };
+    assert_eq!(plan.targets, vec![(7, 1), (7, 2), (7, 3)]);
+    assert_eq!(plan.actions, vec![(7, vec![(2, false), (3, true)])]);
+    assert_eq!((plan.target_count(), plan.core_count()), (3, 1));
+    plan.clear_applied_staging(&mut staged);
+    assert_eq!(staged, HashMap::from([((8, 4), false)]));
+}
+
+/// Treating absent rows as visible would start hidden-only checked cores. Missing core snapshots
+/// must also fail closed even if an old navigation row still names that core.
+#[test]
+fn hidden_only_or_missing_bulk_targets_disable_the_action() {
+    let (cores, data) = bulk_cores();
+    let filter = StrategyFilter {
+        search: "missing".into(),
+        ..Default::default()
+    };
+    let visible = start_stop_core_scope(&filter, &[]);
+    let (targets, actions) = start_stop_payload(
+        &cores,
+        |core| data.get(&core),
+        &HashMap::new(),
+        visible.as_ref(),
+    );
+    let plan = StartStopPlan {
+        workspace_generation: None,
+        targets,
+        actions,
+    };
+    assert_eq!((plan.target_count(), plan.core_count()), (0, 0));
+    assert!(plan.actions.is_empty());
+    let visible = start_stop_core_scope(&filter, &[NavNode::Core(7)]);
+    let (targets, actions) =
+        start_stop_payload(&cores, |_| None, &HashMap::new(), visible.as_ref());
+    assert!(targets.is_empty() && actions.is_empty());
+}
+
+/// Applying expansion visibility without a filter would change the existing collapsed-tree
+/// action: no filter must continue counting and acting on all workspace checked strategies.
+#[test]
+fn unfiltered_bulk_payload_includes_all_checked_cores() {
+    let (cores, data) = bulk_cores();
+    let visible = start_stop_core_scope(&StrategyFilter::default(), &[]);
+    assert!(visible.is_none());
+    let (targets, actions) = start_stop_payload(
+        &cores,
+        |core| data.get(&core),
+        &HashMap::new(),
+        visible.as_ref(),
+    );
+    assert_eq!(targets, vec![(7, 1), (7, 2), (8, 4)]);
+    assert_eq!(actions, vec![(7, vec![]), (8, vec![])]);
+}
+
+/// Missing one narrowing dimension would let that filter start cores with no row. All quick
+/// chips and dropdowns share the same actual tree-core scope; blank search preserves no-filter behavior.
+#[test]
+fn every_filter_dimension_activates_tree_core_scoping() {
+    use moon_core::session::core_order::ExchangeSection;
+    let mut filters = vec![
+        StrategyFilter {
+            search: "UNIT".into(),
+            ..Default::default()
+        },
+        StrategyFilter {
+            kind: Some(1),
+            ..Default::default()
+        },
+        StrategyFilter {
+            dir: Some(true),
+            ..Default::default()
+        },
+        StrategyFilter {
+            exchange: Some(ExchangeSection::Unidentified),
+            ..Default::default()
+        },
+        StrategyFilter {
+            active_only: true,
+            ..Default::default()
+        },
+    ];
+    filters.extend(QuickFilter::ALL.into_iter().map(|quick| StrategyFilter {
+        quick: Some(quick),
+        ..Default::default()
+    }));
+    for filter in filters {
+        let scope =
+            start_stop_core_scope(&filter, &[NavNode::Core(7), NavNode::Strategy(7, 1)]).unwrap();
+        assert_eq!(scope.into_iter().collect::<Vec<_>>(), vec![7]);
+    }
+    assert!(
+        start_stop_core_scope(
+            &StrategyFilter {
+                search: " , ! ".into(),
+                ..Default::default()
+            },
+            &[]
+        )
+        .is_none()
+    );
+}
 
 /// Removing a supported wire name disables real MoonShot edits; broadening the names/kinds offers
 /// an action the core ignores. The oracle is MoonProto's standing-BUY refresh protocol contract.

@@ -70,10 +70,8 @@ pub(crate) struct TreeSig {
     pub(crate) view: u64,
     /// The staged checkboxes alone, already folded into `view` above.
     ///
-    /// Carried out separately for a consumer that reads staging WITHOUT reading the rest of the
-    /// window — the Start/Stop plan, which must not be rebuilt because the user typed a letter in
-    /// the search box. Computed inside [`data_sig`], which walks that map anyway, so this field is
-    /// the walk being reused rather than a second one.
+    /// Computed inside [`data_sig`], which walks that map anyway, so consumers can reuse the digest
+    /// without a second walk. Start/Stop also needs `view` to track filtered core visibility.
     pub(crate) staged: u64,
 }
 

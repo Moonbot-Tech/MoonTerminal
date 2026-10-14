@@ -646,6 +646,7 @@ impl StrategiesView {
         // plan acts on — the same plan the click dispatches, so the count cannot describe a
         // different set. With nothing to act on they are disabled and say what to do instead.
         let targets = pane.plan.target_count();
+        let core_count = pane.plan.core_count();
         let (start_label, stop_label) = pane_cache::start_stop_labels(targets);
         // The button says the verb; the tooltip says the whole sentence. Deriving the tooltip from
         // the caption instead would drop the object the moment the caption is shortened to fit.
@@ -655,8 +656,8 @@ impl StrategiesView {
                 (none.clone(), none)
             }
             n => (
-                t!("strat.start_checked_tip_n", n = n).to_string(),
-                t!("strat.stop_checked_tip_n", n = n).to_string(),
+                t!("strat.start_checked_tip_n", n = n, k = core_count).to_string(),
+                t!("strat.stop_checked_tip_n", n = n, k = core_count).to_string(),
             ),
         };
         // The same count the cached width was measured against, so the rendered label and the

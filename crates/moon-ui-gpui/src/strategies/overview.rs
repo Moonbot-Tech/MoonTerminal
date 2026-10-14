@@ -586,7 +586,7 @@ fn block(
         .into_any_element()
 }
 
-/// One clickable list line: a truncating name and a muted trailing fact.
+/// One clickable list line: a name and a muted trailing fact sharing the available row width.
 ///
 /// Args:
 ///     id: Element id, derived from the line's identity.
@@ -607,6 +607,7 @@ fn line(
     cx: &App,
 ) -> AnyElement {
     let p = MoonPalette::active(cx);
+    let meta_id = format!("{id}-meta");
     h_flex()
         .id(id)
         .w_full()
@@ -631,8 +632,13 @@ fn line(
         )
         .child(
             div()
-                .flex_none()
-                .max_w(relative(0.5))
+                .debug_selector(move || meta_id.clone())
+                // A percentage max-width on a non-shrinking text node can resolve against its
+                // intrinsic width and reduce even "empty" to an inert ellipsis. Allocate a real
+                // half-row slot, so the metadata has known space before text truncation runs.
+                .flex_1()
+                .min_w_0()
+                .text_right()
                 .truncate()
                 .text_color(moon(p.text_muted))
                 .child(meta),

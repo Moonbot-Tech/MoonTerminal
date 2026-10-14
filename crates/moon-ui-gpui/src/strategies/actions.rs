@@ -46,6 +46,76 @@ impl StartStopPlan {
     pub(super) fn target_count(&self) -> usize {
         self.targets.len()
     }
+
+    /// Number of core engines the captured action changes, including their filtered-out rows.
+    pub(super) fn core_count(&self) -> usize {
+        self.actions.len()
+    }
+
+    /// Retire only staging sent by this successful engine batch, preserving excluded cores.
+    fn clear_applied_staging(&self, staged: &mut HashMap<Key, bool>) {
+        let applied_cores: HashSet<CoreId> = self.actions.iter().map(|(core, _)| *core).collect();
+        staged.retain(|(core, _), _| !applied_cores.contains(core));
+    }
+}
+
+/// Resolve bulk engine scope from the tree's actual navigation rows when any filter is active.
+/// A collapsed core still has a row; a core behind a collapsed section has none. Without filters,
+/// `None` preserves the existing whole-workspace action regardless of tree expansion.
+///
+/// Args:
+///     filter: Current editable tree filter.
+///     nav: Navigation rows emitted by the tree builder under that filter and expansion.
+///
+/// Returns:
+///     Visible core identities, or `None` when the tree is unfiltered.
+pub(super) fn start_stop_core_scope(
+    filter: &filter::StrategyFilter,
+    nav: &[tree::ops::NavNode],
+) -> Option<HashSet<CoreId>> {
+    filter.narrows().then(|| {
+        nav.iter()
+            .filter_map(|node| match node {
+                tree::ops::NavNode::Core(core) => Some(*core),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+/// Build the ordered engine payload only for cores whose tree visibility is known.
+/// `None` admits every supplied workspace core; an empty visible set admits nothing.
+///
+/// Args:
+///     cores: Canonically ordered workspace cores.
+///     data: Live snapshot lookup; a missing snapshot excludes that core.
+///     staged: Retained checkbox changes, including cores outside the action scope.
+///     visible: Filtered tree's core identities, or `None` to admit all workspace cores.
+///
+/// Returns:
+///     Ordered targets and per-core checkbox payloads for the admitted engines.
+fn start_stop_payload<'a>(
+    cores: &[(CoreId, String)],
+    mut data: impl FnMut(CoreId) -> Option<&'a moon_core::session::store::CoreData>,
+    staged: &HashMap<Key, bool>,
+    visible: Option<&HashSet<CoreId>>,
+) -> (Vec<Key>, Vec<(CoreId, Vec<(u64, bool)>)>) {
+    let mut targets = Vec::new();
+    let mut actions = Vec::new();
+    for (core, _) in cores {
+        if visible.is_some_and(|ids| !ids.contains(core)) {
+            continue;
+        }
+        let Some(cd) = data(*core) else {
+            continue;
+        };
+        let (core_targets, checks) = core_start_stop_targets(*core, &cd.strategies, staged);
+        if !core_targets.is_empty() {
+            targets.extend(core_targets);
+            actions.push((*core, checks));
+        }
+    }
+    (targets, actions)
 }
 
 impl FieldEditPlan {
@@ -169,29 +239,21 @@ impl StrategiesView {
     /// Args:
     ///     cores: Canonically ordered cores rendered by the Strategies tree.
     ///     store: Current strategy snapshots used by that render.
+    ///     visible: Filtered tree's core rows, or `None` when no filter narrows the tree.
     ///     cx: Application context used to capture the current workspace generation.
     ///
     /// Returns:
-    ///     Immutable action payload; retained staging outside the current scope is not included.
+    ///     Immutable engine payload covering checked rows and checkbox changes on admitted cores;
+    ///     staging on cores outside the current tree scope is not included.
     pub(super) fn start_stop_plan(
         &self,
         cores: &[(CoreId, String)],
         store: &CoreStore,
+        visible: Option<&HashSet<CoreId>>,
         cx: &App,
     ) -> StartStopPlan {
-        let mut targets = Vec::new();
-        let mut actions = Vec::new();
-        for (core, _) in cores {
-            let Some(cd) = store.core(*core) else {
-                continue;
-            };
-            let (core_targets, checks) =
-                core_start_stop_targets(*core, &cd.strategies, &self.staged);
-            if !core_targets.is_empty() {
-                targets.extend(core_targets);
-                actions.push((*core, checks));
-            }
-        }
+        let (targets, actions) =
+            start_stop_payload(cores, |core| store.core(core), &self.staged, visible);
         StartStopPlan {
             workspace_generation: self.action_workspace_generation(cx),
             targets,
@@ -228,16 +290,21 @@ impl StrategiesView {
         {
             return;
         }
-        // A removed strategy changes the captured identity just as surely as a hidden core. Check
-        // every row before the first per-core command so no surviving subset can be sent.
-        let res = {
-            let store = self.backend.read(cx).session.store();
-            !strategy_targets_exist(&plan.targets, |(core, id)| row(store, core, id).is_some())
+        // Rebuild visibility at the click, rather than trusting last frame's navigation. A filter,
+        // expansion, checkbox or feed change invalidates the whole rendered batch before sending.
+        let current = {
+            let backend = self.backend.read(cx);
+            let store = backend.session.store();
+            let cores = visible_strategy_cores(self, backend);
+            let visible = self.filter.narrows().then(|| {
+                let built = tree::moon::build(self, store, &cores, backend.session.core_venues());
+                start_stop_core_scope(&self.filter, &built.nav).unwrap_or_default()
+            });
+            self.start_stop_plan(&cores, store, visible.as_ref(), cx)
         };
-        if res {
+        if *plan != current {
             return;
         }
-        let applied_cores: HashSet<CoreId> = plan.actions.iter().map(|(core, _)| *core).collect();
         let b = self.backend.read(cx);
         for (core, checks) in &plan.actions {
             if let Err(error) = b
@@ -248,8 +315,7 @@ impl StrategiesView {
                 return;
             }
         }
-        self.staged
-            .retain(|(core, _), _| !applied_cores.contains(core));
+        plan.clear_applied_staging(&mut self.staged);
         cx.notify();
     }
 
