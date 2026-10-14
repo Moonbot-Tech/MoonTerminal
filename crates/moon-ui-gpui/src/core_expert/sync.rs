@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use gpui::*;
 
-use moon_core::feed::CoreConfigState;
+use moon_core::feed::{ConnStatus, CoreConfigState};
 use moon_core::session::CoreId;
 
 use crate::Backend;
@@ -81,8 +81,42 @@ impl CoreExpertView {
                 }
             }
         };
+        if let Some(core) = anchor
+            && matches!(
+                state,
+                PageState::Waiting | PageState::Replaced | PageState::Stale
+            )
+        {
+            self.ask_for_page(b, core);
+        }
         changed |= self.enter_state(state);
         changed | self.sync_diff(b)
+    }
+
+    /// Ask a connected anchor for its page when the window has none it may use.
+    ///
+    /// MoonProto repeats no full configuration after a reconnect, so a page marked stale by the
+    /// outage stays stale until something asks. One request per received page: an unanswered one
+    /// is not repeated every frame, and the next page that lands re-arms it.
+    ///
+    /// Args:
+    ///     b: Backend holding the session and its store.
+    ///     core: The anchor core.
+    fn ask_for_page(&mut self, b: &Backend, core: CoreId) {
+        let Some(entry) = b.session.store().core(core) else {
+            return;
+        };
+        if entry.status != ConnStatus::Ready {
+            return;
+        }
+        let key = (core, entry.core_config_recv_rev);
+        if self.page_asked == Some(key) {
+            return;
+        }
+        self.page_asked = Some(key);
+        if let Err(error) = b.session.refresh_shared_config(core) {
+            log::warn!("expert window could not ask a core for its page: {error}");
+        }
     }
 
     /// Seed the anchor's page when there is none, or re-seed it when the core's page changed

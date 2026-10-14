@@ -222,6 +222,10 @@ pub struct CoreExpertView {
     /// write, including a give-up that moves no data revision, and the banner drawn from that
     /// row has no other way to be repainted.
     seen_edit_rev: u64,
+    /// The anchor and its `core_config_recv_rev` a page was last asked for: a core does not
+    /// resend its full configuration after a reconnect, so a window left waiting asks once per
+    /// received page, never once per frame.
+    page_asked: Option<(CoreId, u64)>,
     /// The selection and page revisions [`Self::diff`] was computed for; see [`cores::diff_key`].
     diff_key: Vec<cores::DiffKeyEntry>,
     /// Table fields on which the selected cores' pages disagree, ascending.
@@ -323,6 +327,7 @@ impl CoreExpertView {
             page_behind: false,
             seen_profit: None,
             seen_edit_rev: 0,
+            page_asked: None,
             diff_key: Vec::new(),
             diff: Vec::new(),
             mixed: MixedScope::default(),

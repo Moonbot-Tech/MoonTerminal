@@ -124,12 +124,18 @@ impl CoreExpertView {
                     .min_w_0()
                     .items_center()
                     .gap(design::ui_px(cx, 6.0))
-                    .child(div().flex_1().min_w_0().child(widgets::text_line(
-                        row.name.clone(),
-                        if row.has_page { p.text } else { p.text_muted },
-                        is_anchor,
-                        cx,
-                    )))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(widgets::text_line(
+                                row.name.clone(),
+                                if row.has_page { p.text } else { p.text_muted },
+                                is_anchor,
+                                cx,
+                            )),
+                    )
                     .when(!row.has_page, |this| {
                         this.child(widgets::hint(no_page.clone(), p, cx))
                     }),
