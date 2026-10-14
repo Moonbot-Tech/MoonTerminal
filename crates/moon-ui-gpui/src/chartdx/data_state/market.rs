@@ -1503,7 +1503,11 @@ impl ChartDataState {
                 neutral_in_zone: candle_cfg.neutral_in_zone as u8 as f32,
                 fill_alpha: self.theme.candle_fill_alpha.clamp(0.05, 1.0),
                 hide_start_rel,
-                open_path_rel: if self.trade_replay.is_none() && has_open_path {
+                // A current candle inside the hidden zone stays hidden: its path alone shows.
+                open_path_rel: if self.trade_replay.is_none()
+                    && has_open_path
+                    && open_rel < hide_start_rel
+                {
                     open_rel
                 } else {
                     f32::MAX
