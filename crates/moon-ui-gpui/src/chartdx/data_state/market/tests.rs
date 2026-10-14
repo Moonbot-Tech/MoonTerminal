@@ -7,6 +7,36 @@ use moon_core::market::candles::{
 
 use super::window::{chart_history_floor_ms, hide_start_rel};
 
+/// Losing the composed bar's own duration makes the backend cull a visible minute range as
+/// though it were a five-second mini-candle, recreating the daily chart's narrow sliver.
+#[test]
+fn open_candle_path_gpu_width_reaches_the_visible_slice() {
+    use crate::chartdx::candle_window::CandleWindow;
+    use moon_core::market::ChartCandle;
+
+    let candle = ChartCandle {
+        t_open_ms: 86_400_000.0,
+        low: 10.0,
+        high: 12.0,
+        ..Default::default()
+    };
+    let mut bars = Vec::new();
+    moon_chart::open_candle_path::place_prefix(
+        Some(&[candle]),
+        &[],
+        (86_400_000.0, 86_460_000.0),
+        86_400_000,
+        86_400_000.0,
+        &mut bars,
+    );
+    let rows: Vec<_> = bars.iter().map(super::path_bar_gpu).collect();
+    let mut window = CandleWindow::new(32);
+    window.set_style_tf(5_000.0);
+    window.set(&rows);
+    assert_eq!(window.draw_slice(59_000.0, 59_500.0).candles, 1);
+    assert_eq!(rows[0].tf_rel, 60_000.0);
+}
+
 /// `market.rs:chart_history_floor_ms` must keep every supported candle timeframe within the
 /// 120-to-1500-bar request band; swapping the clamps or lowering the floor would silently request
 /// too much history or make a chart appear empty near the current time.

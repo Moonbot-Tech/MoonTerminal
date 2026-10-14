@@ -4,6 +4,8 @@ mod arb;
 mod archive;
 pub(crate) use archive::ARCHIVE_WAIT;
 mod history;
+mod open_path;
+pub use open_path::PathPrefixRows;
 #[cfg(test)]
 mod label_tests;
 mod price_fit;

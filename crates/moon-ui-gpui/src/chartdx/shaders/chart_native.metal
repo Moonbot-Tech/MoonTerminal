@@ -234,6 +234,10 @@ struct CandleStyle {
     float neutral_in_zone;
     float fill_alpha;
     float hide_start; // rel ms: omit candles with t_open >= boundary (trades only)
+    float open_path; // current candle opening with a resident finer path
+    float path_pad0;
+    float path_pad1;
+    float path_pad2;
 };
 
 struct Candle {
@@ -272,7 +276,9 @@ vertex CandleOut candles_vertex(uint vid [[vertex_id]], uint iid [[instance_id]]
     uint part = vid / 6u; // 0 body, 1 upper wick, 2 lower wick
     float2 corner = CORNERS_01[vid % 6u];
 
-    if (cd.t_open >= cs.hide_start) {
+    bool open_path = abs(cd.t_open - cs.open_path) < 0.5 &&
+        (cd.tf_rel <= 0.0 || abs(cd.tf_rel - cs.tf_rel) < 0.5);
+    if (cd.t_open >= cs.hide_start && !open_path) {
         return candle_cull_out(); // Omit the candle in the "trades only" zone.
     }
     // Wider own timeframe: coarse history tail, muted. Narrower: a clipped trade-window
@@ -288,7 +294,7 @@ vertex CandleOut candles_vertex(uint vid [[vertex_id]], uint iid [[instance_id]]
     x1 = max(round(x1), x0 + 1.0);
 
     bool in_zone = cd.t_open >= cs.zone_start;
-    bool outline = (cs.mode >= 0.5 && cs.mode < 1.5) || (cs.mode >= 1.5 && in_zone);
+    bool outline = open_path || (cs.mode >= 0.5 && cs.mode < 1.5) || (cs.mode >= 1.5 && in_zone);
     if (part != 0u && in_zone && cs.wicks_in_zone < 0.5) {
         return candle_cull_out();
     }

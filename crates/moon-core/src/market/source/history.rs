@@ -1,7 +1,7 @@
 //! Chart-history draining, retry, native backfill, and fixture-read implementation.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use moonproto::DeepHistoryKind;
@@ -134,6 +134,22 @@ impl MarketDataSource {
             caught_up: true,
             ..ChartHistoryRead::default()
         };
+        if let Some(cp) = candle_params {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as i64);
+            read.path_prefix_changed = cursor.open_path.sync(
+                self,
+                (core, market),
+                cp.tf_ms,
+                now_ms,
+                cp.series_reset,
+                Arc::clone(&cursor.cache_done),
+            );
+            if read.path_prefix_changed {
+                cursor.open_path.copy_into(&mut out.path_prefix);
+            }
+        }
 
         let trade_reader = readers.futures_trades.or(readers.spot_trades);
         if let Some(reader) = trade_reader.as_ref().filter(|_| display_trades) {
@@ -253,6 +269,14 @@ impl MarketDataSource {
                             first.time_ms as i64,
                             &mut cursor.path_rows,
                         );
+                    } else {
+                        // An empty raw ring must not hide retained mini-candle history.
+                        super::volume::copy_window(
+                            minis,
+                            from_time.unix_millis(),
+                            to_time.unix_millis(),
+                            &mut cursor.path_rows,
+                        );
                     }
                     cursor.path_minis = Some(match cursor.path_rows.last() {
                         Some(last) => minis.cursor_at_or_after_time(
@@ -347,6 +371,55 @@ impl MarketDataSource {
                 if let Some(row) = cursor.trade_rows.last() {
                     cursor.last_price = Some(row.price);
                 }
+            }
+        }
+        // K=0 hides raw dots, but the open candle still carries its mini-candle price path.
+        if let Some(minis) = readers
+            .mini_candles
+            .as_ref()
+            .filter(|_| !display_trades && candle_params.is_some())
+        {
+            if force_reset || cursor.path_minis.is_none() {
+                super::volume::copy_window(
+                    minis,
+                    from_time.unix_millis(),
+                    to_time.unix_millis(),
+                    &mut cursor.path_rows,
+                );
+                cursor.path_minis = Some(minis.cursor_at_or_after_time(to_time));
+                read.path_update = super::PriceLineUpdate::Replace;
+            } else if let Some(cur) = cursor.path_minis.as_mut() {
+                let meta = minis.drain_new_bounded(cur, minis.capacity(), &mut cursor.path_rows);
+                if meta.clipped {
+                    super::volume::copy_window(
+                        minis,
+                        from_time.unix_millis(),
+                        to_time.unix_millis(),
+                        &mut cursor.path_rows,
+                    );
+                    *cur = minis.cursor_at_or_after_time(to_time);
+                    read.path_update = super::PriceLineUpdate::Replace;
+                } else if meta.copied > 0 {
+                    read.path_update = super::PriceLineUpdate::Append;
+                }
+            }
+            if read.path_update != super::PriceLineUpdate::None {
+                out.path_minis.extend(
+                    cursor
+                        .path_rows
+                        .iter()
+                        .filter(|m| {
+                            m.min_price.is_finite()
+                                && m.max_price.is_finite()
+                                && m.min_price > 0.0
+                                && m.max_price >= m.min_price
+                        })
+                        .map(|m| crate::market::candles::PathMini {
+                            t_open_ms: m.unix_millis() as f64,
+                            low: m.min_price,
+                            high: m.max_price,
+                        }),
+                );
             }
         }
         // Liquidations use a separate ring of the same type and stay synchronized with combo. A

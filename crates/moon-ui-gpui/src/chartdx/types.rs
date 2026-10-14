@@ -336,8 +336,13 @@ pub struct CandleStyleGpu {
     pub fill_alpha: f32,
     /// Hidden-candle zone start in relative milliseconds; `f32::MAX` disables hiding.
     ///
-    /// Candles with `t_open` at or beyond this boundary do not render, leaving only trades.
+    /// Candles at or beyond this boundary do not render, except the outlined current candle
+    /// identified by `open_path_rel`; closed-candle hiding keeps its existing semantics.
     pub hide_start_rel: f32,
+    /// Current candle to outline when its finer path is resident; MAX disables it.
+    pub open_path_rel: f32,
+    /// Keeps the uniform's final register aligned identically on every backend.
+    pub path_pad: [f32; 3],
 }
 
 /// Bottom candle-volume style: cbuffer `VolumeStyle` at b2 in candles.hlsl,

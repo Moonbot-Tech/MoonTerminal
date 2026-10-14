@@ -29,6 +29,10 @@ struct CandleStyle {
     fill_alpha: f32,
     // rel ms: omit candles with t_open >= boundary (trades only).
     hide_start: f32,
+    open_path: f32,
+    path_pad0: f32,
+    path_pad1: f32,
+    path_pad2: f32,
 };
 
 struct Candle {
@@ -80,7 +84,9 @@ fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
     let part = vid / 6u; // 0 body, 1 upper wick, 2 lower wick
     let corner = CORNERS_01[vid % 6u];
 
-    if cd.t_open >= cs.hide_start {
+    let open_path = abs(cd.t_open - cs.open_path) < 0.5 &&
+        (cd.tf_rel <= 0.0 || abs(cd.tf_rel - cs.tf_rel) < 0.5);
+    if cd.t_open >= cs.hide_start && !open_path {
         return cull_out(); // Omit the candle in the "trades only" zone.
     }
     // Wider own timeframe: coarse history tail, muted. Narrower: a clipped trade-window
@@ -99,7 +105,7 @@ fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
     x1 = max(round(x1), x0 + 1.0);
 
     let in_zone = cd.t_open >= cs.zone_start;
-    let outline = (cs.mode >= 0.5 && cs.mode < 1.5) || (cs.mode >= 1.5 && in_zone);
+    let outline = open_path || (cs.mode >= 0.5 && cs.mode < 1.5) || (cs.mode >= 1.5 && in_zone);
     if part != 0u && in_zone && cs.wicks_in_zone < 0.5 {
         return cull_out();
     }

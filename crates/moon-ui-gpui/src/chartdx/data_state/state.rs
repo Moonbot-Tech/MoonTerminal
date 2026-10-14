@@ -321,6 +321,8 @@ impl ChartDataState {
         self.source_market_signature(source)
     }
 
+    /// Tracks source revisions, this chart's cache replies, and the open-path minute frontier
+    /// without requesting parent-window repaints for each live chart frame.
     pub(crate) fn source_market_signature(&self, source: &MarketDataSource) -> u64 {
         let container = self.container.borrow();
         let Some((core, market)) = container.target_ref(0) else {
@@ -341,6 +343,11 @@ impl ChartDataState {
             acc.wrapping_add(pr.history_cursor.cache_completions())
         });
         sig = mix_sig(sig, cache_done);
+        // One minute advances the cached path frontier even on a quiet market. This wakes only
+        // chart preparation, never the parent window or the closed-candle history cache.
+        if self.draws_live_market() && self.candle_view.tf_ms() > 60_000 {
+            sig = mix_sig(sig, (now_unix_ms() / 60_000.0) as u64);
+        }
         sig
     }
 

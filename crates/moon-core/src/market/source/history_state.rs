@@ -2,8 +2,11 @@
 
 use super::*;
 
+/// One chart consumer's retained cursors and caches, including the open candle's finer prefix.
 #[derive(Default)]
 pub struct ChartHistoryCursor {
+    /// Incremental finer history for the current bucket, independent of camera resets.
+    pub(super) open_path: open_path::OpenPathHistory,
     pub(super) trades: Option<SeqRingCursor>,
     pub(super) liquidations: Option<SeqRingCursor>,
     pub(super) last_prices: Option<SeqRingCursor>,
@@ -198,6 +201,7 @@ impl ChartHistoryCursor {
     pub(crate) fn invalidate_cache_prefix(&mut self) {
         self.cache_kind = None;
         self.cache_pending = None;
+        self.open_path.invalidate_cache();
     }
 
     /// Drops every held cache layer and bumps the generation so the composed fill recomputes.
@@ -251,8 +255,11 @@ impl ChartHistoryCursor {
     }
 }
 
+/// Reusable payload buffers; update flags identify which rows a consumer should apply.
 #[derive(Default)]
 pub struct ChartHistoryBuffers {
+    /// Cached finer prefix, populated only when `path_prefix_changed` is set.
+    pub path_prefix: open_path::PathPrefixRows,
     pub ticks: Vec<Tick>,
     /// Liquidation trades from the separate `readers.liquidations` ring.
     ///
@@ -273,7 +280,7 @@ pub struct ChartHistoryBuffers {
     /// whose candles require distinct widths. Empty means every candle uses the series timeframe.
     pub candle_tf_ms: Vec<f32>,
     /// The core's five-second mini-candles older than the oldest raw trade in `ticks`, oldest
-    /// first. Filled only when `ChartHistoryRead::path_changed` is set, i.e. on a full combo read.
+    /// first. Filled when `ChartHistoryRead::path_update` requests replacement or append.
     pub path_minis: Vec<crate::market::candles::PathMini>,
 }
 
@@ -336,8 +343,11 @@ pub struct CandleReadParams {
     pub series_reset: bool,
 }
 
+/// Incremental delivery instructions and price-fit metadata for one chart history read.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ChartHistoryRead {
+    /// The finer prefix changed, independently of the mini-candle ring update.
+    pub path_prefix_changed: bool,
     pub provider: CoreId,
     pub revision: u64,
     pub combo_capacity: usize,
