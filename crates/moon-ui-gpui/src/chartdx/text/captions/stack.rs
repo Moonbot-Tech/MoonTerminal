@@ -358,11 +358,12 @@ impl RenderState {
                         let w = metrics.width.as_f32();
                         drawn_w = drawn_w.max(w);
                         let box_left = if rightwards { line_x } else { line_x - w };
-                        grow_column_band(
-                            &mut self.panes[idx].column_bands,
-                            item,
-                            [box_left, y, w, metrics.line_height.as_f32()],
-                        );
+                        let line_rect = [box_left, y, w, metrics.line_height.as_f32()];
+                        grow_column_band(&mut self.panes[idx].column_bands, item, line_rect);
+                        // Every wrapped line of a filter caption is a target of its own: the
+                        // strategy-filter lines are prose, so they draw through this branch and
+                        // never reach the single-line registration below.
+                        self.push_filter_hits(idx, item.row, entry.action, line_rect);
                         if item.plate {
                             match plates.iter_mut().find(|(row, _)| *row == item.row) {
                                 Some((_, box_)) => {
@@ -531,31 +532,7 @@ impl RenderState {
                     (false, true) => item_x,
                     (false, false) => item_x - w,
                 };
-                if entry.action == Some(LabelAction::ToggleStrategyFilters) {
-                    self.panes[idx]
-                        .filter_header_hits
-                        .push(crate::chartdx::FilterHeaderHit {
-                            rect: [box_left, y, w, line_h],
-                            row: item.row,
-                            cfg: self.chart_labels.clone(),
-                        });
-                }
-                if let Some(LabelAction::OpenFilterLine(slot)) = entry.action {
-                    let target = self.panes[idx]
-                        .labels
-                        .filter_line_targets
-                        .get(usize::from(slot))
-                        .cloned();
-                    if let Some(target) = target {
-                        self.panes[idx]
-                            .filter_line_hits
-                            .push(crate::chartdx::FilterLineHit {
-                                rect: [box_left, y, w, line_h],
-                                target,
-                                cfg: self.chart_labels.clone(),
-                            });
-                    }
-                }
+                self.push_filter_hits(idx, item.row, entry.action, [box_left, y, w, line_h]);
                 grow_column_band(
                     &mut self.panes[idx].column_bands,
                     item,
@@ -626,5 +603,51 @@ impl RenderState {
         }
         // Whichever way the line walked, this is how much of the band it spent.
         Ok((cursor - start_x).abs())
+    }
+}
+
+impl RenderState {
+    /// Register the strategy-filter header or a clickable filter line under one drawn line.
+    ///
+    /// Args:
+    ///     idx: Pane index.
+    ///     row: Label row the caption belongs to.
+    ///     action: The caption's action; anything but the two filter actions registers nothing.
+    ///     rect: The drawn line in window logical pixels, `[left, top, width, height]`.
+    fn push_filter_hits(
+        &mut self,
+        idx: usize,
+        row: usize,
+        action: Option<LabelAction>,
+        rect: [f32; 4],
+    ) {
+        match action {
+            Some(LabelAction::ToggleStrategyFilters) => {
+                self.panes[idx]
+                    .filter_header_hits
+                    .push(crate::chartdx::FilterHeaderHit {
+                        rect,
+                        row,
+                        cfg: self.chart_labels.clone(),
+                    });
+            }
+            Some(LabelAction::OpenFilterLine(slot)) => {
+                let target = self.panes[idx]
+                    .labels
+                    .filter_line_targets
+                    .get(usize::from(slot))
+                    .cloned();
+                if let Some(target) = target {
+                    self.panes[idx]
+                        .filter_line_hits
+                        .push(crate::chartdx::FilterLineHit {
+                            rect,
+                            target,
+                            cfg: self.chart_labels.clone(),
+                        });
+                }
+            }
+            _ => {}
+        }
     }
 }
