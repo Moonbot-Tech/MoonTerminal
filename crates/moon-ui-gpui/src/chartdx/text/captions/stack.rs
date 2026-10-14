@@ -362,8 +362,15 @@ impl RenderState {
                         grow_column_band(&mut self.panes[idx].column_bands, item, line_rect);
                         // Every wrapped line of a filter caption is a target of its own: the
                         // strategy-filter lines are prose, so they draw through this branch and
-                        // never reach the single-line registration below.
-                        self.push_filter_hits(idx, item.row, entry.action, line_rect);
+                        // never reach the single-line registration below. The target spans the
+                        // line PITCH, not the glyph box: the glyph box is taller than the pitch,
+                        // and overlapping targets would light two lines and click the wrong one.
+                        self.push_filter_hits(
+                            idx,
+                            item.row,
+                            entry.action,
+                            [box_left, y, w, item.line_h()],
+                        );
                         if item.plate {
                             match plates.iter_mut().find(|(row, _)| *row == item.row) {
                                 Some((_, box_)) => {
@@ -532,7 +539,7 @@ impl RenderState {
                     (false, true) => item_x,
                     (false, false) => item_x - w,
                 };
-                self.push_filter_hits(idx, item.row, entry.action, [box_left, y, w, line_h]);
+                self.push_filter_hits(idx, item.row, entry.action, [box_left, y, w, item.line_h()]);
                 grow_column_band(
                     &mut self.panes[idx].column_bands,
                     item,

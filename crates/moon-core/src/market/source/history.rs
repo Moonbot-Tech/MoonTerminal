@@ -239,6 +239,76 @@ impl MarketDataSource {
                 .ticks
                 .first()
                 .map(|tick| (tick.time_ms - epoch_ms) as f32);
+            // The core's mini-candles sit strictly left of the ring's oldest print. A full copy
+            // replaces the pane's path with everything up to the dots it just stamped; between
+            // copies the ring folds more prints away, and only those new mini-candles travel.
+            if let Some(minis) = readers.mini_candles.as_ref() {
+                if read.combo_reset {
+                    read.path_update = super::PriceLineUpdate::Replace;
+                    cursor.path_rows.clear();
+                    if let Some(first) = out.ticks.first() {
+                        super::volume::copy_window(
+                            minis,
+                            from_time.unix_millis(),
+                            first.time_ms as i64,
+                            &mut cursor.path_rows,
+                        );
+                    }
+                    cursor.path_minis = Some(match cursor.path_rows.last() {
+                        Some(last) => minis.cursor_at_or_after_time(
+                            moonproto::MoonTime::from_unix_millis(last.unix_millis() + 1),
+                        ),
+                        None => minis.cursor_at_or_after_time(from_time),
+                    });
+                } else if let Some(cur) = cursor.path_minis.as_mut() {
+                    let meta =
+                        minis.drain_new_bounded(cur, minis.capacity(), &mut cursor.path_rows);
+                    if meta.clipped {
+                        // The mini ring wrapped past the cursor: rebuild the path from what the
+                        // ring still holds, up to the dots, instead of leaving a hole.
+                        read.path_update = super::PriceLineUpdate::Replace;
+                        let dots_left = out.ticks.first().map(|t| t.time_ms as i64);
+                        match dots_left {
+                            Some(to) => super::volume::copy_window(
+                                minis,
+                                from_time.unix_millis(),
+                                to,
+                                &mut cursor.path_rows,
+                            ),
+                            None => cursor.path_rows.clear(),
+                        }
+                        *cur =
+                            minis.cursor_at_or_after_time(moonproto::MoonTime::from_unix_millis(
+                                cursor
+                                    .path_rows
+                                    .last()
+                                    .map_or(from_time.unix_millis(), |m| m.unix_millis() + 1),
+                            ));
+                    } else if meta.copied > 0 {
+                        read.path_update = super::PriceLineUpdate::Append;
+                    }
+                }
+                if read.path_update != super::PriceLineUpdate::None {
+                    out.path_minis.extend(
+                        cursor
+                            .path_rows
+                            .iter()
+                            .filter(|m| {
+                                m.min_price.is_finite()
+                                    && m.max_price.is_finite()
+                                    && m.min_price > 0.0
+                                    && m.max_price >= m.min_price
+                            })
+                            .map(|m| crate::market::candles::PathMini {
+                                t_open_ms: m.unix_millis() as f64,
+                                low: m.min_price,
+                                high: m.max_price,
+                            }),
+                    );
+                }
+            } else if read.combo_reset {
+                read.path_update = super::PriceLineUpdate::Replace;
+            }
             if let Some(t) = out.ticks.last() {
                 cursor.last_price = Some(t.price);
             } else if cursor.last_price.is_none() {

@@ -23,6 +23,8 @@ impl WgpuLayers {
             price_line_capacity: MIN_COMBO_CAPACITY,
             candles: Vec::new(),
             candle_style: CandleStyleGpu::default(),
+            path_candles: Vec::new(),
+            path_style: CandleStyleGpu::default(),
             sides: Vec::new(),
             hvol: Vec::new(),
             hvol_style: HvolStyleGpu::default(),
@@ -55,6 +57,8 @@ impl WgpuLayers {
             marker_buffer: BufferSlot::default(),
             candle_buffer: BufferSlot::default(),
             candle_style_uniform: BufferSlot::default(),
+            path_buffer: BufferSlot::default(),
+            path_style_uniform: BufferSlot::default(),
             volume_style_uniform: BufferSlot::default(),
             volume_style: VolumeStyleGpu::default(),
             side_buffer: BufferSlot::default(),
@@ -65,6 +69,7 @@ impl WgpuLayers {
             book_buffer_dirty: true,
             userdata_buffers_dirty: true,
             candle_buffers_dirty: true,
+            path_buffers_dirty: true,
             side_buffer_dirty: true,
             hvol_buffers_dirty: true,
         }
@@ -104,6 +109,22 @@ impl WgpuLayers {
         self.candles = data;
         self.candle_buffers_dirty = true;
         self.base_cache.valid = false;
+    }
+
+    /// Replaces the open candle's mini-candle path. Lives in the base cache, which is rebaked.
+    pub fn set_path_candles(&mut self, data: Vec<CandleGpu>) {
+        self.path_candles = data;
+        self.path_buffers_dirty = true;
+        self.base_cache.valid = false;
+    }
+
+    /// Idempotently updates the path layer's style.
+    pub fn set_path_style(&mut self, style: CandleStyleGpu) {
+        if self.path_style != style {
+            self.path_style = style;
+            self.path_buffers_dirty = true;
+            self.base_cache.valid = false;
+        }
     }
 
     /// Idempotently updates candle-layer mode, zone, colors, and outline style.
@@ -305,6 +326,9 @@ impl WgpuLayers {
         self.marker_buffer = BufferSlot::default();
         self.candle_buffer = BufferSlot::default();
         self.candle_style_uniform = BufferSlot::default();
+        self.path_buffer = BufferSlot::default();
+        self.path_style_uniform = BufferSlot::default();
+        self.path_buffers_dirty = true;
         self.volume_style_uniform = BufferSlot::default();
         self.side_buffer = BufferSlot::default();
         self.hvol_buffer = BufferSlot::default();

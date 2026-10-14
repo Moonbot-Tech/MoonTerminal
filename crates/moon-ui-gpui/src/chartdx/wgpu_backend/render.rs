@@ -126,6 +126,16 @@ impl WgpuLayers {
                 self.candles.len() as u32,
             );
         }
+        // The open candle's mini-candle path over its hidden body; no volume band of its own.
+        if !self.path_candles.is_empty() {
+            draw_pipeline(
+                pass,
+                &pipelines.candles,
+                &binds.path,
+                18,
+                self.path_candles.len() as u32,
+            );
+        }
         // The bought/sold half AFTER the candle layer: it covers the candle band's bucket that
         // straddles the split boundary, and draws the shared scale whether or not samples exist.
         if self.volume_style.m3[0] >= 0.5 {

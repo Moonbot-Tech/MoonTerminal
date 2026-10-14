@@ -214,7 +214,7 @@ impl ChartPanel {
         true
     }
 
-    /// Pointing-hand zones over clickable filter lines, tinting and underlining the hot one.
+    /// Pointing-hand zones over clickable filter lines, tinting and underlining the hovered one.
     ///
     /// The chart draws these captions on the GPU and has no tooltip channel there. The zones are
     /// the same overlay the filter header uses for its cursor, plus
@@ -231,10 +231,6 @@ impl ChartPanel {
         let Some((origin, _, zoom)) = self.chart_origin_logical() else {
             return out;
         };
-        let hot = self.input.cursor.and_then(|pos| {
-            let (origin, scale, _) = self.chart_origin_logical()?;
-            Some((pos.0 / scale + origin.0, pos.1 / scale + origin.1))
-        });
         let palette = MoonPalette::active(cx);
         for pane in 0..self.chart.pane_count() {
             let Some((core, _)) = self.chart.pane_target(pane) else {
@@ -252,8 +248,6 @@ impl ChartPanel {
                 if w <= 0.0 || h <= 0.0 {
                     continue;
                 }
-                let hot_here =
-                    hot.is_some_and(|(px, py)| px >= x && px <= x + w && py >= y && py <= y + h);
                 let tip = filter_line_tip(&target, &core_name);
                 out.push(
                     div()
@@ -264,7 +258,10 @@ impl ChartPanel {
                         .w(px(w / zoom))
                         .h(px(h / zoom))
                         .cursor(CursorStyle::PointingHand)
-                        .when(hot_here, |zone| {
+                        // GPUI's own hover state, not a hit test against the panel's cursor:
+                        // that one is read at render, and the chart panel re-renders on its own
+                        // schedule, so the tint trailed the pointer by a frame or more.
+                        .hover(move |zone| {
                             zone.bg(moon_alpha(palette.amber, 0.16))
                                 .border_b(px(1.0))
                                 .border_color(moon(palette.amber))

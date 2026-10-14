@@ -20,6 +20,7 @@ pub use figures::build_figure_geometry;
 pub mod frozen_overlay;
 pub mod layers;
 pub mod news_marks;
+pub mod open_candle_path;
 pub use news_marks::build_news_geometry;
 pub mod order_geometry;
 pub use order_geometry::build_order_geometry;
