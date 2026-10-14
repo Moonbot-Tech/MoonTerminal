@@ -24,7 +24,9 @@ core_expert.write_refused: "Đã gửi tới %{sent} trong %{total} core: số c
 core_expert.cores_title: "Core"
 core_expert.cores_selected: "đã chọn: %{n}"
 core_expert.cores_none: "Không có core: terminal chưa nối core nào."
-core_expert.core_no_page: "không có trang"
+core_expert.core_requesting: "đang yêu cầu…"
+core_expert.core_offline: "mất kết nối"
+core_expert.rail_hint: "Ctrl thêm lõi, Shift chọn một dải. Nhấp vào sàn để chọn tất cả lõi của sàn đó."
 # --- Banner: a write the session queue gave up on. ---
 core_expert.write_gave_up: "Core không xác nhận lần ghi cuối: không lần thử lại nào được trả lời. Giá trị trên trang này có thể không phải giá trị core đang giữ."
 # --- Footer: what Apply and OK will do, said before the click. ---

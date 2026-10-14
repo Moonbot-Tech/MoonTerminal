@@ -321,7 +321,38 @@ impl CoreExpertView {
             modifiers.secondary(),
         );
         let after = cores::targets(&self.selection, &self.roster);
-        if !self.changes.is_empty() && !cores::keeps_changes(&before, &after) {
+        self.finish_rail_selection(&before, &after, cx);
+    }
+
+    /// Select every member of one venue through the same staged-change rule as a row click.
+    /// Hidden rows remain members: collapsing a venue never changes the write targets.
+    pub(super) fn select_core_venue(
+        &mut self,
+        venue: Option<moon_core::feed::ExchangeId>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(section) = self
+            .roster
+            .sections
+            .iter()
+            .find(|section| section.venue.as_ref().map(|venue| venue.id) == venue)
+        else {
+            return;
+        };
+        let before = cores::targets(&self.selection, &self.roster);
+        cores::select_section(&mut self.selection, section);
+        let after = cores::targets(&self.selection, &self.roster);
+        self.finish_rail_selection(&before, &after, cx);
+    }
+
+    /// Settle a local selection change without altering the group's active core or send logic.
+    fn finish_rail_selection(
+        &mut self,
+        before: &[CoreId],
+        after: &[CoreId],
+        cx: &mut Context<Self>,
+    ) {
+        if !self.changes.is_empty() && !cores::keeps_changes(before, after) {
             log::info!(
                 "expert core settings dropped {} unsaved parameter(s): the selection moved to other cores",
                 self.changes.len()

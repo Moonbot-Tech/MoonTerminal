@@ -24,7 +24,9 @@ core_expert.write_refused: "Надіслано в %{sent} із %{total} ядер
 core_expert.cores_title: "Ядра"
 core_expert.cores_selected: "вибрано: %{n}"
 core_expert.cores_none: "Ядер немає: термінал не підключено до жодного."
-core_expert.core_no_page: "немає сторінки"
+core_expert.core_requesting: "запит…"
+core_expert.core_offline: "немає зв’язку"
+core_expert.rail_hint: "Ctrl — додати ядро, Shift — діапазон. Клік по біржі вибирає всі її ядра."
 # --- Banner: a write the session queue gave up on. ---
 core_expert.write_gave_up: "Ядро не підтвердило останній запис: жодна з повторних спроб не отримала відповіді. Значення на цій сторінці можуть не збігатися з тим, що тримає ядро."
 # --- Footer: what Apply and OK will do, said before the click. ---

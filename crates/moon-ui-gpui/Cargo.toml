@@ -157,6 +157,13 @@ foreign-types = "0.5"
 block = "0.1"
 objc = "0.2"
 core-graphics = "0.24"
+# Still-image capture of our own window and the native header text rasterizer (#860).
+objc2 = "0.6.4"
+block2 = "0.6.2"
+objc2-foundation = "0.3.2"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAttributedString", "NSBitmapImageRep", "NSColor", "NSFont", "NSFontDescriptor", "NSGraphics", "NSGraphicsContext", "NSImageRep", "NSResponder", "NSStringDrawing", "NSView", "NSWindow", "objc2-core-foundation", "objc2-core-graphics", "objc2-quartz-core"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CATransaction"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGImage"] }
 
 [dev-dependencies]
 # `test-support` is what makes `gpui::TestAppContext` / `gpui::VisualTestContext` -- and with them

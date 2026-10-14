@@ -15,8 +15,9 @@ use std::hash::{Hash, Hasher};
 
 use gpui::SharedString;
 
-use moon_core::feed::CoreConfig;
-use moon_core::session::CoreId;
+use moon_core::feed::{ConnStatus, CoreConfig};
+use moon_core::session::{CoreId, CoreRunState};
+use moon_core::venue::CoreVenue;
 
 use crate::Backend;
 use crate::controls::row_selection::RowSelection;
@@ -33,11 +34,19 @@ pub(super) struct RosterRow {
     /// OK can reach it. A row without one is still listed and selectable, so the user sees the
     /// core they meant rather than a gap, and the footer counts it as skipped.
     pub(super) has_page: bool,
+    /// Connection readiness, independent of whether a fresh settings page has arrived.
+    pub(super) connected: bool,
+    /// A failed connection uses the same danger role as the Auto rail.
+    pub(super) failed: bool,
+    /// The session projection used by the Auto rail's engine controls.
+    pub(super) run: CoreRunState,
 }
 
 /// One exchange section of the list, in the canonical order every core menu uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RosterSection {
+    /// Stable identity and brand source; captions never identify a venue.
+    pub(super) venue: Option<CoreVenue>,
     pub(super) label: SharedString,
     pub(super) rows: Vec<RosterRow>,
 }
@@ -57,7 +66,7 @@ pub(super) struct CoreRoster {
 }
 
 impl CoreRoster {
-    /// Hash of everything the list is built from — each session's id, name, venue and page state,
+    /// Hash of everything the list draws — each session's identity, venue, page and run state,
     /// plus the sort mode — so a sync can tell "nothing changed" without building the list.
     ///
     /// The list is rebuilt on a backend notification, which fires a few times a second on a
@@ -74,6 +83,16 @@ impl CoreRoster {
             session.id.hash(&mut hasher);
             session.name.hash(&mut hasher);
             venues.get(&session.id).map(|v| v.id).hash(&mut hasher);
+            b.session.core_run_rev(session.id).hash(&mut hasher);
+            store
+                .core(session.id)
+                .map(|d| {
+                    (
+                        d.status == ConnStatus::Ready,
+                        matches!(d.status, ConnStatus::Failed(_)),
+                    )
+                })
+                .hash(&mut hasher);
             store
                 .core(session.id)
                 .is_some_and(|d| d.live_core_config().is_some())
@@ -96,43 +115,63 @@ impl CoreRoster {
             .collect();
         let venues = b.session.core_venues();
         let store = b.session.store();
-        let mut order = Vec::with_capacity(cores.len());
         // The sections borrow the ordered list, so they are resolved to positions first and the
         // names are then TAKEN out of it rather than cloned a second time.
-        let sections: Vec<(SharedString, Vec<usize>)> = core_menu_sections(&cores, venues)
-            .into_iter()
-            .map(|(venue, members)| {
-                let positions = members
-                    .iter()
-                    .map(|(core, _)| {
-                        cores
-                            .iter()
-                            .position(|(id, _)| id == core)
-                            .expect("a section member comes from the list it was built from")
-                    })
-                    .collect();
-                (SharedString::from(venue_section_label(venue)), positions)
-            })
-            .collect();
+        let sections: Vec<(Option<CoreVenue>, SharedString, Vec<usize>)> =
+            core_menu_sections(&cores, venues)
+                .into_iter()
+                .map(|(venue, members)| {
+                    let positions = members
+                        .iter()
+                        .map(|(core, _)| {
+                            cores
+                                .iter()
+                                .position(|(id, _)| id == core)
+                                .expect("a section member comes from the list it was built from")
+                        })
+                        .collect();
+                    (
+                        venue.cloned(),
+                        SharedString::from(venue_section_label(venue)),
+                        positions,
+                    )
+                })
+                .collect();
         let sections = sections
             .into_iter()
-            .map(|(label, positions)| RosterSection {
+            .map(|(venue, label, positions)| RosterSection {
+                venue,
                 label,
                 rows: positions
                     .into_iter()
                     .map(|position| {
                         let (core, name) = &mut cores[position];
-                        order.push(Some(*core));
                         RosterRow {
                             core: *core,
                             name: SharedString::from(std::mem::take(name)),
                             has_page: store
                                 .core(*core)
                                 .is_some_and(|d| d.live_core_config().is_some()),
+                            connected: store
+                                .core(*core)
+                                .is_some_and(|d| d.status == ConnStatus::Ready),
+                            failed: store
+                                .core(*core)
+                                .is_some_and(|d| matches!(d.status, ConnStatus::Failed(_))),
+                            run: b.session.core_run_state(*core),
                         }
                     })
                     .collect(),
             })
+            .collect();
+        Self::from_sections(sections, key)
+    }
+
+    /// Index a resolved roster without changing its canonical section or member order.
+    pub(super) fn from_sections(sections: Vec<RosterSection>, key: u64) -> Self {
+        let order = sections
+            .iter()
+            .flat_map(|section| section.rows.iter().map(|row| Some(row.core)))
             .collect();
         Self {
             sections,
@@ -197,6 +236,17 @@ pub(super) fn anchor(selection: &RowSelection<CoreId>, roster: &CoreRoster) -> O
     selection
         .current()
         .or_else(|| roster.selected(selection).next().map(|row| row.core))
+}
+
+/// Replace the window-local selection with a venue's rows and anchor its first core.
+/// Uses the existing multi-selection API; no trading or workspace state is involved.
+pub(super) fn select_section(selection: &mut RowSelection<CoreId>, section: &RosterSection) {
+    let Some(first) = section.rows.first() else {
+        return;
+    };
+    selection.select_only(Some(first.core));
+    let order: Vec<_> = section.rows.iter().map(|row| Some(row.core)).collect();
+    selection.select_all(&order);
 }
 
 /// Every selected core in list order — what OK writes to.

@@ -28,6 +28,22 @@ fn manual_quote_guard_borrowing_projection_is_read_only() {
     assert!(!core_config_from_proto(&wire).auto_margin_borrow);
 }
 
+/// The chart-window checkbox decides whether detached charts rise with the main window (#850):
+/// the projection must carry it with MoonBot's default of on, and an unrelated settings edit must
+/// never write the terminal's copy back over the core's.
+#[test]
+fn charts_stay_on_top_projection_is_read_only_and_defaults_on() {
+    let mut wire = SharedConfig::default();
+    let mut draft = core_config_from_proto(&wire);
+    assert!(draft.charts_stay_on_top);
+    draft.charts_stay_on_top = false;
+    let mut sent = wire.clone();
+    apply_core_config(&mut sent, &draft, FieldMask::RENDERED_SECTIONS);
+    assert!(sent.visual.charts_settings.stay_on_top);
+    wire.visual.charts_settings.stay_on_top = false;
+    assert!(!core_config_from_proto(&wire).charts_stay_on_top);
+}
+
 /// Build a write out of a base config's own projection, changed by `mutate`.
 fn edit_from(cfg: &SharedConfig, mutate: impl FnOnce(&mut AutoStartSettings)) -> CoreConfig {
     let mut projected = core_config_from_proto(cfg);

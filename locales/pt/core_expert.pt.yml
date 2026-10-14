@@ -24,7 +24,9 @@ core_expert.write_refused: "Enviado para %{sent} de %{total} núcleos: o resto n
 core_expert.cores_title: "Núcleos"
 core_expert.cores_selected: "selecionados: %{n}"
 core_expert.cores_none: "Sem núcleos: o terminal não está conectado a nenhum."
-core_expert.core_no_page: "sem página"
+core_expert.core_requesting: "solicitando…"
+core_expert.core_offline: "sem conexão"
+core_expert.rail_hint: "Ctrl adiciona um núcleo, Shift seleciona um intervalo. Clique numa bolsa para selecionar todos os seus núcleos."
 # --- Banner: a write the session queue gave up on. ---
 core_expert.write_gave_up: "O núcleo nunca confirmou a última gravação: nenhuma das tentativas foi respondida. Os valores desta página podem não ser os que o núcleo guarda."
 # --- Footer: what Apply and OK will do, said before the click. ---

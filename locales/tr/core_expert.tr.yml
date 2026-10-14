@@ -24,7 +24,9 @@ core_expert.write_refused: "%{total} çekirdekten %{sent} tanesine gönderildi: 
 core_expert.cores_title: "Çekirdekler"
 core_expert.cores_selected: "seçili: %{n}"
 core_expert.cores_none: "Çekirdek yok: terminal hiçbirine bağlı değil."
-core_expert.core_no_page: "sayfa yok"
+core_expert.core_requesting: "isteniyor…"
+core_expert.core_offline: "bağlantı yok"
+core_expert.rail_hint: "Ctrl çekirdek ekler, Shift aralık seçer. Bir borsaya tıklamak tüm çekirdeklerini seçer."
 # --- Banner: a write the session queue gave up on. ---
 core_expert.write_gave_up: "Çekirdek son yazmayı onaylamadı: yeniden denemelerin hiçbiri yanıt almadı. Bu sayfadaki değerler çekirdeğin tuttuğu değerler olmayabilir."
 # --- Footer: what Apply and OK will do, said before the click. ---

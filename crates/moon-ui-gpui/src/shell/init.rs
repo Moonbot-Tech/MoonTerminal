@@ -343,6 +343,14 @@ impl Shell {
                     b.note_main_input(&group);
                     b.focus_singleton_owner(&group, bcx);
                 });
+                // Bring this group's detached charts up from under other apps, by the cores'
+                // checkbox (#850); this window keeps focus.
+                crate::backend::chart_follow::on_main_window_activated(
+                    &this.backend,
+                    &group,
+                    window,
+                    cx,
+                );
             }
         })
         .detach();

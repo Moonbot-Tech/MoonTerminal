@@ -1,6 +1,7 @@
 //! Workspace rail diagnostics, status presentation, and navigation actions.
 
 use super::*;
+pub(super) use crate::controls::core_rail::rail_row_base;
 
 /// Build one Auto core row's hover text, expanding a problem into its live diagnostics.
 ///
@@ -70,51 +71,6 @@ pub(super) fn rail_problem_pill(status: String, p: MoonPalette) -> impl IntoElem
         .border_color(p.red)
         .border_alpha(design::RAIL_PILL_BORDER_ALPHA)
         .text_color(design::danger_color(p))
-}
-
-/// Build shared selection, hover, and disabled chrome for one interactive rail row.
-///
-/// Args:
-///     id: Stable identity unique within the virtualized rail.
-///     selected: Whether this row owns the current Auto scope.
-///     selectable: Whether the row has a live owning group window and session.
-///     horizontal_padding: Density-specific left and right inset in logical pixels.
-///     gap: Density-specific gap between direct children in logical pixels.
-///     p: Active Moon palette.
-///     cx: Application context used for scaled padding.
-///
-/// Returns:
-///     Row container ready for content and an optional click callback.
-pub(super) fn rail_row_base(
-    id: impl Into<ElementId>,
-    selected: bool,
-    selectable: bool,
-    horizontal_padding: f32,
-    gap: f32,
-    p: MoonPalette,
-    cx: &App,
-) -> Stateful<Div> {
-    div()
-        .id(id)
-        .size_full()
-        .flex()
-        .items_center()
-        .min_w_0()
-        .gap(design::ui_px(cx, gap))
-        .px(design::ui_px(cx, horizontal_padding))
-        .text_size(design::t_body(cx))
-        .text_color(rgb(if selectable { p.text } else { p.text_muted }))
-        .when(selected, |row| {
-            row.bg(design::moon_alpha(
-                p.accent,
-                design::RAIL_ROW_SELECTED_ALPHA,
-            ))
-        })
-        .when(selectable, |row| {
-            row.cursor_pointer().hover(move |row| {
-                row.bg(design::moon_alpha(p.accent, design::RAIL_ROW_HOVER_ALPHA))
-            })
-        })
 }
 
 /// Execute one pure rail navigation action without reparenting group-owned panels.

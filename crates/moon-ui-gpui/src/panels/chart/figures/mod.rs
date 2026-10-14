@@ -786,39 +786,34 @@ impl ChartPanel {
         Some((core, market, id))
     }
 
-    /// Drop the selection when a click lands on no figure at all.
+    /// Move the selection to the figure under a plain click, or drop it when the click hits none.
     ///
     /// Called for clicks the figure layer did NOT consume — which is most of them, since grabbing
     /// a figure needs the secondary modifier and an ordinary click belongs to trading and
-    /// navigation. Without this a selection outlived every click that missed it: its handles kept
-    /// sitting on the chart, and Delete/Alert kept pointing at a figure the user had stopped
-    /// working on. Never consumes the click; the caller carries on with it.
-    pub(super) fn fig_clear_selection_on_miss(&mut self, pos: (f32, f32), cx: &mut Context<Self>) {
-        // Only for a selection made on THIS chart. `fig_selected` is global: a click in another
-        // panel or in a detached window would otherwise silently drop a selection its user can
-        // still see.
+    /// navigation. A click ON a figure selects it, moving the knots off any older figure, so the
+    /// `fig_delete` key can never be left pointing at a figure the user stopped working on (#971);
+    /// it does not start a drag, which stays the modifier-click's. A click on no figure ends a
+    /// selection made on THIS chart: `fig_selected` is global, and a click in another panel or a
+    /// detached window would otherwise silently drop a selection its user can still see. Never
+    /// consumes the click; the caller carries on with it.
+    pub(super) fn fig_select_on_plain_click(&mut self, pos: (f32, f32), cx: &mut Context<Self>) {
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
             return;
         };
         let Some((core, market)) = self.fig_pane_key(pane) else {
             return;
         };
-        if !self
-            .backend
-            .read(cx)
-            .fig_selected
-            .as_ref()
-            .is_some_and(|(c, m, _)| *c == core && *m == market)
-        {
+        let hit = self.fig_hit_key_at(pos, cx);
+        let next = {
+            let selected = self.backend.read(cx).fig_selected.as_ref();
+            let selected_here = selected.is_some_and(|(c, m, _)| *c == core && *m == market);
+            crate::hotkeys::fig_target::plain_click_selection(hit, selected, selected_here)
+        };
+        let Some(next) = next else {
             return;
-        }
-        // A click ON a figure is not a miss, modifier or not: pointing at a figure and losing its
-        // handles for it would read as the click having gone somewhere else.
-        if self.fig_hit_at(pos, cx).is_some() {
-            return;
-        }
+        };
         self.backend.update(cx, |b, bcx| {
-            b.fig_selected = None;
+            b.fig_selected = next;
             bcx.notify();
         });
         self.sync_fig_visual(cx);

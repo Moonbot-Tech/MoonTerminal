@@ -1001,6 +1001,16 @@ pub(crate) struct TaskbarHideTask {
 }
 
 impl TaskbarHideTask {
+    /// A token with no burst behind it, for a window that is keeping its taskbar button.
+    ///
+    /// Returns:
+    ///     Token whose cancellation is a no-op.
+    pub(crate) fn idle() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
     /// Cancel this burst without waiting for its worker thread to finish.
     ///
     /// Returns:
@@ -1149,6 +1159,129 @@ pub(crate) fn hide_window_from_taskbar_soon(_: &Window) -> TaskbarHideTask {
         cancelled: Arc::new(AtomicBool::new(false)),
     }
 }
+
+/// Give an independent window back the taskbar button a hide burst deleted.
+///
+/// A detached chart whose group stopped following its main window (#850,
+/// [`crate::window::chart_follow::ChartFollow::Independent`]) must be raisable on its own, so the
+/// button `hide_window_from_taskbar_soon` removed is re-added once. `ITaskbarList::AddTab` on a
+/// window that already has its button is harmless, so callers need no record of whether a burst
+/// ran. COM runs on its own short-lived apartment thread, like the hide burst.
+///
+/// Args:
+///     window: Live independent window used only to copy its integer HWND.
+///
+/// Returns:
+///     Nothing; failure is cosmetic and silent.
+#[cfg(target_os = "windows")]
+pub(crate) fn show_window_in_taskbar(window: &Window) {
+    if let Some(hwnd) = taskbar_hwnd(window) {
+        let _ = std::thread::Builder::new()
+            .name("moon-taskbar-show".to_string())
+            .spawn(move || run_taskbar_show_worker(hwnd));
+    }
+}
+
+/// Leave taskbar state unchanged outside Windows.
+///
+/// Args:
+///     window: Window accepted for API parity.
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn show_window_in_taskbar(_: &Window) {}
+
+/// Add one window's taskbar button inside a dedicated COM apartment thread.
+///
+/// Args:
+///     hwnd_value: Integer HWND copied while the GPUI window was live.
+#[cfg(target_os = "windows")]
+fn run_taskbar_show_worker(hwnd_value: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+    };
+    use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
+    use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+
+    unsafe {
+        if CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_err() {
+            return;
+        }
+        struct ComApartment;
+        impl Drop for ComApartment {
+            fn drop(&mut self) {
+                unsafe { CoUninitialize() };
+            }
+        }
+        let _apartment = ComApartment;
+        let taskbar: ITaskbarList = match CoCreateInstance(&TaskbarList, None, CLSCTX_ALL) {
+            Ok(taskbar) => taskbar,
+            Err(_) => return,
+        };
+        if taskbar.HrInit().is_err() {
+            return;
+        }
+        let hwnd = HWND(hwnd_value as *mut _);
+        if IsWindow(Some(hwnd)).as_bool() {
+            let _ = taskbar.AddTab(hwnd);
+        }
+    }
+}
+
+/// Raise detached chart windows in place, just beneath the main window that was activated (#850).
+///
+/// Each chart is inserted directly after `main` in the z-order, so it comes out from under the
+/// apps that covered it while the main window, which the user just activated, stays on top and
+/// keeps focus. `SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE` makes this a pure z-order change: no
+/// move, no cascade, no activation. A minimized chart is skipped, never restored. The charts stay
+/// unowned windows, so a click on a chart does not pull the main window across monitors and
+/// FancyZones keeps seeing them; nor does minimizing the main window minimize them.
+///
+/// Args:
+///     main: HWND of the group window that was just activated.
+///     charts: HWNDs of that group's detached charts, in the order they should end up stacked
+///         under `main` (first = nearest the main window).
+#[cfg(target_os = "windows")]
+pub(crate) fn raise_charts_below(main: isize, charts: &[isize]) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IsIconic, IsWindow, IsWindowVisible, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+        SWP_NOSIZE, SetWindowPos,
+    };
+
+    let main = HWND(main as *mut _);
+    // Inserting each one right after `main` would reverse the list, so walk it backwards.
+    for &chart in charts.iter().rev() {
+        let hwnd = HWND(chart as *mut _);
+        unsafe {
+            if !IsWindow(Some(hwnd)).as_bool()
+                || !IsWindowVisible(hwnd).as_bool()
+                || IsIconic(hwnd).as_bool()
+            {
+                continue;
+            }
+            let _ = SetWindowPos(
+                hwnd,
+                Some(main),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+            );
+        }
+    }
+}
+
+/// No in-place raise outside Windows.
+///
+/// GPUI's only cross-platform way to bring a window forward is `activate_window`, which also takes
+/// focus away from the main window the user just clicked; the charts are left as they are there.
+///
+/// Args:
+///     main: Accepted for API parity.
+///     charts: Accepted for API parity.
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn raise_charts_below(_main: isize, _charts: &[isize]) {}
 
 #[cfg(test)]
 mod tests;

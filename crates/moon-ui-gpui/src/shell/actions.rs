@@ -389,14 +389,11 @@ impl Shell {
             HotkeyAction::CancelHoveredOrder => {
                 crate::hotkeys::cancel_hovered_order(&self.backend, &press, window, cx)
             }
-            // Delete prioritizes the selected figure, then falls back to hovered-order cancellation.
-            // The default figure binding resolves before built-in Tab/Delete and would otherwise
-            // shadow order cancellation permanently.
+            // Delete aims at the figure under the cursor, then the selected one, and only with
+            // neither falls back to hovered-order cancellation. The default figure binding resolves
+            // before built-in Tab/Delete and would otherwise shadow order cancellation permanently.
             HotkeyAction::FigDelete => {
-                self.backend.update(cx, |b, bcx| {
-                    // Figure deletion does not use a chart target or active core.
-                    crate::hotkeys::apply(action, b, bcx, &group, None, None)
-                }) || crate::hotkeys::cancel_hovered_order(&self.backend, &press, window, cx)
+                crate::hotkeys::fig_delete_or_cancel(&self.backend, &press, window, cx)
             }
             // Built-in Shift+Escape increments the global revision that closes every Main stack.
             HotkeyAction::CloseAllCharts => {

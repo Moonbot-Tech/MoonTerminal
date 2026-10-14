@@ -8,7 +8,8 @@
 //! secondary modifier is Command, so there it does arrive), and a right DOUBLE click is taken by
 //! the figure menu, which opens on press one and whose overlay eats press two.
 
-use gpui::{Context, Modifiers};
+use gpui::{App, Context, Modifiers};
+use moon_core::session::CoreId;
 
 use super::super::trade::TradeMouseButton;
 use super::ChartPanel;
@@ -39,9 +40,8 @@ impl ChartPanel {
     /// Delete the figure under the cursor for the configured mouse gesture.
     ///
     /// Hit tested at the CURSOR, exactly like the right-click menu, and NOT against `fig_selected`:
-    /// pointing at the figure is the whole gesture. Requiring a selection first would make this a
-    /// two-step act, which is what the keyboard route already is — `HotkeyAction::FigDelete` has no
-    /// cursor position and can only work off a selection.
+    /// pointing at the figure is the whole gesture. The `fig_delete` key aims the same way first
+    /// (`hovered_figure_key`) and falls back to the selection only with nothing under the cursor.
     ///
     /// Deletes only a figure this chart DREW. Two neighbours look identical on screen and are not:
     /// a figure another core shares onto this market lives there, and deleting it destroys the
@@ -87,15 +87,63 @@ impl ChartPanel {
         let Some((core, market, id)) = self.fig_hit_key_at(pos, cx) else {
             return false;
         };
+        self.delete_pointed_figure(core, &market, id, cx);
+        true
+    }
+
+    /// The figure under the cursor, as the hover paints it, with the chart it belongs to.
+    ///
+    /// Read off `fig_hover` rather than hit testing again: a key press has no position of its own,
+    /// and the bright hover stroke is what the user sees as "aimed at". `None` mid-draft and
+    /// mid-drag, exactly where the delete gesture refuses too: the press then belongs to the figure
+    /// being placed or moved, and deleting a dragged figure would strand `fig_drag` on a dead id.
+    pub(crate) fn hovered_figure_key(&self, cx: &App) -> Option<(CoreId, String, u64)> {
+        if self.fig_draft.is_some() || self.fig_drag.is_some() {
+            return None;
+        }
+        let id = self.fig_hover?;
+        // `cursor`, not `last_ptr`: an ordinary move updates only the former, so the latter can
+        // still name a pane the pointer left since its last click.
+        let pane = self.chart_gesture_pane_at(self.input.cursor?)?;
+        let (core, market) = self.fig_pane_key(pane)?;
+        let b = self.backend.read(cx);
+        let alive = b
+            .figures
+            .borrow()
+            .visible(core, &market)
+            .any(|f| f.id == id);
+        alive.then_some((core, market, id))
+    }
+
+    /// Whether any pane of this chart shows the `(core, market)` figures are keyed by.
+    pub(crate) fn shows_market(&self, core: CoreId, market: &str) -> bool {
+        (0..self.pane_count()).any(|pane| {
+            self.fig_pane_key(pane)
+                .is_some_and(|(c, m)| c == core && m == market)
+        })
+    }
+
+    /// Delete a figure the user pointed at — by the delete gesture or the `fig_delete` key over it.
+    ///
+    /// Deletes only a figure this chart DREW, for the reasons `try_fig_delete_click` gives: a
+    /// shared or `from_server` figure is deleted only through the right-click menu's named item.
+    /// The caller still treats the press as consumed either way.
+    pub(crate) fn delete_pointed_figure(
+        &mut self,
+        core: CoreId,
+        market: &str,
+        id: u64,
+        cx: &mut Context<Self>,
+    ) {
         // The store borrow is dropped before `remove_figure` takes the same `RefCell` mutably: a
         // `Ref` still alive across that call panics inside the frame loop.
         let ours = {
             let b = self.backend.read(cx);
             let store = b.figures.borrow();
-            store.is_local(core, &market, id)
+            store.is_local(core, market, id)
         };
         if !ours {
-            return true;
+            return;
         }
         // Cleared BEFORE the removal, so the republish that the notify below triggers already sees
         // it gone. Nothing moves the pointer after a click, so a hover still naming the deleted
@@ -107,7 +155,7 @@ impl ChartPanel {
             self.fig_hover_probe = None;
         }
         self.backend.update(cx, |b, bcx| {
-            b.remove_figure(core, &market, id);
+            b.remove_figure(core, market, id);
             // The repaint rides this notify, and only it: the observer republishes the figure
             // layer in THIS window and in every other one showing this market, and closes a style
             // panel left open on the figure. A `sync_fig_visual` here would publish a third time on
@@ -115,6 +163,5 @@ impl ChartPanel {
             // reaches the screen.
             bcx.notify();
         });
-        true
     }
 }

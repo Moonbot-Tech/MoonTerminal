@@ -351,7 +351,7 @@ fn detached_chart_activation_and_activity_refresh_auto_singleton_ownership() {
         "detached chart activation observer",
     );
     assert!(
-        activation.contains("hide_window_from_taskbar_soon(window)")
+        activation.contains("chart_follow::chart_taskbar_policy(")
             && activation.contains("if window.is_window_active()")
             && activation.contains("b.focus_singleton_owner(&group, bcx)"),
         "native detached-chart activation must focus its Auto owner independently of idle polling"
@@ -1131,7 +1131,7 @@ fn rail_core_name_is_never_recoloured_by_status() {
 
 /// A5 (band C) — the rail's hover state must stay visibly weaker than its selected state but
 /// strictly above zero, and hover must remain gated behind `selectable` so a disabled row never
-/// highlights. `crates/moon-ui-gpui/src/shell/workspace.rs::rail_row_base`, plus the two new
+/// highlights. `crates/moon-ui-gpui/src/controls/core_rail.rs::rail_row_base`, plus the two new
 /// `design.rs` alpha tokens (plan-B.md Step 0).
 ///
 /// Future edit that must redden this: set `RAIL_ROW_HOVER_ALPHA` to `0.0`, or move `.hover(..)`
@@ -1148,7 +1148,7 @@ fn rail_hover_alpha_sits_strictly_between_zero_and_selected_and_stays_selectable
         "hover ({hover}) must sit strictly between 0.0 and the selected alpha ({selected})"
     );
 
-    let workspace = code_only(&read_shell_workspace());
+    let workspace = code_only(&read_src("controls/core_rail.rs"));
     let row_base = braced_body(&workspace, "fn rail_row_base(")
         .split_whitespace()
         .collect::<String>();

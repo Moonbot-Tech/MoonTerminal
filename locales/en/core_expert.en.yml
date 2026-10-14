@@ -24,7 +24,9 @@ core_expert.write_refused: "Sent to %{sent} of %{total} cores: the rest have no 
 core_expert.cores_title: "Cores"
 core_expert.cores_selected: "selected: %{n}"
 core_expert.cores_none: "No cores: the terminal is connected to none."
-core_expert.core_no_page: "no page"
+core_expert.core_requesting: "requesting…"
+core_expert.core_offline: "offline"
+core_expert.rail_hint: "Ctrl adds a core, Shift selects a range. Click an exchange to select all its cores."
 # --- Banner: a write the session queue gave up on. ---
 core_expert.write_gave_up: "The core never confirmed the last write: none of the retries was answered. The values on this page may not be what the core holds."
 # --- Footer: what Apply and OK will do, said before the click. ---

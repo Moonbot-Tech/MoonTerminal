@@ -18,6 +18,7 @@
 //! their bare function-key or Delete forms.
 
 pub(crate) mod cancel_hold;
+pub(crate) mod fig_target;
 mod layout;
 pub mod meta;
 #[cfg(test)]
@@ -785,8 +786,8 @@ pub fn recorded_keystroke(mut keystroke: Keystroke) -> Keystroke {
 
 /// Cancel the order under the cursor through `Backend::hovered_chart`.
 ///
-/// This is shared by the built-in Tab/Delete route and the caller's `FigDelete` fallback when no
-/// figure is selected. The default `fig_delete = Delete` resolves before the built-in branch and
+/// This is shared by the built-in Tab/Delete route and [`fig_delete_or_cancel`]'s fallback when no
+/// figure is aimed at. The default `fig_delete = Delete` resolves before the built-in branch and
 /// would otherwise shadow hovered-order cancellation. Returns `false` when no hovered chart or
 /// order exists, allowing the key event to continue propagating. Arms the cancel hold here — the
 /// single shared entry — so a Del that deleted a selected figure never starts a sweep.
@@ -811,6 +812,61 @@ pub fn cancel_hovered_order(
     with_hovered_chart(backend, cx, |panel, pcx| {
         panel.cancel_hovered_order(kind, pcx)
     })
+}
+
+/// Run the `fig_delete` key in the order `fig_target::press_fig_delete` fixes (#971).
+///
+/// The figure under the cursor on the hovered chart is deleted and the entry cancel never runs —
+/// the factory Delete is also the built-in cancel key, and a Delete aimed at a drawing must not
+/// cancel the buy under it. Else [`cancel_hovered_order`] runs exactly as the built-in Tab/Delete;
+/// only when it found no order is the selected figure on this chart deleted.
+///
+/// Returns whether the press was consumed.
+pub fn fig_delete_or_cancel(
+    backend: &Entity<Backend>,
+    press: &HotkeyPress,
+    window: &Window,
+    cx: &mut App,
+) -> bool {
+    use fig_target::FigDeleteTarget;
+    let chart = hovered_chart(backend, cx);
+    let hovered = chart
+        .as_ref()
+        .and_then(|chart| chart.read(cx).hovered_figure_key(cx));
+    let selected = backend.read(cx).fig_selected.clone();
+    let selected_in_reach = match (&chart, &selected) {
+        (Some(chart), Some((core, market, _))) => chart.read(cx).shows_market(*core, market),
+        _ => true,
+    };
+    fig_target::press_fig_delete(
+        hovered,
+        selected,
+        selected_in_reach,
+        cx,
+        |target, cx| match target {
+            FigDeleteTarget::Hovered((core, market, id)) => {
+                if let Some(chart) = chart {
+                    chart.update(cx, |panel, pcx| {
+                        panel.delete_pointed_figure(core, &market, id, pcx)
+                    });
+                }
+            }
+            // Only a figure this terminal drew, as the hovered branch and the delete gesture: a
+            // shared or `from_server` figure (a plain click can select one) is deleted only through
+            // the right-click menu's named item. The press is spent either way.
+            //
+            // The cancel ran first and found no order, but it armed the cancel hold: dropped here,
+            // so a held key that just deleted a figure never turns into an order sweep.
+            FigDeleteTarget::Selected((core, market, id)) => backend.update(cx, |b, bcx| {
+                b.cancel_hold.clear();
+                if b.figures.borrow().is_local(core, &market, id) {
+                    b.remove_figure(core, &market, id);
+                    bcx.notify();
+                }
+            }),
+        },
+        |cx| cancel_hovered_order(backend, press, window, cx),
+    )
 }
 
 /// Clear the cancel hold when its key is released.
@@ -1107,15 +1163,9 @@ pub fn apply(
                 true
             }
         }
-        A::FigDelete => {
-            if let Some((core, market, id)) = b.fig_selected.clone() {
-                b.remove_figure(core, &market, id);
-                bcx.notify();
-                true
-            } else {
-                false
-            }
-        }
+        // Aimed at the cursor first, which `apply` has no view of: the caller routes it through
+        // `fig_delete_or_cancel`.
+        A::FigDelete => false,
         A::OrderSize(i) => {
             b.set_order_size_sel(group, i);
             b.order_size_rev = b.order_size_rev.wrapping_add(1);

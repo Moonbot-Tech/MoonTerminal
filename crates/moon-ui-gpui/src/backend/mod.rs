@@ -30,6 +30,7 @@ pub(crate) use open_request::{ChartHistoryScope, OpenCompareRequest, OpenMainReq
 pub(crate) use problem_sound::ProblemSoundState;
 
 mod chart_consumers;
+pub(crate) mod chart_follow;
 mod chart_refs;
 mod header_coins;
 mod main_targets;

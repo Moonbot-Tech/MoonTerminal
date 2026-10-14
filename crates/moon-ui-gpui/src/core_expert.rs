@@ -132,6 +132,12 @@ pub struct CoreExpertView {
     /// Every core the terminal runs, as the list draws it; rebuilt by the sync when its inputs
     /// move.
     roster: CoreRoster,
+    /// Content width retained until roster captions or typography change.
+    rail_width: sidebar::RailWidthCache,
+    /// Collapsed venues are presentation state only; their cores remain selected and targeted.
+    collapsed_venues: std::collections::HashSet<Option<moon_core::feed::ExchangeId>>,
+    /// Logos are rasterized off the render path before the first branded rail frame.
+    exchange_logos_ready: bool,
     /// Which rows are selected — the cores OK writes to — and which was clicked last.
     selection: RowSelection<CoreId>,
     /// The core the page follows, resolved from the selection by [`cores::anchor`] on every sync.
@@ -304,9 +310,24 @@ impl CoreExpertView {
         })
         .detach();
 
+        cx.spawn(async move |this, cx| {
+            cx.background_spawn(async { crate::media::exchange_logos::prewarm() })
+                .await;
+            cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.exchange_logos_ready = true;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+
         let mut this = Self {
             backend,
             roster: CoreRoster::default(),
+            rail_width: sidebar::RailWidthCache::default(),
+            collapsed_venues: std::collections::HashSet::new(),
+            exchange_logos_ready: false,
             selection: RowSelection::default(),
             anchor: None,
             tab: ExpertTab::default(),

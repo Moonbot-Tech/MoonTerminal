@@ -1,5 +1,6 @@
 //! OS window infrastructure: creation options, the group-window host, and detached windows.
 
+pub(crate) mod chart_follow;
 pub(crate) mod detached;
 pub(crate) mod group_window;
 pub(crate) mod input_hook;
