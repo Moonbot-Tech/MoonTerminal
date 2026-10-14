@@ -546,7 +546,7 @@ impl StrategiesView {
                 // A bounded strip windows the list so the coin stays visible at any position.
                 let max_width = Some(design::font_w_px(
                     cx,
-                    if compact_row { 160.0 } else { 480.0 },
+                    if compact_row { 160.0 } else { 360.0 },
                 ));
                 crate::controls::coin_token::coin_token_strip(text, &item.coin, size, max_width, cx)
             })
