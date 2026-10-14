@@ -11,7 +11,7 @@ use moon_core::venue::CoreVenue;
 use moon_ui::{MoonTheme, h_flex};
 use rust_i18n::t;
 
-use super::{RailAction, RailPresentation, rail};
+use super::{RailAction, RailPresentation, RailWidthCache, rail};
 use crate::controls::row_selection::RowSelection;
 use crate::core_expert::cores::{CoreRoster, RosterRow, RosterSection};
 use crate::design;
@@ -33,7 +33,7 @@ fn roster() -> CoreRoster {
                             RosterRow {
                                 core,
                                 name: format!(
-                                    "CORE_A ~ EX-XX / UNIT_{core:02} EXTRA_LONG_ACCOUNT_NAME"
+                                    "CORE_ALPHA$22 ~ EX-XX / UNIT_LONG_NAME (SUB_01) TOKEN_{core:02}"
                                 )
                                 .into(),
                                 has_page: core != 2,
@@ -57,6 +57,7 @@ fn roster() -> CoreRoster {
 
 /// Fixture view calls the complete production builder, including MoonUI badges and disclosure.
 struct RailProbe {
+    width_cache: RailWidthCache,
     roster: CoreRoster,
     selection: RowSelection<u64>,
     collapsed: HashSet<Option<moon_core::feed::ExchangeId>>,
@@ -65,9 +66,11 @@ struct RailProbe {
 
 impl Render for RailProbe {
     /// Render production chrome at the window's actual zoom and theme.
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex().size_full().child(rail(
             RailPresentation {
+                width_cache: &self.width_cache,
+                viewport_width: crate::window::windowing::responsive_width(window),
                 roster: &self.roster,
                 selection: &self.selection,
                 anchor: Some(2),
@@ -96,7 +99,51 @@ fn bounds(visual: &mut gpui::VisualTestContext, id: &'static str) -> Bounds<Pixe
         .unwrap_or_else(|| panic!("missing {id}"))
 }
 
-/// A future nonshrinking name, shrinking chip, fixed chrome height or missing zoom must fail here.
+/// A cached width must grow after a rename and shrink again when that long name disappears.
+#[gpui::test]
+fn expert_rail_width_invalidates_after_rename(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(|app| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            app,
+        );
+        let cache = RailWidthCache::default();
+        let selection = RowSelection::default();
+        let collapsed = HashSet::new();
+        let measure = |roster: &CoreRoster| {
+            cache.width(
+                &RailPresentation {
+                    width_cache: &cache,
+                    viewport_width: 860.0,
+                    roster,
+                    selection: &selection,
+                    anchor: None,
+                    collapsed: &collapsed,
+                    logos_ready: true,
+                    action: Rc::new(|_, _| {}),
+                },
+                &[],
+                app,
+            )
+        };
+        let mut input = roster();
+        let original = measure(&input);
+        let previous = input.sections[0].rows[0].name.clone();
+        input.sections[0].rows[0].name =
+            format!("{previous} EXTRA_DISTINGUISHING_ACCOUNT_TAIL").into();
+        let renamed = measure(&input);
+        assert!(renamed > original, "renamed core retained stale geometry");
+        input.sections[0].rows[0].name = previous;
+        assert_eq!(
+            measure(&input),
+            original,
+            "removed long name retained excess width"
+        );
+    });
+}
+
+/// Fixed rail widths, ellipsised tails, shrinking chips or missing zoom must fail here.
 #[gpui::test]
 fn expert_rail_keeps_names_chips_and_chrome_inside_in_every_locale(cx: &mut gpui::TestAppContext) {
     crate::media::exchange_logos::prewarm();
@@ -121,6 +168,7 @@ fn expert_rail_keeps_names_chips_and_chrome_inside_in_every_locale(cx: &mut gpui
                         let mut selection = RowSelection::default();
                         selection.select_only(Some(2));
                         RailProbe {
+                            width_cache: RailWidthCache::default(),
                             roster: roster(),
                             selection,
                             collapsed: HashSet::new(),
@@ -140,8 +188,14 @@ fn expert_rail_keeps_names_chips_and_chrome_inside_in_every_locale(cx: &mut gpui
                 let actual_zoom = visual.update(|window, _| window.content_zoom());
                 assert_eq!(actual_zoom, zoom);
                 assert!(
-                    (f32::from(rail_box.size.width) * actual_zoom - 300.0 * zoom).abs() < 1.0,
-                    "rail ignored window zoom: {rail_box:?}"
+                    f32::from(rail_box.size.width) >= 300.0,
+                    "rail lost its width floor: {rail_box:?}"
+                );
+                let viewport = bounds(&mut visual, "expert-rail-viewport");
+                assert!(f32::from(viewport.size.width) <= 860.0 * 0.45 + 0.5);
+                assert!(
+                    viewport.size.width < rail_box.size.width,
+                    "long names need horizontal access"
                 );
                 let header = bounds(&mut visual, "expert-header");
                 let summary = bounds(&mut visual, "expert-summary");
@@ -261,6 +315,30 @@ fn expert_rail_keeps_names_chips_and_chrome_inside_in_every_locale(cx: &mut gpui
                         inside(row, rail_box) && inside(name, row),
                         "row/name overflow: {core}"
                     );
+                    let text =
+                        format!("CORE_ALPHA$22 ~ EX-XX / UNIT_LONG_NAME (SUB_01) TOKEN_{core:02}");
+                    let required = visual.update(|window, app| {
+                        let runs = [gpui::TextRun {
+                            len: text.len(),
+                            font: gpui::Font {
+                                weight: if core == 2 {
+                                    gpui::FontWeight::SEMIBOLD
+                                } else {
+                                    gpui::FontWeight::NORMAL
+                                },
+                                ..gpui::font(design::mono())
+                            },
+                            ..gpui::TextRun::default()
+                        }];
+                        window
+                            .text_system()
+                            .shape_line(text.into(), design::t_caption(app), &runs, None)
+                            .width
+                    });
+                    assert!(
+                        required <= name.size.width + px(0.5),
+                        "tail clipped: {locale:?}/{core}"
+                    );
                     assert!(
                         (f32::from(row.size.height) * actual_zoom - 30.0 * zoom).abs() < 0.5,
                         "row shrank"
@@ -283,9 +361,99 @@ fn expert_rail_keeps_names_chips_and_chrome_inside_in_every_locale(cx: &mut gpui
                         );
                     }
                 }
+                // Drive horizontal access: the distinguishing tail must be reachable at minimum width.
+                visual.simulate_event(gpui::ScrollWheelEvent {
+                    position: gpui::point(viewport.center().x, header.center().y),
+                    delta: gpui::ScrollDelta::Pixels(gpui::point(px(-10000.0), px(0.0))),
+                    ..Default::default()
+                });
+                visual.update(|window, app| {
+                    let _ = window.draw(app);
+                });
+                let scrolled = bounds(&mut visual, "expert-rail");
+                assert!(scrolled.origin.x < rail_box.origin.x, "rail did not scroll");
+                for id in ["expert-name-1", "expert-name-2"] {
+                    let name = bounds(&mut visual, id);
+                    assert!(
+                        name.right() <= viewport.right() + px(0.5),
+                        "tail unreachable: {id}"
+                    );
+                }
+                visual.simulate_resize(gpui::size(px(2000.0 * zoom), px(900.0 * zoom)));
+                visual.update(|window, app| {
+                    let _ = window.draw(app);
+                });
+                let wide = bounds(&mut visual, "expert-rail-viewport");
+                let content = bounds(&mut visual, "expert-rail");
+                assert_eq!(
+                    wide.size.width, content.size.width,
+                    "wide window still clips names"
+                );
             }
         }
     }
+}
+
+/// Nested scrolling must never pan names on a vertical wheel or move rows on a horizontal wheel.
+#[gpui::test]
+fn expert_rail_nested_wheels_stay_on_their_own_axis(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(|app| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            app,
+        )
+    });
+    let handle = cx.open_window(gpui::size(px(860.0), px(400.0)), |_, _| RailProbe {
+        width_cache: RailWidthCache::default(),
+        roster: roster(),
+        selection: RowSelection::default(),
+        collapsed: HashSet::new(),
+        action: Rc::new(|_, _| {}),
+    });
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    for _ in 0..3 {
+        visual.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    let before = bounds(&mut visual, "expert-name-2");
+    let row = bounds(&mut visual, "expert-row-5");
+    let position = gpui::point(px(100.0), row.center().y);
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-30.0))),
+        ..Default::default()
+    });
+    visual.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let vertical = bounds(&mut visual, "expert-name-2");
+    assert_eq!(
+        vertical.origin.x, before.origin.x,
+        "vertical wheel panned core names"
+    );
+    assert!(
+        vertical.origin.y < before.origin.y,
+        "vertical list did not scroll"
+    );
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(-30.0), px(0.0))),
+        ..Default::default()
+    });
+    visual.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let horizontal = bounds(&mut visual, "expert-name-2");
+    assert!(
+        horizontal.origin.x < vertical.origin.x,
+        "horizontal rail did not scroll"
+    );
+    assert_eq!(
+        horizontal.origin.y, vertical.origin.y,
+        "horizontal wheel moved core rows"
+    );
 }
 
 /// A disclosure click must never select a venue; row clicks retain their native modifiers.
@@ -301,6 +469,7 @@ fn expert_rail_caret_and_selection_have_separate_click_targets(cx: &mut gpui::Te
     let events: Rc<RefCell<Vec<RailAction>>> = Rc::default();
     let sink = events.clone();
     let handle = cx.open_window(gpui::size(px(860.0), px(900.0)), |_, _| RailProbe {
+        width_cache: RailWidthCache::default(),
         roster: roster(),
         selection: RowSelection::default(),
         collapsed: HashSet::new(),

@@ -1,6 +1,8 @@
 //! The expert core rail: Auto-style chrome with window-local selection and disclosure.
 
+use std::cell::Cell;
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
@@ -8,8 +10,8 @@ use gpui::*;
 use moon_core::feed::ExchangeId;
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonDisclosure, MoonPalette, MoonSize, MoonSpinner, MoonSpinnerSize,
-    MoonTone, MoonTooltipView, h_flex, v_flex,
+    MoonBadge, MoonBadgeSize, MoonDisclosure, MoonPalette, MoonScrollableElement, MoonSize,
+    MoonSpinner, MoonSpinnerSize, MoonTone, MoonTooltipView, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -21,8 +23,106 @@ use crate::design;
 use super::CoreExpertView;
 use super::cores::{CoreRoster, RosterRow, RosterSection};
 
-/// Logical rail width; grows with the same UI scale as rows and text.
-const SIDEBAR_W: f32 = 300.0;
+/// Minimum logical content width, preserving the original rail floor.
+const MIN_RAIL_WIDTH: f32 = 300.0;
+
+/// Window-local measurement cache; hashing is cheap, shaping every name every frame is not.
+#[derive(Default)]
+pub(super) struct RailWidthCache {
+    measurement: Cell<Option<(u64, f32)>>,
+    scroll: ScrollHandle,
+}
+
+impl RailWidthCache {
+    /// Measure complete rows and chrome only when their content or resolved font changes.
+    fn width(
+        &self,
+        input: &RailPresentation<'_>,
+        summary: &[(&str, String, u32)],
+        cx: &App,
+    ) -> f32 {
+        let mut key = std::collections::hash_map::DefaultHasher::new();
+        rust_i18n::locale().hash(&mut key);
+        for (size, weight, mono) in [
+            (design::BODY_TEXT - 2.0, 600.0, true),
+            (design::BODY_TEXT - 2.0, 400.0, true),
+            (design::BODY_TEXT - 2.0, 400.0, false),
+            (design::BODY_TEXT, 600.0, false),
+            (11.0, 500.0, false),
+        ] {
+            design::text_metrics_key_zoomed(cx, size, weight, mono).hash(&mut key);
+        }
+        for section in &input.roster.sections {
+            section.label.hash(&mut key);
+            section.rows.len().hash(&mut key);
+            for row in &section.rows {
+                row.name.hash(&mut key);
+                row.connected.hash(&mut key);
+                row.has_page.hash(&mut key);
+            }
+        }
+        let key = key.finish();
+        if let Some((previous, width)) = self.measurement.get()
+            && previous == key
+        {
+            return width;
+        }
+        let ui = |n| f32::from(design::ui_px(cx, n));
+        let mut width = ui(MIN_RAIL_WIDTH);
+        for section in &input.roster.sections {
+            width = width.max(
+                ui(66.0)
+                    + design::mono_caption_text_width(cx, &section.label, 600.0)
+                    + design::mono_caption_text_width(cx, &section.rows.len().to_string(), 400.0),
+            );
+            for row in &section.rows {
+                let mut row_width =
+                    ui(71.0) + design::mono_caption_text_width(cx, &row.name, 600.0);
+                if !row.connected || !row.has_page {
+                    let waiting = row.connected;
+                    let label = t!(if waiting {
+                        "core_expert.core_requesting"
+                    } else {
+                        "core_expert.core_offline"
+                    });
+                    // Xs MoonBadge uses 11px UI text and its tier line-height padding ratio.
+                    let height = MoonSize::Xs.control_metrics().line_height;
+                    let badge = (design::ui_text_width_zoomed(cx, &label, 11.0, 500.0, false)
+                        + ui(height * 8.0 / 13.0))
+                    .max(ui(height));
+                    row_width += ui(7.0 + if waiting { 11.0 } else { 0.0 }) + badge;
+                }
+                width = width.max(row_width);
+            }
+        }
+        let summary_width: f32 = summary
+            .iter()
+            .map(|(_, text, _)| design::ui_caption_text_width(cx, text, 400.0))
+            .sum();
+        width = width
+            .max(ui(40.0) + summary_width + 2.0 * design::ui_caption_text_width(cx, "·", 400.0));
+        // Reserve every possible selected count, including each locale's plural forms, so clicks
+        // never trigger a fleet-wide remeasurement or make the rail jump sideways.
+        let selected_width = (0..=input.roster.rows().count())
+            .map(|count| {
+                design::mono_caption_text_width(
+                    cx,
+                    &t!("core_expert.cores_selected", n = count),
+                    400.0,
+                )
+            })
+            .fold(0.0, f32::max);
+        width = width.max(
+            ui(32.0)
+                + design::ui_body_text_width(cx, &t!("core_expert.cores_title"), 600.0)
+                + selected_width,
+        );
+        // Round up and reserve the border; no glyph may lose its final fractional pixel.
+        width = width.ceil() + 2.0;
+        self.measurement.set(Some((key, width)));
+        width
+    }
+}
 
 /// Window-local actions: none may change the active trading or Auto-workspace core.
 enum RailAction {
@@ -33,6 +133,8 @@ enum RailAction {
 
 /// Input and callbacks shared by the production view and its layout probe.
 struct RailPresentation<'a> {
+    width_cache: &'a RailWidthCache,
+    viewport_width: f32,
     roster: &'a CoreRoster,
     selection: &'a RowSelection<CoreId>,
     anchor: Option<CoreId>,
@@ -43,10 +145,17 @@ struct RailPresentation<'a> {
 
 impl CoreExpertView {
     /// Render the Auto-style rail while routing all selection through the expert window.
-    pub(super) fn sidebar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn sidebar(
+        &self,
+        p: MoonPalette,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let view = cx.entity().downgrade();
         rail(
             RailPresentation {
+                width_cache: &self.rail_width,
+                viewport_width: crate::window::windowing::responsive_width(window),
                 roster: &self.roster,
                 selection: &self.selection,
                 anchor: self.anchor,
@@ -75,7 +184,7 @@ impl CoreExpertView {
     }
 }
 
-/// Compose the production rail; chrome and text wrap rather than clip at larger zoom.
+/// Compose full-width content in a bounded horizontal viewport, keeping the page usable.
 fn rail(input: RailPresentation<'_>, p: MoonPalette, cx: &App) -> impl IntoElement {
     let total = input.roster.rows().count();
     let ready = input
@@ -105,6 +214,9 @@ fn rail(input: RailPresentation<'_>, p: MoonPalette, cx: &App) -> impl IntoEleme
             },
         ),
     ];
+    let width = input.width_cache.width(&input, &summary, cx);
+    let viewport =
+        width.min((input.viewport_width * 0.45).max(f32::from(design::ui_px(cx, MIN_RAIL_WIDTH))));
     let mut list = v_flex()
         .id("core-expert-core-list")
         .debug_selector(|| "expert-list".into())
@@ -112,6 +224,7 @@ fn rail(input: RailPresentation<'_>, p: MoonPalette, cx: &App) -> impl IntoEleme
         .min_h_0()
         .w_full()
         .overflow_y_scroll()
+        .restrict_scroll_to_axis()
         .py(design::ui_px(cx, 4.0));
     for section in &input.roster.sections {
         let key = section.venue.as_ref().map(|venue| venue.id);
@@ -144,11 +257,11 @@ fn rail(input: RailPresentation<'_>, p: MoonPalette, cx: &App) -> impl IntoEleme
                 .child(t!("core_expert.cores_none").to_string()),
         );
     }
-    v_flex()
+    let content = v_flex()
         .debug_selector(|| "expert-rail".into())
         .flex_none()
         .h_full()
-        .w(design::ui_px(cx, SIDEBAR_W))
+        .w(px(width))
         .min_h_0()
         .font_family(design::ui_font())
         .text_size(design::t_caption(cx))
@@ -235,7 +348,23 @@ fn rail(input: RailPresentation<'_>, p: MoonPalette, cx: &App) -> impl IntoEleme
                         .whitespace_normal()
                         .child(t!("core_expert.rail_hint").to_string()),
                 ),
+        );
+    div()
+        .debug_selector(|| "expert-rail-viewport".into())
+        .relative()
+        .flex_none()
+        .h_full()
+        .w(px(viewport))
+        .child(
+            div()
+                .id("expert-rail-scroll")
+                .size_full()
+                .overflow_x_scroll()
+                .restrict_scroll_to_axis()
+                .track_scroll(&input.width_cache.scroll)
+                .child(content),
         )
+        .horizontal_scrollbar(&input.width_cache.scroll)
 }
 
 /// Render a venue with separate collapse and select-all targets, keyed by exchange identity.
@@ -324,7 +453,7 @@ fn venue_heading(
                         })
                         .flex_1()
                         .min_w_0()
-                        .truncate()
+                        .whitespace_nowrap()
                         .font_family(design::mono())
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(p.text))
@@ -341,7 +470,7 @@ fn venue_heading(
         )
 }
 
-/// Render one fixed-height core leaf; only its name shrinks against status and engine slots.
+/// Render one fixed-height core leaf with its complete name beside status and engine slots.
 fn core_row(
     row: &RosterRow,
     selected: bool,
@@ -393,7 +522,7 @@ fn core_row(
                 .debug_selector(move || format!("expert-name-{core}"))
                 .flex_1()
                 .min_w_0()
-                .truncate()
+                .whitespace_nowrap()
                 .font_family(design::mono())
                 .text_size(design::t_caption(cx))
                 .font_weight(if anchor {

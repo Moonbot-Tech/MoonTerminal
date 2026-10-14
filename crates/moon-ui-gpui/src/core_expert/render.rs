@@ -59,7 +59,7 @@ impl Render for CoreExpertView {
         self.mixed = mixed::take();
         // How many selected cores OK reaches, and how many it skips for want of a page.
         let (pages, skipped) = self.roster.selected_pages(&self.selection);
-        let sidebar = self.sidebar(p, cx).into_any_element();
+        let sidebar = self.sidebar(p, window, cx).into_any_element();
         let footer = self.footer(pages, skipped, p, cx).into_any_element();
         let chrome_width = crate::window::windowing::responsive_width(window);
         v_flex()
