@@ -253,7 +253,7 @@ pub(super) struct PlacesFace {
 /// Returns:
 ///     The maximum title width, in pixels.
 pub(super) fn title_cap(cx: &App) -> f32 {
-    design::font_w(cx, 320.0)
+    design::font_w(cx, 440.0)
 }
 
 /// Width of the column, in pixels, from the strings it will draw.
@@ -262,9 +262,12 @@ pub(super) fn title_cap(cx: &App) -> f32 {
 /// still take their full measure, and the dialog grows to the widest of those.
 pub(super) fn column_width(face: &PlacesFace, cx: &App) -> f32 {
     let cap = title_cap(cx);
-    let mut width = measure_text(cx, &face.coin, false, 700.0, true) + HEADER_CLOSE_SLACK;
-    width = width.max(measure_text(cx, &face.title, true, 400.0, false));
-    width = width.max(measure_text(cx, &face.summary, true, 400.0, false));
+    let mut width = measure_text(cx, &face.coin, false, 700.0, true)
+        + GAP
+        + measure_text(cx, &face.title, true, 400.0, false)
+        + GAP
+        + measure_text(cx, &face.summary, true, 400.0, false)
+        + HEADER_CLOSE_SLACK;
     width = width.max(measure_text(cx, &face.footer, true, 400.0, false));
     if let Some(empty) = &face.empty {
         width = width.max(measure_text(cx, empty, false, 400.0, false));
@@ -273,8 +276,8 @@ pub(super) fn column_width(face: &PlacesFace, cx: &App) -> f32 {
         let icon = if confirm.ok { 20.0 + GAP } else { 0.0 };
         width = width.max(measure_text(cx, &confirm.text, false, 400.0, false) + icon);
     }
+    let tag = tag_column_width(face, cx);
     for row in &face.rows {
-        let tag = measure_text(cx, &row.tag, true, 400.0, false) + TAG_CHROME;
         let text = measure_text(cx, &row.title, false, 400.0, true)
             .min(cap)
             .max(measure_text(cx, &row.sub, true, 400.0, false));
@@ -285,6 +288,14 @@ pub(super) fn column_width(face: &PlacesFace, cx: &App) -> f32 {
         width = width.max(tag + GAP + text + GAP + buttons);
     }
     width + SLACK
+}
+
+/// Width of the tag column, in pixels: the widest tag, so every path starts at one edge.
+fn tag_column_width(face: &PlacesFace, cx: &App) -> f32 {
+    face.rows
+        .iter()
+        .map(|row| measure_text(cx, &row.tag, true, 400.0, false) + TAG_CHROME)
+        .fold(0.0, f32::max)
 }
 
 /// Widest the column may be for this viewport, in pixels.
@@ -335,6 +346,55 @@ pub(super) fn places_column(
         .overflow_hidden()
         .gap(px(GAP))
         .debug_selector(|| "coin-bl-dialog".into())
+        .child(header_row(face, p, cx));
+    if let Some(confirm) = &face.confirm {
+        column = column.child(confirm_line(confirm, p, cx));
+    }
+    if face.rows.is_empty() {
+        if let Some(empty) = &face.empty {
+            column = column.child(sentence(
+                "coin-bl-empty",
+                empty,
+                design::t_body(cx),
+                FontWeight::NORMAL,
+                design::moon(p.text),
+            ));
+        }
+    } else {
+        let tag_w = tag_column_width(face, cx);
+        let mut rows = div()
+            .id("coin-bl-rows")
+            .flex()
+            .flex_col()
+            .w_full()
+            .flex_none()
+            .max_h(px(rows_height_cap(f32::from(viewport.height))))
+            .overflow_y_scroll()
+            .gap(px(GAP))
+            .debug_selector(|| "coin-bl-rows".into());
+        for (index, row) in face.rows.iter().enumerate() {
+            rows = rows.child(place_row(index, row, tag_w, p, cx));
+        }
+        column = column.child(rows);
+    }
+    column.child(sentence(
+        "coin-bl-footer",
+        &face.footer,
+        design::t_caption(cx),
+        FontWeight::NORMAL,
+        design::moon(p.text_muted),
+    ))
+}
+
+/// Coin, caption and summary on one line; it wraps only when the viewport is narrower.
+fn header_row(face: &PlacesFace, p: MoonPalette, cx: &App) -> impl IntoElement + use<> {
+    h_flex()
+        .w_full()
+        .flex_none()
+        .flex_wrap()
+        .items_baseline()
+        .gap(px(GAP))
+        .pr(px(HEADER_CLOSE_SLACK))
         .child(text_run(
             "coin-bl-coin",
             &face.coin,
@@ -358,43 +418,7 @@ pub(super) fn places_column(
             design::t_caption(cx),
             FontWeight::NORMAL,
             design::moon(p.text_muted),
-        ));
-    if let Some(confirm) = &face.confirm {
-        column = column.child(confirm_line(confirm, p, cx));
-    }
-    if face.rows.is_empty() {
-        if let Some(empty) = &face.empty {
-            column = column.child(sentence(
-                "coin-bl-empty",
-                empty,
-                design::t_body(cx),
-                FontWeight::NORMAL,
-                design::moon(p.text),
-            ));
-        }
-    } else {
-        let mut rows = div()
-            .id("coin-bl-rows")
-            .flex()
-            .flex_col()
-            .w_full()
-            .flex_none()
-            .max_h(px(rows_height_cap(f32::from(viewport.height))))
-            .overflow_y_scroll()
-            .gap(px(GAP))
-            .debug_selector(|| "coin-bl-rows".into());
-        for (index, row) in face.rows.iter().enumerate() {
-            rows = rows.child(place_row(index, row, p, cx));
-        }
-        column = column.child(rows);
-    }
-    column.child(sentence(
-        "coin-bl-footer",
-        &face.footer,
-        design::t_caption(cx),
-        FontWeight::NORMAL,
-        design::moon(p.text_muted),
-    ))
+        ))
 }
 
 fn confirm_line(confirm: &FaceConfirm, p: MoonPalette, cx: &App) -> impl IntoElement + use<> {
@@ -434,8 +458,14 @@ fn confirm_line(confirm: &FaceConfirm, p: MoonPalette, cx: &App) -> impl IntoEle
         })
 }
 
-fn place_row(index: usize, row: &FaceRow, p: MoonPalette, cx: &App) -> impl IntoElement + use<> {
-    let mut buttons = h_flex().flex_none().items_center().gap(px(GAP));
+fn place_row(
+    index: usize,
+    row: &FaceRow,
+    tag_w: f32,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let mut buttons = h_flex().flex_none().ml_auto().items_center().gap(px(GAP));
     if let Some(open) = &row.open {
         buttons = buttons.child(action_button(
             format!("coin-bl-open-{index}"),
@@ -449,20 +479,23 @@ fn place_row(index: usize, row: &FaceRow, p: MoonPalette, cx: &App) -> impl Into
         &row.action,
     ));
     h_flex()
+        .w_full()
         .flex_none()
         .items_center()
         .gap(px(GAP))
         .child(
-            MoonTag::new()
-                .tone(row.tag_tone)
-                .variant(MoonTagVariant::Soft)
-                .compact(true)
-                .mono(false)
-                .label(row.tag.clone()),
+            div().w(px(tag_w)).flex_none().child(
+                MoonTag::new()
+                    .tone(row.tag_tone)
+                    .variant(MoonTagVariant::Soft)
+                    .compact(true)
+                    .mono(false)
+                    .label(row.tag.clone()),
+            ),
         )
         .child(
             v_flex()
-                .flex_none()
+                .flex_1()
                 .min_w_0()
                 .items_start()
                 .child(title_run(
@@ -499,14 +532,10 @@ fn action_button(id: String, selector: String, action: &FaceAction) -> impl Into
 }
 
 fn title_run(selector: &str, text: &str, cx: &App, color: Hsla) -> impl IntoElement + use<> {
-    let measured = measure_text(cx, text, false, 400.0, true);
-    let capped = measured.min(title_cap(cx));
     let selector = selector.to_string();
     let text = text.to_string();
     div()
-        .w(px(capped))
-        .max_w(px(capped))
-        .flex_none()
+        .max_w(px(title_cap(cx)))
         .min_w_0()
         .overflow_hidden()
         .truncate()
