@@ -37,6 +37,17 @@ pub(super) struct FieldEditPlan {
     actions: Vec<(CoreId, Vec<(u64, Vec<(String, String)>)>)>,
 }
 
+impl StartStopPlan {
+    /// How many strategies the Start and Stop buttons act on: every captured target — the
+    /// strategies that run once ticked, plus the staged unticks the same press sends.
+    ///
+    /// Zero exactly when the plan holds no per-core action, which is when `apply_start_stop`
+    /// returns without sending anything; the footer disables both buttons on it.
+    pub(super) fn target_count(&self) -> usize {
+        self.targets.len()
+    }
+}
+
 impl FieldEditPlan {
     /// The drafts this plan covers, for a caller that must narrow them (see
     /// [`StrategiesView::sendable_field_edits`]).
@@ -121,6 +132,37 @@ fn buy_refresh_enabled<'a>(
         })
 }
 
+/// One core's share of the Start/Stop plan: what the buttons act on, and the staged ticks they send.
+///
+/// A row is a target when its effective state (staged over the core's own) is ticked, or when
+/// staging changes it — a staged untick is sent by the same press.
+///
+/// Args:
+///     core: Core the rows belong to.
+///     rows: The core's live strategy rows, in its own order.
+///     staged: Retained staged checkbox values across every core.
+///
+/// Returns:
+///     `(targets, checks)`: target keys in row order, and the `(id, value)` staging differences.
+pub(super) fn core_start_stop_targets(
+    core: CoreId,
+    rows: &[StrategyRow],
+    staged: &HashMap<Key, bool>,
+) -> (Vec<Key>, Vec<(u64, bool)>) {
+    let mut targets = Vec::new();
+    let mut checks = Vec::new();
+    for row in rows {
+        let effective = staged.get(&(core, row.id)).copied().unwrap_or(row.checked);
+        if effective != row.checked {
+            checks.push((row.id, effective));
+        }
+        if effective || effective != row.checked {
+            targets.push((core, row.id));
+        }
+    }
+    (targets, checks)
+}
+
 impl StrategiesView {
     /// Capture the complete Start/Stop payload represented by the current action button.
     ///
@@ -143,24 +185,10 @@ impl StrategiesView {
             let Some(cd) = store.core(*core) else {
                 continue;
             };
-            let mut checks = Vec::new();
-            for row in &cd.strategies {
-                let effective = self
-                    .staged
-                    .get(&(*core, row.id))
-                    .copied()
-                    .unwrap_or(row.checked);
-                if effective != row.checked {
-                    checks.push((row.id, effective));
-                }
-                if effective || effective != row.checked {
-                    targets.push((*core, row.id));
-                }
-            }
-            if targets
-                .last()
-                .is_some_and(|(target_core, _)| target_core == core)
-            {
+            let (core_targets, checks) =
+                core_start_stop_targets(*core, &cd.strategies, &self.staged);
+            if !core_targets.is_empty() {
+                targets.extend(core_targets);
                 actions.push((*core, checks));
             }
         }

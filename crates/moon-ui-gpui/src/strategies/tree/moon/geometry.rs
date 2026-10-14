@@ -17,7 +17,12 @@ pub(super) fn id_exchange(venue: Option<&CoreVenue>) -> SharedString {
     }
 }
 
-pub(super) fn id_core(core: CoreId) -> SharedString {
+/// The tree id of the Stopped section heading — one per tree, so a constant.
+pub(super) fn id_stopped_section() -> SharedString {
+    SharedString::from("x:stopped")
+}
+
+pub(crate) fn id_core(core: CoreId) -> SharedString {
     SharedString::from(format!("c:{core}"))
 }
 pub(super) fn id_folder(core: CoreId, path: &str) -> SharedString {
@@ -64,18 +69,44 @@ pub(super) const BADGE_TINY_MIN_W: f32 = 16.0;
 /// heading spends.
 pub(super) const HEADING_GAP: f32 = 5.0;
 
-/// Width a heading row reserves for its `active/total` counter, in design units.
+/// Width a heading row reserves for its "active of total on" counter, in design units.
 ///
-/// A MINIMUM rather than a fixed box: at the shipped text step this fits seven mono glyphs, which
-/// covers every count a real account produces, so the column lines up across every row at every
-/// tree depth. A count wide enough to exceed it grows its own slot and truncates nothing — a
-/// counter that lies is worse than a column that bulges on one row.
-pub(super) const COUNTS_SLOT_W: f32 = 50.0;
-/// Width a heading row reserves for the open-orders `(N)`, in design units.
+/// A MINIMUM rather than a fixed box: at the shipped text step this fits twelve mono glyphs, which
+/// covers "57 of 57 on" for every count a real account produces, so the column lines up across
+/// every row at every tree depth. A count or a locale wide enough to exceed it grows its own slot
+/// and truncates nothing — a counter that lies is worse than a column that bulges on one row.
+pub(super) const COUNTS_SLOT_W: f32 = 84.0;
+/// Width a heading row reserves for the open-orders "N ord.", in design units.
 ///
 /// ALWAYS reserved, including on a row that currently has no open orders, so a core gaining or
-/// losing them never shifts the `active/total` column left of it.
-pub(super) const ORDERS_SLOT_W: f32 = 34.0;
+/// losing them never shifts the counter column left of it.
+pub(super) const ORDERS_SLOT_W: f32 = 50.0;
+/// Minimum width of a core row's status pill, in design units: the dot plus "running" in the
+/// shipped locales, so the captions after the pill share one column.
+pub(super) const PILL_MIN_W: f32 = 72.0;
+/// Tree width, in pixels, under which heading rows switch to their compact form.
+///
+/// The worded counters and the pill's word cost about 150 design units a row; below this width
+/// they would push the run button out of the row in the widest locales, so the row keeps the same
+/// numbers in the short `57/57` and `50` spelling and the pill keeps only its coloured dot. The
+/// words stay in the counters' tooltip.
+pub(super) const COMPACT_TREE_W: f32 = 400.0;
+/// [`COUNTS_SLOT_W`] in the compact form, which draws the bare `57/57`.
+pub(super) const COUNTS_SLOT_W_COMPACT: f32 = 50.0;
+/// [`ORDERS_SLOT_W`] in the compact form, which draws the bare order count.
+pub(super) const ORDERS_SLOT_W_COMPACT: f32 = 34.0;
+
+/// Whether heading rows draw their compact form at this tree width.
+///
+/// Args:
+///     tree_w: Current width of the tree pane, in pixels.
+///
+/// Returns:
+///     `true` below [`COMPACT_TREE_W`].
+pub(crate) fn compact_headings(tree_w: f32) -> bool {
+    tree_w < COMPACT_TREE_W
+}
+
 /// Gap between the two counter slots, in design units. Tighter than [`HEADING_GAP`] so the two
 /// numbers read as one cluster rather than as two unrelated columns.
 pub(super) const COUNTS_GAP: f32 = 4.0;

@@ -46,6 +46,16 @@ pub(crate) struct TreeCache {
     node_data: Rc<std::collections::HashMap<SharedString, NodeData>>,
 }
 
+impl TreeCache {
+    /// Store half of the signature this result was built from.
+    ///
+    /// Returns:
+    ///     The hash of cores, strategy snapshots, engine states, open orders and open edits.
+    pub(crate) fn store_sig(&self) -> u64 {
+        self.sig.store
+    }
+}
+
 /// The signature, split by where its inputs come from.
 ///
 /// Two halves rather than one number because a miss has two very different meanings: the cores sent
@@ -147,6 +157,9 @@ pub(crate) fn data_sig(
         // about the strategies, and that folder is exactly what this input contributes.
         cd.folders_rev.hash(&mut h);
         open_orders_digest(cd).hash(&mut h);
+        // Open strategy edits, which the "unconfirmed edits" quick filter reads through
+        // `PreparedFilter::scope_to_core`.
+        cd.strategy_edit_rev.hash(&mut h);
     }
     let store_sig = h.finish();
 
@@ -162,6 +175,8 @@ pub(crate) fn data_sig(
     // clicked and revert on the next hover repaint, with every test still green.
     view.filter.exchange.hash(&mut h);
     view.filter.active_only.hash(&mut h);
+    view.filter.quick.hash(&mut h);
+    view.stopped_collapsed.hash(&mut h);
 
     unordered(view.expanded_cores.iter()).hash(&mut h);
     view.rail_expanded_core.hash(&mut h);

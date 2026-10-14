@@ -277,3 +277,70 @@ fn the_move_buttons_take_their_enablement_from_the_pane_cache() {
     }
     assert!(include_str!("../pane_cache.rs").contains("self.move_availability("));
 }
+
+/// The buttons name N once there is something to act on and fall back to the plain verb at zero,
+/// where they are disabled anyway.
+#[test]
+fn start_stop_labels_carry_the_count_only_when_there_is_one() {
+    let _locale = crate::test_locale::force("en");
+    let (start, stop) = super::start_stop_labels(0);
+    assert!(
+        !start.contains('0') && !stop.contains('0'),
+        "{start} / {stop}"
+    );
+    let (start, stop) = super::start_stop_labels(12);
+    assert!(
+        start.contains("(12)") && stop.contains("(12)"),
+        "{start} / {stop}"
+    );
+}
+
+/// The footer is one row at every width: the narrowest density fits the narrowest tree the split
+/// allows, and at the window's default tree width every locale still shows the Start/Stop count
+/// instead of dropping straight to bare icons. Narrowing never adds text.
+#[gpui::test]
+fn the_footer_keeps_one_row_and_its_count_in_every_locale(cx: &mut gpui::TestAppContext) {
+    use super::{FooterDensity, footer_density, footer_icons_width, footer_label_width};
+    use moon_core::config::{Language, UiThemeMode};
+    /// `PanelsLayout::default().tree_w` in moon-core.
+    const DEFAULT_TREE_W: f32 = 418.0;
+    /// The lower clamp in `split.rs`.
+    const MIN_TREE_W: f32 = 240.0;
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            cx,
+        );
+    });
+    let rank = |d: FooterDensity| match d {
+        FooterDensity::Full => 3,
+        FooterDensity::Verbs => 2,
+        FooterDensity::Counts => 1,
+        FooterDensity::Icons => 0,
+    };
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        cx.update(|cx| {
+            let code = language.code();
+            assert!(
+                footer_icons_width(cx) <= MIN_TREE_W,
+                "{code}: icon footer {:.1}px wider than the {MIN_TREE_W}px minimum",
+                footer_icons_width(cx)
+            );
+            let widths = footer_label_width(cx, 12, 999);
+            let at_default = footer_density(DEFAULT_TREE_W, &widths, 999, cx);
+            assert_ne!(at_default, FooterDensity::Icons, "{code}: count hidden");
+            let mut last = rank(footer_density(2000.0, &widths, 999, cx));
+            for width in (240..2000).rev().step_by(7) {
+                let now = rank(footer_density(width as f32, &widths, 999, cx));
+                assert!(now <= last, "{code}: {width}px gained text while narrowing");
+                last = now;
+            }
+            assert_eq!(
+                footer_density(DEFAULT_TREE_W, &footer_label_width(cx, 0, 0), 0, cx),
+                FooterDensity::Icons,
+                "{code}: nothing to act on has no count to show"
+            );
+        });
+    }
+}

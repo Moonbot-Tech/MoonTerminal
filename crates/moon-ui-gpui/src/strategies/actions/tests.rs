@@ -170,3 +170,33 @@ fn delete_confirmation_carries_the_complete_producer_identity() {
     assert!(ui.contains("workspace_generation: Option<u64>"));
     assert!(dialogs.contains("self.delete_selection(&targets, workspace_generation, cx)?"));
 }
+
+/// N on the Start/Stop buttons: a ticked row counts, a staged untick counts (the press sends it),
+/// an unticked untouched row does not, and nothing ticked or staged means zero — the disabled state.
+#[test]
+fn start_stop_targets_count_ticked_rows_and_staged_changes_only() {
+    use super::core_start_stop_targets;
+    use moon_core::feed::StrategyRow;
+    use std::collections::HashMap;
+    let row = |id: u64, checked: bool| StrategyRow {
+        id,
+        name: format!("UNIT_{id:02}"),
+        kind: "Test".to_string(),
+        kind_ordinal: 0,
+        folder_path: String::new(),
+        checked,
+        is_short: false,
+        fields: Vec::new(),
+    };
+    let rows = [row(1, true), row(2, true), row(3, false), row(4, false)];
+    let mut staged = HashMap::new();
+    staged.insert((7, 2), false);
+    staged.insert((7, 4), true);
+    let (targets, checks) = core_start_stop_targets(7, &rows, &staged);
+    assert_eq!(targets, vec![(7, 1), (7, 2), (7, 4)]);
+    assert_eq!(checks, vec![(2, false), (4, true)]);
+
+    let idle = [row(1, false), row(2, false)];
+    let (targets, checks) = core_start_stop_targets(7, &idle, &HashMap::new());
+    assert!(targets.is_empty() && checks.is_empty());
+}

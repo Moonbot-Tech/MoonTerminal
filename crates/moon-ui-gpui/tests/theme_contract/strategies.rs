@@ -10,7 +10,8 @@ use super::support::*;
 fn empty_core_roots_remain_available_without_row_filters() {
     let source = read_src("strategies/tree/moon/build.rs");
     let body = braced_body(&source, "fn build_core_root(");
-    assert!(body.contains("if filter.narrows() && !any_matched && empty_folders.is_empty()"));
+    // `narrows_rows`, not `narrows`: the core-level Stopped chip must keep an empty stopped core.
+    assert!(body.contains("if filter.narrows_rows() && !any_matched && empty_folders.is_empty()"));
 }
 
 /// A strategy copy goes to the core root, sits beside its source, and is revealed to the user.
@@ -480,7 +481,7 @@ fn strategy_tree_groups_visible_cores_by_venue_identity() {
     );
     assert!(
         build.contains("} else {")
-            && build.contains("for (core, core_name) in cores.iter()")
+            && build.contains("for (core, core_name) in others.iter().map(|&index| &cores[index])")
             && build.contains("items.push(root)"),
         "grouping OFF must emit canonical core roots directly without an Exchange wrapper"
     );
@@ -630,7 +631,7 @@ fn strategy_filter_rows_wrap_fitted_controls_and_pin_their_right_hand_controls()
     for (body, bounds) in [
         (kind, ".fit_trigger_width(96.0, 116.0)"),
         (direction, ".fit_trigger_width(96.0, 128.0)"),
-        (create, ".fit_trigger_width(96.0, 110.0)"),
+        (create, ".fit_trigger_width(96.0, 160.0)"),
     ] {
         assert!(
             body.contains(bounds),
@@ -922,10 +923,15 @@ fn strategy_footer_is_one_atomic_action_row() {
             && !action.contains("MoonButtonSize::Micro")
     );
     assert!(
-        action.contains("let show_labels") && action.contains("ui::footer_labels_fit("),
+        action.contains("let show_labels") && action.contains("pane_cache::footer_density("),
         "action_bar must compute one shared footer-density decision"
     );
-    assert!(action.contains("self.panels.tree_w") && action.contains("pane.footer_label_width"));
+    assert!(action.contains("self.panels.tree_w") && action.contains("pane.footer_widths"));
+    // The density ladder still opens with the full-label boundary test.
+    let ladder = read_src("strategies/tree/pane_cache.rs");
+    assert!(
+        code_only(braced_body(&ladder, "fn footer_density(")).contains("ui::footer_labels_fit(")
+    );
     // The measurement moved behind the pane cache — a hover repaint rebuilds this row 34-58 times a
     // second and one full label set is ~40 uncached glyph advances — but the density decision must
     // still come from measuring the CURRENT locale and staged text, never from a stored constant.
@@ -1168,8 +1174,12 @@ fn a_core_folder_row_counter_cluster_stays_passive() {
 
     assert!(
         cluster.contains(".flex_none()")
-            && cluster.contains("counts_slot(\n                    counts.primary,\n                    COUNTS_SLOT_W,\n                    p.text_muted,")
-            && cluster.contains("counts_slot(\n                    counts.orders,\n                    ORDERS_SLOT_W,\n                    p.text_soft,"),
+            && cluster.contains(
+                "counts_slot(\n                    primary,\n                    primary_w,"
+            )
+            && cluster.contains("counts_slot(orders, orders_w, p.text_soft, step, app)")
+            && row
+                .contains("false => (counts.primary, COUNTS_SLOT_W, counts.orders, ORDERS_SLOT_W)"),
         "the identified counter cluster must retain both fixed counter slots"
     );
     assert!(

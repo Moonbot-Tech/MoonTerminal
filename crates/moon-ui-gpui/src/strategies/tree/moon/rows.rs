@@ -27,6 +27,15 @@ pub(super) fn render_row(
         NodeData::Exchange { label, logo } => {
             exchange_row(node_id, indent, label, logo.clone(), step, app)
         }
+        NodeData::StoppedSection { count } => stopped_section_row(
+            view,
+            node_id,
+            indent,
+            entry.is_expanded(),
+            *count,
+            step,
+            app,
+        ),
         NodeData::Core {
             core,
             label,
@@ -46,8 +55,13 @@ pub(super) fn render_row(
                 *checked,
                 indent,
                 label.clone(),
-                RowCounts::subtree(*active, *total, *open_orders, *engine),
-                p.blue,
+                RowCounts::subtree(*active, *total, Some(*open_orders), *engine),
+                // A core with no strategy is dimmed: it is somewhere to create one, not a unit
+                // that trades.
+                match *total {
+                    0 => p.text_muted,
+                    _ => p.blue,
+                },
                 600.0,
                 ToggleTarget::Core(core),
                 // A core root is a heading, not a folder: it keeps its caret and its bulk box even
@@ -83,7 +97,7 @@ pub(super) fn render_row(
                 // An empty one shows no numbers at all rather than `0/0`: there is nothing to
                 // count, and the slot's tooltip says what the row is instead.
                 match fill.has_contents() {
-                    true => RowCounts::subtree(*active, *total, 0, *engine),
+                    true => RowCounts::subtree(*active, *total, None, *engine),
                     false => RowCounts::empty_folder(fill.empty_tip()),
                 },
                 // Empty folder captions remain quieter than populated ones beside their icon.
@@ -223,5 +237,87 @@ pub(super) fn exchange_row(
                     .render(),
             ),
         )
+        .into_any_element()
+}
+
+/// Render the collapsible Stopped section heading: caret, amber caption and core count.
+///
+/// The one heading in the tree a click folds. Exchange headings stay open by design, but this
+/// section exists to be SEEN first and then put away once read — so it collapses, and the choice
+/// lives in `StrategiesView::stopped_collapsed`, which the tree signature hashes.
+///
+/// Args:
+///     view: Strategies view whose collapse flag the click flips.
+///     row_id: Stable section id used as the row element id.
+///     indent: Tree-provided indentation for the heading depth.
+///     expanded: Whether the section's cores are drawn.
+///     count: How many cores the section lists.
+///     step: Local unscaled text-size step read from the tree's own preference.
+///     app: Application context providing palette and scaled geometry.
+///
+/// Returns:
+///     The interactive heading row.
+pub(super) fn stopped_section_row(
+    view: &Entity<StrategiesView>,
+    row_id: SharedString,
+    indent: Pixels,
+    expanded: bool,
+    count: usize,
+    step: f32,
+    app: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(app);
+    let view = view.clone();
+    let edge = design::ui_px(app, design::DISCLOSURE_BOX + step);
+    h_flex()
+        .id(row_id)
+        .w_full()
+        .h(row_h(app, step))
+        .pl(indent)
+        .pr(design::ui_px(app, 6.0))
+        .items_center()
+        .gap(design::ui_px(app, 6.0))
+        .cursor_pointer()
+        .rounded(design::ui_px(app, 3.0))
+        .hover(move |s| s.bg(moon_alpha(p.panel, 0.74)))
+        .tooltip(crate::panels::common::text_tooltip(SharedString::from(
+            rust_i18n::t!("strat.tree_section_stopped_tip").to_string(),
+        )))
+        .child(
+            div().flex_none().size(edge).child(
+                MoonDisclosure::glyph(expanded)
+                    .size(design::DISCLOSURE_GLYPH_MARKER + step)
+                    .box_size(design::DISCLOSURE_BOX + step),
+            ),
+        )
+        .child(
+            div().flex_none().child(
+                MoonText::new(rust_i18n::t!("strat.tree_section_stopped").to_string())
+                    .mono(true)
+                    .uppercase(false)
+                    .color(p.amber)
+                    .weight(600.0)
+                    .font_size(design::body_font_base(app, step))
+                    .line_height(ROW_LINE_BASE + step)
+                    .render(),
+            ),
+        )
+        .child(
+            div().flex_1().min_w_0().truncate().child(
+                MoonText::new(count.to_string())
+                    .mono(true)
+                    .uppercase(false)
+                    .color(p.text_muted)
+                    .font_size(design::body_font_base(app, step))
+                    .line_height(ROW_LINE_BASE + step)
+                    .render(),
+            ),
+        )
+        .on_click(move |_: &ClickEvent, _window, app| {
+            view.update(app, |this, cx| {
+                this.stopped_collapsed = !this.stopped_collapsed;
+                cx.notify();
+            });
+        })
         .into_any_element()
 }

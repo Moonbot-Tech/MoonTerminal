@@ -105,6 +105,7 @@ fn filter(search: &str, kind: Option<u8>, dir: Option<bool>, active_only: bool) 
         dir,
         exchange: None,
         active_only,
+        quick: None,
     }
 }
 
@@ -210,4 +211,101 @@ fn active_only_never_affects_counts() {
     let f = filter("", None, None, true).prepare();
     assert!(f.counts(&row("on", 0, false, true)));
     assert!(f.counts(&row("off", 0, false, false)));
+}
+
+/// The quick filters: Disabled keeps unticked rows only; the per-core ones keep exactly the ids
+/// their core was scoped to, and an unscoped predicate (selection prune, no core in hand) fails
+/// open rather than hiding everything.
+#[test]
+fn quick_filters_keep_their_rows_and_fail_open_when_unscoped() {
+    use super::QuickFilter;
+    let quick = |q| StrategyFilter {
+        quick: Some(q),
+        ..Default::default()
+    };
+    let on = row("UNIT_01", 0, false, true);
+    let off = row("UNIT_02", 0, false, false);
+
+    let disabled = quick(QuickFilter::Disabled).prepare();
+    assert!(!disabled.matches(&on));
+    assert!(disabled.matches(&off));
+
+    // Core-level: rows are never hidden by it, the build drops whole cores instead.
+    let stopped = quick(QuickFilter::Stopped).prepare();
+    assert!(stopped.matches(&on) && stopped.matches(&off));
+
+    for q in [QuickFilter::WithOrders, QuickFilter::Unconfirmed] {
+        let unscoped = quick(q).prepare();
+        assert!(unscoped.matches(&on), "{q:?} unscoped must fail open");
+        assert!(unscoped.narrows());
+    }
+
+    let mut cd = moon_core::session::store::CoreData::default();
+    cd.strategy_edits.push(moon_core::feed::StrategyEditRow {
+        id: 2,
+        phase: moon_core::feed::StrategyEditPhase::Pending,
+        submitted_at_ms: 0,
+        fields: Vec::new(),
+    });
+    let mut other = off.clone();
+    other.id = 2;
+    let scoped = quick(QuickFilter::Unconfirmed).prepare_for_core(&cd);
+    assert!(scoped.matches(&other));
+    assert!(!scoped.matches(&on));
+    // No orders on the core: the orders filter keeps nothing on it.
+    let scoped = quick(QuickFilter::WithOrders).prepare_for_core(&cd);
+    assert!(!scoped.matches(&on) && !scoped.matches(&other));
+}
+
+/// The Stopped chip keeps a stopped core even when it holds no strategy (fix: it used to count as
+/// a row filter and drop empty cores), and it rejects a running or unconfirmed core.
+#[test]
+fn the_stopped_chip_keeps_empty_stopped_cores_and_rejects_running_ones() {
+    use super::QuickFilter;
+    let quick = |q| StrategyFilter {
+        quick: Some(q),
+        ..Default::default()
+    };
+    let stopped = quick(QuickFilter::Stopped).prepare();
+    assert!(
+        !stopped.narrows_rows(),
+        "Stopped must not drop an empty core"
+    );
+    assert!(stopped.core_matches_quick(Some(false)));
+    assert!(!stopped.core_matches_quick(Some(true)));
+    assert!(!stopped.core_matches_quick(None));
+
+    for q in [
+        QuickFilter::WithOrders,
+        QuickFilter::Unconfirmed,
+        QuickFilter::Disabled,
+    ] {
+        let f = quick(q).prepare();
+        assert!(f.narrows_rows(), "{q:?} narrows rows");
+        assert!(f.core_matches_quick(Some(true)), "{q:?} is not core-level");
+    }
+    let none = StrategyFilter::default().prepare();
+    assert!(!none.narrows_rows() && none.core_matches_quick(Some(true)));
+}
+
+/// A reveal must see that a per-core chip hides the target: scoped to the core, an unconfirmed
+/// edit is hidden under WithOrders even though the unscoped predicate fails open on it.
+#[test]
+fn a_scoped_quick_chip_reports_the_reveal_target_as_hidden() {
+    use super::QuickFilter;
+    let f = StrategyFilter {
+        quick: Some(QuickFilter::WithOrders),
+        ..Default::default()
+    };
+    let mut cd = moon_core::session::store::CoreData::default();
+    cd.strategy_edits.push(moon_core::feed::StrategyEditRow {
+        id: 2,
+        phase: moon_core::feed::StrategyEditPhase::Pending,
+        submitted_at_ms: 0,
+        fields: Vec::new(),
+    });
+    let mut target = row("UNIT_02", 0, false, true);
+    target.id = 2;
+    assert!(f.prepare().matches(&target), "unscoped fails open");
+    assert!(!f.prepare_for_core(&cd).matches(&target), "scoped hides it");
 }

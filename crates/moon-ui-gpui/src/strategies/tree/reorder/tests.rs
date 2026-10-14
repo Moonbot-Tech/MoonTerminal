@@ -81,3 +81,22 @@ fn an_unnamed_id_has_no_rank() {
     assert_eq!(pending.rank(4), Some(1));
     assert_eq!(pending.rank(5), None);
 }
+
+/// Reorder fails closed under any quick chip: a move planned there could step over hidden rows.
+#[test]
+fn reorder_is_blocked_while_a_quick_filter_is_on() {
+    use crate::strategies::filter::{QuickFilter, StrategyFilter};
+    assert!(!super::reorder_blocked(&StrategyFilter::default()));
+    for q in [
+        QuickFilter::WithOrders,
+        QuickFilter::Unconfirmed,
+        QuickFilter::Disabled,
+        QuickFilter::Stopped,
+    ] {
+        let f = StrategyFilter {
+            quick: Some(q),
+            ..Default::default()
+        };
+        assert!(super::reorder_blocked(&f), "{q:?}");
+    }
+}

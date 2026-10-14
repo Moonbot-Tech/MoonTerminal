@@ -60,8 +60,8 @@ pub(in crate::strategies) struct LeftPaneFrame {
     pub(super) exchanges: ExchangeList,
     /// Exact Start/Stop payload the footer buttons capture.
     pub(super) plan: Arc<StartStopPlan>,
-    /// Summed glyph width of the footer's localized labels, including the staged count.
-    pub(super) footer_label_width: f32,
+    /// Measured widths of the footer's localized captions at each density.
+    pub(super) footer_widths: FooterWidths,
     /// Staged checkbox count the footer both measures against and renders.
     pub(super) staged: usize,
     /// Arrow enablement and the empty-folder explanation, as `(up, down, empty_folder)`.
@@ -89,6 +89,8 @@ struct LabelKey {
     metrics: u64,
     /// Staged checkbox count, which the staged label spells out.
     staged: usize,
+    /// Start/Stop target count, which both action labels spell out as "(N)".
+    targets: usize,
 }
 
 /// Retained results of the left pane's expensive derivations, each with the key it was built from.
@@ -97,7 +99,7 @@ pub(in crate::strategies) struct PaneCache {
     kinds: Option<(u64, KindList)>,
     exchanges: Option<(u64, SharedString, ExchangeList)>,
     plan: Option<(PlanKey, Arc<StartStopPlan>)>,
-    labels: Option<(LabelKey, f32)>,
+    labels: Option<(LabelKey, FooterWidths)>,
     moves: Option<(MoveKey, (bool, bool, bool))>,
 }
 
@@ -136,11 +138,12 @@ impl StrategiesView {
     ) -> LeftPaneFrame {
         // Counted once and handed on: the footer measures against this number and also renders it.
         let staged = staged_count(self);
+        let plan = self.pane_plan(sig, cores, cx);
         LeftPaneFrame {
             kinds: self.pane_kinds(sig.store, cores, cx),
             exchanges: self.pane_exchanges(sig.store, cores, cx),
-            plan: self.pane_plan(sig, cores, cx),
-            footer_label_width: self.pane_footer_label_width(staged, cx),
+            footer_widths: self.pane_footer_label_width(staged, plan.target_count(), cx),
+            plan,
             staged,
             moves: self.pane_moves(sig, cx),
         }
@@ -283,7 +286,7 @@ impl StrategiesView {
 
     /// Summed width of the footer's labels, remeasured only on a language, typography or staging
     /// change.
-    fn pane_footer_label_width(&mut self, staged: usize, cx: &App) -> f32 {
+    fn pane_footer_label_width(&mut self, staged: usize, targets: usize, cx: &App) -> FooterWidths {
         let locale = rust_i18n::locale();
         let locale: &str = &locale;
         let font_size = design::CONTROL_TIER.control_metrics().font_size;
@@ -297,17 +300,19 @@ impl StrategiesView {
         // this module exists to keep empty.
         if let Some((cached, width)) = &self.pane_cache.labels
             && cached.staged == staged
+            && cached.targets == targets
             && cached.metrics == metrics
             && cached.locale.as_ref() == locale
         {
             return *width;
         }
         crate::diag::bump(&crate::diag::STRAT_PANE_BUILD);
-        let width = footer_label_width(cx, staged);
+        let width = footer_label_width(cx, staged, targets);
         let key = LabelKey {
             locale: SharedString::from(locale.to_string()),
             metrics,
             staged,
+            targets,
         };
         self.pane_cache.labels = Some((key, width));
         width
@@ -374,6 +379,140 @@ fn exchanges_present(
     .collect()
 }
 
+/// The Start and Stop captions for a target count: "Start (N)" when the buttons act on anything,
+/// the bare verb when they act on nothing (and are disabled).
+///
+/// The ONE place both the footer and its width measurement get these strings, so the measured and
+/// the rendered labels cannot differ.
+///
+/// Args:
+///     targets: How many strategies the captured Start/Stop plan names.
+///
+/// Returns:
+///     `(start, stop)` captions.
+pub(in crate::strategies) fn start_stop_labels(targets: usize) -> (String, String) {
+    match targets {
+        0 => (
+            t!("strat.start_checked").to_string(),
+            t!("strat.stop_checked").to_string(),
+        ),
+        n => (
+            t!("strat.start_checked_n", n = n).to_string(),
+            t!("strat.stop_checked_n", n = n).to_string(),
+        ),
+    }
+}
+
+/// The footer's width that never collapses: icons, padding, gaps and the divider.
+///
+/// Five native leading icons remain in both densities. The full state additionally reserves
+/// their label gaps, six group gaps, outer padding, and the hairline divider. The two move buttons
+/// never take a label: they cost their own width and one group gap each in BOTH densities, and
+/// leaving them out of this sum would let the labelled state be chosen for a row that no longer
+/// fits it. Labeled footer buttons set `.padding_x(7.0)`, which replaces the tier's pad_x rather
+/// than adding to it — so the 7-unit inset is the pad they actually draw.
+///
+/// Args:
+///     cx: Application context providing the UI zoom and control metrics.
+///
+/// Returns:
+///     The width in pixels the labelled footer needs besides its measured labels.
+pub(in crate::strategies) fn footer_fixed_width(cx: &App) -> f32 {
+    let action_icon_width = design::action_icon_px(cx);
+    let labeled_pad = design::ui_value(cx, 7.0) * 2.0 * 5.0;
+    5.0 * action_icon_width
+        + design::ui_value(cx, 5.0 * 6.0 + 6.0 * design::CHROME_GAP + 16.0)
+        + 1.0
+        + labeled_pad
+        + 2.0 * design::glyph_btn_w(cx)
+        + 2.0 * design::ui_value(cx, design::CHROME_GAP)
+}
+
+/// Measured widths of the footer's captions at each density that draws any.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(in crate::strategies) struct FooterWidths {
+    /// Every label, the staged note included: the full density.
+    pub(in crate::strategies) full: f32,
+    /// "Start (N)" and "Stop (N)" alone.
+    pub(in crate::strategies) verbs: f32,
+    /// The bare count, twice — once per button.
+    pub(in crate::strategies) counts: f32,
+}
+
+/// How much text the footer's buttons carry, widest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::strategies) enum FooterDensity {
+    /// Every button labelled.
+    Full,
+    /// Copy/Paste/Delete as icons; Start and Stop keep "Start (N)".
+    Verbs,
+    /// Every button an icon; Start and Stop carry the bare N beside it.
+    Counts,
+    /// Every button an icon.
+    Icons,
+}
+
+impl FooterDensity {
+    /// Whether the selection toolbar (copy, paste, delete) is labelled.
+    pub(in crate::strategies) fn toolbar_labels(self) -> bool {
+        self == Self::Full
+    }
+}
+
+/// Width of the footer with every button an icon: seven icon buttons, the divider, padding and
+/// the half-width gaps that density draws.
+///
+/// Args:
+///     cx: Application context providing the UI zoom and control metrics.
+///
+/// Returns:
+///     Pixels the icon density occupies; the staged slot shrinks to nothing.
+fn footer_icons_width(cx: &App) -> f32 {
+    let gap = design::ui_value(cx, design::CHROME_GAP / 2.0);
+    // Five toolbar buttons + Start + Stop; three row gaps, four toolbar gaps, one Start/Stop gap.
+    7.0 * design::glyph_btn_w(cx) + 8.0 * gap + design::ui_value(cx, 2.0 * 4.0) + 1.0
+}
+
+/// Choose the widest footer density that fits the pane on one row.
+///
+/// Truncates before it wraps: each step drops text, never moves a button to a second line. The
+/// two middle steps exist for the Start/Stop count — at the window's default width no locale fits
+/// every label, and dropping straight to icons hid the N the buttons act on.
+///
+/// Args:
+///     available: Rendered width of the tree pane.
+///     widths: Measured caption widths for the current locale, staging and target count.
+///     targets: Start/Stop target count; with nothing to act on there is no count to show.
+///     cx: Application context providing the UI zoom and control metrics.
+///
+/// Returns:
+///     The density the footer draws.
+pub(in crate::strategies) fn footer_density(
+    available: f32,
+    widths: &FooterWidths,
+    targets: usize,
+    cx: &App,
+) -> FooterDensity {
+    if super::ui::footer_labels_fit(available, footer_fixed_width(cx), widths.full) {
+        return FooterDensity::Full;
+    }
+    if targets == 0 {
+        return FooterDensity::Icons;
+    }
+    // A Start/Stop button gaining text trades its square width for pad + icon + gap + text.
+    let labelled = 2.0
+        * (design::ui_value(cx, 7.0 * 2.0 + 6.0) + design::action_icon_px(cx)
+            - design::glyph_btn_w(cx));
+    let icons = footer_icons_width(cx) + labelled;
+    if available >= icons + widths.verbs {
+        FooterDensity::Verbs
+    } else if available >= icons + widths.counts {
+        FooterDensity::Counts
+    } else {
+        FooterDensity::Icons
+    }
+}
+
 /// Measure one full set of footer labels at the size and weight they are rendered with.
 ///
 /// Every measurement is a per-character glyph advance with no cache underneath
@@ -382,19 +521,16 @@ fn exchanges_present(
 /// Args:
 ///     cx: Application context providing the text system and font tokens.
 ///     staged: Staged checkbox count; zero renders no staged label and measures none.
+///     targets: Start/Stop target count, spelled out in both action captions.
 ///
 /// Returns:
-///     Summed glyph width of the labels the footer would show at full density.
-fn footer_label_width(cx: &App, staged: usize) -> f32 {
-    let mut width: f32 = [
-        t!("strat.action_copy"),
-        t!("strat.action_paste"),
-        t!("strat.action_delete"),
-        t!("strat.start_checked"),
-        t!("strat.stop_checked"),
-    ]
-    .iter()
-    .map(|label| {
+///     Glyph widths of the captions at every density that draws any.
+pub(in crate::strategies) fn footer_label_width(
+    cx: &App,
+    staged: usize,
+    targets: usize,
+) -> FooterWidths {
+    let measure = |label: &str| {
         design::ui_text_width_zoomed(
             cx,
             label,
@@ -402,7 +538,19 @@ fn footer_label_width(cx: &App, staged: usize) -> f32 {
             FOOTER_LABEL_WEIGHT,
             false,
         )
-    })
+    };
+    let (start, stop) = start_stop_labels(targets);
+    let verbs = measure(&start) + measure(&stop);
+    let counts = 2.0 * measure(&targets.to_string());
+    let mut width: f32 = [
+        t!("strat.action_copy").to_string(),
+        t!("strat.action_paste").to_string(),
+        t!("strat.action_delete").to_string(),
+        start,
+        stop,
+    ]
+    .iter()
+    .map(|label| measure(label))
     .sum();
     if staged > 0 {
         // MONO, unlike the action labels summed above: `strat.staged` welds its label to a COUNT
@@ -416,7 +564,11 @@ fn footer_label_width(cx: &App, staged: usize) -> f32 {
             true,
         );
     }
-    width
+    FooterWidths {
+        full: width,
+        verbs,
+        counts,
+    }
 }
 
 /// Fold the effective workspace scope into one comparable number.

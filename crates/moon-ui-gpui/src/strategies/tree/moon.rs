@@ -24,13 +24,13 @@ mod shape;
 /// MoonTree strategy row helpers.
 mod strategy_row;
 
-pub(crate) use build::build;
+pub(crate) use build::{build, confirmed_engine};
 pub(super) use callbacks::drop_dest;
 use callbacks::*;
 pub(crate) use counts::FolderFill;
 use counts::*;
 use geometry::*;
-pub(crate) use geometry::{id_del_strat, id_strat};
+pub(crate) use geometry::{id_core, id_del_strat, id_strat};
 use headings::*;
 pub(crate) use node::{MoonTreeBuild, NodeData};
 use rows::*;
@@ -50,7 +50,7 @@ use moon_ui::{
     MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta, h_flex,
 };
 
-use super::super::filter::PreparedFilter;
+use super::super::filter::{PreparedFilter, QuickFilter};
 use super::super::logic::{
     FolderCounts, build_node, ensure_folder, strategy_core_is_visible, subtree_check_targets,
     subtree_displayed_all_checked, toggle,

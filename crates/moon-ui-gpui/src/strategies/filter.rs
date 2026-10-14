@@ -11,11 +11,63 @@
 //! evaluates it once per core against the session's venue map, and every row-level predicate here
 //! stays a pure function of the row.
 
+use std::collections::HashSet;
+
 use moon_core::feed::{StrategyRow, strategy_path};
+use moon_core::session::store::CoreData;
 use moon_core::venue::CoreVenue;
 
 use moon_core::session::core_order::{ExchangeSection, section_of};
 use moon_core::strategy_query::StrategyQuery;
+
+/// One of the overview's quick filters, toggled from its chips and removed from the chip under the
+/// tree's toolbar.
+///
+/// Process-only, like the kind and side filters: a quick filter is a question asked now ("which
+/// cores are stopped?"), not a view the window should reopen on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum QuickFilter {
+    /// Only cores whose strategy engine reported stopped. Selects CORES, so like the exchange it
+    /// is evaluated by `tree::moon::build` and never by a row predicate.
+    Stopped,
+    /// Only strategies holding at least one open order.
+    WithOrders,
+    /// Only strategies the core holds unchecked.
+    Disabled,
+    /// Only strategies with an edit the core has not confirmed yet (pending or timed out).
+    Unconfirmed,
+}
+
+impl QuickFilter {
+    /// Every quick filter, in the order the overview offers them.
+    pub const ALL: [Self; 4] = [
+        Self::Stopped,
+        Self::WithOrders,
+        Self::Disabled,
+        Self::Unconfirmed,
+    ];
+
+    /// The chip's localized caption.
+    pub fn label(self) -> String {
+        match self {
+            Self::Stopped => rust_i18n::t!("strat.quick_stopped"),
+            Self::WithOrders => rust_i18n::t!("strat.quick_with_orders"),
+            Self::Disabled => rust_i18n::t!("strat.quick_disabled"),
+            Self::Unconfirmed => rust_i18n::t!("strat.quick_unconfirmed"),
+        }
+        .to_string()
+    }
+
+    /// Stable element-id suffix, independent of the caption's language.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::WithOrders => "orders",
+            Self::Disabled => "disabled",
+            Self::Unconfirmed => "unconfirmed",
+        }
+    }
+}
 
 /// Editable strategy-filter state retained by the Strategies window.
 #[derive(Default)]
@@ -35,6 +87,8 @@ pub struct StrategyFilter {
     pub exchange: Option<ExchangeSection>,
     /// Whether unchecked live strategies are hidden from the tree.
     pub active_only: bool,
+    /// Quick filter picked from the overview, or `None`.
+    pub quick: Option<QuickFilter>,
 }
 
 impl StrategyFilter {
@@ -66,7 +120,23 @@ impl StrategyFilter {
             dir: self.dir,
             active_only: self.active_only,
             query: (!query.is_empty()).then_some(query),
+            quick: self.quick,
+            core_ids: None,
         }
+    }
+
+    /// Prepare the filter for one core, so the quick filters that need that core's orders or
+    /// edits can answer.
+    ///
+    /// Args:
+    ///     cd: The core whose rows the prepared filter will be asked about.
+    ///
+    /// Returns:
+    ///     A prepared predicate scoped to that core — see [`PreparedFilter::scope_to_core`].
+    pub fn prepare_for_core(&self, cd: &CoreData) -> PreparedFilter {
+        let mut prepared = self.prepare();
+        prepared.scope_to_core(cd);
+        prepared
     }
 
     /// Return whether this filter narrows the tree at all, across every dimension.
@@ -77,7 +147,8 @@ impl StrategyFilter {
     /// `!self.search.is_empty()` check would.
     ///
     /// Returns:
-    ///     `true` when search, kind, direction, active-only, or exchange excludes anything.
+    ///     `true` when search, kind, direction, active-only, a quick filter, or exchange excludes
+    ///     anything.
     pub(super) fn narrows(&self) -> bool {
         self.prepare().narrows() || self.exchange.is_some()
     }
@@ -106,13 +177,96 @@ pub struct PreparedFilter {
     active_only: bool,
     /// Parsed search query, or `None` when it selects everything.
     query: Option<StrategyQuery>,
+    /// Quick filter in force, or `None`.
+    quick: Option<QuickFilter>,
+    /// Strategy ids of the core this filter was scoped to that pass a per-core quick filter
+    /// ([`QuickFilter::WithOrders`], [`QuickFilter::Unconfirmed`]); `None` when unscoped.
+    core_ids: Option<HashSet<u64>>,
 }
 
 impl PreparedFilter {
     /// Return whether row filters require a strategy match to retain an otherwise empty core.
     /// Exchange filtering is applied separately to core identities and must not hide empty cores.
     pub(super) fn narrows(&self) -> bool {
-        self.query.is_some() || self.kind.is_some() || self.dir.is_some() || self.active_only
+        self.query.is_some()
+            || self.kind.is_some()
+            || self.dir.is_some()
+            || self.active_only
+            || self.quick.is_some()
+    }
+
+    /// Whether row filters can leave a core with no matching row, which drops an empty core.
+    ///
+    /// [`Self::narrows`] minus the core-level [`QuickFilter::Stopped`]: that filter keeps or drops a
+    /// WHOLE core by its engine state and never narrows rows, so a stopped core holding no
+    /// strategy must still be shown under it.
+    ///
+    /// Returns:
+    ///     `true` when some row-level filter is in force.
+    pub(super) fn narrows_rows(&self) -> bool {
+        self.query.is_some()
+            || self.kind.is_some()
+            || self.dir.is_some()
+            || self.active_only
+            || matches!(
+                self.quick,
+                Some(QuickFilter::WithOrders | QuickFilter::Unconfirmed | QuickFilter::Disabled)
+            )
+    }
+
+    /// Whether the quick filter in force keeps a core with this engine state.
+    ///
+    /// Args:
+    ///     engine: The core's confirmed engine state, `Some(false)` when it reported stopped.
+    ///
+    /// Returns:
+    ///     `false` only under [`QuickFilter::Stopped`] for a core that did not report stopped.
+    pub fn core_matches_quick(&self, engine: Option<bool>) -> bool {
+        self.quick != Some(QuickFilter::Stopped) || engine == Some(false)
+    }
+
+    /// Scope the per-core quick filters to one core's open orders or open edits.
+    ///
+    /// A [`StrategyRow`] carries neither, so the tree build calls this once per core before asking
+    /// about that core's rows. An UNSCOPED filter lets those two quick filters pass every row:
+    /// callers that never scope it (the selection prune) narrow only, and failing open there keeps
+    /// a selection the operator can still see rather than dropping it on a guess.
+    ///
+    /// Args:
+    ///     cd: The core whose rows follow.
+    pub fn scope_to_core(&mut self, cd: &CoreData) {
+        self.core_ids = match self.quick {
+            Some(QuickFilter::WithOrders) => Some(
+                cd.orders
+                    .iter()
+                    .filter(|order| !order.job_is_done)
+                    .map(|order| order.strat_id)
+                    .collect(),
+            ),
+            Some(QuickFilter::Unconfirmed) => {
+                Some(cd.strategy_edits.iter().map(|edit| edit.id).collect())
+            }
+            _ => None,
+        };
+    }
+
+    /// Return whether one row passes the quick filter in force.
+    ///
+    /// Args:
+    ///     row: Live strategy row to evaluate.
+    ///
+    /// Returns:
+    ///     `true` with no quick filter, for the core-level [`QuickFilter::Stopped`], and for a
+    ///     per-core quick filter on an unscoped predicate.
+    fn quick_matches(&self, row: &StrategyRow) -> bool {
+        match self.quick {
+            None | Some(QuickFilter::Stopped) => true,
+            Some(QuickFilter::Disabled) => !row.checked,
+            Some(QuickFilter::WithOrders | QuickFilter::Unconfirmed) => self
+                .core_ids
+                .as_ref()
+                .is_none_or(|ids| ids.contains(&row.id)),
+        }
     }
 
     /// Return whether search is active, which temporarily expands the entire tree.
@@ -159,7 +313,8 @@ impl PreparedFilter {
             && self.dir.is_none_or(|s| row.is_short == s)
     }
 
-    /// Return row visibility after applying strategy-or-folder name, kind, direction, and active-only filters.
+    /// Return row visibility after applying strategy-or-folder name, kind, direction, active-only and
+    /// quick filters.
     /// The name is folded only when a search is active; full Unicode case folding supports the
     /// Cyrillic strategy names common in this product.
     ///
@@ -172,6 +327,7 @@ impl PreparedFilter {
         self.counts(row)
             && (self.name_matches(&row.name) || self.folder_path_matches(&row.folder_path))
             && (!self.active_only || row.checked)
+            && self.quick_matches(row)
     }
 }
 

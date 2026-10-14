@@ -211,7 +211,7 @@ impl StrategiesView {
     ///
     /// Returns:
     ///     Whether the selection changed.
-    pub(super) fn prune_selection_to_filter(&mut self, cx: &mut App) -> bool {
+    pub(in crate::strategies) fn prune_selection_to_filter(&mut self, cx: &mut App) -> bool {
         if self.search_prune_debounce.is_none() && self.settled_search != self.filter.search {
             self.settled_search = self.filter.search.clone();
         }
@@ -408,6 +408,32 @@ impl StrategiesView {
         self.filter.core_matches(venues.get(&core))
     }
 
+    /// Whether the filters in force keep this core off the tree.
+    ///
+    /// Asks the same questions the tree build does: the exchange filter, the core-level Stopped
+    /// quick filter, and — when a row filter is in force — whether any of the core's rows survive
+    /// it, scoped to this core so the per-core quick filters answer for real. A core missing from
+    /// the store counts as hidden, so a reveal clears filters rather than trusting a guess.
+    ///
+    /// Args:
+    ///     core: Core a reveal is about to select.
+    ///     cx: Context used to read the store and the venue identities.
+    ///
+    /// Returns:
+    ///     `true` when some filter would hide the core's row.
+    pub(super) fn core_hidden_by_filters(&self, core: CoreId, cx: &App) -> bool {
+        if !self.core_shown_by_exchange(core, cx) {
+            return true;
+        }
+        let store = self.backend.read(cx).session.store();
+        let Some(cd) = store.core(core) else {
+            return true;
+        };
+        let filter = self.filter.prepare_for_core(cd);
+        !filter.core_matches_quick(tree::moon::confirmed_engine(cd))
+            || (filter.narrows_rows() && !cd.strategies.iter().any(|row| filter.matches(row)))
+    }
+
     /// Clear every filter that could hide a strategy the user explicitly asked to see.
     ///
     /// `set_value` does not emit Change, so the search filter is updated explicitly alongside the
@@ -420,11 +446,12 @@ impl StrategiesView {
     ///
     /// Returns:
     ///     Nothing; the view is ready for the reveal path to expand and select its target.
-    fn clear_filters_for_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn clear_filters_for_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.disable_active_only_for_reveal(cx);
         self.filter.kind = None;
         self.filter.dir = None;
         self.filter.exchange = None;
+        self.filter.quick = None;
         if !self.filter.search.trim().is_empty() {
             self.filter.search.clear();
             self.search
@@ -510,8 +537,27 @@ impl StrategiesView {
         // would otherwise pass the guard below and be revealed into a tree that cannot show it.
         // Bound before the `if` because the venue lookup borrows `self.backend`.
         let hidden_by_exchange = !self.core_shown_by_exchange(core, cx);
-        // Reset kind, direction, exchange, and search only if they still hide the target.
-        if !self.filter.matches(&row) || hidden_by_exchange {
+        // The per-core quick filters and the core-level Stopped one need the core itself: the
+        // unscoped `filter.matches` above fails open on them, and would reveal into a tree that
+        // still hides the row.
+        let (hidden_by_quick, stopped) = {
+            let store = self.backend.read(cx).session.store();
+            store.core(core).map_or((false, false), |cd| {
+                let engine = tree::moon::confirmed_engine(cd);
+                let filter = self.filter.prepare_for_core(cd);
+                (
+                    !filter.matches(&row) || !filter.core_matches_quick(engine),
+                    engine == Some(false),
+                )
+            })
+        };
+        // A stopped core is drawn inside the Stopped section; a folded section has no row to land
+        // on, so the reveal opens it.
+        if stopped {
+            self.stopped_collapsed = false;
+        }
+        // Reset kind, direction, exchange, search and quick only if they still hide the target.
+        if !self.filter.matches(&row) || hidden_by_exchange || hidden_by_quick {
             self.clear_filters_for_reveal(window, cx);
         }
         let key: Key = (core, row.id);
