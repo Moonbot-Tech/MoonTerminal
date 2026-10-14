@@ -29,12 +29,14 @@ use super::column_scroll;
 use moon_core::feed::order_math::{MONEY_DECIMALS, order_pnl, position_qty};
 
 mod arb;
+mod filter_line;
 mod format;
 mod inputs;
 mod pnl;
 mod preview;
 
 use arb::{push_arb_rows, push_filter_rows};
+pub(crate) use filter_line::FilterLineTarget;
 pub(in crate::chartdx) use format::hours_and_minutes;
 use format::{
     LOCK_CLOSED, LOCK_OPEN, STAR_OFF, STAR_ON, caption_prefix, colored_sign, cut, detect_line,
@@ -103,21 +105,32 @@ pub(in crate::chartdx) struct LabelText {
     pub action: Option<LabelAction>,
 }
 
-/// An action on a caption: a market-button overlay or the GPU-drawn filters header.
+/// An action on a caption: a market-button overlay, the filters header, or one refusal line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::chartdx) enum LabelAction {
     /// Existing market controls retain their own overlay, geometry, and authorization.
     Market(ActionMark),
     /// Fold or unfold this caption's strategy-filter module.
     ToggleStrategyFilters,
+    /// Open the strategy or blacklist named by one filter line.
+    ///
+    /// The `u8` indexes [`LabelState::filter_line_targets`] for the same caption generation.
+    /// The action stays [`Copy`] by carrying that index rather than the target's strings.
+    OpenFilterLine(u8),
 }
 
 impl LabelAction {
     /// Return only actions that reserve a market-button overlay instead of drawing GPU text.
+    ///
+    /// Args:
+    ///     self: The caption action.
+    ///
+    /// Returns:
+    ///     The market mark, or `None` for a header fold and a filter line.
     pub fn market(self) -> Option<ActionMark> {
         match self {
             Self::Market(mark) => Some(mark),
-            Self::ToggleStrategyFilters => None,
+            Self::ToggleStrategyFilters | Self::OpenFilterLine(_) => None,
         }
     }
 }
@@ -192,6 +205,13 @@ pub(in crate::chartdx) struct LabelState {
     /// Formatted captions in draw order — row by row, caption by caption — skipping everything
     /// that resolved to nothing.
     pub texts: Vec<LabelText>,
+    /// Navigation targets addressed by [`LabelAction::OpenFilterLine`].
+    ///
+    /// Rebuilt with [`Self::texts`]. An index stored on a caption names an entry of this
+    /// generation only.
+    pub(in crate::chartdx) filter_line_targets: Vec<FilterLineTarget>,
+    /// Reusable build buffer for [`Self::filter_line_targets`].
+    filter_line_targets_scratch: Vec<FilterLineTarget>,
     /// Advances whenever the formatted texts change.
     pub generation: u64,
     /// Reusable build buffer, so a re-format that changes nothing costs no allocation.
@@ -250,6 +270,8 @@ impl LabelState {
         self.arb_view = Some(arb_view.clone());
         let mut scratch = std::mem::take(&mut self.scratch);
         scratch.clear();
+        let mut targets = std::mem::take(&mut self.filter_line_targets_scratch);
+        targets.clear();
         for (row_ix, row) in cfg.rows.iter().enumerate() {
             // THE gate for a whole module: its own switch, and the question of whether anything on
             // it would print. Asked here rather than in the layout pass because a row that resolves
@@ -311,6 +333,7 @@ impl LabelState {
                             ),
                             ChartLabelField::StrategyFilters => push_filter_rows(
                                 &mut scratch,
+                                &mut targets,
                                 row_ix,
                                 row,
                                 &self.inputs.filter_lines,
@@ -354,8 +377,10 @@ impl LabelState {
         if changed {
             self.generation = self.generation.wrapping_add(1);
             std::mem::swap(&mut self.texts, &mut scratch);
+            std::mem::swap(&mut self.filter_line_targets, &mut targets);
         }
         self.scratch = scratch;
+        self.filter_line_targets_scratch = targets;
         changed
     }
 }

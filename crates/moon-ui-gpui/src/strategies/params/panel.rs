@@ -235,7 +235,20 @@ impl StrategiesView {
         let content: AnyElement = match body {
             ParamsBody::Section(section) => {
                 // Preserve schema field order and look up snapshot values by name.
-                let mut list = v_flex().w_full().gap(design::ui_px(cx, 2.0));
+                // The rows are direct children of the scroller: `ScrollHandle::scroll_to_item`
+                // indexes those children, and a wrapper around them would make every index 0.
+                let scroll_name = self.pending_section_scroll.clone();
+                let mut list = v_flex()
+                    .id("strat-params-scroll")
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .w_full()
+                    .gap(design::ui_px(cx, 2.0))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.params_section_scroll);
+                let mut row_ix = 0usize;
+                let mut scroll_ix = None;
                 for f in &section.fields {
                     let lname = f.name.to_lowercase();
                     if multi && lname == "strategyname" {
@@ -248,6 +261,9 @@ impl StrategiesView {
                     }
                     if differ && lname == "signaltype" {
                         continue;
+                    }
+                    if scroll_name.as_deref() == Some(f.name.as_str()) {
+                        scroll_ix = Some(row_ix);
                     }
                     let active = self.rules.field_active(&f.name, &values);
                     let merged = merged_value_for_owned(self, &row_pairs, f, &pending);
@@ -262,15 +278,15 @@ impl StrategiesView {
                         window,
                         cx,
                     ));
+                    row_ix += 1;
                 }
-                div()
-                    .id("strat-params-scroll")
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .overflow_y_scroll()
-                    .child(list)
-                    .into_any_element()
+                if scroll_name.is_some() {
+                    self.pending_section_scroll = None;
+                    if let Some(ix) = scroll_ix {
+                        self.params_section_scroll.scroll_to_item(ix);
+                    }
+                }
+                list.into_any_element()
             }
             ParamsBody::Full(flat) => {
                 self.full_params_list(flat, &keys, values, row_pairs, pending, window, cx)

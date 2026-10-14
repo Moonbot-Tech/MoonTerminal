@@ -7,18 +7,22 @@
 //! `panic_if_vol_drop`) rather than the compact channel's "zero means off", so switching one off
 //! keeps the level it was switched off at.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonVariant, MoonInput, MoonTextArea, h_flex, v_flex};
+use moon_ui::{
+    MoonButton, MoonButtonVariant, MoonInput, MoonPalette, MoonTextArea, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use moon_core::feed::CoreConfig;
 
-use crate::design;
+use crate::design::{self, moon, moon_alpha};
 use crate::panels::popup_group;
 use crate::shell::Shell;
 use crate::shell::core_settings::draft::{
     TAKE_PROFIT_BOUNDS, TRAILING_BOUNDS, VSTOP_BOUNDS, parse_num,
 };
+use crate::shell::core_settings::{BlacklistReveal, coin_blacklist_remove_button};
 
 use super::widgets::{
     caption, def_alert_strategy_row, flag, num, slider, sound_cell, stretch_field,
@@ -121,6 +125,92 @@ pub(super) fn slider_specs(
     ]
 }
 
+/// The blacklist rows inside the compact popup's risk-limits group.
+///
+/// The token strip sits above the editor. The remove button sits on the label row, before the
+/// expand control. Both appear only while `reveal`'s coin is still in `list_text`.
+///
+/// Args:
+///     blacklist_flag: The «Чёрный список» checkbox.
+///     exclude_flag: The delta-filter checkbox.
+///     expand: The ellipsis that switches the editor between one line and a text area.
+///     editor: The blacklist field that is on screen.
+///     list_text: Draft blacklist text the strip is painted from.
+///     reveal: Highlight, when a reveal is showing.
+///     on_remove: Writes the seeded core and rewrites the draft.
+///     cx: Application context for type scale and colour.
+///
+/// Returns:
+///     The rows the risk-limits group hosts.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn compact_blacklist_rows(
+    blacklist_flag: impl IntoElement,
+    exclude_flag: impl IntoElement,
+    expand: impl IntoElement,
+    editor: impl IntoElement,
+    list_text: &str,
+    reveal: Option<BlacklistReveal<'_>>,
+    on_remove: impl Fn(&mut Window, &mut App) + 'static,
+    cx: &App,
+) -> AnyElement {
+    let marked =
+        reveal.is_some_and(|item| moon_core::symbol::coin_list::contains(list_text, item.coin));
+    let error = reveal.and_then(|item| item.error.map(str::to_string));
+    let coin = reveal.map(|item| item.coin.to_string()).unwrap_or_default();
+    let gap = design::ui_px(cx, 6.0);
+    let remove = marked.then(|| {
+        div()
+            .id("bl-compact-remove")
+            .debug_selector(|| "bl-compact-remove".into())
+            .flex_none()
+            .child(coin_blacklist_remove_button(
+                "core-bl-remove",
+                &coin,
+                on_remove,
+            ))
+    });
+    let strip = marked.then(|| {
+        div().id("bl-compact-token").w_full().min_w_0().child(
+            crate::controls::coin_token::coin_token_strip(
+                list_text,
+                &coin,
+                design::t_body(cx),
+                // The blacklist sits in one of two columns, so the strip gets half the width.
+                Some(design::font_w_px(cx, super::CONTENT_W / 2.0 - 60.0)),
+                cx,
+            ),
+        )
+    });
+    v_flex()
+        .id("bl-compact-rows")
+        .debug_selector(|| "bl-compact-rows".into())
+        .w_full()
+        .gap(gap)
+        .child(
+            h_flex()
+                .id("bl-compact-label")
+                .w_full()
+                .items_center()
+                .gap(design::ui_px(cx, 10.0))
+                .child(blacklist_flag)
+                .child(exclude_flag)
+                .child(div().flex_1())
+                .children(remove)
+                .child(expand),
+        )
+        .children(error.map(|text| {
+            div()
+                .id("bl-compact-error")
+                .w_full()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(design::danger_color(MoonPalette::active(cx))))
+                .child(text)
+        }))
+        .children(strip)
+        .child(div().id("bl-compact-editor").w_full().child(editor))
+        .into_any_element()
+}
+
 /// Builds the General tab's body.
 ///
 /// Args:
@@ -130,6 +220,7 @@ pub(super) fn slider_specs(
 ///     editors: Retained blacklist and strategy-filter editors.
 ///     view: Shell entity used to stage changes.
 ///     blacklist_expanded: Whether to render the multiline blacklist editor.
+///     bl_reveal: Coin highlighted on this tab, when a reveal is showing.
 ///     cx: Application context used to read state and render controls.
 ///     on_toggle_blacklist: Callback that toggles the blacklist editor mode.
 ///
@@ -143,6 +234,7 @@ pub(super) fn general_tab(
     editors: &TextEditors<'_>,
     view: &Entity<Shell>,
     blacklist_expanded: bool,
+    bl_reveal: Option<BlacklistReveal<'_>>,
     cx: &App,
     on_toggle_blacklist: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
@@ -243,37 +335,48 @@ pub(super) fn general_tab(
             .size(design::INPUT_SIZE)
             .into_any_element()
     };
+    let alpha = bl_reveal.map(|item| item.alpha).unwrap_or(0.0);
+    let weak = view.downgrade();
+    let risks_rows = compact_blacklist_rows(
+        flag(
+            "core-bl",
+            t!("core_settings.blacklist").to_string(),
+            g.blacklist_on,
+            view,
+            |d, on| d.general.blacklist_on = on,
+        ),
+        flag(
+            "core-bl-exclude",
+            t!("core_settings.exclude_delta").to_string(),
+            g.exclude_blacklisted_from_deltas,
+            view,
+            |d, on| d.general.exclude_blacklisted_from_deltas = on,
+        ),
+        bl_expand_btn,
+        bl_field,
+        &g.blacklist_text,
+        bl_reveal,
+        move |window, app| {
+            let _ = weak.update(app, |this, cx| {
+                this.remove_highlighted_core_coin(window, cx)
+            });
+        },
+        cx,
+    );
     let risks = popup_group(
         "core-frame-risks",
         t!("core_settings.frame_risks").to_string(),
     )
     .child(
-        v_flex()
+        div()
+            .id("core-frame-risks-body")
             .w_full()
-            .gap(gap)
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap(design::ui_px(cx, 10.0))
-                    .child(flag(
-                        "core-bl",
-                        t!("core_settings.blacklist").to_string(),
-                        g.blacklist_on,
-                        view,
-                        |d, on| d.general.blacklist_on = on,
-                    ))
-                    .child(flag(
-                        "core-bl-exclude",
-                        t!("core_settings.exclude_delta").to_string(),
-                        g.exclude_blacklisted_from_deltas,
-                        view,
-                        |d, on| d.general.exclude_blacklisted_from_deltas = on,
-                    ))
-                    .child(div().flex_1())
-                    .child(bl_expand_btn),
-            )
-            .child(div().w_full().child(bl_field)),
+            .when(alpha > 0.0, |body| {
+                body.rounded(design::ui_px(cx, 4.0))
+                    .border(px(1.5))
+                    .border_color(moon_alpha(p.amber, alpha))
+            })
+            .child(risks_rows),
     );
 
     // --- Leverage and margin, straight from `trading.auto_manage_lev` ---
@@ -489,3 +592,6 @@ pub(super) fn general_tab(
         )
         .into_any_element()
 }
+
+#[cfg(test)]
+mod tests;

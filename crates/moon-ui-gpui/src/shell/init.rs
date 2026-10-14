@@ -581,6 +581,7 @@ impl Shell {
             core_settings_target: None,
             core_settings_cancel_confirm: false,
             core_settings_bl_expanded: false,
+            core_settings_bl_highlight: None,
             quiet_settings_open: false,
             rail_settings_open: false,
             quiet_from_input,

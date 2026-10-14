@@ -30,7 +30,7 @@ use moon_core::session::CoreId;
 
 use crate::panels::popup_title;
 use crate::shell::Shell;
-use crate::shell::core_settings::resolve_core_settings_write;
+use crate::shell::core_settings::{BlacklistReveal, resolve_core_settings_write};
 use crate::{Backend, design};
 
 /// Unscaled content width shared with the popover host.
@@ -195,6 +195,7 @@ pub(crate) fn core_settings_tab_strip(
 ///     editors: Retained blacklist and strategy-filter editors.
 ///     blacklist_expanded: Whether to render the multiline blacklist editor.
 ///     cancel_confirm: Whether Cancel All Orders is awaiting confirmation.
+///     bl_reveal: Coin highlighted on the blacklist, when a reveal is showing.
 ///     view: Shell entity used by tab switching, staging, OK, and Cancel.
 ///     tab_strip: Pre-rendered contrast-safe tab strip, built where a mutable window is available.
 ///     cx: Application context used to read state and render controls.
@@ -212,6 +213,7 @@ pub(crate) fn core_settings_content(
     editors: &TextEditors<'_>,
     blacklist_expanded: bool,
     cancel_confirm: bool,
+    bl_reveal: Option<BlacklistReveal<'_>>,
     view: &Entity<Shell>,
     tab_strip: AnyElement,
     cx: &App,
@@ -271,6 +273,7 @@ pub(crate) fn core_settings_content(
                 editors,
                 view,
                 blacklist_expanded,
+                bl_reveal,
                 cx,
                 on_toggle_blacklist,
             ),

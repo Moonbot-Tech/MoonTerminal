@@ -83,6 +83,18 @@ impl StrategiesView {
         // Preserve the version value before moving it into a control so it can be compared with the
         // current value and used by the "copy to current" button.
         let version_val = value.clone();
+        // More than one selected strategy has no single row to reveal into, so the flash, the
+        // token strip, and the remove button stay hidden.
+        let reveal = (keys.len() <= 1)
+            .then(|| self.coin_field_reveal(&field_name, &value))
+            .flatten();
+        if reveal.as_ref().is_some_and(|item| item.alpha > 0.0) {
+            window.request_animation_frame();
+        }
+        let token_source = reveal
+            .as_ref()
+            .filter(|item| item.marked)
+            .map(|_| value.clone());
         // Computed before `value` moves into the control below, and reused there: a memo/formula
         // field needs its diff arrow stacked vertically rather than beside a control it cannot
         // share a line with.
@@ -521,13 +533,52 @@ impl StrategiesView {
             control
         };
 
+        let compact_row = compact.is_some();
+        let flash_alpha = reveal.as_ref().map(|item| item.alpha).unwrap_or(0.0);
+        let reveal_strip = reveal.as_ref().and_then(|item| {
+            let text = token_source.as_deref()?;
+            item.marked.then(|| {
+                let size = if compact_row {
+                    design::t_caption(cx)
+                } else {
+                    design::t_body(cx)
+                };
+                // A bounded strip windows the list so the coin stays visible at any position.
+                let max_width = Some(design::font_w_px(
+                    cx,
+                    if compact_row { 160.0 } else { 360.0 },
+                ));
+                crate::controls::coin_token::coin_token_strip(text, &item.coin, size, max_width, cx)
+            })
+        });
+        let reveal_button = reveal
+            .as_ref()
+            .filter(|item| item.marked && active)
+            .map(|item| {
+                let weak = cx.entity().downgrade();
+                let editor_id = row_id.clone();
+                let coin = item.coin.clone();
+                let error = item.error.clone();
+                strategy_blacklist_remove(
+                    &row_id,
+                    &coin,
+                    error.as_deref(),
+                    compact_row,
+                    move |_window, app| {
+                        let editor_id = editor_id.clone();
+                        let _ = weak.update(app, |this, cx| {
+                            this.remove_revealed_coin(&editor_id, cx);
+                        });
+                    },
+                    cx,
+                )
+            });
         let field_for_focus = field_name.clone();
         // Line 1 is always Moonbot's own identifier: it is what the manual, a forum post and the
         // strategy file call the field, so it leads the row. Line 2 is the human name when there is
         // one, so a field with no label looks exactly as it did before. Full mode's row pitch is
         // fixed (`full_params::full_row_h_value`) and would clip a second line, so a compact row
         // keeps one line and moves the human name into its tooltip.
-        let compact_row = compact.is_some();
         let subtitle = (!compact_row).then_some(field_label.clone()).flatten();
         let headline = f.name.clone();
         let name_tooltip = match (compact_row, field_label, field_tooltip) {
@@ -544,6 +595,10 @@ impl StrategiesView {
             .py(design::ui_px(cx, 4.0))
             .border_l(px(2.0))
             .border_color(moon_alpha(p.amber, if dirty { 0.72 } else { 0.0 }))
+            .when(flash_alpha > 0.0, |row| {
+                row.border(px(1.5))
+                    .border_color(moon_alpha(p.amber, flash_alpha))
+            })
             .pl(px(8.0))
             .pr_2()
             .rounded(design::ui_px(cx, 3.0))
@@ -608,15 +663,35 @@ impl StrategiesView {
                         )
                     }),
             )
-            .child(
-                div()
+            .child(match reveal_strip {
+                Some(strip) if !compact_row => v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .gap(px(2.0))
+                    .text_color(moon(val_col))
+                    .child(strip)
+                    .child(value_el)
+                    .into_any_element(),
+                Some(strip) => h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .items_center()
+                    .gap(design::ui_px(cx, 6.0))
+                    .text_color(moon(val_col))
+                    .child(strip)
+                    .child(div().flex_1().min_w_0().child(value_el))
+                    .into_any_element(),
+                None => div()
                     .flex_1()
                     .min_w_0()
                     // Clip values to their cells so long memo text cannot overlap adjacent rows.
                     .overflow_hidden()
                     .text_color(moon(val_col))
-                    .child(value_el),
-            )
+                    .child(value_el)
+                    .into_any_element(),
+            })
             .child(
                 div()
                     .flex_none()
@@ -640,10 +715,183 @@ impl StrategiesView {
                         )
                     }),
             )
+            .children(reveal_button)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.focused_field = Some(field_for_focus.clone());
                 cx.notify();
             }))
             .into_any_element()
     }
+
+    /// The field reveal, with optional coin controls, when it belongs to the strategy on screen.
+    ///
+    /// A different field, or a selection that has moved on, draws nothing. The token is marked
+    /// only while the value still lists a nonempty coin, so the highlight and the remove button
+    /// leave together. A field-only reveal retains its outline without either coin control.
+    ///
+    /// Args:
+    ///     field: Schema field name of the row being drawn.
+    ///     value: Text the row is showing, draft first.
+    ///
+    /// Returns:
+    ///     The coin, the outline alpha, any refusal, and whether the value still lists the coin.
+    fn coin_field_reveal(&self, field: &str, value: &str) -> Option<CoinReveal> {
+        let flash = self.field_flash.as_ref()?;
+        if flash.key != field || flash.strategy != selected_key(self) {
+            return None;
+        }
+        let marked = revealed_coin_is_listed(value, &flash.coin);
+        Some(CoinReveal {
+            coin: flash.coin.clone(),
+            alpha: crate::controls::coin_token::flash_alpha(flash.started),
+            error: flash.error.clone(),
+            marked,
+        })
+    }
+
+    /// Remove the revealed coin from the strategy and from an unsent draft of the same field.
+    ///
+    /// `Ok(false)` still counts: the core text was already without the coin, and a draft that
+    /// still names it must not be sent by Apply. No draft is created when none exists. A refusal
+    /// leaves the draft, the input, and the flash, and shows the failure beside the button.
+    ///
+    /// Args:
+    ///     editor_id: Retained input id of this row, from the same keys the row was built with.
+    ///     cx: View context for the backend write and the input update.
+    fn remove_revealed_coin(&mut self, editor_id: &str, cx: &mut Context<Self>) {
+        let Some(flash) = self.field_flash.clone() else {
+            return;
+        };
+        let Some((core, sid)) = flash.strategy else {
+            return;
+        };
+        let coin = flash.coin.clone();
+        let field = flash.key.clone();
+        let outcome = self.backend.update(cx, |backend, _| {
+            crate::controls::coin_menu::write_strategy_blacklist(backend, core, sid, &coin, true)
+        });
+        match outcome {
+            Ok(_) => {
+                let edit_key = (core, sid, field);
+                if let Some(next) = self
+                    .field_edits
+                    .get(&edit_key)
+                    .map(|draft| moon_core::symbol::coin_list::remove(draft, &coin))
+                {
+                    self.field_edits.insert(edit_key, next.clone());
+                    if let Some(input) = self.field_inputs.get(editor_id).cloned() {
+                        input.update(cx, |state, cx| state.sync_value(next, cx));
+                    }
+                }
+                self.field_flash = None;
+                cx.notify();
+            }
+            Err(_) => {
+                if let Some(flash) = self.field_flash.as_mut() {
+                    flash.error = Some(t!("coin_bl_places.remove_failed", coin = coin).to_string());
+                }
+                cx.notify();
+            }
+        }
+    }
 }
+
+/// One field row's reveal, with optional coin controls and an independently fading outline.
+struct CoinReveal {
+    coin: String,
+    alpha: f32,
+    error: Option<String>,
+    marked: bool,
+}
+
+/// An empty reveal token is field-only, even when an empty list contains an empty split piece.
+///
+/// Args:
+///     value: Coin-list text currently displayed in the field.
+///     coin: Reveal token, empty when navigation requested only a field.
+///
+/// Returns:
+///     Whether a nonempty token is present and can receive highlighting/removal controls.
+fn revealed_coin_is_listed(value: &str, coin: &str) -> bool {
+    !coin.is_empty() && moon_core::symbol::coin_list::contains(value, coin)
+}
+
+/// The «Убрать <COIN>» control a strategy field row draws at its trailing edge.
+///
+/// The button is the shared outline control. Per-section mode stacks a refusal under it.
+/// Full mode keeps the fixed row pitch: the refusal is one truncated line beside the button,
+/// and the tooltip carries the full sentence.
+///
+/// Args:
+///     row_id: Field-row id, so two rows never share a button id.
+///     coin: Token the label names.
+///     error: Refusal text, when the last remove failed.
+///     compact: Full-mode row. The refusal stays on one line.
+///     on_remove: Writes the strategy and rewrites an unsent draft.
+///     cx: Application context for the type scale and the danger colour.
+///
+/// Returns:
+///     The button, and the refusal when `error` is set.
+fn strategy_blacklist_remove(
+    row_id: &str,
+    coin: &str,
+    error: Option<&str>,
+    compact: bool,
+    on_remove: impl Fn(&mut Window, &mut App) + 'static,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let button = crate::shell::coin_blacklist_remove_button(
+        SharedString::from(format!("coin-bl-remove-{row_id}")),
+        coin,
+        on_remove,
+    );
+    let selector = {
+        let row_id = row_id.to_string();
+        move || format!("coin-bl-remove-wrap-{row_id}")
+    };
+    if compact {
+        let mut row = h_flex()
+            .id(SharedString::from(format!("coin-bl-remove-wrap-{row_id}")))
+            .debug_selector(selector)
+            .flex_none()
+            .items_center()
+            .gap(px(4.0))
+            .child(button);
+        if let Some(error) = error {
+            let full = error.to_string();
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("coin-bl-remove-error-{row_id}")))
+                    .max_w(design::font_w_px(cx, 140.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_size(design::t_caption(cx))
+                    .text_color(design::moon(design::danger_color(p)))
+                    .tooltip(crate::panels::common::text_tooltip(full.clone()))
+                    .child(full),
+            );
+        }
+        return row.into_any_element();
+    }
+    let mut stack = v_flex()
+        .id(SharedString::from(format!("coin-bl-remove-wrap-{row_id}")))
+        .debug_selector(selector)
+        .flex_none()
+        .items_end()
+        .gap(px(2.0))
+        .child(button);
+    if let Some(error) = error {
+        stack = stack.child(
+            div()
+                .max_w(design::font_w_px(cx, 220.0))
+                .text_size(design::t_caption(cx))
+                .text_color(design::moon(design::danger_color(p)))
+                .child(error.to_string()),
+        );
+    }
+    stack.into_any_element()
+}
+
+#[cfg(test)]
+mod tests;

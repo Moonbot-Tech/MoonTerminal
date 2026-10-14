@@ -50,3 +50,18 @@ fn every_strategy_navigation_producer_passes_workspace_authority() {
     assert!(ms_slots.contains("Some(workspace_group.clone()),"));
     assert!(!ms_slots.contains("singleton_workspace"));
 }
+
+/// A reveal focuses the destination group only when the singleton is owned by a different one.
+#[test]
+fn reveal_scope_group_moves_only_when_the_destination_differs() {
+    assert_eq!(
+        super::reveal_scope_group(Some("alpha"), Some("alpha")),
+        None
+    );
+    assert_eq!(
+        super::reveal_scope_group(Some("beta"), Some("alpha")),
+        Some("beta")
+    );
+    assert_eq!(super::reveal_scope_group(None, Some("alpha")), None);
+    assert_eq!(super::reveal_scope_group(Some("beta"), None), Some("beta"));
+}

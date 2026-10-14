@@ -115,26 +115,7 @@ fn reported_catchup(bot: Option<&BotState>) -> Option<&TapeCatchup> {
         .and_then(|status| status.tape_catchup.as_deref())
 }
 
-/// The locale key of `base` for count `n`: Slavic one/few/many, one or many for the other
-/// languages (each dictionary carries all three forms).
-pub(in crate::settings) fn plural_key(base: &str, n: u64) -> String {
-    let form = if matches!(rust_i18n::locale().as_ref(), "ru" | "uk") {
-        if (11..=14).contains(&(n % 100)) {
-            "many"
-        } else {
-            match n % 10 {
-                1 => "one",
-                2..=4 => "few",
-                _ => "many",
-            }
-        }
-    } else if n == 1 {
-        "one"
-    } else {
-        "many"
-    };
-    format!("{base}_{form}")
-}
+pub(in crate::settings) use crate::display_text::plural_key;
 
 /// The switches "Write to the station" sends: only to a station that reported them, because an
 /// older station's `[tape]` refuses unknown keys.

@@ -7,37 +7,7 @@ use moon_core::session::core_update::{
 use moon_ui::MoonPalette;
 use rust_i18n::t;
 
-/// The `_one` / `_few` / `_many` form of a count-dependent Core Status string.
-///
-/// Slavic locales (`ru`, `uk`) use one/few/many, including the 11..=14 exception. Every other
-/// shipped language uses one when `n` is 1 and many otherwise. The dictionaries carry all three
-/// forms in every language, matching the split already used by the tuner and the station tape.
-/// This copy lives here because those two are private to their modules.
-///
-/// Args:
-///     base: Message key without its form suffix.
-///     n: The count the noun agrees with.
-///
-/// Returns:
-///     The full key of the form to draw.
-pub(super) fn plural_key(base: &str, n: u64) -> String {
-    let form = if matches!(rust_i18n::locale().as_ref(), "ru" | "uk") {
-        if (11..=14).contains(&(n % 100)) {
-            "many"
-        } else {
-            match n % 10 {
-                1 => "one",
-                2..=4 => "few",
-                _ => "many",
-            }
-        }
-    } else if n == 1 {
-        "one"
-    } else {
-        "many"
-    };
-    format!("{base}_{form}")
-}
+pub(super) use crate::display_text::plural_key;
 
 use super::model::{ApiKeyState, GroupVersion};
 use crate::backend::core_warn::LatencySeverity;

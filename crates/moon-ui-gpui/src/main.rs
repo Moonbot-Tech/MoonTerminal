@@ -427,6 +427,8 @@ struct Backend {
     /// Set from a chart order-line context menu or Orders-table strategy cell, then revalidated by
     /// `StrategiesView` before it disables filters, expands folders, and selects the row.
     strategies_goto: Option<strategies::StrategyRevealRequest>,
+    /// Open one core's settings on its blacklist for a chart line or the places dialog.
+    core_settings_goto: Option<shell::CoreSettingsReveal>,
     /// Global singleton Assets window for all cores, retained for deduplication and focus.
     assets_window: Option<WindowHandle<Root>>,
     /// Singleton Screener window covering all exchanges with provider deduplication.

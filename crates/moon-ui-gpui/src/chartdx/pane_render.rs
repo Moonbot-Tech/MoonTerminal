@@ -63,6 +63,11 @@ pub(in crate::chartdx) struct PaneRender {
     pub(crate) volume_hits: Vec<VolumeHit>,
     /// Measured strategy-filter header targets from the last successful caption pass.
     pub(in crate::chartdx) filter_header_hits: Vec<FilterHeaderHit>,
+    /// Measured clickable filter-line targets from the last successful caption pass.
+    ///
+    /// Cleared and rebuilt with [`Self::filter_header_hits`]. A rectangle is valid only for the
+    /// profile stored on the hit.
+    pub(in crate::chartdx) filter_line_hits: Vec<FilterLineHit>,
     /// Where each scrollable label column was drawn, rebuilt with [`Self::filter_header_hits`].
     pub(in crate::chartdx) column_bands: Vec<ColumnBand>,
     /// The plot's left strip where the wheel scrolls the expanded strategy-filter column.
@@ -537,6 +542,7 @@ impl PaneRender {
             volume_boxes: Vec::new(),
             volume_hits: Vec::new(),
             filter_header_hits: Vec::new(),
+            filter_line_hits: Vec::new(),
             column_bands: Vec::new(),
             filter_strip: None,
             action_rects: Vec::new(),

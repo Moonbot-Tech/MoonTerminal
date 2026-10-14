@@ -25,6 +25,7 @@
 //! The disabled rows still print their captions in Moonbot's wording, with an em dash where the
 //! value would be: a row that showed `0.00%` would state a setting this terminal has not read.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
@@ -32,9 +33,12 @@ use rust_i18n::t;
 use moon_core::feed::{CoreConfig, OrderRulesSettings};
 use moon_core::util::fmt::round_to;
 
-use crate::design;
+use crate::design::{self, moon_alpha};
 use crate::shell::editors::EditorStore;
-use crate::shell::{TAKE_PROFIT_BOUNDS, TRAILING_BOUNDS, VSTOP_BOUNDS};
+use crate::shell::{
+    BlacklistReveal, TAKE_PROFIT_BOUNDS, TRAILING_BOUNDS, VSTOP_BOUNDS,
+    coin_blacklist_remove_button,
+};
 
 use super::super::CoreExpertView;
 use super::super::widgets::{action, caption, columns, field, flag, group, hint, rows, slider};
@@ -173,11 +177,124 @@ pub(super) fn slider_specs(
     ]
 }
 
+/// Blacklist block on the General page, including the reveal chrome.
+///
+/// The token strip sits above the editor. The remove button sits on the label row, after the
+/// delta-filter checkbox. Both appear only while `reveal`'s coin is still in `list_text`. The
+/// amber outline wraps the whole block and fades with `reveal.alpha`.
+///
+/// Args:
+///     blacklist_flag: The «Чёрный список» checkbox.
+///     exclude_flag: The delta-filter checkbox.
+///     editor: The blacklist field, when the page declared one.
+///     below: The fresh-coin hold and the trades-into-deltas switch.
+///     list_text: Draft blacklist text the strip is painted from.
+///     reveal: Highlight, when a reveal is showing.
+///     on_remove: Writes this window's core and rewrites the staged page.
+///     p: Active palette. The outline uses its amber.
+///     cx: Application context for the type scale.
+///
+/// Returns:
+///     The block the risk-limits group hosts.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn expert_blacklist_rows(
+    blacklist_flag: impl IntoElement,
+    exclude_flag: impl IntoElement,
+    editor: Option<impl IntoElement>,
+    below: impl IntoElement,
+    list_text: &str,
+    reveal: Option<BlacklistReveal<'_>>,
+    on_remove: impl Fn(&mut Window, &mut App) + 'static,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let alpha = reveal.map(|item| item.alpha).unwrap_or(0.0);
+    let marked =
+        reveal.is_some_and(|item| moon_core::symbol::coin_list::contains(list_text, item.coin));
+    let error = reveal.and_then(|item| item.error.map(str::to_string));
+    let coin = reveal.map(|item| item.coin.to_string()).unwrap_or_default();
+    let remove = marked.then(|| {
+        div()
+            .id("exp-gen-bl-remove")
+            .debug_selector(|| "exp-gen-bl-remove".into())
+            .flex_none()
+            .child(coin_blacklist_remove_button(
+                "exp-gen-bl-remove-btn",
+                &coin,
+                on_remove,
+            ))
+    });
+    let strip = marked.then(|| {
+        div().id("exp-gen-bl-token").w_full().min_w_0().child(
+            crate::controls::coin_token::coin_token_strip(
+                list_text,
+                &coin,
+                design::t_body(cx),
+                // The blacklist sits in one of two columns, so the strip gets half the width.
+                Some(design::font_w_px(
+                    cx,
+                    crate::shell::core_settings_popup::CONTENT_W / 2.0 - 60.0,
+                )),
+                cx,
+            ),
+        )
+    });
+    let rows = v_flex()
+        .id("exp-gen-bl-rows")
+        .w_full()
+        .gap(design::ui_px(cx, 6.0))
+        .child(
+            h_flex()
+                .id("exp-gen-bl-label")
+                .w_full()
+                .items_center()
+                .gap(design::ui_px(cx, 10.0))
+                .child(blacklist_flag)
+                .children(remove)
+                .child(div().flex_1())
+                .child(exclude_flag),
+        )
+        .children(error.map(|text| {
+            div()
+                .id("exp-gen-bl-error")
+                .w_full()
+                .text_size(design::t_caption(cx))
+                .text_color(design::moon(design::danger_color(p)))
+                .child(text)
+        }))
+        .children(strip)
+        .children(editor.map(|editor| div().id("exp-gen-bl-editor").w_full().child(editor)))
+        .child(below);
+    div()
+        .id("exp-gen-risks-body")
+        .debug_selector(|| "exp-gen-risks-body".into())
+        .w_full()
+        .when(alpha > 0.0, |body| {
+            body.rounded(design::ui_px(cx, 4.0))
+                .border(px(1.5))
+                .border_color(moon_alpha(p.amber, alpha))
+        })
+        .child(rows)
+        .into_any_element()
+}
+
 /// Build the page.
+///
+/// Args:
+///     view: Window entity the controls stage through. Not read: this runs inside its render.
+///     store: Controls built for this render.
+///     draft: Staged page every control reads.
+///     bl_reveal: Coin highlighted on the blacklist, when a reveal is showing.
+///     p: Active palette.
+///     cx: Application context for font-scaled geometry.
+///
+/// Returns:
+///     The page body.
 pub(super) fn body(
     view: &Entity<CoreExpertView>,
     store: &EditorStore,
     draft: &CoreConfig,
+    bl_reveal: Option<BlacklistReveal<'_>>,
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -324,51 +441,56 @@ pub(super) fn body(
     );
 
     // --- Right: the blacklist and the two switches Moonbot groups with it ------------------------
+    let weak = view.downgrade();
     let risks = group("exp-gen-risks", t!("core_settings.frame_risks").to_string()).child(
-        rows(cx)
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap(design::ui_px(cx, 10.0))
-                    .child(flag(
-                        "exp-gen-bl-on",
-                        t!("core_settings.blacklist").to_string(),
-                        g.blacklist_on,
-                        true,
-                        view,
-                        |d, on| d.general.blacklist_on = on,
-                    ))
-                    .child(div().flex_1())
-                    .child(flag(
-                        "exp-gen-bl-exclude",
-                        t!("core_settings.exclude_delta").to_string(),
-                        g.exclude_blacklisted_from_deltas,
-                        true,
-                        view,
-                        |d, on| d.general.exclude_blacklisted_from_deltas = on,
-                    )),
-            )
-            .children(field(store, "exp-gen-bl-text", true))
-            .child(caption(
-                t!(
-                    "core_expert.gen_bl_fresh",
-                    v = r.dont_buy_new_coins.to_string()
-                )
-                .to_string(),
-                true,
-                p,
-                cx,
-            ))
-            .children(slider(store, "exp-gen-bl-fresh", true))
-            .child(flag(
-                "exp-gen-deltas-trades",
-                t!("core_expert.gen_deltas_use_trades").to_string(),
-                r.deltas_by_trades,
+        expert_blacklist_rows(
+            flag(
+                "exp-gen-bl-on",
+                t!("core_settings.blacklist").to_string(),
+                g.blacklist_on,
                 true,
                 view,
-                |d, on| d.order_rules.deltas_by_trades = on,
-            )),
+                |d, on| d.general.blacklist_on = on,
+            ),
+            flag(
+                "exp-gen-bl-exclude",
+                t!("core_settings.exclude_delta").to_string(),
+                g.exclude_blacklisted_from_deltas,
+                true,
+                view,
+                |d, on| d.general.exclude_blacklisted_from_deltas = on,
+            ),
+            field(store, "exp-gen-bl-text", true),
+            v_flex()
+                .w_full()
+                .gap(design::ui_px(cx, 6.0))
+                .child(caption(
+                    t!(
+                        "core_expert.gen_bl_fresh",
+                        v = r.dont_buy_new_coins.to_string()
+                    )
+                    .to_string(),
+                    true,
+                    p,
+                    cx,
+                ))
+                .children(slider(store, "exp-gen-bl-fresh", true))
+                .child(flag(
+                    "exp-gen-deltas-trades",
+                    t!("core_expert.gen_deltas_use_trades").to_string(),
+                    r.deltas_by_trades,
+                    true,
+                    view,
+                    |d, on| d.order_rules.deltas_by_trades = on,
+                )),
+            &g.blacklist_text,
+            bl_reveal,
+            move |_window, app| {
+                let _ = weak.update(app, |this, cx| this.remove_highlighted_blacklist(cx));
+            },
+            p,
+            cx,
+        ),
     );
 
     v_flex()
@@ -401,3 +523,6 @@ pub(super) fn body(
         ))
         .into_any_element()
 }
+
+#[cfg(test)]
+mod tests;

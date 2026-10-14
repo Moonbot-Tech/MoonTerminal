@@ -36,9 +36,10 @@
 //! - [`date_range`] provides the shared from/to date+time bounds of Report and Analytics;
 //! - [`toolbar`] composes the toolbar row.
 
-mod coin_menu;
+pub(crate) mod coin_menu;
 pub(crate) mod coin_open;
 pub(crate) mod coin_search;
+pub(crate) mod coin_token;
 pub(crate) mod color_picker;
 mod core_broadcast;
 mod core_combo;

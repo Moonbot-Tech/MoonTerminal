@@ -55,8 +55,10 @@ mod sync;
 mod tabs;
 mod widgets;
 
+use std::time::Instant;
+
 use gpui::*;
-use moon_ui::{MoonBackgroundPolicy, Root};
+use moon_ui::{MoonBackgroundPolicy, MoonNotification, MoonWindowExt as _, Root};
 use rust_i18n::t;
 
 use moon_core::feed::{CoreChangeSet, CoreConfig};
@@ -220,6 +222,10 @@ pub struct CoreExpertView {
     /// write, including a give-up that moves no data revision, and the banner drawn from that
     /// row has no other way to be repainted.
     seen_edit_rev: u64,
+    /// The anchor and its `core_config_recv_rev` a page was last asked for: a core does not
+    /// resend its full configuration after a reconnect, so a window left waiting asks once per
+    /// received page, never once per frame.
+    page_asked: Option<(CoreId, u64)>,
     /// The selection and page revisions [`Self::diff`] was computed for; see [`cores::diff_key`].
     diff_key: Vec<cores::DiffKeyEntry>,
     /// Table fields on which the selected cores' pages disagree, ascending.
@@ -230,6 +236,8 @@ pub struct CoreExpertView {
     /// Text boxes the window emptied to show a mixed value, so it can refill them from the page
     /// the moment they stop being mixed — the editors re-read the page only on a re-seed.
     emptied: std::collections::HashSet<&'static str>,
+    /// Coin revealed on the General page blacklist. Set by an exact-core open.
+    bl_highlight: Option<crate::shell::CoinHighlight>,
     focus: FocusHandle,
 }
 
@@ -246,7 +254,7 @@ impl CoreExpertView {
     ///     The view, seeded when the selected core's configuration has already arrived.
     fn new(
         backend: Entity<Backend>,
-        group: &str,
+        bind: &ExpertBind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -319,13 +327,26 @@ impl CoreExpertView {
             page_behind: false,
             seen_profit: None,
             seen_edit_rev: 0,
+            page_asked: None,
             diff_key: Vec::new(),
             diff: Vec::new(),
             mixed: MixedScope::default(),
             emptied: std::collections::HashSet::new(),
+            bl_highlight: None,
             focus: cx.focus_handle(),
         };
-        this.select_group_core(group, cx);
+        match bind {
+            ExpertBind::Group(group) => this.select_group_core(group, cx),
+            ExpertBind::Core { core, coin } => {
+                this.select_exact_core(*core, cx);
+                this.tab = ExpertTab::General;
+                this.bl_highlight = Some(crate::shell::CoinHighlight {
+                    coin: coin.clone(),
+                    started: Instant::now(),
+                    error: None,
+                });
+            }
+        }
         this
     }
 
@@ -372,6 +393,15 @@ impl Focusable for CoreExpertView {
     }
 }
 
+/// What an expert window should show when it is opened.
+#[derive(Clone)]
+enum ExpertBind {
+    /// The group's active trading core, which is what the gear button stands for.
+    Group(String),
+    /// One exact core and the coin to highlight on its blacklist.
+    Core { core: CoreId, coin: String },
+}
+
 /// Open the singleton expert core-settings window, focusing an existing one instead of duplicating
 /// it.
 ///
@@ -392,7 +422,47 @@ pub(crate) fn open(
     group: String,
     cx: &mut App,
 ) {
-    // A live window is pointed at this group's core and focused, never duplicated. The window
+    open_bound(backend, owner, owner_display, ExpertBind::Group(group), cx);
+}
+
+/// Open the expert window on one exact core's General page and highlight `coin`.
+///
+/// Staged edits for a different core are left in place. The caller sees
+/// `coin_bl_places.open_unavailable` instead of those edits being discarded.
+///
+/// Args:
+///     backend: Application state the window reads and writes.
+///     owner: Window this one belongs to, for placement.
+///     owner_display: Display the owner sits on.
+///     core: Core the page must show.
+///     coin: Token highlighted on that core's blacklist.
+///     cx: Application context.
+pub(crate) fn open_core_expert_on(
+    backend: Entity<Backend>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    core: CoreId,
+    coin: String,
+    cx: &mut App,
+) {
+    open_bound(
+        backend,
+        owner,
+        owner_display,
+        ExpertBind::Core { core, coin },
+        cx,
+    );
+}
+
+/// Shared opener for the group's gear and for an exact-core blacklist reveal.
+fn open_bound(
+    backend: Entity<Backend>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    bind: ExpertBind,
+    cx: &mut App,
+) {
+    // A live window is pointed at this request and focused, never duplicated. The window
     // being live is decided by the HANDLE alone — a second window beside a live one is the worse
     // outcome, so an unreachable view costs the reselect and nothing more.
     if let Some(handle) = backend.read(cx).core_expert_window
@@ -406,7 +476,26 @@ pub(crate) fn open(
             .clone()
             .and_then(|v| v.upgrade());
         match view {
-            Some(view) => view.update(cx, |this, cx| this.rebind(&group, cx)),
+            Some(view) => match bind.clone() {
+                ExpertBind::Group(group) => {
+                    view.update(cx, |this, cx| this.rebind(&group, cx));
+                }
+                ExpertBind::Core { core, coin } => {
+                    let decision =
+                        view.update(cx, |this, cx| this.reveal_core_blacklist(core, coin, cx));
+                    if decision == sync::ExpertReveal::DirtyOtherCore {
+                        let name = core_display_name(backend.read(cx), core);
+                        let _ = handle.update(cx, |_, window, cx| {
+                            window.push_notification(
+                                MoonNotification::warning(
+                                    t!("coin_bl_places.open_unavailable", core = name).to_string(),
+                                ),
+                                cx,
+                            );
+                        });
+                    }
+                }
+            },
             None => log::warn!(
                 "expert core settings window focused without reselecting: its view is unreachable"
             ),
@@ -448,7 +537,7 @@ pub(crate) fn open(
     let b = backend.clone();
     let created = cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
-        let view = cx.new(|cx| CoreExpertView::new(b.clone(), &group, window, cx));
+        let view = cx.new(|cx| CoreExpertView::new(b.clone(), &bind, window, cx));
         // Registered from inside the constructor, the way the Report window registers its panel:
         // this is the only place the view exists, and that handle is what a second group's gear
         // needs in order to reselect in this window instead of opening another.
@@ -476,4 +565,21 @@ pub(crate) fn open(
             });
         }
     }
+}
+
+/// Name shown in the unavailable toast: the session name, or the core id when that name is empty.
+fn core_display_name(backend: &Backend, core: CoreId) -> String {
+    backend
+        .session
+        .sessions()
+        .iter()
+        .find(|session| session.id == core)
+        .map(|session| {
+            if session.name.is_empty() {
+                core.to_string()
+            } else {
+                session.name.clone()
+            }
+        })
+        .unwrap_or_else(|| core.to_string())
 }

@@ -17,7 +17,6 @@ use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonTone, MoonWindowE
 use rust_i18n::t;
 
 use moon_core::config::SPLIT_ORDER_PARTS;
-use moon_core::feed::FIELD_COINS_BLACK_LIST;
 use moon_core::session::CoreId;
 use moon_core::symbol::coin_list::contains as blacklist_contains;
 
@@ -207,6 +206,8 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
         if let Some(item) = temp_blacklist_item(&ctx, b, backend) {
             items.push(item);
         }
+        let count = places::places_summary(&places::listed_places(b, &coin)).0;
+        items.push(where_listed_item(backend, &coin, count));
     } // end of the token-dependent blacklist actions
 
     // Strategy actions.
@@ -394,8 +395,20 @@ fn core_blacklist(b: &Backend, core: CoreId) -> (bool, String) {
 ///     core: Core whose list is rewritten.
 ///     coin: Token to insert or drop, compared case-insensitively.
 ///     lift: When true, drop `coin`; when false, append it and enable the list.
-fn write_core_blacklist(b: &Backend, core: CoreId, coin: &str, lift: bool) {
-    if let Err(err) = b.session.write_core_blacklist(core, coin, lift) {
+///
+/// Returns:
+///     Whether a command was sent. `Ok(false)` is a click that changed nothing.
+///
+/// Errors:
+///     The session refused the write. The warning is logged here, and the caller still sees it.
+pub(crate) fn write_core_blacklist(
+    b: &Backend,
+    core: CoreId,
+    coin: &str,
+    lift: bool,
+) -> anyhow::Result<bool> {
+    let result = b.session.write_core_blacklist(core, coin, lift);
+    if let Err(err) = &result {
         let action = if lift { "lift" } else { "add" };
         let prep = if lift { "from" } else { "to" };
         log::warn!(
@@ -403,6 +416,7 @@ fn write_core_blacklist(b: &Backend, core: CoreId, coin: &str, lift: bool) {
             moon_core::feed::core_label(core)
         );
     }
+    result
 }
 
 /// Returns the strategy's read-only `CoinsBlackList` snapshot. The server omits fields equal to the
@@ -411,13 +425,8 @@ fn strategy_blacklist(b: &Backend, core: CoreId, sid: u64) -> String {
     b.session
         .store()
         .core(core)
-        .and_then(|cd| cd.strategies.iter().find(|s| s.id == sid))
-        .and_then(|s| {
-            s.fields
-                .iter()
-                .find(|(k, _)| k == FIELD_COINS_BLACK_LIST)
-                .map(|(_, v)| v.clone())
-        })
+        .and_then(|data| data.strategies.iter().find(|row| row.id == sid))
+        .map(|row| places::coins_black_list(row).to_string())
         .unwrap_or_default()
 }
 
@@ -433,21 +442,55 @@ fn strategy_blacklist(b: &Backend, core: CoreId, sid: u64) -> String {
 ///     sid: Strategy whose `CoinsBlackList` field is rewritten.
 ///     coin: Token to insert or drop, compared case-insensitively.
 ///     lift: When true, drop `coin`; when false, append it.
-fn write_strategy_blacklist(b: &mut Backend, core: CoreId, sid: u64, coin: &str, lift: bool) {
+///
+/// Returns:
+///     Whether an edit was sent. `Ok(true)` also registers the strategy-edit watch.
+///
+/// Errors:
+///     The session refused the edit. The warning is logged here, and the caller still sees it.
+pub(crate) fn write_strategy_blacklist(
+    b: &mut Backend,
+    core: CoreId,
+    sid: u64,
+    coin: &str,
+    lift: bool,
+) -> anyhow::Result<bool> {
     match b.session.write_strategy_blacklist(core, sid, coin, lift) {
-        Ok(true) => b.watch_strategy_edit(core, sid, coin.to_string()),
-        Ok(false) => {}
+        Ok(true) => {
+            b.watch_strategy_edit(core, sid, coin.to_string());
+            Ok(true)
+        }
+        Ok(false) => Ok(false),
         Err(err) => {
             let action = if lift { "lift" } else { "add" };
             log::warn!(
                 "coin_menu: {action} {coin} {} strategy {sid}@{core} blacklist failed: {err:#}",
                 if lift { "from" } else { "to" }
             );
+            Err(err)
         }
     }
 }
 
 mod blacklist;
+pub(crate) mod core_ref;
+mod places;
+mod places_dialog;
+
+/// The "where is this coin blacklisted" row.
+///
+/// The count is the menu's trailing slot. That slot follows the menu font; it is not a
+/// per-item monospace run.
+fn where_listed_item(backend: &Entity<Backend>, coin: &str, count: usize) -> MoonMenuItem {
+    let backend = backend.clone();
+    let coin = coin.to_string();
+    MoonMenuItem::with_key("coin-bl-where", t!("coin_menu.where_listed").to_string())
+        .right_label(count.to_string())
+        .on_click(move |_, window, cx| {
+            window.close_context_menu(cx);
+            places_dialog::open(backend.clone(), coin.clone(), window, cx);
+        })
+}
 
 use blacklist::{permanent_blacklist_item, temp_blacklist_item};
 

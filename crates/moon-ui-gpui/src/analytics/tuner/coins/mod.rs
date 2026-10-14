@@ -776,9 +776,10 @@ pub(super) fn probe(key: &'static str, line: String) {
 
 // Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
 // shadows the built-in attribute and makes `#[test]` expand recursively.
-/// The `_one` / `_few` / `_many` form of a count-dependent coin message in the active
-/// locale: Slavic one/few/many, one-or-other for the other shipped languages (the dictionary
-/// carries all three forms in every language, like `profit_monitor.days.cores_*`).
+/// Locale form of `base` for count `n`.
+///
+/// The Slavic rule lives in [`crate::display_text::plural_key`]. This adapter exists because the
+/// tuner counts with `usize`.
 ///
 /// Args:
 ///     base: The message key without its form suffix.
@@ -787,22 +788,7 @@ pub(super) fn probe(key: &'static str, line: String) {
 /// Returns:
 ///     The full key of the form to draw.
 pub(in crate::analytics) fn plural_key(base: &str, n: usize) -> String {
-    let form = if matches!(rust_i18n::locale().as_ref(), "ru" | "uk") {
-        if (11..=14).contains(&(n % 100)) {
-            "many"
-        } else {
-            match n % 10 {
-                1 => "one",
-                2..=4 => "few",
-                _ => "many",
-            }
-        }
-    } else if n == 1 {
-        "one"
-    } else {
-        "many"
-    };
-    format!("{base}_{form}")
+    crate::display_text::plural_key(base, n as u64)
 }
 
 /// The empty-table sentence when rows exist but none is drawn: if the trade threshold hid

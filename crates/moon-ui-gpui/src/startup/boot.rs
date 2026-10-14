@@ -324,6 +324,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         settings_window: None,
         strategies_window: None,
         strategies_goto: None,
+        core_settings_goto: None,
         assets_window: None,
         screener_window: None,
         core_expert_window: None,

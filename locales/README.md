@@ -47,6 +47,7 @@ key space — splitting into files is purely organisational, by UI area:
 | `assets.<lang>.yml`          | the Assets window/panel (columns, wallets)                    |
 | `analytics.<lang>.yml`       | the Analytics window and the desktop Profit Monitor           |
 | `dialogs.<lang>.yml`         | create/rename/delete dialogs + shared buttons                 |
+| `coin_bl_places.<lang>.yml`  | the coin blacklist places dialog                              |
 | `errors.<lang>.yml`          | error messages (validation, GPU)                              |
 | `common.<lang>.yml`          | strings shared by several panels (loading, DB-read errors)    |
 | `tables.<lang>.yml`          | shared table actions, including the column-width reset        |

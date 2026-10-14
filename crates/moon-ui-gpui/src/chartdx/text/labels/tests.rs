@@ -116,6 +116,76 @@ fn a_long_filter_column_shows_its_window_indicators_and_the_true_total() {
     assert_eq!(build(38, &cfg), ["> Filters \u{b7} 40"]);
 }
 
+/// A strategy refusal or blacklist suffix stores its target on the drawn line. Plain text and the "N above"
+/// indicator stay inert, while non-blacklist strategy refusals carry navigation too.
+#[test]
+fn filter_lines_carry_their_targets_and_the_indicators_stay_inert() {
+    let _locale = crate::test_locale::force("en");
+    let mut cfg = ChartLabelsCfg::empty();
+    cfg.rows[0] = moon_core::config::strategy_filters_row();
+    cfg.rows[0].name = "Filters".into();
+    let inputs = LabelInputs {
+        filter_lines: vec![
+            "filler-a".into(),
+            "filler-b".into(),
+            "Market XALPHA match global black list".into(),
+            "UNIT_01 ( Kind ) : Market WBTC match strategy black list".into(),
+            "UNIT_02 ( Kind ) : unknown reason".into(),
+            "ordinary spread".into(),
+        ],
+        column_scroll: vec![(0, 2)],
+        ..Default::default()
+    };
+    let mut state = LabelState::default();
+    state.update(&Rc::new(cfg), &Rc::new(ArbViewCfg::default()), inputs);
+    assert_eq!(
+        state
+            .texts
+            .iter()
+            .map(|text| text.text.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "v Filters",
+            "^ 2 above",
+            "Market XALPHA match global black list",
+            "UNIT_01 ( Kind ) : Market WBTC match strategy black list",
+            "UNIT_02 ( Kind ) : unknown reason",
+            "ordinary spread",
+        ]
+    );
+    assert_eq!(
+        state
+            .texts
+            .iter()
+            .map(|text| text.action)
+            .collect::<Vec<_>>(),
+        vec![
+            Some(super::LabelAction::ToggleStrategyFilters),
+            None,
+            Some(super::LabelAction::OpenFilterLine(0)),
+            Some(super::LabelAction::OpenFilterLine(1)),
+            Some(super::LabelAction::OpenFilterLine(2)),
+            None,
+        ]
+    );
+    assert_eq!(
+        state.filter_line_targets,
+        vec![
+            super::FilterLineTarget::GlobalBlacklist {
+                coin: "XALPHA".into(),
+            },
+            super::FilterLineTarget::StrategyBlacklist {
+                strategy: "UNIT_01".into(),
+                coin: "WBTC".into(),
+            },
+            super::FilterLineTarget::Strategy {
+                strategy: "UNIT_02".into(),
+                field: None,
+            },
+        ]
+    );
+}
+
 /// Emitting the control as the row name reorders mixed captions; folding the row hides its
 /// ordinary captions. The live and preview expansions must preserve both sides of the column.
 #[test]

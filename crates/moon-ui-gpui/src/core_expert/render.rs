@@ -29,6 +29,13 @@ impl Render for CoreExpertView {
         if std::mem::take(&mut self.needs_blur) {
             window.blur();
         }
+        if self
+            .bl_highlight
+            .as_ref()
+            .is_some_and(|item| crate::controls::coin_token::flash_alpha(item.started) > 0.0)
+        {
+            window.request_animation_frame();
+        }
         // And put it back on the window itself, as every other window root here does: a window
         // holding no focus at all answers no hotkey.
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);
@@ -315,6 +322,19 @@ impl CoreExpertView {
                     .then(|| SharedString::from(t!("core_expert.write_gave_up").to_string()))
             })
         });
+        let bl_alpha = self
+            .bl_highlight
+            .as_ref()
+            .map(|item| crate::controls::coin_token::flash_alpha(item.started))
+            .unwrap_or(0.0);
+        let bl_reveal = self
+            .bl_highlight
+            .as_ref()
+            .map(|item| crate::shell::BlacklistReveal {
+                coin: item.coin.as_str(),
+                alpha: bl_alpha,
+                error: item.error.as_deref(),
+            });
         let ctx = pages::PageCtx {
             backend: &self.backend,
             seeded: self.seeded(),
@@ -322,6 +342,7 @@ impl CoreExpertView {
             hotkeys_sub: self.hotkeys_sub,
             special_section: self.special_section,
             selected_channel: self.selected_channel,
+            bl_reveal,
         };
         let page = self
             .draft

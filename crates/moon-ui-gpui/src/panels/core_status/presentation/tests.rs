@@ -338,37 +338,3 @@ fn group_build_parts_tags_only_an_agreed_letter() {
         }
     );
 }
-
-/// Slavic one/few/many, including the 11..=14 exception, and English one-versus-many.
-///
-/// 21 must stay `_one` so the counted one-form can show the number. The n==1 sentence is a
-/// separate key chosen at the call site, not by this helper.
-#[test]
-fn plural_key_follows_slavic_and_english_rules() {
-    let cases = [1u64, 2, 5, 11, 21, 22, 111];
-    let slavic = |n: u64| match n {
-        1 | 21 => "one",
-        2 | 22 => "few",
-        5 | 11 | 111 => "many",
-        _ => unreachable!("n outside the pinned table"),
-    };
-    for locale in ["ru", "uk"] {
-        let _guard = crate::test_locale::force(locale);
-        for n in cases {
-            assert_eq!(
-                super::plural_key("core_status.health.verdict_ok", n),
-                format!("core_status.health.verdict_ok_{}", slavic(n)),
-                "{locale} n={n}"
-            );
-        }
-    }
-    let _guard = crate::test_locale::force("en");
-    for n in cases {
-        let form = if n == 1 { "one" } else { "many" };
-        assert_eq!(
-            super::plural_key("core_status.health.verdict_ok", n),
-            format!("core_status.health.verdict_ok_{form}"),
-            "en n={n}"
-        );
-    }
-}

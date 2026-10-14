@@ -6,9 +6,11 @@
 //! SAYS rather than by closing it. The cheap disqualifications come first, and the anchor's page
 //! is taken only while the user has nothing staged on it.
 
+use std::time::Instant;
+
 use gpui::*;
 
-use moon_core::feed::CoreConfigState;
+use moon_core::feed::{ConnStatus, CoreConfigState};
 use moon_core::session::CoreId;
 
 use crate::Backend;
@@ -79,8 +81,42 @@ impl CoreExpertView {
                 }
             }
         };
+        if let Some(core) = anchor
+            && matches!(
+                state,
+                PageState::Waiting | PageState::Replaced | PageState::Stale
+            )
+        {
+            self.ask_for_page(b, core);
+        }
         changed |= self.enter_state(state);
         changed | self.sync_diff(b)
+    }
+
+    /// Ask a connected anchor for its page when the window has none it may use.
+    ///
+    /// MoonProto repeats no full configuration after a reconnect, so a page marked stale by the
+    /// outage stays stale until something asks. One request per received page: an unanswered one
+    /// is not repeated every frame, and the next page that lands re-arms it.
+    ///
+    /// Args:
+    ///     b: Backend holding the session and its store.
+    ///     core: The anchor core.
+    fn ask_for_page(&mut self, b: &Backend, core: CoreId) {
+        let Some(entry) = b.session.store().core(core) else {
+            return;
+        };
+        if entry.status != ConnStatus::Ready {
+            return;
+        }
+        let key = (core, entry.core_config_recv_rev);
+        if self.page_asked == Some(key) {
+            return;
+        }
+        self.page_asked = Some(key);
+        if let Err(error) = b.session.refresh_shared_config(core) {
+            log::warn!("expert window could not ask a core for its page: {error}");
+        }
     }
 
     /// Seed the anchor's page when there is none, or re-seed it when the core's page changed
@@ -341,4 +377,85 @@ impl CoreExpertView {
         }
         cx.notify();
     }
+
+    /// Select one core by id, replacing the selection. Used when a reveal names that core and
+    /// nothing is staged.
+    ///
+    /// Args:
+    ///     core: Core the page should follow.
+    ///     cx: Application context used to read the roster and to sync the page.
+    pub(super) fn select_exact_core(&mut self, core: CoreId, cx: &App) {
+        let backend = self.backend.read(cx);
+        self.sync_roster(backend);
+        if self.roster.contains(core) {
+            self.selection.select_only(Some(core));
+        } else {
+            log::warn!("expert core settings has no row for {core}");
+            self.selection.clear();
+        }
+        self.sync_from_core(cx);
+    }
+
+    /// Point the window at `core`'s General page and highlight `coin`.
+    ///
+    /// When staged edits belong to another core, nothing is selected and nothing is cleared.
+    /// The caller toasts instead.
+    ///
+    /// Args:
+    ///     core: Core the reveal named.
+    ///     coin: Token to highlight on the blacklist.
+    ///     cx: View context used to repaint.
+    ///
+    /// Returns:
+    ///     [`ExpertReveal::DirtyOtherCore`] when the window kept another core's edits.
+    pub(super) fn reveal_core_blacklist(
+        &mut self,
+        core: CoreId,
+        coin: String,
+        cx: &mut Context<Self>,
+    ) -> ExpertReveal {
+        let decision = expert_reveal_decision(self.changes.is_empty(), self.anchor == Some(core));
+        if decision == ExpertReveal::DirtyOtherCore {
+            return decision;
+        }
+        if self.changes.is_empty() {
+            self.select_exact_core(core, cx);
+        }
+        self.set_tab(super::ExpertTab::General, cx);
+        self.bl_highlight = Some(crate::shell::CoinHighlight {
+            coin,
+            started: Instant::now(),
+            error: None,
+        });
+        cx.notify();
+        decision
+    }
 }
+
+/// Whether an exact-core reveal may change the page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ExpertReveal {
+    /// Show General and the coin. Select the core only when nothing is staged.
+    Show,
+    /// Staged edits belong to another core. Leave them.
+    DirtyOtherCore,
+}
+
+/// Decide whether a reveal may bind the window.
+///
+/// Args:
+///     changes_empty: Whether the window has nothing staged.
+///     already_on_core: Whether the anchor is already `core`.
+///
+/// Returns:
+///     [`ExpertReveal::DirtyOtherCore`] only when edits are staged for a different core.
+pub(super) fn expert_reveal_decision(changes_empty: bool, already_on_core: bool) -> ExpertReveal {
+    if changes_empty || already_on_core {
+        ExpertReveal::Show
+    } else {
+        ExpertReveal::DirtyOtherCore
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -32,7 +32,7 @@ mod hits;
 pub mod input;
 mod pane_layout;
 mod pane_render;
-use filter_headers::{ColumnBand, FilterHeaderHit};
+use filter_headers::{ColumnBand, FilterHeaderHit, FilterLineHit};
 mod archived_lines;
 mod figures_sync;
 mod news_sync;
@@ -78,7 +78,7 @@ pub(crate) use render_state::arrival_flash_enabled;
 mod text;
 /// The caption editor formats its sample line with the chart's OWN formatter, never a second
 /// spelling of it.
-pub(crate) use text::{notch_steps, preview_row};
+pub(crate) use text::{FilterLineTarget, notch_steps, preview_row};
 #[cfg(any(windows, target_os = "macos"))]
 mod price_ring;
 #[cfg(test)]
