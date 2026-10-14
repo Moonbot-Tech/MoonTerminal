@@ -175,7 +175,8 @@ pub(super) fn compact_blacklist_rows(
                 list_text,
                 &coin,
                 design::t_body(cx),
-                Some(design::font_w_px(cx, super::CONTENT_W)),
+                // The blacklist sits in one of two columns, so the strip gets half the width.
+                Some(design::font_w_px(cx, super::CONTENT_W / 2.0 - 60.0)),
                 cx,
             ),
         )

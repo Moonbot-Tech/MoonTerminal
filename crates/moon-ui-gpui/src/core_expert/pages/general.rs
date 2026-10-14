@@ -230,9 +230,10 @@ pub(super) fn expert_blacklist_rows(
                 list_text,
                 &coin,
                 design::t_body(cx),
+                // The blacklist sits in one of two columns, so the strip gets half the width.
                 Some(design::font_w_px(
                     cx,
-                    crate::shell::core_settings_popup::CONTENT_W,
+                    crate::shell::core_settings_popup::CONTENT_W / 2.0 - 60.0,
                 )),
                 cx,
             ),
