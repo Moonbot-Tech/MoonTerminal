@@ -243,15 +243,15 @@ pub(super) struct PlacesFace {
     pub confirm: Option<FaceConfirm>,
 }
 
-/// Density-scaled cap for one strategy path.
+/// Density-scaled contribution of one strategy path to the dialog width.
 ///
-/// There is no wide-cell token. 320 is the base width, scaled by [`design::font_w`].
+/// Longer paths wrap at the available row width instead of widening the dialog.
 ///
 /// Args:
 ///     cx: Application context that carries the font scale.
 ///
 /// Returns:
-///     The maximum title width, in pixels.
+///     The maximum title contribution to dialog sizing, in pixels.
 pub(super) fn title_cap(cx: &App) -> f32 {
     design::font_w(cx, 600.0)
 }
@@ -458,6 +458,7 @@ fn confirm_line(confirm: &FaceConfirm, p: MoonPalette, cx: &App) -> impl IntoEle
         })
 }
 
+/// Lay out a wrapping path and caption between fixed-size, top-aligned tags and actions.
 fn place_row(
     index: usize,
     row: &FaceRow,
@@ -481,17 +482,21 @@ fn place_row(
     h_flex()
         .w_full()
         .flex_none()
-        .items_center()
+        .items_start()
         .gap(px(GAP))
         .child(
-            div().w(px(tag_w)).flex_none().child(
-                MoonTag::new()
-                    .tone(row.tag_tone)
-                    .variant(MoonTagVariant::Soft)
-                    .compact(true)
-                    .mono(false)
-                    .label(row.tag.clone()),
-            ),
+            div()
+                .w(px(tag_w))
+                .flex_none()
+                .debug_selector(move || format!("coin-bl-row-{index}-tag"))
+                .child(
+                    MoonTag::new()
+                        .tone(row.tag_tone)
+                        .variant(MoonTagVariant::Soft)
+                        .compact(true)
+                        .mono(false)
+                        .label(row.tag.clone()),
+                ),
         )
         .child(
             v_flex()
@@ -504,10 +509,9 @@ fn place_row(
                     cx,
                     design::moon(p.text),
                 ))
-                .child(text_run(
+                .child(sentence(
                     &format!("coin-bl-row-{index}-sub"),
                     &row.sub,
-                    design::ui_font(),
                     design::t_caption(cx),
                     FontWeight::NORMAL,
                     design::moon(p.text_muted),
@@ -531,14 +535,14 @@ fn action_button(id: String, selector: String, action: &FaceAction) -> impl Into
         .child(button.on_click(move |_, window, cx| on_click(window, cx)))
 }
 
+/// Draw the complete path at the row's available width, including long unbroken names.
 fn title_run(selector: &str, text: &str, cx: &App, color: Hsla) -> impl IntoElement + use<> {
     let selector = selector.to_string();
     let text = text.to_string();
     div()
-        .max_w(px(title_cap(cx)))
+        .w_full()
         .min_w_0()
-        .overflow_hidden()
-        .truncate()
+        .whitespace_normal()
         .font_family(design::mono())
         .text_size(design::t_body(cx))
         .line_height(design::t_body(cx) + px(3.0))

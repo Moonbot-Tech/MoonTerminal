@@ -1,7 +1,7 @@
 //! Pure hide/authorize rules, and a layout pass of the places column in every locale.
 //!
 //! The column is the same function the dialog renders. A backend is not required: the face is
-//! data, and a cell that clips its text is narrower than the measured string.
+//! data. Single-line runs must fit their measured width; wrapping runs must fit their full height.
 
 use std::rc::Rc;
 
@@ -189,10 +189,9 @@ fn button(label: String) -> FaceAction {
     }
 }
 
-/// `CORE_A / <folder> / UNIT_01...` is long enough to overflow a 448 px dialog and still sits
-/// inside the 1800 px probe window.
+/// The distinguishing suffix must remain visible even when the final name needs a hard wrap.
 const LONG_PATH: &str =
-    "CORE_A / folder_folder_folder_folder_folder_path / UNIT_01_strategy_name_XALPHA_WBTC";
+    "CORE_ALPHA ~ EX-XX / UNIT_01 / EMA / A_VERY_LONG_STRATEGY_NAME_THAT_DOES_NOT_FIT_ONE_LINE_END";
 
 fn summary(places: usize, cores: usize) -> String {
     let places_n = places as u64;
@@ -383,8 +382,7 @@ fn fits(bounds: Bounds<Pixels>, width: f32) -> bool {
     f32::from(bounds.size.width) + 0.1 >= width
 }
 
-/// Every locale: an empty dialog, all three kinds with a long strategy path, and that column
-/// with the confirm line. Text stays inside the column and at least as wide as its measure.
+/// Reintroducing truncation or no-wrap captions loses the suffix or overlaps actions in any locale.
 #[gpui::test]
 fn places_column_fits_every_locale(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
@@ -413,12 +411,11 @@ fn places_column_fits_every_locale(cx: &mut gpui::TestAppContext) {
             let dialog = visual
                 .debug_bounds("coin-bl-dialog")
                 .unwrap_or_else(|| panic!("coin-bl-dialog not laid out ({at})"));
-            let (widths, cap): (Vec<f32>, f32) = visual.update(|_window, app| {
-                let widths = expected
+            let widths: Vec<f32> = visual.update(|_window, app| {
+                expected
                     .iter()
                     .map(|item| measure_text(app, &item.text, item.caption, item.weight, item.mono))
-                    .collect();
-                (widths, super::title_cap(app))
+                    .collect()
             });
             for (item, width) in expected.iter().zip(widths) {
                 let bounds = visual
@@ -429,16 +426,10 @@ fn places_column_fits_every_locale(cx: &mut gpui::TestAppContext) {
                     "{} escaped the dialog ({at})",
                     item.selector
                 );
-                let row_title =
-                    item.selector.starts_with("coin-bl-row-") && item.selector.ends_with("-title");
-                if row_title {
-                    assert!(
-                        f32::from(bounds.size.width) <= cap + 0.5,
-                        "{} is {:.1}px above the {:.1}px cap ({at})",
-                        item.selector,
-                        f32::from(bounds.size.width),
-                        cap
-                    );
+                let row_text = item.selector.starts_with("coin-bl-row-")
+                    && (item.selector.ends_with("-title") || item.selector.ends_with("-sub"));
+                if row_text {
+                    assert_wrapped(&mut visual, item, bounds, dialog, &at);
                 } else {
                     assert!(
                         fits(bounds, width),
@@ -448,6 +439,142 @@ fn places_column_fits_every_locale(cx: &mut gpui::TestAppContext) {
                         width
                     );
                 }
+            }
+        }
+    }
+}
+
+/// Independent shaping gives the height and last-glyph position of the complete unclamped text.
+fn assert_wrapped(
+    visual: &mut VisualTestContext,
+    item: &Expect,
+    bounds: Bounds<Pixels>,
+    dialog: Bounds<Pixels>,
+    at: &str,
+) {
+    let (height, end) = visual.update(|window, app| {
+        let size = if item.caption {
+            crate::design::t_caption(app)
+        } else {
+            crate::design::t_body(app)
+        };
+        let family = if item.mono {
+            crate::design::mono()
+        } else {
+            crate::design::ui_font()
+        };
+        let lines = window
+            .text_system()
+            .shape_text(
+                item.text.clone().into(),
+                size,
+                &[gpui::TextRun {
+                    len: item.text.len(),
+                    font: gpui::font(family),
+                    color: gpui::black(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                Some(bounds.size.width),
+                None,
+            )
+            .expect("fixture text shapes");
+        let line_height = size + px(3.0);
+        let line = &lines[0];
+        (
+            line.size(line_height).height,
+            line.position_for_index(item.text.len(), line_height)
+                .expect("last glyph has a position"),
+        )
+    });
+    assert!(
+        (bounds.size.height - height).abs() <= px(0.5),
+        "{} lost wrapped lines ({at}): {:?} vs {height:?}",
+        item.selector,
+        bounds.size.height
+    );
+    let last = bounds.origin + end;
+    assert!(
+        last.x <= bounds.right() + px(0.5) && last.y < bounds.bottom(),
+        "{} suffix escaped its text box ({at})",
+        item.selector
+    );
+    assert!(
+        last.x <= dialog.right() && last.y < dialog.bottom(),
+        "{} suffix escaped the dialog ({at})",
+        item.selector
+    );
+    let prefix = item.selector.rsplit_once('-').expect("row selector").0;
+    for suffix in ["open", "remove"] {
+        if let Some(button) = visual.debug_bounds(leak(format!("{prefix}-{suffix}"))) {
+            assert!(
+                bounds.right() <= button.origin.x,
+                "text overlaps {suffix} ({at})"
+            );
+        }
+    }
+}
+
+/// Long captions and paths must grow vertically while tags and actions stay on the first line.
+#[gpui::test]
+fn places_paths_and_captions_wrap_every_locale(cx: &mut gpui::TestAppContext) {
+    install_theme(cx);
+    for language in Language::ALL {
+        let _locale = force(language.code());
+        for viewport_w in [800.0, 1000.0] {
+            let mut face = face_rows(false);
+            face.rows = vec![face.rows.remove(2)];
+            face.rows[0].sub = format!("{} ", face.rows[0].sub).repeat(6);
+            let expected = expects(&face);
+            let window =
+                cx.open_window(gpui::size(px(viewport_w), px(1400.0)), |_, _| Host { face });
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, app| {
+                    let _ = window.draw(app);
+                });
+            }
+            let dialog = visual
+                .debug_bounds("coin-bl-dialog")
+                .expect("dialog laid out");
+            let title = visual
+                .debug_bounds("coin-bl-row-0-title")
+                .expect("title laid out");
+            let sub = visual
+                .debug_bounds("coin-bl-row-0-sub")
+                .expect("caption laid out");
+            let at = format!("{} {viewport_w}", language.code());
+            for item in expected.iter().filter(|item| {
+                item.selector.ends_with("-title") && item.mono || item.selector.ends_with("-sub")
+            }) {
+                let bounds = visual
+                    .debug_bounds(leak(item.selector.clone()))
+                    .expect("text laid out");
+                assert!(inside(bounds, dialog), "{} escaped ({at})", item.selector);
+                assert_wrapped(&mut visual, item, bounds, dialog, &at);
+                let line_height = visual.update(|_, app| {
+                    if item.caption {
+                        crate::design::t_caption(app)
+                    } else {
+                        crate::design::t_body(app)
+                    }
+                }) + px(3.0);
+                assert!(bounds.size.height > line_height, "fixture must wrap ({at})");
+            }
+            assert!(
+                sub.origin.y >= title.bottom(),
+                "caption overlaps title ({at})"
+            );
+            for suffix in ["tag", "open", "remove"] {
+                let bounds = visual
+                    .debug_bounds(leak(format!("coin-bl-row-0-{suffix}")))
+                    .expect("fixed control laid out");
+                assert!(
+                    (bounds.origin.y - title.origin.y).abs() <= px(0.5),
+                    "{suffix} is not top aligned ({at})"
+                );
+                assert!(inside(bounds, dialog), "{suffix} escaped ({at})");
             }
         }
     }
