@@ -1,13 +1,11 @@
 //! The chart shot on platforms that have no capture path yet.
 //!
 //! Everything above this arm is platform-neutral — the action, the binding, the settings row, the
-//! rectangle arithmetic — so the hotkey is bindable and visible on macOS and Linux exactly as it is
-//! on Windows. What is missing is only the last step, and saying so out loud beats a key that
-//! quietly does nothing. The Windows path reads the composited desktop through GDI; the equivalents
-//! are `CGWindowListCreateImage` on macOS and a compositor-specific portal on Linux, neither of
-//! which this goal built.
+//! rectangle arithmetic — so the hotkey is bindable and visible on Linux exactly as it is on
+//! Windows and macOS. Linux has no capture arm yet; a compositor-specific portal would be needed.
+//! macOS 14.4+ uses ScreenCaptureKit instead, and older macOS is refused before arming its caption.
 //!
-//! What that means CONCRETELY on macOS and Linux: nothing is captured, nothing reaches the
+//! What that means on unsupported platforms: nothing is captured, nothing reaches the
 //! clipboard, and no header strip is drawn. Every one of those is a product of a capture that does
 //! not exist here, not a separate feature that could ship without one.
 

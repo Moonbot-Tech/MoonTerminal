@@ -11,18 +11,19 @@
 //!    (`chartdx::data_state::state::apply_slot_geometry`); [`rect::slot_capture_rect`] turns that
 //!    into physical client pixels. The slot is the plot, the price and time axes, the order book
 //!    and the corner caption — the chart and nothing of the panel's chrome around it.
-//! 3. **Which surface.** On Windows, the composited desktop, through GDI. NOT the chart's own
-//!    render target: see `win.rs` for why the own pass cannot supply a finished picture.
+//! 3. **Which surface.** The composited desktop through GDI on Windows, or our composited window
+//!    through ScreenCaptureKit on macOS 14.4+. Never the chart's own render target: that pass
+//!    cannot supply the labels drawn by GPUI afterwards.
 //! 4. **What is added to it.** The picture is normalized to a bounded final size with a good filter
-//!    (`resize.rs`), then a single header strip is BURNT IN with GDI (`paint_win.rs`) - the coin,
+//!    (`resize.rs`), then a single header strip is burnt in with GDI or AppKit - the coin,
 //!    the venue, the moment, the timeframe, the chart's own Y-scale badge and the movement
 //!    figures, centred, so the picture still explains itself once it has left the application.
 //!    The strip is not one run of text: it is three GROUPS - identity, the view, the market - in
 //!    two sizes and two weights on a band of its own, ranked by `header.rs` and coloured by
 //!    `ink.rs` against a stated contrast floor so it holds in every chart theme.
-//! 5. **Where it goes.** The CLIPBOARD, and nowhere else: `CF_DIB` and the registered `"PNG"`
-//!    format in a single ownership window (`clipboard_win.rs`). **No step touches the disk and no
-//!    step leaves the UI thread.** The shot writes no file — the size rule in `resize.rs` is
+//! 5. **Where it goes.** The clipboard, and nowhere else: `CF_DIB` plus registered `"PNG"` on
+//!    Windows, GPUI's PNG image write on macOS. No step touches disk. The macOS native read is
+//!    asynchronous and its clipboard write returns to the UI thread. The size rule in `resize.rs` is
 //!    therefore the whole of the defence against a messenger's own recompression, which is why it
 //!    matters more here than it would beside a file the user could send as a document.
 //!
@@ -37,15 +38,22 @@
 // `panels/mod.rs` under `cfg(uidoc)`.
 pub(crate) mod rect;
 // Platform-neutral like `rect`: pure arithmetic and pure string work, so their unit tests run on
-// every platform even though only the Windows arm produces a picture to feed them today. The
-// allow is the mirror image of the one on `ShotOutcome::Unsupported` below - on a non-Windows
-// build nothing calls into them, and that is the gate working rather than dead code.
-#[cfg_attr(not(windows), allow(dead_code))]
+// every platform. Unsupported targets have no picture to feed them, which is the gate working.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 mod header;
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 mod ink;
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 mod resize;
+
+#[cfg(target_os = "macos")]
+mod capture_mac;
+#[cfg(target_os = "macos")]
+mod mac;
+#[cfg(any(target_os = "macos", test))]
+mod mac_policy;
+#[cfg(target_os = "macos")]
+mod paint_mac;
 
 #[cfg(windows)]
 mod caption;
@@ -58,7 +66,7 @@ mod paint_win;
 #[cfg(windows)]
 pub(crate) mod win;
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 mod unsupported;
 
 use gpui::{AnyWindowHandle, App, Entity};
@@ -83,11 +91,11 @@ pub(crate) enum ShotOutcome {
     /// If a file ever comes back it comes back as its own variant carrying its own path. This one
     /// must not be stretched to mean both: that stretching is the failure mode the old comment was
     /// guarding against, and it outlives the thing it guarded.
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     Copied,
     /// No chart in this window to shoot, or it has never been painted.
     NoChart,
-    /// This platform has no capture path. Only the non-Windows arm produces it, so on Windows it
+    /// This platform has no capture path. Unsupported platforms produce it, so on Windows it
     /// is matched but never constructed - which is the gate working, not dead code.
     #[cfg_attr(windows, allow(dead_code))]
     Unsupported,
@@ -127,7 +135,7 @@ impl ShotOutcome {
 /// value, the venue is what the privacy substitution puts on the picture, the movement windows are
 /// addressed by a catalogue order only the chart layer knows — and splitting that ownership across
 /// the shot's async wait chain is how two of them end up describing different moments.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub(crate) struct ShotInputs {
     /// Ticker as the chart's own corner caption spells it. RAW wire text.
     pub(crate) coin: Option<String>,
@@ -179,7 +187,7 @@ pub(crate) fn copy_active_chart(
     // always reported "no HWND". The working precedent is `panels/chart/render.rs`, which reads it
     // straight off the `&Window` the frame already holds.
     let native = crate::window::windowing::window_hwnd(window);
-    // `None` means the Windows arm took the shot over: it has to substitute the caption, wait for
+    // `None` means a capture arm took the shot over: it has to substitute the caption, wait for
     // that to reach the screen and only then photograph it, so it reports its own outcome when the
     // picture exists rather than here, several frames too early.
     let Some(outcome) = run(backend, handle, native, window, cx) else {
@@ -201,12 +209,12 @@ pub(crate) fn copy_active_chart(
 ///     window: OS window whose chart slot is captured.
 ///     native: That window's native handle, resolved by the caller while it still holds the
 ///         `&mut Window` — see `copy_active_chart` for why it cannot be resolved here.
-///     gpui_window: The live window, which the Windows arm needs to schedule the frame callbacks
+///     gpui_window: The live window, used by the capture arms to schedule the frame callbacks
 ///         it waits on before capturing.
 ///     cx: Application context used to read the chosen chart.
 ///
 /// Returns:
-///     The outcome to announce now, or `None` when the Windows arm took over and will announce its
+///     The outcome to announce now, or `None` when a capture arm took over and will announce its
 ///     own once it has a picture.
 fn run(
     backend: &Entity<Backend>,
@@ -231,7 +239,12 @@ fn run(
         caption::begin(backend.clone(), panel, window, native, gpui_window, cx);
         None
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = native;
+        mac::begin(backend.clone(), panel, window, gpui_window, cx)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         // No capture path on this platform, so nothing would ever photograph a substituted
         // caption. Answer immediately instead of swapping a caption and waiting for a frame that
