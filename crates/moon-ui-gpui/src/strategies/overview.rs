@@ -1,8 +1,8 @@
 //! The group overview: what the right pane shows while no strategy is selected.
 //!
-//! Four tiles (cores running, cores stopped, strategies on, open orders), the edits the cores have
-//! not confirmed yet, the stopped cores, and the quick filters that narrow the tree to one of those
-//! questions. Scope is the window's own: the same visible cores the tree is built from.
+//! Four tiles (cores running, cores stopped, strategies on, open orders), the stopped cores, and
+//! the quick filters that narrow the tree. Scope is the window's own: the same visible cores the
+//! tree is built from.
 //!
 //! The model is a whole-account walk, so it is derived only when the store half of the tree
 //! signature moves — the same revisions the tree already watches — and handed out again on every
@@ -19,21 +19,6 @@ mod tests;
 
 /// How many stopped cores the overview lists before folding the rest into "+N more".
 pub(super) const STOPPED_LISTED: usize = 5;
-/// How many unconfirmed edits the overview lists before folding the rest into "+N more".
-pub(super) const PENDING_LISTED: usize = 6;
-
-/// One strategy whose edit the core has not confirmed.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct PendingEdit {
-    /// Core-qualified strategy identity, which a click selects.
-    pub(super) key: Key,
-    /// Strategy name as the core lists it.
-    pub(super) name: String,
-    /// Display name of the core holding it.
-    pub(super) core_name: String,
-    /// Whether the core let the edit time out rather than still working on it.
-    pub(super) timed_out: bool,
-}
 
 /// One core whose strategy engine reported stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,8 +44,6 @@ pub(super) struct OverviewModel {
     pub(super) total: usize,
     /// Open orders across the cores.
     pub(super) open_orders: usize,
-    /// Every unconfirmed edit, in core order then the core's own order.
-    pub(super) pending: Vec<PendingEdit>,
     /// Every stopped core, in canonical core order.
     pub(super) stopped: Vec<StoppedCore>,
 }
@@ -68,8 +51,6 @@ pub(super) struct OverviewModel {
 /// What a click in the overview asks the window to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum OverviewClick {
-    /// Select this strategy in the tree and scroll to it.
-    Strategy(Key),
     /// Select this core in the tree and scroll to it.
     Core(CoreId),
     /// Toggle this quick filter on the tree.
@@ -123,19 +104,6 @@ pub(super) fn overview_model<'a>(
         model.total += cd.strategies.len();
         model.enabled += cd.strategies.iter().filter(|row| row.checked).count();
         model.open_orders += cd.orders.iter().filter(|order| !order.job_is_done).count();
-        for edit in &cd.strategy_edits {
-            // An edit for a strategy the core no longer lists has nothing to select; it resolves
-            // on its own and is not worth a line the operator cannot act on.
-            let Some(row) = cd.strategies.iter().find(|row| row.id == edit.id) else {
-                continue;
-            };
-            model.pending.push(PendingEdit {
-                key: (*core, edit.id),
-                name: row.name.clone(),
-                core_name: name.clone(),
-                timed_out: edit.phase == StrategyEditPhase::TimedOut,
-            });
-        }
     }
     model
 }
@@ -150,8 +118,8 @@ impl StrategiesView {
     ///     The shared model for this frame.
     pub(super) fn overview_model_cached(&mut self, cx: &App) -> Rc<OverviewModel> {
         // The tree adapter computed this frame's signature before the right pane renders; its
-        // store half covers the visible core list, their strategies, engine states, open-order
-        // digests and open edits — everything `overview_model` reads.
+        // store half covers the visible core list, their strategies, engine states and open-order
+        // digests — everything `overview_model` reads.
         let store_sig = self.tree_cache.as_ref().map(|cache| cache.store_sig());
         if let (Some(sig), Some(cached)) = (store_sig, self.overview_cache.as_ref())
             && cached.store_sig == sig
@@ -175,10 +143,8 @@ impl StrategiesView {
 
     /// Carry out one overview click.
     ///
-    /// A strategy goes through the window's ordinary reveal request, so it is selected by
-    /// `selection::focus_strategy` like every other reveal and the single-writer rule holds. A core
-    /// is selected the way a click on its row selects it, and scrolled to on the next frame. A
-    /// quick filter toggles: picking the active one again removes it.
+    /// A core is selected the way a click on its row selects it, and scrolled to on the next frame.
+    /// A quick filter toggles: picking the active one again removes it.
     ///
     /// Args:
     ///     click: What was clicked.
@@ -191,17 +157,6 @@ impl StrategiesView {
         cx: &mut Context<Self>,
     ) {
         match click {
-            OverviewClick::Strategy((core, id)) => {
-                self.backend.update(cx, |b, bcx| {
-                    let workspace_group = b.singleton_workspace().map(|w| w.group);
-                    b.strategies_goto = Some(StrategyRevealRequest::new(
-                        core,
-                        RevealTarget::Id(id),
-                        workspace_group,
-                    ));
-                    bcx.notify();
-                });
-            }
             OverviewClick::Core(core) => {
                 // A core the filters hide has no row to select or scroll to: clear them the way a
                 // strategy reveal does, quick filter included.
@@ -305,29 +260,6 @@ pub(super) fn overview_panel(
             cx,
         ));
 
-    let pending_lines: Vec<AnyElement> = model
-        .pending
-        .iter()
-        .take(PENDING_LISTED)
-        .map(|edit| {
-            let meta = match edit.timed_out {
-                true => format!(
-                    "{} · {}",
-                    edit.core_name,
-                    t!("strat.overview_pending_timed_out")
-                ),
-                false => edit.core_name.clone(),
-            };
-            line(
-                SharedString::from(format!("ov-pending:{}:{}", edit.key.0, edit.key.1)),
-                edit.name.clone(),
-                meta,
-                OverviewClick::Strategy(edit.key),
-                on_click.clone(),
-                cx,
-            )
-        })
-        .collect();
     let stopped_lines: Vec<AnyElement> = model
         .stopped
         .iter()
@@ -354,15 +286,6 @@ pub(super) fn overview_panel(
         .flex_wrap()
         .items_start()
         .gap(gap)
-        .child(block(
-            "ov-block-pending",
-            t!("strat.overview_pending_title").to_string(),
-            QuickFilter::Unconfirmed,
-            pending_lines,
-            model.pending.len().saturating_sub(PENDING_LISTED),
-            on_click.clone(),
-            cx,
-        ))
         .child(block(
             "ov-block-stopped",
             t!("strat.overview_stopped_title").to_string(),
@@ -497,6 +420,7 @@ fn tile(
 }
 
 /// One titled list block with a header link to its quick filter and a "none" line when empty.
+/// The block spans its row: the overview keeps a single list, the stopped cores.
 ///
 /// Args:
 ///     id: Element id and debug selector.
@@ -524,7 +448,7 @@ fn block(
     v_flex()
         .id(id)
         .debug_selector(move || id.into())
-        .flex_1()
+        .w_full()
         .min_w(design::ui_px(cx, 220.0))
         .rounded(design::ui_px(cx, 6.0))
         .border_1()

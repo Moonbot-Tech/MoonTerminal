@@ -452,9 +452,9 @@ impl StrategiesView {
 
 /// Whether reordering is refused outright under the filter in force.
 ///
-/// A quick filter hides rows the move would step over, and two of them (open orders, unconfirmed
-/// edits) can only be answered per core, so a move planned against the unscoped predicate could
-/// swap a visible strategy with a hidden neighbour. A reorder is a write to the core, so it fails
+/// A quick filter hides rows the move would step over, and the open-orders filter can only be
+/// answered per core, so a move planned against the unscoped predicate could swap a visible
+/// strategy with a hidden neighbour. A reorder is a write to the core, so it fails
 /// CLOSED: the move buttons, their menu entries and the chord are disabled until the quick-filter
 /// chip is removed, rather than scoped to rows the predicate may not see.
 ///

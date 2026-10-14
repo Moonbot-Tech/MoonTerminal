@@ -10,13 +10,13 @@ use gpui::{
     VisualTestContext, Window, div, px,
 };
 use moon_core::config::{Language, UiThemeMode};
-use moon_core::feed::{StrategyEditPhase, StrategyEditRow, StrategyRow};
+use moon_core::feed::StrategyRow;
 use moon_core::session::store::CoreData;
 use moon_ui::MoonTheme;
 
 use super::{
-    OverviewClick, OverviewModel, PENDING_LISTED, PendingEdit, STOPPED_LISTED, StoppedCore, line,
-    overview_model, overview_panel, toggle_quick,
+    OverviewClick, OverviewModel, STOPPED_LISTED, StoppedCore, line, overview_model,
+    overview_panel, toggle_quick,
 };
 use crate::strategies::filter::QuickFilter;
 use crate::test_locale::force;
@@ -44,24 +44,12 @@ fn core(rows: Vec<StrategyRow>, engine: Option<bool>) -> CoreData {
     cd
 }
 
-/// Tiles count only CONFIRMED engine states, totals cover every core, and an edit for a strategy
-/// the core no longer lists is left out because there is nothing to select.
+/// Tiles count only CONFIRMED engine states, and totals cover every core that has data.
+/// A core that confirmed neither state is in neither tile and still counts toward the totals.
 #[test]
-fn the_model_counts_confirmed_states_and_lists_actionable_edits() {
+fn the_model_counts_confirmed_states_and_lists_stopped_cores() {
     let running = core(vec![row(1, true), row(2, false)], Some(true));
-    let mut stopped = core(vec![row(3, true)], Some(false));
-    stopped.strategy_edits.push(StrategyEditRow {
-        id: 3,
-        phase: StrategyEditPhase::TimedOut,
-        submitted_at_ms: 0,
-        fields: Vec::new(),
-    });
-    stopped.strategy_edits.push(StrategyEditRow {
-        id: 99,
-        phase: StrategyEditPhase::Pending,
-        submitted_at_ms: 0,
-        fields: Vec::new(),
-    });
+    let stopped = core(vec![row(3, true)], Some(false));
     let unknown = core(vec![row(4, true)], None);
     let cores = vec![
         (1, "CORE_A".to_string()),
@@ -79,15 +67,6 @@ fn the_model_counts_confirmed_states_and_lists_actionable_edits() {
     assert_eq!(model.cores_stopped, 1);
     assert_eq!((model.enabled, model.total), (3, 4));
     assert_eq!(model.open_orders, 0);
-    assert_eq!(
-        model.pending,
-        vec![PendingEdit {
-            key: (2, 3),
-            name: "UNIT_03".into(),
-            core_name: "CORE_B".into(),
-            timed_out: true,
-        }]
-    );
     assert_eq!(
         model.stopped,
         vec![StoppedCore {
@@ -142,14 +121,6 @@ fn full_model() -> OverviewModel {
         enabled: 12_345,
         total: 67_890,
         open_orders: 9_999,
-        pending: (0..PENDING_LISTED as u64 + 2)
-            .map(|id| PendingEdit {
-                key: (1, id),
-                name: format!("UNIT_{id:02} with a rather long synthetic strategy name"),
-                core_name: "CORE_A".into(),
-                timed_out: id % 2 == 0,
-            })
-            .collect(),
         stopped: (0..STOPPED_LISTED as u64 + 3)
             .map(|core| StoppedCore {
                 core,
@@ -225,15 +196,30 @@ fn the_overview_fits_the_narrowest_pane_in_every_locale(cx: &mut gpui::TestAppCo
                 assert!(inside(tile, root), "tile {index} escaped ({at})");
                 assert!(inside(value, tile), "tile {index} figure clipped ({at})");
             }
-            for id in ["ov-block-pending", "ov-block-stopped"] {
-                let block = bounds(&mut visual, id, &at);
-                assert!(
-                    inside(block, root),
-                    "{id} escaped ({at}): block={block:?} root={root:?}"
-                );
-                let none = visual.debug_bounds(leak(format!("{id}-none")));
-                assert_eq!(none.is_some(), !full, "{id} empty state ({at})");
-            }
+            let blocks_row = bounds(&mut visual, "ov-blocks", &at);
+            let stopped = bounds(&mut visual, "ov-block-stopped", &at);
+            assert!(
+                inside(stopped, root),
+                "ov-block-stopped escaped ({at}): block={stopped:?} root={root:?}"
+            );
+            assert!(
+                (f32::from(stopped.size.width) - f32::from(blocks_row.size.width)).abs() <= 1.0,
+                "stopped card must span the row ({at}): card={stopped:?} row={blocks_row:?}"
+            );
+            let none = visual.debug_bounds(leak("ov-block-stopped-none".into()));
+            assert_eq!(none.is_some(), !full, "ov-block-stopped empty state ({at})");
+            assert!(
+                visual
+                    .debug_bounds(leak("ov-block-pending".into()))
+                    .is_none(),
+                "pending card still laid out ({at})"
+            );
+            assert!(
+                visual
+                    .debug_bounds(leak("ov-chip-unconfirmed".into()))
+                    .is_none(),
+                "unconfirmed chip still laid out ({at})"
+            );
             if full {
                 for core in 0..STOPPED_LISTED {
                     let meta = bounds(&mut visual, format!("ov-stopped:{core}-meta"), &at);
@@ -310,10 +296,6 @@ fn list_names_and_facts_remain_complete(cx: &mut gpui::TestAppContext) {
                 for meta in [
                     rust_i18n::t!("strat.overview_core_empty").to_string(),
                     rust_i18n::t!("strat.overview_core_strats", n = 12345).to_string(),
-                    format!(
-                        "CORE_ALPHA$18 ~ EX-XX / UNIT_LONG ACC # 46 {tail} - {}",
-                        rust_i18n::t!("strat.overview_pending_timed_out")
-                    ),
                 ] {
                     let name = format!("CORE_ALPHA$18 ~ EX-XX / UNIT_LONG ACC # 46 {tail}");
                     let at = format!("{} width={width} tail={tail} meta={meta}", language.code());

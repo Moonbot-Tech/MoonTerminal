@@ -50,7 +50,7 @@ impl TreeCache {
     /// Store half of the signature this result was built from.
     ///
     /// Returns:
-    ///     The hash of cores, strategy snapshots, engine states, open orders and open edits.
+    ///     The hash of cores, strategy snapshots, engine states and open orders.
     pub(crate) fn store_sig(&self) -> u64 {
         self.sig.store
     }
@@ -155,9 +155,6 @@ pub(crate) fn data_sig(
         // about the strategies, and that folder is exactly what this input contributes.
         cd.folders_rev.hash(&mut h);
         open_orders_digest(cd).hash(&mut h);
-        // Open strategy edits, which the "unconfirmed edits" quick filter reads through
-        // `PreparedFilter::scope_to_core`.
-        cd.strategy_edit_rev.hash(&mut h);
     }
     let store_sig = h.finish();
 
