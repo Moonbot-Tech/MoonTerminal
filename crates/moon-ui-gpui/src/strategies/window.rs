@@ -54,12 +54,13 @@ pub enum RevealTarget {
 
 /// One strategy field a reveal should scroll to, plus the coin token to highlight there.
 ///
-/// `key` is the schema field name. `coin` is the token, not a pair.
+/// `key` is the schema field name. `coin` is the token, not a pair; an empty token requests
+/// only the field flash, without coin highlighting or removal controls.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RevealField {
     /// Schema field name, for example `CoinsBlackList`.
     pub key: &'static str,
-    /// Coin token to highlight inside that field.
+    /// Coin token to highlight inside that field, or empty for a field-only reveal.
     pub coin: String,
 }
 
@@ -72,7 +73,7 @@ pub(crate) struct StrategyRevealRequest {
     /// A saved version to open in the Versions pane once the strategy is selected, by its
     /// `valid_from` key. `None` leaves the pane on live mode, as every reveal did before.
     pub(super) version: Option<i64>,
-    /// Coins-blacklist field to scroll to once the strategy is selected.
+    /// Schema field to scroll to once the strategy is selected.
     /// `None` leaves the params pane untouched, as every reveal did before.
     pub(super) field: Option<RevealField>,
 }
@@ -103,15 +104,15 @@ impl StrategyRevealRequest {
         self
     }
 
-    /// Ask the reveal to land on one field and highlight `field.coin` in it.
+    /// Attach an optional field reveal; an empty coin requests only the field flash.
     ///
     /// Args:
-    ///     field: Schema key and coin token.
+    ///     field: Schema key and optional coin token, or `None` for strategy-only navigation.
     ///
     /// Returns:
-    ///     The same request with that field attached.
-    pub(super) fn with_field(mut self, field: RevealField) -> Self {
-        self.field = Some(field);
+    ///     The same request with that optional field attached.
+    pub(super) fn with_field(mut self, field: impl Into<Option<RevealField>>) -> Self {
+        self.field = field.into();
         self
     }
 
@@ -227,16 +228,16 @@ pub fn open_goto_version(
     open(backend, owner, owner_display, cx);
 }
 
-/// [`open_goto`] that also lands on one strategy field and names the coin to highlight there.
+/// [`open_goto`] with an optional field reveal and the destination group's singleton scope.
 ///
-/// The places dialog is the caller: a strategy row's Open must select the strategy and then the
-/// `CoinsBlackList` field, not stop at the strategy row.
+/// Places rows reveal `CoinsBlackList` with a coin. Chart refusal lines reveal another field
+/// without a coin, or select only the strategy when the refusing field is unknown.
 ///
 /// Args:
 ///     backend: Shared state and singleton-window authority.
 ///     core: Core captured by the navigation producer.
 ///     strat_id: Exact strategy identity on `core`, live or retained in the Deleted branch.
-///     field: Schema key and coin token to reveal once the strategy is selected.
+///     field: Optional schema key and coin token to reveal once the strategy is selected.
 ///     workspace_group: Group owning the callback, or `None` for an unscoped caller.
 ///     owner: Optional native owner window.
 ///     owner_display: Display used when a new tool window is required.
@@ -249,7 +250,7 @@ pub(crate) fn open_goto_field(
     backend: Entity<Backend>,
     core: CoreId,
     strat_id: u64,
-    field: RevealField,
+    field: impl Into<Option<RevealField>>,
     workspace_group: Option<String>,
     owner: Option<AnyWindowHandle>,
     owner_display: Option<DisplayId>,
@@ -277,13 +278,13 @@ pub(crate) fn open_goto_field(
 ///
 /// The chart's filter line is the caller: the caption carries the strategy name, and the id is
 /// known only when that name is already in the store. A miss still opens the window and parks
-/// [`RevealTarget::Name`] with the field attached, which is the path a name reveal already drains.
+/// [`RevealTarget::Name`] with any optional field attached, using the existing name-reveal path.
 ///
 /// Args:
 ///     backend: Shared state and singleton-window authority.
 ///     core: Core captured by the navigation producer.
 ///     name: Strategy name, compared exactly with the store.
-///     field: Schema key and coin token to reveal once the strategy is selected.
+///     field: Optional schema key and coin token to reveal once the strategy is selected.
 ///     workspace_group: Group owning the callback, or `None` for an unscoped caller.
 ///     owner: Optional native owner window.
 ///     owner_display: Display used when a new tool window is required.
@@ -296,7 +297,7 @@ pub(crate) fn open_goto_named_field(
     backend: Entity<Backend>,
     core: CoreId,
     name: String,
-    field: RevealField,
+    field: impl Into<Option<RevealField>>,
     workspace_group: Option<String>,
     owner: Option<AnyWindowHandle>,
     owner_display: Option<DisplayId>,

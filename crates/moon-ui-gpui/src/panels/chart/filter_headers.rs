@@ -1,4 +1,4 @@
-//! Route a strategy-filter header press and a blacklist-line press.
+//! Route strategy-filter header presses and strategy/core navigation from refusal lines.
 
 use gpui::prelude::*;
 use gpui::{App, Context, CursorStyle, Div, SharedString, Stateful, Window, div, px};
@@ -12,18 +12,54 @@ use crate::controls::coin_menu::core_ref::{
 };
 use crate::design::{moon, moon_alpha};
 
-/// Dictionary key for the tooltip of one blacklist line.
+/// Dictionary key for the tooltip of one clickable filter line.
 ///
 /// Args:
 ///     target: Parsed line. The coin and the strategy name are not part of the key.
 ///
 /// Returns:
-///     `chart_labels.filter.open_core_bl` or `chart_labels.filter.open_strategy_bl`.
+///     The core blacklist, strategy blacklist, strategy, or strategy-field tooltip key.
 pub(super) fn filter_line_tooltip_key(target: &FilterLineTarget) -> &'static str {
     match target {
         FilterLineTarget::GlobalBlacklist { .. } => "chart_labels.filter.open_core_bl",
         FilterLineTarget::StrategyBlacklist { .. } => "chart_labels.filter.open_strategy_bl",
+        FilterLineTarget::Strategy { field: Some(_), .. } => {
+            "chart_labels.filter.open_strategy_field"
+        }
+        FilterLineTarget::Strategy { field: None, .. } => "chart_labels.filter.open_strategy",
     }
+}
+
+/// Resolve an exact strategy name first, then remove one trailing bracketed display code.
+/// An unresolved caption retains its original name for the existing deferred by-name reveal.
+///
+/// Args:
+///     name: Strategy name printed in the chart caption, including any display code.
+///     rows: Strategy ids and names from the pane's own core.
+///
+/// Returns:
+///     The matched id, or the original name for deferred navigation.
+fn strategy_reveal_target<'a>(
+    name: &str,
+    rows: impl IntoIterator<Item = (u64, &'a str)>,
+) -> crate::strategies::RevealTarget {
+    let stripped = name.strip_suffix(']').and_then(|head| {
+        let (base, code) = head.rsplit_once(" [")?;
+        (!base.is_empty() && !code.is_empty() && !code.contains(['[', ']', ' '])).then_some(base)
+    });
+    let mut fallback = None;
+    for (id, row_name) in rows {
+        if row_name == name {
+            return crate::strategies::RevealTarget::Id(id);
+        }
+        if fallback.is_none() && stripped == Some(row_name) {
+            fallback = Some(id);
+        }
+    }
+    fallback.map_or_else(
+        || crate::strategies::RevealTarget::Name(name.to_string()),
+        crate::strategies::RevealTarget::Id,
+    )
 }
 
 impl ChartPanel {
@@ -61,11 +97,12 @@ impl ChartPanel {
         true
     }
 
-    /// Open the blacklist a drawn filter line names.
+    /// Open the strategy or core blacklist a drawn filter line names.
     ///
     /// A global line posts `Backend.core_settings_goto` for the pane's own core. A strategy line
-    /// opens that strategy's `CoinsBlackList` field, by id when the name is in the store and by
-    /// name otherwise. Authorization uses the pane core's own workspace group. A refused core
+    /// opens that strategy and optionally its refusing field, by id when the name is in the
+    /// store and by name otherwise. Only blacklist reveals carry a coin. Authorization uses the
+    /// pane core's own workspace group. A refused core
     /// still consumes the press so it does not fall through into an order.
     ///
     /// Args:
@@ -74,7 +111,7 @@ impl ChartPanel {
     ///     cx: Panel context.
     ///
     /// Returns:
-    ///     Whether a drawn blacklist line was under the point.
+    ///     Whether a drawn clickable filter line was under the point.
     pub(super) fn try_open_filter_line(
         &mut self,
         pos: (f32, f32),
@@ -112,59 +149,72 @@ impl ChartPanel {
             log::info!("filter line press skipped: core {core} has no group");
             return true;
         };
-        match target {
+        let (strategy, field) = match target {
             FilterLineTarget::GlobalBlacklist { coin } => {
                 self.backend.update(cx, |backend, bcx| {
                     backend.core_settings_goto =
                         Some(crate::shell::CoreSettingsReveal { core, coin });
                     bcx.notify();
                 });
+                return true;
             }
-            FilterLineTarget::StrategyBlacklist { strategy, coin } => {
-                let sid = {
-                    let backend = self.backend.read(cx);
-                    backend.session.store().core(core).and_then(|data| {
-                        data.strategies
-                            .iter()
-                            .find(|row| row.name == strategy)
-                            .map(|row| row.id)
-                    })
-                };
-                let field = crate::strategies::RevealField {
+            FilterLineTarget::StrategyBlacklist { strategy, coin } => (
+                strategy,
+                Some(crate::strategies::RevealField {
                     key: moon_core::feed::FIELD_COINS_BLACK_LIST,
                     coin,
-                };
-                let owner = Some(window.window_handle());
-                let display = window.display(cx).map(|display| display.id());
-                if let Some(sid) = sid {
-                    crate::strategies::open_goto_field(
-                        self.backend.clone(),
-                        core,
-                        sid,
-                        field,
-                        Some(group),
-                        owner,
-                        display,
-                        cx,
-                    );
-                } else {
-                    crate::strategies::open_goto_named_field(
-                        self.backend.clone(),
-                        core,
-                        strategy,
-                        field,
-                        Some(group),
-                        owner,
-                        display,
-                        cx,
-                    );
-                }
+                }),
+            ),
+            FilterLineTarget::Strategy { strategy, field } => (
+                strategy,
+                field.map(|key| crate::strategies::RevealField {
+                    key,
+                    coin: String::new(),
+                }),
+            ),
+        };
+        let target = {
+            let backend = self.backend.read(cx);
+            let data = backend.session.store().core(core);
+            strategy_reveal_target(
+                &strategy,
+                data.into_iter().flat_map(|data| {
+                    data.strategies
+                        .iter()
+                        .map(|row| (row.id, row.name.as_str()))
+                }),
+            )
+        };
+        let owner = Some(window.window_handle());
+        let display = window.display(cx).map(|display| display.id());
+        match target {
+            crate::strategies::RevealTarget::Id(sid) => crate::strategies::open_goto_field(
+                self.backend.clone(),
+                core,
+                sid,
+                field,
+                Some(group),
+                owner,
+                display,
+                cx,
+            ),
+            crate::strategies::RevealTarget::Name(name) => {
+                crate::strategies::open_goto_named_field(
+                    self.backend.clone(),
+                    core,
+                    name,
+                    field,
+                    Some(group),
+                    owner,
+                    display,
+                    cx,
+                )
             }
         }
         true
     }
 
-    /// Pointing-hand zones over blacklist lines, with an amber tint and underline on the hot one.
+    /// Pointing-hand zones over clickable filter lines, tinting and underlining the hot one.
     ///
     /// The chart draws these captions on the GPU and has no tooltip channel there. The zones are
     /// the same overlay the filter header uses for its cursor, plus
@@ -227,7 +277,7 @@ impl ChartPanel {
     }
 }
 
-/// The sentence shown while the pointer rests on a blacklist line.
+/// The sentence shown while the pointer rests on a clickable filter line.
 ///
 /// Args:
 ///     target: Parsed line. A strategy line names that strategy; a global line names the core.
@@ -241,6 +291,17 @@ fn filter_line_tip(target: &FilterLineTarget, core_name: &str) -> String {
         FilterLineTarget::GlobalBlacklist { .. } => t!(key, core = core_name).to_string(),
         FilterLineTarget::StrategyBlacklist { strategy, .. } => {
             t!(key, name = strategy).to_string()
+        }
+        FilterLineTarget::Strategy {
+            strategy,
+            field: None,
+        } => t!(key, name = strategy).to_string(),
+        FilterLineTarget::Strategy {
+            strategy,
+            field: Some(field),
+        } => {
+            let label = t!(format!("strat.label.{field}")).to_string();
+            t!(key, name = strategy, field = label).to_string()
         }
     }
 }

@@ -146,7 +146,7 @@ fn more_below(n: usize) -> String {
 ///     row_ix: Label row this line belongs to.
 ///     n: Slot inside the column, counted from the first emitted line.
 ///     text: The line as it will be drawn.
-///     action: Navigation carried by a parsed blacklist line, or `None`.
+///     action: Navigation carried by a parsed filter line, or `None`.
 ///
 /// Returns:
 ///     The caption. It names no venue.
@@ -188,13 +188,13 @@ fn filter_header(row: &moon_core::config::ChartLabelRow, lines: &[String]) -> St
 ///
 /// The header has its own run; entries share [`moon_core::config::ARB_MAX_ROWS`] lines of the
 /// column range with the indicators of a scrolled window starting at `first`. Folding omits only
-/// these entries, preserving ordinary row captions. Each real line is parsed; a blacklist suffix
+/// these entries, preserving ordinary row captions. Each real line is parsed; a navigation target
 /// appends its target and stores the index on the caption. The "N above" and "N more" lines stay
 /// inert.
 ///
 /// Args:
 ///     out: Captions for this column, header first.
-///     targets: Pane-wide blacklist targets. A new entry's index is the caption's action.
+///     targets: Pane-wide filter targets. A new entry's index is the caption's action.
 ///     row_ix: Label row the column belongs to.
 ///     row: The module, including whether it is folded.
 ///     lines: Skip reasons as the core spelled them.

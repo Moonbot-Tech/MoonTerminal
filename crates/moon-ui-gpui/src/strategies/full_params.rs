@@ -26,10 +26,11 @@ pub(super) enum ParamScroll {
     Field(usize),
 }
 
-/// A coins-blacklist reveal the parameter pane is showing.
+/// A field reveal the parameter pane is showing, optionally carrying a blacklist coin.
 ///
 /// The outline fades. The token highlight and the remove button stay until the coin is gone
-/// from the field, the removal is accepted, or another strategy is selected.
+/// from the field, the removal is accepted, or another strategy is selected. An empty coin
+/// requests the outline alone.
 #[derive(Clone)]
 pub(super) struct FieldFlash {
     pub(super) key: String,

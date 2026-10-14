@@ -1,8 +1,8 @@
 //! Click target of one chart strategy-filter line.
 //!
 //! The core sends the line as plain text. A line this cannot parse stays inert: no hit rect, no
-//! navigation. The two suffixes are the whole kind test. The strategy name is required only for
-//! the strategy suffix.
+//! navigation. Blacklist suffixes keep their coin targets; other strategy-shaped lines open the
+//! strategy, revealing a field only when the reason identifies it reliably.
 
 /// Where a parsed filter line should open.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,6 +11,11 @@ pub(crate) enum FilterLineTarget {
     GlobalBlacklist { coin: String },
     /// `match strategy black list` — that strategy's `CoinsBlackList` field.
     StrategyBlacklist { strategy: String, coin: String },
+    /// Any other strategy refusal, optionally naming an addressable schema field.
+    Strategy {
+        strategy: String,
+        field: Option<&'static str>,
+    },
 }
 
 /// Parse one filter caption into a navigation target.
@@ -20,7 +25,8 @@ pub(crate) enum FilterLineTarget {
 /// last token of the text after ` ) : ` when that prefix is present, otherwise the last token
 /// of the whole head. One leading `Market` token is skipped. The token is kept as the core
 /// spelled it. A strategy line also needs a `<name> ( <kind> ) : ` prefix; the name is the text
-/// before the first ` ( `, and the kind must close at ` ) : `. Anything else returns `None`.
+/// before the first ` ( `, and the kind must close at ` ) : `. Other complete strategy prefixes
+/// navigate without a coin. Text without a complete prefix or a blacklist suffix stays inert.
 ///
 /// Args:
 ///     line: One filter caption, as the core spelled it.
@@ -37,7 +43,56 @@ pub(crate) fn parse_filter_line(line: &str) -> Option<FilterLineTarget> {
         let coin = coin_token(head)?;
         return Some(FilterLineTarget::GlobalBlacklist { coin });
     }
-    None
+    let strategy = strategy_name(line)?.to_string();
+    Some(FilterLineTarget::Strategy {
+        strategy,
+        field: refusal_field(coin_region(line).trim()),
+    })
+}
+
+/// Map only known refusal reasons to fields present in the Strategies parameter registry.
+/// Unknown delta names and ambiguous bounds open the strategy without guessing a field.
+///
+/// Args:
+///     reason: Text after the strategy prefix, without surrounding whitespace.
+///
+/// Returns:
+///     A known schema key, or `None` when the reason does not identify one reliably.
+fn refusal_field(reason: &str) -> Option<&'static str> {
+    if reason.ends_with("doesnt match strategy white list") {
+        return Some("CoinsWhiteList");
+    }
+    if reason.starts_with("EMA filter not passed.") {
+        return Some("CustomEMA");
+    }
+    if reason.starts_with("Market ") && reason.ends_with("must have \"TradFi\" tag") {
+        return Some("BinanceTokenTags");
+    }
+    let (metric, range) = reason.split_once(" doesnt match strategy range (")?;
+    let (name, value) = metric.split_once(" delta (")?;
+    let value = value
+        .strip_suffix(')')?
+        .trim_end_matches('%')
+        .parse::<f64>()
+        .ok()?;
+    let (min, max) = range.strip_suffix(')')?.split_once(" .. ")?;
+    let min = min.trim_end_matches('%').parse::<f64>().ok()?;
+    let max = max.trim_end_matches('%').parse::<f64>().ok()?;
+    if !value.is_finite() || !min.is_finite() || !max.is_finite() {
+        return None;
+    }
+    let (min_key, max_key) = match name {
+        "3h" => ("Delta_3h_Min", "Delta_3h_Max"),
+        "24h" => ("Delta_24h_Min", "Delta_24h_Max"),
+        "Vol Minute" => ("MinuteVolDeltaMin", "MinuteVolDeltaMax"),
+        _ => return None,
+    };
+    // Do not infer a failed maximum from a zero upper bound, as in the volume refusal caption.
+    match (value < min, max != 0.0 && value > max) {
+        (true, false) => Some(min_key),
+        (false, true) => Some(max_key),
+        _ => None,
+    }
 }
 
 /// `head` without a case-insensitive trailing `suffix`, when `suffix` is a separate word.
@@ -57,10 +112,14 @@ fn strip_suffix_ci<'a>(line: &'a str, suffix: &str) -> Option<&'a str> {
 }
 
 /// Strategy name from `<name> ( <kind> ) : `, or `None` when that prefix is not there.
+/// Both the strategy name and the strategy kind must contain non-whitespace text.
 fn strategy_name(head: &str) -> Option<&str> {
     let open = head.find(" ( ")?;
     let after_open = open + " ( ".len();
-    head[after_open..].find(" ) : ")?;
+    let close = head[after_open..].find(" ) : ")?;
+    if head[after_open..after_open + close].trim().is_empty() {
+        return None;
+    }
     let name = head[..open].trim();
     if name.is_empty() { None } else { Some(name) }
 }

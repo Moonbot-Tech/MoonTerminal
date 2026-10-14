@@ -105,14 +105,14 @@ pub(in crate::chartdx) struct LabelText {
     pub action: Option<LabelAction>,
 }
 
-/// An action on a caption: a market-button overlay, the filters header, or one blacklist line.
+/// An action on a caption: a market-button overlay, the filters header, or one refusal line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::chartdx) enum LabelAction {
     /// Existing market controls retain their own overlay, geometry, and authorization.
     Market(ActionMark),
     /// Fold or unfold this caption's strategy-filter module.
     ToggleStrategyFilters,
-    /// Open the blacklist named by one filter line.
+    /// Open the strategy or blacklist named by one filter line.
     ///
     /// The `u8` indexes [`LabelState::filter_line_targets`] for the same caption generation.
     /// The action stays [`Copy`] by carrying that index rather than the target's strings.
@@ -126,7 +126,7 @@ impl LabelAction {
     ///     self: The caption action.
     ///
     /// Returns:
-    ///     The market mark, or `None` for a header fold and a blacklist line.
+    ///     The market mark, or `None` for a header fold and a filter line.
     pub fn market(self) -> Option<ActionMark> {
         match self {
             Self::Market(mark) => Some(mark),
@@ -205,7 +205,7 @@ pub(in crate::chartdx) struct LabelState {
     /// Formatted captions in draw order — row by row, caption by caption — skipping everything
     /// that resolved to nothing.
     pub texts: Vec<LabelText>,
-    /// Blacklist targets addressed by [`LabelAction::OpenFilterLine`].
+    /// Navigation targets addressed by [`LabelAction::OpenFilterLine`].
     ///
     /// Rebuilt with [`Self::texts`]. An index stored on a caption names an entry of this
     /// generation only.

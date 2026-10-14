@@ -1,4 +1,4 @@
-//! Hit targets for GPU-drawn strategy-filter headers and blacklist lines.
+//! Hit targets for GPU-drawn strategy-filter headers and clickable refusal lines.
 
 use std::rc::Rc;
 
@@ -24,7 +24,7 @@ impl FilterHeaderHit {
     }
 }
 
-/// One drawn blacklist line and the profile that placed it.
+/// One drawn clickable filter line and the profile that placed it.
 pub(super) struct FilterLineHit {
     /// Window logical pixels, shared with the caption and the cursor overlay.
     pub rect: [f32; 4],
@@ -198,7 +198,7 @@ impl ChartEngine {
             .map(|hit| hit.row)
     }
 
-    /// Resolve a blacklist-line press in window logical pixels against the current profile.
+    /// Resolve a filter-line press in window logical pixels against the current profile.
     ///
     /// Args:
     ///     pane: Pane index.
@@ -242,7 +242,7 @@ impl ChartEngine {
             .collect()
     }
 
-    /// Drawn blacklist lines whose profile still matches the captions on screen.
+    /// Drawn clickable filter lines whose profile still matches the captions on screen.
     ///
     /// Args:
     ///     pane: Pane index.

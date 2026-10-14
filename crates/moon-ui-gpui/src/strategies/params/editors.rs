@@ -723,10 +723,11 @@ impl StrategiesView {
             .into_any_element()
     }
 
-    /// The coins-blacklist reveal for this field, when it belongs to the strategy on screen.
+    /// The field reveal, with optional coin controls, when it belongs to the strategy on screen.
     ///
     /// A different field, or a selection that has moved on, draws nothing. The token is marked
-    /// only while the value still lists it, so the highlight and the remove button leave together.
+    /// only while the value still lists a nonempty coin, so the highlight and the remove button
+    /// leave together. A field-only reveal retains its outline without either coin control.
     ///
     /// Args:
     ///     field: Schema field name of the row being drawn.
@@ -739,7 +740,7 @@ impl StrategiesView {
         if flash.key != field || flash.strategy != selected_key(self) {
             return None;
         }
-        let marked = moon_core::symbol::coin_list::contains(value, &flash.coin);
+        let marked = revealed_coin_is_listed(value, &flash.coin);
         Some(CoinReveal {
             coin: flash.coin.clone(),
             alpha: crate::controls::coin_token::flash_alpha(flash.started),
@@ -795,12 +796,24 @@ impl StrategiesView {
     }
 }
 
-/// One field row's coins-blacklist reveal.
+/// One field row's reveal, with optional coin controls and an independently fading outline.
 struct CoinReveal {
     coin: String,
     alpha: f32,
     error: Option<String>,
     marked: bool,
+}
+
+/// An empty reveal token is field-only, even when an empty list contains an empty split piece.
+///
+/// Args:
+///     value: Coin-list text currently displayed in the field.
+///     coin: Reveal token, empty when navigation requested only a field.
+///
+/// Returns:
+///     Whether a nonempty token is present and can receive highlighting/removal controls.
+fn revealed_coin_is_listed(value: &str, coin: &str) -> bool {
+    !coin.is_empty() && moon_core::symbol::coin_list::contains(value, coin)
 }
 
 /// The «Убрать <COIN>» control a strategy field row draws at its trailing edge.

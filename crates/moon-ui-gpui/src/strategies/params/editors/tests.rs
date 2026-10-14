@@ -15,7 +15,7 @@ use rust_i18n::t;
 use crate::design;
 use crate::test_locale::force;
 
-use super::strategy_blacklist_remove;
+use super::{revealed_coin_is_listed, strategy_blacklist_remove};
 use crate::controls::coin_token::coin_token_strip;
 
 struct Host {
@@ -190,4 +190,14 @@ fn braced_body<'a>(source: &'a str, signature: &str) -> &'a str {
         }
     }
     panic!("unbalanced brace after `{signature}`");
+}
+
+/// Passing an empty token to the list matcher would expose Remove on empty or trailing-comma fields.
+#[test]
+fn field_only_reveals_never_mark_a_coin() {
+    for value in ["", "XALPHA,", "3.00", "XALPHA,WBTC"] {
+        assert!(!revealed_coin_is_listed(value, ""));
+    }
+    assert!(revealed_coin_is_listed("XALPHA,WBTC", "wbtc"));
+    assert!(!revealed_coin_is_listed("XALPHA", "WBTC"));
 }

@@ -1,4 +1,4 @@
-//! Filter-line parsing. A miss must stay `None`: the chart would otherwise open the wrong list.
+//! Filter-line parsing: complete strategy prefixes navigate, while malformed text stays inert.
 
 use super::{FilterLineTarget, parse_filter_line};
 
@@ -68,16 +68,85 @@ fn the_suffix_match_is_ascii_case_insensitive() {
     );
 }
 
-/// Treating any line that mentions a blacklist as clickable would navigate from a caption that
-/// does not name one of the two lists.
+/// Removing the complete strategy prefix requirement would navigate from unrelated captions.
 #[test]
-fn a_line_without_the_suffix_stays_inert() {
-    assert_eq!(
-        parse_filter_line("UNIT_01 ( Kind ) : Market XALPHA is quiet"),
-        None
-    );
+fn a_line_without_a_strategy_prefix_or_blacklist_suffix_stays_inert() {
+    assert_eq!(parse_filter_line("Market XALPHA is quiet"), None);
     assert_eq!(parse_filter_line("match global black"), None);
     assert_eq!(parse_filter_line("   "), None);
+}
+
+/// Leaving non-blacklist refusals inert or mapping them to the wrong parameter loses navigation.
+#[test]
+fn strategy_refusals_reveal_only_the_fields_the_reason_identifies() {
+    for (reason, field) in [
+        (
+            "3h delta (27.3%) doesnt match strategy range (6.9% .. 25.8%)",
+            Some("Delta_3h_Max"),
+        ),
+        (
+            "3h delta (1.2%) doesnt match strategy range (6.9% .. 25.8%)",
+            Some("Delta_3h_Min"),
+        ),
+        (
+            "Vol Minute delta (1.12) doesnt match strategy range (3.00 .. 0.00)",
+            Some("MinuteVolDeltaMin"),
+        ),
+        (
+            "EMA filter not passed. Open full screen chart to see more info",
+            Some("CustomEMA"),
+        ),
+        (
+            "Market WAL must have \"TradFi\" tag",
+            Some("BinanceTokenTags"),
+        ),
+        (
+            "Market WAL doesnt match strategy white list",
+            Some("CoinsWhiteList"),
+        ),
+        ("Market XALPHA is quiet", None),
+        (
+            "Other delta (27.3%) doesnt match strategy range (6.9% .. 25.8%)",
+            None,
+        ),
+        (
+            "3h delta (NaN) doesnt match strategy range (6.9% .. 25.8%)",
+            None,
+        ),
+        (
+            "3h delta (27.3%) doesnt match strategy range (30% .. 25.8%)",
+            None,
+        ),
+        (
+            "3h delta (27.3%) doesnt match strategy range (6.9% .. 0%)",
+            None,
+        ),
+    ] {
+        assert_eq!(
+            parse_filter_line(&format!("UNIT_01 ( Kind ) : {reason}")),
+            Some(FilterLineTarget::Strategy {
+                strategy: "UNIT_01".into(),
+                field
+            }),
+            "{reason}"
+        );
+    }
+}
+
+/// Dropping a display code at parsing time loses exact-name matches in the strategy store.
+#[test]
+fn display_codes_are_preserved_and_summary_lines_stay_inert() {
+    assert_eq!(
+        parse_filter_line("UNIT_01 - SAMPLE [7QK2M4XZ] ( Kind ) : unknown reason"),
+        Some(FilterLineTarget::Strategy {
+            strategy: "UNIT_01 - SAMPLE [7QK2M4XZ]".into(),
+            field: None
+        })
+    );
+    assert_eq!(parse_filter_line("... ещё 6"), None);
+    assert_eq!(parse_filter_line("... 6 more"), None);
+    assert_eq!(parse_filter_line("UNIT_01 ( ) : unknown reason"), None);
+    assert_eq!(parse_filter_line("UNIT_01 ( Kind : unknown reason"), None);
 }
 
 /// Guessing a strategy name from the last word, or from a half-written prefix, would open a

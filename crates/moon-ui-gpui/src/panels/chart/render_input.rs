@@ -480,8 +480,8 @@ pub(super) fn mouse_down_left(
     // below instead of to the figure layer. It does NOT lift for the press that FINISHES one — that
     // press sends a live bulk move, and an accidental Ctrl+double-click must not be what sends it.
     // Caption controls come before plot gestures: the filters header folds its module, a
-    // blacklist line opens that list, and a venue name opens the coin there. Falling through a
-    // drawn target could place an order under it.
+    // filter line opens its strategy or blacklist, and a venue name opens the coin there.
+    // Falling through a drawn target could place an order under it.
     if within && this.try_toggle_strategy_filters(pos, cx) {
         cx.stop_propagation();
         return;
@@ -781,6 +781,12 @@ pub(super) fn mouse_down_right(
         None
     };
     this.sync_native_cursor(cx);
+    // Consume both halves of a filter-line press before order gestures or chart menus.
+    if within && this.try_open_filter_line(pos, window, cx) {
+        this.suppress_rmb_up = true;
+        cx.stop_propagation();
+        return;
+    }
     // The same rectangle as the left button, opening the coin in a COMPARISON tab instead. Checked
     // before the menus for the same reason: the name is not part of the plot they act on.
     if within

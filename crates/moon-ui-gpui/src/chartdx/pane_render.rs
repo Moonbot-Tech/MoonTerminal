@@ -63,7 +63,7 @@ pub(in crate::chartdx) struct PaneRender {
     pub(crate) volume_hits: Vec<VolumeHit>,
     /// Measured strategy-filter header targets from the last successful caption pass.
     pub(in crate::chartdx) filter_header_hits: Vec<FilterHeaderHit>,
-    /// Measured blacklist-line targets from the last successful caption pass.
+    /// Measured clickable filter-line targets from the last successful caption pass.
     ///
     /// Cleared and rebuilt with [`Self::filter_header_hits`]. A rectangle is valid only for the
     /// profile stored on the hit.
