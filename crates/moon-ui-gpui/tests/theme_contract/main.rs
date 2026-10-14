@@ -26,6 +26,7 @@ mod fonts;
 mod log;
 mod mini_app;
 mod naming;
+mod platform_dependencies;
 mod report;
 mod settings_collapse;
 mod settings_preview;
