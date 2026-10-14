@@ -152,7 +152,7 @@ hotkeys.draw_triangle_hint: "Araç: üç tık — üçgenin üç köşesi (Moonb
 hotkeys.draw_channel: "Paralel kanal"
 hotkeys.draw_channel_hint: "Araç: fiyatlara iki tık — yatay kanal (bant, Moonbot kanalı gibi)."
 hotkeys.fig_delete: "Şekli sil"
-hotkeys.fig_delete_hint: "Tuş, tıklamayla seçilen şekli siler; hareket, imlecin altındaki şekli seçmeden siler. Yalnızca bu grafiğin şekilleri."
+hotkeys.fig_delete_hint: "Tuş, imlecin altındaki şekli, orada şekil yoksa seçili şekli siler; hareket imlecin altındaki şekli siler. Yalnızca bu grafiğin şekilleri."
 hotkeys.fig_alert: "Seçili şekilde uyarı"
 hotkeys.fig_alert_hint: "Seçili şekilde grafik uyarısını kurar veya kaldırır (çekirdek fiyat kesişimini izler)."
 hotkeys.fig_undo: "Son şekli sil"

@@ -152,7 +152,7 @@ hotkeys.draw_triangle_hint: "Tool: three clicks — the triangle's three vertice
 hotkeys.draw_channel: "Parallel channel"
 hotkeys.draw_channel_hint: "Tool: two clicks at prices — a horizontal channel (band, like Moonbot channel)."
 hotkeys.fig_delete: "Delete figure"
-hotkeys.fig_delete_hint: "The key deletes the figure selected by a click; the gesture deletes the figure under the pointer, no selection needed. This chart's own figures only."
+hotkeys.fig_delete_hint: "The key deletes the figure under the pointer, or the selected one when the pointer is on none; the gesture deletes the figure under the pointer. This chart's own figures only."
 hotkeys.fig_alert: "Alert on selected figure"
 hotkeys.fig_alert_hint: "Arm/disarm a chart alert on the selected figure (the core watches for a price cross)."
 hotkeys.fig_undo: "Delete last figure"

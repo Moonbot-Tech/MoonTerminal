@@ -571,13 +571,10 @@ impl DetachedChartHost {
             HotkeyAction::CancelHoveredOrder => {
                 crate::hotkeys::cancel_hovered_order(&self.backend, &press, window, cx)
             }
-            // Delete prioritizes the selected figure. With no selection, fall back to built-in order
-            // cancellation under the cursor; otherwise `fig_delete=Delete` would shadow it. See Shell.
+            // Delete aims at the figure under the cursor, then the selected one. With neither, fall
+            // back to built-in order cancellation; otherwise `fig_delete=Delete` would shadow it.
             HotkeyAction::FigDelete => {
-                self.backend.update(cx, |b, bcx| {
-                    // `FigDelete` does not use a target or core.
-                    crate::hotkeys::apply(action, b, bcx, &self.group, None, None)
-                }) || crate::hotkeys::cancel_hovered_order(&self.backend, &press, window, cx)
+                crate::hotkeys::fig_delete_or_cancel(&self.backend, &press, window, cx)
             }
             // Built-in Shift+Esc closes every group's Main charts.
             HotkeyAction::CloseAllCharts => {

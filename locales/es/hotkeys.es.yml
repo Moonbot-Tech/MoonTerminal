@@ -152,7 +152,7 @@ hotkeys.draw_triangle_hint: "Herramienta: tres clics — los tres vértices del 
 hotkeys.draw_channel: "Canal paralelo"
 hotkeys.draw_channel_hint: "Herramienta: dos clics en precios — un canal horizontal (banda, como el canal de Moonbot)."
 hotkeys.fig_delete: "Eliminar figura"
-hotkeys.fig_delete_hint: "La tecla elimina la figura seleccionada con un clic; el gesto, la figura bajo el cursor, sin seleccionarla. Solo las figuras de este gráfico."
+hotkeys.fig_delete_hint: "La tecla elimina la figura bajo el cursor o, si no hay ninguna, la seleccionada; el gesto elimina la figura bajo el cursor. Solo las figuras de este gráfico."
 hotkeys.fig_alert: "Alerta en la figura seleccionada"
 hotkeys.fig_alert_hint: "Armar/desarmar una alerta de gráfico en la figura seleccionada (el núcleo vigila el cruce de precio)."
 hotkeys.fig_undo: "Eliminar la última figura"

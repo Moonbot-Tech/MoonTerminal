@@ -152,7 +152,7 @@ hotkeys.draw_triangle_hint: "Công cụ: ba nhấp — ba đỉnh tam giác (Moo
 hotkeys.draw_channel: "Kênh song song"
 hotkeys.draw_channel_hint: "Công cụ: hai nhấp theo giá — kênh ngang (dải, như kênh Moonbot)."
 hotkeys.fig_delete: "Xóa hình"
-hotkeys.fig_delete_hint: "Phím xóa hình đã chọn bằng nhấp; cử chỉ xóa hình dưới con trỏ, không cần chọn. Chỉ hình của biểu đồ này."
+hotkeys.fig_delete_hint: "Phím xóa hình dưới con trỏ, hoặc hình đã chọn khi dưới con trỏ không có hình nào; cử chỉ xóa hình dưới con trỏ. Chỉ hình của biểu đồ này."
 hotkeys.fig_alert: "Cảnh báo trên hình đã chọn"
 hotkeys.fig_alert_hint: "Bật hoặc tắt cảnh báo biểu đồ trên hình đã chọn (core theo dõi giá cắt qua)."
 hotkeys.fig_undo: "Xóa hình cuối"

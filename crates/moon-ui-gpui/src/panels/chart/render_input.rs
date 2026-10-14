@@ -528,10 +528,11 @@ pub(super) fn mouse_down_left(
     if let Some(d) = this.fig_draft.as_mut() {
         d.down = None;
     }
-    // The click was not the figure layer's — but a click that landed on no figure still ends the
-    // selection, which is what every editor does and what the handles left on screen otherwise
-    // contradict. Deliberately here rather than inside `try_fig_click`: that path returns early
-    // without the modifier, and this must hold for the ordinary clicks that make up most of them.
+    // The click was not the figure layer's — but it still moves the selection: onto the figure it
+    // landed on, or off when it landed on none, which is what every editor does and what the
+    // handles left on screen otherwise contradict. Deliberately here rather than inside
+    // `try_fig_click`: that path returns early without the modifier, and this must hold for the
+    // ordinary clicks that make up most of them.
     // The settings panel swallows its own input, so a click arriving here landed outside it — the
     // dismissal every popup on this chart uses. It CONSUMES the click: the first click outside an
     // open panel closes it and does nothing else, or dismissing the panel could cancel a live
@@ -542,7 +543,7 @@ pub(super) fn mouse_down_left(
         return;
     }
     if within && e.click_count <= 1 {
-        this.fig_clear_selection_on_miss(pos, cx);
+        this.fig_select_on_plain_click(pos, cx);
     }
     // A left-bound figure-delete gesture (`hotkeys.fig_delete_click`) acts here: AFTER the drawing
     // layer, which owns the modifier click that places and grabs figures, and before trading. A
