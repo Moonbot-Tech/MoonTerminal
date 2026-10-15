@@ -16,15 +16,30 @@
 //! the tape's high was exactly 0.1964 — the unrounded line was never reached.
 
 use super::pump_move::PumpMove;
-use super::sell_order::{PriceDown, SellLevel, armed_at};
+use super::sell_order::{PriceDown, SellLevel, armed_at, take_model_for};
 use super::stops::{StopTrigger, Stops};
 use super::{ExitParams, Side};
+use crate::db::tuner::ticks::ModelSettings;
 use crate::db::tuner::ticks::gap::{
     HOLE_PRICE_TOLERANCE, HOLE_TIME_SLACK_MS, TapeGap, fact_level_near, sell_not_nearer,
     stop_not_nearer, trigger_not_quicker,
 };
+use crate::db::tuner::ticks::mshot::MSHOT_TAKE_LATENCY_MS;
 use crate::db::tuner::ticks::{Deal, Exit, ExitKind, Fill, reaches, round_to_step};
 use crate::feed::types::Tick;
+
+/// MoonShot's first take reaches the book `MSHOT_TAKE_LATENCY_MS` after arming, never sooner
+/// than a re-place (the model latency floor). Other kinds keep the replacement latency.
+/// First placement only: applying 220 ms to every exit move worsened MoonStrike/MoonHook takes
+/// on the bench, while MoonShot take exits improved from 2114 to 3249 and stops stayed at 1994.
+pub(crate) fn take_latency_ms(deal: &Deal, model: &ModelSettings) -> i64 {
+    let latency_ms = model.latency_whole_ms();
+    if take_model_for(&deal.kind) {
+        MSHOT_TAKE_LATENCY_MS.max(latency_ms)
+    } else {
+        latency_ms
+    }
+}
 
 /// One replacement of the line, for the comparison with the archived Exit points.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -111,8 +126,7 @@ pub(super) struct Line {
     latency_ms: i64,
     /// When the take was placed (`SellDelay` after the fill).
     armed_at: i64,
-    /// When the take is on the book: placed at `armed_at`, there after the same latency as any
-    /// move of the line.
+    /// When the take is on the book, after its initial placement latency from `armed_at`.
     live_at: i64,
     /// The take as placed, before any move landed: what "through the take" is judged against.
     take: f64,
@@ -145,14 +159,20 @@ pub(super) struct Line {
 }
 
 impl Line {
-    /// The take, placed at `armed_at` on the grid of `tick`.
-    fn new(tick: Option<f64>, take: f64, armed_at: i64, latency_ms: i64) -> Self {
+    /// The take on `tick`'s grid, live after `take_latency_ms`; moves use `latency_ms`.
+    fn new(
+        tick: Option<f64>,
+        take: f64,
+        armed_at: i64,
+        take_latency_ms: i64,
+        latency_ms: i64,
+    ) -> Self {
         let take_placed = placed(tick, take);
         Self {
             tick,
             latency_ms,
             armed_at,
-            live_at: armed_at + latency_ms,
+            live_at: armed_at + take_latency_ms,
             take: take_placed,
             exch: take_placed,
             exch_moved: false,
@@ -233,10 +253,13 @@ impl Line {
             .filter(|_| untouched_until(self.moved_at, horizon))
     }
 
-    /// The print at `t_ms`, `price` filling the order the exchange holds: once the take is on
-    /// the book, a print AT the level or through it.
+    /// Fill at `t_ms`, `price` once either the take or an earlier replacement is on the book.
+    /// The take's own arrival still governs marketable-take tracking.
     fn fill_on(&self, t_ms: i64, price: f64, side: Side) -> Option<Exit> {
-        (t_ms > self.armed_at && t_ms >= self.live_at && reaches(price, self.exch, !side.long))
+        let book_live_at = self
+            .moved_at
+            .map_or(self.live_at, |at| at.min(self.live_at));
+        (t_ms > self.armed_at && t_ms >= book_live_at && reaches(price, self.exch, !side.long))
             .then_some(Exit {
                 t_ms,
                 // A take already through the market at its first live print fills at that print.
@@ -292,6 +315,7 @@ pub fn walk(deal: &Deal, ticks: &[Tick], fill: Fill, take: f64, params: &ExitPar
 /// moving the line, so its level at that moment is known whatever print the model would have
 /// sold on before it. The stop is not held: it is a market order and fires as it does. The
 /// verdict on a fact reads the line this way, at the close.
+/// Initial placement uses [`take_latency_ms`]; subsequent moves use the model's latency.
 ///
 /// Args:
 ///     hold_until_ms: `None` walks as [`walk`] does.
@@ -307,7 +331,13 @@ pub fn walk_held(
         long: deal.is_long(),
     };
     let armed_at = armed_at(fill, params);
-    let mut line = Line::new(deal.tick, take, armed_at, params.model.latency_whole_ms());
+    let mut line = Line::new(
+        deal.tick,
+        take,
+        armed_at,
+        take_latency_ms(deal, &params.model),
+        params.model.latency_whole_ms(),
+    );
     let mut price_down = PriceDown::new(params, deal, fill, side);
     let mut pump_move = PumpMove::new(params, fill, side, armed_at);
     let mut sell_level = SellLevel::new(params, deal, fill, side);

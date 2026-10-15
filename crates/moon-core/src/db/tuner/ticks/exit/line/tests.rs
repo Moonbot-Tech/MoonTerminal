@@ -78,10 +78,9 @@ fn without_a_step_the_placed_level_is_the_exact_one() {
     );
 }
 
-/// The take is an order like every move: on the book `latency_ms` after the core placed it. The
-/// spike's own tail, printed in the milliseconds after the fill, cannot fill it.
+/// Using the MoonShot delay for other kinds would miss their first live take print.
 #[test]
-fn the_take_is_on_the_book_only_after_the_latency() {
+fn the_take_is_on_the_book_only_after_the_replacement_latency() {
     let p = ExitParams {
         model: ModelSettings {
             latency_ms: 100.0,
@@ -90,8 +89,82 @@ fn the_take_is_on_the_book_only_after_the_latency() {
         ..ExitParams::default()
     };
     let ticks = tape(&[(9, 101.5), (150, 101.2)]);
-    let w = walk(&deal(false), &ticks, fill(), 101.0, &p);
+    let mut d = deal(false);
+    d.kind = "Spread".into();
+    let w = walk(&d, &ticks, fill(), 101.0, &p);
     assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Take, 150));
+}
+
+/// Reusing the first-placement delay for a move would leave the old sell level live too long.
+#[test]
+fn a_moved_line_lands_after_the_replacement_latency_not_the_take_latency() {
+    let mut line = Line::new(None, 101.0, 0, 220, 100);
+    assert!(line.place(1_000, 100.5));
+    line.land(1_099);
+    assert_eq!(line.exch, 101.0);
+    line.land(1_100);
+    assert_eq!(line.exch, 100.5);
+}
+
+/// Gating an already landed replacement by the take delay would miss its +160 ms fill.
+#[test]
+fn a_replacement_landing_before_the_take_latency_fills_once_it_lands() {
+    let p = ExitParams {
+        price_down_timer_s: 0.05,
+        price_down_pct: 50.0,
+        price_down_relative: true,
+        model: ModelSettings {
+            latency_ms: 100.0,
+            ..ModelSettings::default()
+        },
+        ..params()
+    };
+    let ticks = tape(&[(0, 100.0), (160, 100.75), (230, 100.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 101.0, &p);
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms, w.exit.price),
+        (ExitKind::Line, 160, 100.5)
+    );
+    assert_eq!(w.marketable_take, None);
+}
+
+/// Applying replacement latency to the first take would sell on the spike's early tail.
+#[test]
+fn a_moonshot_take_is_on_the_book_only_after_the_take_latency() {
+    let ticks = tape(&[(0, 100.0), (150, 101.0), (230, 101.0)]);
+    let w = walk(
+        &deal(false),
+        &ticks[..2],
+        fill(),
+        101.0,
+        &ExitParams::default(),
+    );
+    assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd);
+    let w = walk(&deal(false), &ticks, fill(), 101.0, &ExitParams::default());
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Take, 230));
+}
+
+/// Extending MoonShot's placement delay to other kinds would miss their +150 ms fill.
+#[test]
+fn other_kinds_place_the_take_after_the_replacement_latency() {
+    let ticks = tape(&[(0, 100.0), (150, 101.0), (230, 101.0)]);
+    for kind in ["Spread", "MoonStrike", "MoonHook"] {
+        let mut d = deal(false);
+        d.kind = kind.into();
+        let w = walk(&d, &ticks, fill(), 101.0, &ExitParams::default());
+        assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Take, 150), "{kind}");
+    }
+}
+
+/// Pricing a marketable take at the early print would use a market it could not trade on.
+#[test]
+fn a_marketable_moonshot_take_fills_at_the_first_print_after_the_take_latency() {
+    let ticks = tape(&[(0, 102.0), (150, 103.0), (230, 104.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 101.0, &ExitParams::default());
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms, w.exit.price),
+        (ExitKind::Take, 230, 104.0)
+    );
 }
 
 // ---- the mirror and the archive -------------------------------------------------------------

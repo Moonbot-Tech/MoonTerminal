@@ -40,6 +40,8 @@
 //! first value is a constant; calibrating it from the archive's replacement times against the
 //! moments the price left the corridor is phase 3.
 //!
+//! The first MoonShot take placement uses [`MSHOT_TAKE_LATENCY_MS`]; re-places keep `latency_ms`.
+//!
 //! The core keeps its own idea of where the order is; the exchange learns about a move
 //! `latency_ms` later. A print in between fills at the OLD level. That is the one interleaving
 //! the model has to get right, and it is why the state carries two levels.
@@ -241,6 +243,14 @@ const BOUND_FLOOR_PCT: f64 = 0.02;
 
 /// Default replacement latency, milliseconds — see the module doc.
 pub const DEFAULT_LATENCY_MS: f64 = 100.0;
+
+/// First take placement latency only; re-places keep `latency_ms`.
+/// Calibration on 2026-10-15: of 4899 long take closes, the first print after buy + L matched
+/// the sell within 0.05 % for 2371 at 100 ms, 2715 at 160, 3256 at 200, 3543 at 220,
+/// 3371 at 240, 2539 at 300 and 2083 at 400; both largest cores peaked at 220 ms.
+/// On the bench, MoonShot take exits improved from 2114 to 3249 and stops stayed at 1994,
+/// while using 220 ms for every exit move worsened MoonStrike/MoonHook takes.
+pub const MSHOT_TAKE_LATENCY_MS: i64 = 220;
 
 /// The latency a deal's entry re-places reach the exchange with: its core's measured round trip
 /// ([`Deal::round_trip_ms`]), or the model settings' one latency for a core not measured. The

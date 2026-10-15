@@ -26,6 +26,7 @@ use rusqlite::{Connection, OpenFlags};
 
 use super::super::calibrate;
 use super::super::exit::ExitModel;
+use super::super::exit::line::take_latency_ms;
 use super::super::mshot::DEFAULT_LATENCY_MS;
 use super::super::params::{StrategyValues, exit_params, mshot_params, param_keys};
 use super::super::*;
@@ -412,7 +413,7 @@ impl TakeFillDiag {
             Some(step) if step > 0.0 => round_to_step(raw, step),
             _ => raw,
         };
-        let at = fill.t_ms + exit.sell_delay_ms as i64 + exit.model.latency_whole_ms();
+        let at = fill.t_ms + exit.sell_delay_ms as i64 + take_latency_ms(deal, &exit.model);
         let long = deal.is_long();
         let better = |a: f64, b: f64| if long { a.max(b) } else { a.min(b) };
         let t = |k: &Tick| k.time_ms as i64;

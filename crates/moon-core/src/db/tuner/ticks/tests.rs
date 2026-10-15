@@ -977,6 +977,31 @@ fn a_fill_after_the_fact_closed_is_open_at_the_window_end() {
     assert_eq!(out.kind, ExitKind::OpenAtWindowEnd);
 }
 
+/// The fact closes at +150 ms, before its take is live at +220 ms, and is still judged at
+/// the first live market print; pricing it at the take level would lose that market fill.
+#[test]
+fn a_moonshot_take_closed_before_its_take_latency_is_still_judged_at_the_market() {
+    let mut d = deal();
+    d.coin = "XALPHA".into();
+    d.buy_price = 100.0;
+    d.close_ms = d.buy_ms + 150;
+    d.sell_price = 104.0;
+    let ticks = tape(&[
+        (d.buy_ms, 102.0),
+        (d.buy_ms + 150, 103.0),
+        (d.buy_ms + 230, 104.0),
+    ]);
+    let p = ExitParams {
+        sell_at_last_price: false,
+        ..ExitParams::default()
+    };
+    let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, None);
+    assert_eq!(v.exit_kind, Some(ExitKind::Take));
+    assert_eq!(v.exit, Some(true), "{v:?}");
+    assert_eq!(v.exit_dev_pct, Some(0.0), "{v:?}");
+}
+
+/// Ignoring sell delay or the initial take latency would sell before the first live print.
 #[test]
 fn sell_delay_arms_the_take_late() {
     let exit = ExitParams {
@@ -987,15 +1012,17 @@ fn sell_delay_arms_the_take_late() {
         t_ms: 1_000,
         price: 99.0,
     };
-    // 100.5 at +300 ms is inside the delay; 100.2 at +700 ms is the exit.
+    // The +300 ms print is inside the delay; +700 ms is still before placement lands.
+    // The first live print is +730 ms: 500 ms sell delay plus the 220 ms take latency.
     let ticks = tape(&[
         (1_000, 99.0),
         (1_300, 100.5),
         (1_700, 100.2),
+        (1_730, 100.2),
         (20_000, 99.0),
     ]);
     let out = ExitModel::new(&exit).exit(&deal(), &ticks, fill);
-    assert_eq!((out.kind, out.t_ms), (ExitKind::Take, 1_700));
+    assert_eq!((out.kind, out.t_ms), (ExitKind::Take, 1_730));
 }
 
 /// A short MoonShot's take sits below the fill, divided off it: `101 / (1 + 1 %)` = 100.
