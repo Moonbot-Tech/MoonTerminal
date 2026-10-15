@@ -16,11 +16,11 @@ fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
         thinning: TickThinning::Raw,
         partial: true,
         ends: false,
-        brand: moon_core::venue::Brand::Binance,
+        brand: Some(moon_core::venue::Brand::Binance),
     };
     let mut series = TradeReplaySeries {
         source: TradeReplaySource::Ticks,
-        venue: moon_core::venue::venue(3).expect("spot venue"),
+        venue: moon_core::venue::venue(3),
         window: replay_window_ms(100_000_000, 100_060_000, 5 * 60_000).expect("valid trade"),
         tf_ms: 60_000,
         candles: Vec::new(),
@@ -54,7 +54,7 @@ fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
         thinning: TickThinning::Raw,
         partial: false,
         ends: false,
-        brand: moon_core::venue::Brand::Bybit,
+        brand: Some(moon_core::venue::Brand::Bybit),
     };
     let delayed_core = fold_outcome(&awaiting, true, &TradeReplayOutcome::Ready(series.clone()));
     assert!(delayed_core.accept && delayed_core.restore_candle_mode);

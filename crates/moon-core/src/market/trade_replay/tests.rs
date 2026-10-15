@@ -451,7 +451,7 @@ fn candle(t_open_ms: i64, low: f32, high: f32, close: f32) -> ChartCandle {
 fn bars_only_series() -> TradeReplaySeries {
     TradeReplaySeries {
         source: TradeReplaySource::Klines1m,
-        venue: crate::venue::venue(2).expect("known test venue"),
+        venue: crate::venue::venue(2),
         window: ReplayWindow {
             from_ms: 0,
             to_ms: 2 * MINUTE_MS,

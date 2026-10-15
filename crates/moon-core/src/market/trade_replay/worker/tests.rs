@@ -156,9 +156,9 @@ fn cached_retry_keeps_wider_tick_coverage() {
     wide.window.to_ms = 600_000;
     wide.covered = Coverage::one((0, 360_000));
     wide.partial = true;
-    let route = trade_route(wide.venue).expect("tick route");
+    let route = trade_route(wide.venue.expect("known venue")).expect("tick route");
     let key = OutcomeKey {
-        venue: wide.venue,
+        venue: wide.venue.expect("known venue"),
         host: route.host(),
         market: "BTCUSDT".to_owned(),
         from_ms: wide.window.from_ms,
@@ -179,7 +179,7 @@ fn cached_retry_keeps_wider_tick_coverage() {
     let Some(Remembered::Ready { mut series, .. }) = remember_lookup(&cache, &key, 42) else {
         panic!("retry cache missing")
     };
-    let stage = stage_and_stamp(series.venue, &key, &mut series);
+    let stage = stage_and_stamp(series.venue.expect("known venue"), &key, &mut series);
     assert_eq!(series.tick_status, TickStatus::Streaming);
     let narrow = core_series(true);
     assert!(!preserves_coverage(
@@ -214,7 +214,7 @@ fn cached_retry_keeps_wider_tick_coverage() {
 fn core_series(partial: bool) -> TradeReplaySeries {
     TradeReplaySeries {
         source: TradeReplaySource::CoreTicks,
-        venue: crate::venue::venue(3).expect("Binance spot"),
+        venue: crate::venue::venue(3),
         window: ReplayWindow {
             from_ms: 0,
             to_ms: 180_000,
@@ -292,13 +292,13 @@ fn core_replay_rechecks_after_candles_and_keeps_context() {
         volume: 5.0,
         quote_volume: 55.0,
     });
-    let route = trade_route(bars.venue).expect("spot trade route");
+    let route = trade_route(bars.venue.expect("known venue")).expect("spot trade route");
     let stage = TickStage {
         baseline: None,
         route: Some(route),
         archive: None,
         key: OutcomeKey {
-            venue: bars.venue,
+            venue: bars.venue.expect("known venue"),
             host: route.host(),
             market: "BTCUSDT".into(),
             from_ms: bars.window.from_ms,
@@ -750,7 +750,7 @@ fn tile_request(reply: Sender<TradeReplayOutcome>) -> TradeReplayRequest {
     TradeReplayRequest {
         address: crate::market::source::ReplayAddress {
             history,
-            venue,
+            venue: Some(venue),
             exchange_key: "3:00000000".into(),
             cache: None,
         },
@@ -774,13 +774,14 @@ fn tile_request(reply: Sender<TradeReplayOutcome>) -> TradeReplayRequest {
 }
 
 fn tile_stage(request: &TradeReplayRequest) -> TickStage {
-    let route = trade_route(request.address.venue).expect("Binance spot trades route");
+    let route = trade_route(request.address.venue.expect("known venue"))
+        .expect("Binance spot trades route");
     TickStage {
         baseline: None,
         route: Some(route),
         archive: None,
         key: OutcomeKey {
-            venue: request.address.venue,
+            venue: request.address.venue.expect("known venue"),
             host: route.host(),
             market: request.market.clone(),
             from_ms: request.window.from_ms,
@@ -800,10 +801,10 @@ fn archived_focus_serves_bybit_and_old_binance_without_rest() {
         let mut request = tile_request(reply);
         request.market = "SYNUSDT".into();
         request.intent = ReplayIntent::Model;
-        request.address.venue = crate::venue::Venue {
+        request.address.venue = Some(crate::venue::Venue {
             brand,
             kind: crate::venue::MarketKind::Futures,
-        };
+        });
         let from = crate::util::time::now_unix_ms_i64() - 5 * 86_400_000;
         request.window = ReplayWindow {
             from_ms: from,
@@ -815,7 +816,8 @@ fn archived_focus_serves_bybit_and_old_binance_without_rest() {
             over_budget: false,
         };
         let mut stage = tile_stage_for_archive(&request);
-        stage.archive = venue_caps::archive_route(request.address.venue, &request.market);
+        stage.archive =
+            venue_caps::archive_route(request.address.venue.expect("known venue"), &request.market);
         let focus = request.window.focus_spans();
         let (series, _) = serve_ticks_with(
             &rest::agent(),
@@ -846,10 +848,10 @@ fn archived_focus_serves_bybit_and_old_binance_without_rest() {
 fn chart_intent_never_calls_archive() {
     let (reply, _rx) = mpsc::channel();
     let mut request = tile_request(reply);
-    request.address.venue = crate::venue::Venue {
+    request.address.venue = Some(crate::venue::Venue {
         brand: crate::venue::Brand::Bybit,
         kind: crate::venue::MarketKind::Futures,
-    };
+    });
     request.intent = ReplayIntent::Chart;
     let stage = tile_stage_for_archive(&request);
     let result = serve_ticks_with(
@@ -869,10 +871,10 @@ fn chart_intent_never_calls_archive() {
 fn model_archive_request_is_limited_to_three_days() {
     let (reply, _rx) = mpsc::channel();
     let mut request = tile_request(reply);
-    request.address.venue = crate::venue::Venue {
+    request.address.venue = Some(crate::venue::Venue {
         brand: crate::venue::Brand::Bybit,
         kind: crate::venue::MarketKind::Futures,
-    };
+    });
     request.intent = ReplayIntent::Model;
     let day = 86_400_000;
     let from = crate::util::time::now_unix_ms_i64().div_euclid(day) * day - 8 * day;
@@ -909,7 +911,7 @@ fn model_archive_request_is_limited_to_three_days() {
 /// Construct archive-capable stages without assuming that Bybit has a REST endpoint.
 fn tile_stage_for_archive(request: &TradeReplayRequest) -> TickStage {
     let key = OutcomeKey {
-        venue: request.address.venue,
+        venue: request.address.venue.expect("known venue"),
         host: "synthetic",
         market: request.market.clone(),
         from_ms: request.window.from_ms,
@@ -917,7 +919,7 @@ fn tile_stage_for_archive(request: &TradeReplayRequest) -> TickStage {
         margin_ms: request.window.margin_ms,
         long_position_ms: request.window.long_position_ms,
     };
-    tick_stage_for(request.address.venue, &key, &[])
+    tick_stage_for(request.address.venue.expect("known venue"), &key, &[])
 }
 
 /// Hydrating a cold tile store must spare an archive request when persisted tape is complete.
@@ -934,10 +936,10 @@ fn warm_disk_cold_tiles_skip_archive() {
     let cache = trade_cache::TradeCache::open_with_ceiling(path.clone(), || None).unwrap();
     let (reply, _rx) = mpsc::channel();
     let mut request = tile_request(reply);
-    request.address.venue = crate::venue::Venue {
+    request.address.venue = Some(crate::venue::Venue {
         brand: crate::venue::Brand::Bybit,
         kind: crate::venue::MarketKind::Futures,
-    };
+    });
     request.intent = ReplayIntent::Model;
     let focus = request.window.focus_spans();
     for &(from, to) in focus.spans() {
@@ -1067,7 +1069,7 @@ fn a_route_less_stage_serves_captured_tiles_or_prints_no_route() {
 fn a_window_past_the_routes_retention_is_served_from_the_tiles() {
     let (reply, _rx) = mpsc::channel();
     let mut request = tile_request(reply);
-    request.address.venue = crate::venue::venue(4).expect("Binance futures");
+    request.address.venue = crate::venue::venue(4);
     let stage = tile_stage(&request);
     assert_eq!(stage.route, Some(TradeRoute::BinanceUsdMAggTrades));
     let key = (request.address.exchange_key.clone(), request.market.clone());
@@ -1096,9 +1098,9 @@ fn a_window_past_the_routes_retention_is_served_from_the_tiles() {
 fn a_window_past_the_routes_retention_still_queues_its_tick_stage() {
     let (reply, _rx) = mpsc::channel();
     let mut request = tile_request(reply);
-    request.address.venue = crate::venue::venue(4).expect("Binance futures");
+    request.address.venue = crate::venue::venue(4);
     let key = tile_stage(&request).key;
-    let stage = tick_stage_for(request.address.venue, &key, &[]);
+    let stage = tick_stage_for(request.address.venue.expect("known venue"), &key, &[]);
     assert_eq!(stage.route, Some(TradeRoute::BinanceUsdMAggTrades));
 }
 
@@ -1134,7 +1136,7 @@ fn capture_spans_follow_the_windows_focus_and_stop_at_the_exit_before_settling()
     let capture = |open_ms: i64, close_ms: i64| CaptureRequest {
         address: crate::market::source::ReplayAddress {
             history: history.clone(),
-            venue,
+            venue: Some(venue),
             exchange_key: "3:00000000".into(),
             cache: None,
         },
@@ -1199,7 +1201,7 @@ fn a_tiles_reader_gets_the_ring_as_core_tiles_the_walk_no_longer_asks_for() {
     let venue = crate::venue::venue(3).expect("Binance spot");
     let address = ReplayAddress {
         history,
-        venue,
+        venue: Some(venue),
         exchange_key: "3:00000000".into(),
         cache: None,
     };
@@ -1345,4 +1347,35 @@ fn probe_one_slice_against_the_venue() {
         harvest.stop,
         &gaps[..gaps.len().min(5)]
     );
+}
+
+/// LinKvo 15.10: a core on a venue the exchange directory does not know (Aster, a broker through
+/// MoonProto) showed only "unknown venue", although the core held the trade's prints. Its request
+/// now reaches the worker: with no route it costs no call and answers the unknown venue, on an
+/// idle lane — and its core's own prints, read first, replace that answer.
+#[test]
+fn an_unknown_venue_is_served_from_its_core() {
+    let (reply, _rx) = mpsc::channel();
+    let mut request = tile_request(reply);
+    request.address.venue = None;
+    assert_eq!(lane_key(&request).0, "");
+    let served = serve(
+        &rest::agent(),
+        &ReplayGate::new(),
+        &Mutex::new(VecDeque::new()),
+        &request,
+    );
+    assert!(matches!(
+        served.outcome,
+        TradeReplayOutcome::Empty(TradeReplayEmpty::UnknownVenue)
+    ));
+    assert!(served.tick_stage.is_none(), "no route: no tick walk");
+    let mut native = core_series(true);
+    native.venue = None;
+    let served = core_first(|| Some(native.clone()), || served);
+    let TradeReplayOutcome::Ready(series) = served.outcome else {
+        panic!("the core's own prints are hidden behind the unknown venue")
+    };
+    assert_eq!(series.source, TradeReplaySource::CoreTicks);
+    assert!(series.venue.is_none());
 }

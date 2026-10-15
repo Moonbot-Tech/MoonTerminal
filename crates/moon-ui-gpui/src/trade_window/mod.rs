@@ -132,11 +132,12 @@ pub(crate) enum TradeWindowState {
         /// whole (one stretch, middle included). Always `false` on `Klines1m`, whose coverage is
         /// empty.
         ends: bool,
-        /// Brand of the venue the rows came from, so a `NoRoute` caption can name it. Read off
-        /// `series.venue` rather than kept as a `TradeWindowView` field: `window.rs`'s
+        /// Brand of the venue the rows came from, so a `NoRoute` caption can name it; `None` for
+        /// a venue the exchange directory does not know, whose rows are its core's own prints.
+        /// Read off `series.venue` rather than kept as a `TradeWindowView` field: `window.rs`'s
         /// construction of that struct is outside this branch's file bounds, so nothing here may
         /// add a field it would have to initialize.
-        brand: Brand,
+        brand: Option<Brand>,
     },
     /// Nothing to draw, for a reason the window names.
     Empty(TradeReplayEmpty),
@@ -882,18 +883,11 @@ impl TradeWindowView {
             .replay_address(self.core)
         {
             Ok(address) => address,
-            Err(error) => {
-                // Two different sentences: reconnect the core, or this build does not know that
-                // exchange. Collapsing them would tell the user to reconnect something that is
-                // already connected and answering.
-                self.state = TradeWindowState::Empty(match error {
-                    moon_core::market::ReplayAddressError::NotConnected => {
-                        TradeReplayEmpty::CoreNotConnected
-                    }
-                    moon_core::market::ReplayAddressError::UnknownVenue => {
-                        TradeReplayEmpty::UnknownVenue
-                    }
-                });
+            // A venue this build does not know is NOT refused here (LinKvo 15.10): it resolves
+            // with no venue, and the worker serves its core's own prints, or says the venue is
+            // unknown when the core holds none.
+            Err(moon_core::market::ReplayAddressError::NotConnected) => {
+                self.state = TradeWindowState::Empty(TradeReplayEmpty::CoreNotConnected);
                 cx.notify();
                 return;
             }
@@ -916,9 +910,16 @@ impl TradeWindowView {
                 .session
                 .market_source()
                 .market_contract_terms(self.core, &self.market);
-            moon_core::market::trade_replay::venue_caps::tick_value(
-                address.venue,
-                terms.as_ref().map(|(quote, size)| (quote.as_str(), *size)),
+            // A venue the directory does not know names no contract route: its prints are
+            // valued as base coins, as any non-contract venue's are.
+            address.venue.map_or(
+                moon_core::market::trade_replay::venue_caps::TickValue::Base,
+                |venue| {
+                    moon_core::market::trade_replay::venue_caps::tick_value(
+                        venue,
+                        terms.as_ref().map(|(quote, size)| (quote.as_str(), *size)),
+                    )
+                },
             )
         };
         let (tx, rx) = mpsc::channel();
@@ -1007,7 +1008,7 @@ impl TradeWindowView {
                 let thinning = series.thinning;
                 let partial = series.partial;
                 let ends = series.window.focus_spans().is_split() && series.covered.is_split();
-                let brand = series.venue.brand;
+                let brand = series.venue.map(|venue| venue.brand);
                 if fold.restore_candle_mode {
                     self.restore_candle_mode(cx);
                 }

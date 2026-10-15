@@ -372,7 +372,7 @@ fn run_pass(
             degenerate += 1;
             continue;
         };
-        let source = fetchable(row.replay_address.venue, &row.address.market, to_ms, now_ms);
+        let source = fetchable(row.address.venue, &row.address.market, to_ms, now_ms);
         let venue_serves = matches!(source, Fetchable::Rest | Fetchable::Archive);
         match row_path(
             (venues_on, cores_on),

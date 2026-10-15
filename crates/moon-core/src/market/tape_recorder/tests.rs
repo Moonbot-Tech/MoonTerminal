@@ -53,10 +53,10 @@ fn emulator_known_only_at_close_is_closed_and_dropped() {
         Cmd::Closed {
             exchange: key.0.clone(),
             market: key.1.clone(),
-            venue: crate::venue::Venue {
+            venue: Some(crate::venue::Venue {
                 brand: crate::venue::Brand::Bybit,
                 kind: crate::venue::MarketKind::Futures,
-            },
+            }),
             trade: id,
             open_ms: 1000,
             close_ms: 2000,
@@ -150,10 +150,10 @@ fn recorder_drops_emulator_tasks_when_turned_off() {
         Cmd::Closed {
             exchange: "SYNTHETIC".into(),
             market: "XALPHA".into(),
-            venue: crate::venue::Venue {
+            venue: Some(crate::venue::Venue {
                 brand: crate::venue::Brand::Bybit,
                 kind: crate::venue::MarketKind::Futures,
-            },
+            }),
             trade: emu,
             open_ms: 1000,
             close_ms: 2000,
@@ -214,4 +214,83 @@ fn pending_backfills_share_disk_reservation_until_confirmed() {
     let next = reserve_backfill(&pending, 9, |total| total <= 15).unwrap();
     drop(next);
     assert_eq!(pending.load(Ordering::Acquire), 0);
+}
+
+/// LinKvo 15.10: a core on a venue this build's directory does not know (a broker connected
+/// through MoonProto) got no deal picture — its trades never reached the recorder. Its close is
+/// now recorded like any other, and only the catch-up, which needs the venue's REST route, leaves
+/// it out; a known venue's close still reaches the catch-up as before.
+#[test]
+fn a_close_on_an_unknown_venue_is_recorded_without_catchup() {
+    let _guard = catchup::tests::SWITCH_LOCK.lock().unwrap();
+    catchup::enable();
+    let now = Instant::now();
+    let mut recorder = Recorder {
+        cache: TradeCache::open_evictable(":memory:".into()).unwrap(),
+        catchup: catchup::RecorderCatchup::default(),
+        tasks: HashMap::new(),
+        donors: HashMap::new(),
+        shunned: HashMap::new(),
+        stats: Stats::default(),
+        last_summary: now,
+        next_drain: now,
+        replies: Vec::new(),
+        ticks: Vec::new(),
+        compares: Vec::new(),
+        closed: peek::ClosedTrades::default(),
+        pending_bytes: Arc::default(),
+    };
+    let unknown = TradeId { core: 9, rec_id: 1 };
+    let known = TradeId { core: 8, rec_id: 2 };
+    let broker = ("77:00000000".to_string(), "ROLO".to_string());
+    let bybit = ("2:00000000".to_string(), "SYNUSDT".to_string());
+    for (key, id, venue) in [
+        (&broker, unknown, None),
+        (
+            &bybit,
+            known,
+            Some(crate::venue::Venue {
+                brand: crate::venue::Brand::Bybit,
+                kind: crate::venue::MarketKind::Futures,
+            }),
+        ),
+    ] {
+        recorder.apply(
+            Cmd::Opened {
+                exchange: key.0.clone(),
+                market: key.1.clone(),
+                trade: id,
+                open_ms: 1000,
+                emulator: Some(false),
+            },
+            1000,
+        );
+        recorder.apply(
+            Cmd::Closed {
+                exchange: key.0.clone(),
+                market: key.1.clone(),
+                venue,
+                trade: id,
+                open_ms: 1000,
+                close_ms: 2000,
+                emulator: Some(false),
+            },
+            2000,
+        );
+    }
+    assert!(
+        recorder
+            .tasks
+            .get(&broker)
+            .is_some_and(|t| t.knows(unknown)),
+        "the unknown venue's trade is recorded"
+    );
+    assert!(
+        !recorder.catchup.knows(unknown),
+        "no REST route: no catch-up"
+    );
+    assert!(
+        recorder.catchup.knows(known),
+        "a known venue still reaches the catch-up"
+    );
 }

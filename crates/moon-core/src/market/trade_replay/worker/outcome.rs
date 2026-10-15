@@ -12,7 +12,7 @@ use super::*;
 ///
 /// Args:
 ///     request: The request being served.
-///     venue: Venue the ticks came from.
+///     venue: Venue the ticks came from; `None` for one the exchange directory does not know.
 ///     ticks: Trade points, ascending, already clipped to the harvest's covered range.
 ///     thinning: How [`fit_ticks_around`] fitted the points into the budget.
 ///     partial: Whether `ticks` covers only part of `request.window`.
@@ -29,7 +29,7 @@ use super::*;
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compose_ticks(
     request: &TradeReplayRequest,
-    venue: crate::venue::Venue,
+    venue: Option<crate::venue::Venue>,
     ticks: Vec<Tick>,
     thinning: TickThinning,
     side_slots: Vec<crate::market::source::SideSlot>,
@@ -81,14 +81,14 @@ pub(crate) fn rows_for_cache(source: TradeReplaySource, rows: &[ChartCandle]) ->
 ///
 /// Args:
 ///     request: The request being served.
-///     venue: Venue the rows came from.
+///     venue: Venue the rows came from; `None` for one the exchange directory does not know.
 ///     rows: Bars in ascending open time.
 ///
 /// Returns:
 ///     The series to hand the chart.
 pub(super) fn compose(
     request: &TradeReplayRequest,
-    venue: crate::venue::Venue,
+    venue: Option<crate::venue::Venue>,
     rows: Vec<ChartCandle>,
 ) -> TradeReplaySeries {
     TradeReplaySeries {
