@@ -103,10 +103,13 @@ pub struct TickParam {
 
 const MSHOT: &[&str] = &["MoonShot"];
 const HOOK: &[&str] = &[super::hook::KIND_MOONHOOK];
-/// The kinds whose take `SellPrice` does not place: MoonHook's is `HookSellLevel`, Spread's the
-/// edge of the spread it detected (`exit::sell_order::take_is_recorded`).
+const STRIKE: &[&str] = &[super::strike::KIND_MOONSTRIKE];
+/// The kinds whose take `SellPrice` does not place: MoonHook's is `HookSellLevel`, MoonStrike's
+/// `MStrikeSellLevel`, Spread's the edge of the spread it detected
+/// (`exit::sell_order::take_is_recorded`).
 const NOT_SELL_PRICE: &[&str] = &[
     super::hook::KIND_MOONHOOK,
+    super::strike::KIND_MOONSTRIKE,
     super::exit::sell_order::KIND_SPREAD,
 ];
 const ANY: &[&str] = &[];
@@ -247,8 +250,9 @@ pub const TICK_PARAMS: &[TickParam] = &[
         section: ParamSection::SellOrder,
         kind: ParamKind::Num,
         kinds: ANY,
-        // A MoonHook carries no `SellPrice` at all — `HookSellLevel` below is its take — and a
-        // Spread's take is the spread it detected, whatever the field says.
+        // A MoonHook carries no `SellPrice` at all — `HookSellLevel` below is its take, as
+        // `MStrikeSellLevel` is a MoonStrike's — and a Spread's take is the spread it detected,
+        // whatever the field says.
         not_kinds: NOT_SELL_PRICE,
     },
     TickParam {
@@ -273,6 +277,14 @@ pub const TICK_PARAMS: &[TickParam] = &[
         section: ParamSection::StrategySettings,
         kind: ParamKind::Num,
         kinds: HOOK,
+        not_kinds: &[],
+    },
+    TickParam {
+        key: "MStrikeSellLevel",
+        group: ParamGroup::Exit,
+        section: ParamSection::StrategySettings,
+        kind: ParamKind::Num,
+        kinds: STRIKE,
         not_kinds: &[],
     },
     TickParam {
@@ -408,8 +420,8 @@ pub fn params_for<'k>(
 /// which is how the delta modifiers went unapplied through a whole measurement run on 2026-09-22
 /// while every test passed.
 ///
-/// `HookSellFixed` is here because it is not a knob (the branch it selects is not modelled) but
-/// its value decides whether the take is known at all. The Delta Modifiers section is a knob
+/// `HookSellFixed` is here because it is not a knob (both of its branches place the same take,
+/// `ExitParams::hook_sell_fixed`) but the record keeps it. The Delta Modifiers section is a knob
 /// since 2026-09-25, all but `MaxModifier` on a MoonShot, which the grid draws fixed there
 /// (see its [`TICK_PARAMS`] entry) — so it is listed here as well.
 const MODEL_ONLY_KEYS: &[&str] = &[
@@ -582,6 +594,7 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         sell_delay_ms: v.num("SellDelay", base.sell_delay_ms),
         hook_sell_level_pct: v.num("HookSellLevel", base.hook_sell_level_pct),
         hook_sell_fixed: v.bool("HookSellFixed", base.hook_sell_fixed),
+        strike_sell_level_pct: v.num("MStrikeSellLevel", base.strike_sell_level_pct),
         sell_modifier: v.num("SellModifier", base.sell_modifier),
         max_modifier: v.num("MaxModifier", base.max_modifier),
         stop_loss_modifier: v.num("StopLossModifier", base.stop_loss_modifier),

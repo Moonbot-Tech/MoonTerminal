@@ -297,6 +297,8 @@ impl Render for Probe {
                 misses: 5,
                 unjudged: 3,
             },
+            // The longest reason, so the footer wraps at its widest.
+            exit_why: [3, 0, 0, 0, 0],
         };
         v_flex()
             .id("probe-scroll")

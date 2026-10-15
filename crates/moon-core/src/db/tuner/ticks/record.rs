@@ -234,10 +234,13 @@ pub fn entry_placement(deal: &Deal, lines: OwnLines<'_>) -> Option<f64> {
 /// sale sat on the stated take to its hundredth (GEOD 7.467 % against 7.47 %, W3GG 28.567 against
 /// 28.56), a tenth to a half above `Depth · HookSellLevel` (5.55, 19.64).
 ///
-/// `None` — the comment's depth stays — for every other kind, without a stated take, and where
-/// the take is not `HookSellLevel` of the depth (`HookSellFixed`, a level of zero).
+/// `HookSellFixed` places the same take (`ExitParams::hook_sell_fixed`), so it is read back the
+/// same way: where its comment's depth and stated take agree, this returns that depth.
+///
+/// `None` — the comment's depth stays — for every other kind, without a stated take, and with a
+/// level of zero.
 pub fn placed_hook_depth(deal: &Deal, exit: &ExitParams) -> Option<f64> {
-    if deal.kind != KIND_MOONHOOK || exit.hook_sell_fixed || exit.hook_sell_level_pct <= 0.0 {
+    if deal.kind != KIND_MOONHOOK || exit.hook_sell_level_pct <= 0.0 {
         return None;
     }
     let stated = deal

@@ -1334,6 +1334,7 @@ impl SettingsView {
         };
         let days_view = cx.entity();
         let emu_view = days_view.clone();
+        let tuner_view = days_view.clone();
         let confirm_view = days_view.clone();
         let cancel_view = days_view.clone();
         let confirm_target = target.clone();
@@ -1350,6 +1351,14 @@ impl SettingsView {
                 emu_view.update(app, |this, cx| {
                     if let Some(keep) = this.telegram.server.tape.draft_keep.as_mut() {
                         keep.record_emulator = on;
+                        cx.notify();
+                    }
+                })
+            }),
+            tuner: Rc::new(move |on, _, app| {
+                tuner_view.update(app, |this, cx| {
+                    if let Some(keep) = this.telegram.server.tape.draft_keep.as_mut() {
+                        keep.tuner_only = Some(on);
                         cx.notify();
                     }
                 })

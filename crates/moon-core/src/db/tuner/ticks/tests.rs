@@ -54,6 +54,7 @@ pub(super) fn deal() -> Deal {
         fact_modifier: None,
         hook_depth_pct: None,
         hook_stated_take_pct: None,
+        strike_detect: None,
         step_lag_ms: 0.0,
         round_trip_ms: None,
         stop_anchor: None,
@@ -976,6 +977,31 @@ fn a_fill_after_the_fact_closed_is_open_at_the_window_end() {
     assert_eq!(out.kind, ExitKind::OpenAtWindowEnd);
 }
 
+/// The fact closes at +150 ms, before its take is live at +220 ms, and is still judged at
+/// the first live market print; pricing it at the take level would lose that market fill.
+#[test]
+fn a_moonshot_take_closed_before_its_take_latency_is_still_judged_at_the_market() {
+    let mut d = deal();
+    d.coin = "XALPHA".into();
+    d.buy_price = 100.0;
+    d.close_ms = d.buy_ms + 150;
+    d.sell_price = 104.0;
+    let ticks = tape(&[
+        (d.buy_ms, 102.0),
+        (d.buy_ms + 150, 103.0),
+        (d.buy_ms + 230, 104.0),
+    ]);
+    let p = ExitParams {
+        sell_at_last_price: false,
+        ..ExitParams::default()
+    };
+    let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, None);
+    assert_eq!(v.exit_kind, Some(ExitKind::Take));
+    assert_eq!(v.exit, Some(true), "{v:?}");
+    assert_eq!(v.exit_dev_pct, Some(0.0), "{v:?}");
+}
+
+/// Ignoring sell delay or the initial take latency would sell before the first live print.
 #[test]
 fn sell_delay_arms_the_take_late() {
     let exit = ExitParams {
@@ -986,15 +1012,17 @@ fn sell_delay_arms_the_take_late() {
         t_ms: 1_000,
         price: 99.0,
     };
-    // 100.5 at +300 ms is inside the delay; 100.2 at +700 ms is the exit.
+    // The +300 ms print is inside the delay; +700 ms is still before placement lands.
+    // The first live print is +730 ms: 500 ms sell delay plus the 220 ms take latency.
     let ticks = tape(&[
         (1_000, 99.0),
         (1_300, 100.5),
         (1_700, 100.2),
+        (1_730, 100.2),
         (20_000, 99.0),
     ]);
     let out = ExitModel::new(&exit).exit(&deal(), &ticks, fill);
-    assert_eq!((out.kind, out.t_ms), (ExitKind::Take, 1_700));
+    assert_eq!((out.kind, out.t_ms), (ExitKind::Take, 1_730));
 }
 
 /// A short MoonShot's take sits below the fill, divided off it: `101 / (1 + 1 %)` = 100.
@@ -1715,6 +1743,37 @@ fn a_hook_takes_a_share_of_its_detect_depth() {
     assert!((take - 104.0).abs() < 1e-9, "{take}");
 }
 
+/// With `HookSellFixed` on, a take-closed hook sold at `HookSellLevel · depth / 100` per cent off
+/// the buy is judged and reproduced, and one sold a per cent past it is judged and missed —
+/// never left unjudged as a take the model does not know.
+#[test]
+fn a_fixed_hook_take_is_judged() {
+    let params = ExitParams {
+        hook_sell_level_pct: 50.0,
+        hook_sell_fixed: true,
+        ..ExitParams::default()
+    };
+    let ticks = tape(&[
+        (9_000, 100.0),
+        (10_000, 100.0),
+        (20_000, 102.0),
+        (25_000, 103.0),
+    ]);
+    let on_level = Deal {
+        sell_price: 102.0,
+        ..hook_deal()
+    };
+    let v = verify(&on_level, &ticks, &EntryParams::Fact, &params, None, None);
+    assert_eq!(v.exit, Some(true), "{:?}", v.exit_finding);
+    let off_level = Deal {
+        sell_price: 103.0,
+        close_ms: 25_000,
+        ..hook_deal()
+    };
+    let v = verify(&off_level, &ticks, &EntryParams::Fact, &params, None, None);
+    assert_eq!(v.exit, Some(false), "{:?}", v.exit_finding);
+}
+
 /// A short hook sells below the entry, by the same share divided off the fill — every per cent of
 /// a short off the buy divides (`exit::level_off_buy`).
 #[test]
@@ -1755,12 +1814,12 @@ fn a_hook_without_its_depth_is_not_a_known_take() {
         ..params.clone()
     };
     assert!(!ExitModel::new(&no_level).take_known(&hook_deal()));
-    // `HookSellFixed` is the other branch of the rule, and it is not modelled.
+    // `HookSellFixed` places the same take: known just the same.
     let fixed = ExitParams {
         hook_sell_fixed: true,
         ..params.clone()
     };
-    assert!(!ExitModel::new(&fixed).take_known(&hook_deal()));
+    assert!(ExitModel::new(&fixed).take_known(&hook_deal()));
     // The kinds that take by `SellPrice` have it — with or without an archive.
     assert!(model.take_known(&deal()), "MoonShot");
     for kind in ["PumpsDetection", "Combo"] {
@@ -1872,7 +1931,7 @@ fn the_grid_hides_sell_price_from_a_hook_and_offers_its_own_level() {
     assert!(hook.contains(&"HookSellLevel"));
     assert!(
         !hook.contains(&"HookSellFixed"),
-        "read, but not modelled — so not a knob"
+        "read, but it moves no take — so not a knob"
     );
     let pump: Vec<&str> = params_for(ParamGroup::Exit, "PumpsDetection")
         .map(|p| p.key)
@@ -2234,4 +2293,156 @@ fn knob_sections_match_the_schema_copy() {
             "{s:?} has no section in param_deps.toml"
         );
     }
+}
+
+// ---- MoonStrike: the take is a share of the strike's span off its detect price -------------
+
+/// A strike deal: detect at 100 with a 4 % depth, bought at 100.
+fn strike_deal(is_short: bool) -> Deal {
+    Deal {
+        kind: KIND_MOONSTRIKE.into(),
+        buy_price: 100.0,
+        is_short,
+        strike_detect: Some(StrikeDetect {
+            depth_pct: 4.0,
+            trade_price: 100.0,
+        }),
+        ..hook_deal()
+    }
+}
+
+fn strike_fill(price: f64) -> Fill {
+    Fill {
+        t_ms: 10_000,
+        price,
+    }
+}
+
+#[test]
+fn strike_take_level_long_end_to_end() {
+    let p = ExitParams {
+        sell_price_pct: 1.0,
+        strike_sell_level_pct: 50.0,
+        ..ExitParams::default()
+    };
+    // top 104, low the fill 99: half way 101.5 — `SellPrice` not consulted.
+    let take = ExitModel::new(&p).take_level(&strike_deal(false), &[], strike_fill(99.0));
+    assert!((take - 101.5).abs() < 1e-9, "{take}");
+}
+
+#[test]
+fn strike_take_level_short_end_to_end() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        ..ExitParams::default()
+    };
+    // top 96, low the detect 100 (fill 99.5 is shallower): half way 98.
+    let take = ExitModel::new(&p).take_level(&strike_deal(true), &[], strike_fill(99.5));
+    assert!((take - 98.0).abs() < 1e-9, "{take}");
+}
+
+#[test]
+fn strike_take_level_applies_sell_modifier_after() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        sell_modifier: 1.0,
+        sell_mods: Modifiers {
+            add_1h: 1.0,
+            ..Modifiers::default()
+        },
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        deltas: Deltas {
+            d1h: 2.0,
+            ..Deltas::default()
+        },
+        ..strike_deal(false)
+    };
+    // 102 from the span, then +2 % of its own price.
+    let take = ExitModel::new(&p).take_level(&d, &[], strike_fill(100.0));
+    assert!((take - 102.0 * 1.02).abs() < 1e-9, "{take}");
+}
+
+#[test]
+fn strike_take_unknown_without_level() {
+    let p = ExitParams::default();
+    assert!(!ExitModel::new(&p).take_known(&strike_deal(false)));
+    let known = ExitParams {
+        strike_sell_level_pct: 50.0,
+        ..p
+    };
+    assert!(ExitModel::new(&known).take_known(&strike_deal(false)));
+}
+
+#[test]
+fn strike_take_unknown_without_detect() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        strike_detect: None,
+        ..strike_deal(false)
+    };
+    assert!(!ExitModel::new(&p).take_known(&d));
+}
+
+#[test]
+fn strike_take_unknown_with_zero_depth() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        strike_detect: Some(StrikeDetect {
+            depth_pct: 0.0,
+            trade_price: 100.0,
+        }),
+        ..strike_deal(false)
+    };
+    assert!(!ExitModel::new(&p).take_known(&d));
+}
+
+/// A strike whose detect the scan could not read has no level a variant could place: the exit
+/// answers nothing rather than a miss.
+#[test]
+fn strike_without_detect_answers_no_exit_verdict() {
+    let ticks = tape(&[(10_000, 100.0), (15_000, 101.0), (20_000, 102.0)]);
+    let params = ExitParams {
+        strike_sell_level_pct: 50.0,
+        take_from_archive: true,
+        ..ExitParams::default()
+    };
+    let blind = Deal {
+        strike_detect: None,
+        ..strike_deal(false)
+    };
+    let v = verify(&blind, &ticks, &EntryParams::Fact, &params, None, None);
+    assert_eq!(v.exit, None, "no detect, no verdict");
+    assert_eq!(v.exit_dev_pct, None);
+}
+
+/// A fill past the strike's top: the span rule would place the take on the losing side, so it
+/// is held at the fill.
+#[test]
+fn strike_take_never_below_fill_without_shift() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        ..ExitParams::default()
+    };
+    // Detect 100, top 104; a fill at 106 puts half the span at 103.
+    let take = ExitModel::new(&p).take_level(&strike_deal(false), &[], strike_fill(106.0));
+    assert!((take - 106.0).abs() < 1e-9, "{take}");
+}
+
+#[test]
+fn strike_take_never_above_fill_without_shift_short() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        ..ExitParams::default()
+    };
+    // Detect 100, top 96; a fill at 94 puts half the span at 97.
+    let take = ExitModel::new(&p).take_level(&strike_deal(true), &[], strike_fill(94.0));
+    assert!((take - 94.0).abs() < 1e-9, "{take}");
 }

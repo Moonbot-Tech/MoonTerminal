@@ -261,12 +261,14 @@ fn a_zero_timer_never_starts_the_steps() {
     assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd, "nothing closed it");
 }
 
+/// A zero delay still spaces relative steps by the terminal's minimum timer interval.
 #[test]
 fn a_zero_delay_steps_at_the_terminal_floor() {
     let p = ExitParams {
         price_down_timer_s: 1.0,
         price_down_pct: 50.0,
         price_down_delay_s: 0.0,
+        price_down_relative: true,
         price_down_allowed_drop_pct: -1.0,
         ..params()
     };

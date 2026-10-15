@@ -13,7 +13,7 @@
 //! snapshot (0.105).
 
 use super::sell_order::{archived_take, take_is_recorded};
-use super::{ExitModel, ExitParams, level_off_buy};
+use super::{ExitModel, ExitParams};
 use crate::db::tuner::ticks::mshot::Modifiers;
 use crate::db::tuner::ticks::verify::{
     REASON_STOP, REASON_TAKE, reason_starts_with, stated_stop_level,
@@ -244,7 +244,8 @@ const HALF_STEP_SHARE: f64 = 0.49;
 /// The sums the core's take carries: the take as placed against the same take before the
 /// modifiers, `(take / base − 1) / SellModifier` for a long, `(base / take − 1) / SellModifier`
 /// for a short, as `take_level` applies it. The base is the rule's at the fact's parameters — a
-/// MoonHook's off the depth its take was placed at (`record::placed_hook_depth`).
+/// MoonHook's off the depth its take was placed at (`record::placed_hook_depth`), a MoonStrike's
+/// off its strike span (`ExitModel::unmodified_take`).
 ///
 /// `None` without `SellModifier`, for a take the rule does not place (MoonShot's lift to the
 /// ask: one archived point holds both the ask and the core's shift, so the shift cannot be read
@@ -267,7 +268,7 @@ fn take_reading(
     let take_closed = deal.sell_reason.trim().eq_ignore_ascii_case(REASON_TAKE);
     let level = archived_take(exit_points).or_else(|| take_closed.then_some(deal.sell_price))?;
     let long = deal.is_long();
-    let base = level_off_buy(deal.buy_price, model.base_take_pct(deal).max(0.0), long);
+    let base = model.unmodified_take(deal, deal.buy_price);
     if !(base.is_finite() && base > 0.0) {
         return None;
     }

@@ -27,6 +27,7 @@ fn custom_days_preserve_typed_preset_prefixes() {
         draft_keep: Some(TapeKeep {
             max_age_days: 1825,
             record_emulator: true,
+            tuner_only: None,
         }),
         ..TapeEd::default()
     };
@@ -852,6 +853,7 @@ fn keep_reaches_only_new_stations() {
     let keep = TapeKeep {
         max_age_days: 1825,
         record_emulator: true,
+        tuner_only: None,
     };
     let mut ed = TapeEd::default();
     ed.take_keep(Some(Some(keep)));
@@ -916,6 +918,7 @@ fn purge_counts_from_station_ages() {
     let keep = TapeKeep {
         max_age_days: 30,
         record_emulator: false,
+        tuner_only: None,
     };
     assert_eq!(
         purge_counts(&c, keep),
@@ -974,10 +977,12 @@ fn lengthening_writes_without_confirmation() {
             seen_keep: Some(TapeKeep {
                 max_age_days: 180,
                 record_emulator: true,
+                tuner_only: None,
             }),
             draft_keep: Some(TapeKeep {
                 max_age_days: days,
                 record_emulator: true,
+                tuner_only: None,
             }),
             draft: Some(TapeWindow {
                 margin_s: 60,
@@ -1122,6 +1127,7 @@ impl Render for FullTapeProbe {
         }
         let days = cx.entity();
         let emu = days.clone();
+        let tuner = days.clone();
         let yes = days.clone();
         let cancel = days.clone();
         let apply = days.clone();
@@ -1138,6 +1144,14 @@ impl Render for FullTapeProbe {
                 emu.update(app, |this, cx| {
                     if let Some(keep) = this.ed.draft_keep.as_mut() {
                         keep.record_emulator = on;
+                    }
+                    cx.notify();
+                })
+            }),
+            tuner: Rc::new(move |on, _, app| {
+                tuner.update(app, |this, cx| {
+                    if let Some(keep) = this.ed.draft_keep.as_mut() {
+                        keep.tuner_only = Some(on);
                     }
                     cx.notify();
                 })
@@ -1264,6 +1278,7 @@ fn full_probe(state: &str, width: f32) -> FullTapeProbe {
     let keep = TapeKeep {
         max_age_days: 1825,
         record_emulator: true,
+        tuner_only: Some(false),
     };
     let mut ed = TapeEd {
         seen: Some(window),
@@ -1283,6 +1298,7 @@ fn full_probe(state: &str, width: f32) -> FullTapeProbe {
     let mut c = TapeCatchup {
         max_age_days: Some(1825),
         record_emulator: Some(true),
+        tuner_only: Some(false),
         db_bytes: Some(696_254_464),
         tape_trades: Some(18_920),
         tape_ages: vec![TapeAge {
@@ -1298,11 +1314,19 @@ fn full_probe(state: &str, width: f32) -> FullTapeProbe {
             ed.draft_keep = Some(TapeKeep {
                 max_age_days: 180,
                 record_emulator: false,
+                tuner_only: Some(false),
             });
             ed.confirm = state != "draft";
             if state == "confirm_unknown" {
                 c.tape_ages.clear();
             }
+        }
+        "confirm_tuner" => {
+            ed.draft_keep = Some(TapeKeep {
+                tuner_only: Some(true),
+                ..keep
+            });
+            ed.confirm = true;
         }
         "forever" => {
             ed.draft_keep = Some(TapeKeep {
@@ -1345,6 +1369,7 @@ fn full_probe(state: &str, width: f32) -> FullTapeProbe {
         "old" => {
             c.max_age_days = None;
             c.record_emulator = None;
+            c.tuner_only = None;
             c.db_bytes = None;
             c.tape_trades = None;
             ed.forget_keep();
@@ -1367,6 +1392,7 @@ fn full_probe(state: &str, width: f32) -> FullTapeProbe {
             if matches!(state, "widen_old" | "widen_old_count") {
                 c.max_age_days = None;
                 c.record_emulator = None;
+                c.tuner_only = None;
                 ed.forget_keep();
             }
         }
@@ -1436,6 +1462,7 @@ fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestApp
             "draft",
             "confirm",
             "confirm_unknown",
+            "confirm_tuner",
             "forever",
             "custom",
             "purging",
@@ -1542,10 +1569,18 @@ fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestApp
                     "server-tape-purge-progress",
                     "server-tape-keep-old",
                     "server-tape-widen-warning",
+                    "server-tape-tuner-caption",
+                    "server-tape-confirm-tuner",
                 ] {
                     let b = visual.debug_bounds(sel);
                     let expected = match sel {
-                        "server-tape-confirm" => matches!(state, "confirm" | "confirm_unknown"),
+                        "server-tape-tuner-caption" => {
+                            !matches!(state, "old" | "widen_old" | "widen_old_count")
+                        }
+                        "server-tape-confirm-tuner" => state == "confirm_tuner",
+                        "server-tape-confirm" => {
+                            matches!(state, "confirm" | "confirm_unknown" | "confirm_tuner")
+                        }
                         "server-tape-purge-progress" => state == "purging",
                         "server-tape-keep-old" => {
                             matches!(state, "old" | "widen_old" | "widen_old_count")
@@ -1565,6 +1600,28 @@ fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestApp
                     assert_eq!(b.is_some(), expected, "{sel} state visibility {at}");
                     if let Some(b) = b {
                         assert!(b.right() <= col.right() + px(0.5), "{sel} escaped {at}");
+                        let key = match sel {
+                            "server-tape-tuner-caption" => {
+                                Some("telegram.server.keep_tuner_caption")
+                            }
+                            "server-tape-confirm-tuner" => {
+                                Some("telegram.server.keep_confirm_tuner")
+                            }
+                            _ => None,
+                        };
+                        if let Some(key) = key {
+                            let (need, line) = visual.update(|_, cx| {
+                                (
+                                    design::ui_caption_text_width(cx, &rust_i18n::t!(key), 400.0),
+                                    f32::from(design::t_caption(cx)),
+                                )
+                            });
+                            assert!(
+                                f32::from(b.size.height) + 0.5
+                                    >= (need / f32::from(b.size.width)).floor().max(1.0) * line,
+                                "{sel} text clipped {at}"
+                            );
+                        }
                         if sel == "server-tape-widen-warning" {
                             let probe = full_probe(state, width);
                             let (text, warning) =
@@ -1721,4 +1778,88 @@ fn narrowing_write_opens_confirm_cancel_closes_confirm_sends_keep(cx: &mut gpui:
             })
             .unwrap();
     }
+}
+
+/// Switching "only trades the tuner can use" on asks first, names what goes in the write bar,
+/// gives no count the age histogram cannot back, and then sends the key; switching it off writes
+/// at once; a station that never reported the choice has no key to receive. A missed confirm
+/// would delete old tape silently; a key sent to an older station would stop it starting.
+#[test]
+fn tuner_only_confirms_on_writes_off_and_skips_older_stations() {
+    use crate::backend::station::job::Job;
+    use moon_core::station_api::TapeKeep;
+    use moon_remote::ssh::Target;
+    let _locale = crate::test_locale::force("en");
+    let target = Target {
+        host: "CORE_A".into(),
+        port: 22,
+    };
+    let mut probe = full_probe("confirm_tuner", 860.0);
+    probe.ed.confirm = false;
+    let (text, _) = super::keep::bar_message(&probe.ed, Some(&probe.c), false);
+    assert_eq!(
+        text,
+        rust_i18n::t!(
+            "telegram.server.keep_bar_remove_unknown",
+            why = rust_i18n::t!("telegram.server.keep_tuner_reason")
+        ),
+        "the reason is named and no histogram count is promised"
+    );
+    assert!(
+        probe
+            .ed
+            .prepare_write(target.clone(), false, None)
+            .is_none()
+    );
+    assert!(probe.ed.confirm, "switching on asks first");
+    let Some(Job::Tape {
+        keep: Some(keep), ..
+    }) = probe.ed.prepare_write(target.clone(), true, None)
+    else {
+        panic!("a confirmed switch must write");
+    };
+    assert_eq!(keep.tuner_only, Some(true));
+
+    let on = TapeKeep {
+        tuner_only: Some(true),
+        ..keep
+    };
+    let mut ed = TapeEd {
+        seen_keep: Some(on),
+        draft_keep: Some(TapeKeep {
+            tuner_only: Some(false),
+            ..on
+        }),
+        ..probe.ed
+    };
+    let Some(Job::Tape {
+        keep: Some(keep), ..
+    }) = ed.prepare_write(target.clone(), false, None)
+    else {
+        panic!("switching off must write without asking");
+    };
+    assert_eq!(keep.tuner_only, Some(false));
+
+    let mut older = probe.c.clone();
+    older.tuner_only = None;
+    assert_eq!(
+        super::keep::reported_keep(&older).and_then(|keep| keep.tuner_only),
+        None
+    );
+}
+
+#[test]
+fn job_keep_strips_tuner_only_when_the_station_stops_reporting_it() {
+    use super::keep::job_keep;
+    use moon_core::station_api::TapeKeep;
+    let seen = TapeKeep {
+        max_age_days: 30,
+        record_emulator: true,
+        tuner_only: None,
+    };
+    let draft = TapeKeep {
+        tuner_only: Some(true),
+        ..seen
+    };
+    assert_eq!(job_keep(Some(seen), Some(draft)), Some(seen));
 }

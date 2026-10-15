@@ -34,6 +34,84 @@ fn straddler_older_than_a_year_keeps_its_entry_tape() {
     assert!(!result.contains_ms(edge - DAY - 11));
 }
 
+/// Switched on, "only trades the tuner can use" deletes the tape serving only an unstamped
+/// trade, keeps a stamped trade's tape even where the two overlap, and keeps a live window;
+/// switched off, nothing changes. Dropping the overlap would cost a tunable trade its setup;
+/// ignoring the switch would leave the old tape the user asked to delete.
+#[test]
+fn keep_map_drops_untunable_tape_only_when_tuner_only_is_on() {
+    let mut unstamped = trade(200, 300, false);
+    unstamped.tunable = false;
+    let stamped = trade(290, 400, false);
+    let mut live = HashMap::new();
+    live.insert(inventory().keys[0].clone(), Coverage::one((100, 150)));
+    let policy = |tuner_only| KeepPolicy {
+        edge: None,
+        listed_from: i64::MIN,
+        record_emulator: true,
+        tuner_only,
+        margin_ms: 10,
+        long_ms: 1000,
+    };
+    let kept_with = |tuner_only| {
+        keep_map(
+            &inventory(),
+            &[unstamped.clone(), stamped.clone()],
+            &live,
+            &HashSet::new(),
+            policy(tuner_only),
+        )
+        .remove(&inventory().keys[0])
+        .unwrap()
+    };
+    let off = kept_with(false);
+    assert!(
+        off.contains_ms(250),
+        "off: the unstamped trade keeps its tape"
+    );
+    let on = kept_with(true);
+    assert!(
+        !on.contains_ms(250),
+        "on: tape serving only the unstamped trade goes"
+    );
+    assert!(!on.contains_ms(195), "its leading margin goes too");
+    assert!(
+        on.contains_ms(285),
+        "the stamped trade's leading margin survives"
+    );
+    assert!(on.contains_ms(350), "the stamped trade's tape survives");
+    assert!(on.contains_ms(120), "a live window survives");
+}
+
+#[test]
+fn tuner_only_keeps_tape_a_recorded_stamped_emulator_trade_shares() {
+    let mut unstamped = trade(200, 300, false);
+    unstamped.tunable = false;
+    let emulated = trade(250, 400, true);
+    let policy = KeepPolicy {
+        edge: None,
+        listed_from: i64::MIN,
+        record_emulator: true,
+        tuner_only: true,
+        margin_ms: 10,
+        long_ms: 1000,
+    };
+    let kept = keep_map(
+        &inventory(),
+        &[unstamped, emulated],
+        &HashMap::new(),
+        &HashSet::new(),
+        policy,
+    )
+    .remove(&inventory().keys[0])
+    .unwrap();
+    assert!(!kept.contains_ms(220), "unshared unstamped tape goes");
+    assert!(
+        kept.contains_ms(270),
+        "the shared span stays for the emulator trade"
+    );
+}
+
 /// Synthetic identities share one market so overlapping emulator windows exercise protection.
 fn trade(open: i64, close: i64, emulator: bool) -> catchup::CatchupTrade {
     catchup::CatchupTrade {
@@ -50,6 +128,7 @@ fn trade(open: i64, close: i64, emulator: bool) -> catchup::CatchupTrade {
         open_ms: open,
         close_ms: close,
         emulator,
+        tunable: true,
     }
 }
 
@@ -78,6 +157,7 @@ fn kept(
             edge,
             listed_from: i64::MIN,
             record_emulator: emulator,
+            tuner_only: false,
             margin_ms: 10,
             long_ms: 1000,
         },
@@ -173,6 +253,7 @@ fn unlisted_old_real_windows_survive_emulator_subtraction() {
             edge: Some(now - 1825 * DAY),
             listed_from,
             record_emulator: false,
+            tuner_only: false,
             margin_ms: 60_000,
             long_ms: 1000,
         },
@@ -206,6 +287,7 @@ fn trim_applies_keep_map() {
             edge: Some(100),
             listed_from: i64::MIN,
             record_emulator: true,
+            tuner_only: false,
             margin_ms: 10,
             long_ms: 1000,
         },

@@ -1,10 +1,11 @@
 // Not `super::*`: the parent's `gpui::*` brings gpui's own `test` attribute, which `#[test]` would
 // then name, and it expands into itself.
-use super::{Accuracy, GroupCount, accuracy_sentence, pct_text};
+use super::{Accuracy, GroupCount, UncheckedWhy, accuracy_sentence, pct_text};
 
-/// Dropping misses or unjudged tapes from the denominator would inflate the footer's coverage.
+/// The checked exits and the unchecked ones are two numbers, the unchecked with their main
+/// reason; the search's fit sample is a third.
 #[test]
-fn the_footer_counts_all_tapes_and_names_the_independent_fit_sample() {
+fn the_footer_splits_checked_from_unchecked_and_names_the_independent_fit_sample() {
     let _locale = crate::test_locale::force("en");
     let verdicts = [
         verdict(Some(true), Some(true)),
@@ -13,9 +14,35 @@ fn the_footer_counts_all_tapes_and_names_the_independent_fit_sample() {
     ];
     let acc = Accuracy::of(verdicts.iter().map(Some).chain([None]));
     let text = accuracy_sentence(&acc, false, 3);
+    // One unchecked by another rule, one with no verdict yet: the tie goes to the first listed.
     assert_eq!(
         text,
-        "Model repeats: entry — taken from the fact · exit — 1 of 4 trades with tape (25.0 %). The search learns from 3 usable trades."
+        "Model repeats: entry — taken from the fact · exit — 1 of 2 checked (50.0 %), 2 not checked: closed by another rule. The search learns from 3 usable trades."
+    );
+    assert_eq!(acc.none_checked_note(), None, "an exit was checked");
+}
+
+/// A strategy whose every exit went unchecked reads as unchecked, with the reason — never as
+/// "0 of N", which reads as N misses.
+#[test]
+fn no_exit_checked_reads_as_unchecked_not_as_missed() {
+    let _locale = crate::test_locale::force("en");
+    let unknown = Verdict {
+        exit_finding: moon_core::db::tuner::ticks::verify::ExitFinding::Unjudged(
+            moon_core::db::tuner::ticks::verify::Unjudged::TakeUnknown,
+        ),
+        ..verdict(None, None)
+    };
+    let verdicts = [unknown, unknown, unknown, verdict(None, None)];
+    let acc = Accuracy::of(verdicts.iter().map(Some));
+    assert_eq!(acc.main_unchecked_why(), Some(UncheckedWhy::TakeUnknown));
+    assert_eq!(
+        accuracy_sentence(&acc, false, 0),
+        "Model repeats: entry — taken from the fact · exit — 4 not checked: the take level is unknown. The search learns from 0 usable trades."
+    );
+    assert_eq!(
+        acc.none_checked_note().as_deref(),
+        Some("no exit could be checked: the take level is unknown")
     );
 }
 use moon_core::db::tuner::ticks::Verdict;

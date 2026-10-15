@@ -48,7 +48,10 @@ pub(super) fn bar_message(
         && removes_tape(seen, draft)
     {
         let why = deletion_reason(Some(seen), draft);
-        let msg = match c.and_then(|c| purge_counts(c, draft)) {
+        let counts = c
+            .and_then(|c| purge_counts(c, draft))
+            .filter(|_| !seen.drops_untunable(draft));
+        let msg = match counts {
             Some(counts) => t!(
                 &plural_key("telegram.server.keep_bar_remove", counts.total),
                 n = counts.total,
@@ -75,12 +78,18 @@ pub(super) fn reported_keep(c: &TapeCatchup) -> Option<TapeKeep> {
     Some(TapeKeep {
         max_age_days: c.max_age_days?,
         record_emulator: c.record_emulator?,
+        tuner_only: c.tuner_only,
     })
 }
 
 /// Unsupported stations never receive retention keys, even with a retained draft.
 pub(super) fn job_keep(seen: Option<TapeKeep>, draft: Option<TapeKeep>) -> Option<TapeKeep> {
-    seen.and(draft)
+    let seen = seen?;
+    let mut draft = draft?;
+    if seen.tuner_only.is_none() {
+        draft.tuner_only = None;
+    }
+    Some(draft)
 }
 
 /// Zero means infinity; emulator removal is independent of the age horizon.
@@ -209,6 +218,9 @@ pub(super) fn deletion_reason(seen: Option<TapeKeep>, draft: TapeKeep) -> String
     }
     if seen.is_some_and(|s| s.drops_emulator(draft)) {
         parts.push(t!("telegram.server.keep_emu_reason").to_string());
+    }
+    if seen.is_some_and(|s| s.drops_untunable(draft)) {
+        parts.push(t!("telegram.server.keep_tuner_reason").to_string());
     }
     parts.join(&t!("telegram.server.keep_join"))
 }

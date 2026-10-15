@@ -40,6 +40,7 @@ pub mod scope;
 pub mod search;
 pub mod settings;
 pub mod stats;
+pub mod strike;
 pub mod unmodelled;
 pub mod verify;
 
@@ -58,6 +59,7 @@ pub use search::{
 };
 pub use settings::ModelSettings;
 pub use stats::{fact_stats, fact_tally_of, stats_of};
+pub use strike::{KIND_MOONSTRIKE, StrikeDetect, parse_strike_detect, strike_take_level};
 pub use verify::{Verdict, verify};
 
 /// Relative tolerance under which a modelled price counts as reproducing the fact: 0.05 %.
@@ -281,6 +283,10 @@ pub struct Deal {
     /// on ([`record::placed_hook_depth`]), and through it every variant's `HookSellLevel` scales
     /// from the core's own take.
     pub hook_stated_take_pct: Option<f64>,
+    /// What the core wrote about a MoonStrike trade's detect — its depth and `TradePrice` — the
+    /// inputs of that kind's take rule ([`strike::strike_take_level`]). `None` for every other
+    /// kind, and for a strike row whose comment the scan could not read.
+    pub strike_detect: Option<strike::StrikeDetect>,
     /// How much later than `PriceDownDelay` the deal's CORE makes the next PriceDown step after
     /// one that moved the order, milliseconds — its replace round trip, calibrated by the caller
     /// off the core's own archived lines ([`calibrate`]); 0 runs the steps on the plain schedule.

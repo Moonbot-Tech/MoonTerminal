@@ -14,6 +14,8 @@ pub(super) struct KeepPolicy {
     /// Earliest closed row enumerated by the protecting listings.
     pub listed_from: i64,
     pub record_emulator: bool,
+    /// Keep tape only for trades the tuner can replay.
+    pub tuner_only: bool,
     pub margin_ms: i64,
     pub long_ms: i64,
 }
@@ -50,17 +52,31 @@ pub(super) fn keep_map(
             let mut keep = Coverage::one((edge, i64::MAX));
             let mut real = live.get(key).cloned().unwrap_or_default();
             let mut emulated = Coverage::none();
+            let mut untunable = Coverage::none();
+            let mut recorded = Coverage::none();
             for trade in grouped.get(key).into_iter().flatten() {
                 let focus = catchup::needed(trade, policy.margin_ms, policy.long_ms);
-                if trade.emulator {
+                let drop_untunable = policy.tuner_only && !trade.tunable;
+                if trade.emulator || drop_untunable {
                     // Unlisted real closes can have tails after the close-age cutoff. Only
-                    // beyond that cutoff plus margin is emulator subtraction attributable.
+                    // beyond that cutoff plus margin is emulator or untunable subtraction
+                    // attributable.
                     let listed = focus.clip(&Coverage::one((
                         policy.listed_from.saturating_add(policy.margin_ms.max(0)),
                         i64::MAX,
                     )));
+                    if trade.emulator && trade.tunable && policy.record_emulator {
+                        for &span in focus.spans() {
+                            recorded.add(span);
+                        }
+                    }
                     for &span in listed.spans() {
-                        emulated.add(span);
+                        if trade.emulator {
+                            emulated.add(span);
+                        }
+                        if drop_untunable {
+                            untunable.add(span);
+                        }
                     }
                 } else if policy.edge.is_none_or(|edge| trade.close_ms >= edge) {
                     for &span in focus.spans() {
@@ -73,6 +89,11 @@ pub(super) fn keep_map(
             }
             if !policy.record_emulator && !incomplete.contains(key) {
                 keep = keep.minus(&emulated.minus(&real));
+            }
+            // Tape only trades the tuner cannot replay need goes; a tunable trade's (a recorded
+            // emulator one included) or a live window's tape survives even where it overlaps.
+            if policy.tuner_only && !incomplete.contains(key) {
+                keep = keep.minus(&untunable.minus(&real).minus(&recorded));
             }
             (key.clone(), keep)
         })
@@ -116,8 +137,9 @@ pub(super) struct Retention {
     pub retry_at: Option<i64>,
     pub summary_minute: Option<i64>,
     pub recount_dirty: bool,
-    /// Resume a conservatively withheld emulator purge once protecting reports arrive.
-    pub emulator_deferred: bool,
+    /// Resume a conservatively withheld emulator or untunable purge once protecting reports
+    /// arrive.
+    pub attributed_deferred: bool,
 }
 
 impl Default for Retention {
@@ -129,7 +151,7 @@ impl Default for Retention {
             retry_at: None,
             summary_minute: None,
             recount_dirty: false,
-            emulator_deferred: false,
+            attributed_deferred: false,
         }
     }
 }

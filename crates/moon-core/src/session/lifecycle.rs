@@ -202,6 +202,17 @@ fn catchup_stamps(
         .then_some((open, close))
 }
 
+/// Whether the Entry/Exit tuner can replay a listed row: the tuner's own millisecond-stamp gate
+/// ([`crate::db::tuner::ticks::deals::has_ms_stamps`]) over the row's raw stamps, where a stamp
+/// that fell back to whole seconds counts as absent.
+fn tuner_can_replay(row: &CatchupRow) -> bool {
+    let ms = |stamp: crate::db::ReportStamp| match stamp {
+        crate::db::ReportStamp::Millis(ms) => ms,
+        crate::db::ReportStamp::Seconds(_) => 0,
+    };
+    crate::db::tuner::ticks::deals::has_ms_stamps(ms(row.buy), ms(row.close))
+}
+
 /// Count an unknown coin once only after both the venue and its non-empty catalog are known.
 fn latch_unknown(
     latched: &mut HashSet<crate::market::tape_recorder::TradeId>,
@@ -930,6 +941,7 @@ impl SessionManager {
                             open_ms,
                             close_ms,
                             emulator: row.emulator,
+                            tunable: tuner_can_replay(row),
                         });
                     }
                     // Permanently unattributable rows protect no market and must not stall all keys.

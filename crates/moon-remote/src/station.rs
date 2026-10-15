@@ -270,6 +270,11 @@ pub fn with_tape(
             "record_emulator".into(),
             toml::Value::Boolean(keep.record_emulator),
         );
+        // Only a station that reports the choice gets the key: an older one rejects unknown
+        // `[tape]` keys.
+        if let Some(tuner_only) = keep.tuner_only {
+            wanted.insert("tuner_only".into(), toml::Value::Boolean(tuner_only));
+        }
     }
     let section = file
         .entry("tape")
@@ -375,6 +380,7 @@ fn reported_tape(conn: &AdminConn) -> anyhow::Result<Option<ReportedTape>> {
                 Some(TapeKeep {
                     max_age_days: catchup.max_age_days?,
                     record_emulator: catchup.record_emulator?,
+                    tuner_only: catchup.tuner_only,
                 })
             });
             (tape, switches, keep)
@@ -425,6 +431,11 @@ fn tape_verdict(
         }
         (None, None, None) => TapeVerdict::Unreported,
         (None, _, _) | (Some((_, None, _)), Some(_), _) | (Some((_, _, None)), _, Some(_)) => {
+            TapeVerdict::Outdated
+        }
+        (Some((_, _, Some(retained))), _, Some(wanted))
+            if wanted.tuner_only.is_some() && retained.tuner_only.is_none() =>
+        {
             TapeVerdict::Outdated
         }
         _ => TapeVerdict::Pending,

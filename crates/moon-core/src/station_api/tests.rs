@@ -266,9 +266,11 @@ fn tape_catchup_retention_fields_default() {
     assert!(old.tape_ages.is_empty());
     assert!(old.purge.is_none());
     let encoded = serde_json::to_value(&old).unwrap();
+    assert_eq!(old.tuner_only, None);
     for key in [
         "max_age_days",
         "record_emulator",
+        "tuner_only",
         "db_bytes",
         "tape_trades",
         "tape_ages",
@@ -279,7 +281,7 @@ fn tape_catchup_retention_fields_default() {
     let wire = serde_json::json!({
         "running": false, "pending": 0, "filled": 0, "no_route": 0,
         "out_of_reach": 0, "failed": 0, "last_pass_ms": null, "archive_bytes": 0,
-        "max_age_days": 90, "record_emulator": false, "db_bytes": 8192,
+        "max_age_days": 90, "record_emulator": false, "tuner_only": true, "db_bytes": 8192,
         "tape_trades": 5, "tape_ages": [{"days": 12, "plain": 3, "emulator": 2}],
         "purge": {"running": {"done": 2, "total": 8}}
     });
@@ -619,6 +621,7 @@ fn tape_keep_destructive_changes_share_one_rule() {
     let keep = |days, emulator| super::TapeKeep {
         max_age_days: days,
         record_emulator: emulator,
+        tuner_only: None,
     };
     for (seen, draft, age, emu) in [
         (keep(0, true), keep(30, true), true, false),
@@ -631,4 +634,35 @@ fn tape_keep_destructive_changes_share_one_rule() {
         assert_eq!(seen.drops_emulator(draft), emu);
         assert_eq!(seen.removes_tape(draft), age || emu);
     }
+}
+
+/// Switching "only trades the tuner can use" on is destructive and needs the warning; switching
+/// it off, keeping it, or a station that never reported it is not. Missing the first would
+/// delete old tape without a word; flagging the others would warn on a harmless write.
+#[test]
+fn tape_keep_tuner_only_is_destructive_only_when_switched_on() {
+    let keep = |tuner_only| super::TapeKeep {
+        max_age_days: 0,
+        record_emulator: true,
+        tuner_only,
+    };
+    for (seen, draft, drops) in [
+        (keep(Some(false)), keep(Some(true)), true),
+        (keep(Some(true)), keep(Some(false)), false),
+        (keep(Some(true)), keep(Some(true)), false),
+        (keep(None), keep(None), false),
+    ] {
+        assert_eq!(seen.drops_untunable(draft), drops);
+        assert_eq!(seen.removes_tape(draft), drops);
+    }
+    let legacy: super::TapeKeep =
+        serde_json::from_value(serde_json::json!({"max_age_days": 0, "record_emulator": true}))
+            .unwrap();
+    assert_eq!(legacy.tuner_only, None);
+    assert!(
+        serde_json::to_value(legacy)
+            .unwrap()
+            .get("tuner_only")
+            .is_none()
+    );
 }

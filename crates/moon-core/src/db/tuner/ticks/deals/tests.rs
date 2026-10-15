@@ -167,3 +167,46 @@ fn a_replica_without_the_stamp_columns_yields_no_deals() {
     assert!(read.deals.is_empty());
     assert_eq!(read.without_ms, 1);
 }
+
+/// A strike's detect comes off the comment scan and stays only on a deal whose kind resolves to
+/// MoonStrike — another kind's comment with a bare `Depth:` lends it nothing.
+#[test]
+fn strike_detect_overlaid_only_on_strike_deals() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep(
+            reportuid INTEGER, core_uid INTEGER, strategyid INTEGER, coin TEXT,
+            buydate INTEGER, closedate INTEGER, buydatems INTEGER, closedatems INTEGER,
+            buyprice REAL, sellprice REAL, spentbtc REAL, profitbtc REAL, isshort INTEGER,
+            sellreason TEXT, basecurrency INTEGER, comment TEXT
+         );
+         INSERT INTO orders_rep VALUES
+            (21, 7, 42, 'XALPHA', 100, 200, 100000, 200000, 1.0, 1.01, 100.0, 1.0, 0,
+             'Sell Price', 1, ' MoonStrike USDT-XALPHA [Long] TradePrice: 1.0 Depth: 4.00 Vol: 1$'),
+            (22, 7, 43, 'XBETA', 110, 210, 110000, 210000, 1.0, 1.01, 100.0, 1.0, 0,
+             'Sell Price', 1, ' Other USDT-XBETA TradePrice: 1.0 Depth: 4.00 Vol: 1$');",
+    )
+    .expect("fixture");
+    let (q, src) = tuner_source_on(&conn, &scope()).expect("source");
+    let mut read = read_on(&conn, &q, &src).expect("read");
+    overlay_hook_detect(&conn, &q, &mut read.deals).expect("overlay");
+    for deal in &mut read.deals {
+        deal.kind = if deal.report_uid == 21 {
+            KIND_MOONSTRIKE.into()
+        } else {
+            "PumpsDetection".into()
+        };
+    }
+    keep_strike_detect_on_strikes(&mut read.deals);
+    let by_uid = |uid: i64| {
+        read.deals
+            .iter()
+            .find(|d| d.report_uid == uid)
+            .expect("deal")
+    };
+    let strike = by_uid(21).strike_detect.expect("the strike's detect");
+    assert_eq!((strike.depth_pct, strike.trade_price), (4.0, 1.0));
+    assert_eq!(by_uid(22).strike_detect, None);
+    // Neither comment is a hook's: the bare depth carries no per-cent sign.
+    assert_eq!(by_uid(21).hook_depth_pct, None);
+}

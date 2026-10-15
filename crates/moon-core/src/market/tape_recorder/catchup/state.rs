@@ -29,8 +29,8 @@ pub(crate) struct RecorderCatchup {
     tape_complete: HashSet<TradeId>,
     /// Resolved identities also protect retained tape during later purge planning.
     pub(super) known: HashMap<TradeId, CatchupTrade>,
-    /// Disabled emulator trades remain known but never enter the fetch queue.
-    emulator: HashMap<TradeId, CatchupTrade>,
+    /// Skipped trades ([`super::skipped`]) remain known but never enter the fetch queue.
+    skipped: HashMap<TradeId, CatchupTrade>,
     worker: Option<Sender<Pass>>,
     active: bool,
     hour: Option<i64>,
@@ -99,10 +99,10 @@ impl RecorderCatchup {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .purge = Some(TapePurge::Running { done: 0, total: 0 });
         }
-        if super::record_emulator() {
-            self.retention.emulator_deferred = false;
+        if super::record_emulator() && !super::tuner_only() {
+            self.retention.attributed_deferred = false;
         }
-        let deferred = self.retention.emulator_deferred
+        let deferred = self.retention.attributed_deferred
             && super::listings_complete(super::relist_gen())
             && self.retention.retry_at.is_none_or(|at| now >= at);
         let hourly = super::retention_edge_ms(now).is_some()
@@ -158,7 +158,8 @@ impl RecorderCatchup {
                 complete,
             } => match rx.try_recv() {
                 Ok(Ok(inventory)) if generation == super::relist_gen() => {
-                    self.retention.emulator_deferred = !complete && !super::record_emulator();
+                    self.retention.attributed_deferred =
+                        !complete && (!super::record_emulator() || super::tuner_only());
                     let incomplete = if complete {
                         HashSet::new()
                     } else {
@@ -184,6 +185,7 @@ impl RecorderCatchup {
                             edge: super::retention_edge_ms(now),
                             listed_from: super::edge_ms(now),
                             record_emulator: super::record_emulator(),
+                            tuner_only: super::tuner_only(),
                             margin_ms: window.0,
                             long_ms: window.1,
                         },
@@ -303,7 +305,7 @@ impl RecorderCatchup {
                         .filter(|(id, t)| {
                             !self.complete.contains(id)
                                 && self.latched.get(id) != Some(&Latch::Permanent)
-                                && (!t.emulator || super::record_emulator())
+                                && !super::skipped(t)
                                 && t.close_ms >= super::edge_ms(now)
                         })
                         .map(|(id, t)| (*id, t.clone()))
@@ -429,12 +431,12 @@ impl RecorderCatchup {
         }
         for trade in trades {
             self.known.insert(trade.id, trade.clone());
-            if trade.emulator && !super::record_emulator() {
+            if super::skipped(&trade) {
                 self.pending.remove(&trade.id);
-                self.emulator.insert(trade.id, trade);
+                self.skipped.insert(trade.id, trade);
                 continue;
             }
-            self.emulator.remove(&trade.id);
+            self.skipped.remove(&trade.id);
             if !self.complete.contains(&trade.id)
                 && self.latched.get(&trade.id) != Some(&Latch::Permanent)
             {
@@ -455,7 +457,7 @@ impl RecorderCatchup {
         archives: bool,
     ) -> CatchupPlan {
         self.prune(now_ms);
-        self.route_emulator();
+        self.route_skipped();
         let ready: Vec<_> = self.pending.values().cloned().collect();
         let batch = if archives {
             super::plan(&ready, held, &self.latched, now_ms, margin, long)
@@ -500,25 +502,32 @@ impl RecorderCatchup {
             }
             self.switch_gen = generation;
         }
-        self.route_emulator();
+        self.route_skipped();
         self.publish_pending();
         (auto, archives)
     }
 
-    /// Keep disabled emulator rows out of pending and return them when recording is enabled.
-    fn route_emulator(&mut self) {
-        if super::record_emulator() {
-            self.pending.extend(self.emulator.drain());
-        } else {
-            self.pending.retain(|id, trade| {
-                if trade.emulator {
-                    self.emulator.insert(*id, trade.clone());
-                    false
-                } else {
-                    true
-                }
-            });
+    /// Keep skipped rows out of pending and return the ones the current choices admit again.
+    fn route_skipped(&mut self) {
+        let admitted: Vec<_> = self
+            .skipped
+            .iter()
+            .filter(|(_, trade)| !super::skipped(trade))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in admitted {
+            if let Some(trade) = self.skipped.remove(&id) {
+                self.pending.insert(id, trade);
+            }
         }
+        self.pending.retain(|id, trade| {
+            if super::skipped(trade) {
+                self.skipped.insert(*id, trade.clone());
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// Expire catch-up settlements at archive reach while retaining protection until its own edge.
@@ -544,7 +553,7 @@ impl RecorderCatchup {
             self.latched.remove(&id);
             if !self.pending.contains_key(&id) {
                 self.known.remove(&id);
-                self.emulator.remove(&id);
+                self.skipped.remove(&id);
                 self.tape_complete.remove(&id);
             }
         }

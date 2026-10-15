@@ -33,6 +33,9 @@ pub struct CatchupTrade {
     pub close_ms: i64,
     /// Whether this listed trade was emulated.
     pub emulator: bool,
+    /// Whether the Entry/Exit tuner can replay this trade: its report row carries millisecond
+    /// stamps ([`crate::db::tuner::ticks::deals::has_ms_stamps`]). Live closes always can.
+    pub tunable: bool,
 }
 
 /// Sources available for the job's missing focus stretches.
@@ -92,6 +95,8 @@ static AUTO: AtomicBool = AtomicBool::new(true);
 static ARCHIVES: AtomicBool = AtomicBool::new(true);
 static MAX_AGE_DAYS: AtomicU16 = AtomicU16::new(crate::station_api::DEFAULT_MAX_AGE_DAYS);
 static RECORD_EMU: AtomicBool = AtomicBool::new(true);
+/// Keep tape only for trades the tuner can replay; off keeps every trade, as before the switch.
+static TUNER_ONLY: AtomicBool = AtomicBool::new(false);
 static PURGE_WANTED: AtomicBool = AtomicBool::new(false);
 static RELIST_GEN: AtomicU64 = AtomicU64::new(0);
 /// Spawned and successfully completed generations, keyed by durable core identity.
@@ -122,6 +127,7 @@ static STATUS: Mutex<TapeCatchup> = Mutex::new(TapeCatchup {
     archives: None,
     max_age_days: None,
     record_emulator: None,
+    tuner_only: None,
     db_bytes: None,
     tape_trades: None,
     tape_ages: Vec::new(),
@@ -174,10 +180,12 @@ pub fn set_keep(max_age_days: u16, record_emulator: bool) {
     if (crate::station_api::TapeKeep {
         max_age_days: old_days,
         record_emulator: old_emulator,
+        tuner_only: None,
     })
     .removes_tape(crate::station_api::TapeKeep {
         max_age_days,
         record_emulator,
+        tuner_only: None,
     }) {
         PURGE_WANTED.store(true, Ordering::Relaxed);
     }
@@ -186,6 +194,43 @@ pub fn set_keep(max_age_days: u16, record_emulator: bool) {
 /// Whether emulator trades should contribute recorded tape.
 pub fn record_emulator() -> bool {
     RECORD_EMU.load(Ordering::Relaxed)
+}
+
+/// Apply the "keep tape only for trades the tuner can use" choice like a retention change:
+/// switching it on re-lists the cores and requests the same purge a narrowing retention write
+/// does; switching it off deletes nothing and returns the skipped trades to the queue.
+///
+/// Args:
+///     on: Whether catch-up and retention keep only tuner-usable trades.
+pub fn set_tuner_only(on: bool) {
+    let _status = STATUS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let old = TUNER_ONLY.swap(on, Ordering::Relaxed);
+    if old != on {
+        SWITCH_GEN.fetch_add(1, Ordering::Relaxed);
+        RELIST_GEN.fetch_add(1, Ordering::Relaxed);
+    }
+    if !old && on {
+        PURGE_WANTED.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Whether only trades the tuner can replay keep and fetch tape.
+pub fn tuner_only() -> bool {
+    TUNER_ONLY.load(Ordering::Relaxed)
+}
+
+/// Whether the current choices leave `trade` out of catch-up: an emulator trade while emulator
+/// recording is off, or a trade the tuner cannot replay while only tuner-usable trades are kept.
+///
+/// Args:
+///     trade: A listed closed trade.
+///
+/// Returns:
+///     `true` when the trade must not enter the fetch queue.
+pub(crate) fn skipped(trade: &CatchupTrade) -> bool {
+    (trade.emulator && !record_emulator()) || (!trade.tunable && tuner_only())
 }
 
 /// Effective retention limit in days.
@@ -319,6 +364,7 @@ pub fn status() -> TapeCatchup {
     status.archives = Some(ARCHIVES.load(Ordering::Relaxed));
     status.max_age_days = Some(max_age_days());
     status.record_emulator = Some(record_emulator());
+    status.tuner_only = Some(tuner_only());
     status
 }
 
@@ -370,7 +416,7 @@ pub(crate) fn plan_with(
     let mut result = CatchupPlan::default();
     let edge = edge_ms(now_ms);
     for trade in trades {
-        if trade.emulator && !record_emulator() {
+        if skipped(trade) {
             continue;
         }
         if latched.get(&trade.id).is_some_and(|latch| match latch {

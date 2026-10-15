@@ -320,6 +320,9 @@ pub struct TapeCatchup {
     /// Emulator recording choice; presence also signals retention support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record_emulator: Option<bool>,
+    /// Keep tape only for trades the tuner can replay; presence signals support for the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuner_only: Option<bool>,
     /// Tape database bytes, including its WAL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub db_bytes: Option<u64>,
@@ -414,6 +417,10 @@ pub struct TapeKeep {
     pub max_age_days: u16,
     /// Record tape for emulator trades.
     pub record_emulator: bool,
+    /// Keep tape only for trades the tuner can replay; `None` for a station that does not
+    /// report the choice, which then never receives the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuner_only: Option<bool>,
 }
 
 impl TapeKeep {
@@ -428,9 +435,14 @@ impl TapeKeep {
         self.record_emulator && !draft.record_emulator
     }
 
+    /// Switching on "only trades the tuner can use" removes the tape of the other trades.
+    pub fn drops_untunable(self, draft: Self) -> bool {
+        self.tuner_only != Some(true) && draft.tuner_only == Some(true)
+    }
+
     /// Shared station and terminal rule for a destructive policy change.
     pub fn removes_tape(self, draft: Self) -> bool {
-        self.narrows_age(draft) || self.drops_emulator(draft)
+        self.narrows_age(draft) || self.drops_emulator(draft) || self.drops_untunable(draft)
     }
 }
 

@@ -11,8 +11,8 @@
 //! of the rules it does. An exit the model never reached at all IS a miss.
 //!
 //! The same holds for the LEVEL the exit is judged against, as a VARIANT would place it: a hook
-//! without its detect depth or `HookSellLevel` (or with `HookSellFixed`, whose branch is not
-//! modelled), a Spread without the take the core recorded, a MoonShot lifted to a pre-spike ask
+//! without its detect depth or `HookSellLevel`, a strike without its detect or `MStrikeSellLevel`,
+//! a Spread without the take the core recorded, a MoonShot lifted to a pre-spike ask
 //! the record did not keep — the sell line a variant walks stands somewhere the model invented,
 //! and everything downstream of it — where PriceDown stepped to, whether a level stood at the
 //! close — is invented with it. That answers `None`, whatever the deviation says

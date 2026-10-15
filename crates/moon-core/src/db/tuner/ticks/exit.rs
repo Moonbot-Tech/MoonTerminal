@@ -140,12 +140,20 @@ pub struct ExitParams {
     /// ([`ExitModel::take_known`]). Ignored by every other kind.
     pub hook_sell_level_pct: f64,
     /// `HookSellFixed` — the core then takes the distance as `HookSellLevel · depth` per cent
-    /// "whatever the buy price" (FAQ), which is a different rule from the one below. It is NOT
-    /// modelled: no live strategy on this machine sets it, so the branch could not be checked
-    /// against anything, and rather than guess, [`ExitModel::take_known`] reports the take as
-    /// unknown for such a trade and the verdict answers nothing. Not a grid parameter for the
-    /// same reason — a knob that moves no column is worse than no knob.
+    /// "whatever the buy price" (FAQ). On live data without `SellModifier` (2026-10-15) that is the
+    /// SAME take the rule places without it: the comment's `SellPrice` sat at
+    /// `HookSellLevel · Depth / 100` to the rounding, and take-closed sales landed on that level
+    /// off the buy to the price step. So the model places
+    /// both branches alike and the field is read only so that the record keeps it. Whether the
+    /// delta modifiers move a fixed take the sample cannot tell; they are applied as for the
+    /// other branch. Not a grid parameter: a knob that moves no column is worse than no knob.
     pub hook_sell_fixed: bool,
+    /// `MStrikeSellLevel` — MoonStrike's replacement for `SellPrice`: the take in per cent OF THE
+    /// STRIKE'S SPAN, from its deeper end back to where it started (`Deal::strike_detect`,
+    /// [`crate::db::tuner::ticks::strike::strike_take_level`]). 0 means the level is unknown,
+    /// and the verdict then answers nothing ([`ExitModel::take_known`]). Ignored by every other
+    /// kind. `MStrikeSellAdjust` is not modelled.
+    pub strike_sell_level_pct: f64,
     /// `SellModifier` — the coefficient the summed `Add*` delta modifiers are multiplied by
     /// before they move the sell level (FAQ: a summed delta of 5 % with `SellModifier = 0.2`
     /// places the sell 1 % higher). 0 leaves the level alone.
@@ -176,6 +184,8 @@ pub struct ExitParams {
     pub price_down_timer_s: f64,
     pub price_down_pct: f64,
     pub price_down_delay_s: f64,
+    /// The core omits `PriceDownRelative` at its default NO; strategies that set it dump
+    /// `True`. Archived Exit lines without the field step by a fixed share of the buy.
     pub price_down_relative: bool,
     pub price_down_allowed_drop_pct: f64,
     // SellLevel
@@ -251,6 +261,7 @@ impl Default for ExitParams {
             sell_delay_ms: 0.0,
             hook_sell_level_pct: 0.0,
             hook_sell_fixed: false,
+            strike_sell_level_pct: 0.0,
             sell_modifier: 0.0,
             max_modifier: 0.0,
             stop_loss_modifier: 0.0,
@@ -258,7 +269,7 @@ impl Default for ExitParams {
             price_down_timer_s: 0.0,
             price_down_pct: 0.0,
             price_down_delay_s: 0.0,
-            price_down_relative: true,
+            price_down_relative: false,
             price_down_allowed_drop_pct: 0.0,
             sell_level_delay_s: 0.0,
             sell_level_delay_next_s: 0.0,

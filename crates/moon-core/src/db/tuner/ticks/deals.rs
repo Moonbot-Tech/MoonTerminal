@@ -16,6 +16,7 @@ use rusqlite::Connection;
 
 use super::hook::parse_hook_detect;
 use super::scope::{is_service_row, is_tunable, sold_more_than_bought};
+use super::strike::{KIND_MOONSTRIKE, parse_strike_detect};
 use super::{Deal, Deltas, Sizing};
 use crate::db::analytics::Query;
 use crate::db::read_fail::read_fail_on;
@@ -61,6 +62,21 @@ const DELTA_COLS: [&str; 16] = [
     "dump1h",
 ];
 
+/// Whether a report row carries the millisecond stamps the tape replay needs.
+///
+/// The one gate deciding which closed trades the tuner can replay at all; the station's tape
+/// catch-up asks the same question when told to keep tape only for such trades.
+///
+/// Args:
+///     buy_ms: The row's `BuyDateMs`, zero when absent or NULL.
+///     close_ms: The row's `CloseDateMs`, zero when absent or NULL.
+///
+/// Returns:
+///     `true` when both stamps are positive.
+pub fn has_ms_stamps(buy_ms: i64, close_ms: i64) -> bool {
+    buy_ms > 0 && close_ms > 0
+}
+
 /// Read the scope's closed trades as deals: the trades the tuner can be run on
 /// ([`is_tunable`]), the rest counted in [`DealsRead::untunable`].
 ///
@@ -101,11 +117,21 @@ pub fn read_deals(q: &Query) -> ReadResult<DealsRead> {
             deal.kind = kind.clone();
         }
     }
+    keep_strike_detect_on_strikes(&mut read.deals);
     let before = read.deals.len();
     read.deals
         .retain(|deal| is_tunable(&deal.kind, &deal.sell_reason));
     read.untunable = before - read.deals.len();
     Ok(read)
+}
+
+/// Drop [`Deal::strike_detect`] from every deal whose resolved kind is not MoonStrike: the
+/// comment scan runs before the kinds are known, and a bare `Depth:` with a `TradePrice:` in
+/// another kind's comment is not a strike's detect.
+fn keep_strike_detect_on_strikes(deals: &mut [Deal]) {
+    for deal in deals.iter_mut().filter(|d| d.kind != KIND_MOONSTRIKE) {
+        deal.strike_detect = None;
+    }
 }
 
 /// The scan itself, inside the pinned snapshot. Ordered in memory by the millisecond close —
@@ -160,7 +186,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
         };
         let buy_ms = int(4)?;
         let close_ms = int(5)?;
-        if buy_ms <= 0 || close_ms <= 0 {
+        if !has_ms_stamps(buy_ms, close_ms) {
             out.without_ms += 1;
             continue;
         }
@@ -276,6 +302,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             // Filled by `overlay_hook_detect` off the raw report row's comment.
             hook_depth_pct: None,
             hook_stated_take_pct: None,
+            strike_detect: None,
             step_lag_ms: 0.0,
             round_trip_ms: None,
             // Filled with the model inputs, once the archive and the parameters are in.
@@ -292,8 +319,11 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
     Ok(out)
 }
 
-/// Fill the hook numbers of every deal the core wrote a detect for — [`Deal::hook_depth_pct`]
-/// and [`Deal::hook_stated_take_pct`], out of the report row's `comment`.
+/// Fill the detect numbers of every deal the core wrote a detect for, out of the report row's
+/// `comment`: a hook's [`Deal::hook_depth_pct`] and [`Deal::hook_stated_take_pct`], a strike's
+/// [`Deal::strike_detect`] (kept on a MoonStrike deal only, by [`keep_strike_detect_on_strikes`]
+/// once the kinds resolve — the bare `Depth:` of a strike is read without the hook's per-cent
+/// guard, so another kind's comment must not lend it one).
 ///
 /// Read from the RAW report tables rather than through the unified source: `comment` is a long
 /// text column, the unified projection is what every other axis scans, and widening it for one
@@ -320,6 +350,7 @@ fn overlay_hook_detect(conn: &Connection, q: &Query, deals: &mut [Deal]) -> Read
     let wanted: std::collections::HashSet<(u64, i64)> =
         deals.iter().map(|d| (d.core_uid, d.report_uid)).collect();
     let mut found: HashMap<(u64, i64), super::HookDetect> = HashMap::new();
+    let mut strikes: HashMap<(u64, i64), super::StrikeDetect> = HashMap::new();
     for src in crate::db::read_sources_res(conn)? {
         if !src.cols.contains("reportuid")
             || !src.cols.contains("comment")
@@ -355,6 +386,9 @@ fn overlay_hook_detect(conn: &Connection, q: &Query, deals: &mut [Deal]) -> Read
             if let Some(detect) = parse_hook_detect(&comment) {
                 found.entry(key).or_insert(detect);
             }
+            if let Some(detect) = parse_strike_detect(&comment) {
+                strikes.entry(key).or_insert(detect);
+            }
         }
     }
     for deal in deals.iter_mut() {
@@ -362,6 +396,9 @@ fn overlay_hook_detect(conn: &Connection, q: &Query, deals: &mut [Deal]) -> Read
             deal.hook_depth_pct = Some(detect.depth_pct);
             deal.hook_stated_take_pct = detect.stated_take_pct;
         }
+        // The kinds resolve after this scan; `keep_strike_detect_on_strikes` drops the
+        // detect again from every deal that turns out not to be a strike.
+        deal.strike_detect = strikes.get(&(deal.core_uid, deal.report_uid)).copied();
     }
     log::info!(
         target: crate::diagnostics::TICKS_AXIS_TARGET,

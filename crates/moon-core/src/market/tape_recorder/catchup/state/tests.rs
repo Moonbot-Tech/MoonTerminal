@@ -319,7 +319,7 @@ fn disk_full_during_trim_reports_no_room() {
     assert_eq!(state.retention.retry_at, Some(NOW + HOUR_MS));
     catchup::set_keep(0, false);
     catchup::take_purge_wanted();
-    state.retention.emulator_deferred = true;
+    state.retention.attributed_deferred = true;
     assert!(
         !state.retention_tick(&cache, NOW + 60_000, &HashMap::new()),
         "a completed listing must not bypass the disk-full backoff"
@@ -499,7 +499,7 @@ fn incomplete_listing_defers_emulator_purge() {
             .unwrap(),
         vec![(from, to)]
     );
-    assert!(state.retention.emulator_deferred);
+    assert!(state.retention.attributed_deferred);
     catchup::listing_applied(40_001, catchup::relist_gen());
     settle(&mut state, &cache, NOW + 600_001);
     assert!(
@@ -508,7 +508,7 @@ fn incomplete_listing_defers_emulator_purge() {
             .unwrap()
             .is_empty()
     );
-    assert!(!state.retention.emulator_deferred);
+    assert!(!state.retention.attributed_deferred);
 }
 
 /// An older pass can file its final answer only before retention enters its cache queue.
@@ -749,6 +749,7 @@ fn row() -> CatchupTrade {
         open_ms: NOW - DAY - 60_000,
         close_ms: NOW - DAY,
         emulator: false,
+        tunable: true,
     }
 }
 
