@@ -5,7 +5,7 @@ use chrono_tz::Tz;
 use moon_core::station_api::{PurgeFail, TapeCatchup, TapeKeep, TapePurge, TapeWindow};
 use rust_i18n::t;
 
-/// One write-bar message, shared with the real-view layout fixture.
+/// One write-bar message; widening warns even when station counts or capabilities are absent.
 pub(super) fn bar_message(
     ed: &super::TapeEd,
     c: Option<&TapeCatchup>,
@@ -20,6 +20,7 @@ pub(super) fn bar_message(
             d,
             c.and_then(|c| c.tape_trades),
             c.and_then(|c| c.catchup_rate_per_hour),
+            c.and_then(reported_keep).is_some(),
         )
     });
     if matches!(keep_state(c), KeepState::Purging { .. }) || ed.awaiting_keep.is_some() {
@@ -212,17 +213,23 @@ pub(super) fn deletion_reason(seen: Option<TapeKeep>, draft: TapeKeep) -> String
     parts.join(&t!("telegram.server.keep_join"))
 }
 
-/// Increasing the long threshold records more middle tape; decreasing it does not.
+/// Every wider window warns; only retention-capable stations can promise the CPU cap.
 pub(super) fn widen_warning(
     seen: TapeWindow,
     draft: TapeWindow,
     trades: Option<u32>,
     rate: Option<u32>,
+    supports_cpu_cap: bool,
 ) -> Option<String> {
     if draft.margin_s <= seen.margin_s && draft.long_position_min <= seen.long_position_min {
         return None;
     }
-    let n = trades?;
+    if !supports_cpu_cap {
+        return Some(t!("telegram.server.keep_widen_no_cap").to_string());
+    }
+    let Some(n) = trades else {
+        return Some(t!("telegram.server.keep_widen_unknown").to_string());
+    };
     let term = rate
         .filter(|rate| *rate > 0)
         .map(|rate| {

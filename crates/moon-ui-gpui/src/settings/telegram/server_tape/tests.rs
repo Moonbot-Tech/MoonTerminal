@@ -997,8 +997,7 @@ fn lengthening_writes_without_confirmation() {
     }
 }
 
-/// A larger margin or long threshold warns, a smaller window does not, and an unknown rate
-/// omits the timing clause rather than presenting a made-up completion time.
+/// Losing counts must not hide widening; old stations must never get a CPU-cap promise.
 #[test]
 fn widen_warning_only_when_the_window_grows() {
     use super::keep::widen_warning;
@@ -1008,40 +1007,97 @@ fn widen_warning_only_when_the_window_grows() {
         margin_s: 60,
         long_position_min: 120,
     };
+    for supports_cpu_cap in [false, true] {
+        for trades in [None, Some(100)] {
+            for draft in [
+                seen,
+                TapeWindow {
+                    margin_s: 30,
+                    long_position_min: 60,
+                },
+            ] {
+                assert_eq!(
+                    widen_warning(seen, draft, trades, Some(10), supports_cpu_cap),
+                    None
+                );
+            }
+        }
+    }
+    for widened in [
+        TapeWindow {
+            margin_s: 600,
+            ..seen
+        },
+        TapeWindow {
+            long_position_min: 240,
+            ..seen
+        },
+        TapeWindow {
+            margin_s: 30,
+            long_position_min: 240,
+        },
+    ] {
+        for rate in [None, Some(0), Some(10)] {
+            assert_eq!(
+                widen_warning(seen, widened, None, rate, true).as_deref(),
+                Some(
+                    "Not saved. The window grew: the station will fetch edges again for already recorded trades, using up to 75% CPU."
+                )
+            );
+            for trades in [None, Some(100)] {
+                assert_eq!(
+                    widen_warning(seen, widened, trades, rate, false).as_deref(),
+                    Some(
+                        "Not saved. The window grew: the station will fetch edges again for already recorded trades — this may load its CPU for a long time."
+                    )
+                );
+            }
+        }
+        for rate in [None, Some(0)] {
+            assert_eq!(
+                widen_warning(seen, widened, Some(100), rate, true).as_deref(),
+                Some(
+                    "Not saved. The window grew: the station will fetch edges again for up to 100 recorded trades, using up to 75% CPU."
+                )
+            );
+        }
+        assert_eq!(
+            widen_warning(seen, widened, Some(100), Some(10), true).as_deref(),
+            Some(
+                "Not saved. The window grew: the station will fetch edges again for up to 100 recorded trades — about 10h, using up to 75% CPU."
+            )
+        );
+    }
+}
+
+/// Counts and catch-up presence cannot stand in for complete retention capability or hide tone.
+#[test]
+fn widening_bar_warns_without_counts_or_new_station_keys() {
+    let _locale = crate::test_locale::force("en");
+    let mut probe = full_probe("widen", 860.0);
+    assert!(super::keep::bar_message(&probe.ed, Some(&probe.c), false).1);
+    probe.c.tape_trades = None;
+    let (text, warning) = super::keep::bar_message(&probe.ed, Some(&probe.c), false);
     assert!(
-        widen_warning(
-            seen,
-            TapeWindow {
-                margin_s: 30,
-                long_position_min: 60
-            },
-            Some(100),
-            Some(10)
-        )
-        .is_none()
+        warning && text.contains("75%") && !text.contains("about"),
+        "{text}"
     );
-    let widened = TapeWindow {
-        margin_s: 600,
-        ..seen
-    };
-    let no_rate = widen_warning(seen, widened, Some(100), None).unwrap();
+    for (max_age_days, record_emulator) in [(None, Some(true)), (Some(1825), None), (None, None)] {
+        probe.c.max_age_days = max_age_days;
+        probe.c.record_emulator = record_emulator;
+        for trades in [None, Some(100)] {
+            probe.c.tape_trades = trades;
+            let (text, warning) = super::keep::bar_message(&probe.ed, Some(&probe.c), false);
+            assert!(
+                warning && text.contains("long time") && !text.contains("75%"),
+                "{text}"
+            );
+        }
+    }
+    let (text, warning) = super::keep::bar_message(&probe.ed, None, false);
     assert!(
-        no_rate.contains("up to 100") && !no_rate.contains("about"),
-        "{no_rate}"
-    );
-    let rate = widen_warning(seen, widened, Some(100), Some(10)).unwrap();
-    assert!(rate.contains("about 10h"), "{rate}");
-    assert!(
-        widen_warning(
-            seen,
-            TapeWindow {
-                long_position_min: 240,
-                ..seen
-            },
-            Some(100),
-            Some(0)
-        )
-        .is_some()
+        warning && text.contains("long time") && !text.contains("75%"),
+        "{text}"
     );
 }
 
@@ -1198,7 +1254,7 @@ impl Render for FullTapeProbe {
     }
 }
 
-/// Reports independently define all acceptance states, including every maintenance failure.
+/// Synthetic reports cover maintenance failures and widening with missing counts or capability.
 fn full_probe(state: &str, width: f32) -> FullTapeProbe {
     use moon_core::station_api::{PurgeFail, TapeAge, TapeKeep, TapePurge, TapeWindow};
     let window = TapeWindow {
@@ -1293,13 +1349,25 @@ fn full_probe(state: &str, width: f32) -> FullTapeProbe {
             c.tape_trades = None;
             ed.forget_keep();
         }
-        "widen" | "widen_unknown_rate" => {
+        "widen"
+        | "widen_unknown_rate"
+        | "widen_unknown_count"
+        | "widen_old"
+        | "widen_old_count" => {
             ed.draft = Some(TapeWindow {
                 margin_s: 600,
                 ..window
             });
             if state == "widen_unknown_rate" {
                 c.catchup_rate_per_hour = None;
+            }
+            if matches!(state, "widen_unknown_count" | "widen_old") {
+                c.tape_trades = None;
+            }
+            if matches!(state, "widen_old" | "widen_old_count") {
+                c.max_age_days = None;
+                c.record_emulator = None;
+                ed.forget_keep();
             }
         }
         _ => {}
@@ -1336,6 +1404,9 @@ fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestApp
             "old",
             "widen",
             "widen_unknown_rate",
+            "widen_unknown_count",
+            "widen_old",
+            "widen_old_count",
         ] {
             for (zoom, column) in [
                 (1.0, 860.0),
@@ -1431,15 +1502,41 @@ fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestApp
                     let expected = match sel {
                         "server-tape-confirm" => matches!(state, "confirm" | "confirm_unknown"),
                         "server-tape-purge-progress" => state == "purging",
-                        "server-tape-keep-old" => state == "old",
+                        "server-tape-keep-old" => {
+                            matches!(state, "old" | "widen_old" | "widen_old_count")
+                        }
                         "server-tape-widen-warning" => {
-                            matches!(state, "widen" | "widen_unknown_rate")
+                            matches!(
+                                state,
+                                "widen"
+                                    | "widen_unknown_rate"
+                                    | "widen_unknown_count"
+                                    | "widen_old"
+                                    | "widen_old_count"
+                            )
                         }
                         _ => unreachable!(),
                     };
                     assert_eq!(b.is_some(), expected, "{sel} state visibility {at}");
                     if let Some(b) = b {
                         assert!(b.right() <= col.right() + px(0.5), "{sel} escaped {at}");
+                        if sel == "server-tape-widen-warning" {
+                            let probe = full_probe(state, width);
+                            let (text, warning) =
+                                super::keep::bar_message(&probe.ed, Some(&probe.c), false);
+                            assert!(warning, "warning tone lost {at}");
+                            let (need, line) = visual.update(|_, cx| {
+                                (
+                                    design::ui_caption_text_width(cx, &text, 400.0),
+                                    f32::from(design::t_caption(cx)),
+                                )
+                            });
+                            assert!(
+                                f32::from(b.size.height) + 0.5
+                                    >= (need / f32::from(b.size.width)).floor().max(1.0) * line,
+                                "warning text clipped {at}"
+                            );
+                        }
                     }
                 }
                 for (sel, key) in [
@@ -1461,7 +1558,7 @@ fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestApp
                         "{sel} text clipped {at}"
                     );
                 }
-                if state == "old" {
+                if matches!(state, "old" | "widen_old" | "widen_old_count") {
                     let note = visual
                         .debug_bounds("server-tape-keep-old")
                         .expect("old station note");
