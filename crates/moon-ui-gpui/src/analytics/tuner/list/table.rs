@@ -724,6 +724,9 @@ impl AnalyticsView {
         total: usize,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
+        if !self.strat_mode.shows_auto() {
+            return None;
+        }
         let (text, warn) = self.auto_picks.status(total)?;
         Some(auto_progress_row(
             text,

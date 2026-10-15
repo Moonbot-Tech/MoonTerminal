@@ -264,6 +264,23 @@ pub(in crate::analytics) fn filter_sort_indices(
     (out, enabled_filter_available, pool)
 }
 
+/// The saved strategy sort as one axis applies it: a sort by the Auto column only where that
+/// column is drawn ("By coin"). The saved choice itself is kept for the return there.
+///
+/// Args:
+///     sort: The saved sort key and direction.
+///     mode: The axis on screen.
+///
+/// Returns:
+///     The sort to apply, `None` for a sort by a column this axis does not draw.
+pub(in crate::analytics) fn axis_sort(
+    sort: &Option<(String, bool)>,
+    mode: StratMode,
+) -> Option<(String, bool)> {
+    sort.clone()
+        .filter(|(k, _)| mode.shows_auto() || k != SORT_AUTO)
+}
+
 /// Whether a cached result still describes the current inputs.
 ///
 /// Split out so the memo's ONE decision can be exercised directly: "recomputed zero times while
@@ -328,8 +345,10 @@ impl AnalyticsView {
             kind: self.strat_type.clone(),
             lists: self.strat_lists,
             active_only: self.strat_active_only,
-            sort: self.strat_sort.clone(),
-            auto: self.auto_picks.view(self.strat_mode == StratMode::Coins),
+            // A saved sort by the Auto column applies only where that column is drawn; the
+            // saved choice itself is kept for the return to "By coin".
+            sort: axis_sort(&self.strat_sort, self.strat_mode),
+            auto: self.auto_picks.view(self.strat_mode.shows_auto()),
         };
         if !memo_is_fresh(self.strat_visible.as_ref(), &key) {
             let (idx, enabled_filter_available, pool) = filter_sort_indices(all, &key);
@@ -356,9 +375,9 @@ impl AnalyticsView {
         *self.strat_mode.cols_slot(&mut cols)
     }
 
-    /// Is the column with visibility `bit` currently shown?
+    /// Is the column with visibility `bit` currently shown? The Auto column only on "By coin".
     pub(super) fn col_shown(&self, bit: u16) -> bool {
-        self.strat_cols() & bit != 0
+        self.strat_mode.drawn_cols(self.strat_cols()) & bit != 0
     }
 
     /// Set the visible-column mask and PERSIST it (layout), so the choice survives restart —
@@ -479,7 +498,7 @@ impl AnalyticsView {
             )
             .child(self.strat_type_menu(cx))
             .child(self.strat_lists_menu(cx))
-            .child(self.strat_auto_menu(cx))
+            .children(self.strat_auto_menu(cx))
             .child(
                 div()
                     .id("an-strat-active-tip")
@@ -593,9 +612,10 @@ impl AnalyticsView {
 
     /// The "Auto-pick" filter: all / with a finding / confirmed. Amber while it narrows the
     /// list, like the active axis button, so a short list never looks like missing data.
-    fn strat_auto_menu(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
+    fn strat_auto_menu(&self, cx: &Context<Self>) -> Option<impl IntoElement + use<>> {
         let view = cx.entity();
-        auto_filter_el(
+        auto_filter_on_axis(
+            self.strat_mode,
             self.auto_filter(),
             std::rc::Rc::new(move |f, app| {
                 view.update(app, |this, cx| {
@@ -609,7 +629,7 @@ impl AnalyticsView {
 
     /// The auto-pick filter in force on the axis currently on screen.
     pub(super) fn auto_filter(&self) -> AutoFilter {
-        self.auto_picks.filter(self.strat_mode == StratMode::Coins)
+        self.auto_picks.filter(self.strat_mode.shows_auto())
     }
 
     /// Visible-column selector ([`design::COLUMN_SELECTOR_ICON`]); each item toggles a column bit,
@@ -637,15 +657,18 @@ impl AnalyticsView {
         let all_view = view.clone();
         menu = menu.item(
             MoonMenuItem::with_key("col-all", t!("report.filter.all").to_string())
-                .checked(cur == STRAT_COLS_ALL)
+                .checked(
+                    self.strat_mode.drawn_cols(cur) == self.strat_mode.drawn_cols(STRAT_COLS_ALL),
+                )
                 .on_click(move |_, _, app| {
                     all_view.update(app, |this, cx| {
-                        let next = if this.strat_cols() == STRAT_COLS_ALL {
-                            0
-                        } else {
-                            STRAT_COLS_ALL
-                        };
-                        this.set_strat_cols(next, cx);
+                        // Judged and toggled over the columns this axis draws; a bit it does
+                        // not draw (Auto off "By coin") keeps its saved value.
+                        let (mode, cur) = (this.strat_mode, this.strat_cols());
+                        let all = mode.drawn_cols(STRAT_COLS_ALL);
+                        let drawn = mode.drawn_cols(cur);
+                        let next = if drawn == all { 0 } else { all };
+                        this.set_strat_cols(next | (cur ^ drawn), cx);
                     });
                 }),
         );
@@ -672,7 +695,9 @@ impl AnalyticsView {
             COL_BIT_LASTEDIT,
             t!("analytics.col.lastedit").to_string(),
         );
-        menu = add(menu, COL_BIT_AUTO, t!("analytics.auto.col").to_string());
+        if self.strat_mode.shows_auto() {
+            menu = add(menu, COL_BIT_AUTO, t!("analytics.auto.col").to_string());
+        }
         div()
             .id("an-strat-cols-tip")
             .tooltip(crate::panels::common::text_tooltip(
@@ -680,6 +705,25 @@ impl AnalyticsView {
             ))
             .child(menu)
     }
+}
+
+/// The toolbar's "Auto-pick" filter on one axis: drawn on "By coin" only, absent elsewhere.
+///
+/// Args:
+///     mode: The axis on screen.
+///     cur: The active filter.
+///     pick: Applies a chosen filter.
+///     cx: App, for sizing.
+///
+/// Returns:
+///     The filter element, or `None` off "By coin".
+pub(in crate::analytics::tuner) fn auto_filter_on_axis(
+    mode: StratMode,
+    cur: AutoFilter,
+    pick: std::rc::Rc<dyn Fn(AutoFilter, &mut App)>,
+    cx: &App,
+) -> Option<impl IntoElement + use<>> {
+    mode.shows_auto().then(|| auto_filter_el(cur, pick, cx))
 }
 
 /// The toolbar's "Auto-pick" filter, as a free function so a layout probe can draw it: amber

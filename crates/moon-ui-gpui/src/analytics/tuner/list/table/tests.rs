@@ -3,15 +3,17 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     Styled, Window, div, px,
 };
 use moon_core::config::{Language, UiThemeMode};
-use moon_ui::{MoonPalette, MoonTheme, h_flex, v_flex};
+use moon_ui::{MoonCheckbox, MoonPalette, MoonTheme, h_flex, v_flex};
 use rust_i18n::t;
 
+use super::super::super::STRAT_MODES;
+use super::super::super::StratMode;
 use super::super::super::auto_picks::{AutoClass, AutoFilter};
-use super::super::auto_filter_el;
+use super::super::{auto_filter_el, auto_filter_on_axis};
 use super::{
     auto_cell_el, auto_cell_text, auto_computing_el, auto_empty_el, auto_progress_row,
     strat_list_frame,
@@ -477,6 +479,123 @@ fn the_auto_progress_line_is_one_row_of_the_strategy_card(cx: &mut gpui::TestApp
                     table.origin.y + px(0.5) >= row.bottom(),
                     "first strategy row must sit below the progress line ({at})"
                 );
+            }
+        }
+    }
+}
+
+/// Width of the toolbar probe, in font px: the narrowest strategy card ([`CARD_WIDTHS`]).
+const TOOLBAR_W: f32 = CARD_WIDTHS[0];
+
+/// The strategy list's filter bar as `strat_filter_bar` lays it out on one axis: the search
+/// box takes the rest, then the type and coin-list pickers, the auto-pick filter on "By coin"
+/// only, the enabled-only toggle and the column selector.
+struct ToolbarProbe {
+    mode: StratMode,
+    filter: AutoFilter,
+}
+
+impl Render for ToolbarProbe {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let fixed = |id: &'static str, w: f32, cx: &App| {
+            div()
+                .debug_selector(move || id.into())
+                .flex_none()
+                .w(design::ui_px(cx, w))
+                .h(design::ui_px(cx, 22.0))
+        };
+        h_flex()
+            .debug_selector(|| "probe-bar".into())
+            .w_full()
+            .px(design::ui_px(cx, 8.0))
+            .gap(design::ui_px(cx, 6.0))
+            .items_center()
+            .child(
+                div()
+                    .debug_selector(|| "probe-search".into())
+                    .flex_1()
+                    .min_w_0()
+                    .h(design::ui_px(cx, 22.0)),
+            )
+            .child(fixed("probe-type", 116.0, cx))
+            .child(fixed("probe-lists", 96.0, cx))
+            .children(auto_filter_on_axis(
+                self.mode,
+                self.filter,
+                Rc::new(|_, _| {}),
+                cx,
+            ))
+            .child(
+                div().debug_selector(|| "probe-active".into()).child(
+                    MoonCheckbox::new("probe-active-box")
+                        .label(t!("analytics.strat.active_only").to_string()),
+                ),
+            )
+            .child(fixed("probe-cols", 30.0, cx))
+    }
+}
+
+/// The auto-pick filter is in the strategy filter bar on "By coin" only; on the three other
+/// axes it is absent. Either way every control sits inside the bar, left to right, without
+/// overlapping its neighbour, in every language and both zooms.
+#[gpui::test]
+fn the_auto_filter_is_in_the_bar_on_by_coin_only(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            cx,
+        )
+    });
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for zoom in [1.0, 1.25] {
+            for mode in STRAT_MODES {
+                let filter = AutoFilter::Confirmed;
+                let window = cx.open_window(gpui::size(px(TOOLBAR_W * zoom), px(120.0)), |_, _| {
+                    ToolbarProbe { mode, filter }
+                });
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let at = format!("{} zoom {zoom} {}", language.code(), mode.shows_auto());
+                let bar = visual.debug_bounds("probe-bar").expect("bar laid out");
+                let auto = visual.debug_bounds("an-strat-auto-tip");
+                assert_eq!(
+                    auto.is_some(),
+                    mode == StratMode::Coins,
+                    "auto filter presence ({at})"
+                );
+                let mut row = vec!["probe-search", "probe-type", "probe-lists"];
+                if auto.is_some() {
+                    row.push("an-strat-auto-tip");
+                }
+                row.extend(["probe-active", "probe-cols"]);
+                let mut prev: Option<gpui::Bounds<gpui::Pixels>> = None;
+                for sel in row {
+                    let b = visual
+                        .debug_bounds(sel)
+                        .unwrap_or_else(|| panic!("{sel} not laid out ({at})"));
+                    assert!(
+                        b.origin.x + px(0.5) >= bar.origin.x && b.right() <= bar.right() + px(0.5),
+                        "{sel} escaped the bar ({at})"
+                    );
+                    if let Some(p) = prev {
+                        assert!(b.origin.x + px(0.5) >= p.right(), "{sel} overlaps ({at})");
+                    }
+                    prev = Some(b);
+                }
+                if let Some(trigger) = auto {
+                    let label = t!("analytics.auto.filter_lbl", value = filter.label()).to_string();
+                    let need = visual.update(|_, cx| design::ui_body_text_width(cx, &label, 400.0));
+                    assert!(
+                        f32::from(trigger.size.width) >= need,
+                        "auto filter narrower than {label:?} ({at})"
+                    );
+                }
             }
         }
     }

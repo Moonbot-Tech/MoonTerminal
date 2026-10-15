@@ -8,9 +8,10 @@ use std::sync::Arc;
 
 use moon_core::db::analytics::GroupStat;
 
-use super::super::auto_picks::{AutoClass, AutoFilter, AutoView};
+use super::super::auto_picks::{AutoClass, AutoFilter, AutoPicks, AutoView};
+use super::super::{STRAT_MODES, StratMode};
 use super::{
-    SORT_AUTO, SORT_NAME, StratListFilter, VisibleKey, VisibleRows, core_names_changed,
+    SORT_AUTO, SORT_NAME, StratListFilter, VisibleKey, VisibleRows, axis_sort, core_names_changed,
     filter_sort_indices, memo_is_fresh, restore_strat_sort,
 };
 
@@ -394,4 +395,40 @@ fn a_new_batch_generation_misses_the_memo() {
     assert!(memo_is_fresh(Some(&cached), &k));
     k.auto = view;
     assert!(!memo_is_fresh(Some(&cached), &k));
+}
+
+/// The auto-pick filter and an Auto-column sort are "By coin" controls: on every other axis a
+/// narrowing choice (and a saved sort by Auto) leaves the list whole and in its own order, and
+/// back on "By coin" the same choice narrows again. A filter that leaked to the other tabs hid
+/// strategies behind a control those tabs do not draw.
+#[test]
+fn the_auto_filter_and_sort_act_on_by_coin_only() {
+    let (all, view) = auto_rows();
+    let saved_sort = Some((SORT_AUTO.to_string(), true));
+    for chosen in [AutoFilter::Found, AutoFilter::Confirmed] {
+        let mut picks = AutoPicks::default();
+        picks.chosen = Some(chosen);
+        for mode in STRAT_MODES {
+            let mut k = key();
+            k.auto = view.clone();
+            k.auto.filter = picks.filter(mode.shows_auto());
+            k.sort = axis_sort(&saved_sort, mode);
+            let idx = filter_sort_indices(&all, &k).0;
+            if mode == StratMode::Coins {
+                assert_eq!(k.auto.filter, chosen);
+                assert!(idx.len() < all.len(), "{chosen:?} narrows By coin");
+                assert_eq!(idx[0], 1, "Auto sort puts the confirmed row first");
+            } else {
+                assert_eq!(
+                    idx,
+                    vec![0, 1, 2, 3],
+                    "{chosen:?} must not narrow this axis"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        axis_sort(&Some((SORT_NAME.to_string(), false)), StratMode::Time),
+        Some((SORT_NAME.to_string(), false))
+    );
 }

@@ -157,6 +157,22 @@ impl StratMode {
             _ => STRAT_COLS_DEFAULT,
         }
     }
+
+    /// Does this axis carry the coin auto-pick (its toolbar filter, Auto column and caption)?
+    /// The batch picks coin lists, so only "By coin" is about it.
+    pub(super) fn shows_auto(self) -> bool {
+        self == StratMode::Coins
+    }
+
+    /// The columns this axis actually draws out of a saved mask: the Auto bit is dropped off
+    /// "By coin", while the mask itself (the user's saved choice) stays untouched.
+    pub(super) fn drawn_cols(self, mask: u16) -> u16 {
+        if self.shows_auto() {
+            mask
+        } else {
+            mask & !COL_BIT_AUTO
+        }
+    }
 }
 
 impl AnalyticsView {
