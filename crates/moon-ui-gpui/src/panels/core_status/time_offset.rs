@@ -46,8 +46,9 @@ pub(super) fn tz_offset_cell(s: &CoreTimeOffsetStatus) -> TzOffsetCell {
 ///
 /// A measured value renders as `UTC+02:00` / `UTC+00:00` / `UTC-04:00`: ASCII sign, two-digit
 /// hours, two-digit minutes, always both, so a quarter-hour zone renders correctly rather than
-/// losing its minutes. The estimator adopts whole seconds, so a clock that runs off by seconds
-/// adds them: `UTC+03:00:40` — the correction the report rows actually get, not a rounder one.
+/// losing its minutes. The live source is the core's timezone, a quarter-hour value, but a
+/// segment the seconds-precise estimator stored before 2026-10 can still be in force and adds its
+/// seconds: `UTC+03:00:40` — the correction the report rows actually get, not a rounder one.
 ///
 /// Args:
 ///     cell: The decision from [`tz_offset_cell`].
@@ -74,8 +75,6 @@ pub(super) fn tz_offset_cell_text(cell: TzOffsetCell) -> String {
 pub(super) struct TzOffsetFacts {
     /// Adopted offset, or `None` when nothing was ever adopted.
     pub(super) offset_secs: Option<i32>,
-    /// Samples standing behind the adopted value (or behind the still-unmeasured state).
-    pub(super) samples: u32,
     /// True-UTC instant of the LATEST observation carrying the current value, in milliseconds —
     /// see `CoreTimeOffsetStatus::observed_at_utc`. Rendered under «Замерено» / "Observed", never
     /// "adopted": a re-measurement that confirms an unchanged offset advances this while the
@@ -95,7 +94,6 @@ pub(super) struct TzOffsetFacts {
 pub(super) fn tz_offset_facts(s: &CoreTimeOffsetStatus) -> TzOffsetFacts {
     TzOffsetFacts {
         offset_secs: s.offset_secs,
-        samples: s.samples,
         observed_at_utc: s.observed_at_utc,
         source: s.source,
     }
@@ -124,16 +122,10 @@ fn source_label(source: OffsetSource) -> String {
 ///     f: The facts from [`tz_offset_facts`].
 ///
 /// Returns:
-///     The hover body, one `label: value` line per fact, or a single never-measured line plus the
-///     sample count standing behind it.
+///     The hover body, one `label: value` line per fact, or a single never-measured line.
 pub(super) fn tz_offset_tooltip(f: &TzOffsetFacts) -> String {
     let Some(offset_secs) = f.offset_secs else {
-        return format!(
-            "{}\n{}: {}",
-            t!("core_status.tz_off.f.unmeasured"),
-            t!("core_status.tz_off.f.samples"),
-            f.samples
-        );
+        return t!("core_status.tz_off.f.unmeasured").to_string();
     };
     [
         format!(
@@ -141,7 +133,6 @@ pub(super) fn tz_offset_tooltip(f: &TzOffsetFacts) -> String {
             t!("core_status.tz_off.f.offset"),
             tz_offset_cell_text(TzOffsetCell::Measured { offset_secs })
         ),
-        format!("{}: {}", t!("core_status.tz_off.f.samples"), f.samples),
         format!(
             "{}: {}",
             t!("core_status.tz_off.f.observed"),

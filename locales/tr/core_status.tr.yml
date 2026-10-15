@@ -262,10 +262,9 @@ core_status.col.tz_off: "UTC kayması"
 # not read the same.
 core_status.tz_off.unknown: "—"
 core_status.tz_off.f.offset: "Kayma"
-core_status.tz_off.f.samples: "Ölçüm"
 core_status.tz_off.f.observed: "Ölçüldü"
 core_status.tz_off.f.source: "Kaynak"
-# Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
+# Hover line for a core nothing has been measured on yet.
 core_status.tz_off.f.unmeasured: "Henüz ölçülmedi"
 core_status.tz_off.source.log: "Çekirdek günlüğü"
 core_status.tz_off.source.ping: "Çekirdek ping"

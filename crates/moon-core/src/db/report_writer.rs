@@ -681,13 +681,14 @@ pub(in crate::db) fn apply_msg(
         } => {
             rep::core_offset::ensure_table(conn)?;
             // A RE-CONFIRMATION IS NOT AN ADOPTION, and only the durable segment can tell the two
-            // apart — `OffsetEstimator` holds its "already adopted" memory on the feed connection,
-            // so every restart re-adopts an unchanged offset from scratch. Everything below is an
-            // INVALIDATION, `stage_rescan_core` most of all: its worker arm deletes this core's
-            // entire `trade_values` partition. Skipping is honest as well as cheap — the segment
-            // it would write carries the offset the newest one already carries, so the axis is
-            // unmoved. Why this lives in the writer rather than the sender: `core_offset::
-            // latest_offset`.
+            // apart — the feed's Ping reader holds its "already adopted" memory on the feed
+            // connection and is seeded from this table, so a connection whose seed read failed,
+            // or ran before an adoption still queued here was committed, re-adopts an unchanged
+            // offset. Everything below is an INVALIDATION, `stage_rescan_core` most of all: its
+            // worker arm deletes this core's entire `trade_values` partition. Skipping is honest
+            // as well as cheap — the segment it would write carries the offset the newest one
+            // already carries, so the axis is unmoved. Why this lives in the writer rather than
+            // the sender: `core_offset::latest_offset`.
             if rep::core_offset::latest_offset(conn, *core_uid) == Some(*offset_secs) {
                 return Ok(ApplyEffect::maintenance());
             }

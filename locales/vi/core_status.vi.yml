@@ -262,10 +262,9 @@ core_status.col.tz_off: "Lệch UTC"
 # not read the same.
 core_status.tz_off.unknown: "—"
 core_status.tz_off.f.offset: "Độ lệch"
-core_status.tz_off.f.samples: "Mẫu"
 core_status.tz_off.f.observed: "Đã đo"
 core_status.tz_off.f.source: "Nguồn"
-# Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
+# Hover line for a core nothing has been measured on yet.
 core_status.tz_off.f.unmeasured: "Chưa đo"
 core_status.tz_off.source.log: "Nhật ký core"
 core_status.tz_off.source.ping: "Ping core"

@@ -95,9 +95,9 @@ pub fn enabled() -> bool {
 
 /// Whether the light station keeps a domain event.
 ///
-/// `ServerLog` is not kept: its last reader on a station was the clock-offset estimator, which
-/// now samples the Ping (`feed::live::ping_clock`). Only a core older than the log subscription
-/// still sends it.
+/// `ServerLog` is not kept: its last reader on a station was the clock-offset estimator, replaced
+/// by the core's timezone read from the Ping (`feed::live::ping_clock`). Only a core older than
+/// the log subscription still sends it.
 ///
 /// `Detect` stays for the bot alone: with `feed.detects` off no detect reaches the store, and
 /// only one whose strategy has `ReportToTelegram` leaves the feed, as a Telegram event.
