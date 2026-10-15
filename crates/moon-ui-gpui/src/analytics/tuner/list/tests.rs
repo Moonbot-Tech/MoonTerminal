@@ -118,6 +118,7 @@ fn the_memo_is_reused_only_while_nothing_changed() {
         key: key(),
         idx: vec![0, 1, 2],
         enabled_filter_available: true,
+        pool: 3,
     });
     assert!(
         memo_is_fresh(cached.as_ref(), &key()),
@@ -275,10 +276,10 @@ fn enabled_only_hides_unchecked_deleted_and_unknown_strategies() {
         g("unknown", "K", None, 0, 4.0),
     ];
     let mut k = key();
-    assert_eq!(filter_sort_indices(&all, &k), (vec![0, 1, 2, 3], true));
+    assert_eq!(filter_sort_indices(&all, &k), (vec![0, 1, 2, 3], true, 4));
     k.active_only = true;
-    assert_eq!(filter_sort_indices(&all, &k), (vec![2], true));
-    assert_eq!(filter_sort_indices(&all[..2], &k), (vec![], true));
+    assert_eq!(filter_sort_indices(&all, &k), (vec![2], true, 1));
+    assert_eq!(filter_sort_indices(&all[..2], &k), (vec![], true, 0));
 }
 
 /// Checking availability before other filters leaves an enabled checkbox silently bypassed
@@ -291,16 +292,16 @@ fn enabled_availability_matches_the_filtered_candidates() {
     ];
     let mut k = key();
     k.active_only = true;
-    assert_eq!(filter_sort_indices(&all, &k), (vec![0], true));
+    assert_eq!(filter_sort_indices(&all, &k), (vec![0], true, 1));
     k.search_lower = "unknown".into();
-    assert_eq!(filter_sort_indices(&all, &k), (vec![1], false));
+    assert_eq!(filter_sort_indices(&all, &k), (vec![1], false, 1));
     k.search_lower.clear();
     k.kind = Some("Unknown".into());
-    assert_eq!(filter_sort_indices(&all, &k), (vec![1], false));
+    assert_eq!(filter_sort_indices(&all, &k), (vec![1], false, 1));
     k.kind = None;
     k.lists = StratListFilter::Black;
-    assert_eq!(filter_sort_indices(&all, &k), (vec![1], false));
-    assert_eq!(filter_sort_indices(&[], &k), (vec![], false));
+    assert_eq!(filter_sort_indices(&all, &k), (vec![1], false, 1));
+    assert_eq!(filter_sort_indices(&[], &k), (vec![], false, 0));
 }
 
 /// Four rows with one batch class each: a noise row, a confirmed one, a bare one, an unread one.
@@ -312,7 +313,7 @@ fn auto_rows() -> (Vec<GroupStat>, AutoView) {
         g("pending", "K", Some(2), 0, 1.0),
     ];
     let classes: HashMap<String, AutoClass> = [
-        ("noise@1", AutoClass::Noise { n: 2 }),
+        ("noise@1", AutoClass::Noise { n: 2, white: false }),
         ("useful@1", AutoClass::Useful { n: 3, white: false }),
         ("nothing@1", AutoClass::Nothing),
     ]
@@ -343,6 +344,23 @@ fn auto_filter_keeps_findings_and_confirmed_only() {
     assert_eq!(filter_sort_indices(&all, &k).0, vec![1]);
 }
 
+/// "Shown X of Y" must count Y over the same rows with and without the auto-pick filter: a Y
+/// taken from the unfiltered list under the filter (and from the searched list without it)
+/// makes the denominator jump when the filter is toggled.
+#[test]
+fn the_counter_denominator_ignores_only_the_auto_filter() {
+    let (all, view) = auto_rows();
+    let mut k = key();
+    k.auto = view;
+    k.search_lower = "n".into();
+    let (idx, _, pool) = filter_sort_indices(&all, &k);
+    assert_eq!((idx.len(), pool), (3, 3));
+    for filter in [AutoFilter::Found, AutoFilter::Confirmed] {
+        k.auto.filter = filter;
+        assert_eq!(filter_sort_indices(&all, &k).2, 3, "{filter:?}");
+    }
+}
+
 /// The first click on "Auto" must put confirmed findings on top, noise next and the rest
 /// after; ascending mirrors it. A comparator keyed on the candidate count alone would let a
 /// big noise row outrank a confirmed one.
@@ -370,6 +388,7 @@ fn a_new_batch_generation_misses_the_memo() {
         key: key(),
         idx: vec![],
         enabled_filter_available: false,
+        pool: 0,
     };
     let mut k = key();
     assert!(memo_is_fresh(Some(&cached), &k));

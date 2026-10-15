@@ -30,7 +30,7 @@ use super::super::AnalyticsView;
 use super::auto_picks::{AutoFilter, AutoView};
 use super::{
     COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, METRIC_COLS, SORT_AUTO, SORT_CORE,
-    SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_COLS_ALL, STRAT_SORT_DEFAULT, metric_bit,
+    SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_COLS_ALL, STRAT_SORT_DEFAULT, StratMode, metric_bit,
     sort_arrow_of, toggle_sort_key,
 };
 use crate::design;
@@ -128,6 +128,9 @@ pub(in crate::analytics) struct VisibleRows {
     key: VisibleKey,
     idx: Vec<usize>,
     enabled_filter_available: bool,
+    /// Rows passing every filter but the auto-pick one: the counter's "of M", so turning
+    /// that filter on cannot move the denominator.
+    pub(in crate::analytics) pool: usize,
 }
 
 /// Sort only as deep as the list can draw.
@@ -159,12 +162,13 @@ pub(in crate::analytics::tuner) fn partial_sort<T>(
 ///     key: Search, filters, sort, and visible-head limit.
 ///
 /// Returns:
-///     Stable display-order indices through [`MAX_ROWS`], an unordered undisplayed tail, and
-///     whether replica status is available.
+///     Stable display-order indices through [`MAX_ROWS`], an unordered undisplayed tail,
+///     whether replica status is available, and how many rows passed before the auto-pick
+///     filter.
 pub(in crate::analytics) fn filter_sort_indices(
     all: &[GroupStat],
     key: &VisibleKey,
-) -> (Vec<usize>, bool) {
+) -> (Vec<usize>, bool, usize) {
     let q = key.search_lower.as_str();
     // Type and name are always known from the report groups, so apply them before filters that
     // depend on the optional strategies replica.
@@ -199,6 +203,7 @@ pub(in crate::analytics) fn filter_sort_indices(
     } else {
         base
     };
+    let pool = out.len();
     if key.auto.filter != AutoFilter::All {
         out.retain(|i| key.auto.filter.keeps(key.auto.class(&all[*i].key)));
     }
@@ -256,7 +261,7 @@ pub(in crate::analytics) fn filter_sort_indices(
             });
         }
     }
-    (out, enabled_filter_available)
+    (out, enabled_filter_available, pool)
 }
 
 /// Whether a cached result still describes the current inputs.
@@ -324,14 +329,15 @@ impl AnalyticsView {
             lists: self.strat_lists,
             active_only: self.strat_active_only,
             sort: self.strat_sort.clone(),
-            auto: self.auto_picks.view(),
+            auto: self.auto_picks.view(self.strat_mode == StratMode::Coins),
         };
         if !memo_is_fresh(self.strat_visible.as_ref(), &key) {
-            let (idx, enabled_filter_available) = filter_sort_indices(all, &key);
+            let (idx, enabled_filter_available, pool) = filter_sort_indices(all, &key);
             self.strat_visible = Some(VisibleRows {
                 key,
                 idx,
                 enabled_filter_available,
+                pool,
             });
         }
         self.visible_indices()
@@ -590,15 +596,20 @@ impl AnalyticsView {
     fn strat_auto_menu(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let view = cx.entity();
         auto_filter_el(
-            self.auto_picks.filter,
+            self.auto_filter(),
             std::rc::Rc::new(move |f, app| {
                 view.update(app, |this, cx| {
-                    this.auto_picks.filter = f;
+                    this.auto_picks.chosen = Some(f);
                     cx.notify();
                 });
             }),
             cx,
         )
+    }
+
+    /// The auto-pick filter in force on the axis currently on screen.
+    pub(super) fn auto_filter(&self) -> AutoFilter {
+        self.auto_picks.filter(self.strat_mode == StratMode::Coins)
     }
 
     /// Visible-column selector ([`design::COLUMN_SELECTOR_ICON`]); each item toggles a column bit,

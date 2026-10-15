@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::super::super::AnalyticsView;
-use super::super::auto_picks::{AutoClass, AutoFilter, cell_tip};
+use super::super::auto_picks::{AutoClass, AutoEmpty, AutoFilter, cell_tip};
 use super::super::columns::fixed_metric_cell;
 use super::super::{
     AUTO_MIN_W, AUTO_W, COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W,
@@ -95,15 +95,21 @@ impl AnalyticsView {
             .view(|d| d.strategies.is_empty())
             .map(Arc::clone);
         let all_rows = data.as_ref().map_or(0, |d| d.strategies.len());
-        let (list, total, shown): (AnyElement, usize, usize) = match data {
+        let (list, total, shown, pool): (AnyElement, usize, usize, usize) = match data {
             Ok(d) => {
                 // Filter + sort per the bar, memoized; count reflects the filtered set.
                 let total = self.ensure_visible(&d.strategies).len();
+                let pool = self.strat_visible.as_ref().map_or(total, |v| v.pool);
                 let shown = total.min(MAX_ROWS);
-                if shown == 0 && self.auto_picks.filter != AutoFilter::All {
+                let empty_face = self.auto_picks.empty_face(self.auto_filter());
+                if shown == 0 && empty_face == Some(AutoEmpty::Computing) {
+                    // The batch has not answered yet: "no strategy has a finding" would be a
+                    // guess. The rows appear as soon as it lands; the progress line says how far.
+                    (auto_computing_el(p, cx), 0, 0, pool)
+                } else if shown == 0 && empty_face == Some(AutoEmpty::NoFinding) {
                     // The auto-pick filter emptied the list: name the settings that produced
                     // that answer and offer the one click that undoes it.
-                    (self.auto_empty_state(p, cx), 0, 0)
+                    (self.auto_empty_state(p, cx), 0, 0, pool)
                 } else if shown == 0 {
                     // Raw data exists but the filters/search matched nothing — say so instead
                     // of leaving a blank area.
@@ -114,7 +120,7 @@ impl AnalyticsView {
                         .text_center()
                         .text_color(moon(p.text_muted))
                         .child(t!("analytics.strat.no_match").to_string());
-                    (note.into_any_element(), 0, 0)
+                    (note.into_any_element(), 0, 0, pool)
                 } else {
                     // The factory runs only for rows on screen, bounding the work triggered by
                     // `.hover()` notifications even though rows have no entity of their own.
@@ -158,11 +164,13 @@ impl AnalyticsView {
                         .into_any_element(),
                         total,
                         shown,
+                        pool,
                     )
                 }
             }
             Err(note) => (
                 super::super::super::note_el("an-strat-list-note", note, 18.0, p, cx),
+                0,
                 0,
                 0,
             ),
@@ -241,7 +249,6 @@ impl AnalyticsView {
                         t!("analytics.strat.mode_ticks").to_string(),
                     ))
                     .child(div().flex_1())
-                    .children(self.auto_progress_el(p, all_rows, cx))
                     .children({
                         // In multi-select show the count (amber) so the user knows a bulk save
                         // is armed; otherwise retain only the capped shown/total count.
@@ -251,16 +258,12 @@ impl AnalyticsView {
                                     .to_string(),
                                 p.amber,
                             ))
-                        } else if total > shown || self.auto_picks.filter != AutoFilter::All {
-                            // Under the auto-pick filter the "of M" is the whole list, so the
-                            // counter says how much the filter kept.
-                            let of = if self.auto_picks.filter == AutoFilter::All {
-                                total
-                            } else {
-                                all_rows
-                            };
+                        } else if total > shown || self.auto_filter() != AutoFilter::All {
+                            // The "of M" is the list after every filter BUT the auto-pick one,
+                            // so turning that filter on changes only the "shown" half.
                             Some((
-                                t!("analytics.strat.shown", shown = shown, total = of).to_string(),
+                                t!("analytics.strat.shown", shown = shown, total = pool)
+                                    .to_string(),
                                 p.text_muted,
                             ))
                         } else {
@@ -274,6 +277,8 @@ impl AnalyticsView {
                         })
                     }),
             )
+            // Its own line: beside the mode buttons and the counter it was clipped to "…".
+            .children(self.auto_progress_el(p, all_rows, cx))
             .child(filter_bar)
             // The header row stays OUTSIDE the virtual list so it cannot scroll away.
             .child(self.header_row(p, core_w, &metric_widths, cx))
@@ -666,8 +671,8 @@ impl AnalyticsView {
             )
     }
 
-    /// The batch auto-pick's line in the list header: "K of M" with a thin bar while it runs,
-    /// the finding count when done, an amber warning when the read failed.
+    /// The batch auto-pick's line under the list header: "K of M" with a thin bar while it
+    /// runs, the finding count when done, an amber warning when the read failed.
     ///
     /// Args:
     ///     p: Active palette.
@@ -683,35 +688,13 @@ impl AnalyticsView {
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
         let (text, warn) = self.auto_picks.status(all_rows)?;
-        let bar = self.auto_picks.fraction().map(|f| {
-            div()
-                .flex_none()
-                .w(design::ui_px(cx, 56.0))
-                .h(design::ui_px(cx, 3.0))
-                .rounded(design::ui_px(cx, 2.0))
-                .bg(moon(p.border))
-                .overflow_hidden()
-                .child(
-                    div()
-                        .h_full()
-                        .w(relative(f.clamp(0.0, 1.0)))
-                        .bg(moon(p.blue)),
-                )
-        });
-        Some(
-            h_flex()
-                .id("an-auto-progress")
-                .debug_selector(|| "an-auto-progress".to_string())
-                .min_w_0()
-                .flex_shrink_1()
-                .gap(design::ui_px(cx, 6.0))
-                .items_center()
-                .text_size(design::t_caption(cx))
-                .text_color(moon(if warn { p.amber } else { p.text_muted }))
-                .children(bar)
-                .child(div().min_w_0().truncate().child(text))
-                .into_any_element(),
-        )
+        Some(auto_progress_row(
+            text,
+            warn,
+            self.auto_picks.fraction(),
+            p,
+            cx,
+        ))
     }
 
     /// The list emptied by the auto-pick filter: what happened, under which settings, and the
@@ -721,7 +704,7 @@ impl AnalyticsView {
             self.coins.pick_cfg.min_trades,
             self.coins.pick_cfg.holdout_pct,
             cx.listener(|this, _, _, cx| {
-                this.auto_picks.filter = AutoFilter::All;
+                this.auto_picks.chosen = Some(AutoFilter::All);
                 this.strat_visible = None;
                 cx.notify();
             }),
@@ -729,6 +712,86 @@ impl AnalyticsView {
             cx,
         )
     }
+}
+
+/// The auto-pick's progress line, as a free function so a layout probe can draw it.
+///
+/// A full-width row of its own under the list header: squeezed in beside the mode buttons and
+/// the row counter it was clipped to a bare "…". The sentence wraps rather than truncating.
+///
+/// Args:
+///     text: The progress or result sentence.
+///     warn: Draw it amber, as a failed read.
+///     fraction: The running batch's 0..=1 progress, for the thin bar; `None` when not running.
+///     p: Active palette.
+///     cx: App, for sizing.
+///
+/// Returns:
+///     The row; its sentence carries the `an-auto-progress-txt` debug selector.
+pub(in crate::analytics::tuner) fn auto_progress_row(
+    text: String,
+    warn: bool,
+    fraction: Option<f32>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let bar = fraction.map(|f| {
+        div()
+            .flex_none()
+            .w(design::ui_px(cx, 56.0))
+            .h(design::ui_px(cx, 3.0))
+            .rounded(design::ui_px(cx, 2.0))
+            .bg(moon(p.border))
+            .overflow_hidden()
+            .child(
+                div()
+                    .h_full()
+                    .w(relative(f.clamp(0.0, 1.0)))
+                    .bg(moon(p.blue)),
+            )
+    });
+    h_flex()
+        .id("an-auto-progress")
+        .debug_selector(|| "an-auto-progress".to_string())
+        .w_full()
+        .flex_none()
+        .px(design::ui_px(cx, 12.0))
+        .pb(design::ui_px(cx, 6.0))
+        .gap(design::ui_px(cx, 6.0))
+        .items_center()
+        .font_family(design::ui_font())
+        .text_size(design::t_caption(cx))
+        .text_color(moon(if warn { p.amber } else { p.text_muted }))
+        .children(bar)
+        .child(
+            div()
+                .debug_selector(|| "an-auto-progress-txt".to_string())
+                .min_w_0()
+                .child(text),
+        )
+        .into_any_element()
+}
+
+/// The auto-pick-filtered list while the batch is still computing: one muted sentence instead
+/// of the "no findings" empty state, which would be a guess until the batch lands.
+///
+/// Args:
+///     p: Active palette.
+///     cx: App, for sizing.
+///
+/// Returns:
+///     The centred note (`an-auto-computing`).
+pub(in crate::analytics::tuner) fn auto_computing_el(p: MoonPalette, cx: &App) -> AnyElement {
+    div()
+        .id("an-auto-computing")
+        .debug_selector(|| "an-auto-computing".to_string())
+        .w_full()
+        .p(design::ui_px(cx, 18.0))
+        .font_family(design::ui_font())
+        .text_center()
+        .text_color(moon(p.text_muted))
+        .child(t!("analytics.auto.computing").to_string())
+        .into_any_element()
 }
 
 /// The auto-pick filter's empty state, as a free function so a layout probe can draw it.
@@ -827,13 +890,14 @@ fn auto_cell(view: &AnalyticsView, g: &GroupStat, p: MoonPalette, cx: &App) -> A
 ///     `None` for an unread row, which stays empty.
 pub(in crate::analytics::tuner) fn auto_cell_text(class: AutoClass) -> Option<(String, bool)> {
     Some(match class {
-        AutoClass::Useful { n, white: true } => {
+        // Confirmed or not, a finding reads as its list and size; only the chip's colour
+        // (`auto_cell_el`) tells the two apart.
+        AutoClass::Useful { n, white: true } | AutoClass::Noise { n, white: true } => {
             (t!("analytics.auto.chip_wl", n = n).to_string(), true)
         }
-        AutoClass::Useful { n, white: false } => {
+        AutoClass::Useful { n, white: false } | AutoClass::Noise { n, white: false } => {
             (t!("analytics.auto.chip_bl", n = n).to_string(), true)
         }
-        AutoClass::Noise { n } => (t!("analytics.auto.chip_noise", n = n).to_string(), true),
         AutoClass::Nothing => ("\u{2014}".to_string(), false),
         AutoClass::Few => (t!("analytics.auto.chip_few").to_string(), false),
         AutoClass::Pending => ("\u{2026}".to_string(), false),

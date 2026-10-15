@@ -12,20 +12,24 @@ use rust_i18n::t;
 
 use super::super::super::auto_picks::{AutoClass, AutoFilter};
 use super::super::auto_filter_el;
-use super::{auto_cell_el, auto_cell_text, auto_empty_el};
+use super::{auto_cell_el, auto_cell_text, auto_computing_el, auto_empty_el, auto_progress_row};
 use crate::design;
 
 /// Width of the probe window, in font px: a narrow strategy list.
 const LIST_W: f32 = 340.0;
 
 /// Every class the column draws, with two-digit counts (the widest a chip gets in practice).
-const CLASSES: [AutoClass; 7] = [
+const CLASSES: [AutoClass; 8] = [
     AutoClass::Useful {
         n: 12,
         white: false,
     },
     AutoClass::Useful { n: 12, white: true },
-    AutoClass::Noise { n: 12 },
+    AutoClass::Noise {
+        n: 12,
+        white: false,
+    },
+    AutoClass::Noise { n: 12, white: true },
     AutoClass::Nothing,
     AutoClass::Few,
     AutoClass::Pending,
@@ -63,6 +67,7 @@ impl Render for AutoLayoutProbe {
             .children(cells)
             .child(h_flex().child(auto_filter_el(self.filter, Rc::new(|_, _| {}), cx)))
             .child(auto_empty_el(5, 30, |_, _, _| {}, p, cx))
+            .child(auto_computing_el(p, cx))
     }
 }
 
@@ -141,6 +146,8 @@ fn the_auto_column_filter_and_empty_state_fit_every_language(cx: &mut gpui::Test
                         f32::from(trigger.size.width) >= need,
                         "auto filter trigger narrower than {label:?} ({at})"
                     );
+                    let computing = visual.debug_bounds("an-auto-computing").expect("computing");
+                    inside(computing, list, "computing note");
                     let empty = visual.debug_bounds("an-auto-empty").expect("empty state");
                     inside(empty, list, "empty state");
                     for sel in [
@@ -158,6 +165,99 @@ fn the_auto_column_filter_and_empty_state_fit_every_language(cx: &mut gpui::Test
                         "reset button narrower than {label:?} ({at})"
                     );
                 }
+            }
+        }
+    }
+}
+
+/// The narrowest strategy list the user works with, in font px.
+const PROGRESS_LIST_W: f32 = 1000.0;
+
+/// Draws the auto-pick progress line with one sentence, inside a list-width box.
+struct ProgressProbe {
+    text: String,
+    warn: bool,
+    fraction: Option<f32>,
+}
+
+impl Render for ProgressProbe {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        v_flex()
+            .w_full()
+            .debug_selector(|| "probe-list".into())
+            .child(auto_progress_row(
+                self.text.clone(),
+                self.warn,
+                self.fraction,
+                p,
+                cx,
+            ))
+    }
+}
+
+/// The auto-pick progress line shows its whole sentence on one line at the list widths the
+/// user has, in every language and both zooms. Squeezed back beside the mode buttons and the
+/// row counter it rendered as a bare "…", which is what this catches.
+#[gpui::test]
+fn the_auto_progress_line_is_never_clipped(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            cx,
+        )
+    });
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let sentences = [
+            (
+                t!("analytics.auto.progress", k = 641, m = 641).to_string(),
+                false,
+                Some(0.5),
+            ),
+            (
+                t!("analytics.auto.done", n = 593, m = 641).to_string(),
+                false,
+                None,
+            ),
+            (t!("analytics.auto.busy").to_string(), true, None),
+            (t!("analytics.auto.failed").to_string(), true, None),
+        ];
+        for zoom in [1.0, 1.25] {
+            for (text, warn, fraction) in &sentences {
+                let probe = ProgressProbe {
+                    text: text.clone(),
+                    warn: *warn,
+                    fraction: *fraction,
+                };
+                let window = cx.open_window(
+                    gpui::size(px(PROGRESS_LIST_W * zoom), px(200.0)),
+                    move |_, _| probe,
+                );
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let at = format!("{} zoom {zoom} {text:?}", language.code());
+                let list = visual.debug_bounds("probe-list").expect("list laid out");
+                let row = visual
+                    .debug_bounds("an-auto-progress")
+                    .unwrap_or_else(|| panic!("progress row not laid out ({at})"));
+                let txt = visual
+                    .debug_bounds("an-auto-progress-txt")
+                    .unwrap_or_else(|| panic!("progress text not laid out ({at})"));
+                assert!(
+                    row.right() <= list.right() + px(0.5) && txt.right() <= row.right() + px(0.5),
+                    "progress line escaped the list ({at})"
+                );
+                let need = visual.update(|_, cx| design::ui_caption_text_width(cx, text, 400.0));
+                assert!(
+                    f32::from(txt.size.width) + 0.1 >= need,
+                    "progress sentence clipped ({at})"
+                );
             }
         }
     }

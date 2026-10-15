@@ -112,6 +112,37 @@ fn tuning_mode_buttons_keep_their_order_and_baseline() {
     );
 }
 
+/// The auto-pick progress line keeps its own row between the card's toolbar and the filter
+/// bar. The layout probe in `list/table/tests.rs` pins that row unclipped on its own; this pins
+/// WHERE the card draws it.
+///
+/// The plausible edit is tidying it back into the toolbar beside the mode buttons and the
+/// "shown X of Y" counter, where a 1330 px list clipped it to a bare "...".
+#[test]
+fn the_auto_progress_line_sits_under_the_toolbar() {
+    let table = read_src("analytics/tuner/list/table.rs");
+    let card = braced_body(&table, "fn strat_list_card(");
+    let at = |needle: &str| {
+        card.find(needle)
+            .unwrap_or_else(|| panic!("{needle} must be rendered in the strategy card"))
+    };
+    let (counter, progress, filter_bar) = (
+        at("\"analytics.strat.shown\""),
+        at("self.auto_progress_el("),
+        at(".child(filter_bar)"),
+    );
+    assert!(
+        counter < progress && progress < filter_bar,
+        "the progress line must follow the toolbar (after its counter) and precede the filter bar"
+    );
+    assert_eq!(card.matches("auto_progress_el(").count(), 1);
+    let el = braced_body(&table, "fn auto_progress_el(");
+    assert!(
+        el.contains("auto_progress_row("),
+        "the card must draw the same row the layout probe measures"
+    );
+}
+
 /// The Tuning strategy list stays virtualized and reads its rows from the memo.
 ///
 /// The plausible edit is rebuilding the list eagerly (`for g in rows`) while chasing a layout

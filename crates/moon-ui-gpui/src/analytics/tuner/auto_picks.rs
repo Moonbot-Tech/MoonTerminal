@@ -35,11 +35,12 @@ const RETRY_AFTER: Duration = Duration::from_secs(5);
 pub(in crate::analytics) enum AutoClass {
     /// Fresh trades confirm the suggestion; `n` coins on the suggested list.
     Useful { n: usize, white: bool },
-    /// Candidates exist, but fresh trades do not support them.
-    Noise { n: usize },
+    /// Candidates exist, but fresh trades did not confirm them: a small gain, a worse
+    /// holdout, or too few fresh trades touched. `n` coins on the named list.
+    Noise { n: usize, white: bool },
     /// No coin stands out.
     Nothing,
-    /// Too few trades, or too few fresh trades touched, to judge.
+    /// Too few trades in the period to judge, or nothing to show.
     Few,
     /// Not computed yet (running, or the strategy has no trades in the period).
     Pending,
@@ -54,26 +55,22 @@ impl AutoClass {
     ///     pick: The strategy's pick.
     ///
     /// Returns:
-    ///     The column's class. A useful whitelist-only suggestion reads as the whitelist;
-    ///     otherwise the blacklist is named, since it is the default search.
+    ///     The column's class. Any noise verdict with candidates (few fresh trades touched
+    ///     included) counts them, so the column never hides coins the card would offer; too
+    ///     few trades in the period is "few". A whitelist-only suggestion reads as the
+    ///     whitelist; otherwise the blacklist is named, since it is the default search.
     pub(in crate::analytics) fn of(pick: &CoinPick) -> Self {
-        let n = pick.black.len() + pick.white.len();
+        let white = pick.black.is_empty() && !pick.white.is_empty();
+        let n = if white {
+            pick.white.len()
+        } else {
+            pick.black.len()
+        };
         match &pick.verdict {
-            PickVerdict::Useful => {
-                let white = pick.black.is_empty() && !pick.white.is_empty();
-                AutoClass::Useful {
-                    n: if white {
-                        pick.white.len()
-                    } else {
-                        pick.black.len()
-                    },
-                    white,
-                }
-            }
-            PickVerdict::Noise(NoiseReason::FewHoldout) | PickVerdict::TooFewTrades => {
-                AutoClass::Few
-            }
-            PickVerdict::Noise(_) if n > 0 => AutoClass::Noise { n },
+            PickVerdict::Useful => AutoClass::Useful { n, white },
+            PickVerdict::TooFewTrades => AutoClass::Few,
+            PickVerdict::Noise(_) if n > 0 => AutoClass::Noise { n, white },
+            PickVerdict::Noise(NoiseReason::FewHoldout) => AutoClass::Few,
             PickVerdict::Noise(_) | PickVerdict::NothingFound => AutoClass::Nothing,
         }
     }
@@ -93,7 +90,7 @@ impl AutoClass {
     /// The candidate count inside a rank, so the bigger finding leads its group.
     pub(in crate::analytics) fn size(self) -> usize {
         match self {
-            AutoClass::Useful { n, .. } | AutoClass::Noise { n } => n,
+            AutoClass::Useful { n, .. } | AutoClass::Noise { n, .. } => n,
             _ => 0,
         }
     }
@@ -103,7 +100,7 @@ impl AutoClass {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::analytics) enum AutoFilter {
     All,
-    /// Useful, or noise with candidates.
+    /// Any pick with candidates, confirmed or not.
     Found,
     /// Useful only.
     Confirmed,
@@ -181,6 +178,15 @@ impl AutoView {
     }
 }
 
+/// The face of a strategy list the auto-pick filter left empty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::analytics) enum AutoEmpty {
+    /// The batch is still running: "none found" would be a guess.
+    Computing,
+    /// The batch answered and no strategy passed the filter.
+    NoFinding,
+}
+
 /// What a batch was launched for. A different key supersedes the running batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::analytics) struct AutoKey {
@@ -225,7 +231,9 @@ pub(in crate::analytics) struct AutoPicks {
     pub(in crate::analytics) generation: u64,
     /// `picks` classified once per batch, shared with the list's memo.
     classes: Arc<HashMap<String, AutoClass>>,
-    pub(in crate::analytics) filter: AutoFilter,
+    /// The filter the user picked from the menu; `None` until then, so each axis shows its
+    /// own default (see [`AutoPicks::filter`]).
+    pub(in crate::analytics) chosen: Option<AutoFilter>,
     /// The (strategy, batch) whose pick the card already adopted, so "Reset" sticks.
     pub(in crate::analytics) adopted: Option<(String, u64)>,
     /// Debounce timer, progress ticker and retry timer; dropping one cancels it.
@@ -246,7 +254,7 @@ impl Default for AutoPicks {
             holdout_pct: 0,
             generation: 0,
             classes: Arc::default(),
-            filter: AutoFilter::All,
+            chosen: None,
             adopted: None,
             launch_task: None,
             ticker: None,
@@ -255,11 +263,49 @@ impl Default for AutoPicks {
 }
 
 impl AutoPicks {
+    /// The filter in force on one axis of the strategy list.
+    ///
+    /// Args:
+    ///     coins_axis: The list is on the By-coin axis, where the Auto column lives.
+    ///
+    /// Returns:
+    ///     The user's menu choice when there is one; otherwise "with a finding" on By-coin,
+    ///     which is what the column is for, and "all" on every other axis.
+    pub(in crate::analytics) fn filter(&self, coins_axis: bool) -> AutoFilter {
+        self.chosen.unwrap_or(if coins_axis {
+            AutoFilter::Found
+        } else {
+            AutoFilter::All
+        })
+    }
+
+    /// What an EMPTY strategy list shows under the auto-pick filter.
+    ///
+    /// Args:
+    ///     filter: The filter in force.
+    ///
+    /// Returns:
+    ///     `None` when the filter is off (the generic "no match" note applies),
+    ///     [`AutoEmpty::Computing`] until the batch has answered, and [`AutoEmpty::NoFinding`]
+    ///     with its "show all" button once it answered (or failed) with nothing to keep.
+    pub(in crate::analytics) fn empty_face(&self, filter: AutoFilter) -> Option<AutoEmpty> {
+        if filter == AutoFilter::All {
+            None
+        } else if matches!(self.run, AutoRun::Done | AutoRun::Failed { .. }) {
+            Some(AutoEmpty::NoFinding)
+        } else {
+            Some(AutoEmpty::Computing)
+        }
+    }
+
     /// The classes and the filter, for the list's memo and its rows.
-    pub(in crate::analytics) fn view(&self) -> AutoView {
+    ///
+    /// Args:
+    ///     coins_axis: The list is on the By-coin axis (see [`AutoPicks::filter`]).
+    pub(in crate::analytics) fn view(&self, coins_axis: bool) -> AutoView {
         AutoView {
             generation: self.generation,
-            filter: self.filter,
+            filter: self.filter(coins_axis),
             classes: self.classes.clone(),
             missing: self.view_missing(),
         }
@@ -420,7 +466,15 @@ impl AutoPicks {
 /// Returns:
 ///     One or two sentences for the tooltip.
 pub(in crate::analytics) fn cell_tip(pick: &CoinPick, holdout_pct: u32) -> String {
-    let mut text = super::coins::auto::verdict_line(pick, holdout_pct);
+    let mut text = String::new();
+    // A grey chip names coins that look like a finding: say up front that they are not one.
+    if !matches!(pick.verdict, PickVerdict::Useful)
+        && (!pick.black.is_empty() || !pick.white.is_empty())
+    {
+        text.push_str(&t!("analytics.auto.tip_unconfirmed"));
+        text.push(' ');
+    }
+    text.push_str(&super::coins::auto::verdict_line(pick, holdout_pct));
     let coins = |list: &[moon_core::db::tuner::coin_pick::CoinSuggestion]| {
         list.iter()
             .map(|c| c.token.as_str())
