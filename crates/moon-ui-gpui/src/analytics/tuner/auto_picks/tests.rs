@@ -199,6 +199,33 @@ fn the_filter_defaults_to_findings_on_by_coin_only() {
     assert_eq!(auto.filter(false), AutoFilter::Confirmed);
 }
 
+/// The done line's "of M" is the total the list handed in, which is the header's "of Y".
+/// Substituting the unfiltered strategy count made the row say "of 643" beside a header
+/// that said "of 595".
+#[test]
+fn the_done_line_uses_the_list_total_it_is_given() {
+    crate::test_locale::warm();
+    let _locale = crate::test_locale::force("en");
+    let mut auto = AutoPicks::default();
+    let (seq, _) = auto.begin(key(1));
+    let mut picks = HashMap::new();
+    picks.insert(
+        "1@7".to_string(),
+        pick(&["XALPHA"], &[], PickVerdict::Useful),
+    );
+    assert_eq!(auto.land(seq, 30, Ok(Some(picks))), (true, false));
+    let (text, warn) = auto.status(595).expect("done");
+    assert!(!warn);
+    assert!(
+        text.contains("595"),
+        "done line must name the list total it was given, got {text}"
+    );
+    assert!(
+        !text.contains("643"),
+        "done line must not keep a second population, got {text}"
+    );
+}
+
 /// An empty filtered list says "still computing" until the batch answers, and only then the
 /// "no findings" state with its "show all" button: showing that state on the default filter
 /// while the batch runs told the user there was nothing before anything was counted.

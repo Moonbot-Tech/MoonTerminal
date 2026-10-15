@@ -397,10 +397,12 @@ impl AutoPicks {
         }
     }
 
-    /// The toolbar's progress sentence and whether it is a warning.
+    /// The auto-pick progress sentence and whether it is a warning.
     ///
     /// Args:
-    ///     total: Strategies in the list, the "of M" of every sentence.
+    ///     total: The strategy list after every filter but the auto-pick one. Both sentences
+    ///         use it as "of M", the same population the list header calls "of Y". The batch's
+    ///         own count is a different set (every strategy the scan fits) and must not replace it.
     ///
     /// Returns:
     ///     `None` before the first batch, or when the database is simply absent.
@@ -408,14 +410,9 @@ impl AutoPicks {
         match &self.run {
             AutoRun::Idle => None,
             AutoRun::Running { progress } => {
-                let (done, of) = progress.counts();
+                let (done, _) = progress.counts();
                 Some((
-                    t!(
-                        "analytics.auto.progress",
-                        k = done,
-                        m = if of > 0 { of } else { total }
-                    )
-                    .to_string(),
+                    t!("analytics.auto.progress", k = done, m = total).to_string(),
                     false,
                 ))
             }

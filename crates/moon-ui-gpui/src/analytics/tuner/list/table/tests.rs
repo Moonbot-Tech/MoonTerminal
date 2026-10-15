@@ -12,7 +12,10 @@ use rust_i18n::t;
 
 use super::super::super::auto_picks::{AutoClass, AutoFilter};
 use super::super::auto_filter_el;
-use super::{auto_cell_el, auto_cell_text, auto_computing_el, auto_empty_el, auto_progress_row};
+use super::{
+    auto_cell_el, auto_cell_text, auto_computing_el, auto_empty_el, auto_progress_row,
+    strat_list_frame,
+};
 use crate::design;
 
 /// Width of the probe window, in font px: a narrow strategy list.
@@ -257,6 +260,222 @@ fn the_auto_progress_line_is_never_clipped(cx: &mut gpui::TestAppContext) {
                 assert!(
                     f32::from(txt.size.width) + 0.1 >= need,
                     "progress sentence clipped ({at})"
+                );
+            }
+        }
+    }
+}
+
+/// Card widths the strategy list is used at, in font px. 1330 is the width where the live
+/// card wrapped the progress line one glyph per line.
+const CARD_WIDTHS: [f32; 3] = [900.0, 1330.0, 1800.0];
+
+/// The strategy card in the same column the strategies tab uses: the list shares the column
+/// with a detail pane, and the column is a flex child. A window-sized box around the progress
+/// line alone is what let the previous probe pass.
+struct CardProgressProbe {
+    text: String,
+    warn: bool,
+    fraction: Option<f32>,
+}
+
+impl Render for CardProgressProbe {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let toolbar = h_flex()
+            .debug_selector(|| "an-strat-toolbar".into())
+            .w_full()
+            .flex_none()
+            .px(design::ui_px(cx, 12.0))
+            .py(design::ui_px(cx, 8.0))
+            .items_center()
+            .gap(design::ui_px(cx, 8.0))
+            .font_family(design::ui_font())
+            .child(div().flex_none().child("list"))
+            .child(div().flex_none().child("mode"))
+            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(design::t_caption(cx))
+                    .child("shown"),
+            );
+        let filter = div()
+            .debug_selector(|| "an-strat-filter".into())
+            .w_full()
+            .flex_none()
+            .h(design::ui_px(cx, 32.0));
+        let header = div()
+            .debug_selector(|| "an-strat-header".into())
+            .w_full()
+            .flex_none()
+            .h(design::ui_px(cx, 28.0));
+        let table_row = div()
+            .debug_selector(|| "an-strat-probe-row".into())
+            .w_full()
+            .flex_none()
+            .h(design::ui_px(cx, 28.0))
+            .child("row");
+        let card = strat_list_frame(
+            p,
+            toolbar,
+            Some(auto_progress_row(
+                self.text.clone(),
+                self.warn,
+                self.fraction,
+                p,
+                cx,
+            )),
+            filter,
+            header,
+            table_row,
+            cx,
+        );
+        div().size_full().child(
+            h_flex()
+                .size_full()
+                .p(design::ui_px(cx, 10.0))
+                .gap(design::ui_px(cx, 8.0))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .min_h_0()
+                        .gap(design::ui_px(cx, 8.0))
+                        .child(card)
+                        .child(div().flex_none().w_full().h(design::ui_px(cx, 160.0))),
+                )
+                .child(
+                    // Out of flow, so it does not steal width from the card. One caption line,
+                    // the same face the progress row uses, is the height the row must match.
+                    div()
+                        .absolute()
+                        .top(px(0.0))
+                        .left(px(0.0))
+                        .debug_selector(|| "probe-line".into())
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .font_family(design::ui_font())
+                        .text_size(design::t_caption(cx))
+                        .child("Ag"),
+                ),
+        )
+    }
+}
+
+/// The auto-pick line is one caption line tall and as wide as the strategy card, on every
+/// tab that shows the list. The toolbar stays above it and the first strategy row stays
+/// inside the card below it.
+///
+/// A text child with `min_w_0` and no nowrap, inside this card, wraps one glyph per line.
+/// At 1330 px that strip is hundreds of pixels tall and pushes the table out of the card.
+/// The standalone probe at 1000 px never built this column, so it stayed green.
+#[gpui::test]
+fn the_auto_progress_line_is_one_row_of_the_strategy_card(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            cx,
+        )
+    });
+    let (pad, window_h) = cx.update(|cx| {
+        (
+            f32::from(design::ui_px(cx, 10.0)),
+            f32::from(design::ui_px(cx, 560.0)),
+        )
+    });
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let sentences = [
+            (
+                t!("analytics.auto.progress", k = 5, m = 595).to_string(),
+                false,
+                Some(0.4),
+            ),
+            (
+                t!("analytics.auto.done", n = 5, m = 595).to_string(),
+                false,
+                None,
+            ),
+            (t!("analytics.auto.busy").to_string(), true, None),
+            (t!("analytics.auto.failed").to_string(), true, None),
+        ];
+        for card_w in CARD_WIDTHS {
+            for (text, warn, fraction) in &sentences {
+                let probe = CardProgressProbe {
+                    text: text.clone(),
+                    warn: *warn,
+                    fraction: *fraction,
+                };
+                let window = cx.open_window(
+                    gpui::size(px(card_w + pad * 2.0), px(window_h)),
+                    move |_, _| probe,
+                );
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let at = format!("{} card {card_w} {text:?}", language.code());
+                let card = visual.debug_bounds("an-strat-card").expect("card");
+                let row = visual
+                    .debug_bounds("an-auto-progress")
+                    .unwrap_or_else(|| panic!("progress row not laid out ({at})"));
+                let txt = visual
+                    .debug_bounds("an-auto-progress-txt")
+                    .unwrap_or_else(|| panic!("progress text not laid out ({at})"));
+                let toolbar = visual.debug_bounds("an-strat-toolbar").expect("toolbar");
+                let table = visual
+                    .debug_bounds("an-strat-probe-row")
+                    .expect("first row");
+                let line = visual.debug_bounds("probe-line").expect("caption line");
+                let h = |b: gpui::Bounds<gpui::Pixels>| f32::from(b.size.height);
+                let w = |b: gpui::Bounds<gpui::Pixels>| f32::from(b.size.width);
+                assert!(
+                    (w(card) - card_w).abs() <= 2.0,
+                    "card width {} is not {card_w} ({at})",
+                    w(card)
+                );
+                assert!(
+                    (h(txt) - h(line)).abs() <= 1.0,
+                    "progress text is not one line: text {} line {} row {} ({at})",
+                    h(txt),
+                    h(line),
+                    h(row)
+                );
+                assert!(
+                    (h(row) - h(line)).abs() <= 1.0,
+                    "progress row is not one line: row {} line {} ({at})",
+                    h(row),
+                    h(line)
+                );
+                assert!(
+                    w(row) + 1.0 >= w(card) - 2.0,
+                    "progress row width {} does not span card {} ({at})",
+                    w(row),
+                    w(card)
+                );
+                let inside = |b: gpui::Bounds<gpui::Pixels>, what: &str| {
+                    assert!(
+                        b.origin.y + px(0.5) >= card.origin.y
+                            && b.bottom() <= card.bottom() + px(0.5)
+                            && b.origin.x + px(0.5) >= card.origin.x
+                            && b.right() <= card.right() + px(0.5)
+                            && h(b) > 1.0,
+                        "{what} is not visible inside the card ({at}) card={card:?} item={b:?}"
+                    );
+                };
+                inside(toolbar, "toolbar");
+                inside(table, "first strategy row");
+                assert!(
+                    toolbar.bottom() <= row.origin.y + px(0.5),
+                    "progress line must sit under the toolbar ({at})"
+                );
+                assert!(
+                    table.origin.y + px(0.5) >= row.bottom(),
+                    "first strategy row must sit below the progress line ({at})"
                 );
             }
         }
