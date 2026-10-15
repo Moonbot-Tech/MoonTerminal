@@ -590,9 +590,11 @@ impl AnalyticsView {
             self.ticks.steps_per_param()
         );
         probe::watch(handle.clone(), restarts, seq);
-        self.poll_ticks_search(handle.clone(), seq, cx);
-        // What the point cost the answer brings is measured under (`estimate.rs`).
-        let cost_key = self.ticks_cost_key();
+        let cost_key = self
+            .ticks_search_size(only)
+            .and_then(|size| self.ticks_cost_key(&size, restarts));
+        self.poll_ticks_search(handle.clone(), seq, cost_key, started, cx);
+        let timing_handle = handle.clone();
         self.spawn_latest_db(
             &[ReadLane::TicksSearch],
             false,
@@ -617,9 +619,6 @@ impl AnalyticsView {
                     risk,
                     screen_entry,
                 };
-                // The search alone is timed for the point cost: the queue and the unpacking of
-                // the tapes above are no point's.
-                let searching = std::time::Instant::now();
                 // The floor holds over the set the search scored: the deals the strategies as
                 // they stand leave open are cut from it first.
                 let Suggested {
@@ -633,9 +632,9 @@ impl AnalyticsView {
                 });
                 // A candidate is laid over В1 only beside a result the sample may be searched for.
                 let candidate = candidate.filter(|_| !matches!(result, Err(SearchMiss::TooFew { .. })));
-                (result, candidate, searched, searching.elapsed())
+                (result, candidate, searched)
             },
-            move |this, (result, candidate, searched, searched_for), cx| {
+            move |this, (result, candidate, searched), cx| {
                 log::info!(
                     target: moon_core::diagnostics::TICKS_AXIS_TARGET,
                     "[x] ticks search: #{seq} answered after {} ms ({}), current #{}",
@@ -657,6 +656,7 @@ impl AnalyticsView {
                 if this.ticks.sugg_seq != seq {
                     return;
                 }
+                super::estimate::take_search_cost(cost_key, timing_handle.completed(), started.elapsed());
                 this.ticks.sugg = SuggState::Idle;
                 // В1 as the search found it: a candidate is laid over this, never over the
                 // answer, whose completed values (a `TakeProfit` its `UseTakeProfit` brought) sit
@@ -664,12 +664,6 @@ impl AnalyticsView {
                 let before = this.ticks.variant.clone();
                 match result {
                     Ok(result) => {
-                        this.ticks_take_search_cost(
-                            cost_key,
-                            searched_for,
-                            result.stats.evaluations,
-                            result.stats.fills_reused,
-                        );
                         // The answer's own В1: what its holdout verdict speaks for
                         // (`current_result`). A candidate laid over В1 below is another point, so
                         // the verdict stays off the column while it holds the candidate.
@@ -714,9 +708,16 @@ impl AnalyticsView {
 
     /// Repaint the search row while the run it follows goes on, each time its restart count
     /// moves — nothing else repaints a quiet window, and the count would stand still for the
-    /// whole run. Ends when the run finished or was replaced (`sugg_seq`); a window closed under
-    /// it stops the run, which has nobody left to answer.
-    fn poll_ticks_search(&self, handle: SearchHandle, seq: u64, cx: &mut Context<Self>) {
+    /// whole run. Publishes restart timing for the next button estimate. Ends when the run
+    /// finished or was replaced (`sugg_seq`); closing the window stops its unobserved search.
+    fn poll_ticks_search(
+        &self,
+        handle: SearchHandle,
+        seq: u64,
+        cost_key: Option<super::estimate::CostKey>,
+        started: std::time::Instant,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let mut shown = None;
@@ -731,6 +732,7 @@ impl AnalyticsView {
                         // A search of both groups moves its entry points long before a restart.
                         let done = (handle.completed(), handle.points());
                         if running && shown != Some(done) {
+                            super::estimate::take_search_cost(cost_key, done.0, started.elapsed());
                             shown = Some(done);
                             cx.notify();
                         }

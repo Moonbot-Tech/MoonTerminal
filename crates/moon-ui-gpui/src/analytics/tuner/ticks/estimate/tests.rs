@@ -2,9 +2,88 @@ use std::time::Duration;
 
 use super::{count_text, duration_text, pick_all_label};
 
-/// A missing measured cost must not add a guessed duration; a measured duration appears once.
+/// A separate startup formula would drift from the measured running ETA after sample changes.
 #[test]
-fn the_search_button_shows_only_a_measured_time() {
+fn observed_button_and_zero_progress_eta_share_restart_cost() {
+    use super::{CostKey, observed_start_cost, remaining_time};
+    use moon_core::db::tuner::ticks::{ModelSettings, search::SearchSize};
+    let size = SearchSize {
+        points: 50_000.0,
+        fresh: 500.0,
+        exit_fields: 27,
+        ..Default::default()
+    };
+    let key = CostKey::new(293, 70, 500, &size, ModelSettings::default());
+    let elapsed = Duration::from_secs(156);
+    let observed = observed_start_cost(100, elapsed).unwrap();
+    let button = key.estimate(500, Some((key, observed)));
+    assert_eq!(button, Duration::from_secs(780));
+    assert_eq!(
+        remaining_time(0, 500, Duration::ZERO, Some(button)),
+        Some(button)
+    );
+    assert_eq!(
+        remaining_time(100, 500, elapsed, None),
+        Some(Duration::from_secs(624))
+    );
+    let larger = CostKey::new(586, 70, 500, &size, ModelSettings::default());
+    assert_eq!(
+        larger.estimate(500, Some((key, observed))),
+        Duration::from_secs(1560)
+    );
+    let wider = CostKey::new(
+        293,
+        70,
+        500,
+        &SearchSize {
+            points: 100_000.0,
+            fresh: 1000.0,
+            ..size
+        },
+        ModelSettings::default(),
+    );
+    assert_eq!(
+        wider.estimate(500, Some((key, observed))),
+        Duration::from_secs(1560)
+    );
+    let shorter = CostKey::new(
+        293,
+        70,
+        250,
+        &SearchSize {
+            points: 25_000.0,
+            fresh: 250.0,
+            ..size
+        },
+        ModelSettings::default(),
+    );
+    assert_eq!(
+        shorter.estimate(250, Some((key, observed))),
+        Duration::from_secs(390)
+    );
+}
+
+/// The first-run fallback must not repeat the reported four-minute underestimate.
+#[test]
+fn unobserved_reference_is_conservative_and_zero_progress_cannot_calibrate() {
+    use super::{CostKey, observed_start_cost};
+    use moon_core::db::tuner::ticks::{ModelSettings, search::SearchSize};
+    let size = SearchSize {
+        points: 50_000.0,
+        fresh: 500.0,
+        exit_fields: 27,
+        ..Default::default()
+    };
+    let key = CostKey::new(293, 70, 500, &size, ModelSettings::default());
+    let reference = Duration::from_secs(780);
+    assert!(key.estimate(500, None).as_secs_f64() / reference.as_secs_f64() >= 1.0);
+    assert_eq!(observed_start_cost(0, reference), None);
+    assert_eq!(observed_start_cost(500, Duration::ZERO), None);
+}
+
+/// A missing sample omits the estimate; an available prediction appears once.
+#[test]
+fn the_search_button_shows_an_available_prediction_once() {
     let _locale = crate::test_locale::force("en");
     assert_eq!(pick_all_label(None), "Search selected");
     assert_eq!(pick_all_label(Some("3 min")), "Search selected · ≈ 3 min");

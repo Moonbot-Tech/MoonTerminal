@@ -569,15 +569,6 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) schema_reload: Option<u64>,
     /// The grid's sections the user opened; every section starts folded (`grid.rs`).
     pub(in crate::analytics::tuner) open_sections: HashSet<ParamSection>,
-    /// What one whole replay of a search costs (`search::full_replays`), with what it was measured
-    /// under — the time the estimate under the grid prints (`estimate.rs`). Measured when what it
-    /// is measured under changes, and taken again from every finished search.
-    pub(in crate::analytics::tuner) point_cost:
-        Option<(super::estimate::CostKey, std::time::Duration)>,
-    /// What the measurement in flight is measured under, so a paint does not start another.
-    pub(in crate::analytics::tuner) cost_pending: Option<super::estimate::CostKey>,
-    /// The pending measurement of `point_cost`; dropping it cancels it.
-    pub(in crate::analytics::tuner) cost_task: Option<gpui::Task<()>>,
 }
 
 impl Default for TicksState {
@@ -642,9 +633,6 @@ impl Default for TicksState {
             keys_sig: None,
             schema_reload: None,
             open_sections: HashSet::new(),
-            point_cost: None,
-            cost_pending: None,
-            cost_task: None,
         }
     }
 }

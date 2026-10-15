@@ -359,8 +359,6 @@ impl AnalyticsView {
                 });
             }
         }
-        // Reprice the search button whenever the point's measurement settings change.
-        self.ticks_measure_cost(cx);
         // Coverage is useful before a search too: it explains which trades can teach it.
         let accuracy = self.ticks_accuracy_row(p, cx);
         v_flex()
