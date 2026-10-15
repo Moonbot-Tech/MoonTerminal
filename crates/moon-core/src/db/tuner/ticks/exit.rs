@@ -176,6 +176,8 @@ pub struct ExitParams {
     pub price_down_timer_s: f64,
     pub price_down_pct: f64,
     pub price_down_delay_s: f64,
+    /// The core omits `PriceDownRelative` at its default NO; strategies that set it dump
+    /// `True`. Archived Exit lines without the field step by a fixed share of the buy.
     pub price_down_relative: bool,
     pub price_down_allowed_drop_pct: f64,
     // SellLevel
@@ -258,7 +260,7 @@ impl Default for ExitParams {
             price_down_timer_s: 0.0,
             price_down_pct: 0.0,
             price_down_delay_s: 0.0,
-            price_down_relative: true,
+            price_down_relative: false,
             price_down_allowed_drop_pct: 0.0,
             sell_level_delay_s: 0.0,
             sell_level_delay_next_s: 0.0,

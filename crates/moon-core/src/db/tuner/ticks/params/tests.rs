@@ -2,6 +2,34 @@
 
 use super::*;
 
+/// Omitted dump fields use the absolute step, while an explicit relative step survives parsing.
+#[test]
+fn price_down_relative_uses_the_core_default_when_omitted() {
+    let defaults = HashMap::new();
+    for (raw, expected) in [
+        (r#"{"StrategyName":"UNIT_01","Coins":"XALPHA"}"#, false),
+        (
+            r#"{"StrategyName":"UNIT_01","Coins":"XALPHA","PriceDownRelative":true}"#,
+            true,
+        ),
+    ] {
+        let json: HashMap<String, serde_json::Value> = serde_json::from_str(raw).unwrap();
+        let values = json
+            .into_iter()
+            .map(|(key, value)| (key, value.to_string()))
+            .collect();
+        let strategy = StrategyValues {
+            values: &values,
+            defaults: &defaults,
+        };
+        assert_eq!(
+            exit_params(&strategy, ModelSettings::default()).price_down_relative,
+            expected,
+            "{raw}"
+        );
+    }
+}
+
 /// A write's corridor warning must key on every field that moves a MoonShot's corridor: the
 /// Entry group, and `MaxModifier` of the Exit group, which caps the `MShotAdd*` sum too — and on
 /// no field the corridor does not read.

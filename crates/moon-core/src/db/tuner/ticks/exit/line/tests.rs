@@ -96,12 +96,14 @@ fn the_take_is_on_the_book_only_after_the_latency() {
 
 // ---- the mirror and the archive -------------------------------------------------------------
 
+/// A short mirrors relative PriceDown steps and places its stop above the buy.
 #[test]
 fn a_short_mirrors_every_rule() {
     let p = ExitParams {
         price_down_timer_s: 1.0,
         price_down_pct: 50.0,
         price_down_delay_s: 1.0,
+        price_down_relative: true,
         price_down_allowed_drop_pct: 0.1,
         stop_loss_pct: -1.0,
         ..params()
@@ -138,12 +140,14 @@ fn a_spike_through_the_old_level_fills_before_a_step_lands() {
     assert!((w.exit.price - 101.0).abs() < 1e-9);
 }
 
+/// Verification compares every relative step with the archived line, not only its exit price.
 #[test]
 fn verify_holds_the_line_against_the_archived_points() {
     let p = ExitParams {
         price_down_timer_s: 1.0,
         price_down_pct: 50.0,
         price_down_delay_s: 1.0,
+        price_down_relative: true,
         price_down_allowed_drop_pct: 0.1,
         ..params()
     };
@@ -270,6 +274,7 @@ fn clock_params(take_pct: f64) -> ExitParams {
         price_down_timer_s: 1.0,
         price_down_pct: 50.0,
         price_down_delay_s: 1.0,
+        price_down_relative: true,
         price_down_allowed_drop_pct: 0.1,
         model: ModelSettings {
             latency_ms: 100.0,
