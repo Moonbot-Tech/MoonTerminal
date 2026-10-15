@@ -927,8 +927,10 @@ Practical example: popup/menu/dialog mechanics must go through `moon_ui::compone
 (`WindowExt`, `Root` dialog/sheet/context-menu/notification layers, Moon menu wrappers). If
 the base Longbridge `ContextMenuExt` draws in a foreign theme, it must be brought to the Moon theme in MoonUI
 or a Moon wrapper used. The terminal must not render an open context menu as a panel
-child: open it through `window.open_moon_context_menu(...)`, so z-order, dismiss and future
-portal behaviour remain MoonUI Root's responsibility.
+child: open it through `window.open_fitted_moon_context_menu(...)` (the menu fits its rows between
+a minimum and a maximum width), so z-order, dismiss and future portal behaviour remain MoonUI
+Root's responsibility. MoonUI's fixed-width `open_moon_context_menu` is legacy: it clips
+translated rows, and the terminal no longer calls it.
 
 Root overlay layers are not external render hooks for the application. The application opens a dialog,
 sheet, context menu and notification through `WindowExt`/Moon wrappers; `Root::render` itself decides where

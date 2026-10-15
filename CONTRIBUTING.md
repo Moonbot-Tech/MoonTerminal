@@ -82,7 +82,7 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
 
 - **MoonUI first.** Do not hand-roll a widget the stack already has; extend MoonUI upstream and
   consume it through `moon_ui::*`.
-- Popups and menus go through `window.open_moon_context_menu(...)`, never as a child of a panel:
+- Popups and menus go through `window.open_fitted_moon_context_menu(...)`, never as a child of a panel:
   z-order and dismissal belong to MoonUI's `Root`.
 - Panels ship as a dock tab, a detached window and a group-window host, at widths from a narrow
   side dock to full screen. Give each panel a defined narrow behaviour; a horizontal scrollbar is
