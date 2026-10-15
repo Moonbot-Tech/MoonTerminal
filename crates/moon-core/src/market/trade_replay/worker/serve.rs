@@ -277,7 +277,15 @@ pub(super) fn serve(
     cache: &Mutex<VecDeque<(OutcomeKey, Remembered)>>,
     request: &TradeReplayRequest,
 ) -> Served {
-    let venue = request.address.venue;
+    // A venue the exchange directory does not know has no public route to ask. Its core's own
+    // prints answer it when the core still holds them (`core_first`, which replaces this answer);
+    // this is the honest empty when it does not.
+    let Some(venue) = request.address.venue else {
+        return Served {
+            outcome: TradeReplayOutcome::Empty(TradeReplayEmpty::UnknownVenue),
+            tick_stage: None,
+        };
+    };
     let Some(route) = kline_route(venue) else {
         return Served {
             outcome: TradeReplayOutcome::Empty(TradeReplayEmpty::NoEndpoint { brand: venue.brand }),
@@ -333,7 +341,7 @@ pub(super) fn serve(
 
     // The SQLite cache is read first and unconditionally: it costs no request and is not gated.
     if let Some(rows) = read_cached_bars(request.address.cache.as_ref(), request) {
-        let mut series = compose(request, venue, rows);
+        let mut series = compose(request, Some(venue), rows);
         let tick_stage = stage_and_stamp(venue, &key, &mut series);
         // Never settled here: a stage is always queued (`tick_stage_for`), its `Pending` must be
         // re-decided — or answered — on the next open, and the stage's own answer is what is
@@ -519,7 +527,7 @@ pub(super) fn serve(
             tick_stage: None,
         };
     }
-    let mut series = compose(request, venue, rows);
+    let mut series = compose(request, Some(venue), rows);
     // Only a COMPLETE run may be remembered. Pages are issued left to right, so a cancelled run
     // holds the window's left-hand prefix — typically missing exactly the bars around the exit —
     // and the in-memory ring, unlike the SQLite path, has no coverage re-check to catch that on

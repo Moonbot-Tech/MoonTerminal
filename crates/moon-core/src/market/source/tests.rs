@@ -405,3 +405,36 @@ fn position_cap_hides_zero_and_non_finite() {
     assert_eq!(position_cap(f64::INFINITY), None);
     assert_eq!(position_cap(25_000.0), Some(25_000.0));
 }
+
+/// A core on a venue the exchange directory does not know still resolves to a replay address —
+/// its key and its own prints need no directory — carrying no venue, so a reader of the venue's
+/// REST can tell it has no route; before LinKvo 15.10 it was refused outright and neither the
+/// recorder nor the trade window ever saw it. A known venue keeps its venue; a core without a
+/// provider has no address at all.
+#[test]
+fn an_unknown_venue_resolves_without_a_venue() {
+    let source = MarketDataSource::new(MarketStore::shared(0.0));
+    {
+        let mut inner = source.inner.write().unwrap();
+        inner.core_provider.insert(1, 1);
+        inner.core_provider.insert(2, 2);
+        inner
+            .provider_exchange
+            .insert(1, crate::feed::ExchangeId::new(77));
+        inner
+            .provider_exchange
+            .insert(2, crate::feed::ExchangeId::new(4));
+    }
+    let unknown = source
+        .replay_address(1)
+        .expect("an unknown venue still resolves");
+    assert_eq!(unknown.exchange_key, "77:00000000");
+    assert!(unknown.venue.is_none());
+    let known = source.replay_address(2).expect("a known venue resolves");
+    assert_eq!(known.exchange_key, "4:00000000");
+    assert_eq!(known.venue, crate::venue::venue(4));
+    assert!(matches!(
+        source.replay_address(3),
+        Err(ReplayAddressError::NotConnected)
+    ));
+}

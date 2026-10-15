@@ -821,6 +821,11 @@ impl SessionManager {
         let Ok(address) = self.market_source.replay_address(core) else {
             return false;
         };
+        // The catch-up fetches from a venue's public REST: a venue the directory does not know
+        // has no route, so its core is not listed — as before its address resolved at all.
+        let Some(venue) = address.venue else {
+            return false;
+        };
         let catalog_ready = self.market_source.tradable_coins(core).is_some();
         if !catalog_ready {
             return false;
@@ -923,7 +928,7 @@ impl SessionManager {
                             id,
                             exchange: address.exchange_key.clone(),
                             market,
-                            venue: address.venue,
+                            venue,
                             open_ms,
                             close_ms,
                             emulator: row.emulator,
@@ -996,6 +1001,8 @@ impl SessionManager {
         if open_ms <= 0 || close_ms < open_ms {
             return;
         }
+        // A venue the exchange directory does not know (`venue: None`) is recorded live like any
+        // other; only the recorder's REST catch-up leaves it out.
         crate::market::tape_recorder::trade_closed(
             &address.exchange_key,
             &market,
@@ -1008,6 +1015,11 @@ impl SessionManager {
         // `trades.sqlite` is the terminal's capture; a station keeps its tape in the recorder's
         // own file and never opens this one (STATION.md §4.3).
         if crate::feed::station::enabled() {
+            return;
+        }
+        // The trade window serves an unknown venue from its core's own prints only and never
+        // reads these tiles for it, so they are not filed.
+        if address.venue.is_none() {
             return;
         }
         crate::market::trade_replay::worker::capture(
@@ -1053,6 +1065,8 @@ impl SessionManager {
             log::debug!("[x] tape recorder: open of {coin} resolves to no market on core {core}");
             return;
         };
+        // A venue the exchange directory does not know resolves too (`venue: None`) and is
+        // recorded like any other.
         let Ok(address) = self.market_source.replay_address(core) else {
             log::debug!("[x] tape recorder: core {core} has no replay address yet");
             return;

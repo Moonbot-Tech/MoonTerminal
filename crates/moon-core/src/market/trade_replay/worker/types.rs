@@ -258,10 +258,14 @@ pub(super) type LaneKey = (&'static str, ReplayIntent);
 /// The lane key of a request: the kline route's host — the budget every call of the request
 /// is metered under (the trade route derives its host from the same table) — and the intent,
 /// so a chart window and the tuner's batch on the same host walk side by side. A venue with no
-/// route answers `NoEndpoint` without a call and shares one idle lane per intent.
+/// route — or one the exchange directory does not know — answers without a call and shares one
+/// idle lane per intent.
 pub(super) fn lane_key(request: &TradeReplayRequest) -> LaneKey {
     (
-        kline_route(request.address.venue)
+        request
+            .address
+            .venue
+            .and_then(kline_route)
             .map(|route| route.host())
             .unwrap_or(""),
         request.intent,

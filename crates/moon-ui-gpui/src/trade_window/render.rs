@@ -351,10 +351,12 @@ impl TradeWindowView {
                     TickStatus::Disabled => {
                         t!("trade_window.source.candles_ticks_disabled", min = tf_min).to_string()
                     }
+                    // Bars come only from a known venue's route, so the brand is there; an empty
+                    // name is what a series without one would show.
                     TickStatus::NoRoute => t!(
                         "trade_window.source.candles_no_route",
                         min = tf_min,
-                        brand = brand.display()
+                        brand = brand.map_or("", |brand| brand.display())
                     )
                     .to_string(),
                     TickStatus::OutOfRetention { retention_ms } => t!(

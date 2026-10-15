@@ -173,7 +173,9 @@ enum Cmd {
     Closed {
         exchange: String,
         market: String,
-        venue: crate::venue::Venue,
+        /// `None` for a venue this build's directory does not know: recorded live, never
+        /// caught up from a public REST it has no route to.
+        venue: Option<crate::venue::Venue>,
         trade: TradeId,
         open_ms: i64,
         close_ms: i64,
@@ -253,7 +255,9 @@ pub fn trade_opened(
     }
 }
 
-/// A trade closed on `exchange_key`/`market` (true UTC).
+/// A trade closed on `exchange_key`/`market` (true UTC). `venue` is `None` for a venue the
+/// exchange directory does not know: its tape is recorded live like any other, and only the
+/// catch-up — which fetches a venue's public REST — leaves it out.
 pub fn trade_closed(
     exchange_key: &str,
     market: &str,
@@ -261,7 +265,7 @@ pub fn trade_closed(
     open_ms: i64,
     close_ms: i64,
     emulator: Option<bool>,
-    venue: crate::venue::Venue,
+    venue: Option<crate::venue::Venue>,
 ) {
     if enabled() {
         send(Cmd::Closed {
@@ -617,7 +621,13 @@ impl Recorder {
                         self.tasks.remove(&key);
                     }
                 }
-                if catchup::enabled() && emulator != Some(true) {
+                // The catch-up fetches from a venue's public REST: a venue the directory does
+                // not know has no route, so its trade stays with the live recording alone. Its
+                // prints are kept inside the retention period like any other; what it lacks is
+                // the known trade's own window, which `retention::keep_map` also keeps past the
+                // retention edge — so such a trade straddling the edge loses its older part.
+                if let Some(venue) = venue.filter(|_| catchup::enabled() && emulator != Some(true))
+                {
                     self.catchup.protect(vec![catchup::CatchupTrade {
                         id: trade,
                         exchange: key.0,

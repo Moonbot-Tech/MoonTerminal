@@ -55,6 +55,12 @@ struct Pass {
 }
 
 impl RecorderCatchup {
+    /// Whether `id` is among the trades the catch-up and the retention know of.
+    #[cfg(test)]
+    pub(crate) fn knows(&self, id: TradeId) -> bool {
+        self.known.contains_key(&id)
+    }
+
     /// Merge protecting listings and live closes independently of the fetch queue.
     pub(crate) fn protect(&mut self, trades: Vec<CatchupTrade>) {
         self.known

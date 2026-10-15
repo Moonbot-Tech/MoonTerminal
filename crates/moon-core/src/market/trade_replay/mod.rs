@@ -228,11 +228,13 @@ pub enum TradeReplayEmpty {
     /// Carries the brand so the window can NAME it. Retrying cannot help, so the caller offers no
     /// retry.
     NoEndpoint { brand: Brand },
-    /// The core's platform ordinal resolves to no venue this build knows.
+    /// The core's platform ordinal resolves to no venue this build knows, and its core holds no
+    /// prints of the window either.
     ///
     /// Either the core never reported one, or it is newer than this build. `venue.rs` returns
-    /// `None` rather than a neighbour's answer on purpose, and this variant carries that refusal
-    /// through instead of guessing.
+    /// `None` rather than a neighbour's answer on purpose, so there is no public route to ask;
+    /// the core's own prints are served when it still holds them (`worker::serve::core_first`),
+    /// and this is what is left when it does not.
     UnknownVenue,
     /// The trade's own core is not connected, so its venue and market cannot be identified.
     ///
@@ -969,8 +971,9 @@ pub fn tick_identity_salt(source: TradeReplaySource) -> u64 {
 pub struct TradeReplaySeries {
     /// Which of the two kinds of data this actually carries.
     pub source: TradeReplaySource,
-    /// The venue the rows came from, so the window can caption them.
-    pub venue: Venue,
+    /// The venue the rows came from, so the window can caption them; `None` for a venue the
+    /// exchange directory does not know, whose rows are its core's own prints.
+    pub venue: Option<Venue>,
     /// The window the rows cover.
     pub window: ReplayWindow,
     /// Timeframe of [`Self::candles`] in milliseconds; one minute for every current route.

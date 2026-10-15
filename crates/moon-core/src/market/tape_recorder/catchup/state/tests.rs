@@ -83,7 +83,7 @@ fn review_terminal_closes_do_not_accumulate_retention_rows() {
             Cmd::Closed {
                 exchange: trade.exchange.clone(),
                 market: trade.market.clone(),
-                venue: trade.venue,
+                venue: Some(trade.venue),
                 trade: trade.id,
                 open_ms: trade.open_ms,
                 close_ms: trade.close_ms,
@@ -265,7 +265,7 @@ fn real_trade_closed_after_listing_protects_shared_emulator_tape() {
         Cmd::Closed {
             exchange: real.exchange.clone(),
             market: real.market.clone(),
-            venue: real.venue,
+            venue: Some(real.venue),
             trade: real.id,
             open_ms: real.open_ms,
             close_ms: real.close_ms,

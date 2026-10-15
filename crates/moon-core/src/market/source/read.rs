@@ -17,14 +17,13 @@ use crate::market::candles::ChartCandle;
 
 /// Why a core's exchange could not be addressed for a trade replay.
 ///
-/// Two DIFFERENT facts, and the window says a different thing for each: one asks the user to
-/// reconnect a core, the other tells them this build does not know their exchange.
+/// A venue this build's directory does not know is NOT a failure here: the address carries
+/// `venue: None` ([`ReplayAddress::venue`]), and only the readers that need the venue's public
+/// REST refuse it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReplayAddressError {
     /// The core has no live market-data provider, so nothing about its exchange is knowable.
     NotConnected,
-    /// The core is connected, but its platform ordinal is newer than this build's directory.
-    UnknownVenue,
 }
 
 /// How one core's exchange is addressed by the trade replay, resolved from one source snapshot.
@@ -38,8 +37,11 @@ pub enum ReplayAddressError {
 pub struct ReplayAddress {
     /// Shared source retained for background archive reads against this captured exchange identity.
     pub(crate) history: MarketDataSource,
-    /// The venue the core is connected to, as the exchange directory names it.
-    pub venue: crate::venue::Venue,
+    /// The venue the core is connected to, as the exchange directory names it; `None` for a
+    /// platform ordinal newer than the directory (a broker connected through MoonProto, Aster).
+    /// Such an exchange has no public REST route here, but its cores still serve their own
+    /// prints: the tape recorder records it and the trade window shows the core's ticks.
+    pub venue: Option<crate::venue::Venue>,
     /// Kline-cache address shared by every core on this exchange.
     pub exchange_key: String,
     /// Handle to the ONE open kline cache, or `None` before the terminal supplied its path.
@@ -340,8 +342,8 @@ impl MarketDataSource {
     ///
     /// It also carries the ONE honest limitation of the whole feature. Neither the venue nor the
     /// cache key is durable — the platform ordinal is reported by a LIVE core and is never written
-    /// to `servers.enc` — so a trade whose core is offline, disabled, or since removed resolves to
-    /// `None` here and the window says so by name. That is the same boundary the existing Report
+    /// to `servers.enc` — so a trade whose core is offline, disabled, or since removed is refused
+    /// here and the window says so by name. That is the same boundary the existing Report
     /// coin click already stops at; making it durable means widening the report replica's schema,
     /// which is a different change with a different blast radius.
     ///
@@ -349,8 +351,9 @@ impl MarketDataSource {
     ///     core: Core that recorded the report row.
     ///
     /// Returns:
-    ///     The venue, the shared kline-cache address, and a handle to the cache itself, or `None`
-    ///     when this core has no live market-data provider.
+    ///     The venue (`None` for a platform ordinal the exchange directory does not know), the
+    ///     shared kline-cache address, and a handle to the cache itself; or
+    ///     [`ReplayAddressError::NotConnected`] when this core has no live market-data provider.
     pub fn replay_address(&self, core: CoreId) -> Result<ReplayAddress, ReplayAddressError> {
         let inner = self.inner.read().expect("market source poisoned");
         let provider = inner
@@ -363,15 +366,13 @@ impl MarketDataSource {
             .get(&provider)
             .copied()
             .ok_or(ReplayAddressError::NotConnected)?;
-        // `venue` answers `None` for an ordinal this build does not know rather than guessing a
-        // neighbour's. That is a DIFFERENT fact from a core being offline — the core here is
-        // connected and answering — so it is carried as its own error rather than collapsed into
-        // one "cannot resolve", which would tell the user to reconnect something already
-        // connected.
-        let venue = crate::venue::venue(exchange.code).ok_or(ReplayAddressError::UnknownVenue)?;
         Ok(ReplayAddress {
             history: self.clone(),
-            venue,
+            // `venue` answers `None` for an ordinal this build does not know rather than guessing
+            // a neighbour's. The address still resolves (LinKvo 15.10): the key and the core's
+            // own prints need no directory, only a venue's public REST does — and every reader of
+            // that REST refuses a `None` venue on its own.
+            venue: crate::venue::venue(exchange.code),
             // The exact spelling the live path and the recorder already file rows under; a
             // divergence here would silently split the cache in two.
             exchange_key: format!("{}:{:08x}", exchange.code, exchange.dex),
