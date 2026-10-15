@@ -29,6 +29,10 @@ pub(super) fn query_totals_attempt(
 ) -> rusqlite::Result<ReportTotals> {
     let mut sink = totals::TotalsSink::default();
     let mut open_groups = Vec::new();
+    // Only an empty core list has no cardinality of its own. The distinct set is unioned across
+    // sources here, not summed: one core in two sources is still one core.
+    let mut counted_cores = std::collections::HashSet::<i64>::new();
+    let count_cores = f.core_uids.is_empty();
     // Loop-invariant: `projection` yields a builder for the current-rate mode whatever the cache is
     // doing, and for the historical one exactly when the cache may be joined.
     let valuation_present = f.valuation == ValuationMode::Current || include_valuation;
@@ -49,7 +53,11 @@ pub(super) fn query_totals_attempt(
     // still fails CLOSED on the same source — an unprovable position must never be invented. The
     // realized pass's scope choice lives in `totals::ClosedPass::new`.
     for src in sources {
-        totals::ClosedPass::new(src, f, include_valuation, meta).run_grouped(conn, &mut sink)?;
+        let pass = totals::ClosedPass::new(src, f, include_valuation, meta);
+        pass.run_grouped(conn, &mut sink)?;
+        if count_cores {
+            pass.collect_counted_cores(conn, &mut counted_cores)?;
+        }
     }
     // The open pass: a plain per-quote tally, with no window, no coverage and no volume — none of
     // those mean anything for a position that has not closed. Skipped entirely for a caller that
@@ -78,7 +86,7 @@ pub(super) fn query_totals_attempt(
             }
         }
     }
-    Ok(sink.finish(valuation_present, open_groups))
+    Ok(sink.finish(valuation_present, open_groups, counted_cores.len() as u64))
 }
 
 /// Everything one Report row pass needs except whether the derived cache may be joined.

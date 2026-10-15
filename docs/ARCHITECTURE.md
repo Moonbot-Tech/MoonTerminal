@@ -437,10 +437,13 @@ unified USDT conversion remains complete-only, and a scope where not one trade r
 publishes no volume at all. A source without `sellreason` likewise cannot prove that a closed row is
 not Funding, so it contributes to completeness but cannot publish volume.
 
-The footer states realized profit as a percentage of the average order only when the loaded
-snapshot's own filter names exactly one core — averaging order sizes across cores would mix
-universes with different typical sizes, so the fact is absent for an All or multi-core selection.
-Its currency follows the head figure exactly: the one native bucket the scope carries, or a
+The footer states realized profit as a percentage of the average order for every real scope
+whose counted rows yield a ratio, including an All or multi-core selection. The short text does
+not change with the core count. A single named core keeps the original tooltip. A wider filter
+names the core count beside the average order and the counted orders. An empty filter (every
+core) names how many cores contributed a counted order, never a count of zero, so a mix of
+order sizes stays visible. The no-match
+sentinel still publishes nothing. Its currency follows the head figure exactly: the one native bucket the scope carries, or a
 unified USDT total, denominated and gated the same two ways the head promotes one — never a
 figure in a currency the row does not otherwise show. The unified arm carries its OWN USDT leg
 computed alongside the native one rather than reading the valuation cache's `UsdtTotal::spent`,

@@ -507,6 +507,60 @@ fn average_order_spend_excludes_positive_spend_funding_rows() {
     );
 }
 
+/// An empty core filter must name the distinct cores that contributed a counted order, and the
+/// sliced read must state the same count.
+///
+/// Breakage: summing per-quote `COUNT(DISTINCT core_uid)`, which reports one core that traded
+/// two quotes as two, or counting a Funding row, a zero spend, or a still-open row. An explicit
+/// core list stays at zero because the footer names that list's own length.
+#[test]
+fn empty_core_filter_counts_distinct_counted_cores_once() {
+    let conn = Connection::open_in_memory().expect("open counted-cores fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL, closedate INTEGER,
+             basecurrency INTEGER, profitbtc REAL, spentbtc REAL, sellreason TEXT
+         );
+         INSERT INTO orders_rep VALUES
+             (7, 1, 1700000000, 1, 10.0, 100.0, 'Sell Price'),
+             (7, 2, 1700000060, 8, 4.0, 40.0, 'Sell Price'),
+             (8, 3, 1700000120, 1, 6.0, 60.0, 'Sell Price'),
+             (9, 4, 1700000180, 1, 50.0, 4.0, 'Funding'),
+             (10, 5, 1700000240, 1, 1.0, 0.0, 'Sell Price'),
+             (11, 6, 0, 1, 9.0, 90.0, 'Sell Price');",
+    )
+    .expect("seed counted cores");
+
+    let all = query_totals(&conn, &ReportFilter::default()).expect("all-cores totals");
+    assert_eq!(
+        all.quotes.counted_cores, 2,
+        "cores 7 and 8 only: two quotes are one core, and Funding, zero spend, and an open row are not"
+    );
+    let explicit = query_totals(
+        &conn,
+        &ReportFilter {
+            core_uids: vec![7, 8],
+            ..ReportFilter::default()
+        },
+    )
+    .expect("explicit totals");
+    assert_eq!(explicit.quotes.counted_cores, 0);
+
+    let filter = ReportFilter {
+        rows: RowScope::Closed,
+        ..ReportFilter::default()
+    };
+    let slices = [super::TotalsSlice {
+        core_uids: None,
+        date_from: None,
+        date_to: None,
+    }];
+    let sliced = super::query_totals_sliced(&conn, &filter, &slices).expect("sliced totals");
+    let own = query_totals(&conn, &filter).expect("closed all-cores totals");
+    assert_eq!(own.quotes.counted_cores, 2);
+    assert_eq!(sliced[0].quotes.counted_cores, own.quotes.counted_cores);
+}
+
 /// Removing the exit leg, signing short quantity, reusing `spentbtc`, moving the closed/Funding
 /// predicates into `build_where`, or coupling volume completeness to profit coverage turns one of
 /// these exact assertions red and would misstate the current filtered Report footer.

@@ -40,6 +40,8 @@ pub(super) struct ClosedPass<'a> {
     columns: Vec<SumColumn>,
     /// Whether the columns carry the six valuation-coverage sums.
     valued: bool,
+    /// Counted entry-spend predicate. The distinct-core statement adds it to [`Self::where_sql`].
+    counted: String,
 }
 
 impl<'a> ClosedPass<'a> {
@@ -82,7 +84,9 @@ impl<'a> ClosedPass<'a> {
             columns.extend(parts.sum_columns());
         }
         columns.extend(traded_volume_sql(src, rate).sum_columns());
-        columns.extend(entry_spend_sql(src, rate).sum_columns());
+        let spend = entry_spend_sql(src, rate);
+        let counted = spend.counted_predicate().to_string();
+        columns.extend(spend.sum_columns());
         Self {
             src,
             quote,
@@ -95,6 +99,7 @@ impl<'a> ClosedPass<'a> {
             params,
             columns,
             valued: valuation.is_some(),
+            counted,
         }
     }
 
@@ -156,6 +161,50 @@ impl<'a> ClosedPass<'a> {
     fn refs(&self) -> Vec<&dyn rusqlite::types::ToSql> {
         self.params.iter().map(|param| param.as_ref()).collect()
     }
+
+    /// Cores with at least one counted entry-spend row under this pass's own predicate.
+    ///
+    /// A separate statement from the grouped sums. `GROUP BY` quote would count a core once per
+    /// quote, and summing those counts would double a core that traded two quotes. `DISTINCT`
+    /// over the ungrouped counted rows does not.
+    ///
+    /// Args:
+    ///     conn: Open report reader or snapshot.
+    ///     cores: Set the caller unions across sources. A core already recorded is left as it is.
+    pub(super) fn collect_counted_cores(
+        &self,
+        conn: &Connection,
+        cores: &mut HashSet<i64>,
+    ) -> rusqlite::Result<()> {
+        let sql = format!(
+            "SELECT DISTINCT r.core_uid FROM {} r{}{} AND ({})",
+            self.src.table, self.joins, self.where_sql, self.counted,
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(self.refs().as_slice())?;
+        while let Some(row) = rows.next()? {
+            if let Value::Integer(core) = row.get::<_, Value>(0)? {
+                cores.insert(core);
+            }
+        }
+        Ok(())
+    }
+
+    /// Index of the counted entry-spend value in a row-pass value vector.
+    ///
+    /// [`TotalsSink::add_group`] sees the quote key at index 0, so its counted column is one past
+    /// this index. The row pass omits that key.
+    fn counted_value_index(&self) -> usize {
+        counted_group_index(self.valued) - 1
+    }
+}
+
+/// Index of the counted entry-spend column in a grouped values vector.
+///
+/// Layout: quote key, profit, count, six coverage columns when `valued`, five volume columns,
+/// then the counted column.
+fn counted_group_index(valued: bool) -> usize {
+    3 + usize::from(valued) * 6 + 5
 }
 
 /// Everything the closed-row groups of one totals read add up to.
@@ -188,7 +237,7 @@ impl TotalsSink {
             );
         }
         let volume = 3 + usize::from(valued) * 6;
-        let spend = volume + 5;
+        let spend = counted_group_index(valued);
         self.volume_groups.push((
             ordinal,
             get(values, volume)?,
@@ -215,14 +264,18 @@ impl TotalsSink {
     ///     valuation_present: Whether the selected mode could build a projection, so coverage is
     ///         published.
     ///     open_groups: The open pass's per-quote tally, empty for a closed-only read.
+    ///     counted_cores: Distinct cores with a counted entry-spend row. Zero when the filter
+    ///         named its cores explicitly, or when none contributed.
     pub(super) fn finish(
         self,
         valuation_present: bool,
         open_groups: Vec<(Option<i64>, f64, i64)>,
+        counted_cores: u64,
     ) -> ReportTotals {
-        let quotes = QuoteBreakdown::from_groups(self.groups)
+        let mut quotes = QuoteBreakdown::from_groups(self.groups)
             .with_traded_volume(super::super::TradedVolume::from_groups(self.volume_groups))
             .with_entry_spend(super::super::EntrySpend::from_groups(self.spend_groups));
+        quotes.counted_cores = counted_cores;
         // Publish coverage whenever the selected mode can build a projection: always for current
         // rates, and only with an attached cache for historical rates.
         ReportTotals {
@@ -460,6 +513,12 @@ fn sliced_attempt(
         vec![vec![BTreeMap::new(); passes.len()]; plans.len()];
     // A slice one of whose sums the fold refused; its own statement answers it instead.
     let mut refused = vec![false; plans.len()];
+    // Same gate as the grouped read: only an empty core list has no cardinality of its own.
+    let count_cores: Vec<bool> = slices
+        .iter()
+        .map(|slice| slice.filter(base).core_uids.is_empty())
+        .collect();
+    let mut counted_cores: Vec<HashSet<i64>> = vec![HashSet::new(); plans.len()];
     for (source, pass) in passes.iter().enumerate() {
         let has_close = pass.src.cols.contains("closedate");
         let mut stmt = conn.prepare(&pass.row_sql())?;
@@ -481,8 +540,11 @@ fn sliced_attempt(
             let offset = *offsets
                 .entry(core)
                 .or_insert_with(|| core_offset(&base.axis, core, now));
-            for ((plan, slice_folds), refused) in
-                plans.iter().zip(folds.iter_mut()).zip(refused.iter_mut())
+            for (index, ((plan, slice_folds), refused)) in plans
+                .iter()
+                .zip(folds.iter_mut())
+                .zip(refused.iter_mut())
+                .enumerate()
             {
                 match plan.admits(core, has_close.then_some(&close), offset) {
                     Some(true) => {}
@@ -495,10 +557,15 @@ fn sliced_attempt(
                 let sums = slice_folds[source]
                     .entry(key)
                     .or_insert_with(|| vec![SqliteSum::default(); width]);
-                *refused = sums
+                let failed = sums
                     .iter_mut()
                     .zip(&values)
                     .any(|(sum, value)| sum.step(value).is_err());
+                *refused = failed;
+                // A refused slice is answered by its own statement, so its set is discarded.
+                if !failed && count_cores[index] && row_counted(pass, &values) {
+                    counted_cores[index].insert(core);
+                }
             }
         }
     }
@@ -513,14 +580,25 @@ fn sliced_attempt(
         return Ok(None);
     }
     let mut totals = Vec::with_capacity(folds.len());
-    for (slice_folds, refused) in folds.into_iter().zip(refused) {
+    for ((slice_folds, refused), cores) in folds.into_iter().zip(refused).zip(counted_cores) {
         totals.push(if refused {
             None
         } else {
-            finish_slice(&passes, slice_folds, valuation_present)?
+            finish_slice(&passes, slice_folds, valuation_present, cores.len() as u64)?
         });
     }
     Ok(Some(totals))
+}
+
+/// Whether this row-pass value vector is a counted entry-spend row.
+///
+/// The row SQL selects `CASE WHEN counted THEN 1 ELSE 0 END`, an integer. A real or a missing
+/// column is not that flag.
+fn row_counted(pass: &ClosedPass<'_>, values: &[Value]) -> bool {
+    matches!(
+        values.get(pass.counted_value_index()),
+        Some(Value::Integer(n)) if *n > 0
+    )
 }
 
 /// One slice's totals from its folds, or `None` when one of its sums cannot be restated.
@@ -528,6 +606,7 @@ fn finish_slice(
     passes: &[ClosedPass<'_>],
     slice_folds: Vec<BTreeMap<GroupKey, Vec<SqliteSum>>>,
     valuation_present: bool,
+    counted_cores: u64,
 ) -> rusqlite::Result<Option<ReportTotals>> {
     let mut sink = TotalsSink::default();
     // Sources in discovery order and keys ascending: the order the grouped statements return
@@ -545,7 +624,11 @@ fn finish_slice(
             sink.add_group(&group, pass.valued)?;
         }
     }
-    Ok(Some(sink.finish(valuation_present, Vec::new())))
+    Ok(Some(sink.finish(
+        valuation_present,
+        Vec::new(),
+        counted_cores,
+    )))
 }
 
 /// The offset `append_row_scope` shifts this core's bounds by: its measured offset at `now`, or

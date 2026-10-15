@@ -8,7 +8,7 @@ use moon_core::db::valuation::{
 };
 use moon_core::db::{
     EntrySpend, QuoteBreakdown, QuoteCurrency, QuoteSpend, QuoteVolume, ReportFilter, TradedVolume,
-    ValuationCoverage,
+    UsdtTotal, ValuationCoverage,
 };
 
 use super::{FactTone, FooterFacts, footer_facts, footer_tooltip};
@@ -44,6 +44,29 @@ fn data(groups: Vec<(Option<i64>, f64, i64)>, shown_rows: usize) -> ReportData {
 ///     The same snapshot carrying the supplied volume state.
 fn with_volume(mut snapshot: ReportData, volume: TradedVolume) -> ReportData {
     snapshot.totals.traded_volume = volume;
+    snapshot
+}
+
+/// Replace the snapshot filter's core list without touching the money the footer states.
+///
+/// Args:
+///     snapshot: Loaded Report result.
+///     core_uids: Filter core ids. Empty means every core; the no-match sentinel means none.
+///
+/// Returns:
+///     The same snapshot under that core filter.
+fn with_cores(mut snapshot: ReportData, core_uids: Vec<u64>) -> ReportData {
+    snapshot.filter = std::sync::Arc::new(ReportFilter {
+        core_uids,
+        ..ReportFilter::default()
+    });
+    snapshot
+}
+
+/// Record how many cores contributed a counted order, the figure an empty filter cannot take
+/// from its own list.
+fn with_counted_cores(mut snapshot: ReportData, counted_cores: u64) -> ReportData {
+    snapshot.totals.counted_cores = counted_cores;
     snapshot
 }
 
@@ -915,8 +938,8 @@ fn open_positions_fact_clips_before_traded_volume() {
     );
 }
 
-/// `totals.rs::single_core_scope` must exclude `NO_MATCH_CORE_UID`. Dropping that conjunct would
-/// render an average-order percentage for a workspace preset that intentionally names no core.
+/// `totals.rs::core_scope` must exclude `NO_MATCH_CORE_UID`. Treating that sentinel as an ordinary
+/// core id would render an average-order percentage for a workspace preset that names no core.
 #[test]
 fn no_match_scope_has_no_average_order_fact() {
     let mut snapshot = with_average_order(data(vec![(Some(1), 10.0, 1)], 1));
@@ -978,5 +1001,255 @@ fn average_order_fact_clips_between_volume_and_open_positions() {
     assert!(
         volume_ix < average_ix && average_ix < open_ix,
         "the average-order fact must remain between volume and open positions, got tail = {texts:?}"
+    );
+}
+
+/// The spelled tooltip of the average-order fact, which is the only place the core count is named.
+fn average_tip(snapshot: &ReportData, mode: ValuationMode) -> (String, Option<String>) {
+    let fact = super::average_order_fact(snapshot, mode).expect("the ratio must produce a fact");
+    (fact.text, fact.spelled)
+}
+
+/// `totals.rs::average_order_fact` must keep a one-core tooltip verbatim, including the partial
+/// sentence. Routing that scope through the multi-core tip would claim one core's orders were
+/// averaged across cores.
+#[test]
+fn single_core_average_order_tooltip_stays_verbatim() {
+    let complete = with_cores(
+        with_average_order(data(vec![(Some(1), 10.0, 1)], 1)),
+        vec![7],
+    );
+    let partial = with_cores(
+        with_average_order(data(vec![(Some(1), 10.0, 2)], 1)),
+        vec![7],
+    );
+    {
+        let _locale = crate::test_locale::force("en");
+        let (text, spelled) = average_tip(&complete, ValuationMode::Historical);
+        assert_eq!(text, "+10.0% of avg order");
+        assert_eq!(
+            spelled.as_deref(),
+            Some("Profit to average order: +10.0%. Average order: 100 USDT, orders counted: 1")
+        );
+        let (text, spelled) = average_tip(&partial, ValuationMode::Historical);
+        assert_eq!(text, "+10.0% of avg order (partial)");
+        assert_eq!(
+            spelled.as_deref(),
+            Some(
+                "Profit to average order: +10.0%. Average order: 100 USDT, orders counted: 1; not accounted for: 1"
+            )
+        );
+    }
+    let _locale = crate::test_locale::force("ru");
+    let (text, spelled) = average_tip(&complete, ValuationMode::Historical);
+    assert_eq!(text, "+10.0% от ср. ордера");
+    assert_eq!(
+        spelled.as_deref(),
+        Some("Прибыль к среднему ордеру: +10.0%. Средний ордер: 100 USDT, ордеров учтено: 1")
+    );
+}
+
+/// `totals.rs::average_order_fact` must show the percent for several cores and name that count
+/// beside the average, while the short text stays the one-core form.
+///
+/// Breakage: restoring the `core_uids.len() == 1` gate, or dropping the count from the tooltip.
+/// A strategy selected on several cores would hide the percent again, or show a mix of order
+/// sizes with no way to see how many cores were averaged.
+#[test]
+fn multi_core_average_order_names_the_core_count() {
+    let snapshot = with_cores(
+        with_average_order(data(vec![(Some(1), 10.0, 1)], 1)),
+        vec![7, 8],
+    );
+    {
+        let _locale = crate::test_locale::force("en");
+        let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
+        let fact = facts
+            .tail
+            .iter()
+            .find(|fact| fact.text.contains("avg order"))
+            .expect("a two-core scope must still state the average-order percent");
+        assert_eq!(fact.text, "+10.0% of avg order");
+        assert_eq!(fact.tone, FactTone::Positive);
+        assert_eq!(
+            fact.spelled.as_deref(),
+            Some(
+                "Profit to average order: +10.0%. Average order: 100 USDT, orders counted: 1, across 2 cores"
+            )
+        );
+    }
+    {
+        let _locale = crate::test_locale::force("ru");
+        let (_, spelled) = average_tip(&snapshot, ValuationMode::Historical);
+        assert_eq!(
+            spelled.as_deref(),
+            Some(
+                "Прибыль к среднему ордеру: +10.0%. Средний ордер: 100 USDT, ордеров учтено: 1, по 2 ядрам"
+            )
+        );
+    }
+    let _locale = crate::test_locale::force("uk");
+    let (_, spelled) = average_tip(&snapshot, ValuationMode::Historical);
+    assert_eq!(
+        spelled.as_deref(),
+        Some(
+            "Прибуток до середнього ордера: +10.0%. Середній ордер: 100 USDT, ордерів враховано: 1, по 2 ядрах"
+        )
+    );
+}
+
+/// Slavic agreement on the core count: 11 stays plural and 21 takes the singular dative.
+///
+/// Breakage: one fixed "ядрам" for every count. Twenty-one cores would then read with the
+/// plural noun.
+#[test]
+fn slavic_core_count_agrees_at_eleven_and_twenty_one() {
+    let _locale = crate::test_locale::force("ru");
+    let eleven = with_cores(
+        with_average_order(data(vec![(Some(1), 10.0, 1)], 1)),
+        (1..=11).collect(),
+    );
+    let twenty_one = with_cores(
+        with_average_order(data(vec![(Some(1), 10.0, 1)], 1)),
+        (1..=21).collect(),
+    );
+    let (_, eleven_tip) = average_tip(&eleven, ValuationMode::Historical);
+    let (_, twenty_one_tip) = average_tip(&twenty_one, ValuationMode::Historical);
+    assert!(
+        eleven_tip.unwrap().ends_with("по 11 ядрам"),
+        "11 is the plural exception"
+    );
+    assert!(
+        twenty_one_tip.unwrap().ends_with("по 21 ядру"),
+        "21 takes the singular dative"
+    );
+}
+
+/// An empty core filter means every core. The fact names how many cores contributed a counted
+/// order. One contributing core still uses the count phrase, not the single-core sentence. A
+/// missing count is not rendered as zero.
+///
+/// Breakage: treating `core_uids.is_empty()` as the no-match sentinel, or substituting a
+/// numberless "all cores" phrase. An All selection would hide the percent, or hide how many
+/// order sizes were mixed.
+#[test]
+fn all_cores_average_order_names_the_contributing_count() {
+    let snapshot = with_counted_cores(with_average_order(data(vec![(Some(1), 10.0, 1)], 1)), 2);
+    let one = with_counted_cores(with_average_order(data(vec![(Some(1), 10.0, 1)], 1)), 1);
+    let missing = with_average_order(data(vec![(Some(1), 10.0, 1)], 1));
+    {
+        let _locale = crate::test_locale::force("en");
+        let (text, spelled) = average_tip(&snapshot, ValuationMode::Historical);
+        assert_eq!(text, "+10.0% of avg order");
+        assert_eq!(
+            spelled.as_deref(),
+            Some(
+                "Profit to average order: +10.0%. Average order: 100 USDT, orders counted: 1, across 2 cores"
+            )
+        );
+        let (_, one_tip) = average_tip(&one, ValuationMode::Historical);
+        assert_eq!(
+            one_tip.as_deref(),
+            Some(
+                "Profit to average order: +10.0%. Average order: 100 USDT, orders counted: 1, across 1 core"
+            )
+        );
+        let (_, missing_tip) = average_tip(&missing, ValuationMode::Historical);
+        assert_eq!(
+            missing_tip.as_deref(),
+            Some("Profit to average order: +10.0%. Average order: 100 USDT, orders counted: 1")
+        );
+    }
+    let _locale = crate::test_locale::force("ru");
+    let (_, spelled) = average_tip(&snapshot, ValuationMode::Historical);
+    assert_eq!(
+        spelled.as_deref(),
+        Some(
+            "Прибыль к среднему ордеру: +10.0%. Средний ордер: 100 USDT, ордеров учтено: 1, по 2 ядрам"
+        )
+    );
+    let (_, one_tip) = average_tip(&one, ValuationMode::Historical);
+    assert!(
+        one_tip.unwrap().ends_with("по 1 ядру"),
+        "one contributing core takes the singular dative, not a zero and not the bare sentence"
+    );
+}
+
+/// A partial counted scope on several cores keeps the shortfall wording and still names the cores.
+///
+/// Breakage: letting the core-count sentence replace the partial one, or dropping the warn tone.
+/// The excluded-order count would disappear while the percent still looked complete.
+#[test]
+fn partial_multi_core_keeps_the_shortfall_and_the_core_count() {
+    let _locale = crate::test_locale::force("en");
+    let snapshot = with_cores(
+        with_average_order(data(vec![(Some(1), 10.0, 2)], 1)),
+        vec![7, 8],
+    );
+    let fact = super::average_order_fact(&snapshot, ValuationMode::Historical)
+        .expect("a partial multi-core ratio must stay visible");
+    assert_eq!(fact.text, "+10.0% of avg order (partial)");
+    assert_eq!(fact.tone, FactTone::Warn);
+    assert_eq!(
+        fact.spelled.as_deref(),
+        Some(
+            "Profit to average order: +10.0%. Average order: 100 USDT, orders counted: 1, across 2 cores; not accounted for: 1"
+        )
+    );
+}
+
+/// Current-rate wording still wins on a complete unified multi-core scope, with the core count
+/// added to that sentence.
+///
+/// Breakage: falling through to the historical tip once the single-core gate is gone. A
+/// current-rate total would then be read as settled profit.
+#[test]
+fn current_rate_multi_core_keeps_its_sentence_and_names_the_cores() {
+    let _locale = crate::test_locale::force("en");
+    let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
+    let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
+    let mut snapshot = with_cores(
+        data(vec![(Some(1), 6.0, 1), (Some(8), 4.0, 1)], 2),
+        vec![7, 8],
+    );
+    snapshot.totals.entry_spend = EntrySpend {
+        totals: vec![
+            QuoteSpend {
+                currency: usdt,
+                spent: 60.0,
+                profit: 6.0,
+                orders: 1,
+            },
+            QuoteSpend {
+                currency: usdc,
+                spent: 40.0,
+                profit: 4.0,
+                orders: 1,
+            },
+        ],
+        counted_orders: 2,
+        valued_orders: 2,
+        usdt_spent: 100.0,
+        usdt_profit: 10.0,
+    };
+    snapshot.totals.valuation = Some(ValuationCoverage {
+        eligible_orders: 2,
+        valued_orders: 2,
+        unavailable_orders: 0,
+        usdt: Some(UsdtTotal {
+            profit: 10.0,
+            spent: Some(100.0),
+        }),
+    });
+    snapshot.valuation = ValuationMode::Current;
+
+    let fact = super::average_order_fact(&snapshot, ValuationMode::Current)
+        .expect("a complete unified multi-core ratio must stay visible");
+    assert_eq!(fact.text, "+20.0% of avg order");
+    assert_eq!(
+        fact.spelled.as_deref(),
+        Some(
+            "Profit to average order at the current rate: +20.0%. Average order: 50 USDT, orders counted: 2, across 2 cores"
+        )
     );
 }

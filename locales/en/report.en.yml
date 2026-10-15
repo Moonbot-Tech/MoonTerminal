@@ -168,7 +168,9 @@ report.traded_volume_partial: "Volume (partial): %{amount}"
 report.traded_volume_partial_tip: "Traded volume over the reconstructed trades: %{amount}. Orders not accounted for: %{n} (%{currencies})"
 # Names the excluded rows that have no quote ticker of their own to be named by.
 report.traded_volume_unknown_quote: "unknown quote"
-# Realized profit as a percentage of the average order, single-core scope only. %{pct} arrives
+# Realized profit as a percentage of the average order on every real scope. A single named
+# core keeps the tips below verbatim; a wider scope uses the *_cores_tip keys and adds %{cores}
+# beside the average and the counted orders. %{pct} arrives
 # pre-signed from signed_pct, e.g. "+11.6%".
 report.avg_order_pct: "%{pct} of avg order"
 # Some counted rows were excluded from both sums (unknown quote, Funding, non-positive spend).
@@ -183,6 +185,15 @@ report.avg_order_pct_partial_tip: "Profit to average order: %{pct}. Average orde
 # in that case the partial wording above wins and this key is not reached, because the shortfall is
 # the more important signal.
 report.avg_order_pct_current_tip: "Profit to average order at the current rate: %{pct}. Average order: %{avg}, orders counted: %{n}"
+# Wider than one named core, including an empty filter. %{cores} is report.avg_order_cores_*
+# with the contributing core count. The short text above does not change. Partial still
+# wins over the current-rate sentence.
+report.avg_order_cores_one: "across %{n} core"
+report.avg_order_cores_few: "across %{n} cores"
+report.avg_order_cores_many: "across %{n} cores"
+report.avg_order_pct_cores_tip: "Profit to average order: %{pct}. Average order: %{avg}, orders counted: %{n}, %{cores}"
+report.avg_order_pct_partial_cores_tip: "Profit to average order: %{pct}. Average order: %{avg}, orders counted: %{n}, %{cores}; not accounted for: %{excluded}"
+report.avg_order_pct_current_cores_tip: "Profit to average order at the current rate: %{pct}. Average order: %{avg}, orders counted: %{n}, %{cores}"
 report.unknown_quote_orders: "unknown quote: %{n}"
 # The unified figure needs no "in USDT" prefix: the ticker is already on the amount.
 report.valuation_total: "%{amount} USDT"
