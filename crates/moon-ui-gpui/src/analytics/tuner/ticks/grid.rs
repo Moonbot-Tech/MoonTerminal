@@ -522,8 +522,13 @@ impl AnalyticsView {
         // Answered, but no trade fit for the search — whatever the share and the gate: the search
         // has nothing to learn on and refuses the group (`TicksData::group_searchable`).
         if n > 0 && !d.group_searchable(group) {
+            // An exit nobody could check is named for why, not left to read as every trade missed.
+            let why = (group == ParamGroup::Exit)
+                .then(|| d.accuracy.none_checked_note())
+                .flatten()
+                .map_or_else(String::new, |note| format!(" — {note}"));
             return Some((
-                format!("{name}: {}", t!("analytics.ticks.vary_none")),
+                format!("{name}: {}{why}", t!("analytics.ticks.vary_none")),
                 p.orange,
             ));
         }

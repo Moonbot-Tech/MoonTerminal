@@ -125,8 +125,7 @@ impl ExitModel<'_> {
     /// with the level the core recorded. Per kind:
     ///
     /// - a MoonHook needs its rule's inputs — the detect depth and `HookSellLevel`, with
-    ///   `HookSellFixed` off (that branch computes the distance differently and is not modelled:
-    ///   no live strategy sets it, so it could not be checked against anything);
+    ///   `HookSellFixed` on or off alike (`ExitParams::hook_sell_fixed`);
     /// - a Spread needs the take the core recorded ([`take_is_recorded`]);
     /// - a MoonShot lifted to the pre-spike ask (`MShotSellAtLastPrice`) needs that ask off the
     ///   core's record (`Deal::pre_spike_ask`) — the tape's print before the spike sits 0.1–0.5 %
@@ -142,9 +141,7 @@ impl ExitModel<'_> {
     pub fn take_known(&self, deal: &Deal) -> bool {
         let positive = |v: Option<f64>| v.is_some_and(|x| x.is_finite() && x > 0.0);
         if deal.kind == KIND_MOONHOOK {
-            return !self.params.hook_sell_fixed
-                && self.params.hook_sell_level_pct > 0.0
-                && positive(deal.hook_depth_pct);
+            return self.params.hook_sell_level_pct > 0.0 && positive(deal.hook_depth_pct);
         }
         if take_is_recorded(&deal.kind) {
             return positive(deal.archived_take);

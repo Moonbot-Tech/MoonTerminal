@@ -1715,6 +1715,37 @@ fn a_hook_takes_a_share_of_its_detect_depth() {
     assert!((take - 104.0).abs() < 1e-9, "{take}");
 }
 
+/// With `HookSellFixed` on, a take-closed hook sold at `HookSellLevel · depth / 100` per cent off
+/// the buy is judged and reproduced, and one sold a per cent past it is judged and missed —
+/// never left unjudged as a take the model does not know.
+#[test]
+fn a_fixed_hook_take_is_judged() {
+    let params = ExitParams {
+        hook_sell_level_pct: 50.0,
+        hook_sell_fixed: true,
+        ..ExitParams::default()
+    };
+    let ticks = tape(&[
+        (9_000, 100.0),
+        (10_000, 100.0),
+        (20_000, 102.0),
+        (25_000, 103.0),
+    ]);
+    let on_level = Deal {
+        sell_price: 102.0,
+        ..hook_deal()
+    };
+    let v = verify(&on_level, &ticks, &EntryParams::Fact, &params, None, None);
+    assert_eq!(v.exit, Some(true), "{:?}", v.exit_finding);
+    let off_level = Deal {
+        sell_price: 103.0,
+        close_ms: 25_000,
+        ..hook_deal()
+    };
+    let v = verify(&off_level, &ticks, &EntryParams::Fact, &params, None, None);
+    assert_eq!(v.exit, Some(false), "{:?}", v.exit_finding);
+}
+
 /// A short hook sells below the entry, by the same share divided off the fill — every per cent of
 /// a short off the buy divides (`exit::level_off_buy`).
 #[test]
@@ -1755,12 +1786,12 @@ fn a_hook_without_its_depth_is_not_a_known_take() {
         ..params.clone()
     };
     assert!(!ExitModel::new(&no_level).take_known(&hook_deal()));
-    // `HookSellFixed` is the other branch of the rule, and it is not modelled.
+    // `HookSellFixed` places the same take: known just the same.
     let fixed = ExitParams {
         hook_sell_fixed: true,
         ..params.clone()
     };
-    assert!(!ExitModel::new(&fixed).take_known(&hook_deal()));
+    assert!(ExitModel::new(&fixed).take_known(&hook_deal()));
     // The kinds that take by `SellPrice` have it — with or without an archive.
     assert!(model.take_known(&deal()), "MoonShot");
     for kind in ["PumpsDetection", "Combo"] {
@@ -1872,7 +1903,7 @@ fn the_grid_hides_sell_price_from_a_hook_and_offers_its_own_level() {
     assert!(hook.contains(&"HookSellLevel"));
     assert!(
         !hook.contains(&"HookSellFixed"),
-        "read, but not modelled — so not a knob"
+        "read, but it moves no take — so not a knob"
     );
     let pump: Vec<&str> = params_for(ParamGroup::Exit, "PumpsDetection")
         .map(|p| p.key)

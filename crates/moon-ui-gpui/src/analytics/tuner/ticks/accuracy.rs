@@ -3,15 +3,15 @@
 //! said plainly, because the search learns on the reproduced trades only and a reader who sees
 //! its plan should know how much of the strategy's history stands behind it.
 //!
-//! The honest base is every trade of the scope whose tape the terminal holds: a trade the model
-//! misses (✗) and one it cannot judge at all (·, a rule it has no model of) both count against it
-//! — that is the part of the history the answer does not speak for. The ✓ shares of the KPI
-//! caption answer a narrower question (of the trades the model judged, how many it matched) and
-//! stay as they are. What the model assumes where the data is silent — no order book, one latency
+//! The base is every trade of the scope whose tape the terminal holds, split in two: the trades
+//! the model checked (✓ or ✗) with how many it matched, and the trades it could not check at all
+//! (·) with the main reason why. Folding the second into the first's denominator made a strategy
+//! with no exit checked read like a strategy whose every exit was missed. What the model assumes where the data is silent — no order book, one latency
 //! for every core, the verdict's tolerances — goes into the tooltip beside the counts, with the
 //! numbers the model runs under.
 
 use gpui::*;
+use moon_core::db::tuner::ticks::verify::{ExitFinding, Unjudged};
 use moon_core::db::tuner::ticks::{ModelSettings, Verdict};
 use moon_ui::MoonPalette;
 use rust_i18n::t;
@@ -49,6 +49,66 @@ impl GroupCount {
         let n = self.hits + self.misses + self.unjudged;
         (n > 0).then(|| self.hits as f64 / n as f64 * 100.0)
     }
+
+    /// Trades the model checked: matched or missed.
+    pub fn judged(&self) -> usize {
+        self.hits + self.misses
+    }
+
+    /// Reproduced trades over the checked ones, per cent; `None` with none checked.
+    pub fn judged_pct(&self) -> Option<f64> {
+        let n = self.judged();
+        (n > 0).then(|| self.hits as f64 / n as f64 * 100.0)
+    }
+}
+
+/// Why an exit went unchecked, as the footer names it in user words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::analytics::tuner) enum UncheckedWhy {
+    /// A sell rule the model does not have.
+    Rule,
+    /// The take a variant would place is not known.
+    TakeUnknown,
+    /// The line followed the price through a hole in the tape.
+    Gap,
+    /// The core closed by a rule other than the model's at the close.
+    OtherRule,
+    /// No verdict yet.
+    Pending,
+}
+
+impl UncheckedWhy {
+    const ALL: [Self; 5] = [
+        Self::Rule,
+        Self::TakeUnknown,
+        Self::Gap,
+        Self::OtherRule,
+        Self::Pending,
+    ];
+
+    fn of(verdict: Option<&Verdict>) -> Option<Self> {
+        let Some(verdict) = verdict else {
+            return Some(Self::Pending);
+        };
+        match verdict.exit_finding {
+            ExitFinding::Unjudged(Unjudged::Rule(_)) => Some(Self::Rule),
+            ExitFinding::Unjudged(Unjudged::TakeUnknown) => Some(Self::TakeUnknown),
+            ExitFinding::Unjudged(Unjudged::InGap) => Some(Self::Gap),
+            ExitFinding::Unjudged(Unjudged::OtherRule) => Some(Self::OtherRule),
+            ExitFinding::Hit | ExitFinding::Miss(_) => None,
+        }
+    }
+
+    fn text(self) -> String {
+        match self {
+            Self::Rule => t!("analytics.ticks.pick.why_rule"),
+            Self::TakeUnknown => t!("analytics.ticks.pick.why_take"),
+            Self::Gap => t!("analytics.ticks.pick.why_gap"),
+            Self::OtherRule => t!("analytics.ticks.pick.why_other"),
+            Self::Pending => t!("analytics.ticks.pick.why_pending"),
+        }
+        .to_string()
+    }
 }
 
 /// The model's accuracy over the scope's trades with tape.
@@ -56,6 +116,8 @@ impl GroupCount {
 pub(in crate::analytics::tuner) struct Accuracy {
     pub entry: GroupCount,
     pub exit: GroupCount,
+    /// The unchecked exits per reason, in [`UncheckedWhy::ALL`]'s order.
+    pub exit_why: [usize; UncheckedWhy::ALL.len()],
 }
 
 impl Accuracy {
@@ -66,8 +128,35 @@ impl Accuracy {
         for verdict in verdicts {
             out.entry.add(verdict.and_then(|v| v.entry));
             out.exit.add(verdict.and_then(|v| v.exit));
+            if verdict.and_then(|v| v.exit).is_none()
+                && let Some(why) = UncheckedWhy::of(verdict)
+            {
+                out.exit_why[why as usize] += 1;
+            }
         }
         out
+    }
+
+    /// The commonest reason an exit went unchecked; `None` with every exit checked.
+    pub fn main_unchecked_why(&self) -> Option<UncheckedWhy> {
+        UncheckedWhy::ALL
+            .into_iter()
+            .zip(self.exit_why)
+            .filter(|(_, n)| *n > 0)
+            // The first listed wins a tie: `max_by_key` keeps the last, so the order is reversed.
+            .rev()
+            .max_by_key(|(_, n)| *n)
+            .map(|(why, _)| why)
+    }
+
+    /// What the "nothing fit for the search" notice adds when no exit was checked at all: the
+    /// main reason, in user words. `None` once any exit was checked — the misses then say it.
+    pub fn none_checked_note(&self) -> Option<String> {
+        if self.exit.judged() > 0 {
+            return None;
+        }
+        self.main_unchecked_why()
+            .map(|why| t!("analytics.ticks.pick.acc_none_checked", why = why.text()).to_string())
     }
 
     /// Trades with tape the counts are over.
@@ -180,23 +269,41 @@ pub(super) fn accuracy_footer_el(text: String, p: MoonPalette, cx: &App) -> Stat
         .child(text)
 }
 
-/// Count every tape in the denominator while keeping the search's fit sample independent.
+/// The exit's checked trades with their matches, then the unchecked ones with the main reason —
+/// never one share over both, which reads an unchecked trade as a miss. The search's fit sample
+/// stays its own number.
 pub(super) fn accuracy_sentence(acc: &Accuracy, entry_modelled: bool, fit: usize) -> String {
     let entry = if entry_modelled {
         pct_text(acc.entry.pct())
     } else {
         t!("analytics.ticks.pick.acc_entry_fact").to_string()
     };
-    let pct = acc
-        .exit
-        .pct()
-        .map_or_else(|| "—".to_string(), |pct| format!("{pct:.1}"));
+    let mut exit = Vec::new();
+    if acc.exit.judged() > 0 {
+        exit.push(
+            t!(
+                "analytics.ticks.pick.acc_checked",
+                hits = acc.exit.hits,
+                n = acc.exit.judged(),
+                pct = pct_text(acc.exit.judged_pct())
+            )
+            .to_string(),
+        );
+    }
+    if let Some(why) = acc.main_unchecked_why() {
+        exit.push(
+            t!(
+                "analytics.ticks.pick.acc_unchecked",
+                n = acc.exit.unjudged,
+                why = why.text()
+            )
+            .to_string(),
+        );
+    }
     t!(
         "analytics.ticks.pick.acc",
         entry = entry,
-        hits = acc.exit.hits,
-        n = acc.n(),
-        pct = pct,
+        exit = exit.join(", "),
         fit = fit
     )
     .to_string()

@@ -140,11 +140,13 @@ pub struct ExitParams {
     /// ([`ExitModel::take_known`]). Ignored by every other kind.
     pub hook_sell_level_pct: f64,
     /// `HookSellFixed` — the core then takes the distance as `HookSellLevel · depth` per cent
-    /// "whatever the buy price" (FAQ), which is a different rule from the one below. It is NOT
-    /// modelled: no live strategy on this machine sets it, so the branch could not be checked
-    /// against anything, and rather than guess, [`ExitModel::take_known`] reports the take as
-    /// unknown for such a trade and the verdict answers nothing. Not a grid parameter for the
-    /// same reason — a knob that moves no column is worse than no knob.
+    /// "whatever the buy price" (FAQ). On live data without `SellModifier` (2026-10-15) that is the
+    /// SAME take the rule places without it: the comment's `SellPrice` sat at
+    /// `HookSellLevel · Depth / 100` to the rounding, and take-closed sales landed on that level
+    /// off the buy to the price step. So the model places
+    /// both branches alike and the field is read only so that the record keeps it. Whether the
+    /// delta modifiers move a fixed take the sample cannot tell; they are applied as for the
+    /// other branch. Not a grid parameter: a knob that moves no column is worse than no knob.
     pub hook_sell_fixed: bool,
     /// `SellModifier` — the coefficient the summed `Add*` delta modifiers are multiplied by
     /// before they move the sell level (FAQ: a summed delta of 5 % with `SellModifier = 0.2`

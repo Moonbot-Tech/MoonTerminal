@@ -160,11 +160,11 @@ fn no_reading_without_terms_or_a_rule_take() {
         ..p.clone()
     };
     assert_eq!(FactModifier::of(&d, &bare, None), None);
-    let fixed = ExitParams {
-        hook_sell_fixed: true,
-        ..p
+    let no_depth = Deal {
+        hook_depth_pct: None,
+        ..d
     };
-    assert_eq!(FactModifier::of(&d, &fixed, None), None);
+    assert_eq!(FactModifier::of(&no_depth, &p, None), None);
 }
 
 /// A level under the formula by a price step is the grid's rounding and reads zero; one far
@@ -261,11 +261,12 @@ fn the_hook_depth_is_read_off_the_stated_take() {
     d.hook_depth_pct = Some(2.0);
     d.hook_stated_take_pct = Some(1.4);
     assert!(placed_hook_depth(&d, &p).is_some_and(|depth| (depth - 2.8).abs() < 1e-9));
+    // `HookSellFixed` places the same take, so its depth is read back the same way.
     let fixed = ExitParams {
         hook_sell_fixed: true,
         ..p.clone()
     };
-    assert_eq!(placed_hook_depth(&d, &fixed), None);
+    assert_eq!(placed_hook_depth(&d, &fixed), placed_hook_depth(&d, &p));
     d.hook_stated_take_pct = None;
     assert_eq!(placed_hook_depth(&d, &p), None);
 }

@@ -408,8 +408,8 @@ pub fn params_for<'k>(
 /// which is how the delta modifiers went unapplied through a whole measurement run on 2026-09-22
 /// while every test passed.
 ///
-/// `HookSellFixed` is here because it is not a knob (the branch it selects is not modelled) but
-/// its value decides whether the take is known at all. The Delta Modifiers section is a knob
+/// `HookSellFixed` is here because it is not a knob (both of its branches place the same take,
+/// `ExitParams::hook_sell_fixed`) but the record keeps it. The Delta Modifiers section is a knob
 /// since 2026-09-25, all but `MaxModifier` on a MoonShot, which the grid draws fixed there
 /// (see its [`TICK_PARAMS`] entry) — so it is listed here as well.
 const MODEL_ONLY_KEYS: &[&str] = &[
