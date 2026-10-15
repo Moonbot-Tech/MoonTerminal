@@ -23,6 +23,8 @@
 //! long_position_min = 10
 //! auto_catchup = true    # on when absent
 //! archive_catchup = true # on when absent
+//! max_age_days = 1825    # five years when absent; 0 keeps forever; finite limits 1..3650
+//! record_emulator = true # on when absent
 //! ```
 //!
 //! `[update]` is whether the station updates itself from the release; on when absent, set from
@@ -94,7 +96,8 @@ struct UpdateSection {
 }
 
 /// `[tape]`: the recording window and recovery choices. Absent window fields keep storage
-/// values; absent recovery switches enable the full catch-up behavior.
+/// values; absent recovery switches enable full catch-up and retention defaults to five years
+/// including emulator trades.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tape {
@@ -107,6 +110,10 @@ pub struct Tape {
     pub auto_catchup: Option<bool>,
     /// Allow daily archive recovery; absent means on.
     pub archive_catchup: Option<bool>,
+    /// Retain tape up to this close age, clamped to 1..3650; zero means forever, absent five years.
+    pub max_age_days: Option<u16>,
+    /// Record emulator trades; absent means on.
+    pub record_emulator: Option<bool>,
 }
 
 /// `[telegram]` as written.

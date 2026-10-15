@@ -3,9 +3,707 @@
 use super::*;
 use crate::market::tape_recorder::catchup::{self, tests::SWITCH_LOCK};
 use crate::venue::{Brand, MarketKind, Venue};
+use std::sync::Arc;
+
+/// Retrying NotShrinkable every minute would rewrite tape forever without changing its file mode.
+#[test]
+fn review_only_transient_compaction_failures_retry() {
+    use super::super::super::retention::Phase;
+    use crate::market::trade_replay::trade_cache::CompactFail;
+    let _lock = SWITCH_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(0, true);
+    catchup::take_purge_wanted();
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    for failure in [
+        CompactFail::NotShrinkable,
+        CompactFail::NoRoom,
+        CompactFail::Deferred,
+        CompactFail::Other,
+    ] {
+        let mut state = RecorderCatchup::default();
+        state.retention.phase = Phase::Recount {
+            reads: vec![],
+            complete: HashSet::new(),
+            failure: Some(failure),
+            freed: 0,
+        };
+        assert!(!state.retention_tick(&cache, NOW, &HashMap::new()));
+        if failure == CompactFail::NotShrinkable {
+            assert_eq!(state.retention.retry_at, None);
+            assert!(!state.retention_tick(&cache, NOW + 60_000, &HashMap::new()));
+            catchup::set_keep(0, false);
+            assert!(
+                state.retention_tick(&cache, NOW + 60_001, &HashMap::new()),
+                "a new purge must still run"
+            );
+            catchup::set_keep(0, true);
+            catchup::take_purge_wanted();
+        } else {
+            assert_eq!(state.retention.retry_at, Some(NOW + 60_000));
+            assert!(!state.retention_tick(&cache, NOW + 59_999, &HashMap::new()));
+            assert!(state.retention_tick(&cache, NOW + 60_000, &HashMap::new()));
+        }
+    }
+}
+
+/// Without the station guard, every terminal close accumulates a permanent protection row.
+#[test]
+fn review_terminal_closes_do_not_accumulate_retention_rows() {
+    use crate::market::tape_recorder::{Cmd, Recorder, Stats, peek};
+    use std::sync::atomic::Ordering;
+    let _lock = SWITCH_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    let now = std::time::Instant::now();
+    let mut recorder = Recorder {
+        cache: TradeCache::open_evictable(":memory:".into()).unwrap(),
+        catchup: RecorderCatchup::default(),
+        tasks: HashMap::new(),
+        donors: HashMap::new(),
+        shunned: HashMap::new(),
+        stats: Stats::default(),
+        last_summary: now,
+        next_drain: now,
+        replies: Vec::new(),
+        ticks: Vec::new(),
+        compares: Vec::new(),
+        closed: peek::ClosedTrades::default(),
+        pending_bytes: Arc::default(),
+    };
+    let trade = row();
+    for enabled in [false, true] {
+        catchup::ENABLED.store(enabled, Ordering::Relaxed);
+        recorder.apply(
+            Cmd::Closed {
+                exchange: trade.exchange.clone(),
+                market: trade.market.clone(),
+                venue: trade.venue,
+                trade: trade.id,
+                open_ms: trade.open_ms,
+                close_ms: trade.close_ms,
+                emulator: Some(false),
+            },
+            NOW,
+        );
+        assert_eq!(recorder.catchup.known.contains_key(&trade.id), enabled);
+        assert!(
+            recorder.peek(trade.id, 0, 0).is_ok(),
+            "terminal peek tracking must survive"
+        );
+    }
+}
+
+/// Dropping a request in Listing or Inventory would strand emulator tape under keep forever.
+#[test]
+fn review_purge_requests_survive_every_busy_phase() {
+    use super::super::super::retention::Phase;
+    use crate::market::trade_replay::trade_cache::Inventory;
+    use std::sync::atomic::Ordering;
+    let _lock = SWITCH_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    for phase in 0..4 {
+        catchup::set_keep(0, true);
+        catchup::take_purge_wanted();
+        let (inventory_tx, inventory_rx) = mpsc::channel::<rusqlite::Result<Inventory>>();
+        let (trim_tx, trim_rx) = mpsc::channel();
+        let (read_tx, read_rx) = mpsc::channel();
+        let mut state = RecorderCatchup {
+            active: true,
+            ..Default::default()
+        };
+        state.retention.phase = match phase {
+            0 => Phase::Listing {
+                since: NOW,
+                generation: catchup::relist_gen(),
+            },
+            1 => Phase::Inventory {
+                rx: inventory_rx,
+                generation: catchup::relist_gen(),
+                complete: true,
+            },
+            2 => Phase::Trim {
+                rx: trim_rx,
+                progress: Arc::default(),
+            },
+            _ => Phase::Recount {
+                reads: vec![(row(), read_rx)],
+                complete: HashSet::new(),
+                failure: None,
+                freed: 0,
+            },
+        };
+        catchup::set_keep(0, false);
+        assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+        assert!(
+            catchup::PURGE_WANTED.load(Ordering::Relaxed),
+            "phase {phase} lost the request"
+        );
+        // A later busy tick must replace even a stale terminal status with Running.
+        STATUS.lock().unwrap().purge = Some(crate::station_api::TapePurge::Done {
+            at_ms: NOW - 1,
+            freed_bytes: 0,
+        });
+        assert!(state.retention_tick(&cache, NOW + 1, &HashMap::new()));
+        assert!(matches!(
+            catchup::status().purge,
+            Some(crate::station_api::TapePurge::Running { .. })
+        ));
+        drop((inventory_tx, trim_tx, read_tx));
+    }
+}
+
+/// A queued narrowing must start another pass after an older recount and delete emulator tape.
+#[test]
+fn review_queued_purge_runs_after_the_current_pass() {
+    use super::super::super::retention::Phase;
+    let _lock = SWITCH_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(0, true);
+    catchup::take_purge_wanted();
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let mut trade = row();
+    trade.emulator = true;
+    let focus = catchup::needed(
+        &trade,
+        crate::market::trade_replay::margin_ms(),
+        crate::market::trade_replay::long_position_ms(),
+    );
+    let (from, to) = focus.hull().unwrap();
+    cache.insert(
+        &trade.exchange,
+        &trade.market,
+        from,
+        to,
+        vec![],
+        crate::market::trade_replay::tick_tiles::TileSource::Core,
+    );
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    state.retention.phase = Phase::Recount {
+        reads: vec![],
+        complete: HashSet::new(),
+        failure: None,
+        freed: 0,
+    };
+    catchup::set_keep(0, false);
+    assert!(
+        state.retention_tick(&cache, NOW, &HashMap::new()),
+        "queued maintenance must keep catch-up paused"
+    );
+    assert!(matches!(
+        catchup::status().purge,
+        Some(crate::station_api::TapePurge::Running { .. })
+    ));
+    settle(&mut state, &cache, NOW + 1);
+    assert!(
+        cache
+            .held_spans(&trade.exchange, &trade.market, from, to)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A close received between listings must protect shared tape after its live task settles.
+#[test]
+fn real_trade_closed_after_listing_protects_shared_emulator_tape() {
+    use crate::market::tape_recorder::{Cmd, Recorder, Stats, peek};
+    use std::time::Instant;
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(0, false);
+    let real = row();
+    let mut emu = real.clone();
+    emu.id.rec_id += 1;
+    emu.emulator = true;
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let focus = catchup::needed(
+        &real,
+        crate::market::trade_replay::margin_ms(),
+        crate::market::trade_replay::long_position_ms(),
+    );
+    let (from, to) = focus.hull().unwrap();
+    cache.insert(
+        &real.exchange,
+        &real.market,
+        from,
+        to,
+        vec![],
+        crate::market::trade_replay::tick_tiles::TileSource::Core,
+    );
+    let now = Instant::now();
+    let mut recorder = Recorder {
+        cache,
+        catchup: RecorderCatchup::default(),
+        tasks: HashMap::new(),
+        donors: HashMap::new(),
+        shunned: HashMap::new(),
+        stats: Stats::default(),
+        last_summary: now,
+        next_drain: now,
+        replies: Vec::new(),
+        ticks: Vec::new(),
+        compares: Vec::new(),
+        closed: peek::ClosedTrades::default(),
+        pending_bytes: Arc::default(),
+    };
+    recorder.catchup.submit(vec![emu]);
+    recorder.apply(
+        Cmd::Closed {
+            exchange: real.exchange.clone(),
+            market: real.market.clone(),
+            venue: real.venue,
+            trade: real.id,
+            open_ms: real.open_ms,
+            close_ms: real.close_ms,
+            emulator: Some(false),
+        },
+        NOW,
+    );
+    // The protection must outlive the live task's removal after its recording settles.
+    recorder.tasks.clear();
+    settle(&mut recorder.catchup, &recorder.cache, NOW);
+    assert!(
+        Coverage::from_spans(
+            recorder
+                .cache
+                .held_spans(&real.exchange, &real.market, from, to)
+                .unwrap()
+        )
+        .covers(&focus)
+    );
+}
+
+/// A trim rollback caused by a full disk must report room pressure and avoid minute retries.
+#[test]
+fn disk_full_during_trim_reports_no_room() {
+    use super::super::super::retention::Phase;
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(0, true);
+    catchup::take_purge_wanted();
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let (tx, rx) = mpsc::channel();
+    tx.send(Err(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(13),
+        None,
+    )))
+    .unwrap();
+    let mut state = RecorderCatchup::default();
+    state.retention.phase = Phase::Trim {
+        rx,
+        progress: Arc::default(),
+    };
+    assert!(!state.retention_tick(&cache, NOW, &HashMap::new()));
+    assert!(matches!(
+        catchup::status().purge,
+        Some(crate::station_api::TapePurge::Failed {
+            reason: crate::station_api::PurgeFail::DeleteNoRoom,
+            ..
+        })
+    ));
+    assert_eq!(state.retention.retry_at, Some(NOW + HOUR_MS));
+    catchup::set_keep(0, false);
+    catchup::take_purge_wanted();
+    state.retention.emulator_deferred = true;
+    assert!(
+        !state.retention_tick(&cache, NOW + 60_000, &HashMap::new()),
+        "a completed listing must not bypass the disk-full backoff"
+    );
+}
+
+/// The first status read after a narrowing write must already show maintenance during listing.
+#[test]
+fn narrowing_publishes_running_while_listing() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(0, true);
+    catchup::take_purge_wanted();
+    catchup::require_listings(vec![90_001]);
+    catchup::set_keep(30, true);
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let mut state = RecorderCatchup::default();
+    assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+    assert!(matches!(
+        catchup::status().purge,
+        Some(crate::station_api::TapePurge::Running { done: 0, total: 0 })
+    ));
+}
+
+/// Settlement must not synchronously read held spans while maintenance owns the cache queue.
+#[test]
+fn pass_settling_during_a_trim_does_not_block_the_tick() {
+    use super::super::super::retention::Phase;
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let (_tx, rx) = mpsc::channel();
+    let mut state = RecorderCatchup {
+        active: true,
+        ..RecorderCatchup::default()
+    };
+    state.retention.phase = Phase::Trim {
+        rx,
+        progress: Arc::default(),
+    };
+    state.finish(
+        &cache,
+        PassResult {
+            finished: vec![],
+            archive_bytes: 321,
+        },
+        NOW,
+    );
+    assert!(state.active);
+    assert_eq!(state.archive_bytes, 0);
+    state.retention.phase = Phase::Idle;
+    let (result, at) = state.deferred_finish.take().unwrap();
+    state.finish(&cache, result, at);
+    assert!(!state.active);
+    assert_eq!(state.archive_bytes, 321);
+}
 
 const DAY: i64 = 86_400_000;
 const NOW: i64 = 500 * DAY;
+
+/// Preserve global retention switches and barriers around asynchronous recorder fixtures.
+struct RetentionSettings {
+    enabled: bool,
+    days: u16,
+    emulator: bool,
+    wanted: bool,
+    required: Option<Vec<u64>>,
+}
+
+impl RetentionSettings {
+    /// An empty required set models a station with no protecting remote cores.
+    fn new() -> Self {
+        use std::sync::atomic::Ordering;
+        let saved = Self {
+            enabled: catchup::enabled(),
+            days: catchup::max_age_days(),
+            emulator: catchup::record_emulator(),
+            wanted: catchup::PURGE_WANTED.load(Ordering::Relaxed),
+            required: catchup::REQUIRED_CORES.lock().unwrap().clone(),
+        };
+        catchup::enable();
+        catchup::require_listings(vec![]);
+        saved
+    }
+}
+
+impl Drop for RetentionSettings {
+    /// Avoid leaking finite horizons or a purge request into unrelated planner fixtures.
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+        catchup::set_keep(self.days, self.emulator);
+        catchup::ENABLED.store(self.enabled, Ordering::Relaxed);
+        catchup::PURGE_WANTED.store(self.wanted, Ordering::Relaxed);
+        *catchup::REQUIRED_CORES.lock().unwrap() = self.required.clone();
+    }
+}
+
+/// Poll fixture maintenance to its outcome with a bounded deadline and no production fetches.
+fn settle(state: &mut RecorderCatchup, cache: &TradeCache, now: i64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while state.retention_tick(cache, now, &HashMap::new()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "maintenance did not settle"
+        );
+        std::thread::yield_now();
+    }
+}
+
+/// A finite horizon must remove tape again when time advances without a settings change.
+#[test]
+fn retention_drops_tape_that_ages_out() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(1, true);
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    cache.insert(
+        "synthetic",
+        "SYNUSDT",
+        NOW - DAY + 1000,
+        NOW - DAY + 2000,
+        vec![],
+        crate::market::trade_replay::tick_tiles::TileSource::Core,
+    );
+    let mut state = RecorderCatchup::default();
+    settle(&mut state, &cache, NOW);
+    assert_eq!(
+        cache
+            .held_spans("synthetic", "SYNUSDT", i64::MIN, i64::MAX)
+            .unwrap()
+            .len(),
+        1
+    );
+    settle(&mut state, &cache, NOW + HOUR_MS);
+    assert!(
+        cache
+            .held_spans("synthetic", "SYNUSDT", i64::MIN, i64::MAX)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Without a deferred request, forever retention would never revisit an emulator purge vetoed by an offline report.
+#[test]
+fn incomplete_listing_defers_emulator_purge() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(0, false);
+    catchup::require_listings(vec![40_001]);
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let mut trade = row();
+    trade.emulator = true;
+    let focus = catchup::needed(
+        &trade,
+        crate::market::trade_replay::margin_ms(),
+        crate::market::trade_replay::long_position_ms(),
+    );
+    let (from, to) = focus.hull().unwrap();
+    cache.insert(
+        &trade.exchange,
+        &trade.market,
+        from,
+        to,
+        vec![],
+        crate::market::trade_replay::tick_tiles::TileSource::Core,
+    );
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+    settle(&mut state, &cache, NOW + 600_000);
+    assert_eq!(
+        cache
+            .held_spans(&trade.exchange, &trade.market, from, to)
+            .unwrap(),
+        vec![(from, to)]
+    );
+    assert!(state.retention.emulator_deferred);
+    catchup::listing_applied(40_001, catchup::relist_gen());
+    settle(&mut state, &cache, NOW + 600_001);
+    assert!(
+        cache
+            .held_spans(&trade.exchange, &trade.market, from, to)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!state.retention.emulator_deferred);
+}
+
+/// An older pass can file its final answer only before retention enters its cache queue.
+#[test]
+fn narrowing_during_a_fetch_never_refiles_purged_tape() {
+    use super::super::super::retention::Phase;
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(1, true);
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let mut state = RecorderCatchup {
+        active: true,
+        ..Default::default()
+    };
+    assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+    assert!(matches!(state.retention.phase, Phase::Listing { .. }));
+    cache.insert(
+        "synthetic",
+        "SYNUSDT",
+        NOW - 3 * DAY,
+        NOW - 2 * DAY,
+        vec![],
+        crate::market::trade_replay::tick_tiles::TileSource::Core,
+    );
+    state.finish(
+        &cache,
+        PassResult {
+            finished: vec![],
+            archive_bytes: 0,
+        },
+        NOW,
+    );
+    settle(&mut state, &cache, NOW);
+    assert!(
+        cache
+            .held_spans("synthetic", "SYNUSDT", i64::MIN, i64::MAX)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A cache worker held in maintenance must never block another recorder tick.
+#[test]
+fn ticks_continue_while_a_trim_runs() {
+    use super::super::super::retention::Phase;
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let (_tx, rx) = std::sync::mpsc::channel();
+    let mut state = RecorderCatchup::default();
+    state.retention.phase = Phase::Trim {
+        rx,
+        progress: std::sync::Arc::default(),
+    };
+    let before = std::time::Instant::now();
+    for _ in 0..10 {
+        assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+    }
+    assert!(before.elapsed() < std::time::Duration::from_secs(1));
+    assert!(!state.active);
+}
+
+/// Done must wait for the explicit coverage answers and updated pending count.
+#[test]
+fn done_is_published_after_the_queue_recount() {
+    use super::super::super::retention::Phase;
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(0, true);
+    catchup::take_purge_wanted();
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let trade = row();
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    let mut unsupported = row();
+    unsupported.id.rec_id = 999;
+    state.known.insert(unsupported.id, unsupported.clone());
+    state.latched.insert(unsupported.id, Latch::Permanent);
+    let (unsupported_tx, unsupported_rx) = std::sync::mpsc::channel();
+    unsupported_tx.send(Ok(Vec::new())).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    state.retention.phase = Phase::Recount {
+        reads: vec![(trade.clone(), rx), (unsupported, unsupported_rx)],
+        complete: HashSet::new(),
+        failure: None,
+        freed: 123,
+    };
+    STATUS.lock().unwrap().purge =
+        Some(crate::station_api::TapePurge::Running { done: 1, total: 1 });
+    assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+    assert_eq!(catchup::status().pending, 1);
+    assert!(matches!(
+        catchup::status().purge,
+        Some(crate::station_api::TapePurge::Running { .. })
+    ));
+    tx.send(Ok(catchup::needed(
+        &trade,
+        crate::market::trade_replay::margin_ms(),
+        crate::market::trade_replay::long_position_ms(),
+    )
+    .spans()
+    .to_vec()))
+        .unwrap();
+    assert!(!state.retention_tick(&cache, NOW, &HashMap::new()));
+    assert_eq!(catchup::status().pending, 0);
+    assert!(matches!(
+        catchup::status().purge,
+        Some(crate::station_api::TapePurge::Done {
+            freed_bytes: 123,
+            ..
+        })
+    ));
+}
+
+/// Counts must use complete known IDs, and disk usage must include the independently sized WAL.
+#[test]
+fn status_reports_db_size_and_age_histogram() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let path = std::env::temp_dir().join(format!(
+        "synthetic-retention-{}-{}.sqlite",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let wal = path.with_extension("sqlite-wal");
+    std::fs::write(&path, vec![0; 4096]).unwrap();
+    std::fs::write(&wal, vec![0; 127]).unwrap();
+    let mut state = RecorderCatchup::default();
+    let real = row();
+    let mut emulator = row();
+    emulator.id.rec_id = 92;
+    emulator.emulator = true;
+    emulator.close_ms = NOW - 2 * DAY;
+    state.known.insert(real.id, real.clone());
+    state.known.insert(emulator.id, emulator.clone());
+    state.tape_complete.extend([
+        real.id,
+        emulator.id,
+        TradeId {
+            core: 99,
+            rec_id: 99,
+        },
+    ]);
+    state.publish_storage_at(NOW, &path);
+    let status = catchup::status();
+    std::fs::remove_file(&wal).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(status.db_bytes, Some(4223));
+    assert_eq!(status.tape_trades, Some(2));
+    assert_eq!(
+        status.tape_ages,
+        vec![
+            crate::station_api::TapeAge {
+                days: 1,
+                plain: 1,
+                emulator: 0
+            },
+            crate::station_api::TapeAge {
+                days: 2,
+                plain: 0,
+                emulator: 1
+            }
+        ]
+    );
+}
+
+/// Throughput must use completed trades over elapsed recovery time rather than queued jobs.
+#[test]
+fn status_reports_catchup_rate() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let mut state = RecorderCatchup {
+        rate_started: Some(NOW - HOUR_MS / 2),
+        ..Default::default()
+    };
+    state.completions.push_back((NOW - 1000, 10));
+    state.finish(
+        &cache,
+        PassResult {
+            finished: vec![],
+            archive_bytes: 0,
+        },
+        NOW,
+    );
+    assert_eq!(catchup::status().catchup_rate_per_hour, Some(20));
+    let encoded = serde_json::to_value(catchup::status()).unwrap();
+    assert_eq!(encoded["catchup_rate_per_hour"], 20);
+}
 
 /// Restore global choices and progress even when an assertion unwinds.
 struct Restore {
@@ -50,6 +748,7 @@ fn row() -> CatchupTrade {
         },
         open_ms: NOW - DAY - 60_000,
         close_ms: NOW - DAY,
+        emulator: false,
     }
 }
 

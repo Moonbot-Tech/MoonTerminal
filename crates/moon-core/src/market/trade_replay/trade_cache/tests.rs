@@ -5,6 +5,84 @@ use crate::feed::types::Side;
 /// Milliseconds in a day, for stamps the tests spread a year apart.
 const DAY_MS: i64 = 86_400_000;
 
+/// A successful delete must report a failed page release separately; busy readers defer it.
+#[test]
+fn trim_start_reports_compaction() {
+    let conn = conn();
+    insert_span(
+        &conn,
+        "synthetic",
+        "SYNUSDT",
+        0,
+        100,
+        &[],
+        TileSource::Core,
+        1,
+    )
+    .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let cache = TradeCache { tx };
+    let progress = Arc::new(TrimProgress::default());
+    let done = cache.trim_start(
+        Arc::new(KeepMap::new()),
+        Compact::Incremental,
+        Some(progress.clone()),
+    );
+    let mut held = held_bytes(&conn).unwrap();
+    serve(&conn, rx.recv().unwrap(), &mut held, || None);
+    let result = done.recv().unwrap().unwrap();
+    assert_eq!(result.report.spans_dropped, 1);
+    assert_eq!(result.compacted, Err(CompactFail::NotShrinkable));
+    assert_eq!(progress.done.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(progress.total.load(std::sync::atomic::Ordering::Relaxed), 1);
+    evict::make_shrinkable(&conn).unwrap();
+    insert_span(
+        &conn,
+        "synthetic",
+        "SYNUSDT",
+        0,
+        100,
+        &[],
+        TileSource::Core,
+        1,
+    )
+    .unwrap();
+    let done = cache.trim_start(Arc::new(KeepMap::new()), Compact::Incremental, None);
+    serve(&conn, rx.recv().unwrap(), &mut held, || None);
+    let outcome = done.recv().unwrap().unwrap();
+    assert_eq!(outcome.report.spans_dropped, 1);
+    assert_eq!(outcome.compacted, Ok(()));
+    let dir = BenchDir::new("synthetic-compaction");
+    let path = dir.0.join("fixture.sqlite");
+    let writer = rusqlite::Connection::open(&path).unwrap();
+    init_schema(&writer).unwrap();
+    evict::make_shrinkable(&writer).unwrap();
+    writer.busy_timeout(Duration::ZERO).unwrap();
+    insert_span(
+        &writer,
+        "synthetic",
+        "SYNUSDT",
+        0,
+        100,
+        &[],
+        TileSource::Core,
+        1,
+    )
+    .unwrap();
+    let reader = rusqlite::Connection::open(&path).unwrap();
+    reader.execute_batch("BEGIN; SELECT * FROM packs;").unwrap();
+    let (tx, rx) = mpsc::channel();
+    let cache = TradeCache { tx };
+    let done = cache.trim_start(Arc::new(KeepMap::new()), Compact::Incremental, None);
+    let mut held = held_bytes(&writer).unwrap();
+    serve(&writer, rx.recv().unwrap(), &mut held, || None);
+    let outcome = done.recv().unwrap().unwrap();
+    assert_eq!(outcome.report.spans_dropped, 1);
+    assert_eq!(outcome.compacted, Err(CompactFail::Deferred));
+    reader.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(trim::compact(&writer, Compact::Incremental), Ok(()));
+}
+
 /// A queued reservation must survive preceding inserts and release only at the writer barrier.
 #[test]
 fn queued_reservation_releases_after_writer_barrier() {

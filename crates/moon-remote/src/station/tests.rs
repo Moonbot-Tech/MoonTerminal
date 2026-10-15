@@ -729,13 +729,13 @@ fn a_tape_push_changes_only_the_tape_section() {
         margin_s: 180,
         long_position_min: 10,
     };
-    assert!(with_tape(current, same, None).unwrap().is_none());
+    assert!(with_tape(current, same, None, None).unwrap().is_none());
 
     let moved = TapeWindow {
         margin_s: 300,
         long_position_min: 10,
     };
-    let text = with_tape(current, moved, None)
+    let text = with_tape(current, moved, None, None)
         .unwrap()
         .expect("a changed window");
     let back: toml::Value = toml::from_str(&text).unwrap();
@@ -745,7 +745,7 @@ fn a_tape_push_changes_only_the_tape_section() {
     assert_eq!(back["telegram"]["mini_app"].as_bool(), Some(true));
 
     let bare = "[[core]]\nuid = 9\nname = \"Old\"\n";
-    let text = with_tape(bare, same, None)
+    let text = with_tape(bare, same, None, None)
         .unwrap()
         .expect("a file without [tape] gets one");
     let back: toml::Value = toml::from_str(&text).unwrap();
@@ -760,12 +760,12 @@ fn tape_merge_preserves_foreign_fields_and_only_writes_supported_switches() {
         margin_s: 180,
         long_position_min: 10,
     };
-    assert!(with_tape(current, tape, None).unwrap().is_none());
+    assert!(with_tape(current, tape, None, None).unwrap().is_none());
     let moved = TapeWindow {
         margin_s: 300,
         ..tape
     };
-    let text = with_tape(current, moved, None).unwrap().unwrap();
+    let text = with_tape(current, moved, None, None).unwrap().unwrap();
     let back: toml::Value = toml::from_str(&text).unwrap();
     assert_eq!(back["tape"]["future"].as_str(), Some("kept"));
     assert_eq!(back["tape"]["auto_catchup"].as_bool(), Some(false));
@@ -774,18 +774,95 @@ fn tape_merge_preserves_foreign_fields_and_only_writes_supported_switches() {
         auto: true,
         archives: false,
     };
-    let text = with_tape(current, tape, Some(choices)).unwrap().unwrap();
+    let text = with_tape(current, tape, Some(choices), None)
+        .unwrap()
+        .unwrap();
     let back: toml::Value = toml::from_str(&text).unwrap();
     assert_eq!(back["tape"]["future"].as_str(), Some("kept"));
     assert_eq!(back["tape"]["auto_catchup"].as_bool(), Some(true));
     assert_eq!(back["tape"]["archive_catchup"].as_bool(), Some(false));
     assert_eq!(back["tape"]["margin_s"].as_integer(), Some(180));
-    assert!(with_tape(&text, tape, Some(choices)).unwrap().is_none());
-    let legacy = with_tape("", tape, None).unwrap().unwrap();
+    assert!(
+        with_tape(&text, tape, Some(choices), None)
+            .unwrap()
+            .is_none()
+    );
+    let legacy = with_tape("", tape, None, None).unwrap().unwrap();
     let back: toml::Value = toml::from_str(&legacy).unwrap();
     assert!(back["tape"].get("auto_catchup").is_none());
     assert!(back["tape"].get("archive_catchup").is_none());
-    assert!(with_tape("tape = 1", tape, None).is_err());
+    assert!(with_tape("tape = 1", tape, None, None).is_err());
+}
+
+/// Unsupported pushes must omit retention keys; supported merges must preserve foreign fields.
+#[test]
+fn with_tape_writes_keep_only_when_supported() {
+    let tape = TapeWindow {
+        margin_s: 180,
+        long_position_min: 10,
+    };
+    let keep = TapeKeep {
+        max_age_days: 90,
+        record_emulator: false,
+    };
+    let legacy = with_tape("", tape, None, None).unwrap().unwrap();
+    let parsed: toml::Value = toml::from_str(&legacy).unwrap();
+    assert!(parsed["tape"].get("max_age_days").is_none());
+    assert!(parsed["tape"].get("record_emulator").is_none());
+    let current = format!("{legacy}future = 'kept'\n");
+    let text = with_tape(&current, tape, None, Some(keep))
+        .unwrap()
+        .unwrap();
+    let parsed: toml::Value = toml::from_str(&text).unwrap();
+    assert_eq!(parsed["tape"]["max_age_days"].as_integer(), Some(90));
+    assert_eq!(parsed["tape"]["record_emulator"].as_bool(), Some(false));
+    assert_eq!(parsed["tape"]["future"].as_str(), Some("kept"));
+    assert!(with_tape(&text, tape, None, Some(keep)).unwrap().is_none());
+    let moved = TapeWindow {
+        margin_s: 300,
+        ..tape
+    };
+    let text = with_tape(&text, moved, None, None).unwrap().unwrap();
+    let parsed: toml::Value = toml::from_str(&text).unwrap();
+    assert_eq!(parsed["tape"]["max_age_days"].as_integer(), Some(90));
+    assert_eq!(parsed["tape"]["record_emulator"].as_bool(), Some(false));
+}
+
+/// Missing retention support must fail immediately only when retention choices were sent.
+#[test]
+fn tape_verdict_outdated_without_keep() {
+    let tape = TapeWindow {
+        margin_s: 180,
+        long_position_min: 10,
+    };
+    let keep = TapeKeep {
+        max_age_days: 90,
+        record_emulator: false,
+    };
+    assert_eq!(
+        tape_verdict(None, tape, None, Some(keep)),
+        TapeVerdict::Outdated
+    );
+    assert_eq!(
+        tape_verdict(Some((tape, None, None)), tape, None, Some(keep)),
+        TapeVerdict::Outdated
+    );
+    assert_eq!(
+        tape_verdict(Some((tape, None, None)), tape, None, None),
+        TapeVerdict::Applied
+    );
+    assert_eq!(
+        tape_verdict(Some((tape, None, Some(keep))), tape, None, Some(keep)),
+        TapeVerdict::Applied
+    );
+    let old = TapeKeep {
+        max_age_days: 365,
+        record_emulator: true,
+    };
+    assert_eq!(
+        tape_verdict(Some((tape, None, Some(old))), tape, None, Some(keep)),
+        TapeVerdict::Pending
+    );
 }
 
 /// Dropping the removal marker would keep an old helper after Update the service, preventing
@@ -869,17 +946,23 @@ fn tape_switches_sent_to_a_pre_switch_station_fail_at_once() {
         archives: true,
     };
     assert_eq!(
-        tape_verdict(Some((tape, None)), tape, Some(on)),
+        tape_verdict(Some((tape, None, None)), tape, Some(on), None),
         TapeVerdict::Outdated
     );
-    assert_eq!(tape_verdict(None, tape, Some(on)), TapeVerdict::Outdated);
-    assert_eq!(tape_verdict(None, tape, None), TapeVerdict::Unreported);
     assert_eq!(
-        tape_verdict(Some((tape, Some(on))), tape, Some(on)),
+        tape_verdict(None, tape, Some(on), None),
+        TapeVerdict::Outdated
+    );
+    assert_eq!(
+        tape_verdict(None, tape, None, None),
+        TapeVerdict::Unreported
+    );
+    assert_eq!(
+        tape_verdict(Some((tape, Some(on), None)), tape, Some(on), None),
         TapeVerdict::Applied
     );
     assert_eq!(
-        tape_verdict(Some((tape, None)), tape, None),
+        tape_verdict(Some((tape, None, None)), tape, None, None),
         TapeVerdict::Applied
     );
     let old = TapeWindow {
@@ -887,7 +970,7 @@ fn tape_switches_sent_to_a_pre_switch_station_fail_at_once() {
         ..tape
     };
     assert_eq!(
-        tape_verdict(Some((old, Some(on))), tape, Some(on)),
+        tape_verdict(Some((old, Some(on), None)), tape, Some(on), None),
         TapeVerdict::Pending
     );
 }

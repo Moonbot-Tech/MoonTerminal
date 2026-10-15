@@ -43,6 +43,49 @@ fn int(v: i64) -> ReportValue {
     ReportValue::Integer(v)
 }
 
+/// Partial closing upserts must keep emulator identity, with the newest row taking precedence.
+#[test]
+fn closed_edge_carries_emulator_flag() {
+    for (opened, closed, expected) in [
+        (Some(1), None, Some(true)),
+        (Some(1), Some(0), Some(false)),
+        (None, None, None),
+    ] {
+        let mut tracker = CaptureTracker::new(fields());
+        let mut values = vec![(COIN, text("XALPHA")), (BUY, int(1000))];
+        if let Some(flag) = opened {
+            values.push((EMULATOR, int(flag)));
+        }
+        tracker.on_page_row(&row(1, &values));
+        let mut values = vec![(CLOSE, int(1060))];
+        if let Some(flag) = closed {
+            values.push((EMULATOR, int(flag)));
+        }
+        assert_eq!(
+            tracker
+                .on_row(&row(1, &values))
+                .and_then(RowEdge::closed)
+                .unwrap()
+                .emulator,
+            expected
+        );
+    }
+    let mut tracker = CaptureTracker::new(fields());
+    tracker.on_row(&row(2, &[(EMULATOR, int(1))]));
+    let closed = tracker
+        .on_row(&row(
+            2,
+            &[(COIN, text("XALPHA")), (BUY, int(1000)), (CLOSE, int(1060))],
+        ))
+        .and_then(RowEdge::closed)
+        .unwrap();
+    assert_eq!(
+        closed.emulator,
+        Some(true),
+        "filed metadata survives a close that carries its own stamps"
+    );
+}
+
 /// A close that carries everything is announced from its own row.
 #[test]
 fn a_complete_closing_row_is_announced() {
@@ -65,6 +108,7 @@ fn a_complete_closing_row_is_announced() {
             coin: "SUE".into(),
             buy: ReportStamp::Millis(1_000_250),
             close: ReportStamp::Millis(1_060_900),
+            emulator: None,
         })
     );
 }
@@ -102,6 +146,7 @@ fn a_partial_close_is_completed_from_the_open_row_and_announced_once() {
             coin: "SUE".into(),
             buy: ReportStamp::Seconds(1_000),
             close: ReportStamp::Millis(1_060_900),
+            emulator: None,
         })
     );
     assert_eq!(

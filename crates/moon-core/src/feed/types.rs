@@ -284,6 +284,8 @@ pub enum FeedMsg {
         coin: String,
         quote: String,
         buy: crate::db::ReportStamp,
+        /// Unknown on older cores; unknown trades remain recordable.
+        emulator: Option<bool>,
     },
     /// A report row of this core just CLOSED, read off the same `RowUpsert` the replica gets.
     ///
@@ -302,6 +304,8 @@ pub enum FeedMsg {
         quote: String,
         buy: crate::db::ReportStamp,
         close: crate::db::ReportStamp,
+        /// Closing row, open row or filed metadata, in that order.
+        emulator: Option<bool>,
     },
     /// Core-built strategy-filter rows for one or more markets, from `Event::ChartText`.
     ///

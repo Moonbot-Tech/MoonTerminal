@@ -6,6 +6,21 @@
 
 use super::support::{Path, braced_body, code_only, read_src, read_unsplit, rust_sources};
 
+/// Removing the minutes suffix must fail even when the compact wrapper keeps its old width.
+/// This binary-only contract supplements the rendered tape-page geometry regression.
+#[test]
+fn station_tape_compact_number_keeps_its_localized_minutes_suffix() {
+    let block = read_src("settings/telegram/server_tape/block.rs");
+    let control = braced_body(&block, "pub(super) fn long_control(");
+    assert!(control.contains("t!(\"storage.unit_min\")"));
+    assert!(
+        control.contains("Some(unit)"),
+        "the actual number field must receive its suffix"
+    );
+    let page = read_src("settings/telegram/server_tape.rs");
+    assert!(page.contains("block::long_control(input, !locked, cx)"));
+}
+
 /// Reversing slider bound setters crashes Settings when a range starts above MoonUI's default 100.
 ///
 /// MoonUI clamps the thumb after each setter, so all constructor chains must install the maximum

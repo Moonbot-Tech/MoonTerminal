@@ -88,6 +88,7 @@ pub(super) struct ClosedTrade {
     pub coin: String,
     pub buy: ReportStamp,
     pub close: ReportStamp,
+    pub emulator: Option<bool>,
 }
 
 /// What one live upsert meant for its trade.
@@ -155,7 +156,7 @@ impl Filed {
 #[derive(Debug)]
 pub(super) struct CaptureTracker {
     fields: CaptureFields,
-    open: HashMap<i64, (String, ReportStamp)>,
+    open: HashMap<i64, (String, ReportStamp, Option<bool>)>,
     /// Rows seen without an entry yet, with what they carried.
     filed: HashMap<i64, Filed>,
     /// The order rows were first filed in, oldest first: who goes when [`MAX_FILED_ROWS`] is hit.
@@ -190,7 +191,7 @@ impl CaptureTracker {
         let (coin, buy, close) = self.read(row);
         match (coin, buy, close) {
             (Some(coin), Some(buy), None) => {
-                self.remember_open(row.rec_id, coin, buy);
+                self.remember_open(row.rec_id, coin, buy, self.emulator(row));
             }
             // A buy still waiting on the page: its fill may come live, as a partial upsert.
             (_, None, None) => {
@@ -216,11 +217,16 @@ impl CaptureTracker {
     ///     the trade and can be completed.
     pub(super) fn on_row(&mut self, row: &moonproto::ReportRow) -> Option<RowEdge> {
         let (coin, buy, close) = self.read(row);
+        let row_emulator = self.emulator(row);
         let Some(close) = close else {
             // A just-closed row upserted again without its CloseDate is no entry: announced, it
             // would leave an open trade behind that no close will ever come for. An open row
             // upserted again is no second entry either.
-            if self.recent_closed.contains(&row.rec_id) || self.open.contains_key(&row.rec_id) {
+            if let Some(open) = self.open.get_mut(&row.rec_id) {
+                open.2 = row_emulator.or(open.2);
+                return None;
+            }
+            if self.recent_closed.contains(&row.rec_id) {
                 return None;
             }
             let filed = self.file(row);
@@ -228,7 +234,7 @@ impl CaptureTracker {
                 return None;
             };
             self.unfile(row.rec_id);
-            self.remember_open(row.rec_id, coin.clone(), buy);
+            self.remember_open(row.rec_id, coin.clone(), buy, filed.emulator);
             return Some(RowEdge::Opened {
                 rec_id: row.rec_id,
                 coin,
@@ -238,18 +244,22 @@ impl CaptureTracker {
             });
         };
         // A close that overtook the last piece of the entry completes itself from what was filed.
-        let filed = self
-            .filed
-            .get(&row.rec_id)
-            .and_then(|filed| Some((filed.coin.clone()?, filed.buy?)));
+        let filed = self.filed.get(&row.rec_id).cloned();
         self.unfile(row.rec_id);
-        let remembered = self.open.remove(&row.rec_id).or(filed);
+        let open = self.open.remove(&row.rec_id);
+        let emulator = row_emulator
+            .or(open.as_ref().and_then(|entry| entry.2))
+            .or(filed.as_ref().and_then(|entry| entry.emulator));
+        let remembered = open.or_else(|| {
+            let filed = filed?;
+            Some((filed.coin?, filed.buy?, filed.emulator))
+        });
         if self.recent_closed.contains(&row.rec_id) {
             return None;
         }
         let (coin, buy) = match (coin, buy, remembered) {
             (Some(coin), Some(buy), _) => (coin, buy),
-            (coin, buy, Some((old_coin, old_buy))) => {
+            (coin, buy, Some((old_coin, old_buy, _))) => {
                 (coin.unwrap_or(old_coin), buy.unwrap_or(old_buy))
             }
             _ => return None,
@@ -260,7 +270,12 @@ impl CaptureTracker {
         }
         Some(RowEdge::Closed(
             row.rec_id,
-            ClosedTrade { coin, buy, close },
+            ClosedTrade {
+                coin,
+                buy,
+                close,
+                emulator,
+            },
         ))
     }
 
@@ -288,6 +303,14 @@ impl CaptureTracker {
             .filter(|v| *v != 0)
             .map(|secs| ReportStamp::resolve(secs, f.close_ms.and_then(integer)));
         (coin, buy, close)
+    }
+
+    /// Read an explicitly carried emulator flag; absent columns keep the flag unknown.
+    fn emulator(&self, row: &moonproto::ReportRow) -> Option<bool> {
+        match self.fields.emulator.and_then(|index| row.value(index)) {
+            Some(moonproto::ReportValue::Integer(value)) => Some(*value != 0),
+            _ => None,
+        }
     }
 
     /// Keep what an open row carries towards its entry, merged over what earlier upserts carried.
@@ -336,11 +359,17 @@ impl CaptureTracker {
     }
 
     /// Remember what a close will not repeat. Whether the row was not remembered before.
-    fn remember_open(&mut self, rec_id: i64, coin: String, buy: ReportStamp) -> bool {
+    fn remember_open(
+        &mut self,
+        rec_id: i64,
+        coin: String,
+        buy: ReportStamp,
+        emulator: Option<bool>,
+    ) -> bool {
         if self.open.len() >= MAX_OPEN_ROWS {
             self.open.clear();
         }
-        self.open.insert(rec_id, (coin, buy)).is_none()
+        self.open.insert(rec_id, (coin, buy, emulator)).is_none()
     }
 }
 

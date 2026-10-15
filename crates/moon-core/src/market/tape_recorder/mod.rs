@@ -36,8 +36,9 @@
 //! open-row check, stamped with its old entry. The terminal takes such an open for no entry and
 //! skips it; a station RESUMES it: what the file already holds of the trade counts as filed, the
 //! rest is recorded from the core's archive and the live stream as for any trade, the part out of
-//! reach named lost. The file keeps everything until the server runs short of space; then the
-//! station asks for room ([`free_disk`]) and the prints filed longest ago go first, their pages
+//! reach named lost. Station retention removes expired and disabled-emulator tape while
+//! protecting live and in-range real windows. Separately, when disk space runs short the
+//! station asks for room ([`free_disk`]): the prints filed longest ago go first, their pages
 //! handed back to the disk.
 //!
 //! Once a closed trade is settled here, and the terminal's own close-time capture has had time to
@@ -67,6 +68,7 @@ mod compare;
 mod donor;
 mod peek;
 mod plan;
+mod retention;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -146,8 +148,12 @@ static TX: OnceLock<Option<Sender<Cmd>>> = OnceLock::new();
 
 /// Live events and off-thread recovery results, applied by the recorder's single cache owner.
 enum Cmd {
+    /// Retention protection outside the historical fetch horizon.
+    Protect(Vec<catchup::CatchupTrade>),
     /// Resolved closed rows whose tape may still be recovered from public sources.
     Catchup(Vec<catchup::CatchupTrade>),
+    /// A successful listing follows all of its pages on this same queue.
+    Listed { core: CoreId, generation: u64 },
     /// Coverage fetched off-thread, filed only through this recorder's cache handle.
     Backfilled {
         exchange: String,
@@ -162,13 +168,16 @@ enum Cmd {
         market: String,
         trade: TradeId,
         open_ms: i64,
+        emulator: Option<bool>,
     },
     Closed {
         exchange: String,
         market: String,
+        venue: crate::venue::Venue,
         trade: TradeId,
         open_ms: i64,
         close_ms: i64,
+        emulator: Option<bool>,
     },
     /// A core's connection went away or was replaced: a donor on it must not be used again.
     CoreGone(CoreId),
@@ -226,26 +235,43 @@ pub fn core_down(id: CoreId) {
 }
 
 /// A trade opened on `exchange_key`/`market` at `open_ms` (true UTC).
-pub fn trade_opened(exchange_key: &str, market: &str, trade: TradeId, open_ms: i64) {
+pub fn trade_opened(
+    exchange_key: &str,
+    market: &str,
+    trade: TradeId,
+    open_ms: i64,
+    emulator: Option<bool>,
+) {
     if enabled() {
         send(Cmd::Opened {
             exchange: exchange_key.to_string(),
             market: market.to_string(),
             trade,
             open_ms,
+            emulator,
         });
     }
 }
 
 /// A trade closed on `exchange_key`/`market` (true UTC).
-pub fn trade_closed(exchange_key: &str, market: &str, trade: TradeId, open_ms: i64, close_ms: i64) {
+pub fn trade_closed(
+    exchange_key: &str,
+    market: &str,
+    trade: TradeId,
+    open_ms: i64,
+    close_ms: i64,
+    emulator: Option<bool>,
+    venue: crate::venue::Venue,
+) {
     if enabled() {
         send(Cmd::Closed {
             exchange: exchange_key.to_string(),
             market: market.to_string(),
+            venue,
             trade,
             open_ms,
             close_ms,
+            emulator,
         });
     }
 }
@@ -266,6 +292,7 @@ pub fn free_disk(bytes: i64) {
 /// Returns:
 ///     Whether everything was on disk in time.
 pub fn shutdown(timeout: Duration) -> bool {
+    catchup::stop_worker();
     let Some(Some(tx)) = TX.get() else {
         return true;
     };
@@ -475,6 +502,7 @@ impl Recorder {
         let margin = crate::market::trade_replay::margin_ms();
         let long = crate::market::trade_replay::long_position_ms();
         match cmd {
+            Cmd::Listed { core, generation } => catchup::listing_applied(core, generation),
             Cmd::Catchup(trades) => {
                 for trade in &trades {
                     self.closed.closed(
@@ -519,13 +547,18 @@ impl Recorder {
                 }
                 self.cache.release_after_writes(reservation);
             }
+            Cmd::Protect(trades) => self.catchup.protect(trades),
             Cmd::CatchupDone(result) => self.catchup.finish(&self.cache, result, now_ms),
             Cmd::Opened {
                 exchange,
                 market,
                 trade,
                 open_ms,
+                emulator,
             } => {
+                if emulator == Some(true) && !catchup::record_emulator() {
+                    return;
+                }
                 let key = (exchange, market);
                 let station = crate::feed::station::enabled();
                 let known = self.tasks.get(&key).is_some_and(|t| t.knows(trade));
@@ -548,17 +581,17 @@ impl Recorder {
                 if verdict == OpenVerdict::Resume {
                     self.prime(&key, open_ms.saturating_sub(margin), now_ms);
                 }
-                self.tasks
-                    .entry(key)
-                    .or_insert_with(KeyTask::new)
-                    .opened(trade, open_ms, margin, long);
+                let task = self.tasks.entry(key).or_insert_with(KeyTask::new);
+                task.opened(trade, open_ms, margin, long, emulator);
             }
             Cmd::Closed {
                 exchange,
                 market,
+                venue,
                 trade,
                 open_ms,
                 close_ms,
+                emulator,
             } => {
                 line(&format!("close {exchange} {market} {open_ms}..{close_ms}"));
                 let key = (exchange, market);
@@ -566,17 +599,35 @@ impl Recorder {
                 // A station's close of a trade it never saw open — it opened before a restart and
                 // its resent open did not come first: what the file holds of it counts as filed.
                 let known = self.tasks.get(&key).is_some_and(|t| t.knows(trade));
-                if crate::feed::station::enabled() && !known {
+                if crate::feed::station::enabled()
+                    && !known
+                    && (emulator != Some(true) || catchup::record_emulator())
+                {
                     self.prime(
                         &key,
                         open_ms.saturating_sub(margin),
                         close_ms.saturating_add(margin),
                     );
                 }
-                self.tasks
-                    .entry(key)
-                    .or_insert_with(KeyTask::new)
-                    .closed(trade, open_ms, close_ms, margin, long);
+                let task = self.tasks.entry(key.clone()).or_insert_with(KeyTask::new);
+                task.closed(trade, open_ms, close_ms, margin, long, emulator);
+                if !catchup::record_emulator() {
+                    task.discard_emulator();
+                    if task.is_done() {
+                        self.tasks.remove(&key);
+                    }
+                }
+                if catchup::enabled() && emulator != Some(true) {
+                    self.catchup.protect(vec![catchup::CatchupTrade {
+                        id: trade,
+                        exchange: key.0,
+                        market: key.1,
+                        venue,
+                        open_ms,
+                        close_ms,
+                        emulator: false,
+                    }]);
+                }
             }
             // Taken by `run` before a command reaches here.
             Cmd::Shutdown(_) => {}
@@ -610,10 +661,14 @@ impl Recorder {
         }
     }
 
-    /// Count as filed what the file already holds of `key` over `[from_ms, to_ms]`. A read the
+    /// Count as filed what the file already holds of `key` over `[from_ms, to_ms]`. Maintenance
+    /// leaves the live task unprimed rather than blocking it behind a trim. A read the
     /// worker did not answer in time leaves nothing counted: the stretch is recorded again, and
     /// the file keeps only what it does not already hold.
     fn prime(&mut self, key: &Key, from_ms: i64, to_ms: i64) {
+        if self.catchup.maintenance_busy() {
+            return;
+        }
         let held = self.cache.held_spans(&key.0, &key.1, from_ms, to_ms);
         match &held {
             Some(spans) if !spans.is_empty() => line(&format!(
@@ -636,14 +691,23 @@ impl Recorder {
         }
     }
 
-    /// Advance live recording and dispatch catch-up only when its previous pass has settled.
+    /// Advance live recording while polling maintenance; recovery starts only after both settle.
     fn tick(&mut self, now: Instant, now_ms: i64) {
-        self.catchup.tick(
-            &self.cache,
-            now_ms,
-            crate::market::trade_replay::margin_ms(),
-            crate::market::trade_replay::long_position_ms(),
-        );
+        self.drop_emulator_tasks();
+        let live = self
+            .tasks
+            .iter()
+            .map(|(key, task)| (key.clone(), task.real_needed()))
+            .collect();
+        let purging = self.catchup.retention_tick(&self.cache, now_ms, &live);
+        if !purging {
+            self.catchup.tick(
+                &self.cache,
+                now_ms,
+                crate::market::trade_replay::margin_ms(),
+                crate::market::trade_replay::long_position_ms(),
+            );
+        }
         self.collect_replies(now, now_ms);
         self.expire(now);
         self.closed.prune(now);
@@ -674,7 +738,9 @@ impl Recorder {
                 });
             }
         }
-        self.run_compares(now);
+        if !self.catchup.maintenance_busy() {
+            self.run_compares(now);
+        }
         // A key done here is dropped from its donor's selection by the next reconcile.
         self.tasks.retain(|_, task| !task.is_done());
         let idle: Vec<String> = self
@@ -693,6 +759,16 @@ impl Recorder {
         if now.duration_since(self.last_summary) >= SUMMARY_EVERY {
             self.last_summary = now;
             self.summary("summary");
+        }
+    }
+
+    /// Remove disabled emulator recordings before processing replies, drains or pending seeds.
+    fn drop_emulator_tasks(&mut self) {
+        if !catchup::record_emulator() {
+            for task in self.tasks.values_mut() {
+                task.discard_emulator();
+            }
+            self.tasks.retain(|_, task| !task.is_done());
         }
     }
 
@@ -1168,8 +1244,12 @@ fn open_verdict(station: bool, age_ms: i64, known: bool) -> OpenVerdict {
     }
 }
 
-/// Flush `task` up to [`QUIET_TAIL_MS`] behind its stream's last sign of life, if it has one.
+/// Drop disabled emulator needs before every flush, including shutdown and stream-break paths.
+/// Flush up to [`QUIET_TAIL_MS`] behind the stream's last sign of life, if it has one.
 fn flush_to(task: &mut KeyTask, alive_ms: Option<i64>, force: bool) -> Option<Filing> {
+    if !catchup::record_emulator() {
+        task.discard_emulator();
+    }
     task.flush(alive_ms? - QUIET_TAIL_MS, force)
 }
 

@@ -2,7 +2,7 @@
 //! This is deliberately a lexical contract, not macro expansion or Rust name resolution.
 
 use super::support::{Path, PathBuf, code_only, fs};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod tests;
 
@@ -10,6 +10,8 @@ mod tests;
 const SYSTEMS: [&str; 4] = ["windows", "macos", "linux", "other"];
 /// A conservative set of targets on which source can compile.
 type Targets = [bool; 4];
+/// Local bindings retain the targets on which their declarations are present.
+type Names = BTreeMap<String, Targets>;
 
 /// Tokenize source, preserving quoted attribute values but discarding comments and raw strings.
 fn tokens(source: &str) -> Vec<String> {
@@ -210,7 +212,107 @@ fn dependencies(manifest: &str) -> BTreeMap<String, Targets> {
     result
 }
 
-/// A module traversal keeps declaration gates attached to all descendants, including relocated files.
+/// Collect explicit use-tree bindings, including grouped imports, aliases, and `self` leaves.
+fn import_names(ts: &[String], prefix: Option<&str>, names: &mut BTreeSet<String>) {
+    let mut i = 0;
+    let mut last = None;
+    while i < ts.len() {
+        match ts[i].as_str() {
+            "{" => {
+                let end = close(ts, i);
+                import_names(&ts[i + 1..end], last, names);
+                i = end;
+                last = None;
+            }
+            "as" => {
+                last = ts.get(i + 1).map(String::as_str);
+                i += 1;
+            }
+            "," => {
+                if let Some(name) = last.take().filter(|name| *name != "_") {
+                    names.insert(name.to_owned());
+                }
+                last = None;
+            }
+            ":" => {}
+            "*" => last = None,
+            "self" => last = prefix,
+            name => last = Some(name),
+        }
+        i += 1;
+    }
+    if let Some(name) = last.filter(|name| *name != "_") {
+        names.insert(name.to_owned());
+    }
+}
+
+/// Union declarations so a gated shadow does not erase an enclosing binding on other targets.
+fn merge_names(names: &mut Names, declarations: Names) {
+    for (name, targets) in declarations {
+        let available = names.entry(name).or_insert([false; 4]);
+        for n in 0..4 {
+            available[n] |= targets[n];
+        }
+    }
+}
+
+/// Predeclare cfg-aware scope items, excluding the import whose source is being checked.
+fn local_names(ts: &[String], excluded_use: Option<usize>) -> Names {
+    let mut names = Names::new();
+    let mut inherited = [true; 4];
+    let mut active = inherited;
+    let mut i = 0;
+    while i < ts.len() {
+        if ts[i] == "#" && ts.get(i + 1).is_some_and(|s| s == "[" || s == "!") {
+            let inner = ts[i + 1] == "!";
+            let open = i + if inner { 2 } else { 1 };
+            let end = close(ts, open);
+            let attr = &ts[open + 1..end];
+            if attr.first().is_some_and(|s| s == "cfg") {
+                for (n, os) in SYSTEMS.iter().enumerate() {
+                    // Unknown gates cannot prove that a shadowing declaration exists.
+                    active[n] &= predicate(&attr[2..attr.len() - 1], os) == Some(true);
+                }
+                if inner {
+                    inherited = active;
+                }
+            }
+            i = end + 1;
+            continue;
+        }
+        if ts[i] == "use" && ts.get(i + 1).is_some_and(|token| token != "<") {
+            let end = (i + 1..ts.len()).find(|&n| ts[n] == ";").unwrap();
+            if excluded_use != Some(i) {
+                let mut bindings = BTreeSet::new();
+                import_names(&ts[i + 1..end], None, &mut bindings);
+                merge_names(
+                    &mut names,
+                    bindings.into_iter().map(|name| (name, active)).collect(),
+                );
+            }
+            i = end;
+            active = inherited;
+        } else if matches!(
+            ts[i].as_str(),
+            "mod" | "struct" | "enum" | "union" | "trait" | "type"
+        ) && let Some(name) = ts.get(i + 1)
+        {
+            merge_names(&mut names, [(name.clone(), active)].into());
+        } else if matches!(ts[i].as_str(), "{" | "(" | "[") {
+            let end = close(ts, i);
+            if ts[i] == "{" {
+                active = inherited;
+            }
+            i = end;
+        } else if ts[i] == ";" {
+            active = inherited;
+        }
+        i += 1;
+    }
+    names
+}
+
+/// A module traversal keeps declaration gates and local names attached to descendants.
 struct Contract {
     dependencies: BTreeMap<String, Targets>,
     failures: Vec<String>,
@@ -220,6 +322,17 @@ struct Contract {
 impl Contract {
     /// Read one reachable module file; derive Rust's normal child directory from its file stem.
     fn file(&mut self, path: &Path, inherited: Targets, module_dir: Option<PathBuf>) {
+        self.file_in_scope(path, inherited, module_dir, &Names::new());
+    }
+
+    /// Carry enclosing declarations across file boundaries, including relocated modules.
+    fn file_in_scope(
+        &mut self,
+        path: &Path,
+        inherited: Targets,
+        module_dir: Option<PathBuf>,
+        names: &Names,
+    ) {
         let source = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         self.files += 1;
         let dir = module_dir.unwrap_or_else(|| {
@@ -232,12 +345,26 @@ impl Contract {
                 path.with_extension("")
             }
         });
-        self.walk(&tokens(&source), path, &dir, inherited);
+        self.scope(
+            &tokens(&source),
+            path,
+            &dir,
+            path.parent().unwrap(),
+            inherited,
+            names,
+        );
     }
 
     /// Scan scopes with item/block cfg attributes; imports and fully qualified paths share the check.
     fn walk(&mut self, ts: &[String], path: &Path, dir: &Path, inherited: Targets) {
-        self.scope(ts, path, dir, path.parent().unwrap(), inherited);
+        self.scope(
+            ts,
+            path,
+            dir,
+            path.parent().unwrap(),
+            inherited,
+            &Names::new(),
+        );
     }
 
     /// Resolve path attributes against the containing inline module, separately from file children.
@@ -248,11 +375,16 @@ impl Contract {
         dir: &Path,
         attribute_dir: &Path,
         inherited: Targets,
+        names: &Names,
     ) {
+        let enclosing_names = names;
+        let mut names = names.clone();
+        merge_names(&mut names, local_names(ts, None));
         let mut inherited = inherited;
         let mut i = 0;
         let mut active = inherited;
         let mut relocated = None;
+        let mut import_scope = None;
         while i < ts.len() {
             if ts[i] == "#" && ts.get(i + 1).is_some_and(|s| s == "[" || s == "!") {
                 let inner = ts[i + 1] == "!";
@@ -290,7 +422,7 @@ impl Contract {
                     // Optional private overlays are not repository source and cannot be checked here.
                     if child.exists() {
                         let child_dir = has_path.then(|| child.parent().unwrap().to_path_buf());
-                        self.file(&child, active, child_dir);
+                        self.file_in_scope(&child, active, child_dir, &names);
                     } else if !child.components().any(|part| part.as_os_str() == "private") {
                         panic!("{}: missing module {}", path.display(), child.display());
                     }
@@ -300,7 +432,14 @@ impl Contract {
                     let inline_dir = relocated
                         .take()
                         .map_or_else(|| dir.join(name), |rel| attribute_dir.join(rel));
-                    self.scope(&ts[i + 3..end], path, &inline_dir, &inline_dir, active);
+                    self.scope(
+                        &ts[i + 3..end],
+                        path,
+                        &inline_dir,
+                        &inline_dir,
+                        active,
+                        &names,
+                    );
                     i = end + 1;
                 }
                 active = inherited;
@@ -321,6 +460,11 @@ impl Contract {
                 }
                 continue;
             }
+            if ts[i] == "use" && ts.get(i + 1).is_some_and(|token| token != "<") {
+                let mut source_names = enclosing_names.clone();
+                merge_names(&mut source_names, local_names(ts, Some(i)));
+                import_scope = Some(source_names);
+            }
             let nested_path = i >= 3
                 && ts[i - 1] == ":"
                 && ts[i - 2] == ":"
@@ -329,13 +473,27 @@ impl Contract {
                     .all(|c| c.is_ascii_alphanumeric() || c == '_');
             let direct_import = (i > 0 && ts[i - 1] == "use")
                 || (i >= 2 && ts[i - 2] == "extern" && ts[i - 1] == "crate");
+            let absolute = i >= 2 && ts[i - 2] == ":" && ts[i - 1] == ":";
+            // An import's own bindings cannot make its external source appear local.
+            let local = if direct_import {
+                import_scope
+                    .as_ref()
+                    .filter(|_| i > 0 && ts[i - 1] == "use")
+            } else {
+                Some(&names)
+            }
+            .and_then(|scope| scope.get(&ts[i]))
+            .copied()
+            .unwrap_or([false; 4]);
             if !nested_path
                 && (direct_import
                     || (ts.get(i + 1).is_some_and(|s| s == ":")
                         && ts.get(i + 2).is_some_and(|s| s == ":")))
                 && let Some(available) = self.dependencies.get(&ts[i])
             {
-                let missing: Vec<_> = (0..4).filter(|&n| active[n] && !available[n]).collect();
+                let missing: Vec<_> = (0..4)
+                    .filter(|&n| active[n] && !available[n] && (absolute || !local[n]))
+                    .collect();
                 if !missing.is_empty() {
                     let table = if active == [true; 4] {
                         "[dependencies]".into()
@@ -354,7 +512,14 @@ impl Contract {
             }
             if matches!(ts[i].as_str(), "{" | "(" | "[") {
                 let end = close(ts, i);
-                self.scope(&ts[i + 1..end], path, dir, attribute_dir, active);
+                self.scope(
+                    &ts[i + 1..end],
+                    path,
+                    dir,
+                    attribute_dir,
+                    active,
+                    import_scope.as_ref().unwrap_or(&names),
+                );
                 if ts[i] == "{" {
                     active = inherited;
                     relocated = None;
@@ -364,6 +529,7 @@ impl Contract {
                 if ts[i] == ";" {
                     active = inherited;
                     relocated = None;
+                    import_scope = None;
                 }
                 i += 1;
             }

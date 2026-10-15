@@ -100,6 +100,7 @@ impl Metrics {
             .refresh_processes(ProcessesToUpdate::Some(&[self.pid]), true);
 
         let cpu_system = self.sys.global_cpu_usage();
+        cpu_watch::publish_system_cpu(cpu_system);
         // `None` when sysinfo did not see the process this tick. The status bar shows zeros for
         // that second, as it always has; the resource watch must NOT see a zero, which it would
         // read as a release of every megabyte.
@@ -164,6 +165,11 @@ impl Metrics {
 /// of seven floats, which is the whole reason this type exists.
 pub struct MetricsSampler {
     latest: Arc<Mutex<MetricsSnapshot>>,
+}
+
+/// Last machine CPU sample, shared by low-priority recovery without extra polling.
+pub(crate) fn system_cpu_pct() -> f32 {
+    cpu_watch::system_cpu()
 }
 
 impl MetricsSampler {

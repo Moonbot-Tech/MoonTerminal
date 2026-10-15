@@ -4,8 +4,247 @@ use crate::venue::{Brand, MarketKind};
 const DAY: i64 = 86_400_000;
 const NOW: i64 = 500 * DAY;
 
+/// Applying an absent retention setting on upgrade must not schedule a destructive purge.
+#[test]
+fn upgrade_with_absent_key_never_flags_a_purge() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = RestoreKeep::new();
+    assert_eq!(
+        max_age_days(),
+        1825,
+        "the untouched process default must match an absent setting"
+    );
+    assert!(!take_purge_wanted());
+    let absent: Option<u16> = serde_json::from_value(
+        serde_json::json!({})
+            .get("max_age_days")
+            .cloned()
+            .unwrap_or_default(),
+    )
+    .unwrap();
+    set_keep(
+        absent.unwrap_or(crate::station_api::DEFAULT_MAX_AGE_DAYS),
+        true,
+    );
+    assert_eq!(max_age_days(), 1825);
+    assert!(!take_purge_wanted());
+}
+
 /// Serialize recorder tests because switch generations and progress are process-wide.
 pub(crate) static SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Restore retention settings and the outstanding request when a global-state test exits.
+struct RestoreKeep(u16, bool, bool);
+impl RestoreKeep {
+    /// Capture settings after the caller takes the shared test lock.
+    fn new() -> Self {
+        Self(
+            max_age_days(),
+            record_emulator(),
+            PURGE_WANTED.load(Ordering::Relaxed),
+        )
+    }
+}
+impl Drop for RestoreKeep {
+    /// Leave subsequent planner tests on their original horizon even after an assertion fails.
+    fn drop(&mut self) {
+        set_keep(self.0, self.1);
+        PURGE_WANTED.store(self.2, Ordering::Relaxed);
+    }
+}
+
+/// Widening retention must not purge data, while either narrowing choice requests a relist.
+#[test]
+fn set_keep_flags_a_purge_only_when_narrowing() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
+    let _restore = RestoreKeep::new();
+    set_keep(0, true);
+    take_purge_wanted();
+    let generation = relist_gen();
+    let switch_generation = switches().0;
+    set_keep(90, true);
+    assert!(take_purge_wanted());
+    assert!(!take_purge_wanted());
+    assert_eq!(relist_gen(), generation + 1);
+    assert_eq!(switches().0, switch_generation + 1);
+    assert_eq!(status().max_age_days, Some(90));
+    set_keep(180, true);
+    assert!(!take_purge_wanted());
+    assert_eq!(relist_gen(), generation + 2);
+    set_keep(180, false);
+    assert!(take_purge_wanted());
+    assert_eq!(relist_gen(), generation + 3);
+    assert_eq!(status().record_emulator, Some(false));
+    let switch_generation = switches().0;
+    set_keep(180, false);
+    assert!(!take_purge_wanted());
+    assert_eq!(switches().0, switch_generation);
+    set_keep(0, true);
+    assert!(!take_purge_wanted());
+}
+
+/// A larger configured limit must never expand tape retention beyond archive reach.
+#[test]
+fn edge_ms_is_capped_by_archive_depth() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
+    let _restore = RestoreKeep::new();
+    set_keep(30, true);
+    assert_eq!(edge_ms(NOW), NOW - 30 * DAY);
+    set_keep(4000, true);
+    assert_eq!(max_age_days(), 3650);
+    assert_eq!(edge_ms(NOW), NOW - venue_caps::ARCHIVE_DEPTH_MS);
+    set_keep(0, true);
+    assert_eq!(edge_ms(NOW), NOW - venue_caps::ARCHIVE_DEPTH_MS);
+    set_keep(0, true);
+    take_purge_wanted();
+}
+
+/// Switching to forever must never request age deletion, including from a finite limit.
+#[test]
+fn forever_never_flags_a_purge() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
+    let _restore = RestoreKeep::new();
+    set_keep(30, true);
+    take_purge_wanted();
+    set_keep(0, true);
+    assert!(!take_purge_wanted());
+    assert_eq!(retention_edge_ms(NOW), None);
+    set_keep(0, true);
+    assert!(!take_purge_wanted());
+    set_keep(0, false);
+    assert!(
+        take_purge_wanted(),
+        "emulator deletion is independent of age"
+    );
+    set_keep(0, true);
+}
+
+/// Five years may retain old tape but must not ask archives for a two-year-old trade.
+#[test]
+fn five_years_keeps_catchup_within_archive_depth() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
+    let _restore = RestoreKeep::new();
+    set_keep(1825, true);
+    assert_eq!(retention_edge_ms(NOW), Some(NOW - 1825 * DAY));
+    assert!(retention_edge_ms(NOW).unwrap() < NOW - 730 * DAY);
+    assert_eq!(edge_ms(NOW), NOW - 365 * DAY);
+    let result = plan(
+        &[trade(1, Brand::Bybit, MarketKind::Futures, 730 * DAY)],
+        |_| Coverage::none(),
+        &HashMap::new(),
+        NOW,
+        0,
+        DAY,
+    );
+    assert_eq!(result.out_of_reach, 1);
+    assert!(result.jobs.is_empty());
+    set_keep(0, true);
+    take_purge_wanted();
+}
+
+/// Purged prefixes must stay outside every future catch-up request, including straddlers.
+#[test]
+fn catchup_plan_never_reaches_past_max_age() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
+    let _restore = RestoreKeep::new();
+    set_keep(30, true);
+    let mut straddler = trade(3, Brand::Bybit, MarketKind::Futures, 29 * DAY);
+    straddler.open_ms = NOW - 31 * DAY;
+    let rows = vec![
+        trade(1, Brand::Bybit, MarketKind::Futures, 31 * DAY),
+        trade(2, Brand::Bybit, MarketKind::Futures, DAY),
+        straddler,
+    ];
+    let result = plan(
+        &rows,
+        |_| Coverage::none(),
+        &HashMap::new(),
+        NOW,
+        0,
+        40 * DAY,
+    );
+    assert_eq!(result.out_of_reach, 1);
+    assert_eq!(result.jobs.len(), 2);
+    let job = result
+        .jobs
+        .iter()
+        .find(|job| job.trade.id.rec_id == 3)
+        .unwrap();
+    assert_eq!(job.missing.hull(), Some((NOW - 30 * DAY, NOW - 29 * DAY)));
+    assert!(result.jobs.iter().all(|job| {
+        job.missing
+            .spans()
+            .iter()
+            .all(|span| span.0 >= NOW - 30 * DAY)
+    }));
+    set_keep(0, true);
+    take_purge_wanted();
+}
+
+/// Disabled emulator trades must stay known without entering the pending fetch queue.
+#[test]
+fn catchup_skips_emulator_trades_when_off() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
+    let _restore = RestoreKeep::new();
+    let mut emulated = trade(1, Brand::Bybit, MarketKind::Futures, DAY);
+    emulated.emulator = true;
+    set_keep(0, false);
+    let result = plan(
+        std::slice::from_ref(&emulated),
+        |_| panic!("disabled emulator read tape"),
+        &HashMap::new(),
+        NOW,
+        0,
+        DAY,
+    );
+    assert!(result.jobs.is_empty());
+    let mut state = state::RecorderCatchup::default();
+    state.submit(vec![emulated]);
+    assert_eq!(state.known.len(), 1);
+    assert_eq!(status().pending, 0);
+    assert!(
+        state
+            .prepare(|_| Coverage::none(), NOW, 0, DAY, true)
+            .jobs
+            .is_empty()
+    );
+    set_keep(0, true);
+    state.submit(Vec::new());
+    assert_eq!(
+        state
+            .prepare(|_| Coverage::none(), NOW, 0, DAY, true)
+            .jobs
+            .len(),
+        1
+    );
+    take_purge_wanted();
+}
+
+/// A completed old listing must not satisfy either reload that overtook it.
+#[test]
+fn two_reloads_during_one_listing_count_only_the_last() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
+    let _restore = RestoreKeep::new();
+    let core = 9_000_001;
+    set_keep(0, true);
+    let old = relist_gen();
+    listing_started(core, old);
+    set_keep(90, true);
+    let middle = relist_gen();
+    set_keep(30, true);
+    let current = relist_gen();
+    listing_applied(core, old);
+    listing_applied(core, middle);
+    assert!(!all_listed(&[core], current));
+    assert_ne!(listing_generation(core), Some(current));
+    listing_started(core, current);
+    listing_applied(core, current);
+    assert!(all_listed(&[core], current));
+    assert!(!all_listed(&[core], middle));
+    assert!(!all_listed(&[core, core + 1], current));
+    set_keep(0, true);
+    take_purge_wanted();
+}
 
 /// Synthetic closed positions share no production core or market identity.
 fn trade(id: i64, brand: Brand, kind: MarketKind, age_ms: i64) -> CatchupTrade {
@@ -20,12 +259,14 @@ fn trade(id: i64, brand: Brand, kind: MarketKind, age_ms: i64) -> CatchupTrade {
         venue: Venue { brand, kind },
         open_ms: close_ms - 60_000,
         close_ms,
+        emulator: false,
     }
 }
 
 /// Prioritizing recent tape would lose the REST-only window nearest its retention deadline.
 #[test]
 fn expiring_rest_is_first_and_archive_backed_last() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let trades = vec![
         trade(1, Brand::Bybit, MarketKind::Futures, 5 * DAY),
         trade(2, Brand::Gate, MarketKind::Spot, DAY),
@@ -46,6 +287,7 @@ fn expiring_rest_is_first_and_archive_backed_last() {
 /// Coverage must subtract held islands rather than refetching the trade's entire hull.
 #[test]
 fn held_complete_and_holed_windows_are_distinguished() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let row = trade(1, Brand::Gate, MarketKind::Spot, DAY);
     let whole = needed(&row, 1000, DAY);
     let planned = plan(
@@ -79,6 +321,7 @@ fn held_complete_and_holed_windows_are_distinguished() {
 /// A permanent refusal or an unexpired retry must never become another venue request.
 #[test]
 fn permanent_and_retry_latches_omit_requests_until_due() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let row = trade(1, Brand::Gate, MarketKind::Spot, DAY);
     for latch in [Latch::Permanent, Latch::RetryAfter(NOW + 1)] {
         let latched = HashMap::from([(row.id, latch)]);
@@ -107,6 +350,7 @@ fn permanent_and_retry_latches_omit_requests_until_due() {
 /// Catch-up must wait until live recording has had its full margin and give-up interval.
 #[test]
 fn live_tail_waits_without_a_permanent_refusal() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let row = trade(1, Brand::Bybit, MarketKind::Futures, 120_999);
     let planned = plan(
         std::slice::from_ref(&row),
@@ -137,6 +381,7 @@ fn live_tail_waits_without_a_permanent_refusal() {
 /// The 365-day close bound must exclude old rows even when their venue has an archive.
 #[test]
 fn depth_excludes_366_days_but_keeps_364_day_archives() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let rows = [
         trade(1, Brand::Bybit, MarketKind::Futures, 366 * DAY),
         trade(2, Brand::Bybit, MarketKind::Futures, 364 * DAY),
@@ -150,6 +395,7 @@ fn depth_excludes_366_days_but_keeps_364_day_archives() {
 /// A REST-only trade crossing retention may still recover its reachable exit without old slices.
 #[test]
 fn rest_retention_crossing_keeps_only_reachable_missing_tape() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let mut row = trade(1, Brand::Gate, MarketKind::Spot, 28 * DAY);
     row.open_ms = NOW - 31 * DAY;
     let planned = plan(
@@ -357,6 +603,7 @@ fn request_fault_rest(
 /// run through the real paginator rather than inherit the refusal curve.
 #[test]
 fn request_fault_settles_only_its_job_and_next_same_host_proceeds() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let mut bad = job(1, Brand::BitGet, MarketKind::Spot);
     bad.trade.market = "BADUSDT".into();
     let good = job(2, Brand::BitGet, MarketKind::Spot);
@@ -509,6 +756,7 @@ fn partial_archive(
 /// Catch-up must keep completed coverage even when the same archive fill throttles its host.
 #[test]
 fn deferred_archive_throttle_keeps_completed_coverage() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let job = job(1, Brand::Bybit, MarketKind::Futures);
     let (from, _) = job.missing.hull().unwrap();
     let outcome = executor::run_job_at(
@@ -526,6 +774,7 @@ fn deferred_archive_throttle_keeps_completed_coverage() {
 /// A throttled host must leave later same-host jobs pending without new transport attempts.
 #[test]
 fn throttled_host_defers_later_same_host_jobs() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let jobs = vec![
         job(1, Brand::Gate, MarketKind::Spot),
         job(2, Brand::Gate, MarketKind::Spot),
@@ -563,6 +812,7 @@ fn one_host_throttled_rest(
 /// A throttle must defer its host's next job without blocking another venue's recovery.
 #[test]
 fn throttled_host_does_not_stop_another_host() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let jobs = vec![
         job(1, Brand::Gate, MarketKind::Spot),
         job(2, Brand::Gate, MarketKind::Spot),
@@ -593,6 +843,7 @@ fn throttled_host_does_not_stop_another_host() {
 /// Catch-up must publish a 418 into the same gate a different caller subsequently claims.
 #[test]
 fn catchup_418_blocks_other_shared_gate_callers() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let mut job = job(1, Brand::Gate, MarketKind::Spot);
     let now = crate::util::now_unix_ms_i64();
     job.missing = Coverage::one((now - 1000, now - 1));
@@ -608,6 +859,7 @@ fn catchup_418_blocks_other_shared_gate_callers() {
 /// Unknown REST symbols are permanent; a damaged archive day must leave its trade retryable.
 #[test]
 fn unknown_rest_is_permanent_but_corrupt_archive_is_retryable() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let rest_job = job(1, Brand::Gate, MarketKind::Spot);
     assert_eq!(
         executor::run_job_at(
@@ -637,6 +889,7 @@ fn unknown_rest_is_permanent_but_corrupt_archive_is_retryable() {
 /// Filing a returned hull would falsely mark unrequested ground held and retain overshooting ticks.
 #[test]
 fn filed_harvest_is_clipped_exactly_to_missing_spans() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let mut job = job(1, Brand::Bybit, MarketKind::Futures);
     let from = job.trade.open_ms;
     job.missing = Coverage::from_spans([(from, from + 10), (from + 100, from + 110)]);
@@ -674,6 +927,7 @@ fn hole_rest(
 /// Intersection must happen before paging, so a held interior never becomes a venue request.
 #[test]
 fn holed_trade_sends_no_request_for_held_slices() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     HOLE_REQUESTS.lock().unwrap().clear();
     let mut job = job(1, Brand::Gate, MarketKind::Spot);
     let from = job.trade.open_ms;
@@ -711,6 +965,7 @@ fn budget_archive(
 /// The compressed-byte cap defers later archive days but must keep a following REST job runnable.
 #[test]
 fn spent_archive_budget_defers_archives_and_continues_rest() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     BUDGET_CALLS.store(0, Ordering::Relaxed);
     let first = job(1, Brand::Bybit, MarketKind::Futures);
     let mut second = job(2, Brand::Bybit, MarketKind::Futures);
@@ -762,6 +1017,7 @@ fn deferring_archive(
 /// admits only REST jobs until the hourly reset.
 #[test]
 fn budget_deferred_day_saturates_the_hour_budget() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     DEFERRED_CALLS.store(0, Ordering::Relaxed);
     let first = job(1, Brand::Bybit, MarketKind::Futures);
     let mut second = job(2, Brand::Bybit, MarketKind::Futures);
@@ -817,6 +1073,7 @@ fn failed_archive(
 /// Failed bodies spend this pass's local budget and defer another day without recording failure.
 #[test]
 fn failed_archive_bytes_spend_only_the_fetchers_budget() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     FAILED_ARCHIVE_CALLS.store(0, Ordering::Relaxed);
     let first = job(1, Brand::Bybit, MarketKind::Futures);
     let mut second = job(2, Brand::Bybit, MarketKind::Futures);
@@ -840,6 +1097,7 @@ fn failed_archive_bytes_spend_only_the_fetchers_budget() {
 /// A successful REST portion followed by an archive budget skip is still deferred, not failed.
 #[test]
 fn mixed_job_budget_deferral_does_not_count_successful_rest_as_failed() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let mut job = job(1, Brand::Binance, MarketKind::Futures);
     job.missing = Coverage::from_spans([
         (NOW - 3 * DAY, NOW - 3 * DAY + 1000),
@@ -885,6 +1143,7 @@ fn grouped_archive(
 /// Same-file trades must share one fill while each receives only its own exhaustive spans.
 #[test]
 fn same_route_market_day_trades_share_one_archive_fill() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     GROUP_CALLS.store(0, Ordering::Relaxed);
     let first = job(1, Brand::Bybit, MarketKind::Futures);
     let mut second = job(2, Brand::Bybit, MarketKind::Futures);
@@ -953,6 +1212,7 @@ fn empty_rest(
 /// Filing edge-empty slices would permanently hide tape just beyond a rolling venue boundary.
 #[test]
 fn empty_rest_near_retention_edge_retries_without_coverage() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let mut row = job(1, Brand::Gate, MarketKind::Spot);
     row.missing = Coverage::one((NOW - 29 * DAY + 3_600_000, NOW - 29 * DAY + 3_601_000));
     let answer = executor::run_job_at(&row, NOW, &gate::ReplayGate::new(), empty_rest, no_archive);
@@ -982,6 +1242,7 @@ fn mixed_edge_rest(
 /// Prints in another slice must not make an empty retention-edge neighborhood authoritative.
 #[test]
 fn ready_rest_harvest_keeps_empty_edge_slice_uncovered() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let mut row = job(1, Brand::Gate, MarketKind::Spot);
     let edge = (NOW - 29 * DAY + 3_600_000, NOW - 29 * DAY + 3_601_000);
     let fresh = (NOW - DAY, NOW - DAY + 1000);
@@ -1000,6 +1261,7 @@ fn ready_rest_harvest_keeps_empty_edge_slice_uncovered() {
 /// Both-source trades must use their reachable REST expiry instead of archive-last priority.
 #[test]
 fn both_source_jobs_sort_by_rest_expiry() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let rows = [
         trade(1, Brand::Binance, MarketKind::Futures, DAY),
         trade(2, Brand::Binance, MarketKind::Futures, DAY + 3_600_000),
@@ -1048,6 +1310,7 @@ fn ordered_archive(
 /// Interleaving per-job downloads would let slow archives postpone another trade's expiring REST.
 #[test]
 fn every_rest_portion_precedes_any_archive_download() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     SOURCE_ORDER.lock().unwrap().clear();
     let mut mixed = job(1, Brand::Binance, MarketKind::Futures);
     mixed.missing = Coverage::from_spans([
@@ -1180,6 +1443,7 @@ fn unpublished_archive(
 /// A pass with no publishable archive date is waiting, not a failed attempt in station status.
 #[test]
 fn unpublished_archive_wait_does_not_count_as_failed() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let result = executor::run_pass_with(
         vec![job(1, Brand::Bybit, MarketKind::Futures)],
         || NOW,
@@ -1196,6 +1460,7 @@ fn unpublished_archive_wait_does_not_count_as_failed() {
 /// A slow preceding job must not leave the next REST boundary frozen at the pass's start.
 #[test]
 fn pass_refreshes_clock_for_each_rest_job() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let clock = std::cell::Cell::new(NOW);
     let seen = std::cell::RefCell::new(Vec::new());
     executor::run_pass_with(
@@ -1255,6 +1520,7 @@ fn expired_fallback_archive(
 /// A Binance -4166 slice must move into archive work while leaving the REST host open.
 #[test]
 fn expired_rest_portion_moves_to_archive() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     EXPIRED_ARCHIVE_SPANS.lock().unwrap().clear();
     let mut row = job(1, Brand::Binance, MarketKind::Futures);
     row.missing = Coverage::from_spans([
@@ -1313,6 +1579,7 @@ fn refused_rest(status: u16) -> executor::FetchRest {
 /// mapping tells the user the venue failed when the network did, or the other way round.
 #[test]
 fn failure_reasons_follow_the_errors_already_returned() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     use crate::station_api::CatchupFailReason as R;
     use executor::{archive_fault, rest_fault};
     let transient = rest::FetchError::Transient("x".into());
@@ -1348,6 +1615,7 @@ fn failure_reasons_follow_the_errors_already_returned() {
 /// A failed job carries its reason out of the executor, through the real paginator and archive.
 #[test]
 fn failed_jobs_carry_their_reason_out_of_the_executor() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     use crate::station_api::CatchupFailReason as R;
     let rest_job = job(1, Brand::Gate, MarketKind::Spot);
     let reason = |fetch: executor::FetchRest| {

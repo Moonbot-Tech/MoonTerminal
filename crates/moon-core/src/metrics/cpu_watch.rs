@@ -36,6 +36,18 @@ mod tests;
 
 use std::collections::VecDeque;
 
+static SYSTEM_CPU: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Publish the existing sampler's machine load without introducing another system walk.
+pub(super) fn publish_system_cpu(percent: f32) {
+    SYSTEM_CPU.store(percent.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Read the last system-wide sample for background-work pacing.
+pub(super) fn system_cpu() -> f32 {
+    f32::from_bits(SYSTEM_CPU.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 use super::MetricsSnapshot;
 
 /// Samples the rolling baseline is taken over, at one sample a second.

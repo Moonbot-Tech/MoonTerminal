@@ -17,7 +17,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_core::config::storage as storage_cfg;
 use moon_core::market::trade_replay::venue_caps::{self, VenueReach};
-use moon_core::station_api::{CatchupSwitches, TapeCatchup, TapeWindow};
+use moon_core::station_api::{CatchupSwitches, TapeCatchup, TapeKeep, TapePurge, TapeWindow};
 use moon_remote::ssh::Target;
 use moon_remote::station::bot::BotState;
 use moon_ui::{
@@ -32,6 +32,10 @@ use super::super::frame::{RemoteBar, SaveBar};
 use crate::backend::station::job::Job;
 use crate::design;
 
+mod block;
+mod keep;
+use keep::{KeepState, job_keep, keep_state, purge_sentence, removes_tape, reported_keep};
+
 /// Shown in both steppers when the station has not reported a window.
 const UNKNOWN_VALUE: &str = "—";
 
@@ -44,6 +48,19 @@ const RUNNING_REREAD: Duration = Duration::from_secs(60);
 /// The window and the catch-up switches as the station reported them and as edited here.
 #[derive(Default)]
 pub(in crate::settings) struct TapeEd {
+    /// Retention capability and the last acknowledged policy.
+    seen_keep: Option<TapeKeep>,
+    /// Retention policy edited for this target alone.
+    draft_keep: Option<TapeKeep>,
+    /// A destructive write needs the inline confirmation.
+    confirm: bool,
+    /// Narrowing waits for a fresh policy or changed purge report before polling stops.
+    awaiting_keep: Option<(TapeKeep, Option<TapePurge>)>,
+    /// The user-job completion counter at dispatch distinguishes a failed write from an old error.
+    awaiting_finished: Option<u64>,
+    /// The custom days control and the last draft value reflected into it.
+    days_input: Option<Entity<MoonInputState>>,
+    days_shown: Option<u16>,
     /// The station's window as last read.
     seen: Option<TapeWindow>,
     /// The window as edited; follows `seen` while untouched.
@@ -91,6 +108,80 @@ pub(super) fn long_shown_after(typed: u32, kept: u32) -> Option<u32> {
 }
 
 impl TapeEd {
+    /// Rewrite only externally changed days; typed preset prefixes remain intact mid-entry.
+    fn days_writeback(&mut self) -> Option<String> {
+        let days = self.draft_keep.map(|keep| keep.max_age_days);
+        if days == self.days_shown {
+            return None;
+        }
+        self.days_shown = days;
+        Some(
+            days.filter(|days| *days != 0)
+                .map(|days| days.to_string())
+                .unwrap_or_default(),
+        )
+    }
+    /// Prepare the same station job for the write bar and inline confirmation; cancellation
+    /// leaves the draft intact, and only a confirmed narrowing creates a purge polling intent.
+    fn prepare_write(
+        &mut self,
+        target: Target,
+        confirmed: bool,
+        purge: Option<TapePurge>,
+    ) -> Option<Job> {
+        let tape = self.draft?;
+        let destructive = self
+            .seen_keep
+            .zip(self.draft_keep)
+            .is_some_and(|(seen, draft)| removes_tape(seen, draft));
+        if destructive && !confirmed {
+            self.confirm = true;
+            return None;
+        }
+        if confirmed && !self.confirm {
+            return None;
+        }
+        let keep = job_keep(self.seen_keep, self.draft_keep);
+        if destructive && let Some(keep) = keep {
+            self.awaiting_keep = Some((keep, purge));
+        }
+        self.confirm = false;
+        Some(Job::Tape {
+            target,
+            tape,
+            catchup: job_switches(self.seen_switches, self.draft_switches),
+            keep,
+        })
+    }
+    /// A missing status preserves edits; a legacy status removes unsupported keys.
+    fn take_keep(&mut self, read: Option<Option<TapeKeep>>) {
+        match read {
+            None => {}
+            Some(None) => self.forget_keep(),
+            Some(value) => follow(&mut self.seen_keep, &mut self.draft_keep, value),
+        }
+        if self
+            .seen_keep
+            .zip(self.draft_keep)
+            .is_some_and(|(seen, draft)| !removes_tape(seen, draft))
+        {
+            self.confirm = false;
+        }
+    }
+
+    /// Forget target-bound retention edits, confirmation and polling intent.
+    pub(super) fn forget_keep(&mut self) {
+        if self.seen_keep.is_some() || self.draft_keep.is_some() {
+            self.days_input = None;
+        }
+        self.seen_keep = None;
+        self.draft_keep = None;
+        self.confirm = false;
+        self.awaiting_keep = None;
+        self.awaiting_finished = None;
+        self.days_shown = None;
+        self.reread = None;
+    }
     /// Take one read's switches. `None` is no status read at all and changes nothing; a status
     /// read without switches (a station rolled back, or another, older station) forgets them, so
     /// "Write to the station" never sends that station keys it would refuse.
@@ -184,6 +275,12 @@ pub(super) fn tape_status(facts: TapeFacts) -> TapeStatus {
 /// What the station's catch-up of missed tape is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CatchupState {
+    /// Retention is deleting or compacting before catch-up can continue.
+    Purging,
+    /// Retention deletion or compaction failed.
+    PurgeFailed,
+    /// A completed purge has rebuilt a queue awaiting the next pass.
+    Purged,
     /// The station does not report catch-up: it predates it.
     NoData,
     /// Automatic catch-up is switched off.
@@ -198,12 +295,22 @@ pub(super) enum CatchupState {
     Done,
 }
 
-/// Pick the catch-up state, in this priority: no data, off, running, errors, waiting, done. A
-/// queue never reads as "all caught up".
+/// Pick the catch-up state: no report, maintenance or a freshly rebuilt purge queue, then the
+/// automatic switch and pass state. A queue never reads as "all caught up".
 pub(super) fn catchup_state(catchup: Option<&TapeCatchup>) -> CatchupState {
     let Some(catchup) = catchup else {
         return CatchupState::NoData;
     };
+    match keep_state(Some(catchup)) {
+        KeepState::Purging { .. } => return CatchupState::Purging,
+        KeepState::Failed { reason } if reason != moon_core::station_api::PurgeFail::Deferred => {
+            return CatchupState::PurgeFailed;
+        }
+        KeepState::Done { .. } if catchup.pending > 0 && catchup.auto != Some(false) => {
+            return CatchupState::Purged;
+        }
+        _ => {}
+    }
     if catchup.auto == Some(false) {
         CatchupState::Off
     } else if catchup.running {
@@ -228,6 +335,9 @@ pub(super) fn clock(ms: i64, zone: Tz) -> String {
 /// The state's tag word and tone.
 fn catchup_tag(state: CatchupState) -> (&'static str, MoonTone) {
     match state {
+        CatchupState::Purging => ("telegram.server.keep_tag_purging", MoonTone::Info),
+        CatchupState::PurgeFailed => ("telegram.server.catchup_tag_errors", MoonTone::Danger),
+        CatchupState::Purged => ("telegram.server.catchup_tag_waiting", MoonTone::Warning),
         CatchupState::NoData => ("telegram.server.catchup_tag_nodata", MoonTone::Muted),
         CatchupState::Off => ("telegram.server.catchup_tag_off", MoonTone::Muted),
         CatchupState::Running => ("telegram.server.catchup_tag_running", MoonTone::Info),
@@ -248,8 +358,14 @@ pub(super) fn catchup_sentence(
         return t!("telegram.server.catchup_nodata").to_string();
     };
     let last = c.last_pass_ms;
+    if let Some(text) = purge_sentence(c, zone) {
+        return text;
+    }
     let next = last.map(|last| clock(last + PASS_EVERY_MS, zone));
     match state {
+        CatchupState::Purging | CatchupState::PurgeFailed | CatchupState::Purged => {
+            unreachable!("purge sentence handled above")
+        }
         CatchupState::NoData => t!("telegram.server.catchup_nodata").to_string(),
         CatchupState::Off => t!("telegram.server.catchup_off").to_string(),
         CatchupState::Running => t!(
@@ -288,12 +404,47 @@ pub(super) fn catchup_sentence(
     }
 }
 
-/// One count tile: its number, its word and the short reason under it (locale keys).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// One station tile: a count or disk size, localized label, hint and maintenance accent.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Tile {
-    pub(super) value: u32,
+    pub(super) value: TileValue,
     pub(super) label: &'static str,
-    pub(super) hint: &'static str,
+    pub(super) hint: TileHint,
+    pub(super) accent: bool,
+}
+
+/// Counts remain numeric; disk sizes are already localized text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum TileValue {
+    Count(u32),
+    Text(String),
+}
+
+/// Keep count selection locale-free; only the rendered tile resolves static hint keys.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum TileHint {
+    Key(&'static str),
+    Text(String),
+}
+
+impl TileHint {
+    /// Resolve static labels at rendering time and preserve already formatted station facts.
+    fn text(&self) -> String {
+        match self {
+            Self::Key(key) => t!(*key).to_string(),
+            Self::Text(text) => text.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for TileValue {
+    /// Render the prominent tile value without parsing a localized size as a count.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Count(n) => f.write_str(&moon_core::util::fmt::group_thousands(&n.to_string())),
+            Self::Text(text) => f.write_str(text),
+        }
+    }
 }
 
 /// Up to four counts; "Failed" takes the last tile from "No source" while the last pass failed.
@@ -302,7 +453,12 @@ pub(super) fn catchup_tiles(state: CatchupState, catchup: &TapeCatchup) -> Vec<T
     if matches!(state, CatchupState::NoData | CatchupState::Off) {
         return Vec::new();
     }
-    let tile = |value, label, hint| Tile { value, label, hint };
+    let tile = |value, label, hint| Tile {
+        value: TileValue::Count(value),
+        label,
+        hint: TileHint::Key(hint),
+        accent: false,
+    };
     let last = if catchup.failed > 0 {
         tile(
             catchup.failed,
@@ -316,7 +472,7 @@ pub(super) fn catchup_tiles(state: CatchupState, catchup: &TapeCatchup) -> Vec<T
             "telegram.server.catchup_tile_no_route_hint",
         )
     };
-    vec![
+    let mut tiles = vec![
         tile(
             catchup.filled,
             "telegram.server.catchup_tile_filled",
@@ -333,7 +489,11 @@ pub(super) fn catchup_tiles(state: CatchupState, catchup: &TapeCatchup) -> Vec<T
             "telegram.server.catchup_tile_out_of_reach_hint",
         ),
         last,
-    ]
+    ];
+    if state == CatchupState::Purging {
+        tiles[1].value = TileValue::Text(UNKNOWN_VALUE.into());
+    }
+    tiles
 }
 
 /// Why the last pass's jobs failed, in plain words with a count each — `None` while nothing
@@ -411,29 +571,48 @@ pub(super) fn tape_status_strip(
         .into_any_element()
 }
 
-/// How many equal tiles go in one row: four where `width` holds four of the widest label, two
-/// where it holds two, else one.
+/// Fit the four counts and the disk tile in one row when their measured content allows it.
 fn tile_columns(width: f32, tile: f32, gap: f32, count: usize) -> usize {
-    [4, 2]
+    [5, 4, 2]
         .into_iter()
         .find(|&cols| cols as f32 * tile + (cols - 1) as f32 * gap <= width)
         .unwrap_or(1)
         .min(count.max(1))
 }
 
-/// The count tiles in rows of equal-width, equal-height tiles; the column count comes from
-/// `width`, so the row reserves exactly the height it paints.
+/// Station tiles reserve the height they paint; a last disk tile spans the narrow two-column
+/// row, while count tiles preserve the equal-width layout of earlier stations.
 pub(super) fn tape_tiles(tiles: &[Tile], width: f32, cx: &App) -> AnyElement {
     let p = MoonPalette::active(cx);
     let gap = design::ui_value(cx, 8.0);
     let pad = design::ui_value(cx, 10.0);
+    let has_db = tiles
+        .iter()
+        .any(|tile| tile.label == "telegram.server.keep_db");
     let widest = tiles
         .iter()
-        .map(|tile| design::ui_body_text_width(cx, &t!(tile.label), 400.0))
+        .map(|tile| {
+            let label = if has_db {
+                design::ui_caption_text_width(cx, &t!(tile.label), 400.0)
+            } else {
+                design::ui_body_text_width(cx, &t!(tile.label), 400.0)
+            };
+            label.max(
+                design::mono_body_text_width(cx, &tile.value.to_string(), 600.0)
+                    * f32::from(design::t_title(cx))
+                    / f32::from(design::t_body(cx)),
+            )
+        })
         .fold(0.0_f32, f32::max);
-    let tile_min = (widest + 2.0 * pad + 2.0).max(design::font_w(cx, 150.0));
+    let floor = if has_db {
+        design::ui_value(cx, 150.0)
+    } else {
+        design::font_w(cx, 150.0)
+    };
+    let tile_min = (widest + 2.0 * pad + 2.0).max(floor);
     let cols = tile_columns(width, tile_min, gap, tiles.len());
     let tile_el = |index: usize, tile: &Tile| {
+        let db = tile.label == "telegram.server.keep_db";
         v_flex()
             .flex_1()
             .flex_basis(px(0.0))
@@ -444,7 +623,14 @@ pub(super) fn tape_tiles(tiles: &[Tile], width: f32, cx: &App) -> AnyElement {
             .rounded(design::ui_px(cx, 5.0))
             .border_1()
             .border_color(rgba_from(p.border, 1.0))
-            .debug_selector(move || format!("server-tape-tile-{index}"))
+            .when(tile.accent, |el| el.border_color(rgba_from(p.blue, 1.0)))
+            .debug_selector(move || {
+                if db {
+                    "server-tape-tile-db".to_string()
+                } else {
+                    format!("server-tape-tile-{index}")
+                }
+            })
             // The mockup's tile: a small muted caption over a prominent mono value.
             .child(
                 div()
@@ -469,7 +655,7 @@ pub(super) fn tape_tiles(tiles: &[Tile], width: f32, cx: &App) -> AnyElement {
                     .font_family(design::ui_font())
                     .text_size(design::t_caption(cx))
                     .text_color(rgba_from(p.text_muted, 1.0))
-                    .child(t!(tile.hint).to_string()),
+                    .child(tile.hint.text()),
             )
             .into_any_element()
     };
@@ -479,6 +665,12 @@ pub(super) fn tape_tiles(tiles: &[Tile], width: f32, cx: &App) -> AnyElement {
         .gap(px(gap))
         .debug_selector(|| "server-tape-tiles".into())
         .children(tiles.chunks(cols).enumerate().map(|(row, chunk)| {
+            let fill =
+                if cols == 2 && chunk.len() == 1 && chunk[0].label == "telegram.server.keep_db" {
+                    1
+                } else {
+                    cols
+                };
             h_flex()
                 .w_full()
                 .min_w_0()
@@ -490,8 +682,8 @@ pub(super) fn tape_tiles(tiles: &[Tile], width: f32, cx: &App) -> AnyElement {
                         .enumerate()
                         .map(|(i, tile)| tile_el(row * cols + i, tile)),
                 )
-                // A short last row keeps the tile width of the rows above.
-                .children((chunk.len()..cols).map(|_| {
+                // Keep count rows aligned; the disk-only narrow row fills the available width.
+                .children((chunk.len()..fill).map(|_| {
                     div()
                         .flex_1()
                         .flex_basis(px(0.0))
@@ -759,7 +951,7 @@ pub(super) fn catchup_switches(
                 .disabled(!editable)
                 .label(auto_label.clone())
                 .on_change(on_auto),
-            t!("telegram.server.catchup_auto_hint").to_string(),
+            t!("telegram.server.keep_cpu_note").to_string(),
             cx,
         ))
         .child(crate::settings::common::checkbox_with_caption(
@@ -783,31 +975,121 @@ pub(super) fn catchup_switches(
 
 /// The page that renders the tape block, whose open state keeps a running catch-up re-read.
 pub(super) fn shows_tape_block(page: super::super::Tab) -> bool {
-    page == super::super::Tab::StOverview
+    matches!(
+        page,
+        super::super::Tab::StOverview | super::super::Tab::StTape
+    )
 }
 
 impl SettingsView {
-    /// A new read of the station's window and catch-up switches: an untouched draft follows it,
-    /// an edited one stays. A read without one changes nothing.
-    ///
-    /// While a catch-up pass runs and the page showing the tape block is open, the station is
-    /// read again a minute later, so the numbers move without a click.
+    /// Subscribe once to custom retention days, and write clamped station reads back to the field.
+    fn server_tape_days_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let days = self.telegram.server.tape.draft_keep.map(|k| k.max_age_days);
+        let input = match self.telegram.server.tape.days_input.clone() {
+            Some(input) => input,
+            None => {
+                let input = super::super::common::number_state(
+                    u32::from(days.unwrap_or(1825).max(1)),
+                    window,
+                    cx,
+                );
+                if days.is_none_or(|days| days == 0) {
+                    input.update(cx, |st, cx| st.set_value("", window, cx));
+                }
+                cx.subscribe(&input, |this, state, ev: &MoonInputEvent, cx| {
+                    if !matches!(ev, MoonInputEvent::Change) {
+                        return;
+                    }
+                    let Some(value) = MoonNumberInput::read_value(&state, cx) else {
+                        return;
+                    };
+                    let typed = value.round().clamp(1.0, 3650.0) as u16;
+                    let ed = &mut this.telegram.server.tape;
+                    if let Some(draft) = ed.draft_keep.as_mut() {
+                        draft.max_age_days = typed;
+                        ed.days_shown = (value == f64::from(typed)).then_some(typed);
+                        cx.notify();
+                    }
+                })
+                .detach();
+                self.telegram.server.tape.days_input = Some(input.clone());
+                self.telegram.server.tape.days_shown = days;
+                input
+            }
+        };
+        if let Some(value) = self.telegram.server.tape.days_writeback() {
+            input.update(cx, |st, cx| st.set_value(value, window, cx));
+        }
+    }
+
+    /// Open a destructive confirmation or dispatch the acknowledged target's complete policy.
+    fn server_tape_write(&mut self, target: Target, confirmed: bool, cx: &mut Context<Self>) {
+        if self.telegram.server.known().map(Target::addr) != Some(target.addr()) {
+            return;
+        }
+        if self.backend.read(cx).station.busy()
+            || matches!(
+                keep_state(reported_catchup(self.backend.read(cx).station.bot.as_ref())),
+                KeepState::Purging { .. }
+            )
+        {
+            return;
+        }
+        let ed = &mut self.telegram.server.tape;
+        let Some(job) = ed.prepare_write(
+            target,
+            confirmed,
+            reported_catchup(self.backend.read(cx).station.bot.as_ref()).and_then(|c| c.purge),
+        ) else {
+            cx.notify();
+            return;
+        };
+        if ed.awaiting_keep.is_some() {
+            ed.awaiting_finished = Some(self.backend.read(cx).station.finished);
+        }
+        self.server_bot_run(Ok(job), cx);
+        self.server_tape_sync(cx);
+    }
+    /// Follow acknowledged policies while untouched; poll during catch-up, purge and a pending
+    /// narrowing acknowledgement so maintenance never needs a manual status click.
     pub(in crate::settings) fn server_tape_sync(&mut self, cx: &mut Context<Self>) {
-        let (read, switches, running) = {
+        let (read, switches, keep, purge, running) = {
             let bot = self.backend.read(cx).station.bot.as_ref();
             let catchup = reported_catchup(bot);
             (
                 bot.and_then(|state| state.tape),
                 bot.and_then(|state| state.station.as_ref())
                     .map(|_| catchup.and_then(reported_switches)),
-                catchup_state(catchup) == CatchupState::Running,
+                bot.and_then(|state| state.station.as_ref())
+                    .map(|_| catchup.and_then(reported_keep)),
+                catchup.and_then(|c| c.purge),
+                catchup.is_some_and(|c| {
+                    c.running || matches!(c.purge, Some(TapePurge::Running { .. }))
+                }),
             )
         };
         let shown = shows_tape_block(self.active);
+        let station = &self.backend.read(cx).station;
+        let failed_write = station.outcome.as_ref().is_some_and(Result::is_err)
+            && self
+                .telegram
+                .server
+                .tape
+                .awaiting_finished
+                .is_some_and(|sent| sent != station.finished);
         let ed = &mut self.telegram.server.tape;
         follow(&mut ed.seen, &mut ed.draft, read);
         ed.take_switches(switches);
-        if running && shown && ed.reread.is_none() {
+        ed.take_keep(keep);
+        if failed_write
+            || ed.awaiting_keep.as_ref().is_some_and(|(expected, before)| {
+                keep.flatten() == Some(*expected) || &purge != before
+            })
+        {
+            ed.awaiting_keep = None;
+            ed.awaiting_finished = None;
+        }
+        if (running || ed.awaiting_keep.is_some()) && shown && ed.reread.is_none() {
             ed.reread = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(RUNNING_REREAD).await;
                 let _ = this.update(cx, |this, cx| {
@@ -820,6 +1102,7 @@ impl SettingsView {
         }
     }
 
+    /// Snap edits to the station window's shared margin steps.
     fn server_tape_margin(&mut self, secs: u32, cx: &mut Context<Self>) {
         if let Some(draft) = self.telegram.server.tape.draft.as_mut() {
             draft.margin_s = storage_cfg::snap_trade_margin_s(secs);
@@ -834,6 +1117,7 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.server_tape_days_sync(window, cx);
         let draft = self.telegram.server.tape.draft.map(|d| d.long_position_min);
         let input = match self.telegram.server.tape.long_input.clone() {
             Some(input) => input,
@@ -919,6 +1203,7 @@ impl SettingsView {
             .into_any_element()
     }
 
+    /// Edit only switches the target has reported supporting.
     fn server_tape_switch(&mut self, edit: impl FnOnce(&mut CatchupSwitches)) {
         if let Some(draft) = self.telegram.server.tape.draft_switches.as_mut() {
             edit(draft);
@@ -942,145 +1227,60 @@ impl SettingsView {
             return SaveBar::None;
         };
         let busy = self.backend.read(cx).station.busy();
-        let changed = ed.seen != Some(draft) || ed.draft_switches != ed.seen_switches;
-        let catchup = job_switches(ed.seen_switches, ed.draft_switches);
+        let changed = ed.seen != Some(draft)
+            || ed.draft_switches != ed.seen_switches
+            || ed.seen_keep != ed.draft_keep;
+        let catchup = reported_catchup(self.backend.read(cx).station.bot.as_ref());
+        let purging =
+            matches!(keep_state(catchup), KeepState::Purging { .. }) || ed.awaiting_keep.is_some();
+        let (msg, warning_tone) = keep::bar_message(ed, catchup, busy);
         let view = cx.entity().downgrade();
+        let revert_view = view.clone();
         SaveBar::Remote(RemoteBar {
-            msg: t!(if changed {
-                "settings.savebar.dirty_other"
-            } else {
-                "settings.mode.remote"
-            })
-            .to_string(),
-            dirty: changed && !busy,
+            tone: warning_tone.then_some(MoonTone::Warning),
+            msg,
+            dirty: changed && !busy && !ed.confirm && !purging,
             apply: std::rc::Rc::new(move |_, app| {
-                let job = Job::Tape {
-                    target: target.clone(),
-                    tape: draft,
-                    catchup,
-                };
-                let _ = view.update(app, |this, cx| this.server_bot_run(Ok(job), cx));
+                let _ = view.update(app, |this, cx| {
+                    this.server_tape_write(target.clone(), false, cx)
+                });
             }),
-            revert: None,
+            revert: Some(Rc::new(move |_, app| {
+                let _ = revert_view.update(app, |this, cx| {
+                    let ed = &mut this.telegram.server.tape;
+                    ed.draft = ed.seen;
+                    ed.draft_switches = ed.seen_switches;
+                    ed.draft_keep = ed.seen_keep;
+                    ed.confirm = false;
+                    cx.notify();
+                });
+            })),
             label: t!("telegram.server.tape_set").to_string(),
         })
     }
 
+    /// Build the production tape page from the current target's report and edits.
     pub(super) fn server_tape_block(
         &self,
         target: &Target,
         width: f32,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let p = MoonPalette::active(cx);
         let backend = self.backend.read(cx);
-        let busy = backend.station.busy();
-        let job_name = backend
-            .station
-            .running_label
-            .map(|label| label.text())
-            .unwrap_or_default();
-        let ed = &self.telegram.server.tape;
-        let older = ed.draft.is_none()
-            && backend
-                .station
-                .bot
-                .as_ref()
-                .is_some_and(|bot| bot.station.is_some() && bot.tape.is_none());
-        let known = ed.draft.is_some();
-        let switches_changed = ed.draft_switches != ed.seen_switches;
-        let changed = ed
-            .draft
-            .is_some_and(|draft| ed.seen != Some(draft) || switches_changed);
-        let status = tape_status(TapeFacts {
-            known,
-            dirty: changed,
-            busy,
-            older_service: older,
-        });
-        let sentence = |text: String, color: u32| {
-            crate::settings::common::cap_prose(div(), cx)
-                .font_family(design::ui_font())
-                .text_size(design::t_caption(cx))
-                .text_color(rgba_from(color, 1.0))
-                .child(text)
-        };
-        let (status_text, status_color) = match status {
-            TapeStatus::Clean => (
-                t!("telegram.server.tape_clean").to_string(),
-                design::positive_color(p),
-            ),
-            TapeStatus::Draft => {
-                let margin = ed
-                    .seen
-                    .map(|window| Self::trades_margin_label(window.margin_s))
-                    .unwrap_or_else(|| UNKNOWN_VALUE.to_string());
-                let long = ed
-                    .seen
-                    .map(|window| {
-                        t!("storage.trades_min", min = window.long_position_min).to_string()
-                    })
-                    .unwrap_or_else(|| UNKNOWN_VALUE.to_string());
-                (
-                    t!("telegram.server.tape_draft", margin = margin, long = long).to_string(),
-                    p.amber,
-                )
-            }
-            TapeStatus::Busy => (
-                t!("telegram.server.tape_busy", job = job_name).to_string(),
-                p.text_muted,
-            ),
-            TapeStatus::Down => {
-                let status_button = t!("telegram.server.status").to_string();
-                (
-                    t!("telegram.server.tape_down", status = status_button).to_string(),
-                    design::danger_color(p),
-                )
-            }
-            TapeStatus::Older => (t!("telegram.server.tape_unknown").to_string(), p.text_muted),
-        };
-        let row = |label: String, control: AnyElement, explanation: Option<String>| {
-            h_flex()
-                .w_full()
-                .min_w(px(0.0))
-                .flex_wrap()
-                .gap(design::ui_px(cx, 12.0))
-                .items_start()
-                .child(
-                    div()
-                        .w(design::font_w_px(cx, 190.0))
-                        .max_w_full()
-                        .flex_shrink_0()
-                        .pt(design::ui_px(cx, 4.0))
-                        .font_family(design::ui_font())
-                        .text_color(rgba_from(p.text, 1.0))
-                        .child(label),
-                )
-                .child(control)
-                .children(explanation.map(|explanation| {
-                    div()
-                        .flex_1()
-                        .min_w(design::font_w_px(cx, 220.0))
-                        .max_w_full()
-                        .pt(design::ui_px(cx, 4.0))
-                        .child(sentence(explanation, p.text_muted))
-                }))
-        };
-        let _ = target;
         let catchup = reported_catchup(backend.station.bot.as_ref());
-        let state = catchup_state(catchup);
-        let zone = crate::chartdx::axes::display_zone();
-        let snapshot = backend
-            .station
-            .bot_read_ms
-            .filter(|_| state != CatchupState::NoData)
-            .map(|at| t!("telegram.server.catchup_snapshot", at = clock(at, zone)).to_string());
-        let tiles = catchup
-            .map(|catchup| catchup_tiles(state, catchup))
-            .unwrap_or_default();
-        let breakdown = catchup
-            .filter(|_| !tiles.is_empty())
-            .and_then(catchup_breakdown);
+        let ed = &self.telegram.server.tape;
+        let busy = backend.station.busy();
+        let locked = busy
+            || ed.confirm
+            || ed.awaiting_keep.is_some()
+            || matches!(keep_state(catchup), KeepState::Purging { .. });
+        let snapshot = backend.station.bot_read_ms.map(|at| {
+            t!(
+                "telegram.server.catchup_snapshot",
+                at = clock(at, crate::chartdx::axes::display_zone())
+            )
+            .to_string()
+        });
         let switches = catchup.map(|_| {
             let view = cx.entity();
             let archives_view = view.clone();
@@ -1089,7 +1289,7 @@ impl SettingsView {
                     auto: true,
                     archives: true,
                 }),
-                ed.draft_switches.is_some() && !busy,
+                ed.draft_switches.is_some() && !locked,
                 move |on, _, app| {
                     let on = *on;
                     view.update(app, |this, cx| {
@@ -1124,91 +1324,66 @@ impl SettingsView {
             }),
             cx,
         );
-        v_flex()
-            .w_full()
-            .min_w(px(0.0))
-            .gap(design::ui_px(cx, 10.0))
-            .font_family(design::ui_font())
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgba_from(p.text, 1.0))
-                    .child(t!("telegram.server.tape_title").to_string()),
-            )
-            .child(sentence(
-                t!("telegram.server.tape_hint").to_string(),
-                p.text_muted,
-            ))
-            .child(tape_status_strip(
-                state,
-                catchup_sentence(state, catchup, zone),
-                snapshot,
-                cx,
-            ))
-            .when(!tiles.is_empty(), |block| {
-                block.child(tape_tiles(&tiles, width - design::ui_value(cx, 24.0), cx))
-            })
-            .when_some(breakdown, |block, text| {
-                block.child(tape_breakdown(text, cx))
-            })
-            .child(row(
-                t!("storage.trades_margin").to_string(),
-                match ed.draft {
-                    Some(draft) => {
-                        self.server_tape_margin_picker(draft.margin_s, known && !busy, cx)
+
+        let margin = ed
+            .draft
+            .map(|draft| self.server_tape_margin_picker(draft.margin_s, !locked, cx))
+            .unwrap_or_else(|| div().child(UNKNOWN_VALUE).into_any_element());
+        let long = match (&ed.long_input, ed.draft) {
+            (Some(input), Some(_)) => self::block::long_control(input, !locked, cx),
+            _ => div().child(UNKNOWN_VALUE).into_any_element(),
+        };
+        let days_view = cx.entity();
+        let emu_view = days_view.clone();
+        let confirm_view = days_view.clone();
+        let cancel_view = days_view.clone();
+        let confirm_target = target.clone();
+        let actions = self::block::Actions {
+            days: Rc::new(move |days, _, app| {
+                days_view.update(app, |this, cx| {
+                    if let Some(keep) = this.telegram.server.tape.draft_keep.as_mut() {
+                        keep.max_age_days = days;
+                        cx.notify();
                     }
-                    None => sentence(UNKNOWN_VALUE.to_string(), p.text_muted).into_any_element(),
-                },
-                Some(t!("telegram.server.tape_margin_hint").to_string()),
-            ))
-            .child(row(
-                t!("storage.trades_long_position").to_string(),
-                match (&ed.long_input, ed.draft) {
-                    (Some(input), Some(_)) => super::super::general::num_input_on(
-                        "server-tape-long",
-                        input,
-                        {
-                            let r = storage_cfg::LONG_POSITION_MIN_RANGE;
-                            f64::from(*r.start())..=f64::from(*r.end())
-                        },
-                        1.0,
-                        None,
-                        known && !busy,
-                    ),
-                    _ => sentence(UNKNOWN_VALUE.to_string(), p.text_muted).into_any_element(),
-                },
-                Some(t!("telegram.server.tape_long_hint").to_string()),
-            ))
-            .when_some(switches, |block, switches| {
-                block.child(row(
-                    t!("telegram.server.catchup_section").to_string(),
-                    switches,
-                    None,
-                ))
-            })
-            .child(venues)
-            .child(
-                h_flex()
-                    .w_full()
-                    .min_w(px(0.0))
-                    .flex_wrap()
-                    .items_center()
-                    .gap(design::ui_px(cx, 12.0))
-                    .pt(design::ui_px(cx, 8.0))
-                    .border_t_1()
-                    .border_color(rgba_from(p.border, 1.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(design::font_w_px(cx, 220.0))
-                            .child(sentence(status_text, status_color)),
-                    ),
-            )
-            .child(sentence(
-                t!("telegram.server.tape_footnote").to_string(),
-                p.text_muted,
-            ))
-            .into_any_element()
+                })
+            }),
+            emulator: Rc::new(move |on, _, app| {
+                emu_view.update(app, |this, cx| {
+                    if let Some(keep) = this.telegram.server.tape.draft_keep.as_mut() {
+                        keep.record_emulator = on;
+                        cx.notify();
+                    }
+                })
+            }),
+            confirm: Rc::new(move |_, app| {
+                confirm_view.update(app, |this, cx| {
+                    this.server_tape_write(confirm_target.clone(), true, cx)
+                })
+            }),
+            cancel: Rc::new(move |_, app| {
+                cancel_view.update(app, |this, cx| {
+                    this.telegram.server.tape.confirm = false;
+                    cx.notify();
+                })
+            }),
+        };
+        self::block::server_tape_block(
+            ed,
+            self::block::Snapshot {
+                catchup,
+                busy,
+                width: width - design::ui_value(cx, 24.0),
+                read_at: snapshot,
+            },
+            self::block::Controls {
+                margin,
+                long,
+                switches,
+                venues,
+            },
+            actions,
+            cx,
+        )
     }
 }
 

@@ -80,7 +80,7 @@ use crate::feed::types::Tick;
 pub use filed::filed_since;
 pub(super) use filed::note as note_filed;
 pub use remote::{TapeFile, decode_prints, encode_prints};
-pub use trim::{Inventory, KeepMap, TrimReport};
+pub use trim::{Compact, CompactFail, Inventory, KeepMap, TrimOutcome, TrimProgress, TrimReport};
 
 /// The two tables prints live in — see the module header's "Layout".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,11 +215,17 @@ enum Op {
     Inventory {
         reply: mpsc::Sender<rusqlite::Result<Inventory>>,
     },
-    /// Clip every span to the map — counting only, or for real followed by a `VACUUM`.
-    Trim {
+    /// Preview clipping without modifying the file.
+    PreviewTrim {
         keep: Arc<KeepMap>,
-        apply: bool,
         reply: mpsc::Sender<rusqlite::Result<TrimReport>>,
+    },
+    /// Commit a trim and report compaction separately from deletion.
+    TrimStart {
+        keep: Arc<KeepMap>,
+        compact: Compact,
+        progress: Option<Arc<TrimProgress>>,
+        reply: mpsc::Sender<rusqlite::Result<TrimOutcome>>,
     },
     /// Nothing: answered once every op queued before it has been served.
     Sync {
@@ -372,17 +378,29 @@ impl TradeCache {
         from_ms: i64,
         to_ms: i64,
     ) -> Option<Vec<(i64, i64)>> {
+        self.held_spans_start(exchange, market, from_ms, to_ms)
+            .recv_timeout(READ_TIMEOUT)
+            .ok()?
+            .ok()
+    }
+
+    /// Queue a coverage read without stalling the recorder behind maintenance.
+    pub fn held_spans_start(
+        &self,
+        exchange: &str,
+        market: &str,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> mpsc::Receiver<rusqlite::Result<Vec<(i64, i64)>>> {
         let (reply, rx) = mpsc::channel();
-        self.tx
-            .send(Op::Spans {
-                exchange: exchange.to_string(),
-                market: market.to_string(),
-                from_ms,
-                to_ms,
-                reply,
-            })
-            .ok()?;
-        rx.recv_timeout(READ_TIMEOUT).ok()?.ok()
+        let _ = self.tx.send(Op::Spans {
+            exchange: exchange.to_string(),
+            market: market.to_string(),
+            from_ms,
+            to_ms,
+            reply,
+        });
+        rx
     }
 
     /// Drop the spans written longest ago until `bytes` packed bytes are gone, and give the pages
@@ -399,17 +417,55 @@ impl TradeCache {
     /// Waits for the worker up to [`MAINTENANCE_TIMEOUT`]; `None` means the worker is gone or
     /// did not answer in time, `Some(Err)` that the read itself failed.
     pub fn inventory(&self) -> Option<rusqlite::Result<Inventory>> {
+        self.inventory_start()
+            .recv_timeout(MAINTENANCE_TIMEOUT)
+            .ok()
+    }
+
+    /// Queue inventory without blocking the recorder on a maintenance operation.
+    pub fn inventory_start(&self) -> mpsc::Receiver<rusqlite::Result<Inventory>> {
         let (reply, rx) = mpsc::channel();
-        self.tx.send(Op::Inventory { reply }).ok()?;
-        rx.recv_timeout(MAINTENANCE_TIMEOUT).ok()
+        let _ = self.tx.send(Op::Inventory { reply });
+        rx
+    }
+
+    /// Queue an atomic delete and compaction; disconnection means the worker is gone.
+    pub fn trim_start(
+        &self,
+        keep: Arc<KeepMap>,
+        compact: Compact,
+        progress: Option<Arc<TrimProgress>>,
+    ) -> mpsc::Receiver<rusqlite::Result<TrimOutcome>> {
+        let (reply, rx) = mpsc::channel();
+        let _ = self.tx.send(Op::TrimStart {
+            keep,
+            compact,
+            progress,
+            reply,
+        });
+        rx
     }
 
     /// Clip every span to `keep` — see [`trim`]. With `apply`, the file is rewritten in one
     /// transaction and then compacted (`VACUUM`), so the bytes leave the disk, not only the
     /// table. Waits like [`Self::inventory`].
     pub fn trim(&self, keep: Arc<KeepMap>, apply: bool) -> Option<rusqlite::Result<TrimReport>> {
+        if apply {
+            return self
+                .trim_start(keep, Compact::Full, None)
+                .recv_timeout(MAINTENANCE_TIMEOUT)
+                .ok()
+                .map(|r| {
+                    r.map(|outcome| {
+                        if let Err(failure) = outcome.compacted {
+                            log::warn!("trade cache compaction after trim failed: {failure:?}");
+                        }
+                        outcome.report
+                    })
+                });
+        }
         let (reply, rx) = mpsc::channel();
-        self.tx.send(Op::Trim { keep, apply, reply }).ok()?;
+        self.tx.send(Op::PreviewTrim { keep, reply }).ok()?;
         rx.recv_timeout(MAINTENANCE_TIMEOUT).ok()
     }
 
@@ -727,16 +783,43 @@ fn trim_to_ceiling(
     Ok(held)
 }
 
-/// The worker: serves the queue, carrying the file's packed byte count so the ceiling is held
-/// after every insert rather than only at open. While `spans` still holds rows it moves them
-/// into `packs` a batch at a time, only when no op is waiting — an op never queues behind more
-/// than one batch.
+/// A committed trim whose bounded compaction steps still owe the caller a reply.
+struct PendingCompact {
+    report: TrimReport,
+    before: u64,
+    reply: mpsc::Sender<rusqlite::Result<TrimOutcome>>,
+}
+
+impl PendingCompact {
+    /// Reply as soon as a bounded step finishes, retaining ownership only while pages remain.
+    fn step(self, conn: &rusqlite::Connection) -> Option<Self> {
+        match trim::compact_step(conn) {
+            Ok(true) => Some(self),
+            result => {
+                let _ = self.reply.send(Ok(TrimOutcome {
+                    report: self.report,
+                    compacted: result.map(|_| ()),
+                    bytes_before: self.before,
+                    bytes_after: trim::disk_bytes(conn),
+                }));
+                None
+            }
+        }
+    }
+}
+
+/// Ordinary operations finish immediately; incremental compaction resumes between queue items.
+struct Served(Option<PendingCompact>);
+
+/// Serve queued operations between bounded repacking and incremental-compaction batches.
 fn run(
     conn: rusqlite::Connection,
     rx: mpsc::Receiver<Op>,
     mut held: i64,
     ceiling: fn() -> Option<i64>,
 ) {
+    let mut compacting: Option<PendingCompact> = None;
+    let mut deferred = std::collections::VecDeque::new();
     let mut repack = match legacy_rows_left(&conn) {
         Ok(true) => Some(RepackTally::start()),
         Ok(false) => None,
@@ -746,7 +829,24 @@ fn run(
         }
     };
     loop {
-        let op = if let Some(tally) = repack.as_mut() {
+        if let Some(pending) = compacting.take() {
+            // One queued live op interleaves with every bounded vacuum step.
+            match rx.try_recv() {
+                Ok(op @ Op::TrimStart { .. }) => {
+                    deferred.push_back(op);
+                }
+                Ok(op) => {
+                    serve(&conn, op, &mut held, ceiling);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            compacting = pending.step(&conn);
+            continue;
+        }
+        let op = if let Some(op) = deferred.pop_front() {
+            op
+        } else if let Some(tally) = repack.as_mut() {
             match rx.try_recv() {
                 Ok(op) => op,
                 Err(mpsc::TryRecvError::Empty) => {
@@ -763,12 +863,17 @@ fn run(
                 Err(_) => return,
             }
         };
-        serve(&conn, op, &mut held, ceiling);
+        compacting = serve(&conn, op, &mut held, ceiling).0;
     }
 }
 
 /// Serves one queued op, committing standalone post-insert ceiling deletes in bounded chunks.
-fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64, ceiling: fn() -> Option<i64>) {
+fn serve(
+    conn: &rusqlite::Connection,
+    op: Op,
+    held: &mut i64,
+    ceiling: fn() -> Option<i64>,
+) -> Served {
     match op {
         Op::Insert {
             exchange,
@@ -848,6 +953,53 @@ fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64, ceiling: fn() -> O
         Op::Inventory { reply } => {
             let _ = reply.send(trim::inventory(conn));
         }
+        Op::TrimStart {
+            keep,
+            compact,
+            progress,
+            reply,
+        } => {
+            let before = trim::disk_bytes(conn);
+            if matches!(compact, Compact::Incremental) {
+                match trim::trim_progress(conn, &keep, true, progress.as_deref()) {
+                    Ok(report) => {
+                        *held = held_bytes(conn).unwrap_or(*held);
+                        log::info!(
+                            "trade cache trimmed: {} span(s)",
+                            report.spans_dropped + report.spans_cut
+                        );
+                        return Served(
+                            PendingCompact {
+                                report,
+                                before,
+                                reply,
+                            }
+                            .step(conn),
+                        );
+                    }
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                    }
+                }
+                return Served(None);
+            }
+            let result =
+                trim::trim_progress(conn, &keep, true, progress.as_deref()).map(|report| {
+                    *held = held_bytes(conn).unwrap_or(*held);
+                    log::info!(
+                        "trade cache trimmed: {} span(s)",
+                        report.spans_dropped + report.spans_cut
+                    );
+                    let compacted = trim::compact(conn, compact);
+                    TrimOutcome {
+                        report,
+                        compacted,
+                        bytes_before: before,
+                        bytes_after: trim::disk_bytes(conn),
+                    }
+                });
+            let _ = reply.send(result);
+        }
         Op::Sync { reply, reservation } => {
             drop(reservation);
             let _ = reply.send(());
@@ -877,31 +1029,11 @@ fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64, ceiling: fn() -> O
                 *held = held_bytes(conn).unwrap_or(*held);
             }
         },
-        Op::Trim { keep, apply, reply } => {
-            let result = trim::trim(conn, &keep, apply);
-            if apply {
-                // Whatever the pass did, the carried count must be the file's: a failed
-                // transaction rolled back to what it was, a committed one removed rows.
-                *held = held_bytes(conn).unwrap_or(*held);
-                if let Ok(report) = &result {
-                    log::info!(
-                        "trade cache trimmed: {} span(s) dropped, {} cut, {} print(s) / {} bytes gone of {}",
-                        report.spans_dropped,
-                        report.spans_cut,
-                        report.prints_dropped,
-                        report.bytes_dropped,
-                        report.bytes_total
-                    );
-                    // The bytes leave the disk only here; the table alone would keep the
-                    // file its old size and the tab's readout would not move.
-                    if let Err(e) = crate::db::wal::vacuum(conn) {
-                        log::warn!("trade cache vacuum after trim failed: {e}");
-                    }
-                }
-            }
-            let _ = reply.send(result);
+        Op::PreviewTrim { keep, reply } => {
+            let _ = reply.send(trim::trim(conn, &keep, false));
         }
     }
+    Served(None)
 }
 
 /// Whether the legacy table still holds a row to move.

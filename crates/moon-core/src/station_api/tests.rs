@@ -1,5 +1,17 @@
 use super::*;
 
+/// A future purge state must leave core counts and the rest of the status usable.
+#[test]
+fn unknown_purge_state_keeps_status_parsing() {
+    let status: Status = serde_json::from_value(serde_json::json!({
+        "station_version":"synthetic", "cores_ready":3,"cores_total":4,"bot":null,
+        "tape_catchup":{"pending":7,"filled":0,"no_route":0,"out_of_reach":0,"failed":0,"last_pass_ms":null,"archive_bytes":0,"purge":{"future_phase":{"new_field":true}}}
+    })).unwrap();
+    assert_eq!(status.cores_ready, 3);
+    assert_eq!(status.tape_catchup.as_ref().unwrap().pending, 7);
+    assert!(status.tape_catchup.unwrap().purge.is_none());
+}
+
 /// Losing layout in Access storage or equality would discard station edits or accept stale ones.
 #[test]
 fn message_layout_rides_access_and_participates_in_base_holds() {
@@ -239,6 +251,59 @@ fn tape_catchup_is_optional_and_round_trips() {
     assert!(!progress.running);
     assert_eq!((progress.auto, progress.archives), (None, None));
     assert!(progress.failed_by.is_empty());
+}
+
+/// Retention additions must not reject old status JSON or drop new progress on a round trip.
+#[test]
+fn tape_catchup_retention_fields_default() {
+    let legacy = serde_json::json!({
+        "pending": 0, "filled": 0, "no_route": 0, "out_of_reach": 0,
+        "failed": 0, "last_pass_ms": null, "archive_bytes": 0
+    });
+    let old: TapeCatchup = serde_json::from_value(legacy).unwrap();
+    assert_eq!((old.max_age_days, old.record_emulator), (None, None));
+    assert_eq!((old.db_bytes, old.tape_trades), (None, None));
+    assert!(old.tape_ages.is_empty());
+    assert!(old.purge.is_none());
+    let encoded = serde_json::to_value(&old).unwrap();
+    for key in [
+        "max_age_days",
+        "record_emulator",
+        "db_bytes",
+        "tape_trades",
+        "tape_ages",
+        "purge",
+    ] {
+        assert!(encoded.get(key).is_none(), "legacy field {key}");
+    }
+    let wire = serde_json::json!({
+        "running": false, "pending": 0, "filled": 0, "no_route": 0,
+        "out_of_reach": 0, "failed": 0, "last_pass_ms": null, "archive_bytes": 0,
+        "max_age_days": 90, "record_emulator": false, "db_bytes": 8192,
+        "tape_trades": 5, "tape_ages": [{"days": 12, "plain": 3, "emulator": 2}],
+        "purge": {"running": {"done": 2, "total": 8}}
+    });
+    let progress: TapeCatchup = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(progress).unwrap(), wire);
+    for purge in [
+        serde_json::json!({"done": {"at_ms": 100, "freed_bytes": 4096}}),
+        serde_json::json!({"failed": {"at_ms": 200, "reason": "no_room"}}),
+        serde_json::json!({"failed": {"at_ms": 200, "reason": "not_shrinkable"}}),
+    ] {
+        let parsed: TapePurge = serde_json::from_value(purge.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), purge);
+    }
+    let future: TapePurge = serde_json::from_value(serde_json::json!({
+        "failed": {"at_ms": 200, "reason": "future_reason"}
+    }))
+    .unwrap();
+    assert_eq!(
+        future,
+        TapePurge::Failed {
+            at_ms: 200,
+            reason: PurgeFail::Other
+        }
+    );
 }
 
 /// The failure breakdown must round-trip, stay off the wire when empty, and survive a reason a
@@ -547,4 +612,23 @@ fn report_groups_use_saved_order_with_legacy_and_renamed_fallback() {
     access.groups_order = Some(vec!["Renamed".into(), "Zulu".into(), "alpha".into()]);
     let back: Access = serde_json::from_str(&serde_json::to_string(&access).unwrap()).unwrap();
     assert_eq!(names(&back), ["Renamed", "Zulu", "alpha"]);
+}
+/// Both UI confirmation and station purge scheduling must treat infinity and emulator removal alike.
+#[test]
+fn tape_keep_destructive_changes_share_one_rule() {
+    let keep = |days, emulator| super::TapeKeep {
+        max_age_days: days,
+        record_emulator: emulator,
+    };
+    for (seen, draft, age, emu) in [
+        (keep(0, true), keep(30, true), true, false),
+        (keep(30, true), keep(0, true), false, false),
+        (keep(30, true), keep(30, true), false, false),
+        (keep(30, true), keep(90, false), false, true),
+        (keep(90, false), keep(30, true), true, false),
+    ] {
+        assert_eq!(seen.narrows_age(draft), age);
+        assert_eq!(seen.drops_emulator(draft), emu);
+        assert_eq!(seen.removes_tape(draft), age || emu);
+    }
 }

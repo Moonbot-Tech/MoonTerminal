@@ -314,6 +314,31 @@ pub struct TapeCatchup {
     /// Archive recovery switch; absent on stations predating switch support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archives: Option<bool>,
+    /// Retention limit; absent on stations predating retention support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_age_days: Option<u16>,
+    /// Emulator recording choice; presence also signals retention support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_emulator: Option<bool>,
+    /// Tape database bytes, including its WAL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_bytes: Option<u64>,
+    /// Listed trades whose tape is complete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tape_trades: Option<u32>,
+    /// Sparse close-age histogram of trades with complete tape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tape_ages: Vec<TapeAge>,
+    /// Completed catch-up trades per elapsed hour of recovery work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catchup_rate_per_hour: Option<u32>,
+    /// Latest retention purge progress or outcome.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_purge"
+    )]
+    pub purge: Option<TapePurge>,
     /// Jobs awaiting tape that is still within reach.
     pub pending: u32,
     /// Closed-trade tape windows filled by catch-up.
@@ -380,6 +405,96 @@ pub struct CatchupSwitches {
     pub auto: bool,
     /// Allow daily archives beyond REST retention.
     pub archives: bool,
+}
+
+/// Station retention choices sent only to stations reporting retention support.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TapeKeep {
+    /// Maximum close age of retained tape in days; zero keeps tape forever.
+    pub max_age_days: u16,
+    /// Record tape for emulator trades.
+    pub record_emulator: bool,
+}
+
+impl TapeKeep {
+    /// Finite horizons narrow infinity or a longer finite acknowledged horizon.
+    pub fn narrows_age(self, draft: Self) -> bool {
+        draft.max_age_days != 0
+            && (self.max_age_days == 0 || draft.max_age_days < self.max_age_days)
+    }
+
+    /// Disabling emulator recording removes its independently attributed tape.
+    pub fn drops_emulator(self, draft: Self) -> bool {
+        self.record_emulator && !draft.record_emulator
+    }
+
+    /// Shared station and terminal rule for a destructive policy change.
+    pub fn removes_tape(self, draft: Self) -> bool {
+        self.narrows_age(draft) || self.drops_emulator(draft)
+    }
+}
+
+/// Supported finite retention limits; zero separately means keep forever.
+pub const MAX_AGE_DAYS_RANGE: std::ops::RangeInclusive<u16> = 1..=3650;
+
+/// Upgrade default retains five years without scheduling a purge during initial config apply.
+pub const DEFAULT_MAX_AGE_DAYS: u16 = 1825;
+
+/// Clamp a finite retention limit while preserving the keep-forever sentinel.
+pub fn clamp_max_age_days(days: u16) -> u16 {
+    if days == 0 {
+        0
+    } else {
+        days.clamp(*MAX_AGE_DAYS_RANGE.start(), *MAX_AGE_DAYS_RANGE.end())
+    }
+}
+
+/// Complete trades grouped by their close age in days.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TapeAge {
+    /// Whole days since the trade closed.
+    pub days: u16,
+    /// Complete non-emulator trades at this age.
+    pub plain: u32,
+    /// Complete emulator trades at this age.
+    pub emulator: u32,
+}
+
+/// Retention purge progress and its latest durable outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TapePurge {
+    /// Coverage spans processed so far and in the whole purge.
+    Running { done: u64, total: u64 },
+    /// Completed purge and the disk bytes it reclaimed.
+    Done { at_ms: i64, freed_bytes: u64 },
+    /// Failed purge, worded by the terminal from its reason.
+    Failed { at_ms: i64, reason: PurgeFail },
+}
+
+/// Why retention could not finish reclaiming disk space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PurgeFail {
+    /// The delete transaction failed and rolled back.
+    DeleteFailed,
+    /// Disk exhaustion rolled back the delete without removing tape.
+    DeleteNoRoom,
+    /// Compaction ran out of disk space after deletion committed.
+    NoRoom,
+    /// The database does not support incremental compaction.
+    NotShrinkable,
+    /// A reader held the checkpoint busy; compaction will be retried.
+    Deferred,
+    /// Unknown failures, including reasons introduced by newer stations.
+    #[serde(other)]
+    Other,
+}
+
+/// A future purge state must not discard the surrounding station status.
+fn lenient_purge<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<TapePurge>, D::Error> {
+    let value = serde_json::Value::deserialize(de)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 /// The window around a trade the tape is recorded in (the terminal's `[trade_replay]`, the

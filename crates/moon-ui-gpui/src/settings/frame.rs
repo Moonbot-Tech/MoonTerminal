@@ -32,6 +32,8 @@ pub(super) struct PageHeader {
 
 /// A station-applied page's bar: what is pending there and how to send or drop it.
 pub(super) struct RemoteBar {
+    /// Optional semantic emphasis; absent keeps the existing neutral bar.
+    pub(super) tone: Option<MoonTone>,
     pub(super) msg: String,
     pub(super) dirty: bool,
     pub(super) apply: OnClick,
@@ -215,6 +217,15 @@ pub(super) fn save_bar(
     cx: &App,
 ) -> Option<AnyElement> {
     let p = MoonPalette::active(cx);
+    let status = if matches!(&bar, SaveBar::Remote(_)) {
+        None
+    } else {
+        status
+    };
+    let remote_tone = match &bar {
+        SaveBar::Remote(remote) => remote.tone,
+        _ => None,
+    };
     let (msg, dirty, buttons): (String, bool, Vec<AnyElement>) = match bar {
         SaveBar::None => return None,
         SaveBar::Live => (t!("settings.savebar.live").to_string(), false, Vec::new()),
@@ -263,6 +274,7 @@ pub(super) fn save_bar(
                 buttons.push(
                     MoonButton::new("settings-remote-revert")
                         .ghost()
+                        .disabled(!remote.dirty)
                         .label(t!("settings.savebar.revert").to_string())
                         .on_click(move |_, window, cx| revert(window, cx))
                         .render()
@@ -271,12 +283,16 @@ pub(super) fn save_bar(
             }
             let apply = remote.apply;
             buttons.push(
-                MoonButton::new("settings-remote-apply")
-                    .variant(MoonButtonVariant::Blue)
-                    .disabled(!remote.dirty)
-                    .label(remote.label.clone())
-                    .on_click(move |_, window, cx| apply(window, cx))
-                    .render()
+                div()
+                    .debug_selector(|| "settings-remote-apply".into())
+                    .child(
+                        MoonButton::new("settings-remote-apply")
+                            .variant(MoonButtonVariant::Blue)
+                            .disabled(!remote.dirty)
+                            .label(remote.label.clone())
+                            .on_click(move |_, window, cx| apply(window, cx))
+                            .render(),
+                    )
                     .into_any_element(),
             );
             (remote.msg, remote.dirty, buttons)
@@ -285,7 +301,20 @@ pub(super) fn save_bar(
     let (text, color) = match status {
         Some((text, true)) => (text, p.red),
         Some((text, false)) => (text, p.green),
-        None => (msg, if dirty { p.text } else { p.text_muted }),
+        None => (
+            msg,
+            match remote_tone {
+                Some(MoonTone::Warning) => p.amber,
+                Some(MoonTone::Danger) => p.red,
+                _ => {
+                    if dirty {
+                        p.text
+                    } else {
+                        p.text_muted
+                    }
+                }
+            },
+        ),
     };
     Some(
         h_flex()
@@ -312,7 +341,18 @@ pub(super) fn save_bar(
                     .flex_1()
                     .min_w(design::ui_px(cx, 200.0))
                     .text_color(rgba_from(color, 1.0))
-                    .child(text),
+                    .child(
+                        div()
+                            .min_w_0()
+                            .debug_selector(move || {
+                                if remote_tone == Some(MoonTone::Warning) {
+                                    "server-tape-widen-warning".into()
+                                } else {
+                                    "settings-save-bar-message".into()
+                                }
+                            })
+                            .child(text),
+                    ),
             )
             .children(buttons)
             .into_any_element(),
