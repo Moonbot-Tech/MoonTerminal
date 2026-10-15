@@ -143,7 +143,7 @@ pub fn search_size(params: &SearchParams<'_>) -> SearchSize {
 /// each other.
 ///
 /// Args:
-///     deals: The sample, chronological, cut at its horizon (`clip_to_horizon`).
+///     deals: The sample, chronological, each tape limited to its deal's held trail.
 ///     defaults, kind, model: As for [`super::variant_tally`].
 ///     train_frac: [`SearchParams::train_frac`].
 ///     parallel: Replays run side by side — the search's restarts; at least one.

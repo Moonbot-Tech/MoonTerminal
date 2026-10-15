@@ -693,7 +693,7 @@ analytics.ticks.tape_no_route: "Borsanın açık piyasa işlemi geçmişi yok �
 analytics.ticks.tape_retention: "Borsanın saklama süresinden eski (%{hours} sa) — borsa bu piyasa işlemlerini artık vermiyor"
 analytics.ticks.model_tip: "Giriş: model ve gerçek %{entry} · Çıkış: %{exit}"
 analytics.ticks.subset_sub: "bantlı %{m} taneden %{n} · giriş ✓ %{entry} · çıkış ✓ %{exit}"
-analytics.ticks.horizon: " · kapanıştan sonra çıkış ≤ %{h}"
+analytics.ticks.horizon: " · çıkış ufku: her işlemin mevcut bandı"
 analytics.ticks.assumptions: "Model bilmez: defter ve seviyedeki kuyruk · model dışı çıkış kuralları (SellShot, SellSpread) · MShotRepeat* · ASK/BID dayanağı kendi tarafının son kaydıdır · uzun pozisyonun ortası: çizgisi ya da stopu orada gerçeğinkinden fiyata daha yakın duran varyant yargılanmaz"
 analytics.ticks.group_entry: "Giriş"
 analytics.ticks.group_exit: "Çıkış"

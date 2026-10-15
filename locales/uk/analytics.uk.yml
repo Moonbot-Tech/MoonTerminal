@@ -693,7 +693,7 @@ analytics.ticks.tape_no_route: "Біржа не віддає публічної 
 analytics.ticks.tape_retention: "Старіша за строк утримання біржі (%{hours} год) — біржа вже не віддає ці трейди"
 analytics.ticks.model_tip: "Вхід: модель проти факту %{entry} · Вихід: %{exit}"
 analytics.ticks.subset_sub: "%{n} із %{m} зі стрічкою · вхід ✓ %{entry} · вихід ✓ %{exit}"
-analytics.ticks.horizon: " · вихід ≤ %{h} після закриття"
+analytics.ticks.horizon: " · горизонт виходу: власна стрічка кожної угоди"
 analytics.ticks.assumptions: "Модель не знає: стакан і чергу на рівні · правила виходу поза нею (SellShot, SellSpread) · MShotRepeat* · опора ASK/BID є останнім принтом свого боку · середину довгої позиції: варіант, чия лінія або стоп стояли там ближче до ціни, ніж у факта, не оцінено"
 analytics.ticks.group_entry: "Вхід"
 analytics.ticks.group_exit: "Вихід"

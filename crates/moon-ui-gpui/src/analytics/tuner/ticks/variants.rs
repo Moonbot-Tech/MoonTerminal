@@ -106,7 +106,7 @@ pub(super) fn passes_of(text: &str) -> usize {
 impl AnalyticsView {
     /// The replayable rows as the search and the columns take them, their tapes still packed:
     /// the caller hands them to [`prepare_sample`] off the UI thread, which unpacks them and
-    /// cuts every tape at the sample's one exit horizon.
+    /// limits each tape to that deal's own held trail.
     pub(super) fn prepared_deals(&self) -> Vec<PendingDeal> {
         self.ticks
             .data

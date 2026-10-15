@@ -24,10 +24,10 @@ pub(super) fn prepared(uid: i64, peak: f64) -> PreparedDeal {
     let deal = Deal {
         report_uid: uid,
         core_uid: 1,
-        core_name: String::new(),
+        core_name: "CORE_A".into(),
         strategy_id: 1,
         kind: "PumpsDetection".into(),
-        coin: "ACE".into(),
+        coin: "XALPHA".into(),
         buy_ms: 1_000 * uid,
         close_ms: 1_000 * uid + 900,
         buy_price: 100.0,
@@ -367,63 +367,103 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
     assert!(handle.abandoned());
 }
 
-/// The sample is judged on ONE exit horizon — the shortest HELD trail among its deals, the
-/// coverage's word rather than the last print's: a tape that prints past the horizon is cut
-/// there, a tape that prints less is left alone, a print exactly on the horizon stays, and a
-/// quiet tail (held 8 s, last print at the close) does not shorten the horizon below what
-/// is held.
+/// Reintroducing a sample minimum would discard the long deal's answered 90 s exit.
+/// Search replays, column scores, per-deal results and the picture must agree on one open deal.
 #[test]
-fn the_common_horizon_is_the_shortest_held_trail_and_clips_only_the_longer_tapes() {
-    let mut long = prepared(1, 101.0);
-    let close = long.deal.close_ms;
-    // Prints 5 s and 10 s past the close, on top of the fixture's last print AT the close.
-    let mut ticks: Vec<Tick> = long.ticks.to_vec();
-    ticks.push(tick(close + 5_000, 100.1));
-    ticks.push(tick(close + 10_000, 100.0));
-    long.ticks = Arc::from(ticks);
-    long.trail_ms = 10_000;
-    let mut short = prepared(2, 101.0);
-    let close2 = short.deal.close_ms;
-    let mut ticks: Vec<Tick> = short.ticks.to_vec();
-    ticks.push(tick(close2 + 5_000, 100.3));
-    short.ticks = Arc::from(ticks);
-    short.trail_ms = 5_000;
-    // Held 8 s past the close, but the market printed nothing there.
-    let mut quiet = prepared(3, 101.0);
-    quiet.trail_ms = 8_000;
+fn each_deal_answers_exits_only_within_its_own_held_trail() {
+    let mut deals: Vec<_> = [(1, 60_000), (2, 180_000)]
+        .into_iter()
+        .map(|(uid, trail)| {
+            let mut deal = prepared(uid, 100.2);
+            deal.trail_ms = trail;
+            let close = deal.deal.close_ms;
+            let mut ticks = deal.ticks.to_vec();
+            ticks.extend([
+                tick(close + 60_000, 100.2),
+                tick(close + 90_000, 101.0),
+                tick(close + 180_000, 101.0),
+                tick(close + 180_001, 102.0),
+            ]);
+            deal.ticks = ticks.into();
+            deal.clip_to_trail();
+            deal
+        })
+        .collect();
+    assert_eq!(tape_end_ms(&deals[0]), 60_000);
+    assert_eq!(tape_end_ms(&deals[1]), 180_000);
+    let model = ModelSettings {
+        latency_ms: 0.0,
+        ..ModelSettings::default()
+    };
+    let defaults = HashMap::new();
+    let values = vec![("SellPrice".to_string(), "1".to_string())];
+    let bases = Bases::of(&deals);
+    let params = bases.params(
+        &HashMap::new(),
+        &defaults,
+        &point_of(&values),
+        "PumpsDetection",
+        model,
+    );
+    let replay = closing::replay(
+        &deals,
+        &bases.of_deal,
+        &params,
+        &[
+            Some(Fill {
+                t_ms: deals[0].deal.buy_ms,
+                price: 100.0,
+            }),
+            Some(Fill {
+                t_ms: deals[1].deal.buy_ms,
+                price: 100.0,
+            }),
+        ],
+    );
+    assert_eq!((replay.closed.n, replay.open), (1, 1));
+    let score = variant_tally(&deals, &defaults, "PumpsDetection", &values, model);
+    assert_eq!((score.tally.n, score.open), (1, 1));
+    let (score, money) = variant_tally_by_deal(&deals, &defaults, "PumpsDetection", &values, model);
+    assert_eq!((score.tally.n, score.open), (1, 1));
+    assert!(money[0].1.is_none());
+    assert!(money[1].1.is_some());
+    let picture = variant_picture(&deals[1], &defaults, "PumpsDetection", &values, model);
     assert_eq!(
-        tape_end_ms(&quiet),
-        0,
-        "the fixture's tape ends at the close"
+        picture.outcome.exit.expect("answered exit").t_ms,
+        deals[1].deal.close_ms + 90_000
+    );
+    assert!(
+        variant_picture(&deals[0], &defaults, "PumpsDetection", &values, model)
+            .outcome
+            .left_open()
     );
 
-    let mut deals = vec![long.clone(), short.clone(), quiet.clone()];
-    assert_eq!(common_horizon_ms(&deals), Some(5_000));
-    assert_eq!(common_horizon_ms(&[]), None);
-    clip_to_horizon(&mut deals, 5_000);
-    assert_eq!(
-        tape_end_ms(&deals[0]),
-        5_000,
-        "the long tape is cut at the horizon, the print on it stays"
-    );
-    assert_eq!(deals[0].ticks.len(), long.ticks.len() - 1);
-    assert_eq!(
-        deals[1].ticks.len(),
-        short.ticks.len(),
-        "the short one is untouched"
-    );
-    assert_eq!(deals[2].ticks.len(), quiet.ticks.len());
-    // A quiet deal alone with the long one: the horizon is what it HOLDS, 8 s, not the
-    // zero its last print would say — the long tape keeps its 5-s print and loses the 10-s one.
-    let mut with_quiet = vec![long.clone(), quiet];
-    let horizon = common_horizon_ms(&with_quiet).expect("two deals");
-    assert_eq!(horizon, 8_000);
-    clip_to_horizon(&mut with_quiet, horizon);
-    assert_eq!(tape_end_ms(&with_quiet[0]), 5_000);
-    // A negative trail (a hand-built deal) reads as zero, never as a horizon before the close.
-    let mut odd = long;
+    // A longer held trail cannot answer an exit whose path enters an unproven hole.
+    deals[1].deal.gap = Some(crate::db::tuner::ticks::gap::TapeGap {
+        from_ms: deals[1].deal.close_ms + 60_000,
+        to_ms: deals[1].deal.close_ms + 90_000,
+        fact_line: None,
+        fact_stop: None,
+    });
+    let score = variant_tally(&deals, &defaults, "PumpsDetection", &values, model);
+    assert_eq!((score.tally.n, score.open), (0, 2));
+}
+
+/// Clipping must keep quiet coverage independent of other rows and clamp negative trails.
+#[test]
+fn held_trails_preserve_quiet_tapes_and_clamp_before_the_close() {
+    let mut quiet = prepared(1, 101.0);
+    quiet.trail_ms = 180_000;
+    let ticks = Arc::clone(&quiet.ticks);
+    quiet.clip_to_trail();
+    assert!(Arc::ptr_eq(&ticks, &quiet.ticks));
+    let mut odd = prepared(2, 101.0);
     odd.trail_ms = -1;
-    assert_eq!(common_horizon_ms(&[odd]), Some(0));
+    let mut ticks = odd.ticks.to_vec();
+    ticks.push(tick(odd.deal.close_ms + 1, 102.0));
+    odd.ticks = ticks.into();
+    odd.clip_to_trail();
+    assert_eq!(tape_end_ms(&odd), 0);
 }
 
 /// A shift replays no path, so the fields that only move the path are not searched under it;

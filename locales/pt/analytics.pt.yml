@@ -693,7 +693,7 @@ analytics.ticks.tape_no_route: "A corretora não oferece histórico público de 
 analytics.ticks.tape_retention: "Mais antigo que a retenção da corretora (%{hours} h) — a corretora não fornece mais estes negócios"
 analytics.ticks.model_tip: "Entrada: modelo vs fato %{entry} · Saída: %{exit}"
 analytics.ticks.subset_sub: "%{n} de %{m} com tape · entrada ✓ %{entry} · saída ✓ %{exit}"
-analytics.ticks.horizon: " · saída ≤ %{h} depois do fechamento"
+analytics.ticks.horizon: " · horizonte de saída: fita disponível de cada operação"
 analytics.ticks.assumptions: "O modelo não sabe: o livro e a fila num nível · regras de saída fora dele (SellShot, SellSpread) · MShotRepeat* · a referência ASK/BID é o último print do lado · o meio de uma posição longa: uma variante cuja linha ou stop ficou mais perto do preço ali do que o fato não é julgada"
 analytics.ticks.group_entry: "Entrada"
 analytics.ticks.group_exit: "Saída"

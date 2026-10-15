@@ -148,7 +148,7 @@ pub struct VariantPicture {
 /// replay [`variant_tally`] scores the column with, and the corridor its order walked.
 ///
 /// Args:
-///     deal: The deal with its tape, cut at the sample's horizon as the column's are.
+///     deal: The deal with its tape limited to its own held trail, as in the columns.
 ///     defaults, kind, values, model: As for [`variant_tally`].
 ///
 /// Returns:

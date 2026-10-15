@@ -693,7 +693,7 @@ analytics.ticks.tape_no_route: "Sàn không cung cấp lịch sử khớp lệnh
 analytics.ticks.tape_retention: "Cũ hơn hạn lưu của sàn (%{hours} giờ) — sàn không còn trả dữ liệu khớp lệnh này"
 analytics.ticks.model_tip: "Vào lệnh: mô hình so với thực tế %{entry} · Thoát lệnh: %{exit}"
 analytics.ticks.subset_sub: "%{n} trong %{m} có tape · vào lệnh ✓ %{entry} · thoát lệnh ✓ %{exit}"
-analytics.ticks.horizon: " · thoát lệnh ≤ %{h} sau lúc đóng"
+analytics.ticks.horizon: " · giới hạn thoát lệnh: băng đã lưu của từng giao dịch"
 analytics.ticks.assumptions: "Mô hình không biết: sổ lệnh và hàng đợi tại một mức · luật thoát ngoài nó (SellShot, SellSpread) · MShotRepeat* · mốc ASK/BID là print cuối của phía đó · đoạn giữa của một vị thế dài: phương án có đường hoặc cắt lỗ đứng gần giá hơn thực tế ở đó thì không bị xét"
 analytics.ticks.group_entry: "Vào lệnh"
 analytics.ticks.group_exit: "Thoát lệnh"

@@ -24,9 +24,8 @@ use crate::db::tuner::ticks::params::range::{
 };
 pub(super) use crate::db::tuner::ticks::search::PreparedDeal;
 use crate::db::tuner::ticks::search::{
-    DEFAULT_MAX_PASSES, SearchParams, Suggested, check_corridors, clip_to_horizon,
-    common_horizon_ms, point_cost, search_size, suggest, suggest_with_candidate, train_len,
-    variant_picture, variant_tally,
+    DEFAULT_MAX_PASSES, SearchParams, Suggested, check_corridors, point_cost, search_size, suggest,
+    suggest_with_candidate, train_len, variant_picture, variant_tally,
 };
 use crate::db::tuner::ticks::{Deal, ModelSettings, TICK_PARAMS};
 use crate::feed::types::Tick;
@@ -40,13 +39,15 @@ pub(super) fn prepared(
     values: &HashMap<String, String>,
 ) -> PreparedDeal {
     let last_ms = ticks.last().map_or(deal.close_ms, |t| t.time_ms as i64);
-    PreparedDeal {
+    let mut prepared = PreparedDeal {
         deal: deal.clone(),
         ticks: Arc::from(ticks),
         entry_line: entry_line.map(Arc::from),
         trail_ms: (last_ms - deal.close_ms).max(0),
         own: Arc::new(values.clone()),
-    }
+    };
+    prepared.clip_to_trail();
+    prepared
 }
 
 /// Run the search on each of the five strategies with the most deals.
@@ -84,9 +85,6 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
         return;
     }
     deals.sort_by_key(|d| d.deal.close_ms);
-    if let Some(horizon) = common_horizon_ms(&deals) {
-        clip_to_horizon(&mut deals, horizon);
-    }
     let restarts = std::env::var("MOON_TICKS_SEARCH_RESTARTS")
         .ok()
         .and_then(|v| v.parse().ok())

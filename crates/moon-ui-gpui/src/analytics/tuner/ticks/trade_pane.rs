@@ -20,7 +20,7 @@ use gpui::*;
 use moon_chart::frozen_overlay::{OverlayBand, OverlayTrade};
 use moon_chart::layers::SEG_PATTERN_DASH;
 use moon_core::db::tuner::ticks::ExitKind;
-use moon_core::db::tuner::ticks::search::{clip_to_horizon, variant_picture};
+use moon_core::db::tuner::ticks::search::variant_picture;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
@@ -146,11 +146,10 @@ impl AnalyticsView {
             }
             Some((
                 data.prepared(row)?,
-                data.exit_horizon_ms(),
                 data.single_kind().unwrap_or_default().to_string(),
             ))
         });
-        let Some((pending, horizon_ms, kind)) = job else {
+        let Some((pending, kind)) = job else {
             view.update(cx, |view, cx| {
                 view.set_model_trades(Vec::new(), Vec::new(), cx)
             });
@@ -165,10 +164,7 @@ impl AnalyticsView {
                 .spawn(async move {
                     // Unpacked here, off the UI thread, and cut as the columns cut it, so the
                     // picture shows what the column counted.
-                    let mut deal = pending.prepare();
-                    if let Some(horizon_ms) = horizon_ms {
-                        clip_to_horizon(std::slice::from_mut(&mut deal), horizon_ms);
-                    }
+                    let deal = pending.prepare();
                     variant_picture(&deal, &defaults, &kind, &changes, model)
                 })
                 .await;

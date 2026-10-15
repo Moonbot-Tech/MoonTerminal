@@ -549,7 +549,7 @@ impl AnalyticsView {
 
     /// Compare the displayed V1 with the fit-trade fact, keeping open estimates outside profit.
     fn ticks_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        let (fit, covered, entry, exit, replayable, horizon, entry_on) = self
+        let (fit, covered, entry, exit, replayable, entry_on) = self
             .ticks
             .data
             .data()
@@ -560,7 +560,6 @@ impl AnalyticsView {
                     d.entry_share,
                     d.exit_share,
                     d.replayable().count(),
-                    d.exit_horizon_ms(),
                     d.entry_modelled(),
                 )
             })
@@ -572,8 +571,7 @@ impl AnalyticsView {
                 format!("{:.0} %", hits as f64 / n as f64 * 100.0)
             }
         };
-        // The exit horizon every variant and the search are judged on: the shortest trail the
-        // replayable rows hold past their close (`prepared_deals`).
+        // Each replay uses its deal's own held trail, as the columns and search do.
         let mut subset_sub = t!(
             "analytics.ticks.subset_sub",
             n = fit,
@@ -587,8 +585,8 @@ impl AnalyticsView {
             exit = share(exit)
         )
         .to_string();
-        if let Some(horizon) = horizon {
-            subset_sub.push_str(&t!("analytics.ticks.horizon", h = duration_text(horizon)));
+        if replayable > 0 {
+            subset_sub.push_str(&t!("analytics.ticks.horizon"));
         }
         // One short title. The share line is a hover: inside a 92px column it wrapped and
         // truncated ("2 of 2 with tape…").

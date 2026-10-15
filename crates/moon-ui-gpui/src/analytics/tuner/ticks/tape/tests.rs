@@ -76,3 +76,80 @@ fn an_empty_tape_holds_nothing() {
     assert_eq!(tape.bytes(), 0);
     assert!(tape.unpack().is_empty());
 }
+
+/// A shared cutoff in sample preparation would lose the long row's answered 90 s exit.
+/// Preparing the trade picture alone must use the same trail as preparing variant columns.
+#[test]
+fn samples_and_single_pictures_keep_each_rows_own_exit_horizon() {
+    use moon_core::db::tuner::ticks::Deltas;
+    use moon_core::db::tuner::ticks::ModelSettings;
+    use moon_core::db::tuner::ticks::search::variant_tally;
+
+    let pending = |uid, trail_ms| PendingDeal {
+        deal: Deal {
+            report_uid: uid,
+            core_uid: 1,
+            core_name: "CORE_A".into(),
+            strategy_id: 1,
+            kind: "PumpsDetection".into(),
+            coin: "XALPHA".into(),
+            buy_ms: 1_000,
+            close_ms: 2_000,
+            buy_price: 100.0,
+            sell_price: 100.2,
+            spent: 1_000.0,
+            is_short: false,
+            sell_reason: String::new(),
+            fact_pnl: 2.0,
+            sizing: None,
+            pnl_pct: false,
+            profit: None,
+            deltas: Deltas::default(),
+            tick: None,
+            pre_spike_ask: None,
+            archived_take: None,
+            fact_modifier: None,
+            hook_depth_pct: None,
+            hook_stated_take_pct: None,
+            step_lag_ms: 0.0,
+            round_trip_ms: None,
+            stop_anchor: None,
+            delta_track: None,
+            bars: None,
+            own_entry: None,
+            buy_set_ms: None,
+            corridor: None,
+            entry_placed: None,
+            gap: None,
+        },
+        tape: PackedTape::pack(vec![
+            tick(1_000.0, 100.0, 1.0, Side::Buy),
+            tick(2_000.0, 100.2, 1.0, Side::Buy),
+            tick(62_000.0, 100.2, 1.0, Side::Buy),
+            tick(92_000.0, 101.0, 1.0, Side::Buy),
+            tick(182_000.0, 101.0, 1.0, Side::Buy),
+            tick(182_001.0, 102.0, 1.0, Side::Buy),
+        ]),
+        entry_line: None,
+        trail_ms,
+        own: Arc::new(HashMap::new()),
+    };
+    let short = pending(1, 60_000);
+    let long = pending(2, 180_000);
+    let picture = long.clone().prepare();
+    let deals = prepare_sample(vec![short, long]);
+    assert_eq!(deals[0].ticks.last().expect("short tape").time_ms, 62_000.0);
+    assert_eq!(deals[1].ticks.last().expect("long tape").time_ms, 182_000.0);
+    assert_eq!(picture.ticks.len(), deals[1].ticks.len());
+    let score = variant_tally(
+        &deals,
+        &HashMap::new(),
+        "PumpsDetection",
+        &[("SellPrice".into(), "1".into())],
+        ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+    );
+    assert_eq!((score.tally.n, score.open), (1, 1));
+}

@@ -143,7 +143,7 @@ fn sort_indices(
             )
         }
         COL_DURATION => by_f64(&|r| (r.deal.close_ms - r.deal.buy_ms) as f64, order),
-        // By the trail — the half the exit horizon is taken from; nothing held is the shortest.
+        // By each deal's held exit trail; nothing held is the shortest.
         COL_HELD => by_f64(
             &|r| r.held.map(|(_, trail)| trail as f64).unwrap_or(-1.0),
             order,

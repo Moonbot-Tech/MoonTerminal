@@ -315,8 +315,7 @@ fn profit_sorts_by_the_rows_money() {
     assert_eq!(uids(&mut state), [1, 3, 2]);
 }
 
-/// The held column sorts by the trail the terminal holds past the exit — what the exit
-/// horizon of the sample is taken from; a row with nothing held sorts as the shortest.
+/// The held column sorts by each deal's held exit trail; a row with nothing held sorts first.
 #[test]
 fn the_held_tape_sorts_by_its_trail() {
     let mut state = state();

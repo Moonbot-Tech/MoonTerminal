@@ -68,7 +68,7 @@ use crate::feed::types::Tick;
 mod types;
 pub use types::{
     Candidate, DEFAULT_MAX_PASSES, PreparedDeal, SearchMiss, SearchParams, SearchResult,
-    SearchStats, clip_to_horizon, common_horizon_ms,
+    SearchStats,
 };
 
 /// descent items for tick searches.

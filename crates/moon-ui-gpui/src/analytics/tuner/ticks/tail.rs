@@ -1,9 +1,9 @@
 //! The shortest tape past the close a deal must hold to be worked on: a row whose held trail
 //! (`DealRow::held`) is shorter is not fit (`DealRow::fit`), so the fact's baseline, the variant
-//! columns and the search all run on the same deals, and the sample's exit horizon — the shortest
-//! trail among them (`search::common_horizon_ms`) — is never under this.
+//! columns and the search all run on the same deals. Each deal's own held trail is its exit
+//! horizon and is never under this floor.
 //!
-//! One deal with a 30 s tail cut every variant's exit 30 s past its close: a variant that fills a
+//! A deal with a 30 s tail cuts its variant's exit 30 s past its close: a variant that fills a
 //! hair off the fact's price reaches its take or its Price Down line later than the fact did, is
 //! left open at the cut, and the point is never the answer (`search::closing`) — an exit search
 //! refuses it outright, an entry search can only steer through it. Short tails can be extended

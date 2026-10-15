@@ -75,8 +75,7 @@ pub(in crate::analytics::tuner) struct DealRow {
     /// What the terminal HOLDS of the window, as `(lead_ms, trail_ms)`: how far before the
     /// entry and past the exit the held coverage reaches, clipped to what the window asks for
     /// (the setting's margin, floored for the model). `None` until the tape stage answered, or
-    /// when it holds nothing. The table's "tape" column; the exit horizon of the sample is the
-    /// shortest trail among the replayable rows.
+    /// when it holds nothing. The table's "tape" column; each replay uses this row's own trail.
     pub(in crate::analytics::tuner) held: Option<(i64, i64)>,
 }
 
@@ -146,8 +145,7 @@ impl DealRow {
     /// Every fold of a replay answer goes through here: the variants replay the STORED row
     /// (`prepared_deals`), so a take lifted to the archive's pre-spike ask in the verdict but
     /// read off the tape in the variants puts the two on different levels, and a row folded
-    /// without its held coverage reads a trail of 0 and clips every variant tape at its close
-    /// (`common_horizon_ms` is the shortest trail of the sample).
+    /// without its held coverage reads a trail of 0 and clips that row's variant tape at its close.
     pub(in crate::analytics::tuner) fn take_replay(&mut self, answer: DealRow) {
         self.tape = answer.tape;
         self.verdict = answer.verdict;
@@ -265,16 +263,6 @@ impl TicksData {
             .iter()
             .filter(|r| r.tape == TapeStatus::Covered)
             .count()
-    }
-
-    /// The exit horizon of the replayable sample, in milliseconds — the shortest HELD trail
-    /// past the close among the rows the variants and the search replay, the same rule as
-    /// `search::common_horizon_ms` over the same rows (`prepared_deals` hands it each row's
-    /// `held` trail), or `None` with nothing to replay.
-    pub(in crate::analytics::tuner) fn exit_horizon_ms(&self) -> Option<i64> {
-        self.replayable()
-            .map(|r| r.held.map(|(_, trail)| trail.max(0)).unwrap_or(0))
-            .min()
     }
 
     /// Missing rows and reproduced short tails that REST or an archive can still extend.
@@ -1054,8 +1042,8 @@ impl TicksState {
 impl TicksData {
     /// A row as the variants and the search replay it — its tape, its archived entry line, its
     /// held trail, its strategy's current values; `None` without a tape in memory. The tape
-    /// stays packed and uncut: the caller unpacks off the UI thread and cuts the sample at its
-    /// one horizon ([`prepare_sample`](super::tape::prepare_sample)).
+    /// stays packed and uncut: the caller unpacks off the UI thread and limits each deal to its
+    /// own held trail ([`prepare_sample`](super::tape::prepare_sample)).
     pub(in crate::analytics::tuner) fn prepared(&self, row: &DealRow) -> Option<PendingDeal> {
         Some(PendingDeal {
             deal: row.deal.clone(),

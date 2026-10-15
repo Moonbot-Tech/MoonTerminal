@@ -693,7 +693,7 @@ analytics.ticks.tape_no_route: "La bolsa no ofrece historial público de operaci
 analytics.ticks.tape_retention: "Más antigua que la retención de la bolsa (%{hours} h) — la bolsa ya no entrega esas operaciones"
 analytics.ticks.model_tip: "Entrada: modelo vs hecho %{entry} · Salida: %{exit}"
 analytics.ticks.subset_sub: "%{n} de %{m} con cinta · entrada ✓ %{entry} · salida ✓ %{exit}"
-analytics.ticks.horizon: " · salida ≤ %{h} tras el cierre"
+analytics.ticks.horizon: " · horizonte de salida: cinta disponible de cada operación"
 analytics.ticks.assumptions: "El modelo no conoce: el libro y la cola en un nivel · reglas de salida fuera de él (SellShot, SellSpread) · MShotRepeat* · la referencia ASK/BID es el último print de su lado · el medio de una posición larga: una variante cuya línea o stop estuvo allí más cerca del precio que el del hecho no se juzga"
 analytics.ticks.group_entry: "Entrada"
 analytics.ticks.group_exit: "Salida"
