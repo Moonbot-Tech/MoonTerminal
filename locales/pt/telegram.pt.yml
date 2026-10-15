@@ -551,7 +551,7 @@ telegram.server.keep_note_finite: "Os dados de operações com mais de %{period}
 telegram.server.keep_emu: "Emulador"
 telegram.server.keep_emu_label: "Gravar operações do emulador"
 telegram.server.keep_emu_caption: "Desative se usa o emulador para testes e não o avalia com o otimizador. Os seus dados são eliminados e novas operações não são gravadas."
-telegram.server.keep_old: "Esta estação é anterior a estas configurações. Atualize o serviço com o botão acima."
+telegram.server.keep_old: "A estação ainda não suporta estas configurações. Elas funcionarão quando a estação for atualizada para uma versão que as inclua (Estação → Visão geral → «Atualizar o serviço»)."
 telegram.server.keep_cpu_note: "A recuperação usa no máximo 75% da CPU da estação, mantendo o bot, os relatórios e a gravação ao vivo ágeis."
 telegram.server.keep_tag_purging: "Limpando a base"
 telegram.server.keep_purging: "A estação elimina os dados que já não se enquadram e compacta o arquivo. A recuperação está em pausa até terminar."

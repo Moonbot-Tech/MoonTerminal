@@ -551,7 +551,7 @@ telegram.server.keep_note_finite: "La cinta de operaciones de más de %{period} 
 telegram.server.keep_emu: "Emulador"
 telegram.server.keep_emu_label: "Grabar operaciones del emulador"
 telegram.server.keep_emu_caption: "Desactívelo si usa el emulador para pruebas y no lo evalúa con el optimizador. Se elimina su cinta y no se graban nuevas operaciones."
-telegram.server.keep_old: "Esta estación es anterior a estos ajustes. Actualice el servicio con el botón de arriba."
+telegram.server.keep_old: "La estación aún no admite estos ajustes. Funcionarán cuando se actualice a una versión que los incluya (Estación → Resumen → «Actualizar el servicio»)."
 telegram.server.keep_cpu_note: "La recuperación usa como máximo el 75% de la CPU de la estación para mantener ágiles el bot, los informes y la grabación en vivo."
 telegram.server.keep_tag_purging: "Limpiando base"
 telegram.server.keep_purging: "La estación elimina la cinta que ya no corresponde y compacta el archivo. La recuperación está pausada hasta terminar."

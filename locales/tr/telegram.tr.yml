@@ -551,7 +551,7 @@ telegram.server.keep_note_finite: "%{period} süresinden eski işlem verileri si
 telegram.server.keep_emu: "Emülatör"
 telegram.server.keep_emu_label: "Emülatör işlemlerini kaydet"
 telegram.server.keep_emu_caption: "Emülatörü deneme için kullanıyor ve ayarlayıcıyla değerlendirmiyorsanız kapatın. Verileri silinir ve yeni işlemleri kaydedilmez."
-telegram.server.keep_old: "Bu istasyon bu ayarları desteklemiyor. Yukarıdaki düğmeyle hizmeti güncelleyin."
+telegram.server.keep_old: "İstasyon bu ayarları henüz desteklemiyor. Bu ayarlar, istasyon bunları içeren bir sürüme güncellendiğinde çalışacak (İstasyon → Genel bakış → «Hizmeti güncelle»)."
 telegram.server.keep_cpu_note: "Geçmiş indirme istasyon işlemcisinin en fazla %75'ini kullanır; bot, raporlar ve canlı kayıt yavaşlamaz."
 telegram.server.keep_tag_purging: "Veritabanı temizleniyor"
 telegram.server.keep_purging: "İstasyon artık uygun olmayan verileri siliyor ve dosyayı küçültüyor. Geçmiş indirme temizlik bitene kadar duraklatıldı."

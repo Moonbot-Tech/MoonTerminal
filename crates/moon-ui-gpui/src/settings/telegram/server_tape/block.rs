@@ -7,6 +7,7 @@ use super::{
 };
 use crate::design;
 use gpui::{prelude::FluentBuilder as _, *};
+use moon_core::config::storage::LONG_POSITION_MIN_RANGE;
 use moon_core::station_api::{DEFAULT_MAX_AGE_DAYS, TapeCatchup, TapeKeep};
 use moon_ui::{
     MoonAccent, MoonButton, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonProgress,
@@ -37,6 +38,32 @@ pub(super) struct Snapshot<'a> {
     pub busy: bool,
     pub width: f32,
     pub read_at: Option<String>,
+}
+
+/// Keep the minutes field at the shared Settings compact width, even in a growing row.
+pub(super) fn long_control(
+    input: &Entity<moon_ui::MoonInputState>,
+    enabled: bool,
+    cx: &App,
+) -> AnyElement {
+    let range =
+        f64::from(*LONG_POSITION_MIN_RANGE.start())..=f64::from(*LONG_POSITION_MIN_RANGE.end());
+    let unit = t!("storage.unit_min").to_string();
+    let width = crate::settings::common::num_field_min_w(&range, Some(&unit), cx);
+    div()
+        .w(px(width))
+        .max_w_full()
+        .flex_none()
+        .debug_selector(|| "server-tape-long-compact".into())
+        .child(crate::settings::general::num_input_on(
+            "server-tape-long",
+            input,
+            range,
+            1.0,
+            Some(unit),
+            enabled,
+        ))
+        .into_any_element()
 }
 
 /// Wrapping prose owns its width directly, preventing nested flex truncation.
@@ -331,17 +358,28 @@ pub(super) fn server_tape_block(
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(t!("telegram.server.tape_title").to_string()),
         )
-        .child(prose(
-            t!("telegram.server.tape_hint").to_string(),
-            p.text_muted,
-            cx,
-        ))
-        .child(row(
-            t!("storage.trades_margin").to_string(),
-            controls.margin,
-            Some(t!("telegram.server.tape_margin_hint").to_string()),
-            cx,
-        ))
+        .child(
+            prose(
+                t!("telegram.server.tape_hint").to_string(),
+                p.text_muted,
+                cx,
+            )
+            .flex_shrink_0()
+            .mb(design::ui_px(cx, 8.0))
+            .debug_selector(|| "server-tape-hint".into()),
+        )
+        .child(
+            div()
+                .w_full()
+                .min_w_0()
+                .debug_selector(|| "server-tape-margin-row".into())
+                .child(row(
+                    t!("storage.trades_margin").to_string(),
+                    controls.margin,
+                    Some(t!("telegram.server.tape_margin_hint").to_string()),
+                    cx,
+                )),
+        )
         .child(row(
             t!("storage.trades_long_position").to_string(),
             controls.long,

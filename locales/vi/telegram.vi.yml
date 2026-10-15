@@ -551,7 +551,7 @@ telegram.server.keep_note_finite: "Dữ liệu giao dịch cũ hơn %{period} b�
 telegram.server.keep_emu: "Trình mô phỏng"
 telegram.server.keep_emu_label: "Ghi giao dịch mô phỏng"
 telegram.server.keep_emu_caption: "Tắt nếu chỉ dùng mô phỏng để thử nghiệm và không đánh giá bằng bộ tinh chỉnh. Dữ liệu sẽ bị xóa và giao dịch mới không được ghi."
-telegram.server.keep_old: "Trạm này chưa hỗ trợ các cài đặt này. Hãy cập nhật dịch vụ bằng nút phía trên."
+telegram.server.keep_old: "Trạm chưa hỗ trợ các cài đặt này. Chúng sẽ hoạt động khi trạm được cập nhật lên phiên bản có hỗ trợ (Trạm → Tổng quan → «Cập nhật dịch vụ»)."
 telegram.server.keep_cpu_note: "Tải bù dùng tối đa 75% CPU của trạm để bot, báo cáo và ghi trực tiếp vẫn hoạt động nhanh."
 telegram.server.keep_tag_purging: "Đang dọn cơ sở dữ liệu"
 telegram.server.keep_purging: "Trạm đang xóa dữ liệu không còn phù hợp và thu nhỏ tệp. Tải bù tạm dừng đến khi dọn xong."

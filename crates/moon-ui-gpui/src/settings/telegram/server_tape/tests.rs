@@ -1124,14 +1124,7 @@ impl Render for FullTapeProbe {
             .trigger_width(design::font_w(cx, 120.0))
             .disabled(locked)
             .into_any_element();
-        let long = crate::settings::general::num_input_on(
-            "server-tape-long",
-            self.ed.long_input.as_ref().unwrap(),
-            1.0..=240.0,
-            1.0,
-            None,
-            !locked,
-        );
+        let long = super::block::long_control(self.ed.long_input.as_ref().unwrap(), !locked, cx);
         let switches = catchup_switches(
             self.ed.draft_switches.unwrap(),
             !locked,
@@ -1319,7 +1312,7 @@ fn full_probe(state: &str, width: f32) -> FullTapeProbe {
     }
 }
 
-/// Dropping a wrap or sizing a tile by its label alone spills the real keep page at narrow zooms.
+/// Dropping hint spacing, compact sizing or prose wrapping breaks the real page at narrow zooms.
 #[gpui::test]
 fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestAppContext) {
     cx.update(moon_ui::init);
@@ -1364,6 +1357,46 @@ fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestApp
                 }
                 let col = visual.debug_bounds("probe-col").unwrap();
                 let at = format!("{} {state} {zoom} {column}", language.code());
+                let hint = visual
+                    .debug_bounds("server-tape-hint")
+                    .expect("header hint");
+                let margin = visual
+                    .debug_bounds("server-tape-margin-row")
+                    .expect("first row");
+                // The page's 10-unit row gap plus the hint's normal 8-unit block spacing.
+                let gap = visual.update(|_, cx| design::ui_value(cx, 18.0));
+                assert!(
+                    margin.origin.y >= hint.bottom() + px(gap - 0.5),
+                    "header hint touches the first row {at}"
+                );
+                let long = visual
+                    .debug_bounds("server-tape-long")
+                    .expect("minutes field");
+                let compact = visual
+                    .debug_bounds("server-tape-long-compact")
+                    .expect("compact class");
+                let (limit, height) = visual.update(|_, cx| {
+                    let range = moon_core::config::storage::LONG_POSITION_MIN_RANGE;
+                    let range = f64::from(*range.start())..=f64::from(*range.end());
+                    (
+                        crate::settings::common::num_field_min_w(
+                            &range,
+                            Some(&rust_i18n::t!("storage.unit_min")),
+                            cx,
+                        ),
+                        // MoonNumberInput's outline adds one border pixel on each side.
+                        design::ui_value(cx, design::CONTROL_TIER.control_metrics().height) + 2.0,
+                    )
+                });
+                assert!(
+                    long.size.width <= px(limit + 0.5) && long.size.height <= px(height + 0.5),
+                    "minutes field {:?} exceeds compact {limit} x {height} {at}",
+                    long.size
+                );
+                assert!(
+                    long.right() <= compact.right() + px(0.5),
+                    "minutes field escaped {at}"
+                );
                 for sel in [
                     "server-tape-block",
                     "server-tape-keep",
@@ -1410,6 +1443,7 @@ fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestApp
                     }
                 }
                 for (sel, key) in [
+                    ("server-tape-hint", "telegram.server.tape_hint"),
                     ("server-tape-auto-caption", "telegram.server.keep_cpu_note"),
                     (
                         "server-tape-emu-caption",
@@ -1425,6 +1459,37 @@ fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestApp
                     assert!(
                         f32::from(b.size.height) + 0.5 >= lines * line,
                         "{sel} text clipped {at}"
+                    );
+                }
+                if state == "old" {
+                    let note = visual
+                        .debug_bounds("server-tape-keep-old")
+                        .expect("old station note");
+                    let next = visual
+                        .debug_bounds("server-tape-strip")
+                        .expect("next section");
+                    let (need, line) = visual.update(|_, cx| {
+                        (
+                            design::ui_caption_text_width(
+                                cx,
+                                &rust_i18n::t!("telegram.server.keep_old"),
+                                400.0,
+                            ),
+                            f32::from(design::t_caption(cx)),
+                        )
+                    });
+                    assert!(
+                        note.origin.x >= col.origin.x && note.right() <= col.right() + px(0.5),
+                        "old station note escaped {at}"
+                    );
+                    assert!(
+                        note.bottom() <= next.origin.y,
+                        "old station note overlaps the next section {at}"
+                    );
+                    assert!(
+                        f32::from(note.size.height) + 0.5
+                            >= (need / f32::from(note.size.width)).floor().max(1.0) * line,
+                        "old station note clipped {at}"
                     );
                 }
                 let db = visual.debug_bounds("server-tape-tile-db").unwrap();

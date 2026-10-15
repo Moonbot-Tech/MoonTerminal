@@ -551,7 +551,7 @@ telegram.server.keep_note_finite: "Tape older than %{period} is deleted, and con
 telegram.server.keep_emu: "Emulator"
 telegram.server.keep_emu_label: "Record emulator trades"
 telegram.server.keep_emu_caption: "Turn off if you use the emulator for experiments and do not evaluate it with the tuner. Its tape is deleted and new trades are not recorded."
-telegram.server.keep_old: "This station predates these settings. Update the service with the button above."
+telegram.server.keep_old: "The station does not support these settings yet. They will work once the station updates to a version that includes them (Station → Overview → “Update the service”)."
 telegram.server.keep_cpu_note: "Catch-up uses at most 75% of the station CPU, keeping the bot, reports and live recording responsive."
 telegram.server.keep_tag_purging: "Cleaning database"
 telegram.server.keep_purging: "The station is deleting tape that no longer fits and shrinking the file. Catch-up is paused until cleaning finishes."

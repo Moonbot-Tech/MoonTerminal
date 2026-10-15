@@ -1330,15 +1330,7 @@ impl SettingsView {
             .map(|draft| self.server_tape_margin_picker(draft.margin_s, !locked, cx))
             .unwrap_or_else(|| div().child(UNKNOWN_VALUE).into_any_element());
         let long = match (&ed.long_input, ed.draft) {
-            (Some(input), Some(_)) => super::super::general::num_input_on(
-                "server-tape-long",
-                input,
-                f64::from(*storage_cfg::LONG_POSITION_MIN_RANGE.start())
-                    ..=f64::from(*storage_cfg::LONG_POSITION_MIN_RANGE.end()),
-                1.0,
-                None,
-                !locked,
-            ),
+            (Some(input), Some(_)) => self::block::long_control(input, !locked, cx),
             _ => div().child(UNKNOWN_VALUE).into_any_element(),
         };
         let days_view = cx.entity();
@@ -1346,7 +1338,7 @@ impl SettingsView {
         let confirm_view = days_view.clone();
         let cancel_view = days_view.clone();
         let confirm_target = target.clone();
-        let actions = block::Actions {
+        let actions = self::block::Actions {
             days: Rc::new(move |days, _, app| {
                 days_view.update(app, |this, cx| {
                     if let Some(keep) = this.telegram.server.tape.draft_keep.as_mut() {
@@ -1375,15 +1367,15 @@ impl SettingsView {
                 })
             }),
         };
-        block::server_tape_block(
+        self::block::server_tape_block(
             ed,
-            block::Snapshot {
+            self::block::Snapshot {
                 catchup,
                 busy,
                 width: width - design::ui_value(cx, 24.0),
                 read_at: snapshot,
             },
-            block::Controls {
+            self::block::Controls {
                 margin,
                 long,
                 switches,
