@@ -1380,6 +1380,51 @@ fn full_probe(state: &str, width: f32) -> FullTapeProbe {
     }
 }
 
+/// A row-oriented flex basis on the switches must not leave empty height before the venue caret.
+#[gpui::test]
+fn the_tape_switches_leave_only_the_normal_gap_before_venues(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for auto in [true, false] {
+            for (zoom, column) in [
+                (1.0, 860.0),
+                (1.0, 420.0),
+                (1.25, 860.0),
+                (1.25, 420.0),
+                (2.0, 244.0),
+            ] {
+                let width = zoom * column;
+                let window = cx.open_window(gpui::size(px(width), px(12000.0)), |_, _| {
+                    let mut probe = full_probe("clean", width);
+                    probe.ed.draft_switches.as_mut().unwrap().auto = auto;
+                    probe
+                });
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let caption = visual
+                    .debug_bounds("server-tape-archives-caption")
+                    .expect("last switch caption");
+                let venues = visual
+                    .debug_bounds("server-tape-venues")
+                    .expect("venue caret");
+                let gap = f32::from(venues.origin.y - caption.bottom());
+                let normal_gap = visual.update(|_, cx| design::ui_value(cx, 10.0));
+                assert!(
+                    gap >= -0.5 && gap <= normal_gap + 0.5,
+                    "switches leave {gap}px before venues, expected {normal_gap}px: {} auto={auto} zoom={zoom} column={column}",
+                    language.code()
+                );
+            }
+        }
+    }
+}
+
 /// Dropping hint spacing, compact sizing or prose wrapping breaks the real page at narrow zooms.
 #[gpui::test]
 fn the_tape_keep_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestAppContext) {
