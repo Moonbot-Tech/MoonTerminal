@@ -922,7 +922,8 @@ fn tile_stage_for_archive(request: &TradeReplayRequest) -> TickStage {
     tick_stage_for(request.address.venue.expect("known venue"), &key, &[])
 }
 
-/// Hydrating a cold tile store must spare an archive request when persisted tape is complete.
+/// Hydrating cold tiles from completed disk writes must spare an archive request.
+/// Skipping the fixture barrier lets cache startup exhaust the bounded read timeout instead.
 #[test]
 fn warm_disk_cold_tiles_skip_archive() {
     let stamp = std::time::SystemTime::now()
@@ -952,6 +953,11 @@ fn warm_disk_cold_tiles_skip_archive() {
             TileSource::Venue,
         );
     }
+    // Inserts are queued: establish warm disk before the production read's short timeout.
+    assert!(
+        cache.sync(Duration::from_secs(10)),
+        "fixture writes must finish before testing warm-disk hydration"
+    );
     let stage = tile_stage_for_archive(&request);
     let answer = serve_ticks_with(
         &rest::agent(),
