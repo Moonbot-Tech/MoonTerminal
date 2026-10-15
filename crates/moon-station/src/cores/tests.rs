@@ -305,6 +305,19 @@ fn tape_keep_keys_parse() {
     assert!(from_station_file(&unknown, Some(&dir)).is_err());
 }
 
+/// The tuner-only key parses, and its absence reads as off: an older terminal that never sends
+/// it must leave every station fetching every trade.
+#[test]
+fn tape_tuner_only_key_parses_and_defaults_off() {
+    let dir = creds("tape_tuner_only", &[(3, "k1")]);
+    let core = "[[core]]\nuid = 3\nname = \"CORE_A\"\n";
+    let configured = format!("{core}[tape]\ntuner_only = true\n");
+    let station = from_station_file(&configured, Some(&dir)).unwrap();
+    assert_eq!(station.tape.tuner_only, Some(true));
+    let absent = from_station_file(core, Some(&dir)).unwrap();
+    assert_eq!(absent.tape.tuner_only, None);
+}
+
 /// `[telegram]` with the Mini App switches the station to the account profile and gives every
 /// core the account feed; without the section it stays light.
 #[test]

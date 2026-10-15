@@ -20,6 +20,7 @@ use std::rc::Rc;
 pub(super) struct Actions {
     pub days: Rc<dyn Fn(u16, &mut Window, &mut App)>,
     pub emulator: Rc<dyn Fn(bool, &mut Window, &mut App)>,
+    pub tuner: Rc<dyn Fn(bool, &mut Window, &mut App)>,
     pub confirm: Rc<dyn Fn(&mut Window, &mut App)>,
     pub cancel: Rc<dyn Fn(&mut Window, &mut App)>,
 }
@@ -117,6 +118,7 @@ fn keep_controls(ed: &TapeEd, disabled: bool, actions: &Actions, cx: &App) -> An
     let keep = ed.draft_keep.unwrap_or(TapeKeep {
         max_age_days: DEFAULT_MAX_AGE_DAYS,
         record_emulator: true,
+        tuner_only: None,
     });
     let presets = [30, 90, 180, 365, 1825, 0];
     let chips = h_flex()
@@ -202,6 +204,7 @@ pub(super) fn server_tape_block(
     let keep = ed.draft_keep.unwrap_or(TapeKeep {
         max_age_days: DEFAULT_MAX_AGE_DAYS,
         record_emulator: true,
+        tuner_only: None,
     });
     let label = t!("telegram.server.keep_emu_label").to_string();
     let on_emulator = actions.emulator.clone();
@@ -216,6 +219,22 @@ pub(super) fn server_tape_block(
         t!("telegram.server.keep_emu_caption").to_string(),
         cx,
     );
+    // Only a station that reports the choice shows it; an older one never receives the key.
+    let tuner = keep.tuner_only.map(|on| {
+        let label = t!("telegram.server.keep_tuner_label").to_string();
+        let on_tuner = actions.tuner.clone();
+        crate::settings::common::checkbox_with_caption(
+            "server-tape-tuner",
+            &label,
+            MoonCheckbox::new("server-tape-tuner")
+                .checked(on)
+                .disabled(disabled)
+                .label(label.clone())
+                .on_change(move |on, window, app| on_tuner(*on, window, app)),
+            t!("telegram.server.keep_tuner_caption").to_string(),
+            cx,
+        )
+    });
     let keep_block = v_flex()
         .w_full()
         .min_w_0()
@@ -243,13 +262,25 @@ pub(super) fn server_tape_block(
             None,
             cx,
         ))
+        .children(tuner.map(|tuner| {
+            row(
+                t!("telegram.server.keep_tuner").to_string(),
+                tuner,
+                None,
+                cx,
+            )
+        }))
         .when(matches!(state, KeepState::Old), |el| {
             el.child(
                 prose(t!("telegram.server.keep_old").to_string(), p.amber, cx)
                     .debug_selector(|| "server-tape-keep-old".into()),
             )
         });
-    let counts = c.and_then(|c| purge_counts(c, keep));
+    // The age histogram cannot tell which trades lack millisecond stamps: no count then.
+    let drops_untunable = ed.seen_keep.is_some_and(|seen| seen.drops_untunable(keep));
+    let counts = c
+        .and_then(|c| purge_counts(c, keep))
+        .filter(|_| !drops_untunable);
     let confirm = ed.confirm.then(|| {
         let title = counts
             .as_ref()
@@ -309,6 +340,14 @@ pub(super) fn server_tape_block(
                         )
                     }),
             )
+            .children(drops_untunable.then(|| {
+                prose(
+                    t!("telegram.server.keep_confirm_tuner").to_string(),
+                    p.text,
+                    cx,
+                )
+                .debug_selector(|| "server-tape-confirm-tuner".into())
+            }))
             .child(prose(
                 t!("telegram.server.keep_confirm_note").to_string(),
                 p.text_muted,

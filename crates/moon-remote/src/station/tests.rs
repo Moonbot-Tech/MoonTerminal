@@ -804,6 +804,7 @@ fn with_tape_writes_keep_only_when_supported() {
     let keep = TapeKeep {
         max_age_days: 90,
         record_emulator: false,
+        tuner_only: None,
     };
     let legacy = with_tape("", tape, None, None).unwrap().unwrap();
     let parsed: toml::Value = toml::from_str(&legacy).unwrap();
@@ -828,6 +829,55 @@ fn with_tape_writes_keep_only_when_supported() {
     assert_eq!(parsed["tape"]["record_emulator"].as_bool(), Some(false));
 }
 
+/// The tuner-only key reaches `station.toml` only when the station reported the choice: an
+/// older station rejects an unknown `[tape]` key and would stop starting.
+#[test]
+fn with_tape_writes_tuner_only_only_when_supported() {
+    let tape = TapeWindow {
+        margin_s: 180,
+        long_position_min: 10,
+    };
+    let keep = |tuner_only| TapeKeep {
+        max_age_days: 90,
+        record_emulator: true,
+        tuner_only,
+    };
+    let old = with_tape("", tape, None, Some(keep(None)))
+        .unwrap()
+        .unwrap();
+    let parsed: toml::Value = toml::from_str(&old).unwrap();
+    assert!(parsed["tape"].get("tuner_only").is_none());
+    let text = with_tape(&old, tape, None, Some(keep(Some(true))))
+        .unwrap()
+        .unwrap();
+    let parsed: toml::Value = toml::from_str(&text).unwrap();
+    assert_eq!(parsed["tape"]["tuner_only"].as_bool(), Some(true));
+    assert!(
+        with_tape(&text, tape, None, Some(keep(Some(true))))
+            .unwrap()
+            .is_none()
+    );
+    // A station that reports retention but not the tuner choice cannot apply a sent one.
+    assert_eq!(
+        tape_verdict(
+            Some((tape, None, Some(keep(None)))),
+            tape,
+            None,
+            Some(keep(Some(true)))
+        ),
+        TapeVerdict::Outdated
+    );
+    assert_eq!(
+        tape_verdict(
+            Some((tape, None, Some(keep(Some(true))))),
+            tape,
+            None,
+            Some(keep(Some(true)))
+        ),
+        TapeVerdict::Applied
+    );
+}
+
 /// Missing retention support must fail immediately only when retention choices were sent.
 #[test]
 fn tape_verdict_outdated_without_keep() {
@@ -838,6 +888,7 @@ fn tape_verdict_outdated_without_keep() {
     let keep = TapeKeep {
         max_age_days: 90,
         record_emulator: false,
+        tuner_only: None,
     };
     assert_eq!(
         tape_verdict(None, tape, None, Some(keep)),
@@ -858,6 +909,7 @@ fn tape_verdict_outdated_without_keep() {
     let old = TapeKeep {
         max_age_days: 365,
         record_emulator: true,
+        tuner_only: None,
     };
     assert_eq!(
         tape_verdict(Some((tape, None, Some(old))), tape, None, Some(keep)),

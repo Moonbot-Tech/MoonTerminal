@@ -636,6 +636,8 @@ impl Recorder {
                         open_ms,
                         close_ms,
                         emulator: false,
+                        // A live close carries the core's millisecond stamps.
+                        tunable: true,
                     }]);
                 }
             }

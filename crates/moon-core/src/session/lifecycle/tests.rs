@@ -236,3 +236,30 @@ fn protecting_listing_reads_only_retention_straddlers() {
         vec![1]
     );
 }
+
+/// A listed row is tuner-usable only when BOTH stamps came from the millisecond columns, the
+/// same gate the tuner's deal read applies. Treating a seconds fallback as usable would keep
+/// fetching tape for the pre-millisecond history the switch exists to skip.
+#[test]
+fn tuner_can_replay_needs_both_millisecond_stamps() {
+    let row = |buy, close| CatchupRow {
+        rec_id: 4,
+        coin: "SYN".into(),
+        buy,
+        close,
+        closedate: 2,
+        emulator: false,
+    };
+    assert!(tuner_can_replay(&row(
+        ReportStamp::Millis(1_000),
+        ReportStamp::Millis(2_000)
+    )));
+    assert!(!tuner_can_replay(&row(
+        ReportStamp::Seconds(1),
+        ReportStamp::Millis(2_000)
+    )));
+    assert!(!tuner_can_replay(&row(
+        ReportStamp::Millis(1_000),
+        ReportStamp::Seconds(2)
+    )));
+}

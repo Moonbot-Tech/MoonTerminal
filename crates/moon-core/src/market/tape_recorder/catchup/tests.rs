@@ -34,7 +34,7 @@ fn upgrade_with_absent_key_never_flags_a_purge() {
 pub(crate) static SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Restore retention settings and the outstanding request when a global-state test exits.
-struct RestoreKeep(u16, bool, bool);
+struct RestoreKeep(u16, bool, bool, bool);
 impl RestoreKeep {
     /// Capture settings after the caller takes the shared test lock.
     fn new() -> Self {
@@ -42,6 +42,7 @@ impl RestoreKeep {
             max_age_days(),
             record_emulator(),
             PURGE_WANTED.load(Ordering::Relaxed),
+            tuner_only(),
         )
     }
 }
@@ -49,6 +50,7 @@ impl Drop for RestoreKeep {
     /// Leave subsequent planner tests on their original horizon even after an assertion fails.
     fn drop(&mut self) {
         set_keep(self.0, self.1);
+        set_tuner_only(self.3);
         PURGE_WANTED.store(self.2, Ordering::Relaxed);
     }
 }
@@ -220,6 +222,67 @@ fn catchup_skips_emulator_trades_when_off() {
     take_purge_wanted();
 }
 
+/// With "only trades the tuner can use" off, a trade without millisecond stamps is planned
+/// exactly like any other; switched on, it stays known but never queues, while a stamped trade
+/// still does. A planner that ignored the switch would keep fetching ~100k useless trades a year;
+/// one that applied it while off would silently stop recording old trades for every station.
+#[test]
+fn catchup_skips_untunable_trades_only_when_tuner_only_is_on() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
+    let _restore = RestoreKeep::new();
+    set_keep(0, true);
+    set_tuner_only(false);
+    let stamped = trade(1, Brand::Bybit, MarketKind::Futures, DAY);
+    let mut unstamped = trade(2, Brand::Bybit, MarketKind::Futures, DAY);
+    unstamped.tunable = false;
+    let both = [stamped.clone(), unstamped.clone()];
+    let queued = |plan: &CatchupPlan| {
+        let mut ids: Vec<_> = plan.jobs.iter().map(|job| job.trade.id.rec_id).collect();
+        ids.sort_unstable();
+        ids
+    };
+    let off = plan(&both, |_| Coverage::none(), &HashMap::new(), NOW, 0, DAY);
+    assert_eq!(
+        queued(&off),
+        vec![1, 2],
+        "off: every trade is fetched as before"
+    );
+
+    set_tuner_only(true);
+    assert!(
+        take_purge_wanted(),
+        "switching on requests the retention purge"
+    );
+    let on = plan(&both, |_| Coverage::none(), &HashMap::new(), NOW, 0, DAY);
+    assert_eq!(
+        queued(&on),
+        vec![1],
+        "on: only the stamped trade is fetched"
+    );
+
+    let mut state = state::RecorderCatchup::default();
+    state.submit(both.to_vec());
+    assert!(
+        state.knows(unstamped.id),
+        "a skipped trade still protects its tape"
+    );
+    assert_eq!(status().pending, 1);
+    assert_eq!(
+        queued(&state.prepare(|_| Coverage::none(), NOW, 0, DAY, true)),
+        vec![1]
+    );
+
+    set_tuner_only(false);
+    assert!(!take_purge_wanted(), "switching off deletes nothing");
+    state.submit(Vec::new());
+    assert_eq!(
+        queued(&state.prepare(|_| Coverage::none(), NOW, 0, DAY, true)),
+        vec![1, 2],
+        "off again: the skipped trade returns to the queue"
+    );
+    assert_eq!(status().tuner_only, Some(false));
+}
+
 /// A completed old listing must not satisfy either reload that overtook it.
 #[test]
 fn two_reloads_during_one_listing_count_only_the_last() {
@@ -260,6 +323,7 @@ fn trade(id: i64, brand: Brand, kind: MarketKind, age_ms: i64) -> CatchupTrade {
         open_ms: close_ms - 60_000,
         close_ms,
         emulator: false,
+        tunable: true,
     }
 }
 

@@ -25,6 +25,7 @@
 //! archive_catchup = true # on when absent
 //! max_age_days = 1825    # five years when absent; 0 keeps forever; finite limits 1..3650
 //! record_emulator = true # on when absent
+//! tuner_only = false     # off when absent: keep tape only for trades the tuner can use
 //! ```
 //!
 //! `[update]` is whether the station updates itself from the release; on when absent, set from
@@ -114,6 +115,8 @@ pub struct Tape {
     pub max_age_days: Option<u16>,
     /// Record emulator trades; absent means on.
     pub record_emulator: Option<bool>,
+    /// Keep and fetch tape only for trades the tuner can use; absent means off.
+    pub tuner_only: Option<bool>,
 }
 
 /// `[telegram]` as written.

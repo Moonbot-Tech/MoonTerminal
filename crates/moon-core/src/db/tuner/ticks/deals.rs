@@ -62,6 +62,21 @@ const DELTA_COLS: [&str; 16] = [
     "dump1h",
 ];
 
+/// Whether a report row carries the millisecond stamps the tape replay needs.
+///
+/// The one gate deciding which closed trades the tuner can replay at all; the station's tape
+/// catch-up asks the same question when told to keep tape only for such trades.
+///
+/// Args:
+///     buy_ms: The row's `BuyDateMs`, zero when absent or NULL.
+///     close_ms: The row's `CloseDateMs`, zero when absent or NULL.
+///
+/// Returns:
+///     `true` when both stamps are positive.
+pub fn has_ms_stamps(buy_ms: i64, close_ms: i64) -> bool {
+    buy_ms > 0 && close_ms > 0
+}
+
 /// Read the scope's closed trades as deals: the trades the tuner can be run on
 /// ([`is_tunable`]), the rest counted in [`DealsRead::untunable`].
 ///
@@ -171,7 +186,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
         };
         let buy_ms = int(4)?;
         let close_ms = int(5)?;
-        if buy_ms <= 0 || close_ms <= 0 {
+        if !has_ms_stamps(buy_ms, close_ms) {
             out.without_ms += 1;
             continue;
         }
