@@ -395,6 +395,11 @@ impl EntrySpendSql {
             ),
         ]
     }
+
+    /// The counted-row predicate, so a distinct-core query admits the same rows these sums do.
+    pub(super) fn counted_predicate(&self) -> &str {
+        &self.counted
+    }
 }
 
 /// Build the entry-spend SQL for one source.

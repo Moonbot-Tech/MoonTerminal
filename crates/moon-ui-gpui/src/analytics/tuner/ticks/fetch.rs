@@ -239,8 +239,8 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Mark the table's still-missing rows for a running batch — the ones the user is looking
-    /// at go before the rest of their venues' queues. A no-op while no batch runs.
+    /// Prioritize missing rows and recoverable short tails in a running batch: the visible
+    /// rows go before the rest of their venues' queues. A no-op while no batch runs.
     pub(in crate::analytics::tuner) fn ticks_prioritize_visible(&self) {
         if !job::progress().active {
             return;
@@ -249,9 +249,8 @@ impl AnalyticsView {
             return;
         };
         let wanted: HashSet<i64> = data
-            .rows
-            .iter()
-            .filter(|r| matches!(r.tape, TapeStatus::Missing | TapeStatus::Fetching))
+            .fetchable()
+            .chain(data.rows.iter().filter(|r| r.tape == TapeStatus::Fetching))
             .map(|r| r.deal.report_uid)
             .collect();
         let moved = job::prioritize(&wanted);

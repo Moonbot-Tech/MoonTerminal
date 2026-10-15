@@ -12,6 +12,39 @@ use super::{
 };
 use moon_core::market::trade_replay::TickStatus;
 
+/// Checking only the Covered status would endlessly offer a short tail after a final refusal.
+#[test]
+fn a_short_tail_refusal_is_terminal_after_its_retries() {
+    use super::final_tape;
+    for status in [
+        TickStatus::Failed,
+        TickStatus::NoTrades,
+        TickStatus::NoRoute,
+    ] {
+        assert_eq!(
+            final_tape(TapeStatus::Covered, TapeStatus::Missing, status, false),
+            TapeStatus::Refused(status)
+        );
+        assert_eq!(
+            final_tape(TapeStatus::Covered, TapeStatus::Missing, status, true),
+            TapeStatus::Covered
+        );
+        assert_eq!(
+            final_tape(TapeStatus::Covered, TapeStatus::Covered, status, false),
+            TapeStatus::Covered
+        );
+    }
+    assert_eq!(
+        final_tape(
+            TapeStatus::Covered,
+            TapeStatus::Missing,
+            TickStatus::Streaming,
+            false
+        ),
+        TapeStatus::Covered
+    );
+}
+
 /// Only a gate refusal on a still-uncovered row is asked again, with the gate's own number;
 /// a row the tiles covered anyway, and every other status, is final here (a venue's own
 /// refusal gets its one retry in the thread, not in this rule).

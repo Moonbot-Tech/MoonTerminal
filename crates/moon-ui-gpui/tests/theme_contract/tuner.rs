@@ -29,7 +29,7 @@ fn the_changed_column_header_explains_what_moves_its_date() {
     let lastedit = code_only(chain_between(
         header,
         "\"an-hdr-le\"",
-        "})),",
+        "}))",
         "the Changed column header",
     ));
     assert!(
@@ -109,6 +109,61 @@ fn tuning_mode_buttons_keep_their_order_and_baseline() {
         4,
         "exactly four axis buttons — a fifth needs this test updated deliberately, not a \
          copy-pasted line the ordering assertion above would happily accept"
+    );
+}
+
+/// The auto-pick progress line keeps its own row between the card's toolbar and the filter
+/// bar. The layout probe in `list/table/tests.rs` measures that row inside `strat_list_frame`;
+/// this pins WHERE the card draws it.
+///
+/// The plausible edit is tidying it back into the toolbar beside the mode buttons and the
+/// "shown X of Y" counter, where a 1330 px list clipped it to a bare "...".
+#[test]
+fn the_auto_progress_line_sits_under_the_toolbar() {
+    let table = read_src("analytics/tuner/list/table.rs");
+    let card = braced_body(&table, "fn strat_list_card(");
+    let at = |needle: &str| {
+        card.find(needle)
+            .unwrap_or_else(|| panic!("{needle} must be rendered in the strategy card"))
+    };
+    let (counter, progress, frame) = (
+        at("\"analytics.strat.shown\""),
+        at("self.auto_progress_el("),
+        at("strat_list_frame("),
+    );
+    assert!(
+        counter < progress && progress < frame,
+        "the progress line must be built after the toolbar counter and handed to the card frame"
+    );
+    assert_eq!(card.matches("auto_progress_el(").count(), 1);
+    assert!(
+        card.contains("self.auto_progress_el(p, pool, cx)"),
+        "the progress line's M must be the header's pool, the list after every filter but \
+         the auto-pick one — the unfiltered strategy count is a different population"
+    );
+    assert!(
+        !card.contains("all_rows"),
+        "the loaded-list length must not be passed as the progress line's denominator"
+    );
+    let shell = braced_body(&table, "fn strat_list_frame(");
+    let at_shell = |needle: &str| {
+        shell
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} must be rendered in the card frame"))
+    };
+    let (toolbar, line, filter_bar) = (
+        at_shell(".child(toolbar)"),
+        at_shell(".children(progress)"),
+        at_shell(".child(filter_bar)"),
+    );
+    assert!(
+        toolbar < line && line < filter_bar,
+        "the progress line must follow the toolbar and precede the filter bar"
+    );
+    let el = braced_body(&table, "fn auto_progress_el(");
+    assert!(
+        el.contains("auto_progress_row("),
+        "the card must draw the same row the layout probe measures"
     );
 }
 

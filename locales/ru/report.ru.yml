@@ -168,7 +168,9 @@ report.traded_volume_partial: "Объём (частично): %{amount}"
 report.traded_volume_partial_tip: "Торговый объём по восстановленным сделкам: %{amount}. Не учтено ордеров: %{n} (%{currencies})"
 # Names the excluded rows that have no quote ticker of their own to be named by.
 report.traded_volume_unknown_quote: "валюта неизвестна"
-# Realized profit as a percentage of the average order, single-core scope only. %{pct} arrives
+# Realized profit as a percentage of the average order on every real scope. A single named
+# core keeps the tips below verbatim; a wider scope uses the *_cores_tip keys and adds %{cores}
+# beside the average and the counted orders. %{pct} arrives
 # pre-signed from signed_pct, e.g. "+11.6%".
 report.avg_order_pct: "%{pct} от ср. ордера"
 # Some counted rows were excluded from both sums (unknown quote, Funding, non-positive spend).
@@ -183,6 +185,15 @@ report.avg_order_pct_partial_tip: "Прибыль к среднему ордер
 # in that case the partial wording above wins and this key is not reached, because the shortfall is
 # the more important signal.
 report.avg_order_pct_current_tip: "Прибыль к среднему ордеру по текущему курсу: %{pct}. Средний ордер: %{avg}, ордеров учтено: %{n}"
+# Wider than one named core, including an empty filter. %{cores} is report.avg_order_cores_*
+# with the contributing core count. The short text above does not change. Partial still
+# wins over the current-rate sentence.
+report.avg_order_cores_one: "по %{n} ядру"
+report.avg_order_cores_few: "по %{n} ядрам"
+report.avg_order_cores_many: "по %{n} ядрам"
+report.avg_order_pct_cores_tip: "Прибыль к среднему ордеру: %{pct}. Средний ордер: %{avg}, ордеров учтено: %{n}, %{cores}"
+report.avg_order_pct_partial_cores_tip: "Прибыль к среднему ордеру: %{pct}. Средний ордер: %{avg}, ордеров учтено: %{n}, %{cores}; не учтено: %{excluded}"
+report.avg_order_pct_current_cores_tip: "Прибыль к среднему ордеру по текущему курсу: %{pct}. Средний ордер: %{avg}, ордеров учтено: %{n}, %{cores}"
 report.unknown_quote_orders: "валюта неизвестна: %{n}"
 # The unified figure needs no "in USDT" prefix: the ticker is already on the amount.
 report.valuation_total: "%{amount} USDT"

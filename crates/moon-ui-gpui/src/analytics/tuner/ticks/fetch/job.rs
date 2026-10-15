@@ -1095,6 +1095,23 @@ pub(super) fn retry_wait(status: TickStatus, tape: TapeStatus) -> Option<u32> {
     }
 }
 
+/// File an exhausted fetch refusal even when the model pad was already covered.
+/// A continuing walk keeps its current coverage; a fully satisfied row keeps Covered.
+fn final_tape(
+    tape: TapeStatus,
+    pending: TapeStatus,
+    status: TickStatus,
+    retrying: bool,
+) -> TapeStatus {
+    if pending != TapeStatus::Missing || retrying {
+        return tape;
+    }
+    match status {
+        TickStatus::Served | TickStatus::Pending | TickStatus::Streaming => tape,
+        refused => TapeStatus::Refused(refused),
+    }
+}
+
 /// The thread: dispatches one row per free exchange key onto its own walk, waits included.
 /// It never walks itself, so a venue's three-minute walk holds nobody else's turn.
 fn run(job: &'static Job) {
@@ -1316,13 +1333,20 @@ fn serve_cluster(
             row.window.long_position_ms,
             row.replay_address.cache.as_ref(),
         );
-        let mut wait = retry_wait(status, answer.tape).map(|s| Duration::from_secs(u64::from(s)));
+        // Pad coverage reproduces the fact but does not finish a requested short-tail refill.
+        // Keep the existing retry/continuation budget until that tail reaches the sample floor.
+        let pending_tape = if answer.reproduced() && !super::super::tail::holds(answer.held) {
+            TapeStatus::Missing
+        } else {
+            answer.tape
+        };
+        let mut wait = retry_wait(status, pending_tape).map(|s| Duration::from_secs(u64::from(s)));
         // Back to the end of the venue's turn, for the next walk to continue from where the
         // tiles end — see [`continues`]; the ceiling, no gain, or any other word is final.
         let continue_walk = wait.is_none()
             && continues(
                 status,
-                answer.tape,
+                pending_tape,
                 walk_short,
                 covered_ms,
                 row.covered_ms,
@@ -1336,21 +1360,19 @@ fn serve_cluster(
         // Once more, after the wait the gate will name for the rows behind it; the second
         // time is final.
         if wait.is_none()
-            && answer.tape == TapeStatus::Missing
+            && pending_tape == TapeStatus::Missing
             && status == TickStatus::Failed
             && !row.retried
         {
             row.retried = true;
             wait = Some(VENUE_REFUSAL_WAIT);
         }
-        if answer.tape == TapeStatus::Missing && wait.is_none() && !continue_walk {
-            answer.tape = match status {
-                TickStatus::Served | TickStatus::Pending | TickStatus::Streaming => {
-                    TapeStatus::Missing
-                }
-                refused => TapeStatus::Refused(refused),
-            };
-        }
+        answer.tape = final_tape(
+            answer.tape,
+            pending_tape,
+            status,
+            wait.is_some() || continue_walk,
+        );
         let replayed_ms = replayed_at.elapsed().as_millis();
         let mut outcome_text = match (wait, continue_walk) {
             (Some(wait), _) => format!("retry in {} s", wait.as_secs()),

@@ -103,7 +103,7 @@ pub(super) fn replay(
 /// open a deal the strategies as they stand close ([`Replayed::closed_all`]).
 ///
 /// Args:
-///     deals: The sample, cut at its horizon.
+///     deals: The sample, each tape limited to its deal's held trail.
 ///     bases: The sample's bases ([`Bases::of`] over `deals`), kept by the search as they are.
 ///     params: The search's parameters: the held edits, the defaults, the kind, the model.
 ///     deps: The search's completion ([`super::deps::dependents_of`]) over `bases`.

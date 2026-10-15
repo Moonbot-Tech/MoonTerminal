@@ -71,6 +71,7 @@ fn counts() -> CoinCounts {
     CoinCounts {
         all: 412,
         black: 3,
+        black_traded: 2,
         white: 1,
         changed: 2,
         hidden: 37,
@@ -226,7 +227,7 @@ impl Render for CoinsLayoutProbe {
         let face = self.face;
         let pieces: Vec<AnyElement> = vec![
             filter_bar_el(
-                &FilterBarModel::new(&s, counts()),
+                &FilterBarModel::new(&s, counts(), &[]),
                 &self.search,
                 &self.min_trades,
                 &bar_acts,
@@ -330,7 +331,7 @@ fn needs(cx: &gpui::App, face: usize) -> Vec<Need> {
         out.push(caption(cx, "tun-copy-c", &t!("analytics.tuner.copy_btn")));
         out.push(caption(cx, "tun-save-c", &t!("analytics.tuner.save_btn")));
     }
-    for c in FilterBarModel::new(&state(), counts()).chips {
+    for c in FilterBarModel::new(&state(), counts(), &[]).chips {
         out.push(caption(cx, c.id, &c.label));
     }
     let auto: &[(&str, &str)] = match face {
@@ -391,7 +392,7 @@ fn no_coin_text_is_a_raw_key() {
             language.code()
         );
         let _locale = crate::test_locale::force(language.code());
-        let bar = FilterBarModel::new(&state(), counts());
+        let bar = FilterBarModel::new(&state(), counts(), &[]);
         let mut drawn: Vec<String> = bar.chips.iter().map(|c| c.label.clone()).collect();
         drawn.push(bar.caption.clone());
         for m in [

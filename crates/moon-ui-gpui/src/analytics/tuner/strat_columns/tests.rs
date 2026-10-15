@@ -2,10 +2,10 @@ use super::super::columns::{
     COL_AVG_ORDER, COL_PROFIT, COL_PROFIT_PCT, COL_TRADES, COL_WINRATE, MetricCol,
 };
 use super::{
-    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, KIND_MIN_W, LASTEDIT_MIN_W,
-    METRIC_COLS, STRAT_COLS_ALL, STRAT_COLS_DEFAULT, STRAT_COLS_DEFAULT_COINS,
+    AUTO_MIN_W, COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, KIND_MIN_W,
+    LASTEDIT_MIN_W, METRIC_COLS, STRAT_COLS_ALL, STRAT_COLS_DEFAULT, STRAT_COLS_DEFAULT_COINS,
     STRAT_COLS_V3_ADDITIONS, STRAT_MIN_PANEL_W, STRAT_NAME_MIN_W, metric_bit,
-    restore_strat_columns,
+    restore_strat_columns, restore_without_auto,
 };
 use moon_core::config::layout::StratColsByMode;
 
@@ -26,6 +26,9 @@ fn fixed_extras(mask: u16) -> f32 {
     }
     if mask & COL_BIT_LASTEDIT != 0 {
         w += LASTEDIT_MIN_W + 8.0;
+    }
+    if mask & COL_BIT_AUTO != 0 {
+        w += AUTO_MIN_W + 8.0;
     }
     w
 }
@@ -107,7 +110,7 @@ fn legacy_masks_gain_new_metrics_without_reinterpreting_old_bits() {
         time: COL_BIT_CORE,
         ticks: None,
     };
-    let restored = restore_strat_columns(None, Some(previous), None);
+    let restored = restore_without_auto(None, Some(previous), None);
 
     assert_eq!(
         restored.filter,
@@ -116,7 +119,7 @@ fn legacy_masks_gain_new_metrics_without_reinterpreting_old_bits() {
     assert_eq!(restored.coins, STRAT_COLS_V3_ADDITIONS);
     assert_eq!(restored.time, COL_BIT_CORE | STRAT_COLS_V3_ADDITIONS);
     assert_eq!(COL_BIT_LASTEDIT, 1 << 11, "historical bit remains stable");
-    let hidden = restore_strat_columns(Some(StratColsByMode::default()), Some(previous), None);
+    let hidden = restore_without_auto(Some(StratColsByMode::default()), Some(previous), None);
     assert_eq!(hidden.filter, 0, "current masks preserve a deliberate hide");
 }
 
@@ -131,7 +134,7 @@ fn a_saved_key_without_the_ticks_slot_takes_the_axis_default() {
         time: 0,
         ticks: None,
     };
-    let restored = restore_strat_columns(Some(before_ticks), None, None);
+    let restored = restore_strat_columns(Some(before_ticks), None, None, None);
     assert_eq!(restored.filter, COL_BIT_KIND);
     assert_eq!(restored.coins, 0);
     assert_eq!(
@@ -144,9 +147,49 @@ fn a_saved_key_without_the_ticks_slot_takes_the_axis_default() {
             ..before_ticks
         };
         assert_eq!(
-            restore_strat_columns(Some(set), None, None).ticks,
+            restore_strat_columns(Some(set), None, None, None).ticks,
             Some(saved),
             "a saved choice is kept, an all-hidden one included"
         );
     }
+}
+
+/// A column set saved before the Auto column existed must still show it once, on every axis;
+/// a set saved after it keeps a deliberate hide. Dropping the migration hides the column from
+/// every user who ever touched the column selector.
+#[test]
+fn the_auto_column_is_migrated_in_once() {
+    let saved = StratColsByMode {
+        filter: COL_BIT_KIND,
+        coins: 0,
+        time: COL_BIT_CORE,
+        ticks: Some(COL_BIT_KIND),
+    };
+    let restored = restore_strat_columns(None, Some(saved), None, None);
+    assert_eq!(restored.filter, COL_BIT_KIND | COL_BIT_AUTO);
+    assert_eq!(restored.coins, COL_BIT_AUTO);
+    assert_eq!(restored.time, COL_BIT_CORE | COL_BIT_AUTO);
+    assert_eq!(restored.ticks, Some(COL_BIT_KIND | COL_BIT_AUTO));
+    let fresh = restore_strat_columns(None, None, None, None);
+    assert_ne!(
+        fresh.coins & COL_BIT_AUTO,
+        0,
+        "the By-coin default shows Auto"
+    );
+    assert_ne!(
+        fresh.filter & COL_BIT_AUTO,
+        0,
+        "the filter default shows Auto"
+    );
+    let hidden = restore_strat_columns(Some(saved), Some(saved), None, None);
+    assert_eq!(
+        hidden.filter & COL_BIT_AUTO,
+        0,
+        "a hide saved after the column is kept"
+    );
+    assert_eq!(
+        COL_BIT_AUTO & !STRAT_COLS_ALL,
+        0,
+        "the full mask includes Auto"
+    );
 }

@@ -124,13 +124,17 @@ impl AnalyticsView {
                 };
                 let report =
                     moon_core::db::tuner::coin_tuner_data(&q, &plan.variants, &picked_q, &picked);
+                // The headings count the listed coins THESE strategies traded, read off the
+                // per-coin aggregates this same pass produced.
+                let (bl_n, wl_n, auto_n) =
+                    plan.traded_reach(report.stats.as_ref().ok().map(Vec::as_slice));
                 (
                     report.stats,
                     report.kpi,
                     lists,
-                    plan.bl,
-                    plan.wl,
-                    plan.auto,
+                    bl_n,
+                    wl_n,
+                    auto_n,
                     entries,
                     report.picked_strategies,
                 )
@@ -345,7 +349,8 @@ impl AnalyticsView {
             return;
         }
         let plan = self.coins.plan(&universe);
-        let (bl_n, wl_n, auto_n) = (plan.bl, plan.wl, plan.auto);
+        let (bl_n, wl_n, auto_n) =
+            plan.traded_reach(self.coins.stats.data().map(|stats| stats.as_slice()));
         let variants = plan.variants;
         self.spawn_latest_db(
             &[crate::analytics::bg::ReadLane::CoinKpi],

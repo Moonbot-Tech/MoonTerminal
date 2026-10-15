@@ -299,6 +299,8 @@ pub struct AnalyticsView {
     pub(super) strat_active_only: bool,
     /// Show only strategies that name coins in a list (blacklist / whitelist), or all.
     pub(in crate::analytics) strat_lists: tuner::StratListFilter,
+    /// The batch auto-pick behind the list's "Auto" column and filter.
+    pub(in crate::analytics) auto_picks: tuner::AutoPicks,
     /// Lazily-created search input backing `strat_search`.
     pub(super) strat_search_input: Option<Entity<MoonInputState>>,
     /// List sort: `(column key, descending)`. None → the default profit-descending order.

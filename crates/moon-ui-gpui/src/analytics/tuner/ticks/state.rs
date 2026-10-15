@@ -75,12 +75,45 @@ pub(in crate::analytics::tuner) struct DealRow {
     /// What the terminal HOLDS of the window, as `(lead_ms, trail_ms)`: how far before the
     /// entry and past the exit the held coverage reaches, clipped to what the window asks for
     /// (the setting's margin, floored for the model). `None` until the tape stage answered, or
-    /// when it holds nothing. The table's "tape" column; the exit horizon of the sample is the
-    /// shortest trail among the replayable rows.
+    /// when it holds nothing. The table's "tape" column; each replay uses this row's own trail.
     pub(in crate::analytics::tuner) held: Option<(i64, i64)>,
 }
 
 impl DealRow {
+    /// Cancel a progress mark without losing the model coverage a short-tail refill started with.
+    fn unmark_fetching(&mut self) {
+        if self.tape == TapeStatus::Fetching {
+            self.tape = if self.verdict.is_some() {
+                TapeStatus::Covered
+            } else {
+                TapeStatus::Missing
+            };
+        }
+    }
+
+    /// Offer missing tape as before, and short reproduced tails only while a source can fill them.
+    pub(in crate::analytics::tuner) fn fetchable_at(&self, now_ms: i64, min_tail_s: u32) -> bool {
+        use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
+        let Some(address) = &self.address else {
+            return false;
+        };
+        if self.tape == TapeStatus::Missing {
+            return true;
+        }
+        let trail_ms = self.held.map_or(0, |(_, trail)| trail.max(0));
+        self.reproduced()
+            && trail_ms < i64::from(min_tail_s) * 1_000
+            && matches!(
+                fetchable(
+                    address.venue,
+                    &address.market,
+                    self.deal.close_ms.saturating_add(trail_ms),
+                    now_ms,
+                ),
+                Fetchable::Rest | Fetchable::Archive
+            )
+    }
+
     /// Whether the variants and the search run on this row: it is [`Self::reproduced`], holds
     /// the shortest tail past the close (`tail`) and has no hole between the buy and the close
     /// (`Deal::gap`). The table shows every row; this is the sample.
@@ -112,8 +145,7 @@ impl DealRow {
     /// Every fold of a replay answer goes through here: the variants replay the STORED row
     /// (`prepared_deals`), so a take lifted to the archive's pre-spike ask in the verdict but
     /// read off the tape in the variants puts the two on different levels, and a row folded
-    /// without its held coverage reads a trail of 0 and clips every variant tape at its close
-    /// (`common_horizon_ms` is the shortest trail of the sample).
+    /// without its held coverage reads a trail of 0 and clips that row's variant tape at its close.
     pub(in crate::analytics::tuner) fn take_replay(&mut self, answer: DealRow) {
         self.tape = answer.tape;
         self.verdict = answer.verdict;
@@ -161,6 +193,8 @@ pub(in crate::analytics::tuner) enum NowValue {
 /// The loaded picture of the axis for one scope.
 #[derive(Clone, Debug, Default)]
 pub(in crate::analytics::tuner) struct TicksData {
+    /// All closed report-scope rows, before replay eligibility gates, for sample-bias context.
+    pub(in crate::analytics::tuner) all: VarStats,
     /// Chronological by close, as `read_deals` orders them.
     pub(in crate::analytics::tuner) rows: Vec<DealRow>,
     /// Scope rows without millisecond stamps — in the Fact column, not in the table.
@@ -231,21 +265,23 @@ impl TicksData {
             .count()
     }
 
-    /// The exit horizon of the replayable sample, in milliseconds — the shortest HELD trail
-    /// past the close among the rows the variants and the search replay, the same rule as
-    /// `search::common_horizon_ms` over the same rows (`prepared_deals` hands it each row's
-    /// `held` trail), or `None` with nothing to replay.
-    pub(in crate::analytics::tuner) fn exit_horizon_ms(&self) -> Option<i64> {
-        self.replayable()
-            .map(|r| r.held.map(|(_, trail)| trail.max(0)).unwrap_or(0))
-            .min()
+    /// Missing rows and reproduced short tails that REST or an archive can still extend.
+    pub(in crate::analytics::tuner) fn fetchable(&self) -> impl Iterator<Item = &DealRow> {
+        self.fetchable_at(
+            chrono::Utc::now().timestamp_millis(),
+            super::tail::effective_s(),
+        )
     }
 
-    /// Rows a fetch could still fill: missing, with an address, not already asked.
-    pub(in crate::analytics::tuner) fn fetchable(&self) -> impl Iterator<Item = &DealRow> {
+    /// Resolve one consistent clock and tail floor for the whole offered population.
+    pub(in crate::analytics::tuner) fn fetchable_at(
+        &self,
+        now_ms: i64,
+        min_tail_s: u32,
+    ) -> impl Iterator<Item = &DealRow> {
         self.rows
             .iter()
-            .filter(|r| r.tape == TapeStatus::Missing && r.address.is_some())
+            .filter(move |r| r.fetchable_at(now_ms, min_tail_s))
     }
 
     /// Rows fit for the search ([`DealRow::fit`]), tape in memory or not.
@@ -339,9 +375,9 @@ impl TicksData {
 
 /// One of the fetch job's words on a row ([`TicksState::edit_rows`]).
 pub(in crate::analytics::tuner) enum RowEdit {
-    /// A walk went out for the row: a missing row reads "fetching".
+    /// A walk went out for missing tape or a short tail: the row reads "fetching".
     MarkFetching,
-    /// The walk was stopped: a fetching row reads "missing" again.
+    /// The walk was stopped: restore any pad coverage the refill started with.
     UnmarkFetching,
     /// The row's replay after the walk.
     Replay(Box<DealRow>),
@@ -533,15 +569,6 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) schema_reload: Option<u64>,
     /// The grid's sections the user opened; every section starts folded (`grid.rs`).
     pub(in crate::analytics::tuner) open_sections: HashSet<ParamSection>,
-    /// What one whole replay of a search costs (`search::full_replays`), with what it was measured
-    /// under — the time the estimate under the grid prints (`estimate.rs`). Measured when what it
-    /// is measured under changes, and taken again from every finished search.
-    pub(in crate::analytics::tuner) point_cost:
-        Option<(super::estimate::CostKey, std::time::Duration)>,
-    /// What the measurement in flight is measured under, so a paint does not start another.
-    pub(in crate::analytics::tuner) cost_pending: Option<super::estimate::CostKey>,
-    /// The pending measurement of `point_cost`; dropping it cancels it.
-    pub(in crate::analytics::tuner) cost_task: Option<gpui::Task<()>>,
 }
 
 impl Default for TicksState {
@@ -606,9 +633,6 @@ impl Default for TicksState {
             keys_sig: None,
             schema_reload: None,
             open_sections: HashSet::new(),
-            point_cost: None,
-            cost_pending: None,
-            cost_task: None,
         }
     }
 }
@@ -770,9 +794,7 @@ impl TicksState {
         self.plan.clear();
         if let Some(data) = self.data.data_mut() {
             for row in &mut data.rows {
-                if row.tape == TapeStatus::Fetching {
-                    row.tape = TapeStatus::Missing;
-                }
+                row.unmark_fetching();
             }
         }
     }
@@ -894,13 +916,14 @@ impl TicksState {
             };
             touched = true;
             match edit {
-                RowEdit::MarkFetching if row.tape == TapeStatus::Missing => {
+                RowEdit::MarkFetching
+                    if row.tape == TapeStatus::Missing
+                        || (row.reproduced() && !super::tail::holds(row.held)) =>
+                {
                     row.tape = TapeStatus::Fetching;
                 }
-                RowEdit::UnmarkFetching if row.tape == TapeStatus::Fetching => {
-                    row.tape = TapeStatus::Missing;
-                }
-                RowEdit::MarkFetching | RowEdit::UnmarkFetching => {}
+                RowEdit::UnmarkFetching => row.unmark_fetching(),
+                RowEdit::MarkFetching => {}
                 RowEdit::Replay(answer) => {
                     row.take_replay(*answer);
                     replayed = true;
@@ -950,8 +973,17 @@ impl TicksState {
             // Coverage only grows between reloads, so the fresher word is the covered one —
             // and a refusal the walk itself gave outranks a plain "missing" read from before
             // it, or the row would read as fetchable again and be queued once more.
+            // A short-tail refusal also outranks an older Covered answer until tape grows.
             let stale = match (slot.tape, answer.tape) {
+                (TapeStatus::Covered, TapeStatus::Covered) => {
+                    slot.held.map(|(_, trail)| trail).unwrap_or(0)
+                        > answer.held.map(|(_, trail)| trail).unwrap_or(0)
+                }
                 (TapeStatus::Covered, other) => other != TapeStatus::Covered,
+                (TapeStatus::Refused(_), TapeStatus::Covered) => {
+                    answer.held.map(|(_, trail)| trail).unwrap_or(0)
+                        <= slot.held.map(|(_, trail)| trail).unwrap_or(0)
+                }
                 (TapeStatus::Refused(_), TapeStatus::Missing) => true,
                 _ => false,
             };
@@ -998,8 +1030,8 @@ impl TicksState {
 impl TicksData {
     /// A row as the variants and the search replay it — its tape, its archived entry line, its
     /// held trail, its strategy's current values; `None` without a tape in memory. The tape
-    /// stays packed and uncut: the caller unpacks off the UI thread and cuts the sample at its
-    /// one horizon ([`prepare_sample`](super::tape::prepare_sample)).
+    /// stays packed and uncut: the caller unpacks off the UI thread and limits each deal to its
+    /// own held trail ([`prepare_sample`](super::tape::prepare_sample)).
     pub(in crate::analytics::tuner) fn prepared(&self, row: &DealRow) -> Option<PendingDeal> {
         Some(PendingDeal {
             deal: row.deal.clone(),

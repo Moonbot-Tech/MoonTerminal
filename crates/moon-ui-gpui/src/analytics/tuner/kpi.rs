@@ -87,6 +87,8 @@ pub(super) enum KpiRows {
 #[derive(Default)]
 pub(super) struct KpiOpts {
     pub(super) title: Option<(String, String)>,
+    /// Sample-selection warning, visible even when the matrix is collapsed.
+    pub(super) sample_note: Option<String>,
     pub(super) rows: KpiRows,
     pub(super) unclosed: Option<(usize, f64)>,
 }
@@ -441,6 +443,7 @@ pub(super) fn kpi_matrix_card_with(
     match opts {
         KpiOpts {
             title: None,
+            sample_note: None,
             rows: KpiRows::Shared,
             unclosed: None,
         } => kpi_matrix_body(
@@ -726,7 +729,26 @@ pub(super) fn kpi_matrix_body_with(
     } else {
         rows.len()
     };
-    let mut body = v_flex().w_full().child(head);
+    let mut body = v_flex().w_full();
+    if let Some(note) = opts.sample_note {
+        body = body.child(
+            div()
+                .debug_selector(|| "kpi-sample-note".to_string())
+                .w_full()
+                .min_w_0()
+                .px(design::ui_px(cx, inset))
+                .pb(design::ui_px(cx, 6.0))
+                .font_family(design::ui_font())
+                .text_size(design::t_caption(cx))
+                .text_color(moon(p.amber))
+                .child(
+                    div()
+                        .debug_selector(|| "kpi-sample-note-content".to_string())
+                        .child(note),
+                ),
+        );
+    }
+    body = body.child(head);
     for (row_index, (label, kind)) in rows.into_iter().take(shown).enumerate() {
         let plain = matches!(opts.rows, KpiRows::Plain);
         let label_width = design::ui_caption_text_width(cx, &label, 400.0);

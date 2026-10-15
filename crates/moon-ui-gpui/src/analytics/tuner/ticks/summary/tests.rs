@@ -9,6 +9,32 @@ use crate::analytics::tuner::shared::{InlineWrite, SaveAuthority, SaveTarget};
 use moon_core::db::metrics::Tally;
 use moon_core::db::tuner::ticks::search::{MIN_HOLDOUT, SearchResult};
 
+/// An expired startup forecast must not pin hundreds of remaining restarts to one second.
+#[test]
+fn remaining_time_tracks_observed_progress_after_the_startup_estimate_expires() {
+    use super::remaining_time;
+    let elapsed = Duration::from_secs(229);
+    assert_eq!(
+        remaining_time(229, 500, elapsed, Some(Duration::from_secs(120))),
+        Some(Duration::from_secs(271))
+    );
+    assert_eq!(
+        remaining_time(0, 500, elapsed, Some(Duration::from_secs(120))),
+        None
+    );
+    assert_eq!(
+        remaining_time(
+            0,
+            500,
+            Duration::from_secs(20),
+            Some(Duration::from_secs(120))
+        ),
+        Some(Duration::from_secs(100))
+    );
+    assert_eq!(remaining_time(500, 500, elapsed, None), None);
+    assert_eq!(remaining_time(501, 500, elapsed, None), None);
+}
+
 /// Set synthetic slice figures without reaching the core tally's private cumulative peak.
 fn tally(n: i64, profit: f64) -> Tally {
     let mut tally = Tally::default();
@@ -135,9 +161,9 @@ fn informational_range_note_does_not_refuse_a_successful_search() {
     );
 }
 
-/// Reusing the full estimate instead of subtracting elapsed time would overstate time left.
+/// An expired forecast without measured restart throughput must disappear instead of claiming zero.
 #[test]
-fn running_time_left_uses_the_launched_estimate_and_saturates() {
+fn running_time_left_is_unknown_when_the_unmeasured_forecast_expires() {
     let mut state = TicksState::default();
     let started = std::time::Instant::now() - Duration::from_secs(8);
     state.sugg = super::super::state::SuggState::Running {
@@ -153,7 +179,7 @@ fn running_time_left_uses_the_launched_estimate_and_saturates() {
         Verdict::Running {
             done: 0,
             total: 13,
-            left: Some(Duration::ZERO),
+            left: None,
             points: 0,
         }
     );

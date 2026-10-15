@@ -72,6 +72,22 @@ fn stats() -> Vec<VarStats> {
     ]
 }
 
+/// Exercise the actual bias decision and translations with a material selection difference.
+fn sample_bias() -> Option<String> {
+    super::super::sample::bias_note(
+        &VarStats {
+            n: 73,
+            pf: 0.42,
+            ..Default::default()
+        },
+        &VarStats {
+            n: 405,
+            pf: 0.90,
+            ..Default::default()
+        },
+    )
+}
+
 /// Cover each user-visible advice face, including a consent and the held-back open estimate.
 fn model(face: usize) -> SummaryModel {
     let verdict = match face {
@@ -316,8 +332,9 @@ impl Render for Probe {
                         KpiOpts {
                             title: Some((
                                 t!("analytics.ticks.kpi.title").to_string(),
-                                super::super::kpi_over_text(73),
+                                super::super::sample::caption(73, 405),
                             )),
+                            sample_note: sample_bias(),
                             rows: KpiRows::Plain,
                             unclosed: Some((1_234_567, 987_654.321)),
                         },
@@ -627,12 +644,21 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                                 "prose clipped vertically ({at}): {text}"
                             );
                         }
+                        let note = visual.debug_bounds("kpi-sample-note").expect("bias note");
+                        let content = visual
+                            .debug_bounds("kpi-sample-note-content")
+                            .expect("bias content");
+                        inside(note, "bias note");
+                        inside(content, "bias content");
+                        assert!(
+                            content.top() >= note.top() && content.bottom() <= note.bottom(),
+                            "bias note clipped vertically ({at})"
+                        );
+                        let caption = visual
+                            .debug_bounds("an-tuner-card-caption")
+                            .expect("sample caption");
+                        inside(caption, "sample caption");
                         let mut needs: Vec<(String, String, bool)> = vec![
-                            (
-                                "an-tuner-card-caption".into(),
-                                super::super::kpi_over_text(73),
-                                false,
-                            ),
                             (
                                 "tun-suggest-one-x-box".into(),
                                 t!("analytics.ticks.pick.one").to_string(),

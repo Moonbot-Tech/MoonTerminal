@@ -12,7 +12,7 @@ use rust_i18n::t;
 use std::rc::Rc;
 
 use super::super::shared::InlineWrite;
-use super::estimate::duration_text;
+use super::estimate::{duration_text, remaining_time};
 use super::sections::GridSection;
 use super::state::{NowValue, SuggState, TicksState};
 use crate::analytics::AnalyticsView;
@@ -290,7 +290,7 @@ impl SummaryModel {
             } => Some((
                 handle.completed(),
                 *total,
-                estimate.map(|d| d.saturating_sub(started.elapsed())),
+                remaining_time(handle.completed(), *total, started.elapsed(), *estimate),
                 handle.points(),
             )),
         };

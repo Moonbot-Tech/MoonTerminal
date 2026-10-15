@@ -1,19 +1,7 @@
-//! What "Search all" will cost before it runs (LinKvo, 2026-09-25): the points it scores and,
-//! at what one point costs on this sample, roughly how long — inside the search button,
-//! and a question before a run longer than [`LONG_SEARCH`]. A search of both groups nests a whole
-//! exit search under the entry points it scores — every one, or the few the screen keeps
-//! (`moon_core::db::tuner::ticks::search`) — and its count is the product: minutes to hours where
-//! one group takes seconds.
-//!
-//! The count is the core's (`search_size`). The cost of a whole replay is measured, never assumed
-//! — a point on the entry fills of a point before costs the exit's share of it — and kept with
-//! what it was measured under ([`CostKey`]: the rows, the training share, the model,
-//! the restarts side by side): replays of the training slice run side by side as a search runs
-//! its restarts (`point_cost`), measured again whenever one of those moves, and taken from every
-//! finished search — its time over the whole replays its points come to (`full_replays`), the
-//! same quantity.
+//! Search-button timing and long-run confirmation, calibrated by actual restart throughput.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use gpui::*;
@@ -22,37 +10,96 @@ use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
 use super::model_cfg;
-use super::tape::prepare_sample;
 use super::variants::{passes_of, restarts_of};
 use crate::design;
 use crate::design::moon;
 use moon_core::db::tuner::ticks::params::ParamGroup;
-use moon_core::db::tuner::ticks::search::{
-    SearchParams, SearchSize, full_replays, point_cost, search_size,
-};
+use moon_core::db::tuner::ticks::search::{SearchParams, SearchSize, full_replays, search_size};
 use moon_core::db::tuner::ticks::{ModelSettings, TICK_PARAMS};
 
 /// A search estimated to run longer than this asks before it starts.
 pub(super) const LONG_SEARCH: Duration = Duration::from_secs(10 * 60);
 
-/// How long the sample must stand still before its point cost is measured: rows join it one by
-/// one while their tape is read, and each would start a measurement of its own.
-const COST_DEBOUNCE: Duration = Duration::from_millis(600);
-
-/// What a point cost is measured under: a change of any of them prices the point again.
+/// Inputs that normalize a measured restart to another sample and search scope.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::analytics::tuner) struct CostKey {
-    /// The load the rows came from (`TicksState::seq`): another scope of as many rows is
-    /// another sample.
-    pub load: u64,
-    /// Replayable rows of the sample.
-    pub n: usize,
-    /// The training share, per cent: a point replays that slice.
-    pub train_pct: usize,
+    /// Training deals multiplied by estimated replay work per restart.
+    work: f64,
+    /// Conservative startup seconds per restart, before any observation exists.
+    fallback: f64,
     /// The model's settings every replay runs under.
     pub model: ModelSettings,
     /// Restarts run side by side ([`side_by_side`]).
     pub parallel: usize,
+}
+
+/// Last running or finished search in this process, retained across panel and sample reloads.
+static LAST_THROUGHPUT: Mutex<Option<(CostKey, Duration)>> = Mutex::new(None);
+
+impl CostKey {
+    /// Normalize scope work without relying on a guessed cost of a baseline replay.
+    fn new(
+        n: usize,
+        train_pct: usize,
+        starts: usize,
+        size: &SearchSize,
+        model: ModelSettings,
+    ) -> Self {
+        let starts = starts.max(1) as f64;
+        Self {
+            work: n as f64 * train_pct as f64 / 100.0
+                * full_replays(size.points, size.points - size.fresh)
+                / starts,
+            // The reported 293-deal, 500-start run took 13 minutes under CPU contention.
+            // Round up to 15 minutes and scale nested searches by their entry work as well.
+            fallback: 900.0 / 500.0 * n as f64 / 293.0
+                * (size.entry_fields + size.exit_fields).max(27) as f64
+                / 27.0
+                * (size.entry_points / starts).max(1.0),
+            model,
+            parallel: side_by_side(starts as usize),
+        }
+    }
+
+    /// Estimate a new run from measured seconds per restart, adjusting sample and scope work.
+    fn estimate(self, starts: usize, observed: Option<(Self, Duration)>) -> Duration {
+        let seconds = observed
+            .filter(|(key, _)| key.model == self.model && key.work > 0.0)
+            .map_or(self.fallback, |(key, per_start)| {
+                per_start.as_secs_f64() * self.work / key.work * key.parallel as f64
+                    / self.parallel as f64
+            });
+        Duration::from_secs_f64((seconds * starts as f64).clamp(0.0, u32::MAX as f64))
+    }
+}
+
+/// Shared restart-throughput measurement used both by startup prediction and running ETA.
+pub(super) fn observed_start_cost(done: usize, elapsed: Duration) -> Option<Duration> {
+    (done > 0 && !elapsed.is_zero()).then(|| elapsed.div_f64(done as f64))
+}
+
+/// Publish only completed restart work, using the same elapsed clock as the running ETA.
+pub(super) fn take_search_cost(key: Option<CostKey>, done: usize, elapsed: Duration) {
+    if let (Some(key), Some(cost)) = (key, observed_start_cost(done, elapsed)) {
+        *LAST_THROUGHPUT.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, cost));
+    }
+}
+
+/// Update remaining time using the same measured restart cost as the search button.
+pub(super) fn remaining_time(
+    done: usize,
+    total: usize,
+    elapsed: Duration,
+    estimate: Option<Duration>,
+) -> Option<Duration> {
+    let remaining = total.checked_sub(done).filter(|&n| n > 0)?;
+    if let Some(cost) = observed_start_cost(done, elapsed) {
+        Some(cost.mul_f64(remaining as f64))
+    } else {
+        estimate
+            .and_then(|d| d.checked_sub(elapsed))
+            .filter(|d| !d.is_zero())
+    }
 }
 
 /// How many of a search's restarts run side by side: the machine's threads bound them.
@@ -148,28 +195,21 @@ impl AnalyticsView {
         }))
     }
 
-    /// What a point cost measured now would be measured under — the rows, the training share,
-    /// the model's settings and the restarts run side by side — or `None` before a sample.
-    pub(super) fn ticks_cost_key(&self) -> Option<CostKey> {
+    /// Capture the launched workload so later UI edits cannot re-label its throughput.
+    pub(super) fn ticks_cost_key(&self, size: &SearchSize, starts: usize) -> Option<CostKey> {
         let n = self.ticks.data.data()?.replayable().count();
-        (n > 0).then(|| CostKey {
-            load: self.ticks.seq,
-            n,
-            train_pct: self.ticks.train_pct,
-            model: model_cfg::current(),
-            parallel: side_by_side(restarts_of(&self.ticks.iters)),
-        })
+        (n > 0).then(|| CostKey::new(n, self.ticks.train_pct, starts, size, model_cfg::current()))
     }
 
-    /// Roughly how long a search of `size` runs, when a point's cost was measured under the
-    /// settings as they stand.
+    /// Price a run from the last process observation, or a conservative first-run default.
     pub(super) fn ticks_search_time(&self, size: &SearchSize) -> Option<Duration> {
-        let key = self.ticks_cost_key()?;
-        let (at, cost) = self.ticks.point_cost?;
-        (at == key).then(|| size.time(cost))
+        let starts = restarts_of(&self.ticks.iters);
+        let key = self.ticks_cost_key(size, starts)?;
+        let observed = *LAST_THROUGHPUT.lock().unwrap_or_else(|e| e.into_inner());
+        Some(key.estimate(starts, observed))
     }
 
-    /// Include time only after a point cost measured under the current settings exists.
+    /// Format the shared throughput prediction for the button using the existing rounding.
     pub(super) fn ticks_estimate_time_text(&self) -> Option<String> {
         self.ticks_search_time(&self.ticks_search_size(None)?)
             .map(duration_text)
@@ -199,112 +239,8 @@ impl AnalyticsView {
         Some(format!("{text}\n\n{}", t!("analytics.ticks.est_tip")))
     }
 
-    /// Measure what a point costs under the settings as they stand, once they stop moving —
-    /// asked by every paint of the grid, so a change of the rows, the training share, the model
-    /// or the restarts is priced without each of them saying so. A cost already measured or being
-    /// measured under them, a sample still reading its tape, and a running search — which answers
-    /// the cost itself, and would slow the measurement — are left alone.
-    pub(super) fn ticks_measure_cost(&mut self, cx: &mut Context<Self>) {
-        if self.ticks.tape_reading
-            || matches!(self.ticks.sugg, super::state::SuggState::Running { .. })
-        {
-            return;
-        }
-        let Some(key) = self.ticks_cost_key() else {
-            return;
-        };
-        if self.ticks.point_cost.is_some_and(|(at, _)| at == key)
-            || self.ticks.cost_pending == Some(key)
-        {
-            return;
-        }
-        self.ticks.cost_pending = Some(key);
-        self.ticks.cost_task = Some(cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            executor.timer(COST_DEBOUNCE).await;
-            cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| this.run_ticks_cost(key, cx));
-            });
-        }));
-    }
-
-    /// Time the replay of the sample's training slice, off the UI thread. Settings that moved
-    /// meanwhile, or a search started meanwhile — the two would have shared the pool — drop the
-    /// answer; the next paint asks again.
-    fn run_ticks_cost(&mut self, key: CostKey, cx: &mut Context<Self>) {
-        let searching =
-            |this: &Self| matches!(this.ticks.sugg, super::state::SuggState::Running { .. });
-        let kind = self
-            .ticks
-            .data
-            .data()
-            .and_then(|d| d.single_kind().map(String::from));
-        let (Some(kind), false, Some(true)) = (
-            kind,
-            searching(self),
-            self.ticks_cost_key().map(|now| now == key),
-        ) else {
-            self.ticks.cost_pending = None;
-            return;
-        };
-        let pending = self.prepared_deals();
-        let defaults = self.filter_defaults(cx);
-        let train_frac = super::super::filter::state::train_frac(key.train_pct);
-        let seq = self.ticks.sugg_seq;
-        self.spawn_db(
-            false,
-            cx,
-            move || {
-                let deals = prepare_sample(pending);
-                point_cost(
-                    &deals,
-                    &defaults,
-                    &kind,
-                    key.model,
-                    train_frac,
-                    key.parallel,
-                )
-            },
-            move |this, cost, cx| {
-                if this.ticks.cost_pending == Some(key) {
-                    this.ticks.cost_pending = None;
-                }
-                let still = this.ticks_cost_key() == Some(key)
-                    && this.ticks.sugg_seq == seq
-                    && !searching(this);
-                if still && cost > Duration::ZERO {
-                    this.ticks.point_cost = Some((key, cost));
-                }
-                cx.notify();
-            },
-        );
-    }
-
-    /// Take a finished search's time over the points it scored as the point cost under the
-    /// settings it started with: it ran the restarts side by side, as the next search will. A
-    /// search of a few points is left out — the replays it runs besides its points (the sample's
-    /// filter, the base, the holdout) would weigh on the figure.
-    ///
-    /// `reused` of the `scored` points read the entry fills of a point before and cost the exit's
-    /// share of a replay, so the time is spread over the whole replays they come to
-    /// (`search::full_replays`) — the quantity `point_cost` measures, whichever search ran.
-    pub(super) fn ticks_take_search_cost(
-        &mut self,
-        key: Option<CostKey>,
-        elapsed: Duration,
-        scored: usize,
-        reused: usize,
-    ) {
-        /// Points a search must score before its time says what one costs.
-        const MIN_SCORED: usize = 200;
-        let replays = full_replays(scored as f64, reused as f64);
-        if let (Some(key), true) = (key, scored >= MIN_SCORED && replays > 0.0) {
-            self.ticks.point_cost = Some((key, elapsed.div_f64(replays)));
-        }
-    }
-
-    /// Ask before a search estimated past [`LONG_SEARCH`] — or a nested one whose point cost is
-    /// not measured yet — how long it will take; answers whether it asked, the search then waits
+    /// Ask before a search estimated past [`LONG_SEARCH`] — or a nested one without a sample —
+    /// how long it will take; answers whether it asked, the search then waits
     /// for Run.
     pub(super) fn ticks_confirm_long_search(
         &mut self,
@@ -392,7 +328,7 @@ impl AnalyticsView {
     }
 }
 
-/// Include a measured duration once; an unmeasured point never promises a completion time.
+/// Include the predicted duration once when a searchable sample exists.
 pub(super) fn pick_all_label(time: Option<&str>) -> String {
     match time {
         Some(time) => t!("analytics.ticks.pick.all_est", time = time).to_string(),

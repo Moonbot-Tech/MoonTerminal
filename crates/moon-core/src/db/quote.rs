@@ -709,7 +709,8 @@ impl EntrySpend {
     }
 }
 
-/// Realized profit stated as a percentage of the average order over a single-core Report scope.
+/// Realized profit stated as a percentage of the average order over the counted rows of one
+/// Report scope.
 ///
 /// Denominated the same way the head footer figure is: a native currency where [`QuoteBreakdown`]
 /// carries exactly one, or a unified USDT total where the scope is mixed, the head figure is
@@ -978,6 +979,18 @@ pub struct QuoteBreakdown {
     /// Per-quote spend/profit subtotals over the counted rows of this same filter and snapshot,
     /// feeding [`Self::average_order_return`].
     pub entry_spend: EntrySpend,
+    /// Distinct cores that contributed at least one counted entry-spend row.
+    ///
+    /// A counted row is the row [`EntrySpend`] admits: closed, non-Funding, with a positive
+    /// numeric settled spend and a numeric settled profit. The count is a union across physical
+    /// sources, never a sum of per-quote distinct counts, so a core that traded two quotes is one
+    /// core.
+    ///
+    /// The Report read fills this only when the filter's `core_uids` is empty (every core). An
+    /// explicit list leaves it at zero, because the footer names that list's own length and a
+    /// contributing-core count would be a different number. Zero is also what Analytics and any
+    /// hand-built breakdown carry. It is never rendered as a count of zero cores.
+    pub counted_cores: u64,
 }
 
 impl QuoteBreakdown {

@@ -49,6 +49,7 @@ pub(in crate::db) use query::{ProjectionMode as ResolvedProjectionMode, unified_
 pub(in crate::db) use query::{
     attach_strategies, effective_sid_expr, quote_breakdown_on, strategies_attached, unified_from,
 };
+pub(in crate::db) use strategy_meta::read_metadata;
 
 /// Period totals: counters and metrics computed from the trade sequence ordered by
 /// `closedate`, including profit factor, maximum drawdown, streaks, and duration.

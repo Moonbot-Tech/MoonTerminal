@@ -26,7 +26,7 @@ use crate::db::read_fail::read_fail_on;
 
 /// Metadata for one numeric strategy/core identity.
 #[derive(Clone, Debug, Default)]
-pub(super) struct StrategyMetadata {
+pub(in crate::db) struct StrategyMetadata {
     pub(super) name: Option<String>,
     pub(super) alive: i64,
     pub(super) has_head: bool,
@@ -74,6 +74,29 @@ impl StrategyMetadata {
         self.list_count(self.whitelist.as_deref())
     }
 
+    /// The strategy's blacklist and whitelist as folded coin tokens, behind the same live-head
+    /// gate as the two counts, so a batch auto-pick starts from exactly the lists the strategy
+    /// table counts.
+    ///
+    /// Returns:
+    ///     `(black, white)` token sets; both empty for a deleted or headless strategy.
+    pub(in crate::db) fn coin_lists(
+        &self,
+    ) -> (
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    ) {
+        if !self.has_head || self.deleted {
+            return Default::default();
+        }
+        let parse =
+            |list: Option<&str>| list.map(crate::symbol::parse_coin_list).unwrap_or_default();
+        (
+            parse(self.blacklist.as_deref()),
+            parse(self.whitelist.as_deref()),
+        )
+    }
+
     /// Apply the live-head gate both coin-list counts sit behind.
     ///
     /// THE ONE PLACE. Both the Strategies grouping and the Summary stream ask for these counts,
@@ -102,9 +125,9 @@ impl StrategyMetadata {
 
 /// Metadata split at the historical fallback boundary between Summary top rows and groups.
 #[derive(Clone, Debug, Default)]
-pub(super) struct SummaryMetadata {
-    pub(super) heads: HashMap<(i64, i64), StrategyMetadata>,
-    pub(super) groups: Option<HashMap<(i64, i64), StrategyMetadata>>,
+pub(in crate::db) struct SummaryMetadata {
+    pub(in crate::db) heads: HashMap<(i64, i64), StrategyMetadata>,
+    pub(in crate::db) groups: Option<HashMap<(i64, i64), StrategyMetadata>>,
 }
 
 /// Load strategy heads and current versions in bounded batches for requested Analytics pairs.
@@ -115,7 +138,7 @@ pub(super) struct SummaryMetadata {
 ///
 /// Returns:
 ///     Head metadata plus all-or-nothing version-enriched group metadata.
-pub(super) fn read_metadata(
+pub(in crate::db) fn read_metadata(
     conn: &Connection,
     pairs: &HashSet<(i64, i64)>,
 ) -> ReadResult<SummaryMetadata> {

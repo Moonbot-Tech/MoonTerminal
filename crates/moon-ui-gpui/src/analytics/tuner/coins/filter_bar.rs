@@ -48,11 +48,16 @@ impl FilterBarModel {
     /// Args:
     ///     s: Coin state (current view, lists, switch).
     ///     counts: Counts of the searched coin set.
+    ///     black_idle: Blacklist tokens the selected strategies never traded.
     ///
     /// Returns:
     ///     The model; a list chip reads "shown/total" when the list names coins the searched
     ///     set does not cover.
-    pub(in crate::analytics::tuner) fn new(s: &CoinsState, counts: CoinCounts) -> Self {
+    pub(in crate::analytics::tuner) fn new(
+        s: &CoinsState,
+        counts: CoinCounts,
+        black_idle: &[String],
+    ) -> Self {
         let listed = |shown: usize, total: usize| {
             if shown == total {
                 shown.to_string()
@@ -81,9 +86,9 @@ impl FilterBarModel {
                 format!(
                     "{} {}",
                     t!("analytics.coins.chip_in_bl"),
-                    listed(counts.black, s.work.black.len())
+                    black_count(counts.black_traded, s.work.black.len())
                 ),
-                t!("analytics.coins.tip_chip_bl").to_string(),
+                black_tip(black_idle),
             ),
             chip(
                 "an-coin-f-wl",
@@ -244,4 +249,54 @@ pub(in crate::analytics::tuner) fn filter_bar_el(
         .child(controls)
         .child(chips)
         .into_any_element()
+}
+
+/// The blacklist chip's count: the listed coins this strategy's own trades hit, and the list
+/// size after them when the list names more ("5 of 22").
+///
+/// Args:
+///     traded: Listed coins the selected strategies traded in the period.
+///     listed: Coins on the working blacklist.
+///
+/// Returns:
+///     "N" when every listed coin was traded, else "N of M".
+fn black_count(traded: usize, listed: usize) -> String {
+    if traded >= listed {
+        traded.to_string()
+    } else {
+        t!("analytics.coins.n_of_m", n = traded, m = listed).to_string()
+    }
+}
+
+/// The blacklist chip's hover: what the chip shows, plus the listed coins this strategy never
+/// traded (the first few named), which cannot have changed its result.
+///
+/// Args:
+///     black_idle: Blacklist tokens the selected strategies never traded, sorted.
+///
+/// Returns:
+///     The tooltip text.
+fn black_tip(black_idle: &[String]) -> String {
+    let tip = t!("analytics.coins.tip_chip_bl").to_string();
+    if black_idle.is_empty() {
+        return tip;
+    }
+    const NAMED: usize = 12;
+    let mut coins = black_idle
+        .iter()
+        .take(NAMED)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if black_idle.len() > NAMED {
+        coins.push_str(&format!(" +{}", black_idle.len() - NAMED));
+    }
+    format!(
+        "{tip}\n{}",
+        t!(
+            "analytics.coins.tip_bl_idle",
+            n = black_idle.len(),
+            coins = coins
+        )
+    )
 }

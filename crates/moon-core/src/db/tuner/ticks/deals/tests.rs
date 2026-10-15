@@ -52,6 +52,12 @@ fn rows_with_stamps_become_deals_and_the_rest_are_counted() {
         "the kind gate is applied after the kinds resolve, not here"
     );
     assert_eq!(read.deals.len(), 2);
+    assert_eq!(
+        read.all.n, 5,
+        "the full baseline precedes every replay eligibility gate"
+    );
+    // The five percent results are +1, -2, +10, -0.03, +2, including the excluded rows.
+    assert!((read.all.pf - 13.0 / 2.03).abs() < 1e-9);
     // Chronological by the millisecond close: BEN (180 000) before ACE (200 000).
     assert_eq!(read.deals[0].report_uid, 12);
     assert_eq!(read.deals[1].report_uid, 11);

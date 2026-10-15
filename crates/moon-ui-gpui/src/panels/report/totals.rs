@@ -339,55 +339,110 @@ fn open_positions_fact(open: &db::OpenPositions) -> Option<FooterFact> {
     Some(open_fact)
 }
 
-/// Whether the loaded snapshot's own filter names exactly one real core.
+/// How many cores the snapshot's own filter names.
 ///
-/// The predicate is CARDINALITY over `data.filter.core_uids`, deliberately not selector
-/// provenance. An All or Overview selector that happens to resolve to one core in the connected
-/// universe is exactly as honest a scope to average over as an explicit single-core pick: either
-/// way there is one core's order sizes in the sums and no second core to mix them with, so the
-/// figure is correct regardless of how the selector arrived at that one core.
+/// Empty `core_uids` means every core, not zero. The no-match sentinel is a present-empty scope
+/// and is never a count.
+enum CoreScope {
+    /// The filter lists no ids, which [`db::ReportFilter`] defines as every core.
+    All,
+    /// The filter names exactly one real core.
+    Single,
+    /// The filter names this many real cores. Always at least two.
+    Many(usize),
+}
+
+/// Classify the snapshot's core filter for the average-order fact.
+///
+/// Cardinality is the filter list the query ran with, deliberately not selector provenance and
+/// not the displayed page: an All or Overview selector that resolves to one core is the same
+/// scope as an explicit single-core pick, and a paged grid must not under-count the cores the
+/// sums were taken over.
 ///
 /// Args:
 ///     data: Current report snapshot.
 ///
 /// Returns:
-///     Whether the snapshot's own filter names exactly one core, excluding the
-///     [`moon_core::config::NO_MATCH_CORE_UID`] sentinel a preset that hides every core emits.
-fn single_core_scope(data: &ReportData) -> bool {
-    data.filter.core_uids.len() == 1
-        && data.filter.core_uids[0] != moon_core::config::NO_MATCH_CORE_UID
+///     The scope kind, or `None` when the list contains
+///     [`moon_core::config::NO_MATCH_CORE_UID`], the sentinel a preset that hides every core emits.
+fn core_scope(data: &ReportData) -> Option<CoreScope> {
+    let ids = &data.filter.core_uids;
+    if ids.contains(&moon_core::config::NO_MATCH_CORE_UID) {
+        return None;
+    }
+    Some(match ids.len() {
+        0 => CoreScope::All,
+        1 => CoreScope::Single,
+        n => CoreScope::Many(n),
+    })
 }
 
-/// State realized profit as a percentage of the average order over a single-core scope, or
-/// nothing when the scope names more than one core or no ratio exists.
+/// The tooltip clause that names a wider-than-one core scope, beside the average order.
 ///
-/// Denominated exactly as [`db::QuoteBreakdown::average_order_return`] chose, so this fact can
-/// never disagree with the currency the row's own promoted money is stated in. Wording mirrors
-/// [`traded_volume_amount`]'s partial-vs-complete split: an incomplete counted scope takes the
-/// warn tone and the partial wording ahead of the current-rate wording, whatever the valuation
-/// mode, because the shortfall is the more important signal.
+/// An empty filter has no list to measure. `counted_cores` is how many cores contributed a
+/// counted order on that read. Zero means the read did not record one — an explicit filter,
+/// or a hand-built breakdown — and is never rendered as a count of zero.
+///
+/// Args:
+///     scope: Scope kind from [`core_scope`].
+///     counted_cores: [`db::QuoteBreakdown::counted_cores`] of the snapshot.
+///
+/// Returns:
+///     Localized core-count clause, or `None` when the single-core sentence must stay verbatim
+///     or when an empty filter has no recorded count.
+fn cores_clause(scope: CoreScope, counted_cores: u64) -> Option<String> {
+    let n = match scope {
+        CoreScope::Single => return None,
+        CoreScope::Many(n) => n as u64,
+        CoreScope::All if counted_cores > 0 => counted_cores,
+        CoreScope::All => return None,
+    };
+    let key = crate::display_text::plural_key("report.avg_order_cores", n);
+    Some(t!(&key, n = n).to_string())
+}
+
+/// State realized profit as a percentage of the average order, or nothing when the scope is the
+/// no-match sentinel or no ratio exists.
+///
+/// The short text does not change with the core count. A single named core keeps today's tooltip
+/// verbatim. A wider scope, including an empty filter, adds the core count beside the average
+/// order and the counted orders, so a mix of order sizes is visible. An empty filter names how
+/// many cores contributed a counted order. Denominated exactly as
+/// [`db::QuoteBreakdown::average_order_return`] chose, so this fact can never disagree with the
+/// currency the row's own promoted money is stated in. Wording mirrors [`traded_volume_amount`]'s
+/// partial-vs-complete split: an incomplete counted scope takes the warn tone and the partial
+/// wording ahead of the current-rate wording, whatever the valuation mode, because the shortfall
+/// is the more important signal.
 ///
 /// Args:
 ///     data: Current report snapshot.
 ///     mode: Valuation mode the snapshot's figures were computed under.
 ///
 /// Returns:
-///     The assembled fact, or `None` outside a single-core scope or without a computable ratio.
+///     The assembled fact, or `None` for the no-match sentinel or without a computable ratio.
 fn average_order_fact(data: &ReportData, mode: db::valuation::ValuationMode) -> Option<FooterFact> {
-    if !single_core_scope(data) {
-        return None;
-    }
+    let scope = core_scope(data)?;
     let ret = data.totals.average_order_return()?;
     let (pct, sign) = fmt::signed_pct(ret.pct, 1)?;
     let avg = exact_native(ret.avg_order, ret.currency);
+    let cores = cores_clause(scope, data.totals.counted_cores);
     if ret.excluded > 0 {
         let mut partial = fact(
             t!("report.avg_order_pct_partial", pct = pct.clone()).to_string(),
             FactTone::Warn,
             false,
         );
-        partial.spelled = Some(
-            t!(
+        partial.spelled = Some(match cores {
+            Some(cores) => t!(
+                "report.avg_order_pct_partial_cores_tip",
+                pct = pct,
+                avg = avg,
+                n = ret.counted,
+                cores = cores,
+                excluded = ret.excluded
+            )
+            .to_string(),
+            None => t!(
                 "report.avg_order_pct_partial_tip",
                 pct = pct,
                 avg = avg,
@@ -395,23 +450,49 @@ fn average_order_fact(data: &ReportData, mode: db::valuation::ValuationMode) -> 
                 excluded = ret.excluded
             )
             .to_string(),
-        );
+        });
         return Some(partial);
     }
     // A current-rate figure is not historical P&L, so it never borrows that sentence — the same
     // gate the traded-volume fact uses for the identical wording pair.
     let current = ret.unified && mode == db::valuation::ValuationMode::Current;
-    let tip_key = if current {
-        "report.avg_order_pct_current_tip"
-    } else {
-        "report.avg_order_pct_tip"
-    };
     let mut complete = fact(
         t!("report.avg_order_pct", pct = pct.clone()).to_string(),
         money_tone(sign),
         false,
     );
-    complete.spelled = Some(t!(tip_key, pct = pct, avg = avg, n = ret.counted).to_string());
+    complete.spelled = Some(match (current, cores) {
+        (true, Some(cores)) => t!(
+            "report.avg_order_pct_current_cores_tip",
+            pct = pct,
+            avg = avg,
+            n = ret.counted,
+            cores = cores
+        )
+        .to_string(),
+        (false, Some(cores)) => t!(
+            "report.avg_order_pct_cores_tip",
+            pct = pct,
+            avg = avg,
+            n = ret.counted,
+            cores = cores
+        )
+        .to_string(),
+        (true, None) => t!(
+            "report.avg_order_pct_current_tip",
+            pct = pct,
+            avg = avg,
+            n = ret.counted
+        )
+        .to_string(),
+        (false, None) => t!(
+            "report.avg_order_pct_tip",
+            pct = pct,
+            avg = avg,
+            n = ret.counted
+        )
+        .to_string(),
+    });
     Some(complete)
 }
 
@@ -423,8 +504,8 @@ fn average_order_fact(data: &ReportData, mode: db::valuation::ValuationMode) -> 
 /// sum, whereas a missing row count only withholds a tally the table itself shows. Everything ahead
 /// of the traded volume QUALIFIES the realized figure in the never-clipped head, so losing one of
 /// them changes what that head appears to mean. The average-order-return fact sits right after the
-/// traded volume it shares a section with — it too qualifies the head's money, over the narrower
-/// single-core scope the volume figure does not itself require. The open-positions fact closes the
+/// traded volume it shares a section with — it too qualifies the head's money, for every real
+/// scope the volume figure is stated for, not only a single named core. The open-positions fact closes the
 /// tail because it is the one entry that names itself completely — it can never be misread as part
 /// of the head, and the grid above already shows those rows — so it is the cheapest thing to lose
 /// to a narrow dock.

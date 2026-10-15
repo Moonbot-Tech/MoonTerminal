@@ -4,6 +4,123 @@ use super::{order_for, paint_fixed, result_pct};
 use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
 use moon_core::market::trade_replay::TickStatus;
 
+/// Restricting fetchable rows to Missing strands pad-covered tails even on archive venues.
+#[test]
+fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
+    use super::super::state::RowAddress;
+    use std::sync::Arc;
+    let now = chrono::Utc::now().timestamp_millis();
+    let day = 86_400_000;
+    let mut row = DealRow {
+        deal: deal(91, now - 21 * day, 100.0, 101.0, false),
+        tape: TapeStatus::Covered,
+        verdict: Some(verdict(Some(true), Some(true))),
+        address: Some(Arc::new(RowAddress {
+            core_uid: 1,
+            venue: moon_core::venue::venue(4).expect("futures venue"),
+            exchange_key: "EX-XX".into(),
+            market: "XALPHAUSDT".into(),
+            btc_market: None,
+        })),
+        ticks: None,
+        entry_line: None,
+        held: Some((30_000, 30_000)),
+    };
+    row.deal.coin = "XALPHA".into();
+    assert!(
+        row.fetchable_at(now, 60),
+        "daily archive beyond REST retention"
+    );
+    let data = TicksData {
+        rows: vec![row.clone()],
+        ..Default::default()
+    };
+    assert_eq!(
+        data.fetchable_at(now, 60).count(),
+        1,
+        "button offers the covered row"
+    );
+    row.held = Some((30_000, 60_000));
+    assert!(!row.fetchable_at(now, 60), "enough tail needs no refill");
+    row.held = Some((30_000, 30_000));
+    row.deal.close_ms = now - 400 * day;
+    assert!(!row.fetchable_at(now, 60), "outside archive catch-up depth");
+    row.deal.close_ms = now - 21 * day;
+    Arc::make_mut(row.address.as_mut().unwrap()).venue =
+        moon_core::venue::venue(8).expect("REST-only venue");
+    row.deal.close_ms = now - 60 * day;
+    assert!(
+        !row.fetchable_at(now, 60),
+        "unsupported old tape stays excluded"
+    );
+    let unavailable = TicksData {
+        rows: vec![row.clone()],
+        ..Default::default()
+    };
+    assert_eq!(unavailable.fetchable_at(now, 60).count(), 0);
+    row.deal.close_ms = now - 60_000;
+    Arc::make_mut(row.address.as_mut().unwrap()).venue =
+        moon_core::venue::venue(4).expect("futures venue");
+    assert!(row.fetchable_at(now, 60), "recent REST tail");
+}
+
+/// A held-read started before a fetch must not put its old pad tail back over the extension.
+#[test]
+fn stale_covered_answers_cannot_shorten_a_refetched_tail() {
+    let mut state = state();
+    let mut answer = state.data.data().unwrap().rows[1].clone();
+    answer.held = Some((30_000, 30_000));
+    state.data.data_mut().unwrap().rows[1].held = Some((30_000, 180_000));
+    state.update_rows(vec![answer]);
+    assert_eq!(
+        state.data.data().unwrap().rows[1].held,
+        Some((30_000, 180_000))
+    );
+}
+
+/// Refills need a visible progress mark, while Stop and reload must restore held pad coverage.
+#[test]
+fn a_short_tail_progress_mark_restores_covered_on_cancel_and_reload() {
+    use super::super::state::RowEdit;
+    let mut state = state();
+    let trail = i64::from(super::super::tail::effective_s()) * 1_000 - 1;
+    state.data.data_mut().unwrap().rows[1].held = Some((30_000, trail));
+    state.edit_rows([(2, RowEdit::MarkFetching), (1, RowEdit::MarkFetching)]);
+    assert_eq!(
+        state.data.data().unwrap().rows[1].tape,
+        TapeStatus::Fetching
+    );
+    state.edit_rows([(2, RowEdit::UnmarkFetching), (1, RowEdit::UnmarkFetching)]);
+    assert_eq!(state.data.data().unwrap().rows[1].tape, TapeStatus::Covered);
+    assert_eq!(state.data.data().unwrap().rows[0].tape, TapeStatus::Missing);
+    state.edit_rows([(2, RowEdit::MarkFetching)]);
+    state.invalidate_for_axis();
+    assert_eq!(state.data.data().unwrap().rows[1].tape, TapeStatus::Covered);
+    assert_eq!(
+        state.data.data().unwrap().rows[1].held,
+        Some((30_000, trail))
+    );
+}
+
+/// An old pad-covered read must not undo a terminal refill refusal; newly gained tape may.
+#[test]
+fn a_stale_covered_read_cannot_reopen_a_refused_short_tail() {
+    let mut state = state();
+    let mut answer = state.data.data().unwrap().rows[1].clone();
+    answer.held = Some((30_000, 30_000));
+    let row = &mut state.data.data_mut().unwrap().rows[1];
+    row.tape = TapeStatus::Refused(TickStatus::NoTrades);
+    row.held = answer.held;
+    state.update_rows(vec![answer.clone()]);
+    assert_eq!(
+        state.data.data().unwrap().rows[1].tape,
+        TapeStatus::Refused(TickStatus::NoTrades)
+    );
+    answer.held = Some((30_000, 180_000));
+    state.update_rows(vec![answer]);
+    assert_eq!(state.data.data().unwrap().rows[1].tape, TapeStatus::Covered);
+}
+
 fn deal(uid: i64, buy_ms: i64, buy: f64, sell: f64, short: bool) -> Deal {
     Deal {
         report_uid: uid,
@@ -198,8 +315,7 @@ fn profit_sorts_by_the_rows_money() {
     assert_eq!(uids(&mut state), [1, 3, 2]);
 }
 
-/// The held column sorts by the trail the terminal holds past the exit — what the exit
-/// horizon of the sample is taken from; a row with nothing held sorts as the shortest.
+/// The held column sorts by each deal's held exit trail; a row with nothing held sorts first.
 #[test]
 fn the_held_tape_sorts_by_its_trail() {
     let mut state = state();

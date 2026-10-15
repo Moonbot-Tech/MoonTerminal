@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use moon_core::db::tuner::ticks::Deal;
-use moon_core::db::tuner::ticks::search::{PreparedDeal, clip_to_horizon, common_horizon_ms};
+use moon_core::db::tuner::ticks::search::PreparedDeal;
 use moon_core::feed::types::{Side, Tick};
 
 /// One deal's prints, packed where that loses nothing.
@@ -95,27 +95,23 @@ pub(in crate::analytics::tuner) struct PendingDeal {
 }
 
 impl PendingDeal {
-    /// The deal as the model replays it, its tape unpacked.
+    /// Unpack and limit the replay to this deal's own held trail, off the UI thread.
     pub(in crate::analytics::tuner) fn prepare(self) -> PreparedDeal {
-        PreparedDeal {
+        let mut deal = PreparedDeal {
             ticks: self.tape.unpack(),
             deal: self.deal,
             entry_line: self.entry_line,
             trail_ms: self.trail_ms,
             own: self.own,
-        }
+        };
+        deal.clip_to_trail();
+        deal
     }
 }
 
-/// A sample as the columns and the search replay it: every tape unpacked and cut at the
-/// sample's one exit horizon (`clip_to_horizon`), so no variant is judged on more tape than
-/// another. Off the UI thread: it is the whole sample's prints at full width.
+/// Prepare each deal on its own held trail for both columns and search, off the UI thread.
 pub(in crate::analytics::tuner) fn prepare_sample(pending: Vec<PendingDeal>) -> Vec<PreparedDeal> {
-    let mut deals: Vec<PreparedDeal> = pending.into_iter().map(PendingDeal::prepare).collect();
-    if let Some(horizon_ms) = common_horizon_ms(&deals) {
-        clip_to_horizon(&mut deals, horizon_ms);
-    }
-    deals
+    pending.into_iter().map(PendingDeal::prepare).collect()
 }
 
 /// `ticks` packed, or `None` when a print would not come back as it went in.
