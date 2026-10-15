@@ -14,15 +14,22 @@ use std::sync::Arc;
 use super::super::super::AnalyticsView;
 use super::super::auto_picks::{AutoClass, AutoEmpty, AutoFilter, cell_tip};
 use super::super::columns::fixed_metric_cell;
+use super::super::ready::ReadyFilter;
 use super::super::{
-    AUTO_MIN_W, AUTO_W, COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W,
-    CORE_W, CORE_W_MAX, KIND_MIN_W, KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_AUTO,
-    SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_NAME_MIN_W, StratMode, metric_bit,
+    AUTO_MIN_W, AUTO_W, COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, COL_BIT_READY,
+    CORE_MIN_W, CORE_W, CORE_W_MAX, KIND_MIN_W, KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS,
+    READY_MIN_W, READY_W, SORT_AUTO, SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, SORT_READY,
+    STRAT_NAME_MIN_W, StratMode, metric_bit,
 };
 use super::MAX_ROWS;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::GroupStat;
+
+/// The "Tuning" cell, progress line and empty states ("Entry/Exit" only).
+mod ready;
+#[cfg(test)]
+use ready::{ready_cell_el, ready_cell_text, ready_computing_el, ready_empty_el};
 
 /// Height of one strategy row, in base px.
 ///
@@ -85,6 +92,8 @@ impl AnalyticsView {
         };
         // The batch auto-pick follows the list: arm it before reading the rows it annotates.
         self.ensure_auto_picks(cx);
+        // So does the readiness pass, on "Entry/Exit".
+        self.ensure_ready_pass(cx);
         // The filter bar creates the search input (needs &mut) — build it before the immutable
         // data read below.
         let filter_bar = self.strat_filter_bar(p, window, cx);
@@ -101,7 +110,14 @@ impl AnalyticsView {
                 let pool = self.strat_visible.as_ref().map_or(total, |v| v.pool);
                 let shown = total.min(MAX_ROWS);
                 let empty_face = self.auto_picks.empty_face(self.auto_filter());
-                if shown == 0 && empty_face == Some(AutoEmpty::Computing) {
+                let ready_face = self.ready.empty_face(self.ready_filter());
+                if shown == 0 && ready_face == Some(AutoEmpty::Computing) {
+                    // The readiness pass has not answered yet: "none can be tuned" would be
+                    // a guess. The rows appear as the pass counts them.
+                    (ready::ready_computing_el(p, cx), 0, 0, pool)
+                } else if shown == 0 && ready_face == Some(AutoEmpty::NoFinding) {
+                    (self.ready_empty_state(p, cx), 0, 0, pool)
+                } else if shown == 0 && empty_face == Some(AutoEmpty::Computing) {
                     // The batch has not answered yet: "no strategy has a finding" would be a
                     // guess. The rows appear as soon as it lands; the progress line says how far.
                     (auto_computing_el(p, cx), 0, 0, pool)
@@ -246,7 +262,10 @@ impl AnalyticsView {
                         t!("analytics.strat.selected_n", n = self.sel_extra.len() + 1).to_string(),
                         p.amber,
                     ))
-                } else if total > shown || self.auto_filter() != AutoFilter::All {
+                } else if total > shown
+                    || self.auto_filter() != AutoFilter::All
+                    || self.ready_filter() != ReadyFilter::All
+                {
                     // The "of M" is the list after every filter BUT the auto-pick one,
                     // so turning that filter on changes only the "shown" half.
                     Some((
@@ -266,7 +285,9 @@ impl AnalyticsView {
         // Its own line under the toolbar. M is `pool`, the same population the header's
         // "of Y" counts: every filter except the auto-pick one. The loaded-list length
         // counted strategies the header had already filtered out.
+        // At most one of the two lines exists: each is drawn on its own axis only.
         let progress = self.auto_progress_el(p, pool, cx);
+        let progress = progress.or_else(|| self.ready_progress_el(p, pool, cx));
         // The header row stays OUTSIDE the virtual list so it cannot scroll away.
         strat_list_frame(
             p,
@@ -495,6 +516,10 @@ fn strategy_row(
                 .children(
                     view.col_shown(COL_BIT_AUTO)
                         .then(|| auto_cell(view, g, p, cx)),
+                )
+                .children(
+                    view.col_shown(COL_BIT_READY)
+                        .then(|| ready::ready_cell(view, g, p, cx)),
                 ),
         )
         .on_mouse_down(MouseButton::Right, {
@@ -703,6 +728,16 @@ impl AnalyticsView {
                             Some((AUTO_W, AUTO_MIN_W)),
                             true,
                             Some(t!("analytics.auto.col_tip").to_string()),
+                        )
+                    }))
+                    .children(self.col_shown(COL_BIT_READY).then(|| {
+                        sortable(
+                            "an-hdr-ready".into(),
+                            t!("analytics.ready.col").to_string(),
+                            SORT_READY,
+                            Some((READY_W, READY_MIN_W)),
+                            true,
+                            Some(t!("analytics.ready.col_tip").to_string()),
                         )
                     })),
             )

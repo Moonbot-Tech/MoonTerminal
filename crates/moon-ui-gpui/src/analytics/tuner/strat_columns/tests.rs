@@ -2,10 +2,10 @@ use super::super::columns::{
     COL_AVG_ORDER, COL_PROFIT, COL_PROFIT_PCT, COL_TRADES, COL_WINRATE, MetricCol,
 };
 use super::{
-    AUTO_MIN_W, COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, KIND_MIN_W,
-    LASTEDIT_MIN_W, METRIC_COLS, STRAT_COLS_ALL, STRAT_COLS_DEFAULT, STRAT_COLS_DEFAULT_COINS,
-    STRAT_COLS_V3_ADDITIONS, STRAT_MIN_PANEL_W, STRAT_NAME_MIN_W, metric_bit,
-    restore_strat_columns, restore_without_auto,
+    AUTO_MIN_W, COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, COL_BIT_READY,
+    CORE_MIN_W, KIND_MIN_W, LASTEDIT_MIN_W, METRIC_COLS, STRAT_COLS_ALL, STRAT_COLS_DEFAULT,
+    STRAT_COLS_DEFAULT_COINS, STRAT_COLS_V3_ADDITIONS, STRAT_MIN_PANEL_W, STRAT_NAME_MIN_W,
+    metric_bit, restore_strat_columns, restore_without_auto, restore_without_ready,
 };
 use moon_core::config::layout::StratColsByMode;
 
@@ -134,7 +134,7 @@ fn a_saved_key_without_the_ticks_slot_takes_the_axis_default() {
         time: 0,
         ticks: None,
     };
-    let restored = restore_strat_columns(Some(before_ticks), None, None, None);
+    let restored = restore_without_ready(Some(before_ticks), None, None, None);
     assert_eq!(restored.filter, COL_BIT_KIND);
     assert_eq!(restored.coins, 0);
     assert_eq!(
@@ -147,7 +147,7 @@ fn a_saved_key_without_the_ticks_slot_takes_the_axis_default() {
             ..before_ticks
         };
         assert_eq!(
-            restore_strat_columns(Some(set), None, None, None).ticks,
+            restore_without_ready(Some(set), None, None, None).ticks,
             Some(saved),
             "a saved choice is kept, an all-hidden one included"
         );
@@ -165,12 +165,12 @@ fn the_auto_column_is_migrated_in_once() {
         time: COL_BIT_CORE,
         ticks: Some(COL_BIT_KIND),
     };
-    let restored = restore_strat_columns(None, Some(saved), None, None);
+    let restored = restore_without_ready(None, Some(saved), None, None);
     assert_eq!(restored.filter, COL_BIT_KIND | COL_BIT_AUTO);
     assert_eq!(restored.coins, COL_BIT_AUTO);
     assert_eq!(restored.time, COL_BIT_CORE | COL_BIT_AUTO);
     assert_eq!(restored.ticks, Some(COL_BIT_KIND | COL_BIT_AUTO));
-    let fresh = restore_strat_columns(None, None, None, None);
+    let fresh = restore_without_ready(None, None, None, None);
     assert_ne!(
         fresh.coins & COL_BIT_AUTO,
         0,
@@ -181,7 +181,7 @@ fn the_auto_column_is_migrated_in_once() {
         0,
         "the filter default shows Auto"
     );
-    let hidden = restore_strat_columns(Some(saved), Some(saved), None, None);
+    let hidden = restore_without_ready(Some(saved), Some(saved), None, None);
     assert_eq!(
         hidden.filter & COL_BIT_AUTO,
         0,
@@ -191,5 +191,39 @@ fn the_auto_column_is_migrated_in_once() {
         COL_BIT_AUTO & !STRAT_COLS_ALL,
         0,
         "the full mask includes Auto"
+    );
+}
+
+/// A column set saved before the Tuning column existed shows it once on every axis and keeps
+/// every other bit exactly; a set saved after it keeps a deliberate hide.
+#[test]
+fn the_ready_column_is_migrated_in_once() {
+    let saved = StratColsByMode {
+        filter: COL_BIT_KIND,
+        coins: COL_BIT_AUTO,
+        time: 0,
+        ticks: Some(COL_BIT_CORE),
+    };
+    let restored = restore_strat_columns(None, Some(saved), None, None, None);
+    assert_eq!(restored.filter, COL_BIT_KIND | COL_BIT_READY);
+    assert_eq!(restored.coins, COL_BIT_AUTO | COL_BIT_READY);
+    assert_eq!(restored.time, COL_BIT_READY);
+    assert_eq!(restored.ticks, Some(COL_BIT_CORE | COL_BIT_READY));
+    let kept = restore_strat_columns(Some(saved), Some(saved), None, None, None);
+    assert_eq!(
+        kept.ticks,
+        Some(COL_BIT_CORE),
+        "a hide saved after the column is kept"
+    );
+    let fresh = restore_strat_columns(None, None, None, None, None);
+    assert_ne!(
+        fresh.ticks.unwrap_or(0) & COL_BIT_READY,
+        0,
+        "the Entry/Exit default shows it"
+    );
+    assert_eq!(
+        COL_BIT_READY & !STRAT_COLS_ALL,
+        0,
+        "the full mask includes Tuning"
     );
 }

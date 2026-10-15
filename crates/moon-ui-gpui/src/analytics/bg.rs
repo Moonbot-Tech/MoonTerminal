@@ -41,6 +41,8 @@ pub(super) enum ReadLane {
     TicksVariants,
     /// The Entry/Exit axis' search.
     TicksSearch,
+    /// The strategy list's tuning readiness (every strategy, replayed one at a time).
+    TicksReady,
 }
 
 /// Active cancellation tokens keyed by the UI state each request may publish.

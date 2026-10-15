@@ -42,6 +42,13 @@ pub(super) const SORT_AUTO: &str = "auto";
 pub(super) const AUTO_W: f32 = 62.0;
 /// How narrow the auto-pick column may be squeezed before its chip stops fitting.
 pub(super) const AUTO_MIN_W: f32 = 50.0;
+/// Sort id of the tuning-readiness column: tunable first, by sample size.
+pub(super) const SORT_READY: &str = "ready";
+/// Width (font-scaled px) of the readiness column — fits its widest cell ("мало · 10/20",
+/// "нет ленты") and the heading with a sort arrow.
+pub(super) const READY_W: f32 = 84.0;
+/// How narrow the readiness column may be squeezed before its text stops fitting.
+pub(super) const READY_MIN_W: f32 = 72.0;
 /// Strategy-list sort used when no valid saved choice exists.
 pub(super) const STRAT_SORT_DEFAULT: (&str, bool) = (COL_PROFIT.key, true);
 
@@ -71,6 +78,9 @@ pub(super) const COL_BIT_LASTEDIT: u16 = 1u16 << 11;
 /// Visibility bit of the batch auto-pick column, above every older bit so saved masks keep
 /// their meaning; [`restore_strat_columns`] turns it on once for masks saved before it.
 pub(super) const COL_BIT_AUTO: u16 = 1u16 << 14;
+/// Visibility bit of the tuning-readiness column ("Entry/Exit" only), the last free bit;
+/// [`restore_strat_columns`] turns it on once for masks saved before it.
+pub(super) const COL_BIT_READY: u16 = 1u16 << 15;
 /// Width (font-scaled px) of the "last edit" column — fits a `dd.mm.yyyy hh:mm` stamp.
 pub(super) const LASTEDIT_W: f32 = 110.0;
 /// How narrow that stamp may be squeezed before it stops being readable.
@@ -99,7 +109,7 @@ pub(super) const CORE_W_MAX: f32 = 240.0;
 /// NOT the default: the fixed columns then total more than the left column is wide, and since
 /// the name is the only flexible one, it is the name that collapses — the table loses the very
 /// thing every row is identified by. See [`STRAT_COLS_DEFAULT`].
-pub(in crate::analytics) const STRAT_COLS_ALL: u16 = (1 << 15) - 1;
+pub(in crate::analytics) const STRAT_COLS_ALL: u16 = u16::MAX;
 /// New fields enabled once while migrating an older per-mode mask.
 pub(in crate::analytics) const STRAT_COLS_V3_ADDITIONS: u16 = metric_bit(2) | metric_bit(3);
 
@@ -131,7 +141,8 @@ pub(in crate::analytics) const STRAT_COLS_DEFAULT: u16 = COL_BIT_KIND
     | metric_bit(3)
     | metric_bit(5)
     | metric_bit(6)
-    | COL_BIT_AUTO;
+    | COL_BIT_AUTO
+    | COL_BIT_READY;
 
 /// The same, plus the strategy's coin-list counts and minus Avg order — the default of the
 /// "By coin" axis.
@@ -145,6 +156,7 @@ pub(in crate::analytics) const STRAT_COLS_DEFAULT_COINS: u16 =
 /// Restore the current per-mode mask schema or migrate older masks by enabling new columns once.
 ///
 /// Args:
+///     with_ready: Saved mask in the schema containing the Tuning column.
 ///     with_auto: Saved mask in the schema containing the Auto column.
 ///     current: Older mask in the schema containing Avg order and Profit %.
 ///     previous: Older per-mode mask whose existing bits retain their meaning.
@@ -153,6 +165,39 @@ pub(in crate::analytics) const STRAT_COLS_DEFAULT_COINS: u16 =
 /// Returns:
 ///     Current per-mode masks that respect current hides or enable new columns once.
 pub(in crate::analytics) fn restore_strat_columns(
+    with_ready: Option<moon_core::config::layout::StratColsByMode>,
+    with_auto: Option<moon_core::config::layout::StratColsByMode>,
+    current: Option<moon_core::config::layout::StratColsByMode>,
+    previous: Option<moon_core::config::layout::StratColsByMode>,
+    legacy_single: Option<u16>,
+) -> moon_core::config::layout::StratColsByMode {
+    if let Some(mut with_ready) = with_ready {
+        // A saved zero (Tuning hidden with everything else) is kept like any deliberate hide.
+        with_ready
+            .ticks
+            .get_or_insert(super::StratMode::Ticks.default_cols());
+        return with_ready;
+    }
+    // Saved before the Tuning column existed: every axis carries its bit once (only
+    // "Entry/Exit" draws it); every other bit keeps exactly what was saved.
+    let mut restored = restore_without_ready(with_auto, current, previous, legacy_single);
+    for mode in super::STRAT_MODES {
+        *mode.cols_slot(&mut restored) |= COL_BIT_READY;
+    }
+    restored
+}
+
+/// The pre-Tuning restore: the Auto schema, or an older mask migrated into it.
+///
+/// Args:
+///     with_auto: Saved mask in the schema containing the Auto column.
+///     current: Older mask in the schema containing Avg order and Profit %.
+///     previous: Older per-mode mask whose existing bits retain their meaning.
+///     legacy_single: Oldest one-mask preference used only when per-mode state is absent.
+///
+/// Returns:
+///     Masks in that schema.
+fn restore_without_ready(
     with_auto: Option<moon_core::config::layout::StratColsByMode>,
     current: Option<moon_core::config::layout::StratColsByMode>,
     previous: Option<moon_core::config::layout::StratColsByMode>,

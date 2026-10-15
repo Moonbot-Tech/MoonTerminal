@@ -34,8 +34,10 @@ use crate::design;
 use crate::design::{moon, moon_alpha};
 use columns::*;
 pub(in crate::analytics::tuner) use fetch::strategy_field_defaults;
+pub(in crate::analytics::tuner) use load::replay_batch;
 use moon_core::market::trade_replay::TickStatus;
 use state::{DealRow, TapeStatus};
+pub(in crate::analytics::tuner) use summary::readiness_refusal;
 
 mod accuracy;
 mod cfg;
@@ -49,6 +51,7 @@ mod layout;
 mod load;
 pub(in crate::analytics) mod model_cfg;
 mod ranges;
+pub(in crate::analytics::tuner) mod readiness;
 mod refiled;
 mod report;
 mod risk;

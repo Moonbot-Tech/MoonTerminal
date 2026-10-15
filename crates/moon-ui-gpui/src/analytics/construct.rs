@@ -232,6 +232,7 @@ impl AnalyticsView {
         let saved_strat_cols = {
             let layout = &backend.read(cx).layout;
             tuner::restore_strat_columns(
+                layout.analytics_strat_cols_modes4,
                 layout.analytics_strat_cols_modes3,
                 layout.analytics_strat_cols_modes2,
                 layout.analytics_strat_cols_modes,
@@ -376,6 +377,7 @@ impl AnalyticsView {
             strat_active_only: true,
             strat_lists: tuner::StratListFilter::All,
             auto_picks: tuner::AutoPicks::default(),
+            ready: tuner::ReadyPass::default(),
             strat_search_input: None,
             strat_sort: saved_strat_sort,
             strat_cols: saved_strat_cols,

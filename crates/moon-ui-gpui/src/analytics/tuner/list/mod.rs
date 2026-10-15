@@ -28,10 +28,11 @@ pub(in crate::analytics::tuner) use select::{
 
 use super::super::AnalyticsView;
 use super::auto_picks::{AutoFilter, AutoView};
+use super::ready::{ReadyFilter, ReadyView};
 use super::{
-    COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, METRIC_COLS, SORT_AUTO, SORT_CORE,
-    SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_COLS_ALL, STRAT_SORT_DEFAULT, StratMode, metric_bit,
-    sort_arrow_of, toggle_sort_key,
+    COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, COL_BIT_READY, METRIC_COLS,
+    SORT_AUTO, SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, SORT_READY, STRAT_COLS_ALL,
+    STRAT_SORT_DEFAULT, StratMode, metric_bit, sort_arrow_of, toggle_sort_key,
 };
 use crate::design;
 use crate::design::moon;
@@ -98,7 +99,7 @@ pub(in crate::analytics) fn restore_strat_sort(
         .filter(|(key, _)| {
             matches!(
                 key.as_str(),
-                SORT_NAME | SORT_KIND | SORT_CORE | SORT_LASTEDIT | SORT_AUTO
+                SORT_NAME | SORT_KIND | SORT_CORE | SORT_LASTEDIT | SORT_AUTO | SORT_READY
             ) || METRIC_COLS.iter().any(|column| column.key == key)
         })
         .or_else(|| Some((STRAT_SORT_DEFAULT.0.to_string(), STRAT_SORT_DEFAULT.1)))
@@ -121,6 +122,8 @@ pub(in crate::analytics) struct VisibleKey {
     sort: Option<(String, bool)>,
     /// The batch auto-pick's classes and the "Auto-pick" filter.
     auto: AutoView,
+    /// The readiness pass's classes and the "Tuning" filter.
+    ready: ReadyView,
 }
 
 /// The memoized row order, enabled-filter availability and inputs that produced them.
@@ -128,8 +131,8 @@ pub(in crate::analytics) struct VisibleRows {
     key: VisibleKey,
     idx: Vec<usize>,
     enabled_filter_available: bool,
-    /// Rows passing every filter but the auto-pick one: the counter's "of M", so turning
-    /// that filter on cannot move the denominator.
+    /// Rows passing every filter but the auto-pick and tuning ones: the counter's "of M", so
+    /// turning either on cannot move the denominator.
     pub(in crate::analytics) pool: usize,
 }
 
@@ -164,7 +167,7 @@ pub(in crate::analytics::tuner) fn partial_sort<T>(
 /// Returns:
 ///     Stable display-order indices through [`MAX_ROWS`], an unordered undisplayed tail,
 ///     whether replica status is available, and how many rows passed before the auto-pick
-///     filter.
+///     and tuning filters.
 pub(in crate::analytics) fn filter_sort_indices(
     all: &[GroupStat],
     key: &VisibleKey,
@@ -207,6 +210,9 @@ pub(in crate::analytics) fn filter_sort_indices(
     if key.auto.filter != AutoFilter::All {
         out.retain(|i| key.auto.filter.keeps(key.auto.class(&all[*i].key)));
     }
+    if key.ready.filter != ReadyFilter::All {
+        out.retain(|i| key.ready.filter.keeps(key.ready.class(&all[*i].key)));
+    }
     if let Some((sort_key, desc)) = &key.sort {
         let desc = *desc;
         // A numeric metric column sorts by its `sort` value; the name/kind/core columns
@@ -223,6 +229,15 @@ pub(in crate::analytics) fn filter_sort_indices(
             // candidates, then the rest; a bigger finding leads its own group.
             partial_sort(&mut out, |a, b| {
                 let (x, y) = (key.auto.class(&all[*a].key), key.auto.class(&all[*b].key));
+                let o = x.rank().cmp(&y.rank()).then(y.size().cmp(&x.size()));
+                let o = if desc { o } else { o.reverse() };
+                o.then_with(|| all[*a].key.cmp(&all[*b].key))
+            });
+        } else if sort_key == SORT_READY {
+            // Descending (the first click) puts the tunable strategies first, the bigger
+            // sample leading, then the ones closest to it.
+            partial_sort(&mut out, |a, b| {
+                let (x, y) = (key.ready.class(&all[*a].key), key.ready.class(&all[*b].key));
                 let o = x.rank().cmp(&y.rank()).then(y.size().cmp(&x.size()));
                 let o = if desc { o } else { o.reverse() };
                 o.then_with(|| all[*a].key.cmp(&all[*b].key))
@@ -265,7 +280,8 @@ pub(in crate::analytics) fn filter_sort_indices(
 }
 
 /// The saved strategy sort as one axis applies it: a sort by the Auto column only where that
-/// column is drawn ("By coin"). The saved choice itself is kept for the return there.
+/// column is drawn ("By coin"), by the Tuning column only on "Entry/Exit". The saved choice
+/// itself is kept for the return there.
 ///
 /// Args:
 ///     sort: The saved sort key and direction.
@@ -279,6 +295,7 @@ pub(in crate::analytics) fn axis_sort(
 ) -> Option<(String, bool)> {
     sort.clone()
         .filter(|(k, _)| mode.shows_auto() || k != SORT_AUTO)
+        .filter(|(k, _)| mode.shows_ready() || k != SORT_READY)
 }
 
 /// Whether a cached result still describes the current inputs.
@@ -349,6 +366,7 @@ impl AnalyticsView {
             // saved choice itself is kept for the return to "By coin".
             sort: axis_sort(&self.strat_sort, self.strat_mode),
             auto: self.auto_picks.view(self.strat_mode.shows_auto()),
+            ready: self.ready.view(self.strat_mode.shows_ready()),
         };
         if !memo_is_fresh(self.strat_visible.as_ref(), &key) {
             let (idx, enabled_filter_available, pool) = filter_sort_indices(all, &key);
@@ -375,7 +393,8 @@ impl AnalyticsView {
         *self.strat_mode.cols_slot(&mut cols)
     }
 
-    /// Is the column with visibility `bit` currently shown? The Auto column only on "By coin".
+    /// Is the column with visibility `bit` currently shown? The Auto column only on "By coin",
+    /// the Tuning column only on "Entry/Exit".
     pub(super) fn col_shown(&self, bit: u16) -> bool {
         self.strat_mode.drawn_cols(self.strat_cols()) & bit != 0
     }
@@ -390,7 +409,7 @@ impl AnalyticsView {
         *mode.cols_slot(&mut self.strat_cols) = cols;
         let all = self.strat_cols;
         self.backend.update(cx, |b, _| {
-            b.layout.analytics_strat_cols_modes3 = Some(all);
+            b.layout.analytics_strat_cols_modes4 = Some(all);
             b.layout_dirty = true;
         });
         cx.notify();
@@ -499,6 +518,7 @@ impl AnalyticsView {
             .child(self.strat_type_menu(cx))
             .child(self.strat_lists_menu(cx))
             .children(self.strat_auto_menu(cx))
+            .children(self.strat_ready_menu(cx))
             .child(
                 div()
                     .id("an-strat-active-tip")
@@ -632,6 +652,28 @@ impl AnalyticsView {
         self.auto_picks.filter(self.strat_mode.shows_auto())
     }
 
+    /// The "Tuning" filter: all / can tune. Amber while it narrows the list, like the
+    /// auto-pick filter on "By coin".
+    fn strat_ready_menu(&self, cx: &Context<Self>) -> Option<impl IntoElement + use<>> {
+        let view = cx.entity();
+        ready_filter_on_axis(
+            self.strat_mode,
+            self.ready_filter(),
+            std::rc::Rc::new(move |f, app| {
+                view.update(app, |this, cx| {
+                    this.ready.chosen = Some(f);
+                    cx.notify();
+                });
+            }),
+            cx,
+        )
+    }
+
+    /// The tuning filter in force on the axis currently on screen.
+    pub(super) fn ready_filter(&self) -> ReadyFilter {
+        self.ready.filter(self.strat_mode.shows_ready())
+    }
+
     /// Visible-column selector ([`design::COLUMN_SELECTOR_ICON`]); each item toggles a column bit,
     /// "All" toggles all.
     /// The menu stays open across clicks; the name column is always shown, so hiding every
@@ -663,7 +705,8 @@ impl AnalyticsView {
                 .on_click(move |_, _, app| {
                     all_view.update(app, |this, cx| {
                         // Judged and toggled over the columns this axis draws; a bit it does
-                        // not draw (Auto off "By coin") keeps its saved value.
+                        // not draw (Auto off "By coin", Tuning off "Entry/Exit") keeps its
+                        // saved value.
                         let (mode, cur) = (this.strat_mode, this.strat_cols());
                         let all = mode.drawn_cols(STRAT_COLS_ALL);
                         let drawn = mode.drawn_cols(cur);
@@ -698,6 +741,9 @@ impl AnalyticsView {
         if self.strat_mode.shows_auto() {
             menu = add(menu, COL_BIT_AUTO, t!("analytics.auto.col").to_string());
         }
+        if self.strat_mode.shows_ready() {
+            menu = add(menu, COL_BIT_READY, t!("analytics.ready.col").to_string());
+        }
         div()
             .id("an-strat-cols-tip")
             .tooltip(crate::panels::common::text_tooltip(
@@ -724,6 +770,69 @@ pub(in crate::analytics::tuner) fn auto_filter_on_axis(
     cx: &App,
 ) -> Option<impl IntoElement + use<>> {
     mode.shows_auto().then(|| auto_filter_el(cur, pick, cx))
+}
+
+/// The toolbar's "Tuning" filter on one axis: drawn on "Entry/Exit" only, absent elsewhere.
+///
+/// Args:
+///     mode: The axis on screen.
+///     cur: The active filter.
+///     pick: Applies a chosen filter.
+///     cx: App, for sizing.
+///
+/// Returns:
+///     The filter element, or `None` off "Entry/Exit".
+pub(in crate::analytics::tuner) fn ready_filter_on_axis(
+    mode: StratMode,
+    cur: ReadyFilter,
+    pick: std::rc::Rc<dyn Fn(ReadyFilter, &mut App)>,
+    cx: &App,
+) -> Option<impl IntoElement + use<>> {
+    mode.shows_ready().then(|| ready_filter_el(cur, pick, cx))
+}
+
+/// The toolbar's "Tuning" filter, as a free function so a layout probe can draw it: amber
+/// while it narrows the list, its trigger sized to the current label.
+///
+/// Args:
+///     cur: The active filter.
+///     pick: Applies a chosen filter.
+///     cx: App, for sizing.
+///
+/// Returns:
+///     The dropdown wrapped in its hover tip (`an-strat-ready-tip`).
+pub(in crate::analytics::tuner) fn ready_filter_el(
+    cur: ReadyFilter,
+    pick: std::rc::Rc<dyn Fn(ReadyFilter, &mut App)>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let mut menu = MoonDropdown::new("an-strat-ready")
+        .label(t!("analytics.ready.filter_lbl", value = cur.label()).to_string())
+        .trigger_caret(true)
+        .trigger_variant(if cur == ReadyFilter::All {
+            MoonButtonVariant::Soft
+        } else {
+            MoonButtonVariant::Amber
+        })
+        .trigger_size(MoonButtonSize::density(cx))
+        .fit_trigger_width(96.0, 240.0)
+        .fit_menu_width(150.0, 560.0);
+    for f in ReadyFilter::ALL {
+        let pick = pick.clone();
+        menu = menu.item(
+            MoonMenuItem::with_key(format!("ready-{}", f.key()), f.label())
+                .checked(cur == f)
+                .on_click(move |_, _, app| pick(f, app)),
+        );
+    }
+    div()
+        .id("an-strat-ready-tip")
+        .debug_selector(|| "an-strat-ready-tip".to_string())
+        .flex_none()
+        .tooltip(crate::panels::common::text_tooltip(
+            t!("analytics.ready.filter_tip").to_string(),
+        ))
+        .child(menu)
 }
 
 /// The toolbar's "Auto-pick" filter, as a free function so a layout probe can draw it: amber

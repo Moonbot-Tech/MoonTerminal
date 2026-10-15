@@ -301,6 +301,8 @@ pub struct AnalyticsView {
     pub(in crate::analytics) strat_lists: tuner::StratListFilter,
     /// The batch auto-pick behind the list's "Auto" column and filter.
     pub(in crate::analytics) auto_picks: tuner::AutoPicks,
+    /// The tuning-readiness pass behind the list's "Tuning" column and filter (Entry/Exit).
+    pub(in crate::analytics) ready: tuner::ReadyPass,
     /// Lazily-created search input backing `strat_search`.
     pub(super) strat_search_input: Option<Entity<MoonInputState>>,
     /// List sort: `(column key, descending)`. None → the default profit-descending order.

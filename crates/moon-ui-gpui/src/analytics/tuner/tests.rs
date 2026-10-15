@@ -38,12 +38,14 @@ fn coin_axis_defaults_to_showing_the_lists() {
 /// column (and its saved width slot) comes back on return.
 #[test]
 fn the_auto_column_is_drawn_on_by_coin_only() {
-    use super::{COL_BIT_AUTO, STRAT_COLS_ALL};
+    use super::{COL_BIT_AUTO, COL_BIT_READY, STRAT_COLS_ALL};
     for mode in STRAT_MODES {
         let drawn = mode.drawn_cols(STRAT_COLS_ALL);
         assert_eq!(drawn & COL_BIT_AUTO != 0, mode == StratMode::Coins);
-        assert_eq!(drawn | COL_BIT_AUTO, STRAT_COLS_ALL);
+        assert_eq!(drawn & COL_BIT_READY != 0, mode == StratMode::Ticks);
+        assert_eq!(drawn | COL_BIT_AUTO | COL_BIT_READY, STRAT_COLS_ALL);
         assert_eq!(mode.shows_auto(), mode == StratMode::Coins);
+        assert_eq!(mode.shows_ready(), mode == StratMode::Ticks);
     }
     assert_eq!(StratMode::Coins.drawn_cols(0), 0);
 }

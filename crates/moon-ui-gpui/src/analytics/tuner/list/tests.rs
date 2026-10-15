@@ -9,10 +9,11 @@ use std::sync::Arc;
 use moon_core::db::analytics::GroupStat;
 
 use super::super::auto_picks::{AutoClass, AutoFilter, AutoPicks, AutoView};
+use super::super::ready::{ReadyClass, ReadyFilter, ReadyPass, ReadyView};
 use super::super::{STRAT_MODES, StratMode};
 use super::{
-    SORT_AUTO, SORT_NAME, StratListFilter, VisibleKey, VisibleRows, axis_sort, core_names_changed,
-    filter_sort_indices, memo_is_fresh, restore_strat_sort,
+    SORT_AUTO, SORT_NAME, SORT_READY, StratListFilter, VisibleKey, VisibleRows, axis_sort,
+    core_names_changed, filter_sort_indices, memo_is_fresh, restore_strat_sort,
 };
 
 /// A group with just the fields these tests filter and sort on.
@@ -100,6 +101,7 @@ fn key_over(base: usize) -> VisibleKey {
         active_only: false,
         sort: None,
         auto: AutoView::default(),
+        ready: ReadyView::default(),
     }
 }
 
@@ -431,4 +433,75 @@ fn the_auto_filter_and_sort_act_on_by_coin_only() {
         axis_sort(&Some((SORT_NAME.to_string(), false)), StratMode::Time),
         Some((SORT_NAME.to_string(), false))
     );
+}
+
+/// Four rows with one readiness class each: few, can (small), can (big), pending.
+fn ready_rows() -> (Vec<GroupStat>, ReadyView) {
+    let all = vec![
+        g("few", "K", Some(2), 0, 4.0),
+        g("can_small", "K", Some(2), 0, 3.0),
+        g("can_big", "K", Some(2), 0, 2.0),
+        g("pending", "K", Some(2), 0, 1.0),
+    ];
+    let classes: HashMap<String, ReadyClass> = [
+        ("few@1", ReadyClass::Few { fit: 10 }),
+        ("can_small@1", ReadyClass::Can { fit: 21 }),
+        ("can_big@1", ReadyClass::Can { fit: 34 }),
+    ]
+    .into_iter()
+    .map(|(k, c)| (k.to_string(), c))
+    .collect();
+    let view = ReadyView {
+        generation: 1,
+        filter: ReadyFilter::All,
+        classes: Arc::new(classes),
+        missing: ReadyClass::Pending,
+    };
+    (all, view)
+}
+
+/// "Can tune" keeps the tunable strategies only; the counter's "of M" does not move with it;
+/// the first click on the column puts the tunable ones first, the bigger sample leading.
+#[test]
+fn the_ready_filter_keeps_tunable_and_sorts_them_first() {
+    let (all, view) = ready_rows();
+    let mut k = key();
+    k.ready = view;
+    assert_eq!(filter_sort_indices(&all, &k).0, vec![0, 1, 2, 3]);
+    k.ready.filter = ReadyFilter::Can;
+    let (idx, _, pool) = filter_sort_indices(&all, &k);
+    assert_eq!((idx, pool), (vec![1, 2], 4));
+    k.ready.filter = ReadyFilter::All;
+    k.sort = Some((SORT_READY.to_string(), true));
+    assert_eq!(filter_sort_indices(&all, &k).0, vec![2, 1, 0, 3]);
+    assert_eq!(
+        restore_strat_sort(Some((SORT_READY.to_string(), true))),
+        Some((SORT_READY.to_string(), true))
+    );
+}
+
+/// The tuning filter and a Tuning-column sort are "Entry/Exit" controls: on every other axis
+/// they leave the list whole and in its own order.
+#[test]
+fn the_ready_filter_and_sort_act_on_entry_exit_only() {
+    let (all, view) = ready_rows();
+    let saved_sort = Some((SORT_READY.to_string(), true));
+    let mut pass = ReadyPass::default();
+    for mode in STRAT_MODES {
+        pass.chosen = Some(ReadyFilter::Can);
+        let mut k = key();
+        k.ready = view.clone();
+        k.ready.filter = pass.filter(mode.shows_ready());
+        k.sort = axis_sort(&saved_sort, mode);
+        let idx = filter_sort_indices(&all, &k).0;
+        if mode == StratMode::Ticks {
+            assert_eq!(
+                idx,
+                vec![2, 1],
+                "Can tune narrows Entry/Exit, big sample first"
+            );
+        } else {
+            assert_eq!(idx, vec![0, 1, 2, 3], "must not narrow off Entry/Exit");
+        }
+    }
 }
