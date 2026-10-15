@@ -926,7 +926,7 @@ pub(super) fn venue_reach_table(
 }
 
 /// The two catch-up switches. Archives need automatic catch-up; a station that reports counts
-/// but predates the switches shows them unchangeable.
+/// but predates the switches shows them unchangeable. Use content height in the tape column.
 pub(super) fn catchup_switches(
     switches: CatchupSwitches,
     editable: bool,
@@ -937,8 +937,7 @@ pub(super) fn catchup_switches(
     let auto_label = t!("telegram.server.catchup_auto").to_string();
     let archives_label = t!("telegram.server.catchup_archives").to_string();
     v_flex()
-        .flex_1()
-        .flex_basis(design::font_w_px(cx, 220.0))
+        .w_full()
         .min_w_0()
         .max_w_full()
         .gap(design::ui_px(cx, 8.0))
