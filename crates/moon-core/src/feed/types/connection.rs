@@ -81,7 +81,7 @@ impl MarketDirty {
 /// `offset_secs` is `None` for a core nothing has ever been measured on, and that is deliberately
 /// NOT the same fact as `Some(0)`: a diagnosis surface must be able to say "never measured" rather
 /// than claim the core runs on UTC. Every field beside it exists so the surface can say WHY it
-/// believes the number — how many samples, how long ago, and from which source — because an
+/// believes the number — how long ago, and from which source — because an
 /// unexplained four-hour correction on a trade list is indistinguishable from a bug.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CoreTimeOffsetStatus {
@@ -97,8 +97,6 @@ pub struct CoreTimeOffsetStatus {
     /// for exactly that reason: a fresh instant here means the measurement is still live, not that
     /// the offset moved.
     pub observed_at_utc: i64,
-    /// Samples standing behind the adopted value.
-    pub samples: u32,
     /// Which measurement produced it.
     pub source: crate::session::core_time_offset::OffsetSource,
 }

@@ -261,10 +261,9 @@ core_status.col.tz_off: "UTC offset"
 # not read the same.
 core_status.tz_off.unknown: "—"
 core_status.tz_off.f.offset: "Offset"
-core_status.tz_off.f.samples: "Samples"
 core_status.tz_off.f.observed: "Observed"
 core_status.tz_off.f.source: "Source"
-# Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
+# Hover line for a core nothing has been measured on yet.
 core_status.tz_off.f.unmeasured: "Not measured yet"
 core_status.tz_off.source.log: "Core log"
 core_status.tz_off.source.ping: "Core ping"

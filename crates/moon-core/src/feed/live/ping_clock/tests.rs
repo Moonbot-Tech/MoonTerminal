@@ -1,230 +1,170 @@
 use super::*;
 
-/// A UTC instant the synthetic runs start at, in milliseconds.
-const T0_MS: i64 = 1_800_000_000_000;
-
-/// Drive a Ready sampler for `secs` seconds from second `from_s`, one loop pass per second, with
-/// the core's clock `offset_secs` east of UTC and a delay that wanders between 15 and 80 ms like
-/// the 2026-10-08 shadow run — so every Ping reads a different delta. Returns every adoption with
-/// the second it happened at.
+/// Poll a Ready reader every five seconds for `secs` seconds from second `from_s`, each poll
+/// reading `minutes`. Returns every outcome with the second it happened at.
 fn run(
     clock: &mut PingClock,
     start: Instant,
     from_s: u64,
     secs: u64,
-    offset_secs: i64,
-) -> Vec<(u64, i32)> {
-    let mut adopted = Vec::new();
-    for s in from_s..from_s + secs {
-        let now = start + Duration::from_secs(s);
-        let recv_ms = T0_MS + s as i64 * 1000;
-        let lag_ms = 15 + (s as i64 * 37) % 66;
-        let delta = Some(offset_secs * 1000 - lag_ms);
-        if let Some(PingOffset::Adopted(offset)) = clock.poll(now, recv_ms, delta, None, true) {
-            adopted.push((s, offset));
-        }
-    }
-    adopted
+    minutes: i64,
+) -> Vec<(u64, PingOffset)> {
+    (from_s..from_s + secs)
+        .step_by(5)
+        .filter_map(|s| {
+            clock
+                .poll(start + Duration::from_secs(s), Some(minutes), true)
+                .map(|o| (s, o))
+        })
+        .collect()
 }
 
-/// Breakage guarded: a non-UTC core corrected by the wrong amount — the sign flipped, the
-/// timezone dropped, or a half- or quarter-hour zone rounded to the hour — which would move every
-/// report row of that core by hours. UTC+3, UTC-5, UTC+5:30, UTC+5:45 and a UTC+3 clock forty
-/// seconds fast must each adopt exactly their offset, once, after the quarantine.
+/// Breakage guarded (#931): a stable link whose fresh Pings all read the same value never
+/// establishing the core's offset — a UTC+3 core with no stored segment left on the UTC axis,
+/// every report date three hours off. Equal readings are usable from the first one.
 #[test]
-fn a_non_utc_core_adopts_its_own_zone() {
-    for offset_secs in [10_800, -18_000, 19_800, 20_700, 10_840] {
+fn fresh_equal_readings_establish_offset() {
+    let start = Instant::now();
+    let mut clock = PingClock::new(start);
+    clock.note_ready();
+    assert_eq!(
+        run(&mut clock, start, 0, 121, 180),
+        vec![(0, PingOffset::Adopted(10_800))]
+    );
+}
+
+/// Breakage guarded: a non-UTC core corrected by the wrong amount — the sign flipped, minutes
+/// read as seconds, a half- or quarter-hour zone rounded to the hour — which moves every report
+/// row of that core by hours; or a UTC core's `Some(0)` taken for "no reading" and left
+/// unmeasured.
+#[test]
+fn a_core_adopts_its_own_zone_at_once() {
+    for (minutes, secs) in [
+        (180, 10_800),
+        (-300, -18_000),
+        (330, 19_800),
+        (345, 20_700),
+        (0, 0),
+    ] {
         let start = Instant::now();
         let mut clock = PingClock::new(start);
-        clock.note_ready(T0_MS);
-        let adopted = run(&mut clock, start, 0, 120, offset_secs);
+        clock.note_ready();
         assert_eq!(
-            adopted.len(),
-            1,
-            "UTC{offset_secs:+}s adopts once: {adopted:?}"
-        );
-        let (at, offset) = adopted[0];
-        assert_eq!(i64::from(offset), offset_secs);
-        assert!(
-            at >= 15,
-            "nothing is adopted inside the quarantine (at {at} s)"
+            run(&mut clock, start, 0, 60, minutes),
+            vec![(0, PingOffset::Adopted(secs))],
+            "UTC{minutes:+} min"
         );
     }
 }
 
 /// Breakage guarded: a daylight-saving switch or a timezone change on the core's machine left on
 /// the old offset for the rest of the connection — every row closed after it lands an hour off.
-/// Both directions must be adopted on the running connection, without a reconnect.
+/// Both directions are adopted at the next reading, without a reconnect.
 #[test]
 fn a_zone_change_on_the_running_connection_is_adopted() {
-    for (before, after) in [(7_200, 10_800), (10_800, 7_200)] {
+    for (before, after) in [(120, 180), (180, 120)] {
         let start = Instant::now();
         let mut clock = PingClock::new(start);
-        clock.note_ready(T0_MS);
+        clock.note_ready();
+        run(&mut clock, start, 0, 60, before);
         assert_eq!(
-            run(&mut clock, start, 0, 120, before),
-            vec![(35, before as i32)]
-        );
-        // The estimator keeps a 5-minute window, so going back waits for the old samples to age
-        // out; ten minutes is enough either way.
-        let changed = run(&mut clock, start, 120, 600, after);
-        assert_eq!(
-            changed
-                .iter()
-                .map(|&(_, o)| i64::from(o))
-                .collect::<Vec<_>>(),
-            vec![after],
+            run(&mut clock, start, 60, 60, after),
+            vec![(60, PingOffset::Adopted(after as i32 * 60))],
             "{before} -> {after}"
         );
     }
 }
 
-/// Breakage guarded: this PC's own clock error folded into the core's offset — a PC twenty
-/// seconds slow would make a UTC+3 core forty seconds fast read `+03:01:00` and move its report
-/// rows twenty seconds off the exchange's trades. Corrected, the core is measured against true
-/// UTC.
-#[test]
-fn this_pcs_clock_error_is_taken_out() {
-    let start = Instant::now();
-    let mut clock = PingClock::new(start);
-    clock.note_ready(T0_MS);
-    let mut adopted = Vec::new();
-    for s in 0..120 {
-        let now = start + Duration::from_secs(s);
-        let lag_ms = 15 + (s as i64 * 37) % 66;
-        // The PC is 20 s behind true UTC: the core reads 20 s further ahead of it.
-        let delta = Some(10_840_000 + 20_000 - lag_ms);
-        if let Some(PingOffset::Adopted(o)) =
-            clock.poll(now, T0_MS + s as i64 * 1000, delta, Some(20_000), true)
-        {
-            adopted.push(o);
-        }
-    }
-    assert_eq!(adopted, vec![10_840]);
-}
-
-/// Breakage guarded: a reconnecting core whose offset did not move showing a stale status for
-/// the life of the connection — "Observed" frozen at the stored segment's start, zero samples,
-/// the log as its source — because a re-confirmation stores nothing and so said nothing.
-/// The first confirmation on each connection is reported once; nothing is stored for it.
+/// Breakage guarded: a reconnecting core whose zone did not move either re-storing a segment
+/// for it (the writer then re-values nothing, but the status claims a new adoption) or showing a
+/// stale status for the life of the connection, "Observed" frozen and the log as its source. The
+/// first reading on each connection confirms once; nothing is stored for it.
 #[test]
 fn an_unchanged_offset_is_confirmed_once_per_connection() {
     let start = Instant::now();
     let mut clock = PingClock::new(start);
     clock.seed(Some(10_800));
-    clock.note_ready(T0_MS);
+    clock.note_ready();
+    assert_eq!(
+        run(&mut clock, start, 0, 120, 180),
+        vec![(0, PingOffset::Confirmed(10_800))]
+    );
+    clock.note_ready();
+    assert_eq!(
+        run(&mut clock, start, 120, 120, 180),
+        vec![(120, PingOffset::Confirmed(10_800))]
+    );
+}
+
+/// Breakage guarded: a core whose stored offset came from the seconds-precise estimator
+/// (`+03:00:40`) kept on it, the clock error the timezone reading deliberately leaves out still
+/// applied to every new row. The zone differs from the stored value, so it is adopted.
+#[test]
+fn a_seconds_precise_stored_offset_gives_way_to_the_zone() {
+    let start = Instant::now();
+    let mut clock = PingClock::new(start);
+    clock.seed(Some(10_840));
+    clock.note_ready();
+    assert_eq!(
+        run(&mut clock, start, 0, 60, 180),
+        vec![(0, PingOffset::Adopted(10_800))]
+    );
+}
+
+/// Breakage guarded: `None` before the first Ping read as UTC and stored as a zero offset, a
+/// reading taken before Ready confirming a connection that is not up, or the reader acting on
+/// every loop pass instead of on its deadline.
+#[test]
+fn no_ping_not_ready_and_not_due_say_nothing() {
+    let start = Instant::now();
+    let mut clock = PingClock::new(start);
+    for s in 0..60 {
+        let now = start + Duration::from_secs(s);
+        assert_eq!(clock.poll(now, None, true), None, "no Ping at {s} s");
+    }
+
+    let mut clock = PingClock::new(start);
+    for s in 0..60 {
+        let now = start + Duration::from_secs(s);
+        assert_eq!(
+            clock.poll(now, Some(180), false),
+            None,
+            "not Ready at {s} s"
+        );
+    }
+
+    // Read at 0 s, then due again only at 5 s: the zone changing at 1 s is seen at 5 s.
+    let mut clock = PingClock::new(start);
+    clock.note_ready();
     let mut outcomes = Vec::new();
-    for s in 0..120 {
-        let now = start + Duration::from_secs(s);
-        let lag_ms = 15 + (s as i64 * 37) % 66;
-        if let Some(o) = clock.poll(
-            now,
-            T0_MS + s as i64 * 1000,
-            Some(10_800_000 - lag_ms),
-            None,
-            true,
-        ) {
-            outcomes.push(o);
+    for ms in (0..10_000u64).step_by(100) {
+        let minutes = if ms < 1_000 { 120 } else { 180 };
+        if let Some(o) = clock.poll(start + Duration::from_millis(ms), Some(minutes), true) {
+            outcomes.push((ms, o));
         }
-    }
-    assert_eq!(outcomes, vec![PingOffset::Confirmed(10_800)]);
-
-    // A reconnect confirms again.
-    clock.note_ready(T0_MS + 120_000);
-    let mut again = Vec::new();
-    for s in 120..240 {
-        let now = start + Duration::from_secs(s);
-        let lag_ms = 15 + (s as i64 * 37) % 66;
-        if let Some(o) = clock.poll(
-            now,
-            T0_MS + s as i64 * 1000,
-            Some(10_800_000 - lag_ms),
-            None,
-            true,
-        ) {
-            again.push(o);
-        }
-    }
-    assert_eq!(again, vec![PingOffset::Confirmed(10_800)]);
-}
-
-/// Breakage guarded: the Ping MoonProto holds through a reconnect re-read every 5 s and counted
-/// as a new arrival each time, until one Ping alone clears the agreement and spread rules and
-/// stores a segment nothing confirmed. Neither before Ready nor after it may a held value count
-/// more than once.
-#[test]
-fn one_held_ping_is_one_sample() {
-    let start = Instant::now();
-    let mut clock = PingClock::new(start);
-    // A reconnect: the getter keeps returning the last Ping of the old connection.
-    for s in 0..120 {
-        let now = start + Duration::from_secs(s);
-        assert_eq!(
-            clock.poll(now, T0_MS + s as i64 * 1000, Some(10_800_000), None, false),
-            None
-        );
-    }
-    assert_eq!(clock.samples(), 0, "nothing is fed before Ready");
-
-    clock.note_ready(T0_MS + 120_000);
-    // Ready, but the first new Ping is late: the held value is read for two more minutes. Its
-    // first reading falls inside the quarantine and is consumed there, so it never counts.
-    for s in 120..240 {
-        let now = start + Duration::from_secs(s);
-        assert_eq!(
-            clock.poll(now, T0_MS + s as i64 * 1000, Some(10_800_000), None, true),
-            None,
-            "one Ping must not adopt (at {s} s)"
-        );
-    }
-    assert_eq!(clock.samples(), 0, "the held Ping never counts");
-
-    // The next genuine Ping moves the delta by its own delay and counts at once.
-    let now = start + Duration::from_secs(240);
-    clock.poll(now, T0_MS + 240_000, Some(10_800_000 - 37), None, true);
-    assert_eq!(clock.samples(), 1, "a new Ping after the held one counts");
-}
-
-/// Breakage guarded: a wrong value adopted before the first Ping (`None` read as zero), or the
-/// loop sampling on every pass — sixty times the window walks on a core whose loop wakes often.
-#[test]
-fn no_ping_and_not_due_take_no_sample() {
-    let start = Instant::now();
-    let mut clock = PingClock::new(start);
-    for s in 0..120 {
-        assert_eq!(
-            clock.poll(
-                start + Duration::from_secs(s),
-                T0_MS + s as i64 * 1000,
-                None,
-                None,
-                true
-            ),
-            None
-        );
-    }
-    assert_eq!(clock.samples(), 0, "no Ping, no sample");
-
-    let mut clock = PingClock::new(start);
-    for ms in (0..10_000).step_by(100) {
-        let now = start + Duration::from_millis(ms);
-        // A fresh Ping every pass: the delay, and so the delta, moves by a millisecond each time.
-        clock.poll(now, T0_MS + ms as i64, Some(-(ms as i64) / 100), None, true);
     }
     assert_eq!(
-        clock.samples(),
-        2,
-        "one sample per SAMPLE_EVERY: at 0 s and at 5 s"
+        outcomes,
+        vec![
+            (0, PingOffset::Adopted(7_200)),
+            (5_000, PingOffset::Adopted(10_800))
+        ]
     );
     assert_eq!(clock.wait(start + Duration::from_secs(5)), SAMPLE_EVERY);
 }
 
-/// Breakage guarded: a delta near `i64::MAX` overflowing the core-clock sum and panicking the
-/// feed thread instead of being dropped.
+/// Breakage guarded: a value outside the report axis's band stored as a segment the axis drops
+/// on load, or a value near `i64::MAX` overflowing the conversion and panicking the feed thread.
 #[test]
-fn an_overflowing_delta_is_dropped() {
+fn an_impossible_zone_is_dropped() {
     let start = Instant::now();
-    let mut clock = PingClock::new(start);
-    assert_eq!(clock.poll(start, T0_MS, Some(i64::MAX), None, true), None);
-    assert_eq!(clock.samples(), 0);
+    for minutes in [15 * 60, -13 * 60, i64::MAX, i64::MIN] {
+        let mut clock = PingClock::new(start);
+        clock.note_ready();
+        assert_eq!(
+            clock.poll(start, Some(minutes), true),
+            None,
+            "{minutes} min"
+        );
+    }
 }

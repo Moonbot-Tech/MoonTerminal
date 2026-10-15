@@ -45,7 +45,7 @@ pub fn ensure_table(conn: &Connection) -> rusqlite::Result<()> {
 ///     from_utc: True-UTC instant, in seconds, from which `offset_secs` applies.
 ///     offset_secs: Seconds east of UTC on the core's clock.
 ///     observed_at: True-UTC instant, in seconds, the adoption itself happened.
-///     source: Label of the estimator that adopted this segment.
+///     source: Label of the source that adopted this segment.
 ///
 /// Returns:
 ///     Nothing, or the SQLite failure from upserting the segment.
@@ -73,9 +73,9 @@ pub fn store_segment(
 /// Read the offset currently IN FORCE for one core: the newest segment's value.
 ///
 /// The durable answer to "has anything actually changed", and the only one that survives a
-/// restart. [`crate::session::core_time_offset::OffsetEstimator`] dedupes re-confirmations of the
-/// same value, but it holds that memory on the FEED CONNECTION: a restart or a hard reconnect
-/// gives every core a fresh estimator that re-adopts its unchanged offset from scratch. Since an
+/// restart. The feed's Ping reader (`feed::live::ping_clock`) is seeded from this very row and so
+/// sends only a changed offset, but its memory lives on the FEED CONNECTION, and a seed read that
+/// failed starts it from nothing: it then re-adopts an unchanged offset from scratch. Since an
 /// adoption invalidates caches and DELETES that core's whole `trade_values` partition, the
 /// writer has to be able to tell a re-confirmation from a change without trusting the sender.
 ///
@@ -122,9 +122,9 @@ pub fn latest_offset(conn: &Connection, core_uid: u64) -> Option<i32> {
 
 /// Read the segment in force for one core: the newest one's offset and start.
 ///
-/// Fail-open like [`latest_offset`]: the feed seeds its estimator from it once per connection, and
-/// a failed read only means the first adoption is compared with nothing — the writer still skips a
-/// value equal to the stored one.
+/// Fail-open like [`latest_offset`]: the feed seeds its Ping reader from it once per connection,
+/// and a failed read only means the first adoption is compared with nothing — the writer still
+/// skips a value equal to the stored one.
 ///
 /// Args:
 ///     conn: Open writer connection or report reader.
@@ -146,12 +146,12 @@ pub fn latest_segment(conn: &Connection, core_uid: u64) -> Option<(i32, i64)> {
     .and_then(|(offset, from_utc)| Some((i32::try_from(offset).ok()?, from_utc)))
 }
 
-/// Read which estimator stored the offset in force for one core: the newest segment's `source`.
+/// Read which source stored the offset in force for one core: the newest segment's `source`.
 ///
 /// Fail-open like [`latest_offset`] and for the same reason in a milder form: the answer only
-/// labels a seeded status for the Core Status hover, never moves the axis. It names the estimator
+/// labels a seeded status for the Core Status hover, never moves the axis. It names the source
 /// that STORED the segment: a re-confirmation stores nothing, so an unchanged offset keeps the
-/// label of whichever estimator first adopted it.
+/// label of whichever source first adopted it.
 ///
 /// Args:
 ///     conn: Open writer connection or report reader.

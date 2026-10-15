@@ -261,10 +261,9 @@ core_status.col.tz_off: "Desvio UTC"
 # not read the same.
 core_status.tz_off.unknown: "—"
 core_status.tz_off.f.offset: "Desvio"
-core_status.tz_off.f.samples: "Amostras"
 core_status.tz_off.f.observed: "Observado"
 core_status.tz_off.f.source: "Fonte"
-# Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
+# Hover line for a core nothing has been measured on yet.
 core_status.tz_off.f.unmeasured: "Ainda não medido"
 core_status.tz_off.source.log: "Log do núcleo"
 core_status.tz_off.source.ping: "Ping do núcleo"

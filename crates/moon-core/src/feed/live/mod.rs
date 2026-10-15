@@ -40,7 +40,6 @@ mod deadline;
 mod dirty;
 mod identity_refresh;
 mod market_role;
-mod pc_clock;
 mod ping_clock;
 mod report_sync;
 mod shared_config;
@@ -763,9 +762,8 @@ pub(super) fn run(
                     // subscriptions and indexes, so waiting for an event that will never arrive
                     // would leave the status stuck at "reconnected" (0/N) forever while data flows.
                     if reconnect_is_operational(fresh, init_completed) {
-                        // The first Pings after a reconnect carry its largest delay — the stretch
-                        // the estimator's quarantine keeps out.
-                        ping_clock.note_ready(now_ms_i64());
+                        // A new connection confirms the zone in force once more.
+                        ping_clock.note_ready();
                         if std::mem::take(&mut log_delivery_ignored) {
                             let _ = tx.send(FeedMsg::LogDeliveryIgnored(false));
                         }
@@ -789,7 +787,7 @@ pub(super) fn run(
                     // and nothing clears it: a client whose init completed never runs init again,
                     // and a client that is rebuilt gets a fresh `run` with a fresh latch.
                     init_completed = true;
-                    ping_clock.note_ready(now_ms_i64());
+                    ping_clock.note_ready();
                     if std::mem::take(&mut log_delivery_ignored) {
                         let _ = tx.send(FeedMsg::LogDeliveryIgnored(false));
                     }
@@ -2675,29 +2673,19 @@ pub(super) fn run(
         }
         force_market_sample = false;
 
-        // The clock offset, on its own deadline: nothing announces a new Ping, so this runs on
-        // every pass and `ping_clock` decides whether a reading is due — and counts one only while
+        // The core's timezone, on its own deadline: nothing announces a new Ping, so this runs on
+        // every pass and `ping_clock` decides whether a reading is due — and reads only while
         // Ready, since the getter holds the previous connection's last Ping through a reconnect.
         let recv_ms = now_ms_i64();
-        // This PC's own clock error comes first: until its first SNTP round ends (seconds, inside
-        // the quarantine) a sample could be corrected while its neighbours are not.
-        let pc = pc_clock::read();
-        let reading = ping_clock.poll(
-            Instant::now(),
-            recv_ms,
-            client.server_time_delta_ms(),
-            pc.error_ms(),
-            is_ready && pc.settled(),
-        );
+        let reading = ping_clock.poll(Instant::now(), client.server_utc_offset_minutes(), is_ready);
         // A confirmation stores nothing — the offset in force is already the newest segment — but
-        // tells Core Status the value is live: the samples and the Ping as its source. Its instant
+        // tells Core Status the value is live, with the Ping as its source. Its instant
         // stays the segment's own start, so the axis built from this status is the same axis.
         if let (Some(ping_clock::PingOffset::Confirmed(offset_secs)), Some(_)) = (reading, reports)
         {
             let _ = tx.send(FeedMsg::TimeOffset(CoreTimeOffsetStatus {
                 offset_secs: Some(offset_secs),
                 observed_at_utc: segment_start_ms.unwrap_or(recv_ms),
-                samples: ping_clock.samples(),
                 source: OffsetSource::Ping,
             }));
         }
@@ -2727,7 +2715,6 @@ pub(super) fn run(
                 let _ = tx.send(FeedMsg::TimeOffset(CoreTimeOffsetStatus {
                     offset_secs: Some(offset_secs),
                     observed_at_utc: recv_ms,
-                    samples: ping_clock.samples(),
                     source: OffsetSource::Ping,
                 }));
             }

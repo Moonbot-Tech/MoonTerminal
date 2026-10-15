@@ -390,9 +390,7 @@ impl SessionManager {
                     // not come back from a restart claiming it was measured at boot. That is the
                     // whole reason `segment_at` returns the segment rather than just its offset.
                     observed_at_utc: segment.from_utc.saturating_mul(1_000),
-                    // A seeded value has no live samples behind it and must not claim any.
-                    samples: 0,
-                    // The estimator that stored the segment in force. The writer stores only a
+                    // The source that stored the segment in force. The writer stores only a
                     // CHANGED offset, so a core whose offset has not moved since the log era is
                     // seeded with the log's label; the first connection's Ping confirmation then
                     // replaces this status with a live one (`PingOffset::Confirmed`).

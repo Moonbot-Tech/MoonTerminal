@@ -261,10 +261,9 @@ core_status.col.tz_off: "Desfase UTC"
 # not read the same.
 core_status.tz_off.unknown: "—"
 core_status.tz_off.f.offset: "Desfase"
-core_status.tz_off.f.samples: "Muestras"
 core_status.tz_off.f.observed: "Observado"
 core_status.tz_off.f.source: "Fuente"
-# Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
+# Hover line for a core nothing has been measured on yet.
 core_status.tz_off.f.unmeasured: "Aún no medido"
 core_status.tz_off.source.log: "Registro del núcleo"
 core_status.tz_off.source.ping: "Ping núcleo"

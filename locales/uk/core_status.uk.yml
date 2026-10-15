@@ -261,10 +261,9 @@ core_status.col.tz_off: "Зсув UTC"
 # not read the same.
 core_status.tz_off.unknown: "—"
 core_status.tz_off.f.offset: "Зсув"
-core_status.tz_off.f.samples: "Заміри"
 core_status.tz_off.f.observed: "Заміряно"
 core_status.tz_off.f.source: "Джерело"
-# Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
+# Hover line for a core nothing has been measured on yet.
 core_status.tz_off.f.unmeasured: "Ще не заміряно"
 core_status.tz_off.source.log: "Лог ядра"
 core_status.tz_off.source.ping: "Пінг ядра"
