@@ -802,3 +802,30 @@ fn an_overlong_token_is_rejected() {
     assert_eq!(s.add_tokens(true, &format!("{long},{ok}")), 1);
     assert!(s.work.black.contains(&ok));
 }
+
+/// The headings count only the listed coins the selected strategies' own trades hit: a list
+/// built across every core names coins this strategy never traded, and counting them would
+/// label the Manual column with a restriction its numbers were not scored under.
+#[test]
+fn the_headings_count_only_coins_this_strategy_traded() {
+    let universe = [coin("XAAA"), coin("XBBB_RP"), coin("XCCC"), coin("XDDD")];
+    let work = CoinLists::parse("XAAA, XBBB, XCCC", "");
+    let sug = SuggestedLists {
+        black: vec!["XDDD".to_string()],
+        white: Vec::new(),
+    };
+    let plan = super::CoinPlan::build(&work, Some(&sug), &universe);
+    assert_eq!(plan.bl, 3, "the scan still excludes every reached coin");
+    let traded = |name: &str, n: i64| GroupStat {
+        name: name.to_string(),
+        n,
+        ..Default::default()
+    };
+    let scoped = [traded("XBBB_RP", 4), traded("XCCC", 0), traded("XDDD", 2)];
+    assert_eq!(plan.traded_reach(Some(&scoped)), (1, 0, Some((2, 0))));
+    assert_eq!(
+        plan.traded_reach(None),
+        (3, 0, Some((4, 0))),
+        "without the strategy's coins the universe-wide counts stand"
+    );
+}

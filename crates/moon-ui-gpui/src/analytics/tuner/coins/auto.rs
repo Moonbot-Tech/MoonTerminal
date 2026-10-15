@@ -612,6 +612,8 @@ impl AnalyticsView {
             s.data().is_some() && !matches!(s, LoadState::Loading { .. })
         }
         let loaded = settled(&self.coins.stats) && settled(&self.coin_lists.rows);
+        // The batch already fitted this strategy: show its verdict without a second scan.
+        self.adopt_auto_pick(loaded, cx);
         let model = AutoCardModel::new(
             &self.coins,
             self.sel_strategy.is_some(),

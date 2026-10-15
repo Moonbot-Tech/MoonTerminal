@@ -3,11 +3,15 @@
 //! Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
 //! shadows the built-in attribute and makes `#[test]` expand recursively (CONTRIBUTING.md).
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use moon_core::db::analytics::GroupStat;
 
+use super::super::auto_picks::{AutoClass, AutoFilter, AutoView};
 use super::{
-    SORT_NAME, StratListFilter, VisibleKey, VisibleRows, core_names_changed, filter_sort_indices,
-    memo_is_fresh, restore_strat_sort,
+    SORT_AUTO, SORT_NAME, StratListFilter, VisibleKey, VisibleRows, core_names_changed,
+    filter_sort_indices, memo_is_fresh, restore_strat_sort,
 };
 
 /// A group with just the fields these tests filter and sort on.
@@ -94,6 +98,7 @@ fn key_over(base: usize) -> VisibleKey {
         lists: StratListFilter::All,
         active_only: false,
         sort: None,
+        auto: AutoView::default(),
     }
 }
 
@@ -296,4 +301,78 @@ fn enabled_availability_matches_the_filtered_candidates() {
     k.lists = StratListFilter::Black;
     assert_eq!(filter_sort_indices(&all, &k), (vec![1], false));
     assert_eq!(filter_sort_indices(&[], &k), (vec![], false));
+}
+
+/// Four rows with one batch class each: a noise row, a confirmed one, a bare one, an unread one.
+fn auto_rows() -> (Vec<GroupStat>, AutoView) {
+    let all = vec![
+        g("noise", "K", Some(2), 0, 4.0),
+        g("useful", "K", Some(2), 0, 3.0),
+        g("nothing", "K", Some(2), 0, 2.0),
+        g("pending", "K", Some(2), 0, 1.0),
+    ];
+    let classes: HashMap<String, AutoClass> = [
+        ("noise@1", AutoClass::Noise { n: 2 }),
+        ("useful@1", AutoClass::Useful { n: 3, white: false }),
+        ("nothing@1", AutoClass::Nothing),
+    ]
+    .into_iter()
+    .map(|(k, c)| (k.to_string(), c))
+    .collect();
+    let view = AutoView {
+        generation: 1,
+        filter: AutoFilter::All,
+        classes: Arc::new(classes),
+        missing: AutoClass::Pending,
+    };
+    (all, view)
+}
+
+/// "With a finding" must keep noise with candidates beside the confirmed ones, and
+/// "confirmed" only those: swapping the two predicates hides exactly the rows the user asked
+/// for, with a list that still looks plausible.
+#[test]
+fn auto_filter_keeps_findings_and_confirmed_only() {
+    let (all, view) = auto_rows();
+    let mut k = key();
+    k.auto = view;
+    assert_eq!(filter_sort_indices(&all, &k).0, vec![0, 1, 2, 3]);
+    k.auto.filter = AutoFilter::Found;
+    assert_eq!(filter_sort_indices(&all, &k).0, vec![0, 1]);
+    k.auto.filter = AutoFilter::Confirmed;
+    assert_eq!(filter_sort_indices(&all, &k).0, vec![1]);
+}
+
+/// The first click on "Auto" must put confirmed findings on top, noise next and the rest
+/// after; ascending mirrors it. A comparator keyed on the candidate count alone would let a
+/// big noise row outrank a confirmed one.
+#[test]
+fn auto_sort_puts_confirmed_then_noise_first() {
+    let (all, view) = auto_rows();
+    let mut k = key();
+    k.auto = view;
+    k.sort = Some((SORT_AUTO.to_string(), true));
+    assert_eq!(filter_sort_indices(&all, &k).0, vec![1, 0, 2, 3]);
+    k.sort = Some((SORT_AUTO.to_string(), false));
+    assert_eq!(filter_sort_indices(&all, &k).0, vec![3, 2, 0, 1]);
+    assert_eq!(
+        restore_strat_sort(Some((SORT_AUTO.to_string(), true))),
+        Some((SORT_AUTO.to_string(), true))
+    );
+}
+
+/// A landed batch must re-sort the list: a memo that ignored the batch generation would keep
+/// the "…" order after the answers arrived.
+#[test]
+fn a_new_batch_generation_misses_the_memo() {
+    let (_, view) = auto_rows();
+    let cached = VisibleRows {
+        key: key(),
+        idx: vec![],
+        enabled_filter_available: false,
+    };
+    let mut k = key();
+    assert!(memo_is_fresh(Some(&cached), &k));
+    k.auto = view;
+    assert!(!memo_is_fresh(Some(&cached), &k));
 }

@@ -251,6 +251,10 @@ impl AnalyticsView {
         if !after_report {
             self.strategy_data = ProfitLoadState::default();
         }
+        // A hand-made reload is a new scope: the batch auto-pick reruns for it.
+        if !after_report {
+            self.auto_picks.scope_changed();
+        }
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
         let report_req = self.current_report_generation();

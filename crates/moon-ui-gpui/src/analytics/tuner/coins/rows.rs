@@ -48,6 +48,9 @@ pub(in crate::analytics::tuner) struct CoinRow {
 pub(in crate::analytics::tuner) struct CoinCounts {
     pub(in crate::analytics::tuner) all: usize,
     pub(in crate::analytics::tuner) black: usize,
+    /// Of `black`, the coins the selected strategies' own trades hit in the period. A list
+    /// names coins from every core and every time; only these ones changed this result.
+    pub(in crate::analytics::tuner) black_traded: usize,
     pub(in crate::analytics::tuner) white: usize,
     pub(in crate::analytics::tuner) changed: usize,
     /// Searched coins the trade-count rule hid.
@@ -83,6 +86,8 @@ pub(in crate::analytics::tuner) struct RowsCache {
     key: RowsKey,
     pub(in crate::analytics::tuner) rows: Vec<CoinRow>,
     pub(in crate::analytics::tuner) counts: CoinCounts,
+    /// Working blacklist tokens the selected strategies never traded in the period, sorted.
+    pub(in crate::analytics::tuner) black_idle: Vec<String>,
     /// Rows before the `MAX_ROWS` cut; the shown/total label reads this complete count.
     pub(in crate::analytics::tuner) total: usize,
 }
@@ -111,10 +116,12 @@ pub(in crate::analytics::tuner) fn rows_for<'a>(
     };
     if state.rows.as_ref().is_none_or(|c| c.key != key) {
         let (rows, counts, total) = build(state, base, scoped, &key.search);
+        let black_idle = black_idle(state, scoped);
         state.rows = Some(RowsCache {
             key,
             rows,
             counts,
+            black_idle,
             total,
         });
     }
@@ -257,6 +264,10 @@ fn build(
         }
     }
     counts.black = black_tok.len();
+    if !black_tok.is_empty() {
+        let traded = traded_tokens(scoped);
+        counts.black_traded = black_tok.iter().filter(|t| traded.contains(*t)).count();
+    }
     counts.white = white_tok.len();
     counts.changed = changed_tok.len();
     counts.suggested = sug_tok.len();
@@ -264,6 +275,39 @@ fn build(
     let total = rows.len();
     rows.truncate(MAX_ROWS);
     (rows, counts, total)
+}
+
+/// Tokens of every coin the scoped read shows with at least one trade.
+fn traded_tokens(scoped: &[GroupStat]) -> HashSet<String> {
+    scoped
+        .iter()
+        .filter(|g| g.n > 0 && !g.name.trim().is_empty())
+        .map(|g| coin_token(&g.name))
+        .collect()
+}
+
+/// The working blacklist entries the selected strategies never traded in the period.
+///
+/// Args:
+///     state: Coin state holding the working lists.
+///     scoped: Per-coin aggregates of the selected strategies.
+///
+/// Returns:
+///     Those tokens, sorted; empty when every listed coin was traded.
+fn black_idle(state: &CoinsState, scoped: &[GroupStat]) -> Vec<String> {
+    if state.work.black.is_empty() {
+        return Vec::new();
+    }
+    let traded = traded_tokens(scoped);
+    let mut idle: Vec<String> = state
+        .work
+        .black
+        .iter()
+        .filter(|t| !t.is_empty() && !traded.contains(*t))
+        .cloned()
+        .collect();
+    idle.sort();
+    idle
 }
 
 /// Order by the active column, bringing the visible head to the front.

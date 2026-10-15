@@ -161,7 +161,7 @@ pub(in crate::analytics::tuner) fn parse_min_trades(raw: &str) -> Option<i64> {
 
 /// The automatic pick's settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::analytics::tuner) struct PickCfg {
+pub(in crate::analytics) struct PickCfg {
     pub(in crate::analytics::tuner) min_trades: u32,
     pub(in crate::analytics::tuner) holdout_pct: u32,
     /// Suggest blacklist coins.
@@ -268,6 +268,11 @@ pub(in crate::analytics::tuner) struct CoinPlan {
     pub(in crate::analytics::tuner) wl: usize,
     /// The Auto variant's reach `(bl, wl)`, when a finished pick added that third column.
     pub(in crate::analytics::tuner) auto: Option<(usize, usize)>,
+    /// The blacklist tokens behind `bl` and behind the Auto variant's blacklist, so the column
+    /// headings can count only the coins the selected strategies' own trades hit
+    /// ([`CoinPlan::traded_reach`]).
+    pub(in crate::analytics::tuner) bl_tokens: HashSet<String>,
+    pub(in crate::analytics::tuner) auto_bl_tokens: HashSet<String>,
 }
 
 /// State of the "By coin" mode.
@@ -932,6 +937,8 @@ impl CoinPlan {
             bl: 0,
             wl: 0,
             auto: None,
+            bl_tokens: HashSet::new(),
+            auto_bl_tokens: HashSet::new(),
         };
         let auto_lists = auto.map(|s| {
             let mut lists = work.duplicate();
@@ -947,22 +954,58 @@ impl CoinPlan {
         if universe.is_empty() {
             return plan;
         }
-        (plan.variants[1], plan.bl, plan.wl) = expand(work, universe);
+        let (variant, bl_tokens, wl) = expand(work, universe);
+        (plan.variants[1], plan.bl, plan.wl) = (variant, bl_tokens.len(), wl);
+        plan.bl_tokens = bl_tokens;
         if let Some(lists) = auto_lists {
-            let (variant, bl, wl) = expand(&lists, universe);
+            let (variant, bl_tokens, wl) = expand(&lists, universe);
             plan.variants.push(variant);
-            plan.auto = Some((bl, wl));
+            plan.auto = Some((bl_tokens.len(), wl));
+            plan.auto_bl_tokens = bl_tokens;
         }
         plan
+    }
+
+    /// The headings' list counts, with each blacklist counted over the coins the selected
+    /// strategies' own trades hit rather than every coin of the selected cores.
+    ///
+    /// A list names coins from every core and every period; only the ones this strategy
+    /// traded changed its numbers, so "Manual BL 18" against five traded coins overstates
+    /// what the column was scored under.
+    ///
+    /// Args:
+    ///     scoped: Per-coin aggregates of the selected strategies, when they are known.
+    ///
+    /// Returns:
+    ///     `(bl, wl, auto)` like the plan's own counts; without `scoped` the plan's
+    ///     universe-wide counts.
+    pub(in crate::analytics::tuner) fn traded_reach(
+        &self,
+        scoped: Option<&[GroupStat]>,
+    ) -> (usize, usize, Option<(usize, usize)>) {
+        let Some(scoped) = scoped else {
+            return (self.bl, self.wl, self.auto);
+        };
+        let traded: HashSet<String> = scoped
+            .iter()
+            .filter(|g| g.n > 0 && !g.name.trim().is_empty())
+            .map(|g| coin_token(&g.name))
+            .collect();
+        let hit = |tokens: &HashSet<String>| tokens.iter().filter(|t| traded.contains(*t)).count();
+        (
+            hit(&self.bl_tokens),
+            self.wl,
+            self.auto.map(|(_, wl)| (hit(&self.auto_bl_tokens), wl)),
+        )
     }
 }
 
 /// Expand list tokens against the coin set into a scan variant, plus how many coins each list
 /// actually REACHED in the period (a list may name coins that never traded, and labelling a
 /// column with them would claim a restriction the numbers were not scored under).
-fn expand(lists: &CoinLists, universe: &[GroupStat]) -> (Variant, usize, usize) {
+fn expand(lists: &CoinLists, universe: &[GroupStat]) -> (Variant, HashSet<String>, usize) {
     if lists.is_empty() {
-        return (Variant::default(), 0, 0);
+        return (Variant::default(), HashSet::new(), 0);
     }
     let white_on = !lists.white.is_empty();
     let (mut coins_in, mut coins_out) = (Vec::new(), Vec::new());
@@ -991,7 +1034,7 @@ fn expand(lists: &CoinLists, universe: &[GroupStat]) -> (Variant, usize, usize) 
         coins_out,
         ..Default::default()
     };
-    (variant, bl_tok.len(), wl_tok.len())
+    (variant, bl_tok, wl_tok.len())
 }
 
 // Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own

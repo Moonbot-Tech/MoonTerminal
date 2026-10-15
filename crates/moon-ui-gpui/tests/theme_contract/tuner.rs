@@ -29,7 +29,7 @@ fn the_changed_column_header_explains_what_moves_its_date() {
     let lastedit = code_only(chain_between(
         header,
         "\"an-hdr-le\"",
-        "})),",
+        "}))",
         "the Changed column header",
     ));
     assert!(

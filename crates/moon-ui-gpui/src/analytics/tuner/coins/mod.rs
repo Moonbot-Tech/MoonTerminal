@@ -184,7 +184,12 @@ impl AnalyticsView {
         p: MoonPalette,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let model = filter_bar::FilterBarModel::new(&self.coins, counts);
+        let black_idle = self
+            .coins
+            .rows
+            .as_ref()
+            .map_or(&[][..], |c| c.black_idle.as_slice());
+        let model = filter_bar::FilterBarModel::new(&self.coins, counts, black_idle);
         let view = cx.entity();
         let acts = filter_bar::FilterBarActs {
             on_filter: Rc::new({
@@ -564,16 +569,39 @@ pub(in crate::analytics::tuner) fn coin_kpi_labels(
         lists(s.kpi_bl, s.kpi_wl),
     )
     .with_tip(t!("analytics.coins.tip_manual").to_string());
-    // The Auto column is always drawn — a dash until a finished pick is scored — so the
-    // matrix does not grow a column under the user's eyes.
+    // The Auto column is always drawn so the matrix does not grow a column under the user's
+    // eyes: a dash until a pick finished, its verdict word when it finished with nothing to
+    // score (a dash there read as "never ran").
     let auto = super::kpi::VarLabel::with_sub(
         t!("analytics.coins.auto_col").to_string(),
         s.kpi_auto
-            .map_or_else(|| "—".to_string(), |(bl, wl)| lists(bl, wl)),
+            .map_or_else(|| auto_idle_sub(&s.pick), |(bl, wl)| lists(bl, wl)),
     )
     .with_tip(t!("analytics.coins.tip_auto_col").to_string())
     .placeholder();
     [manual, auto]
+}
+
+/// The Auto heading's second line while no Auto variant is scored.
+///
+/// Args:
+///     pick: The card's pick state.
+///
+/// Returns:
+///     The finished pick's verdict word when it suggested nothing, else a dash.
+pub(in crate::analytics::tuner) fn auto_idle_sub(pick: &state::PickState) -> String {
+    use moon_core::db::tuner::coin_pick::{NoiseReason, PickVerdict};
+    let state::PickState::Done { pick, .. } = pick else {
+        return "—".to_string();
+    };
+    match pick.verdict {
+        PickVerdict::TooFewTrades | PickVerdict::Noise(NoiseReason::FewHoldout) => {
+            t!("analytics.coins.auto_sub_few").to_string()
+        }
+        PickVerdict::NothingFound => t!("analytics.coins.auto_sub_nothing").to_string(),
+        PickVerdict::Noise(_) => t!("analytics.coins.auto_sub_noise").to_string(),
+        PickVerdict::Useful => "—".to_string(),
+    }
 }
 
 /// Height of one coin row, in base px.

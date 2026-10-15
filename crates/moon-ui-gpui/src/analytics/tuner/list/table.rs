@@ -12,11 +12,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::super::super::AnalyticsView;
+use super::super::auto_picks::{AutoClass, AutoFilter, cell_tip};
 use super::super::columns::fixed_metric_cell;
 use super::super::{
-    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, CORE_W, CORE_W_MAX, KIND_MIN_W,
-    KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT,
-    SORT_NAME, STRAT_NAME_MIN_W, StratMode, metric_bit,
+    AUTO_MIN_W, AUTO_W, COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W,
+    CORE_W, CORE_W_MAX, KIND_MIN_W, KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_AUTO,
+    SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_NAME_MIN_W, StratMode, metric_bit,
 };
 use super::MAX_ROWS;
 use crate::design;
@@ -82,6 +83,8 @@ impl AnalyticsView {
                 w
             }
         };
+        // The batch auto-pick follows the list: arm it before reading the rows it annotates.
+        self.ensure_auto_picks(cx);
         // The filter bar creates the search input (needs &mut) — build it before the immutable
         // data read below.
         let filter_bar = self.strat_filter_bar(p, window, cx);
@@ -91,12 +94,17 @@ impl AnalyticsView {
             .strategy_data
             .view(|d| d.strategies.is_empty())
             .map(Arc::clone);
+        let all_rows = data.as_ref().map_or(0, |d| d.strategies.len());
         let (list, total, shown): (AnyElement, usize, usize) = match data {
             Ok(d) => {
                 // Filter + sort per the bar, memoized; count reflects the filtered set.
                 let total = self.ensure_visible(&d.strategies).len();
                 let shown = total.min(MAX_ROWS);
-                if shown == 0 {
+                if shown == 0 && self.auto_picks.filter != AutoFilter::All {
+                    // The auto-pick filter emptied the list: name the settings that produced
+                    // that answer and offer the one click that undoes it.
+                    (self.auto_empty_state(p, cx), 0, 0)
+                } else if shown == 0 {
                     // Raw data exists but the filters/search matched nothing — say so instead
                     // of leaving a blank area.
                     let note = div()
@@ -233,6 +241,7 @@ impl AnalyticsView {
                         t!("analytics.strat.mode_ticks").to_string(),
                     ))
                     .child(div().flex_1())
+                    .children(self.auto_progress_el(p, all_rows, cx))
                     .children({
                         // In multi-select show the count (amber) so the user knows a bulk save
                         // is armed; otherwise retain only the capped shown/total count.
@@ -242,10 +251,16 @@ impl AnalyticsView {
                                     .to_string(),
                                 p.amber,
                             ))
-                        } else if total > shown {
+                        } else if total > shown || self.auto_picks.filter != AutoFilter::All {
+                            // Under the auto-pick filter the "of M" is the whole list, so the
+                            // counter says how much the filter kept.
+                            let of = if self.auto_picks.filter == AutoFilter::All {
+                                total
+                            } else {
+                                all_rows
+                            };
                             Some((
-                                t!("analytics.strat.shown", shown = shown, total = total)
-                                    .to_string(),
+                                t!("analytics.strat.shown", shown = shown, total = of).to_string(),
                                 p.text_muted,
                             ))
                         } else {
@@ -434,7 +449,11 @@ fn strategy_row(
                         .text_size(design::t_caption(cx))
                         .text_color(moon(p.text_muted))
                         .child(g.lastedit.clone())
-                })),
+                }))
+                .children(
+                    view.col_shown(COL_BIT_AUTO)
+                        .then(|| auto_cell(view, g, p, cx)),
+                ),
         )
         .on_mouse_down(MouseButton::Right, {
             // Opening a menu must not move the selection: making the clicked row the anchor would
@@ -633,8 +652,247 @@ impl AnalyticsView {
                             // cosmetics do not open a version, so the hover says what does.
                             Some(t!("analytics.col.lastedit_tip").to_string()),
                         )
+                    }))
+                    .children(self.col_shown(COL_BIT_AUTO).then(|| {
+                        sortable(
+                            "an-hdr-auto".into(),
+                            t!("analytics.auto.col").to_string(),
+                            SORT_AUTO,
+                            Some((AUTO_W, AUTO_MIN_W)),
+                            true,
+                            Some(t!("analytics.auto.col_tip").to_string()),
+                        )
                     })),
             )
+    }
+
+    /// The batch auto-pick's line in the list header: "K of M" with a thin bar while it runs,
+    /// the finding count when done, an amber warning when the read failed.
+    ///
+    /// Args:
+    ///     p: Active palette.
+    ///     all_rows: Strategies in the loaded list, the "of M" before the scan has counted.
+    ///     cx: View context, for sizing.
+    ///
+    /// Returns:
+    ///     The line, or `None` before the first batch.
+    fn auto_progress_el(
+        &self,
+        p: MoonPalette,
+        all_rows: usize,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        let (text, warn) = self.auto_picks.status(all_rows)?;
+        let bar = self.auto_picks.fraction().map(|f| {
+            div()
+                .flex_none()
+                .w(design::ui_px(cx, 56.0))
+                .h(design::ui_px(cx, 3.0))
+                .rounded(design::ui_px(cx, 2.0))
+                .bg(moon(p.border))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(f.clamp(0.0, 1.0)))
+                        .bg(moon(p.blue)),
+                )
+        });
+        Some(
+            h_flex()
+                .id("an-auto-progress")
+                .debug_selector(|| "an-auto-progress".to_string())
+                .min_w_0()
+                .flex_shrink_1()
+                .gap(design::ui_px(cx, 6.0))
+                .items_center()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(if warn { p.amber } else { p.text_muted }))
+                .children(bar)
+                .child(div().min_w_0().truncate().child(text))
+                .into_any_element(),
+        )
+    }
+
+    /// The list emptied by the auto-pick filter: what happened, under which settings, and the
+    /// button that shows every strategy again.
+    fn auto_empty_state(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+        auto_empty_el(
+            self.coins.pick_cfg.min_trades,
+            self.coins.pick_cfg.holdout_pct,
+            cx.listener(|this, _, _, cx| {
+                this.auto_picks.filter = AutoFilter::All;
+                this.strat_visible = None;
+                cx.notify();
+            }),
+            p,
+            cx,
+        )
+    }
+}
+
+/// The auto-pick filter's empty state, as a free function so a layout probe can draw it.
+///
+/// Args:
+///     min_trades: The card's minimum-trades setting, named in the sentence.
+///     holdout_pct: The card's fresh share, named in the sentence.
+///     on_reset: The "Show every strategy" click.
+///     p: Active palette.
+///     cx: App, for sizing.
+///
+/// Returns:
+///     A centred title, one sentence and the reset button.
+pub(in crate::analytics::tuner) fn auto_empty_el(
+    min_trades: u32,
+    holdout_pct: u32,
+    on_reset: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    v_flex()
+        .id("an-auto-empty")
+        .debug_selector(|| "an-auto-empty".to_string())
+        .w_full()
+        .p(design::ui_px(cx, 18.0))
+        .gap(design::ui_px(cx, 8.0))
+        .items_center()
+        .font_family(design::ui_font())
+        .text_center()
+        .child(
+            div()
+                .debug_selector(|| "an-auto-empty-title".to_string())
+                .w_full()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(moon(p.text))
+                .child(t!("analytics.auto.empty_title").to_string()),
+        )
+        .child(
+            div()
+                .debug_selector(|| "an-auto-empty-body".to_string())
+                .w_full()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(p.text_muted))
+                .child(
+                    t!(
+                        "analytics.auto.empty_body",
+                        min = min_trades,
+                        pct = holdout_pct
+                    )
+                    .to_string(),
+                ),
+        )
+        .child(
+            div()
+                .debug_selector(|| "an-auto-empty-reset".to_string())
+                .child(
+                    MoonButton::new("an-auto-empty-reset")
+                        .variant(MoonButtonVariant::Amber)
+                        .label(t!("analytics.auto.show_all").to_string())
+                        .on_click(on_reset)
+                        .render(),
+                ),
+        )
+        .into_any_element()
+}
+
+/// The "Auto" cell of one strategy row: a chip for a finding, muted text otherwise, the
+/// card's verdict sentence on hover.
+///
+/// Args:
+///     view: Current Analytics state, holding the batch.
+///     g: The row's strategy.
+///     p: Active palette.
+///     cx: App, for sizing.
+///
+/// Returns:
+///     The fixed-width cell.
+fn auto_cell(view: &AnalyticsView, g: &GroupStat, p: MoonPalette, cx: &App) -> AnyElement {
+    let pick = view.auto_picks.picks.get(&g.key);
+    let class = match pick {
+        Some(pick) => AutoClass::of(pick),
+        None => view.auto_picks.view_missing(),
+    };
+    auto_cell_el(
+        SharedString::from(format!("an-auto-{}", g.key)),
+        class,
+        pick.map(|pick| cell_tip(pick, view.auto_picks.holdout_pct)),
+        p,
+        cx,
+    )
+}
+
+/// The cell's text for a class, and whether it is drawn as a chip (a finding).
+///
+/// Returns:
+///     `None` for an unread row, which stays empty.
+pub(in crate::analytics::tuner) fn auto_cell_text(class: AutoClass) -> Option<(String, bool)> {
+    Some(match class {
+        AutoClass::Useful { n, white: true } => {
+            (t!("analytics.auto.chip_wl", n = n).to_string(), true)
+        }
+        AutoClass::Useful { n, white: false } => {
+            (t!("analytics.auto.chip_bl", n = n).to_string(), true)
+        }
+        AutoClass::Noise { n } => (t!("analytics.auto.chip_noise", n = n).to_string(), true),
+        AutoClass::Nothing => ("\u{2014}".to_string(), false),
+        AutoClass::Few => (t!("analytics.auto.chip_few").to_string(), false),
+        AutoClass::Pending => ("\u{2026}".to_string(), false),
+        AutoClass::Unread => return None,
+    })
+}
+
+/// The "Auto" cell, as a free function so a layout probe can draw every class.
+///
+/// Args:
+///     id: Element id; the text box carries `"{id}-txt"` as its debug selector.
+///     class: What the batch says for the strategy.
+///     tip: Hover text, when the batch holds a pick.
+///     p: Active palette.
+///     cx: App, for sizing.
+///
+/// Returns:
+///     The fixed-width, right-aligned cell.
+pub(in crate::analytics::tuner) fn auto_cell_el(
+    id: SharedString,
+    class: AutoClass,
+    tip: Option<String>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let txt_sel = format!("{id}-txt");
+    let cell_sel = format!("{id}-cell");
+    let mut cell = h_flex()
+        .id(id)
+        .debug_selector(move || cell_sel)
+        .w(design::font_w_px(cx, AUTO_W))
+        .min_w(design::font_w_px(cx, AUTO_MIN_W))
+        .flex_shrink_1()
+        .justify_end()
+        .text_size(design::t_caption(cx));
+    if let Some((text, chip)) = auto_cell_text(class) {
+        let (bg, alpha, fg) = match class {
+            AutoClass::Useful { .. } => (p.green, 0.16, p.green_text),
+            AutoClass::Noise { .. } => (p.text_muted, 0.14, p.text_soft),
+            _ => (p.text_muted, 0.0, p.text_muted),
+        };
+        let mut el = div()
+            .flex_none()
+            .debug_selector(move || txt_sel)
+            .text_color(moon(fg))
+            .child(text);
+        if chip {
+            el = el
+                .px(design::ui_px(cx, 5.0))
+                .rounded(design::ui_px(cx, 3.0))
+                .bg(moon_alpha(bg, alpha));
+        }
+        cell = cell.child(el);
+    }
+    match tip {
+        Some(tip) => cell
+            .tooltip(crate::panels::common::text_tooltip(tip))
+            .into_any_element(),
+        None => cell.into_any_element(),
     }
 }
 
@@ -720,3 +978,6 @@ fn metric_col_widths(groups: &[GroupStat], cx: &App) -> Vec<f32> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

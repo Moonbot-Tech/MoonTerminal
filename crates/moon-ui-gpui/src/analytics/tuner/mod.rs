@@ -19,6 +19,9 @@
 // being reviewable as shared, and the next axis inherits a dependency nobody chose.
 
 // ————— shared by every axis —————
+/// The auto-pick for every strategy of the list: the "Auto" column, its filter and progress.
+mod auto_picks;
+pub(super) use auto_picks::AutoPicks;
 /// Its column descriptors: the metric pool both comparison tables draw from …
 mod columns;
 /// The "Fact vs variants" KPI matrix, rendered by every axis out of plain `VarStats`.
@@ -66,10 +69,11 @@ pub(in crate::analytics::tuner) use columns::{metric_cell, sort_arrow_of, toggle
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
+pub(in crate::analytics::tuner) use strat_columns::{AUTO_MIN_W, AUTO_W, SORT_AUTO};
 pub(in crate::analytics::tuner) use strat_columns::{
-    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, CORE_W, CORE_W_MAX, KIND_MIN_W,
-    KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT,
-    SORT_NAME, STRAT_NAME_MIN_W, STRAT_SORT_DEFAULT, metric_bit,
+    COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, CORE_W, CORE_W_MAX,
+    KIND_MIN_W, KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND,
+    SORT_LASTEDIT, SORT_NAME, STRAT_NAME_MIN_W, STRAT_SORT_DEFAULT, metric_bit,
 };
 /// The default visible-column mask is read by the parent too (`analytics::mod`, when it
 /// creates the view).
@@ -896,6 +900,9 @@ impl AnalyticsView {
     /// its chips/KPI. Deliberately NOT `reload_axis`: a write changes no past trades, so
     /// the filter histogram (a distribution over them) is left alone.
     pub(super) fn reload_active_tuner(&mut self, cx: &mut Context<Self>) {
+        // Only a save reaches here: the strategies' lists may have moved, so the batch
+        // auto-pick reruns against them.
+        self.auto_picks.lists_changed();
         match self.strat_mode {
             StratMode::Filters => self.reload_tuner(cx),
             StratMode::Time => self.reload_time(cx),

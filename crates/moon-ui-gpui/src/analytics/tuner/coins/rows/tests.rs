@@ -194,3 +194,17 @@ fn coin_result_window_keeps_five_hundred_of_the_complete_total() {
     assert_eq!(model.rows.len(), 500);
     assert_eq!(model.total, 505);
 }
+
+/// The blacklist chip counts the listed coins the strategy traded and names the rest: a list
+/// shared across cores lists coins this strategy never touched.
+#[test]
+fn the_blacklist_chip_counts_coins_this_strategy_traded() {
+    let base = [coin("XAAA", 4), coin("XBBB", 3), coin("XCCC", 2)];
+    let scoped = [coin("XAAA", 4), coin("XBBB", 0)];
+    let mut s = CoinsState::default();
+    s.adopt(CoinLists::parse("XAAA, XBBB, XCCC, XGONE", ""));
+    let c = rows_for(&mut s, &base, &scoped);
+    assert_eq!(c.counts.black, 4, "every listed coin still gets a row");
+    assert_eq!(c.counts.black_traded, 1);
+    assert_eq!(c.black_idle, ["XBBB", "XCCC", "XGONE"]);
+}

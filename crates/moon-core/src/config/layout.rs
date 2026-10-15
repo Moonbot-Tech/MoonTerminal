@@ -554,8 +554,13 @@ pub struct WindowLayout {
     #[serde(default)]
     pub analytics_strat_cols_modes: Option<StratColsByMode>,
     /// Versioned strategy-list masks whose bit layout includes Avg order and Profit %.
+    ///
+    /// Superseded by `analytics_strat_cols_modes3`; kept as its migration seed.
     #[serde(default, deserialize_with = "de_lenient")]
     pub analytics_strat_cols_modes2: Option<StratColsByMode>,
+    /// Versioned strategy-list masks whose bit layout includes the auto-pick column.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_strat_cols_modes3: Option<StratColsByMode>,
     /// Strategy-list sort as `(stable column key, descending)`.
     ///
     /// `None` means the UI's profit-descending default. Read leniently because this

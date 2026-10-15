@@ -11,6 +11,13 @@ use crate::db::metrics::Tally;
 use crate::db::read_fail::read_fail_on;
 use crate::symbol::coin_match_key;
 
+/// The same pick for every strategy of the list at once.
+mod batch;
+pub use batch::{
+    BatchProgress, KeyedTrade, ManualLists, PickSettings, coin_picks_from_rows,
+    suggest_coins_by_strategy,
+};
+
 /// Supported share of fresh trades reserved for validation.
 pub const HOLDOUT_PCT_RANGE: RangeInclusive<u32> = 10..=50;
 /// Default fresh-trade share.

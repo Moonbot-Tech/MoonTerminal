@@ -35,6 +35,13 @@ pub(super) const SORT_NAME: &str = "name";
 pub(super) const SORT_KIND: &str = "kind";
 pub(super) const SORT_CORE: &str = "core";
 pub(super) const SORT_LASTEDIT: &str = "lastedit";
+/// Sort id of the batch auto-pick column: findings first.
+pub(super) const SORT_AUTO: &str = "auto";
+/// Width (font-scaled px) of the auto-pick column — fits its widest chip ("шум 30", "BL 30")
+/// and the heading with a sort arrow.
+pub(super) const AUTO_W: f32 = 62.0;
+/// How narrow the auto-pick column may be squeezed before its chip stops fitting.
+pub(super) const AUTO_MIN_W: f32 = 50.0;
 /// Strategy-list sort used when no valid saved choice exists.
 pub(super) const STRAT_SORT_DEFAULT: (&str, bool) = (COL_PROFIT.key, true);
 
@@ -61,6 +68,9 @@ pub(super) const fn metric_bit(i: usize) -> u16 {
 }
 /// Historical visibility bit of the "last edit" column.
 pub(super) const COL_BIT_LASTEDIT: u16 = 1u16 << 11;
+/// Visibility bit of the batch auto-pick column, above every older bit so saved masks keep
+/// their meaning; [`restore_strat_columns`] turns it on once for masks saved before it.
+pub(super) const COL_BIT_AUTO: u16 = 1u16 << 14;
 /// Width (font-scaled px) of the "last edit" column — fits a `dd.mm.yyyy hh:mm` stamp.
 pub(super) const LASTEDIT_W: f32 = 110.0;
 /// How narrow that stamp may be squeezed before it stops being readable.
@@ -89,7 +99,7 @@ pub(super) const CORE_W_MAX: f32 = 240.0;
 /// NOT the default: the fixed columns then total more than the left column is wide, and since
 /// the name is the only flexible one, it is the name that collapses — the table loses the very
 /// thing every row is identified by. See [`STRAT_COLS_DEFAULT`].
-pub(in crate::analytics) const STRAT_COLS_ALL: u16 = (1 << 14) - 1;
+pub(in crate::analytics) const STRAT_COLS_ALL: u16 = (1 << 15) - 1;
 /// New fields enabled once while migrating an older per-mode mask.
 pub(in crate::analytics) const STRAT_COLS_V3_ADDITIONS: u16 = metric_bit(2) | metric_bit(3);
 
@@ -120,16 +130,51 @@ pub(in crate::analytics) const STRAT_COLS_DEFAULT: u16 = COL_BIT_KIND
     | metric_bit(2)
     | metric_bit(3)
     | metric_bit(5)
-    | metric_bit(6);
+    | metric_bit(6)
+    | COL_BIT_AUTO;
 
-/// The same, plus the strategy's coin-list counts — the default of the "By coin" axis.
+/// The same, plus the strategy's coin-list counts and minus Avg order — the default of the
+/// "By coin" axis.
 ///
 /// The lists are what that axis is ABOUT, so they earn their width there; on the other two they
-/// would only take it from the name. That is the whole reason the mask is kept per axis.
+/// would only take it from the name. That is the whole reason the mask is kept per axis. Avg
+/// order gives its width to the Auto column here: order size says nothing about coin choice.
 pub(in crate::analytics) const STRAT_COLS_DEFAULT_COINS: u16 =
-    STRAT_COLS_DEFAULT | metric_bit(9) | metric_bit(10);
+    (STRAT_COLS_DEFAULT & !metric_bit(3)) | metric_bit(9) | metric_bit(10);
 
-/// Restore the current per-mode mask schema or migrate older masks by enabling new metrics once.
+/// Restore the current per-mode mask schema or migrate older masks by enabling new columns once.
+///
+/// Args:
+///     with_auto: Saved mask in the schema containing the Auto column.
+///     current: Older mask in the schema containing Avg order and Profit %.
+///     previous: Older per-mode mask whose existing bits retain their meaning.
+///     legacy_single: Oldest one-mask preference used only when per-mode state is absent.
+///
+/// Returns:
+///     Current per-mode masks that respect current hides or enable new columns once.
+pub(in crate::analytics) fn restore_strat_columns(
+    with_auto: Option<moon_core::config::layout::StratColsByMode>,
+    current: Option<moon_core::config::layout::StratColsByMode>,
+    previous: Option<moon_core::config::layout::StratColsByMode>,
+    legacy_single: Option<u16>,
+) -> moon_core::config::layout::StratColsByMode {
+    if let Some(mut with_auto) = with_auto {
+        // A saved zero (Auto hidden with everything else) is kept like any deliberate hide.
+        with_auto
+            .ticks
+            .get_or_insert(super::StratMode::Ticks.default_cols());
+        return with_auto;
+    }
+    // Saved before the Auto column existed: every axis shows it once; a later hide is kept,
+    // because from then on the mask is saved under the schema that knows the bit.
+    let mut restored = restore_without_auto(current, previous, legacy_single);
+    for mode in super::STRAT_MODES {
+        *mode.cols_slot(&mut restored) |= COL_BIT_AUTO;
+    }
+    restored
+}
+
+/// The pre-Auto restore: the Avg order / Profit % schema, or an older mask migrated into it.
 ///
 /// Args:
 ///     current: Saved mask in the schema containing Avg order and Profit %.
@@ -137,8 +182,8 @@ pub(in crate::analytics) const STRAT_COLS_DEFAULT_COINS: u16 =
 ///     legacy_single: Oldest one-mask preference used only when per-mode state is absent.
 ///
 /// Returns:
-///     Current per-mode masks that respect current hides or enable new columns once.
-pub(in crate::analytics) fn restore_strat_columns(
+///     Masks in that schema; an axis never chosen takes its (Auto-bearing) default.
+fn restore_without_auto(
     current: Option<moon_core::config::layout::StratColsByMode>,
     previous: Option<moon_core::config::layout::StratColsByMode>,
     legacy_single: Option<u16>,

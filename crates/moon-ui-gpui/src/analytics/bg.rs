@@ -30,6 +30,8 @@ pub(super) enum ReadLane {
     CoinPicked,
     /// The By coin axis' automatic pick.
     CoinPick,
+    /// The strategy list's batch auto-pick (every strategy at once).
+    CoinPickAll,
     Time,
     /// The Entry/Exit axis' database stage.
     Ticks,
