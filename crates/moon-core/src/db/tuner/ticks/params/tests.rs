@@ -55,3 +55,33 @@ fn max_modifier_moves_the_entry_like_the_entry_fields() {
         2.0
     );
 }
+
+/// `MStrikeSellLevel` is read into the exit parameters, as `HookSellLevel` is for a hook.
+#[test]
+fn mstrike_sell_level_maps_to_exit_params() {
+    let values: HashMap<String, String> =
+        [("MStrikeSellLevel".to_string(), "60".to_string())].into();
+    let defaults = HashMap::new();
+    let sv = StrategyValues {
+        values: &values,
+        defaults: &defaults,
+    };
+    assert_eq!(
+        exit_params(&sv, ModelSettings::default()).strike_sell_level_pct,
+        60.0
+    );
+}
+
+/// A strike's grid offers its own level and not `SellPrice`, which it does not carry.
+#[test]
+fn strike_grid_shows_mstrike_sell_level_not_sell_price() {
+    let strike: Vec<&str> = params_for(ParamGroup::Exit, super::super::strike::KIND_MOONSTRIKE)
+        .map(|p| p.key)
+        .collect();
+    assert!(strike.contains(&"MStrikeSellLevel"));
+    assert!(!strike.contains(&"SellPrice"));
+    let pump: Vec<&str> = params_for(ParamGroup::Exit, "PumpsDetection")
+        .map(|p| p.key)
+        .collect();
+    assert!(!pump.contains(&"MStrikeSellLevel"), "a strike-only field");
+}

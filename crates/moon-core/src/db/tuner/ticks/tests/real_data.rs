@@ -167,6 +167,10 @@ fn dump_deal(
         "fact_modifier": deal.fact_modifier.is_some(),
         "hook_depth": deal.hook_depth_pct,
         "hook_stated": deal.hook_stated_take_pct,
+        "strike_detect": deal.strike_detect.map(|d| serde_json::json!({
+            "depth": d.depth_pct,
+            "trade_price": d.trade_price,
+        })),
         "stop": {
             "pct": stop,
             "level": level,
@@ -1333,7 +1337,7 @@ fn real_data_reproduction() {
         eprintln!(
             "{uid} {coin:<8} {kind:<8} buy {buy:.6} | plain fill {fill:?} dev {dev:?} ✓{ok:?} | \
              archived start {start:?} fill {fill2:?} dev {dev2:?} ✓{ok2:?} | \
-             exit {exit_kind:?} ✓{exit_ok:?} dev {exit_dev:?} line {line:?} | {reason} | ticks {n} step {tick:?}              | hook depth {hook_depth:?} core {hook_stated:?} model {hook_model:?}",
+             exit {exit_kind:?} ✓{exit_ok:?} dev {exit_dev:?} line {line:?} | {reason} | ticks {n} step {tick:?}              | hook depth {hook_depth:?} core {hook_stated:?} model {hook_model:?} | strike {strike:?}",
             uid = deal.report_uid,
             coin = deal.coin,
             kind = deal.kind,
@@ -1354,6 +1358,7 @@ fn real_data_reproduction() {
             tick = deal.tick,
             hook_depth = round3(deal.hook_depth_pct),
             hook_stated = round3(deal.hook_stated_take_pct),
+            strike = deal.strike_detect.map(|d| (d.depth_pct, d.trade_price)),
             // The formula against the core's own number, for the same trade. The depth is the one
             // the stated take implies (`record::placed_hook_depth`), so the two agree wherever
             // the comment states a take; a gap left is a row without one.

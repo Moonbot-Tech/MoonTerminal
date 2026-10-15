@@ -270,3 +270,50 @@ fn the_hook_depth_is_read_off_the_stated_take() {
     d.hook_stated_take_pct = None;
     assert_eq!(placed_hook_depth(&d, &p), None);
 }
+
+/// A strike long whose snapshot sums to 2, its take placed off the span rule at that same sum.
+fn strike(is_short: bool) -> (Deal, ExitParams) {
+    let mut d = deal(is_short);
+    d.kind = crate::db::tuner::ticks::strike::KIND_MOONSTRIKE.to_string();
+    d.buy_price = 100.0;
+    d.tick = Some(0.0001);
+    d.strike_detect = Some(crate::db::tuner::ticks::strike::StrikeDetect {
+        depth_pct: 4.0,
+        trade_price: 100.0,
+    });
+    d.deltas.d15m = 20.0;
+    d.sell_reason = REASON_TAKE.to_string();
+    // Span rule at 50 %: 102 long, 98 short; then the 0.3 · 2 % shift.
+    d.sell_price = if is_short {
+        98.0 / 1.006
+    } else {
+        102.0 * 1.006
+    };
+    let p = ExitParams {
+        sell_price_pct: 1.0,
+        sell_modifier: 0.3,
+        strike_sell_level_pct: 50.0,
+        sell_mods: Modifiers {
+            add_15m: 0.1,
+            ..Modifiers::default()
+        },
+        ..ExitParams::default()
+    };
+    (d, p)
+}
+
+/// The strike's base is its span rule, not `SellPrice`: a take that IS the rule at the model's
+/// own sum leaves no residual.
+#[test]
+fn a_strike_long_take_on_its_rule_leaves_no_residual() {
+    let (d, p) = strike(false);
+    let fm = FactModifier::of(&d, &p, None).expect("a reading");
+    assert!(fm.residual.abs() < 1e-3, "{}", fm.residual);
+}
+
+#[test]
+fn a_strike_short_take_on_its_rule_leaves_no_residual() {
+    let (d, p) = strike(true);
+    let fm = FactModifier::of(&d, &p, None).expect("a reading");
+    assert!(fm.residual.abs() < 1e-3, "{}", fm.residual);
+}

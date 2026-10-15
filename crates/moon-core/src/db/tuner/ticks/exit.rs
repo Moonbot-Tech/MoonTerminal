@@ -148,6 +148,12 @@ pub struct ExitParams {
     /// delta modifiers move a fixed take the sample cannot tell; they are applied as for the
     /// other branch. Not a grid parameter: a knob that moves no column is worse than no knob.
     pub hook_sell_fixed: bool,
+    /// `MStrikeSellLevel` — MoonStrike's replacement for `SellPrice`: the take in per cent OF THE
+    /// STRIKE'S SPAN, from its deeper end back to where it started (`Deal::strike_detect`,
+    /// [`crate::db::tuner::ticks::strike::strike_take_level`]). 0 means the level is unknown,
+    /// and the verdict then answers nothing ([`ExitModel::take_known`]). Ignored by every other
+    /// kind. `MStrikeSellAdjust` is not modelled.
+    pub strike_sell_level_pct: f64,
     /// `SellModifier` — the coefficient the summed `Add*` delta modifiers are multiplied by
     /// before they move the sell level (FAQ: a summed delta of 5 % with `SellModifier = 0.2`
     /// places the sell 1 % higher). 0 leaves the level alone.
@@ -255,6 +261,7 @@ impl Default for ExitParams {
             sell_delay_ms: 0.0,
             hook_sell_level_pct: 0.0,
             hook_sell_fixed: false,
+            strike_sell_level_pct: 0.0,
             sell_modifier: 0.0,
             max_modifier: 0.0,
             stop_loss_modifier: 0.0,

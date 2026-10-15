@@ -1,9 +1,11 @@
 //! The strategy window's "Sell order" section: the take, `SellDelay`, `PriceDown*` and
 //! `SellLevel*`.
 //!
-//! - **The take** is `SellPrice` per cent above the fill for every kind but two: MoonHook, whose
+//! - **The take** is `SellPrice` per cent above the fill for every kind but three: MoonHook, whose
 //!   take replaces it with `HookSellLevel` per cent of the trade's own detect depth
-//!   ([`crate::db::tuner::ticks::hook`]), and Spread, whose take is the edge of the spread it
+//!   ([`crate::db::tuner::ticks::hook`]), MoonStrike, whose take is `MStrikeSellLevel` per cent
+//!   of the strike's span off its detect price ([`crate::db::tuner::ticks::strike`]), and
+//!   Spread, whose take is the edge of the spread it
 //!   detected — a level, not a rule, taken as the core recorded it ([`take_is_recorded`]). The
 //!   Delta-Modifier family moves it ([`super::delta_mods`]). A MoonShot's take is raised by
 //!   `MShotSellAtLastPrice` — read for MoonShot alone ([`lifts_take_to_ask`]) — to the
@@ -37,6 +39,7 @@ use super::line::Line;
 use super::{ExitModel, ExitParams, Side, due_by, level_off_buy};
 use crate::db::tuner::ticks::deltas::Bar;
 use crate::db::tuner::ticks::hook::{KIND_MOONHOOK, hook_take_pct};
+use crate::db::tuner::ticks::strike::{KIND_MOONSTRIKE, strike_take_level};
 use crate::db::tuner::ticks::{Deal, Fill};
 use crate::feed::types::Tick;
 
@@ -59,12 +62,13 @@ impl ExitModel<'_> {
             }
         }
         // A short's take divides off the fill for every kind (the core developer, 2026-09-23 for
-        // MoonShot, 2026-09-24 for every per cent of a short off the buy).
-        let mut take = level_off_buy(
-            fill.price,
-            self.base_take_pct(deal).max(0.0),
-            deal.is_long(),
-        );
+        // MoonShot, 2026-09-24 for every per cent of a short off the buy). A MoonStrike with its
+        // level and detect places a PRICE off the strike's span instead ([`Self::strike_take`]);
+        // it never stands on the losing side of the fill, and the modifier shift below moves it
+        // as any other take. A strike's take
+        // is no model of its own ([`take_model_for`] is false for it), so when the fact is judged
+        // the archived level above still comes first.
+        let mut take = self.unmodified_take(deal, fill.price);
         if lifts_take_to_ask(self.params, &deal.kind) {
             let pre = deal
                 .pre_spike_ask
@@ -102,8 +106,47 @@ impl ExitModel<'_> {
         take
     }
 
+    /// The take price before the lift and the delta modifiers, off `fill_price`: a MoonStrike's
+    /// span rule where its level and detect are known ([`Self::strike_take`]), else the kind's
+    /// per cent ([`Self::base_take_pct`]) off the fill. Shared by [`Self::take_level`] and the
+    /// fact's modifier reading (`delta_mods::take_reading`), so the two never disagree on the base.
+    pub(in crate::db::tuner::ticks) fn unmodified_take(&self, deal: &Deal, fill_price: f64) -> f64 {
+        self.strike_take(deal, fill_price).unwrap_or_else(|| {
+            level_off_buy(
+                fill_price,
+                self.base_take_pct(deal).max(0.0),
+                deal.is_long(),
+            )
+        })
+    }
+
+    /// A MoonStrike's take price before the modifiers — `MStrikeSellLevel` of the strike's span
+    /// ([`strike_take_level`]) — or `None` for every other kind and for a strike whose level or
+    /// detect is unknown.
+    fn strike_take(&self, deal: &Deal, fill_price: f64) -> Option<f64> {
+        if deal.kind != KIND_MOONSTRIKE || !(self.params.strike_sell_level_pct > 0.0) {
+            return None;
+        }
+        let d = deal.strike_detect?;
+        let take = strike_take_level(
+            d,
+            fill_price,
+            self.params.strike_sell_level_pct,
+            deal.is_long(),
+        );
+        // A fill past the strike's top would put the span's take on the losing side; it is held
+        // at the fill instead, as the modifier shift is.
+        Some(if deal.is_long() {
+            take.max(fill_price)
+        } else {
+            take.min(fill_price)
+        })
+    }
+
     /// The take distance before the modifiers, per cent of the fill: `HookSellLevel` of the
-    /// trade's own detect depth for a MoonHook, `SellPrice` for every other kind.
+    /// trade's own detect depth for a MoonHook, `SellPrice` for every other kind. A MoonStrike
+    /// with its level and detect never reaches it ([`Self::strike_take`] places a price); one
+    /// without falls back to `SellPrice` like a hook below.
     ///
     /// A hook whose depth or level is unknown falls back to `SellPrice` so the line still has
     /// somewhere to step down from — and [`Self::take_known`] answers `false` for it, which is
@@ -126,6 +169,8 @@ impl ExitModel<'_> {
     ///
     /// - a MoonHook needs its rule's inputs — the detect depth and `HookSellLevel`, with
     ///   `HookSellFixed` on or off alike (`ExitParams::hook_sell_fixed`);
+    /// - a MoonStrike needs `MStrikeSellLevel` and its detect — the depth and `TradePrice` the
+    ///   comment wrote ([`Deal::strike_detect`]);
     /// - a Spread needs the take the core recorded ([`take_is_recorded`]);
     /// - a MoonShot lifted to the pre-spike ask (`MShotSellAtLastPrice`) needs that ask off the
     ///   core's record (`Deal::pre_spike_ask`) — the tape's print before the spike sits 0.1–0.5 %
@@ -142,6 +187,14 @@ impl ExitModel<'_> {
         let positive = |v: Option<f64>| v.is_some_and(|x| x.is_finite() && x > 0.0);
         if deal.kind == KIND_MOONHOOK {
             return self.params.hook_sell_level_pct > 0.0 && positive(deal.hook_depth_pct);
+        }
+        if deal.kind == KIND_MOONSTRIKE {
+            // Re-checked here though the scan parses only positive numbers: a Deal is also
+            // built by hand (tests, callers), and the verdict must not trust it.
+            return self.params.strike_sell_level_pct > 0.0
+                && deal
+                    .strike_detect
+                    .is_some_and(|d| positive(Some(d.depth_pct)) && positive(Some(d.trade_price)));
         }
         if take_is_recorded(&deal.kind) {
             return positive(deal.archived_take);
@@ -174,7 +227,8 @@ pub fn take_is_recorded(kind: &str) -> bool {
 ///
 /// It is NOT the test for "is the take known at all" — that is [`ExitModel::take_known`], and
 /// reading this one in its place silenced five legitimate verdicts on the live sample
-/// (2026-09-22), four of them hits: `SellPrice` is the take of every kind but MoonHook, and a
+/// (2026-09-22), four of them hits: `SellPrice` is the take of every kind but MoonHook and
+/// MoonStrike (whose own rules [`ExitModel::take_known`] checks), and a
 /// Spread trade without an archived line is judged by it perfectly well.
 pub fn take_model_for(kind: &str) -> bool {
     crate::db::tuner::ticks::entry::entry_model_for(kind)
