@@ -25,6 +25,8 @@ use crate::db::{ReadFail, ReadResult};
 /// The scope's rows split into what the axis can replay and what it cannot.
 #[derive(Clone, Debug, Default)]
 pub struct DealsRead {
+    /// Full report-scope baseline, before the stamp, service and model eligibility gates.
+    pub all: crate::db::tuner::VarStats,
     /// Rows with millisecond stamps, chronological by close.
     pub deals: Vec<Deal>,
     /// Rows the scope holds that carry no millisecond stamp — older replicas, or a core that
@@ -66,7 +68,7 @@ const DELTA_COLS: [&str; 16] = [
 ///     q: The tuner scope — period, cores, strategies, filters.
 ///
 /// Returns:
-///     The replayable deals with their kinds resolved, and the counts left out; `NotReady`
+///     The full-scope baseline, replayable deals with resolved kinds, and excluded counts; `NotReady`
 ///     when no report source has the schema yet.
 pub fn read_deals(q: &Query) -> ReadResult<DealsRead> {
     // The scan on the tuner's own source (the metric decides `pnl`), then the USDT money of
@@ -133,7 +135,17 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
     let mut rows = stmt
         .query(rusqlite::params![q.from, q.to])
         .map_err(|e| read_fail_on(conn, CTX, e))?;
-    let mut out = DealsRead::default();
+    let mut out = DealsRead {
+        all: crate::db::tuner::variant_stats_from_source(
+            conn,
+            q,
+            src,
+            &[crate::db::tuner::Variant::default()],
+        )?
+        .pop()
+        .unwrap_or_default(),
+        ..Default::default()
+    };
     let mut order: Vec<(i64, i64)> = Vec::new();
     while let Some(r) = rows.next().map_err(|e| read_fail_on(conn, CTX, e))? {
         let fail = |e: rusqlite::Error| -> ReadFail { read_fail_on(conn, CTX, e) };

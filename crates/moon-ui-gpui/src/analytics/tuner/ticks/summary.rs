@@ -290,7 +290,7 @@ impl SummaryModel {
             } => Some((
                 handle.completed(),
                 *total,
-                estimate.map(|d| d.saturating_sub(started.elapsed())),
+                remaining_time(handle.completed(), *total, started.elapsed(), *estimate),
                 handle.points(),
             )),
         };
@@ -433,6 +433,24 @@ impl SummaryModel {
             }),
             write_error: None,
         }
+    }
+}
+
+/// Update remaining time from observed restart throughput once any restart has completed.
+/// Before that, an exhausted startup estimate is unknown rather than a permanent one second.
+fn remaining_time(
+    done: usize,
+    total: usize,
+    elapsed: Duration,
+    estimate: Option<Duration>,
+) -> Option<Duration> {
+    let remaining = total.checked_sub(done).filter(|&n| n > 0)?;
+    if done > 0 {
+        Some(elapsed.mul_f64(remaining as f64 / done as f64))
+    } else {
+        estimate
+            .and_then(|d| d.checked_sub(elapsed))
+            .filter(|d| !d.is_zero())
     }
 }
 

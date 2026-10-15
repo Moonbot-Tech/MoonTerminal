@@ -53,6 +53,7 @@ mod refiled;
 mod report;
 mod risk;
 pub(in crate::analytics::tuner) mod rows;
+mod sample;
 mod sections;
 pub(in crate::analytics) mod state;
 mod summary;
@@ -64,12 +65,6 @@ mod variants;
 
 #[cfg(test)]
 mod tests;
-
-/// Decline the usable-trade caption with the shared locale-aware count rules.
-fn kpi_over_text(n: usize) -> String {
-    let key = super::coins::plural_key("analytics.ticks.kpi.over", n);
-    t!(key, n = n).to_string()
-}
 
 impl AnalyticsView {
     /// The deal table card — sits UNDER the strategy list, where the coin table sits in "By
@@ -681,8 +676,13 @@ impl AnalyticsView {
             KpiOpts {
                 title: Some((
                     t!("analytics.ticks.kpi.title").to_string(),
-                    kpi_over_text(set_n),
+                    sample::caption(set_n, self.ticks.data.data().map_or(0, |d| d.all.n)),
                 )),
+                sample_note: self.ticks.data.data().and_then(|d| {
+                    baseline
+                        .as_ref()
+                        .and_then(|fit| sample::bias_note(fit, &d.all))
+                }),
                 rows: KpiRows::Plain,
                 unclosed: (self.ticks.var_open > 0)
                     .then_some((self.ticks.var_open, self.ticks.var_open_profit)),

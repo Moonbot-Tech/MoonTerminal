@@ -162,6 +162,7 @@ fn card_header_layout(
         text = text.child(
             div()
                 .flex_none()
+                .when(wrap, |caption| caption.min_w_0().max_w_full())
                 .text_size(design::t_caption(cx))
                 .text_color(moon(p.text_muted))
                 .debug_selector(|| "an-tuner-card-caption".to_string())

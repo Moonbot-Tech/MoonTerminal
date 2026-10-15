@@ -364,6 +364,7 @@ impl AnalyticsView {
                 kinds.sort();
                 kinds.dedup();
                 let mut data = TicksData {
+                    all: read.all,
                     rows,
                     without_ms: read.without_ms,
                     service: read.service,

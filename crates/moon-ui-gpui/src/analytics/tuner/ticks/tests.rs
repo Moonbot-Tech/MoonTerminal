@@ -2,33 +2,14 @@ use std::time::Duration;
 
 use super::fetch_wait_text;
 
-/// A count ending in one must use the singular instrumental form, including twenty-one.
+/// The comparison caption always names its full population in every shipped language.
 #[test]
-fn usable_trade_caption_declines_russian_and_ukrainian_counts() {
-    for (code, expected) in [
-        (
-            "ru",
-            [
-                "по 1 годной сделке",
-                "по 2 годным сделкам",
-                "по 5 годным сделкам",
-                "по 21 годной сделке",
-            ],
-        ),
-        (
-            "uk",
-            [
-                "за 1 придатною угодою",
-                "за 2 придатними угодами",
-                "за 5 придатними угодами",
-                "за 21 придатною угодою",
-            ],
-        ),
-    ] {
-        let _locale = crate::test_locale::force(code);
-        for (n, expected) in [1, 2, 5, 21].into_iter().zip(expected) {
-            assert_eq!(super::kpi_over_text(n), expected);
-        }
+fn usable_trade_caption_names_all_closed_deals() {
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let caption = super::sample::caption(155, 405);
+        assert!(caption.contains("155") && caption.contains("405"));
+        assert!(!caption.contains("analytics."));
     }
 }
 

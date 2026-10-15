@@ -81,6 +81,40 @@ pub(in crate::analytics::tuner) struct DealRow {
 }
 
 impl DealRow {
+    /// Cancel a progress mark without losing the model coverage a short-tail refill started with.
+    fn unmark_fetching(&mut self) {
+        if self.tape == TapeStatus::Fetching {
+            self.tape = if self.verdict.is_some() {
+                TapeStatus::Covered
+            } else {
+                TapeStatus::Missing
+            };
+        }
+    }
+
+    /// Offer missing tape as before, and short reproduced tails only while a source can fill them.
+    pub(in crate::analytics::tuner) fn fetchable_at(&self, now_ms: i64, min_tail_s: u32) -> bool {
+        use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
+        let Some(address) = &self.address else {
+            return false;
+        };
+        if self.tape == TapeStatus::Missing {
+            return true;
+        }
+        let trail_ms = self.held.map_or(0, |(_, trail)| trail.max(0));
+        self.reproduced()
+            && trail_ms < i64::from(min_tail_s) * 1_000
+            && matches!(
+                fetchable(
+                    address.venue,
+                    &address.market,
+                    self.deal.close_ms.saturating_add(trail_ms),
+                    now_ms,
+                ),
+                Fetchable::Rest | Fetchable::Archive
+            )
+    }
+
     /// Whether the variants and the search run on this row: it is [`Self::reproduced`], holds
     /// the shortest tail past the close (`tail`) and has no hole between the buy and the close
     /// (`Deal::gap`). The table shows every row; this is the sample.
@@ -161,6 +195,8 @@ pub(in crate::analytics::tuner) enum NowValue {
 /// The loaded picture of the axis for one scope.
 #[derive(Clone, Debug, Default)]
 pub(in crate::analytics::tuner) struct TicksData {
+    /// All closed report-scope rows, before replay eligibility gates, for sample-bias context.
+    pub(in crate::analytics::tuner) all: VarStats,
     /// Chronological by close, as `read_deals` orders them.
     pub(in crate::analytics::tuner) rows: Vec<DealRow>,
     /// Scope rows without millisecond stamps — in the Fact column, not in the table.
@@ -241,11 +277,23 @@ impl TicksData {
             .min()
     }
 
-    /// Rows a fetch could still fill: missing, with an address, not already asked.
+    /// Missing rows and reproduced short tails that REST or an archive can still extend.
     pub(in crate::analytics::tuner) fn fetchable(&self) -> impl Iterator<Item = &DealRow> {
+        self.fetchable_at(
+            chrono::Utc::now().timestamp_millis(),
+            super::tail::effective_s(),
+        )
+    }
+
+    /// Resolve one consistent clock and tail floor for the whole offered population.
+    pub(in crate::analytics::tuner) fn fetchable_at(
+        &self,
+        now_ms: i64,
+        min_tail_s: u32,
+    ) -> impl Iterator<Item = &DealRow> {
         self.rows
             .iter()
-            .filter(|r| r.tape == TapeStatus::Missing && r.address.is_some())
+            .filter(move |r| r.fetchable_at(now_ms, min_tail_s))
     }
 
     /// Rows fit for the search ([`DealRow::fit`]), tape in memory or not.
@@ -339,9 +387,9 @@ impl TicksData {
 
 /// One of the fetch job's words on a row ([`TicksState::edit_rows`]).
 pub(in crate::analytics::tuner) enum RowEdit {
-    /// A walk went out for the row: a missing row reads "fetching".
+    /// A walk went out for missing tape or a short tail: the row reads "fetching".
     MarkFetching,
-    /// The walk was stopped: a fetching row reads "missing" again.
+    /// The walk was stopped: restore any pad coverage the refill started with.
     UnmarkFetching,
     /// The row's replay after the walk.
     Replay(Box<DealRow>),
@@ -770,9 +818,7 @@ impl TicksState {
         self.plan.clear();
         if let Some(data) = self.data.data_mut() {
             for row in &mut data.rows {
-                if row.tape == TapeStatus::Fetching {
-                    row.tape = TapeStatus::Missing;
-                }
+                row.unmark_fetching();
             }
         }
     }
@@ -894,13 +940,14 @@ impl TicksState {
             };
             touched = true;
             match edit {
-                RowEdit::MarkFetching if row.tape == TapeStatus::Missing => {
+                RowEdit::MarkFetching
+                    if row.tape == TapeStatus::Missing
+                        || (row.reproduced() && !super::tail::holds(row.held)) =>
+                {
                     row.tape = TapeStatus::Fetching;
                 }
-                RowEdit::UnmarkFetching if row.tape == TapeStatus::Fetching => {
-                    row.tape = TapeStatus::Missing;
-                }
-                RowEdit::MarkFetching | RowEdit::UnmarkFetching => {}
+                RowEdit::UnmarkFetching => row.unmark_fetching(),
+                RowEdit::MarkFetching => {}
                 RowEdit::Replay(answer) => {
                     row.take_replay(*answer);
                     replayed = true;
@@ -950,8 +997,17 @@ impl TicksState {
             // Coverage only grows between reloads, so the fresher word is the covered one —
             // and a refusal the walk itself gave outranks a plain "missing" read from before
             // it, or the row would read as fetchable again and be queued once more.
+            // A short-tail refusal also outranks an older Covered answer until tape grows.
             let stale = match (slot.tape, answer.tape) {
+                (TapeStatus::Covered, TapeStatus::Covered) => {
+                    slot.held.map(|(_, trail)| trail).unwrap_or(0)
+                        > answer.held.map(|(_, trail)| trail).unwrap_or(0)
+                }
                 (TapeStatus::Covered, other) => other != TapeStatus::Covered,
+                (TapeStatus::Refused(_), TapeStatus::Covered) => {
+                    answer.held.map(|(_, trail)| trail).unwrap_or(0)
+                        <= slot.held.map(|(_, trail)| trail).unwrap_or(0)
+                }
                 (TapeStatus::Refused(_), TapeStatus::Missing) => true,
                 _ => false,
             };
