@@ -7,8 +7,11 @@ use super::terms::{
 use crate::Backend;
 use moon_core::config::{GroupExitSettings, GroupTradeSettings};
 use moon_core::feed::ClientSettingsEdit;
-use moon_core::market::MarketQuantityUnit;
+use moon_core::market::{MarketQuantityUnit, OrderSizeRules};
 use moon_core::session::CoreId;
+
+#[cfg(test)]
+mod tests;
 
 impl Backend {
     /// Convert a target core's effective USD amount — group-local, or the core's own when the
@@ -51,6 +54,18 @@ impl Backend {
             .iter()
             .find(|server| server.id == core)?;
         let usd = self.effective_order_size_usd_for_order(&server.group, core)?;
+        self.manual_order_size_base_for_usd(core, market, price, usd)
+    }
+
+    /// Resolve an explicit USD equivalent through the manual-order collateral and minimum rules.
+    /// Returns `None` for missing sizing data, invalid amounts, or a below-minimum order.
+    pub(crate) fn manual_order_size_base_for_usd(
+        &self,
+        core: CoreId,
+        market: &str,
+        price: f64,
+        usd: f64,
+    ) -> Option<(f64, f64)> {
         // On a Contracts market `price` is the divisor below, so a caller that cannot name the FILL
         // price gets a size for the price it did name. The pending-order path is the one such
         // caller: its price is a TRIGGER, and the core moves the real entry off it by its own
@@ -62,29 +77,9 @@ impl Backend {
         // REFUSES on an unknown unit rather than picking one: guessing here is what sends a whole
         // account's worth of coin as a quantity.
         let rules = source.order_size_rules(core, market)?;
-        let rate = match rules.unit {
-            MarketQuantityUnit::Contracts(_) => (price.is_finite() && price > 0.0).then_some(price),
-            MarketQuantityUnit::Coins => {
-                source.currency_usd_rate(core, self.session.core_base(core)?)
-            }
-        };
-        let size = usd_to_base_amount(usd, rate)?;
-        // Below what the venue accepts the order cannot be placed at all, so refusing is the honest
-        // answer: rounding down reaches zero, rounding up spends more than the trader asked for.
-        //
-        // Compared in DOLLARS, which is the one currency both units share — the trader's figure is
-        // always dollars, while the wire quantity is coins on one market and contracts on another.
-        // Checking the venue's raw QUANTITY here instead is what read `$200 < 1000 STONKS` as one
-        // comparison and refused every manual order on Gate's `STONKS_USDT`. An absent floor never
-        // blocks; `min_order_floor` argues why.
-        if let Some(floor) = rules.min_order_usd.filter(|floor| usd < *floor) {
-            log::warn!(
-                "manual order refused: core={core} market={market} ${usd:.2} is below this \
-                 market's minimum order value ${floor:.2} ({:?}, wire size {size:.8})",
-                rules.unit
-            );
-            return None;
-        }
+        let size = Self::manual_order_collateral_size(core, market, usd, price, rules, || {
+            source.currency_usd_rate(core, self.session.core_base(core)?)
+        })?;
         Some((size, usd))
     }
 
@@ -296,5 +291,34 @@ impl Backend {
             .map(|preview| &mut preview.group_mut(group).trade);
         update_group_trade_pair(live, preview, update);
         self.config_dirty = true;
+    }
+    /// Convert USD into collateral and enforce the venue floor for presets and quote overrides.
+    /// The rate lookup runs only for linear/spot collateral; inverse collateral uses price.
+    pub(crate) fn manual_order_collateral_size(
+        core: CoreId,
+        market: &str,
+        usd: f64,
+        price: f64,
+        rules: OrderSizeRules,
+        account_usd_rate: impl FnOnce() -> Option<f64>,
+    ) -> Option<f64> {
+        let rate = match rules.unit {
+            MarketQuantityUnit::Contracts(_) => Some(price),
+            MarketQuantityUnit::Coins => account_usd_rate(),
+        };
+        let size = usd_to_base_amount(usd, rate)?;
+        // Compare in USD for both units: a coin count and a dollar amount are not comparable.
+        // A small dollar order can exceed a large minimum coin count after conversion, so testing
+        // USD against that raw count would refuse a valid order. An unknown floor never blocks.
+        // Rounding up to a known floor would spend more than requested, so refuse instead.
+        if let Some(floor) = rules.min_order_usd.filter(|floor| usd < *floor) {
+            log::warn!(
+                "manual order refused: core={core} market={market} ${usd:.2} is below this \
+             market's minimum order value ${floor:.2} ({:?}, wire size {size:.8})",
+                rules.unit
+            );
+            return None;
+        }
+        Some(size)
     }
 }
