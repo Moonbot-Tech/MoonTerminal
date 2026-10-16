@@ -23,12 +23,13 @@ use moon_core::market::{SIDE_BUCKET_MS, side_slots_of_ticks};
 use moon_core::market::{tape_recorder, trade_replay};
 use moon_core::telegram::web::MiniAppApiError;
 use moon_core::telegram::web::dto::{
-    ChartRangeDto, ChartStateDto, LevelDto, LevelKindDto, LiveTicksDto, MAX_CHART_TICKS,
-    MAX_LIVE_TICKS, MAX_VOLUME_BUCKETS, TradeTicksDto,
+    ChartRangeDto, ChartStateDto, CoinDealDto, CoinLevelDto, CoinPositionDto, CoinTfDto,
+    CoinTicksDto, LevelDto, LevelKindDto, LiveTicksDto, MAX_CHART_TICKS, MAX_LIVE_TICKS,
+    MAX_VOLUME_BUCKETS, TradeTicksDto,
 };
 use moon_core::util::fmt;
 
-use super::dto::{order_at_mark, order_quote, pnl_sign, pnl_text, trade_dto};
+use super::dto::{core_quotes, order_at_mark, order_quote, pnl_sign, pnl_text, trade_dto};
 use super::{mini_access, visible_cores};
 use crate::report::MiniTrade;
 use crate::{TelegramState, TgHost};
@@ -839,13 +840,455 @@ pub(super) fn mini_order_ticks(
                 result.map(|(mut dto, trade)| {
                     dto.trade = trade
                         .as_ref()
-                        .map(|trade| trade_dto(host, zone, now / 1000, trade));
+                        .map(|trade| trade_dto(host, &core_quotes(&host.config().servers), &mut Default::default(), zone, now / 1000, trade));
                     dto
                 })
             });
             let _ = reply.try_send(result);
         })
     }));
+}
+
+/// Admit a market read with all permitted overlays captured before leaving the owner thread.
+pub(super) fn mini_coin_ticks(
+    host: &mut dyn TgHost,
+    chat: i64,
+    core: u64,
+    market: String,
+    tf: CoinTfDto,
+    since_ms: Option<i64>,
+    reply: SyncSender<Result<CoinTicksDto, MiniAppApiError>>,
+) {
+    let access = match authorize(host, chat, core) {
+        Ok(access) => access,
+        Err(error) => {
+            let _ = reply.try_send(Err(error));
+            return;
+        }
+    };
+    if !claim_pending(&mut host.state_mut().mini_live_pending, 4) {
+        log::info!("[mini-chart] coin ticks state=Busy source=admission elapsed_ms=0");
+        let _ = reply.try_send(Err(MiniAppApiError::Busy));
+        return;
+    }
+    let source = host.session().market_source();
+    let listed = visible_cores(host, &access);
+    let exchange = listed
+        .iter()
+        .find(|(id, _, _)| *id == core)
+        .map(|(_, _, exchange)| exchange.clone())
+        .unwrap_or_default();
+    let CoinSnapshot { ids, orders } = coin_snapshot(
+        host.session().store(),
+        &listed,
+        host.session().core_venues(),
+        core,
+        &market,
+    );
+    let market_display = orders
+        .first()
+        .map(|(_, _, row)| row.market_display.clone())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| market.clone());
+    let coin = orders
+        .first()
+        .map(|(_, _, row)| row.coin.clone())
+        .unwrap_or_else(|| source.market_label(core, &market).coin);
+    let deal_ids = coin_deal_cores(
+        &ids,
+        &core_quotes(&host.config().servers),
+        &order_quote(&source.market_label(core, &market).quote, &market),
+    );
+    let zone = host.report_zone();
+    let names = CoreNames::from_servers(&host.config().servers);
+    host.spawn(Box::new(move || {
+        let started = Instant::now();
+        let now = moon_core::util::now_unix_ms_i64();
+        let mut stage = "handoff";
+        let result = chart_read(|| {
+            let market_read = read_coin_market(tf, since_ms, |since| read_market(&source, core, &market, since, now));
+            let data = market_read.data;
+            stage = market_read.source;
+            let ticks = data.as_ref().map_or(&[][..], |data| data.ticks.as_slice());
+            let series = coin_series(&source, core, &market, tf, now, since_ms, ticks);
+            let mark = source.latest_price(core, &market).ok().map(f64::from)
+                .filter(|price| price.is_finite() && *price > 0.0)
+                .or_else(|| ticks.last().map(|tick| f64::from(tick.price)))
+                .or_else(|| orders.first().map(|(_, _, row)| f64::from(row.price)))
+                .unwrap_or(0.0);
+            let mut dto = CoinTicksDto {
+                state: live_state(now, data.as_ref().and_then(|data| data.last_tick_ms)),
+                now_ms: now,
+                last_tick_ms: data.as_ref().and_then(|data| data.last_tick_ms),
+                mark_price: mark,
+                price_decimals: price_decimals(mark),
+                truncated: data.as_ref().is_some_and(|data| data.truncated),
+                exchange: exchange.clone(),
+                market_display,
+                open_price: series.candles.first().map(|candle| candle[1])
+                    .or(market_read.open_price),
+                ticks: series.ticks,
+                candles: series.candles,
+                ..Default::default()
+            };
+            for (id, name, row) in &orders {
+                coin_overlays(&source, *id, name, row, mark, &mut dto);
+            }
+            let window_from = coin_deal_from(tf, now);
+            let trades = crate::report::read_mini_trades(
+                zone, TelegramReportAccess::Viewer(deal_ids), names, 50,
+                Some(crate::report::MiniTradeWindow {
+                    coin: coin.clone(), from: window_from.saturating_add(999).div_euclid(1000),
+                    to: now.div_euclid(1000),
+                }),
+            ).or_else(|error| match error {
+                moon_core::db::ReadFail::NotReady => Ok(Vec::new()),
+                _ => Err(MiniAppApiError::ReadFailed),
+            })?;
+            dto.deals = trades.into_iter().map(|trade| CoinDealDto {
+                core_name: trade.core_name,
+                is_short: trade.is_short,
+                profit_usd: trade.profit_usdt,
+                profit_pct: trade.pct,
+                open_ms: trade.buy_utc.map(|time| time.saturating_mul(1000)),
+                close_ms: trade.close_utc.saturating_mul(1000),
+                open_price: trade.buy_price,
+                close_price: trade.sell_price,
+            }).collect();
+            Ok(dto)
+        });
+        log::info!("[mini-chart] coin ticks exchange={exchange} coin={market} tf={tf:?} state={} source={stage} elapsed_ms={}",
+            result.as_ref().map_or_else(|error| format!("{error:?}"), |dto| format!("{:?}", dto.state)),
+            started.elapsed().as_millis());
+        Box::new(move |host: &mut dyn TgHost| {
+            host.state_mut().mini_live_pending = host.state().mini_live_pending.saturating_sub(1);
+            let current = mini_access(host, chat);
+            let visible = current.as_ref().is_some_and(|grant| {
+                let visible = visible_cores(host, grant);
+                ids.iter().all(|id| visible.iter().any(|(current, _, _)| current == id))
+            });
+            let result = finish_grant(&access, current, visible).and(result);
+            let _ = reply.try_send(result);
+        })
+    }));
+}
+
+/// Restrict history to granted cores whose configured quote matches this chart before SQL LIMIT.
+pub(super) fn coin_deal_cores(
+    ids: &[u64],
+    quotes: &std::collections::HashMap<u64, String>,
+    quote: &str,
+) -> Vec<u64> {
+    let quote = quote.trim();
+    ids.iter()
+        .copied()
+        .filter(|id| {
+            !quote.is_empty()
+                && quotes
+                    .get(id)
+                    .is_some_and(|configured| configured.trim().eq_ignore_ascii_case(quote))
+        })
+        .collect()
+}
+
+/// Owned overlay rows and the exact venue-scoped history grant captured at admission.
+pub(super) struct CoinSnapshot {
+    pub ids: Vec<u64>,
+    pub orders: Vec<(u64, String, OrderRow)>,
+}
+
+/// Keep overlays within visible cores on the source venue and the exact market key.
+pub(super) fn coin_snapshot(
+    store: &moon_core::session::CoreStore,
+    listed: &[(u64, String, String)],
+    venues: &std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+    core: u64,
+    market: &str,
+) -> CoinSnapshot {
+    let venue = venues.get(&core);
+    let peers: Vec<_> = listed
+        .iter()
+        .filter(|(id, _, _)| {
+            *id == core
+                || venue.is_some_and(|venue| venues.get(id).is_some_and(|peer| peer.id == venue.id))
+        })
+        .collect();
+    let ids = peers.iter().map(|(id, _, _)| *id).collect();
+    let orders = peers
+        .into_iter()
+        .flat_map(|(id, name, _)| {
+            store
+                .core(*id)
+                .into_iter()
+                .flat_map(|data| data.orders.iter())
+                .filter(|row| !row.job_is_done && row.market == market)
+                .map(|row| (*id, name.clone(), row.clone()))
+        })
+        .collect();
+    CoinSnapshot { ids, orders }
+}
+
+/// Tag existing level prices and position arithmetic with their originating core.
+pub(super) fn coin_overlays(
+    source: &MarketDataSource,
+    core: u64,
+    name: &str,
+    row: &OrderRow,
+    mark: f64,
+    dto: &mut CoinTicksDto,
+) {
+    dto.levels
+        .extend(live_levels(row).into_iter().map(|level| CoinLevelDto {
+            kind: if row.pending && level.kind == LevelKindDto::Entry {
+                LevelKindDto::Buy
+            } else {
+                level.kind
+            },
+            price: level.price,
+            core: core.to_string(),
+            core_name: name.to_string(),
+            is_short: row.is_short,
+            pending: row.pending,
+        }));
+    let volume = source
+        .currency_usd_rate(core, &order_quote(&row.quote, &row.market))
+        .map(|rate| row.size * row.buy_price * rate)
+        .filter(|value| value.is_finite() && *value > 0.0);
+    let pnl_pct = if row.pending {
+        moon_core::feed::order_math::pct_to_entry(row, mark)
+    } else {
+        order_at_mark(row, mark as f32).1
+    };
+    dto.positions.push(CoinPositionDto {
+        core: core.to_string(),
+        core_name: name.to_string(),
+        is_short: row.is_short,
+        pending: row.pending,
+        entry: row.buy_price,
+        take: row.take_profit,
+        stop: row.stop_loss,
+        strategy: row.strat_name.clone(),
+        volume_usd: volume,
+        pnl_pct,
+    });
+}
+
+/// Wire series keep incremental prints separate from replacement candle history.
+pub(super) struct CoinSeries {
+    pub ticks: Vec<(i64, f64, f64, u8)>,
+    pub candles: Vec<[f64; 6]>,
+}
+
+/// Apply the client cursor only to tick payloads, never to candle input history.
+pub(super) fn coin_series(
+    source: &MarketDataSource,
+    core: u64,
+    market: &str,
+    tf: CoinTfDto,
+    now: i64,
+    since: Option<i64>,
+    ticks: &[Tick],
+) -> CoinSeries {
+    let candles = coin_candles(source, core, market, tf, now, ticks);
+    let from = live_from(now, since);
+    let ticks = wire_ticks(
+        ticks
+            .iter()
+            .filter(|tick| tick.time_ms >= from as f64)
+            .copied()
+            .collect(),
+    );
+    CoinSeries { ticks, candles }
+}
+
+/// Maximum raw prints retained while rebuilding candle buckets beyond the cached prefix.
+pub(super) const MAX_COIN_CANDLE_TICKS: usize = 200_000;
+
+/// Read cached candle history first, then a bounded raw tail using the shared builders.
+pub(super) fn coin_candles(
+    source: &MarketDataSource,
+    core: u64,
+    market: &str,
+    tf: CoinTfDto,
+    now: i64,
+    ticks: &[Tick],
+) -> Vec<[f64; 6]> {
+    if tf == CoinTfDto::Ticks {
+        return Vec::new();
+    }
+    let window = coin_candle_window(tf, now);
+    let (from, _) = window;
+    let cached = source
+        .kline_cache()
+        .and_then(|cache| {
+            let address = source.replay_address(core).ok()?;
+            cache.read_range(
+                &address.exchange_key,
+                market,
+                if tf == CoinTfDto::M1 { 1 } else { 5 },
+                from,
+                now,
+            )
+        })
+        .unwrap_or_default();
+    let width = window.1;
+    coin_candle_tail(&cached, ticks, window, now, |(from, to, limit)| {
+        // One bucket of lookback lets a ring read prove it reaches back to the bucket open.
+        let (data, _, covered) = read_market_span(
+            source,
+            core,
+            market,
+            None,
+            (from.saturating_sub(width), to, limit),
+            tape_recorder::watch_market,
+        );
+        let data = data?;
+        let covered = covered.or_else(|| data.ticks.first().map(|tick| tick.time_ms as i64));
+        Some((data, covered))
+    })
+}
+
+/// Rebuild only the last cached bucket and its successors, retaining at most the newest raw cap.
+pub(super) fn coin_candle_tail(
+    cached: &[moon_core::market::candles::ChartCandle],
+    fallback: &[Tick],
+    window: (i64, i64),
+    now: i64,
+    read: impl FnOnce((i64, i64, usize)) -> Option<(moon_core::market::LiveTicks, Option<i64>)>,
+) -> Vec<[f64; 6]> {
+    let (from, width) = window;
+    // Include the final cached bucket because it may still be forming.
+    let tail_from = cached.last().map_or(from, |bar| {
+        (bar.t_open_ms as i64)
+            .div_euclid(width)
+            .saturating_mul(width)
+            .max(from)
+    });
+    let history = read((tail_from, now, MAX_COIN_CANDLE_TICKS));
+    let ticks = history
+        .as_ref()
+        .map_or(fallback, |(history, _)| history.ticks.as_slice());
+    let first = ticks.partition_point(|tick| tick.time_ms < tail_from as f64);
+    let end = ticks.partition_point(|tick| tick.time_ms <= now as f64);
+    let capped = end.saturating_sub(MAX_COIN_CANDLE_TICKS);
+    let covered = match &history {
+        // A capped read only covers from its oldest retained print.
+        Some((history, _)) if history.truncated || capped > first => {
+            ticks.get(capped).map(|tick| tick.time_ms as i64)
+        }
+        Some((_, covered)) => *covered,
+        None => fallback.first().map(|tick| tick.time_ms as i64),
+    };
+    let first = first.max(capped);
+    merge_coin_candles(cached, &ticks[first..end], covered, window, now)
+}
+
+/// Preserve complete cached buckets when the source's coverage starts partway through their bar.
+pub(super) fn merge_coin_candles(
+    cached: &[moon_core::market::candles::ChartCandle],
+    ticks: &[Tick],
+    covered_from: Option<i64>,
+    window: (i64, i64),
+    now: i64,
+) -> Vec<[f64; 6]> {
+    use moon_core::market::candles::{aggregate_trades, resample};
+    let (from, width) = window;
+    let mut base = Vec::new();
+    resample(cached, width, &mut base);
+    let mut tail = Vec::new();
+    aggregate_trades(ticks, 60_000, &mut tail);
+    let mut resampled = Vec::new();
+    resample(&tail, width, &mut resampled);
+    // Both builders return sorted lists; only fully observed live buckets replace cache.
+    let mut cached = base.into_iter().peekable();
+    let mut live = resampled.into_iter().peekable();
+    let mut merged = Vec::new();
+    while let (Some(left), Some(right)) = (cached.peek(), live.peek()) {
+        if left.t_open_ms < right.t_open_ms {
+            merged.extend(cached.next());
+        } else {
+            if left.t_open_ms == right.t_open_ms {
+                if covered_from.is_none_or(|from| from as f64 > right.t_open_ms) {
+                    merged.extend(cached.next());
+                    let _ = live.next();
+                    continue;
+                }
+                let _ = cached.next();
+            }
+            merged.extend(live.next());
+        }
+    }
+    merged.extend(cached);
+    merged.extend(live);
+    merged
+        .into_iter()
+        .filter(|row| row.t_open_ms >= from as f64 && row.t_open_ms <= now as f64)
+        .map(|row| {
+            [
+                row.t_open_ms,
+                f64::from(row.open),
+                f64::from(row.high),
+                f64::from(row.low),
+                f64::from(row.close),
+                f64::from(row.volume),
+            ]
+        })
+        .collect()
+}
+
+/// Market delta and its independently sampled window opening, with streaming source provenance.
+pub(super) struct CoinMarketRead {
+    pub data: Option<moon_core::market::LiveTicks>,
+    pub open_price: Option<f64>,
+    pub source: &'static str,
+}
+
+/// Apply tick cursors before source caps; only the first read carries the window's opening.
+pub(super) fn read_coin_market(
+    tf: CoinTfDto,
+    since: Option<i64>,
+    read: impl FnOnce(Option<i64>) -> (Option<moon_core::market::LiveTicks>, &'static str),
+) -> CoinMarketRead {
+    let cursor = if tf == CoinTfDto::Ticks { since } else { None };
+    let (data, source) = read(cursor);
+    // The sheet keeps the first reply's opening, so a cursor read never re-scans the window.
+    let open_price = if cursor.is_some() {
+        None
+    } else {
+        data.as_ref()
+            .and_then(|window| window.ticks.first())
+            .map(|tick| f64::from(tick.price))
+    };
+    CoinMarketRead {
+        data,
+        open_price,
+        source,
+    }
+}
+
+/// Give tick charts one hour of closed deals while candle charts retain their selected history.
+pub(super) fn coin_deal_from(tf: CoinTfDto, now: i64) -> i64 {
+    if tf == CoinTfDto::Ticks {
+        now.saturating_sub(3_600_000)
+    } else {
+        coin_candle_window(tf, now).0
+    }
+}
+
+/// Align a candle window to full bucket boundaries, including the current forming bucket.
+pub(super) fn coin_candle_window(tf: CoinTfDto, now: i64) -> (i64, i64) {
+    let (width, bars) = match tf {
+        CoinTfDto::Ticks => (1, 0),
+        CoinTfDto::M1 => (60_000, 120),
+        CoinTfDto::M5 => (300_000, 100),
+        CoinTfDto::M15 => (900_000, 100),
+    };
+    (
+        now.div_euclid(width)
+            .saturating_sub(bars - 1)
+            .saturating_mul(width),
+        width,
+    )
 }
 
 /// Base fields survive a closing handoff without inventing an exit execution.
@@ -930,42 +1373,108 @@ fn read_live(
     since: Option<i64>,
     dto: &mut LiveTicksDto,
 ) -> &'static str {
-    let from = live_from(dto.now_ms, since);
-    let mut used = "ring";
-    let data = source
-        .live_core_ticks(core, &row.market, from, dto.now_ms, MAX_LIVE_TICKS)
-        .filter(|ring| ring.last_tick_ms.is_some())
-        .or_else(|| {
-            used = "recorder";
-            let address = source.replay_address(core).ok()?;
-            tape_recorder::watch_market(
-                &address.exchange_key,
-                &row.market,
-                dto.now_ms.saturating_add(30_000),
-            );
-            let span = tape_recorder::market_tape(
-                &address.exchange_key,
-                &row.market,
-                from,
-                dto.now_ms,
-                Duration::from_millis(1500),
-            )
-            .ok()?;
-            let start = recorder_start(since, &span.covered, from);
-            let mut delta = recorder_delta(span.ticks, start, dto.now_ms);
-            delta.last_tick_ms = delta.last_tick_ms.or(since);
-            Some(delta)
-        });
+    let (data, used) = read_market(source, core, &row.market, since, dto.now_ms);
     if let Some(data) = data {
         dto.last_tick_ms = data.last_tick_ms;
         dto.truncated = data.truncated;
         dto.ticks = wire_ticks(data.ticks);
-    } else {
-        used = "none";
     }
     dto.state = live_state(dto.now_ms, dto.last_tick_ms);
     fill_mark(source, core, row, dto);
     used
+}
+
+/// Read a bounded market delta from the ring, then renew the recorder's expiring demand.
+pub(super) fn read_market(
+    source: &MarketDataSource,
+    core: u64,
+    market: &str,
+    since: Option<i64>,
+    now: i64,
+) -> (Option<moon_core::market::LiveTicks>, &'static str) {
+    read_market_with_watch(
+        source,
+        core,
+        market,
+        since,
+        now,
+        tape_recorder::watch_market,
+    )
+}
+
+/// Share source selection while allowing a fixture to observe the recorder demand request.
+pub(super) fn read_market_with_watch(
+    source: &MarketDataSource,
+    core: u64,
+    market: &str,
+    since: Option<i64>,
+    now: i64,
+    watch: impl FnOnce(&str, &str, i64),
+) -> (Option<moon_core::market::LiveTicks>, &'static str) {
+    read_market_window(
+        source,
+        core,
+        market,
+        since,
+        (live_from(now, since), now, MAX_LIVE_TICKS),
+        watch,
+    )
+}
+
+/// Share ring and recorder selection while allowing candle history its own time and row bounds.
+fn read_market_window(
+    source: &MarketDataSource,
+    core: u64,
+    market: &str,
+    since: Option<i64>,
+    window: (i64, i64, usize),
+    watch: impl FnOnce(&str, &str, i64),
+) -> (Option<moon_core::market::LiveTicks>, &'static str) {
+    let (data, used, _) = read_market_span(source, core, market, since, window, watch);
+    (data, used)
+}
+
+/// Read a market window and, from the recorder, the start of its newest contiguous coverage.
+fn read_market_span(
+    source: &MarketDataSource,
+    core: u64,
+    market: &str,
+    since: Option<i64>,
+    window: (i64, i64, usize),
+    watch: impl FnOnce(&str, &str, i64),
+) -> (
+    Option<moon_core::market::LiveTicks>,
+    &'static str,
+    Option<i64>,
+) {
+    let (from, now, limit) = window;
+    let mut used = "ring";
+    let mut covered = None;
+    let data = source
+        .live_core_ticks(core, market, from, now, limit)
+        .filter(|ring| ring.last_tick_ms.is_some())
+        .or_else(|| {
+            used = "recorder";
+            let address = source.replay_address(core).ok()?;
+            watch(&address.exchange_key, market, now.saturating_add(30_000));
+            let span = tape_recorder::market_tape(
+                &address.exchange_key,
+                market,
+                from,
+                now,
+                Duration::from_millis(1500),
+            )
+            .ok()?;
+            covered = span.covered.last().map(|&(start, _)| start);
+            let start = recorder_start(since, &span.covered, from);
+            let mut delta = recorder_delta(span.ticks, start, now, limit);
+            delta.last_tick_ms = delta.last_tick_ms.or(since);
+            Some(delta)
+        });
+    if data.is_none() {
+        used = "none";
+    }
+    (data, used, covered)
 }
 
 /// Format live and closing rows from one fresh mark using the order table's arithmetic.
@@ -1027,6 +1536,7 @@ pub(super) fn recorder_delta(
     mut ticks: Vec<Tick>,
     from: i64,
     now: i64,
+    limit: usize,
 ) -> moon_core::market::LiveTicks {
     debug_assert!(
         ticks
@@ -1035,8 +1545,8 @@ pub(super) fn recorder_delta(
     );
     let last_tick_ms = ticks.last().map(|tick| tick.time_ms as i64);
     ticks.retain(|tick| tick.time_ms >= from as f64 && tick.time_ms <= now as f64);
-    let truncated = ticks.len() > MAX_LIVE_TICKS;
-    let older = ticks.len().saturating_sub(MAX_LIVE_TICKS);
+    let truncated = ticks.len() > limit;
+    let older = ticks.len().saturating_sub(limit);
     ticks.drain(..older);
     moon_core::market::LiveTicks {
         ticks,

@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { CHART_ORDER, CHART_TRADE, TRADE_TICK_COUNT, liveFeed, tradeTicks } from "./tick_fixtures.mjs";
+import { CHART_ORDER, CHART_TRADE, COIN, COIN_LEVEL_PRICES, TRADE_TICK_COUNT, coinFeed, liveFeed, tradeTicks } from "./tick_fixtures.mjs";
 
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -502,6 +502,64 @@ const glyphProblems = (p, rowSel) => p.evaluate((rowSel) => {
     return errors;
 }, rowSel).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
 const refOf = (p) => p.evaluate(() => +document.querySelector("#sheet .chart-wrap").getAttribute("data-ref"));
+// Coin chart: the order row's coin opens every core's view of that market.
+const COIN_ORDER = { ...CHART_ORDER, coin: COIN.coin, market: COIN.market, core: COIN.core };
+const coinApi = (feed) => ({
+    "/api/orders": { orders: [COIN_ORDER], can_control: true },
+    "/api/order/ticks": liveFeed(),
+    "/api/coin/ticks": feed,
+});
+const coinStrategies = () => {
+    const base = fixture("strategies");
+    const cores = base.cores.map((core, n) => ({
+        ...core,
+        folders: core.folders.map((folder) => ({
+            ...folder,
+            strategies: folder.strategies.map((s, i) => ({
+                ...s,
+                coins: n === 0 && i === 0 ? [{ coin: COIN.coin, market: COIN.market }, { coin: "XBETA", market: "XBETAUSDT" }] : [],
+            })),
+        })),
+    }));
+    return { "/api/strategies": { ...base, cores }, "/api/coin/ticks": coinFeed() };
+};
+const openCoinFromOrder = async (p) => {
+    await nav(p, "deals"); await p.click('[data-seg="orders"]'); await openFirstGroup(p, "orders");
+    await p.click('section[data-tab="orders"] .order-row .coin-btn');
+    await p.waitForSelector("#sheet.coin-sheet");
+};
+const coinDrawn = (p) => p.waitForSelector("#sheet .chart-wrap[data-ticks]");
+// A coin button is a real button, at least 44 px tall, in the accent colour.
+const coinButtonProblems = (p, selector) => p.evaluate((selector) => {
+    const nodes = [...document.querySelectorAll(selector)];
+    if (!nodes.length) return [`no ${selector}`];
+    const errors = [];
+    for (const node of nodes) {
+        if (node.tagName !== "BUTTON") errors.push(`${selector} is a ${node.tagName}`);
+        if (node.getBoundingClientRect().height < 43.5) errors.push(`${selector} is ${node.getBoundingClientRect().height}px tall`);
+        if (!node.querySelector(".chart-glyph")) errors.push(`${selector} has no chart glyph`);
+    }
+    return errors;
+}, selector).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+// Every level label and axis tag the coin chart draws stays on the canvas and apart.
+const labelOverlaps = (p, lines) => p.evaluate((lines) => {
+    const cv = document.querySelector("#sheet canvas");
+    const box = cv.getBoundingClientRect();
+    const drawn = cv.drawnBoxes;
+    if (!drawn || !drawn.labels) return ["coin chart exposes no label boxes"];
+    const errors = [];
+    if (drawn.labels.length !== lines) errors.push(`expected ${lines} level labels, got ${drawn.labels.length}`);
+    if (drawn.tags.length < lines) errors.push(`expected >= ${lines} axis tags, got ${drawn.tags.length}`);
+    const hit = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h - 0.5 && b.y < a.y + a.h - 0.5;
+    for (const [kind, list] of [["labels", drawn.labels], ["tags", drawn.tags]]) {
+        for (let i = 0; i < list.length; i++) {
+            const a = list[i];
+            if (a.x < -0.1 || a.y < -0.1 || a.x + a.w > box.width + 0.1 || a.y + a.h > box.height + 0.1) errors.push(`${kind} ${i} leaves the canvas`);
+            for (let j = i + 1; j < list.length; j++) if (hit(a, list[j])) errors.push(`${kind} ${i} and ${j} overlap`);
+        }
+    }
+    return errors;
+}, lines).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
 const CHART_SCREENS = [
     { name: "chart-trade-ok", api: CHART_TRADES, run: async (p, t) => {
         await openChartTrade(p); await chartDrawn(p); await settle(p);
@@ -642,6 +700,61 @@ const CHART_SCREENS = [
         const text = await p.locator("#sheet").innerText();
         if (!text.includes(t.mini_trade_exit) || !text.includes("2.4390")) throw new Error("closed sheet must show the trade's exit");
         if ((await p.locator("#sheet .chart-provenance").innerText()) !== t.mini_chart_frozen) throw new Error("closed chart must say frozen");
+    } },
+    { name: "coin-list-tappable", api: () => coinStrategies(), run: async (p, t) => {
+        await nav(p, "strategies"); await openFirstGroup(p, "strategies");
+        const line = await p.locator('section[data-tab="strategies"] .coin-line').first().innerText();
+        if (!line.includes(t.mini_coin_in_work) || !line.includes(COIN.coin)) throw new Error(`strategy coin line reads ${JSON.stringify(line)}`);
+        await coinButtonProblems(p, 'section[data-tab="strategies"] .coin-btn');
+    } },
+    { name: "coin-sheet-ticks", api: () => coinApi(coinFeed()), run: async (p, t) => {
+        await openCoinFromOrder(p); await coinDrawn(p); await settle(p);
+        if (!(await p.locator("#sheet .live-tag").innerText()).includes(t.mini_chart_live)) throw new Error("coin sheet must show the live tag");
+        if (await p.locator("#sheet .coin-core-row").count() !== 6) throw new Error("coin sheet must list all six cores");
+        await liveScaleProblems(p, await refOf(p), COIN_LEVEL_PRICES);
+        await labelOverlaps(p, 14);
+    } },
+    { name: "coin-sheet-1m", api: () => coinApi(coinFeed()), run: async (p) => {
+        await openCoinFromOrder(p); await coinDrawn(p);
+        await p.click('#sheet .coin-modes [data-range="1m"]');
+        await p.waitForFunction(() => document.querySelector('#sheet .coin-modes [data-range="1m"]').classList.contains("on")
+            && +(document.querySelector("#sheet .chart-wrap") || {}).getAttribute?.("data-span") > 3600000, null, { timeout: 5000 });
+        await settle(p);
+        await labelOverlaps(p, 14);
+    } },
+    { name: "coin-many-cores", api: () => coinApi(coinFeed()), run: async (p) => {
+        await openCoinFromOrder(p); await coinDrawn(p); await settle(p);
+        await labelOverlaps(p, 14);
+        // A tap on a core card highlights that core and leaves the rest dimmed.
+        await p.click('#sheet .coin-core-row[data-core="2004"]'); await settle(p);
+        const hl = await p.locator("#sheet .coin-core-row.hl").count();
+        if (hl !== 1 || !(await p.$('#sheet .coin-core-row.hl[data-core="2004"]'))) throw new Error(`exactly CORE_D must be highlighted, got ${hl}`);
+        // Polls patch the cards in place, so keyboard focus and the highlight survive them.
+        await p.focus('#sheet .coin-core-row[data-core="2004"]');
+        await p.waitForTimeout(2500);
+        const kept = await p.evaluate(() => {
+            const a = document.activeElement;
+            return !!a && a.getAttribute("data-core") === "2004" && a.classList.contains("hl") && a.isConnected;
+        });
+        if (!kept) throw new Error(`focus or highlight lost across polls`);
+        await p.locator("#sheet .coin-cards").scrollIntoViewIfNeeded();
+    } },
+    { name: "coin-not-watching", api: () => coinApi(coinFeed({ mode: "no_tape" })), run: async (p, t) => {
+        await openCoinFromOrder(p);
+        await p.waitForSelector("#sheet .coin-watch-note:not([hidden])");
+        const text = await p.locator("#sheet .coin-watch-note").innerText();
+        if (!text.includes(t.mini_coin_watch_title.replace("{coin}", COIN_ORDER.coin))) throw new Error(`watch note reads ${JSON.stringify(text)}`);
+        if (!await p.$("#sheet .chart-wrap canvas")) throw new Error("an unwatched coin must still draw the order lines");
+        await liveScaleProblems(p, await refOf(p), COIN_LEVEL_PRICES);
+    } },
+    { name: "coin-empty", api: () => coinApi(coinFeed({ mode: "empty" })), run: async (p, t) => {
+        await openCoinFromOrder(p); await coinDrawn(p);
+        await p.waitForSelector("#sheet .coin-empty");
+        if (!(await p.locator("#sheet .coin-empty").innerText()).includes(t.mini_coin_empty)) throw new Error("empty coin must say no open orders");
+    } },
+    { name: "coin-error", api: () => coinApi(() => ({ status: 404, body: {} })), run: async (p, t) => {
+        await openCoinFromOrder(p); await chartBox(p, t.mini_chart_error);
+        if (!await p.$("#sheet .chart-retry")) throw new Error("a failed coin chart must offer retry");
     } },
 ].map((screen) => ({ ...screen, viewports: CHART_VIEWPORTS }));
 
@@ -1223,6 +1336,104 @@ async function chartInteractions(browser, html, texts) {
     return failures;
 }
 
+// The coin button: a tap or Enter opens the coin sheet with the frozen request body, while a tap
+// on the rest of the row still opens the row's own sheet.
+async function coinInteractions(browser, html) {
+    const failures = [];
+    const expect = (cond, what) => { if (!cond) failures.push(what); };
+    const log = { errors: [], sent: [] };
+    const open = async (api) => {
+        const opened = await openPage(browser, html, CHART_VIEWPORTS[0], "light", Object.assign(defaultApi(), api), log);
+        await opened.page.waitForSelector("#app-nav:not([hidden])");
+        return opened;
+    };
+    let { page, context } = await open(coinApi(coinFeed()));
+    await openCoinFromOrder(page);
+    await page.waitForTimeout(400);
+    const first = log.sent.find((s) => s.path === "/api/coin/ticks");
+    const wanted = `{"core":${COIN.core},"market":"${COIN.market}","tf":"ticks"}`;
+    expect(first && first.raw === wanted, `coin tap body ${first && first.raw} != ${wanted}`);
+    await page.waitForTimeout(2600);
+    const later = log.sent.filter((s) => s.path === "/api/coin/ticks").slice(1);
+    expect(later.length >= 1, "the coin sheet must poll again");
+    expect(later.every((s) => JSON.parse(s.raw).since_ms > 0), `tick polls must carry since_ms: ${JSON.stringify(later.map((s) => s.raw))}`);
+    await page.click('#sheet .coin-modes [data-range="5m"]'); await page.waitForTimeout(600);
+    const candle = log.sent.filter((s) => s.path === "/api/coin/ticks").pop();
+    expect(candle && JSON.parse(candle.raw).tf === "5m" && !("since_ms" in JSON.parse(candle.raw)), `candle poll body ${candle && candle.raw}`);
+    await page.keyboard.press("Escape"); await page.waitForTimeout(500);
+    // The rest of the row opens the order sheet, never the coin sheet.
+    await page.click('section[data-tab="orders"] .order-row .order-flow');
+    await page.waitForSelector("#sheet .chart-area");
+    expect(!(await page.$("#sheet.coin-sheet")), "a row tap outside the coin must open the order sheet");
+    await page.keyboard.press("Escape"); await page.waitForTimeout(500);
+    // Enter on the focused coin opens the coin sheet and stops before the row handler.
+    const before = log.sent.filter((s) => s.path === "/api/order/ticks").length;
+    await page.focus('section[data-tab="orders"] .order-row .coin-btn');
+    await page.keyboard.press("Enter"); await page.waitForTimeout(600);
+    expect(!!(await page.$("#sheet.coin-sheet")), "Enter on the coin must open the coin sheet");
+    expect(log.sent.filter((s) => s.path === "/api/order/ticks").length === before, "Enter on the coin must not reach the row handler");
+    await context.close();
+
+    // A trade row's coin with a market opens the coin sheet; the rest of the row the trade sheet.
+    ({ page, context } = await open({
+        "/api/trades": { trades: [{ ...CHART_TRADE, market: "XALPHAUSDT" }], limit: 50 },
+        "/api/coin/ticks": coinFeed(),
+    }));
+    await openTrade(page, 0); await page.waitForSelector("#sheet .chart-area");
+    expect(!(await page.$("#sheet.coin-sheet")), "a trade row tap must open the trade sheet");
+    await page.keyboard.press("Escape"); await page.waitForTimeout(500);
+    await page.click('section[data-tab="trades"] .trade-row .coin-btn'); await page.waitForSelector("#sheet.coin-sheet");
+    await context.close();
+    // Without a market the coin stays plain text.
+    ({ page, context } = await open({ "/api/trades": { trades: [CHART_TRADE], limit: 50 } }));
+    await nav(page, "deals"); await page.click('[data-seg="trades"]');
+    const head = await page.$('section[data-tab="trades"] .group-head');
+    if (head) { await head.click(); await settle(page); }
+    expect(!(await page.$('section[data-tab="trades"] .coin-btn')), "a trade without a market must not offer a coin button");
+    await context.close();
+    for (const error of log.errors.filter((e) => !/status of (404|500)/.test(e))) failures.push(`page error: ${error}`);
+    return failures;
+}
+
+// Pure functions lifted from app.js by name and run in node.
+function appFunction(source, name) {
+    const start = source.indexOf(`    function ${name}(`);
+    if (start < 0) throw new Error(`app.js has no function ${name}`);
+    const end = source.indexOf("\n    }\n", start);
+    return source.slice(start, end + 7);
+}
+function pureChecks() {
+    const failures = [];
+    const expect = (cond, what) => { if (!cond) failures.push(what); };
+    const source = fs.readFileSync(path.join(WEB, "app.js"), "utf8");
+    const fns = new Function(["finiteNumber", "liveScale", "tickRadius", "relaxLabels"].map((n) => appFunction(source, n)).join("\n")
+        + "\nreturn { liveScale, tickRadius, relaxLabels };")();
+    const r = (() => { let s = 5; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); })();
+    for (let round = 0; round < 200; round++) {
+        const n = 1 + Math.floor(r() * 16);
+        const h = 15;
+        const maxY = 330;
+        const items = Array.from({ length: n }, (_, i) => ({ id: i, want: r() * maxY }));
+        const wants = items.map((it) => it.want);
+        fns.relaxLabels(items, h, 0, maxY);
+        const sorted = [...wants].sort((a, b) => a - b);
+        for (let i = 0; i < n; i++) {
+            expect(items[i].want === sorted[i], `relaxLabels round ${round} lost the order`);
+            expect(items[i].y - h / 2 >= -1e-9 && items[i].y + h / 2 <= maxY + 1e-9, `relaxLabels round ${round} item ${i} at ${items[i].y} leaves 0..${maxY}`);
+            if (i) expect(items[i].y - items[i - 1].y >= h - 1e-9, `relaxLabels round ${round} items ${i - 1},${i} overlap`);
+        }
+    }
+    const single = fns.relaxLabels([{ want: 100 }], 15, 0, 330);
+    expect(single[0].y === 100, "relaxLabels must leave a lone label where it wants to be");
+    const scale = fns.liveScale(2.4, [2.4, 3.15, 2.39], 0.10);
+    expect(scale.lo <= 2.39 && scale.hi >= 3.15, `liveScale must widen to the furthest level: ${JSON.stringify(scale)}`);
+    const tight = fns.liveScale(2.4, [2.41], 0.10);
+    expect(Math.abs(tight.hi - tight.lo - 0.24) < 1e-9, `liveScale must keep 10 % when levels are close: ${JSON.stringify(tight)}`);
+    for (const q of [0, 0.25, 1]) expect(Math.abs(fns.tickRadius(q) - (0.4 + Math.sqrt(q) * 1.33)) < 1e-12, `tickRadius(${q})`);
+    expect(fns.tickRadius(-1) === 0.4, "tickRadius must clamp a negative share");
+    return failures;
+}
+
 // Render, then check; the exit code is the verdict.
 async function main() {
     const opts = args();
@@ -1242,6 +1453,7 @@ async function main() {
         const failures = errors.map((e) => `page error: ${e}`);
         if (!opts.only || opts.only.startsWith("settings-")) failures.push(...(await interactions(browser, html, texts)));
         if (!opts.only || opts.only.startsWith("chart-")) failures.push(...(await chartInteractions(browser, html, texts)));
+        if (!opts.only || opts.only.startsWith("coin-")) failures.push(...(await coinInteractions(browser, html)), ...pureChecks());
         for (const failure of failures) console.error(`[FAIL] ${failure}`);
         if (failures.length) process.exitCode = 1;
         else console.log("[OK] interaction checks passed");

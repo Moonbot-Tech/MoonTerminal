@@ -1683,6 +1683,82 @@ fn chat_report_names_a_renamed_core_by_its_configured_name() {
     assert!(!html.contains("core-a-old"));
 }
 
+/// Filtering after LIMIT would let 600 newer unrelated trades hide this coin's three deals.
+#[test]
+fn mini_app_coin_window_filters_before_limit() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, id INTEGER, newrecid INTEGER, coin TEXT, buydate INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER, emulator INTEGER);
+        INSERT INTO orders_rep VALUES
+        (1,'CORE_A',1,1,'XALPHA',100,600,1,100,1,0),
+        (1,'CORE_A',2,2,'XALPHA',100,650,1,100,1,0),
+        (1,'CORE_A',3,3,'XALPHA',100,700,1,100,1,0),
+        (1,'CORE_A',4,4,'XALPHA',10,50,1,100,1,0),
+        (1,'CORE_A',5,5,'XALPHA',100,2500,1,100,1,0),
+        (2,'CORE_B',6,6,'XALPHA',100,800,1,100,1,0),
+        (1,'CORE_A',7,7,'XALPHA_X',100,850,1,100,1,0),
+        (1,'CORE_A',8,8,'XALPHA',100,900,1,100,1,1);").unwrap();
+    for index in 0..600_i64 {
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (1,'CORE_A',?1,?1,'XBETA',100,?2,1,100,1,0)",
+            (index + 100, index + 1000),
+        )
+        .unwrap();
+    }
+    let trades = super::read_mini_trades_on(
+        &conn,
+        chrono_tz::UTC,
+        super::TelegramReportAccess::Viewer(vec![1]),
+        Default::default(),
+        50,
+        Some(super::MiniTradeWindow {
+            coin: "XALPHA".into(),
+            from: 100,
+            to: 2000,
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        trades
+            .iter()
+            .map(|trade| (trade.core_uid, trade.coin.as_str(), trade.close_utc))
+            .collect::<Vec<_>>(),
+        vec![(1, "XALPHA", 700), (1, "XALPHA", 650), (1, "XALPHA", 600)]
+    );
+}
+
+/// Limiting core-local times before UTC sorting hides newer closes on a peer with a lower offset.
+#[test]
+fn mini_app_coin_window_overreads_before_utc_sorting() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, id INTEGER, newrecid INTEGER, coin TEXT, buydate INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER, emulator INTEGER);
+        CREATE TABLE core_time_offset (core_uid INTEGER, from_utc INTEGER, offset_secs INTEGER, observed_at INTEGER, source TEXT);
+        INSERT INTO core_time_offset VALUES (1,0,3600,0,'fixture'),(2,0,0,0,'fixture');
+        INSERT INTO orders_rep VALUES (2,'CORE_B',100,100,'XALPHA',8900,9000,1,100,1,0);").unwrap();
+    for index in 0..50_i64 {
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (1,'CORE_A',?1,?1,'XALPHA',11000,?2,1,100,1,0)",
+            (index + 1, 12000 + index),
+        )
+        .unwrap();
+    }
+    let trades = super::read_mini_trades_on(
+        &conn,
+        chrono_tz::UTC,
+        super::TelegramReportAccess::Viewer(vec![1, 2]),
+        Default::default(),
+        50,
+        Some(super::MiniTradeWindow {
+            coin: "XALPHA".into(),
+            from: 8000,
+            to: 10000,
+        }),
+    )
+    .unwrap();
+    assert_eq!(trades.len(), 50);
+    assert_eq!((trades[0].core_uid, trades[0].close_utc), (2, 9000));
+    assert_eq!(trades.last().unwrap().close_utc, 8401);
+}
+
 /// Mini App core rows and trades name a renamed core by its configured name on every trade.
 #[test]
 fn mini_app_names_a_renamed_core_by_its_configured_name() {
@@ -1716,6 +1792,7 @@ fn mini_app_names_a_renamed_core_by_its_configured_name() {
         super::TelegramReportAccess::Owner,
         names,
         10,
+        None,
     )
     .unwrap();
     let mut named: Vec<(u64, &str)> = trades
@@ -1764,6 +1841,7 @@ fn mini_app_trades_keep_safe_entry_inputs_separate_from_exit_quantity() {
         super::TelegramReportAccess::Owner,
         Default::default(),
         10,
+        None,
     )
     .unwrap();
     assert_eq!(trades.len(), 3);

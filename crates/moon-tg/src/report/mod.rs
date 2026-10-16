@@ -895,14 +895,15 @@ pub(crate) struct MiniTrade {
 ///
 /// Scope follows [`read_mini_report`]: the owner reads every core, a viewer only granted cores,
 /// and a viewer with no granted core in the snapshot reads [`moon_core::config::NO_MATCH_CORE_UID`].
-/// The query over-reads by 25 rows because it sorts by the core-local close date; the rows are then
-/// re-sorted on UTC and cut to `limit`.
+/// Lists over-read by 25 rows because SQL sorts by core-local close date; rows are then
+/// re-sorted on UTC and cut to `limit`. Coin windows apply their exact bounds before that read.
 ///
 /// Args:
 ///     zone: Display zone for the report axis.
 ///     access: Chat grant captured at admission.
 ///     names: Current configured core names, shown in place of the stored ones.
 ///     limit: Most trades to return.
+///     window: Optional exact coin and inclusive UTC-second close bounds applied before LIMIT.
 ///
 /// Returns:
 ///     The trades, or the database error. No closed trades is an empty `Ok`.
@@ -911,18 +912,27 @@ pub(crate) fn read_mini_trades(
     access: TelegramReportAccess,
     names: db::CoreNames,
     limit: usize,
+    window: Option<MiniTradeWindow>,
 ) -> db::ReadResult<Vec<MiniTrade>> {
     let conn = db::open_reader()?;
-    read_mini_trades_on(&conn, zone, access, names, limit)
+    read_mini_trades_on(&conn, zone, access, names, limit, window)
 }
 
-/// Read Mini App rows and safe entry-volume inputs on the same snapshot as their valued profit.
+/// Optional exact coin and inclusive UTC-second close window, applied in SQL before LIMIT.
+pub(crate) struct MiniTradeWindow {
+    pub coin: String,
+    pub from: i64,
+    pub to: i64,
+}
+
+/// Read valued Mini App rows with optional SQL coin/window bounds before limiting the result.
 fn read_mini_trades_on(
     conn: &rusqlite::Connection,
     zone: Tz,
     access: TelegramReportAccess,
     names: db::CoreNames,
     limit: usize,
+    window: Option<MiniTradeWindow>,
 ) -> db::ReadResult<Vec<MiniTrade>> {
     let snap = db::read_snapshot(conn)?;
     let mut cores = db::distinct_cores(&snap)?;
@@ -938,13 +948,16 @@ fn read_mini_trades_on(
     };
     let filter = ReportFilter {
         core_uids: scoped_ids,
+        exact_coins: window.as_ref().map(|window| vec![window.coin.clone()]),
+        date_from: window.as_ref().map(|window| window.from),
+        date_to: window.as_ref().map(|window| window.to),
         emulator: Some(false),
         rows: RowScope::Closed,
         axis: db::ReportAxis::load(&snap, zone)?,
         core_names: names,
         ..Default::default()
     };
-    let table = db::query_mini_trades(&snap, &filter, limit + 25)?;
+    let table = db::query_mini_trades(&snap, &filter, limit.saturating_add(25))?;
     Ok(mini_trade_rows(table, &filter, limit))
 }
 

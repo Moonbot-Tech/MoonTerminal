@@ -252,3 +252,102 @@ export function liveFeed({ mode = "live", perPoll = 3, seedCount = null, closeAf
         return { body: reply, delay: calls === 1 ? delayFirst : 0 };
     };
 }
+
+// Coin chart: XALPHA on every core at once. Six synthetic cores, fourteen order lines bunched
+// around the price so the labels have to be spread apart. Ids and names are invented.
+export const COIN = { coin: "XALPHA", market: "XALPHAUSDT", core: 2001 };
+const COIN_PRICE = 0.07124;
+const COIN_CORES = ["CORE_A", "CORE_B", "CORE_C", "CORE_D", "CORE_E", "CORE_F"];
+const coinPos = (n, isShort, pending, entry, take, stop, pnl) => ({
+    core: String(2001 + n), core_name: COIN_CORES[n], is_short: isShort, pending,
+    entry, take, stop, strategy: `DROPS_0${n + 1}`, volume_usd: 150 + n * 25, pnl_pct: pnl,
+});
+const COIN_POSITIONS = [
+    coinPos(0, false, false, 0.07098, 0.07165, 0.07012, 0.37),
+    coinPos(1, true, false, 0.07151, 0.07088, 0.07230, 0.38),
+    coinPos(2, false, true, 0.07071, null, null, null),
+    coinPos(3, false, false, 0.07110, 0.07158, 0.07040, 0.20),
+    coinPos(4, false, true, 0.07060, null, null, null),
+    coinPos(5, true, false, 0.07140, 0.07095, 0.07210, 0.22),
+];
+function coinLevelsOf(positions) {
+    const out = [];
+    for (const p of positions) {
+        const base = { core: p.core, core_name: p.core_name, is_short: p.is_short, pending: p.pending };
+        out.push({ ...base, kind: p.pending ? "buy" : "entry", price: p.entry });
+        if (p.take != null) out.push({ ...base, kind: "take", price: p.take });
+        if (p.stop != null) out.push({ ...base, kind: "stop", price: p.stop });
+    }
+    return out;
+}
+export const COIN_LEVEL_PRICES = coinLevelsOf(COIN_POSITIONS).map((l) => l.price);
+
+/**
+ * A stateful /api/coin/ticks handler. Ticks mode seeds five minutes of prints and then answers
+ * only prints after `since_ms`; a candle mode answers the whole series for its timeframe.
+ * `mode`: live | no_tape (the station has not watched the coin: no prints, levels only) | empty
+ * (no core holds an order on the coin).
+ */
+export function coinFeed({ mode = "live", perPoll = 3 } = {}) {
+    const r = rng(23);
+    const ring = [];
+    let price = COIN_PRICE;
+    const step = () => {
+        price += (r() - 0.5) * 0.000035 + (COIN_PRICE - price) * 0.03;
+        return +price.toFixed(6);
+    };
+    const print = (t) => [Math.round(t), step(), Math.round(200 + Math.pow(r(), 3) * 9000), r() < 0.52 ? 1 : 0];
+    const positions = mode === "empty" ? [] : COIN_POSITIONS;
+    return (raw) => {
+        const now = Date.now();
+        let body = {};
+        try { body = JSON.parse(raw || "{}"); } catch { body = {}; }
+        const silent = mode === "no_tape";
+        if (!silent) {
+            if (!ring.length) {
+                let t = now - 600000;
+                while (t < now) { t += 120 + r() * 600; if (t < now) ring.push(print(t)); }
+            } else {
+                const last = ring[ring.length - 1][0];
+                for (let i = 1; i <= perPoll; i++) ring.push(print(last + (now - last) * i / perPoll));
+            }
+        }
+        const reply = {
+            state: silent ? "no_tape" : "live",
+            now_ms: now,
+            last_tick_ms: ring.length ? ring[ring.length - 1][0] : null,
+            mark_price: ring.length ? ring[ring.length - 1][1] : null,
+            price_decimals: 6,
+            ticks: [],
+            truncated: false,
+            exchange: "Binance Futures",
+            market_display: "XALPHA/USDT",
+            open_price: 0.07090,
+            candles: [],
+            levels: coinLevelsOf(positions),
+            positions,
+            deals: mode === "empty" ? [] : [
+                { core_name: "CORE_A", is_short: false, profit_usd: 1.2, profit_pct: 0.6, open_ms: now - 240000, close_ms: now - 150000, open_price: 0.07101, close_price: 0.07144 },
+                { core_name: "CORE_B", is_short: true, profit_usd: -0.4, profit_pct: -0.3, open_ms: now - 200000, close_ms: now - 90000, open_price: 0.07120, close_price: 0.07141 },
+            ],
+        };
+        const tf = { "1m": 60000, "5m": 300000, "15m": 900000 }[body.tf];
+        if (tf && !silent) {
+            const count = 90;
+            let close = COIN_PRICE - 0.0004;
+            for (let i = count - 1; i >= 0; i--) {
+                const t = Math.floor((now - i * tf) / tf) * tf;
+                const open = close;
+                close = +(open + (r() - 0.48) * 0.00012).toFixed(6);
+                const high = +(Math.max(open, close) + r() * 0.00005).toFixed(6);
+                const low = +(Math.min(open, close) - r() * 0.00005).toFixed(6);
+                reply.candles.push([t, open, high, low, close, Math.round(20000 + r() * 90000)]);
+            }
+            reply.mark_price = close;
+        } else if (!silent) {
+            const since = typeof body.since_ms === "number" ? body.since_ms : now - 300000;
+            reply.ticks = ring.filter((t) => t[0] > since);
+        }
+        return { body: reply };
+    };
+}

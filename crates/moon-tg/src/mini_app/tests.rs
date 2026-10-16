@@ -1,5 +1,514 @@
 //! Unit regressions for Mini App targeting, ordering and safe entry-notional display.
 
+/// Dropping peer or market filtering leaks levels from another market or an invisible core.
+#[test]
+fn coin_chart_two_core_overlays_exclude_other_markets_and_venues() {
+    use moon_core::session::CoreStore;
+    use moon_core::telegram::web::dto::{CoinTicksDto, LevelKindDto};
+    use moon_core::venue::CoreVenue;
+    let mut store = CoreStore::default();
+    for id in 1..=4 {
+        store.ensure(id);
+    }
+    let mut alpha = resting_order(100.0, 110.0);
+    alpha.coin = "XALPHA".into();
+    alpha.market = "XALPHAUSDT".into();
+    alpha.pending = false;
+    alpha.filled = true;
+    alpha.take_profit = Some(120.0);
+    alpha.stop_loss = Some(90.0);
+    store.core_mut(1).unwrap().orders.push(alpha.clone());
+    let mut pending = alpha.clone();
+    pending.pending = true;
+    pending.filled = false;
+    pending.take_profit = None;
+    pending.stop_loss = None;
+    store.core_mut(2).unwrap().orders.push(pending.clone());
+    let mut beta = pending;
+    beta.market = "XBETAUSDT".into();
+    beta.coin = "XBETA".into();
+    store.core_mut(2).unwrap().orders.push(beta);
+    store.core_mut(3).unwrap().orders.push(alpha.clone());
+    store.core_mut(4).unwrap().orders.push(alpha.clone());
+    alpha.job_is_done = true;
+    store.core_mut(2).unwrap().orders.push(alpha);
+    let venues = [
+        (1, CoreVenue::identify(1, "", None)),
+        (2, CoreVenue::identify(1, "", None)),
+        (3, CoreVenue::identify(2, "", None)),
+        (4, CoreVenue::identify(1, "", None)),
+    ]
+    .into_iter()
+    .collect();
+    let listed = vec![
+        (1, "CORE_A".into(), String::new()),
+        (2, "CORE_B".into(), String::new()),
+        (3, "CORE_C".into(), String::new()),
+    ];
+    let snapshot = super::charts::coin_snapshot(&store, &listed, &venues, 1, "XALPHAUSDT");
+    assert_eq!(snapshot.ids, vec![1, 2]);
+    assert_eq!(snapshot.orders.len(), 2);
+    let source =
+        moon_core::market::MarketDataSource::new(moon_core::market::MarketStore::shared(0.0));
+    let mut dto = CoinTicksDto::default();
+    for (id, name, row) in snapshot.orders {
+        super::charts::coin_overlays(&source, id, &name, &row, 110.0, &mut dto);
+    }
+    assert_eq!(
+        dto.levels
+            .iter()
+            .map(|level| (level.core.as_str(), level.kind, level.price))
+            .collect::<Vec<_>>(),
+        vec![
+            ("1", LevelKindDto::Take, 120.0),
+            ("1", LevelKindDto::Entry, 100.0),
+            ("1", LevelKindDto::Stop, 90.0),
+            ("2", LevelKindDto::Buy, 100.0)
+        ]
+    );
+    assert_eq!(
+        dto.positions
+            .iter()
+            .map(|row| (row.core_name.as_str(), row.pending))
+            .collect::<Vec<_>>(),
+        vec![("CORE_A", false), ("CORE_B", true)]
+    );
+}
+
+/// Building a delta-only candle or resampling with the wrong bucket loses OHLCV history.
+#[test]
+fn coin_chart_candles_use_ticks_without_cache_and_resample() {
+    use moon_core::feed::{Side, Tick};
+    use moon_core::telegram::web::dto::CoinTfDto;
+    let source =
+        moon_core::market::MarketDataSource::new(moon_core::market::MarketStore::shared(0.0));
+    let ticks: Vec<_> = [
+        (1000., 10., 2.),
+        (2000., 12., 3.),
+        (61000., 9., 4.),
+        (301000., 15., 1.),
+    ]
+    .into_iter()
+    .map(|(time_ms, price, qty)| Tick {
+        time_ms,
+        price,
+        qty,
+        side: Side::Buy,
+    })
+    .collect();
+    assert_eq!(
+        super::charts::coin_candles(&source, 1, "XALPHAUSDT", CoinTfDto::M1, 400000, &ticks),
+        vec![
+            [0., 10., 12., 10., 12., 5.],
+            [60000., 9., 9., 9., 9., 4.],
+            [300000., 15., 15., 15., 15., 1.]
+        ]
+    );
+    assert_eq!(
+        super::charts::coin_candles(&source, 1, "XALPHAUSDT", CoinTfDto::M5, 400000, &ticks),
+        vec![
+            [0., 10., 12., 9., 9., 9.],
+            [300000., 15., 15., 15., 15., 1.]
+        ]
+    );
+}
+
+/// Advancing a tick cursor must not discard older candle buckets or impose the live print cap.
+#[test]
+fn coin_candles_ignore_incremental_cursor_and_live_payload_cap() {
+    use moon_core::feed::{Side, Tick};
+    use moon_core::telegram::web::dto::CoinTfDto;
+    let source =
+        moon_core::market::MarketDataSource::new(moon_core::market::MarketStore::shared(0.0));
+    let mut ticks = vec![Tick {
+        time_ms: 120001.,
+        price: 10.,
+        qty: 1.,
+        side: Side::Buy,
+    }];
+    ticks.extend((0..4500).map(|_| Tick {
+        time_ms: 7000000.,
+        price: 12.,
+        qty: 1.,
+        side: Side::Buy,
+    }));
+    ticks.push(Tick {
+        time_ms: 7199000.,
+        price: 15.,
+        qty: 1.,
+        side: Side::Buy,
+    });
+    let series = super::charts::coin_series(
+        &source,
+        1,
+        "XALPHAUSDT",
+        CoinTfDto::M1,
+        7200000,
+        Some(7198000),
+        &ticks,
+    );
+    assert_eq!(series.ticks, vec![(7199000, 15., 1., 1)]);
+    assert_eq!(
+        series.candles,
+        vec![
+            [120000., 10., 10., 10., 10., 1.],
+            [6960000., 12., 12., 12., 12., 4500.],
+            [7140000., 15., 15., 15., 15., 1.]
+        ]
+    );
+}
+
+/// A cache prefix must retain full mode-specific history while newer live buckets win overlaps.
+#[test]
+fn coin_candles_merge_cache_and_tail_over_fixed_bar_windows() {
+    use moon_core::market::candles::ChartCandle;
+    use moon_core::telegram::web::dto::CoinTfDto;
+    for (tf, width, bars) in [
+        (CoinTfDto::M1, 60000, 120),
+        (CoinTfDto::M5, 300000, 100),
+        (CoinTfDto::M15, 900000, 100),
+    ] {
+        let now = (bars + 5) * width;
+        let cached: Vec<_> = (0..=bars + 5)
+            .map(|index| ChartCandle {
+                t_open_ms: (index * width) as f64,
+                open: 10.,
+                high: 10.,
+                low: 10.,
+                close: 10.,
+                volume: 2.,
+                quote_volume: 20.,
+            })
+            .collect();
+        let ticks = [moon_core::feed::Tick {
+            time_ms: (now - width) as f64,
+            price: 15.,
+            qty: 3.,
+            side: moon_core::feed::Side::Buy,
+        }];
+        let candles = super::charts::merge_coin_candles(
+            &cached,
+            &ticks,
+            Some(now - width),
+            super::charts::coin_candle_window(tf, now),
+            now,
+        );
+        assert_eq!(candles.len(), bars as usize);
+        assert_eq!(candles[0][0], (6 * width) as f64);
+        assert_eq!(
+            candles[candles.len() - 2],
+            [(now - width) as f64, 15., 15., 15., 15., 3.]
+        );
+        assert_eq!(
+            candles.last().unwrap(),
+            &[now as f64, 10., 10., 10., 10., 2.]
+        );
+    }
+}
+
+/// Removing the raw cap or reading the cached prefix wastes work and can overwhelm candle reads.
+#[test]
+fn coin_candle_tail_is_capped_and_skips_the_cached_prefix() {
+    use moon_core::feed::{Side, Tick};
+    use moon_core::market::candles::ChartCandle;
+    let cached = [ChartCandle {
+        t_open_ms: 60000.,
+        open: 10.,
+        high: 10.,
+        low: 10.,
+        close: 10.,
+        volume: 1.,
+        quote_volume: 10.,
+    }];
+    let candles = super::charts::coin_candle_tail(&cached, &[], (0, 60000), 300000, |window| {
+        assert_eq!(window, (60000, 300000, 200000));
+        let ticks = (0..200010)
+            .map(|index| Tick {
+                time_ms: 60000. + f64::from(index),
+                price: if index < 10 { 1. } else { 12. },
+                qty: 1.,
+                side: Side::Buy,
+            })
+            .collect();
+        let data = super::charts::recorder_delta(ticks, window.0, window.1, window.2);
+        assert!(data.truncated);
+        assert_eq!(data.ticks.len(), 200000);
+        assert_eq!(data.ticks.first().unwrap().time_ms, 60010.);
+        assert_eq!(data.ticks.last().unwrap().time_ms, 260009.);
+        Some((data, Some(window.0)))
+    });
+    assert_eq!(candles[0], [60000., 10., 10., 10., 10., 1.]);
+    assert_eq!(
+        candles.last().unwrap(),
+        &[240000., 12., 12., 12., 12., 20010.]
+    );
+}
+
+/// A partial first live bucket must not erase a cached bar's earlier extremes or volume.
+#[test]
+fn coin_candles_keep_complete_cache_when_live_tail_starts_mid_bucket() {
+    use moon_core::feed::{Side, Tick};
+    use moon_core::market::candles::ChartCandle;
+    use moon_core::telegram::web::dto::CoinTfDto;
+    for (tf, width) in [
+        (CoinTfDto::M1, 60000),
+        (CoinTfDto::M5, 300000),
+        (CoinTfDto::M15, 900000),
+    ] {
+        let cached = [ChartCandle {
+            t_open_ms: 0.,
+            open: 10.,
+            high: 20.,
+            low: 5.,
+            close: 12.,
+            volume: 100.,
+            quote_volume: 1000.,
+        }];
+        let ticks = [
+            Tick {
+                time_ms: 1000.,
+                price: 15.,
+                qty: 1.,
+                side: Side::Buy,
+            },
+            Tick {
+                time_ms: width as f64,
+                price: 16.,
+                qty: 2.,
+                side: Side::Buy,
+            },
+        ];
+        let candles = super::charts::merge_coin_candles(
+            &cached,
+            &ticks,
+            Some(1000),
+            super::charts::coin_candle_window(tf, width),
+            width,
+        );
+        assert_eq!(candles[0], [0., 10., 20., 5., 12., 100.]);
+        assert_eq!(candles[1], [width as f64, 16., 16., 16., 16., 2.]);
+    }
+}
+
+/// Applying the cap to a full window before its cursor incorrectly reports truncated deltas.
+#[test]
+fn coin_tick_delta_is_read_before_capping_its_payload() {
+    use moon_core::feed::{Side, Tick};
+    use moon_core::telegram::web::dto::CoinTfDto;
+    let ticks: Vec<_> = (0..5000)
+        .map(|time| Tick {
+            time_ms: f64::from(time),
+            price: 10.,
+            qty: 1.,
+            side: Side::Buy,
+        })
+        .collect();
+    let mut cursors = Vec::new();
+    let read = super::charts::read_coin_market(CoinTfDto::Ticks, Some(4990), |since| {
+        cursors.push(since);
+        (
+            Some(super::charts::recorder_delta(
+                ticks.clone(),
+                since.unwrap_or(0),
+                5000,
+                4000,
+            )),
+            "recorder",
+        )
+    });
+    assert_eq!(cursors, vec![Some(4990)]);
+    let data = read.data.unwrap();
+    assert!(!data.truncated);
+    assert_eq!(data.ticks.len(), 10);
+    assert_eq!(data.ticks.first().unwrap().time_ms, 4990.);
+    assert_eq!(data.ticks.last().unwrap().time_ms, 4999.);
+    assert_eq!(read.open_price, None);
+}
+
+/// Re-reading the whole window on every cursor poll only to repeat the opening wastes the read.
+#[test]
+fn coin_tick_first_read_alone_carries_the_opening() {
+    use moon_core::feed::{Side, Tick};
+    use moon_core::telegram::web::dto::CoinTfDto;
+    let ticks = vec![Tick {
+        time_ms: 100.,
+        price: 7.,
+        qty: 1.,
+        side: Side::Buy,
+    }];
+    let mut cursors = Vec::new();
+    let read = super::charts::read_coin_market(CoinTfDto::Ticks, None, |since| {
+        cursors.push(since);
+        (
+            Some(super::charts::recorder_delta(ticks, 0, 200, 10)),
+            "recorder",
+        )
+    });
+    assert_eq!(cursors, vec![None]);
+    assert_eq!(read.open_price, Some(7.));
+}
+
+/// Judging a forming bucket by its first print keeps a stale cached bar the source fully covers.
+#[test]
+fn coin_candles_use_source_coverage_not_the_first_print() {
+    use moon_core::feed::{Side, Tick};
+    use moon_core::market::candles::ChartCandle;
+    let cached = [ChartCandle {
+        t_open_ms: 60000.,
+        open: 10.,
+        high: 10.,
+        low: 10.,
+        close: 10.,
+        volume: 1.,
+        quote_volume: 10.,
+    }];
+    let ticks = [Tick {
+        time_ms: 80000.,
+        price: 14.,
+        qty: 3.,
+        side: Side::Buy,
+    }];
+    let covered =
+        super::charts::merge_coin_candles(&cached, &ticks, Some(60000), (0, 60000), 90000);
+    assert_eq!(covered, vec![[60000., 14., 14., 14., 14., 3.]]);
+    let partial =
+        super::charts::merge_coin_candles(&cached, &ticks, Some(75000), (0, 60000), 90000);
+    assert_eq!(partial, vec![[60000., 10., 10., 10., 10., 1.]]);
+}
+
+/// A 15-minute deals bound hides a real close 40 minutes ago from the tick chart.
+#[test]
+fn coin_tick_deals_include_a_close_forty_minutes_ago() {
+    use moon_core::db::{ReportFilter, RowScope};
+    use moon_core::telegram::web::dto::CoinTfDto;
+    let now = 7200000;
+    let from = super::charts::coin_deal_from(CoinTfDto::Ticks, now);
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT, buydate INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'CORE_A',1,'XALPHA',4000,4800,1,100,1),
+        (1,'CORE_A',2,'XALPHA',3000,3500,1,100,1);").unwrap();
+    let filter = ReportFilter {
+        core_uids: vec![1],
+        exact_coins: Some(vec!["XALPHA".into()]),
+        date_from: Some(from.div_euclid(1000)),
+        date_to: Some(now.div_euclid(1000)),
+        rows: RowScope::Closed,
+        ..Default::default()
+    };
+    let table = moon_core::db::query_mini_trades(&conn, &filter, 50).unwrap();
+    let close = table
+        .cols
+        .iter()
+        .position(|column| column == "closedate")
+        .unwrap();
+    assert_eq!(table.rows.len(), 1);
+    assert_eq!(table.rows[0][close], rusqlite::types::Value::Integer(4800));
+}
+
+/// Same-coin closes from another quote must not appear on this chart or occupy its SQL limit.
+#[test]
+fn coin_deals_exclude_same_coin_on_another_quote() {
+    let quotes = [(1, "USDT".into()), (2, "BTC".into()), (3, "USDT".into())]
+        .into_iter()
+        .collect();
+    let ids = super::charts::coin_deal_cores(&[1, 2, 4], &quotes, "USDT");
+    assert_eq!(ids, vec![1]);
+    let lower = [(1, " usdt".into())].into_iter().collect();
+    assert_eq!(
+        super::charts::coin_deal_cores(&[1], &lower, "USDT"),
+        vec![1]
+    );
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT, closedate INTEGER);
+        INSERT INTO orders_rep VALUES (1,'CORE_A',1,'XALPHA',100),(2,'CORE_B',2,'XALPHA',200),(3,'CORE_C',3,'XALPHA',300);").unwrap();
+    let filter = moon_core::db::ReportFilter {
+        core_uids: ids,
+        exact_coins: Some(vec!["XALPHA".into()]),
+        rows: moon_core::db::RowScope::Closed,
+        ..Default::default()
+    };
+    let table = moon_core::db::query_mini_trades(&conn, &filter, 1).unwrap();
+    assert_eq!(table.rows.len(), 1);
+    assert_eq!(table.core_uids, vec![1]);
+}
+
+/// An empty first read must request recorder demand, and admission must refuse a fifth read.
+#[test]
+fn coin_chart_empty_source_and_busy_admission() {
+    let source =
+        moon_core::market::MarketDataSource::new(moon_core::market::MarketStore::shared(0.0));
+    source.set_provider_map(&[(1, 1)].into_iter().collect());
+    source.set_provider_exchanges(
+        &[(1, moon_core::feed::ExchangeId::with_dex(1, ""))]
+            .into_iter()
+            .collect(),
+    );
+    let mut watch = None;
+    let (data, stage) = super::charts::read_market_with_watch(
+        &source,
+        1,
+        "XALPHAUSDT",
+        None,
+        10000,
+        |exchange, market, until| watch = Some((exchange.to_string(), market.to_string(), until)),
+    );
+    assert_eq!(
+        watch,
+        Some(("1:00000000".into(), "XALPHAUSDT".into(), 40000))
+    );
+    assert!(data.is_none());
+    assert_eq!(stage, "none");
+    assert_eq!(
+        super::charts::live_state(10000, None),
+        moon_core::telegram::web::dto::ChartStateDto::NoTape
+    );
+    let mut pending = 4;
+    assert!(!super::charts::claim_pending(&mut pending, 4));
+    assert_eq!(pending, 4);
+}
+
+/// Strategy coins must deduplicate active rows without including completed or other-core orders.
+#[test]
+fn strategies_coin_index_is_per_core_sorted_and_live_only() {
+    use moon_core::telegram::web::dto::CoinRefDto;
+    let mut store = moon_core::session::CoreStore::default();
+    store.ensure(1);
+    store.ensure(2);
+    let mut row = resting_order(100.0, 100.0);
+    row.strat_id = 7;
+    row.coin = "XBETA".into();
+    row.market = "XBETAUSDT".into();
+    store.core_mut(1).unwrap().orders.push(row.clone());
+    row.coin = "XALPHA".into();
+    row.market = "XALPHAUSDT".into();
+    store
+        .core_mut(1)
+        .unwrap()
+        .orders
+        .extend([row.clone(), row.clone()]);
+    row.coin = "XGAMMA".into();
+    row.job_is_done = true;
+    store.core_mut(1).unwrap().orders.push(row.clone());
+    row.job_is_done = false;
+    store.core_mut(2).unwrap().orders.push(row);
+    let coins = super::reads::strategy_coins(&store.core(1).unwrap().orders);
+    assert_eq!(
+        coins[&7],
+        vec![
+            CoinRefDto {
+                coin: "XALPHA".into(),
+                market: "XALPHAUSDT".into()
+            },
+            CoinRefDto {
+                coin: "XBETA".into(),
+                market: "XBETAUSDT".into()
+            }
+        ]
+    );
+    assert!(!coins.contains_key(&8));
+    assert!(super::reads::strategy_coins(&[]).is_empty());
+}
+
 /// A panicking read maps to ReadFailed, so control returns to Finish instead of unwinding.
 #[test]
 fn chart_read_maps_panic_to_read_failed() {
@@ -474,18 +983,18 @@ fn chart_recorder_delta_keeps_newest_and_reports_overflow() {
             })
             .collect()
     };
-    let exact = super::charts::recorder_delta(ticks(4000), 0, 5000);
+    let exact = super::charts::recorder_delta(ticks(4000), 0, 5000, 4000);
     assert_eq!(exact.ticks.len(), 4000);
     assert!(!exact.truncated);
-    let capped = super::charts::recorder_delta(ticks(4001), 0, 5000);
+    let capped = super::charts::recorder_delta(ticks(4001), 0, 5000, 4000);
     assert_eq!(capped.ticks.len(), 4000);
     assert!(capped.truncated);
     assert_eq!(capped.ticks[0].time_ms, 1.0);
     assert_eq!(capped.last_tick_ms, Some(4000));
-    let empty = super::charts::recorder_delta(ticks(4001), 4001, 5000);
+    let empty = super::charts::recorder_delta(ticks(4001), 4001, 5000, 4000);
     assert!(empty.ticks.is_empty());
     assert_eq!(empty.last_tick_ms, Some(4000));
-    let filtered = super::charts::recorder_delta(ticks(10), 6, 8);
+    let filtered = super::charts::recorder_delta(ticks(10), 6, 8, 4000);
     assert_eq!(
         filtered
             .ticks
@@ -496,7 +1005,7 @@ fn chart_recorder_delta_keeps_newest_and_reports_overflow() {
     );
     let since = super::charts::live_from(5000, Some(6));
     assert_eq!(
-        super::charts::recorder_delta(ticks(10), since, 8).ticks[0].time_ms,
+        super::charts::recorder_delta(ticks(10), since, 8, 4000).ticks[0].time_ms,
         6.0
     );
 }

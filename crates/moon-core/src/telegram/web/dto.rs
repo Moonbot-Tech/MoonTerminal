@@ -116,6 +116,77 @@ pub struct LiveTicksDto {
     pub trade: Option<TradeDto>,
 }
 
+/// Timeframe of a market chart; names match the Mini App mode switch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CoinTfDto {
+    #[serde(rename = "ticks")]
+    Ticks,
+    #[serde(rename = "1m")]
+    M1,
+    #[serde(rename = "5m")]
+    M5,
+    #[serde(rename = "15m")]
+    M15,
+}
+
+/// One visible core's order level on a shared market chart.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct CoinLevelDto {
+    pub kind: LevelKindDto,
+    pub price: f64,
+    pub core: String,
+    pub core_name: String,
+    pub is_short: bool,
+    pub pending: bool,
+}
+
+/// One open order or position, retaining unknown valuation as null.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct CoinPositionDto {
+    pub core: String,
+    pub core_name: String,
+    pub is_short: bool,
+    pub pending: bool,
+    pub entry: f64,
+    pub take: Option<f64>,
+    pub stop: Option<f64>,
+    pub strategy: String,
+    pub volume_usd: Option<f64>,
+    pub pnl_pct: Option<f64>,
+}
+
+/// Recent closed execution in the market chart's window.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct CoinDealDto {
+    pub core_name: String,
+    pub is_short: bool,
+    pub profit_usd: Option<f64>,
+    pub profit_pct: Option<f64>,
+    pub open_ms: Option<i64>,
+    pub close_ms: i64,
+    pub open_price: f64,
+    pub close_price: f64,
+}
+
+/// Shared market stream and overlays; candles are UTC millisecond OHLCV arrays.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct CoinTicksDto {
+    pub state: ChartStateDto,
+    pub now_ms: i64,
+    pub last_tick_ms: Option<i64>,
+    pub mark_price: f64,
+    pub price_decimals: u32,
+    pub ticks: Vec<(i64, f64, f64, u8)>,
+    pub truncated: bool,
+    pub exchange: String,
+    pub market_display: String,
+    pub open_price: Option<f64>,
+    pub candles: Vec<[f64; 6]>,
+    pub levels: Vec<CoinLevelDto>,
+    pub positions: Vec<CoinPositionDto>,
+    pub deals: Vec<CoinDealDto>,
+}
+
 /// Named report window. Serialized as snake_case (`last_month`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -354,6 +425,7 @@ pub struct OrdersDto {
 /// `profit` and `profit_pct` are `None` when the trade could not be valued.
 /// `volume_text` is the safe entry notional in USDT, absent when it cannot be reconstructed.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 pub struct TradeDto {
     pub core: u64,
     pub core_name: String,
@@ -364,6 +436,9 @@ pub struct TradeDto {
     /// Recorder `newrecid`: the chart identity of a row without a displayed id.
     pub new_rec_id: i64,
     pub coin: String,
+    /// Catalog-verified market key, absent while the originating core cannot resolve it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub market: Option<String>,
     pub side: String,
     pub profit: Option<f64>,
     pub profit_text: Option<String>,
@@ -401,6 +476,7 @@ pub struct TradesDto {
 ///
 /// `TimedOut` means the core did not confirm in time; the real state is unknown, not rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(rename_all = "snake_case")]
 pub enum StrategyPendingDto {
     Pending,
@@ -411,13 +487,25 @@ pub enum StrategyPendingDto {
 ///
 /// `id` goes out as a decimal string ([`id_text`]): strategy ids span the whole 64-bit range.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 pub struct StrategyDto {
     #[serde(serialize_with = "id_text::serialize")]
+    #[cfg_attr(test, serde(deserialize_with = "id_text::deserialize"))]
     pub id: u64,
     pub name: String,
     pub checked: bool,
     pub wanted: Option<bool>,
     pub pending: Option<StrategyPendingDto>,
+    #[serde(default)]
+    pub coins: Vec<CoinRefDto>,
+}
+
+/// Exact market identity behind a displayed coin button.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+pub struct CoinRefDto {
+    pub coin: String,
+    pub market: String,
 }
 
 /// Strategies of one folder. `path` is `"/"`-joined; `""` is the root.
