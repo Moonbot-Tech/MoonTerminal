@@ -137,6 +137,27 @@ fn aggregate_late_resend_updates_old_bucket() {
     assert_eq!(out[0].close, 10.0);
 }
 
+/// MoonProto's trade ring returns rows in append order, so a late resend can be the ONLY trade of
+/// a bucket lying between two buckets the series already holds. That bucket is not empty and not
+/// older than the series: it must get its own candle, in time order. Expected by hand: bucket
+/// 0..5m holds the 10.0 trade, 5m..10m only the late 11.0 trade, 10m..15m the 12.0 trade.
+#[test]
+fn aggregate_late_resend_into_a_missing_middle_bucket_keeps_its_candle() {
+    let trades = [
+        tick(1.0 * M, 10.0, 1.0),
+        tick(11.0 * M, 12.0, 1.0),
+        tick(6.0 * M, 11.0, 2.0), // Late resend; nothing else traded in 5m..10m.
+    ];
+    let mut out = Vec::new();
+    aggregate_trades(&trades, TF5, &mut out);
+    let mut middle = candle(5.0 * M, 11.0, 11.0, 11.0, 11.0, 2.0);
+    middle.quote_volume = 22.0;
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[1], middle);
+    assert_eq!(out[0].t_open_ms, 0.0);
+    assert_eq!(out[2].t_open_ms, 10.0 * M);
+}
+
 #[test]
 fn resample_5m_to_15m() {
     let rows = [

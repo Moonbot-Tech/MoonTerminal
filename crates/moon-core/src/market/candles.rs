@@ -766,6 +766,11 @@ pub fn aggregate_trades(trades: &[Tick], tf_ms: i64, out: &mut Vec<ChartCandle>)
                     c.low = c.low.min(t.price);
                     c.volume += t.qty.max(0.0);
                     c.quote_volume += t.price * t.qty.max(0.0);
+                } else if open_ms > out[0].t_open_ms {
+                    // The resend is the only trade of a bucket between two the series holds:
+                    // that bucket is not empty, so it gets its own candle, in time order.
+                    let at = out.partition_point(|c| c.t_open_ms < open_ms);
+                    out.insert(at, candle_from_tick(open_ms, t));
                 }
                 // Ignore a trade older than the entire series because its window has moved on.
             }
