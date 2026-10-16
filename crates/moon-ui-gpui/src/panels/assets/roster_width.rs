@@ -58,7 +58,7 @@ pub(super) fn resolved(user: &HashMap<String, f32>, auto: f32) -> f32 {
 
 /// BASE width the roster needs to draw its widest core name in full beside the free/total pair.
 ///
-/// Content-measured because a core name is the user's own free text: `Demo Fund ~ F-BN / SUBACCOUNT
+/// Content-measured because a core name is the user's own free text: `Demo Fund ~ EX-X / SUBACCOUNT
 /// (09)` and `Sample Desk ~ S-HL / ACCOUNT No 38 L` are typical, and against the fixed
 /// [`DEFAULT_BASE_W`] every one of them ellipsized at the sub-account — the part that says WHICH
 /// row this is — while the three `flex_1` wallet columns beside it sat near-empty. Same shape as

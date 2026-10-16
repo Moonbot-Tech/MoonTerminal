@@ -796,7 +796,7 @@ impl AssetsView {
         //
         // And the DEFAULT is now measured rather than fixed. 420 px was chosen against the names
         // above, but a name is the user's own free text: at the shipped width every row read
-        // `Demo Fund ~ F-BN / SUBACCOUNT (…`, ellipsized exactly at the sub-account that says which
+        // `Demo Fund ~ EX-X / SUBACCOUNT (…`, ellipsized exactly at the sub-account that says which
         // row it is, while the three wallet columns beside it held one short entry each. The
         // column is sized to its widest name plus the figure it must not overlap, floored at the
         // shipped width and capped at `MAX_BASE_W` (`roster_width::auto_base`); a stored drag

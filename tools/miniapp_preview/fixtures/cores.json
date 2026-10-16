@@ -2,7 +2,7 @@
   "cores": [
     {
       "id": 1001,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (01)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (01)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 25,
@@ -51,7 +51,7 @@
     },
     {
       "id": 1002,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (02)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (02)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 32,
@@ -75,7 +75,7 @@
     },
     {
       "id": 1003,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (03)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (03)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 39,
@@ -99,7 +99,7 @@
     },
     {
       "id": 1004,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (04)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (04)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 46,
@@ -123,7 +123,7 @@
     },
     {
       "id": 1005,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (05)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (05)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 53,
@@ -147,7 +147,7 @@
     },
     {
       "id": 1006,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (06)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (06)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 60,
@@ -171,7 +171,7 @@
     },
     {
       "id": 1007,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (07)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (07)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 67,
@@ -195,7 +195,7 @@
     },
     {
       "id": 1008,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (08)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (08)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 74,
@@ -219,7 +219,7 @@
     },
     {
       "id": 1009,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (09)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (09)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 21,
@@ -243,7 +243,7 @@
     },
     {
       "id": 1010,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (10)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (10)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 28,
@@ -267,7 +267,7 @@
     },
     {
       "id": 1011,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (11)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (11)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 35,
@@ -291,7 +291,7 @@
     },
     {
       "id": 1012,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (12)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (12)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 42,
@@ -315,7 +315,7 @@
     },
     {
       "id": 1013,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (13)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (13)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 49,
@@ -339,7 +339,7 @@
     },
     {
       "id": 1014,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (14)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (14)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 56,
@@ -363,7 +363,7 @@
     },
     {
       "id": 1015,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (15)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (15)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 63,
@@ -387,7 +387,7 @@
     },
     {
       "id": 1016,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (16)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (16)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 70,
@@ -411,7 +411,7 @@
     },
     {
       "id": 1017,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (17)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (17)",
       "exchange": "Binance Futures",
       "conn": "disconnected",
       "ping_ms": null,
@@ -435,7 +435,7 @@
     },
     {
       "id": 1018,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (18)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (18)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 24,
@@ -459,7 +459,7 @@
     },
     {
       "id": 1019,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (19)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (19)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 31,
@@ -483,7 +483,7 @@
     },
     {
       "id": 1020,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (20)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (20)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 38,
@@ -507,7 +507,7 @@
     },
     {
       "id": 1021,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (21)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (21)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 45,
@@ -531,7 +531,7 @@
     },
     {
       "id": 1022,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (22)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (22)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 52,
@@ -555,7 +555,7 @@
     },
     {
       "id": 1023,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (23)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (23)",
       "exchange": "Binance Futures",
       "conn": "connecting",
       "ping_ms": null,
@@ -579,7 +579,7 @@
     },
     {
       "id": 1024,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (24)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (24)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 66,
@@ -603,7 +603,7 @@
     },
     {
       "id": 1025,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (25)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (25)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 73,
@@ -627,7 +627,7 @@
     },
     {
       "id": 1026,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (26)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (26)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 20,
@@ -651,7 +651,7 @@
     },
     {
       "id": 1027,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (27)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (27)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 27,
@@ -675,7 +675,7 @@
     },
     {
       "id": 1028,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (28)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (28)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 34,
@@ -699,7 +699,7 @@
     },
     {
       "id": 1029,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (29)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (29)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 41,
@@ -723,7 +723,7 @@
     },
     {
       "id": 1030,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (30)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (30)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 48,
@@ -747,7 +747,7 @@
     },
     {
       "id": 1031,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (31)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (31)",
       "exchange": "Binance Futures",
       "conn": "failed",
       "ping_ms": null,
@@ -771,7 +771,7 @@
     },
     {
       "id": 1032,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (32)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (32)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 62,
@@ -795,7 +795,7 @@
     },
     {
       "id": 1033,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (33)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (33)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 69,
@@ -819,7 +819,7 @@
     },
     {
       "id": 1034,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (34)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (34)",
       "exchange": "Binance Futures",
       "conn": "disconnected",
       "ping_ms": null,
@@ -843,7 +843,7 @@
     },
     {
       "id": 1035,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (35)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (35)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 23,
@@ -867,7 +867,7 @@
     },
     {
       "id": 1036,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (36)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (36)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 30,
@@ -891,7 +891,7 @@
     },
     {
       "id": 1037,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (37)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (37)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 37,
@@ -915,7 +915,7 @@
     },
     {
       "id": 1038,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (38)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (38)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 44,
@@ -939,7 +939,7 @@
     },
     {
       "id": 1039,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (39)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (39)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 51,
@@ -963,7 +963,7 @@
     },
     {
       "id": 1040,
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (40)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (40)",
       "exchange": "Binance Futures",
       "conn": "ready",
       "ping_ms": 58,

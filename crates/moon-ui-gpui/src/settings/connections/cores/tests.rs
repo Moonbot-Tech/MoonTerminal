@@ -189,7 +189,7 @@ fn linked(r: CoreListRow, group: &str, link: &str) -> CoreListRow {
 }
 
 /// A 30-character core name, the longest the list is built for.
-const LONG_NAME: &str = "CORE_A ~ F-BN / SUB 07 / EXTRA";
+const LONG_NAME: &str = "CORE_A ~ EX-X / SUB 07 / EXTRA";
 
 /// Three groups, eight cores, one with a key the core rejected, one with a 30-character name.
 fn model() -> CoresModel {
@@ -208,14 +208,14 @@ fn model() -> CoresModel {
                         "Binance Futures",
                         vec![
                             linked(
-                                row(0, "ALPHA ~ F-BN / SUB 07", "10.0.4.17:3100", 9, CoreDot::Ok),
+                                row(0, "ALPHA ~ EX-X / SUB 07", "10.0.4.17:3100", 9, CoreDot::Ok),
                                 "default",
                                 "a-chart-link-name-too-long-for-its-column",
                             ),
-                            row(1, "ALPHA ~ F-BN / SUB 08", "10.0.4.18:3100", 9, CoreDot::Ok),
+                            row(1, "ALPHA ~ EX-X / SUB 08", "10.0.4.18:3100", 9, CoreDot::Ok),
                             row(
                                 2,
-                                "ORION ~ F-BN / SUB 21",
+                                "ORION ~ EX-X / SUB 21",
                                 "10.0.4.21:3100",
                                 7,
                                 CoreDot::Wait,
@@ -242,11 +242,11 @@ fn model() -> CoresModel {
                     "Binance Futures",
                     vec![
                         linked(
-                            row(4, "LYRA ~ F-BN / SUB 30", "10.0.6.30:3100", 9, CoreDot::Ok),
+                            row(4, "LYRA ~ EX-X / SUB 30", "10.0.6.30:3100", 9, CoreDot::Ok),
                             "Scalp",
                             "BTC-main",
                         ),
-                        row(5, "LYRA ~ F-BN / SUB 31", "10.0.6.31:3100", 8, CoreDot::Off),
+                        row(5, "LYRA ~ EX-X / SUB 31", "10.0.6.31:3100", 8, CoreDot::Off),
                         linked(
                             row(7, LONG_NAME, "203.0.113.7:3100", 9, CoreDot::Ok),
                             "Scalp",

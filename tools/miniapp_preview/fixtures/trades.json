@@ -2,7 +2,7 @@
   "trades": [
     {
       "core": 1001,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (37) ALPHA",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (37) ALPHA",
       "exchange": "Binance Futures",
       "rec_id": 880000,
       "coin": "AAA",
@@ -24,7 +24,7 @@
     },
     {
       "core": 1006,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (06)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (06)",
       "exchange": "Binance Futures",
       "rec_id": 880001,
       "coin": "BBB",
@@ -46,7 +46,7 @@
     },
     {
       "core": 1011,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (11)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (11)",
       "exchange": "Binance Futures",
       "rec_id": 880002,
       "coin": "CCC",
@@ -68,7 +68,7 @@
     },
     {
       "core": 1016,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (16)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (16)",
       "exchange": "Binance Futures",
       "rec_id": 880003,
       "coin": "DDD",
@@ -90,7 +90,7 @@
     },
     {
       "core": 1021,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (21)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (21)",
       "exchange": "Binance Futures",
       "rec_id": 880004,
       "coin": "EEE",
@@ -112,7 +112,7 @@
     },
     {
       "core": 1026,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (26)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (26)",
       "exchange": "Binance Futures",
       "rec_id": 880005,
       "coin": "FFF",
@@ -134,7 +134,7 @@
     },
     {
       "core": 1031,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (31)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (31)",
       "exchange": "Binance Futures",
       "rec_id": 880006,
       "coin": "GGG",
@@ -156,7 +156,7 @@
     },
     {
       "core": 1036,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (36)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (36)",
       "exchange": "Binance Futures",
       "rec_id": 880007,
       "coin": "AAA",
@@ -266,7 +266,7 @@
     },
     {
       "core": 1003,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (03)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (03)",
       "exchange": "Binance Futures",
       "rec_id": 880012,
       "coin": "FFF",
@@ -288,7 +288,7 @@
     },
     {
       "core": 1008,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (08)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (08)",
       "exchange": "Binance Futures",
       "rec_id": 880013,
       "coin": "GGG",
@@ -310,7 +310,7 @@
     },
     {
       "core": 1013,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (13)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (13)",
       "exchange": "Binance Futures",
       "rec_id": 880014,
       "coin": "AAA",
@@ -332,7 +332,7 @@
     },
     {
       "core": 1018,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (18)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (18)",
       "exchange": "Binance Futures",
       "rec_id": 880015,
       "coin": "BBB",
@@ -354,7 +354,7 @@
     },
     {
       "core": 1023,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (23)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (23)",
       "exchange": "Binance Futures",
       "rec_id": 880016,
       "coin": "CCC",
@@ -376,7 +376,7 @@
     },
     {
       "core": 1028,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (28)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (28)",
       "exchange": "Binance Futures",
       "rec_id": 880017,
       "coin": "DDD",
@@ -398,7 +398,7 @@
     },
     {
       "core": 1033,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (33)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (33)",
       "exchange": "Binance Futures",
       "rec_id": 880018,
       "coin": "EEE",
@@ -420,7 +420,7 @@
     },
     {
       "core": 1038,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (38)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (38)",
       "exchange": "Binance Futures",
       "rec_id": 880019,
       "coin": "FFF",
@@ -530,7 +530,7 @@
     },
     {
       "core": 1005,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (05)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (05)",
       "exchange": "Binance Futures",
       "rec_id": 880024,
       "coin": "DDD",
@@ -552,7 +552,7 @@
     },
     {
       "core": 1010,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (10)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (10)",
       "exchange": "Binance Futures",
       "rec_id": 880025,
       "coin": "EEE",
@@ -574,7 +574,7 @@
     },
     {
       "core": 1015,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (15)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (15)",
       "exchange": "Binance Futures",
       "rec_id": 880026,
       "coin": "FFF",
@@ -596,7 +596,7 @@
     },
     {
       "core": 1020,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (20)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (20)",
       "exchange": "Binance Futures",
       "rec_id": 880027,
       "coin": "GGG",
@@ -618,7 +618,7 @@
     },
     {
       "core": 1025,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (25)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (25)",
       "exchange": "Binance Futures",
       "rec_id": 880028,
       "coin": "AAA",
@@ -640,7 +640,7 @@
     },
     {
       "core": 1030,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (30)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (30)",
       "exchange": "Binance Futures",
       "rec_id": 880029,
       "coin": "BBB",
@@ -662,7 +662,7 @@
     },
     {
       "core": 1035,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (35)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (35)",
       "exchange": "Binance Futures",
       "rec_id": 880030,
       "coin": "CCC",
@@ -684,7 +684,7 @@
     },
     {
       "core": 1040,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (40)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (40)",
       "exchange": "Binance Futures",
       "rec_id": 880031,
       "coin": "DDD",
@@ -772,7 +772,7 @@
     },
     {
       "core": 1002,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (02)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (02)",
       "exchange": "Binance Futures",
       "rec_id": 880035,
       "coin": "AAA",
@@ -794,7 +794,7 @@
     },
     {
       "core": 1007,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (07)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (07)",
       "exchange": "Binance Futures",
       "rec_id": 880036,
       "coin": "BBB",
@@ -816,7 +816,7 @@
     },
     {
       "core": 1012,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (12)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (12)",
       "exchange": "Binance Futures",
       "rec_id": 880037,
       "coin": "CCC",
@@ -838,7 +838,7 @@
     },
     {
       "core": 1017,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (17)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (17)",
       "exchange": "Binance Futures",
       "rec_id": 880038,
       "coin": "DDD",
@@ -860,7 +860,7 @@
     },
     {
       "core": 1022,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (22)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (22)",
       "exchange": "Binance Futures",
       "rec_id": 880039,
       "coin": "EEE",
@@ -882,7 +882,7 @@
     },
     {
       "core": 1027,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (27)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (27)",
       "exchange": "Binance Futures",
       "rec_id": 880040,
       "coin": "FFF",
@@ -904,7 +904,7 @@
     },
     {
       "core": 1032,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (32)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (32)",
       "exchange": "Binance Futures",
       "rec_id": 880041,
       "coin": "GGG",
@@ -926,7 +926,7 @@
     },
     {
       "core": 1037,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (37)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (37)",
       "exchange": "Binance Futures",
       "rec_id": 880042,
       "coin": "AAA",
@@ -1036,7 +1036,7 @@
     },
     {
       "core": 1004,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (04)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (04)",
       "exchange": "Binance Futures",
       "rec_id": 880047,
       "coin": "FFF",
@@ -1058,7 +1058,7 @@
     },
     {
       "core": 1009,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (09)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (09)",
       "exchange": "Binance Futures",
       "rec_id": 880048,
       "coin": "GGG",
@@ -1080,7 +1080,7 @@
     },
     {
       "core": 1014,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (14)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (14)",
       "exchange": "Binance Futures",
       "rec_id": 880049,
       "coin": "AAA",
@@ -1102,7 +1102,7 @@
     },
     {
       "core": 1019,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (19)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (19)",
       "exchange": "Binance Futures",
       "rec_id": 880050,
       "coin": "BBB",
@@ -1124,7 +1124,7 @@
     },
     {
       "core": 1024,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (24)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (24)",
       "exchange": "Binance Futures",
       "rec_id": 880051,
       "coin": "CCC",
@@ -1146,7 +1146,7 @@
     },
     {
       "core": 1029,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (29)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (29)",
       "exchange": "Binance Futures",
       "rec_id": 880052,
       "coin": "DDD",
@@ -1168,7 +1168,7 @@
     },
     {
       "core": 1034,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (34)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (34)",
       "exchange": "Binance Futures",
       "rec_id": 880053,
       "coin": "EEE",
@@ -1190,7 +1190,7 @@
     },
     {
       "core": 1039,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (39)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (39)",
       "exchange": "Binance Futures",
       "rec_id": 880054,
       "coin": "FFF",
@@ -1278,7 +1278,7 @@
     },
     {
       "core": 1001,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (01)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (01)",
       "exchange": "Binance Futures",
       "rec_id": 880058,
       "coin": "CCC",
@@ -1300,7 +1300,7 @@
     },
     {
       "core": 1006,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (06)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (06)",
       "exchange": "Binance Futures",
       "rec_id": 880059,
       "coin": "DDD",
