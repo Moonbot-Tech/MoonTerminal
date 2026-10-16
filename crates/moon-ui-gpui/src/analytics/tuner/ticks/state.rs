@@ -80,6 +80,12 @@ pub(in crate::analytics::tuner) struct DealRow {
 }
 
 impl DealRow {
+    /// Automatic reloads wait for publication; an explicit fetch can still requeue the row.
+    pub(in crate::analytics::tuner) fn autoload_ready_at(&self, now_ms: i64) -> bool {
+        !matches!(self.tape,
+            TapeStatus::Refused(TickStatus::ArchivePending { retry_at_ms }) if now_ms < retry_at_ms)
+    }
+
     /// Cancel a progress mark without losing the model coverage a short-tail refill started with.
     fn unmark_fetching(&mut self) {
         if self.tape == TapeStatus::Fetching {
@@ -91,13 +97,16 @@ impl DealRow {
         }
     }
 
-    /// Offer missing tape as before, and short reproduced tails only while a source can fill them.
+    /// Offer missing or unpublished tape again, and short tails while a source can fill them.
     pub(in crate::analytics::tuner) fn fetchable_at(&self, now_ms: i64, min_tail_s: u32) -> bool {
         use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
         let Some(address) = &self.address else {
             return false;
         };
-        if self.tape == TapeStatus::Missing {
+        if matches!(
+            self.tape,
+            TapeStatus::Missing | TapeStatus::Refused(TickStatus::ArchivePending { .. })
+        ) {
             return true;
         }
         let trail_ms = self.held.map_or(0, |(_, trail)| trail.max(0));
@@ -926,8 +935,11 @@ impl TicksState {
             touched = true;
             match edit {
                 RowEdit::MarkFetching
-                    if row.tape == TapeStatus::Missing
-                        || (row.reproduced() && !super::tail::holds(row.held)) =>
+                    if matches!(
+                        row.tape,
+                        TapeStatus::Missing
+                            | TapeStatus::Refused(TickStatus::ArchivePending { .. })
+                    ) || (row.reproduced() && !super::tail::holds(row.held)) =>
                 {
                     row.tape = TapeStatus::Fetching;
                 }

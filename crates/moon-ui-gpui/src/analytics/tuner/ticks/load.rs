@@ -319,7 +319,11 @@ impl AnalyticsView {
         // since — the station's recording, the core's archive — is asked about again.
         let (tape_rev, refiled) =
             moon_core::market::trade_replay::trade_cache::filed_since(self.ticks.tape_rev);
-        let judged = super::refiled::drop_refiled(judged, &refiled);
+        let judged = super::refiled::drop_refiled(
+            judged,
+            &refiled,
+            moon_core::util::time::now_unix_ms_i64(),
+        );
         self.spawn_latest_db(
             &[ReadLane::TicksReplay],
             false,

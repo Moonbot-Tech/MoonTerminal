@@ -122,6 +122,30 @@ fn days_cross_midnight_and_exclude_unpublished_days() {
     );
 }
 
+/// Dropping the route's lag would hammer unpublished files; keeping the boundary would block recovery.
+#[test]
+fn publication_wait_ends_exactly_when_the_day_becomes_requestable() {
+    let route = ArchiveRoute::BybitTradingDaily;
+    let spans = Coverage::one((1000, 2000));
+    let due = 216_000_000; // End of 1970-01-01 plus the reviewed 36-hour lag.
+    assert_eq!(publication_pending(route, &spans, due - 1), Some(due));
+    assert!(utc_days_at(&spans, due - 1, route.publish_lag_ms()).is_empty());
+    assert_eq!(publication_pending(route, &spans, due), None);
+    assert_eq!(
+        utc_days_at(&spans, due, route.publish_lag_ms()),
+        vec![day()]
+    );
+    let holed = Coverage::from_spans([(1000, 2000), (172_800_000, 172_801_000)]);
+    assert_eq!(publication_pending(route, &holed, due), Some(388_800_000));
+}
+
+/// An already-due retry would let every report reload request the same late daily file again.
+#[test]
+fn late_daily_files_retry_at_the_next_utc_hour() {
+    assert_eq!(next_retry_at(3_599_999), 3_600_000);
+    assert_eq!(next_retry_at(3_600_000), 7_200_000);
+}
+
 /// Both compression envelopes must filter their CSV streams and remove downloaded bodies.
 #[test]
 fn zip_and_gzip_fill_only_requested_span_and_delete_files() {

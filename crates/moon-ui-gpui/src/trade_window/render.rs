@@ -359,6 +359,13 @@ impl TradeWindowView {
                         brand = brand.map_or("", |brand| brand.display())
                     )
                     .to_string(),
+                    TickStatus::ArchivePending { retry_at_ms } => t!(
+                        "analytics.ticks.tape_archive_pending",
+                        expected = chrono::DateTime::from_timestamp_millis(*retry_at_ms)
+                            .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+                            .unwrap_or_else(|| retry_at_ms.to_string())
+                    )
+                    .to_string(),
                     TickStatus::OutOfRetention { retention_ms } => t!(
                         "trade_window.source.candles_retention",
                         min = tf_min,

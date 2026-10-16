@@ -839,6 +839,9 @@ fn tape_mark(tape: TapeStatus) -> (&'static str, String) {
         TapeStatus::Refused(TickStatus::NoRoute) => {
             ("✕", t!("analytics.ticks.tape_no_route").to_string())
         }
+        TapeStatus::Refused(TickStatus::ArchivePending { retry_at_ms }) => {
+            ("○", archive_pending_caption(retry_at_ms))
+        }
         TapeStatus::Refused(TickStatus::OutOfRetention { retention_ms }) => (
             "✕",
             t!(
@@ -856,6 +859,14 @@ fn tape_mark(tape: TapeStatus) -> (&'static str, String) {
             .to_string(),
         ),
     }
+}
+
+/// Name the exchange publication wait with an approximate UTC time in every locale.
+fn archive_pending_caption(retry_at_ms: i64) -> String {
+    let expected = chrono::DateTime::from_timestamp_millis(retry_at_ms)
+        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| retry_at_ms.to_string());
+    t!("analytics.ticks.tape_archive_pending", expected = expected).to_string()
 }
 
 /// The box of one column's cell — the heading's and the row's alike: the descriptor's width

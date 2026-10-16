@@ -922,6 +922,144 @@ fn tile_stage_for_archive(request: &TradeReplayRequest) -> TickStage {
     tick_stage_for(request.address.venue.expect("known venue"), &key, &[])
 }
 
+/// Turning publication gaps into NoRoute strands linear rows; inverse and PERP stay terminal.
+#[test]
+fn unpublished_archive_focus_is_retryable_and_published_focus_fetches_again() {
+    let day_ms = 86_400_000;
+    let today = crate::util::time::now_unix_ms_i64().div_euclid(day_ms) * day_ms;
+    for (market, kind, pending) in [
+        ("XALPHAUSDT", crate::venue::MarketKind::Futures, true),
+        ("XALPHAUSDC", crate::venue::MarketKind::Futures, true),
+        ("XALPHAUSD", crate::venue::MarketKind::Quarterly, false),
+        ("XALPHAPERP", crate::venue::MarketKind::Futures, false),
+    ] {
+        let (reply, _rx) = mpsc::channel();
+        let mut request = tile_request(reply);
+        request.market = market.into();
+        request.intent = ReplayIntent::Model;
+        request.address.venue = Some(crate::venue::Venue {
+            brand: crate::venue::Brand::Bybit,
+            kind,
+        });
+        request.window = ReplayWindow {
+            from_ms: today + 1000,
+            to_ms: today + 2000,
+            open_ms: today + 1000,
+            close_ms: today + 2000,
+            margin_ms: 0,
+            long_position_ms: 300_000,
+            over_budget: false,
+        };
+        let stage = tile_stage_for_archive(&request);
+        let tiles = Mutex::new(TickTileStore::default());
+        for _ in 0..2 {
+            let answer = serve_ticks_with(
+                &rest::agent(),
+                &ReplayGate::new(),
+                &request,
+                &stage,
+                &tiles,
+                None,
+                |_, _, _, _| panic!("unpublished or unsupported day reached archive transport"),
+            );
+            let expected = if pending {
+                TickStatus::ArchivePending {
+                    retry_at_ms: today + 216_000_000,
+                }
+            } else {
+                TickStatus::NoRoute
+            };
+            assert!(matches!(answer, Err(Some(status)) if status == expected));
+        }
+        if !pending {
+            continue;
+        }
+        lock_tiles(&tiles).insert(
+            (request.address.exchange_key.clone(), request.market.clone()),
+            today + 1000,
+            today + 1500,
+            vec![tick(today + 1000, 10.0)],
+            TileSource::Core,
+        );
+        let (partial, retry) = serve_ticks_with(
+            &rest::agent(),
+            &ReplayGate::new(),
+            &request,
+            &stage,
+            &tiles,
+            None,
+            |_, _, _, _| panic!("partial core tape must not bypass the publication lag"),
+        )
+        .expect("retain the core's partial tape");
+        assert_eq!(partial.ticks.len(), 1);
+        assert!(matches!(
+            partial.tick_status,
+            TickStatus::ArchivePending { .. }
+        ));
+        assert!(
+            retry,
+            "a short core slice must not settle the missing archive"
+        );
+        // Shift the fixture's day back past publication, then ask the same production pipeline.
+        request.window.from_ms -= 5 * day_ms;
+        request.window.to_ms -= 5 * day_ms;
+        request.window.open_ms -= 5 * day_ms;
+        request.window.close_ms -= 5 * day_ms;
+        let stage = tile_stage_for_archive(&request);
+        let (series, _) = serve_ticks_with(
+            &rest::agent(),
+            &ReplayGate::new(),
+            &request,
+            &stage,
+            &tiles,
+            None,
+            |_, _, missing, _| {
+                Ok(super::super::archive::ArchiveFill {
+                    covered: missing.clone(),
+                    ticks: vec![tick(request.window.from_ms, 10.0)],
+                    deferred: None,
+                })
+            },
+        )
+        .expect("published archive must be requested");
+        assert_eq!(series.tick_status, TickStatus::Served);
+        assert!(series.covered.covers(&request.window.focus_spans()));
+    }
+}
+
+/// A NotPublished answer after expected publication must remain retryable.
+#[test]
+fn delayed_published_archive_remains_retryable() {
+    let started_ms = crate::util::time::now_unix_ms_i64();
+    let (reply, _rx) = mpsc::channel();
+    let mut request = tile_request(reply);
+    request.market = "XALPHAUSDT".into();
+    request.intent = ReplayIntent::Model;
+    request.address.venue = Some(crate::venue::Venue {
+        brand: crate::venue::Brand::Bybit,
+        kind: crate::venue::MarketKind::Futures,
+    });
+    let stage = tile_stage_for_archive(&request);
+    let answer = serve_ticks_with(
+        &rest::agent(),
+        &ReplayGate::new(),
+        &request,
+        &stage,
+        &Mutex::new(TickTileStore::default()),
+        None,
+        |_, _, _, _| Err(super::super::archive::ArchiveError::NotPublished),
+    );
+    let Err(Some(TickStatus::ArchivePending { retry_at_ms })) = answer else {
+        panic!("late archive must stay retryable");
+    };
+    assert!(retry_at_ms > started_ms, "late files need a future retry");
+    assert_eq!(
+        retry_at_ms.rem_euclid(3_600_000),
+        0,
+        "reuse the UTC-hour catch-up retry boundary"
+    );
+}
+
 /// Hydrating cold tiles from completed disk writes must spare an archive request.
 /// Skipping the fixture barrier lets cache startup exhaust the bounded read timeout instead.
 #[test]

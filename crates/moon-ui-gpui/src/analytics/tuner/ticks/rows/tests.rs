@@ -4,6 +4,48 @@ use super::{order_for, paint_fixed, result_pct};
 use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
 use moon_core::market::trade_replay::TickStatus;
 
+/// Manual fetch keeps publication waits retryable; automatic reloads wait for the deadline.
+#[test]
+fn unpublished_rows_are_offered_by_reload_and_marked_fetching() {
+    use super::super::state::{RowAddress, RowEdit};
+    use std::sync::Arc;
+    let mut state = state();
+    let row = &mut state.data.data_mut().unwrap().rows[0];
+    row.address = Some(Arc::new(RowAddress {
+        core_uid: 1,
+        venue: moon_core::venue::Venue {
+            brand: moon_core::venue::Brand::Bybit,
+            kind: moon_core::venue::MarketKind::Futures,
+        },
+        exchange_key: "UNIT_01".into(),
+        market: "XALPHAUSDT".into(),
+        btc_market: None,
+    }));
+    row.tape = TapeStatus::Refused(TickStatus::ArchivePending {
+        retry_at_ms: 216_000_000,
+    });
+    assert!(!row.autoload_ready_at(215_999_999));
+    assert!(row.autoload_ready_at(216_000_000));
+    assert!(row.autoload_ready_at(216_000_001));
+    let uid = row.deal.report_uid;
+    assert_eq!(state.data.data().unwrap().fetchable_at(1000, 60).count(), 1);
+    state.edit_rows([(uid, RowEdit::MarkFetching)]);
+    assert_eq!(
+        state.data.data().unwrap().rows[0].tape,
+        TapeStatus::Fetching
+    );
+    state.data.data_mut().unwrap().rows[0].tape = TapeStatus::Refused(TickStatus::NoRoute);
+    assert_eq!(
+        state
+            .data
+            .data()
+            .unwrap()
+            .fetchable_at(300_000_000, 60)
+            .count(),
+        0
+    );
+}
+
 /// Restricting fetchable rows to Missing strands pad-covered tails even on archive venues.
 #[test]
 fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
