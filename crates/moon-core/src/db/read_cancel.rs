@@ -82,6 +82,15 @@ pub fn with_read_cancellation<T>(cancellation: ReadCancellation, read: impl FnOn
     read()
 }
 
+/// The token of the read this thread is running, for work that hands part of that read to
+/// another thread (a pool) and must carry the token there with [`with_read_cancellation`].
+///
+/// Returns:
+///     The installed token, or `None` outside any [`with_read_cancellation`] scope.
+pub fn current_read_cancellation() -> Option<ReadCancellation> {
+    CURRENT.with(|current| current.borrow().clone())
+}
+
 /// Whether the read this thread is running has been cancelled — for work that is not an
 /// SQLite statement (a wait on another thread's answer, a per-row loop) and so never meets the
 /// progress handler.

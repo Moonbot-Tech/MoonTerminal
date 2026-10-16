@@ -387,6 +387,9 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     if let Some(e) = diag_err {
         log::warn!("{e}");
     }
+    // Before any rayon use, and after the logger so a refusal is recorded: a parallel section
+    // that ever escapes the tuner's own pools lands in a global pool held to the same CPU budget.
+    moon_core::db::tuner::threshold_search::cap_global_pool();
     log::info!(
         "build: moonterminal={} release_base={} moonui={}",
         option_env!("MOONTERMINAL_GIT_REV").unwrap_or("unknown"),

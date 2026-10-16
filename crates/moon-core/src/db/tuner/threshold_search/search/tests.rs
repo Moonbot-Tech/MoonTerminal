@@ -1160,3 +1160,50 @@ fn a_column_is_scored_while_a_search_holds_the_pool() {
     holder.join().expect("the holder ends once released");
     assert_eq!(scored, Ok(2016), "the column waited for the search's pool");
 }
+
+/// The search pool and the column pool run at the same time, so a split that sized each against
+/// the budget on its own (search = 80%, column = 2 on top) would put the tuner past 80% of the
+/// machine — 27 of 32 CPUs — beside live trading. Oracle: the percentages computed by hand.
+#[test]
+fn search_and_column_pools_together_fit_eighty_percent() {
+    for (cores, budget) in [(1, 1), (2, 1), (4, 3), (8, 6), (16, 12), (32, 25), (56, 44)] {
+        assert_eq!(cpu_budget_of(cores), budget, "{cores} CPUs");
+        let (search, column) = pool_split_of(cores);
+        assert!(
+            search >= 1 && column >= 1,
+            "{cores} CPUs: {search} + {column}"
+        );
+        if budget >= 2 {
+            assert!(
+                search + column <= budget,
+                "{cores} CPUs: {search} + {column}"
+            );
+        }
+        if cores >= 2 {
+            assert!(budget < cores, "{cores} CPUs: no CPU left free");
+        }
+    }
+    assert_eq!(pool_split_of(32), (23, 2));
+    assert_eq!(pool_split_of(4), (2, 1));
+}
+
+/// Below two CPUs of budget the floor of one thread per pool wins over the sum — a pool of none
+/// cannot run and a column must never queue behind a search — so a change that "fixed" the sum
+/// by dropping a pool to zero would hang the columns. Pinned as the stated exception.
+#[test]
+fn one_and_two_cpus_keep_one_thread_per_pool() {
+    assert_eq!(pool_split_of(1), (1, 1));
+    assert_eq!(pool_split_of(2), (1, 1));
+}
+
+/// A job moved onto the search pool loses its caller's thread-local read token unless it is
+/// carried there; an abandoned readiness pass would then replay every strategy to its end.
+#[test]
+fn install_job_carries_the_read_cancellation_onto_the_pool() {
+    let token = crate::db::ReadCancellation::new();
+    token.cancel();
+    let seen =
+        crate::db::with_read_cancellation(token, || install_job(crate::db::current_is_cancelled));
+    assert!(seen);
+    assert!(!install_job(crate::db::current_is_cancelled));
+}

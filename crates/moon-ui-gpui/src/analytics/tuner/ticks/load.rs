@@ -494,47 +494,51 @@ impl AnalyticsView {
             &[ReadLane::TicksReplay],
             false,
             cx,
+            // The table's replay is CPU and may run beside a search: in the tuner's pool, within
+            // its CPU budget.
             move || {
-                // One threshold for the whole table, read once: every row of one load splits
-                // its window the same way.
-                let long_position_ms = moon_core::market::trade_replay::long_position_ms();
-                let mut rows = replay_batch(
-                    targets,
-                    &defaults,
-                    model,
-                    klines.as_ref(),
-                    long_position_ms,
-                    true,
-                );
-                log_replay(&rows);
-                // Rows the job answered while the batch was read: read again, each behind
-                // whatever walk is running. A row the job answers during THIS loop is kept
-                // covered by the fold (`update_rows`), not re-read once more.
-                let late = super::fetch::job::finished_after(reading_since);
-                if !late.is_empty() {
-                    let traces = archived_lines(&rows);
-                    for row in rows
-                        .iter_mut()
-                        .filter(|r| late.contains(&r.deal.report_uid))
-                    {
-                        if moon_core::db::current_is_cancelled() {
-                            break;
+                moon_core::db::tuner::threshold_search::install_job(|| {
+                    // One threshold for the whole table, read once: every row of one load splits
+                    // its window the same way.
+                    let long_position_ms = moon_core::market::trade_replay::long_position_ms();
+                    let mut rows = replay_batch(
+                        targets,
+                        &defaults,
+                        model,
+                        klines.as_ref(),
+                        long_position_ms,
+                        true,
+                    );
+                    log_replay(&rows);
+                    // Rows the job answered while the batch was read: read again, each behind
+                    // whatever walk is running. A row the job answers during THIS loop is kept
+                    // covered by the fold (`update_rows`), not re-read once more.
+                    let late = super::fetch::job::finished_after(reading_since);
+                    if !late.is_empty() {
+                        let traces = archived_lines(&rows);
+                        for row in rows
+                            .iter_mut()
+                            .filter(|r| late.contains(&r.deal.report_uid))
+                        {
+                            if moon_core::db::current_is_cancelled() {
+                                break;
+                            }
+                            let lines = traces
+                                .get(&row.deal.report_uid)
+                                .cloned()
+                                .unwrap_or_default();
+                            replay_row(
+                                row,
+                                &defaults,
+                                model,
+                                lines,
+                                long_position_ms,
+                                klines.as_ref(),
+                            );
                         }
-                        let lines = traces
-                            .get(&row.deal.report_uid)
-                            .cloned()
-                            .unwrap_or_default();
-                        replay_row(
-                            row,
-                            &defaults,
-                            model,
-                            lines,
-                            long_position_ms,
-                            klines.as_ref(),
-                        );
                     }
-                }
-                rows
+                    rows
+                })
             },
             move |this, rows, cx| {
                 if this.ticks.seq != req || this.ticks.tape_seq != tape_req {
