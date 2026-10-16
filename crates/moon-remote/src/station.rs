@@ -616,6 +616,19 @@ const CONFIG_TRIES: usize = 3;
 ///     build: The new file from the current one.
 fn edit_config(
     conn: &AdminConn,
+    exists: bool,
+    build: impl FnMut(Option<&str>) -> anyhow::Result<Option<String>>,
+) -> anyhow::Result<bool> {
+    edit_config_using(
+        &mut |command, stdin| conn.run(command, stdin, STEP_TIMEOUT),
+        exists,
+        build,
+    )
+}
+
+/// Apply the config compare-and-swap through the same command transport as credential writes.
+fn edit_config_using(
+    run: &mut impl FnMut(&str, &[u8]) -> anyhow::Result<crate::ssh::Output>,
     mut exists: bool,
     mut build: impl FnMut(Option<&str>) -> anyhow::Result<Option<String>>,
 ) -> anyhow::Result<bool> {
@@ -623,12 +636,8 @@ fn edit_config(
         // The digest of the bytes as the helper hashes them, not of a decoded copy.
         let current = match exists {
             true => {
-                let out = script::checked(conn.run(
-                    &script::helper("get-config", &[]),
-                    &[],
-                    STEP_TIMEOUT,
-                )?)
-                .context("read the server's station.toml")?;
+                let out = script::checked(run(&script::helper("get-config", &[]), &[])?)
+                    .context("read the server's station.toml")?;
                 Some((
                     out.stdout_text(),
                     format!("{:x}", Sha256::digest(&out.stdout)),
@@ -640,11 +649,7 @@ fn edit_config(
             return Ok(false);
         };
         let base = current.map_or_else(|| "none".to_owned(), |(_, digest)| digest);
-        let out = conn.run(
-            &script::helper("put-config", &[&base]),
-            new.as_bytes(),
-            STEP_TIMEOUT,
-        )?;
+        let out = run(&script::helper("put-config", &[&base]), new.as_bytes())?;
         if script::value(&out.stdout_text(), "config") == Some("changed") {
             exists = true;
             continue;
@@ -750,7 +755,7 @@ pub fn push_telegram(
 }
 
 /// Allocate fresh station identities for CLI adds to an existing station, then restart.
-/// A failed config write leaves unused credentials but never removes another core's key.
+/// A failed config write leaves credentials untouched; failed credential writes leave reserved uids.
 pub fn push_cores(
     target: &Target,
     cores: &[CoreKey],
@@ -853,7 +858,7 @@ fn validate_cores(cores: &[CoreKey]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Push reconciled cores, refusing occupied or retired uids before writing any credential.
+/// Push reconciled cores, committing their uid allocation before writing any credential.
 /// The installed binary's capability controls override fields even before its first start;
 /// older stations receive the original key-only configuration.
 /// CLI picks and fresh installs mark every picked core as an add.
@@ -889,8 +894,7 @@ pub fn push_cores_with_add_flags(
     } else {
         None
     };
-    // A dry run of the merge before any credential is written; the real one below reads the file
-    // again, as it is by then.
+    // A dry run catches invalid picks early; only the guarded config commit reserves their uids.
     let current = if exists {
         Some(
             run(script::helper("get-config", &[]), &[])
@@ -900,22 +904,46 @@ pub fn push_cores_with_add_flags(
         None
     };
     merge_cores_with_add_flags(current.as_deref(), cores, adds, tape, high_water)?;
+    write_cores(
+        &mut |command, stdin| conn.run(command, stdin, STEP_TIMEOUT),
+        exists,
+        cores,
+        adds,
+        tape,
+        high_water,
+        say,
+    )?;
+    restart_and_report(&conn, say)
+}
+
+/// Reserve this push's uids with a guarded config edit before publishing their credentials.
+/// A competing add rejected on a re-read or CAS retry must never replace the winner's key.
+fn write_cores(
+    run: &mut impl FnMut(&str, &[u8]) -> anyhow::Result<crate::ssh::Output>,
+    exists: bool,
+    cores: &[CoreKey],
+    adds: &[bool],
+    tape: Option<TapeWindow>,
+    high_water: Option<u64>,
+    say: &mut dyn FnMut(Progress),
+) -> anyhow::Result<()> {
+    edit_config_using(run, exists, |current| {
+        merge_cores_with_add_flags(current, cores, adds, tape, high_water).map(Some)
+    })?;
     for core in cores {
         let uid = core.uid.to_string();
         run(
-            script::helper("put-cred", &[&uid]),
+            &script::helper("put-cred", &[&uid]),
             core.key.expose().as_bytes(),
         )
+        .and_then(script::checked)
         .with_context(|| format!("credential of {}", core.name))?;
         say(Progress::step(
             Step::CoreWritten,
             format!("core {} ({}): credential written", core.name, core.uid),
         ));
     }
-    edit_config(&conn, exists, |current| {
-        merge_cores_with_add_flags(current, cores, adds, tape, high_water).map(Some)
-    })?;
-    restart_and_report(&conn, say)
+    Ok(())
 }
 
 /// The cores whose ticked address `peer_cores` is about to drop because the installed station

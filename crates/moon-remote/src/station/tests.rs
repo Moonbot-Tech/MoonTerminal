@@ -284,18 +284,120 @@ fn an_add_collision_is_refused_before_any_credential_write() {
         .next()
         .unwrap();
     assert!(cli_push.contains("&vec![true; cores.len()]"));
-    let push = source
-        .split("pub fn push_cores_with_add_flags(")
-        .nth(1)
-        .unwrap()
-        .split("/// Reject stale")
-        .next()
-        .unwrap();
-    assert!(
-        push.find("merge_cores_with_add_flags(current.as_deref()")
-            .unwrap()
-            < push.find("put-cred").unwrap()
-    );
+}
+
+/// Synthetic helper storage: commands enforce only the remote helper's config CAS protocol.
+#[derive(Default)]
+struct CorePushFixture {
+    config: Option<String>,
+    credentials: std::collections::HashMap<u64, Vec<u8>>,
+}
+
+impl CorePushFixture {
+    /// Execute the production commands without SSH, encryption or a running station.
+    fn run(&mut self, command: &str, stdin: &[u8]) -> anyhow::Result<crate::ssh::Output> {
+        let mut out = crate::ssh::Output {
+            status: Some(0),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        if command == script::helper("get-config", &[]) {
+            out.stdout = self.config.as_ref().unwrap().as_bytes().to_vec();
+        } else if command.starts_with(&script::helper("put-config", &[])) {
+            let base = self.config.as_ref().map_or_else(
+                || "none".to_owned(),
+                |text| format!("{:x}", Sha256::digest(text.as_bytes())),
+            );
+            if command == script::helper("put-config", &[&base]) {
+                self.config = Some(String::from_utf8(stdin.to_vec()).unwrap());
+            } else {
+                out.status = Some(3);
+                out.stdout = b"config=changed\n".to_vec();
+            }
+        } else if command == script::helper("put-cred", &["81"]) {
+            self.credentials.insert(81, stdin.to_vec());
+        } else {
+            panic!("unexpected fixture command: {command}");
+        }
+        Ok(out)
+    }
+}
+
+/// Moving credential publication before the guarded edit corrupts CORE_A when CORE_B loses a race.
+#[test]
+fn concurrent_add_refusal_preserves_the_accepted_credential() {
+    for exists in [false, true] {
+        for race_at_cas in [false, true] {
+            let mut fixture = CorePushFixture {
+                config: exists.then(|| {
+                    "core_uid_high_water = 80\n[[core]]\nuid = 80\nname = 'UNIT_01'\n".into()
+                }),
+                ..Default::default()
+            };
+            let mut a = synthetic_core(81, "CORE_A", None);
+            a.key = Secret::new("synthetic-key-A");
+            let mut b = synthetic_core(81, "CORE_B", None);
+            b.key = Secret::new("synthetic-key-B");
+            // Both terminals pass preflight against the same snapshot, before A commits.
+            for core in [&a, &b] {
+                merge_cores_with_add_flags(
+                    fixture.config.as_deref(),
+                    std::slice::from_ref(core),
+                    &[true],
+                    None,
+                    Some(80),
+                )
+                .unwrap();
+            }
+            let accept_a = |fixture: &mut CorePushFixture| {
+                write_cores(
+                    &mut |command, stdin| fixture.run(command, stdin),
+                    exists,
+                    std::slice::from_ref(&a),
+                    &[true],
+                    None,
+                    Some(80),
+                    &mut |_| {},
+                )
+                .unwrap();
+                assert_eq!(fixture.credentials[&81], b"synthetic-key-A");
+            };
+            if !race_at_cas {
+                accept_a(&mut fixture);
+            }
+            let mut injected = false;
+            let refused = write_cores(
+                &mut |command, stdin| {
+                    if race_at_cas
+                        && !injected
+                        && command.starts_with(&script::helper("put-config", &[]))
+                    {
+                        accept_a(&mut fixture);
+                        injected = true;
+                    }
+                    fixture.run(command, stdin)
+                },
+                exists,
+                &[b],
+                &[true],
+                None,
+                Some(80),
+                &mut |_| {},
+            )
+            .unwrap_err();
+            assert_eq!(refused.to_string(), "station changed, refresh");
+            assert_eq!(fixture.credentials[&81], b"synthetic-key-A");
+            let config: toml::Value = toml::from_str(fixture.config.as_ref().unwrap()).unwrap();
+            let accepted = config["core"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|core| core["uid"].as_integer() == Some(81))
+                .unwrap();
+            assert_eq!(accepted["name"].as_str(), Some("CORE_A"));
+            assert_eq!(injected, race_at_cas);
+        }
+    }
 }
 
 /// A made-up core credential for config-only tests; never connects.
