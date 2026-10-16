@@ -430,6 +430,7 @@ const MINI_LABEL_KEYS: &[&str] = &[
     "mini_chart_error_note",
     "mini_chart_tick_buy",
     "mini_chart_tick_sell",
+    "mini_chart_deal_marks",
     "mini_chart_buy_order",
     "mini_chart_sell_order",
     "mini_chart_take",

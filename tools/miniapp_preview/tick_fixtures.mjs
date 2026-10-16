@@ -280,7 +280,8 @@ function coinLevelsOf(positions) {
     }
     return out;
 }
-export const COIN_LEVEL_PRICES = coinLevelsOf(COIN_POSITIONS).map((l) => l.price);
+// The lines of one core, the only ones the chart draws once that core is picked.
+export const coinCoreLevelPrices = (core) => coinLevelsOf(COIN_POSITIONS.filter((p) => p.core === String(core))).map((l) => l.price);
 
 /**
  * A stateful /api/coin/ticks handler. Ticks mode seeds five minutes of prints and then answers

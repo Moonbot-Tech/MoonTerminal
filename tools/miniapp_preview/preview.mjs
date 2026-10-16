@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { CHART_ORDER, CHART_TRADE, COIN, COIN_LEVEL_PRICES, TRADE_TICK_COUNT, coinFeed, liveFeed, tradeTicks } from "./tick_fixtures.mjs";
+import { CHART_ORDER, CHART_TRADE, COIN, TRADE_TICK_COUNT, coinCoreLevelPrices, coinFeed, liveFeed, tradeTicks } from "./tick_fixtures.mjs";
 
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -420,14 +420,15 @@ const chartBox = async (p, title) => {
     if (text !== title) throw new Error(`chart state must read ${JSON.stringify(title)}, got ${JSON.stringify(text)}`);
 };
 // The chart's own drawn boxes: time labels and axis tags never intersect, nor leave the canvas.
-const axisOverlaps = (p) => p.evaluate(() => {
+// `minTags`: the level and price tags the chart must draw; a closed trade draws none.
+const axisOverlaps = (p, minTags = 2) => p.evaluate((minTags) => {
     const cv = document.querySelector("#sheet canvas");
     const box = cv.getBoundingClientRect();
     const drawn = cv.drawnBoxes;
     const errors = [];
     if (!drawn) return ["chart exposes no drawn boxes"];
     if (drawn.times.length < 2) errors.push(`expected >= 2 time labels, got ${drawn.times.length}`);
-    if (drawn.tags.length < 2) errors.push(`expected >= 2 axis tags, got ${drawn.tags.length}`);
+    if (drawn.tags.length < minTags) errors.push(`expected >= ${minTags} axis tags, got ${drawn.tags.length}`);
     const hit = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
     for (const [kind, list] of [["time labels", drawn.times], ["axis tags", drawn.tags]]) {
         for (let i = 0; i < list.length; i++) {
@@ -437,7 +438,7 @@ const axisOverlaps = (p) => p.evaluate(() => {
         }
     }
     return errors;
-}).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+}, minTags).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
 // The live chart's default vertical window: 10 % of the reference price, widened only as far as
 // an order line or a print in view needs, and every order line inside it.
 const LIVE_SHARE = 0.10;
@@ -560,6 +561,35 @@ const labelOverlaps = (p, lines) => p.evaluate((lines) => {
     }
     return errors;
 }, lines).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+// Deal marks as the terminal draws them: one colour per deal (its side), a buy pointing up and a
+// sell down with the apex on the price, the body 12 px long and 9 px wide, entry and exit joined
+// by one dashed connector. `deals`: how many complete deals the frame must show.
+const dealMarkProblems = (p, deals) => p.evaluate((deals) => {
+    const drawn = document.querySelector("#sheet canvas").drawnBoxes;
+    const errors = [];
+    if (!drawn || !drawn.arrows) return ["chart exposes no arrow boxes"];
+    if (drawn.arrows.length !== deals * 2) errors.push(`expected ${deals * 2} arrows, got ${drawn.arrows.length}`);
+    if (drawn.connectors.length !== deals) errors.push(`expected ${deals} connectors, got ${drawn.connectors.length}`);
+    for (const a of drawn.arrows) {
+        if (Math.abs(Math.abs(a.base - a.y) - 12) > 0.01 || Math.abs(a.halfW - 4.5) > 0.01) errors.push(`arrow at ${a.x} is not 12 x 9`);
+        if ((a.base > a.y) !== a.up) errors.push(`arrow at ${a.x} hangs toward its price`);
+    }
+    for (const c of drawn.connectors) {
+        const ends = drawn.arrows.filter((a) => (Math.abs(a.x - c.x0) < 0.01 && Math.abs(a.y - c.y0) < 0.01) || (Math.abs(a.x - c.x1) < 0.01 && Math.abs(a.y - c.y1) < 0.01));
+        if (ends.length !== 2) errors.push(`connector does not join two apexes`);
+        else if (ends[0].up === ends[1].up) errors.push("a deal's ends must be one buy and one sell");
+        else if (ends.some((a) => a.color !== c.color)) errors.push("a deal's arrows and connector must share the side colour");
+    }
+    return errors;
+}, deals).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+// Only the picked core's order lines are drawn: `lines` labels and level tags, plus the price tag.
+const pickedLines = (p, lines) => p.evaluate((lines) => {
+    const drawn = document.querySelector("#sheet canvas").drawnBoxes;
+    const errors = [];
+    if (drawn.labels.length !== lines) errors.push(`expected ${lines} level labels, got ${drawn.labels.length}`);
+    if (drawn.tags.length !== lines + 1) errors.push(`expected ${lines} level tags and the price tag, got ${drawn.tags.length}`);
+    return errors;
+}, lines).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
 const CHART_SCREENS = [
     { name: "chart-trade-ok", api: CHART_TRADES, run: async (p, t) => {
         await openChartTrade(p); await chartDrawn(p); await settle(p);
@@ -570,7 +600,12 @@ const CHART_SCREENS = [
             throw new Error(`trade chart provenance must name the source and dot size: ${note}`);
         }
         if (!(await p.locator("#sheet").innerText()).includes("Sell Price")) throw new Error("exit reason must be shown");
-        await axisOverlaps(p);
+        // A closed deal draws no order levels: its two arrows and the connector only.
+        const tags = await p.evaluate(() => document.querySelector("#sheet canvas").drawnBoxes.tags.length);
+        if (tags) throw new Error(`a closed trade must draw no level tags, drew ${tags}`);
+        if (!(await p.locator("#sheet .chart-legend").innerText()).includes(t.mini_chart_deal_marks)) throw new Error("legend must explain the deal marks");
+        await dealMarkProblems(p, 1);
+        await axisOverlaps(p, 0);
     } },
     // A station replica row has no displayed id: the route's own rule (one positive identity,
     // neither negative) must accept what the page sends for it, or the chart never loads.
@@ -711,8 +746,10 @@ const CHART_SCREENS = [
         await openCoinFromOrder(p); await coinDrawn(p); await settle(p);
         if (!(await p.locator("#sheet .live-tag").innerText()).includes(t.mini_chart_live)) throw new Error("coin sheet must show the live tag");
         if (await p.locator("#sheet .coin-core-row").count() !== 6) throw new Error("coin sheet must list all six cores");
-        await liveScaleProblems(p, await refOf(p), COIN_LEVEL_PRICES);
-        await labelOverlaps(p, 14);
+        // Nothing picked: no order lines, the scale follows the price, the deals are drawn.
+        await liveScaleProblems(p, await refOf(p), []);
+        await pickedLines(p, 0);
+        await dealMarkProblems(p, 2);
     } },
     { name: "coin-sheet-1m", api: () => coinApi(coinFeed()), run: async (p) => {
         await openCoinFromOrder(p); await coinDrawn(p);
@@ -720,13 +757,16 @@ const CHART_SCREENS = [
         await p.waitForFunction(() => document.querySelector('#sheet .coin-modes [data-range="1m"]').classList.contains("on")
             && +(document.querySelector("#sheet .chart-wrap") || {}).getAttribute?.("data-span") > 3600000, null, { timeout: 5000 });
         await settle(p);
-        await labelOverlaps(p, 14);
+        await pickedLines(p, 0);
     } },
     { name: "coin-many-cores", api: () => coinApi(coinFeed()), run: async (p) => {
         await openCoinFromOrder(p); await coinDrawn(p); await settle(p);
-        await labelOverlaps(p, 14);
-        // A tap on a core card highlights that core and leaves the rest dimmed.
+        await pickedLines(p, 0);
+        // A tap on a core card highlights that core and draws its lines alone.
         await p.click('#sheet .coin-core-row[data-core="2004"]'); await settle(p);
+        await labelOverlaps(p, 3);
+        await pickedLines(p, 3);
+        await liveScaleProblems(p, await refOf(p), coinCoreLevelPrices(2004));
         const hl = await p.locator("#sheet .coin-core-row.hl").count();
         if (hl !== 1 || !(await p.$('#sheet .coin-core-row.hl[data-core="2004"]'))) throw new Error(`exactly CORE_D must be highlighted, got ${hl}`);
         // Polls patch the cards in place, so keyboard focus and the highlight survive them.
@@ -737,15 +777,29 @@ const CHART_SCREENS = [
             return !!a && a.getAttribute("data-core") === "2004" && a.classList.contains("hl") && a.isConnected;
         });
         if (!kept) throw new Error(`focus or highlight lost across polls`);
+        await pickedLines(p, 3);
+        // A second tap lets go of the core and its lines.
+        await p.click('#sheet .coin-core-row[data-core="2004"]'); await settle(p);
+        await pickedLines(p, 0);
+        await p.click('#sheet .coin-core-row[data-core="2004"]'); await settle(p);
         await p.locator("#sheet .coin-cards").scrollIntoViewIfNeeded();
+    } },
+    // One core picked: its lines, labels and tags alone, the frame kept on the chart.
+    { name: "coin-picked-core", api: () => coinApi(coinFeed()), run: async (p) => {
+        await openCoinFromOrder(p); await coinDrawn(p); await settle(p);
+        await p.click('#sheet .coin-core-row[data-core="2004"]'); await settle(p);
+        await labelOverlaps(p, 3);
+        await pickedLines(p, 3);
+        await dealMarkProblems(p, 2);
+        await p.locator("#sheet .chart-wrap").scrollIntoViewIfNeeded();
     } },
     { name: "coin-not-watching", api: () => coinApi(coinFeed({ mode: "no_tape" })), run: async (p, t) => {
         await openCoinFromOrder(p);
         await p.waitForSelector("#sheet .coin-watch-note:not([hidden])");
         const text = await p.locator("#sheet .coin-watch-note").innerText();
         if (!text.includes(t.mini_coin_watch_title.replace("{coin}", COIN_ORDER.coin))) throw new Error(`watch note reads ${JSON.stringify(text)}`);
-        if (!await p.$("#sheet .chart-wrap canvas")) throw new Error("an unwatched coin must still draw the order lines");
-        await liveScaleProblems(p, await refOf(p), COIN_LEVEL_PRICES);
+        if (!await p.$("#sheet .chart-wrap canvas")) throw new Error("an unwatched coin must still draw the chart");
+        await liveScaleProblems(p, await refOf(p), []);
     } },
     { name: "coin-empty", api: () => coinApi(coinFeed({ mode: "empty" })), run: async (p, t) => {
         await openCoinFromOrder(p); await coinDrawn(p);

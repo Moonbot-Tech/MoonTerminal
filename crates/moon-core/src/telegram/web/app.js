@@ -1752,6 +1752,14 @@
     var LIVE_SCALE_SHARE = 0.10;
     var CHART_AXIS_W = 58;
     var CHART_VOL_H = 44;
+    // Deal marks in the terminal's sizes (crates/moon-chart/src/trade_marks.rs), in CSS px: the
+    // arrow's half height and half width, and the entry-to-exit connector's alpha, width and the
+    // length below which it is skipped.
+    var DEAL_ARROW_HALF_H = 6;
+    var DEAL_ARROW_HALF_W = 4.5;
+    var DEAL_CONNECTOR_ALPHA = 0.85;
+    var DEAL_CONNECTOR_W = 2;
+    var DEAL_CONNECTOR_MIN = 6;
     var TRADE_RANGES = [["deal", "mini_chart_range_deal"], ["30", "mini_chart_range_30"], ["300", "mini_chart_range_300"]];
     var LIVE_SPANS = [["120", "mini_chart_span_2"], ["300", "mini_chart_span_5"], ["900", "mini_chart_span_15"]];
     // Every sheet open and close bumps it; a reply or timer of an older sheet sees the change and stops.
@@ -1994,6 +2002,34 @@
         return { lo: mid - width / 2, hi: mid + width / 2 };
     }
 
+    // A deal arrow's corners: the apex ON the fill price, the body hanging away from it — below
+    // for a buy (`up`), above for a sell.
+    function dealArrow(x, y, up) {
+        var base = up ? y + 2 * DEAL_ARROW_HALF_H : y - 2 * DEAL_ARROW_HALF_H;
+        return [[x, y], [x - DEAL_ARROW_HALF_W, base], [x + DEAL_ARROW_HALF_W, base]];
+    }
+
+    // Whether entry and exit stand far enough apart for a connector between them.
+    function dealConnects(xa, ya, xb, yb) {
+        return Math.sqrt((xb - xa) * (xb - xa) + (yb - ya) * (yb - ya)) >= DEAL_CONNECTOR_MIN;
+    }
+
+    // One deal's marks as the terminal draws them: colour is the SIDE (long green, short red, both
+    // ends alike), shape the ACTION (a buy points up, a sell down). `entry` / `exit` are
+    // { t, price } or null; ends sharing `extra.deal` are joined by the dashed connector.
+    function dealMarks(long, entry, exit, extra) {
+        var out = [];
+        function end(at, up) {
+            var m = { t: at.t, price: at.price, up: up, color: long ? "--tick-buy" : "--tick-sell" };
+            var key;
+            for (key in extra) if (Object.prototype.hasOwnProperty.call(extra, key)) m[key] = extra[key];
+            out.push(m);
+        }
+        if (entry) end(entry, long);
+        if (exit) end(exit, !long);
+        return out;
+    }
+
     // Dot radius of a print; `q` is its quantity over the largest one in view.
     function tickRadius(q) {
         return 0.4 + Math.sqrt(Math.max(0, q)) * 1.33;
@@ -2097,6 +2133,12 @@
             if (!this.levels[i].fit) continue;
             lo = Math.min(lo, this.levels[i].price);
             hi = Math.max(hi, this.levels[i].price);
+        }
+        // A fill in view stays on the scale even where no print reached its price.
+        for (i = 0; i < this.marks.length; i++) {
+            if (this.marks[i].t < v.from || this.marks[i].t > v.to) continue;
+            lo = Math.min(lo, this.marks[i].price);
+            hi = Math.max(hi, this.marks[i].price);
         }
         if (!isFinite(lo) || !isFinite(hi)) {
             lo = 0;
@@ -2334,33 +2376,57 @@
             g.fill();
         }
         g.globalAlpha = 1;
-        // Entry and exit markers.
-        for (i = 0; i < this.marks.length; i++) {
-            var m = this.marks[i];
+        // Deal marks: each deal's dashed connector first, then its arrows over it.
+        var marks = this.marks;
+        var j;
+        drawn.arrows = [];
+        drawn.connectors = [];
+        for (i = 0; i < marks.length; i++) {
+            if (marks[i].deal == null) continue;
+            for (j = i + 1; j < marks.length; j++) {
+                if (marks[j].deal !== marks[i].deal) continue;
+                var xa = X(marks[i].t);
+                var ya = Y(marks[i].price);
+                var xb = X(marks[j].t);
+                var yb = Y(marks[j].price);
+                if (Math.max(xa, xb) < 0 || Math.min(xa, xb) > plotW || !dealConnects(xa, ya, xb, yb)) continue;
+                // Clipped to the plot: an end outside the window must not reach into the axis.
+                g.save();
+                g.beginPath();
+                g.rect(0, 0, plotW, plotH);
+                g.clip();
+                g.globalAlpha = DEAL_CONNECTOR_ALPHA * this.dim(marks[i].core, 0.3);
+                g.strokeStyle = color(marks[i].color);
+                g.lineWidth = DEAL_CONNECTOR_W;
+                g.setLineDash([5, 4]);
+                g.beginPath();
+                g.moveTo(xa, ya);
+                g.lineTo(xb, yb);
+                g.stroke();
+                g.restore();
+                drawn.connectors.push({ x0: xa, y0: ya, x1: xb, y1: yb, color: marks[i].color });
+            }
+        }
+        g.globalAlpha = 1;
+        for (i = 0; i < marks.length; i++) {
+            var m = marks[i];
             var mx = X(m.t);
             var my = Y(m.price);
             m.hx = null;
             if (mx < -10 || mx > plotW + 10) continue;
             m.hx = mx;
-            m.hy = m.up ? my + 11 : my - 11;
-            g.globalAlpha = this.dim(m.core, 0.3);
+            m.hy = m.up ? my + DEAL_ARROW_HALF_H : my - DEAL_ARROW_HALF_H;
+            var corners = dealArrow(mx, my, m.up);
+            g.globalAlpha = 0.95 * this.dim(m.core, 0.3);
             g.fillStyle = color(m.color);
-            g.strokeStyle = color("--card");
-            g.lineWidth = 2;
             g.beginPath();
-            if (m.up) {
-                g.moveTo(mx, my + 4);
-                g.lineTo(mx - 7, my + 16);
-                g.lineTo(mx + 7, my + 16);
-            } else {
-                g.moveTo(mx, my - 4);
-                g.lineTo(mx - 7, my - 16);
-                g.lineTo(mx + 7, my - 16);
-            }
+            g.moveTo(corners[0][0], corners[0][1]);
+            g.lineTo(corners[1][0], corners[1][1]);
+            g.lineTo(corners[2][0], corners[2][1]);
             g.closePath();
-            g.stroke();
             g.fill();
             g.globalAlpha = 1;
+            drawn.arrows.push({ x: mx, y: my, up: m.up, color: m.color, base: corners[1][1], halfW: mx - corners[1][0] });
         }
         // Hold span.
         if (this.opts.hold) {
@@ -2944,23 +3010,19 @@
                 live: false,
                 onView: provenance
             });
-            sheetChart.levels = chartLevels(data.levels, false);
-            if (finiteNumber(data.entry_price)) {
-                sheetChart.marks.push({ t: data.open_ms, price: data.entry_price, up: long, color: long ? "--tick-buy" : "--tick-sell" });
-            }
-            if (finiteNumber(data.exit_price)) {
-                sheetChart.marks.push({ t: data.close_ms, price: data.exit_price, up: !long, color: long ? "--tick-sell" : "--tick-buy" });
-            }
+            // No order levels across a closed deal: only its two arrows and their connector, as
+            // in the terminal; the prices stay in the details under the chart.
+            sheetChart.marks = dealMarks(long,
+                finiteNumber(data.entry_price) ? { t: data.open_ms, price: data.entry_price } : null,
+                finiteNumber(data.exit_price) ? { t: data.close_ms, price: data.exit_price } : null,
+                { deal: "trade" });
             var span = tradeView(state.range, data);
             sheetChart.setView(span[0], span[1]);
-            var items = [
+            chartLegend(legend, [
                 { dot: true, color: "--tick-buy", key: "mini_chart_tick_buy" },
-                { dot: true, color: "--tick-sell", key: "mini_chart_tick_sell" }
-            ];
-            if (hasLevel(sheetChart.levels, "buy")) items.push({ color: "--entry", key: "mini_chart_buy_order" });
-            if (hasLevel(sheetChart.levels, "take")) items.push({ color: "--take", key: "mini_chart_take" });
-            if (hasLevel(sheetChart.levels, "stop")) items.push({ color: "--stop", key: "mini_chart_stop" });
-            chartLegend(legend, items);
+                { dot: true, color: "--tick-sell", key: "mini_chart_tick_sell" },
+                { key: "mini_chart_deal_marks" }
+            ]);
             provenance();
         }
         function fetchTicks() {
@@ -3275,7 +3337,7 @@
         function entryMark(d) {
             var long = order.side !== "sell";
             if (!finiteNumber(d.entry_ms) || d.entry_ms <= 0 || !finiteNumber(d.entry_price)) return [];
-            return [{ t: d.entry_ms, price: d.entry_price, up: long, color: long ? "--tick-buy" : "--tick-sell" }];
+            return dealMarks(long, { t: d.entry_ms, price: d.entry_price }, null, { deal: "position" });
         }
         function openDetails(d) {
             clear(details);
@@ -3430,7 +3492,7 @@
                 for (i = 0; i < sheetChart.levels.length; i++) if (sheetChart.levels[i].kind !== "stop") keep.push(sheetChart.levels[i]);
                 sheetChart.levels = keep;
                 if (closeMs != null && finiteNumber(exitPrice)) {
-                    sheetChart.marks.push({ t: closeMs, price: exitPrice, up: !long, color: long ? "--tick-sell" : "--tick-buy" });
+                    sheetChart.marks = sheetChart.marks.concat(dealMarks(long, null, { t: closeMs, price: exitPrice }, { deal: "position" }));
                 }
                 var start = sheetChart.marks.length && sheetChart.marks[0].t;
                 if (closeMs != null && start) sheetChart.opts.hold = [start, closeMs];
@@ -3500,8 +3562,8 @@
         return (value >= 0 ? "+" : "−") + Math.abs(value).toFixed(2) + " %";
     }
 
-    // Closed deals of the coin as entry and exit arrows; a buy points up from below, a sell
-    // down from above. A tap on either opens the deal's tip.
+    // Closed deals of the coin as entry and exit arrows joined by a dashed connector, drawn as
+    // the terminal draws them (`dealMarks`). A tap on either end opens the deal's tip.
     function coinDealMarks(deals, coreOf) {
         var out = [];
         var i;
@@ -3524,11 +3586,8 @@
                         to: clockAt(d.close_ms)
                     })));
                 }
-                var long = !d.is_short;
-                if (finiteNumber(d.open_ms) && finiteNumber(d.open_price)) {
-                    out.push({ t: d.open_ms, price: d.open_price, up: long, color: long ? "--tick-buy" : "--tick-sell", core: core, tip: tip });
-                }
-                out.push({ t: d.close_ms, price: d.close_price, up: !long, color: long ? "--tick-sell" : "--tick-buy", core: core, tip: tip });
+                var entry = finiteNumber(d.open_ms) && finiteNumber(d.open_price) ? { t: d.open_ms, price: d.open_price } : null;
+                out = out.concat(dealMarks(!d.is_short, entry, { t: d.close_ms, price: d.close_price }, { core: core, tip: tip, deal: "deal:" + i }));
             })(deals[i]);
         }
         return out;
@@ -3559,6 +3618,7 @@
             gen: 0,
             data: null,
             open: null,
+            levels: [],
             poll: poll
         };
         liveSheet = live;
@@ -3761,12 +3821,22 @@
             sheetChart.opts.dp = priceDecimals(d.price_decimals);
             // Before the first print there is no price to tag, only the orders' lines.
             sheetChart.opts.live = d.state !== "no_tape";
-            sheetChart.levels = coinLevels(d.levels);
+            live.levels = coinLevels(d.levels);
+            sheetChart.levels = pickedLevels();
             sheetChart.marks = d.state === "no_tape" ? [] : coinDealMarks(d.deals, coreOf);
             sheetChart.mark = refPrice(d);
             if (sheetChart.follow) sheetChart.anchor(sheetChart.view.to - sheetChart.view.from);
             sheetChart.fitY();
             sheetChart.draw();
+        }
+        // Order lines, their labels and axis tags only for the core picked in «На этой монете»:
+        // every core's lines at once are a wall of them. Nothing picked: price and deals only.
+        function pickedLevels() {
+            var on = sheetChart ? sheetChart.highlight : null;
+            var out = [];
+            var i;
+            for (i = 0; on != null && i < live.levels.length; i++) if (live.levels[i].core === on) out.push(live.levels[i]);
+            return out;
         }
         function paintHero(d) {
             var dp = priceDecimals(d.price_decimals);
@@ -3849,7 +3919,10 @@
                 if (!sheetChart) return;
                 var key = String(p.core);
                 sheetChart.highlight = sheetChart.highlight === key ? null : key;
+                sheetChart.levels = pickedLevels();
                 paintHighlight();
+                if (live.data) paintLegend(live.data, live.data.state === "no_tape");
+                sheetChart.fitY();
                 sheetChart.draw();
             }
             row.addEventListener("click", toggle);
@@ -3915,7 +3988,12 @@
                 Object.keys(old).forEach(function (stale) { box.removeChild(old[stale]); });
             }
             // A highlighted core that left the list lets go of its lines.
-            if (sheetChart && sheetChart.highlight != null && !seen[sheetChart.highlight]) sheetChart.highlight = null;
+            if (sheetChart && sheetChart.highlight != null && !seen[sheetChart.highlight]) {
+                sheetChart.highlight = null;
+                sheetChart.levels = [];
+                sheetChart.fitY();
+                sheetChart.draw();
+            }
             paintHighlight();
         }
         function received(d) {
@@ -3946,7 +4024,7 @@
                 setLiveTag(tag, tr("mini_chart_live"), false);
                 var levelCores = {};
                 var k;
-                for (k = 0; k < sheetChart.levels.length; k++) levelCores[sheetChart.levels[k].core] = true;
+                for (k = 0; k < live.levels.length; k++) levelCores[live.levels[k].core] = true;
                 source.textContent = trf("mini_coin_live_note", { n: Object.keys(levelCores).length });
             } else {
                 var lag = finiteNumber(d.last_tick_ms) && finiteNumber(d.now_ms) ? (d.now_ms - d.last_tick_ms) / 1000 : null;

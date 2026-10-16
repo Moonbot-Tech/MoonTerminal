@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 
 use super::support::{
-    assert_locale_key_in_every_language, braced_body, read_core_src, read_tg_src,
+    assert_locale_key_in_every_language, braced_body, read_chart_src, read_core_src, read_tg_src,
 };
 
 /// Quoted `mini_*` keys in `app.js` that are whole label names.
@@ -697,4 +697,56 @@ fn mini_open_pnl_sums_real_orders_in_dollars() {
             "{caller} must not print a dollar sum that is missing a real order"
         );
     }
+}
+
+/// The value of `<name> = <value>;` in `source`, as text: `pub const NAME: f32 = 6.0;` in Rust,
+/// `var NAME = 6;` in the page.
+fn assigned_number(source: &str, name: &str) -> f64 {
+    let at = source
+        .find(&format!("{name}:"))
+        .or_else(|| source.find(&format!("{name} =")))
+        .unwrap_or_else(|| panic!("{name} is not declared"));
+    let rest = &source[at..];
+    let value = rest
+        [rest.find('=').expect("an assignment") + 1..rest.find(';').expect("a semicolon")]
+        .trim();
+    value
+        .parse()
+        .unwrap_or_else(|err| panic!("{name} = {value} is not a number: {err}"))
+}
+
+/// The Mini App draws a closed deal in the terminal's own sizes: the arrow, the connector's width
+/// and the length below which the connector is skipped come from `moon-chart`'s trade marks.
+///
+/// Mutation: set `DEAL_ARROW_HALF_H` back to the 7 px wedge, or drop the connector skip. The
+/// Mini App's deal then stops reading as the terminal's.
+#[test]
+fn mini_deal_marks_match_the_terminal() {
+    let js = read_core_src("telegram/web/app.js");
+    let marks = read_chart_src("trade_marks.rs");
+    for (page, terminal) in [
+        ("DEAL_ARROW_HALF_H", "ARROW_HALF_H"),
+        ("DEAL_ARROW_HALF_W", "ARROW_HALF_W"),
+        ("DEAL_CONNECTOR_W", "CONNECTOR_THICKNESS"),
+        ("DEAL_CONNECTOR_MIN", "CONNECTOR_MIN_PX"),
+    ] {
+        assert_eq!(
+            assigned_number(&js, page),
+            assigned_number(&marks, terminal),
+            "app.js {page} must equal trade_marks.rs {terminal}"
+        );
+    }
+    assert!(
+        braced_body(&js, "function dealArrow(").contains("2 * DEAL_ARROW_HALF_H"),
+        "the arrow's apex sits on the price and its body hangs a full height away"
+    );
+    assert!(
+        braced_body(&js, "function dealConnects(").contains(">= DEAL_CONNECTOR_MIN"),
+        "the connector is skipped only below DEAL_CONNECTOR_MIN"
+    );
+    let draw = braced_body(&js, "TickChart.prototype.draw = function (");
+    assert!(
+        draw.contains("dealConnects(xa, ya, xb, yb)"),
+        "a connector shorter than DEAL_CONNECTOR_MIN must be skipped"
+    );
 }
