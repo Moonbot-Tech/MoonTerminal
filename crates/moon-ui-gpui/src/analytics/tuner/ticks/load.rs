@@ -266,7 +266,7 @@ impl AnalyticsView {
     /// Where each deal's prints live, per distinct `(core, coin)` — the fetch's own resolver,
     /// asked once per distinct pair. A core that is not connected, or a coin its catalog does
     /// not spell, resolves to nothing and the row says so.
-    fn resolve_addresses(
+    pub(in crate::analytics::tuner) fn resolve_addresses(
         &self,
         deals: &[Deal],
         cx: &Context<Self>,
@@ -494,42 +494,14 @@ impl AnalyticsView {
                 // One threshold for the whole table, read once: every row of one load splits
                 // its window the same way.
                 let long_position_ms = moon_core::market::trade_replay::long_position_ms();
-                let mut tapes = held_tapes(&targets, long_position_ms);
-                let mut rows: Vec<DealRow> = targets
-                    .into_iter()
-                    .map(|(deal, address)| DealRow {
-                        deal,
-                        tape: TapeStatus::Missing,
-                        verdict: None,
-                        address: Some(address),
-                        ticks: None,
-                        entry_line: None,
-                        held: None,
-                    })
-                    .collect();
-                let mut traces = archived_lines(&rows);
-                // Before any row is replayed: each core's step lag, off these rows' archives.
-                super::lags::calibrate_from(&rows, &traces, &defaults, model);
-                let now_ms = moon_core::util::now_unix_ms_i64();
-                for row in &mut rows {
-                    let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
-                    let tape = tapes.remove(&row.deal.report_uid);
-                    let answered = tape.is_some();
-                    replay_row_with(row, &defaults, model, lines, tape, klines.as_ref());
-                    // Said at load, not after a walk: a row the venue cannot serve is not
-                    // "missing" — it would only ever come back refused. The fetch job's own
-                    // path (`replay_row` after a walk) is NOT given this: its retries and its
-                    // continuation read `Missing`, and its refusal is the walk's own word.
-                    // Nor is a row whose held query went unanswered: the tile store was not
-                    // read for it, so "cannot be fetched" would be said of a store never asked.
-                    if answered
-                        && row.tape == TapeStatus::Missing
-                        && let Some(address) = row.address.as_ref()
-                    {
-                        row.tape = unservable_status(address, &row.deal, now_ms)
-                            .unwrap_or(TapeStatus::Missing);
-                    }
-                }
+                let mut rows = replay_batch(
+                    targets,
+                    &defaults,
+                    model,
+                    klines.as_ref(),
+                    long_position_ms,
+                    true,
+                );
                 log_replay(&rows);
                 // Rows the job answered while the batch was read: read again, each behind
                 // whatever walk is running. A row the job answers during THIS loop is kept
@@ -591,6 +563,71 @@ impl AnalyticsView {
             },
         );
     }
+}
+
+/// Stage C's replay of a batch of rows: their held tape asked in one batch, their archived
+/// lines, each core's step lag calibrated off them, then the model on every row. Shared by the
+/// table's own stage C and the strategy list's readiness pass (`tuner::ready`), so the
+/// "Tuning" column counts exactly the rows the card would.
+///
+/// Args:
+///     targets: The deals to replay, each with where its prints live.
+///     defaults: The strategy-field defaults of the live schema.
+///     model: The model settings, one set for the whole batch.
+///     klines: The kline cache the live deltas read, when the market source has one.
+///     long_position_ms: One window split for the whole batch ([`ask_held`]).
+///     calibrate: Whether the batch recalibrates each core's step lag and round trip. They
+///         are process-global and every replay reads them, so only the card's own load
+///         writes them; the readiness pass replays on whatever that load found.
+///
+/// Returns:
+///     The replayed rows, in the order of `targets`.
+pub(in crate::analytics::tuner) fn replay_batch(
+    targets: Vec<(Deal, Arc<RowAddress>)>,
+    defaults: &HashMap<String, f64>,
+    model: ModelSettings,
+    klines: Option<&KlineCache>,
+    long_position_ms: i64,
+    calibrate: bool,
+) -> Vec<DealRow> {
+    let mut tapes = held_tapes(&targets, long_position_ms);
+    let mut rows: Vec<DealRow> = targets
+        .into_iter()
+        .map(|(deal, address)| DealRow {
+            deal,
+            tape: TapeStatus::Missing,
+            verdict: None,
+            address: Some(address),
+            ticks: None,
+            entry_line: None,
+            held: None,
+        })
+        .collect();
+    let mut traces = archived_lines(&rows);
+    // Before any row is replayed: each core's step lag, off these rows' archives.
+    if calibrate {
+        super::lags::calibrate_from(&rows, &traces, defaults, model);
+    }
+    let now_ms = moon_core::util::now_unix_ms_i64();
+    for row in &mut rows {
+        let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
+        let tape = tapes.remove(&row.deal.report_uid);
+        let answered = tape.is_some();
+        replay_row_with(row, defaults, model, lines, tape, klines);
+        // Said at load, not after a walk: a row the venue cannot serve is not
+        // "missing" — it would only ever come back refused. The fetch job's own
+        // path (`replay_row` after a walk) is NOT given this: its retries and its
+        // continuation read `Missing`, and its refusal is the walk's own word.
+        // Nor is a row whose held query went unanswered: the tile store was not
+        // read for it, so "cannot be fetched" would be said of a store never asked.
+        if answered
+            && row.tape == TapeStatus::Missing
+            && let Some(address) = row.address.as_ref()
+        {
+            row.tape = unservable_status(address, &row.deal, now_ms).unwrap_or(TapeStatus::Missing);
+        }
+    }
+    rows
 }
 
 /// The held tape of every target, asked from the worker in one batch and collected in order.

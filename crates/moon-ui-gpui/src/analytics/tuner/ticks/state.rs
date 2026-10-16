@@ -284,6 +284,16 @@ impl TicksData {
             .filter(move |r| r.fetchable_at(now_ms, min_tail_s))
     }
 
+    /// The table's tuning readiness: its sample, covered and fetchable rows, on one clock —
+    /// what the card's verdict and the strategy list's "Tuning" column both read.
+    pub(in crate::analytics::tuner) fn readiness(&self) -> super::readiness::Readiness {
+        super::readiness::Readiness::of_rows(
+            &self.rows,
+            chrono::Utc::now().timestamp_millis(),
+            super::tail::effective_s(),
+        )
+    }
+
     /// Rows fit for the search ([`DealRow::fit`]), tape in memory or not.
     pub(in crate::analytics::tuner) fn fit(&self) -> usize {
         self.rows.iter().filter(|r| r.fit()).count()
@@ -862,8 +872,7 @@ impl TicksState {
     /// search buttons are off and the search row says why. `None` at or above the floor, and
     /// while nothing is loaded.
     pub(in crate::analytics::tuner) fn search_too_few(&self) -> Option<usize> {
-        let n = self.data.data()?.replayable().count();
-        search::sample_floor(n).is_err().then_some(n)
+        self.data.data()?.readiness().too_few()
     }
 
     /// The deals the variant column was scored on while they are too few to recommend it

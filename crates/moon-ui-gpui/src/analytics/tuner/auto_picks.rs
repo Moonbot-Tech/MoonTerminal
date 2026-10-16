@@ -269,14 +269,15 @@ impl AutoPicks {
     ///     coins_axis: The list is on the By-coin axis, where the Auto column lives.
     ///
     /// Returns:
-    ///     The user's menu choice when there is one; otherwise "with a finding" on By-coin,
-    ///     which is what the column is for, and "all" on every other axis.
+    ///     "all" on every axis but By-coin, whatever the menu holds: the filter is drawn only
+    ///     there, so it must not narrow a list where it cannot be seen. On By-coin, the user's
+    ///     menu choice when there is one, else "with a finding", which is what the column is for.
     pub(in crate::analytics) fn filter(&self, coins_axis: bool) -> AutoFilter {
-        self.chosen.unwrap_or(if coins_axis {
-            AutoFilter::Found
+        if coins_axis {
+            self.chosen.unwrap_or(AutoFilter::Found)
         } else {
             AutoFilter::All
-        })
+        }
     }
 
     /// What an EMPTY strategy list shows under the auto-pick filter.

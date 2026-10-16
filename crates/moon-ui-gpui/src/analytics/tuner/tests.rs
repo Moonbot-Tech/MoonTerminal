@@ -33,6 +33,23 @@ fn coin_axis_defaults_to_showing_the_lists() {
     );
 }
 
+/// The Auto column is drawn on "By coin" only, and hiding it elsewhere never edits the saved
+/// mask: the other bits pass through untouched and the By-coin mask keeps the Auto bit, so the
+/// column (and its saved width slot) comes back on return.
+#[test]
+fn the_auto_column_is_drawn_on_by_coin_only() {
+    use super::{COL_BIT_AUTO, COL_BIT_READY, STRAT_COLS_ALL};
+    for mode in STRAT_MODES {
+        let drawn = mode.drawn_cols(STRAT_COLS_ALL);
+        assert_eq!(drawn & COL_BIT_AUTO != 0, mode == StratMode::Coins);
+        assert_eq!(drawn & COL_BIT_READY != 0, mode == StratMode::Ticks);
+        assert_eq!(drawn | COL_BIT_AUTO | COL_BIT_READY, STRAT_COLS_ALL);
+        assert_eq!(mode.shows_auto(), mode == StratMode::Coins);
+        assert_eq!(mode.shows_ready(), mode == StratMode::Ticks);
+    }
+    assert_eq!(StratMode::Coins.drawn_cols(0), 0);
+}
+
 /// Routing `tuner/mod.rs:selected_targets` through the read authority would keep a stale owner
 /// strategy writable after the singleton Auto workspace moves to another core.
 #[test]

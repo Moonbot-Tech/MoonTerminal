@@ -184,8 +184,9 @@ fn an_unconfirmed_chip_says_so_on_hover() {
 }
 
 /// The filter opens on "with a finding" on By-coin, where the Auto column is the point, and on
-/// "all" elsewhere; once the user picks one from the menu, that choice wins on every axis.
-/// Defaulting to "all" everywhere buried the few strategies with something to add.
+/// "all" elsewhere; the user's menu choice wins on By-coin only. The filter is drawn on By-coin
+/// alone, so on the other axes it never narrows the list, and returning to By-coin brings the
+/// choice back. Defaulting to "all" everywhere buried the few strategies with something to add.
 #[test]
 fn the_filter_defaults_to_findings_on_by_coin_only() {
     use super::AutoFilter;
@@ -196,7 +197,9 @@ fn the_filter_defaults_to_findings_on_by_coin_only() {
     auto.chosen = Some(AutoFilter::All);
     assert_eq!(auto.filter(true), AutoFilter::All);
     auto.chosen = Some(AutoFilter::Confirmed);
-    assert_eq!(auto.filter(false), AutoFilter::Confirmed);
+    assert_eq!(auto.filter(false), AutoFilter::All);
+    assert_eq!(auto.view(false).filter, AutoFilter::All);
+    assert_eq!(auto.filter(true), AutoFilter::Confirmed);
 }
 
 /// The done line's "of M" is the total the list handed in, which is the header's "of Y".

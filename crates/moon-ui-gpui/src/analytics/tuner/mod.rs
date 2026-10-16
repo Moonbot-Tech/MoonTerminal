@@ -22,6 +22,9 @@
 /// The auto-pick for every strategy of the list: the "Auto" column, its filter and progress.
 mod auto_picks;
 pub(super) use auto_picks::AutoPicks;
+/// Tuning readiness for every strategy of the list: the "Tuning" column, its filter and progress.
+mod ready;
+pub(super) use ready::ReadyPass;
 /// Its column descriptors: the metric pool both comparison tables draw from …
 mod columns;
 /// The "Fact vs variants" KPI matrix, rendered by every axis out of plain `VarStats`.
@@ -69,7 +72,9 @@ pub(in crate::analytics::tuner) use columns::{metric_cell, sort_arrow_of, toggle
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
-pub(in crate::analytics::tuner) use strat_columns::{AUTO_MIN_W, AUTO_W, SORT_AUTO};
+pub(in crate::analytics::tuner) use strat_columns::{
+    AUTO_MIN_W, AUTO_W, COL_BIT_READY, READY_MIN_W, READY_W, SORT_AUTO, SORT_READY,
+};
 pub(in crate::analytics::tuner) use strat_columns::{
     COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, CORE_W, CORE_W_MAX,
     KIND_MIN_W, KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND,
@@ -156,6 +161,32 @@ impl StratMode {
             StratMode::Coins => STRAT_COLS_DEFAULT_COINS,
             _ => STRAT_COLS_DEFAULT,
         }
+    }
+
+    /// Does this axis carry the coin auto-pick (its toolbar filter, Auto column and caption)?
+    /// The batch picks coin lists, so only "By coin" is about it.
+    pub(super) fn shows_auto(self) -> bool {
+        self == StratMode::Coins
+    }
+
+    /// The columns this axis actually draws out of a saved mask: the Auto bit is dropped off
+    /// "By coin" and the Tuning bit off "Entry/Exit", while the mask itself (the user's saved
+    /// choice) stays untouched.
+    pub(super) fn drawn_cols(self, mask: u16) -> u16 {
+        let mut mask = mask;
+        if !self.shows_auto() {
+            mask &= !COL_BIT_AUTO;
+        }
+        if !self.shows_ready() {
+            mask &= !COL_BIT_READY;
+        }
+        mask
+    }
+
+    /// Does this axis carry the tuning readiness (its toolbar filter, "Tuning" column and
+    /// caption)? Readiness is the Entry/Exit search's, so only "Entry/Exit" is about it.
+    pub(super) fn shows_ready(self) -> bool {
+        self == StratMode::Ticks
     }
 }
 

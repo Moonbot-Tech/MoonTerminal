@@ -182,6 +182,23 @@ pub(super) fn sentence(
     }
 }
 
+/// The card's verdict for a strategy no search has run on yet, from its readiness alone —
+/// what the card says the moment that strategy's table has loaded, through the card's own
+/// [`verdict_of`] and [`sentence`].
+///
+/// Args:
+///     ready: The strategy's sample, covered and fetchable rows.
+///
+/// Returns:
+///     The card's full "cannot tune" sentence while it would say so; `None` when the card
+///     would offer the search (its idle state).
+pub(in crate::analytics::tuner) fn readiness_refusal(
+    ready: &super::readiness::Readiness,
+) -> Option<String> {
+    let verdict = verdict_of(None, ready.too_few(), None, None, false);
+    matches!(verdict, Verdict::Cannot(_)).then(|| sentence(&verdict, 0, 0, ready.fetchable))
+}
+
 /// One comparable search slice, with open profit kept outside its scored profit.
 pub(super) struct ProfitRow {
     pub label: String,
@@ -390,7 +407,7 @@ impl SummaryModel {
                 &verdict,
                 fit,
                 hold,
-                data.map_or(0, |d| d.fetchable().count()),
+                data.map_or(0, |d| d.readiness().fetchable),
             ),
             verdict,
             train,
