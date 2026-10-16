@@ -1,6 +1,6 @@
 //! The axis' report rows: every closed trade of the tuner scope, as [`Deal`]s.
 //!
-//! Read through the same unified source the other axes scan (`read_tuner_rows`), so the
+//! Read through `tuner_deal_sources_on` inside one `with_read_snapshot`, so the
 //! "Fact" column and the tape replay describe the SAME trades — period, cores, strategies,
 //! emulator and side filters included. Three kinds of row are counted rather than dropped
 //! silently, and the caption and the load log print the counts: a row without a millisecond
@@ -90,11 +90,14 @@ pub fn read_deals(q: &Query) -> ReadResult<DealsRead> {
     // The scan on the tuner's own source (the metric decides `pnl`), then the USDT money of
     // every row off the USDT source in the same snapshot — the table's profit column must not
     // change unit with the scope's quote, and the scan's `profitbtc` would.
-    let mut read = crate::db::tuner::read_tuner_rows(q, |conn, q, src| {
-        let mut read = read_on(conn, q, src)?;
-        overlay_hook_detect(conn, q, &mut read.deals)?;
-        match crate::db::tuner::tuner_source_usdt_on(conn, q)? {
-            Some(usdt_src) => overlay_usdt_profit(conn, q, &usdt_src, &mut read.deals)?,
+    let conn = crate::db::open_reader()?;
+    let mut read = crate::db::with_read_snapshot(&conn, |conn| {
+        let (q, src, usdt_src) = crate::db::tuner::tuner_deal_sources_on(conn, q)?;
+        let mut read = read_on(conn, &q, &src)?;
+        overlay_hook_detect(conn, &q, &mut read.deals)?;
+        let usdt_src = usdt_src.resolve(conn, &q)?;
+        match usdt_src {
+            Some(usdt_src) => overlay_usdt_profit(conn, &q, &usdt_src, &mut read.deals)?,
             None => log::info!(
                 target: crate::diagnostics::TICKS_AXIS_TARGET,
                 "[x] ticks deals: the scope's money cannot be valued in USDT, the profit column stays empty"

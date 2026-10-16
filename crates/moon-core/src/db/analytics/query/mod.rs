@@ -605,9 +605,26 @@ pub(in crate::db) fn quote_breakdown_on(
     conn: &Connection,
     q: &Query,
 ) -> ReadResult<QuoteBreakdown> {
+    quote_breakdown_with_stage_on(conn, q, true)
+}
+
+/// Let the monitor avoid materialization overhead while retaining identical coverage and retry.
+pub(super) fn quote_breakdown_unfenced_on(
+    conn: &Connection,
+    q: &Query,
+) -> ReadResult<QuoteBreakdown> {
+    quote_breakdown_with_stage_on(conn, q, false)
+}
+
+/// Apply one caller's normalization stage choice to both the primary read and native retry.
+fn quote_breakdown_with_stage_on(
+    conn: &Connection,
+    q: &Query,
+    materialize: bool,
+) -> ReadResult<QuoteBreakdown> {
     let sources = super::super::read_sources_res(conn)?;
     let valuation_attached = super::super::valuation::is_attached(conn);
-    match quote_breakdown_attempt(conn, q, &sources, valuation_attached) {
+    match quote_breakdown_attempt(conn, q, &sources, valuation_attached, materialize) {
         Ok(totals) => Ok(totals),
         Err(error)
             if valuation_attached
@@ -617,7 +634,7 @@ pub(in crate::db) fn quote_breakdown_on(
                 &format!("DETACH DATABASE {}", super::super::valuation::SCHEMA),
                 [],
             );
-            quote_breakdown_attempt(conn, q, &sources, false).map_err(|retry_error| {
+            quote_breakdown_attempt(conn, q, &sources, false, materialize).map_err(|retry_error| {
                 super::super::read_fail::read_fail(
                     "analytics: quote breakdown native retry",
                     retry_error,
@@ -640,6 +657,7 @@ pub(in crate::db) fn quote_breakdown_on(
 ///     sources: Physical report sources discovered from `main`.
 ///     include_valuation: Whether the historical mode may join the attached derived cache; the
 ///         current-rate mode does not depend on it.
+///     materialize: Whether to fence the normalization stage for this caller.
 ///
 /// Returns:
 ///     Exact quote totals, optionally carrying complete USDT coverage.
@@ -651,6 +669,7 @@ fn quote_breakdown_attempt(
     q: &Query,
     sources: &[super::super::ReadSource],
     include_valuation: bool,
+    materialize: bool,
 ) -> rusqlite::Result<QuoteBreakdown> {
     let has_names = strategies_attached(conn);
     // Resolved ONCE for this whole pass, above the source loop: the rows pass and this totals pass
@@ -676,14 +695,16 @@ fn quote_breakdown_attempt(
         let attribution = liquidation_attribution_available(&src.cols, has_names);
         let where_branches =
             q.where_branches(&period, &src.cols, &sid, Some("r"), attribution, &mask);
-        let (quote, group_by) = super::super::quote::trusted_quote_group("r", &src.cols);
         let source = super::super::report_read::source_partition(src);
-        let valuation = super::super::valuation::projection(
+        let inputs = super::super::valuation::CoverageInputs::normalized("r");
+        let names = super::super::valuation::CoverageInputs::normalized("");
+        let valuation = super::super::valuation::projection_with_inputs(
             q.valuation,
             include_valuation,
             "r",
             &src.cols,
             source,
+            &inputs,
         );
         let joins = valuation
             .as_ref()
@@ -693,16 +714,46 @@ fn quote_breakdown_attempt(
             .as_ref()
             .map(|parts| format!(", {}", parts.aggregate_columns()))
             .unwrap_or_default();
+        // Keep raw cells beside corrected amounts for storage and cache-identity guards. The
+        // monitor leaves the stage flattenable; other callers reuse the fenced normalization.
+        let raw_columns = super::super::valuation::RAW_COVERAGE_COLUMNS
+            .iter()
+            .copied()
+            .filter(|column| src.cols.contains(*column))
+            .map(|column| format!("r.\"{column}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let normalized = super::super::valuation::CoverageInputs::report("r", &src.cols);
+        let group_by = if src.cols.contains("basecurrency") {
+            format!(" GROUP BY {}", inputs.quote)
+        } else {
+            String::new()
+        };
         let sql = where_branches
             .iter()
             .map(|where_sql| {
                 format!(
-                    "SELECT {quote}, COALESCE(SUM({settled_profit}), 0.0), COUNT(*)\
-                     {coverage_columns} \
-                     FROM {} r{joins} WHERE {where_sql}{group_by}",
+                    "SELECT * FROM (WITH normalized AS {stage} (
+                     SELECT {raw_columns}, {} AS {quote_name},
+                            {} AS {profit_name}, {} AS {spent_name}
+                     FROM {} r WHERE {where_sql})
+                     SELECT {quote}, COALESCE(SUM({profit}), 0.0), COUNT(*)
+                            {coverage_columns}
+                     FROM normalized r{joins}{group_by})",
+                    normalized.quote,
+                    normalized.profit,
+                    normalized.spent,
                     src.table,
-                    settled_profit =
-                        super::super::quote::settled_amount_expr("r", &src.cols, "profitbtc"),
+                    quote_name = names.quote,
+                    profit_name = names.profit,
+                    spent_name = names.spent,
+                    quote = inputs.quote,
+                    profit = inputs.profit,
+                    stage = if materialize {
+                        "MATERIALIZED"
+                    } else {
+                        "NOT MATERIALIZED"
+                    },
                 )
             })
             .collect::<Vec<_>>()

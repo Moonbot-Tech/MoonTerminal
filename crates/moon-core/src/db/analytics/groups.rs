@@ -361,6 +361,25 @@ pub(super) fn groups(
     by_strategy: bool,
 ) -> ReadResult<Vec<GroupStat>> {
     const CTX: &str = "analytics: groups";
+    // Keep the projection narrow: materializing the wide report source copies columns this
+    // aggregate never reads. The fence prevents SQLite from expanding pnl and identity CASEs
+    // again for every aggregate and GROUP BY expression.
+    let narrow = "o.strategyid, o.core_uid, o.core_name, o.coin, o.pnl,
+                  o.profitbtc, o.spentbtc, o.basecurrency";
+    let (normalized, src, raw_src) = if by_strategy {
+        let raw = raw_src
+            .map(|source| {
+                format!("raw_normalized AS MATERIALIZED (SELECT {narrow} FROM {source}), ")
+            })
+            .unwrap_or_default();
+        (
+            format!("normalized AS MATERIALIZED (SELECT {narrow} FROM {src}), {raw}"),
+            "normalized o",
+            raw_src.map(|_| "raw_normalized o"),
+        )
+    } else {
+        (String::new(), src, raw_src)
+    };
     // Strategy key is `id@core_uid`, splitting PER CORE so each core's activity is visible.
     // Renames do not create groups, distinct strategies sharing a name do not merge, and the
     // name is only a label.
@@ -458,7 +477,7 @@ pub(super) fn groups(
         )
     };
     let sql = format!(
-        "WITH a AS (
+        "WITH {normalized}a AS (
              SELECT {key} AS k,
                     {pair}
                     MAX(o.core_name) AS core_name,

@@ -423,13 +423,22 @@ enum ScopeDecision {
 /// Errors:
 ///     Returns a classified report read failure when quote or valuation preflight cannot complete.
 fn scope_decision_on(conn: &Connection, q: &Query) -> ReadResult<ScopeDecision> {
+    scope_decision_with_quote_reader_on(conn, q, quote_breakdown_on)
+}
+
+/// Resolve the same scope contract with a caller-specific quote scan and the shared Percent exit.
+fn scope_decision_with_quote_reader_on(
+    conn: &Connection,
+    q: &Query,
+    read_quotes: fn(&Connection, &Query) -> ReadResult<QuoteBreakdown>,
+) -> ReadResult<ScopeDecision> {
     if q.metric == ProfitMetric::Percent {
         return Ok(ScopeDecision::Comparable {
             unit: ProfitUnit::Percent,
             projection: ProjectionMode::Percent,
         });
     }
-    let totals = quote_breakdown_on(conn, q)?;
+    let totals = read_quotes(conn, q)?;
     Ok(match totals.scope() {
         QuoteScope::Empty => ScopeDecision::Empty {
             projection: ProjectionMode::Native,
@@ -482,7 +491,12 @@ pub(in crate::db) fn usdt_projection_on(
     let mut money = q.clone();
     money.metric = ProfitMetric::Quote;
     money.prefer_usdt = true;
-    Ok(match scope_decision_on(conn, &money)? {
+    Ok(usdt_projection(scope_decision_on(conn, &money)?))
+}
+
+/// Extract the USDT projection without repeating a resolved money-scope preflight.
+fn usdt_projection(decision: ScopeDecision) -> Option<ProjectionMode> {
+    match decision {
         ScopeDecision::Comparable { unit, projection }
             if unit == ProfitUnit::Quote(crate::db::QuoteCurrency::usdt()) =>
         {
@@ -490,7 +504,19 @@ pub(in crate::db) fn usdt_projection_on(
         }
         ScopeDecision::Empty { projection } => Some(projection),
         ScopeDecision::Comparable { .. } | ScopeDecision::Split(_) => None,
-    })
+    }
+}
+
+/// Resolve active and overlay projections for a Quote+USDT request with identical scope inputs.
+///
+/// Decisions remain local to the caller's pinned snapshot, including the native retry.
+pub(in crate::db) fn projection_with_usdt_on(
+    conn: &Connection,
+    q: &Query,
+) -> ReadResult<(ProjectionMode, Option<ProjectionMode>)> {
+    let decision = scope_decision_on(conn, q)?;
+    let active = decision.projection().ok_or(ReadFail::IncomparableQuote)?;
+    Ok((active, usdt_projection(decision)))
 }
 
 /// Resolve one query to a safe row-level projection for non-`ProfitScope` consumers.

@@ -12,6 +12,125 @@
 use super::*;
 use crate::db::{ProfitMetric, SideFilter};
 
+/// The normalization fence must preserve liquidation attribution, deleted metadata and quote splits.
+/// Flattening the source used to expand its identity and pnl expressions for each aggregate.
+#[test]
+fn normalized_strategy_groups_match_the_unfenced_reference() {
+    use crate::db::test_support::{build_replica, remove_db, temp_db};
+    let path = temp_db("normalized-strategy-parity");
+    let conn = build_replica(&path, &[(10_000, 3.0, "XALPHA"), (11_000, -2.0, "XALPHA")]);
+    conn.execute_batch(
+        "ALTER TABLE orders_rep ADD COLUMN channelname TEXT;
+         ALTER TABLE orders_rep ADD COLUMN signaltype TEXT;
+         UPDATE orders_rep SET core_name='CORE_A';
+         UPDATE orders_rep SET channelname='LIQUIDATION', signaltype='UNIT_01', strategyid=0 WHERE newrecid=2;
+         ATTACH ':memory:' AS strat;
+         CREATE TABLE strat.strategies(core_uid INTEGER, strategy_id INTEGER, name TEXT,
+             deleted INTEGER, checked INTEGER);
+         CREATE TABLE strat.strategy_versions(core_uid INTEGER, strategy_id INTEGER,
+             valid_from INTEGER, valid_to INTEGER, raw_json TEXT);
+         INSERT INTO strat.strategies VALUES(1,7,'UNIT_01',1,0);",
+    )
+    .expect("synthetic strategy fixture");
+    conn.execute_batch(
+        "ALTER TABLE orders_rep RENAME COLUMN strategyid TO original_strategyid;
+         ALTER TABLE orders_rep ADD COLUMN strategyid;
+         UPDATE orders_rep SET strategyid=original_strategyid;
+         INSERT INTO orders_rep(core_uid,core_name,newrecid,closedate,buydate,profitbtc,
+             spentbtc,coin,strategyid,isshort,emulator,deleted,basecurrency)
+         VALUES(1,'CORE_A',3,12000,11700,4,200,'XALPHA','7',0,0,0,1);",
+    )
+    .unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT typeof(strategyid) FROM orders_rep WHERE newrecid=3",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "text"
+    );
+    for split in [false, true] {
+        conn.execute(
+            "UPDATE orders_rep SET basecurrency=?1 WHERE newrecid=2",
+            [if split { 8 } else { 1 }],
+        )
+        .expect("quote scope");
+        {
+            for metric in [ProfitMetric::Quote, ProfitMetric::Percent] {
+                let query = Query {
+                    axis: crate::db::ReportAxis::from_measured(
+                        std::collections::HashMap::from([(
+                            1,
+                            vec![crate::db::OffsetSegment {
+                                from_utc: 0,
+                                offset_secs: 3600,
+                            }],
+                        )]),
+                        chrono_tz::UTC,
+                    ),
+                    from: -1,
+                    to: 20_000,
+                    metric,
+                    prefer_usdt: true,
+                    ..Default::default()
+                };
+                let mut query = query;
+                query.floor_all_history();
+                // Native is intentional for split money: scalar callers refuse that scope,
+                // while grouping must retain its exact per-group unknown/raw-money semantics.
+                let projection = if metric == ProfitMetric::Percent {
+                    super::super::ProjectionMode::Percent
+                } else {
+                    super::super::ProjectionMode::Native
+                };
+                let src = unified_from_mode(&conn, &query, projection)
+                    .unwrap()
+                    .unwrap();
+                let raw_src = raw_source(&conn, &query).unwrap();
+                let reference = reference_with_raw(&src, raw_src.as_deref());
+                let old = run(&conn, &reference, &query, true, true);
+                let new = groups(&conn, &src, raw_src.as_deref(), &query, true, true).unwrap();
+                assert!(!old.is_empty());
+                assert_same("normalization parity", &old, &new);
+                if !split {
+                    let integer = new.iter().find(|g| g.key == "7@1").unwrap();
+                    assert_eq!(integer.n, 2);
+                    assert_eq!(integer.raw_profit, 7.0);
+                    assert_eq!(integer.avg_order, 150.0);
+                    assert_eq!(new.iter().map(|g| g.raw_profit).sum::<f64>(), 5.0);
+                }
+            }
+        }
+    }
+    drop(conn);
+    remove_db(&path);
+}
+
+/// Keep the old active aggregation while independently reading native money for Percent groups.
+fn reference_with_raw(src: &str, raw_src: Option<&str>) -> String {
+    let sql = reference_sql(src, true, true);
+    let Some(raw_src) = raw_src else {
+        return sql;
+    };
+    let correlated = format!(
+        "FROM {raw_src} WHERE CAST(o.strategyid AS TEXT) || '@' || CAST(o.core_uid AS TEXT) = active.k"
+    );
+    format!(
+        "SELECT active.k, active.name, active.kind, active.core_name, active.cores_n,
+        active.alive, active.n, active.profit, active.wins, active.wsum, active.lsum,
+        active.best, active.worst, active.lastedit, active.blacklist, active.whitelist,
+        (SELECT COALESCE(SUM(o.profitbtc),0) {correlated}),
+        (SELECT COALESCE(AVG(CASE WHEN o.spentbtc>0 THEN o.spentbtc END),0) {correlated}),
+        (SELECT MIN(o.basecurrency) {correlated}), (SELECT MAX(o.basecurrency) {correlated}),
+        (SELECT COUNT(CASE WHEN typeof(o.basecurrency)='integer' THEN 1 END) {correlated}),
+        (SELECT COUNT(*) {correlated})
+        FROM (WITH ref(k,name,kind,core_name,cores_n,alive,n,profit,wins,wsum,lsum,best,worst,
+        lastedit,blacklist,whitelist,raw_profit,avg_order,qmin,qmax,qint,qrows) AS ({sql})
+        SELECT * FROM ref) active ORDER BY active.profit DESC, active.k"
+    )
+}
+
 /// The report scope every case here uses: all cores, all history, no filters.
 fn q() -> Query {
     Query {

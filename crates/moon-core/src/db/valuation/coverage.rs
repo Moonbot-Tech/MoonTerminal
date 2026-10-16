@@ -199,16 +199,71 @@ pub(in crate::db) fn source_predicates(
     alias: &str,
     columns: &std::collections::HashSet<String>,
 ) -> SourcePredicates {
+    source_predicates_with_inputs(alias, columns, &CoverageInputs::report(alias, columns))
+}
+
+/// Original cells retained beside normalized amounts for storage guards and cache identity.
+pub(in crate::db) const RAW_COVERAGE_COLUMNS: &[&str] = &[
+    "closedate",
+    "profitbtc",
+    "spentbtc",
+    "core_uid",
+    "newrecid",
+    "db_id",
+];
+
+/// Expressions whose storage checks remain on the original cells while amounts are normalized.
+pub(in crate::db) struct CoverageInputs {
+    /// Trusted effective quote ordinal, including denomination corrections.
+    pub quote: String,
+    /// Settled profit, before conversion.
+    pub profit: String,
+    /// Settled spend, before conversion and numeric storage validation.
+    pub spent: String,
+}
+
+impl CoverageInputs {
+    /// Name the normalization-stage columns, optionally qualified by a row alias.
+    pub(in crate::db) fn normalized(alias: &str) -> Self {
+        let prefix = if alias.is_empty() {
+            String::new()
+        } else {
+            format!("{alias}.")
+        };
+        Self {
+            quote: format!("{prefix}normalized_quote"),
+            profit: format!("{prefix}settled_profit"),
+            spent: format!("{prefix}settled_spent"),
+        }
+    }
+
+    /// Build the original report expressions for callers without a normalization stage.
+    pub(in crate::db) fn report(alias: &str, columns: &std::collections::HashSet<String>) -> Self {
+        Self {
+            quote: crate::db::quote::effective_ordinal_expr(alias, columns),
+            profit: crate::db::quote::settled_amount_expr(alias, columns, "profitbtc"),
+            spent: if columns.contains("spentbtc") {
+                crate::db::quote::settled_amount_expr(alias, columns, "spentbtc")
+            } else {
+                "NULL".to_string()
+            },
+        }
+    }
+}
+
+/// Build storage guards against raw cells and values against explicit normalized expressions.
+pub(in crate::db) fn source_predicates_with_inputs(
+    alias: &str,
+    columns: &std::collections::HashSet<String>,
+    inputs: &CoverageInputs,
+) -> SourcePredicates {
     // SQLite resolves every column reference at prepare time, unreachable arms included, so an
     // absent column collapses to a constant rather than being named.
     SourcePredicates {
         quote_known: if columns.contains("basecurrency") {
             // The effective expression already rejects every non-integer storage class, so the
             // range check alone decides whether the identity is one this build knows.
-            format!(
-                "({quote}) BETWEEN 0 AND 20",
-                quote = crate::db::quote::effective_ordinal_expr(alias, columns)
-            )
+            format!("({quote}) BETWEEN 0 AND 20", quote = inputs.quote)
         } else {
             "0".to_string()
         },
@@ -223,7 +278,7 @@ pub(in crate::db) fn source_predicates(
         spent_value: if columns.contains("spentbtc") {
             format!(
                 "CASE WHEN typeof({alias}.spentbtc) IN ('integer','real') THEN {settled} END",
-                settled = crate::db::quote::settled_amount_expr(alias, columns, "spentbtc")
+                settled = inputs.spent
             )
         } else {
             "NULL".to_string()
@@ -245,6 +300,21 @@ pub(crate) fn coverage_sql(
     columns: &std::collections::HashSet<String>,
     source: TradeSource,
 ) -> CoverageSql {
+    coverage_sql_with_inputs(
+        alias,
+        columns,
+        source,
+        &CoverageInputs::report(alias, columns),
+    )
+}
+
+/// Build historical coverage using already normalized quote and amount expressions.
+fn coverage_sql_with_inputs(
+    alias: &str,
+    columns: &std::collections::HashSet<String>,
+    source: TradeSource,
+    inputs: &CoverageInputs,
+) -> CoverageSql {
     let id_column = match source {
         TradeSource::Typed if columns.contains("newrecid") => Some("newrecid"),
         TradeSource::Legacy if columns.contains("db_id") => Some("db_id"),
@@ -256,12 +326,12 @@ pub(crate) fn coverage_sql(
     // Every quote reference below goes through this ONE expression: the cache is keyed by quote
     // ordinal, so a join that matched the raw column while the projection valued the effective one
     // would look up the rate of a currency the row is not denominated in.
-    let quote = crate::db::quote::effective_ordinal_expr(alias, columns);
+    let quote = &inputs.quote;
     let SourcePredicates {
         quote_known,
         numeric_profit,
         spent_value,
-    } = source_predicates(alias, columns);
+    } = source_predicates_with_inputs(alias, columns, inputs);
     let date_valid = if has_closedate {
         format!("typeof({alias}.closedate)='integer' AND {alias}.closedate>0")
     } else {
@@ -280,7 +350,7 @@ pub(crate) fn coverage_sql(
              AND v.profit_quote={settled_profit} AND v.spent_quote IS {spent_value}",
             source_kind = source.code(),
             algorithm_version = ALGORITHM_VERSION,
-            settled_profit = crate::db::quote::settled_amount_expr(alias, columns, "profitbtc"),
+            settled_profit = inputs.profit,
         )
     } else {
         "0".to_string()
@@ -304,7 +374,7 @@ pub(crate) fn coverage_sql(
         format!(
             "CASE WHEN {identity} THEN {settled}
                   WHEN {prepared} THEN v.profit_usdt END",
-            settled = crate::db::quote::settled_amount_expr(alias, columns, "profitbtc")
+            settled = inputs.profit
         )
     } else {
         "NULL".to_string()
@@ -409,6 +479,28 @@ pub(in crate::db) fn projection(
             // One snapshot AND one clock for every projection of this read batch — see `RatePin`.
             let (rates, now_ms) = current::current_rates_at();
             Some(current_rate_sql(alias, columns, &rates, now_ms))
+        }
+    }
+}
+
+/// Build either coverage mode over explicit normalization-stage columns.
+pub(in crate::db) fn projection_with_inputs(
+    mode: ValuationMode,
+    attached: bool,
+    alias: &str,
+    columns: &std::collections::HashSet<String>,
+    source: TradeSource,
+    inputs: &CoverageInputs,
+) -> Option<CoverageSql> {
+    match mode {
+        ValuationMode::Historical => {
+            attached.then(|| coverage_sql_with_inputs(alias, columns, source, inputs))
+        }
+        ValuationMode::Current => {
+            let (rates, now_ms) = current::current_rates_at();
+            Some(current::current_rate_sql_with_inputs(
+                alias, columns, &rates, now_ms, inputs,
+            ))
         }
     }
 }
