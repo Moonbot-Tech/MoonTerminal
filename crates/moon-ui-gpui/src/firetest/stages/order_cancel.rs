@@ -9,7 +9,6 @@
 use std::collections::HashSet;
 
 use moon_core::feed::CoreLogLine;
-use moon_core::market::MarketQuantityUnit;
 use moon_core::session::order_lines::OrderCloseReason;
 use moon_core::util::now_unix_ms_i64;
 
@@ -20,6 +19,29 @@ use gpui::Context;
 use crate::firetest::Runtime;
 use crate::firetest::logging::firetest_info;
 use crate::firetest::plan::StageStep;
+
+#[cfg(test)]
+mod tests;
+
+/// Prefer the raw override; otherwise resolve quote money through manual sizing and fail closed.
+/// `Ok(None)` preserves the normal preset path when neither override is configured.
+fn order_cancel_size_override(
+    raw: Option<f64>,
+    quote: Option<f64>,
+    size_for_usd: impl FnOnce(f64) -> Option<(f64, f64)>,
+) -> Result<Option<f64>, String> {
+    if let Some(size) = raw {
+        return Ok(Some(size));
+    }
+    quote
+        .map(|usd| {
+            size_for_usd(usd).map(|(size, _)| size).ok_or_else(|| {
+                "invalid quote amount, missing sizing data, or amount below the venue minimum"
+                    .to_string()
+            })
+        })
+        .transpose()
+}
 
 /// Stage `order_cancel_lag`.
 pub(in crate::firetest) fn run(
@@ -60,7 +82,7 @@ pub(in crate::firetest) struct OrderCancelRun {
 }
 
 impl Runtime {
-    /// Place the test order and capture the pre-existing order uids to tell it apart from the rest.
+    /// Size quote overrides through manual-order rules, place the test order, and capture old uids.
     fn start_order_cancel_lag(&self, backend: &Backend) -> Result<OrderCancelRun, String> {
         let group = self
             .opened_group
@@ -77,41 +99,12 @@ impl Runtime {
                 format!("order_cancel_lag has no live-correct latest price for {market}: {reason}")
             })?;
         let price = (latest_price as f64 * self.config.order_cancel_price_mult).max(1e-8);
-        // `order_cancel_quote_size` is a QUOTE amount, and what one unit of size means depends on
-        // the market: dividing by price gives a coin quantity, which is right on a linear market
-        // and wrong on a coin-margined one, where the exchange counts contracts of fixed value.
-        // This script places a REAL order, so it asks the market rather than assuming.
-        let quote_size = self.config.order_cancel_quote_size;
-        let size_override = match self.config.order_cancel_size {
-            Some(size) => Some(size),
-            None => match quote_size {
-                None => None,
-                Some(quote) => {
-                    match backend
-                        .session
-                        .market_source()
-                        .order_size_rules(core, &market)
-                        .map(|rules| rules.unit)
-                    {
-                        // `quote / price` is a COIN amount, right only on a coin-margined market;
-                        // a linear one is margined in its quote currency, so this over-sizes by
-                        // `1 / price` (a $10 order on `VELVETUSDT` at 0.0712 leaves as ~$140) and
-                        // reaches the wire without the venue-minimum check. Left as measured, not
-                        // changed blind: this stage places a REAL order. See
-                        // `manual_order_size_base`, which the live path uses and which is right.
-                        Some(MarketQuantityUnit::Contracts(_) | MarketQuantityUnit::Coins) => {
-                            Some(quote / price)
-                        }
-                        None => {
-                            return Err(format!(
-                                "order_cancel_lag cannot size {market}: its quantity unit has not \
-                                 been reported yet"
-                            ));
-                        }
-                    }
-                }
-            },
-        };
+        let size_override = order_cancel_size_override(
+            self.config.order_cancel_size,
+            self.config.order_cancel_quote_size,
+            |usd| backend.manual_order_size_base_for_usd(core, &market, price, usd),
+        )
+        .map_err(|reason| format!("order_cancel_lag cannot size {market}: {reason}"))?;
         let terms = backend
             .manual_order_terms(core, &market, price, false, size_override)?
             .ok_or_else(|| {
