@@ -655,21 +655,16 @@ pub(super) fn is_on(v: &str) -> bool {
     matches!(v.to_ascii_lowercase().as_str(), "yes" | "true" | "1" | "on")
 }
 
-pub(super) fn is_memo_field(f: &SchemaField, value: &str) -> bool {
+/// Choose the memo editor from field metadata alone, so typing never replaces the input.
+/// Ordinary strings remain single-line even when a stored value contains newlines.
+pub(super) fn is_memo_field(f: &SchemaField) -> bool {
     // Memo and multiline formula editors apply only to string fields. Numeric fields such as Int,
     // Double, and Single always use a single-line input even when their name contains `ema` (for
     // example, `trailingEma`); otherwise an ordinary numeric field expands like a formula editor.
     if f.type_name != "String" {
         return false;
     }
-    if value.contains('\n') || value.chars().count() > 44 {
-        return true;
-    }
     is_formula_field(&f.name)
-        || matches!(f.ui, SchemaFieldUi::Edit)
-            && value
-                .chars()
-                .any(|ch| matches!(ch, '<' | '>' | '(' | ')' | '&' | '|'))
 }
 
 pub(super) fn is_formula_field(field: &str) -> bool {

@@ -98,7 +98,7 @@ impl StrategiesView {
         // Computed before `value` moves into the control below, and reused there: a memo/formula
         // field needs its diff arrow stacked vertically rather than beside a control it cannot
         // share a line with.
-        let stacked = is_memo_field(f, &value);
+        let stacked = is_memo_field(f);
         // Computed here, before `value` moves into a control: text the core would refuse to store
         // paints the input red, and `sendable_field_edits` keeps it out of Apply, so it says so
         // instead of accepting the press and quietly restoring the old value. Only a DRAFT can be
@@ -242,8 +242,7 @@ impl StrategiesView {
                         .selected(dirty)
                         .disabled(!active)
                         .into_any_element()
-                } else if compact.is_some() && !differ && is_memo_field(f, &value) && !list_actions
-                {
+                } else if compact.is_some() && !differ && stacked && !list_actions {
                     // A disabled `MoonInput` here would need a retained state entity and a
                     // synchronization path to stay honest as drafts and version selection move
                     // underneath it. A static element carries the same look, is rebuilt from

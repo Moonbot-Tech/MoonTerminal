@@ -542,6 +542,50 @@ fn edit_field(type_name: &str) -> moon_core::feed::SchemaField {
     }
 }
 
+/// Reintroducing text heuristics would replace ordinary inputs and drop their caret.
+/// Defaults exercise text-bearing schema metadata; draft text is excluded from the API entirely.
+#[test]
+fn memo_classification_keeps_plain_strings_single_line() {
+    let long_name = "DROPS_01 - LONG REBOUND AFTER DROPS [XXXX0000]";
+    assert_eq!(long_name.len(), 46);
+    for name in ["StrategyName", "Comment", "ChannelName"] {
+        let mut field = edit_field("String");
+        field.name = name.to_string();
+        for text in [
+            "CORE_A",
+            "(2) CORE_A",
+            "CORE_A (",
+            "CORE_A )",
+            "CORE_A <",
+            "CORE_A >",
+            "CORE_A &",
+            "CORE_A |",
+            long_name,
+            "CORE_A\nCORE_A",
+            "",
+        ] {
+            field.default = Some(text.to_string());
+            assert!(!super::is_memo_field(&field), "{name}: {text:?}");
+        }
+    }
+}
+
+/// Removing formula-name detection would collapse empty or short formulas into plain inputs;
+/// applying it to numeric EMA fields would expand ordinary numeric controls instead.
+#[test]
+fn memo_classification_keeps_formula_fields_multiline() {
+    for name in ["Custom", "Formula", "EMA", "Condition", "Filter"] {
+        let mut field = edit_field("String");
+        field.name = name.to_string();
+        for text in ["", "1", "EMA(60s, 1) > 2", "1\n& 2", "1"] {
+            field.default = Some(text.to_string());
+            assert!(super::is_memo_field(&field), "{name}: {text:?}");
+        }
+        field.type_name = "Double".to_string();
+        assert!(!super::is_memo_field(&field), "numeric {name}");
+    }
+}
+
 /// The row has to mark what the sender will refuse, or pressing Apply looks like it worked and the
 /// old value comes back unexplained. A decimal comma is NOT refused — it is the separator a Russian
 /// keyboard produces, and rejecting it here would fail the very input this marker exists for.
