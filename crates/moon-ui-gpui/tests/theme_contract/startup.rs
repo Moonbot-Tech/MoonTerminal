@@ -26,7 +26,9 @@ fn station_handover_publishes_before_suspend_and_remote_work() {
     let publish = begin.find("recovery::save(").unwrap();
     let refused = begin.find("if saved.is_err()").unwrap();
     let suspend = begin.find("self.telegram.suspend()").unwrap();
-    let start = begin.find("job::start(job)").unwrap();
+    let start = begin
+        .find("job::start(job, cores_sync::trace_cores(&self.config))")
+        .unwrap();
     assert!(publish < refused && refused < suspend && suspend < start);
     assert!(braced_body(begin, "if saved.is_err()").contains("return;"));
     let erase = braced_body(&station, "fn station_erase_local_bot(");

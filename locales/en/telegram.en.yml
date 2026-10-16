@@ -249,6 +249,7 @@ telegram.server.groups_same: "Core groups on the station match the terminal: %{n
 telegram.server.groups_differ: "Core groups on the station: %{station} · in this terminal: %{terminal}. The bot's report by core uses the station's."
 telegram.server.groups_send: "Send groups to the station"
 telegram.server.groups_pushed: "Core groups sent to the station: %{n}."
+telegram.server.cores_unmapped: "Cores omitted because their identity could not be matched uniquely: %{n}."
 telegram.server.groups_unsupported: "The station does not know core groups yet — update it to split the report by core into groups."
 telegram.server.cores_count: "on station %{station} · here %{here}"
 telegram.server.cores_sync_hint: "A core is identified by its address, not its name. The station never loses anything automatically: Save in Connections does not touch it, and a core absent from this terminal stays on the station until you remove it here."

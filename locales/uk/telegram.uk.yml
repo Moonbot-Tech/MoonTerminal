@@ -249,6 +249,7 @@ telegram.server.groups_same: "Групи ядер на станції збіга
 telegram.server.groups_differ: "Групи ядер на станції: %{station} · у цьому терміналі: %{terminal}. Звіт бота за ядрами бере групи станції."
 telegram.server.groups_send: "Надіслати групи на станцію"
 telegram.server.groups_pushed: "Групи ядер надіслано на станцію: %{n}."
+telegram.server.cores_unmapped: "Пропущено ядер, які не вдалося однозначно зіставити: %{n}."
 telegram.server.groups_unsupported: "Станція ще не знає груп ядер — оновіть її, щоб звіт за ядрами ділився на групи."
 telegram.server.cores_count: "на станції %{station} · тут %{here}"
 telegram.server.cores_sync_hint: "Ядро розпізнається за адресою, а не за назвою. Станція нічого не втрачає сама: «Зберегти» у Підключеннях її не змінює, а ядро, якого немає в цьому терміналі, залишається на станції, доки ви не приберете його тут."

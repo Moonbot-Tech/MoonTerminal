@@ -249,6 +249,7 @@ telegram.server.groups_same: "Os grupos de núcleos na estação são os mesmos 
 telegram.server.groups_differ: "Grupos de núcleos na estação: %{station} · neste terminal: %{terminal}. O relatório por núcleo do bot usa os da estação."
 telegram.server.groups_send: "Enviar grupos para a estação"
 telegram.server.groups_pushed: "Grupos de núcleos enviados para a estação: %{n}."
+telegram.server.cores_unmapped: "Núcleos omitidos porque não foi possível corresponder a identidade de forma única: %{n}."
 telegram.server.groups_unsupported: "A estação ainda não conhece grupos de núcleos — atualize-a para dividir o relatório por núcleo em grupos."
 telegram.server.cores_count: "na estação %{station} · aqui %{here}"
 telegram.server.cores_sync_hint: "Um núcleo é identificado pelo endereço, não pelo nome. A estação nunca perde nada automaticamente: Salvar em Conexões não a altera, e um núcleo ausente deste terminal permanece na estação até você removê-lo aqui."
