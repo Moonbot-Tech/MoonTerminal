@@ -34,7 +34,7 @@
   "by_core": [
     {
       "key": "1001",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (01)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (01)",
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
@@ -45,7 +45,7 @@
     },
     {
       "key": "1002",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (02)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (02)",
       "section": "Binance Futures",
       "money": {
         "usdt": -10,
@@ -56,7 +56,7 @@
     },
     {
       "key": "1003",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (03)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (03)",
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
@@ -67,7 +67,7 @@
     },
     {
       "key": "1004",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (04)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (04)",
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
@@ -78,7 +78,7 @@
     },
     {
       "key": "1005",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (05)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (05)",
       "section": "Binance Futures",
       "money": {
         "usdt": 20,
@@ -89,7 +89,7 @@
     },
     {
       "key": "1006",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (06)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (06)",
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
@@ -100,7 +100,7 @@
     },
     {
       "key": "1007",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (07)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (07)",
       "section": "Binance Futures",
       "money": {
         "usdt": null,
@@ -111,7 +111,7 @@
     },
     {
       "key": "1008",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (08)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (08)",
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
@@ -122,7 +122,7 @@
     },
     {
       "key": "1009",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (09)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (09)",
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
@@ -133,7 +133,7 @@
     },
     {
       "key": "1010",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (10)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (10)",
       "section": "Binance Futures",
       "money": {
         "usdt": 20,
@@ -144,7 +144,7 @@
     },
     {
       "key": "1011",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (11)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (11)",
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
@@ -155,7 +155,7 @@
     },
     {
       "key": "1012",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (12)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (12)",
       "section": "Binance Futures",
       "money": {
         "usdt": -10,
@@ -166,7 +166,7 @@
     },
     {
       "key": "1013",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (13)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (13)",
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
@@ -177,7 +177,7 @@
     },
     {
       "key": "1014",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (14)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (14)",
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
@@ -188,7 +188,7 @@
     },
     {
       "key": "1015",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (15)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (15)",
       "section": "Binance Futures",
       "money": {
         "usdt": 20,
@@ -199,7 +199,7 @@
     },
     {
       "key": "1016",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (16)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (16)",
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
@@ -210,7 +210,7 @@
     },
     {
       "key": "1017",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (17)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (17)",
       "section": "Binance Futures",
       "money": {
         "usdt": -10,
@@ -221,7 +221,7 @@
     },
     {
       "key": "1018",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (18)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (18)",
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
@@ -232,7 +232,7 @@
     },
     {
       "key": "1019",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (19)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (19)",
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
@@ -243,7 +243,7 @@
     },
     {
       "key": "1020",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (20)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (20)",
       "section": "Binance Futures",
       "money": {
         "usdt": 20,
@@ -254,7 +254,7 @@
     },
     {
       "key": "1021",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (21)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (21)",
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
@@ -265,7 +265,7 @@
     },
     {
       "key": "1022",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (22)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (22)",
       "section": "Binance Futures",
       "money": {
         "usdt": -10,
@@ -276,7 +276,7 @@
     },
     {
       "key": "1023",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (23)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (23)",
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
@@ -287,7 +287,7 @@
     },
     {
       "key": "1024",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (24)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (24)",
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
@@ -298,7 +298,7 @@
     },
     {
       "key": "1025",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (25)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (25)",
       "section": "Binance Futures",
       "money": {
         "usdt": 20,
@@ -309,7 +309,7 @@
     },
     {
       "key": "1026",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (26)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (26)",
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
@@ -320,7 +320,7 @@
     },
     {
       "key": "1027",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (27)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (27)",
       "section": "Binance Futures",
       "money": {
         "usdt": -10,
@@ -331,7 +331,7 @@
     },
     {
       "key": "1028",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (28)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (28)",
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
@@ -342,7 +342,7 @@
     },
     {
       "key": "1029",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (29)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (29)",
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
@@ -353,7 +353,7 @@
     },
     {
       "key": "1030",
-      "name": "Demo Fund ~ F-BN / SUBACCOUNT (30)",
+      "name": "Demo Fund ~ EX-X / SUBACCOUNT (30)",
       "section": "Binance Futures",
       "money": {
         "usdt": 20,

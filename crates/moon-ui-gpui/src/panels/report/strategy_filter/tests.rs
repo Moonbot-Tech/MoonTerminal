@@ -35,7 +35,7 @@ fn strategy(core_uid: u64, strategy_id: i64, name: &str) -> ReportStrategy {
 fn every_exact_item_matches_its_core_name() {
     let groups = strategy_groups(
         &[strategy(42, -7, "BREAKOUT")],
-        &[(42, "Demo Fund ~ F-BN".to_string())],
+        &[(42, "Demo Fund ~ EX-X".to_string())],
         "All strategies",
         "Manual orders",
     );

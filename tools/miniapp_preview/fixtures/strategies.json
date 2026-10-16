@@ -3,7 +3,7 @@
   "cores": [
     {
       "core": 1001,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (01)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (01)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -55,7 +55,7 @@
     },
     {
       "core": 1002,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (02)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (02)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -107,7 +107,7 @@
     },
     {
       "core": 1003,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (03)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (03)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -159,7 +159,7 @@
     },
     {
       "core": 1004,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (04)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (04)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -211,7 +211,7 @@
     },
     {
       "core": 1005,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (05)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (05)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -263,7 +263,7 @@
     },
     {
       "core": 1006,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (06)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (06)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -315,7 +315,7 @@
     },
     {
       "core": 1007,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (07)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (07)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -367,7 +367,7 @@
     },
     {
       "core": 1008,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (08)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (08)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -419,7 +419,7 @@
     },
     {
       "core": 1009,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (09)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (09)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -471,7 +471,7 @@
     },
     {
       "core": 1010,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (10)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (10)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -523,7 +523,7 @@
     },
     {
       "core": 1011,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (11)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (11)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -575,7 +575,7 @@
     },
     {
       "core": 1012,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (12)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (12)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -627,7 +627,7 @@
     },
     {
       "core": 1013,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (13)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (13)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -679,7 +679,7 @@
     },
     {
       "core": 1014,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (14)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (14)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -731,7 +731,7 @@
     },
     {
       "core": 1015,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (15)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (15)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -783,7 +783,7 @@
     },
     {
       "core": 1016,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (16)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (16)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -835,7 +835,7 @@
     },
     {
       "core": 1018,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (18)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (18)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -887,7 +887,7 @@
     },
     {
       "core": 1019,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (19)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (19)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -939,7 +939,7 @@
     },
     {
       "core": 1020,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (20)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (20)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -991,7 +991,7 @@
     },
     {
       "core": 1021,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (21)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (21)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1043,7 +1043,7 @@
     },
     {
       "core": 1022,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (22)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (22)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1095,7 +1095,7 @@
     },
     {
       "core": 1024,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (24)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (24)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1147,7 +1147,7 @@
     },
     {
       "core": 1025,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (25)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (25)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1199,7 +1199,7 @@
     },
     {
       "core": 1026,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (26)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (26)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1251,7 +1251,7 @@
     },
     {
       "core": 1027,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (27)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (27)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1303,7 +1303,7 @@
     },
     {
       "core": 1028,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (28)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (28)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1355,7 +1355,7 @@
     },
     {
       "core": 1029,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (29)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (29)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1407,7 +1407,7 @@
     },
     {
       "core": 1030,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (30)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (30)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1459,7 +1459,7 @@
     },
     {
       "core": 1032,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (32)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (32)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1511,7 +1511,7 @@
     },
     {
       "core": 1033,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (33)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (33)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1563,7 +1563,7 @@
     },
     {
       "core": 1035,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (35)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (35)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1615,7 +1615,7 @@
     },
     {
       "core": 1036,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (36)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (36)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1667,7 +1667,7 @@
     },
     {
       "core": 1037,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (37)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (37)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1719,7 +1719,7 @@
     },
     {
       "core": 1038,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (38)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (38)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1771,7 +1771,7 @@
     },
     {
       "core": 1039,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (39)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (39)",
       "exchange": "Binance Futures",
       "folders": [
         {
@@ -1823,7 +1823,7 @@
     },
     {
       "core": 1040,
-      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (40)",
+      "core_name": "Demo Fund ~ EX-X / SUBACCOUNT (40)",
       "exchange": "Binance Futures",
       "folders": [
         {
