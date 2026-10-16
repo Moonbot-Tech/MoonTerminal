@@ -141,6 +141,17 @@ impl RecorderCatchup {
                 };
                 let complete = super::listings_complete(generation);
                 if !self.active && (complete || now.saturating_sub(since) >= 600_000) {
+                    if !complete {
+                        // This pass keeps all tape of every market; say which cores held it.
+                        let cores = super::unlisted(generation).map_or_else(
+                            || "core list not received yet".to_string(),
+                            |cores| format!("cores not listed: {cores:?}"),
+                        );
+                        super::super::line(&format!(
+                            "retention: listings incomplete after 10 min, nothing is deleted \
+                             this pass; {cores}"
+                        ));
+                    }
                     self.retention.hour = Some(now.div_euclid(HOUR_MS));
                     status = Some(TapePurge::Running { done: 0, total: 0 });
                     Phase::Inventory {

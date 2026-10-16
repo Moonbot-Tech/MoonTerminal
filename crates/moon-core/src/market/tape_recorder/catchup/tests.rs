@@ -309,6 +309,19 @@ fn two_reloads_during_one_listing_count_only_the_last() {
     take_purge_wanted();
 }
 
+/// A core whose platform is outside the exchange directory lists nothing; its listing must close
+/// the barrier at once, or every purge keeps all tape of every market forever.
+#[test]
+fn an_empty_listing_settles_the_barrier_at_once() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
+    let core = 9_000_011;
+    let generation = relist_gen();
+    assert!(!all_listed(&[core], generation));
+    listed_empty(core, generation);
+    assert!(all_listed(&[core], generation));
+    assert_eq!(listing_generation(core), Some(generation));
+}
+
 /// Synthetic closed positions share no production core or market identity.
 fn trade(id: i64, brand: Brand, kind: MarketKind, age_ms: i64) -> CatchupTrade {
     let close_ms = NOW - age_ms;

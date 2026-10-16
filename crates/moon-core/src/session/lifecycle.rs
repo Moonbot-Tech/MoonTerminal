@@ -796,7 +796,15 @@ impl SessionManager {
             }
         }
         if crate::market::tape_recorder::catchup::enabled() {
-            crate::market::tape_recorder::catchup::require_listings(self.config_order.clone());
+            // Every session, connected or not — but not a server switched off in the config: it
+            // has no session, could never list, and would hold the retention barrier forever.
+            // The cost, chosen by LinKvo on 2026-10-16: its trades are not known to retention,
+            // so tape under them goes by age alone — one straddling the edge loses its older
+            // part, and on a shared market it gets no shelter from another core's emulator or
+            // tuner-unusable subtraction.
+            crate::market::tape_recorder::catchup::require_listings(
+                self.sessions.iter().map(|sess| sess.id).collect(),
+            );
             let now = Instant::now();
             let generation = crate::market::tape_recorder::catchup::relist_gen();
             let cores: Vec<_> = self
@@ -831,9 +839,14 @@ impl SessionManager {
             return false;
         };
         // The catch-up fetches from a venue's public REST: a venue the directory does not know
-        // has no route, so its core is not listed — as before its address resolved at all.
+        // has no route, so its core is not listed. Its listing still counts as complete — it
+        // could protect nothing — or the retention barrier would wait on it forever.
         let Some(venue) = address.venue else {
-            return false;
+            crate::market::tape_recorder::catchup::listed_empty(
+                core,
+                crate::market::tape_recorder::catchup::relist_gen(),
+            );
+            return true;
         };
         let catalog_ready = self.market_source.tradable_coins(core).is_some();
         if !catalog_ready {
