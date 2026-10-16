@@ -529,16 +529,21 @@ fn mini_balance_figures_stay_masked_until_revealed() {
 
 /// The order row's entry-to-mark percent must be the desktop table's figure.
 ///
-/// Mutation: format `change_text` from `entry_text` in the page. Adaptive
-/// prices drop cents at 1000, so the percent on the row would disagree with
-/// the orders table for the same order.
+/// Mutation: bypass `order_at_mark` in `order_dto`, replace `order_pnl_pct` in
+/// the helper, or stop formatting `change_text` with `fmt::signed_pct`. The row
+/// would lose the desktop table's percent arithmetic or signed formatting.
 #[test]
 fn mini_order_change_percent_matches_the_desktop_table() {
     let source = read_tg_src("mini_app/dto.rs");
     let body = braced_body(&source, "fn order_dto(");
     assert!(
-        body.contains("order_pnl_pct(") && body.contains("fmt::signed_pct("),
-        "Mini App change percent must use order_pnl_pct and signed_pct"
+        body.contains("order_at_mark(") && body.contains("fmt::signed_pct("),
+        "Mini App change percent must use order_at_mark and signed_pct"
+    );
+    let at_mark = braced_body(&source, "fn order_at_mark(");
+    assert!(
+        at_mark.contains("order_pnl_pct("),
+        "the shared mark helper must use the desktop table's order_pnl_pct"
     );
     assert!(
         body.contains("change_text:"),

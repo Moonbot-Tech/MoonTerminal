@@ -854,11 +854,18 @@ fn read_mini_report_on(
 pub(crate) const MINI_TRADES_LIMIT: usize = 50;
 
 /// One closed Mini App trade, with UTC dates and the Report-gated entry-volume inputs.
+#[derive(Clone)]
 pub(crate) struct MiniTrade {
     /// Core that made the trade.
     pub core_uid: u64,
     /// Report row id.
     pub rec_id: i64,
+    /// Recorder identity, distinct from the displayed report id.
+    pub new_rec_id: i64,
+    /// Identity of the archived order traces.
+    pub report_uid: Option<i64>,
+    /// Core-supplied exit reason, absent on older rows.
+    pub sell_reason: Option<String>,
     pub coin: String,
     /// Configured name of the core, or the name stored on the row for a core no longer configured.
     pub core_name: String,
@@ -938,6 +945,101 @@ fn read_mini_trades_on(
         ..Default::default()
     };
     let table = db::query_mini_trades(&snap, &filter, limit + 25)?;
+    Ok(mini_trade_rows(table, &filter, limit))
+}
+
+/// Identity of one closed Mini App trade as its list row carries it.
+///
+/// A typed-replica row whose displayed `id` is `0` or absent (the station's replica) is still
+/// named by the recorder's `newrecid`, so a row the list shows can always be charted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TradeKey {
+    /// Displayed report id; `0` when the row has none.
+    pub rec_id: i64,
+    /// Recorder `newrecid`; `0` when unknown.
+    pub new_rec_id: i64,
+}
+
+impl TradeKey {
+    /// Whether the key names anything: a positive displayed id or a positive recorder id.
+    pub(crate) fn is_valid(&self) -> bool {
+        self.rec_id > 0 || self.new_rec_id > 0
+    }
+
+    /// Whether `trade` is the row this key names. The displayed id wins when the key has one.
+    ///
+    /// Args:
+    ///     trade: A trade of the same core.
+    ///
+    /// Returns:
+    ///     `true` on an exact match of the identity the key carries.
+    pub(crate) fn matches(&self, trade: &MiniTrade) -> bool {
+        if self.rec_id > 0 {
+            trade.rec_id == self.rec_id
+        } else {
+            self.new_rec_id > 0 && trade.new_rec_id == self.new_rec_id
+        }
+    }
+}
+
+/// Read one authorized trade, or the newest closed row matching a previously observed order.
+pub(crate) fn read_mini_chart_trade(
+    zone: Tz,
+    names: db::CoreNames,
+    core: u64,
+    identity: Result<TradeKey, (String, i64)>,
+) -> db::ReadResult<Option<MiniTrade>> {
+    let conn = db::open_reader()?;
+    read_mini_chart_trade_on(&conn, zone, names, core, identity)
+}
+
+/// Read chart identity on an existing connection, allowing transport-free regression fixtures.
+pub(crate) fn read_mini_chart_trade_on(
+    conn: &rusqlite::Connection,
+    zone: Tz,
+    names: db::CoreNames,
+    core: u64,
+    identity: Result<TradeKey, (String, i64)>,
+) -> db::ReadResult<Option<MiniTrade>> {
+    if identity.as_ref().is_ok_and(|key| !key.is_valid()) {
+        return Ok(None);
+    }
+    // A cancelled resting entry has no execution stamp to match against closed history.
+    if identity.as_ref().is_err_and(|(_, entry_ms)| *entry_ms <= 0) {
+        return Ok(None);
+    }
+    let snap = db::read_snapshot(conn)?;
+    let mut filter = ReportFilter {
+        core_uids: vec![core],
+        emulator: Some(false),
+        rows: RowScope::Closed,
+        axis: db::ReportAxis::load(&snap, zone)?,
+        core_names: names,
+        ..Default::default()
+    };
+    let (table, entry) = match identity {
+        Ok(key) if key.rec_id > 0 => (filter.mini_trade_table(&snap, key.rec_id)?, None),
+        Ok(key) => (
+            filter.mini_trade_table_by_recorder(&snap, key.new_rec_id)?,
+            None,
+        ),
+        Err((coin, entry_ms)) => {
+            filter.exact_coins = Some(vec![coin]);
+            (db::query_mini_trades(&snap, &filter, 1)?, Some(entry_ms))
+        }
+    };
+    Ok(mini_trade_rows(table, &filter, 1).pop().filter(|trade| {
+        entry.is_none_or(|entry| {
+            trade.close_utc.saturating_mul(1000) >= entry
+                && trade
+                    .buy_utc
+                    .is_some_and(|buy| buy.saturating_mul(1000).abs_diff(entry) <= 1000)
+        })
+    }))
+}
+
+/// Decode shared Mini App columns without mixing display and recorder identities.
+fn mini_trade_rows(table: db::ReportTable, filter: &ReportFilter, limit: usize) -> Vec<MiniTrade> {
     let index = |name: &str| table.cols.iter().position(|col| col == name);
     let (coin, core_name, is_short, quantity) = (
         index("coin"),
@@ -974,6 +1076,13 @@ fn read_mini_trades_on(
         trades.push(MiniTrade {
             core_uid,
             rec_id: cell(rec_id).and_then(value_i64).unwrap_or_default(),
+            new_rec_id: cell(index("newrecid"))
+                .and_then(value_i64)
+                .unwrap_or_default(),
+            report_uid: cell(index("reportuid")).and_then(value_i64),
+            sell_reason: cell(index("sellreason"))
+                .map(value_text)
+                .filter(|s| !s.is_empty()),
             coin: cell(coin).map(value_text).unwrap_or_default(),
             core_name: cell(core_name).map(value_text).unwrap_or_default(),
             is_short: cell(is_short).and_then(value_i64).is_some_and(|v| v != 0),
@@ -995,7 +1104,7 @@ fn read_mini_trades_on(
     }
     trades.sort_by_key(|trade| std::cmp::Reverse(trade.close_utc));
     trades.truncate(limit);
-    Ok(trades)
+    trades
 }
 
 /// Closed rows fetched per core on one notification page.

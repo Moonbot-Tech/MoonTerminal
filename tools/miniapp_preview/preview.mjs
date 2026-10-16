@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { CHART_ORDER, CHART_TRADE, TRADE_TICK_COUNT, liveFeed, tradeTicks } from "./tick_fixtures.mjs";
 
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -123,6 +124,19 @@ async function openPage(browser, html, viewport, theme, api, log) {
         if (msg.type() === "error") log.errors.push(msg.text());
     });
     await page.addInitScript((scheme) => {
+        // Retain the latest canvas frame for label-bound and axis-tag overlap assertions.
+        const proto = CanvasRenderingContext2D.prototype;
+        const clear = proto.clearRect;
+        const text = proto.fillText;
+        proto.clearRect = function (...args) {
+            this.canvas.previewFrame = { texts: [] };
+            return clear.apply(this, args);
+        };
+        proto.fillText = function (label, x, y, ...args) {
+            const frame = this.canvas.previewFrame;
+            if (frame) frame.texts.push({ label: String(label), x, y, width: this.measureText(label).width, align: this.textAlign });
+            return text.call(this, label, x, y, ...args);
+        };
         const noop = () => {};
         window.Telegram = {
             WebApp: {
@@ -154,6 +168,7 @@ async function openPage(browser, html, viewport, theme, api, log) {
         const handler = api[url.pathname];
         if (!handler) return route.fulfill({ status: 404, body: "" });
         const reply = typeof handler === "function" ? handler(raw) : { body: handler };
+        if (reply.delay) await new Promise((done) => setTimeout(done, reply.delay));
         return route.fulfill({
             status: reply.status || 200,
             body: JSON.stringify(reply.body ?? {}),
@@ -180,6 +195,9 @@ function defaultApi() {
         "/api/strategies": fixture("strategies"),
         "/api/strategy/toggle": OK,
         "/api/order/cancel": OK,
+        "/api/panic": OK,
+        "/api/trade/ticks": () => ({ body: tradeTicks("ok") }),
+        "/api/order/ticks": liveFeed(),
         "/api/notify": () => ({ body: notifySaved || fixture("notify") }),
         "/api/notify/save": (raw) => {
             let posted = {};
@@ -379,8 +397,257 @@ async function assertSettingsTradesOn(page) {
     await assertSettingsFit(page);
 }
 
+// Tick charts: one synthetic closed trade and one synthetic open position, phone width only.
+const CHART_VIEWPORTS = [{ width: 390, height: 844 }];
+const CHART_TRADES = { "/api/trades": { trades: [CHART_TRADE], limit: 50 } };
+const chartOrders = (feed) => ({
+    "/api/orders": { orders: [CHART_ORDER], can_control: true },
+    "/api/order/ticks": feed,
+});
+const openChartTrade = async (p) => {
+    await openTrade(p, 0);
+    await p.waitForSelector("#sheet .chart-area");
+};
+const openChartOrder = async (p) => {
+    await nav(p, "deals"); await p.click('[data-seg="orders"]'); await openFirstGroup(p, "orders");
+    await p.click('section[data-tab="orders"] .order-row .order-main');
+    await p.waitForSelector("#sheet .chart-area");
+};
+const chartDrawn = (p) => p.waitForSelector("#sheet .chart-wrap[data-ticks]");
+const chartBox = async (p, title) => {
+    await p.waitForSelector("#sheet .chart-state-title");
+    const text = await p.locator("#sheet .chart-state-title").innerText();
+    if (text !== title) throw new Error(`chart state must read ${JSON.stringify(title)}, got ${JSON.stringify(text)}`);
+};
+// The chart's own drawn boxes: time labels and axis tags never intersect, nor leave the canvas.
+const axisOverlaps = (p) => p.evaluate(() => {
+    const cv = document.querySelector("#sheet canvas");
+    const box = cv.getBoundingClientRect();
+    const drawn = cv.drawnBoxes;
+    const errors = [];
+    if (!drawn) return ["chart exposes no drawn boxes"];
+    if (drawn.times.length < 2) errors.push(`expected >= 2 time labels, got ${drawn.times.length}`);
+    if (drawn.tags.length < 2) errors.push(`expected >= 2 axis tags, got ${drawn.tags.length}`);
+    const hit = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    for (const [kind, list] of [["time labels", drawn.times], ["axis tags", drawn.tags]]) {
+        for (let i = 0; i < list.length; i++) {
+            const a = list[i];
+            if (a.x < -0.1 || a.y < -0.1 || a.x + a.w > box.width + 0.1 || a.y + a.h > box.height + 0.1) errors.push(`${kind} ${i} leaves the canvas`);
+            for (let j = i + 1; j < list.length; j++) if (hit(a, list[j])) errors.push(`${kind} ${i} and ${j} overlap`);
+        }
+    }
+    return errors;
+}).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+// The live chart's default vertical window: 10 % of the reference price, widened only as far as
+// an order line or a print in view needs, and every order line inside it.
+const LIVE_SHARE = 0.10;
+const liveScaleProblems = (p, ref, lines) => p.evaluate(({ ref, lines, share }) => {
+    const wrap = document.querySelector("#sheet .chart-wrap");
+    const lo = +wrap.getAttribute("data-lo");
+    const hi = +wrap.getAttribute("data-hi");
+    const errors = [];
+    if (!(hi > lo)) return [`no price window: ${lo}..${hi}`];
+    const width = hi - lo;
+    const need = Math.max(share * ref, (Math.max(ref, ...lines) - Math.min(ref, ...lines)) * 1.12);
+    if (width < share * ref * 0.999) errors.push(`window ${width} is narrower than ${share * 100}% of ${ref}`);
+    if (width > need * 1.2) errors.push(`window ${width} is wider than the ${need} it needs`);
+    for (const price of [ref, ...lines]) if (price < lo || price > hi) errors.push(`${price} is outside ${lo}..${hi}`);
+    return errors;
+}, { ref, lines, share: LIVE_SHARE }).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+// A far take profit, 30 % above the price: the window must widen to hold it.
+const FAR_TAKE = 3.15;
+const farTakeFeed = (opts) => {
+    const feed = liveFeed(opts);
+    return (raw) => {
+        const reply = feed(raw);
+        reply.body.levels = reply.body.levels.map((level) => level.kind === "take" ? { ...level, price: FAR_TAKE } : level);
+        return reply;
+    };
+};
+// A very long synthetic core name: shown whole from its start, on as many lines as it needs.
+const LONG_CORE = "FUND_ALPHA ~ EX-XX / SUBACCOUNT UNIT_01 LONG NAME";
+const LONG_TRADES = { "/api/trades": { trades: [{ ...CHART_TRADE, core_name: LONG_CORE }, CHART_TRADE], limit: 50 } };
+const longOrders = (feed) => ({
+    "/api/orders": { orders: [{ ...CHART_ORDER, core_name: LONG_CORE }], can_control: true },
+    "/api/order/ticks": feed,
+});
+// Every node naming the long core shows all of it inside the viewport, never an ellipsis.
+const fullNameProblems = (p, selector) => p.evaluate(({ selector, name }) => {
+    const errors = [];
+    const nodes = [...document.querySelectorAll(selector)].filter((node) => node.textContent.includes("FUND_ALPHA"));
+    if (!nodes.length) return [`no ${selector} carries the long core name`];
+    for (const node of nodes) {
+        const text = node.textContent.replace(/\s+/g, " ");
+        if (!text.includes(name)) errors.push(`${selector} cut the name: ${JSON.stringify(text)}`);
+        if (text.includes("…")) errors.push(`${selector} ellipsizes: ${JSON.stringify(text)}`);
+        const box = node.getBoundingClientRect();
+        if (box.right > window.innerWidth + 0.5 || node.scrollWidth > node.clientWidth + 1) errors.push(`${selector} overflows`);
+        if (node.scrollHeight > node.clientHeight + 1) errors.push(`${selector} clips its lines`);
+        for (const part of node.querySelectorAll(".name-part")) {
+            if (part.getBoundingClientRect().right > box.right + 0.5) errors.push(`${selector} part leaves its line`);
+        }
+    }
+    return errors;
+}, { selector, name: LONG_CORE }).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+// The first line keeps coin, chart glyph and side badge together, the glyph right after the coin.
+const glyphProblems = (p, rowSel) => p.evaluate((rowSel) => {
+    const errors = [];
+    for (const row of document.querySelectorAll(rowSel)) {
+        const coin = row.querySelector(".order-top .order-coin").getBoundingClientRect();
+        const glyph = row.querySelector(".order-top .chart-glyph").getBoundingClientRect();
+        const badge = row.querySelector(".order-top .order-side").getBoundingClientRect();
+        if (glyph.left - coin.right > 10) errors.push(`glyph floats ${Math.round(glyph.left - coin.right)}px from the coin`);
+        if (badge.left - glyph.right > 10) errors.push(`badge floats ${Math.round(badge.left - glyph.right)}px from the glyph`);
+    }
+    return errors;
+}, rowSel).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+const refOf = (p) => p.evaluate(() => +document.querySelector("#sheet .chart-wrap").getAttribute("data-ref"));
+const CHART_SCREENS = [
+    { name: "chart-trade-ok", api: CHART_TRADES, run: async (p, t) => {
+        await openChartTrade(p); await chartDrawn(p); await settle(p);
+        const held = await p.getAttribute("#sheet .chart-wrap", "data-ticks");
+        if (+held !== TRADE_TICK_COUNT) throw new Error(`trade chart must hold all ${TRADE_TICK_COUNT} prints, holds ${held}`);
+        const note = await p.locator("#sheet .chart-provenance").innerText();
+        if (!note.includes(t.mini_chart_source_recorder) || !note.includes(t.mini_chart_dot_size)) {
+            throw new Error(`trade chart provenance must name the source and dot size: ${note}`);
+        }
+        if (!(await p.locator("#sheet").innerText()).includes("Sell Price")) throw new Error("exit reason must be shown");
+        await axisOverlaps(p);
+    } },
+    // A station replica row has no displayed id: the route's own rule (one positive identity,
+    // neither negative) must accept what the page sends for it, or the chart never loads.
+    { name: "chart-trade-station-row", api: {
+        "/api/trades": { trades: [{ ...CHART_TRADE, rec_id: 0 }], limit: 50 },
+        "/api/trade/ticks": (raw) => {
+            // The body shape web/tests.rs posts to the real route
+            // (station_trade_row_without_display_id_reaches_the_owner), which answers 200.
+            const STATION_BODY = `{"core":${CHART_TRADE.core},"rec_id":0,"new_rec_id":${CHART_TRADE.new_rec_id},"range":"deal"}`;
+            const ok = raw === STATION_BODY;
+            return ok ? { body: tradeTicks("ok") } : { status: 400, body: { error: "json" } };
+        },
+    }, run: async (p) => {
+        await openChartTrade(p); await chartDrawn(p);
+    } },
+    { name: "chart-trade-loading", api: { ...CHART_TRADES, "/api/trade/ticks": () => ({ body: tradeTicks("loading") }) }, run: async (p) => {
+        await openChartTrade(p); await settle(p);
+        if (!await p.$("#sheet .chart-loading")) throw new Error("a loading tape must show the skeleton");
+    } },
+    { name: "chart-trade-no-tape", api: { ...CHART_TRADES, "/api/trade/ticks": () => ({ body: tradeTicks("no_tape") }) }, run: async (p, t) => {
+        await openChartTrade(p); await chartBox(p, t.mini_chart_no_tape);
+    } },
+    { name: "chart-trade-archive", api: { ...CHART_TRADES, "/api/trade/ticks": () => ({ body: tradeTicks("archive_pending") }) }, run: async (p, t) => {
+        await openChartTrade(p); await chartBox(p, t.mini_chart_archive);
+    } },
+    { name: "chart-trade-catchup", api: { ...CHART_TRADES, "/api/trade/ticks": () => ({ body: tradeTicks("catching_up") }) }, run: async (p, t) => {
+        await openChartTrade(p); await chartBox(p, t.mini_chart_catchup);
+        if (await p.$("#sheet .chart-retry")) throw new Error("a catching-up tape retries on its own, without a retry button");
+    } },
+    { name: "chart-live-waiting", api: () => chartOrders(liveFeed({ mode: "quiet" })), run: async (p, t) => {
+        await openChartOrder(p); await chartBox(p, t.mini_chart_live_no_tape);
+        // Before the first print: the price axis at the default window and the order's lines,
+        // the waiting note over them, never an empty box.
+        if (!await p.$("#sheet .chart-wrap canvas")) throw new Error("a feed with no print yet must still draw the axis and the order's lines");
+        if (!await p.$("#sheet .chart-wrap .chart-waiting")) throw new Error("the waiting note must sit over the chart");
+        await liveScaleProblems(p, 2.4185, [2.439, 2.4185, 2.392]);
+        await axisOverlaps(p);
+    } },
+    { name: "chart-live-waiting-far-take", api: () => chartOrders(farTakeFeed({ mode: "quiet" })), run: async (p, t) => {
+        await openChartOrder(p); await chartBox(p, t.mini_chart_live_no_tape);
+        await liveScaleProblems(p, 2.4185, [FAR_TAKE, 2.4185, 2.392]);
+    } },
+    { name: "chart-live-scale", api: () => chartOrders(liveFeed()), run: async (p) => {
+        await openChartOrder(p); await chartDrawn(p); await settle(p);
+        if (await p.$("#sheet .chart-waiting")) throw new Error("the waiting note must go with the first print");
+        await liveScaleProblems(p, await refOf(p), [2.439, 2.4185, 2.392]);
+    } },
+    { name: "chart-live-far-take", api: () => chartOrders(farTakeFeed()), run: async (p) => {
+        await openChartOrder(p); await chartDrawn(p); await settle(p);
+        await liveScaleProblems(p, await refOf(p), [FAR_TAKE, 2.4185, 2.392]);
+    } },
+    { name: "trades-long-core-name", api: LONG_TRADES, run: async (p) => {
+        await nav(p, "deals"); await p.click('[data-seg="trades"]');
+        const head = await p.$('section[data-tab="trades"] .group-head');
+        if (head) { await head.click(); await settle(p); }
+        await p.waitForSelector('section[data-tab="trades"] .trade-row');
+        await fullNameProblems(p, ".trade-row-meta");
+        await glyphProblems(p, ".trade-row");
+    } },
+    { name: "trade-sheet-long-core-name", api: LONG_TRADES, run: async (p) => {
+        await openChartTrade(p); await settle(p);
+        await fullNameProblems(p, "#sheet .trade-meta");
+    } },
+    { name: "orders-long-core-name", api: () => longOrders(liveFeed()), run: async (p) => {
+        await nav(p, "deals"); await p.click('[data-seg="orders"]'); await openFirstGroup(p, "orders");
+        await fullNameProblems(p, 'section[data-tab="orders"] .group-head .core-name');
+        await glyphProblems(p, 'section[data-tab="orders"] .order-row');
+    } },
+    { name: "order-sheet-long-core-name", api: () => longOrders(liveFeed()), run: async (p) => {
+        await openChartOrder(p); await chartDrawn(p); await settle(p);
+        await fullNameProblems(p, "#sheet .trade-meta");
+    } },
+    { name: "chart-trade-error", api: { ...CHART_TRADES, "/api/trade/ticks": () => ({ status: 500, body: {} }) }, run: async (p, t) => {
+        await openChartTrade(p); await chartBox(p, t.mini_chart_error);
+        if (!await p.$("#sheet .chart-retry")) throw new Error("a failed tape must offer retry");
+    } },
+    { name: "chart-live-live", api: () => chartOrders(liveFeed()), run: async (p, t) => {
+        await openChartOrder(p); await chartDrawn(p); await p.waitForTimeout(1200);
+        const tag = await p.locator("#sheet .live-tag").innerText();
+        if (!tag.includes(t.mini_chart_live)) throw new Error(`live tag must read live, got ${tag}`);
+        if (await p.locator("#sheet .chart-actions .cmd").count() !== 2) throw new Error("live sheet must carry the order's two actions");
+        await axisOverlaps(p);
+    } },
+    { name: "chart-live-stale", api: () => chartOrders(liveFeed({ mode: "stale" })), run: async (p) => {
+        await openChartOrder(p); await chartDrawn(p); await p.waitForTimeout(800);
+        if (!await p.$("#sheet .live-tag.stale")) throw new Error("a stale feed must mark the live tag stale");
+    } },
+    { name: "chart-live-small-price", api: () => {
+        const feed = liveFeed();
+        return chartOrders((raw) => {
+            const reply = feed(raw);
+            const d = reply.body;
+            d.ticks = d.ticks.map((t) => [t[0], t[1] * 0.000000003, t[2], t[3]]);
+            d.entry_price *= 0.000000003;
+            d.mark_price = d.entry_price;
+            d.levels = d.levels.map((level) => ({ ...level, price: level.price * 0.000000003 }));
+            d.price_decimals = 13;
+            return reply;
+        });
+    }, run: async (p) => {
+        await openChartOrder(p); await chartDrawn(p); await settle(p);
+        const problems = await p.evaluate(() => {
+            const cv = document.querySelector("#sheet canvas");
+            const W = cv.getBoundingClientRect().width;
+            const frame = cv.previewFrame;
+            const errors = [];
+            for (const text of frame.texts) {
+                const left = text.align === "center" ? text.x - text.width / 2 : text.x;
+                if (left < -0.1 || left + text.width > W + 0.1) errors.push(`clipped ${text.label}`);
+            }
+            if (!frame.texts.some((t) => /^0\.00000000[1-9]/.test(t.label))) errors.push("small price precision lost");
+            return errors;
+        });
+        if (problems.length) throw new Error(problems.join(", "));
+        await axisOverlaps(p);
+    } },
+    { name: "chart-live-closing", api: () => chartOrders(liveFeed({ mode: "closing" })), run: async (p, t) => {
+        await openChartOrder(p); await chartDrawn(p); await settle(p);
+        const banner = await p.locator("#sheet .chart-banner").innerText();
+        if (banner !== t.mini_chart_closing) throw new Error(`closing banner reads ${JSON.stringify(banner)}`);
+    } },
+    { name: "chart-live-closed", api: () => chartOrders(liveFeed({ closeAfter: 2 })), run: async (p, t) => {
+        await openChartOrder(p); await chartDrawn(p);
+        // Closed: the banner shows and the order's actions are gone.
+        await p.waitForFunction(() => !!document.querySelector("#sheet .chart-banner:not([hidden])")
+            && !document.querySelector("#sheet .chart-actions .cmd"), null, { timeout: 8000 });
+        const text = await p.locator("#sheet").innerText();
+        if (!text.includes(t.mini_trade_exit) || !text.includes("2.4390")) throw new Error("closed sheet must show the trade's exit");
+        if ((await p.locator("#sheet .chart-provenance").innerText()) !== t.mini_chart_frozen) throw new Error("closed chart must say frozen");
+    } },
+].map((screen) => ({ ...screen, viewports: CHART_VIEWPORTS }));
+
 // Each screen starts from a fresh page; `api` overrides replace fixture routes.
 const SCREENS = [
+    ...CHART_SCREENS,
     { name: "settings-root", run: async (p) => {
         await nav(p, "settings");
         if (await p.locator("[data-settings-category]").count() !== 1
@@ -592,13 +859,14 @@ async function shoot(browser, html, opts, texts) {
     const log = { errors: [], sent: [] };
     for (const screen of SCREENS) {
         if (opts.only && screen.name !== opts.only) continue;
-        for (const viewport of VIEWPORTS) for (const theme of THEMES) {
-            const api = Object.assign(defaultApi(), screen.api || {});
+        for (const viewport of screen.viewports || VIEWPORTS) for (const theme of THEMES) {
+            // A function builds fresh routes per page, so a stateful feed starts over each time.
+            const api = Object.assign(defaultApi(), (typeof screen.api === "function" ? screen.api() : screen.api) || {});
             const { page, context } = await openPage(browser, html, viewport, theme, api, log);
             await page.waitForSelector(screen.ready || "#app-nav:not([hidden])");
             await settle(page);
             await assertNav(page);
-            await screen.run(page);
+            await screen.run(page, texts);
             await volumeChecks(page, screen.name, texts);
             const file = path.join(opts.out, `${screen.name}-${viewport.width}x${viewport.height}-${theme}.png`);
             await page.screenshot({ path: file });
@@ -716,6 +984,245 @@ async function interactions(browser, html, texts) {
     return failures;
 }
 
+// Tick-chart behaviour: what the sheets request, when they stop, and how the view moves.
+async function chartInteractions(browser, html, texts) {
+    const failures = [];
+    const expect = (cond, what) => { if (!cond) failures.push(what); };
+    const log = { errors: [], sent: [] };
+    const count = (route) => log.sent.filter((s) => s.path === route).length;
+    const viewport = CHART_VIEWPORTS[0];
+    const span = async (page) => +(await page.getAttribute("#sheet .chart-wrap", "data-span"));
+    const follows = async (page) => (await page.getAttribute("#sheet .chart-wrap", "data-follow")) === "1";
+    const visibility = (page, state) => page.evaluate((value) => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
+        document.dispatchEvent(new Event("visibilitychange"));
+    }, state);
+    const fresh = async (api) => {
+        const opened = await openPage(browser, html, viewport, "light", Object.assign(defaultApi(), api), log);
+        await opened.page.waitForSelector("#app-nav:not([hidden])");
+        return opened;
+    };
+
+    // Range chips move the view over the one fetched tape; they never refetch.
+    let { page, context } = await fresh(CHART_TRADES);
+    await openChartTrade(page); await chartDrawn(page);
+    const dealSpan = await span(page);
+    await page.click('#sheet [data-range="30"]'); await settle(page);
+    const shortSpan = await span(page);
+    await page.click('#sheet [data-range="300"]'); await settle(page);
+    expect(count("/api/trade/ticks") === 1, `range chips refetched: ${count("/api/trade/ticks")} trade tick reads`);
+    expect(shortSpan === 60000 && await span(page) === 600000 && dealSpan !== shortSpan,
+        `range chips must set the window: deal ${dealSpan}, 30 s ${shortSpan}, 300 s ${await span(page)}`);
+    expect((await page.getAttribute('#sheet [data-range="300"]', "aria-pressed")) === "true", "the picked range chip must be pressed");
+    const sent = log.sent.find((s) => s.path === "/api/trade/ticks");
+    expect(sent && sent.raw === `{"core":${CHART_TRADE.core},"rec_id":${CHART_TRADE.rec_id},"new_rec_id":${CHART_TRADE.new_rec_id},"range":"deal"}`,
+        `trade tick body ${sent && sent.raw}`);
+
+    // Tap draws the crosshair; drag pans; the wheel zooms.
+    const canvas = await page.locator("#sheet .chart-canvas").boundingBox();
+    await page.mouse.click(canvas.x + canvas.width * 0.4, canvas.y + canvas.height * 0.4); await settle(page);
+    expect(await page.locator("#sheet .chart-tip").isVisible(), "a tap must show the crosshair readout");
+    const before = await span(page);
+    await page.mouse.move(canvas.x + canvas.width * 0.5, canvas.y + 100);
+    await page.mouse.wheel(0, -300); await settle(page);
+    expect(await span(page) < before, `wheel up must zoom in: ${before} -> ${await span(page)}`);
+    await context.close();
+
+    // A failed read offers retry, and retry reads again.
+    let failOnce = true;
+    ({ page, context } = await fresh({ ...CHART_TRADES, "/api/trade/ticks": () => {
+        if (failOnce) { failOnce = false; return { status: 500, body: {} }; }
+        return { body: tradeTicks("ok") };
+    } }));
+    const reads = count("/api/trade/ticks");
+    await openChartTrade(page); await page.waitForSelector("#sheet .chart-retry");
+    await page.click("#sheet .chart-retry"); await chartDrawn(page);
+    expect(count("/api/trade/ticks") - reads === 2, "retry must read the tape again");
+    await context.close();
+
+    // Inclusive cursor keeps distinct same-ms prints and replaces the ring across a truncated gap.
+    let phase = 0;
+    const clock = Date.now() - 2000;
+    const seed = [[clock, 2.4, 1, 1], [clock, 2.41, 2, 0], [clock + 1, 2.42, 3, 1]];
+    const baseFeed = liveFeed();
+    ({ page, context } = await fresh(chartOrders(() => {
+        const reply = baseFeed("{}");
+        reply.body.ticks = phase === 0 ? seed : phase === 1
+            ? [seed[2], [clock + 1, 2.43, 4, 0]] : [[clock + 1000, 2.44, 5, 1]];
+        reply.body.truncated = phase === 2;
+        return reply;
+    })));
+    await openChartOrder(page); await chartDrawn(page);
+    expect(+(await page.getAttribute("#sheet .chart-wrap", "data-ticks")) === 3, "first response dropped same-ms prints");
+    phase = 1; await page.waitForTimeout(700);
+    expect(+(await page.getAttribute("#sheet .chart-wrap", "data-ticks")) === 4, "inclusive merge lost a distinct print or repeated a duplicate");
+    phase = 2; await page.waitForTimeout(700);
+    expect(+(await page.getAttribute("#sheet .chart-wrap", "data-ticks")) === 1, "truncated delta appended across a hole");
+    await context.close();
+
+    // Tick endpoints leave busy retries to the sheet cadence: none inside runJob, three on the
+    // sheet's own 3 s cadence, and only then the error box.
+    for (const status of [503, 504]) {
+        ({ page, context } = await fresh({ ...CHART_TRADES, "/api/trade/ticks": () => ({ status, body: {} }) }));
+        const busyReads = count("/api/trade/ticks");
+        await openChartTrade(page); await page.waitForTimeout(1100);
+        expect(count("/api/trade/ticks") - busyReads === 1, `trade ${status} retried inside runJob`);
+        expect(!await page.$("#sheet .chart-retry"), `trade ${status} must not show the error box on the first busy answer`);
+        await page.waitForSelector("#sheet .chart-retry", { timeout: 15000 });
+        expect(count("/api/trade/ticks") - busyReads === 4, `trade ${status} must be asked 4 times before the error: ${count("/api/trade/ticks") - busyReads}`);
+        await context.close();
+        ({ page, context } = await fresh(chartOrders(() => ({ status, body: {} }))));
+        const liveBusyReads = count("/api/order/ticks");
+        await openChartOrder(page); await page.waitForTimeout(1100);
+        expect(count("/api/order/ticks") - liveBusyReads === 1, `live ${status} retried inside runJob`);
+        await page.waitForSelector("#sheet .chart-retry", { timeout: 15000 });
+        expect(count("/api/order/ticks") - liveBusyReads === 4, `live ${status} must be asked 4 times before the error`);
+        await context.close();
+    }
+
+    // A tape still queued past the load budget turns into «catching up», never the error box.
+    ({ page, context } = await fresh({ ...CHART_TRADES, "/api/trade/ticks": () => ({ body: { ...tradeTicks("loading"), retry_in_ms: 20 } }) }));
+    await openChartTrade(page);
+    await chartBox(page, texts.mini_chart_catchup);
+    expect(!await page.$("#sheet .chart-retry"), "an endless loading tape must not end in the error box");
+    await context.close();
+
+    // Hit areas: a row tap opens the sheet and sends no command; a button press or a tap in the
+    // action line's dead space never opens the sheet; buttons keep 12 px of dead space around.
+    ({ page, context } = await fresh(chartOrders(liveFeed())));
+    await nav(page, "deals"); await page.click('[data-seg="orders"]'); await openFirstGroup(page, "orders");
+    const rowSel = 'section[data-tab="orders"] .order-row';
+    const gaps = await page.evaluate((sel) => {
+        const row = document.querySelector(sel);
+        const line = row.querySelector(".order-actions");
+        const r = row.getBoundingClientRect();
+        const l = line.getBoundingClientRect();
+        const b = Array.from(line.querySelectorAll(".cmd")).map((n) => n.getBoundingClientRect());
+        return {
+            above: Math.min(...b.map((x) => x.top)) - l.top,
+            below: r.bottom - Math.max(...b.map((x) => x.bottom)),
+            between: b.length === 2 ? b[1].left - b[0].right : 99,
+            // The action line must own the row's whole width, so no row edge borders a button.
+            right: r.right - l.right <= 0.5 && l.right - Math.max(...b.map((x) => x.right)) >= 12 ? 99 : 0,
+            left: l.left - r.left <= 0.5 ? 99 : 0,
+            glyph: !!row.querySelector(".order-top .chart-glyph"),
+            hint: !!row.querySelector(".chart-hint"),
+        };
+    }, rowSel);
+    expect(gaps.above >= 12 && gaps.below >= 12 && gaps.between >= 12 && gaps.right >= 12 && gaps.left >= 12,`buttons need 12 px of dead space: ${JSON.stringify(gaps)}`);
+    expect(gaps.glyph && !gaps.hint, `order rows carry the glyph and no text link: ${JSON.stringify(gaps)}`);
+    const sheetOpen = () => page.evaluate(() => !!document.querySelector("#sheet .chart-area"));
+    const commands = () => log.sent.filter((s) => s.path === "/api/panic" || s.path === "/api/order/cancel").length;
+    // The preview's confirm says yes, so the press is a sent command and no sheet.
+    const pressBefore = commands();
+    await page.click(`${rowSel} .order-actions .cmd-danger`); await page.waitForTimeout(500);
+    expect(commands() === pressBefore + 1, "a Panic Sell press must send exactly its own command");
+    expect(!await sheetOpen(), "a Panic Sell press must not open the chart sheet");
+    await page.waitForSelector(`${rowSel} .order-actions .cmd:not([disabled])`);
+    const sentBefore = commands();
+    const line = await page.locator(`${rowSel} .order-actions`).boundingBox();
+    await page.mouse.click(line.x + 4, line.y + 4); await page.waitForTimeout(300);
+    expect(!await sheetOpen(), "a tap in the action line's dead space must not open the chart sheet");
+    await page.click(`${rowSel} .order-main`); await page.waitForSelector("#sheet .chart-area");
+    expect(commands() === sentBefore, "neither a row tap nor a dead-space tap may send a command");
+    await context.close();
+    ({ page, context } = await fresh(CHART_TRADES));
+    await nav(page, "deals"); await page.click('[data-seg="trades"]');
+    const head = await page.$('section[data-tab="trades"] .group-head');
+    if (head) { await head.click(); await settle(page); }
+    await page.waitForSelector(".trade-row");
+    const tradeRow = await page.evaluate(() => {
+        const row = document.querySelector(".trade-row");
+        return { glyph: !!row.querySelector(".chart-glyph"), hint: !!row.querySelector(".chart-hint") };
+    });
+    expect(tradeRow.glyph && !tradeRow.hint, `trade rows carry the glyph and no text link: ${JSON.stringify(tradeRow)}`);
+    await context.close();
+
+    // Live: since_ms after the first read, follow off on pan and back on the button, pinch zooms.
+    ({ page, context } = await fresh(chartOrders(liveFeed())));
+    await openChartOrder(page); await chartDrawn(page); await page.waitForTimeout(1300);
+    const polls = log.sent.filter((s) => s.path === "/api/order/ticks").map((s) => JSON.parse(s.raw));
+    expect(polls.length >= 2 && polls[0].since_ms === undefined && typeof polls[1].since_ms === "number"
+        && polls[0].core === CHART_ORDER.core && polls[0].uid === CHART_ORDER.uid,
+        `live reads must start full then ask since_ms: ${JSON.stringify(polls.slice(0, 2))}`);
+    expect(await follows(page), "a live sheet opens following");
+    const live = await page.locator("#sheet .chart-canvas").boundingBox();
+    await page.mouse.move(live.x + 150, live.y + 120);
+    await page.mouse.down(); await page.mouse.move(live.x + 260, live.y + 120, { steps: 6 }); await page.mouse.up();
+    await page.waitForTimeout(700);
+    expect(!await follows(page), "a pan must stop following");
+    expect((await page.getAttribute("#sheet .chart-follow", "aria-pressed")) === "false", "the follow button must release on pan");
+    await page.click("#sheet .chart-follow"); await settle(page);
+    expect(await follows(page), "the follow button must resume following");
+    const wide = await span(page);
+    await page.evaluate(() => {
+        const cv = document.querySelector("#sheet .chart-canvas");
+        const box = cv.getBoundingClientRect();
+        const y = box.top + 100;
+        const fire = (type, id, x) => cv.dispatchEvent(new PointerEvent(type, { pointerId: id, clientX: x, clientY: y, bubbles: true }));
+        fire("pointerdown", 11, box.left + 120); fire("pointerdown", 12, box.left + 180);
+        fire("pointermove", 11, box.left + 70); fire("pointermove", 12, box.left + 230);
+        fire("pointerup", 11, box.left + 70); fire("pointerup", 12, box.left + 230);
+    });
+    await settle(page);
+    expect(await span(page) < wide, `a spreading pinch must zoom in: ${wide} -> ${await span(page)}`);
+
+    // The sheet's own actions send the order's original bodies.
+    await page.click("#sheet .chart-actions .cmd-danger"); await page.waitForTimeout(500);
+    const panic = log.sent.filter((s) => s.path === "/api/panic").pop();
+    const panicWanted = `{"core":${CHART_ORDER.core},"market":"${CHART_ORDER.market}","on":true}`;
+    expect(panic && panic.raw === panicWanted, `sheet panic body ${panic && panic.raw} != ${panicWanted}`);
+
+    // Hidden stops polling; visible resumes it; closing stops it for good.
+    await visibility(page, "hidden"); await page.waitForTimeout(700);
+    const hidden = count("/api/order/ticks");
+    await page.waitForTimeout(1500);
+    expect(count("/api/order/ticks") === hidden, `a hidden page kept polling: ${count("/api/order/ticks") - hidden} reads`);
+    await visibility(page, "visible"); await page.waitForTimeout(1500);
+    expect(count("/api/order/ticks") > hidden, "a visible page must resume polling");
+    await page.keyboard.press("Escape"); await page.waitForTimeout(700);
+    const shut = count("/api/order/ticks");
+    await page.waitForTimeout(2000);
+    expect(count("/api/order/ticks") === shut, `a closed sheet kept polling: ${count("/api/order/ticks") - shut} reads`);
+
+    // A row action works on the row and does not open the sheet.
+    await page.click('section[data-tab="orders"] .order-row .cmd-cancel'); await page.waitForTimeout(500);
+    expect(!(await page.locator("#sheet").isVisible()), "a row action must not open the chart sheet");
+    const cancel = log.sent.filter((s) => s.path === "/api/order/cancel").pop();
+    expect(cancel && cancel.raw === `{"core":${CHART_ORDER.core},"uid":"${CHART_ORDER.uid}"}`, `row cancel body ${cancel && cancel.raw}`);
+    // The sheet's cancel sends the same body.
+    const cancels = count("/api/order/cancel");
+    await page.click('section[data-tab="orders"] .order-row .order-main');
+    await page.waitForSelector("#sheet .chart-actions .cmd-cancel:not([disabled])");
+    await page.click("#sheet .chart-actions .cmd-cancel"); await page.waitForTimeout(500);
+    const sheetCancel = log.sent.filter((s) => s.path === "/api/order/cancel").pop();
+    expect(count("/api/order/cancel") === cancels + 1 && sheetCancel.raw === cancel.raw, "sheet cancel must send the row's body");
+    await context.close();
+
+    // A late live reply after the sheet changed is dropped.
+    ({ page, context } = await fresh({ ...chartOrders(liveFeed({ delayFirst: 1500 })), ...CHART_TRADES }));
+    await openChartOrder(page);
+    await page.keyboard.press("Escape"); await settle(page);
+    await openTrade(page, 0); await chartDrawn(page); await page.waitForTimeout(1800);
+    expect(!await page.$("#sheet .chart-hero") && +(await page.getAttribute("#sheet .chart-wrap", "data-ticks")) === TRADE_TICK_COUNT,
+        "a late live reply must not draw into the trade sheet");
+    await context.close();
+
+    // The live ring keeps at most 4000 prints however many polls arrive.
+    ({ page, context } = await fresh(chartOrders(liveFeed({ seedCount: 3990, perPoll: 40 }))));
+    await openChartOrder(page); await chartDrawn(page);
+    const ringStart = count("/api/order/ticks");
+    const deadline = Date.now() + 60000;
+    while (count("/api/order/ticks") - ringStart < 50 && Date.now() < deadline) await page.waitForTimeout(500);
+    expect(count("/api/order/ticks") - ringStart >= 50, "the live sheet stopped polling before 50 reads");
+    const held = +(await page.getAttribute("#sheet .chart-wrap", "data-ticks"));
+    expect(held > 3900 && held <= 4000, `live ring holds ${held} prints after 50 polls, expected at most 4000`);
+    await context.close();
+
+    for (const error of log.errors.filter((e) => !/status of (500|503|504)/.test(e))) failures.push(`page error: ${error}`);
+    return failures;
+}
+
 // Render, then check; the exit code is the verdict.
 async function main() {
     const opts = args();
@@ -734,6 +1241,7 @@ async function main() {
         console.log(`[OK] ${shots.length} screenshots -> ${opts.out}`);
         const failures = errors.map((e) => `page error: ${e}`);
         if (!opts.only || opts.only.startsWith("settings-")) failures.push(...(await interactions(browser, html, texts)));
+        if (!opts.only || opts.only.startsWith("chart-")) failures.push(...(await chartInteractions(browser, html, texts)));
         for (const failure of failures) console.error(`[FAIL] ${failure}`);
         if (failures.length) process.exitCode = 1;
         else console.log("[OK] interaction checks passed");

@@ -2,8 +2,8 @@
 //! settings.
 //!
 //! The session check stays in `dispatch.rs` so its authorization text stays byte-identical.
-//! Every route here goes through [`mini_access`]. Only the report and trades reads leave the owner
-//! thread.
+//! Every route here goes through [`mini_access`]. Report, trades and chart reads leave the owner
+//! thread; chart replies recheck both the grant and core visibility.
 
 use std::collections::HashMap;
 
@@ -17,6 +17,7 @@ use crate::TgHost;
 use crate::labels::section_label;
 
 pub(crate) mod cache;
+pub(crate) mod charts;
 mod commands;
 pub(crate) mod dto;
 mod reads;
@@ -28,6 +29,30 @@ pub use settings::{check_notify_rows, notify_rows, save_notify_rows};
 /// Answer one Mini App request. The live session check is handled by the caller.
 pub(crate) fn dispatch(host: &mut dyn TgHost, request: MiniAppApiRequest) {
     match request {
+        MiniAppApiRequest::TradeTicks {
+            chat_id,
+            core,
+            rec_id,
+            new_rec_id,
+            range,
+            reply,
+            ..
+        } => charts::mini_trade_ticks(
+            host,
+            chat_id,
+            core,
+            crate::report::TradeKey { rec_id, new_rec_id },
+            range,
+            reply,
+        ),
+        MiniAppApiRequest::OrderTicks {
+            chat_id,
+            core,
+            uid,
+            since_ms,
+            reply,
+            ..
+        } => charts::mini_order_ticks(host, chat_id, core, uid, since_ms, reply),
         MiniAppApiRequest::Report {
             chat_id,
             period,
@@ -38,7 +63,8 @@ pub(crate) fn dispatch(host: &mut dyn TgHost, request: MiniAppApiRequest) {
             let _ = reply.try_send(reads::mini_cores(host, chat_id));
         }
         MiniAppApiRequest::Orders { chat_id, reply, .. } => {
-            let _ = reply.try_send(reads::mini_orders(host, chat_id));
+            let result = reads::mini_orders(host, chat_id);
+            let _ = reply.try_send(result);
         }
         MiniAppApiRequest::CancelOrder {
             chat_id,

@@ -126,6 +126,12 @@ fn handler_with_acceptor() -> App {
 /// Answers one authenticated event so the HTTP handler can finish.
 fn accept(event: MiniAppApiRequest) {
     match event {
+        MiniAppApiRequest::TradeTicks { reply, .. } => {
+            let _ = reply.send(Ok(trade_ticks_ok()));
+        }
+        MiniAppApiRequest::OrderTicks { reply, .. } => {
+            let _ = reply.send(Ok(live_ticks_ok()));
+        }
         MiniAppApiRequest::CancelOrder { reply, .. } => {
             let _ = reply.send(Ok(super::dto::CommandResultDto {
                 ok: true,
@@ -198,6 +204,324 @@ fn notify_ok() -> super::dto::NotifyDto {
         error: None,
         fault: None,
     }
+}
+
+/// Synthetic closed-trade response exercising the frozen optional wire fields.
+fn trade_ticks_ok() -> super::dto::TradeTicksDto {
+    use super::dto::*;
+    TradeTicksDto {
+        state: ChartStateDto::Ok,
+        open_ms: 1000,
+        close_ms: 2000,
+        from_ms: Some(0),
+        to_ms: Some(3000),
+        entry_price: Some(10.0),
+        exit_price: Some(11.0),
+        levels: Some(vec![LevelDto {
+            kind: LevelKindDto::Buy,
+            price: 10.0,
+        }]),
+        ticks: Some(vec![(1500, 10.5, 2.0, 1)]),
+        thinned_ms: Some(0),
+        volume_bucket_ms: Some(1000),
+        volume: Some(vec![(1000, 2.0, 3.0)]),
+        exit_reason: Some("TakeProfit".into()),
+        source: Some("recorder".into()),
+        exchange: Some("CORE_A".into()),
+        price_decimals: Some(4),
+        ..Default::default()
+    }
+}
+
+/// Synthetic live response keeps the nullable last timestamp on the wire.
+fn live_ticks_ok() -> super::dto::LiveTicksDto {
+    use super::dto::*;
+    LiveTicksDto {
+        state: ChartStateDto::Live,
+        now_ms: 2000,
+        last_tick_ms: None,
+        entry_ms: 1000,
+        entry_price: 10.0,
+        mark_price: 10.5,
+        levels: vec![LevelDto {
+            kind: LevelKindDto::Entry,
+            price: 10.0,
+        }],
+        ticks: vec![(1500, 10.5, 2.0, 1)],
+        truncated: false,
+        pnl_text: "+0.31 $".into(),
+        pnl_sign: 1,
+        change_text: "+0.10 %".into(),
+        take_dist_text: "+0.84 %".into(),
+        stop_dist_text: "-1.20 %".into(),
+        price_decimals: 4,
+        trade: None,
+    }
+}
+
+/// Removing auth or parsing after dispatch would leak invalid chart requests onto the owner.
+#[test]
+fn chart_routes_reject_before_dispatch() {
+    let (app, events) = handler_quiet();
+    let now = stable_unix_now();
+    let fresh = signed_at(now);
+    let forged = with_forged_hash(&fresh);
+    let stale = signed_at(now - 3601);
+    let now_text = now.to_string();
+    let stranger = signed_init_data(&[
+        ("auth_date", &now_text),
+        ("user", "{\"id\":42,\"first_name\":\"UNIT_01\"}"),
+    ]);
+    for (path, valid) in [
+        (
+            "/api/trade/ticks",
+            r#"{"core":7,"rec_id":1,"range":"deal"}"#,
+        ),
+        (
+            "/api/order/ticks",
+            r#"{"core":7,"uid":"18446744073709551615"}"#,
+        ),
+    ] {
+        for (auth, expected) in [
+            (None, 401),
+            (Some(forged.as_str()), 401),
+            (Some(stale.as_str()), 401),
+            (Some(stranger.as_str()), 403),
+        ] {
+            assert_eq!(post(&app, path, auth, valid).0, expected, "{path}");
+            assert!(events.try_recv().is_err());
+        }
+        let unknown = format!("{},\"unknown\":true}}", &valid[..valid.len() - 1]);
+        for body in ["[]", "null", unknown.as_str()] {
+            assert_eq!(post(&app, path, Some(&fresh), body).0, 400, "{path}");
+            assert!(events.try_recv().is_err());
+        }
+        let oversized = format!("{{\"padding\":\"{}\"}}", "x".repeat(16384));
+        assert_eq!(post(&app, path, Some(&fresh), &oversized).0, 413);
+        assert!(events.try_recv().is_err());
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("http://127.0.0.1{path}"))
+            .header("content-type", "text/plain")
+            .header("x-telegram-init-data", &fresh)
+            .body(Body::from(valid.as_bytes().to_vec()))
+            .unwrap();
+        assert_eq!(app.handle(request).status().as_u16(), 415);
+        assert!(events.try_recv().is_err());
+        assert_eq!(get(&app, path).0, 405);
+        let request = Request::builder()
+            .method(Method::HEAD)
+            .uri(format!("http://127.0.0.1{path}"))
+            .body(Body::empty())
+            .unwrap();
+        let sibling = Request::builder()
+            .method(Method::HEAD)
+            .uri("http://127.0.0.1/api/orders")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(app.handle(request).status(), app.handle(sibling).status());
+        assert!(events.try_recv().is_err());
+    }
+    for (path, body) in [
+        (
+            "/api/trade/ticks",
+            r#"{"core":7,"rec_id":0,"range":"deal"}"#,
+        ),
+        (
+            "/api/trade/ticks",
+            r#"{"core":7,"rec_id":0,"new_rec_id":0,"range":"deal"}"#,
+        ),
+        (
+            "/api/trade/ticks",
+            r#"{"core":7,"rec_id":-1,"range":"deal"}"#,
+        ),
+        (
+            "/api/trade/ticks",
+            r#"{"core":7,"rec_id":0,"new_rec_id":-5,"range":"deal"}"#,
+        ),
+        ("/api/trade/ticks", r#"{"core":7,"rec_id":1,"range":"60"}"#),
+        ("/api/order/ticks", r#"{"core":7,"uid":"1","span_s":300}"#),
+        ("/api/order/ticks", r#"{"core":7,"uid":"1","since_ms":-1}"#),
+        (
+            "/api/order/ticks",
+            r#"{"core":7,"uid":18446744073709551615}"#,
+        ),
+    ] {
+        assert_eq!(post(&app, path, Some(&fresh), body).0, 400, "{body}");
+        assert!(events.try_recv().is_err());
+    }
+}
+
+/// Tuple-to-object or enum casing changes would break the chart frontend's frozen contract.
+#[test]
+fn chart_wire_contract_and_valid_routes() {
+    let app = handler_with_acceptor();
+    let fresh = signed_at(stable_unix_now());
+    for range in ["deal", "30", "300"] {
+        let body = format!(r#"{{"core":7,"rec_id":1,"range":"{range}"}}"#);
+        let (status, response) = post(&app, "/api/trade/ticks", Some(&fresh), &body);
+        assert_eq!(status, 200);
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["state"], "ok");
+        assert_eq!(value["ticks"], serde_json::json!([[1500, 10.5, 2.0, 1]]));
+        assert_eq!(value["levels"][0]["kind"], "buy");
+        assert_eq!(value["volume"], serde_json::json!([[1000, 2.0, 3.0]]));
+        assert_eq!(value["volume_bucket_ms"], 1000);
+        assert_eq!(value["exit_reason"], "TakeProfit");
+        assert!(value.get("retry_in_ms").is_none());
+    }
+    for body in [
+        r#"{"core":7,"uid":"18446744073709551615","since_ms":0}"#,
+        r#"{"core":7,"uid":"18446744073709551615"}"#,
+    ] {
+        let (status, response) = post(&app, "/api/order/ticks", Some(&fresh), body);
+        assert_eq!(status, 200);
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["state"], "live");
+        assert_eq!(value["ticks"], serde_json::json!([[1500, 10.5, 2.0, 1]]));
+        assert_eq!(value["last_tick_ms"], serde_json::Value::Null);
+        assert!(value.get("trade").is_none());
+    }
+    let loading = super::dto::TradeTicksDto {
+        state: super::dto::ChartStateDto::Loading,
+        open_ms: 1000,
+        close_ms: 2000,
+        retry_in_ms: Some(1500),
+        ..Default::default()
+    };
+    assert_eq!(
+        serde_json::to_value(loading).unwrap(),
+        serde_json::json!({
+            "state":"loading", "open_ms":1000, "close_ms":2000, "retry_in_ms":1500
+        })
+    );
+}
+
+/// A station replica row has no displayed id: its list row carries `rec_id` 0 and the recorder's
+/// `new_rec_id`. If the route went back to requiring a positive `rec_id`, every closed-trade chart
+/// on the station would answer 400 before the owner thread ever saw it, as it did in the field.
+#[test]
+fn station_trade_row_without_display_id_reaches_the_owner() {
+    let (app, events) = handler_quiet();
+    let consumer = thread::spawn(move || {
+        let event = events.recv_timeout(Duration::from_secs(2)).unwrap();
+        match event {
+            MiniAppApiRequest::TradeTicks {
+                core,
+                rec_id,
+                new_rec_id,
+                reply,
+                ..
+            } => {
+                let _ = reply.send(Ok(trade_ticks_ok()));
+                (core, rec_id, new_rec_id)
+            }
+            _ => panic!("expected TradeTicks"),
+        }
+    });
+    let fresh = signed_at(stable_unix_now());
+    // Exactly the body app.js builds from a station `TradeDto` row.
+    let body = r#"{"core":7,"rec_id":0,"new_rec_id":901,"range":"deal"}"#;
+    let (status, _) = post(&app, "/api/trade/ticks", Some(&fresh), body);
+    assert_eq!(status, 200);
+    assert_eq!(consumer.join().unwrap(), (7, 0, 901));
+}
+
+/// A rejected API call must leave one log line with route, status and reason token, and never a
+/// raw path: dropping the line hides a whole class of refused requests again, and logging the
+/// path as sent would let a client write arbitrary text into the station log.
+#[test]
+fn rejected_api_request_has_one_data_free_log_line() {
+    assert_eq!(super::api_route_label("/app.js"), None);
+    assert_eq!(
+        super::api_route_label("/api/trade/ticks"),
+        Some("/api/trade/ticks")
+    );
+    assert_eq!(super::api_route_label("/api/CORE_A/secret"), Some("other"));
+    let rejected = super::status_response(StatusCode::BAD_REQUEST, "json");
+    assert_eq!(
+        super::rejection_line("/api/trade/ticks", &rejected).as_deref(),
+        Some("[mini-api] rejected route=/api/trade/ticks status=400 reason=json")
+    );
+    let ok = super::json_response(StatusCode::OK, serde_json::json!({"ok": true}));
+    assert_eq!(super::rejection_line("/api/trade/ticks", &ok), None);
+}
+
+/// Parsing through a JSON number would corrupt a full-width order id before dispatch.
+#[test]
+fn chart_order_id_reaches_event_losslessly() {
+    let (app, events) = handler_quiet();
+    let consumer = thread::spawn(move || {
+        let event = events.recv_timeout(Duration::from_secs(2)).unwrap();
+        match event {
+            MiniAppApiRequest::OrderTicks {
+                core,
+                uid,
+                since_ms,
+                reply,
+                ..
+            } => {
+                assert_eq!((core, uid, since_ms), (7, u64::MAX, Some(0)));
+                reply.send(Ok(live_ticks_ok())).unwrap();
+            }
+            _ => panic!("wrong event"),
+        }
+    });
+    let fresh = signed_at(stable_unix_now());
+    assert_eq!(
+        post(
+            &app,
+            "/api/order/ticks",
+            Some(&fresh),
+            r#"{"core":7,"uid":"18446744073709551615","since_ms":0}"#
+        )
+        .0,
+        200
+    );
+    consumer.join().unwrap();
+}
+
+/// The closing transition must remain distinct from a final response carrying trade details.
+#[test]
+fn chart_v2_closing_and_closed_trade_serialize() {
+    use super::dto::{ChartStateDto, TradeDto};
+    let mut response = live_ticks_ok();
+    response.state = ChartStateDto::Closing;
+    let value = serde_json::to_value(&response).unwrap();
+    assert_eq!(value["state"], "closing");
+    assert!(value.get("trade").is_none());
+    response.state = ChartStateDto::Closed;
+    response.trade = Some(TradeDto {
+        core: 7,
+        core_name: "CORE_A".into(),
+        exchange: "UNIT_01".into(),
+        rec_id: 42,
+        new_rec_id: 901,
+        coin: "XALPHA".into(),
+        side: "buy".into(),
+        profit: None,
+        profit_text: None,
+        profit_pct: None,
+        profit_pct_text: None,
+        closed_at: 2,
+        closed_text: "00:00:02".into(),
+        closed_short_text: "00:00".into(),
+        entry_text: Some("10".into()),
+        exit_text: Some("11".into()),
+        exit_price: Some(1000.4),
+        close_ms: Some(2000),
+        qty_text: "1".into(),
+        volume_text: None,
+        duration_secs: Some(1),
+        strategy: None,
+        manual: true,
+    });
+    let value = serde_json::to_value(response).unwrap();
+    assert_eq!(value["state"], "closed");
+    assert_eq!(value["trade"]["rec_id"], 42);
+    assert_eq!(value["trade"]["coin"], "XALPHA");
+    assert_eq!(value["trade"]["exit_price"].as_f64(), Some(1000.4));
+    assert_eq!(value["trade"]["close_ms"], 2000);
 }
 
 /// Posts one JSON write and returns the status plus the raw body.

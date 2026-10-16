@@ -1,5 +1,506 @@
 //! Unit regressions for Mini App targeting, ordering and safe entry-notional display.
 
+/// A panicking read maps to ReadFailed, so control returns to Finish instead of unwinding.
+#[test]
+fn chart_read_maps_panic_to_read_failed() {
+    let mut pending = 0;
+    assert!(super::charts::claim_pending(&mut pending, 1));
+    let result = super::charts::chart_read::<()>(|| panic!("synthetic chart read"));
+    pending -= 1;
+    assert!(matches!(
+        result,
+        Err(moon_core::telegram::web::MiniAppApiError::ReadFailed)
+    ));
+    assert!(super::charts::claim_pending(&mut pending, 1));
+}
+
+/// A short fresh tail must not mask an earlier contiguous stretch covering the whole trade.
+#[test]
+fn chart_trade_accepts_full_stretch_before_gapped_tail() {
+    let covered = [(1000, 100000), (200000, 201000)];
+    assert!(super::charts::covers_trade(&covered, 2000, 99000));
+    assert!(!super::charts::covers_trade(&covered, 99000, 200500));
+}
+
+/// Recorder and replay paths must send quote turnover with the same contract multiplier.
+#[test]
+fn chart_quote_volume_matches_replay_slots() {
+    use moon_core::feed::{Side, Tick};
+    use moon_core::market::trade_replay::venue_caps::TickValue;
+    let ticks = [
+        Tick {
+            time_ms: 1001.0,
+            price: 10.0,
+            qty: 2.0,
+            side: Side::Buy,
+        },
+        Tick {
+            time_ms: 1999.0,
+            price: 12.0,
+            qty: 3.0,
+            side: Side::Sell,
+        },
+    ];
+    let recorder = super::charts::quote_slots(
+        &ticks,
+        TickValue::LinearContracts {
+            coins_per_contract: 5.0,
+        },
+    );
+    let replay = vec![(1000, 100.0, 180.0)];
+    assert_eq!(recorder, replay);
+    assert_eq!(
+        super::charts::volume(Some(&recorder)),
+        super::charts::volume(Some(&replay))
+    );
+    assert!(super::charts::quote_slots(&ticks, TickValue::Unknown).is_empty());
+}
+
+/// Accepting candle-only Ready or treating ContextUnavailable as failure hides native tape.
+#[test]
+fn chart_replay_states_follow_tick_status_and_actual_points() {
+    use moon_core::market::trade_replay::*;
+    use moon_core::telegram::web::dto::ChartStateDto as State;
+    let mut series = TradeReplaySeries {
+        source: TradeReplaySource::Ticks,
+        venue: None,
+        window: ReplayWindow {
+            from_ms: 1,
+            to_ms: 20,
+            open_ms: 2,
+            close_ms: 19,
+            margin_ms: 1,
+            long_position_ms: 300000,
+            over_budget: false,
+        },
+        tf_ms: 60000,
+        candles: Vec::new(),
+        ticks: vec![moon_core::feed::Tick {
+            time_ms: 5.0,
+            price: 10.0,
+            qty: 1.0,
+            side: moon_core::feed::Side::Buy,
+        }],
+        identity: 1,
+        tick_status: TickStatus::Served,
+        thinning: TickThinning::Raw,
+        partial: false,
+        side_slots: Vec::new(),
+        covered: Coverage::one((1, 20)),
+    };
+    for (status, state, retry) in [
+        (TickStatus::Served, State::Ok, None),
+        (TickStatus::ContextUnavailable, State::Ok, None),
+        (TickStatus::Pending, State::Loading, None),
+        (TickStatus::Streaming, State::Loading, None),
+        (TickStatus::AwaitingCore, State::Loading, None),
+        (
+            TickStatus::ArchivePending { retry_at_ms: 12345 },
+            State::ArchivePending,
+            Some(12345),
+        ),
+        (TickStatus::NoTrades, State::NoTape, None),
+        (TickStatus::NoRoute, State::NoTape, None),
+        (TickStatus::Disabled, State::NoTape, None),
+        (
+            TickStatus::OutOfRetention { retention_ms: 100 },
+            State::NoTape,
+            None,
+        ),
+        (
+            TickStatus::RateLimited { retry_in_s: 1 },
+            State::CatchingUp,
+            None,
+        ),
+        (TickStatus::Failed, State::Error, None),
+    ] {
+        series.tick_status = status;
+        assert_eq!(
+            super::charts::replay_state(Some(&TradeReplayOutcome::Ready(series.clone()))),
+            (state, retry)
+        );
+    }
+    series.tick_status = TickStatus::Served;
+    series.ticks.clear();
+    series.source = TradeReplaySource::Klines1m;
+    assert_eq!(
+        super::charts::replay_state(Some(&TradeReplayOutcome::Ready(series))),
+        (State::NoTape, None)
+    );
+    for (reason, state) in [
+        (TradeReplayEmpty::NoDataInWindow, State::NoTape),
+        (TradeReplayEmpty::CoreNotConnected, State::CatchingUp),
+        (TradeReplayEmpty::DegenerateWindow, State::NoTape),
+        (TradeReplayEmpty::UnknownVenue, State::NoTape),
+        (
+            TradeReplayEmpty::NoEndpoint {
+                brand: moon_core::venue::Brand::Bybit,
+            },
+            State::NoTape,
+        ),
+    ] {
+        assert_eq!(
+            super::charts::replay_state(Some(&TradeReplayOutcome::Empty(reason))),
+            (state, None)
+        );
+    }
+    assert_eq!(
+        super::charts::replay_state(Some(&TradeReplayOutcome::Failed(
+            TradeReplayFailure::RateLimited { retry_in_s: 3 }
+        ))),
+        (State::CatchingUp, None)
+    );
+    for failure in [
+        TradeReplayFailure::UnknownSymbol,
+        TradeReplayFailure::Transient {
+            diagnostic: "UNIT_01".into(),
+        },
+    ] {
+        assert_eq!(
+            super::charts::replay_state(Some(&TradeReplayOutcome::Failed(failure))),
+            (State::Error, None)
+        );
+    }
+}
+
+/// Removing eviction cancellation or pruning leaks venue jobs after sheets are forgotten.
+#[test]
+fn chart_jobs_evict_oldest_cancel_and_expire() {
+    use super::charts::{ChartJob, ChartJobs};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+        mpsc,
+    };
+    let mut jobs = ChartJobs::default();
+    let mut flags = Vec::new();
+    for id in 0..5 {
+        let (_, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        flags.push(cancel.clone());
+        jobs.insert(
+            (1, id, 0),
+            ChartJob {
+                receiver,
+                at: Instant::now() - Duration::from_secs(10 - id as u64),
+                cancel,
+                latest: None,
+            },
+        );
+        assert!(jobs.0.len() <= 4);
+    }
+    assert!(flags[0].load(AtomicOrdering::Acquire));
+    assert!(!flags[1].load(AtomicOrdering::Acquire));
+    jobs.0.get_mut(&(1, 1, 0)).unwrap().at = Instant::now() - Duration::from_secs(301);
+    let (_, receiver) = mpsc::channel();
+    jobs.insert(
+        (1, 9, 0),
+        ChartJob {
+            receiver,
+            at: Instant::now(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            latest: None,
+        },
+    );
+    assert!(!jobs.0.contains_key(&(1, 1, 0)));
+    assert!(flags[1].load(AtomicOrdering::Acquire));
+    drop(jobs);
+    assert!(flags.iter().all(|flag| flag.load(AtomicOrdering::Acquire)));
+}
+
+/// Computing volume after fitting would discard most of these 10000 distinct prints.
+#[test]
+fn chart_volume_sums_raw_prints_and_keeps_bucket_bound() {
+    use moon_core::feed::{Side, Tick};
+    let ticks: Vec<_> = (0..10000)
+        .map(|i| Tick {
+            time_ms: (1000 * i) as f64,
+            price: 10.0,
+            qty: 2.0,
+            side: if i % 2 == 0 { Side::Buy } else { Side::Sell },
+        })
+        .collect();
+    let slots = super::charts::quote_slots(
+        &ticks,
+        moon_core::market::trade_replay::venue_caps::TickValue::Base,
+    );
+    let (_, buckets) = super::charts::volume(Some(&slots));
+    assert!(buckets.len() <= 600);
+    assert_eq!(buckets.iter().map(|(_, buy, _)| buy).sum::<f64>(), 100000.0);
+    assert_eq!(
+        buckets.iter().map(|(_, _, sell)| sell).sum::<f64>(),
+        100000.0
+    );
+    let (fitted, _) = moon_core::market::trade_replay::fit_for_chart(ticks, 100000, 200000, 6000);
+    assert!(fitted.len() <= 6000);
+    assert!(fitted.iter().map(|tick| f64::from(tick.qty)).sum::<f64>() < 20000.0);
+}
+
+/// Excluding the cursor millisecond loses late prints; empty deltas must preserve freshness.
+#[test]
+fn chart_live_cursor_freshness_levels_and_mark_are_independent() {
+    use moon_core::telegram::web::dto::{ChartStateDto as State, LevelKindDto};
+    assert_eq!(super::charts::live_from(1000000, None), 100000);
+    assert_eq!(super::charts::live_from(1000000, Some(200000)), 200000);
+    assert_eq!(super::charts::live_from(1000000, Some(0)), 100000);
+    assert_eq!(super::charts::live_from(1000000, Some(2000000)), 1000000);
+    assert_eq!(super::charts::live_state(10000, Some(4999)), State::Stale);
+    assert_eq!(super::charts::live_state(10000, Some(5000)), State::Live);
+    assert_eq!(super::charts::live_state(10000, None), State::NoTape);
+    let mut row = resting_order(100.0, 100.0);
+    row.market = "XALPHAUSDT".into();
+    row.coin = "XALPHA".into();
+    row.filled = true;
+    row.fill_pct = 100.0;
+    row.take_profit = Some(120.0);
+    row.stop_loss = Some(90.0);
+    assert_eq!(
+        super::dto::order_at_mark(&row, 110.0),
+        (Some(100.0), Some(10.0))
+    );
+    let levels = super::charts::live_levels(&row);
+    assert_eq!(
+        levels
+            .iter()
+            .map(|level| (level.kind, level.price))
+            .collect::<Vec<_>>(),
+        vec![
+            (LevelKindDto::Take, 120.0),
+            (LevelKindDto::Entry, 100.0),
+            (LevelKindDto::Stop, 90.0)
+        ]
+    );
+}
+
+/// Losing retained identities or omitting their TTL can match an unrelated later report row.
+#[test]
+fn chart_order_snapshots_are_bounded_and_expire() {
+    let config = moon_core::config::TelegramConfig::default();
+    let mut state = crate::TelegramState::new(&config, crate::HostKind::Station);
+    let mut row = resting_order(100.0, 101.0);
+    row.market = "XALPHAUSDT".into();
+    row.coin = "XALPHA".into();
+    for uid in 0..65 {
+        row.uid = uid;
+        super::charts::remember_order(&mut state, 1, &row);
+    }
+    assert_eq!(state.mini_order_snapshots.len(), 64);
+    assert!(!state.mini_order_snapshots.contains_key(&(1, 0)));
+    state.mini_order_snapshots.get_mut(&(1, 1)).unwrap().at =
+        Instant::now() - Duration::from_secs(86401);
+    super::charts::remember_order(&mut state, 1, &row);
+    assert!(!state.mini_order_snapshots.contains_key(&(1, 1)));
+    assert_eq!(state.mini_order_snapshots[&(1, 64)].coin, "XALPHA");
+}
+
+/// The first chat's displayed id must resolve after a different chat replaces the list cache.
+#[test]
+fn chart_report_lookup_uses_display_id_and_carries_recorder_identity() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, newrecid INTEGER, id INTEGER, core_name TEXT, coin TEXT, buydate INTEGER, closedate INTEGER, buyprice REAL, sellprice REAL, quantity REAL, reportuid INTEGER, sellreason TEXT);
+        INSERT INTO orders_rep VALUES (7, 901, 11, 'CORE_A', 'XALPHA', 100, 200, 10, 12, 2, 101, 'TakeProfit');
+        INSERT INTO orders_rep VALUES (8, 902, 11, 'CORE_B', 'XALPHA', 100, 300, 10, 12, 2, 102, 'Stop');
+        INSERT INTO orders_rep VALUES (7, 903, 12, 'CORE_A', 'XALPHA', 200, 400, 10, 12, 2, 103, 'TakeProfit');").unwrap();
+    let read = |core, identity| {
+        crate::report::read_mini_chart_trade_on(
+            &conn,
+            chrono_tz::UTC,
+            moon_core::db::CoreNames::default(),
+            core,
+            identity,
+        )
+        .unwrap()
+    };
+    let display = |rec_id| crate::report::TradeKey {
+        rec_id,
+        new_rec_id: 0,
+    };
+    let trade = read(7, Ok(display(11))).unwrap();
+    assert_eq!(
+        (
+            trade.core_uid,
+            trade.rec_id,
+            trade.new_rec_id,
+            trade.report_uid
+        ),
+        (7, 11, 901, Some(101))
+    );
+    assert_eq!(super::charts::recorder_id(&trade).rec_id, 901);
+    assert_eq!(trade.sell_reason.as_deref(), Some("TakeProfit"));
+    let mut execution = trade.clone();
+    execution.sell_price = 1000.4;
+    let dto = super::dto::trade_row_dto(
+        &execution,
+        chrono_tz::UTC,
+        300,
+        "UNIT_01".into(),
+        None,
+        true,
+    );
+    assert_eq!(dto.exit_price, Some(1000.4));
+    assert_eq!(dto.close_ms, Some(200000));
+    let replay = |slots| {
+        super::charts::trade_ok(
+            moon_core::telegram::web::dto::TradeTicksDto::default(),
+            &trade,
+            vec![moon_core::feed::Tick {
+                time_ms: 100000.0,
+                price: 10.0,
+                qty: 1.0,
+                side: moon_core::feed::Side::Buy,
+            }],
+            Some(slots),
+            "exchange",
+            "UNIT_01".into(),
+            moon_core::market::trade_replay::TickThinning::Whole { bucket_ms: 100 },
+        )
+    };
+    assert!(replay(Vec::new()).volume.is_none());
+    let supplied = replay(vec![(100000, 40.0, 20.0)]);
+    assert_eq!(
+        supplied
+            .volume
+            .unwrap()
+            .iter()
+            .map(|(_, buy, sell)| buy + sell)
+            .sum::<f64>(),
+        60.0
+    );
+    assert!(read(9, Ok(display(11))).is_none());
+    assert!(read(7, Err(("XALPHA".into(), 100000))).is_none());
+    assert!(read(7, Err(("XALPHA".into(), 300000))).is_none());
+    let closed = read(7, Err(("XALPHA".into(), 200000))).unwrap();
+    assert_eq!(closed.rec_id, 12);
+    assert!(read(7, Err(("XALPHA".into(), 500000))).is_none());
+    assert!(read(7, Err(("XALPHA".into(), 0))).is_none());
+}
+
+/// A station replica has no displayed `id` column, so its list rows carry `rec_id` 0. If the
+/// chart lookup went back to the displayed id only, such a row could never be charted; the
+/// recorder `newrecid` the row carries must resolve it, on its own core only.
+#[test]
+fn station_row_without_display_id_resolves_by_recorder_id() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, newrecid INTEGER, core_name TEXT, coin TEXT, buydate INTEGER, closedate INTEGER, buyprice REAL, sellprice REAL, quantity REAL, reportuid INTEGER, sellreason TEXT);
+        INSERT INTO orders_rep VALUES (7, 901, 'CORE_A', 'XALPHA', 100, 200, 10, 12, 2, 101, 'TakeProfit');
+        INSERT INTO orders_rep VALUES (8, 902, 'CORE_B', 'XALPHA', 100, 300, 10, 12, 2, 102, 'Stop');").unwrap();
+    let read = |core, rec_id, new_rec_id| {
+        crate::report::read_mini_chart_trade_on(
+            &conn,
+            chrono_tz::UTC,
+            moon_core::db::CoreNames::default(),
+            core,
+            Ok(crate::report::TradeKey { rec_id, new_rec_id }),
+        )
+        .unwrap()
+    };
+    let trade = read(7, 0, 901).expect("the recorder id names the row");
+    assert_eq!(
+        (trade.core_uid, trade.rec_id, trade.new_rec_id),
+        (7, 0, 901)
+    );
+    let row = super::dto::trade_row_dto(&trade, chrono_tz::UTC, 300, "UNIT_01".into(), None, true);
+    assert_eq!((row.rec_id, row.new_rec_id), (0, 901));
+    assert!(
+        crate::report::TradeKey {
+            rec_id: row.rec_id,
+            new_rec_id: row.new_rec_id
+        }
+        .matches(&trade)
+    );
+    assert!(read(7, 0, 902).is_none(), "another core's recorder id");
+    assert!(read(7, 0, 0).is_none(), "an empty key reads nothing");
+}
+
+/// Finishing with an old grant discloses revoked data, and pending over-admission overloads hosts.
+#[test]
+fn chart_grants_and_pending_caps_reject_without_reading() {
+    use moon_core::config::telegram_access::TelegramReportAccess as Access;
+    use moon_core::telegram::web::MiniAppApiError as Error;
+    let captured = Access::Viewer(vec![7]);
+    assert!(matches!(
+        super::charts::finish_grant(&captured, None, false),
+        Err(Error::Rejected)
+    ));
+    assert!(matches!(
+        super::charts::finish_grant(&captured, Some(Access::Viewer(vec![8])), false),
+        Err(Error::Rejected)
+    ));
+    assert!(matches!(
+        super::charts::finish_grant(&captured, Some(captured.clone()), false),
+        Err(Error::NotFound)
+    ));
+    assert!(super::charts::finish_grant(&captured, Some(captured.clone()), true).is_ok());
+    for cap in [2, 4] {
+        let mut count = 0;
+        for _ in 0..cap {
+            assert!(super::charts::claim_pending(&mut count, cap));
+        }
+        assert!(!super::charts::claim_pending(&mut count, cap));
+        assert_eq!(count, cap);
+    }
+}
+
+/// Vanished known rows wait for final details; a never-observed UID must never guess a trade.
+#[test]
+fn chart_closing_handoff_preserves_known_identity_only() {
+    use moon_core::telegram::web::dto::ChartStateDto as State;
+    let mut row = resting_order(100.0, 101.0);
+    assert!(!super::charts::order_closing(Some(&row)));
+    row.job_is_done = true;
+    assert!(super::charts::order_closing(Some(&row)));
+    assert!(super::charts::order_closing(None));
+    assert_eq!(super::charts::handoff_state(true, false), State::Closing);
+    assert_eq!(super::charts::handoff_state(true, true), State::Closed);
+    assert_eq!(super::charts::handoff_state(false, false), State::Closing);
+    let mut bare = super::charts::live_base(None, 10000);
+    bare.state = super::charts::handoff_state(false, false);
+    assert!(bare.trade.is_none());
+    assert!(bare.ticks.is_empty());
+    assert_eq!(bare.state, State::Closing);
+}
+
+/// Keeping oldest prints or dropping freshness with an empty delta breaks live follow polling.
+#[test]
+fn chart_recorder_delta_keeps_newest_and_reports_overflow() {
+    use moon_core::feed::{Side, Tick};
+    let ticks = |count| {
+        (0..count)
+            .map(|i| Tick {
+                time_ms: i as f64,
+                price: 10.0,
+                qty: 1.0,
+                side: Side::Buy,
+            })
+            .collect()
+    };
+    let exact = super::charts::recorder_delta(ticks(4000), 0, 5000);
+    assert_eq!(exact.ticks.len(), 4000);
+    assert!(!exact.truncated);
+    let capped = super::charts::recorder_delta(ticks(4001), 0, 5000);
+    assert_eq!(capped.ticks.len(), 4000);
+    assert!(capped.truncated);
+    assert_eq!(capped.ticks[0].time_ms, 1.0);
+    assert_eq!(capped.last_tick_ms, Some(4000));
+    let empty = super::charts::recorder_delta(ticks(4001), 4001, 5000);
+    assert!(empty.ticks.is_empty());
+    assert_eq!(empty.last_tick_ms, Some(4000));
+    let filtered = super::charts::recorder_delta(ticks(10), 6, 8);
+    assert_eq!(
+        filtered
+            .ticks
+            .iter()
+            .map(|tick| tick.time_ms as i64)
+            .collect::<Vec<_>>(),
+        vec![6, 7, 8]
+    );
+    let since = super::charts::live_from(5000, Some(6));
+    assert_eq!(
+        super::charts::recorder_delta(ticks(10), since, 8).ticks[0].time_ms,
+        6.0
+    );
+}
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -285,6 +786,9 @@ fn entry_volume_withholds_unavailable_or_invalid_inputs() {
 #[test]
 fn closed_volume_uses_bought_quantity_and_safe_rate() {
     let mut trade = crate::report::MiniTrade {
+        new_rec_id: 1001,
+        report_uid: None,
+        sell_reason: None,
         core_uid: 2,
         rec_id: 1,
         coin: "DEMO".into(),
@@ -1622,4 +2126,133 @@ fn a_mini_app_save_keeps_the_per_currency_thresholds() {
     keep_stored_bot_fields(&file, 5, &mut from_page);
     assert_eq!(from_page.trades.by_quote, vec![row]);
     assert_eq!(from_page.trades.profit_at_least_usd, Some(3.0));
+}
+
+/// Dropping the unpublished-day rule would show «no tape» (or an error) for every trade closed
+/// today whose daily file the venue has not published and the recorder did not record.
+#[test]
+fn chart_fresh_trade_without_tape_waits_for_the_archive() {
+    use moon_core::telegram::web::dto::{ChartStateDto as State, TradeTicksDto};
+    const DAY: i64 = 86_400_000;
+    const LAG: i64 = 36 * 3_600_000;
+    let now = 20_000 * DAY + 13 * 3_600_000;
+    let mut dto = TradeTicksDto {
+        open_ms: now - 400_000,
+        close_ms: now - 360_000,
+        ..Default::default()
+    };
+    super::charts::settle_trade(&mut dto, State::NoTape, None, None, Some(LAG), now);
+    assert_eq!(dto.state, State::ArchivePending);
+    // The next UTC midnight plus the venue's own publication lag, never midnight alone.
+    assert_eq!(dto.retry_at_ms, Some(20_001 * DAY + LAG));
+    assert_eq!(dto.retry_in_ms, None);
+    // A venue that publishes no daily archive for the market can never fill it: «no tape».
+    super::charts::settle_trade(&mut dto, State::NoTape, None, None, None, now);
+    assert_eq!(dto.state, State::NoTape);
+    // A day whose file is already out and still empty is a real «no tape».
+    dto.close_ms = now - 3 * DAY;
+    super::charts::settle_trade(&mut dto, State::NoTape, None, None, Some(LAG), now);
+    assert_eq!(dto.state, State::NoTape);
+}
+
+/// Without the patience bound a replay queued behind the recorder's catch-up kept answering
+/// «loading» until the page gave up with «the server did not answer».
+#[test]
+fn chart_queued_replay_becomes_catching_up_with_a_slow_retry() {
+    use moon_core::telegram::web::dto::{ChartStateDto as State, TradeTicksDto};
+    use std::time::Duration;
+    let mut dto = TradeTicksDto::default();
+    super::charts::settle_trade(
+        &mut dto,
+        State::Loading,
+        None,
+        Some(Duration::from_secs(2)),
+        None,
+        0,
+    );
+    assert_eq!((dto.state, dto.retry_in_ms), (State::Loading, Some(1500)));
+    super::charts::settle_trade(
+        &mut dto,
+        State::Loading,
+        None,
+        Some(super::charts::LOADING_PATIENCE),
+        None,
+        0,
+    );
+    assert_eq!(
+        (dto.state, dto.retry_in_ms),
+        (State::CatchingUp, Some(10_000))
+    );
+    // A core not connected yet (no replay job) also retries slowly instead of erroring.
+    super::charts::settle_trade(&mut dto, State::CatchingUp, None, None, None, 0);
+    assert_eq!(
+        (dto.state, dto.retry_in_ms),
+        (State::CatchingUp, Some(10_000))
+    );
+}
+
+/// A real transport failure must stay an error, so the page offers its retry button.
+#[test]
+fn chart_transport_failure_stays_an_error() {
+    use moon_core::market::trade_replay::{TradeReplayFailure, TradeReplayOutcome};
+    use moon_core::telegram::web::dto::{ChartStateDto as State, TradeTicksDto};
+    let outcome = TradeReplayOutcome::Failed(TradeReplayFailure::Transient {
+        diagnostic: "UNIT_01".into(),
+    });
+    let (state, retry_at) = super::charts::replay_state(Some(&outcome));
+    let mut dto = TradeTicksDto {
+        close_ms: 1000,
+        ..Default::default()
+    };
+    super::charts::settle_trade(&mut dto, state, retry_at, None, Some(0), 2000);
+    assert_eq!((dto.state, dto.retry_in_ms), (State::Error, None));
+}
+
+/// A live sheet that opens on a market the recorder already watched must start from every span
+/// it holds, or the chart stays empty for the first seconds; a later delta must stay on the newest
+/// span, or a hole behind the cursor would be filled in after the fact.
+#[test]
+fn recorder_start_seeds_the_first_read_and_follows_the_newest_span() {
+    let covered = [(1_000, 2_000), (5_000, 9_000)];
+    assert_eq!(super::charts::recorder_start(None, &covered, 500), 500);
+    assert_eq!(
+        super::charts::recorder_start(Some(6_000), &covered, 500),
+        5_000
+    );
+    assert_eq!(
+        super::charts::recorder_start(Some(6_000), &covered, 7_000),
+        7_000
+    );
+    assert_eq!(super::charts::recorder_start(Some(6_000), &[], 500), 500);
+}
+
+/// Two station trades of one core both carry displayed id 0; keyed on that alone, the second
+/// reused the first one's replay and showed another trade's ticks.
+#[test]
+fn station_trades_without_display_id_get_their_own_replay_job() {
+    let trade = |new_rec_id| crate::report::MiniTrade {
+        new_rec_id,
+        report_uid: None,
+        sell_reason: None,
+        core_uid: 7,
+        rec_id: 0,
+        coin: "XALPHA".into(),
+        core_name: "CORE_A".into(),
+        is_short: false,
+        profit_usdt: None,
+        pct: None,
+        buy_utc: Some(100),
+        close_utc: 150,
+        buy_price: 1.0,
+        sell_price: 1.0,
+        quantity: 1.0,
+        bought_quantity: None,
+        entry_volume_rate: None,
+        strategy_id: None,
+        channel_name: String::new(),
+    };
+    assert_ne!(
+        super::charts::job_key(&trade(901)),
+        super::charts::job_key(&trade(902))
+    );
 }

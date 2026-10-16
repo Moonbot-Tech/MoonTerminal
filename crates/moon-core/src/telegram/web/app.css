@@ -1221,9 +1221,18 @@ input:focus-visible {
     font-size: 12px;
 }
 
+/* The action line is its own zone that the row tap never reaches: 12px of dead space above,
+   between and below the buttons keeps them clear of the tappable row and of the next row. */
+.order-row.has-actions {
+    padding-bottom: 0;
+}
+
 .order-row .order-actions {
     gap: 12px;
-    padding: 6px 0 0;
+    /* Reach over the row's side padding, so the edges beside the buttons are dead space too. */
+    margin: 0 -16px;
+    padding: 12px 16px;
+    cursor: default;
 }
 
 .order-row .order-actions .cmd {
@@ -1266,6 +1275,12 @@ input:focus-visible {
 .group-head .name.core-name {
     white-space: normal;
     line-height: 1.3;
+}
+
+/* An order group's core name is never clamped: every line of it shows. */
+.group-head .name.core-name.core-full {
+    display: block;
+    overflow: visible;
 }
 
 .group-head.core-head .chev,
@@ -1588,7 +1603,8 @@ button.pill:disabled {
 /* Closed trades: tap a row for the detail sheet. */
 .trade-row {
     display: flex;
-    align-items: center;
+    /* A wrapped core name grows downward; the profit stays level with the coin line. */
+    align-items: flex-start;
     gap: 8px;
     cursor: pointer;
 }
@@ -1600,31 +1616,30 @@ button.pill:disabled {
     align-items: flex-end;
 }
 
-.trade-meta {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+/* Coin, chart glyph and side badge sit together at the left of a trade row's first line. */
+.trade-row .order-top {
+    gap: 6px;
+    justify-content: flex-start;
 }
 
-/* Row line 2: only the core name truncates; the close time always shows whole. */
+/* Name lines under a row or the sheet title: the core name in full, wrapped, never cut; the
+   close time (or the exchange) ends the last line in one piece. */
+.trade-meta,
 .trade-row-meta {
-    display: flex;
     min-width: 0;
-    white-space: nowrap;
+    white-space: normal;
+    line-height: 1.35;
 }
 
-.trade-core {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+/* One part of a name between its separators wraps as a unit while it fits a line. */
+.name-part {
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
 }
 
-/* The last characters of a long core name, kept whole beside the ellipsized head. */
-
-.trade-sep,
 .trade-when {
-    flex: none;
-    white-space: pre;
+    white-space: nowrap;
 }
 
 .sheet-backdrop {
@@ -1906,4 +1921,303 @@ button.pill:disabled {
     .settings-spin {
         animation: none;
     }
+}
+
+/* Tick charts in the trade and order sheets. The chart tokens derive from the page palette. */
+:root {
+    --tick-buy: var(--pos);
+    --tick-sell: var(--neg);
+    --take: var(--pos);
+    --stop: var(--neg);
+    --entry: var(--accent);
+    --grid: var(--row-line);
+}
+
+:root[data-scheme="light"] {
+    --tick-buy: #13a06b;
+    --tick-sell: #d0453f;
+    --grid: #eef1f4;
+}
+
+:root[data-scheme="dark"] {
+    --tick-buy: var(--pill-on);
+    --take: var(--pill-on);
+    --grid: #202328;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-scheme]) {
+        --tick-buy: var(--pill-on);
+        --take: var(--pill-on);
+        --grid: #202328;
+    }
+}
+
+.sheet.chart-sheet {
+    max-height: calc(var(--tg-viewport-stable-height, 100vh) * 0.92 - var(--inset-top));
+    padding-bottom: calc(var(--inset-bottom) + 16px);
+}
+
+/* Neutral mark beside a row's coin: the row opens a chart. Decoration only, never a target. */
+.chart-glyph {
+    flex: none;
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: var(--hint);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    pointer-events: none;
+}
+
+.chart-tf {
+    display: flex;
+    gap: 6px;
+    padding: 4px 16px 8px;
+    overflow-x: auto;
+}
+
+.chart-spacer {
+    flex: 1;
+}
+
+.chart-chip {
+    flex: none;
+    min-height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-ctl);
+    background: var(--card);
+    color: var(--sub);
+    font: inherit;
+    font-size: var(--fs-meta);
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.chart-chip.on {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--tint);
+}
+
+.chart-area {
+    margin: 0 0 4px;
+}
+
+.chart-wrap {
+    position: relative;
+    height: 300px;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.chart-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.chart-tip {
+    position: absolute;
+    z-index: 2;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--card-high);
+    color: var(--ink);
+    font-size: 11px;
+    line-height: 1.35;
+    white-space: nowrap;
+    pointer-events: none;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.chart-waiting {
+    position: absolute;
+    z-index: 1;
+    left: 16px;
+    right: 74px;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 10px 12px;
+    border: 1px dashed var(--line);
+    border-radius: var(--r-card);
+    background: var(--card-high);
+    color: var(--sub);
+    font-size: var(--fs-small);
+    text-align: center;
+    pointer-events: none;
+}
+
+.chart-state {
+    height: 300px;
+    margin: 0 16px 8px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    border: 1px dashed var(--line);
+    border-radius: var(--r-card);
+    color: var(--sub);
+    font-size: 14px;
+    line-height: 1.4;
+    text-align: center;
+}
+
+.chart-state-title {
+    color: var(--ink);
+    font-size: var(--fs-body);
+    font-weight: 600;
+}
+
+.chart-retry {
+    min-height: 40px;
+    padding: 0 14px;
+    border: 1px solid var(--accent);
+    border-radius: var(--r-ctl);
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    cursor: pointer;
+}
+
+.chart-state.chart-loading {
+    padding: 0;
+    border: 0;
+}
+
+.chart-skeleton {
+    width: 100%;
+    height: 100%;
+    border-radius: var(--r-card);
+    background: linear-gradient(90deg, var(--card-high) 25%, var(--line) 50%, var(--card-high) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.3s linear infinite;
+}
+
+.chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    padding: 2px 16px 8px;
+    color: var(--sub);
+    font-size: 11px;
+}
+
+.chart-legend i {
+    display: inline-block;
+    width: 14px;
+    height: 0;
+    margin-right: 4px;
+    border-top: 2px dashed;
+    vertical-align: middle;
+}
+
+.chart-legend i.dot {
+    width: 7px;
+    height: 7px;
+    border: 0;
+    border-radius: 50%;
+}
+
+.chart-provenance {
+    padding: 0 16px 10px;
+    color: var(--hint);
+    font-size: 11px;
+}
+
+.chart-provenance:empty {
+    display: none;
+}
+
+.chart-details {
+    border-top: 1px solid var(--row-line);
+}
+
+.chart-banner {
+    margin: 0 16px 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: var(--tint);
+    color: var(--ink);
+    font-size: var(--fs-meta);
+}
+
+.chart-hero {
+    align-items: baseline;
+}
+
+.live-tag {
+    display: flex;
+    align-items: center;
+    color: var(--sub);
+    font-size: var(--fs-small);
+    white-space: nowrap;
+}
+
+.live-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--tick-buy);
+    animation: live-pulse 1.4s infinite;
+}
+
+.live-tag.stale .live-dot {
+    background: var(--warn);
+    animation: none;
+}
+
+@keyframes live-pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.25; }
+    100% { opacity: 1; }
+}
+
+.chart-actions .order-actions {
+    padding: 12px 16px 4px;
+}
+
+.chart-actions .order-actions .cmd {
+    flex: 1;
+    min-height: 44px;
+    padding: 0 14px;
+    font-size: 14px;
+    font-weight: 500;
+    border-radius: var(--r-ctl);
+}
+
+.chart-actions .order-actions .cmd-cancel {
+    color: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .chart-skeleton,
+    .live-dot {
+        animation: none;
+    }
+}
+
+/* Chart sheets: the side badge sits beside the coin and the result sits flush under it. */
+.chart-sheet .sheet-head .order-top {
+    justify-content: flex-start;
+}
+
+.chart-sheet .sheet-result {
+    min-height: 0;
+    padding-top: 0;
+    border-bottom: 0;
+}
+
+.chart-sheet .sheet-result .hero-value {
+    margin: 0;
 }

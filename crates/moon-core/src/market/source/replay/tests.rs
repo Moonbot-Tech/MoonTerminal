@@ -1,5 +1,148 @@
 use super::*;
 
+/// Periodic selection must keep the newest two even after an older in-window resend.
+#[test]
+fn live_capture_small_budget_survives_late_in_window_resend() {
+    let mut capture = LiveCapture::new(99_997, 100_000, 2);
+    for stamp in (99_997..=100_000).chain([99_997]) {
+        capture.push(Tick {
+            time_ms: stamp as f64,
+            price: 10.0,
+            qty: 1.0,
+            side: Side::Buy,
+        });
+        assert!(capture.ticks.len() <= 4);
+    }
+    let result = capture.finish(Some(100_000));
+    assert_eq!(
+        result
+            .ticks
+            .iter()
+            .map(|t| t.time_ms as i64)
+            .collect::<Vec<_>>(),
+        vec![99_999, 100_000]
+    );
+    assert!(result.truncated);
+}
+
+/// An old appended resend must not hide recent prints earlier in the retained sequence.
+#[test]
+fn live_capture_preserves_recent_prints_before_late_old_resends() {
+    let mut capture = LiveCapture::new(99_997, 100_000, 4000);
+    for stamp in (0..100_000).chain([10, 20, 30]) {
+        capture.push(Tick {
+            time_ms: stamp as f64,
+            price: 10.0,
+            qty: 1.0,
+            side: Side::Buy,
+        });
+    }
+    let delta = capture.finish(Some(99_999));
+    assert_eq!(
+        delta
+            .ticks
+            .iter()
+            .map(|tick| tick.time_ms as i64)
+            .collect::<Vec<_>>(),
+        vec![99_997, 99_998, 99_999]
+    );
+    assert!(!delta.truncated);
+}
+
+/// Capping before clipping, or retaining the oldest rows, would starve live chart polling.
+#[test]
+fn live_chart_cap_keeps_newest_inside_requested_span() {
+    let ticks: Vec<Tick> = [500, 100, 400, 200, 300, 600]
+        .into_iter()
+        .map(|time| Tick {
+            time_ms: time as f64,
+            price: 10.0,
+            qty: 1.0,
+            side: Side::Buy,
+        })
+        .collect();
+    let capture = |max| {
+        let mut capture = LiveCapture::new(250, 500, max);
+        for tick in &ticks {
+            capture.push(*tick);
+        }
+        capture.finish(Some(600))
+    };
+    let kept = capture(2);
+    assert_eq!(
+        kept.ticks
+            .iter()
+            .map(|tick| tick.time_ms as i64)
+            .collect::<Vec<_>>(),
+        vec![400, 500]
+    );
+    assert!(kept.truncated);
+    let clipped = capture(10);
+    assert_eq!(
+        clipped
+            .ticks
+            .iter()
+            .map(|tick| tick.time_ms as i64)
+            .collect::<Vec<_>>(),
+        vec![300, 400, 500]
+    );
+    assert!(!clipped.truncated);
+    assert!(capture(0).ticks.is_empty());
+}
+
+/// A cap reached exactly is complete; only a dropped print makes a response truncated.
+#[test]
+fn live_chart_reports_4000_vs_4001_and_retains_empty_delta_freshness() {
+    let tick = |stamp| Tick {
+        time_ms: stamp as f64,
+        price: 10.0,
+        qty: 1.0,
+        side: Side::Buy,
+    };
+    let mut capture = LiveCapture::new(0, 5000, 4000);
+    for stamp in 1..=4000 {
+        capture.push(tick(stamp));
+    }
+    let exact = capture.finish(Some(4000));
+    assert_eq!(exact.ticks.len(), 4000);
+    assert!(!exact.truncated);
+    let mut capture = LiveCapture::new(0, 5000, 4000);
+    for stamp in (1..=4001).rev() {
+        capture.push(tick(stamp));
+    }
+    let overflow = capture.finish(Some(4001));
+    assert_eq!(overflow.ticks.first().unwrap().time_ms, 2.0);
+    assert_eq!(overflow.ticks.last().unwrap().time_ms, 4001.0);
+    assert_eq!(overflow.ticks.len(), 4000);
+    assert!(overflow.truncated);
+    let mut capture = LiveCapture::new(4500, 5000, 4000);
+    capture.push(tick(4001));
+    let empty = capture.finish(Some(4001));
+    assert!(empty.ticks.is_empty());
+    assert!(!empty.truncated);
+    assert_eq!(empty.last_tick_ms, Some(4001));
+}
+
+/// A full requested core window must retain its newest prints instead of becoming unavailable.
+#[test]
+fn live_capture_over_core_budget_keeps_newest_even_with_late_resends() {
+    let mut capture = LiveCapture::new(0, 300_000, 4000);
+    for stamp in (0..=250_001).rev() {
+        capture.push(Tick {
+            time_ms: stamp as f64,
+            price: 10.0,
+            qty: 1.0,
+            side: Side::Buy,
+        });
+    }
+    let result = capture.finish(Some(250_001));
+    assert!(result.truncated);
+    assert_eq!(result.ticks.len(), 4000);
+    assert_eq!(result.ticks.first().unwrap().time_ms, 246_002.0);
+    assert_eq!(result.ticks.last().unwrap().time_ms, 250_001.0);
+    assert_eq!(result.last_tick_ms, Some(250_001));
+}
+
 /// A large ring outside the requested interval must not force an otherwise avoidable REST fetch.
 #[test]
 fn capture_budgets_only_the_requested_interval_and_preserves_late_rows() {

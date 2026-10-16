@@ -26,12 +26,13 @@ pub use candles::{CandleViewCfg, ChartCandle};
 pub use screener::ScreenerRow;
 pub use source::{
     ArbQuote, ArbVenue, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor,
-    ChartHistoryRead, CoinTag, DetectSnapshot, LatestPriceError, LiqSpanReadout,
+    ChartHistoryRead, CoinTag, DetectSnapshot, LatestPriceError, LiqSpanReadout, LiveTicks,
     MarketContextReadout, MarketDataSource, MarketFiguresReadout, MarketLabel, MarketLimits,
     MarketQuantityUnit, MarketRevisions, MarketTickerReadout, MarketWindowsReadout, MaxOrder,
     MaxOrderSource, OrderSizeRules, PathPrefixRows, PriceLineUpdate, PriceProfileRow,
     ProfileWindow, ReplayAddress, ReplayAddressError, SIDE_BUCKET_MS, SideVolumeBucket, VolumeAt,
     VolumeSpan, VolumeSpanReadout, WindowFigures, pick_market_for_coin, pick_market_for_identity,
+    side_slots_of_ticks,
 };
 
 /// Shared market buffer owned by moon-core, not by a GPUI entity. Live feeds only wake

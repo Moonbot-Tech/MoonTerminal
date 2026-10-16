@@ -10,7 +10,8 @@
 //! `POST /api/orders`, `POST /api/order/cancel`, `POST /api/panic`, `POST /api/core/switch`,
 //! `POST /api/cores/switch`, `POST /api/core/cancel_all`, `POST /api/trades`,
 //! `POST /api/strategies`, `POST /api/strategy/toggle`, `POST /api/core/reconnect`,
-//! `POST /api/notify`, and `POST /api/notify/save`.
+//! `POST /api/notify`, `POST /api/notify/save`, `POST /api/trade/ticks`, and
+//! `POST /api/order/ticks`.
 
 use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -87,6 +88,27 @@ pub struct MiniAppServerConfig {
 
 /// Authenticated Mini App API event emitted after HMAC and pairing checks succeed.
 pub enum MiniAppApiRequest {
+    /// Read the chart of one closed trade after validating its request bounds.
+    TradeTicks {
+        identity: SignedInitData,
+        chat_id: i64,
+        core: u64,
+        /// Displayed report id; `0` when the row has none.
+        rec_id: i64,
+        /// Recorder `newrecid`; names the row when it has no displayed id.
+        new_rec_id: i64,
+        range: dto::ChartRangeDto,
+        reply: SyncSender<Result<dto::TradeTicksDto, MiniAppApiError>>,
+    },
+    /// Read an incremental chart snapshot without advancing the chart cursor.
+    OrderTicks {
+        identity: SignedInitData,
+        chat_id: i64,
+        core: u64,
+        uid: u64,
+        since_ms: Option<i64>,
+        reply: SyncSender<Result<dto::LiveTicksDto, MiniAppApiError>>,
+    },
     /// Data-free session check. The body is discarded after bounds checks.
     Session {
         /// Signed identity that passed pairing.
@@ -447,6 +469,31 @@ struct CancelOrderBody {
     uid: u64,
 }
 
+/// Closed-trade chart request; unknown fields never reach the owner thread.
+///
+/// A station replica row may have no displayed id (`rec_id` 0), so either identity may be absent,
+/// but at least one must be positive.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TradeTicksBody {
+    core: u64,
+    #[serde(default)]
+    rec_id: i64,
+    #[serde(default)]
+    new_rec_id: i64,
+    range: dto::ChartRangeDto,
+}
+
+/// Live chart request with a lossless order identifier.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrderTicksBody {
+    core: u64,
+    #[serde(deserialize_with = "dto::id_text::deserialize")]
+    uid: u64,
+    since_ms: Option<i64>,
+}
+
 /// Body of `POST /api/core/switch`. Unknown fields are rejected.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -526,11 +573,25 @@ struct App {
 }
 
 impl App {
+    /// Answer one HTTP request and log an API rejection.
+    ///
+    /// A `4xx`/`5xx` on an `/api/` route writes one info line naming the route, the status and the
+    /// reason token ([`rejection_line`]), so a class of refused requests shows up in the log
+    /// without any user data.
+    fn handle(&self, request: Request<Body>) -> Response<Body> {
+        let route = api_route_label(request.uri().path());
+        let response = self.route(request);
+        if let Some(line) = route.and_then(|route| rejection_line(route, &response)) {
+            log::info!("{line}");
+        }
+        response
+    }
+
     /// Dispatch one HTTP request onto the fixed Mini App route table.
     // Route closures return `Result<_, Response<Body>>`. Boxing that error would
     // change the shared helper the same way `authenticate` refuses to.
     #[allow(clippy::result_large_err)]
-    fn handle(&self, request: Request<Body>) -> Response<Body> {
+    fn route(&self, request: Request<Body>) -> Response<Body> {
         if self.stop.load(Ordering::SeqCst) {
             return status_response(StatusCode::SERVICE_UNAVAILABLE, "stopped");
         }
@@ -597,6 +658,44 @@ impl App {
                         chat_id,
                         core: parsed.core,
                         uid: parsed.uid,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/trade/ticks") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<TradeTicksBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    if parsed.rec_id < 0
+                        || parsed.new_rec_id < 0
+                        || (parsed.rec_id == 0 && parsed.new_rec_id == 0)
+                    {
+                        return Err(status_response(StatusCode::BAD_REQUEST, "json"));
+                    }
+                    Ok(MiniAppApiRequest::TradeTicks {
+                        identity,
+                        chat_id,
+                        core: parsed.core,
+                        rec_id: parsed.rec_id,
+                        new_rec_id: parsed.new_rec_id,
+                        range: parsed.range,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/order/ticks") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<OrderTicksBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    if parsed.since_ms.is_some_and(|stamp| stamp < 0) {
+                        return Err(status_response(StatusCode::BAD_REQUEST, "json"));
+                    }
+                    Ok(MiniAppApiRequest::OrderTicks {
+                        identity,
+                        chat_id,
+                        core: parsed.core,
+                        uid: parsed.uid,
+                        since_ms: parsed.since_ms,
                         reply,
                     })
                 })
@@ -734,6 +833,8 @@ impl App {
                 | "/api/cores"
                 | "/api/orders"
                 | "/api/order/cancel"
+                | "/api/trade/ticks"
+                | "/api/order/ticks"
                 | "/api/panic"
                 | "/api/core/switch"
                 | "/api/cores/switch"
@@ -1016,7 +1117,72 @@ fn auth_reason(error: InitDataError) -> &'static str {
 
 /// Build a small JSON error body.
 fn status_response(status: StatusCode, error: &'static str) -> Response<Body> {
-    json_response(status, json!({ "error": error }))
+    let mut response = json_response(status, json!({ "error": error }));
+    response.extensions_mut().insert(RejectReason(error));
+    response
+}
+
+/// Reason token of a [`status_response`], kept beside the body for the rejection log.
+#[derive(Clone, Copy)]
+struct RejectReason(&'static str);
+
+/// Every API path the route table names; anything else under `/api/` is logged as `other`.
+const API_ROUTES: &[&str] = &[
+    "/api/session",
+    "/api/report",
+    "/api/cores",
+    "/api/orders",
+    "/api/order/cancel",
+    "/api/trade/ticks",
+    "/api/order/ticks",
+    "/api/panic",
+    "/api/core/switch",
+    "/api/cores/switch",
+    "/api/core/cancel_all",
+    "/api/trades",
+    "/api/strategies",
+    "/api/strategy/toggle",
+    "/api/core/reconnect",
+    "/api/notify",
+    "/api/notify/save",
+];
+
+/// Log label of an API path: the fixed route, `other` for an unknown `/api/` path, `None` for a
+/// static asset. A request path is never logged as sent, so nothing a client typed reaches the log.
+fn api_route_label(path: &str) -> Option<&'static str> {
+    if !path.starts_with("/api/") {
+        return None;
+    }
+    Some(
+        API_ROUTES
+            .iter()
+            .copied()
+            .find(|route| *route == path)
+            .unwrap_or("other"),
+    )
+}
+
+/// The log line of a rejected API response, `None` for a success.
+///
+/// Args:
+///     route: Label from [`api_route_label`].
+///     response: The answer about to be sent.
+///
+/// Returns:
+///     `[mini-api] rejected route=<route> status=<code> reason=<token>` for a `4xx`/`5xx`.
+fn rejection_line(route: &str, response: &Response<Body>) -> Option<String> {
+    let status = response.status();
+    if !(status.is_client_error() || status.is_server_error()) {
+        return None;
+    }
+    let reason = response
+        .extensions()
+        .get::<RejectReason>()
+        .map_or("status", |reason| reason.0);
+    Some(format!(
+        "[mini-api] rejected route={route} status={} reason={reason}",
+        status.as_u16()
+    ))
 }
 
 /// Serialize `value` as a JSON response.

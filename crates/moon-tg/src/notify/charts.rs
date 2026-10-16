@@ -272,6 +272,31 @@ fn trade_lines(core: u64, report_uid: Option<i64>) -> Option<Lines> {
     }
 }
 
+/// Project only the latest entry, take and stop, bounding Mini App levels to three prices.
+pub(crate) fn mini_trade_levels(
+    core: u64,
+    report_uid: Option<i64>,
+) -> Vec<(moon_core::telegram::web::dto::LevelKindDto, f64)> {
+    use moon_core::telegram::web::dto::LevelKindDto;
+    let Some(lines) = trade_lines(core, report_uid) else {
+        return Vec::new();
+    };
+    [
+        (
+            LevelKindDto::Buy,
+            lines.entry.last().map(|(_, price)| *price),
+        ),
+        (
+            LevelKindDto::Take,
+            lines.exit.last().map(|(_, price)| *price),
+        ),
+        (LevelKindDto::Stop, lines.stop),
+    ]
+    .into_iter()
+    .filter_map(|(kind, price)| price.map(|price| (kind, price)))
+    .collect()
+}
+
 /// What the picture draws of the trade's orders.
 #[derive(Default)]
 struct Lines {

@@ -355,3 +355,37 @@ fn every_listed_command_has_a_description() {
         assert!(!labels.contains_key("command_settings"));
     }
 }
+
+/// Every Mini App page key has its own value in the shipped `telegram*.<lc>.yml` files of every
+/// locale, so no locale silently shows the English fallback (or the bare key) on the page.
+#[test]
+fn every_mini_label_key_is_translated_in_every_locale() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales");
+    for locale in moon_core::config::Language::ALL.map(moon_core::config::Language::code) {
+        let suffix = format!(".{locale}.yml");
+        let mut text = String::new();
+        for entry in std::fs::read_dir(root.join(locale)).expect("locale dir") {
+            let path = entry.expect("locale entry").path();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if name.starts_with("telegram") && name.ends_with(&suffix) {
+                text.push_str(&std::fs::read_to_string(&path).expect("locale file"));
+                text.push('\n');
+            }
+        }
+        let defined: std::collections::BTreeSet<&str> = text
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .filter(|(key, value)| !value.trim().trim_matches('"').is_empty() && !key.contains(' '))
+            .map(|(key, _)| key)
+            .collect();
+        for key in super::MINI_LABEL_KEYS {
+            assert!(
+                defined.contains(format!("telegram.{key}").as_str()),
+                "telegram.{key} is missing in {locale}"
+            );
+        }
+    }
+}

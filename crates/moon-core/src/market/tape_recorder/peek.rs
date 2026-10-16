@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use super::{Cmd, Key, Recorder, TX, TradeId};
 use crate::feed::Tick;
+use crate::market::trade_replay::Coverage;
 
 /// How long a closed trade is remembered for a reader. A picture is drawn within minutes of the
 /// close or not at all.
@@ -71,6 +72,18 @@ pub struct TradeTape {
     /// Nothing more will come for the window: the stream was seen past its end, or the key's
     /// recording is over and everything it had is filed.
     pub settled: bool,
+    /// Every contiguous recorded stretch in the requested window, ascending by time.
+    pub covered: Vec<(i64, i64)>,
+}
+
+/// What one requested market window holds, without treating an empty or partial tape as full.
+#[derive(Clone, Debug)]
+pub struct RecorderSpan {
+    pub ticks: Vec<Tick>,
+    /// No more recording is expected for this window; this does not imply complete coverage.
+    pub settled: bool,
+    /// Every clipped contiguous recorded stretch, ascending and excluding known stream gaps.
+    pub covered: Vec<(i64, i64)>,
 }
 
 /// Why [`trade_tape`] has no tape to give.
@@ -109,7 +122,89 @@ pub fn trade_tape(
     }
 }
 
+/// Read a market's filed and buffered prints, settlement and contiguous coverage inside inclusive
+/// UTC bounds without starting the recorder. Returns `Unknown` when absent and `Busy` on timeout.
+pub fn market_tape(
+    exchange_key: &str,
+    market: &str,
+    from_ms: i64,
+    to_ms: i64,
+    timeout: Duration,
+) -> Result<RecorderSpan, TapeMiss> {
+    let Some(Some(tx)) = TX.get() else {
+        return Err(TapeMiss::Unknown);
+    };
+    let (reply, answer) = mpsc::channel();
+    tx.send(Cmd::PeekKey {
+        key: (exchange_key.to_owned(), market.to_owned()),
+        from_ms,
+        to_ms,
+        reply,
+    })
+    .map_err(|_| TapeMiss::Unknown)?;
+    match answer.recv_timeout(timeout) {
+        Ok(tape) => tape,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(TapeMiss::Busy),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(TapeMiss::Unknown),
+    }
+}
+
 impl Recorder {
+    /// Read only the requested span through the recorder's own cache queue before adding
+    /// unfiled prints, so a concurrent flush cannot leave a gap between the two halves. Return
+    /// settlement separately from coverage: a recording can stop with holes still unfilled.
+    pub(super) fn read_key(
+        &self,
+        key: &Key,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Result<RecorderSpan, TapeMiss> {
+        if from_ms > to_ms {
+            return Ok(RecorderSpan {
+                ticks: Vec::new(),
+                settled: true,
+                covered: Vec::new(),
+            });
+        }
+        let spans = self
+            .cache
+            .read(&key.0, &key.1, from_ms, to_ms)
+            .ok_or(TapeMiss::Busy)?;
+        let mut covered = Coverage::from_spans(spans.iter().map(|span| (span.from_ms, span.to_ms)));
+        let mut ticks: Vec<Tick> = spans
+            .into_iter()
+            .flat_map(|span| span.ticks)
+            .filter(|t| (from_ms..=to_ms).contains(&(t.time_ms as i64)))
+            .collect();
+        let mut settled = true;
+        if let Some(task) = self.tasks.get(key) {
+            ticks.extend(task.unfiled(from_ms, to_ms));
+            let alive_ms = task
+                .live_epoch()
+                .and_then(|epoch| self.donors.get(&key.0)?.alive_ms(epoch));
+            if let Some(alive_ms) = alive_ms {
+                for &span in task
+                    .buffered_coverage(alive_ms.saturating_sub(SETTLE_LAG_MS))
+                    .spans()
+                {
+                    covered.add(span);
+                }
+            }
+            settled = alive_ms.is_some_and(|alive| alive >= to_ms.saturating_add(SETTLE_LAG_MS))
+                || !task.wants_pair();
+        }
+        ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+        let covered = covered
+            .clip(&Coverage::one((from_ms, to_ms)))
+            .spans()
+            .to_vec();
+        Ok(RecorderSpan {
+            ticks,
+            settled,
+            covered,
+        })
+    }
+
     /// Answer [`trade_tape`] on the recorder's thread.
     pub(super) fn peek(
         &self,
@@ -121,34 +216,15 @@ impl Recorder {
         let key = &closed.key;
         let from_ms = closed.open_ms.saturating_sub(lead_ms.max(0));
         let to_ms = closed.close_ms.saturating_add(tail_ms.max(0));
-        let inside = |t: &Tick| (from_ms..=to_ms).contains(&(t.time_ms as i64));
-        let mut ticks: Vec<Tick> = self
-            .cache
-            .read(&key.0, &key.1, from_ms, to_ms)
-            .ok_or(TapeMiss::Busy)?
-            .into_iter()
-            .flat_map(|span| span.ticks)
-            .filter(inside)
-            .collect();
-        let settled = match self.tasks.get(key) {
-            None => true,
-            Some(task) => {
-                ticks.extend(task.unfiled(from_ms, to_ms));
-                let alive_ms = task
-                    .live_epoch()
-                    .and_then(|epoch| self.donors.get(&key.0)?.alive_ms(epoch));
-                alive_ms.is_some_and(|alive| alive >= to_ms.saturating_add(SETTLE_LAG_MS))
-                    || !task.wants_pair()
-            }
-        };
-        ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+        let span = self.read_key(key, from_ms, to_ms)?;
         Ok(TradeTape {
             exchange: key.0.clone(),
             market: key.1.clone(),
             open_ms: closed.open_ms,
             close_ms: closed.close_ms,
-            ticks,
-            settled,
+            ticks: span.ticks,
+            settled: span.settled,
+            covered: span.covered,
         })
     }
 }

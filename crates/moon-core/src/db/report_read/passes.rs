@@ -94,6 +94,8 @@ pub(super) fn query_totals_attempt(
 /// Held together so the retry after a corrupt cache reruns the SAME request, differing in exactly
 /// the one flag the corruption bears on.
 struct ReportPass<'a> {
+    /// Optional exact row identity: the displayed `id` or the recorder's `newrecid`.
+    row_key: Option<RowKey>,
     /// Complete Report filter.
     filter: &'a ReportFilter,
     /// Shared runtime display columns, resolved once for both attempts.
@@ -218,7 +220,24 @@ fn run_row_pass(
     // Query the top N from EACH source separately so indexes work, then merge below.
     let mut merged: Vec<(u64, i64, Vec<Value>)> = Vec::new();
     for src in pass.sources {
-        let (where_sql, mut params) = build_where(&scoped, &src.cols, pass.meta);
+        let (mut where_sql, mut params) = build_where(&scoped, &src.cols, pass.meta);
+        if let Some(key) = pass.row_key {
+            let (column, id) = match key {
+                RowKey::Display(id) if src.legacy && src.cols.contains("db_id") => ("db_id", id),
+                RowKey::Display(id) if src.cols.contains("id") => ("id", id),
+                RowKey::Recorder(id) if !src.legacy && src.cols.contains("newrecid") => {
+                    ("newrecid", id)
+                }
+                _ => continue,
+            };
+            where_sql.push_str(if where_sql.is_empty() {
+                " WHERE "
+            } else {
+                " AND "
+            });
+            where_sql.push_str(&format!("r.\"{column}\" = ?"));
+            params.push(Box::new(id));
+        }
         let valuation = crate::db::valuation::projection(
             pass.filter.valuation,
             include_valuation,
@@ -367,7 +386,60 @@ pub fn query_mini_trades(
     f: &ReportFilter,
     limit: usize,
 ) -> ReadResult<ReportTable> {
-    query_closed_with(conn, f, limit, &[MINI_ENTRY_VOLUME_RATE_COLUMN])
+    query_closed_with(
+        conn,
+        f,
+        limit,
+        &[
+            MINI_ENTRY_VOLUME_RATE_COLUMN,
+            "reportuid",
+            "newrecid",
+            "sellreason",
+        ],
+    )
+}
+
+impl ReportFilter {
+    /// Read one exact displayed trade identity through the normal report projection and valuation.
+    /// The caller must constrain this filter to the authorized core before calling.
+    pub fn mini_trade_table(&self, conn: &Connection, rec_id: i64) -> ReadResult<ReportTable> {
+        self.mini_trade_table_by(conn, RowKey::Display(rec_id))
+    }
+
+    /// Read one trade by the recorder's `newrecid`, for a typed-replica row whose displayed `id`
+    /// is `0` or absent (a station replica). Legacy sources carry no `newrecid` and are skipped.
+    /// The caller must constrain this filter to the authorized core before calling.
+    pub fn mini_trade_table_by_recorder(
+        &self,
+        conn: &Connection,
+        new_rec_id: i64,
+    ) -> ReadResult<ReportTable> {
+        self.mini_trade_table_by(conn, RowKey::Recorder(new_rec_id))
+    }
+
+    /// Shared projection of the two exact Mini App trade reads.
+    fn mini_trade_table_by(&self, conn: &Connection, key: RowKey) -> ReadResult<ReportTable> {
+        let mut cols = display_columns(conn)?;
+        cols.extend(
+            [
+                MINI_ENTRY_VOLUME_RATE_COLUMN,
+                "reportuid",
+                "newrecid",
+                "sellreason",
+            ]
+            .map(str::to_owned),
+        );
+        query_projected_reports(conn, self, "closedate", true, 1, (cols, Some(key)))
+    }
+}
+
+/// Exact identity of one report row for a single-row read.
+#[derive(Clone, Copy)]
+enum RowKey {
+    /// The displayed `id` (`db_id` on a legacy source).
+    Display(i64),
+    /// The typed replica's immutable `newrecid`.
+    Recorder(i64),
 }
 
 /// [`query_mini_trades`] plus each trade's own money: its settled profit, its entry notional and
@@ -476,6 +548,19 @@ fn query_reports_with_columns(
     limit: usize,
     cols: Vec<String>,
 ) -> ReadResult<ReportTable> {
+    query_projected_reports(conn, f, sort_key, desc, limit, (cols, None))
+}
+
+/// Execute the shared row pass with an optional exact row identity and bounded output.
+fn query_projected_reports(
+    conn: &Connection,
+    f: &ReportFilter,
+    sort_key: &str,
+    desc: bool,
+    limit: usize,
+    projection: (Vec<String>, Option<RowKey>),
+) -> ReadResult<ReportTable> {
+    let (cols, row_key) = projection;
     let meta = report_strategy_meta(conn, f)
         .map_err(|error| read_fail("reports: resolve strategy mask", error))?;
     let col = sort_column(&cols, sort_key);
@@ -484,6 +569,7 @@ fn query_reports_with_columns(
     // the same `cols`, or a cache-free retry would desynchronise `cols` from `rows`.
     let merged = {
         let pass = ReportPass {
+            row_key,
             filter: f,
             cols: &cols,
             sort_col: &col,
