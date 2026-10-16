@@ -406,3 +406,50 @@ fn forget_evicts_deleted_heads_and_preserves_live_heads() {
         .unwrap();
     assert_eq!(live, 1, "forget must not purge a live head");
 }
+
+/// Reusing the per-core purge for a roster must erase every target's versions, retain live
+/// history even if accidentally named, and leave a different group's identical ids intact.
+#[test]
+fn forget_across_cores_preserves_live_and_other_group_history() {
+    let (conn, mut st) = setup();
+    for (core, name) in [(11, "CORE_A"), (22, "CORE_B"), (33, "CORE_C")] {
+        apply_full_set(
+            &conn,
+            &mut st,
+            core,
+            name,
+            true,
+            &[dump(1, "UNIT_01", 5, "x"), dump(2, "UNIT_02", 3, "x")],
+        )
+        .unwrap();
+        apply_full_set(
+            &conn,
+            &mut st,
+            core,
+            name,
+            false,
+            &[dump(2, "UNIT_02", 3, "x")],
+        )
+        .unwrap();
+    }
+    let mut heads = 0;
+    let mut history = 0;
+    for core in [11, 22] {
+        let outcome = forget(&conn, &mut st, core, &[1, 2]).unwrap();
+        heads += outcome.heads;
+        history += outcome.versions;
+    }
+    assert_eq!((heads, history), (2, 2));
+    for table in ["strategies", "strategy_versions"] {
+        let remaining: Vec<(i64, i64)> = conn
+            .prepare(&format!(
+                "SELECT core_uid, strategy_id FROM {table} ORDER BY core_uid, strategy_id"
+            ))
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(remaining, vec![(11, 2), (22, 2), (33, 1), (33, 2)]);
+    }
+}

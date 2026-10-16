@@ -524,6 +524,26 @@ impl StrategiesView {
                         }
                     }),
                 );
+                let cores = visible_strategy_cores(self, self.backend.read(cx));
+                let ids: Vec<_> = cores.iter().map(|(core, _)| *core).collect();
+                let plan = super::super::forget::ForgetPlan::capture(&ids, &self.deleted);
+                items.push(
+                    MoonMenuItem::with_key(
+                        "forget-all-cores",
+                        t!("strat.menu_forget_all_cores", n = plan.count()).to_string(),
+                    )
+                    .tone(MoonTone::Danger)
+                    .disabled(!plan.available())
+                    .on_click({
+                        let view = view.clone();
+                        move |_, window, app| {
+                            window.close_context_menu(app);
+                            view.update(app, |this, cx| {
+                                this.request_forget_all(plan.clone(), window, cx);
+                            });
+                        }
+                    }),
+                );
             }
             MenuTarget::DeletedStrategy(id) => {
                 // Restore under the original ID so version history and order profit remain joined

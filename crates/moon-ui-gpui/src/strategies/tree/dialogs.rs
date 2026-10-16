@@ -949,11 +949,13 @@ impl StrategiesView {
             }
             // Confirmed by clicking a destination in the body, not by an OK button.
             TreeOp::MoveToFolder { .. } => {}
-            TreeOp::ConfirmForget { core, ids, .. } => {
+            TreeOp::ConfirmForget { targets, .. } => {
                 // No workspace re-validation here: this touches the LOCAL history database, never
                 // the core, so a core going out of scope between the dialog opening and its OK
                 // changes nothing about what is being purged.
-                self.forget_deleted(core, ids, cx);
+                for (core, ids) in targets {
+                    self.forget_deleted(core, ids, cx);
+                }
             }
         }
 
@@ -973,7 +975,11 @@ impl StrategiesView {
     ///
     /// Returns:
     ///     Nothing; the dialog stays open until confirm, cancel, or overlay dismiss.
-    fn open_op_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::strategies) fn open_op_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.ensure_op_input(window, cx);
         let view = cx.entity();
         window.open_unique_moon_dialog(
@@ -1125,7 +1131,10 @@ impl StrategiesView {
         if ids.is_empty() {
             return;
         }
-        self.op = Some(TreeOp::ConfirmForget { core, ids, label });
+        self.op = Some(TreeOp::ConfirmForget {
+            targets: vec![(core, ids)],
+            label,
+        });
         self.open_op_dialog(window, cx);
         cx.notify();
     }

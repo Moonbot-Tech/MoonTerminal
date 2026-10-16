@@ -149,6 +149,8 @@ strat.menu_expand_core: "Bu çekirdeği aç"
 strat.menu_collapse_core: "Bu çekirdeği daralt"
 strat.menu_forget: "Sonsuza dek unut…"
 strat.menu_forget_all: "Tümünü sonsuza dek unut (%{n})…"
+strat.menu_forget_all_cores: "Tüm çekirdeklerde unut (%{n})…"
+strat.count_strategies_all_cores: "bu penceredeki %{cores} çekirdekte %{n} silinmiş strateji"
 
 # --- Strategy tree: the one irreversible confirmation ---
 strat.forget_title: "Sonsuza dek unutulsun mu?"
