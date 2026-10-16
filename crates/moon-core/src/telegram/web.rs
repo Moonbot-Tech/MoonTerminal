@@ -11,7 +11,7 @@
 //! `POST /api/cores/switch`, `POST /api/core/cancel_all`, `POST /api/trades`,
 //! `POST /api/strategies`, `POST /api/strategy/toggle`, `POST /api/core/reconnect`,
 //! `POST /api/notify`, `POST /api/notify/save`, `POST /api/trade/ticks`, and
-//! `POST /api/order/ticks`.
+//! `POST /api/order/ticks` and `POST /api/coin/ticks`.
 
 use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -108,6 +108,16 @@ pub enum MiniAppApiRequest {
         uid: u64,
         since_ms: Option<i64>,
         reply: SyncSender<Result<dto::LiveTicksDto, MiniAppApiError>>,
+    },
+    /// Read one market stream with overlays from every visible core on that venue.
+    CoinTicks {
+        identity: SignedInitData,
+        chat_id: i64,
+        core: u64,
+        market: String,
+        tf: dto::CoinTfDto,
+        since_ms: Option<i64>,
+        reply: SyncSender<Result<dto::CoinTicksDto, MiniAppApiError>>,
     },
     /// Data-free session check. The body is discarded after bounds checks.
     Session {
@@ -494,6 +504,16 @@ struct OrderTicksBody {
     since_ms: Option<i64>,
 }
 
+/// Market chart request, bounded before dispatch and refusing unrecognized fields.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoinTicksBody {
+    core: u64,
+    market: String,
+    tf: dto::CoinTfDto,
+    since_ms: Option<i64>,
+}
+
 /// Body of `POST /api/core/switch`. Unknown fields are rejected.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -700,6 +720,27 @@ impl App {
                     })
                 })
             }
+            (&Method::POST, "/api/coin/ticks") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<CoinTicksBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    if parsed.market.is_empty()
+                        || parsed.market.len() > MAX_MARKET_BYTES
+                        || parsed.since_ms.is_some_and(|stamp| stamp < 0)
+                    {
+                        return Err(status_response(StatusCode::BAD_REQUEST, "json"));
+                    }
+                    Ok(MiniAppApiRequest::CoinTicks {
+                        identity,
+                        chat_id,
+                        core: parsed.core,
+                        market: parsed.market,
+                        tf: parsed.tf,
+                        since_ms: parsed.since_ms,
+                        reply,
+                    })
+                })
+            }
             (&Method::POST, "/api/panic") => {
                 self.handle_api(request, |identity, chat_id, body, reply| {
                     let parsed = serde_json::from_value::<PanicSellBody>(body)
@@ -835,6 +876,7 @@ impl App {
                 | "/api/order/cancel"
                 | "/api/trade/ticks"
                 | "/api/order/ticks"
+                | "/api/coin/ticks"
                 | "/api/panic"
                 | "/api/core/switch"
                 | "/api/cores/switch"
@@ -1135,6 +1177,7 @@ const API_ROUTES: &[&str] = &[
     "/api/order/cancel",
     "/api/trade/ticks",
     "/api/order/ticks",
+    "/api/coin/ticks",
     "/api/panic",
     "/api/core/switch",
     "/api/cores/switch",

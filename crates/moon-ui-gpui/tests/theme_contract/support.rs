@@ -404,6 +404,11 @@ pub fn read_core_src(rel: &str) -> String {
     read_sibling_src("moon-core", rel)
 }
 
+/// Read one `moon-chart` source file for a cross-crate static contract, normalizing line endings.
+pub fn read_chart_src(rel: &str) -> String {
+    read_sibling_src("moon-chart", rel)
+}
+
 /// Read one source file of a sibling crate, line endings normalized.
 fn read_sibling_src(krate: &str, rel: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))

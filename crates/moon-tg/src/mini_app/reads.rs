@@ -17,14 +17,14 @@ use moon_core::session::{BalanceState, CoreRunState};
 use moon_core::telegram::report::ReportRequest;
 use moon_core::telegram::web::MiniAppApiError;
 use moon_core::telegram::web::dto::{
-    CoinBalanceDto, CoreBalanceFigureDto, CoreStatusDto, CoreStrategiesDto, CoresDto,
+    CoinBalanceDto, CoinRefDto, CoreBalanceFigureDto, CoreStatusDto, CoreStrategiesDto, CoresDto,
     ExchangeBalanceDto, OrdersDto, ReportDto, ReportPeriodDto, StrategiesDto, StrategyDto,
     StrategyFolderDto, TradesDto,
 };
 use moon_core::util::fmt;
 
 use super::dto::{
-    balance_state_dto, balance_text, conn_of, order_dto, report_dto, report_period,
+    balance_state_dto, balance_text, conn_of, core_quotes, order_dto, report_dto, report_period,
     strategy_pending, trade_dto,
 };
 use super::{mini_access, visible_cores};
@@ -225,6 +225,7 @@ pub(super) fn mini_trades(
             read_access,
             names,
             crate::report::MINI_TRADES_LIMIT,
+            None,
         );
         Box::new(move |host: &mut dyn TgHost| {
             host.state_mut().mini_trades_pending = false;
@@ -261,16 +262,18 @@ fn trades_dto(
     trades: &[crate::report::MiniTrade],
 ) -> TradesDto {
     let now_secs = moon_core::util::now_unix_ms_i64() / 1000;
+    let quotes = core_quotes(&host.config().servers);
+    let mut markets = std::collections::HashMap::new();
     TradesDto {
         trades: trades
             .iter()
-            .map(|trade| trade_dto(host, zone, now_secs, trade))
+            .map(|trade| trade_dto(host, &quotes, &mut markets, zone, now_secs, trade))
             .collect(),
         limit: u32::try_from(crate::report::MINI_TRADES_LIMIT).unwrap_or(u32::MAX),
     }
 }
 
-/// Strategies of the chat's cores, grouped by folder, with unconfirmed toggles marked.
+/// Strategies of the chat's cores, grouped by folder, with active coins and pending toggles.
 ///
 /// Confirmed, vanished and settled toggle entries are dropped from the pending map first.
 pub(super) fn mini_strategies(
@@ -287,6 +290,7 @@ pub(super) fn mini_strategies(
     for (id, name, exchange) in listed {
         let mut folders: Vec<StrategyFolderDto> = Vec::new();
         if let Some(data) = store.core(id) {
+            let coins = strategy_coins(&data.orders);
             for row in &data.strategies {
                 let path = moon_core::feed::strategy_path::split_path(&row.folder_path).join("/");
                 let entry = host.state().mini_strategy_wanted.get(&(id, row.id));
@@ -305,6 +309,7 @@ pub(super) fn mini_strategies(
                     checked: row.checked,
                     wanted: pending.and(entry.map(|(wanted, ..)| *wanted)),
                     pending,
+                    coins: coins.get(&row.id).cloned().unwrap_or_default(),
                 };
                 match folders.iter_mut().find(|folder| folder.path == path) {
                     Some(folder) => folder.strategies.push(strategy),
@@ -323,6 +328,25 @@ pub(super) fn mini_strategies(
         });
     }
     Ok(StrategiesDto { cores, can_control })
+}
+
+/// Index only this core's active orders, keeping strategy coin lists stable and unique.
+pub(super) fn strategy_coins(
+    orders: &[moon_core::feed::OrderRow],
+) -> HashMap<u64, Vec<CoinRefDto>> {
+    let mut coins: HashMap<u64, Vec<CoinRefDto>> = HashMap::new();
+    for order in orders.iter().filter(|order| !order.job_is_done) {
+        coins.entry(order.strat_id).or_default().push(CoinRefDto {
+            coin: order.coin.clone(),
+            market: order.market.clone(),
+        });
+    }
+    for values in coins.values_mut() {
+        values.sort_by(|a, b| a.market.cmp(&b.market).then(a.coin.cmp(&b.coin)));
+        values.dedup_by(|a, b| a.market == b.market);
+        values.sort_by(|a, b| a.coin.cmp(&b.coin).then(a.market.cmp(&b.market)));
+    }
+    coins
 }
 
 /// Drop toggle entries whose strategy is gone or whose state [`strategy_pending`] settled.

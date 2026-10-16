@@ -343,7 +343,7 @@
                 finish(job, { ok: false, status: 0, cancelled: true, retry: false, error: "" });
                 return;
             }
-            if ((pack.status === 503 || pack.status === 504) && job.path !== "/api/trade/ticks" && job.path !== "/api/order/ticks") {
+            if ((pack.status === 503 || pack.status === 504) && job.path !== "/api/trade/ticks" && job.path !== "/api/order/ticks" && job.path !== "/api/coin/ticks") {
                 if (job.attempt < retryLimit(job)) {
                     var wait = retryWait(job);
                     job.attempt += 1;
@@ -991,10 +991,7 @@
         var main = el("div", "order-main");
         var top = el("div", "order-top");
         // (E) marks an emulated order, as the desktop orders table does.
-        var coin = el("span", "name order-coin", (order.coin || "") + (order.emulator ? " (E)" : ""));
-        coin.title = order.coin || "";
-        top.appendChild(coin);
-        top.appendChild(chartGlyph());
+        coinTarget(top, order.coin, order.market, order.core, (order.coin || "") + (order.emulator ? " (E)" : ""));
         top.appendChild(el("span", "badge order-side " + sideClass(order.side), sideLabel(order.side)));
         var change = orderChange(order);
         if (change) top.appendChild(change);
@@ -1684,10 +1681,7 @@
         row.tabIndex = 0;
         var left = el("div", "grow");
         var top = el("div", "order-top");
-        var coin = el("span", "name order-coin", trade.coin || "");
-        coin.title = trade.coin || "";
-        top.appendChild(coin);
-        top.appendChild(chartGlyph());
+        coinTarget(top, trade.coin, trade.market, trade.core);
         top.appendChild(el("span", "badge order-side " + sideClass(trade.side), sideLabel(trade.side)));
         left.appendChild(top);
         // The core name in full on as many lines as it needs; the close time ends the last one.
@@ -1758,6 +1752,14 @@
     var LIVE_SCALE_SHARE = 0.10;
     var CHART_AXIS_W = 58;
     var CHART_VOL_H = 44;
+    // Deal marks in the terminal's sizes (crates/moon-chart/src/trade_marks.rs), in CSS px: the
+    // arrow's half height and half width, and the entry-to-exit connector's alpha, width and the
+    // length below which it is skipped.
+    var DEAL_ARROW_HALF_H = 6;
+    var DEAL_ARROW_HALF_W = 4.5;
+    var DEAL_CONNECTOR_ALPHA = 0.85;
+    var DEAL_CONNECTOR_W = 2;
+    var DEAL_CONNECTOR_MIN = 6;
     var TRADE_RANGES = [["deal", "mini_chart_range_deal"], ["30", "mini_chart_range_30"], ["300", "mini_chart_range_300"]];
     var LIVE_SPANS = [["120", "mini_chart_span_2"], ["300", "mini_chart_span_5"], ["900", "mini_chart_span_15"]];
     // Every sheet open and close bumps it; a reply or timer of an older sheet sees the change and stops.
@@ -1829,6 +1831,9 @@
         this.mark = null;
         this.view = { from: 0, to: 1, lo: 0, hi: 1 };
         this.cross = null;
+        // The tapped marker whose tip is open, and the core whose lines stand out (null: none).
+        this.markTip = null;
+        this.highlight = null;
         this.follow = false;
         this.shown = 0;
         this.canvas = el("canvas", "chart-canvas");
@@ -1916,7 +1921,23 @@
             delete points[e.pointerId];
             if (tap) {
                 var box = cv.getBoundingClientRect();
-                self.cross = { x: e.clientX - box.left, y: e.clientY - box.top };
+                var x = e.clientX - box.left;
+                var y = e.clientY - box.top;
+                // A tap on a marker that carries a tip opens it; anywhere else places the crosshair.
+                var hit = null;
+                var best = 18;
+                var m;
+                for (m = 0; m < self.marks.length; m++) {
+                    var mk = self.marks[m];
+                    if (!mk.tip || mk.hx == null) continue;
+                    var d = Math.sqrt((mk.hx - x) * (mk.hx - x) + (mk.hy - y) * (mk.hy - y));
+                    if (d < best) {
+                        best = d;
+                        hit = mk;
+                    }
+                }
+                self.markTip = hit;
+                self.cross = hit ? null : { x: x, y: y };
                 self.draw();
             }
             var list = active();
@@ -1936,7 +1957,7 @@
     // Zoom out keeps following the newest print; zoom in and pan stop following.
     TickChart.prototype.zoomTo = function (span, at, fx) {
         var wider = span > this.view.to - this.view.from;
-        var next = Math.max(CHART_MIN_SPAN_MS, Math.min(this.opts.maxSpan, span));
+        var next = Math.max(this.opts.minSpan || CHART_MIN_SPAN_MS, Math.min(this.opts.maxSpan, span));
         this.view.from = at - fx * next;
         this.view.to = this.view.from + next;
         this.userMoved(wider);
@@ -1981,6 +2002,108 @@
         return { lo: mid - width / 2, hi: mid + width / 2 };
     }
 
+    // A deal arrow's corners: the apex ON the fill price, the body hanging away from it — below
+    // for a buy (`up`), above for a sell.
+    function dealArrow(x, y, up) {
+        var base = up ? y + 2 * DEAL_ARROW_HALF_H : y - 2 * DEAL_ARROW_HALF_H;
+        return [[x, y], [x - DEAL_ARROW_HALF_W, base], [x + DEAL_ARROW_HALF_W, base]];
+    }
+
+    // Whether entry and exit stand far enough apart for a connector between them.
+    function dealConnects(xa, ya, xb, yb) {
+        return Math.sqrt((xb - xa) * (xb - xa) + (yb - ya) * (yb - ya)) >= DEAL_CONNECTOR_MIN;
+    }
+
+    // One deal's marks as the terminal draws them: colour is the SIDE (long green, short red, both
+    // ends alike), shape the ACTION (a buy points up, a sell down). `entry` / `exit` are
+    // { t, price } or null; ends sharing `extra.deal` are joined by the dashed connector.
+    function dealMarks(long, entry, exit, extra) {
+        var out = [];
+        function end(at, up) {
+            var m = { t: at.t, price: at.price, up: up, color: long ? "--tick-buy" : "--tick-sell" };
+            var key;
+            for (key in extra) if (Object.prototype.hasOwnProperty.call(extra, key)) m[key] = extra[key];
+            out.push(m);
+        }
+        if (entry) end(entry, long);
+        if (exit) end(exit, !long);
+        return out;
+    }
+
+    // Dot radius of a print; `q` is its quantity over the largest one in view.
+    function tickRadius(q) {
+        return 0.4 + Math.sqrt(Math.max(0, q)) * 1.33;
+    }
+
+    // Spread labels apart on one axis: each item wants its centre at `want`, `h` tall. Overlapping
+    // neighbours merge into a block centred on their wanted positions; a block stays inside
+    // [minY, maxY]. Sets `y` (the centre) on every item, keeps their order, returns them sorted.
+    function relaxLabels(items, h, minY, maxY) {
+        items.sort(function (a, b) { return a.want - b.want; });
+        var blocks = [];
+        var i;
+        for (i = 0; i < items.length; i++) {
+            blocks.push({ items: [items[i]], top: items[i].want - h / 2 });
+            while (blocks.length > 1) {
+                var prev = blocks[blocks.length - 2];
+                var cur = blocks[blocks.length - 1];
+                if (prev.top + prev.items.length * h <= cur.top) break;
+                var all = prev.items.concat(cur.items);
+                var sum = 0;
+                var k;
+                for (k = 0; k < all.length; k++) sum += all[k].want - h / 2 - k * h;
+                blocks.splice(blocks.length - 2, 2, { items: all, top: sum / all.length });
+            }
+            var last = blocks[blocks.length - 1];
+            last.top = Math.max(minY, Math.min(maxY - last.items.length * h, last.top));
+        }
+        // A clamp can push a block back into its predecessor: a forward sweep separates them, a
+        // backward one pulls the tail back under maxY (both hold while the labels fit at all).
+        var floor = minY;
+        for (i = 0; i < blocks.length; i++) {
+            blocks[i].top = Math.max(blocks[i].top, floor);
+            floor = blocks[i].top + blocks[i].items.length * h;
+        }
+        var ceiling = maxY;
+        for (i = blocks.length - 1; i >= 0; i--) {
+            blocks[i].top = Math.max(minY, Math.min(blocks[i].top, ceiling - blocks[i].items.length * h));
+            ceiling = blocks[i].top;
+        }
+        for (i = 0; i < blocks.length; i++) {
+            var j;
+            for (j = 0; j < blocks[i].items.length; j++) blocks[i].items[j].y = blocks[i].top + j * h + h / 2;
+        }
+        return items;
+    }
+
+    // Candles as the wire sends them: [t_ms, open, high, low, close, volume].
+    function candleList(value) {
+        var out = [];
+        if (!Array.isArray(value)) return out;
+        var i;
+        for (i = 0; i < value.length; i++) {
+            var c = value[i];
+            if (Array.isArray(c) && c.length >= 6 && finiteNumber(c[0]) && finiteNumber(c[2]) && finiteNumber(c[3]) && finiteNumber(c[4])) out.push(c);
+        }
+        return out;
+    }
+
+    // Candles that touch the view; none on a tick chart.
+    TickChart.prototype.visibleCandles = function () {
+        var out = [];
+        if (!this.opts.candles) return out;
+        var all = this.opts.candles();
+        var tf = this.opts.tf || 60000;
+        var i;
+        for (i = 0; i < all.length; i++) if (all[i][0] + tf >= this.view.from && all[i][0] <= this.view.to) out.push(all[i]);
+        return out;
+    };
+
+    // Opacity of something owned by `core` while one core is highlighted.
+    TickChart.prototype.dim = function (core, faded) {
+        return this.highlight != null && core !== this.highlight ? faded : 1;
+    };
+
     TickChart.prototype.fitY = function () {
         var ts = this.opts.ticks();
         var v = this.view;
@@ -1990,6 +2113,8 @@
             var k;
             for (k = 0; k < this.levels.length; k++) if (this.levels[k].fit) keep.push(this.levels[k].price);
             for (k = 0; k < ts.length; k++) if (ts[k][0] >= v.from && ts[k][0] <= v.to) keep.push(ts[k][1]);
+            var bars = this.visibleCandles();
+            for (k = 0; k < bars.length; k++) keep.push(bars[k][2], bars[k][3]);
             var band = liveScale(ref, keep, LIVE_SCALE_SHARE);
             v.lo = band.lo;
             v.hi = band.hi;
@@ -2008,6 +2133,12 @@
             if (!this.levels[i].fit) continue;
             lo = Math.min(lo, this.levels[i].price);
             hi = Math.max(hi, this.levels[i].price);
+        }
+        // A fill in view stays on the scale even where no print reached its price.
+        for (i = 0; i < this.marks.length; i++) {
+            if (this.marks[i].t < v.from || this.marks[i].t > v.to) continue;
+            lo = Math.min(lo, this.marks[i].price);
+            hi = Math.max(hi, this.marks[i].price);
         }
         if (!isFinite(lo) || !isFinite(hi)) {
             lo = 0;
@@ -2075,8 +2206,19 @@
         g.font = "10px " + mono;
         g.textBaseline = "middle";
         var taken = [];
-        for (i = 0; i < levels.length; i++) taken.push(Y(levels[i].price));
-        if (nowPrice != null) taken.push(Y(nowPrice));
+        // Many cores' levels: the axis tags are spread apart first, so the grid labels give way
+        // to where the tags end up rather than where they wanted to be.
+        var axisTags = null;
+        if (this.opts.relax) {
+            axisTags = [];
+            for (i = 0; i < levels.length; i++) axisTags.push({ want: Math.max(0, Math.min(plotH, Y(levels[i].price))), level: levels[i] });
+            if (nowPrice != null) axisTags.push({ want: Math.max(0, Math.min(plotH, Y(nowPrice))), now: true });
+            relaxLabels(axisTags, 16, 0, plotH);
+            for (i = 0; i < axisTags.length; i++) taken.push(axisTags[i].y);
+        } else {
+            for (i = 0; i < levels.length; i++) taken.push(Y(levels[i].price));
+            if (nowPrice != null) taken.push(Y(nowPrice));
+        }
         var steps = 5;
         for (i = 0; i <= steps; i++) {
             var gp = v.lo + (v.hi - v.lo) * i / steps;
@@ -2096,7 +2238,8 @@
             g.fillText(gp.toFixed(dp), plotW + 6, gy);
         }
         // Time axis.
-        var tstep = span > 1800000 ? 300000 : span > 600000 ? 120000 : span > 180000 ? 60000 : span > 60000 ? 15000 : span > 20000 ? 5000 : 2000;
+        var tstep = span > 43200000 ? 7200000 : span > 14400000 ? 3600000 : span > 5400000 ? 900000
+            : span > 1800000 ? 300000 : span > 600000 ? 120000 : span > 180000 ? 60000 : span > 60000 ? 15000 : span > 20000 ? 5000 : 2000;
         g.textAlign = "center";
         // Drawn label and tag boxes in CSS pixels, kept for the preview harness.
         var drawn = { times: [], tags: [] };
@@ -2120,8 +2263,26 @@
             g.fillText(timeLabel, lx, H - 8);
             drawn.times.push({ x: lx - halfTime, y: H - 14, w: halfTime * 2, h: 12 });
         }
+        // Candles: one bar per bucket, its volume below in the bar's colour.
+        var bars = this.visibleCandles();
+        var tf = this.opts.tf || 60000;
+        var barW = Math.max(1, tf / span * plotW * 0.7);
+        if (bars.length) {
+            var maxBarV = 0;
+            for (i = 0; i < bars.length; i++) if (finiteNumber(bars[i][5]) && bars[i][5] > maxBarV) maxBarV = bars[i][5];
+            if (maxBarV > 0) {
+                var volBase = plotH + 2 + CHART_VOL_H - 4;
+                g.globalAlpha = 0.5;
+                for (i = 0; i < bars.length; i++) {
+                    var vh = (finiteNumber(bars[i][5]) ? bars[i][5] : 0) / maxBarV * (CHART_VOL_H - 6);
+                    g.fillStyle = color(bars[i][4] >= bars[i][1] ? "--tick-buy" : "--tick-sell");
+                    g.fillRect(X(bars[i][0] + tf / 2) - barW / 2, volBase - vh, barW, vh);
+                }
+                g.globalAlpha = 1;
+            }
+        }
         // Volume: server buckets when given (raw, before thinning), else the visible prints.
-        if (!this.opts.noVolume) {
+        if (!this.opts.noVolume && !this.opts.candles) {
             var vol = this.opts.volume;
             var bucket = Math.max(250, span / 90);
             if (vol && vol.width > 0) bucket = Math.max(1, Math.ceil(span / 90 / vol.width)) * vol.width;
@@ -2169,14 +2330,30 @@
         for (i = 0; i < levels.length; i++) {
             var ly = Y(levels[i].price);
             if (ly < 0 || ly > plotH) continue;
+            g.globalAlpha = this.dim(levels[i].core, 0.22);
             g.strokeStyle = color(levels[i].color);
-            g.setLineDash([5, 4]);
-            g.lineWidth = 1.2;
+            g.setLineDash(levels[i].solid ? [] : [5, 4]);
+            g.lineWidth = this.highlight != null && levels[i].core === this.highlight ? 2 : 1.2;
             g.beginPath();
             g.moveTo(0, ly);
             g.lineTo(plotW, ly);
             g.stroke();
             g.setLineDash([]);
+            g.globalAlpha = 1;
+        }
+        for (i = 0; i < bars.length; i++) {
+            var bx0 = X(bars[i][0] + tf / 2);
+            var rising = bars[i][4] >= bars[i][1];
+            g.strokeStyle = color(rising ? "--tick-buy" : "--tick-sell");
+            g.fillStyle = g.strokeStyle;
+            g.lineWidth = 1;
+            g.beginPath();
+            g.moveTo(bx0, Y(bars[i][2]));
+            g.lineTo(bx0, Y(bars[i][3]));
+            g.stroke();
+            var by0 = Y(Math.max(bars[i][1], bars[i][4]));
+            var by1 = Y(Math.min(bars[i][1], bars[i][4]));
+            g.fillRect(bx0 - barW / 2, by0, barW, Math.max(1, by1 - by0));
         }
         // Price line, then the dots, radius by the square root of the quantity.
         g.strokeStyle = color("--sub");
@@ -2195,32 +2372,61 @@
             var q = finiteNumber(vis[i][2]) && maxQ > 0 ? vis[i][2] / maxQ : 0;
             g.fillStyle = color(vis[i][3] === 1 ? "--tick-buy" : "--tick-sell");
             g.beginPath();
-            g.arc(X(vis[i][0]), Y(vis[i][1]), 1.2 + Math.sqrt(Math.max(0, q)) * 4, 0, Math.PI * 2);
+            g.arc(X(vis[i][0]), Y(vis[i][1]), tickRadius(q), 0, Math.PI * 2);
             g.fill();
         }
         g.globalAlpha = 1;
-        // Entry and exit markers.
-        for (i = 0; i < this.marks.length; i++) {
-            var m = this.marks[i];
+        // Deal marks: each deal's dashed connector first, then its arrows over it.
+        var marks = this.marks;
+        var j;
+        drawn.arrows = [];
+        drawn.connectors = [];
+        for (i = 0; i < marks.length; i++) {
+            if (marks[i].deal == null) continue;
+            for (j = i + 1; j < marks.length; j++) {
+                if (marks[j].deal !== marks[i].deal) continue;
+                var xa = X(marks[i].t);
+                var ya = Y(marks[i].price);
+                var xb = X(marks[j].t);
+                var yb = Y(marks[j].price);
+                if (Math.max(xa, xb) < 0 || Math.min(xa, xb) > plotW || !dealConnects(xa, ya, xb, yb)) continue;
+                // Clipped to the plot: an end outside the window must not reach into the axis.
+                g.save();
+                g.beginPath();
+                g.rect(0, 0, plotW, plotH);
+                g.clip();
+                g.globalAlpha = DEAL_CONNECTOR_ALPHA * this.dim(marks[i].core, 0.3);
+                g.strokeStyle = color(marks[i].color);
+                g.lineWidth = DEAL_CONNECTOR_W;
+                g.setLineDash([5, 4]);
+                g.beginPath();
+                g.moveTo(xa, ya);
+                g.lineTo(xb, yb);
+                g.stroke();
+                g.restore();
+                drawn.connectors.push({ x0: xa, y0: ya, x1: xb, y1: yb, color: marks[i].color });
+            }
+        }
+        g.globalAlpha = 1;
+        for (i = 0; i < marks.length; i++) {
+            var m = marks[i];
             var mx = X(m.t);
             var my = Y(m.price);
+            m.hx = null;
             if (mx < -10 || mx > plotW + 10) continue;
+            m.hx = mx;
+            m.hy = m.up ? my + DEAL_ARROW_HALF_H : my - DEAL_ARROW_HALF_H;
+            var corners = dealArrow(mx, my, m.up);
+            g.globalAlpha = 0.95 * this.dim(m.core, 0.3);
             g.fillStyle = color(m.color);
-            g.strokeStyle = color("--card");
-            g.lineWidth = 2;
             g.beginPath();
-            if (m.up) {
-                g.moveTo(mx, my + 4);
-                g.lineTo(mx - 7, my + 16);
-                g.lineTo(mx + 7, my + 16);
-            } else {
-                g.moveTo(mx, my - 4);
-                g.lineTo(mx - 7, my - 16);
-                g.lineTo(mx + 7, my - 16);
-            }
+            g.moveTo(corners[0][0], corners[0][1]);
+            g.lineTo(corners[1][0], corners[1][1]);
+            g.lineTo(corners[2][0], corners[2][1]);
             g.closePath();
-            g.stroke();
             g.fill();
+            g.globalAlpha = 1;
+            drawn.arrows.push({ x: mx, y: my, up: m.up, color: m.color, base: corners[1][1], halfW: mx - corners[1][0] });
         }
         // Hold span.
         if (this.opts.hold) {
@@ -2259,7 +2465,8 @@
             drawn.tags.push({ x: plotW, y: y - 8, w: axisW, h: 16 });
             return y;
         }
-        for (i = 0; i < levels.length; i++) {
+        if (axisTags) this.drawSpread(g, color, axisTags, Y, plotW, plotH, axisW, nowPrice, drawn);
+        for (i = 0; !axisTags && i < levels.length; i++) {
             var lv = levels[i];
             var y = Y(lv.price);
             if (y < 0 || y > plotH) {
@@ -2297,7 +2504,7 @@
             g.fillText(lv.label, 6, y - 8);
         }
         // The current price, neutral so it never reads as an order level.
-        if (nowPrice != null) {
+        if (nowPrice != null && !axisTags) {
             var py = Y(nowPrice);
             if (py >= 0 && py <= plotH) {
                 py = tagY(py);
@@ -2309,17 +2516,26 @@
                 g.fillText(nowPrice.toFixed(dp), plotW + 4, py);
             }
         }
-        // Crosshair on the print nearest the tap.
+        // A tapped marker's own tip, else the crosshair on the print or candle nearest the tap.
         var tip = this.tip;
+        if (this.markTip && this.markTip.hx != null) {
+            clear(tip);
+            this.markTip.tip(tip);
+            tip.hidden = false;
+            placeTip(tip, this.markTip.hx, this.markTip.hy, plotW);
+            return;
+        }
         var best = null;
+        var candle = !!bars.length;
+        var pool = candle ? bars : vis;
         if (this.cross && this.cross.x < plotW) {
             var at = v.from + this.cross.x / plotW * span;
             var gap = Infinity;
-            for (i = 0; i < vis.length; i++) {
-                var dd = Math.abs(vis[i][0] - at);
+            for (i = 0; i < pool.length; i++) {
+                var dd = Math.abs(pool[i][0] + (candle ? tf / 2 : 0) - at);
                 if (dd < gap) {
                     gap = dd;
-                    best = vis[i];
+                    best = pool[i];
                 }
             }
         }
@@ -2327,8 +2543,33 @@
             tip.hidden = true;
             return;
         }
-        var cxp = X(best[0]);
-        var cyp = Y(best[1]);
+        var cxp = X(best[0] + (candle ? tf / 2 : 0));
+        var cyp = Y(candle ? best[4] : best[1]);
+        if (candle) {
+            g.strokeStyle = color("--hint");
+            g.setLineDash([2, 3]);
+            g.beginPath();
+            g.moveTo(cxp, 0);
+            g.lineTo(cxp, plotH);
+            g.moveTo(0, cyp);
+            g.lineTo(plotW, cyp);
+            g.stroke();
+            g.setLineDash([]);
+            clear(tip);
+            tip.appendChild(el("span", "num", clockAt(best[0]).slice(0, 5)));
+            tip.appendChild(document.createTextNode(" · O "));
+            tip.appendChild(el("span", "num", best[1].toFixed(dp)));
+            tip.appendChild(document.createTextNode(" H "));
+            tip.appendChild(el("span", "num", best[2].toFixed(dp)));
+            tip.appendChild(el("br"));
+            tip.appendChild(document.createTextNode("L "));
+            tip.appendChild(el("span", "num", best[3].toFixed(dp)));
+            tip.appendChild(document.createTextNode(" C "));
+            tip.appendChild(el("span", "num", best[4].toFixed(dp)));
+            tip.hidden = false;
+            placeTip(tip, cxp, cyp, plotW);
+            return;
+        }
         g.strokeStyle = color("--hint");
         g.setLineDash([2, 3]);
         g.beginPath();
@@ -2351,6 +2592,76 @@
         tip.style.left = left + "px";
         tip.style.top = Math.max(4, cyp - 46) + "px";
     };
+
+    // Levels of several cores: a boxed name at the left edge and a price tag on the axis per line,
+    // both spread apart so none overlap; one moved off its line keeps a connector to its price.
+    TickChart.prototype.drawSpread = function (g, color, tags, Y, plotW, plotH, axisW, nowPrice, drawn) {
+        var dp = this.opts.dp;
+        var mono = color("--font-mono");
+        var ui = color("--font-ui");
+        var levels = this.levels;
+        var labs = [];
+        var i;
+        for (i = 0; i < levels.length; i++) labs.push({ want: Math.max(1, Math.min(plotH - 1, Y(levels[i].price) - 9)), level: levels[i] });
+        relaxLabels(labs, 15, 1, plotH - 1);
+        g.font = "600 10px " + ui;
+        g.textAlign = "left";
+        g.textBaseline = "middle";
+        drawn.labels = [];
+        for (i = 0; i < labs.length; i++) {
+            var l = labs[i].level;
+            var col = color(l.color);
+            var tw = g.measureText(l.label).width + 10;
+            var ly = Y(l.price);
+            g.globalAlpha = this.dim(l.core, 0.35);
+            if (Math.abs(labs[i].y - (ly - 9)) > 1.5) {
+                g.strokeStyle = col;
+                g.lineWidth = 1;
+                g.beginPath();
+                g.moveTo(tw + 2, labs[i].y);
+                g.lineTo(tw + 14, ly);
+                g.stroke();
+            }
+            g.fillStyle = color("--card");
+            g.fillRect(2, labs[i].y - 7, tw, 14);
+            g.strokeStyle = col;
+            g.lineWidth = 1;
+            g.strokeRect(2.5, labs[i].y - 6.5, tw - 1, 13);
+            g.fillStyle = col;
+            g.fillText(l.label, 7, labs[i].y + 0.5);
+            drawn.labels.push({ x: 2, y: labs[i].y - 7, w: tw, h: 14 });
+            g.globalAlpha = 1;
+        }
+        g.font = "600 10px " + mono;
+        for (i = 0; i < tags.length; i++) {
+            var t = tags[i];
+            var tagCol = t.now ? color("--ink") : color(t.level.color);
+            g.globalAlpha = t.now ? 1 : this.dim(t.level.core, 0.35);
+            if (Math.abs(t.y - t.want) > 1.5) {
+                g.strokeStyle = tagCol;
+                g.lineWidth = 1;
+                g.beginPath();
+                g.moveTo(plotW - 6, t.want);
+                g.lineTo(plotW, t.y);
+                g.stroke();
+            }
+            g.fillStyle = tagCol;
+            g.fillRect(plotW, t.y - 8, axisW, 16);
+            g.fillStyle = color("--card");
+            g.fillText((t.now ? nowPrice : t.level.price).toFixed(dp), plotW + 4, t.y);
+            drawn.tags.push({ x: plotW, y: t.y - 8, w: axisW, h: 16 });
+            g.globalAlpha = 1;
+        }
+    };
+
+    // A tip beside (x, y), flipped to the left when it would cross the axis.
+    function placeTip(tip, x, y, plotW) {
+        var w = tip.offsetWidth;
+        var left = x + 12;
+        if (left + w > plotW) left = x - w - 12;
+        tip.style.left = Math.max(4, left) + "px";
+        tip.style.top = Math.max(4, y - 46) + "px";
+    }
 
     // A row of view chips; `extra` (the follow button) sits at the far end.
     function chartChips(host, items, active, onPick, extra) {
@@ -2398,6 +2709,35 @@
         return svg;
     }
 
+    // A coin name that opens the live chart of its market (every core's orders on it): accent text
+    // with the chart glyph, its own target inside a row, so neither its click nor its Enter/Space
+    // reaches the row's handler. Without a market (an older station) the name stays plain text
+    // beside the neutral glyph and the row keeps the tap. `label` defaults to the coin.
+    function coinTarget(host, coin, market, core, label) {
+        var text = label || coin || "";
+        if (!coin || !market || core == null) {
+            var plain = el("span", "name order-coin", text);
+            plain.title = coin || "";
+            host.appendChild(plain);
+            host.appendChild(chartGlyph());
+            return null;
+        }
+        var btn = el("button", "name order-coin coin-btn", text);
+        btn.type = "button";
+        btn.title = coin;
+        btn.setAttribute("aria-label", trf("mini_coin_open", { coin: coin }));
+        btn.appendChild(chartGlyph());
+        btn.addEventListener("click", function (event) {
+            event.stopPropagation();
+            openCoinSheet({ coin: coin, market: market, core: core });
+        });
+        btn.addEventListener("keydown", function (event) {
+            if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+        });
+        host.appendChild(btn);
+        return btn;
+    }
+
     // A tick read that may succeed if asked again: busy (503), late (504) or no connection (0).
     function chartTransient(res) {
         return res.status === 503 || res.status === 504 || res.status === 0;
@@ -2427,10 +2767,12 @@
         var i;
         for (i = 0; i < items.length; i++) {
             var item = el("span", "");
-            var mark = el("i", items[i].dot ? "dot" : "");
-            if (items[i].dot) mark.style.background = "var(" + items[i].color + ")";
-            else mark.style.borderColor = "var(" + items[i].color + ")";
-            item.appendChild(mark);
+            if (items[i].color) {
+                var mark = el("i", items[i].dot ? "dot" + (items[i].square ? " square" : "") : items[i].solid ? "solid" : "");
+                if (items[i].dot) mark.style.background = "var(" + items[i].color + ")";
+                else mark.style.borderColor = "var(" + items[i].color + ")";
+                item.appendChild(mark);
+            }
             item.appendChild(document.createTextNode(tr(items[i].key)));
             host.appendChild(item);
         }
@@ -2486,7 +2828,10 @@
             sheetChart.destroy();
             sheetChart = null;
         }
-        if (sheet) clear(sheet);
+        if (sheet) {
+            clear(sheet);
+            sheet.classList.remove("coin-sheet");
+        }
         return sheetToken;
     }
 
@@ -2665,23 +3010,19 @@
                 live: false,
                 onView: provenance
             });
-            sheetChart.levels = chartLevels(data.levels, false);
-            if (finiteNumber(data.entry_price)) {
-                sheetChart.marks.push({ t: data.open_ms, price: data.entry_price, up: long, color: long ? "--tick-buy" : "--tick-sell" });
-            }
-            if (finiteNumber(data.exit_price)) {
-                sheetChart.marks.push({ t: data.close_ms, price: data.exit_price, up: !long, color: long ? "--tick-sell" : "--tick-buy" });
-            }
+            // No order levels across a closed deal: only its two arrows and their connector, as
+            // in the terminal; the prices stay in the details under the chart.
+            sheetChart.marks = dealMarks(long,
+                finiteNumber(data.entry_price) ? { t: data.open_ms, price: data.entry_price } : null,
+                finiteNumber(data.exit_price) ? { t: data.close_ms, price: data.exit_price } : null,
+                { deal: "trade" });
             var span = tradeView(state.range, data);
             sheetChart.setView(span[0], span[1]);
-            var items = [
+            chartLegend(legend, [
                 { dot: true, color: "--tick-buy", key: "mini_chart_tick_buy" },
-                { dot: true, color: "--tick-sell", key: "mini_chart_tick_sell" }
-            ];
-            if (hasLevel(sheetChart.levels, "buy")) items.push({ color: "--entry", key: "mini_chart_buy_order" });
-            if (hasLevel(sheetChart.levels, "take")) items.push({ color: "--take", key: "mini_chart_take" });
-            if (hasLevel(sheetChart.levels, "stop")) items.push({ color: "--stop", key: "mini_chart_stop" });
-            chartLegend(legend, items);
+                { dot: true, color: "--tick-sell", key: "mini_chart_tick_sell" },
+                { key: "mini_chart_deal_marks" }
+            ]);
             provenance();
         }
         function fetchTicks() {
@@ -2755,6 +3096,54 @@
         line.appendChild(el("span", "k", label));
         line.appendChild(el("span", "num" + (tone ? " " + tone : ""), value == null || value === "" ? "—" : value));
         host.appendChild(line);
+    }
+
+    // Append a live reply's prints to `live.ring` past the `live.last` cursor; a truncated reply
+    // replaces the ring. An inclusive cursor repeats the boundary millisecond, so only identical
+    // prints are deduped. The ring keeps LIVE_KEEP_MS before `nowMs` and at most LIVE_RING prints.
+    function mergeRing(live, ticks, truncated, nowMs) {
+        var list = tickList(ticks);
+        if (truncated) {
+            live.ring = [];
+            live.last = null;
+        }
+        var ring = live.ring;
+        var i;
+        for (i = 0; i < list.length; i++) {
+            var tick = list[i];
+            if (live.last != null && tick[0] < live.last) continue;
+            var duplicate = false;
+            var j;
+            for (j = ring.length - 1; j >= 0 && ring[j][0] === tick[0]; j--) {
+                if (ring[j][1] === tick[1] && ring[j][2] === tick[2] && ring[j][3] === tick[3]) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            ring.push(list[i]);
+            live.last = list[i][0];
+        }
+        var cut = nowMs - LIVE_KEEP_MS;
+        var drop = 0;
+        while (drop < ring.length && ring[drop][0] < cut) drop += 1;
+        if (ring.length - drop > LIVE_RING) drop = ring.length - LIVE_RING;
+        if (drop) ring.splice(0, drop);
+    }
+
+    // The live tag: a pulsing dot and `text`; amber with a still dot when `stale`.
+    function setLiveTag(tag, text, stale) {
+        clear(tag);
+        tag.className = "live-tag" + (stale ? " stale" : "");
+        tag.appendChild(el("span", "live-dot"));
+        tag.appendChild(document.createTextNode(text));
+    }
+
+    // «no connection N s», or plain «no connection» when the gap is unknown.
+    function staleSeconds(seconds) {
+        if (!finiteNumber(seconds)) return tr("mini_chart_offline");
+        var n = Math.max(1, Math.round(seconds));
+        return trf("mini_chart_stale_" + pluralForm(n), { n: n });
     }
 
     // Open position: live PnL, a tick chart fed every 500 ms and the order's own actions. The
@@ -2837,15 +3226,10 @@
             follow.setAttribute("aria-pressed", on ? "true" : "false");
         }
         function setTag(text, stale) {
-            clear(tag);
-            tag.className = "live-tag" + (stale ? " stale" : "");
-            tag.appendChild(el("span", "live-dot"));
-            tag.appendChild(document.createTextNode(text));
+            setLiveTag(tag, text, stale);
         }
         function staleText(seconds) {
-            if (!finiteNumber(seconds)) return tr("mini_chart_offline");
-            var n = Math.max(1, Math.round(seconds));
-            return trf("mini_chart_stale_" + pluralForm(n), { n: n });
+            return staleSeconds(seconds);
         }
         function next(ms) {
             if (token !== sheetToken || live.stopped) return;
@@ -2900,35 +3284,8 @@
             if (!live.frozen) setTag(staleText((Date.now() - live.okAt) / 1000), true);
             next(CHART_SLOW_POLL_MS);
         }
-        // An inclusive cursor repeats the boundary millisecond; dedupe only identical prints.
         function merge(ticks, truncated) {
-            var list = tickList(ticks);
-            if (truncated) {
-                live.ring = [];
-                live.last = null;
-            }
-            var ring = live.ring;
-            var i;
-            for (i = 0; i < list.length; i++) {
-                var tick = list[i];
-                if (live.last != null && tick[0] < live.last) continue;
-                var duplicate = false;
-                var j;
-                for (j = ring.length - 1; j >= 0 && ring[j][0] === tick[0]; j--) {
-                    if (ring[j][1] === tick[1] && ring[j][2] === tick[2] && ring[j][3] === tick[3]) {
-                        duplicate = true;
-                        break;
-                    }
-                }
-                if (duplicate) continue;
-                ring.push(list[i]);
-                live.last = list[i][0];
-            }
-            var cut = now() - LIVE_KEEP_MS;
-            var drop = 0;
-            while (drop < ring.length && ring[drop][0] < cut) drop += 1;
-            if (ring.length - drop > LIVE_RING) drop = ring.length - LIVE_RING;
-            if (drop) ring.splice(0, drop);
+            mergeRing(live, ticks, truncated, now());
         }
         function ensureChart(d) {
             if (sheetChart) return;
@@ -2980,7 +3337,7 @@
         function entryMark(d) {
             var long = order.side !== "sell";
             if (!finiteNumber(d.entry_ms) || d.entry_ms <= 0 || !finiteNumber(d.entry_price)) return [];
-            return [{ t: d.entry_ms, price: d.entry_price, up: long, color: long ? "--tick-buy" : "--tick-sell" }];
+            return dealMarks(long, { t: d.entry_ms, price: d.entry_price }, null, { deal: "position" });
         }
         function openDetails(d) {
             clear(details);
@@ -3135,7 +3492,7 @@
                 for (i = 0; i < sheetChart.levels.length; i++) if (sheetChart.levels[i].kind !== "stop") keep.push(sheetChart.levels[i]);
                 sheetChart.levels = keep;
                 if (closeMs != null && finiteNumber(exitPrice)) {
-                    sheetChart.marks.push({ t: closeMs, price: exitPrice, up: !long, color: long ? "--tick-sell" : "--tick-buy" });
+                    sheetChart.marks = sheetChart.marks.concat(dealMarks(long, null, { t: closeMs, price: exitPrice }, { deal: "position" }));
                 }
                 var start = sheetChart.marks.length && sheetChart.marks[0].t;
                 if (closeMs != null && start) sheetChart.opts.hold = [start, closeMs];
@@ -3157,6 +3514,533 @@
         setTag(tr("mini_chart_live"), false);
         chartSkeleton(area);
         source.textContent = tr("mini_chart_loading");
+        showSheet(closeBtn);
+        poll();
+    }
+
+    // Coin chart modes by the wire's `tf`: the bucket, the default, narrowest and widest window.
+    var COIN_MODES = {
+        ticks: { tf: 0, span: 300000, minSpan: CHART_MIN_SPAN_MS, maxSpan: LIVE_MAX_SPAN_MS },
+        "1m": { tf: 60000, span: 5400000, minSpan: 900000, maxSpan: 86400000 },
+        "5m": { tf: 300000, span: 27000000, minSpan: 3600000, maxSpan: 86400000 },
+        "15m": { tf: 900000, span: 81000000, minSpan: 10800000, maxSpan: 86400000 }
+    };
+    var COIN_MODE_KEYS = [["ticks", "mini_coin_mode_ticks"], ["1m", "mini_coin_mode_1m"], ["5m", "mini_coin_mode_5m"], ["15m", "mini_coin_mode_15m"]];
+    // A core name on a level label is cut to this many characters; the cards show it whole.
+    var COIN_LABEL_CHARS = 14;
+
+    function shortCore(name) {
+        var text = String(name || "");
+        return text.length > COIN_LABEL_CHARS ? text.slice(0, COIN_LABEL_CHARS - 1) + "…" : text;
+    }
+
+    // Levels of every core on the coin: pending buy dashed, entry solid (long accent, short
+    // violet), take green, stop red; each labelled «CORE ▲ entry» and owned by its core.
+    function coinLevels(levels) {
+        var words = { buy: "mini_chart_buy", entry: "mini_chart_entry", take: "mini_chart_take", stop: "mini_chart_stop" };
+        var out = [];
+        var i;
+        if (!Array.isArray(levels)) return out;
+        for (i = 0; i < levels.length; i++) {
+            var l = levels[i];
+            if (!l || !words[l.kind] || !finiteNumber(l.price)) continue;
+            var tone = l.kind === "take" ? "--take" : l.kind === "stop" ? "--stop" : l.is_short ? "--short" : "--entry";
+            out.push({
+                kind: l.kind,
+                core: String(l.core),
+                price: l.price,
+                color: tone,
+                solid: l.kind === "entry",
+                fit: true,
+                label: shortCore(l.core_name || l.core) + " " + (l.is_short ? "▼" : "▲") + " " + tr(words[l.kind])
+            });
+        }
+        return out;
+    }
+
+    function signedPct(value) {
+        return (value >= 0 ? "+" : "−") + Math.abs(value).toFixed(2) + " %";
+    }
+
+    // Closed deals of the coin as entry and exit arrows joined by a dashed connector, drawn as
+    // the terminal draws them (`dealMarks`). A tap on either end opens the deal's tip.
+    function coinDealMarks(deals, coreOf) {
+        var out = [];
+        var i;
+        if (!Array.isArray(deals)) return out;
+        for (i = 0; i < deals.length; i++) {
+            (function (d) {
+                if (!d || !finiteNumber(d.close_ms) || !finiteNumber(d.close_price)) return;
+                var core = coreOf(d.core_name);
+                function tip(host) {
+                    host.appendChild(el("b", "", d.core_name || ""));
+                    host.appendChild(document.createTextNode(" · " + sideLabel(d.is_short ? "sell" : "buy") + " · "));
+                    var bits = [];
+                    if (finiteNumber(d.profit_usd)) bits.push(signedDollars(d.profit_usd));
+                    if (finiteNumber(d.profit_pct)) bits.push(signedPct(d.profit_pct));
+                    var tone = finiteNumber(d.profit_usd) ? d.profit_usd : d.profit_pct;
+                    host.appendChild(el("span", "num " + signClass(tone), bits.join(" · ") || "—"));
+                    host.appendChild(el("br"));
+                    host.appendChild(document.createTextNode(trf("mini_coin_entry_exit", {
+                        from: finiteNumber(d.open_ms) ? clockAt(d.open_ms) : "—",
+                        to: clockAt(d.close_ms)
+                    })));
+                }
+                var entry = finiteNumber(d.open_ms) && finiteNumber(d.open_price) ? { t: d.open_ms, price: d.open_price } : null;
+                out = out.concat(dealMarks(!d.is_short, entry, { t: d.close_ms, price: d.close_price }, { core: core, tip: tip, deal: "deal:" + i }));
+            })(deals[i]);
+        }
+        return out;
+    }
+
+    // A coin's market from every core of the station: the live price, a tick or candle chart
+    // with all cores' order lines, recent closed deals as arrows, and one card per core with an
+    // order or position on it. `ref`: { coin, market, core } — `core` is the core whose row was
+    // tapped; the station answers for every core the viewer may see. Polled about once a second:
+    // ticks incrementally past the newest one held, candles replaced on each reply.
+    function openCoinSheet(ref) {
+        if (!sheet) return;
+        hapticSelection();
+        var token = resetSheet();
+        sheet.classList.add("chart-sheet");
+        sheet.classList.add("coin-sheet");
+        var live = {
+            timer: null,
+            inflight: false,
+            stopped: false,
+            ring: [],
+            candles: [],
+            last: null,
+            transient: 0,
+            offset: 0,
+            okAt: 0,
+            mode: "ticks",
+            gen: 0,
+            data: null,
+            open: null,
+            levels: [],
+            poll: poll
+        };
+        liveSheet = live;
+
+        var head = el("div", "sheet-head");
+        var titleBox = el("div", "grow");
+        var title = el("div", "name coin-title", ref.coin);
+        title.id = "sheet-title";
+        titleBox.appendChild(title);
+        var where = el("div", "sub coin-where", ref.market + " · " + tr("mini_coin_market_all"));
+        titleBox.appendChild(where);
+        head.appendChild(titleBox);
+        var closeBtn = button("cmd text-btn sheet-close", tr("mini_close"), closeSheet);
+        head.appendChild(closeBtn);
+        sheet.appendChild(head);
+
+        var hero = el("div", "coin-hero");
+        var price = el("span", "coin-price num");
+        var change = el("span", "coin-change num");
+        var tag = el("span", "live-tag");
+        hero.appendChild(price);
+        hero.appendChild(change);
+        hero.appendChild(tag);
+        sheet.appendChild(hero);
+
+        var follow = button("chart-chip chart-follow on", tr("mini_chart_follow"), function () {
+            if (!sheetChart) return;
+            sheetChart.follow = true;
+            sheetChart.anchor(sheetChart.view.to - sheetChart.view.from);
+            sheetChart.fitY();
+            sheetChart.draw();
+            syncFollow();
+        });
+        follow.setAttribute("aria-pressed", "true");
+        var chips = chartChips(sheet, COIN_MODE_KEYS, live.mode, pickMode, follow);
+        chips.classList.add("coin-modes");
+        var note = el("div", "coin-watch-note");
+        note.hidden = true;
+        sheet.appendChild(note);
+        var area = chartArea(sheet);
+        var legend = el("div", "chart-legend");
+        legend.hidden = true;
+        sheet.appendChild(legend);
+        var source = el("div", "chart-provenance");
+        sheet.appendChild(source);
+
+        var hereTitle = el("div", "coin-here-title");
+        hereTitle.appendChild(el("h2", "", tr("mini_coin_here")));
+        var hereCount = el("span", "");
+        hereTitle.appendChild(hereCount);
+        sheet.appendChild(hereTitle);
+        var hereHint = el("div", "coin-here-hint", tr("mini_coin_here_hint"));
+        hereHint.hidden = true;
+        sheet.appendChild(hereHint);
+        var cards = el("div", "coin-cards");
+        sheet.appendChild(cards);
+
+        function now() {
+            return Date.now() + live.offset;
+        }
+        function mode() {
+            return COIN_MODES[live.mode];
+        }
+        function syncFollow() {
+            var on = !!(sheetChart && sheetChart.follow);
+            follow.classList.toggle("on", on);
+            follow.setAttribute("aria-pressed", on ? "true" : "false");
+        }
+        function pickMode(key) {
+            if (key === live.mode || !COIN_MODES[key]) return;
+            live.mode = key;
+            live.gen += 1;
+            live.ring = [];
+            live.candles = [];
+            live.last = null;
+            live.open = null;
+            pressChip(chips, key);
+            if (sheetChart) {
+                sheetChart.destroy();
+                sheetChart = null;
+            }
+            if (live.data) drawChart(live.data);
+            else chartSkeleton(area);
+            if (live.timer) clearTimeout(live.timer);
+            live.timer = null;
+            if (!live.inflight) poll();
+        }
+        function next(ms) {
+            if (token !== sheetToken || live.stopped) return;
+            if (live.timer) clearTimeout(live.timer);
+            live.timer = setTimeout(poll, ms);
+        }
+        function poll() {
+            live.timer = null;
+            if (token !== sheetToken || live.stopped || live.inflight) return;
+            if (document.visibilityState === "hidden") return;
+            var body = { core: ref.core, market: ref.market, tf: live.mode };
+            if (live.mode === "ticks" && live.last != null) body.since_ms = live.last;
+            var gen = live.gen;
+            live.inflight = true;
+            api("/api/coin/ticks", body).then(function (res) {
+                if (token !== sheetToken) return;
+                live.inflight = false;
+                if (res.cancelled) {
+                    next(CHART_POLL_MS);
+                    return;
+                }
+                // A reply for the mode the user just left: ask again in the new one.
+                if (gen !== live.gen) {
+                    next(0);
+                    return;
+                }
+                if (!res.ok || !res.data) {
+                    failed(res);
+                    return;
+                }
+                received(res.data);
+            });
+        }
+        function failed(res) {
+            if (!live.okAt && chartTransient(res) && live.transient < CHART_TRANSIENT_TRIES) {
+                live.transient += 1;
+                next(CHART_LOAD_WAIT_MS * 2);
+                return;
+            }
+            // Before any answer (an older station without the route answers 404) the error box;
+            // afterwards the chart freezes and the tag counts the gap while it reconnects.
+            if (res.status === 401 || res.status === 403 || !live.okAt) {
+                live.stopped = res.status === 401 || res.status === 403;
+                if (sheetChart) {
+                    sheetChart.destroy();
+                    sheetChart = null;
+                }
+                legend.hidden = true;
+                note.hidden = true;
+                source.textContent = "";
+                clear(price);
+                price.textContent = "—";
+                change.textContent = "";
+                tag.hidden = true;
+                chartState(area, tr("mini_chart_error"), res.error || tr("mini_chart_error_note"), live.stopped ? null : function () {
+                    live.transient = 0;
+                    chartSkeleton(area);
+                    poll();
+                });
+                return;
+            }
+            tag.hidden = false;
+            setLiveTag(tag, staleSeconds((Date.now() - live.okAt) / 1000), true);
+            source.textContent = live.data && finiteNumber(live.data.last_tick_ms)
+                ? trf("mini_chart_stale_note", { time: clockAt(live.data.last_tick_ms) })
+                : tr("mini_chart_offline");
+            next(CHART_SLOW_POLL_MS);
+        }
+        // The price the window centres on: the mark, else the newest print or close, else the
+        // first order level; null while none is known.
+        function refPrice(d) {
+            if (d && finiteNumber(d.mark_price) && d.mark_price > 0) return d.mark_price;
+            if (live.ring.length) return live.ring[live.ring.length - 1][1];
+            if (live.candles.length) return live.candles[live.candles.length - 1][4];
+            if (d && Array.isArray(d.levels)) {
+                var i;
+                for (i = 0; i < d.levels.length; i++) {
+                    if (d.levels[i] && finiteNumber(d.levels[i].price) && d.levels[i].price > 0) return d.levels[i].price;
+                }
+            }
+            return null;
+        }
+        function coreOf(name) {
+            var list = live.data && Array.isArray(live.data.positions) ? live.data.positions : [];
+            var i;
+            for (i = 0; i < list.length; i++) if (list[i].core_name === name) return String(list[i].core);
+            return "name:" + String(name || "");
+        }
+        function drawChart(d) {
+            var m = mode();
+            if (!sheetChart) {
+                clear(area);
+                var wrap = el("div", "chart-wrap");
+                area.appendChild(wrap);
+                sheetChart = new TickChart(wrap, {
+                    ticks: function () { return live.mode === "ticks" ? live.ring : []; },
+                    candles: live.mode === "ticks" ? null : function () { return live.candles; },
+                    tf: m.tf,
+                    dp: priceDecimals(d.price_decimals),
+                    minSpan: m.minSpan,
+                    maxSpan: m.maxSpan,
+                    hold: null,
+                    volume: null,
+                    live: true,
+                    relax: true,
+                    now: now,
+                    band: function () { return refPrice(live.data); },
+                    onView: syncFollow
+                });
+                sheetChart.follow = true;
+                sheetChart.anchor(m.span);
+                syncFollow();
+            }
+            sheetChart.opts.dp = priceDecimals(d.price_decimals);
+            // Before the first print there is no price to tag, only the orders' lines.
+            sheetChart.opts.live = d.state !== "no_tape";
+            live.levels = coinLevels(d.levels);
+            sheetChart.levels = pickedLevels();
+            sheetChart.marks = d.state === "no_tape" ? [] : coinDealMarks(d.deals, coreOf);
+            sheetChart.mark = refPrice(d);
+            if (sheetChart.follow) sheetChart.anchor(sheetChart.view.to - sheetChart.view.from);
+            sheetChart.fitY();
+            sheetChart.draw();
+        }
+        // Order lines, their labels and axis tags only for the core picked in «На этой монете»:
+        // every core's lines at once are a wall of them. Nothing picked: price and deals only.
+        function pickedLevels() {
+            var on = sheetChart ? sheetChart.highlight : null;
+            var out = [];
+            var i;
+            for (i = 0; on != null && i < live.levels.length; i++) if (live.levels[i].core === on) out.push(live.levels[i]);
+            return out;
+        }
+        function paintHero(d) {
+            var dp = priceDecimals(d.price_decimals);
+            var p = live.ring.length && live.mode === "ticks" ? live.ring[live.ring.length - 1][1] : d.mark_price;
+            if (d.state === "no_tape" || !finiteNumber(p) || p <= 0) {
+                price.textContent = "—";
+                var ref0 = refPrice(d);
+                change.className = "coin-change sub";
+                change.textContent = ref0 != null ? trf("mini_coin_order_price", { price: ref0.toFixed(dp) }) : "";
+                return;
+            }
+            price.textContent = p.toFixed(dp);
+            if (finiteNumber(live.open) && live.open > 0) {
+                var pct = (p / live.open - 1) * 100;
+                change.className = "coin-change num " + (pct >= 0 ? "pos" : "neg");
+                change.textContent = trf("mini_coin_since_open", { pct: signedPct(pct) });
+            } else {
+                change.className = "coin-change num";
+                change.textContent = "";
+            }
+        }
+        function paintLegend(d, watching) {
+            var items = live.mode === "ticks"
+                ? [{ dot: true, color: "--tick-buy", key: "mini_chart_buy" }, { dot: true, color: "--tick-sell", key: "mini_chart_sell" }]
+                : [{ dot: true, square: true, color: "--tick-buy", key: "mini_coin_candle_up" }, { dot: true, square: true, color: "--tick-sell", key: "mini_coin_candle_down" }];
+            var levels = sheetChart ? sheetChart.levels : [];
+            var i;
+            var has = {};
+            for (i = 0; i < levels.length; i++) has[levels[i].kind + (levels[i].color === "--short" ? "-short" : "")] = true;
+            if (has.buy || has["buy-short"]) items.push({ color: "--entry", key: "mini_chart_buy_order" });
+            if (has.entry) items.push({ solid: true, color: "--entry", key: "mini_coin_long_entry" });
+            if (has["entry-short"]) items.push({ solid: true, color: "--short", key: "mini_coin_short_entry" });
+            if (has.take || has["take-short"]) items.push({ color: "--take", key: "mini_chart_take" });
+            if (has.stop || has["stop-short"]) items.push({ color: "--stop", key: "mini_chart_stop" });
+            if (!watching && Array.isArray(d.deals) && d.deals.length) items.push({ key: "mini_coin_deals_hint" });
+            chartLegend(legend, items);
+        }
+        function card(p, dp, mark) {
+            var row = el("div", "coin-core-row");
+            row.setAttribute("role", "button");
+            row.tabIndex = 0;
+            row.setAttribute("data-core", String(p.core));
+            var body = el("div", "grow");
+            fullName(body.appendChild(el("div", "coin-core-name")), p.core_name || String(p.core));
+            var line = el("div", "coin-order");
+            var side = p.pending ? "wait" : p.is_short ? "neg" : "pos";
+            line.appendChild(el("span", "badge order-side " + side, p.pending ? "BUY" : sideLabel(p.is_short ? "sell" : "buy")));
+            function bit(label, value) {
+                var b = el("span", "coin-bit");
+                if (label) b.appendChild(el("span", "k", label));
+                b.appendChild(el("span", "num", value));
+                line.appendChild(b);
+            }
+            if (p.pending) {
+                bit(tr("mini_coin_price"), finiteNumber(p.entry) ? p.entry.toFixed(dp) : "—");
+            } else {
+                bit(tr("mini_chart_entry"), finiteNumber(p.entry) ? p.entry.toFixed(dp) : "—");
+                if (finiteNumber(p.take)) bit(tr("mini_chart_take"), p.take.toFixed(dp));
+                if (finiteNumber(p.stop)) bit(tr("mini_chart_stop"), p.stop.toFixed(dp));
+            }
+            var extra = [];
+            if (p.strategy) extra.push(p.strategy);
+            if (finiteNumber(p.volume_usd)) extra.push((p.volume_usd >= 100 ? p.volume_usd.toFixed(0) : p.volume_usd.toFixed(2)) + "$");
+            if (extra.length) bit("", extra.join(" · "));
+            body.appendChild(line);
+            row.appendChild(body);
+            var pnl = el("div", "coin-core-pnl");
+            var value;
+            if (p.pending) {
+                value = finiteNumber(mark) && mark > 0 && finiteNumber(p.entry) ? (p.entry / mark - 1) * 100 : null;
+                pnl.appendChild(el("span", "num", value == null ? "—" : signedPct(value)));
+                pnl.appendChild(el("span", "fine", tr("mini_coin_to_price")));
+            } else {
+                value = finiteNumber(p.pnl_pct) ? p.pnl_pct : null;
+                pnl.appendChild(el("span", "num " + (value == null ? "" : signClass(value)), value == null ? "—" : signedPct(value)));
+                pnl.appendChild(el("span", "fine", tr("mini_coin_pnl")));
+            }
+            row.appendChild(pnl);
+            function toggle() {
+                if (!sheetChart) return;
+                var key = String(p.core);
+                sheetChart.highlight = sheetChart.highlight === key ? null : key;
+                sheetChart.levels = pickedLevels();
+                paintHighlight();
+                if (live.data) paintLegend(live.data, live.data.state === "no_tape");
+                sheetChart.fitY();
+                sheetChart.draw();
+            }
+            row.addEventListener("click", toggle);
+            row.addEventListener("keydown", function (event) {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                toggle();
+            });
+            return row;
+        }
+        function paintHighlight() {
+            var on = sheetChart ? sheetChart.highlight : null;
+            var rows = cards.querySelectorAll(".coin-core-row");
+            var i;
+            for (i = 0; i < rows.length; i++) {
+                var hl = on != null && rows[i].getAttribute("data-core") === on;
+                rows[i].classList.toggle("hl", hl);
+                rows[i].setAttribute("aria-pressed", hl ? "true" : "false");
+            }
+        }
+        function paintCards(d) {
+            var list = Array.isArray(d.positions) ? d.positions : [];
+            var dp = priceDecimals(d.price_decimals);
+            var mark = refPrice(d);
+            var seen = {};
+            var i;
+            for (i = 0; i < list.length; i++) seen[String(list[i].core)] = true;
+            var n = Object.keys(seen).length;
+            hereCount.textContent = n ? trf("mini_coin_cores_n", { n: n }) : "";
+            hereHint.hidden = !list.length;
+            var box = cards.firstChild;
+            if (!list.length || !box || box.querySelector(".coin-empty")) {
+                clear(cards);
+                box = cards.appendChild(el("div", "coin-core-card"));
+            }
+            if (!list.length) {
+                var empty = el("div", "coin-empty");
+                empty.appendChild(el("b", "", tr("mini_coin_empty")));
+                empty.appendChild(document.createTextNode(trf("mini_coin_empty_note", { coin: ref.coin })));
+                box.appendChild(empty);
+            } else {
+                // Rows are patched in place by core so a poll keeps keyboard focus and a tap.
+                var old = {};
+                var rows = box.querySelectorAll(".coin-core-row");
+                var nth = {};
+                for (i = 0; i < rows.length; i++) old[rows[i].getAttribute("data-key")] = rows[i];
+                for (i = 0; i < list.length; i++) {
+                    var core = String(list[i].core);
+                    nth[core] = (nth[core] || 0) + 1;
+                    var key = core + ":" + nth[core];
+                    var fresh = card(list[i], dp, mark);
+                    var row = old[key];
+                    if (row) {
+                        delete old[key];
+                        clear(row);
+                        while (fresh.firstChild) row.appendChild(fresh.firstChild);
+                    } else {
+                        row = fresh;
+                        row.setAttribute("data-key", key);
+                    }
+                    if (box.children[i] !== row) box.insertBefore(row, box.children[i] || null);
+                }
+                Object.keys(old).forEach(function (stale) { box.removeChild(old[stale]); });
+            }
+            // A highlighted core that left the list lets go of its lines.
+            if (sheetChart && sheetChart.highlight != null && !seen[sheetChart.highlight]) {
+                sheetChart.highlight = null;
+                sheetChart.levels = [];
+                sheetChart.fitY();
+                sheetChart.draw();
+            }
+            paintHighlight();
+        }
+        function received(d) {
+            live.okAt = Date.now();
+            live.transient = 0;
+            if (finiteNumber(d.now_ms)) live.offset = d.now_ms - Date.now();
+            live.data = d;
+            // Cursor replies omit the opening; the window's first reply keeps it.
+            if (finiteNumber(d.open_price)) live.open = d.open_price;
+            if (d.market_display) where.textContent = d.market_display + " · " + tr("mini_coin_market_all");
+            if (live.mode === "ticks") mergeRing(live, d.ticks, d.truncated, now());
+            else live.candles = candleList(d.candles);
+            var watching = d.state === "no_tape";
+            tag.hidden = false;
+            drawChart(d);
+            paintHero(d);
+            paintCards(d);
+            paintLegend(d, watching);
+            note.hidden = !watching;
+            if (watching) {
+                clear(note);
+                note.appendChild(el("b", "", trf("mini_coin_watch_title", { coin: ref.coin })));
+                note.appendChild(el("span", "live-dot"));
+                note.appendChild(document.createTextNode(tr("mini_coin_watch_note")));
+                setLiveTag(tag, tr("mini_coin_connecting"), false);
+                source.textContent = tr("mini_coin_watch_scale");
+            } else if (d.state === "live") {
+                setLiveTag(tag, tr("mini_chart_live"), false);
+                var levelCores = {};
+                var k;
+                for (k = 0; k < live.levels.length; k++) levelCores[live.levels[k].core] = true;
+                source.textContent = trf("mini_coin_live_note", { n: Object.keys(levelCores).length });
+            } else {
+                var lag = finiteNumber(d.last_tick_ms) && finiteNumber(d.now_ms) ? (d.now_ms - d.last_tick_ms) / 1000 : null;
+                setLiveTag(tag, staleSeconds(lag), true);
+                source.textContent = finiteNumber(d.last_tick_ms)
+                    ? trf("mini_chart_stale_note", { time: clockAt(d.last_tick_ms) })
+                    : tr("mini_chart_offline");
+            }
+            next(CHART_SLOW_POLL_MS);
+        }
+
+        setLiveTag(tag, tr("mini_coin_connecting"), false);
+        tag.hidden = true;
+        price.appendChild(el("span", "coin-price-skel chart-skeleton"));
+        chartSkeleton(area);
+        source.textContent = trf("mini_coin_loading", { coin: ref.coin });
         showSheet(closeBtn);
         poll();
     }
@@ -3267,6 +4151,22 @@
             body.appendChild(el("div", "sub", tr("mini_strategy_pending")));
         } else if (strategy.pending === "timed_out") {
             body.appendChild(el("div", "sub neg", tr("mini_strategy_timed_out")));
+        }
+        // The coins this strategy holds orders or positions on, each opening its market's chart.
+        // An older station sends no list, and the line is left out.
+        if (Array.isArray(strategy.coins)) {
+            var coins = el("div", "coin-line");
+            var coinCount = 0;
+            var c;
+            for (c = 0; c < strategy.coins.length; c++) {
+                var ref = strategy.coins[c];
+                if (!ref || !ref.coin || !ref.market) continue;
+                if (!coinCount) coins.appendChild(el("span", "", tr("mini_coin_in_work")));
+                coinTarget(coins, ref.coin, ref.market, core.core);
+                coinCount += 1;
+            }
+            if (!coinCount) coins.appendChild(el("span", "", tr("mini_coin_none_in_work")));
+            body.appendChild(coins);
         }
         row.appendChild(body);
         var on = strategy.checked === true;

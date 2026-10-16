@@ -14,6 +14,7 @@ use moon_core::telegram::web::dto::{
     ReportDto, ReportPeriodDto, RowDto, StrategyPendingDto, TradeDto,
 };
 use moon_core::util::{display_time, fmt};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::TgHost;
@@ -175,10 +176,20 @@ pub(super) fn order_to_entry_pct(order: &OrderRow) -> Option<f64> {
     pct_to_entry(order, f64::from(order.price)).filter(|value| value.is_finite())
 }
 
-/// Map a read closed trade into the Mini App row.
+/// Snapshot configured core quotes once for a batch of closed-trade rows.
+pub(super) fn core_quotes(servers: &[moon_core::config::ServerConfig]) -> HashMap<u64, String> {
+    servers
+        .iter()
+        .map(|server| (server.uid, server.market.clone()))
+        .collect()
+}
+
+/// Map a read closed trade into the Mini App row using the caller's quote snapshot.
 ///
 /// Args:
 ///     host: Source of venues and live strategy names.
+///     quotes: Configured quote by core uid, collected once for this batch.
+///     markets: Catalog answers by core and coin, shared across this batch.
 ///     zone: Display zone for the close time.
 ///     now_secs: Current UTC Unix seconds; decides whether the short close time drops the date.
 ///     trade: Trade read by [`crate::report::read_mini_trades`].
@@ -186,7 +197,15 @@ pub(super) fn order_to_entry_pct(order: &OrderRow) -> Option<f64> {
 /// Returns:
 ///     The row, its strategy attributed by [`trade_strategy`].
 ///     Entry volume uses bought quantity and the Report-gated rate, never exit quantity.
-pub(super) fn trade_dto(host: &dyn TgHost, zone: Tz, now_secs: i64, trade: &MiniTrade) -> TradeDto {
+///     Market links use the trade chart's catalog resolver and remain absent until it can answer.
+pub(super) fn trade_dto(
+    host: &dyn TgHost,
+    quotes: &HashMap<u64, String>,
+    markets: &mut HashMap<(u64, String), Option<String>>,
+    zone: Tz,
+    now_secs: i64,
+    trade: &MiniTrade,
+) -> TradeDto {
     let (strategy, manual) = trade_strategy(trade.strategy_id, &trade.channel_name, |sid| {
         host.session()
             .store()
@@ -194,14 +213,24 @@ pub(super) fn trade_dto(host: &dyn TgHost, zone: Tz, now_secs: i64, trade: &Mini
             .and_then(|data| data.strategies.iter().find(|row| row.id == sid))
             .map(|row| row.name.clone())
     });
-    trade_row_dto(
+    let mut dto = trade_row_dto(
         trade,
         zone,
         now_secs,
         section_label(host.session().core_venues().get(&trade.core_uid)),
         strategy,
         manual,
-    )
+    );
+    let quote = quotes.get(&trade.core_uid).map_or("", String::as_str);
+    dto.market = markets
+        .entry((trade.core_uid, trade.coin.clone()))
+        .or_insert_with(|| {
+            host.session()
+                .market_source()
+                .resolve_market(trade.core_uid, quote, &trade.coin)
+        })
+        .clone();
+    dto
 }
 
 /// Build the wire row from recorded executions independently of host display lookups.
@@ -222,6 +251,7 @@ pub(super) fn trade_row_dto(
         rec_id: trade.rec_id,
         new_rec_id: trade.new_rec_id,
         coin: trade.coin.clone(),
+        market: None,
         side: if trade.is_short { "sell" } else { "buy" }.to_string(),
         profit,
         profit_text: profit.map(signed_dollars),

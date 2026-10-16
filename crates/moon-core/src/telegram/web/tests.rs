@@ -132,6 +132,9 @@ fn accept(event: MiniAppApiRequest) {
         MiniAppApiRequest::OrderTicks { reply, .. } => {
             let _ = reply.send(Ok(live_ticks_ok()));
         }
+        MiniAppApiRequest::CoinTicks { reply, .. } => {
+            let _ = reply.send(Ok(super::dto::CoinTicksDto::default()));
+        }
         MiniAppApiRequest::CancelOrder { reply, .. } => {
             let _ = reply.send(Ok(super::dto::CommandResultDto {
                 ok: true,
@@ -498,6 +501,7 @@ fn chart_v2_closing_and_closed_trade_serialize() {
         rec_id: 42,
         new_rec_id: 901,
         coin: "XALPHA".into(),
+        market: None,
         side: "buy".into(),
         profit: None,
         profit_text: None,
@@ -522,6 +526,8 @@ fn chart_v2_closing_and_closed_trade_serialize() {
     assert_eq!(value["trade"]["coin"], "XALPHA");
     assert_eq!(value["trade"]["exit_price"].as_f64(), Some(1000.4));
     assert_eq!(value["trade"]["close_ms"], 2000);
+    let old: TradeDto = serde_json::from_value(value["trade"].clone()).unwrap();
+    assert_eq!(old.market, None);
 }
 
 /// Posts one JSON write and returns the status plus the raw body.
@@ -819,6 +825,7 @@ fn big_ids_round_trip_as_decimal_strings() {
             checked: true,
             wanted: None,
             pending: None,
+            coins: Vec::new(),
         };
         let json = serde_json::to_value(&dto).expect("serialize");
         let text = id.to_string();
@@ -835,6 +842,69 @@ fn big_ids_round_trip_as_decimal_strings() {
     let mut out = Vec::new();
     id_text::serialize(&7, &mut serde_json::Serializer::new(&mut out)).expect("serialize");
     assert_eq!(out, br#""7""#);
+}
+
+/// Older station strategy payloads remain readable and empty coin lists stay on the wire.
+#[test]
+fn strategy_coins_are_additive_and_always_serialized() {
+    let old = serde_json::json!({"id":"7", "name":"UNIT_01", "checked":true, "wanted":null, "pending":null});
+    let mut dto: StrategyDto = serde_json::from_value(old).unwrap();
+    assert_eq!(
+        serde_json::to_value(&dto).unwrap()["coins"],
+        serde_json::json!([])
+    );
+    dto.coins = vec![
+        super::dto::CoinRefDto {
+            coin: "XALPHA".into(),
+            market: "XALPHAUSDT".into(),
+        },
+        super::dto::CoinRefDto {
+            coin: "XBETA".into(),
+            market: "XBETAUSDT".into(),
+        },
+    ];
+    assert_eq!(
+        serde_json::to_value(&dto).unwrap()["coins"],
+        serde_json::json!([{"coin":"XALPHA", "market":"XALPHAUSDT"}, {"coin":"XBETA", "market":"XBETAUSDT"}])
+    );
+}
+
+/// Market charts must use authenticated typed requests and refuse excess or unknown input.
+#[test]
+fn coin_ticks_route_bounds_and_rejection_log() {
+    let app = handler_with_acceptor();
+    let fresh = signed_at(stable_unix_now());
+    for tf in ["ticks", "1m", "5m", "15m"] {
+        let body = serde_json::json!({"core":7, "market":"XALPHAUSDT", "tf":tf}).to_string();
+        assert_eq!(post(&app, "/api/coin/ticks", Some(&fresh), &body).0, 200);
+        assert_ne!(post(&app, "/api/coin/ticks", None, &body).0, 200);
+    }
+    for body in [
+        serde_json::json!({"core":7,"market":"X".repeat(64),"tf":"ticks"}),
+        serde_json::json!({"core":7,"market":"\u{00e9}".repeat(32),"tf":"ticks"}),
+    ] {
+        assert_eq!(
+            post(&app, "/api/coin/ticks", Some(&fresh), &body.to_string()).0,
+            200
+        );
+    }
+    for body in [
+        serde_json::json!({"core":7,"market":"","tf":"ticks"}),
+        serde_json::json!({"core":7,"market":"X".repeat(65),"tf":"ticks"}),
+        serde_json::json!({"core":7,"market":"\u{00e9}".repeat(33),"tf":"ticks"}),
+        serde_json::json!({"core":7,"market":"XALPHAUSDT","tf":"ticks","extra":true}),
+        serde_json::json!({"core":7,"market":"XALPHAUSDT","tf":"ticks","since_ms":-1}),
+    ] {
+        assert_eq!(
+            post(&app, "/api/coin/ticks", Some(&fresh), &body.to_string()).0,
+            400
+        );
+    }
+    let rejected = super::status_response(StatusCode::BAD_REQUEST, "json");
+    assert_eq!(
+        super::rejection_line("/api/coin/ticks", &rejected).as_deref(),
+        Some("[mini-api] rejected route=/api/coin/ticks status=400 reason=json")
+    );
 }
 
 /// One `POST /api/session` over a real socket; returns the HTTP status code.
