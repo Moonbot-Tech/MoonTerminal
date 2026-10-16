@@ -6,6 +6,27 @@ const LONG: i64 = 300_000;
 const T0: i64 = 1_800_000_000_000;
 const ID: TradeId = TradeId { core: 1, rec_id: 7 };
 
+/// Dropping a long position's pair must not interrupt an active sheet's recording and filing.
+#[test]
+fn watch_keeps_long_position_pair_and_flushes_until_expiry() {
+    let mut task = KeyTask::new();
+    task.opened(ID, T0, MARGIN, LONG, None);
+    task.filed_before(&[(T0 - MARGIN, T0 + LONG)]);
+    assert!(!task.wants_pair());
+    let now = T0 + LONG + 60_000;
+    task.watch(now, now + 30_000);
+    assert!(task.wants_pair());
+    assert!(task.needs_seed());
+    task.seeded(vec![tick(now + 1000)], now, 1);
+    let filing = task.flush(now + 20_000, true).unwrap();
+    assert!(filing.file.contains_ms(now + 1000));
+    assert_eq!(filing.ticks.len(), 1);
+    task.expire_watch(now + 29_999);
+    assert!(task.wants_pair());
+    task.expire_watch(now + 30_000);
+    assert!(!task.wants_pair());
+}
+
 fn tick(at: i64) -> Tick {
     Tick {
         time_ms: at as f64,

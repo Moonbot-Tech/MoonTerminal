@@ -1,5 +1,217 @@
 use super::*;
 
+/// Build an isolated recorder whose reads and writes share one in-memory cache queue.
+fn chart_recorder() -> Recorder {
+    let now = Instant::now();
+    Recorder {
+        cache: TradeCache::open_evictable(":memory:".into()).unwrap(),
+        catchup: catchup::RecorderCatchup::default(),
+        tasks: HashMap::new(),
+        donors: HashMap::new(),
+        shunned: HashMap::new(),
+        stats: Stats::default(),
+        last_summary: now,
+        next_drain: now,
+        replies: Vec::new(),
+        ticks: Vec::new(),
+        compares: Vec::new(),
+        closed: peek::ClosedTrades::default(),
+        pending_bytes: Arc::default(),
+    }
+}
+
+/// The key hook must read both filed and unfiled prints exactly like the closed-trade hook.
+#[test]
+fn market_key_and_trade_reads_share_filed_and_buffered_tape() {
+    let mut recorder = chart_recorder();
+    let key = ("CORE_A".to_string(), "XALPHA".to_string());
+    let trade = TradeId {
+        core: 7,
+        rec_id: 42,
+    };
+    let tick = |stamp| Tick {
+        time_ms: stamp as f64,
+        price: 10.0,
+        qty: 1.0,
+        side: crate::feed::Side::Buy,
+    };
+    recorder.cache.insert(
+        &key.0,
+        &key.1,
+        1000,
+        2000,
+        vec![tick(1000), tick(1500)],
+        TileSource::Core,
+    );
+    let mut task = KeyTask::new();
+    task.seed_asked(2000, 1);
+    task.seeded(vec![tick(2500)], 2000, 1);
+    recorder.tasks.insert(key.clone(), task);
+    recorder.closed.closed(trade, &key, 1500, 2500);
+    let by_key = recorder.read_key(&key, 1500, 2500).unwrap();
+    assert_eq!(
+        by_key
+            .ticks
+            .iter()
+            .map(|tick| tick.time_ms as i64)
+            .collect::<Vec<_>>(),
+        vec![1500, 2500]
+    );
+    let by_trade = recorder.peek(trade, 0, 0).unwrap();
+    let values = |ticks: &[Tick]| {
+        ticks
+            .iter()
+            .map(|t| (t.time_ms, t.price, t.qty, t.side))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(values(&by_key.ticks), values(&by_trade.ticks));
+    assert_eq!(by_key.covered, vec![(1500, 2000)]);
+    assert_eq!(by_trade.covered, by_key.covered);
+    let (reply, answer) = mpsc::channel();
+    recorder.apply(
+        Cmd::PeekKey {
+            key,
+            from_ms: 1500,
+            to_ms: 2500,
+            reply,
+        },
+        3000,
+    );
+    assert_eq!(
+        values(&answer.recv().unwrap().unwrap().ticks),
+        values(&by_key.ticks)
+    );
+}
+
+/// A stopped or empty key must not claim that its requested tape is complete.
+#[test]
+fn recorder_span_distinguishes_empty_partial_and_complete() {
+    let mut recorder = chart_recorder();
+    let key = ("CORE_A".to_owned(), "XALPHA".to_owned());
+    let empty = recorder.read_key(&key, 1000, 4000).unwrap();
+    assert!(empty.ticks.is_empty());
+    assert!(empty.settled);
+    assert!(empty.covered.is_empty());
+    recorder
+        .cache
+        .insert(&key.0, &key.1, 1500, 2500, Vec::new(), TileSource::Core);
+    let partial = recorder.read_key(&key, 1000, 4000).unwrap();
+    assert_eq!(partial.covered, vec![(1500, 2500)]);
+    assert!(partial.settled);
+    recorder.watch_key(key.clone(), 5000, 3000);
+    assert!(!recorder.read_key(&key, 1000, 4000).unwrap().settled);
+    recorder
+        .cache
+        .insert(&key.0, &key.1, 1000, 4000, Vec::new(), TileSource::Core);
+    assert_eq!(
+        recorder.read_key(&key, 1000, 4000).unwrap().covered,
+        vec![(1000, 4000)]
+    );
+}
+
+/// Renewal protects an old watch while a stale watch is evicted and remaining leases expire.
+#[test]
+fn ninth_market_watch_evicts_earliest_expiry_and_expired_watches_drop() {
+    let mut recorder = chart_recorder();
+    let key = |index| ("CORE_A".to_string(), format!("XALPHA{index}"));
+    for index in 0..8 {
+        recorder.apply(
+            Cmd::Watch {
+                key: key(index),
+                until_ms: 5000 + index,
+            },
+            1000 + index,
+        );
+    }
+    recorder.apply(
+        Cmd::Watch {
+            key: key(0),
+            until_ms: 6000,
+        },
+        2000,
+    );
+    recorder.apply(
+        Cmd::Watch {
+            key: key(8),
+            until_ms: 5000,
+        },
+        2001,
+    );
+    assert_eq!(
+        recorder
+            .tasks
+            .values()
+            .filter(|task| task.watch_until().is_some())
+            .count(),
+        8
+    );
+    assert!(recorder.tasks[&key(0)].wants_pair());
+    assert!(recorder.tasks[&key(1)].watch_until().is_none());
+    assert!(recorder.tasks[&key(8)].wants_pair());
+    recorder.expire_watches(5008);
+    assert!(recorder.tasks[&key(0)].wants_pair());
+    assert!(!recorder.tasks[&key(8)].wants_pair());
+    recorder.expire_watches(6000);
+    assert!(
+        recorder
+            .tasks
+            .values()
+            .all(|task| task.watch_until().is_none())
+    );
+    assert!(recorder.tasks.values().all(|task| !task.wants_pair()));
+}
+
+/// A mixed-unit or far-future lease must release the pair after sixty recorder-clock seconds.
+#[test]
+fn market_watch_clamps_extreme_lease_to_sixty_seconds() {
+    let mut recorder = chart_recorder();
+    let key = ("CORE_A".to_owned(), "XALPHA".to_owned());
+    recorder.apply(
+        Cmd::Watch {
+            key: key.clone(),
+            until_ms: i64::MAX,
+        },
+        1000,
+    );
+    recorder.expire_watches(60_999);
+    assert!(recorder.tasks[&key].wants_pair());
+    recorder.expire_watches(61_000);
+    assert!(!recorder.tasks[&key].wants_pair());
+    assert_eq!(recorder.tasks[&key].watch_until(), None);
+}
+
+/// Collapsing coverage to the fresh tail loses a fully recorded trade before a gap.
+#[test]
+fn recorder_span_prefers_fresh_coverage_after_a_gap() {
+    let recorder = chart_recorder();
+    let key = ("CORE_A".to_owned(), "XALPHA".to_owned());
+    recorder
+        .cache
+        .insert(&key.0, &key.1, 1000, 100_000, Vec::new(), TileSource::Core);
+    recorder.cache.insert(
+        &key.0,
+        &key.1,
+        200_000,
+        201_000,
+        Vec::new(),
+        TileSource::Core,
+    );
+    assert_eq!(
+        recorder.read_key(&key, 1000, 201_000).unwrap().covered,
+        vec![(1000, 100_000), (200_000, 201_000)]
+    );
+}
+
+/// The read API must not start a recorder as a side effect of a chart request.
+#[test]
+fn market_tape_without_running_recorder_is_unknown() {
+    assert!(TX.get().is_none_or(Option::is_none));
+    assert!(matches!(
+        market_tape("CORE_A", "XALPHA", 0, 1000, Duration::from_millis(1)),
+        Err(TapeMiss::Unknown)
+    ));
+}
+
 const MIN: i64 = 60_000;
 
 /// A close revealing emulator metadata must discard its earlier unclassified open and buffer.

@@ -866,6 +866,27 @@ pub(crate) fn fit_ticks_around(
     (merged, TickThinning::Edges { bucket_ms })
 }
 
+/// Fit ascending chart prints into `budget`, protecting the entry and exit neighborhoods
+/// with the replay's existing raw-span policy. Returns real prints and their thinning mode.
+pub fn fit_for_chart(
+    ticks: Vec<Tick>,
+    open_ms: i64,
+    close_ms: i64,
+    budget: usize,
+) -> (Vec<Tick>, TickThinning) {
+    let keep = ReplayWindow {
+        from_ms: open_ms.saturating_sub(KEEP_RAW_MS),
+        to_ms: close_ms.saturating_add(KEEP_RAW_MS),
+        open_ms,
+        close_ms,
+        margin_ms: KEEP_RAW_MS,
+        long_position_ms: long_position_ms(),
+        over_budget: false,
+    }
+    .raw_spans();
+    fit_ticks_around(ticks, budget, &keep)
+}
+
 /// Whether cached rows already cover a window densely enough to skip the network.
 ///
 /// COVERAGE, not presence, is the question. A partial prefix is exactly what a previously

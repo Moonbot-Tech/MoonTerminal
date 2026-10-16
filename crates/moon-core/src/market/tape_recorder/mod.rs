@@ -77,7 +77,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use donor::{Donor, Reply};
-pub use peek::{TapeMiss, TradeTape, trade_tape};
+pub use peek::{RecorderSpan, TapeMiss, TradeTape, market_tape, trade_tape};
 pub use plan::TradeId;
 use plan::{Filing, KeyTask, QUIET_TAIL_MS};
 
@@ -92,6 +92,8 @@ use crate::session::CoreId;
 const LOG_FILE: &str = "tape_recorder.log";
 /// How often the running recorder looks at its donors and its schedule.
 const TICK: Duration = Duration::from_millis(250);
+/// Longest a sheet can retain a recorder pair without renewing on the recorder's clock.
+const MAX_WATCH_LEASE_MS: i64 = 60_000;
 /// How often every recording pair's ring is drained.
 const DRAIN_EVERY: Duration = Duration::from_secs(1);
 /// How often a switched-off recorder looks at the switch.
@@ -148,6 +150,15 @@ static TX: OnceLock<Option<Sender<Cmd>>> = OnceLock::new();
 
 /// Live events and off-thread recovery results, applied by the recorder's single cache owner.
 enum Cmd {
+    /// A live sheet keeps this market selected until its lease expires.
+    Watch { key: Key, until_ms: i64 },
+    /// Read by market key even after the closed-trade id has expired from memory.
+    PeekKey {
+        key: Key,
+        from_ms: i64,
+        to_ms: i64,
+        reply: Sender<Result<RecorderSpan, TapeMiss>>,
+    },
     /// Retention protection outside the historical fetch horizon.
     Protect(Vec<catchup::CatchupTrade>),
     /// Resolved closed rows whose tape may still be recovered from public sources.
@@ -251,6 +262,18 @@ pub fn trade_opened(
             trade,
             open_ms,
             emulator,
+        });
+    }
+}
+
+/// Keep a market's recorder pair wanted until `until_ms` (UTC), subject to the recorder switch.
+/// Renewed sheets share the existing plan; at most eight pairs are watched at once, and the
+/// recorder clamps each lease to sixty seconds on its own clock.
+pub fn watch_market(exchange_key: &str, market: &str, until_ms: i64) {
+    if enabled() {
+        send(Cmd::Watch {
+            key: (exchange_key.to_owned(), market.to_owned()),
+            until_ms,
         });
     }
 }
@@ -472,6 +495,46 @@ fn reserve_backfill(
 }
 
 impl Recorder {
+    /// Expire leases before any plan decision so a closed sheet cannot retain a donor.
+    fn expire_watches(&mut self, now_ms: i64) {
+        for task in self.tasks.values_mut() {
+            task.expire_watch(now_ms);
+        }
+    }
+
+    /// Clamp a lease and evict the earliest-expiring watch when eight distinct pairs are watched.
+    fn watch_key(&mut self, key: Key, until_ms: i64, now_ms: i64) {
+        self.expire_watches(now_ms);
+        let until_ms = until_ms.min(now_ms.saturating_add(MAX_WATCH_LEASE_MS));
+        if until_ms <= now_ms {
+            return;
+        }
+        if let Some(task) = self.tasks.get_mut(&key) {
+            if task.watch_until().is_some() {
+                task.watch(now_ms.saturating_sub(900_000), until_ms);
+                return;
+            }
+        }
+        let mut count = 0;
+        let mut oldest = None;
+        for (key, task) in &self.tasks {
+            if let Some(until) = task.watch_until() {
+                count += 1;
+                if oldest.is_none_or(|(_, at)| until < at) {
+                    oldest = Some((key, until));
+                }
+            }
+        }
+        let evict = oldest.filter(|_| count >= 8).map(|(key, _)| key.clone());
+        if let Some(task) = evict.and_then(|key| self.tasks.get_mut(&key)) {
+            task.clear_watch();
+        }
+        self.tasks
+            .entry(key)
+            .or_insert_with(KeyTask::new)
+            .watch(now_ms.saturating_sub(900_000), until_ms);
+    }
+
     /// Open the recorder's own tape store and initialize catch-up without starting its fetcher.
     fn start() -> Option<Self> {
         let path = crate::config::paths::tape_recorder_db_path();
@@ -506,6 +569,7 @@ impl Recorder {
         let margin = crate::market::trade_replay::margin_ms();
         let long = crate::market::trade_replay::long_position_ms();
         match cmd {
+            Cmd::Watch { key, until_ms } => self.watch_key(key, until_ms, now_ms),
             Cmd::Listed { core, generation } => catchup::listing_applied(core, generation),
             Cmd::Catchup(trades) => {
                 for trade in &trades {
@@ -651,6 +715,14 @@ impl Recorder {
             } => {
                 let _ = reply.send(self.peek(trade, lead_ms, tail_ms));
             }
+            Cmd::PeekKey {
+                key,
+                from_ms,
+                to_ms,
+                reply,
+            } => {
+                let _ = reply.send(self.read_key(&key, from_ms, to_ms));
+            }
             Cmd::FreeDisk(bytes) => {
                 line(&format!(
                     "the server is short of {} KB: the oldest prints go",
@@ -705,6 +777,7 @@ impl Recorder {
 
     /// Advance live recording while polling maintenance; recovery starts only after both settle.
     fn tick(&mut self, now: Instant, now_ms: i64) {
+        self.expire_watches(now_ms);
         self.drop_emulator_tasks();
         let live = self
             .tasks

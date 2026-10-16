@@ -678,7 +678,10 @@ pub(super) fn coin_rows(
 }
 
 /// Open orders for the chat's cores. `can_control` is true only for the owner.
-pub(super) fn mini_orders(host: &dyn TgHost, chat_id: i64) -> Result<OrdersDto, MiniAppApiError> {
+pub(super) fn mini_orders(
+    host: &mut dyn TgHost,
+    chat_id: i64,
+) -> Result<OrdersDto, MiniAppApiError> {
     let access = mini_access(host, chat_id).ok_or(MiniAppApiError::Rejected)?;
     let can_control = matches!(access, TelegramReportAccess::Owner);
     let cores = visible_cores(host, &access);
@@ -696,6 +699,7 @@ pub(super) fn mini_orders(host: &dyn TgHost, chat_id: i64) -> Result<OrdersDto, 
     };
     let mut orders = Vec::with_capacity(staged.len());
     for (id, name, exchange, order) in staged {
+        super::charts::remember_order(host.state_mut(), id, &order);
         orders.push(order_dto(host, id, name, exchange, &order));
     }
     Ok(OrdersDto {

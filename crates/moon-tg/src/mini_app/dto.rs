@@ -35,11 +35,10 @@ pub(super) fn order_dto(
     exchange: String,
     order: &OrderRow,
 ) -> OrderDto {
-    let pnl = order_pnl(order).filter(|value| value.is_finite());
+    let (pnl, change) = order_at_mark(order, order.price);
     let quote = order_quote(&order.quote, &order.market);
     let quote = quote.as_str();
     let market_source = host.session().market_source();
-    let change = order_pnl_pct(order).filter(|value| value.is_finite());
     let to_entry = order_to_entry_pct(order);
     OrderDto {
         core: id,
@@ -68,6 +67,16 @@ pub(super) fn order_dto(
         to_entry_text: to_entry.and_then(distance_text),
         panic_armed: host.is_panic_armed(id, &order.market),
     }
+}
+
+/// Share order-row arithmetic with live charts using the source's fresh mark.
+pub(super) fn order_at_mark(order: &OrderRow, mark: f32) -> (Option<f64>, Option<f64>) {
+    let mut marked = order.clone();
+    marked.price = mark;
+    (
+        order_pnl(&marked).filter(|v| v.is_finite()),
+        order_pnl_pct(&marked).filter(|v| v.is_finite()),
+    )
 }
 
 /// The currency an order's PnL is counted in: the catalog quote, else the quote the market name
@@ -178,8 +187,6 @@ pub(super) fn order_to_entry_pct(order: &OrderRow) -> Option<f64> {
 ///     The row, its strategy attributed by [`trade_strategy`].
 ///     Entry volume uses bought quantity and the Report-gated rate, never exit quantity.
 pub(super) fn trade_dto(host: &dyn TgHost, zone: Tz, now_secs: i64, trade: &MiniTrade) -> TradeDto {
-    let profit = trade.profit_usdt.filter(|value| value.is_finite());
-    let pct = trade.pct.filter(|value| value.is_finite());
     let (strategy, manual) = trade_strategy(trade.strategy_id, &trade.channel_name, |sid| {
         host.session()
             .store()
@@ -187,10 +194,31 @@ pub(super) fn trade_dto(host: &dyn TgHost, zone: Tz, now_secs: i64, trade: &Mini
             .and_then(|data| data.strategies.iter().find(|row| row.id == sid))
             .map(|row| row.name.clone())
     });
+    trade_row_dto(
+        trade,
+        zone,
+        now_secs,
+        section_label(host.session().core_venues().get(&trade.core_uid)),
+        strategy,
+        manual,
+    )
+}
+
+/// Build the wire row from recorded executions independently of host display lookups.
+pub(super) fn trade_row_dto(
+    trade: &MiniTrade,
+    zone: Tz,
+    now_secs: i64,
+    exchange: String,
+    strategy: Option<String>,
+    manual: bool,
+) -> TradeDto {
+    let profit = trade.profit_usdt.filter(|value| value.is_finite());
+    let pct = trade.pct.filter(|value| value.is_finite());
     TradeDto {
         core: trade.core_uid,
         core_name: trade.core_name.clone(),
-        exchange: section_label(host.session().core_venues().get(&trade.core_uid)),
+        exchange,
         rec_id: trade.rec_id,
         coin: trade.coin.clone(),
         side: if trade.is_short { "sell" } else { "buy" }.to_string(),
@@ -204,6 +232,8 @@ pub(super) fn trade_dto(host: &dyn TgHost, zone: Tz, now_secs: i64, trade: &Mini
         closed_short_text: display_time::format_short_minute(trade.close_utc, zone, now_secs),
         entry_text: price_text(trade.buy_price),
         exit_text: price_text(trade.sell_price),
+        exit_price: trade.sell_price.is_finite().then_some(trade.sell_price),
+        close_ms: Some(trade.close_utc.saturating_mul(1000)),
         qty_text: fmt::qty(trade.quantity),
         volume_text: trade_volume_text(trade),
         duration_secs: trade

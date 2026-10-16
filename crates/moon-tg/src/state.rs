@@ -19,6 +19,14 @@ use crate::mini_app::cache::{CachedReport, CachedTrades};
 
 /// Process-only service state; no credential is rendered by Debug.
 pub struct TelegramState {
+    /// Chart reads remain admitted until their Finish callback rechecks the grant.
+    pub(crate) mini_chart_pending: usize,
+    /// Live chart reads have a separate four-reader cap.
+    pub(crate) mini_live_pending: usize,
+    /// Bounded replay receivers shared only with background chart jobs.
+    pub(crate) mini_chart_jobs: Arc<Mutex<crate::mini_app::charts::ChartJobs>>,
+    /// Previously observed orders permit truthful handoff after removal from the store.
+    pub(crate) mini_order_snapshots: BTreeMap<(u64, u64), crate::mini_app::charts::OrderSnapshot>,
     /// At most one database report is computed at a time, including timed-out requests.
     pub(crate) report_pending: bool,
     /// At most one Mini App report is computed at a time, including timed-out requests.
@@ -182,6 +190,10 @@ impl TelegramState {
             TelegramStatus::Unavailable
         };
         Self {
+            mini_chart_pending: 0,
+            mini_live_pending: 0,
+            mini_chart_jobs: Arc::default(),
+            mini_order_snapshots: BTreeMap::new(),
             report_pending: false,
             mini_report_pending: false,
             mini_report_last: None,
@@ -240,6 +252,8 @@ impl TelegramState {
         let report_pending = self.report_pending;
         let mini_report_pending = self.mini_report_pending;
         let mini_trades_pending = self.mini_trades_pending;
+        let mini_chart_pending = self.mini_chart_pending;
+        let mini_live_pending = self.mini_live_pending;
         let notify_busy = self.notify_busy;
         let auto_busy = self.auto_busy;
         let notifications_path = self.notifications_path.clone();
@@ -247,6 +261,8 @@ impl TelegramState {
         self.report_pending = report_pending;
         self.mini_report_pending = mini_report_pending;
         self.mini_trades_pending = mini_trades_pending;
+        self.mini_chart_pending = mini_chart_pending;
+        self.mini_live_pending = mini_live_pending;
         self.notify_busy = notify_busy;
         self.auto_busy = auto_busy;
         // `mini_report_last` and `mini_trades_last` stay clear: a restarted service must not
@@ -361,6 +377,8 @@ impl TelegramState {
 
     /// Retire the current transport without blocking the coordination loop.
     pub(crate) fn restart(&mut self) {
+        self.mini_chart_jobs = Arc::default();
+        self.mini_order_snapshots.clear();
         self.mini_report_last = None;
         self.mini_trades_last = None;
         self.mini_strategy_wanted.clear();

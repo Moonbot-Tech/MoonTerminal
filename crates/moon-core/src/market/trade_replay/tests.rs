@@ -1,5 +1,41 @@
 use super::*;
 
+/// A wrapper using whole-run thinning would unnecessarily remove the entry/exit neighborhoods.
+#[test]
+fn chart_fit_preserves_raw_small_runs_and_trade_edges() {
+    let ticks: Vec<Tick> = (0..1000)
+        .map(|index| Tick {
+            time_ms: (index * 1000) as f64,
+            price: 10.0,
+            qty: 1.0,
+            side: crate::feed::Side::Buy,
+        })
+        .collect();
+    let small = ticks[..10].to_vec();
+    let (raw, mode) = fit_for_chart(small.clone(), 2000, 7000, 10);
+    assert!(matches!(mode, TickThinning::Raw));
+    let values = |ticks: &[Tick]| {
+        ticks
+            .iter()
+            .map(|t| (t.time_ms, t.price, t.qty, t.side))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(values(&raw), values(&small));
+    let (fitted, _) = fit_for_chart(ticks.clone(), 400_000, 410_000, 100);
+    assert!(fitted.len() <= 100);
+    for at in [400_000.0, 410_000.0] {
+        assert!(fitted.iter().any(|tick| tick.time_ms == at));
+    }
+    for budget in [0, 1, 2, 7] {
+        assert!(
+            fit_for_chart(ticks.clone(), 400_000, 410_000, budget)
+                .0
+                .len()
+                <= budget
+        );
+    }
+}
+
 /// The margin every test window is built with — the five minutes the module shipped with, so
 /// the numbers in the assertions below stay what they were.
 const MARGIN_MS: i64 = 5 * MINUTE_MS;

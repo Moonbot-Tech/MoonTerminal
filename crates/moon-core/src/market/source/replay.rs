@@ -8,6 +8,14 @@ use crate::session::CoreId;
 /// Bound the requested interval copy; unrelated retained history must not reject a donor.
 const MAX_CORE_ROWS: usize = 250_000;
 
+/// A bounded live delta with freshness independent of whether the delta contains a print.
+#[derive(Debug)]
+pub struct LiveTicks {
+    pub ticks: Vec<Tick>,
+    pub truncated: bool,
+    pub last_tick_ms: Option<i64>,
+}
+
 /// One contiguous retained span from a single core; never assembled across unrelated donors.
 pub(crate) struct CoreReplayTicks {
     /// Owned points, independent of future ring eviction or reconnects.
@@ -17,6 +25,62 @@ pub(crate) struct CoreReplayTicks {
 }
 
 impl MarketDataSource {
+    /// Copy at most `max` newest prints inside inclusive UTC bounds without moving a chart
+    /// cursor. Empty deltas retain the source's latest timestamp; only an unavailable market
+    /// or connection returns `None`. Keep the copy bounded with periodic newest-print selection
+    /// under the ring view, then sort after releasing it. Overflow sets `truncated`.
+    pub fn live_core_ticks(
+        &self,
+        core: CoreId,
+        market: &str,
+        from_ms: i64,
+        to_ms: i64,
+        max: usize,
+    ) -> Option<LiveTicks> {
+        let address = self.replay_address(core).ok()?;
+        let last_tick_ms = self.latest_trade_ms(core, market);
+        let (donors, archive) = self.venue_donors(&address);
+        let mut best: Option<LiveTicks> = None;
+        for (provider, slot) in donors {
+            let Some((client, epoch)) = slot.get_with_epoch() else {
+                continue;
+            };
+            let Some(snapshot) = client.snapshot_versioned() else {
+                continue;
+            };
+            if !serves_exchange(&snapshot, &address.exchange_key) {
+                continue;
+            }
+            let Some(readers) = snapshot.market_history_readers(market) else {
+                continue;
+            };
+            let Some(reader) = readers.futures_trades.or(readers.spot_trades) else {
+                continue;
+            };
+            archive.request(provider, market, &client, epoch);
+            // Retained append order can contain late resends, so an old timestamp cannot end
+            // the scan. Bound the copied subset under the view; sort after releasing it.
+            let capture = reader.with_last(reader.capacity(), |view| {
+                let mut capture = LiveCapture::new(from_ms, to_ms, max);
+                view.for_each(|row| {
+                    capture.push(Tick {
+                        time_ms: row.unix_millis() as f64,
+                        price: row.price,
+                        qty: row.quantity(),
+                        side: if row.is_buy() { Side::Buy } else { Side::Sell },
+                    });
+                });
+                capture
+            });
+            let candidate = capture.finish(last_tick_ms);
+            let end = |run: &LiveTicks| run.ticks.last().map(|tick| tick.time_ms as i64);
+            if best.as_ref().is_none_or(|old| end(&candidate) > end(old)) {
+                best = Some(candidate);
+            }
+        }
+        best
+    }
+
     /// Request archives through the shared gate and copy the best currently retained trade span.
     ///
     /// Called only on the replay worker. Identity includes the platform and DEX discriminator,
@@ -235,6 +299,60 @@ impl MarketDataSource {
             }
         }
         best
+    }
+}
+
+/// Keep the newest bounded subset even when resends arrive out of timestamp order.
+struct LiveCapture {
+    from_ms: i64,
+    to_ms: i64,
+    max: usize,
+    ticks: Vec<Tick>,
+    truncated: bool,
+}
+
+impl LiveCapture {
+    /// Bound the final payload by the core copy ceiling as well as the consumer's budget.
+    fn new(from_ms: i64, to_ms: i64, max: usize) -> Self {
+        Self {
+            from_ms,
+            to_ms,
+            max: max.min(MAX_CORE_ROWS),
+            ticks: Vec::new(),
+            truncated: false,
+        }
+    }
+
+    /// Periodically keep only the newest prints so the locked copy stays bounded.
+    fn push(&mut self, tick: Tick) {
+        if !tick.time_ms.is_finite()
+            || !tick.price.is_finite()
+            || tick.price <= 0.0
+            || !(self.from_ms..=self.to_ms).contains(&(tick.time_ms as i64))
+        {
+            return;
+        }
+        self.ticks.push(tick);
+        if self.ticks.len() > self.max.saturating_mul(2) {
+            let max = self.max;
+            self.ticks
+                .select_nth_unstable_by(max, |a, b| b.time_ms.total_cmp(&a.time_ms));
+            self.ticks.truncate(max);
+            self.truncated = true;
+        }
+    }
+
+    /// Sort the retained delta and carry freshness from `latest_trade_ms`, including on empty.
+    fn finish(mut self, last_tick_ms: Option<i64>) -> LiveTicks {
+        self.ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+        let truncated = self.truncated || self.ticks.len() > self.max;
+        self.ticks
+            .drain(..self.ticks.len().saturating_sub(self.max));
+        LiveTicks {
+            ticks: self.ticks,
+            truncated,
+            last_tick_ms,
+        }
     }
 }
 

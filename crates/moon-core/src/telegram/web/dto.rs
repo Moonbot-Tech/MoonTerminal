@@ -2,6 +2,117 @@
 //!
 //! This crate does not localize. The Backend fills these values and the page renders them.
 
+/// Maximum number of prints in a closed-trade chart.
+pub const MAX_CHART_TICKS: usize = 6000;
+/// Maximum number of prints in one live-chart response.
+pub const MAX_LIVE_TICKS: usize = 4000;
+/// Maximum number of raw side-volume buckets in a closed-trade chart.
+pub const MAX_VOLUME_BUCKETS: usize = 600;
+
+/// Initial viewport of a closed-trade chart; fetching always includes both margins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ChartRangeDto {
+    #[serde(rename = "deal")]
+    Deal,
+    #[serde(rename = "30")]
+    Seconds30,
+    #[serde(rename = "300")]
+    Seconds300,
+}
+
+/// Chart availability, serialized using the frozen Mini App state names.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartStateDto {
+    Ok,
+    Loading,
+    NoTape,
+    ArchivePending,
+    #[default]
+    Error,
+    Live,
+    Stale,
+    Closed,
+    Closing,
+}
+
+/// Meaning of a horizontal chart level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LevelKindDto {
+    Buy,
+    Take,
+    Stop,
+    Entry,
+}
+
+/// One price level, with its wire-stable kind.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct LevelDto {
+    pub kind: LevelKindDto,
+    pub price: f64,
+}
+
+/// Closed-trade chart; unavailable data is omitted rather than invented.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct TradeTicksDto {
+    pub state: ChartStateDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_in_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_at_ms: Option<i64>,
+    pub open_ms: i64,
+    pub close_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub levels: Option<Vec<LevelDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticks: Option<Vec<(i64, f64, f64, u8)>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinned_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_bucket_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume: Option<Vec<(i64, f64, f64)>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exchange: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_decimals: Option<u32>,
+}
+
+/// Snapshot of an open position and its incremental chart prints.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct LiveTicksDto {
+    pub state: ChartStateDto,
+    pub now_ms: i64,
+    pub last_tick_ms: Option<i64>,
+    pub entry_ms: i64,
+    pub entry_price: f64,
+    pub mark_price: f64,
+    pub levels: Vec<LevelDto>,
+    pub ticks: Vec<(i64, f64, f64, u8)>,
+    pub truncated: bool,
+    pub pnl_text: String,
+    pub pnl_sign: i8,
+    pub change_text: String,
+    pub take_dist_text: String,
+    pub stop_dist_text: String,
+    pub price_decimals: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trade: Option<TradeDto>,
+}
+
 /// Named report window. Serialized as snake_case (`last_month`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -258,6 +369,10 @@ pub struct TradeDto {
     pub closed_short_text: String,
     pub entry_text: Option<String>,
     pub exit_text: Option<String>,
+    /// Recorded execution price without display rounding.
+    pub exit_price: Option<f64>,
+    /// Recorded close in UTC milliseconds.
+    pub close_ms: Option<i64>,
     pub qty_text: String,
     pub volume_text: Option<String>,
     /// Seconds from entry to close; `None` when the entry time is unknown.

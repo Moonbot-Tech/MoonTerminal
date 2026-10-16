@@ -10,7 +10,8 @@
 //! `POST /api/orders`, `POST /api/order/cancel`, `POST /api/panic`, `POST /api/core/switch`,
 //! `POST /api/cores/switch`, `POST /api/core/cancel_all`, `POST /api/trades`,
 //! `POST /api/strategies`, `POST /api/strategy/toggle`, `POST /api/core/reconnect`,
-//! `POST /api/notify`, and `POST /api/notify/save`.
+//! `POST /api/notify`, `POST /api/notify/save`, `POST /api/trade/ticks`, and
+//! `POST /api/order/ticks`.
 
 use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -87,6 +88,24 @@ pub struct MiniAppServerConfig {
 
 /// Authenticated Mini App API event emitted after HMAC and pairing checks succeed.
 pub enum MiniAppApiRequest {
+    /// Read the chart of one closed trade after validating its request bounds.
+    TradeTicks {
+        identity: SignedInitData,
+        chat_id: i64,
+        core: u64,
+        rec_id: i64,
+        range: dto::ChartRangeDto,
+        reply: SyncSender<Result<dto::TradeTicksDto, MiniAppApiError>>,
+    },
+    /// Read an incremental chart snapshot without advancing the chart cursor.
+    OrderTicks {
+        identity: SignedInitData,
+        chat_id: i64,
+        core: u64,
+        uid: u64,
+        since_ms: Option<i64>,
+        reply: SyncSender<Result<dto::LiveTicksDto, MiniAppApiError>>,
+    },
     /// Data-free session check. The body is discarded after bounds checks.
     Session {
         /// Signed identity that passed pairing.
@@ -447,6 +466,25 @@ struct CancelOrderBody {
     uid: u64,
 }
 
+/// Closed-trade chart request; unknown fields never reach the owner thread.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TradeTicksBody {
+    core: u64,
+    rec_id: i64,
+    range: dto::ChartRangeDto,
+}
+
+/// Live chart request with a lossless order identifier.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrderTicksBody {
+    core: u64,
+    #[serde(deserialize_with = "dto::id_text::deserialize")]
+    uid: u64,
+    since_ms: Option<i64>,
+}
+
 /// Body of `POST /api/core/switch`. Unknown fields are rejected.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -601,6 +639,40 @@ impl App {
                     })
                 })
             }
+            (&Method::POST, "/api/trade/ticks") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<TradeTicksBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    if parsed.rec_id <= 0 {
+                        return Err(status_response(StatusCode::BAD_REQUEST, "json"));
+                    }
+                    Ok(MiniAppApiRequest::TradeTicks {
+                        identity,
+                        chat_id,
+                        core: parsed.core,
+                        rec_id: parsed.rec_id,
+                        range: parsed.range,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/order/ticks") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<OrderTicksBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    if parsed.since_ms.is_some_and(|stamp| stamp < 0) {
+                        return Err(status_response(StatusCode::BAD_REQUEST, "json"));
+                    }
+                    Ok(MiniAppApiRequest::OrderTicks {
+                        identity,
+                        chat_id,
+                        core: parsed.core,
+                        uid: parsed.uid,
+                        since_ms: parsed.since_ms,
+                        reply,
+                    })
+                })
+            }
             (&Method::POST, "/api/panic") => {
                 self.handle_api(request, |identity, chat_id, body, reply| {
                     let parsed = serde_json::from_value::<PanicSellBody>(body)
@@ -734,6 +806,8 @@ impl App {
                 | "/api/cores"
                 | "/api/orders"
                 | "/api/order/cancel"
+                | "/api/trade/ticks"
+                | "/api/order/ticks"
                 | "/api/panic"
                 | "/api/core/switch"
                 | "/api/cores/switch"

@@ -142,6 +142,8 @@
                 applyScheme();
                 applyChromeColors();
                 syncHeaderHeight();
+                // The canvas reads its colours from the scheme's tokens at draw time.
+                if (sheetChart) sheetChart.draw();
             });
         }
         webapp.ready();
@@ -341,7 +343,7 @@
                 finish(job, { ok: false, status: 0, cancelled: true, retry: false, error: "" });
                 return;
             }
-            if (pack.status === 503 || pack.status === 504) {
+            if ((pack.status === 503 || pack.status === 504) && job.path !== "/api/trade/ticks" && job.path !== "/api/order/ticks") {
                 if (job.attempt < retryLimit(job)) {
                     var wait = retryWait(job);
                     job.attempt += 1;
@@ -1005,9 +1007,25 @@
             volume.appendChild(el("span", "num", order.volume_text));
             flow.appendChild(volume);
         }
+        flow.appendChild(el("span", "chart-hint", "◉ " + tr("mini_chart_live_hint")));
         main.appendChild(flow);
         row.appendChild(main);
         if (data.can_control) orderActions(row, order);
+        // A row tap opens the live chart; a tap on cancel or Panic Sell stays theirs.
+        row.setAttribute("role", "button");
+        row.tabIndex = 0;
+        function onAction(event) {
+            return !!(event.target && event.target.closest && event.target.closest(".order-actions"));
+        }
+        row.addEventListener("click", function (event) {
+            if (onAction(event)) return;
+            openOrderSheet(order, data);
+        });
+        row.addEventListener("keydown", function (event) {
+            if (onAction(event) || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            openOrderSheet(order, data);
+        });
         return row;
     }
 
@@ -1686,6 +1704,7 @@
         applyMoney(profit, "num money-col", trade.profit_text, trade.profit);
         right.appendChild(profit);
         right.appendChild(tradePct(trade, "num fine"));
+        right.appendChild(el("span", "chart-hint", "◔ " + tr("mini_chart_hint")));
         row.appendChild(right);
         function open() {
             openTradeSheet(trade);
@@ -1719,40 +1738,722 @@
         restoreScroll(y);
     }
 
-    // Closed-trade details retain exchange quantity and add safe entry volume when available.
-    function openTradeSheet(trade) {
-        if (!sheet) return;
-        hapticSelection();
-        clear(sheet);
+    // ---------- Tick charts: a closed trade's tape and an open position's live stream ----------
+
+    var CHART_POLL_MS = 500;
+    var CHART_SLOW_POLL_MS = 1000;
+    var CHART_CLOSING_TRIES = 30;
+    var CHART_LOAD_TRIES = 20;
+    var CHART_LOAD_WAIT_MS = 1500;
+    // The live ring: at most this many prints, none older than 15 minutes.
+    var LIVE_RING = 4000;
+    var LIVE_KEEP_MS = 900000;
+    var LIVE_MAX_SPAN_MS = 960000;
+    var CHART_MIN_SPAN_MS = 3000;
+    var CHART_AXIS_W = 58;
+    var CHART_VOL_H = 44;
+    var TRADE_RANGES = [["deal", "mini_chart_range_deal"], ["30", "mini_chart_range_30"], ["300", "mini_chart_range_300"]];
+    var LIVE_SPANS = [["120", "mini_chart_span_2"], ["300", "mini_chart_span_5"], ["900", "mini_chart_span_15"]];
+    // Every sheet open and close bumps it; a reply or timer of an older sheet sees the change and stops.
+    var sheetToken = 0;
+    var sheetTimer = null;
+    var sheetChart = null;
+    // The open live sheet's poll state; null while none is open.
+    var liveSheet = null;
+
+    function cssVar(name) {
+        return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    function clamp01(value) {
+        return Math.min(1, Math.max(0, value));
+    }
+
+    // Local wall-clock HH:MM:SS of an epoch millisecond.
+    function clockAt(ms) {
+        var d = new Date(ms);
+        return twoDigits(d.getHours()) + ":" + twoDigits(d.getMinutes()) + ":" + twoDigits(d.getSeconds());
+    }
+
+    function millisTail(ms) {
+        var rest = ((Math.floor(ms) % 1000) + 1000) % 1000;
+        return (rest < 10 ? "00" : rest < 100 ? "0" : "") + rest;
+    }
+
+    // HH:MM today, HH:MM DD.MM on another day.
+    function whenText(ms) {
+        var d = new Date(ms);
+        var hm = twoDigits(d.getHours()) + ":" + twoDigits(d.getMinutes());
+        if (d.toDateString() === new Date().toDateString()) return hm;
+        return hm + " " + twoDigits(d.getDate()) + "." + twoDigits(d.getMonth() + 1);
+    }
+
+    function qtyText(qty) {
+        if (!finiteNumber(qty)) return "?";
+        return qty >= 100 ? String(Math.round(qty)) : String(+qty.toPrecision(4));
+    }
+
+    function priceDecimals(value) {
+        return finiteNumber(value) && value >= 0 && value <= 18 ? Math.floor(value) : 6;
+    }
+
+    // Prints as the wire sends them: [t_ms, price, qty, side] with side 1 a buy.
+    function tickList(value) {
+        var out = [];
+        if (!Array.isArray(value)) return out;
+        var i;
+        for (i = 0; i < value.length; i++) {
+            var t = value[i];
+            if (Array.isArray(t) && t.length >= 4 && finiteNumber(t[0]) && finiteNumber(t[1])) out.push(t);
+        }
+        return out;
+    }
+
+    // Canvas tick chart: every print a dot sized by quantity on a thin price line, a side-split
+    // volume histogram below, dashed order levels, entry/exit markers and the hold-span tint.
+    // Drag pans, wheel and pinch zoom, a tap places the crosshair. `opts`: ticks() -> prints,
+    // dp, maxSpan, hold [from, to] or null, volume {width, rows: [[start, buy, sell]]} or null
+    // (null buckets the prints themselves), noVolume, live (the current-price tag), onView.
+    function TickChart(host, opts) {
+        var self = this;
+        this.host = host;
+        this.opts = opts;
+        this.levels = [];
+        this.marks = [];
+        this.mark = null;
+        this.view = { from: 0, to: 1, lo: 0, hi: 1 };
+        this.cross = null;
+        this.follow = false;
+        this.shown = 0;
+        this.canvas = el("canvas", "chart-canvas");
+        this.tip = el("div", "chart-tip");
+        this.tip.hidden = true;
+        host.appendChild(this.canvas);
+        host.appendChild(this.tip);
+        this.observer = null;
+        if (typeof ResizeObserver === "function") {
+            this.observer = new ResizeObserver(function () { self.size(); });
+            this.observer.observe(host);
+        }
+        this.bind();
+        this.size();
+    }
+
+    TickChart.prototype.destroy = function () {
+        if (this.observer) this.observer.disconnect();
+        this.observer = null;
+    };
+
+    TickChart.prototype.size = function () {
+        var box = this.host.getBoundingClientRect();
+        var ratio = window.devicePixelRatio || 1;
+        if (!box.width || !box.height) return;
+        this.canvas.width = Math.round(box.width * ratio);
+        this.canvas.height = Math.round(box.height * ratio);
+        this.draw();
+    };
+
+    TickChart.prototype.plotWidth = function () {
+        return Math.max(1, this.canvas.getBoundingClientRect().width - (this.axisWidth || CHART_AXIS_W));
+    };
+
+    TickChart.prototype.bind = function () {
+        var self = this;
+        var cv = this.canvas;
+        var points = {};
+        var drag = null;
+        var pinch = null;
+        function active() {
+            var list = [];
+            var id;
+            for (id in points) {
+                if (Object.prototype.hasOwnProperty.call(points, id)) list.push(points[id]);
+            }
+            return list;
+        }
+        cv.addEventListener("pointerdown", function (e) {
+            if (cv.setPointerCapture) {
+                try { cv.setPointerCapture(e.pointerId); } catch (err) { /* a synthetic pointer has no capture */ }
+            }
+            points[e.pointerId] = e.clientX;
+            var list = active();
+            if (list.length === 2) {
+                pinch = { dist: Math.abs(list[0] - list[1]) || 1, mid: (list[0] + list[1]) / 2, from: self.view.from, to: self.view.to };
+                drag = null;
+            } else if (list.length === 1) {
+                drag = { x: e.clientX, from: self.view.from, to: self.view.to, moved: false };
+            }
+        });
+        cv.addEventListener("pointermove", function (e) {
+            if (!Object.prototype.hasOwnProperty.call(points, e.pointerId)) return;
+            points[e.pointerId] = e.clientX;
+            var list = active();
+            if (pinch && list.length === 2) {
+                var dist = Math.abs(list[0] - list[1]) || 1;
+                var fx = clamp01((pinch.mid - cv.getBoundingClientRect().left) / self.plotWidth());
+                var span = pinch.to - pinch.from;
+                self.zoomTo(span * pinch.dist / dist, pinch.from + fx * span, fx);
+                return;
+            }
+            if (!drag) return;
+            var dx = e.clientX - drag.x;
+            if (Math.abs(dx) > 3) drag.moved = true;
+            if (!drag.moved) return;
+            var shift = -dx / self.plotWidth() * (drag.to - drag.from);
+            self.view.from = drag.from + shift;
+            self.view.to = drag.to + shift;
+            self.cross = null;
+            self.userMoved(false);
+        });
+        function release(e, tapped) {
+            var tap = tapped && drag && !drag.moved && !pinch;
+            delete points[e.pointerId];
+            if (tap) {
+                var box = cv.getBoundingClientRect();
+                self.cross = { x: e.clientX - box.left, y: e.clientY - box.top };
+                self.draw();
+            }
+            var list = active();
+            if (list.length < 2) pinch = null;
+            drag = list.length === 1 ? { x: list[0], from: self.view.from, to: self.view.to, moved: true } : null;
+        }
+        cv.addEventListener("pointerup", function (e) { release(e, true); });
+        cv.addEventListener("pointercancel", function (e) { release(e, false); });
+        cv.addEventListener("wheel", function (e) {
+            e.preventDefault();
+            var fx = clamp01((e.clientX - cv.getBoundingClientRect().left) / self.plotWidth());
+            var span = self.view.to - self.view.from;
+            self.zoomTo(span * (e.deltaY > 0 ? 1.18 : 1 / 1.18), self.view.from + fx * span, fx);
+        }, { passive: false });
+    };
+
+    // Zoom out keeps following the newest print; zoom in and pan stop following.
+    TickChart.prototype.zoomTo = function (span, at, fx) {
+        var wider = span > this.view.to - this.view.from;
+        var next = Math.max(CHART_MIN_SPAN_MS, Math.min(this.opts.maxSpan, span));
+        this.view.from = at - fx * next;
+        this.view.to = this.view.from + next;
+        this.userMoved(wider);
+    };
+
+    TickChart.prototype.userMoved = function (keepFollow) {
+        if (!keepFollow) this.follow = false;
+        if (this.follow && this.opts.now) this.anchor(this.view.to - this.view.from);
+        this.fitY();
+        this.draw();
+        if (this.opts.onView) this.opts.onView();
+    };
+
+    // The live window: `span` wide, the newest moment 8 % in from the right edge.
+    TickChart.prototype.anchor = function (span) {
+        this.view.to = this.opts.now() + span * 0.08;
+        this.view.from = this.view.to - span;
+    };
+
+    TickChart.prototype.setView = function (from, to) {
+        this.view.from = from;
+        this.view.to = to;
+        this.cross = null;
+        this.fitY();
+        this.draw();
+    };
+
+    TickChart.prototype.fitY = function () {
+        var ts = this.opts.ticks();
+        var v = this.view;
+        var lo = Infinity;
+        var hi = -Infinity;
+        var i;
+        for (i = 0; i < ts.length; i++) {
+            var t = ts[i];
+            if (t[0] < v.from || t[0] > v.to) continue;
+            if (t[1] < lo) lo = t[1];
+            if (t[1] > hi) hi = t[1];
+        }
+        for (i = 0; i < this.levels.length; i++) {
+            if (!this.levels[i].fit) continue;
+            lo = Math.min(lo, this.levels[i].price);
+            hi = Math.max(hi, this.levels[i].price);
+        }
+        if (!isFinite(lo) || !isFinite(hi)) {
+            lo = 0;
+            hi = 1;
+        }
+        var pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.001 || 1;
+        v.lo = lo - pad;
+        v.hi = hi + pad;
+    };
+
+    TickChart.prototype.draw = function () {
+        var cv = this.canvas;
+        var g = cv.getContext ? cv.getContext("2d") : null;
+        if (!g || !cv.width || !cv.height) return;
+        var ratio = window.devicePixelRatio || 1;
+        var W = cv.width / ratio;
+        var H = cv.height / ratio;
+        g.setTransform(ratio, 0, 0, ratio, 0, 0);
+        g.clearRect(0, 0, W, H);
+        var v = this.view;
+        var dp = this.opts.dp;
+        var plotW;
+        var plotH = H - CHART_VOL_H - 18;
+        var span = v.to - v.from || 1;
+        var tone = {};
+        function color(name) {
+            if (!Object.prototype.hasOwnProperty.call(tone, name)) tone[name] = cssVar(name);
+            return tone[name];
+        }
+        function X(t) { return (t - v.from) / span * plotW; }
+        function Y(p) { return 6 + (v.hi - p) / (v.hi - v.lo) * (plotH - 6); }
+        var mono = color("--font-mono");
+        var ui = color("--font-ui");
+        var ts = this.opts.ticks();
+        var vis = [];
+        var i;
+        for (i = 0; i < ts.length; i++) {
+            if (ts[i][0] >= v.from - 2000 && ts[i][0] <= v.to + 2000) vis.push(ts[i]);
+        }
+        this.shown = 0;
+        for (i = 0; i < vis.length; i++) if (vis[i][0] >= v.from && vis[i][0] <= v.to) this.shown += 1;
+        // What is drawn, readable without the canvas: held prints, the window, and follow.
+        this.host.setAttribute("data-ticks", String(ts.length));
+        this.host.setAttribute("data-span", String(Math.round(span)));
+        this.host.setAttribute("data-follow", this.follow ? "1" : "0");
+        var levels = this.levels;
+        var nowPrice = null;
+        if (this.opts.live) {
+            if (finiteNumber(this.mark)) nowPrice = this.mark;
+            else if (ts.length) nowPrice = ts[ts.length - 1][1];
+        }
+        // Measure at the drawing precision so small-price tags stay inside narrow canvases.
+        var axisW = CHART_AXIS_W;
+        g.font = "600 10px " + mono;
+        var labelPrices = [v.lo, v.hi];
+        for (i = 0; i < levels.length; i++) labelPrices.push(levels[i].price);
+        if (nowPrice != null) labelPrices.push(nowPrice);
+        for (i = 0; i < labelPrices.length; i++) axisW = Math.max(axisW, Math.ceil(g.measureText(labelPrices[i].toFixed(dp)).width) + 12);
+        this.axisWidth = axisW;
+        plotW = Math.max(1, W - axisW);
+        // Grid and price axis; an axis label gives way to a level tag or the price tag on its row.
+        g.font = "10px " + mono;
+        g.textBaseline = "middle";
+        var taken = [];
+        for (i = 0; i < levels.length; i++) taken.push(Y(levels[i].price));
+        if (nowPrice != null) taken.push(Y(nowPrice));
+        var steps = 5;
+        for (i = 0; i <= steps; i++) {
+            var gp = v.lo + (v.hi - v.lo) * i / steps;
+            var gy = Y(gp);
+            g.strokeStyle = color("--grid");
+            g.lineWidth = 1;
+            g.beginPath();
+            g.moveTo(0, gy);
+            g.lineTo(plotW, gy);
+            g.stroke();
+            var busyRow = false;
+            var k;
+            for (k = 0; k < taken.length; k++) if (Math.abs(taken[k] - gy) < 14) busyRow = true;
+            if (busyRow) continue;
+            g.fillStyle = color("--hint");
+            g.textAlign = "left";
+            g.fillText(gp.toFixed(dp), plotW + 6, gy);
+        }
+        // Time axis.
+        var tstep = span > 1800000 ? 300000 : span > 600000 ? 120000 : span > 180000 ? 60000 : span > 60000 ? 15000 : span > 20000 ? 5000 : 2000;
+        g.textAlign = "center";
+        // Drawn label and tag boxes in CSS pixels, kept for the preview harness.
+        var drawn = { times: [], tags: [] };
+        cv.drawnBoxes = drawn;
+        var lastRight = -Infinity;
+        var tt;
+        for (tt = Math.ceil(v.from / tstep) * tstep; tt < v.to; tt += tstep) {
+            var tx = X(tt);
+            g.strokeStyle = color("--grid");
+            g.beginPath();
+            g.moveTo(tx, 0);
+            g.lineTo(tx, plotH);
+            g.stroke();
+            g.fillStyle = color("--hint");
+            var timeLabel = span > 600000 ? clockAt(tt).slice(0, 5) : clockAt(tt);
+            var halfTime = g.measureText(timeLabel).width / 2;
+            var lx = Math.max(halfTime, Math.min(plotW - halfTime, tx));
+            // A label crowding the previous one is skipped; its grid line stays.
+            if (lx - halfTime < lastRight + 8) continue;
+            lastRight = lx + halfTime;
+            g.fillText(timeLabel, lx, H - 8);
+            drawn.times.push({ x: lx - halfTime, y: H - 14, w: halfTime * 2, h: 12 });
+        }
+        // Volume: server buckets when given (raw, before thinning), else the visible prints.
+        if (!this.opts.noVolume) {
+            var vol = this.opts.volume;
+            var bucket = Math.max(250, span / 90);
+            if (vol && vol.width > 0) bucket = Math.max(1, Math.ceil(span / 90 / vol.width)) * vol.width;
+            var sums = {};
+            var maxV = 0;
+            var add = function (start, buy, sell) {
+                var key = Math.floor(start / bucket);
+                var cell = sums[key] || (sums[key] = [0, 0]);
+                cell[0] += buy || 0;
+                cell[1] += sell || 0;
+            };
+            if (vol) {
+                for (i = 0; i < vol.rows.length; i++) {
+                    var row = vol.rows[i];
+                    if (Array.isArray(row) && row[0] >= v.from - bucket && row[0] <= v.to) add(row[0], row[1], row[2]);
+                }
+            } else {
+                for (i = 0; i < vis.length; i++) {
+                    if (vis[i][3] === 1) add(vis[i][0], vis[i][2], 0);
+                    else add(vis[i][0], 0, vis[i][2]);
+                }
+            }
+            var key;
+            for (key in sums) {
+                if (Object.prototype.hasOwnProperty.call(sums, key)) maxV = Math.max(maxV, sums[key][0] + sums[key][1]);
+            }
+            if (maxV > 0) {
+                var bw = Math.max(1, bucket / span * plotW - 1);
+                var base = plotH + 2 + CHART_VOL_H - 4;
+                g.globalAlpha = 0.55;
+                for (key in sums) {
+                    if (!Object.prototype.hasOwnProperty.call(sums, key)) continue;
+                    var bx = X(key * bucket);
+                    var hb = sums[key][0] / maxV * (CHART_VOL_H - 6);
+                    var hs = sums[key][1] / maxV * (CHART_VOL_H - 6);
+                    g.fillStyle = color("--tick-buy");
+                    g.fillRect(bx, base - hb, bw, hb);
+                    g.fillStyle = color("--tick-sell");
+                    g.fillRect(bx, base - hb - hs, bw, hs);
+                }
+                g.globalAlpha = 1;
+            }
+        }
+        // Order levels, pass 1: the dashed lines, under the prints.
+        for (i = 0; i < levels.length; i++) {
+            var ly = Y(levels[i].price);
+            if (ly < 0 || ly > plotH) continue;
+            g.strokeStyle = color(levels[i].color);
+            g.setLineDash([5, 4]);
+            g.lineWidth = 1.2;
+            g.beginPath();
+            g.moveTo(0, ly);
+            g.lineTo(plotW, ly);
+            g.stroke();
+            g.setLineDash([]);
+        }
+        // Price line, then the dots, radius by the square root of the quantity.
+        g.strokeStyle = color("--sub");
+        g.globalAlpha = 0.45;
+        g.lineWidth = 1;
+        g.beginPath();
+        for (i = 0; i < vis.length; i++) {
+            if (i) g.lineTo(X(vis[i][0]), Y(vis[i][1]));
+            else g.moveTo(X(vis[i][0]), Y(vis[i][1]));
+        }
+        g.stroke();
+        var maxQ = 0;
+        for (i = 0; i < vis.length; i++) if (finiteNumber(vis[i][2]) && vis[i][2] > maxQ) maxQ = vis[i][2];
+        g.globalAlpha = 0.8;
+        for (i = 0; i < vis.length; i++) {
+            var q = finiteNumber(vis[i][2]) && maxQ > 0 ? vis[i][2] / maxQ : 0;
+            g.fillStyle = color(vis[i][3] === 1 ? "--tick-buy" : "--tick-sell");
+            g.beginPath();
+            g.arc(X(vis[i][0]), Y(vis[i][1]), 1.2 + Math.sqrt(Math.max(0, q)) * 4, 0, Math.PI * 2);
+            g.fill();
+        }
+        g.globalAlpha = 1;
+        // Entry and exit markers.
+        for (i = 0; i < this.marks.length; i++) {
+            var m = this.marks[i];
+            var mx = X(m.t);
+            var my = Y(m.price);
+            if (mx < -10 || mx > plotW + 10) continue;
+            g.fillStyle = color(m.color);
+            g.strokeStyle = color("--card");
+            g.lineWidth = 2;
+            g.beginPath();
+            if (m.up) {
+                g.moveTo(mx, my + 4);
+                g.lineTo(mx - 7, my + 16);
+                g.lineTo(mx + 7, my + 16);
+            } else {
+                g.moveTo(mx, my - 4);
+                g.lineTo(mx - 7, my - 16);
+                g.lineTo(mx + 7, my - 16);
+            }
+            g.closePath();
+            g.stroke();
+            g.fill();
+        }
+        // Hold span.
+        if (this.opts.hold) {
+            var h0 = X(this.opts.hold[0]);
+            var h1 = X(this.opts.hold[1]);
+            g.fillStyle = color("--tint");
+            g.fillRect(h0, 0, Math.max(1, h1 - h0), plotH);
+        }
+        // Levels, pass 2: the price as a tag on the axis, the name at the left edge, and an arrow
+        // chip at the right edge for a level outside the price range.
+        var off = 0;
+        var tagRows = [];
+        // Move only the axis tag, away from a colliding tag toward its own price side; the line
+        // and execution marker retain their true price. At the plot edge the push flips.
+        function tagY(y0) {
+            var top = 8;
+            var bottom = plotH - 8;
+            var y = Math.max(top, Math.min(bottom, y0));
+            var guard = 2 * tagRows.length + 2;
+            var j;
+            for (j = 0; j < tagRows.length && guard > 0; j++) {
+                var row = tagRows[j];
+                if (Math.abs(y - row.y) >= 16) continue;
+                var dir = y0 < row.at ? -1 : 1;
+                y = row.y + dir * 16;
+                if (y < top) y = row.y + 16;
+                else if (y > bottom) y = row.y - 16;
+                y = Math.max(top, Math.min(bottom, y));
+                guard -= 1;
+                j = -1;
+            }
+            tagRows.push({ y: y, at: y0 });
+            drawn.tags.push({ x: plotW, y: y - 8, w: axisW, h: 16 });
+            return y;
+        }
+        for (i = 0; i < levels.length; i++) {
+            var lv = levels[i];
+            var y = Y(lv.price);
+            if (y < 0 || y > plotH) {
+                var up = y < 0;
+                var lab = (up ? "↑ " : "↓ ") + lv.label + " " + lv.price.toFixed(dp);
+                g.font = "600 10px " + ui;
+                var tw = g.measureText(lab).width + 10;
+                var cy = up ? 10 + off * 18 : plotH - 10 - off * 18;
+                var cx = plotW - tw - 4;
+                off += 1;
+                g.fillStyle = color("--card-high");
+                g.fillRect(cx, cy - 8, tw, 16);
+                g.strokeStyle = color(lv.color);
+                g.lineWidth = 1;
+                g.strokeRect(cx + 0.5, cy - 7.5, tw - 1, 15);
+                g.fillStyle = color(lv.color);
+                g.textAlign = "left";
+                g.fillText(lab, cx + 5, cy);
+                continue;
+            }
+            g.fillStyle = color(lv.color);
+            var tagRow = tagY(y);
+            g.fillRect(plotW, tagRow - 8, axisW, 16);
+            g.fillStyle = color("--card");
+            g.textAlign = "left";
+            g.font = "600 10px " + mono;
+            g.fillText(lv.price.toFixed(dp), plotW + 4, tagRow);
+            g.font = "600 10px " + ui;
+            var nw = g.measureText(lv.label).width + 8;
+            g.fillStyle = color("--card");
+            g.globalAlpha = 0.9;
+            g.fillRect(2, y - 15, nw, 13);
+            g.globalAlpha = 1;
+            g.fillStyle = color(lv.color);
+            g.fillText(lv.label, 6, y - 8);
+        }
+        // The current price, neutral so it never reads as an order level.
+        if (nowPrice != null) {
+            var py = Y(nowPrice);
+            if (py >= 0 && py <= plotH) {
+                py = tagY(py);
+                g.fillStyle = color("--ink");
+                g.fillRect(plotW, py - 8, axisW, 16);
+                g.fillStyle = color("--card");
+                g.textAlign = "left";
+                g.font = "600 10px " + mono;
+                g.fillText(nowPrice.toFixed(dp), plotW + 4, py);
+            }
+        }
+        // Crosshair on the print nearest the tap.
+        var tip = this.tip;
+        var best = null;
+        if (this.cross && this.cross.x < plotW) {
+            var at = v.from + this.cross.x / plotW * span;
+            var gap = Infinity;
+            for (i = 0; i < vis.length; i++) {
+                var dd = Math.abs(vis[i][0] - at);
+                if (dd < gap) {
+                    gap = dd;
+                    best = vis[i];
+                }
+            }
+        }
+        if (!best) {
+            tip.hidden = true;
+            return;
+        }
+        var cxp = X(best[0]);
+        var cyp = Y(best[1]);
+        g.strokeStyle = color("--hint");
+        g.setLineDash([2, 3]);
+        g.beginPath();
+        g.moveTo(cxp, 0);
+        g.lineTo(cxp, plotH);
+        g.moveTo(0, cyp);
+        g.lineTo(plotW, cyp);
+        g.stroke();
+        g.setLineDash([]);
+        clear(tip);
+        tip.appendChild(el("b", "num", best[1].toFixed(dp)));
+        tip.appendChild(document.createTextNode(" · " + tr(best[3] === 1 ? "mini_chart_buy" : "mini_chart_sell")));
+        tip.appendChild(el("br"));
+        tip.appendChild(el("span", "num", clockAt(best[0]) + "." + millisTail(best[0])));
+        tip.appendChild(document.createTextNode(" · " + tr("mini_chart_qty") + " "));
+        tip.appendChild(el("span", "num", qtyText(best[2])));
+        tip.hidden = false;
+        var left = cxp + 10;
+        if (left > plotW - 150) left = Math.max(4, cxp - 160);
+        tip.style.left = left + "px";
+        tip.style.top = Math.max(4, cyp - 46) + "px";
+    };
+
+    // A row of view chips; `extra` (the follow button) sits at the far end.
+    function chartChips(host, items, active, onPick, extra) {
+        var row = el("div", "chart-tf");
+        var i;
+        for (i = 0; i < items.length; i++) {
+            (function (key, labelKey) {
+                var chip = button("chart-chip", tr(labelKey), function () { onPick(key); });
+                chip.setAttribute("data-range", key);
+                row.appendChild(chip);
+            })(items[i][0], items[i][1]);
+        }
+        if (extra) {
+            row.appendChild(el("span", "chart-spacer"));
+            row.appendChild(extra);
+        }
+        pressChip(row, active);
+        host.appendChild(row);
+        return row;
+    }
+
+    function pressChip(row, key) {
+        var nodes = row.querySelectorAll("[data-range]");
+        var i;
+        for (i = 0; i < nodes.length; i++) {
+            var on = nodes[i].getAttribute("data-range") === key;
+            nodes[i].classList.toggle("on", on);
+            nodes[i].setAttribute("aria-pressed", on ? "true" : "false");
+        }
+    }
+
+    function chartSkeleton(host) {
+        clear(host);
+        var box = el("div", "chart-state chart-loading");
+        box.setAttribute("aria-busy", "true");
+        box.appendChild(el("div", "chart-skeleton"));
+        box.appendChild(el("p", "sr-only", tr("mini_chart_loading")));
+        host.appendChild(box);
+    }
+
+    // A dashed box in place of the chart: a title, a note, and «Retry» when `onRetry` is given.
+    function chartState(host, title, note, onRetry) {
+        clear(host);
+        var box = el("div", "chart-state");
+        box.appendChild(el("div", "chart-state-title", title));
+        if (note) box.appendChild(el("div", "", note));
+        if (onRetry) box.appendChild(button("chart-retry", tr("mini_retry"), onRetry));
+        host.appendChild(box);
+    }
+
+    function chartLegend(host, items) {
+        clear(host);
+        var i;
+        for (i = 0; i < items.length; i++) {
+            var item = el("span", "");
+            var mark = el("i", items[i].dot ? "dot" : "");
+            if (items[i].dot) mark.style.background = "var(" + items[i].color + ")";
+            else mark.style.borderColor = "var(" + items[i].color + ")";
+            item.appendChild(mark);
+            item.appendChild(document.createTextNode(tr(items[i].key)));
+            host.appendChild(item);
+        }
+        host.hidden = !items.length;
+    }
+
+    // Levels on the wire by kind; a closed trade's stop is drawn but never stretches the scale.
+    function chartLevels(levels, fitStop) {
+        var names = {
+            buy: ["mini_chart_level_buy", "--entry"],
+            entry: ["mini_chart_level_entry", "--entry"],
+            take: ["mini_chart_level_take", "--take"],
+            stop: ["mini_chart_level_stop", "--stop"]
+        };
+        var out = [];
+        var i;
+        if (!Array.isArray(levels)) return out;
+        for (i = 0; i < levels.length; i++) {
+            var level = levels[i];
+            var name = level && names[level.kind];
+            if (!name || !finiteNumber(level.price)) continue;
+            out.push({ kind: level.kind, label: tr(name[0]), price: level.price, color: name[1], fit: level.kind !== "stop" || fitStop });
+        }
+        return out;
+    }
+
+    function hasLevel(levels, kind) {
+        var i;
+        for (i = 0; i < levels.length; i++) if (levels[i].kind === kind) return true;
+        return false;
+    }
+
+    function chartArea(host) {
+        var area = el("div", "chart-area");
+        host.appendChild(area);
+        return area;
+    }
+
+    // Stop the previous sheet's chart and timers, empty the sheet and start a new generation.
+    function resetSheet() {
+        sheetToken += 1;
+        if (sheetTimer) {
+            clearTimeout(sheetTimer);
+            sheetTimer = null;
+        }
+        if (liveSheet) {
+            if (liveSheet.timer) clearTimeout(liveSheet.timer);
+            liveSheet.timer = null;
+            liveSheet.stopped = true;
+            liveSheet = null;
+        }
+        if (sheetChart) {
+            sheetChart.destroy();
+            sheetChart = null;
+        }
+        if (sheet) clear(sheet);
+        return sheetToken;
+    }
+
+    function sheetHead(coin, side, where) {
         var head = el("div", "sheet-head");
         var titleBox = el("div", "grow");
         var top = el("div", "order-top");
-        var title = el("span", "name order-coin", trade.coin || "");
+        var title = el("span", "name order-coin", coin || "");
         title.id = "sheet-title";
         top.appendChild(title);
-        top.appendChild(el("span", "badge order-side " + sideClass(trade.side), sideLabel(trade.side)));
+        top.appendChild(el("span", "badge order-side " + sideClass(side), sideLabel(side)));
         titleBox.appendChild(top);
-        var where = [];
-        if (trade.core_name) where.push(trade.core_name);
-        if (trade.exchange) where.push(trade.exchange);
         titleBox.appendChild(el("div", "sub trade-meta", where.join(" · ")));
         head.appendChild(titleBox);
         var closeBtn = button("cmd text-btn sheet-close", tr("mini_close"), closeSheet);
         head.appendChild(closeBtn);
         sheet.appendChild(head);
-        var result = el("div", "row spread sheet-result");
-        var profit = el("span", "");
-        applyMoney(profit, "hero-value num", trade.profit_text, trade.profit);
-        result.appendChild(profit);
-        result.appendChild(tradePct(trade, "num"));
-        sheet.appendChild(result);
-        detailLine(sheet, tr("mini_trade_entry"), trade.entry_text);
-        detailLine(sheet, tr("mini_trade_exit"), trade.exit_text);
-        if (trade.volume_text) detailLine(sheet, tr("mini_trade_volume"), trade.volume_text);
-        detailLine(sheet, tr("mini_trade_qty"), trade.qty_text);
-        detailLine(sheet, tr("mini_trade_duration"), fmtDuration(trade.duration_secs));
-        detailLine(sheet, tr("mini_trade_strategy"), trade.strategy || (trade.manual ? tr("mini_trade_manual") : "—"));
-        detailLine(sheet, tr("mini_trade_closed"), trade.closed_text);
+        return closeBtn;
+    }
+
+    function whereOf(item) {
+        var where = [];
+        if (item.core_name) where.push(item.core_name);
+        if (item.exchange) where.push(item.exchange);
+        return where;
+    }
+
+    function showSheet(focus) {
         if (!sheetBackdrop) {
             sheetBackdrop = el("div", "sheet-backdrop");
             sheetBackdrop.addEventListener("click", closeSheet);
@@ -1763,16 +2464,575 @@
         sheet.hidden = false;
         sheetOpen = true;
         document.body.style.overflow = "hidden";
-        closeBtn.focus();
+        focus.focus();
         syncBackButton();
+    }
+
+    // Closed-trade rows: entry and exit with their times once the tape answered, the hold, entry
+    // volume when the DTO has it, quantity, strategy, and the exit reason when the report has one.
+    function tradeDetails(host, trade, data) {
+        clear(host);
+        var timed = !!(data && finiteNumber(data.open_ms) && finiteNumber(data.close_ms) && data.close_ms > 0);
+        var entry = trade.entry_text || "—";
+        var exit = trade.exit_text || "—";
+        if (timed) {
+            entry += " · " + clockAt(data.open_ms);
+            exit += " · " + clockAt(data.close_ms);
+        }
+        detailLine(host, tr("mini_trade_entry"), entry);
+        detailLine(host, tr("mini_trade_exit"), exit);
+        detailLine(host, tr("mini_trade_duration"), fmtDuration(trade.duration_secs));
+        if (trade.volume_text) detailLine(host, tr("mini_trade_volume"), trade.volume_text);
+        detailLine(host, tr("mini_trade_qty"), trade.qty_text);
+        detailLine(host, tr("mini_trade_strategy"), trade.strategy || (trade.manual ? tr("mini_trade_manual") : "—"));
+        if (data && data.exit_reason) detailLine(host, tr("mini_chart_exit_reason"), data.exit_reason);
+        if (!timed) detailLine(host, tr("mini_trade_closed"), trade.closed_text);
+    }
+
+    // The initial window of a closed trade for a range chip.
+    function tradeView(range, data) {
+        var open = data.open_ms;
+        var close = Math.max(data.close_ms, open);
+        if (range === "30") return [open - 30000, open + 30000];
+        if (range === "300") {
+            var mid = (open + close) / 2;
+            return [mid - 300000, mid + 300000];
+        }
+        var pad = Math.max(10000, (close - open) * 0.2);
+        return [open - pad, close + pad];
+    }
+
+    function sourceText(data) {
+        var bits = [];
+        var name = tr("mini_chart_source_" + String(data.source || ""));
+        if (name) bits.push(name);
+        if (data.exchange) bits.push(data.exchange);
+        return bits;
+    }
+
+    // Closed trade: the result, the tick chart of the deal and the trade's details. The range
+    // chips only move the view: the tape is fetched once for open-5 min .. close+5 min.
+    function openTradeSheet(trade) {
+        if (!sheet) return;
+        hapticSelection();
+        var token = resetSheet();
+        sheet.classList.add("chart-sheet");
+        var closeBtn = sheetHead(trade.coin, trade.side, whereOf(trade));
+        var result = el("div", "row spread sheet-result");
+        var profit = el("span", "");
+        applyMoney(profit, "hero-value num", trade.profit_text, trade.profit);
+        result.appendChild(profit);
+        result.appendChild(tradePct(trade, "num"));
+        sheet.appendChild(result);
+        var state = { range: "deal", data: null, tries: 0 };
+        var chips = chartChips(sheet, TRADE_RANGES, "deal", function (key) {
+            state.range = key;
+            pressChip(chips, key);
+            if (sheetChart && state.data) {
+                var span = tradeView(key, state.data);
+                sheetChart.setView(span[0], span[1]);
+                provenance();
+            }
+        });
+        var area = chartArea(sheet);
+        var legend = el("div", "chart-legend");
+        legend.hidden = true;
+        sheet.appendChild(legend);
+        var source = el("div", "chart-provenance");
+        sheet.appendChild(source);
+        var details = el("div", "chart-details");
+        sheet.appendChild(details);
+        tradeDetails(details, trade, null);
+
+        function provenance() {
+            var data = state.data;
+            if (!data || !sheetChart) return;
+            var bits = sourceText(data);
+            bits.push(trf("mini_chart_in_frame_" + pluralForm(sheetChart.shown), { n: sheetChart.shown }));
+            bits.push(tr("mini_chart_dot_size"));
+            if (finiteNumber(data.thinned_ms) && data.thinned_ms > 0) bits.push(tr("mini_chart_thinned"));
+            source.textContent = bits.join(" · ");
+        }
+        function failed() {
+            legend.hidden = true;
+            source.textContent = "";
+            chartState(area, tr("mini_chart_error"), tr("mini_chart_error_note"), function () {
+                state.tries = 0;
+                load();
+            });
+        }
+        function draw(data) {
+            state.data = data;
+            clear(area);
+            var wrap = el("div", "chart-wrap");
+            area.appendChild(wrap);
+            var ticks = tickList(data.ticks);
+            var long = trade.side !== "sell";
+            var volume = Array.isArray(data.volume) && finiteNumber(data.volume_bucket_ms) && data.volume_bucket_ms > 0
+                ? { width: data.volume_bucket_ms, rows: data.volume }
+                : null;
+            sheetChart = new TickChart(wrap, {
+                ticks: function () { return ticks; },
+                dp: priceDecimals(data.price_decimals),
+                maxSpan: Math.max(600000, (data.to_ms - data.from_ms) || 0),
+                hold: [data.open_ms, Math.max(data.open_ms, data.close_ms)],
+                volume: volume,
+                // Thinned prints would undercount the histogram, so without buckets it stays empty.
+                noVolume: !volume && finiteNumber(data.thinned_ms) && data.thinned_ms > 0,
+                live: false,
+                onView: provenance
+            });
+            sheetChart.levels = chartLevels(data.levels, false);
+            if (finiteNumber(data.entry_price)) {
+                sheetChart.marks.push({ t: data.open_ms, price: data.entry_price, up: long, color: long ? "--tick-buy" : "--tick-sell" });
+            }
+            if (finiteNumber(data.exit_price)) {
+                sheetChart.marks.push({ t: data.close_ms, price: data.exit_price, up: !long, color: long ? "--tick-sell" : "--tick-buy" });
+            }
+            var span = tradeView(state.range, data);
+            sheetChart.setView(span[0], span[1]);
+            var items = [
+                { dot: true, color: "--tick-buy", key: "mini_chart_tick_buy" },
+                { dot: true, color: "--tick-sell", key: "mini_chart_tick_sell" }
+            ];
+            if (hasLevel(sheetChart.levels, "buy")) items.push({ color: "--entry", key: "mini_chart_buy_order" });
+            if (hasLevel(sheetChart.levels, "take")) items.push({ color: "--take", key: "mini_chart_take" });
+            if (hasLevel(sheetChart.levels, "stop")) items.push({ color: "--stop", key: "mini_chart_stop" });
+            chartLegend(legend, items);
+            provenance();
+        }
+        function fetchTicks() {
+            api("/api/trade/ticks", { core: trade.core, rec_id: trade.rec_id, range: state.range }).then(function (res) {
+                if (token !== sheetToken) return;
+                // A command or tab reload dropped the queued read; the sheet still wants it.
+                if (res.cancelled) {
+                    state.tries += 1;
+                    if (state.tries >= CHART_LOAD_TRIES) {
+                        failed();
+                        return;
+                    }
+                    sheetTimer = setTimeout(function () {
+                        sheetTimer = null;
+                        if (token === sheetToken) fetchTicks();
+                    }, CHART_LOAD_WAIT_MS);
+                    return;
+                }
+                if (!res.ok || !res.data) {
+                    failed();
+                    return;
+                }
+                var data = res.data;
+                if (data.state === "loading") {
+                    state.tries += 1;
+                    if (state.tries >= CHART_LOAD_TRIES) {
+                        failed();
+                        return;
+                    }
+                    sheetTimer = setTimeout(function () {
+                        sheetTimer = null;
+                        if (token === sheetToken) fetchTicks();
+                    }, finiteNumber(data.retry_in_ms) && data.retry_in_ms > 0 ? data.retry_in_ms : CHART_LOAD_WAIT_MS);
+                    return;
+                }
+                tradeDetails(details, trade, data);
+                if (data.state === "ok") {
+                    draw(data);
+                    return;
+                }
+                source.textContent = "";
+                if (data.state === "no_tape") {
+                    chartState(area, tr("mini_chart_no_tape"), tr("mini_chart_no_tape_note"), null);
+                } else if (data.state === "archive_pending") {
+                    chartState(area, tr("mini_chart_archive"), finiteNumber(data.retry_at_ms)
+                        ? trf("mini_chart_archive_note", { time: whenText(data.retry_at_ms) }) : null, null);
+                } else {
+                    failed();
+                }
+            });
+        }
+        function load() {
+            chartSkeleton(area);
+            legend.hidden = true;
+            source.textContent = tr("mini_chart_loading");
+            fetchTicks();
+        }
+        showSheet(closeBtn);
+        load();
+    }
+
+    function liveDetail(host, label, value, tone) {
+        var line = el("div", "row spread");
+        line.appendChild(el("span", "k", label));
+        line.appendChild(el("span", "num" + (tone ? " " + tone : ""), value == null || value === "" ? "—" : value));
+        host.appendChild(line);
+    }
+
+    // Open position: live PnL, a tick chart fed every 500 ms and the order's own actions. The
+    // first read takes the last 15 minutes; later reads only prints after the newest one held.
+    function openOrderSheet(order, data) {
+        if (!sheet) return;
+        hapticSelection();
+        var token = resetSheet();
+        sheet.classList.add("chart-sheet");
+        var live = {
+            timer: null,
+            inflight: false,
+            stopped: false,
+            frozen: false,
+            ring: [],
+            last: null,
+            offset: 0,
+            okAt: 0,
+            closingTries: 0,
+            span: 300000,
+            data: null,
+            poll: poll
+        };
+        liveSheet = live;
+        var closeBtn = sheetHead((order.coin || "") + (order.emulator ? " (E)" : ""), order.side, whereOf(order));
+        var banner = el("div", "chart-banner");
+        banner.hidden = true;
+        sheet.appendChild(banner);
+        var hero = el("div", "row spread sheet-result chart-hero");
+        var pnl = el("span", "");
+        applyMoney(pnl, "hero-value num", order.pnl_text, order.pnl_sign);
+        hero.appendChild(pnl);
+        var tag = el("span", "live-tag");
+        hero.appendChild(tag);
+        sheet.appendChild(hero);
+        var follow = button("chart-chip chart-follow on", tr("mini_chart_follow"), function () {
+            if (!sheetChart) return;
+            sheetChart.follow = true;
+            sheetChart.anchor(sheetChart.view.to - sheetChart.view.from);
+            sheetChart.fitY();
+            sheetChart.draw();
+            syncFollow();
+        });
+        follow.setAttribute("aria-pressed", "true");
+        var chips = chartChips(sheet, LIVE_SPANS, "300", function (key) {
+            live.span = +key * 1000;
+            pressChip(chips, key);
+            if (!sheetChart) return;
+            if (live.frozen) {
+                var end = sheetChart.view.to;
+                sheetChart.setView(end - live.span, end);
+                return;
+            }
+            sheetChart.follow = true;
+            sheetChart.anchor(live.span);
+            sheetChart.fitY();
+            sheetChart.draw();
+            syncFollow();
+        }, follow);
+        var area = chartArea(sheet);
+        var legend = el("div", "chart-legend");
+        legend.hidden = true;
+        sheet.appendChild(legend);
+        var source = el("div", "chart-provenance");
+        sheet.appendChild(source);
+        var details = el("div", "chart-details");
+        sheet.appendChild(details);
+        var actions = el("div", "chart-actions");
+        // The same controls the order row carries: same handlers, same request bodies.
+        if (data && data.can_control) orderActions(actions, order);
+        sheet.appendChild(actions);
+
+        function now() {
+            return Date.now() + live.offset;
+        }
+        function syncFollow() {
+            var on = !!(sheetChart && sheetChart.follow);
+            follow.classList.toggle("on", on);
+            follow.setAttribute("aria-pressed", on ? "true" : "false");
+        }
+        function setTag(text, stale) {
+            clear(tag);
+            tag.className = "live-tag" + (stale ? " stale" : "");
+            tag.appendChild(el("span", "live-dot"));
+            tag.appendChild(document.createTextNode(text));
+        }
+        function staleText(seconds) {
+            if (!finiteNumber(seconds)) return tr("mini_chart_offline");
+            var n = Math.max(1, Math.round(seconds));
+            return trf("mini_chart_stale_" + pluralForm(n), { n: n });
+        }
+        function next(ms) {
+            if (token !== sheetToken || live.stopped) return;
+            if (live.timer) clearTimeout(live.timer);
+            live.timer = setTimeout(poll, ms);
+        }
+        function poll() {
+            live.timer = null;
+            if (token !== sheetToken || live.stopped || live.inflight) return;
+            // A hidden pane stops polling; the visibility handler resumes it.
+            if (document.visibilityState === "hidden") return;
+            var body = { core: order.core, uid: order.uid };
+            if (live.last != null) body.since_ms = live.last;
+            live.inflight = true;
+            api("/api/order/ticks", body).then(function (res) {
+                if (token !== sheetToken) return;
+                live.inflight = false;
+                if (res.cancelled) {
+                    next(CHART_POLL_MS);
+                    return;
+                }
+                if (!res.ok || !res.data) {
+                    failed(res);
+                    return;
+                }
+                received(res.data);
+            });
+        }
+        function failed(res) {
+            if (res.status === 401 || res.status === 403 || !live.okAt) {
+                live.stopped = res.status === 401 || res.status === 403;
+                if (sheetChart) {
+                    sheetChart.destroy();
+                    sheetChart = null;
+                }
+                legend.hidden = true;
+                source.textContent = "";
+                setTag(tr("mini_chart_offline"), true);
+                chartState(area, tr("mini_chart_error"), res.error || tr("mini_chart_error_note"), live.stopped ? null : function () {
+                    chartSkeleton(area);
+                    poll();
+                });
+                return;
+            }
+            // Data on screen stays; the tag counts the time since the last good reply.
+            if (!live.frozen) setTag(staleText((Date.now() - live.okAt) / 1000), true);
+            next(CHART_SLOW_POLL_MS);
+        }
+        // An inclusive cursor repeats the boundary millisecond; dedupe only identical prints.
+        function merge(ticks, truncated) {
+            var list = tickList(ticks);
+            if (truncated) {
+                live.ring = [];
+                live.last = null;
+            }
+            var ring = live.ring;
+            var i;
+            for (i = 0; i < list.length; i++) {
+                var tick = list[i];
+                if (live.last != null && tick[0] < live.last) continue;
+                var duplicate = false;
+                var j;
+                for (j = ring.length - 1; j >= 0 && ring[j][0] === tick[0]; j--) {
+                    if (ring[j][1] === tick[1] && ring[j][2] === tick[2] && ring[j][3] === tick[3]) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate) continue;
+                ring.push(list[i]);
+                live.last = list[i][0];
+            }
+            var cut = now() - LIVE_KEEP_MS;
+            var drop = 0;
+            while (drop < ring.length && ring[drop][0] < cut) drop += 1;
+            if (ring.length - drop > LIVE_RING) drop = ring.length - LIVE_RING;
+            if (drop) ring.splice(0, drop);
+        }
+        function ensureChart(d) {
+            if (sheetChart) return;
+            clear(area);
+            var wrap = el("div", "chart-wrap");
+            area.appendChild(wrap);
+            sheetChart = new TickChart(wrap, {
+                ticks: function () { return live.ring; },
+                dp: priceDecimals(d.price_decimals),
+                maxSpan: LIVE_MAX_SPAN_MS,
+                hold: null,
+                volume: null,
+                live: true,
+                now: now,
+                onView: syncFollow
+            });
+            sheetChart.follow = true;
+            sheetChart.anchor(live.span);
+        }
+        function entryMark(d) {
+            var long = order.side !== "sell";
+            if (!finiteNumber(d.entry_ms) || d.entry_ms <= 0 || !finiteNumber(d.entry_price)) return [];
+            return [{ t: d.entry_ms, price: d.entry_price, up: long, color: long ? "--tick-buy" : "--tick-sell" }];
+        }
+        function openDetails(d) {
+            clear(details);
+            var dp = priceDecimals(d.price_decimals);
+            var entry = finiteNumber(d.entry_price) ? d.entry_price.toFixed(dp) : order.entry_text;
+            if (finiteNumber(d.entry_ms) && d.entry_ms > 0) {
+                var held = fmtDuration(Math.max(0, (now() - d.entry_ms) / 1000));
+                if (held) entry += " · " + trf("mini_chart_ago", { t: held });
+            }
+            liveDetail(details, tr("mini_trade_entry"), entry);
+            var mark = finiteNumber(d.mark_price) ? d.mark_price.toFixed(dp) : order.mark_text;
+            if (d.change_text) mark += " · " + d.change_text;
+            liveDetail(details, tr("mini_chart_now"), mark, signClass(d.pnl_sign));
+            if (d.take_dist_text) liveDetail(details, tr("mini_chart_to_take"), d.take_dist_text);
+            if (d.stop_dist_text) liveDetail(details, tr("mini_chart_to_stop"), d.stop_dist_text);
+            if (order.volume_text) liveDetail(details, tr("mini_trade_volume"), order.volume_text);
+        }
+        function openLegend(levels) {
+            var items = [
+                { dot: true, color: "--tick-buy", key: "mini_chart_buy" },
+                { dot: true, color: "--tick-sell", key: "mini_chart_sell" }
+            ];
+            if (hasLevel(levels, "entry")) items.push({ color: "--entry", key: "mini_chart_entry" });
+            if (hasLevel(levels, "take")) items.push({ color: "--take", key: "mini_chart_sell_order" });
+            if (hasLevel(levels, "stop")) items.push({ color: "--stop", key: "mini_chart_stop" });
+            if (!live.frozen) items.push({ dot: true, color: "--ink", key: "mini_chart_price_now" });
+            chartLegend(legend, items);
+        }
+        function received(d) {
+            live.okAt = Date.now();
+            if (finiteNumber(d.now_ms)) live.offset = d.now_ms - Date.now();
+            live.data = d;
+            if (d.state === "closed") {
+                closed(d);
+                return;
+            }
+            // A closing position's chart is frozen: later prints are not its own.
+            if (!live.frozen) merge(d.ticks, d.truncated);
+            if (d.pnl_text) applyMoney(pnl, "hero-value num", d.pnl_text, d.pnl_sign);
+            openDetails(d);
+            if (!live.ring.length && (d.state === "no_tape" || d.state === "closing")) {
+                setTag(tr("mini_chart_offline"), true);
+                legend.hidden = true;
+                source.textContent = "";
+                if (sheetChart) {
+                    sheetChart.destroy();
+                    sheetChart = null;
+                }
+                chartState(area, tr("mini_chart_live_no_tape"), tr("mini_chart_live_no_tape_note"), null);
+                if (d.state === "closing") closing();
+                else next(CHART_SLOW_POLL_MS);
+                return;
+            }
+            ensureChart(d);
+            if (!live.frozen) {
+                sheetChart.levels = chartLevels(d.levels, true);
+                sheetChart.marks = entryMark(d);
+                sheetChart.mark = finiteNumber(d.mark_price) ? d.mark_price : null;
+                if (sheetChart.follow) sheetChart.anchor(sheetChart.view.to - sheetChart.view.from);
+                sheetChart.fitY();
+                sheetChart.draw();
+                openLegend(sheetChart.levels);
+            }
+            if (d.state === "closing") {
+                closing();
+                return;
+            }
+            var stale = d.state !== "live";
+            if (stale) {
+                var lag = finiteNumber(d.last_tick_ms) && finiteNumber(d.now_ms) ? (d.now_ms - d.last_tick_ms) / 1000 : null;
+                setTag(staleText(lag), true);
+                source.textContent = finiteNumber(d.last_tick_ms)
+                    ? trf("mini_chart_stale_note", { time: clockAt(d.last_tick_ms) })
+                    : tr("mini_chart_offline");
+            } else {
+                setTag(tr("mini_chart_live"), false);
+                source.textContent = tr("mini_chart_live_stream");
+            }
+            next(CHART_POLL_MS);
+        }
+        function freeze() {
+            live.frozen = true;
+            follow.hidden = true;
+            tag.hidden = true;
+            if (sheetChart) {
+                sheetChart.follow = false;
+                sheetChart.opts.live = false;
+                sheetChart.draw();
+            }
+        }
+        function closing() {
+            freeze();
+            live.closingTries += 1;
+            banner.hidden = false;
+            if (live.closingTries > CHART_CLOSING_TRIES) {
+                banner.textContent = tr("mini_chart_closing_late");
+                live.stopped = true;
+                return;
+            }
+            banner.textContent = tr("mini_chart_closing");
+            next(CHART_SLOW_POLL_MS);
+        }
+        function closed(d) {
+            var trade = d.trade;
+            freeze();
+            live.stopped = true;
+            banner.hidden = false;
+            if (!trade || typeof trade !== "object") {
+                banner.textContent = tr("mini_chart_closing_late");
+                return;
+            }
+            var closeMs = finiteNumber(trade.close_ms) ? trade.close_ms : finiteNumber(trade.closed_at) ? trade.closed_at * 1000 : null;
+            banner.textContent = closeMs != null ? trf("mini_chart_closed", { time: clockAt(closeMs) }) : tr("mini_chart_closing_late");
+            applyMoney(pnl, "hero-value num", trade.profit_text, trade.profit);
+            hero.appendChild(tradePct(trade, "num"));
+            clear(actions);
+            // The live reply knows when the position opened; the trade knows when it closed.
+            var times = finiteNumber(d.entry_ms) && d.entry_ms > 0 && closeMs != null ? { open_ms: d.entry_ms, close_ms: closeMs } : null;
+            tradeDetails(details, trade, times);
+            if (closeMs != null && live.ring.length) {
+                // Prints after the close are not this position's; the closing second stays.
+                while (live.ring.length && live.ring[live.ring.length - 1][0] > closeMs + 1000) live.ring.pop();
+            }
+            if (!sheetChart && live.ring.length) ensureChart(d);
+            if (!sheetChart) chartState(area, tr("mini_chart_no_tape"), null, null);
+            if (sheetChart) {
+                var long = order.side !== "sell";
+                var exitPrice = finiteNumber(trade.exit_price) ? trade.exit_price : parseFloat(String(trade.exit_text || "").replace(/[\s ]/g, ""));
+                var keep = [];
+                var i;
+                for (i = 0; i < sheetChart.levels.length; i++) if (sheetChart.levels[i].kind !== "stop") keep.push(sheetChart.levels[i]);
+                sheetChart.levels = keep;
+                if (closeMs != null && finiteNumber(exitPrice)) {
+                    sheetChart.marks.push({ t: closeMs, price: exitPrice, up: !long, color: long ? "--tick-sell" : "--tick-buy" });
+                }
+                var start = sheetChart.marks.length && sheetChart.marks[0].t;
+                if (closeMs != null && start) sheetChart.opts.hold = [start, closeMs];
+                sheetChart.follow = false;
+                sheetChart.opts.live = false;
+                sheetChart.opts.now = null;
+                if (closeMs != null) sheetChart.setView(closeMs - live.span * 0.85, closeMs + live.span * 0.15);
+                else sheetChart.draw();
+                var items = [
+                    { dot: true, color: "--tick-buy", key: "mini_chart_buy" },
+                    { dot: true, color: "--tick-sell", key: "mini_chart_sell" }
+                ];
+                if (hasLevel(keep, "entry")) items.push({ color: "--entry", key: "mini_chart_entry" });
+                if (hasLevel(keep, "take")) items.push({ color: "--take", key: "mini_chart_take" });
+                chartLegend(legend, items);
+            }
+            source.textContent = tr("mini_chart_frozen");
+        }
+        setTag(tr("mini_chart_live"), false);
+        chartSkeleton(area);
+        source.textContent = tr("mini_chart_loading");
+        showSheet(closeBtn);
+        poll();
+    }
+
+    // The live sheet polls only while the page is visible.
+    function chartVisibility() {
+        var live = liveSheet;
+        if (!live || live.stopped) return;
+        if (document.visibilityState !== "visible") {
+            if (live.timer) clearTimeout(live.timer);
+            live.timer = null;
+            return;
+        }
+        if (!live.timer && !live.inflight) live.poll();
     }
 
     function closeSheet() {
         if (!sheetOpen) return;
         sheetOpen = false;
+        resetSheet();
         if (sheet) {
             sheet.hidden = true;
-            clear(sheet);
+            sheet.classList.remove("chart-sheet");
         }
         if (sheetBackdrop) sheetBackdrop.hidden = true;
         document.body.style.overflow = "";
@@ -2777,6 +4037,7 @@
 
     /** Resume visible-tab reads and age updates while preserving a dirty or saving Settings form. */
     function onVisible() {
+        chartVisibility();
         if (!sessionOk || !current) return;
         if (document.visibilityState !== "visible") {
             clearPoll();

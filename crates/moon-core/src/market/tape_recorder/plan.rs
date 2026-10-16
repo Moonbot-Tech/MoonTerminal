@@ -15,7 +15,8 @@
 //!
 //! # The recording
 //!
-//! While any of that is unresolved the key wants its pair selected on the donor. A pair selected
+//! While any of that is unresolved, or an unexpired sheet watch needs it, the key wants its pair
+//! selected on the donor. Watches share this plan's coverage, buffer and flushing. A pair selected
 //! afresh is SEEDED once: the core's chart archive merged into the donor's ring, which brings the
 //! run-up — as far back as the core still holds it, the rest named lost. From then on the ring
 //! only grows with the live stream, and the recorder drains it by cursor into the key's buffer.
@@ -118,9 +119,17 @@ struct Live {
     epoch: u64,
 }
 
+/// Sheet demand shares the trade plan and expires independently of trade retention.
+#[derive(Clone, Copy, Debug)]
+struct Watch {
+    from_ms: i64,
+    until_ms: i64,
+}
+
 /// The plan of one key.
 #[derive(Clone, Debug)]
 pub(super) struct KeyTask {
+    watch: Option<Watch>,
     trades: Vec<Trade>,
     /// Written this session — or before it, for a trade taken up again ([`Self::filed_before`]).
     filed: Coverage,
@@ -133,8 +142,10 @@ pub(super) struct KeyTask {
 }
 
 impl KeyTask {
+    /// Start a key with neither trade nor sheet demand.
     pub(super) fn new() -> Self {
         Self {
+            watch: None,
             trades: Vec::new(),
             filed: Coverage::none(),
             lost: Coverage::none(),
@@ -142,6 +153,35 @@ impl KeyTask {
             seed: None,
             buffer: Vec::new(),
         }
+    }
+
+    /// Renew a sheet's rolling history window and its expiry-based eviction priority.
+    pub(super) fn watch(&mut self, from_ms: i64, until_ms: i64) {
+        self.watch = Some(Watch { from_ms, until_ms });
+    }
+
+    /// The lease expiry used by the recorder's bounded watch set.
+    pub(super) fn watch_until(&self) -> Option<i64> {
+        self.watch.map(|watch| watch.until_ms)
+    }
+
+    /// Release an expired or evicted watch while retaining any independent trade demand.
+    pub(super) fn clear_watch(&mut self) {
+        self.watch = None;
+    }
+
+    /// Expire sheet demand on the recorder's clock before selection and flushing.
+    pub(super) fn expire_watch(&mut self, now_ms: i64) {
+        if self.watch.is_some_and(|watch| now_ms >= watch.until_ms) {
+            self.clear_watch();
+        }
+    }
+
+    /// Buffered coverage is contiguous after the filed frontier except for named stream gaps.
+    pub(super) fn buffered_coverage(&self, to_ms: i64) -> Coverage {
+        self.live.map_or_else(Coverage::none, |live| {
+            Coverage::one((live.through_ms.saturating_add(1), to_ms)).minus(&self.lost)
+        })
     }
 
     /// Whether the key already has this trade.
@@ -217,9 +257,12 @@ impl KeyTask {
         }
     }
 
-    /// Everything the key's trades need.
+    /// Everything the key's trades and active sheet watch need.
     pub(super) fn needed(&self) -> Coverage {
         let mut out = Coverage::none();
+        if let Some(watch) = self.watch {
+            out.add((watch.from_ms, watch.until_ms));
+        }
         for trade in &self.trades {
             for &span in trade.needed().spans() {
                 out.add(span);
@@ -228,14 +271,18 @@ impl KeyTask {
         out
     }
 
-    /// Protect live plain or unclassified trades even before the report listing catches up.
+    /// Protect watched history and live plain or unclassified trades before the listing catches up.
     pub(super) fn real_needed(&self) -> Coverage {
-        Coverage::from_spans(
+        let mut needed = Coverage::from_spans(
             self.trades
                 .iter()
                 .filter(|t| t.emulator != Some(true))
                 .flat_map(|t| t.needed().spans().to_vec()),
-        )
+        );
+        if let Some(watch) = self.watch {
+            needed.add((watch.from_ms, watch.until_ms));
+        }
+        needed
     }
 
     /// Drop emulator-only needs and buffered prints; shared plain-trade windows survive.
@@ -244,7 +291,7 @@ impl KeyTask {
         let needed = self.needed();
         self.buffer
             .retain(|tick| needed.contains_ms(tick.time_ms as i64));
-        if self.trades.is_empty() {
+        if self.trades.is_empty() && self.watch.is_none() {
             self.stop();
         }
     }
@@ -270,7 +317,7 @@ impl KeyTask {
 
     /// Whether the key wants its pair selected on the donor.
     pub(super) fn wants_pair(&self) -> bool {
-        self.deadline().is_some()
+        self.watch.is_some() || self.deadline().is_some()
     }
 
     /// Whether the key must ask for the archive now: a pair it wants and does not record yet, or
@@ -513,9 +560,11 @@ impl KeyTask {
         out
     }
 
-    /// Every trade closed and every stretch resolved: the key can be dropped.
+    /// No sheet watch, every trade closed and every stretch resolved: the key can be dropped.
     pub(super) fn is_done(&self) -> bool {
-        self.trades.iter().all(|t| t.close_ms.is_some()) && self.deadline().is_none()
+        self.watch.is_none()
+            && self.trades.iter().all(|t| t.close_ms.is_some())
+            && self.deadline().is_none()
     }
 
     /// Forget trades that opened before `horizon_ms` and never closed — an exit this session
