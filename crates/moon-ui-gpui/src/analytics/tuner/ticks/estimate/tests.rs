@@ -1,6 +1,20 @@
 use std::time::Duration;
 
-use super::{count_text, duration_text, pick_all_label};
+use super::{count_text, duration_text, pick_all_label, side_by_side, side_by_side_on};
+
+/// An estimate that assumed every CPU runs restarts would promise a 32-CPU box finishes ~28%
+/// sooner than its 23-thread search pool can: side by side is bounded by the pool, not the box.
+#[test]
+fn side_by_side_is_bounded_by_the_search_pool() {
+    assert_eq!(side_by_side_on(500, 23), 23);
+    assert_eq!(side_by_side_on(5, 23), 5);
+    assert_eq!(side_by_side_on(0, 23), 1);
+    assert_eq!(side_by_side_on(500, 0), 1);
+    assert_eq!(
+        side_by_side(100_000),
+        moon_core::db::tuner::threshold_search::search_threads()
+    );
+}
 
 /// A separate startup formula would drift from the measured running ETA after sample changes.
 #[test]

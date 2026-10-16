@@ -71,23 +71,75 @@ pub(super) fn logical_cores() -> usize {
     })
 }
 
-/// Share of the machine's logical CPUs the search may occupy, in percent.
+/// Share of the machine's logical CPUs ALL tuner computation together may occupy, in percent —
+/// the search pool and the column pool summed, and rayon's global pool capped to it as well.
 ///
-/// The whole point is that the rest of the PC stays usable while a search runs: a pool sized to
-/// every core but one is 98% of a 56-core machine, which is indistinguishable from all of it.
-/// A proportional cap keeps a fixed fraction of the machine free instead of a fixed single core,
-/// so a big box gives back proportionally more.
-const WORKER_CORE_PCT: usize = 90;
+/// The whole point is that the rest of the PC (live trading beside it) stays usable while the
+/// tuner works: a pool sized to every core but one is 98% of a 56-core machine, which is
+/// indistinguishable from all of it. A proportional cap keeps a fixed fraction of the machine
+/// free instead of a fixed single core, so a big box gives back proportionally more.
+const TUNER_CPU_PCT: usize = 80;
 
-/// Threads the search may use: [`WORKER_CORE_PCT`] of the logical CPUs, at most every CPU but
-/// one, and never fewer than one.
+/// Threads every tuner computation together may use on a machine of `cores` logical CPUs:
+/// [`TUNER_CPU_PCT`] of them rounded down, at most every CPU but one, and never fewer than one.
 ///
 /// Both bounds bind: the percentage is what keeps a large machine responsive, and the
-/// leave-one-free rule still covers the small end, where 90% of two cores rounds back up to
-/// both of them.
+/// leave-one-free rule still covers the small end, where the percentage of two or four cores
+/// would leave none of them free.
+///
+/// Args:
+///     cores: Logical CPUs of the machine.
+///
+/// Returns:
+///     The thread budget, at least one.
+pub(super) fn cpu_budget_of(cores: usize) -> usize {
+    (cores * TUNER_CPU_PCT / 100)
+        .min(cores.saturating_sub(1))
+        .max(1)
+}
+
+/// The budget of [`cpu_budget_of`] split into `(search, column)` pool threads.
+///
+/// The column pool takes one thread per eight of the budget, between one and
+/// [`COLUMN_THREADS`], and the search the rest, so the two together fit the budget wherever it
+/// holds two threads or more. Below that (one or two CPUs) each pool still gets its one thread:
+/// a pool of none cannot run, and a column must never queue behind a search.
+///
+/// Args:
+///     cores: Logical CPUs of the machine.
+///
+/// Returns:
+///     `(search threads, column threads)`, each at least one.
+pub(super) fn pool_split_of(cores: usize) -> (usize, usize) {
+    let budget = cpu_budget_of(cores);
+    let column = (budget / 8).clamp(1, COLUMN_THREADS);
+    (budget.saturating_sub(column).max(1), column)
+}
+
+/// Threads of the search pool ([`pool`]) on this machine: its share of the tuner's CPU budget.
 pub(super) fn worker_cores() -> usize {
-    let pct = logical_cores() * WORKER_CORE_PCT / 100;
-    pct.min(logical_cores().saturating_sub(1)).max(1)
+    pool_split_of(logical_cores()).0
+}
+
+/// Restarts the search runs side by side on this machine — its pool's thread count — for a time
+/// estimate that must not assume every CPU.
+pub fn search_threads() -> usize {
+    worker_cores()
+}
+
+/// Cap rayon's GLOBAL pool at the tuner's CPU budget, as a backstop: any parallel section that
+/// ever reaches it outside [`install`] / [`install_column`] still cannot take every CPU.
+///
+/// Call once at process start, before any rayon use; a later call (or a global pool someone
+/// already built) only logs.
+pub fn cap_global_pool() {
+    if let Err(e) = rayon::ThreadPoolBuilder::new()
+        .num_threads(cpu_budget_of(logical_cores()))
+        .thread_name(|i| format!("moon-rayon-{i}"))
+        .build_global()
+    {
+        log::warn!("tuner: rayon's global pool was not capped — {e}");
+    }
 }
 
 /// Logical cores a machine must have before the tuner offers its most expensive settings.
@@ -115,8 +167,9 @@ pub fn heavy_search_supported() -> bool {
 /// free: the search is started from a window that must keep repainting and answering the Stop button while it runs,
 /// and saturating every core makes that window stutter for the whole run.
 ///
-/// `None` means the fan-out falls back to rayon's GLOBAL pool, which is sized to every logical
-/// CPU — the search still finishes and still answers a stop, but the free core is gone with it.
+/// `None` means the fan-out falls back to rayon's GLOBAL pool, capped at the whole tuner budget
+/// by [`cap_global_pool`] (every CPU where that cap was not set) — the search still finishes and
+/// still answers a stop, but beside a column it may exceed the budget.
 /// Building a pool only fails when the process can no longer spawn threads, so this is a
 /// degraded path, not a supported mode.
 fn pool() -> Option<&'static rayon::ThreadPool> {
@@ -147,16 +200,37 @@ fn pool() -> Option<&'static rayon::ThreadPool> {
 ///
 /// Returns:
 ///     Whatever `f` returns.
-pub(crate) fn install<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+pub fn install<R: Send>(f: impl FnOnce() -> R + Send) -> R {
     match pool() {
         Some(pool) => pool.install(f),
         None => f(),
     }
 }
 
-/// Threads of the pool the variant columns are scored on ([`install_column`]): a column is one
-/// replay of the sample, a fraction of a second on two threads, and a pool this small takes
-/// little from a machine whose search pool already holds most of it.
+/// Run a whole background job — a replay of the table, a readiness pass, a coin pick — inside
+/// the tuner's search pool, so its CPU counts against the tuner's budget rather than adding a
+/// thread on top of a running search.
+///
+/// The caller's read-cancellation token ([`crate::db::current_read_cancellation`]) is a
+/// thread-local, so it is carried onto the pool thread: without it the job's own
+/// `current_is_cancelled` checks would read `false` and an abandoned job would run to its end.
+///
+/// Args:
+///     f: The job.
+///
+/// Returns:
+///     Whatever `f` returns.
+pub fn install_job<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+    let cancellation = crate::db::current_read_cancellation();
+    install(move || match cancellation {
+        Some(cancellation) => crate::db::with_read_cancellation(cancellation, f),
+        None => f(),
+    })
+}
+
+/// Most threads of the pool the variant columns are scored on ([`install_column`]): a column is
+/// one replay of the sample, a fraction of a second on two threads, and a pool this small takes
+/// little from the tuner's budget, the rest of which is the search's ([`pool_split_of`]).
 const COLUMN_THREADS: usize = 2;
 
 /// Worker pool for scoring the variant columns, apart from the search's ([`pool`]), or `None`
@@ -169,7 +243,7 @@ fn column_pool() -> Option<&'static rayon::ThreadPool> {
     static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
     POOL.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
-            .num_threads(COLUMN_THREADS.min(logical_cores()).max(1))
+            .num_threads(pool_split_of(logical_cores()).1)
             .thread_name(|i| format!("moon-tuner-column-{i}"))
             .build()
             .inspect_err(|e| {

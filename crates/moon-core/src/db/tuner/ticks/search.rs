@@ -131,7 +131,11 @@ pub fn suggest_with_candidate(
     handle: &SearchHandle,
 ) -> Suggested {
     let mut candidate = None;
-    let result = search(deals, params, handle, &mut candidate);
+    // The whole search in the tuner's pool, not only its restart fan-out: the base score, the
+    // cut, the refusal count, the trim and the held-back score replay the sample in parallel too,
+    // and outside the pool they would reach rayon's global one. The nested `install` of the
+    // restarts runs in place.
+    let result = install(|| search(deals, params, handle, &mut candidate));
     let mut searched: Vec<String> = varied(params).iter().map(|f| f.key.to_string()).collect();
     searched.sort();
     Suggested {

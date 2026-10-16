@@ -546,7 +546,13 @@ impl AnalyticsView {
             false,
             cx,
             move || {
-                moon_core::db::tuner::coin_pick::suggest_coins_by_strategy(&q, settings, &worker)
+                // Every strategy's fit runs beside a search: in the tuner's pool, within its
+                // CPU budget.
+                moon_core::db::tuner::threshold_search::install_job(|| {
+                    moon_core::db::tuner::coin_pick::suggest_coins_by_strategy(
+                        &q, settings, &worker,
+                    )
+                })
             },
             move |this, result, cx| {
                 let (landed, retry) = this.auto_picks.land(seq, settings.holdout_pct, result);

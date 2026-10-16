@@ -949,21 +949,25 @@ impl AnalyticsView {
             cx,
             move || {
                 let long_position_ms = moon_core::market::trade_replay::long_position_ms();
-                count_strategies(
-                    groups,
-                    |targets| {
-                        super::ticks::replay_batch(
-                            targets,
-                            &defaults,
-                            model,
-                            klines.as_ref(),
-                            long_position_ms,
-                            false,
-                        )
-                    },
-                    &progress,
-                    STRATEGY_PAUSE,
-                )
+                // Every strategy's replay is pure CPU and runs beside a search: in the tuner's
+                // pool it shares the search's CPU budget instead of adding a thread on top.
+                moon_core::db::tuner::threshold_search::install_job(|| {
+                    count_strategies(
+                        groups,
+                        |targets| {
+                            super::ticks::replay_batch(
+                                targets,
+                                &defaults,
+                                model,
+                                klines.as_ref(),
+                                long_position_ms,
+                                false,
+                            )
+                        },
+                        &progress,
+                        STRATEGY_PAUSE,
+                    )
+                })
             },
             move |this, counts, cx| this.finish_ready_pass(key, seq, Ok(counts), cx),
         );

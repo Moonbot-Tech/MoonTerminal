@@ -102,10 +102,18 @@ pub(super) fn remaining_time(
     }
 }
 
-/// How many of a search's restarts run side by side: the machine's threads bound them.
+/// How many of a search's restarts run side by side: the search pool's threads bound them,
+/// not every CPU of the machine.
 fn side_by_side(restarts: usize) -> usize {
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-    restarts.clamp(1, threads)
+    side_by_side_on(
+        restarts,
+        moon_core::db::tuner::threshold_search::search_threads(),
+    )
+}
+
+/// [`side_by_side`] on a pool of `threads` threads.
+fn side_by_side_on(restarts: usize, threads: usize) -> usize {
+    restarts.clamp(1, threads.max(1))
 }
 
 /// What one search varies: whether each group is searched, and the fields it holds.

@@ -20,7 +20,10 @@ mod tests;
 
 pub use compose::{ComposeBudget, composition_budget};
 pub use handle::SearchHandle;
-pub use search::{HEAVY_SEARCH_MIN_CORES, heavy_search_supported};
+pub use search::{
+    HEAVY_SEARCH_MIN_CORES, cap_global_pool, heavy_search_supported, install, install_job,
+    search_threads,
+};
 
 use std::cmp::Ordering;
 use std::sync::Arc;
