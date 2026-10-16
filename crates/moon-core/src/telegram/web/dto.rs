@@ -28,6 +28,9 @@ pub enum ChartStateDto {
     Loading,
     NoTape,
     ArchivePending,
+    /// The tape exists but the source is still catching up (busy recorder, rate-limited host,
+    /// core not reconnected yet); the page keeps retrying on a slow cadence.
+    CatchingUp,
     #[default]
     Error,
     Live,

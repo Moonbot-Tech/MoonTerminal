@@ -17,7 +17,7 @@ use moon_core::market::trade_replay::venue_caps::TickValue;
 use moon_core::market::trade_replay::worker::TradeReplayRequest;
 use moon_core::market::trade_replay::{
     Coverage, ReplayIntent, ReplayWindow, TickStatus, TickThinning, TradeReplayEmpty,
-    TradeReplayOutcome, TradeReplaySource,
+    TradeReplayFailure, TradeReplayOutcome, TradeReplaySource,
 };
 use moon_core::market::{SIDE_BUCKET_MS, side_slots_of_ticks};
 use moon_core::market::{tape_recorder, trade_replay};
@@ -189,6 +189,7 @@ pub(super) fn mini_trade_ticks(
         }
     };
     if !claim_pending(&mut host.state_mut().mini_chart_pending, 2) {
+        log::info!("[mini-chart] trade ticks state=Busy source=admission elapsed_ms=0");
         let _ = reply.try_send(Err(MiniAppApiError::Busy));
         return;
     }
@@ -220,7 +221,10 @@ pub(super) fn mini_trade_ticks(
         .unwrap_or_default();
     let jobs = host.state().mini_chart_jobs.clone();
     host.spawn(Box::new(move || {
-        let deadline = Instant::now() + Duration::from_secs(4);
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(4);
+        let mut coin = String::new();
+        let mut stage = "report";
         let result = chart_read(|| {
             cached
                 .map(Ok)
@@ -229,8 +233,21 @@ pub(super) fn mini_trade_ticks(
                         .map_err(|_| MiniAppApiError::ReadFailed)
                         .and_then(|trade| trade.ok_or(MiniAppApiError::NotFound))
                 })
-                .map(|trade| read_trade(&source, &jobs, &quote, exchange, trade, deadline))
+                .map(|trade| {
+                    coin = trade.coin.clone();
+                    let (dto, used) =
+                        read_trade(&source, &jobs, &quote, exchange.clone(), trade, deadline);
+                    stage = used;
+                    dto
+                })
         });
+        log::info!(
+            "[mini-chart] trade ticks exchange={exchange} coin={coin} state={} source={stage} elapsed_ms={}",
+            result
+                .as_ref()
+                .map_or_else(|error| format!("{error:?}"), |dto| format!("{:?}", dto.state)),
+            started.elapsed().as_millis()
+        );
         Box::new(move |host: &mut dyn TgHost| {
             host.state_mut().mini_chart_pending = host.state().mini_chart_pending.saturating_sub(1);
             let current = mini_access(host, chat);
@@ -263,7 +280,22 @@ fn trade_base(trade: &MiniTrade) -> TradeTicksDto {
     }
 }
 
+/// How long a replay may stay queued before the sheet is told the source is catching up.
+pub(super) const LOADING_PATIENCE: Duration = Duration::from_secs(20);
+
+/// Fast poll while a fresh replay job is still within [`LOADING_PATIENCE`].
+pub(super) const LOADING_RETRY_MS: u64 = 1500;
+
+/// Slow background poll while the source is catching up.
+pub(super) const CATCHUP_RETRY_MS: u64 = 10_000;
+
+/// One UTC day in milliseconds.
+const DAY_MS: i64 = 86_400_000;
+
 /// Recorder, held terminal tiles, then an existing bounded replay job, in that order.
+///
+/// Returns:
+///     The answer and the name of the stage that decided it, for the request's log line.
 fn read_trade(
     source: &MarketDataSource,
     jobs: &Mutex<ChartJobs>,
@@ -271,7 +303,7 @@ fn read_trade(
     exchange: String,
     trade: MiniTrade,
     deadline: Instant,
-) -> TradeTicksDto {
+) -> (TradeTicksDto, &'static str) {
     let mut dto = trade_base(&trade);
     let open = dto.open_ms;
     let close = dto.close_ms;
@@ -279,7 +311,7 @@ fn read_trade(
     let to = close.saturating_add(300_000);
     if close <= open || open <= 0 {
         dto.state = ChartStateDto::NoTape;
-        return dto;
+        return (dto, "window");
     }
     let recorder = tape_recorder::trade_tape(
         recorder_id(&trade),
@@ -287,14 +319,17 @@ fn read_trade(
         300_000,
         remaining(deadline, Duration::from_millis(1500)),
     );
+    // A busy recorder answers neither question in time; asking twice only burns the budget.
+    let recorder_busy = matches!(recorder, Err(tape_recorder::TapeMiss::Busy));
+    // The hold itself recorded is enough: a fresh trade's tail margin is still being written,
+    // and waiting for it to settle sent every fresh trade to the slower venue walk.
     if let Ok(tape) = recorder
-        && tape.settled
         && !tape.ticks.is_empty()
         && covers_trade(&tape.covered, open, close)
     {
         let value = tick_value(source, trade.core_uid, &tape.market);
         let slots = quote_slots(&tape.ticks, value);
-        return trade_ok(
+        let dto = trade_ok(
             dto,
             &trade,
             tape.ticks,
@@ -303,26 +338,37 @@ fn read_trade(
             exchange,
             TickThinning::Raw,
         );
+        return (dto, "recorder");
     }
+    let now = moon_core::util::now_unix_ms_i64();
+    // The core is not connected yet (a restart) or its catalog is not loaded: both recover on
+    // their own, so the sheet keeps asking slowly instead of showing a hard error.
     let Ok(address) = source.replay_address(trade.core_uid) else {
-        return dto;
+        settle_trade(&mut dto, ChartStateDto::CatchingUp, None, None, None, now);
+        return (dto, "no_address");
     };
     let Some(market) = source.resolve_market(trade.core_uid, quote, &trade.coin) else {
-        return dto;
+        settle_trade(&mut dto, ChartStateDto::CatchingUp, None, None, None, now);
+        return (dto, "no_market");
     };
     let tick_value = tick_value(source, trade.core_uid, &market);
-    if let Ok(span) = tape_recorder::market_tape(
-        &address.exchange_key,
-        &market,
-        from,
-        to,
-        remaining(deadline, Duration::from_millis(1000)),
-    ) && span.settled
+    let archive_lag = address
+        .venue
+        .and_then(|venue| trade_replay::venue_caps::archive_route(venue, &market))
+        .map(|route| route.publish_lag_ms());
+    if !recorder_busy
+        && let Ok(span) = tape_recorder::market_tape(
+            &address.exchange_key,
+            &market,
+            from,
+            to,
+            remaining(deadline, Duration::from_millis(1000)),
+        )
         && !span.ticks.is_empty()
         && covers_trade(&span.covered, open, close)
     {
         let slots = quote_slots(&span.ticks, tick_value);
-        return trade_ok(
+        let dto = trade_ok(
             dto,
             &trade,
             span.ticks,
@@ -331,6 +377,7 @@ fn read_trade(
             exchange,
             TickThinning::Raw,
         );
+        return (dto, "recorder");
     }
     let (reply, answer) = mpsc::channel();
     trade_replay::query_held(trade_replay::TickQuery {
@@ -344,7 +391,7 @@ fn read_trade(
         && held.covered.contains((open, close))
     {
         let slots = quote_slots(&held.ticks, tick_value);
-        return trade_ok(
+        let dto = trade_ok(
             dto,
             &trade,
             held.ticks,
@@ -353,6 +400,7 @@ fn read_trade(
             exchange,
             TickThinning::Raw,
         );
+        return (dto, "terminal");
     }
     let key = (trade.core_uid, trade.rec_id);
     let mut jobs = jobs.lock().unwrap_or_else(PoisonError::into_inner);
@@ -363,8 +411,8 @@ fn read_trade(
         .and_then(|job| job.latest.as_ref())
         .is_some_and(|outcome| {
             let (state, retry_at) = replay_state(Some(outcome));
-            state == ChartStateDto::Error
-                || retry_at.is_some_and(|at| at <= moon_core::util::now_unix_ms_i64())
+            matches!(state, ChartStateDto::Error | ChartStateDto::CatchingUp)
+                || retry_at.is_some_and(|at| at <= now)
         });
     if retry {
         jobs.0.remove(&key);
@@ -406,13 +454,9 @@ fn read_trade(
         job.latest = Some(outcome);
     }
     let outcome = job.latest.clone();
+    let age = job.at.elapsed();
     drop(jobs);
-    let (state, retry) = replay_state(outcome.as_ref());
-    dto.state = state;
-    if state == ChartStateDto::Loading {
-        dto.retry_in_ms = Some(1500);
-    }
-    dto.retry_at_ms = retry;
+    let (state, retry_at) = replay_state(outcome.as_ref());
     if let Some(TradeReplayOutcome::Ready(series)) = outcome
         && state == ChartStateDto::Ok
     {
@@ -421,7 +465,7 @@ fn read_trade(
         } else {
             "exchange"
         };
-        return trade_ok(
+        let dto = trade_ok(
             dto,
             &trade,
             series.ticks,
@@ -436,22 +480,82 @@ fn read_trade(
             exchange,
             series.thinning,
         );
+        return (dto, origin);
     }
-    if state == ChartStateDto::NoTape {
+    settle_trade(&mut dto, state, retry_at, Some(age), archive_lag, now);
+    if dto.state == ChartStateDto::NoTape {
         dto.levels = Some(trade_levels(&trade));
     }
-    dto
+    (dto, "replay")
+}
+
+/// Turn a replay state into the bounded answer the sheet acts on.
+///
+/// A job still loading past [`LOADING_PATIENCE`] waits behind other venue work (the recorder's
+/// catch-up shares the host gate), so the sheet is moved to the slow catching-up cadence rather
+/// than counting toward a hard error. An empty answer for a market whose venue publishes a daily
+/// archive, while the trade's day is not published yet, is the file not being out: it reads as
+/// archive-pending with the publication time, never as «no tape».
+///
+/// Args:
+///     dto: Answer to fill; only `state`, `retry_in_ms` and `retry_at_ms` change.
+///     state: State derived from the replay outcome or the pre-replay stage.
+///     retry_at: Publication time the replay reported, when it did.
+///     age: How long the replay job has been running; `None` before a job exists.
+///     archive_lag_ms: The venue's daily-archive publication lag for this market, or `None`
+///         when the venue publishes no daily archive for it.
+///     now_ms: Current UTC Unix milliseconds.
+pub(super) fn settle_trade(
+    dto: &mut TradeTicksDto,
+    state: ChartStateDto,
+    retry_at: Option<i64>,
+    age: Option<Duration>,
+    archive_lag_ms: Option<i64>,
+    now_ms: i64,
+) {
+    use ChartStateDto as State;
+    let published = archive_lag_ms.map(|lag| archive_expected(dto.close_ms, lag));
+    let (state, retry_at) = match state {
+        State::Loading if age.is_some_and(|age| age >= LOADING_PATIENCE) => {
+            (State::CatchingUp, None)
+        }
+        State::NoTape if published.is_some_and(|at| at > now_ms) => {
+            (State::ArchivePending, published)
+        }
+        other => (other, retry_at),
+    };
+    dto.state = state;
+    dto.retry_at_ms = retry_at;
+    dto.retry_in_ms = match state {
+        State::Loading => Some(LOADING_RETRY_MS),
+        State::CatchingUp => Some(CATCHUP_RETRY_MS),
+        _ => None,
+    };
+}
+
+/// When the daily file holding `close_ms` is published: the next UTC midnight plus the venue's
+/// lag, the same schedule the archive reader retries on.
+pub(super) fn archive_expected(close_ms: i64, lag_ms: i64) -> i64 {
+    close_ms
+        .div_euclid(DAY_MS)
+        .saturating_add(1)
+        .saturating_mul(DAY_MS)
+        .saturating_add(lag_ms)
 }
 
 /// Interpret tick availability explicitly; candle-only success is never a tick chart.
+///
+/// A refused host (rate limit, usually the recorder's catch-up spending the same budget) and a
+/// core that is not connected yet are transient: both read as catching up, never as an error.
 pub(super) fn replay_state(outcome: Option<&TradeReplayOutcome>) -> (ChartStateDto, Option<i64>) {
     use ChartStateDto as State;
     match outcome {
         None => (State::Loading, None),
-        Some(TradeReplayOutcome::Failed(_))
+        Some(TradeReplayOutcome::Failed(TradeReplayFailure::RateLimited { .. }))
         | Some(TradeReplayOutcome::Empty(TradeReplayEmpty::CoreNotConnected)) => {
-            (State::Error, None)
+            (State::CatchingUp, None)
         }
+        Some(TradeReplayOutcome::Failed(_)) => (State::Error, None),
         Some(TradeReplayOutcome::Empty(_)) => (State::NoTape, None),
         Some(TradeReplayOutcome::Ready(series)) => match series.tick_status {
             TickStatus::Pending | TickStatus::Streaming | TickStatus::AwaitingCore => {
@@ -460,7 +564,8 @@ pub(super) fn replay_state(outcome: Option<&TradeReplayOutcome>) -> (ChartStateD
             TickStatus::ArchivePending { retry_at_ms } => {
                 (State::ArchivePending, Some(retry_at_ms))
             }
-            TickStatus::Failed | TickStatus::RateLimited { .. } => (State::Error, None),
+            TickStatus::RateLimited { .. } => (State::CatchingUp, None),
+            TickStatus::Failed => (State::Error, None),
             TickStatus::Served | TickStatus::ContextUnavailable
                 if series.source.is_ticks() && !series.ticks.is_empty() =>
             {
@@ -625,6 +730,7 @@ pub(super) fn mini_order_ticks(
         }
     };
     if !claim_pending(&mut host.state_mut().mini_live_pending, 4) {
+        log::info!("[mini-chart] order ticks state=Busy source=admission elapsed_ms=0");
         let _ = reply.try_send(Err(MiniAppApiError::Busy));
         return;
     }
@@ -645,8 +751,20 @@ pub(super) fn mini_order_ticks(
     let source = host.session().market_source();
     let zone = host.report_zone();
     let names = CoreNames::from_servers(&host.config().servers);
+    let exchange = visible_cores(host, &access)
+        .into_iter()
+        .find(|(id, _, _)| *id == core)
+        .map(|(_, _, exchange)| exchange)
+        .unwrap_or_default();
     host.spawn(Box::new(move || {
+        let started = Instant::now();
         let now = moon_core::util::now_unix_ms_i64();
+        let mut stage = "handoff";
+        let coin = live
+            .as_ref()
+            .map(|row| row.coin.clone())
+            .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.coin.clone()))
+            .unwrap_or_default();
         let result = chart_read(|| {
             let mut dto = live_base(live.as_ref(), now);
             if live.is_none()
@@ -689,10 +807,17 @@ pub(super) fn mini_order_ticks(
                     fill_mark(&source, core, row, &mut dto);
                 }
             } else if let Some(row) = &live {
-                read_live(&source, core, row, since_ms, &mut dto);
+                stage = read_live(&source, core, row, since_ms, &mut dto);
             }
             trade.map(|trade| (dto, trade))
         });
+        log::info!(
+            "[mini-chart] order ticks exchange={exchange} coin={coin} state={} source={stage} elapsed_ms={}",
+            result
+                .as_ref()
+                .map_or_else(|error| format!("{error:?}"), |(dto, _)| format!("{:?}", dto.state)),
+            started.elapsed().as_millis()
+        );
         Box::new(move |host: &mut dyn TgHost| {
             host.state_mut().mini_live_pending = host.state().mini_live_pending.saturating_sub(1);
             let current = mini_access(host, chat);
@@ -783,17 +908,27 @@ pub(super) fn live_state(now: i64, last: Option<i64>) -> ChartStateDto {
 }
 
 /// Read terminal capability first; stations renew the recorder's expiring pair demand.
+///
+/// A ring that holds no print of the market (the core never subscribed it, as on a station
+/// right after a restart) counts as absent, so the recorder is armed and asked instead of the
+/// sheet staying on an empty chart.
+///
+/// Returns:
+///     The source that answered (`ring`, `recorder` or `none`), for the request's log line.
 fn read_live(
     source: &MarketDataSource,
     core: u64,
     row: &OrderRow,
     since: Option<i64>,
     dto: &mut LiveTicksDto,
-) {
+) -> &'static str {
     let from = live_from(dto.now_ms, since);
+    let mut used = "ring";
     let data = source
         .live_core_ticks(core, &row.market, from, dto.now_ms, MAX_LIVE_TICKS)
+        .filter(|ring| ring.last_tick_ms.is_some())
         .or_else(|| {
+            used = "recorder";
             let address = source.replay_address(core).ok()?;
             tape_recorder::watch_market(
                 &address.exchange_key,
@@ -820,9 +955,12 @@ fn read_live(
         dto.last_tick_ms = data.last_tick_ms;
         dto.truncated = data.truncated;
         dto.ticks = wire_ticks(data.ticks);
+    } else {
+        used = "none";
     }
     dto.state = live_state(dto.now_ms, dto.last_tick_ms);
     fill_mark(source, core, row, dto);
+    used
 }
 
 /// Format live and closing rows from one fresh mark using the order table's arithmetic.

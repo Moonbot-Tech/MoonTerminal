@@ -88,6 +88,7 @@ const TRADE_TICKS = buildTradeTicks();
 export function tradeTicks(state) {
     const base = { state, open_ms: T0, close_ms: T1 };
     if (state === "loading") return { ...base, retry_in_ms: 1500 };
+    if (state === "catching_up") return { ...base, retry_in_ms: 10000 };
     if (state === "archive_pending") return { ...base, retry_at_ms: Date.UTC(2026, 9, 17, 20, 0, 0) };
     const levels = [
         { kind: "buy", price: ENTRY },
@@ -173,7 +174,8 @@ function closedTrade(closeMs) {
 /**
  * A stateful /api/order/ticks handler: the first call seeds 15 minutes of prints, every later
  * call adds `perPoll` new ones and answers only prints after `since_ms`.
- * `mode`: live | stale (the newest print 18 s old, nothing new) | no_tape | closing | closed.
+ * `mode`: live | stale (the newest print 18 s old, nothing new) | no_tape | closing | closed |
+ *   quiet (the feed is live but has not printed this market yet: no ticks).
  * `closeAfter`: after that many live calls, two closing replies, then closed with the trade.
  * `seedCount`: seed exactly this many prints instead of the random-walk cadence.
  * `delayFirst`: milliseconds the first reply is held back.
@@ -208,8 +210,9 @@ export function liveFeed({ mode = "live", perPoll = 3, seedCount = null, closeAf
         let body = {};
         try { body = JSON.parse(raw || "{}"); } catch { body = {}; }
         const stale = mode === "stale";
-        if (!ring.length && mode !== "no_tape") seed(now, stale ? now - 18000 : now);
-        else if (!stale && mode !== "no_tape") {
+        const silent = mode === "no_tape" || mode === "quiet";
+        if (!ring.length && !silent) seed(now, stale ? now - 18000 : now);
+        else if (!stale && !silent) {
             const last = ring.length ? ring[ring.length - 1][0] : now - 1000;
             for (let i = 1; i <= perPoll; i++) ring.push(print(last + (now - last) * i / perPoll, 0.55));
         }
@@ -226,7 +229,7 @@ export function liveFeed({ mode = "live", perPoll = 3, seedCount = null, closeAf
         const reply = {
             state,
             now_ms: now,
-            last_tick_ms: ring.length ? ring[ring.length - 1][0] : null,
+            last_tick_ms: ring.length ? ring[ring.length - 1][0] : mode === "quiet" ? now - 1000 : null,
             entry_ms: openedAt || now - 130000,
             entry_price: LIVE_ENTRY,
             mark_price: mark,

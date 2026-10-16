@@ -951,6 +951,14 @@
         var panicLabel = tr(order.panic_armed ? "mini_panic_off" : "mini_panic_sell");
         panic.textContent = (order.panic_armed ? "↺ " : "⚡ ") + panicLabel;
         panic.disabled = commandBusy;
+        // A whole-row tap opens the chart; the action line is its own zone, so neither a button
+        // press nor a tap in the gap around the buttons ever reaches the row.
+        line.addEventListener("click", function (event) {
+            event.stopPropagation();
+        });
+        line.addEventListener("keydown", function (event) {
+            event.stopPropagation();
+        });
         cancel.addEventListener("click", function () {
             if (commandBusy) return;
             runCommand(
@@ -982,6 +990,7 @@
         var coin = el("span", "name order-coin", (order.coin || "") + (order.emulator ? " (E)" : ""));
         coin.title = order.coin || "";
         top.appendChild(coin);
+        top.appendChild(chartGlyph());
         top.appendChild(el("span", "badge order-side " + sideClass(order.side), sideLabel(order.side)));
         var change = orderChange(order);
         if (change) top.appendChild(change);
@@ -1007,10 +1016,12 @@
             volume.appendChild(el("span", "num", order.volume_text));
             flow.appendChild(volume);
         }
-        flow.appendChild(el("span", "chart-hint", "◉ " + tr("mini_chart_live_hint")));
         main.appendChild(flow);
         row.appendChild(main);
-        if (data.can_control) orderActions(row, order);
+        if (data.can_control) {
+            orderActions(row, order);
+            row.classList.add("has-actions");
+        }
         // A row tap opens the live chart; a tap on cancel or Panic Sell stays theirs.
         row.setAttribute("role", "button");
         row.tabIndex = 0;
@@ -1684,6 +1695,7 @@
         var coin = el("span", "name order-coin", trade.coin || "");
         coin.title = trade.coin || "";
         top.appendChild(coin);
+        top.appendChild(chartGlyph());
         top.appendChild(el("span", "badge order-side " + sideClass(trade.side), sideLabel(trade.side)));
         left.appendChild(top);
         var meta = el("div", "sub trade-row-meta");
@@ -1704,7 +1716,6 @@
         applyMoney(profit, "num money-col", trade.profit_text, trade.profit);
         right.appendChild(profit);
         right.appendChild(tradePct(trade, "num fine"));
-        right.appendChild(el("span", "chart-hint", "◔ " + tr("mini_chart_hint")));
         row.appendChild(right);
         function open() {
             openTradeSheet(trade);
@@ -1745,6 +1756,10 @@
     var CHART_CLOSING_TRIES = 30;
     var CHART_LOAD_TRIES = 20;
     var CHART_LOAD_WAIT_MS = 1500;
+    // A source catching up is asked again this rarely, for as long as the sheet stays open.
+    var CHART_CATCHUP_MS = 10000;
+    // Busy, timeout and network answers retried on the sheet's cadence before the error box.
+    var CHART_TRANSIENT_TRIES = 3;
     // The live ring: at most this many prints, none older than 15 minutes.
     var LIVE_RING = 4000;
     var LIVE_KEEP_MS = 900000;
@@ -2342,6 +2357,27 @@
         }
     }
 
+    // The small neutral mark beside a row's coin saying the row opens a chart; not a control.
+    function chartGlyph() {
+        var ns = "http://www.w3.org/2000/svg";
+        var svg = document.createElementNS(ns, "svg");
+        svg.setAttribute("class", "chart-glyph");
+        svg.setAttribute("viewBox", "0 0 12 12");
+        svg.setAttribute("width", "12");
+        svg.setAttribute("height", "12");
+        svg.setAttribute("aria-hidden", "true");
+        svg.setAttribute("focusable", "false");
+        var line = document.createElementNS(ns, "polyline");
+        line.setAttribute("points", "1,9 4,5 7,7 11,2");
+        svg.appendChild(line);
+        return svg;
+    }
+
+    // A tick read that may succeed if asked again: busy (503), late (504) or no connection (0).
+    function chartTransient(res) {
+        return res.status === 503 || res.status === 504 || res.status === 0;
+    }
+
     function chartSkeleton(host) {
         clear(host);
         var box = el("div", "chart-state chart-loading");
@@ -2524,7 +2560,7 @@
         result.appendChild(profit);
         result.appendChild(tradePct(trade, "num"));
         sheet.appendChild(result);
-        var state = { range: "deal", data: null, tries: 0 };
+        var state = { range: "deal", data: null, tries: 0, transient: 0 };
         var chips = chartChips(sheet, TRADE_RANGES, "deal", function (key) {
             state.range = key;
             pressChip(chips, key);
@@ -2558,8 +2594,23 @@
             source.textContent = "";
             chartState(area, tr("mini_chart_error"), tr("mini_chart_error_note"), function () {
                 state.tries = 0;
+                state.transient = 0;
                 load();
             });
+        }
+        // The source is behind (recorder catch-up, a refused host, a core reconnecting).
+        function catchingUp() {
+            legend.hidden = true;
+            source.textContent = "";
+            chartState(area, tr("mini_chart_catchup"), tr("mini_chart_catchup_note"), null);
+        }
+        // One pending read per sheet; a newer sheet's token cancels it.
+        function later(ms) {
+            if (sheetTimer) clearTimeout(sheetTimer);
+            sheetTimer = setTimeout(function () {
+                sheetTimer = null;
+                if (token === sheetToken) fetchTicks();
+            }, ms);
         }
         function draw(data) {
             state.data = data;
@@ -2605,33 +2656,40 @@
             api("/api/trade/ticks", { core: trade.core, rec_id: trade.rec_id, range: state.range }).then(function (res) {
                 if (token !== sheetToken) return;
                 // A command or tab reload dropped the queued read; the sheet still wants it.
+                // Nothing reached the server, so it is never counted as a failure.
                 if (res.cancelled) {
-                    state.tries += 1;
-                    if (state.tries >= CHART_LOAD_TRIES) {
-                        failed();
-                        return;
-                    }
-                    sheetTimer = setTimeout(function () {
-                        sheetTimer = null;
-                        if (token === sheetToken) fetchTicks();
-                    }, CHART_LOAD_WAIT_MS);
+                    later(CHART_LOAD_WAIT_MS);
                     return;
                 }
                 if (!res.ok || !res.data) {
+                    // Busy, a late reply or a dropped connection: try a few more times on the
+                    // sheet's own cadence before calling it a failure.
+                    if (chartTransient(res) && state.transient < CHART_TRANSIENT_TRIES) {
+                        state.transient += 1;
+                        later(CHART_LOAD_WAIT_MS * 2);
+                        return;
+                    }
                     failed();
                     return;
                 }
+                state.transient = 0;
                 var data = res.data;
+                var wait = finiteNumber(data.retry_in_ms) && data.retry_in_ms > 0 ? data.retry_in_ms : CHART_LOAD_WAIT_MS;
                 if (data.state === "loading") {
                     state.tries += 1;
                     if (state.tries >= CHART_LOAD_TRIES) {
-                        failed();
+                        // Still queued: say so and keep asking slowly, never a hard error.
+                        catchingUp();
+                        later(CHART_CATCHUP_MS);
                         return;
                     }
-                    sheetTimer = setTimeout(function () {
-                        sheetTimer = null;
-                        if (token === sheetToken) fetchTicks();
-                    }, finiteNumber(data.retry_in_ms) && data.retry_in_ms > 0 ? data.retry_in_ms : CHART_LOAD_WAIT_MS);
+                    later(wait);
+                    return;
+                }
+                if (data.state === "catching_up") {
+                    tradeDetails(details, trade, data);
+                    catchingUp();
+                    later(Math.max(wait, CHART_CATCHUP_MS));
                     return;
                 }
                 tradeDetails(details, trade, data);
@@ -2681,6 +2739,7 @@
             frozen: false,
             ring: [],
             last: null,
+            transient: 0,
             offset: 0,
             okAt: 0,
             closingTries: 0,
@@ -2784,6 +2843,12 @@
             });
         }
         function failed(res) {
+            // Before the first answer a busy or late read is retried a few times, not an error.
+            if (!live.okAt && chartTransient(res) && live.transient < CHART_TRANSIENT_TRIES) {
+                live.transient += 1;
+                next(CHART_LOAD_WAIT_MS * 2);
+                return;
+            }
             if (res.status === 401 || res.status === 403 || !live.okAt) {
                 live.stopped = res.status === 401 || res.status === 403;
                 if (sheetChart) {
@@ -2895,7 +2960,9 @@
             if (!live.frozen) merge(d.ticks, d.truncated);
             if (d.pnl_text) applyMoney(pnl, "hero-value num", d.pnl_text, d.pnl_sign);
             openDetails(d);
-            if (!live.ring.length && (d.state === "no_tape" || d.state === "closing")) {
+            // No print yet, whatever the state: a waiting box that the first print replaces,
+            // never an empty chart.
+            if (!live.ring.length) {
                 setTag(tr("mini_chart_offline"), true);
                 legend.hidden = true;
                 source.textContent = "";

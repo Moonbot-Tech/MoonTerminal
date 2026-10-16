@@ -460,6 +460,14 @@ const CHART_SCREENS = [
     { name: "chart-trade-archive", api: { ...CHART_TRADES, "/api/trade/ticks": () => ({ body: tradeTicks("archive_pending") }) }, run: async (p, t) => {
         await openChartTrade(p); await chartBox(p, t.mini_chart_archive);
     } },
+    { name: "chart-trade-catchup", api: { ...CHART_TRADES, "/api/trade/ticks": () => ({ body: tradeTicks("catching_up") }) }, run: async (p, t) => {
+        await openChartTrade(p); await chartBox(p, t.mini_chart_catchup);
+        if (await p.$("#sheet .chart-retry")) throw new Error("a catching-up tape retries on its own, without a retry button");
+    } },
+    { name: "chart-live-waiting", api: () => chartOrders(liveFeed({ mode: "quiet" })), run: async (p, t) => {
+        await openChartOrder(p); await chartBox(p, t.mini_chart_live_no_tape);
+        if (await p.$("#sheet canvas")) throw new Error("a feed with no print yet must show the waiting box, not an empty chart");
+    } },
     { name: "chart-trade-error", api: { ...CHART_TRADES, "/api/trade/ticks": () => ({ status: 500, body: {} }) }, run: async (p, t) => {
         await openChartTrade(p); await chartBox(p, t.mini_chart_error);
         if (!await p.$("#sheet .chart-retry")) throw new Error("a failed tape must offer retry");
@@ -935,21 +943,83 @@ async function chartInteractions(browser, html, texts) {
     expect(+(await page.getAttribute("#sheet .chart-wrap", "data-ticks")) === 1, "truncated delta appended across a hole");
     await context.close();
 
-    // Tick endpoints leave busy retries to the sheet cadence.
+    // Tick endpoints leave busy retries to the sheet cadence: none inside runJob, three on the
+    // sheet's own 3 s cadence, and only then the error box.
     for (const status of [503, 504]) {
         ({ page, context } = await fresh({ ...CHART_TRADES, "/api/trade/ticks": () => ({ status, body: {} }) }));
         const busyReads = count("/api/trade/ticks");
-        await openChartTrade(page); await page.waitForSelector("#sheet .chart-retry");
-        await page.waitForTimeout(1100);
+        await openChartTrade(page); await page.waitForTimeout(1100);
         expect(count("/api/trade/ticks") - busyReads === 1, `trade ${status} retried inside runJob`);
+        expect(!await page.$("#sheet .chart-retry"), `trade ${status} must not show the error box on the first busy answer`);
+        await page.waitForSelector("#sheet .chart-retry", { timeout: 15000 });
+        expect(count("/api/trade/ticks") - busyReads === 4, `trade ${status} must be asked 4 times before the error: ${count("/api/trade/ticks") - busyReads}`);
         await context.close();
         ({ page, context } = await fresh(chartOrders(() => ({ status, body: {} }))));
         const liveBusyReads = count("/api/order/ticks");
-        await openChartOrder(page); await page.waitForSelector("#sheet .chart-retry");
-        await page.waitForTimeout(1100);
+        await openChartOrder(page); await page.waitForTimeout(1100);
         expect(count("/api/order/ticks") - liveBusyReads === 1, `live ${status} retried inside runJob`);
+        await page.waitForSelector("#sheet .chart-retry", { timeout: 15000 });
+        expect(count("/api/order/ticks") - liveBusyReads === 4, `live ${status} must be asked 4 times before the error`);
         await context.close();
     }
+
+    // A tape still queued past the load budget turns into «catching up», never the error box.
+    ({ page, context } = await fresh({ ...CHART_TRADES, "/api/trade/ticks": () => ({ body: { ...tradeTicks("loading"), retry_in_ms: 20 } }) }));
+    await openChartTrade(page);
+    await chartBox(page, texts.mini_chart_catchup);
+    expect(!await page.$("#sheet .chart-retry"), "an endless loading tape must not end in the error box");
+    await context.close();
+
+    // Hit areas: a row tap opens the sheet and sends no command; a button press or a tap in the
+    // action line's dead space never opens the sheet; buttons keep 12 px of dead space around.
+    ({ page, context } = await fresh(chartOrders(liveFeed())));
+    await nav(page, "deals"); await page.click('[data-seg="orders"]'); await openFirstGroup(page, "orders");
+    const rowSel = 'section[data-tab="orders"] .order-row';
+    const gaps = await page.evaluate((sel) => {
+        const row = document.querySelector(sel);
+        const line = row.querySelector(".order-actions");
+        const r = row.getBoundingClientRect();
+        const l = line.getBoundingClientRect();
+        const b = Array.from(line.querySelectorAll(".cmd")).map((n) => n.getBoundingClientRect());
+        return {
+            above: Math.min(...b.map((x) => x.top)) - l.top,
+            below: r.bottom - Math.max(...b.map((x) => x.bottom)),
+            between: b.length === 2 ? b[1].left - b[0].right : 99,
+            // The action line must own the row's whole width, so no row edge borders a button.
+            right: r.right - l.right <= 0.5 && l.right - Math.max(...b.map((x) => x.right)) >= 12 ? 99 : 0,
+            left: l.left - r.left <= 0.5 ? 99 : 0,
+            glyph: !!row.querySelector(".order-top .chart-glyph"),
+            hint: !!row.querySelector(".chart-hint"),
+        };
+    }, rowSel);
+    expect(gaps.above >= 12 && gaps.below >= 12 && gaps.between >= 12 && gaps.right >= 12 && gaps.left >= 12,`buttons need 12 px of dead space: ${JSON.stringify(gaps)}`);
+    expect(gaps.glyph && !gaps.hint, `order rows carry the glyph and no text link: ${JSON.stringify(gaps)}`);
+    const sheetOpen = () => page.evaluate(() => !!document.querySelector("#sheet .chart-area"));
+    const commands = () => log.sent.filter((s) => s.path === "/api/panic" || s.path === "/api/order/cancel").length;
+    // The preview's confirm says yes, so the press is a sent command and no sheet.
+    const pressBefore = commands();
+    await page.click(`${rowSel} .order-actions .cmd-danger`); await page.waitForTimeout(500);
+    expect(commands() === pressBefore + 1, "a Panic Sell press must send exactly its own command");
+    expect(!await sheetOpen(), "a Panic Sell press must not open the chart sheet");
+    await page.waitForSelector(`${rowSel} .order-actions .cmd:not([disabled])`);
+    const sentBefore = commands();
+    const line = await page.locator(`${rowSel} .order-actions`).boundingBox();
+    await page.mouse.click(line.x + 4, line.y + 4); await page.waitForTimeout(300);
+    expect(!await sheetOpen(), "a tap in the action line's dead space must not open the chart sheet");
+    await page.click(`${rowSel} .order-main`); await page.waitForSelector("#sheet .chart-area");
+    expect(commands() === sentBefore, "neither a row tap nor a dead-space tap may send a command");
+    await context.close();
+    ({ page, context } = await fresh(CHART_TRADES));
+    await nav(page, "deals"); await page.click('[data-seg="trades"]');
+    const head = await page.$('section[data-tab="trades"] .group-head');
+    if (head) { await head.click(); await settle(page); }
+    await page.waitForSelector(".trade-row");
+    const tradeRow = await page.evaluate(() => {
+        const row = document.querySelector(".trade-row");
+        return { glyph: !!row.querySelector(".chart-glyph"), hint: !!row.querySelector(".chart-hint") };
+    });
+    expect(tradeRow.glyph && !tradeRow.hint, `trade rows carry the glyph and no text link: ${JSON.stringify(tradeRow)}`);
+    await context.close();
 
     // Live: since_ms after the first read, follow off on pan and back on the button, pinch zooms.
     ({ page, context } = await fresh(chartOrders(liveFeed())));

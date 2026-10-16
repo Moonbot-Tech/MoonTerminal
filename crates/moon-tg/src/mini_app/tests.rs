@@ -109,7 +109,7 @@ fn chart_replay_states_follow_tick_status_and_actual_points() {
         ),
         (
             TickStatus::RateLimited { retry_in_s: 1 },
-            State::Error,
+            State::CatchingUp,
             None,
         ),
         (TickStatus::Failed, State::Error, None),
@@ -129,7 +129,7 @@ fn chart_replay_states_follow_tick_status_and_actual_points() {
     );
     for (reason, state) in [
         (TradeReplayEmpty::NoDataInWindow, State::NoTape),
-        (TradeReplayEmpty::CoreNotConnected, State::Error),
+        (TradeReplayEmpty::CoreNotConnected, State::CatchingUp),
         (TradeReplayEmpty::DegenerateWindow, State::NoTape),
         (TradeReplayEmpty::UnknownVenue, State::NoTape),
         (
@@ -144,9 +144,14 @@ fn chart_replay_states_follow_tick_status_and_actual_points() {
             (state, None)
         );
     }
+    assert_eq!(
+        super::charts::replay_state(Some(&TradeReplayOutcome::Failed(
+            TradeReplayFailure::RateLimited { retry_in_s: 3 }
+        ))),
+        (State::CatchingUp, None)
+    );
     for failure in [
         TradeReplayFailure::UnknownSymbol,
-        TradeReplayFailure::RateLimited { retry_in_s: 3 },
         TradeReplayFailure::Transient {
             diagnostic: "UNIT_01".into(),
         },
@@ -2080,4 +2085,84 @@ fn a_mini_app_save_keeps_the_per_currency_thresholds() {
     keep_stored_bot_fields(&file, 5, &mut from_page);
     assert_eq!(from_page.trades.by_quote, vec![row]);
     assert_eq!(from_page.trades.profit_at_least_usd, Some(3.0));
+}
+
+/// Dropping the unpublished-day rule would show «no tape» (or an error) for every trade closed
+/// today whose daily file the venue has not published and the recorder did not record.
+#[test]
+fn chart_fresh_trade_without_tape_waits_for_the_archive() {
+    use moon_core::telegram::web::dto::{ChartStateDto as State, TradeTicksDto};
+    const DAY: i64 = 86_400_000;
+    const LAG: i64 = 36 * 3_600_000;
+    let now = 20_000 * DAY + 13 * 3_600_000;
+    let mut dto = TradeTicksDto {
+        open_ms: now - 400_000,
+        close_ms: now - 360_000,
+        ..Default::default()
+    };
+    super::charts::settle_trade(&mut dto, State::NoTape, None, None, Some(LAG), now);
+    assert_eq!(dto.state, State::ArchivePending);
+    // The next UTC midnight plus the venue's own publication lag, never midnight alone.
+    assert_eq!(dto.retry_at_ms, Some(20_001 * DAY + LAG));
+    assert_eq!(dto.retry_in_ms, None);
+    // A venue that publishes no daily archive for the market can never fill it: «no tape».
+    super::charts::settle_trade(&mut dto, State::NoTape, None, None, None, now);
+    assert_eq!(dto.state, State::NoTape);
+    // A day whose file is already out and still empty is a real «no tape».
+    dto.close_ms = now - 3 * DAY;
+    super::charts::settle_trade(&mut dto, State::NoTape, None, None, Some(LAG), now);
+    assert_eq!(dto.state, State::NoTape);
+}
+
+/// Without the patience bound a replay queued behind the recorder's catch-up kept answering
+/// «loading» until the page gave up with «the server did not answer».
+#[test]
+fn chart_queued_replay_becomes_catching_up_with_a_slow_retry() {
+    use moon_core::telegram::web::dto::{ChartStateDto as State, TradeTicksDto};
+    use std::time::Duration;
+    let mut dto = TradeTicksDto::default();
+    super::charts::settle_trade(
+        &mut dto,
+        State::Loading,
+        None,
+        Some(Duration::from_secs(2)),
+        None,
+        0,
+    );
+    assert_eq!((dto.state, dto.retry_in_ms), (State::Loading, Some(1500)));
+    super::charts::settle_trade(
+        &mut dto,
+        State::Loading,
+        None,
+        Some(super::charts::LOADING_PATIENCE),
+        None,
+        0,
+    );
+    assert_eq!(
+        (dto.state, dto.retry_in_ms),
+        (State::CatchingUp, Some(10_000))
+    );
+    // A core not connected yet (no replay job) also retries slowly instead of erroring.
+    super::charts::settle_trade(&mut dto, State::CatchingUp, None, None, None, 0);
+    assert_eq!(
+        (dto.state, dto.retry_in_ms),
+        (State::CatchingUp, Some(10_000))
+    );
+}
+
+/// A real transport failure must stay an error, so the page offers its retry button.
+#[test]
+fn chart_transport_failure_stays_an_error() {
+    use moon_core::market::trade_replay::{TradeReplayFailure, TradeReplayOutcome};
+    use moon_core::telegram::web::dto::{ChartStateDto as State, TradeTicksDto};
+    let outcome = TradeReplayOutcome::Failed(TradeReplayFailure::Transient {
+        diagnostic: "UNIT_01".into(),
+    });
+    let (state, retry_at) = super::charts::replay_state(Some(&outcome));
+    let mut dto = TradeTicksDto {
+        close_ms: 1000,
+        ..Default::default()
+    };
+    super::charts::settle_trade(&mut dto, state, retry_at, None, Some(0), 2000);
+    assert_eq!((dto.state, dto.retry_in_ms), (State::Error, None));
 }
