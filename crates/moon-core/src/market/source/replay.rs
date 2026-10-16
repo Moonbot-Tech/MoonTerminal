@@ -22,6 +22,8 @@ pub(crate) struct CoreReplayTicks {
     pub ticks: Vec<Tick>,
     /// Observed retained bounds clipped to the requested window.
     pub covered: (i64, i64),
+    /// True only when this donor's archive wait completed with an answer on the copied epoch.
+    pub(crate) archive_answered: bool,
 }
 
 impl MarketDataSource {
@@ -201,6 +203,7 @@ impl MarketDataSource {
         (donors, inner.archive.clone())
     }
 
+    /// Copy the best donor span and retain whether its archive wait actually answered.
     fn core_ticks(
         &self,
         address: &ReplayAddress,
@@ -228,6 +231,7 @@ impl MarketDataSource {
             let Some(mut readers) = snapshot.market_history_readers(market) else {
                 continue;
             };
+            let mut archive_answered = false;
             match deadline {
                 Some(deadline) => {
                     let started = std::time::Instant::now();
@@ -240,6 +244,7 @@ impl MarketDataSource {
                         || slot.get_with_epoch().map(|(_, e)| e) == Some(epoch),
                     );
                     let elapsed = started.elapsed();
+                    archive_answered = waited == super::archive::ArchiveWait::Answered;
                     // Only a wait that actually blocked is worth a line; an earlier answer returns
                     // in microseconds on every later row of the market.
                     if elapsed >= std::time::Duration::from_millis(1) {
@@ -253,7 +258,10 @@ impl MarketDataSource {
                     // or, after a reconnect mid-wait, the live client's rather than the dead one's.
                     match slot
                         .get_with_epoch()
-                        .and_then(|(client, _)| client.snapshot_versioned())
+                        .and_then(|(client, fresh_epoch)| {
+                            archive_answered &= fresh_epoch == epoch;
+                            client.snapshot_versioned()
+                        })
                         .and_then(|snapshot| snapshot.market_history_readers(market))
                     {
                         Some(fresh) => readers = fresh,
@@ -283,9 +291,12 @@ impl MarketDataSource {
                         side: if row.is_buy() { Side::Buy } else { Side::Sell },
                     })
                 });
-                capture.finish()
+                capture.finish(archive_answered)
             });
-            let Some(candidate) = captured else { continue };
+            let Some(mut candidate) = captured else {
+                continue;
+            };
+            candidate.archive_answered = archive_answered;
             let covered = candidate.covered;
             if best
                 .as_ref()
@@ -424,9 +435,13 @@ impl ReplayCapture {
         }
     }
 
-    /// Refuse a truncated interval; otherwise freeze sorted points and their retained span.
-    fn finish(mut self) -> Option<CoreReplayTicks> {
-        if self.overflow || self.ticks.is_empty() {
+    /// Freeze retained coverage, accepting quiet captures only after an answered archive.
+    fn finish(mut self, archive_answered: bool) -> Option<CoreReplayTicks> {
+        let quiet_capture = matches!(self.rule, CoreSpanRule::Overlap)
+            && archive_answered
+            && self.first <= self.window.from_ms
+            && self.last >= self.window.to_ms;
+        if self.overflow || (self.ticks.is_empty() && !quiet_capture) {
             return None;
         }
         let covered = match self.rule {
@@ -454,6 +469,7 @@ impl ReplayCapture {
         Some(CoreReplayTicks {
             ticks: self.ticks,
             covered,
+            archive_answered,
         })
     }
 }

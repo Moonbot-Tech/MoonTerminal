@@ -907,6 +907,7 @@ fn with_tape_writes_keep_only_when_supported() {
         max_age_days: 90,
         record_emulator: false,
         tuner_only: None,
+        min_tail_s: None,
     };
     let legacy = with_tape("", tape, None, None).unwrap().unwrap();
     let parsed: toml::Value = toml::from_str(&legacy).unwrap();
@@ -943,6 +944,7 @@ fn with_tape_writes_tuner_only_only_when_supported() {
         max_age_days: 90,
         record_emulator: true,
         tuner_only,
+        min_tail_s: None,
     };
     let old = with_tape("", tape, None, Some(keep(None)))
         .unwrap()
@@ -980,6 +982,48 @@ fn with_tape_writes_tuner_only_only_when_supported() {
     );
 }
 
+/// Tail writes must omit unsupported keys and accept a newer station's unrequested fields.
+#[test]
+fn with_tape_min_tail_is_capability_gated_and_acknowledged() {
+    let tape = TapeWindow {
+        margin_s: 30,
+        long_position_min: 10,
+    };
+    let old = TapeKeep {
+        max_age_days: 90,
+        record_emulator: true,
+        tuner_only: None,
+        min_tail_s: None,
+    };
+    let text = with_tape("", tape, None, Some(old)).unwrap().unwrap();
+    let parsed: toml::Value = toml::from_str(&text).unwrap();
+    assert!(parsed["tape"].get("min_tail_s").is_none());
+    let wanted = TapeKeep {
+        min_tail_s: Some(120),
+        ..old
+    };
+    let text = with_tape(&text, tape, None, Some(wanted)).unwrap().unwrap();
+    let parsed: toml::Value = toml::from_str(&text).unwrap();
+    assert_eq!(parsed["tape"]["min_tail_s"].as_integer(), Some(120));
+    assert!(
+        with_tape(&text, tape, None, Some(wanted))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        tape_verdict(Some((tape, None, Some(old))), tape, None, Some(wanted)),
+        TapeVerdict::Outdated
+    );
+    assert_eq!(
+        tape_verdict(Some((tape, None, Some(wanted))), tape, None, Some(old)),
+        TapeVerdict::Applied
+    );
+    assert_eq!(
+        tape_verdict(Some((tape, None, Some(wanted))), tape, None, Some(wanted)),
+        TapeVerdict::Applied
+    );
+}
+
 /// Missing retention support must fail immediately only when retention choices were sent.
 #[test]
 fn tape_verdict_outdated_without_keep() {
@@ -991,6 +1035,7 @@ fn tape_verdict_outdated_without_keep() {
         max_age_days: 90,
         record_emulator: false,
         tuner_only: None,
+        min_tail_s: None,
     };
     assert_eq!(
         tape_verdict(None, tape, None, Some(keep)),
@@ -1012,6 +1057,7 @@ fn tape_verdict_outdated_without_keep() {
         max_age_days: 365,
         record_emulator: true,
         tuner_only: None,
+        min_tail_s: None,
     };
     assert_eq!(
         tape_verdict(Some((tape, None, Some(old))), tape, None, Some(keep)),

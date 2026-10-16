@@ -452,6 +452,10 @@ fn apply_tape(tape: &cores::Tape) {
         tape.record_emulator.unwrap_or(true),
     );
     moon_core::market::tape_recorder::catchup::set_tuner_only(tape.tuner_only.unwrap_or(false));
+    moon_core::market::trade_replay::set_min_tail_s(
+        tape.min_tail_s
+            .unwrap_or(moon_core::db::tuner::ticks::tail::DEFAULT_MIN_TAIL_S),
+    );
     if let Some(secs) = tape.margin_s {
         moon_core::market::trade_replay::set_margin_s(secs);
     }
@@ -459,12 +463,13 @@ fn apply_tape(tape: &cores::Tape) {
         moon_core::market::trade_replay::set_long_position_min(minutes);
     }
     log::info!(
-        "tape window: margin {} s, long position from {} min, max age {} days, record emulator {}, tuner-usable trades only {}",
+        "tape window: margin {} s, long position from {} min, max age {} days, record emulator {}, tuner-usable trades only {}, minimum tail {} s",
         moon_core::market::trade_replay::margin_ms() / 1_000,
         moon_core::market::trade_replay::long_position_ms() / 60_000,
         moon_core::market::tape_recorder::catchup::max_age_days(),
         moon_core::market::tape_recorder::catchup::record_emulator(),
-        moon_core::market::tape_recorder::catchup::tuner_only()
+        moon_core::market::tape_recorder::catchup::tuner_only(),
+        moon_core::market::trade_replay::min_tail_s()
     );
 }
 

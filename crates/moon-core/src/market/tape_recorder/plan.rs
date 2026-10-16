@@ -11,7 +11,7 @@
 //!   the threshold it is known to be long, its entry side is settled, and the key lets its pair go
 //!   until the exit arrives;
 //! - a CLOSED trade needs its [`ReplayWindow::focus_spans`]: the whole body of a short position,
-//!   the two neighbourhoods of a long one.
+//!   the two neighbourhoods of a long one, extended through the tuner's tail floor.
 //!
 //! # The recording
 //!
@@ -31,6 +31,7 @@
 //! another trade kept the pair selected, whose rows were drained when nothing needed them — is
 //! seeded again the same way: the archive still holds what the core holds.
 
+use super::catchup::Shape;
 use crate::feed::Tick;
 use crate::market::trade_replay::{Coverage, ReplayWindow};
 
@@ -61,6 +62,7 @@ struct Trade {
     close_ms: Option<i64>,
     margin_ms: i64,
     long_position_ms: i64,
+    tail_ms: i64,
     /// Handed to the comparison once settled ([`KeyTask::take_settled`]).
     reported: bool,
     /// Unknown flags stay recordable for older cores.
@@ -77,16 +79,18 @@ impl Trade {
                 self.open_ms
                     .saturating_add(self.long_position_ms.max(margin)),
             )),
-            Some(close_ms) => ReplayWindow {
-                from_ms: self.open_ms.saturating_sub(margin),
-                to_ms: close_ms.saturating_add(margin),
-                open_ms: self.open_ms,
-                close_ms,
-                margin_ms: margin,
-                long_position_ms: self.long_position_ms,
-                over_budget: false,
+            Some(close_ms) => {
+                let window = ReplayWindow {
+                    from_ms: self.open_ms.saturating_sub(margin),
+                    to_ms: close_ms.saturating_add(margin),
+                    open_ms: self.open_ms,
+                    close_ms,
+                    margin_ms: margin,
+                    long_position_ms: self.long_position_ms,
+                    over_budget: false,
+                };
+                crate::db::tuner::ticks::tail::focus_with_tail(&window, self.tail_ms)
             }
-            .focus_spans(),
         }
     }
 }
@@ -202,8 +206,7 @@ impl KeyTask {
         &mut self,
         id: TradeId,
         open_ms: i64,
-        margin_ms: i64,
-        long_ms: i64,
+        shape: &Shape,
         emulator: Option<bool>,
     ) {
         if let Some(trade) = self.trades.iter_mut().find(|t| t.id == id) {
@@ -213,8 +216,9 @@ impl KeyTask {
                 id,
                 open_ms,
                 close_ms: None,
-                margin_ms,
-                long_position_ms: long_ms,
+                margin_ms: shape.margin_ms,
+                long_position_ms: shape.long_ms,
+                tail_ms: shape.tail_ms,
                 reported: false,
                 emulator,
             });
@@ -229,8 +233,7 @@ impl KeyTask {
         id: TradeId,
         open_ms: i64,
         close_ms: i64,
-        margin_ms: i64,
-        long_ms: i64,
+        shape: &Shape,
         emulator: Option<bool>,
     ) {
         let emulator = emulator.or(self
@@ -242,8 +245,9 @@ impl KeyTask {
             id,
             open_ms,
             close_ms: Some(close_ms),
-            margin_ms,
-            long_position_ms: long_ms,
+            margin_ms: shape.margin_ms,
+            long_position_ms: shape.long_ms,
+            tail_ms: shape.tail_ms,
             reported: false,
             emulator,
         };

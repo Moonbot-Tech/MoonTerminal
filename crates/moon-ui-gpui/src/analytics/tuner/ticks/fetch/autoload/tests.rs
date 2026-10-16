@@ -1,4 +1,7 @@
+use super::super::station::drop_held;
 use super::*;
+use moon_core::db::tuner::ticks::tail::{floor_ms, required_with_floor};
+use moon_core::market::trade_replay::ReplayWindow;
 
 /// A trade `(exchange, market, open_ms, close_ms)` and its window.
 fn trade(market: &str, open_ms: i64, close_ms: i64) -> (String, String, ReplayWindow) {
@@ -13,7 +16,12 @@ fn trade(market: &str, open_ms: i64, close_ms: i64) -> (String, String, ReplayWi
 fn only_the_rows_the_disk_fully_holds_are_dropped() {
     let base = 1_790_000_000_000;
     let held_trade = trade("M", base, base + 10_000);
-    let need = required_spans(&held_trade.2).hull().expect("a need");
+    let need = required_with_floor(
+        &held_trade.2,
+        floor_ms(super::super::super::tail::current_s()),
+    )
+    .hull()
+    .expect("a need");
     let hole_trade = trade("M", base + 3_600_000, base + 3_610_000);
     let other_market = trade("N", base, base + 10_000);
     let unread_market = trade("U", base, base + 10_000);

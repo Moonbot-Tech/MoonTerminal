@@ -61,6 +61,7 @@ mod toolbar;
 mod tuner;
 /// The tape autoload of the Entry/Exit axis, driven from the coordination tick.
 pub(crate) use tuner::ticks::fetch::autoload as tape_autoload;
+pub(crate) use tuner::ticks::tail::current_s as tape_min_tail_s;
 
 // Pages reach these through the familiar `super::…`, unaware of the `period` module.
 pub(in crate::analytics) use period::{

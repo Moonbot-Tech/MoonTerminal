@@ -79,7 +79,7 @@ pub(in crate::analytics::tuner) struct QueuedRow {
     pub(in crate::analytics::tuner) tick_value: TickValue,
     pub(in crate::analytics::tuner) window: ReplayWindow,
     /// Who queued the row. A later user ask adopts an autoload row ([`adopt_origin`]).
-    origin: RowOrigin,
+    pub(super) origin: RowOrigin,
     /// Whether the venue itself already refused this row once; the second refusal is final.
     retried: bool,
     /// How many walks were continued for this row's tape, and how much of the request's focus
@@ -93,6 +93,33 @@ pub(in crate::analytics::tuner) struct QueuedRow {
 }
 
 impl QueuedRow {
+    /// Whether a venue or recent core archive can still supply the uncovered request.
+    pub(super) fn fetchable_after_station(&self, now_ms: i64) -> bool {
+        use moon_core::db::tuner::ticks::tail::{floor_ms, required_with_floor};
+        use moon_core::market::trade_replay::trade_cache;
+        let need = required_with_floor(&self.window, floor_ms(super::super::tail::current_s()));
+        let Some((from, to)) = need.hull() else {
+            return false;
+        };
+        let held = trade_cache::handle()
+            .and_then(|cache| {
+                cache.held_spans(&self.address.exchange_key, &self.address.market, from, to)
+            })
+            .map(Coverage::from_spans)
+            .unwrap_or_default();
+        let Some((from, _)) = need.minus(&held).hull() else {
+            return false;
+        };
+        reachable_after_station(
+            self.address.venue,
+            &self.address.market,
+            from,
+            to,
+            self.window.close_ms,
+            now_ms,
+        )
+    }
+
     pub(in crate::analytics::tuner) fn new(
         deal: Deal,
         address: Arc<RowAddress>,
@@ -116,8 +143,27 @@ impl QueuedRow {
     }
 }
 
+/// Whole missing windows use the usual exit reach; short tails use their first missing stamp.
+pub(super) fn reachable_after_station(
+    venue: moon_core::venue::Venue,
+    market: &str,
+    from_ms: i64,
+    to_ms: i64,
+    close_ms: i64,
+    now_ms: i64,
+) -> bool {
+    use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
+    let venue_from = if from_ms > close_ms { from_ms } else { to_ms };
+    matches!(
+        fetchable(venue, market, venue_from, now_ms),
+        Fetchable::Rest | Fetchable::Archive
+    ) || from_ms >= now_ms.saturating_sub(super::autoload::CORE_HORIZON_MS)
+}
+
 /// What the job tells whoever listens.
 pub(in crate::analytics::tuner) enum JobEvent {
+    /// Station tape reached disk; the open view must re-read its held queries.
+    StationFilled,
     /// A request went out for this row.
     Started(i64),
     /// A row's answer: what the row became, tape and verdict included.
@@ -128,6 +174,11 @@ pub(in crate::analytics::tuner) enum JobEvent {
     /// A walk that already covered the row may still deliver that answer. An uncovered row
     /// is not asked for again.
     Released(i64),
+}
+
+/// Notify an attached view after a station fill, even when no venue rows remain.
+pub(super) fn station_filled() {
+    lock(job()).notify(JobEvent::StationFilled);
 }
 
 /// The job as a caption reads it.
@@ -1250,6 +1301,13 @@ fn serve_cluster(
             ..hull
         })
         .unwrap_or(first.window);
+    let window = with_record_tail(
+        window,
+        moon_core::db::tuner::ticks::tail::record_tail_ms(
+            super::super::tail::current_s(),
+            moon_core::market::trade_replay::margin_ms(),
+        ),
+    );
     let (reply, rx) = mpsc::channel();
     let started = Instant::now();
     worker::request(TradeReplayRequest {
@@ -1471,6 +1529,15 @@ fn serve_cluster(
     }
     // The key is free again, or the batch is over: the dispatcher decides which.
     job.wake.notify_all();
+}
+
+/// ReplayWindow is symmetric: admit the tail while preserving the original outer lead bound.
+fn with_record_tail(window: ReplayWindow, tail_ms: i64) -> ReplayWindow {
+    ReplayWindow {
+        margin_ms: window.margin_ms.max(tail_ms),
+        to_ms: window.to_ms.max(window.close_ms.saturating_add(tail_ms)),
+        ..window
+    }
 }
 
 /// A replay identity for a fetch, distinct from every chart window's: the row's own id, which

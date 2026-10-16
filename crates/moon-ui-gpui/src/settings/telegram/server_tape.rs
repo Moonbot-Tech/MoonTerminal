@@ -160,6 +160,9 @@ impl TapeEd {
             Some(None) => self.forget_keep(),
             Some(value) => follow(&mut self.seen_keep, &mut self.draft_keep, value),
         }
+        if let Some(draft) = self.draft_keep.as_mut() {
+            draft.min_tail_s = self.seen_keep.and_then(|seen| seen.min_tail_s);
+        }
         if self
             .seen_keep
             .zip(self.draft_keep)
