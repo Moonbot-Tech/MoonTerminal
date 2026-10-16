@@ -231,9 +231,10 @@ fn main() -> anyhow::Result<()> {
                         );
                     }
                     let mut reloaded = reloaded.config;
-                    // The process runs the profile it started with; the bot keeps its pairing.
+                    // The process runs the profile it started with; the bot keeps its pairing
+                    // and the terminal's core groups.
                     cores::set_feed(&mut reloaded, profile);
-                    reloaded.telegram = cfg.telegram.clone();
+                    tg::keep_across_reload(&cfg, &mut reloaded);
                     session.reconcile(&reloaded, Some(&reports.tx));
                     session.map_cores_to_themselves();
                     groups = groups_of(&reloaded);

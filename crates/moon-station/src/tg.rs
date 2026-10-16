@@ -598,6 +598,21 @@ impl TgHost for StationHost<'_> {
     }
 }
 
+/// Carry what the bot put into the running config over to one rebuilt by a reload (SIGHUP).
+///
+/// `station.toml` holds neither the pairing (`telegram`) nor the core groups a terminal sent: both
+/// come from `telegram.json` at the start ([`StationTg::start`]). A config rebuilt from the file
+/// alone would run the report by cores without its groups, answer the terminal an empty set, and
+/// write that empty set to `telegram.json` at the next pairing save.
+///
+/// Args:
+///     running: The config the station runs now.
+///     reloaded: The one just rebuilt from `station.toml`, which takes these over.
+pub fn keep_across_reload(running: &AppConfig, reloaded: &mut AppConfig) {
+    reloaded.telegram = running.telegram.clone();
+    reloaded.core_groups = running.core_groups.clone();
+}
+
 /// The zone a saved pairing carries, when it names one this build reads.
 fn pushed_zone(pairing: &Access) -> Option<(String, Tz)> {
     let name = pairing.zone.as_deref()?;

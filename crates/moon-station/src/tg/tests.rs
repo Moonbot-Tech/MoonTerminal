@@ -324,6 +324,31 @@ fn groups_replace_the_stations_whole_or_stay() {
     );
 }
 
+/// A reload rebuilds the config from `station.toml`, which holds neither the pairing nor the core
+/// groups: both ride over from the running config, or the report by cores loses its groups until
+/// a restart — and for good once the next pairing save writes the empty set.
+#[test]
+fn a_reload_keeps_the_pairing_and_the_core_groups() {
+    use moon_core::config::CoreGroup;
+    let mut running = AppConfig::headless(Vec::new());
+    running.telegram.authorized_chat_ids = vec![7];
+    running.core_groups = vec![CoreGroup {
+        name: "main".into(),
+        cores: vec![1, 2],
+    }];
+    let mut reloaded = AppConfig::headless(Vec::new());
+    super::keep_across_reload(&running, &mut reloaded);
+    assert_eq!(reloaded.telegram.authorized_chat_ids, vec![7]);
+    assert_eq!(
+        reloaded.core_groups,
+        vec![CoreGroup {
+            name: "main".into(),
+            cores: vec![1, 2],
+        }],
+        "the terminal's core groups survive a reload"
+    );
+}
+
 /// Dropping order on a settings edit or disk save would reset reports after a chat edit/restart.
 #[test]
 fn group_order_survives_settings_edits_and_restarts_but_old_group_sends_reset_it() {
