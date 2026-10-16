@@ -101,6 +101,30 @@ fn a_field_under_a_switch_that_is_off_is_not_in_effect() {
     );
 }
 
+/// The custom-EMA sell is a warning when its formula is set; blank is off, and `AutoSell=NO`
+/// greys it out.
+#[test]
+fn a_custom_ema_formula_is_watched() {
+    let deps = FieldDeps::bundled();
+    let on = values(&[
+        ("AutoSell", "YES"),
+        ("SellByCustomEMA", "EMA(15s,1s) > 0.5"),
+    ]);
+    let found = unmodelled_fields(&on, &HashMap::new(), &deps);
+    assert_eq!(keys(&found), ["SellByCustomEMA"]);
+    assert_eq!(found[0].section, ParamSection::SellOrder);
+    assert_eq!(found[0].rule, None, "a warning, not a rule");
+    for blank in ["", "   "] {
+        let v = values(&[("AutoSell", "YES"), ("SellByCustomEMA", blank)]);
+        assert!(
+            unmodelled_fields(&v, &HashMap::new(), &deps).is_empty(),
+            "{blank:?}"
+        );
+    }
+    let off = values(&[("AutoSell", "NO"), ("SellByCustomEMA", "EMA(15s,1s) > 0.5")]);
+    assert!(!keys(&unmodelled_fields(&off, &HashMap::new(), &deps)).contains(&"SellByCustomEMA"));
+}
+
 /// `UseScalpingMode` acts only under a 1 % `SellPrice`; SellShot only with a distance.
 #[test]
 fn the_extra_conditions_hold_the_field_back() {

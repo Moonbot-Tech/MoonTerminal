@@ -16,13 +16,14 @@
 //!   fact's sale;
 //! - the entry — `SellEMACheckEnter` (checks the EMA filter before the BUY), `BuyModifier`,
 //!   `DetectModifier`;
-//! - the EMA sell — `SellByCustomEMA` and its `SellEMADelay`: unused, and left out of the list
-//!   (the developer's call, 2026-09-24);
 //! - what acts only by hand or only in another kind — `SplitPiece` (a chart menu item),
 //!   `UseMarketStop`/`MarketStopLevel` (Manual), `SellPriceAbsolute`/`SellFromAssets`/
 //!   `SellQuantity` (NewListing): none of them is a kind the tuner runs;
 //! - the fields of a listed switch (`SecondStopLoss`, `BV_SV_Ratio`, `SellEMADelay`, …): the
 //!   switch stands for them.
+//!
+//! The custom-EMA sell (`SellByCustomEMA`) is watched as a warning: the model has no replay of its
+//! formula, and a deal the core sold by it is already unjudged as closed by another rule.
 //!
 //! "Switched on" is the Strategies window's own reading: the field's dependency rule holds
 //! (`assets/param_deps.toml`, [`FieldDeps`]) and its value differs from the core's default — the
@@ -105,6 +106,9 @@ const WATCHED: &[Watched] = &[
     },
     // Sells when the filters' bounds are left, seconds after the buy; 0 is off.
     watched("SellByFilters", ParamSection::SellOrder, "0"),
+    // Sells on the custom EMA formula over the core's own EMA/MAX/MIN/AVG series, under a trigger
+    // condition the model has no replay of; blank is off. Its `SellEMADelay` is a field of it.
+    watched("SellByCustomEMA", ParamSection::SellOrder, ""),
     // SellShot.
     Watched {
         also: Also::SellShotDistance,
