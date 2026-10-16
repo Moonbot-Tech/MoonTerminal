@@ -202,6 +202,7 @@ impl AnalyticsView {
     /// Queue every fetchable row of the table with the job, oldest first: a fresh batch when
     /// none runs, or added to the running one — the startup autoload's, or a previous window's
     /// — which already knows some of them and takes the rest.
+    /// Automatic asks honor publication deadlines; an explicit fetch can requeue a waiting row.
     ///
     /// Args:
     ///     origin: Who is asking. The button passes [`job::RowOrigin::User`]; a table load while
@@ -222,8 +223,10 @@ impl AnalyticsView {
         };
         let backend = self.backend.read(cx);
         let resolver = FetchResolver::of(backend);
+        let now_ms = moon_core::util::time::now_unix_ms_i64();
         let mut rows: Vec<job::QueuedRow> = data
             .fetchable()
+            .filter(|row| origin == job::RowOrigin::User || row.autoload_ready_at(now_ms))
             .filter_map(|row| resolver.queued_row(row.deal.clone(), row.address.clone()?, origin))
             .collect();
         // Oldest first, so the ones nearest the venues' retention edge go before it moves; the

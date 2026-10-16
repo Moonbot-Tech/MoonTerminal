@@ -174,12 +174,15 @@ pub(super) fn serve_ticks_with(
             .unwrap_or_default(),
     };
     let mut archive_limited = None;
+    let mut archive_pending = None;
     if let Some(archive) = stage
         .archive
         .filter(|_| request.intent == ReplayIntent::Model)
     {
         let held = held_coverage(&lock_tiles(tiles), &key, &focus, Coverage::none());
-        let missing = archive_request(&old.minus(&held));
+        let uncovered = old.minus(&held);
+        archive_pending = super::super::archive::publication_pending(archive, &uncovered, now_ms);
+        let missing = archive_request(archive, &uncovered);
         if !missing.is_empty() {
             match fetch_archive(archive, &request.market, &missing, gate) {
                 Ok(fill) => {
@@ -217,6 +220,10 @@ pub(super) fn serve_ticks_with(
                             super::super::trade_cache::note_filed(&key.0, &key.1);
                         }
                     }
+                    if fill.deferred == Some(super::super::archive::ArchiveError::NotPublished) {
+                        archive_pending
+                            .get_or_insert_with(|| super::super::archive::next_retry_at(now_ms));
+                    }
                     if let Some(super::super::archive::ArchiveError::Throttled { retry_after_s }) =
                         fill.deferred
                     {
@@ -234,6 +241,10 @@ pub(super) fn serve_ticks_with(
                             .unwrap_or(1),
                     });
                 }
+                Err(super::super::archive::ArchiveError::NotPublished) => {
+                    archive_pending
+                        .get_or_insert_with(|| super::super::archive::next_retry_at(now_ms));
+                }
                 Err(_) => {}
             }
         }
@@ -248,6 +259,16 @@ pub(super) fn serve_ticks_with(
         };
     }
     let Some(route) = stage.route else {
+        if let Some(retry_at_ms) = archive_pending {
+            let status = TickStatus::ArchivePending { retry_at_ms };
+            return match serve_held(status) {
+                Ok((mut series, retry)) => {
+                    series.tick_status = status;
+                    Ok((series, retry))
+                }
+                Err(error) => Err(error),
+            };
+        }
         return serve_held(TickStatus::NoRoute);
     };
     let deadline = Instant::now() + JOB_DEADLINE;
@@ -562,8 +583,8 @@ pub(super) fn serve_ticks_with(
 }
 
 /// Admit at most three distinct UTC archive days for one model request, including holed spans.
-fn archive_request(missing: &Coverage) -> Coverage {
-    let days = super::super::archive::utc_days(missing);
+fn archive_request(archive: venue_caps::ArchiveRoute, missing: &Coverage) -> Coverage {
+    let days = super::super::archive::utc_days(archive, missing);
     let admitted = Coverage::from_spans(days.into_iter().take(3).map(|day| {
         let start = day
             .and_hms_opt(0, 0, 0)

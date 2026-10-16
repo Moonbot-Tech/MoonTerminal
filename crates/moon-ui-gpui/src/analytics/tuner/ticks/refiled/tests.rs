@@ -86,10 +86,44 @@ fn a_refused_row_whose_market_gained_prints_is_not_carried() {
     .collect();
     let refiled: HashSet<(String, String)> =
         [("2:00000000".to_string(), "PONSUSDT".to_string())].into();
-    let kept = drop_refiled(judged, &refiled);
+    let kept = drop_refiled(judged, &refiled, 3000);
     assert!(!kept.contains_key(&1));
     assert!(kept.contains_key(&2));
     assert!(kept.contains_key(&3));
     // A refusal the venue's walk gave is the fetch job's to retry, not the store's to lift.
     assert!(kept.contains_key(&4));
+}
+
+/// Carrying a wait forever skips the reload's tape stage and never re-arms autoload after publication.
+#[test]
+fn archive_wait_expires_without_a_market_write() {
+    let judged = HashMap::from([
+        (
+            1,
+            row(
+                1,
+                "XALPHAUSDT",
+                TapeStatus::Refused(TickStatus::ArchivePending { retry_at_ms: 5000 }),
+            ),
+        ),
+        (
+            2,
+            row(2, "XALPHAPERP", TapeStatus::Refused(TickStatus::NoRoute)),
+        ),
+    ]);
+    let no_writes = HashSet::new();
+    assert_eq!(drop_refiled(judged.clone(), &no_writes, 4999).len(), 2);
+    let newly_filed = HashSet::from([("2:00000000".into(), "XALPHAUSDT".into())]);
+    let refreshed = drop_refiled(judged.clone(), &newly_filed, 4999);
+    assert!(
+        !refreshed.contains_key(&1),
+        "new tape lifts a publication wait before its deadline"
+    );
+    assert!(
+        refreshed.contains_key(&2),
+        "another market's tape cannot lift NoRoute"
+    );
+    let due = drop_refiled(judged, &no_writes, 5000);
+    assert!(!due.contains_key(&1));
+    assert!(due.contains_key(&2));
 }

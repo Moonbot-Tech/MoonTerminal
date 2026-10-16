@@ -2,6 +2,22 @@ use std::time::Duration;
 
 use super::fetch_wait_text;
 
+/// A raw debug status or untranslated key would hide why a retryable row has no tape.
+#[test]
+fn unpublished_tape_caption_names_the_expected_utc_time_in_every_language() {
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let (mark, caption) = super::tape_mark(super::TapeStatus::Refused(
+            moon_core::market::trade_replay::TickStatus::ArchivePending {
+                retry_at_ms: 216_000_000,
+            },
+        ));
+        assert_eq!(mark, "○");
+        assert!(caption.contains("1970-01-03 12:00 UTC"));
+        assert!(!caption.contains("analytics.") && !caption.contains("ArchivePending"));
+    }
+}
+
 /// The comparison caption always names its full population in every shipped language.
 #[test]
 fn usable_trade_caption_names_all_closed_deals() {

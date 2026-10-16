@@ -118,6 +118,7 @@ fn tape_class(tape: TapeStatus) -> TapeClass {
             TickStatus::AwaitingCore => "AwaitingCore",
             TickStatus::ContextUnavailable => "ContextUnavailable",
             TickStatus::NoRoute => "NoRoute",
+            TickStatus::ArchivePending { .. } => "ArchivePending",
             TickStatus::Disabled => "Disabled",
             TickStatus::OutOfRetention { .. } => "OutOfRetention",
             TickStatus::NoTrades => "NoTrades",

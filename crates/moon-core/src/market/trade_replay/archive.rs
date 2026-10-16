@@ -147,12 +147,17 @@ pub(crate) fn fill_counted(
     budget: u64,
 ) -> (Result<ArchiveFill, ArchiveError>, u64) {
     let bytes = Arc::new(AtomicU64::new(0));
+    let now_ms = crate::util::time::now_unix_ms_i64();
+    let pending = publication_pending(route, spans, now_ms);
     let result = fill_with(
         route,
         market,
         spans,
         gate,
-        (&day_dir(), utc_days(spans)),
+        (
+            &day_dir(),
+            utc_days_at(spans, now_ms, route.publish_lag_ms()),
+        ),
         (room_for, budget),
         |url| {
             let mut response = fetch_day(url)?;
@@ -163,7 +168,51 @@ pub(crate) fn fill_counted(
             Ok(response)
         },
     );
+    let result = result.and_then(|mut fill| {
+        if pending.is_some() && fill.deferred.is_none() {
+            if fill.covered.is_empty() {
+                return Err(ArchiveError::NotPublished);
+            }
+            fill.deferred = Some(ArchiveError::NotPublished);
+        }
+        Ok(fill)
+    });
     (result, bytes.load(Ordering::Relaxed))
+}
+
+/// Earliest future daily publication touched by the uncovered focus, using the route's lag.
+pub(crate) fn publication_pending(
+    route: ArchiveRoute,
+    spans: &Coverage,
+    now_ms: i64,
+) -> Option<i64> {
+    const DAY_MS: i64 = 86_400_000;
+    spans
+        .spans()
+        .iter()
+        .filter_map(|&(from, to)| {
+            let first = from.div_euclid(DAY_MS);
+            let last = to.div_euclid(DAY_MS);
+            let first_pending = now_ms
+                .saturating_sub(route.publish_lag_ms())
+                .div_euclid(DAY_MS);
+            let day = first.max(first_pending);
+            (day <= last).then(|| {
+                day.saturating_add(1)
+                    .saturating_mul(DAY_MS)
+                    .saturating_add(route.publish_lag_ms())
+            })
+        })
+        .min()
+}
+
+/// Retry a late daily file on the next UTC hour, matching recorder catch-up's `next_pass` policy.
+pub(crate) fn next_retry_at(now_ms: i64) -> i64 {
+    const HOUR_MS: i64 = 3_600_000;
+    now_ms
+        .div_euclid(HOUR_MS)
+        .saturating_add(1)
+        .saturating_mul(HOUR_MS)
 }
 
 /// Account compressed transport bytes locally without charging another caller's download.
@@ -484,9 +533,13 @@ fn transient(error: impl std::fmt::Display) -> ArchiveError {
     ArchiveError::Transient(error.to_string())
 }
 
-/// Enumerate published days using the common 36-hour archive publication lag.
-pub(crate) fn utc_days(spans: &Coverage) -> Vec<NaiveDate> {
-    utc_days_at(spans, crate::util::time::now_unix_ms_i64(), 36 * 3_600_000)
+/// Enumerate published days using the selected archive's publication lag.
+pub(crate) fn utc_days(route: ArchiveRoute, spans: &Coverage) -> Vec<NaiveDate> {
+    utc_days_at(
+        spans,
+        crate::util::time::now_unix_ms_i64(),
+        route.publish_lag_ms(),
+    )
 }
 
 /// Enumerate unique UTC dates touched by spans, excluding days whose publication lag remains.

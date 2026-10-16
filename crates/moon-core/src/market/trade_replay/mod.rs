@@ -165,9 +165,13 @@ pub enum TickStatus {
     AwaitingCore,
     /// Usable native ticks are visible, but broad candle context could not be loaded.
     ContextUnavailable,
-    /// This build knows no public trades route for the venue (Bybit, Hyperliquid). Retrying
-    /// cannot help.
+    /// This build knows no public trade source for this market. Retrying cannot help.
     NoRoute,
+    /// A supported daily archive is not out yet; a later request may fill the focus.
+    ArchivePending {
+        /// Expected publication or next retry time, in UTC Unix milliseconds.
+        retry_at_ms: i64,
+    },
     /// The reader switched the tick stage off, so only the bars were asked for. A retry with the
     /// stage on is what changes it.
     Disabled,
