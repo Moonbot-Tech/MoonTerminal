@@ -149,6 +149,8 @@ strat.menu_expand_core: "Развернуть ядро"
 strat.menu_collapse_core: "Свернуть ядро"
 strat.menu_forget: "Забыть навсегда…"
 strat.menu_forget_all: "Забыть все навсегда (%{n})…"
+strat.menu_forget_all_cores: "Забыть на всех ядрах (%{n})…"
+strat.count_strategies_all_cores: "%{n} удалённых стратегий на %{cores} ядрах этого окна"
 
 # --- Strategy tree: the one irreversible confirmation ---
 strat.forget_title: "Забыть навсегда?"

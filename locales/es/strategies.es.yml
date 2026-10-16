@@ -149,6 +149,8 @@ strat.menu_expand_core: "Expandir el núcleo"
 strat.menu_collapse_core: "Contraer el núcleo"
 strat.menu_forget: "Olvidar para siempre…"
 strat.menu_forget_all: "Olvidar todas para siempre (%{n})…"
+strat.menu_forget_all_cores: "Olvidar en todos los núcleos (%{n})…"
+strat.count_strategies_all_cores: "%{n} estrategias eliminadas en %{cores} núcleos de esta ventana"
 
 # --- Strategy tree: the one irreversible confirmation ---
 strat.forget_title: "¿Olvidar para siempre?"

@@ -137,8 +137,7 @@ pub(crate) enum TreeOp {
     /// asks the core, which can be undone, or moves rows about. This one destroys local history
     /// that nothing else keeps a copy of.
     ConfirmForget {
-        core: CoreId,
-        ids: Vec<u64>,
+        targets: Vec<(CoreId, Vec<u64>)>,
         label: String,
     },
     /// Confirm folder deletion using its core, path, and display label.

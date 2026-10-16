@@ -149,6 +149,8 @@ strat.menu_expand_core: "Розгорнути це ядро"
 strat.menu_collapse_core: "Згорнути це ядро"
 strat.menu_forget: "Забути назавжди…"
 strat.menu_forget_all: "Забути всі назавжди (%{n})…"
+strat.menu_forget_all_cores: "Забути на всіх ядрах (%{n})…"
+strat.count_strategies_all_cores: "%{n} видалених стратегій на %{cores} ядрах цього вікна"
 
 # --- Strategy tree: the one irreversible confirmation ---
 strat.forget_title: "Забути назавжди?"

@@ -149,6 +149,8 @@ strat.menu_expand_core: "Mở core này"
 strat.menu_collapse_core: "Thu core này"
 strat.menu_forget: "Quên vĩnh viễn…"
 strat.menu_forget_all: "Quên tất cả vĩnh viễn (%{n})…"
+strat.menu_forget_all_cores: "Quên trên mọi core (%{n})…"
+strat.count_strategies_all_cores: "%{n} chiến lược đã xóa trên %{cores} core trong cửa sổ này"
 
 # --- Strategy tree: the one irreversible confirmation ---
 strat.forget_title: "Quên vĩnh viễn?"

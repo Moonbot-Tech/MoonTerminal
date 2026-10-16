@@ -149,6 +149,8 @@ strat.menu_expand_core: "Expand this core"
 strat.menu_collapse_core: "Collapse this core"
 strat.menu_forget: "Forget forever…"
 strat.menu_forget_all: "Forget all forever (%{n})…"
+strat.menu_forget_all_cores: "Forget on all cores (%{n})…"
+strat.count_strategies_all_cores: "%{n} deleted strategies on %{cores} cores in this window"
 
 # --- Strategy tree: the one irreversible confirmation ---
 strat.forget_title: "Forget forever?"
