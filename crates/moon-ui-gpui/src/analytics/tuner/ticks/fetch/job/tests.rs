@@ -12,6 +12,66 @@ use super::{
 };
 use moon_core::market::trade_replay::TickStatus;
 
+/// Station misses must still reach a live venue or a recent core, without queuing dead tails.
+#[test]
+fn after_station_only_reachable_missing_spans_are_queued() {
+    use moon_core::venue::{Brand, MarketKind, Venue};
+    let now = 100 * 86_400_000;
+    let core_only = Venue {
+        brand: Brand::Bybit,
+        kind: MarketKind::Spot,
+    };
+    assert!(super::reachable_after_station(
+        core_only,
+        "XALPHAUSDT",
+        now - 3_600_000,
+        now - 3_500_000,
+        now - 3_550_000,
+        now
+    ));
+    assert!(!super::reachable_after_station(
+        core_only,
+        "XALPHAUSDT",
+        now - 3 * 86_400_000,
+        now - 3 * 86_400_000 + 1_000,
+        now - 3 * 86_400_000,
+        now
+    ));
+    let venue = Venue {
+        brand: Brand::Gate,
+        kind: MarketKind::Spot,
+    };
+    assert!(super::reachable_after_station(
+        venue,
+        "XALPHAUSDT",
+        now - 3 * 86_400_000,
+        now - 3 * 86_400_000 + 1_000,
+        now - 3 * 86_400_000,
+        now
+    ));
+}
+
+/// Keeping the symmetric margin at thirty seconds would truncate the venue/core tail request.
+#[test]
+fn the_request_keeps_its_start_and_reaches_the_recorded_tail() {
+    let window =
+        moon_core::market::trade_replay::replay_window_ms(100_000, 110_000, 30_000).unwrap();
+    let request = super::with_record_tail(window, 60_000);
+    assert_eq!(request.from_ms, window.from_ms);
+    assert!(request.focus_spans().contains_ms(170_000));
+    assert!(!request.focus_spans().contains_ms(170_001));
+    let long = moon_core::market::trade_replay::ReplayWindow {
+        from_ms: 70_000,
+        to_ms: 3_140_000,
+        close_ms: 3_110_000,
+        long_position_ms: 100_000,
+        ..window
+    };
+    let request = super::with_record_tail(long, 60_000);
+    assert_eq!(request.from_ms, 70_000);
+    assert!(request.focus_spans().contains_ms(3_170_000));
+}
+
 /// Checking only the Covered status would endlessly offer a short tail after a final refusal.
 #[test]
 fn a_short_tail_refusal_is_terminal_after_its_retries() {

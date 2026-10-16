@@ -78,6 +78,7 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.refresh_station_tape(cx);
         let scale = design::font_scale(cx);
         let scope = self.scope_label();
         // The order is settled before the data is viewed: both live in `ticks`, and the sort
@@ -100,7 +101,15 @@ impl AnalyticsView {
             (
                 d.rows.len(),
                 d.covered(),
-                d.fetchable().count(),
+                if fetch::station_available() {
+                    let now = moon_core::util::time::now_unix_ms_i64();
+                    d.rows
+                        .iter()
+                        .filter(|row| fetch::station_load_candidate(row, now))
+                        .count()
+                } else {
+                    d.fetchable().count()
+                },
                 d.without_ms,
             )
         });
@@ -194,7 +203,7 @@ impl AnalyticsView {
         // again, read here so the next repaint shows less of it. No timer: this window's render
         // root schedules none (`theme_contract`).
         let progress = fetch::job::progress();
-        let fetch_active = progress.active;
+        let fetch_active = progress.active || fetch::station_active();
         // A batch this window did not start — the startup autoload, or one left by a previous
         // window — is listened to from the first paint that finds it running, so its answers
         // land in the table and the button keeps counting. Idempotent: one listener per view

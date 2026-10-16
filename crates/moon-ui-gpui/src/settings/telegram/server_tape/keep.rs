@@ -79,6 +79,7 @@ pub(super) fn reported_keep(c: &TapeCatchup) -> Option<TapeKeep> {
         max_age_days: c.max_age_days?,
         record_emulator: c.record_emulator?,
         tuner_only: c.tuner_only,
+        min_tail_s: c.min_tail_s,
     })
 }
 
@@ -89,6 +90,7 @@ pub(super) fn job_keep(seen: Option<TapeKeep>, draft: Option<TapeKeep>) -> Optio
     if seen.tuner_only.is_none() {
         draft.tuner_only = None;
     }
+    draft.min_tail_s = seen.min_tail_s.map(|_| crate::analytics::tape_min_tail_s());
     Some(draft)
 }
 

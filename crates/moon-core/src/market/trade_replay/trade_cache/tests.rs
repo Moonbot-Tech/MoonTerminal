@@ -2,6 +2,95 @@ use super::codec::encode_legacy;
 use super::*;
 use crate::feed::types::Side;
 
+/// Measure page overhead and encoded payload through the recorder's production span writer.
+#[test]
+#[ignore = "synthetic tail storage measurement"]
+fn measure_tail_storage_per_1000_deals() {
+    let dir = BenchDir::new("tail-storage");
+    println!("TAIL STORAGE: 1000 non-overlapping deals, CORE_A/XALPHA, 30s flushes");
+    println!("DB+WAL after TRUNCATE checkpoint; MB = 1000000 bytes; payload = packs.ticks");
+    println!("prints/s tail_s db_wal_bytes payload_bytes");
+    let mut measurements = Vec::new();
+    for (rate_label, step_ms) in [("0.5", 2000_i64), ("5", 200), ("50", 20)] {
+        let mut sizes = Vec::new();
+        for tail_s in [30_i64, 60, 300] {
+            let path = dir.0.join(format!("tail-{step_ms}-{tail_s}.sqlite"));
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            init_schema(&conn).unwrap();
+            evict::make_shrinkable(&conn).unwrap();
+            for deal in 0..1000_i64 {
+                let close = 1_700_000_000_000 + deal * 600_000;
+                for flush in 0..tail_s / 30 {
+                    let from = close + flush * 30_000;
+                    let ticks = (0..30_000 / step_ms)
+                        .map(|i| {
+                            let index = (deal * 300_000 + flush * 30_000) / step_ms + i;
+                            // Deterministic changing prices and sizes avoid measuring constant columns.
+                            Tick {
+                                time_ms: (from + i * step_ms) as f64,
+                                price: 100.0 + ((index * 17) % 997) as f32 * 0.001,
+                                qty: 0.01 + ((index * 13) % 101) as f32 * 0.01,
+                                side: if index % 2 == 0 {
+                                    Side::Buy
+                                } else {
+                                    Side::Sell
+                                },
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let tx = conn.unchecked_transaction().unwrap();
+                    insert_span(
+                        &tx,
+                        "CORE_A",
+                        "XALPHA",
+                        from,
+                        from + 29_999,
+                        &ticks,
+                        TileSource::Core,
+                        from + 30_000,
+                    )
+                    .unwrap();
+                    tx.commit().unwrap();
+                }
+            }
+            let payload: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(LENGTH(ticks)), 0) FROM packs",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let count: i64 = conn
+                .query_row("SELECT SUM(prints) FROM packs", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 1000 * tail_s * 1000 / step_ms);
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+            let wal_path = std::path::PathBuf::from(format!("{}-wal", path.display()));
+            let wal = std::fs::metadata(wal_path).map_or(0, |m| m.len());
+            assert_eq!(wal, 0);
+            let bytes = std::fs::metadata(&path).unwrap().len() + wal;
+            println!("{rate_label:>8} {tail_s:>6} {bytes:>12} {payload:>13}");
+            sizes.push((bytes, payload));
+        }
+        measurements.push((rate_label, sizes));
+    }
+    println!("prints/s extra_s bytes/deal MB/1000_deals payload_B/deal payload_MB/1000");
+    for (rate, sizes) in measurements {
+        for (index, extra_s) in [(1, 30), (2, 270)] {
+            let bytes = sizes[index].0 - sizes[0].0;
+            let payload = sizes[index].1 - sizes[0].1;
+            println!(
+                "{rate:>8} {extra_s:>7} {:>10.3} {:>13.6} {:>14.3} {:>15.6}",
+                bytes as f64 / 1000.0,
+                bytes as f64 / 1_000_000.0,
+                payload as f64 / 1000.0,
+                payload as f64 / 1_000_000.0
+            );
+        }
+    }
+}
+
 /// Milliseconds in a day, for stamps the tests spread a year apart.
 const DAY_MS: i64 = 86_400_000;
 

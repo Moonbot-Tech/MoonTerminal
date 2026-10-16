@@ -323,6 +323,12 @@ pub struct TapeCatchup {
     /// Keep tape only for trades the tuner can replay; presence signals support for the key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tuner_only: Option<bool>,
+    /// Minimum post-close tape in seconds; presence signals automatic tuner-tail support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_tail_s: Option<u32>,
+    /// Incomplete tails finalised for the current recording window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail_final: Option<u32>,
     /// Tape database bytes, including its WAL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub db_bytes: Option<u64>,
@@ -421,6 +427,9 @@ pub struct TapeKeep {
     /// report the choice, which then never receives the key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tuner_only: Option<bool>,
+    /// Tuner's minimum post-close tape; omitted for stations without the capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_tail_s: Option<u32>,
 }
 
 impl TapeKeep {
