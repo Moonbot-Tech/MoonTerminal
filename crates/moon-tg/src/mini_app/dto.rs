@@ -220,6 +220,7 @@ pub(super) fn trade_row_dto(
         core_name: trade.core_name.clone(),
         exchange,
         rec_id: trade.rec_id,
+        new_rec_id: trade.new_rec_id,
         coin: trade.coin.clone(),
         side: if trade.is_short { "sell" } else { "buy" }.to_string(),
         profit,

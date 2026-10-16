@@ -179,7 +179,7 @@ fn chart_jobs_evict_oldest_cancel_and_expire() {
         let cancel = Arc::new(AtomicBool::new(false));
         flags.push(cancel.clone());
         jobs.insert(
-            (1, id),
+            (1, id, 0),
             ChartJob {
                 receiver,
                 at: Instant::now() - Duration::from_secs(10 - id as u64),
@@ -191,10 +191,10 @@ fn chart_jobs_evict_oldest_cancel_and_expire() {
     }
     assert!(flags[0].load(AtomicOrdering::Acquire));
     assert!(!flags[1].load(AtomicOrdering::Acquire));
-    jobs.0.get_mut(&(1, 1)).unwrap().at = Instant::now() - Duration::from_secs(301);
+    jobs.0.get_mut(&(1, 1, 0)).unwrap().at = Instant::now() - Duration::from_secs(301);
     let (_, receiver) = mpsc::channel();
     jobs.insert(
-        (1, 9),
+        (1, 9, 0),
         ChartJob {
             receiver,
             at: Instant::now(),
@@ -202,7 +202,7 @@ fn chart_jobs_evict_oldest_cancel_and_expire() {
             latest: None,
         },
     );
-    assert!(!jobs.0.contains_key(&(1, 1)));
+    assert!(!jobs.0.contains_key(&(1, 1, 0)));
     assert!(flags[1].load(AtomicOrdering::Acquire));
     drop(jobs);
     assert!(flags.iter().all(|flag| flag.load(AtomicOrdering::Acquire)));
@@ -311,7 +311,11 @@ fn chart_report_lookup_uses_display_id_and_carries_recorder_identity() {
         )
         .unwrap()
     };
-    let trade = read(7, Ok(11)).unwrap();
+    let display = |rec_id| crate::report::TradeKey {
+        rec_id,
+        new_rec_id: 0,
+    };
+    let trade = read(7, Ok(display(11))).unwrap();
     assert_eq!(
         (
             trade.core_uid,
@@ -362,13 +366,50 @@ fn chart_report_lookup_uses_display_id_and_carries_recorder_identity() {
             .sum::<f64>(),
         60.0
     );
-    assert!(read(9, Ok(11)).is_none());
+    assert!(read(9, Ok(display(11))).is_none());
     assert!(read(7, Err(("XALPHA".into(), 100000))).is_none());
     assert!(read(7, Err(("XALPHA".into(), 300000))).is_none());
     let closed = read(7, Err(("XALPHA".into(), 200000))).unwrap();
     assert_eq!(closed.rec_id, 12);
     assert!(read(7, Err(("XALPHA".into(), 500000))).is_none());
     assert!(read(7, Err(("XALPHA".into(), 0))).is_none());
+}
+
+/// A station replica has no displayed `id` column, so its list rows carry `rec_id` 0. If the
+/// chart lookup went back to the displayed id only, such a row could never be charted; the
+/// recorder `newrecid` the row carries must resolve it, on its own core only.
+#[test]
+fn station_row_without_display_id_resolves_by_recorder_id() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, newrecid INTEGER, core_name TEXT, coin TEXT, buydate INTEGER, closedate INTEGER, buyprice REAL, sellprice REAL, quantity REAL, reportuid INTEGER, sellreason TEXT);
+        INSERT INTO orders_rep VALUES (7, 901, 'CORE_A', 'XALPHA', 100, 200, 10, 12, 2, 101, 'TakeProfit');
+        INSERT INTO orders_rep VALUES (8, 902, 'CORE_B', 'XALPHA', 100, 300, 10, 12, 2, 102, 'Stop');").unwrap();
+    let read = |core, rec_id, new_rec_id| {
+        crate::report::read_mini_chart_trade_on(
+            &conn,
+            chrono_tz::UTC,
+            moon_core::db::CoreNames::default(),
+            core,
+            Ok(crate::report::TradeKey { rec_id, new_rec_id }),
+        )
+        .unwrap()
+    };
+    let trade = read(7, 0, 901).expect("the recorder id names the row");
+    assert_eq!(
+        (trade.core_uid, trade.rec_id, trade.new_rec_id),
+        (7, 0, 901)
+    );
+    let row = super::dto::trade_row_dto(&trade, chrono_tz::UTC, 300, "UNIT_01".into(), None, true);
+    assert_eq!((row.rec_id, row.new_rec_id), (0, 901));
+    assert!(
+        crate::report::TradeKey {
+            rec_id: row.rec_id,
+            new_rec_id: row.new_rec_id
+        }
+        .matches(&trade)
+    );
+    assert!(read(7, 0, 902).is_none(), "another core's recorder id");
+    assert!(read(7, 0, 0).is_none(), "an empty key reads nothing");
 }
 
 /// Finishing with an old grant discloses revoked data, and pending over-admission overloads hosts.
@@ -2165,4 +2206,53 @@ fn chart_transport_failure_stays_an_error() {
     };
     super::charts::settle_trade(&mut dto, state, retry_at, None, Some(0), 2000);
     assert_eq!((dto.state, dto.retry_in_ms), (State::Error, None));
+}
+
+/// A live sheet that opens on a market the recorder already watched must start from every span
+/// it holds, or the chart stays empty for the first seconds; a later delta must stay on the newest
+/// span, or a hole behind the cursor would be filled in after the fact.
+#[test]
+fn recorder_start_seeds_the_first_read_and_follows_the_newest_span() {
+    let covered = [(1_000, 2_000), (5_000, 9_000)];
+    assert_eq!(super::charts::recorder_start(None, &covered, 500), 500);
+    assert_eq!(
+        super::charts::recorder_start(Some(6_000), &covered, 500),
+        5_000
+    );
+    assert_eq!(
+        super::charts::recorder_start(Some(6_000), &covered, 7_000),
+        7_000
+    );
+    assert_eq!(super::charts::recorder_start(Some(6_000), &[], 500), 500);
+}
+
+/// Two station trades of one core both carry displayed id 0; keyed on that alone, the second
+/// reused the first one's replay and showed another trade's ticks.
+#[test]
+fn station_trades_without_display_id_get_their_own_replay_job() {
+    let trade = |new_rec_id| crate::report::MiniTrade {
+        new_rec_id,
+        report_uid: None,
+        sell_reason: None,
+        core_uid: 7,
+        rec_id: 0,
+        coin: "XALPHA".into(),
+        core_name: "CORE_A".into(),
+        is_short: false,
+        profit_usdt: None,
+        pct: None,
+        buy_utc: Some(100),
+        close_utc: 150,
+        buy_price: 1.0,
+        sell_price: 1.0,
+        quantity: 1.0,
+        bought_quantity: None,
+        entry_volume_rate: None,
+        strategy_id: None,
+        channel_name: String::new(),
+    };
+    assert_ne!(
+        super::charts::job_key(&trade(901)),
+        super::charts::job_key(&trade(902))
+    );
 }

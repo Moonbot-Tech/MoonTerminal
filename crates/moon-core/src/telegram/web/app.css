@@ -1277,6 +1277,12 @@ input:focus-visible {
     line-height: 1.3;
 }
 
+/* An order group's core name is never clamped: every line of it shows. */
+.group-head .name.core-name.core-full {
+    display: block;
+    overflow: visible;
+}
+
 .group-head.core-head .chev,
 .group-head.core-head .group-meta,
 .group-head.core-head .count {
@@ -1597,7 +1603,8 @@ button.pill:disabled {
 /* Closed trades: tap a row for the detail sheet. */
 .trade-row {
     display: flex;
-    align-items: center;
+    /* A wrapped core name grows downward; the profit stays level with the coin line. */
+    align-items: flex-start;
     gap: 8px;
     cursor: pointer;
 }
@@ -1609,31 +1616,30 @@ button.pill:disabled {
     align-items: flex-end;
 }
 
-.trade-meta {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+/* Coin, chart glyph and side badge sit together at the left of a trade row's first line. */
+.trade-row .order-top {
+    gap: 6px;
+    justify-content: flex-start;
 }
 
-/* Row line 2: only the core name truncates; the close time always shows whole. */
+/* Name lines under a row or the sheet title: the core name in full, wrapped, never cut; the
+   close time (or the exchange) ends the last line in one piece. */
+.trade-meta,
 .trade-row-meta {
-    display: flex;
     min-width: 0;
-    white-space: nowrap;
+    white-space: normal;
+    line-height: 1.35;
 }
 
-.trade-core {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+/* One part of a name between its separators wraps as a unit while it fits a line. */
+.name-part {
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
 }
 
-/* The last characters of a long core name, kept whole beside the ellipsized head. */
-
-.trade-sep,
 .trade-when {
-    flex: none;
-    white-space: pre;
+    white-space: nowrap;
 }
 
 .sheet-backdrop {
@@ -2029,6 +2035,23 @@ button.pill:disabled {
     white-space: nowrap;
     pointer-events: none;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.chart-waiting {
+    position: absolute;
+    z-index: 1;
+    left: 16px;
+    right: 74px;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 10px 12px;
+    border: 1px dashed var(--line);
+    border-radius: var(--r-card);
+    background: var(--card-high);
+    color: var(--sub);
+    font-size: var(--fs-small);
+    text-align: center;
+    pointer-events: none;
 }
 
 .chart-state {

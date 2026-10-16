@@ -25,6 +25,7 @@ export const CHART_TRADE = {
     core_name: "CORE_A",
     exchange: "Binance Futures",
     rec_id: 990001,
+    new_rec_id: 770001,
     coin: "XALPHA",
     side: "buy",
     profit: 2.4,

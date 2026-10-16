@@ -329,7 +329,15 @@ fn chart_routes_reject_before_dispatch() {
         ),
         (
             "/api/trade/ticks",
+            r#"{"core":7,"rec_id":0,"new_rec_id":0,"range":"deal"}"#,
+        ),
+        (
+            "/api/trade/ticks",
             r#"{"core":7,"rec_id":-1,"range":"deal"}"#,
+        ),
+        (
+            "/api/trade/ticks",
+            r#"{"core":7,"rec_id":0,"new_rec_id":-5,"range":"deal"}"#,
         ),
         ("/api/trade/ticks", r#"{"core":7,"rec_id":1,"range":"60"}"#),
         ("/api/order/ticks", r#"{"core":7,"uid":"1","span_s":300}"#),
@@ -389,6 +397,56 @@ fn chart_wire_contract_and_valid_routes() {
     );
 }
 
+/// A station replica row has no displayed id: its list row carries `rec_id` 0 and the recorder's
+/// `new_rec_id`. If the route went back to requiring a positive `rec_id`, every closed-trade chart
+/// on the station would answer 400 before the owner thread ever saw it, as it did in the field.
+#[test]
+fn station_trade_row_without_display_id_reaches_the_owner() {
+    let (app, events) = handler_quiet();
+    let consumer = thread::spawn(move || {
+        let event = events.recv_timeout(Duration::from_secs(2)).unwrap();
+        match event {
+            MiniAppApiRequest::TradeTicks {
+                core,
+                rec_id,
+                new_rec_id,
+                reply,
+                ..
+            } => {
+                let _ = reply.send(Ok(trade_ticks_ok()));
+                (core, rec_id, new_rec_id)
+            }
+            _ => panic!("expected TradeTicks"),
+        }
+    });
+    let fresh = signed_at(stable_unix_now());
+    // Exactly the body app.js builds from a station `TradeDto` row.
+    let body = r#"{"core":7,"rec_id":0,"new_rec_id":901,"range":"deal"}"#;
+    let (status, _) = post(&app, "/api/trade/ticks", Some(&fresh), body);
+    assert_eq!(status, 200);
+    assert_eq!(consumer.join().unwrap(), (7, 0, 901));
+}
+
+/// A rejected API call must leave one log line with route, status and reason token, and never a
+/// raw path: dropping the line hides a whole class of refused requests again, and logging the
+/// path as sent would let a client write arbitrary text into the station log.
+#[test]
+fn rejected_api_request_has_one_data_free_log_line() {
+    assert_eq!(super::api_route_label("/app.js"), None);
+    assert_eq!(
+        super::api_route_label("/api/trade/ticks"),
+        Some("/api/trade/ticks")
+    );
+    assert_eq!(super::api_route_label("/api/CORE_A/secret"), Some("other"));
+    let rejected = super::status_response(StatusCode::BAD_REQUEST, "json");
+    assert_eq!(
+        super::rejection_line("/api/trade/ticks", &rejected).as_deref(),
+        Some("[mini-api] rejected route=/api/trade/ticks status=400 reason=json")
+    );
+    let ok = super::json_response(StatusCode::OK, serde_json::json!({"ok": true}));
+    assert_eq!(super::rejection_line("/api/trade/ticks", &ok), None);
+}
+
 /// Parsing through a JSON number would corrupt a full-width order id before dispatch.
 #[test]
 fn chart_order_id_reaches_event_losslessly() {
@@ -438,6 +496,7 @@ fn chart_v2_closing_and_closed_trade_serialize() {
         core_name: "CORE_A".into(),
         exchange: "UNIT_01".into(),
         rec_id: 42,
+        new_rec_id: 901,
         coin: "XALPHA".into(),
         side: "buy".into(),
         profit: None,

@@ -359,7 +359,10 @@ pub struct TradeDto {
     pub core_name: String,
     /// Exchange section caption of the trade's core.
     pub exchange: String,
+    /// Displayed report id; `0` on a replica row that has none.
     pub rec_id: i64,
+    /// Recorder `newrecid`: the chart identity of a row without a displayed id.
+    pub new_rec_id: i64,
     pub coin: String,
     pub side: String,
     pub profit: Option<f64>,

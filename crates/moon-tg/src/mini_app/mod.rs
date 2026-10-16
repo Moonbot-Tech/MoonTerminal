@@ -33,10 +33,18 @@ pub(crate) fn dispatch(host: &mut dyn TgHost, request: MiniAppApiRequest) {
             chat_id,
             core,
             rec_id,
+            new_rec_id,
             range,
             reply,
             ..
-        } => charts::mini_trade_ticks(host, chat_id, core, rec_id, range, reply),
+        } => charts::mini_trade_ticks(
+            host,
+            chat_id,
+            core,
+            crate::report::TradeKey { rec_id, new_rec_id },
+            range,
+            reply,
+        ),
         MiniAppApiRequest::OrderTicks {
             chat_id,
             core,

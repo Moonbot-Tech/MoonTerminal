@@ -48,13 +48,21 @@ impl Drop for ChartJob {
     }
 }
 
+/// A replay job's identity: core, displayed id and recorder id. Station rows can all carry
+/// displayed id 0, so the recorder id keeps two of their trades apart.
+pub(super) type JobKey = (u64, i64, i64);
+
+pub(super) fn job_key(trade: &MiniTrade) -> JobKey {
+    (trade.core_uid, trade.rec_id, trade.new_rec_id)
+}
+
 /// At most four replay channels, with a five-minute lifetime independent of polling.
 #[derive(Default)]
-pub(crate) struct ChartJobs(pub(super) BTreeMap<(u64, i64), ChartJob>);
+pub(crate) struct ChartJobs(pub(super) BTreeMap<JobKey, ChartJob>);
 
 impl ChartJobs {
     /// Drop expired receivers before inserting; cancellation also covers oldest-entry eviction.
-    pub(super) fn insert(&mut self, key: (u64, i64), job: ChartJob) {
+    pub(super) fn insert(&mut self, key: JobKey, job: ChartJob) {
         self.prune();
         if !self.0.contains_key(&key)
             && self.0.len() >= 4
@@ -177,7 +185,7 @@ pub(super) fn mini_trade_ticks(
     host: &mut dyn TgHost,
     chat: i64,
     core: u64,
-    rec_id: i64,
+    key: crate::report::TradeKey,
     _range: ChartRangeDto,
     reply: SyncSender<Result<TradeTicksDto, MiniAppApiError>>,
 ) {
@@ -201,7 +209,7 @@ pub(super) fn mini_trade_ticks(
             cache
                 .trades
                 .iter()
-                .find(|trade| trade.core_uid == core && trade.rec_id == rec_id)
+                .find(|trade| trade.core_uid == core && key.matches(trade))
         })
         .cloned();
     let names = CoreNames::from_servers(&host.config().servers);
@@ -229,7 +237,7 @@ pub(super) fn mini_trade_ticks(
             cached
                 .map(Ok)
                 .unwrap_or_else(|| {
-                    crate::report::read_mini_chart_trade(zone, names, core, Ok(rec_id))
+                    crate::report::read_mini_chart_trade(zone, names, core, Ok(key))
                         .map_err(|_| MiniAppApiError::ReadFailed)
                         .and_then(|trade| trade.ok_or(MiniAppApiError::NotFound))
                 })
@@ -402,7 +410,7 @@ fn read_trade(
         );
         return (dto, "terminal");
     }
-    let key = (trade.core_uid, trade.rec_id);
+    let key = job_key(&trade);
     let mut jobs = jobs.lock().unwrap_or_else(PoisonError::into_inner);
     jobs.prune();
     let retry = jobs
@@ -943,10 +951,7 @@ fn read_live(
                 Duration::from_millis(1500),
             )
             .ok()?;
-            let start = span
-                .covered
-                .last()
-                .map_or(from, |&(start, _)| start.max(from));
+            let start = recorder_start(since, &span.covered, from);
             let mut delta = recorder_delta(span.ticks, start, dto.now_ms);
             delta.last_tick_ms = delta.last_tick_ms.or(since);
             Some(delta)
@@ -995,6 +1000,26 @@ fn fill_mark(source: &MarketDataSource, core: u64, row: &OrderRow, dto: &mut Liv
 /// Use the order table's signed percent precision for live figures.
 fn signed_pct(value: f64) -> Option<String> {
     fmt::signed_pct(value, moon_core::feed::order_math::MONEY_DECIMALS).map(|(text, _)| text)
+}
+
+/// First millisecond a recorder read hands the sheet.
+///
+/// The sheet's first read (`since` absent) seeds the chart with every span the recorder already
+/// holds in the window, so it is not empty while a fresh watch catches up. Later deltas stay on
+/// the newest covered span, so a hole is never filled in behind the cursor.
+///
+/// Args:
+///     since: The sheet's inclusive cursor; `None` on its first read.
+///     covered: Recorder spans, oldest first.
+///     from: Oldest millisecond of the live window.
+///
+/// Returns:
+///     The start of the delta.
+pub(super) fn recorder_start(since: Option<i64>, covered: &[(i64, i64)], from: i64) -> i64 {
+    if since.is_none() {
+        return from;
+    }
+    covered.last().map_or(from, |&(start, _)| start.max(from))
 }
 
 /// Retain freshness before excluding an acknowledged delta and dropping its older overflow.

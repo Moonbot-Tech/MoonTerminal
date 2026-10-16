@@ -699,7 +699,11 @@
             var title = group.key;
             if (typeof labelFn === "function" && group.items.length) title = labelFn(group.items[0]);
             head.appendChild(el("span", "chev", collapsed ? "\u25B8" : "\u25BE"));
-            head.appendChild(el("span", nameClass || "name grow", title || ""));
+            if ((" " + (nameClass || "") + " ").indexOf(" core-full ") !== -1) {
+                head.appendChild(fullName(el("span", nameClass, ""), title));
+            } else {
+                head.appendChild(el("span", nameClass || "name grow", title || ""));
+            }
             var summary = typeof summaryFn === "function" ? summaryFn(ordered) : null;
             if (summary) head.appendChild(summary);
             else {
@@ -1510,7 +1514,7 @@
                 paintOrders,
                 orderCoreKey,
                 orderCoreLabel,
-                "name grow core-name",
+                "name grow core-name core-full",
                 orderGroupSummary
             );
         }
@@ -1658,32 +1662,20 @@
         return node;
     }
 
-    // Most characters of a core name a closed-trade row shows before it drops leading words.
-    var TRADE_CORE_CHARS = 24;
-
-    // Names share long prefixes, so a long one keeps its trailing whole words behind "…".
-    // Words split on spaces and "/"; the last word alone is kept even when it exceeds the budget.
-    function coreNameTail(name, budget) {
-        if (name.length <= budget) return name;
-        var parts = name.split(/(?=[ \/])/);
-        var tail = parts.pop();
-        while (parts.length && parts[parts.length - 1].length + tail.length + 1 <= budget) {
-            tail = parts.pop() + tail;
+    // A core or server name in full, from its start: never cut, wrapped onto more lines when it
+    // does not fit. Each part between the name's own separators (" / ", " ~ ", " | ") is one unit
+    // while it fits a line, so a line breaks at a separator before it breaks inside a part; the
+    // separator stays at the end of the line it closes.
+    function fullName(host, name) {
+        var parts = String(name || "").split(/(\s+[\/~|]\s+)/);
+        var i;
+        for (i = 0; i < parts.length; i += 2) {
+            var text = parts[i] + (i + 1 < parts.length ? parts[i + 1].replace(/\s+$/, "") : "");
+            if (!text) continue;
+            if (host.childNodes.length) host.appendChild(document.createTextNode(" "));
+            host.appendChild(el("span", "name-part", text));
         }
-        return "…" + tail;
-    }
-
-    // Once the row is laid out, drop further leading words while the name still overflows its
-    // span, so the kept tail is never cut at its right end.
-    function fitCoreName(node) {
-        var text = node.textContent;
-        while (node.scrollWidth > node.clientWidth) {
-            var body = text.charAt(0) === "…" ? text.slice(1) : text;
-            var cut = body.slice(1).search(/[ \/]/);
-            if (cut < 0) return;
-            text = "…" + body.slice(cut + 1);
-            node.textContent = text;
-        }
+        return host;
     }
 
     function tradeRow(trade) {
@@ -1698,17 +1690,14 @@
         top.appendChild(chartGlyph());
         top.appendChild(el("span", "badge order-side " + sideClass(trade.side), sideLabel(trade.side)));
         left.appendChild(top);
+        // The core name in full on as many lines as it needs; the close time ends the last one.
         var meta = el("div", "sub trade-row-meta");
         var when = trade.closed_short_text || trade.closed_text;
-        if (trade.core_name) {
-            var name = String(trade.core_name);
-            var core = el("span", "trade-core", coreNameTail(name, TRADE_CORE_CHARS));
-            core.title = name;
-            meta.appendChild(core);
-            window.requestAnimationFrame(function () { fitCoreName(core); });
+        if (trade.core_name) fullName(meta, trade.core_name);
+        if (when) {
+            if (trade.core_name) meta.appendChild(document.createTextNode(" "));
+            meta.appendChild(el("span", "trade-when", (trade.core_name ? "· " : "") + when));
         }
-        if (trade.core_name && when) meta.appendChild(el("span", "trade-sep", " · "));
-        if (when) meta.appendChild(el("span", "trade-when", when));
         left.appendChild(meta);
         row.appendChild(left);
         var right = el("div", "trade-result");
@@ -1765,6 +1754,8 @@
     var LIVE_KEEP_MS = 900000;
     var LIVE_MAX_SPAN_MS = 960000;
     var CHART_MIN_SPAN_MS = 3000;
+    // The live chart's default price window, as the terminal chart opens: 10 % of the price.
+    var LIVE_SCALE_SHARE = 0.10;
     var CHART_AXIS_W = 58;
     var CHART_VOL_H = 44;
     var TRADE_RANGES = [["deal", "mini_chart_range_deal"], ["30", "mini_chart_range_30"], ["300", "mini_chart_range_300"]];
@@ -1973,9 +1964,37 @@
         this.draw();
     };
 
+    // Default vertical window of a live chart: `share` of the reference price, centred on the
+    // span that holds the price and `prices` (the order's lines and the prints in view). When
+    // that span is wider than the window, the window widens just enough to hold it, with a margin.
+    function liveScale(price, prices, share) {
+        var lo = price;
+        var hi = price;
+        var i;
+        for (i = 0; i < prices.length; i++) {
+            if (!finiteNumber(prices[i])) continue;
+            lo = Math.min(lo, prices[i]);
+            hi = Math.max(hi, prices[i]);
+        }
+        var width = Math.max(Math.abs(price) * share, (hi - lo) * 1.12) || 1;
+        var mid = (lo + hi) / 2;
+        return { lo: mid - width / 2, hi: mid + width / 2 };
+    }
+
     TickChart.prototype.fitY = function () {
         var ts = this.opts.ticks();
         var v = this.view;
+        var ref = this.opts.band ? this.opts.band() : null;
+        if (finiteNumber(ref) && ref > 0) {
+            var keep = [];
+            var k;
+            for (k = 0; k < this.levels.length; k++) if (this.levels[k].fit) keep.push(this.levels[k].price);
+            for (k = 0; k < ts.length; k++) if (ts[k][0] >= v.from && ts[k][0] <= v.to) keep.push(ts[k][1]);
+            var band = liveScale(ref, keep, LIVE_SCALE_SHARE);
+            v.lo = band.lo;
+            v.hi = band.hi;
+            return;
+        }
         var lo = Infinity;
         var hi = -Infinity;
         var i;
@@ -2034,6 +2053,9 @@
         this.host.setAttribute("data-ticks", String(ts.length));
         this.host.setAttribute("data-span", String(Math.round(span)));
         this.host.setAttribute("data-follow", this.follow ? "1" : "0");
+        if (this.opts.band) this.host.setAttribute("data-ref", String(this.opts.band()));
+        this.host.setAttribute("data-lo", String(v.lo));
+        this.host.setAttribute("data-hi", String(v.hi));
         var levels = this.levels;
         var nowPrice = null;
         if (this.opts.live) {
@@ -2211,24 +2233,27 @@
         // chip at the right edge for a level outside the price range.
         var off = 0;
         var tagRows = [];
-        // Move only the axis tag, away from a colliding tag toward its own price side; the line
-        // and execution marker retain their true price. At the plot edge the push flips.
+        // Move only the axis tag to the nearest free row, first toward its own price side away
+        // from the tag it collides with; the line and execution marker retain their true price.
+        // Several levels close together (the default 10 % window) still get a row each.
         function tagY(y0) {
             var top = 8;
             var bottom = plotH - 8;
-            var y = Math.max(top, Math.min(bottom, y0));
-            var guard = 2 * tagRows.length + 2;
-            var j;
-            for (j = 0; j < tagRows.length && guard > 0; j++) {
-                var row = tagRows[j];
-                if (Math.abs(y - row.y) >= 16) continue;
-                var dir = y0 < row.at ? -1 : 1;
-                y = row.y + dir * 16;
-                if (y < top) y = row.y + 16;
-                else if (y > bottom) y = row.y - 16;
-                y = Math.max(top, Math.min(bottom, y));
-                guard -= 1;
-                j = -1;
+            var base = Math.max(top, Math.min(bottom, y0));
+            function hit(y) {
+                var j;
+                for (j = 0; j < tagRows.length; j++) if (Math.abs(y - tagRows[j].y) < 16) return tagRows[j];
+                return null;
+            }
+            var first = hit(base);
+            var pref = first && y0 < first.at ? -1 : 1;
+            var y = base;
+            var d;
+            for (d = 0; first && d <= plotH; d += 2) {
+                var a = base + pref * d;
+                var b = base - pref * d;
+                if (a >= top && a <= bottom && !hit(a)) { y = a; break; }
+                if (b >= top && b <= bottom && !hit(b)) { y = b; break; }
             }
             tagRows.push({ y: y, at: y0 });
             drawn.tags.push({ x: plotW, y: y - 8, w: axisW, h: 16 });
@@ -2474,7 +2499,14 @@
         top.appendChild(title);
         top.appendChild(el("span", "badge order-side " + sideClass(side), sideLabel(side)));
         titleBox.appendChild(top);
-        titleBox.appendChild(el("div", "sub trade-meta", where.join(" · ")));
+        // The core name in full, then the exchange; wraps, never cut.
+        var meta = el("div", "sub trade-meta");
+        if (where.length) fullName(meta, where[0]);
+        if (where.length > 1) {
+            meta.appendChild(document.createTextNode(" "));
+            meta.appendChild(el("span", "trade-when", "· " + where.slice(1).join(" · ")));
+        }
+        titleBox.appendChild(meta);
         head.appendChild(titleBox);
         var closeBtn = button("cmd text-btn sheet-close", tr("mini_close"), closeSheet);
         head.appendChild(closeBtn);
@@ -2653,7 +2685,7 @@
             provenance();
         }
         function fetchTicks() {
-            api("/api/trade/ticks", { core: trade.core, rec_id: trade.rec_id, range: state.range }).then(function (res) {
+            api("/api/trade/ticks", { core: trade.core, rec_id: trade.rec_id || 0, new_rec_id: trade.new_rec_id || 0, range: state.range }).then(function (res) {
                 if (token !== sheetToken) return;
                 // A command or tab reload dropped the queued read; the sheet still wants it.
                 // Nothing reached the server, so it is never counted as a failure.
@@ -2911,10 +2943,39 @@
                 volume: null,
                 live: true,
                 now: now,
+                band: function () { return refPrice(live.data); },
                 onView: syncFollow
             });
             sheetChart.follow = true;
             sheetChart.anchor(live.span);
+        }
+        // The price the live window is centred on: the mark, else the newest print, else the
+        // order's own entry; `null` when none is known yet.
+        function refPrice(d) {
+            if (d && finiteNumber(d.mark_price) && d.mark_price > 0) return d.mark_price;
+            if (live.ring.length) return live.ring[live.ring.length - 1][1];
+            if (d && finiteNumber(d.entry_price) && d.entry_price > 0) return d.entry_price;
+            if (d && Array.isArray(d.levels)) {
+                var i;
+                for (i = 0; i < d.levels.length; i++) {
+                    if (d.levels[i] && finiteNumber(d.levels[i].price) && d.levels[i].price > 0) return d.levels[i].price;
+                }
+            }
+            return null;
+        }
+        // Over a chart with no print yet: the axis and the order's lines stay visible under it.
+        function waitNote(on) {
+            var wrap = area.querySelector(".chart-wrap");
+            var note = area.querySelector(".chart-waiting");
+            if (!on) {
+                if (note) note.parentNode.removeChild(note);
+                return;
+            }
+            if (note || !wrap) return;
+            note = el("div", "chart-waiting");
+            note.appendChild(el("div", "chart-state-title", tr("mini_chart_live_no_tape")));
+            note.appendChild(el("div", "", tr("mini_chart_live_no_tape_note")));
+            wrap.appendChild(note);
         }
         function entryMark(d) {
             var long = order.side !== "sell";
@@ -2960,22 +3021,36 @@
             if (!live.frozen) merge(d.ticks, d.truncated);
             if (d.pnl_text) applyMoney(pnl, "hero-value num", d.pnl_text, d.pnl_sign);
             openDetails(d);
-            // No print yet, whatever the state: a waiting box that the first print replaces,
-            // never an empty chart.
+            // No print yet, whatever the state: the price axis at the default window and the
+            // order's lines, with a waiting note over them that the first print removes. With no
+            // price known at all, a waiting box instead of an empty frame.
             if (!live.ring.length) {
                 setTag(tr("mini_chart_offline"), true);
-                legend.hidden = true;
                 source.textContent = "";
-                if (sheetChart) {
-                    sheetChart.destroy();
-                    sheetChart = null;
+                if (refPrice(d) == null) {
+                    legend.hidden = true;
+                    if (sheetChart) {
+                        sheetChart.destroy();
+                        sheetChart = null;
+                    }
+                    chartState(area, tr("mini_chart_live_no_tape"), tr("mini_chart_live_no_tape_note"), null);
+                } else if (!live.frozen) {
+                    ensureChart(d);
+                    sheetChart.levels = chartLevels(d.levels, true);
+                    sheetChart.marks = entryMark(d);
+                    sheetChart.mark = refPrice(d);
+                    if (sheetChart.follow) sheetChart.anchor(sheetChart.view.to - sheetChart.view.from);
+                    sheetChart.fitY();
+                    sheetChart.draw();
+                    openLegend(sheetChart.levels);
+                    waitNote(true);
                 }
-                chartState(area, tr("mini_chart_live_no_tape"), tr("mini_chart_live_no_tape_note"), null);
                 if (d.state === "closing") closing();
                 else next(CHART_SLOW_POLL_MS);
                 return;
             }
             ensureChart(d);
+            waitNote(false);
             if (!live.frozen) {
                 sheetChart.levels = chartLevels(d.levels, true);
                 sheetChart.marks = entryMark(d);
@@ -3044,6 +3119,11 @@
             if (closeMs != null && live.ring.length) {
                 // Prints after the close are not this position's; the closing second stays.
                 while (live.ring.length && live.ring[live.ring.length - 1][0] > closeMs + 1000) live.ring.pop();
+            }
+            if (sheetChart && !live.ring.length) {
+                // The frame drawn before the first print: a closed position without prints has no chart.
+                sheetChart.destroy();
+                sheetChart = null;
             }
             if (!sheetChart && live.ring.length) ensureChart(d);
             if (!sheetChart) chartState(area, tr("mini_chart_no_tape"), null, null);

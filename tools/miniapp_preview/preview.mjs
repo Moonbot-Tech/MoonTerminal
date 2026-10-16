@@ -438,6 +438,70 @@ const axisOverlaps = (p) => p.evaluate(() => {
     }
     return errors;
 }).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+// The live chart's default vertical window: 10 % of the reference price, widened only as far as
+// an order line or a print in view needs, and every order line inside it.
+const LIVE_SHARE = 0.10;
+const liveScaleProblems = (p, ref, lines) => p.evaluate(({ ref, lines, share }) => {
+    const wrap = document.querySelector("#sheet .chart-wrap");
+    const lo = +wrap.getAttribute("data-lo");
+    const hi = +wrap.getAttribute("data-hi");
+    const errors = [];
+    if (!(hi > lo)) return [`no price window: ${lo}..${hi}`];
+    const width = hi - lo;
+    const need = Math.max(share * ref, (Math.max(ref, ...lines) - Math.min(ref, ...lines)) * 1.12);
+    if (width < share * ref * 0.999) errors.push(`window ${width} is narrower than ${share * 100}% of ${ref}`);
+    if (width > need * 1.2) errors.push(`window ${width} is wider than the ${need} it needs`);
+    for (const price of [ref, ...lines]) if (price < lo || price > hi) errors.push(`${price} is outside ${lo}..${hi}`);
+    return errors;
+}, { ref, lines, share: LIVE_SHARE }).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+// A far take profit, 30 % above the price: the window must widen to hold it.
+const FAR_TAKE = 3.15;
+const farTakeFeed = (opts) => {
+    const feed = liveFeed(opts);
+    return (raw) => {
+        const reply = feed(raw);
+        reply.body.levels = reply.body.levels.map((level) => level.kind === "take" ? { ...level, price: FAR_TAKE } : level);
+        return reply;
+    };
+};
+// A very long synthetic core name: shown whole from its start, on as many lines as it needs.
+const LONG_CORE = "FUND_ALPHA ~ EX-XX / SUBACCOUNT UNIT_01 LONG NAME";
+const LONG_TRADES = { "/api/trades": { trades: [{ ...CHART_TRADE, core_name: LONG_CORE }, CHART_TRADE], limit: 50 } };
+const longOrders = (feed) => ({
+    "/api/orders": { orders: [{ ...CHART_ORDER, core_name: LONG_CORE }], can_control: true },
+    "/api/order/ticks": feed,
+});
+// Every node naming the long core shows all of it inside the viewport, never an ellipsis.
+const fullNameProblems = (p, selector) => p.evaluate(({ selector, name }) => {
+    const errors = [];
+    const nodes = [...document.querySelectorAll(selector)].filter((node) => node.textContent.includes("FUND_ALPHA"));
+    if (!nodes.length) return [`no ${selector} carries the long core name`];
+    for (const node of nodes) {
+        const text = node.textContent.replace(/\s+/g, " ");
+        if (!text.includes(name)) errors.push(`${selector} cut the name: ${JSON.stringify(text)}`);
+        if (text.includes("…")) errors.push(`${selector} ellipsizes: ${JSON.stringify(text)}`);
+        const box = node.getBoundingClientRect();
+        if (box.right > window.innerWidth + 0.5 || node.scrollWidth > node.clientWidth + 1) errors.push(`${selector} overflows`);
+        if (node.scrollHeight > node.clientHeight + 1) errors.push(`${selector} clips its lines`);
+        for (const part of node.querySelectorAll(".name-part")) {
+            if (part.getBoundingClientRect().right > box.right + 0.5) errors.push(`${selector} part leaves its line`);
+        }
+    }
+    return errors;
+}, { selector, name: LONG_CORE }).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+// The first line keeps coin, chart glyph and side badge together, the glyph right after the coin.
+const glyphProblems = (p, rowSel) => p.evaluate((rowSel) => {
+    const errors = [];
+    for (const row of document.querySelectorAll(rowSel)) {
+        const coin = row.querySelector(".order-top .order-coin").getBoundingClientRect();
+        const glyph = row.querySelector(".order-top .chart-glyph").getBoundingClientRect();
+        const badge = row.querySelector(".order-top .order-side").getBoundingClientRect();
+        if (glyph.left - coin.right > 10) errors.push(`glyph floats ${Math.round(glyph.left - coin.right)}px from the coin`);
+        if (badge.left - glyph.right > 10) errors.push(`badge floats ${Math.round(badge.left - glyph.right)}px from the glyph`);
+    }
+    return errors;
+}, rowSel).then((errors) => { if (errors.length) throw new Error(errors.join(", ")); });
+const refOf = (p) => p.evaluate(() => +document.querySelector("#sheet .chart-wrap").getAttribute("data-ref"));
 const CHART_SCREENS = [
     { name: "chart-trade-ok", api: CHART_TRADES, run: async (p, t) => {
         await openChartTrade(p); await chartDrawn(p); await settle(p);
@@ -449,6 +513,20 @@ const CHART_SCREENS = [
         }
         if (!(await p.locator("#sheet").innerText()).includes("Sell Price")) throw new Error("exit reason must be shown");
         await axisOverlaps(p);
+    } },
+    // A station replica row has no displayed id: the route's own rule (one positive identity,
+    // neither negative) must accept what the page sends for it, or the chart never loads.
+    { name: "chart-trade-station-row", api: {
+        "/api/trades": { trades: [{ ...CHART_TRADE, rec_id: 0 }], limit: 50 },
+        "/api/trade/ticks": (raw) => {
+            // The body shape web/tests.rs posts to the real route
+            // (station_trade_row_without_display_id_reaches_the_owner), which answers 200.
+            const STATION_BODY = `{"core":${CHART_TRADE.core},"rec_id":0,"new_rec_id":${CHART_TRADE.new_rec_id},"range":"deal"}`;
+            const ok = raw === STATION_BODY;
+            return ok ? { body: tradeTicks("ok") } : { status: 400, body: { error: "json" } };
+        },
+    }, run: async (p) => {
+        await openChartTrade(p); await chartDrawn(p);
     } },
     { name: "chart-trade-loading", api: { ...CHART_TRADES, "/api/trade/ticks": () => ({ body: tradeTicks("loading") }) }, run: async (p) => {
         await openChartTrade(p); await settle(p);
@@ -466,7 +544,46 @@ const CHART_SCREENS = [
     } },
     { name: "chart-live-waiting", api: () => chartOrders(liveFeed({ mode: "quiet" })), run: async (p, t) => {
         await openChartOrder(p); await chartBox(p, t.mini_chart_live_no_tape);
-        if (await p.$("#sheet canvas")) throw new Error("a feed with no print yet must show the waiting box, not an empty chart");
+        // Before the first print: the price axis at the default window and the order's lines,
+        // the waiting note over them, never an empty box.
+        if (!await p.$("#sheet .chart-wrap canvas")) throw new Error("a feed with no print yet must still draw the axis and the order's lines");
+        if (!await p.$("#sheet .chart-wrap .chart-waiting")) throw new Error("the waiting note must sit over the chart");
+        await liveScaleProblems(p, 2.4185, [2.439, 2.4185, 2.392]);
+        await axisOverlaps(p);
+    } },
+    { name: "chart-live-waiting-far-take", api: () => chartOrders(farTakeFeed({ mode: "quiet" })), run: async (p, t) => {
+        await openChartOrder(p); await chartBox(p, t.mini_chart_live_no_tape);
+        await liveScaleProblems(p, 2.4185, [FAR_TAKE, 2.4185, 2.392]);
+    } },
+    { name: "chart-live-scale", api: () => chartOrders(liveFeed()), run: async (p) => {
+        await openChartOrder(p); await chartDrawn(p); await settle(p);
+        if (await p.$("#sheet .chart-waiting")) throw new Error("the waiting note must go with the first print");
+        await liveScaleProblems(p, await refOf(p), [2.439, 2.4185, 2.392]);
+    } },
+    { name: "chart-live-far-take", api: () => chartOrders(farTakeFeed()), run: async (p) => {
+        await openChartOrder(p); await chartDrawn(p); await settle(p);
+        await liveScaleProblems(p, await refOf(p), [FAR_TAKE, 2.4185, 2.392]);
+    } },
+    { name: "trades-long-core-name", api: LONG_TRADES, run: async (p) => {
+        await nav(p, "deals"); await p.click('[data-seg="trades"]');
+        const head = await p.$('section[data-tab="trades"] .group-head');
+        if (head) { await head.click(); await settle(p); }
+        await p.waitForSelector('section[data-tab="trades"] .trade-row');
+        await fullNameProblems(p, ".trade-row-meta");
+        await glyphProblems(p, ".trade-row");
+    } },
+    { name: "trade-sheet-long-core-name", api: LONG_TRADES, run: async (p) => {
+        await openChartTrade(p); await settle(p);
+        await fullNameProblems(p, "#sheet .trade-meta");
+    } },
+    { name: "orders-long-core-name", api: () => longOrders(liveFeed()), run: async (p) => {
+        await nav(p, "deals"); await p.click('[data-seg="orders"]'); await openFirstGroup(p, "orders");
+        await fullNameProblems(p, 'section[data-tab="orders"] .group-head .core-name');
+        await glyphProblems(p, 'section[data-tab="orders"] .order-row');
+    } },
+    { name: "order-sheet-long-core-name", api: () => longOrders(liveFeed()), run: async (p) => {
+        await openChartOrder(p); await chartDrawn(p); await settle(p);
+        await fullNameProblems(p, "#sheet .trade-meta");
     } },
     { name: "chart-trade-error", api: { ...CHART_TRADES, "/api/trade/ticks": () => ({ status: 500, body: {} }) }, run: async (p, t) => {
         await openChartTrade(p); await chartBox(p, t.mini_chart_error);
@@ -898,7 +1015,7 @@ async function chartInteractions(browser, html, texts) {
         `range chips must set the window: deal ${dealSpan}, 30 s ${shortSpan}, 300 s ${await span(page)}`);
     expect((await page.getAttribute('#sheet [data-range="300"]', "aria-pressed")) === "true", "the picked range chip must be pressed");
     const sent = log.sent.find((s) => s.path === "/api/trade/ticks");
-    expect(sent && sent.raw === `{"core":${CHART_TRADE.core},"rec_id":${CHART_TRADE.rec_id},"range":"deal"}`,
+    expect(sent && sent.raw === `{"core":${CHART_TRADE.core},"rec_id":${CHART_TRADE.rec_id},"new_rec_id":${CHART_TRADE.new_rec_id},"range":"deal"}`,
         `trade tick body ${sent && sent.raw}`);
 
     // Tap draws the crosshair; drag pans; the wheel zooms.

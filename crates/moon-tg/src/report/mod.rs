@@ -948,12 +948,46 @@ fn read_mini_trades_on(
     Ok(mini_trade_rows(table, &filter, limit))
 }
 
+/// Identity of one closed Mini App trade as its list row carries it.
+///
+/// A typed-replica row whose displayed `id` is `0` or absent (the station's replica) is still
+/// named by the recorder's `newrecid`, so a row the list shows can always be charted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TradeKey {
+    /// Displayed report id; `0` when the row has none.
+    pub rec_id: i64,
+    /// Recorder `newrecid`; `0` when unknown.
+    pub new_rec_id: i64,
+}
+
+impl TradeKey {
+    /// Whether the key names anything: a positive displayed id or a positive recorder id.
+    pub(crate) fn is_valid(&self) -> bool {
+        self.rec_id > 0 || self.new_rec_id > 0
+    }
+
+    /// Whether `trade` is the row this key names. The displayed id wins when the key has one.
+    ///
+    /// Args:
+    ///     trade: A trade of the same core.
+    ///
+    /// Returns:
+    ///     `true` on an exact match of the identity the key carries.
+    pub(crate) fn matches(&self, trade: &MiniTrade) -> bool {
+        if self.rec_id > 0 {
+            trade.rec_id == self.rec_id
+        } else {
+            self.new_rec_id > 0 && trade.new_rec_id == self.new_rec_id
+        }
+    }
+}
+
 /// Read one authorized trade, or the newest closed row matching a previously observed order.
 pub(crate) fn read_mini_chart_trade(
     zone: Tz,
     names: db::CoreNames,
     core: u64,
-    identity: Result<i64, (String, i64)>,
+    identity: Result<TradeKey, (String, i64)>,
 ) -> db::ReadResult<Option<MiniTrade>> {
     let conn = db::open_reader()?;
     read_mini_chart_trade_on(&conn, zone, names, core, identity)
@@ -965,8 +999,11 @@ pub(crate) fn read_mini_chart_trade_on(
     zone: Tz,
     names: db::CoreNames,
     core: u64,
-    identity: Result<i64, (String, i64)>,
+    identity: Result<TradeKey, (String, i64)>,
 ) -> db::ReadResult<Option<MiniTrade>> {
+    if identity.as_ref().is_ok_and(|key| !key.is_valid()) {
+        return Ok(None);
+    }
     // A cancelled resting entry has no execution stamp to match against closed history.
     if identity.as_ref().is_err_and(|(_, entry_ms)| *entry_ms <= 0) {
         return Ok(None);
@@ -981,7 +1018,11 @@ pub(crate) fn read_mini_chart_trade_on(
         ..Default::default()
     };
     let (table, entry) = match identity {
-        Ok(id) => (filter.mini_trade_table(&snap, id)?, None),
+        Ok(key) if key.rec_id > 0 => (filter.mini_trade_table(&snap, key.rec_id)?, None),
+        Ok(key) => (
+            filter.mini_trade_table_by_recorder(&snap, key.new_rec_id)?,
+            None,
+        ),
         Err((coin, entry_ms)) => {
             filter.exact_coins = Some(vec![coin]);
             (db::query_mini_trades(&snap, &filter, 1)?, Some(entry_ms))
