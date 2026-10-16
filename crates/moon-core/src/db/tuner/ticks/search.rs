@@ -273,7 +273,7 @@ fn search(
         }
         // Keep the fills cache's access and statistics on every request, as before. Only the
         // folded replay is memoized: refusals and tracker offers still run for every caller.
-        let fills = fill_cache.fills(train, train_of, &per_base);
+        let fills = replays::PROFILE.timed_fills(|| fill_cache.fills(train, train_of, &per_base));
         Some(replay_cache.replay(&per_base, || {
             closing::replay(train, train_of, &per_base, &fills)
         }))
@@ -652,6 +652,7 @@ mod fills;
 mod nested;
 mod pinned;
 mod replays;
+pub use self::replays::SearchProfile;
 mod risk;
 mod screen;
 pub use self::risk::{DEFAULT_WORSE_PCT, RiskLimits};

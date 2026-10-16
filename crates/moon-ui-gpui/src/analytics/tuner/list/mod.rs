@@ -279,6 +279,38 @@ pub(in crate::analytics) fn filter_sort_indices(
     (out, enabled_filter_available, pool)
 }
 
+/// The rows a readiness pass counts first, in order: the list's own filters and sort with every
+/// tuning class passing — under the default "can tune" filter a row not counted yet fails, and
+/// the drawn list is empty until the pass answers. A sort by the Tuning column itself, which the
+/// pass has yet to fill, goes by trade count, the most first.
+///
+/// Args:
+///     all: Complete strategy group set.
+///     key: The inputs the list is drawn with.
+///
+/// Returns:
+///     Indices into `all`, the drawable head in the list's order.
+pub(in crate::analytics) fn ready_priority_indices(
+    all: &[GroupStat],
+    mut key: VisibleKey,
+) -> Vec<usize> {
+    key.ready = ReadyView::default();
+    let by_ready = key.sort.as_ref().is_some_and(|(k, _)| k == SORT_READY);
+    if by_ready {
+        key.sort = None;
+    }
+    let (mut idx, _, _) = filter_sort_indices(all, &key);
+    if by_ready {
+        idx.sort_by(|a, b| {
+            all[*b]
+                .n
+                .cmp(&all[*a].n)
+                .then_with(|| all[*a].key.cmp(&all[*b].key))
+        });
+    }
+    idx
+}
+
 /// The saved strategy sort as one axis applies it: a sort by the Auto column only where that
 /// column is drawn ("By coin"), by the Tuning column only on "Entry/Exit". The saved choice
 /// itself is kept for the return there.
@@ -356,18 +388,7 @@ impl AnalyticsView {
     /// only unique among live allocations — a failed load frees the buffer and a later one can
     /// be given the same address — so the explicit drop is what makes the key trustworthy.
     pub(super) fn ensure_visible(&mut self, all: &[GroupStat]) -> &[usize] {
-        let key = VisibleKey {
-            base: all.as_ptr() as usize,
-            search_lower: self.strat_search.trim().to_lowercase(),
-            kind: self.strat_type.clone(),
-            lists: self.strat_lists,
-            active_only: self.strat_active_only,
-            // A saved sort by the Auto column applies only where that column is drawn; the
-            // saved choice itself is kept for the return to "By coin".
-            sort: axis_sort(&self.strat_sort, self.strat_mode),
-            auto: self.auto_picks.view(self.strat_mode.shows_auto()),
-            ready: self.ready.view(self.strat_mode.shows_ready()),
-        };
+        let key = self.strat_visible_key(all);
         if !memo_is_fresh(self.strat_visible.as_ref(), &key) {
             let (idx, enabled_filter_available, pool) = filter_sort_indices(all, &key);
             self.strat_visible = Some(VisibleRows {
@@ -378,6 +399,22 @@ impl AnalyticsView {
             });
         }
         self.visible_indices()
+    }
+
+    /// The filter-and-sort inputs the list is drawn with now.
+    pub(super) fn strat_visible_key(&self, all: &[GroupStat]) -> VisibleKey {
+        VisibleKey {
+            base: all.as_ptr() as usize,
+            search_lower: self.strat_search.trim().to_lowercase(),
+            kind: self.strat_type.clone(),
+            lists: self.strat_lists,
+            active_only: self.strat_active_only,
+            // A saved sort by the Auto column applies only where that column is drawn; the
+            // saved choice itself is kept for the return to "By coin".
+            sort: axis_sort(&self.strat_sort, self.strat_mode),
+            auto: self.auto_picks.view(self.strat_mode.shows_auto()),
+            ready: self.ready.view(self.strat_mode.shows_ready()),
+        }
     }
 
     /// Indices of the rows the list should draw, in order. Empty until [`Self::ensure_visible`].

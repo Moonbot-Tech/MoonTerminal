@@ -13,7 +13,8 @@ use super::super::ready::{ReadyClass, ReadyFilter, ReadyPass, ReadyView};
 use super::super::{STRAT_MODES, StratMode};
 use super::{
     SORT_AUTO, SORT_NAME, SORT_READY, StratListFilter, VisibleKey, VisibleRows, axis_sort,
-    core_names_changed, filter_sort_indices, memo_is_fresh, restore_strat_sort,
+    core_names_changed, filter_sort_indices, memo_is_fresh, ready_priority_indices,
+    restore_strat_sort,
 };
 
 /// A group with just the fields these tests filter and sort on.
@@ -503,5 +504,44 @@ fn the_ready_filter_and_sort_act_on_entry_exit_only() {
         } else {
             assert_eq!(idx, vec![0, 1, 2, 3], "must not narrow off Entry/Exit");
         }
+    }
+}
+
+/// Before the pass answers, every row is pending and the default "can tune" filter draws
+/// nothing; the pass still counts the rows the user would see first, in the list's own sort —
+/// and by trade count when the list is sorted by the Tuning column it is filling.
+#[test]
+fn the_readiness_pass_counts_the_rows_the_list_would_draw_first() {
+    let mut all = vec![
+        g("b", "Spread", Some(2), 0, 1.0),
+        g("a", "Spread", Some(2), 0, 3.0),
+        g("c", "Spread", Some(2), 0, 2.0),
+    ];
+    for (group, n) in all.iter_mut().zip([5, 20, 9]) {
+        group.n = n;
+    }
+    let mut k = key();
+    k.ready.filter = ReadyFilter::Can;
+    k.sort = Some((SORT_NAME.to_string(), false));
+    assert!(
+        filter_sort_indices(&all, &k).0.is_empty(),
+        "nothing is drawn while every row is pending"
+    );
+    assert_eq!(ready_priority_indices(&all, key_with(&k)), vec![1, 0, 2]);
+    k.sort = Some((SORT_READY.to_string(), true));
+    assert_eq!(ready_priority_indices(&all, k), vec![1, 2, 0]);
+}
+
+/// A copy of `k`, the memo key being move-only.
+fn key_with(k: &VisibleKey) -> VisibleKey {
+    VisibleKey {
+        base: k.base,
+        search_lower: k.search_lower.clone(),
+        kind: k.kind.clone(),
+        lists: k.lists,
+        active_only: k.active_only,
+        sort: k.sort.clone(),
+        auto: k.auto.clone(),
+        ready: k.ready.clone(),
     }
 }

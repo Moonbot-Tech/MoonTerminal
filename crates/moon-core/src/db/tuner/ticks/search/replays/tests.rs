@@ -94,30 +94,117 @@ fn built_keys_preserve_closed_open_and_colliding_replays() {
     assert_eq!(calls.load(Ordering::Relaxed), 5);
 }
 
-/// An entry pushed out by newer points must replay; exceeding the base budget bypasses storage.
+/// A budget of `bytes` of its own, for a test.
+fn budget(bytes: usize) -> &'static Budget {
+    Box::leak(Box::new(Budget::new(bytes)))
+}
+
+/// Points pushed out by newer ones must replay, the newest stays, the budget is never passed;
+/// a key heavier than a shard's share bypasses storage.
 #[test]
 fn eviction_and_large_keys_remain_bounded() {
-    let cache = ReplayCache::default();
     let mut params = vec![(EntryParams::Fact, ExitParams::default()); 8];
-    let capacity = PARAMS_PER_SHARD / params.len();
+    let entry = ReplayCache::entry_bytes(&params);
+    // Room for ten entries a shard's share.
+    let limit = budget(entry * 10 * SHARDS);
+    let cache = ReplayCache::within(limit);
     let calls = AtomicUsize::new(0);
     let replay = || {
         calls.fetch_add(1, Ordering::Relaxed);
         Replayed::default()
     };
-    for i in 0..=capacity {
+    let points = 400;
+    for i in 0..points {
+        params[0].1.model.latency_ms = i as f64;
+        cache.replay(&params, replay);
+        assert!(limit.held() <= entry * 10 * SHARDS, "held {}", limit.held());
+    }
+    assert_eq!(calls.load(Ordering::Relaxed), points);
+    // The newest point is still kept.
+    cache.replay(&params, replay);
+    assert_eq!(calls.load(Ordering::Relaxed), points);
+    // 400 points do not fit in 160: asking all of them again replays some.
+    for i in 0..points {
         params[0].1.model.latency_ms = i as f64;
         cache.replay(&params, replay);
     }
-    cache.replay(&params, replay);
-    assert_eq!(calls.load(Ordering::Relaxed), capacity + 1);
-    params[0].1.model.latency_ms = 0.0;
-    cache.replay(&params, replay);
-    assert_eq!(calls.load(Ordering::Relaxed), capacity + 2);
-    let oversized = vec![params[0].clone(); PARAMS_PER_SHARD + 1];
+    assert!(calls.load(Ordering::Relaxed) > points);
+    let oversized = vec![params[0].clone(); 10 * 9];
+    assert!(ReplayCache::entry_bytes(&oversized) > entry * 10);
+    let before = calls.load(Ordering::Relaxed);
     cache.replay(&oversized, replay);
     cache.replay(&oversized, replay);
-    assert_eq!(calls.load(Ordering::Relaxed), capacity + 4);
+    assert_eq!(calls.load(Ordering::Relaxed), before + 2);
+}
+
+/// Two caches drawing on one budget never hold more than it together, and a dropped cache
+/// gives back everything it held.
+#[test]
+fn caches_share_one_budget_and_release_it_when_dropped() {
+    let mut params = vec![(EntryParams::Fact, ExitParams::default()); 2];
+    let entry = ReplayCache::entry_bytes(&params);
+    let total = entry * 4 * SHARDS;
+    let limit = budget(total);
+    let first = ReplayCache::within(limit);
+    let second = ReplayCache::within(limit);
+    for i in 0..300 {
+        params[0].1.model.latency_ms = i as f64;
+        first.replay(&params, Replayed::default);
+        second.replay(&params, Replayed::default);
+        assert!(limit.held() <= total, "held {} of {total}", limit.held());
+    }
+    assert!(limit.held() > 0);
+    drop(first);
+    let left: usize = second.shards.iter().map(|s| s.lock().unwrap().bytes).sum();
+    assert_eq!(limit.held(), left);
+    drop(second);
+    assert_eq!(limit.held(), 0);
+}
+
+/// Equal keys hash alike, a signed zero included; the hash reads every field.
+#[test]
+fn equal_keys_hash_alike_and_every_field_counts() {
+    let mut zero = vec![(EntryParams::Fact, ExitParams::default())];
+    zero[0].1.stop_loss_pct = 0.0;
+    let mut negative_zero = zero.clone();
+    negative_zero[0].1.stop_loss_pct = -0.0;
+    assert_eq!(zero, negative_zero);
+    assert_eq!(key_hash(&zero), key_hash(&negative_zero));
+    let mut moved = zero.clone();
+    moved[0].1.model.latency_ms += 1.0;
+    assert_ne!(key_hash(&zero), key_hash(&moved));
+}
+
+/// A cache big enough for every point answers exactly what no cache answers, point by point.
+#[test]
+fn a_cache_that_keeps_everything_answers_what_no_cache_answers() {
+    let deals: Vec<_> = (1..=6)
+        .map(|uid| prepared(uid, 95.0 + uid as f64))
+        .collect();
+    let bases = Bases::of(&deals);
+    let fill_cache = fills::FillCache::default();
+    let kept = ReplayCache::default();
+    let none = ReplayCache::within(budget(0));
+    let mut seen = Vec::new();
+    for round in 0..3 {
+        for step in 0..20 {
+            let params = vec![(
+                EntryParams::Fact,
+                ExitParams {
+                    stop_loss_pct: -1.0 - f64::from(step) * 0.5,
+                    sell_price_pct: 0.2 + f64::from(step % 4) * 0.3,
+                    ..Default::default()
+                },
+            )];
+            let fills = fill_cache.fills(&deals, &bases.of_deal, &params);
+            let fold = || closing::replay(&deals, &bases.of_deal, &params, &fills);
+            let a = kept.replay(&params, fold);
+            let b = none.replay(&params, fold);
+            assert_eq!(exact(&a), exact(&b), "round {round} step {step}");
+            seen.push(exact(&a));
+        }
+    }
+    assert_eq!(seen[..20], seen[20..40]);
 }
 
 /// Parallel misses must neither block nested replays nor replace another point's score.

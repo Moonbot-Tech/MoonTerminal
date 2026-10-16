@@ -167,65 +167,172 @@ pub fn strategy_values_at(
     keys: &[String],
 ) -> Option<std::collections::HashMap<String, String>> {
     let conn = open_strategies_ro()?;
-    let raw = load_raw_json_at(&conn, strategy_id, core, at_ms)?;
+    let (_, raw) = load_raw_json_at(&conn, strategy_id, core, at_ms)?;
     flatten_values(&raw, keys)
 }
 
-/// The `raw_json` of the version valid at `at_ms`, else the earliest version on record, scoped
-/// to `core` when known. `None` when the strategy has no version at all.
+/// [`strategy_values_at`] for a whole pass over many trades: the same rows and the same
+/// answer, but connections are opened once and kept for the next call, and each version's
+/// `raw_json` is parsed once however many trades read it. Shared by every thread of the pass.
+pub struct StrategyValuesReader {
+    /// Open connections not in use; a call takes one or opens one, and gives it back.
+    idle: std::sync::Mutex<Vec<Connection>>,
+    /// Each version's parsed `raw_json` by its row id, with what proves the row is still that
+    /// version: a deleted version's row id can be reused by another.
+    parsed: std::sync::Mutex<std::collections::HashMap<i64, Parsed>>,
+}
+
+/// One version's parse and the read it came from.
+struct Parsed {
+    strategy_id: i64,
+    core: Option<u64>,
+    /// Length and hash of the `raw_json` it was parsed from.
+    raw: (usize, u64),
+    /// `None` for a `raw_json` that does not parse.
+    map: Option<std::sync::Arc<serde_json::Map<String, serde_json::Value>>>,
+}
+
+/// The length and a 64-bit hash of `raw`.
+fn fingerprint(raw: &str) -> (usize, u64) {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    raw.hash(&mut hasher);
+    (raw.len(), hasher.finish())
+}
+
+impl Default for StrategyValuesReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StrategyValuesReader {
+    /// A reader with nothing open or parsed yet.
+    pub fn new() -> Self {
+        Self {
+            idle: std::sync::Mutex::new(Vec::new()),
+            parsed: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// A reader over an open connection, for the tests.
+    #[cfg(test)]
+    fn over(conn: Connection) -> Self {
+        let reader = Self::new();
+        reader
+            .idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(conn);
+        reader
+    }
+
+    /// The values of `keys` as of `at_ms` — exactly [`strategy_values_at`]'s answer.
+    pub fn values_at(
+        &self,
+        strategy_id: i64,
+        core: Option<u64>,
+        at_ms: i64,
+        keys: &[String],
+    ) -> Option<std::collections::HashMap<String, String>> {
+        let conn = self
+            .idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop()
+            .or_else(open_strategies_ro)?;
+        let found = load_raw_json_at(&conn, strategy_id, core, at_ms);
+        self.idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(conn);
+        let (rowid, raw) = found?;
+        let print = fingerprint(&raw);
+        let memo = self
+            .parsed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&rowid)
+            .filter(|kept| {
+                kept.strategy_id == strategy_id && kept.core == core && kept.raw == print
+            })
+            .map(|kept| kept.map.clone());
+        let map = match memo {
+            Some(map) => map,
+            None => {
+                let map = match serde_json::from_str(&raw) {
+                    Ok(serde_json::Value::Object(map)) => Some(std::sync::Arc::new(map)),
+                    _ => None,
+                };
+                self.parsed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(
+                        rowid,
+                        Parsed {
+                            strategy_id,
+                            core,
+                            raw: print,
+                            map: map.clone(),
+                        },
+                    );
+                map
+            }
+        }?;
+        Some(flatten_map(&map, keys))
+    }
+}
+
+/// The row id and `raw_json` of the version valid at `at_ms`, else the earliest version on
+/// record, scoped to `core` when known. `None` when the strategy has no version at all.
 fn load_raw_json_at(
     conn: &Connection,
     strategy_id: i64,
     core: Option<u64>,
     at_ms: i64,
-) -> Option<String> {
+) -> Option<(i64, String)> {
     // Two spellings per query rather than one with an optional clause: the placeholder
     // numbering shifts with the core clause, and a `?3` bound to nothing is a silent `None`
-    // that would send every core-less read to the first version.
+    // that would send every core-less read to the first version. Cached statements: a pass
+    // reader asks the same four on one connection for every trade.
+    let one = |sql: &str, params: &[&dyn rusqlite::ToSql]| -> Option<(i64, String)> {
+        conn.prepare_cached(sql)
+            .ok()?
+            .query_row(params, |r| Ok((r.get(0)?, r.get(1)?)))
+            .ok()
+    };
     let at = match core {
-        Some(c) => conn
-            .query_row(
-                "SELECT v.raw_json FROM strategy_versions v
-                     WHERE v.strategy_id = ?1 AND v.core_uid = ?2
-                       AND v.valid_from <= ?3 AND (v.valid_to IS NULL OR v.valid_to > ?3)
-                     ORDER BY v.valid_from DESC LIMIT 1",
-                rusqlite::params![strategy_id, c as i64, at_ms],
-                |r| r.get(0),
-            )
-            .ok(),
-        None => conn
-            .query_row(
-                "SELECT v.raw_json FROM strategy_versions v
-                     WHERE v.strategy_id = ?1
-                       AND v.valid_from <= ?2 AND (v.valid_to IS NULL OR v.valid_to > ?2)
-                     ORDER BY v.valid_from DESC LIMIT 1",
-                rusqlite::params![strategy_id, at_ms],
-                |r| r.get(0),
-            )
-            .ok(),
+        Some(c) => one(
+            "SELECT v.rowid, v.raw_json FROM strategy_versions v
+                 WHERE v.strategy_id = ?1 AND v.core_uid = ?2
+                   AND v.valid_from <= ?3 AND (v.valid_to IS NULL OR v.valid_to > ?3)
+                 ORDER BY v.valid_from DESC LIMIT 1",
+            rusqlite::params![strategy_id, c as i64, at_ms],
+        ),
+        None => one(
+            "SELECT v.rowid, v.raw_json FROM strategy_versions v
+                 WHERE v.strategy_id = ?1
+                   AND v.valid_from <= ?2 AND (v.valid_to IS NULL OR v.valid_to > ?2)
+                 ORDER BY v.valid_from DESC LIMIT 1",
+            rusqlite::params![strategy_id, at_ms],
+        ),
     };
     if at.is_some() {
         return at;
     }
     match core {
-        Some(c) => conn
-            .query_row(
-                "SELECT v.raw_json FROM strategy_versions v
-                     WHERE v.strategy_id = ?1 AND v.core_uid = ?2
-                     ORDER BY v.valid_from ASC LIMIT 1",
-                rusqlite::params![strategy_id, c as i64],
-                |r| r.get(0),
-            )
-            .ok(),
-        None => conn
-            .query_row(
-                "SELECT v.raw_json FROM strategy_versions v
-                     WHERE v.strategy_id = ?1
-                     ORDER BY v.valid_from ASC LIMIT 1",
-                rusqlite::params![strategy_id],
-                |r| r.get(0),
-            )
-            .ok(),
+        Some(c) => one(
+            "SELECT v.rowid, v.raw_json FROM strategy_versions v
+                 WHERE v.strategy_id = ?1 AND v.core_uid = ?2
+                 ORDER BY v.valid_from ASC LIMIT 1",
+            rusqlite::params![strategy_id, c as i64],
+        ),
+        None => one(
+            "SELECT v.rowid, v.raw_json FROM strategy_versions v
+                 WHERE v.strategy_id = ?1
+                 ORDER BY v.valid_from ASC LIMIT 1",
+            rusqlite::params![strategy_id],
+        ),
     }
 }
 
@@ -284,17 +391,25 @@ pub fn strategy_kinds(pairs: &[(i64, u64)]) -> std::collections::HashMap<(i64, u
 /// `keys` out of one version's `raw_json`, in strategy format — see
 /// [`strategy_current_values_opt`] for the rules.
 fn flatten_values(raw: &str, keys: &[String]) -> Option<std::collections::HashMap<String, String>> {
-    let mut out = std::collections::HashMap::new();
     let Ok(serde_json::Value::Object(map)) = serde_json::from_str(raw) else {
         return None;
     };
+    Some(flatten_map(&map, keys))
+}
+
+/// `keys` out of one version's parsed `raw_json`, in strategy format.
+fn flatten_map(
+    map: &serde_json::Map<String, serde_json::Value>,
+    keys: &[String],
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
     for key in keys {
         let Some(text) = map.get(key).and_then(value_text) else {
             continue;
         };
         out.insert(key.clone(), text);
     }
-    Some(out)
+    out
 }
 
 /// One `raw_json` value in strategy format: a string as is, a number in its shortest form, a
