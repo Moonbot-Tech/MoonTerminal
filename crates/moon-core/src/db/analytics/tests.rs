@@ -1,10 +1,225 @@
 //! Summary, Strategies, and quote-scope analytics regression tests.
 
+mod real_data;
+
 use super::super::test_support::{
     build_replica, build_replica_multi_core, corrupt_leaf_page, remove_db, spread_rows, temp_db,
 };
 use super::super::{QuoteCurrency, SideFilter};
 use super::*;
+
+/// Frozen pre-normalization quote aggregate, independently retaining the original SQL shape.
+///
+/// The oracle exercises the public coverage builder; the new path consumes explicit normalized
+/// expressions instead. Comparing complete results catches stale-cache and unknown-quote drift.
+fn unfenced_quote_breakdown(conn: &Connection, q: &Query) -> QuoteBreakdown {
+    use rusqlite::types::Value;
+    let sources = super::super::read_sources_res(conn).unwrap();
+    let mask = query::StrategyMask::resolve(conn, q).unwrap();
+    let axis = q.resolved_axis_sql(conn).unwrap();
+    let period = q.period_predicate_on(&axis, "r");
+    let attached = super::super::valuation::is_attached(conn);
+    let mut groups = Vec::new();
+    let mut coverage = super::super::valuation::CoverageAggregate::default();
+    for src in sources {
+        if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
+            continue;
+        }
+        let sid = effective_sid_expr("r", &src.cols, strategies_attached(conn));
+        let attribution =
+            query::liquidation_attribution_available(&src.cols, strategies_attached(conn));
+        let (quote, group_by) = super::super::quote::trusted_quote_group("r", &src.cols);
+        let valuation = super::super::valuation::projection(
+            q.valuation,
+            attached,
+            "r",
+            &src.cols,
+            super::super::report_read::source_partition(&src),
+        );
+        let joins = valuation.as_ref().map(|v| v.joins.as_str()).unwrap_or("");
+        let columns = valuation
+            .as_ref()
+            .map(|v| format!(", {}", v.aggregate_columns()))
+            .unwrap_or_default();
+        let sql = q
+            .where_branches(&period, &src.cols, &sid, Some("r"), attribution, &mask)
+            .iter()
+            .map(|predicate| {
+                format!(
+                    "SELECT {quote}, COALESCE(SUM({}),0.0), COUNT(*) {columns}
+                 FROM {} r{joins} WHERE {predicate}{group_by}",
+                    super::super::quote::settled_amount_expr("r", &src.cols, "profitbtc"),
+                    src.table
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+        let mut statement = conn.prepare(&sql).unwrap();
+        let mut rows = statement.query(rusqlite::params![q.from, q.to]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            groups.push((
+                super::super::quote::report_ordinal_from_value(&row.get::<_, Value>(0).unwrap()),
+                row.get::<_, f64>(1).unwrap(),
+                row.get::<_, i64>(2).unwrap(),
+            ));
+            if valuation.is_some() {
+                coverage.add_row(row, 3).unwrap();
+            }
+        }
+    }
+    let totals = QuoteBreakdown::from_groups(groups);
+    if attached || q.valuation == super::super::valuation::ValuationMode::Current {
+        totals.with_valuation(coverage.finish())
+    } else {
+        totals
+    }
+}
+
+/// Computing coverage against normalized columns must preserve raw storage and cache freshness.
+/// A normalized quote substituted into a raw storage check would incorrectly accept text money.
+/// Both fenced Analytics reads and the flattenable monitor path must match the frozen SQL oracle.
+#[test]
+fn normalized_quote_breakdown_matches_unfenced_sql() {
+    use super::super::valuation::{ALGORITHM_VERSION, ValuationMode};
+    let path = temp_db("normalized-coverage-parity");
+    let conn = build_replica_multi_core(
+        &path,
+        &[
+            (1, 10_000, 3.0, "XALPHA"),
+            (2, 11_000, -2.0, "XALPHA"),
+            (1, 8_000, 5.0, "XALPHA"),
+            (2, 12_000, 3.0, "XALPHA"),
+            (2, 13_000, 4.0, "XALPHA"),
+            (3, 1_800_000_000, 0.5, "UNI_RP"),
+            (3, 1_800_000_060, -0.01, "UNI_RP"),
+        ],
+    );
+    conn.execute_batch(
+        "ALTER TABLE orders_rep ADD COLUMN channelname TEXT;
+         ALTER TABLE orders_rep ADD COLUMN signaltype TEXT;
+         ALTER TABLE orders_rep ADD COLUMN fname TEXT;
+         ALTER TABLE orders_rep ADD COLUMN sellreason TEXT;
+         ALTER TABLE orders_rep ADD COLUMN buyprice REAL;
+         UPDATE orders_rep SET core_name='CORE_A';
+         UPDATE orders_rep SET profitbtc='3x' WHERE newrecid=4;
+         UPDATE orders_rep SET spentbtc='100x' WHERE newrecid=5;
+         UPDATE orders_rep SET fname='Pump_USD-UNI_RP_UNIT_01', buyprice=10 WHERE newrecid=6;
+         UPDATE orders_rep SET fname='', sellreason='LIQUIDATION', buyprice=10 WHERE newrecid=7;
+         UPDATE orders_rep SET channelname='LIQUIDATION', signaltype='UNIT_01', strategyid=0 WHERE newrecid=2;
+         ATTACH ':memory:' AS strat;
+         CREATE TABLE strat.strategies(core_uid INTEGER, strategy_id INTEGER, name TEXT,
+             deleted INTEGER, checked INTEGER);
+         CREATE TABLE strat.strategy_versions(core_uid INTEGER, strategy_id INTEGER,
+             valid_from INTEGER, valid_to INTEGER, raw_json TEXT);
+         INSERT INTO strat.strategies VALUES(1,7,'UNIT_01',1,0);"
+    ).unwrap();
+    super::super::rep::core_offset::ensure_table(&conn).unwrap();
+    super::super::rep::core_offset::store_segment(&conn, 1, 0, 3600, 0, "UNIT_01").unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT typeof(profitbtc) FROM orders_rep WHERE newrecid=4",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "text"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT typeof(spentbtc) FROM orders_rep WHERE newrecid=5",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "text"
+    );
+    let sources = super::super::read_sources_res(&conn).unwrap();
+    super::super::quote::learn_coin_m_cores(&conn, &sources);
+    let source = sources.iter().find(|s| s.table == "orders_rep").unwrap();
+    let settled = super::super::quote::settled_amount_expr("r", &source.cols, "profitbtc");
+    let corrected: f64 = conn
+        .query_row(
+            &format!("SELECT {settled} FROM orders_rep r WHERE newrecid=7"),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!((corrected + 0.1).abs() < 1e-12);
+    let cache_path = path.with_file_name("normalized-valuation.sqlite");
+    remove_db(&cache_path);
+    drop(super::super::valuation::open_store(&cache_path).unwrap());
+    conn.execute(
+        "ATTACH DATABASE ?1 AS valuation",
+        [cache_path.to_str().unwrap()],
+    )
+    .unwrap();
+    for quote in ["1", "8", "8.5", "'unknown'", "NULL"] {
+        conn.execute_batch(&format!(
+            "UPDATE orders_rep SET basecurrency={quote} WHERE newrecid=2"
+        ))
+        .unwrap();
+        conn.execute("DELETE FROM valuation.trade_values", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO valuation.trade_values(source_kind,core_uid,row_id,algorithm_version,
+                closedate,quote_ordinal,profit_quote,spent_quote,rate_minute_utc,rate_usdt,
+                profit_usdt,spent_usdt,valued_at_ms)
+             SELECT 0,core_uid,newrecid,?1,closedate,basecurrency,profitbtc,spentbtc,
+                (closedate/60)*60,0.999,profitbtc*0.999,spentbtc*0.999,1 FROM orders_rep
+             WHERE typeof(basecurrency)='integer' AND basecurrency BETWEEN 0 AND 20",
+            [ALGORITHM_VERSION],
+        )
+        .unwrap();
+        for stale in [false, true] {
+            if stale {
+                conn.execute("UPDATE valuation.trade_values SET profit_quote=999", [])
+                    .unwrap();
+            }
+            for valuation in [ValuationMode::Historical, ValuationMode::Current] {
+                for metric in [ProfitMetric::Quote, ProfitMetric::Percent] {
+                    for all in [false, true] {
+                        let mut query = Query {
+                            from: if all { -1 } else { 6000 },
+                            to: 2_000_000_000,
+                            prefer_usdt: true,
+                            metric,
+                            valuation,
+                            axis: super::super::ReportAxis::from_measured(
+                                std::collections::HashMap::from([(
+                                    1,
+                                    vec![super::super::OffsetSegment {
+                                        from_utc: 0,
+                                        offset_secs: 3600,
+                                    }],
+                                )]),
+                                chrono_tz::UTC,
+                            ),
+                            ..Default::default()
+                        };
+                        query.floor_all_history();
+                        let old = unfenced_quote_breakdown(&conn, &query);
+                        let new = quote_breakdown_on(&conn, &query).unwrap();
+                        assert_eq!(format!("{old:?}"), format!("{new:?}"));
+                        let monitor = query::quote_breakdown_unfenced_on(&conn, &query).unwrap();
+                        assert_eq!(format!("{old:?}"), format!("{monitor:?}"));
+                        assert_eq!(new.orders, if all { 7 } else { 6 });
+                        if !all {
+                            conn.execute("UPDATE core_time_offset SET offset_secs=0", [])
+                                .unwrap();
+                            let unshifted = quote_breakdown_on(&conn, &query).unwrap();
+                            assert_eq!(unshifted.orders, 7);
+                            conn.execute("UPDATE core_time_offset SET offset_secs=3600", [])
+                                .unwrap();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    drop(conn);
+    remove_db(&path);
+    remove_db(&cache_path);
+}
 
 /// Dividing by a drawdown displayed as zero produces a misleading recovery KPI;
 /// rounding the denominator before division also changes otherwise valid ratios.

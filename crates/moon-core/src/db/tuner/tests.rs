@@ -6,6 +6,95 @@ use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
 use super::*;
 
+/// Sharing a money preflight must preserve both sources, split errors and measured-clock rows.
+/// Reusing the active Percent source as USDT would change the second projection in this matrix.
+#[test]
+fn deal_sources_match_independent_preflights() {
+    use crate::db::test_support::{build_replica, remove_db, temp_db};
+    use crate::db::valuation::ValuationMode;
+    let path = temp_db("deal-source-parity");
+    let conn = build_replica(&path, &[(10_000, 3.0, "XALPHA"), (11_000, -2.0, "XALPHA")]);
+    conn.execute_batch(
+        "ALTER TABLE orders_rep ADD COLUMN channelname TEXT;
+         ALTER TABLE orders_rep ADD COLUMN signaltype TEXT;
+         UPDATE orders_rep SET core_name='CORE_A';
+         UPDATE orders_rep SET channelname='LIQUIDATION', signaltype='UNIT_01', strategyid=0 WHERE newrecid=2;
+         ATTACH ':memory:' AS strat;
+         CREATE TABLE strat.strategies(core_uid INTEGER, strategy_id INTEGER, name TEXT,
+             deleted INTEGER, checked INTEGER);
+         INSERT INTO strat.strategies VALUES(1,7,'UNIT_01',1,0);",
+    )
+    .expect("synthetic strategy fixture");
+    let axis = crate::db::ReportAxis::from_measured(
+        std::collections::HashMap::from([(
+            1,
+            vec![crate::db::OffsetSegment {
+                from_utc: 0,
+                offset_secs: 3600,
+            }],
+        )]),
+        chrono_tz::UTC,
+    );
+    for split in [false, true] {
+        conn.execute(
+            "UPDATE orders_rep SET basecurrency=?1 WHERE newrecid=2",
+            [if split { 8 } else { 1 }],
+        )
+        .expect("quote scope");
+        for valuation in [ValuationMode::Historical, ValuationMode::Current] {
+            for metric in [
+                crate::db::ProfitMetric::Quote,
+                crate::db::ProfitMetric::Percent,
+            ] {
+                for from in [-1, 6000] {
+                    let query = Query {
+                        axis: axis.clone(),
+                        from,
+                        to: 20_000,
+                        prefer_usdt: true,
+                        valuation,
+                        metric,
+                        ..Default::default()
+                    };
+                    super::super::with_read_snapshot(&conn, |snapshot| {
+                        let old = tuner_source_on(snapshot, &query).and_then(|(q, source)| {
+                            Ok((q.clone(), source, tuner_source_usdt_on(snapshot, &q)?))
+                        });
+                        let new =
+                            tuner_deal_sources_on(snapshot, &query).and_then(|(q, src, usdt)| {
+                                let usdt = usdt.resolve(snapshot, &q)?;
+                                Ok((q, src, usdt))
+                            });
+                        match (old, new) {
+                            (Ok((old_q, old, old_usdt)), Ok((new_q, new, new_usdt))) => {
+                                assert_eq!((old_q.from, old_q.to), (new_q.from, new_q.to));
+                                assert_eq!(old, new, "active projection");
+                                assert_eq!(old_usdt, new_usdt, "USDT overlay projection");
+                                let count: i64 = snapshot
+                                    .query_row(
+                                        &format!("SELECT COUNT(*) FROM {new}"),
+                                        rusqlite::params![new_q.from, new_q.to],
+                                        |r| r.get(0),
+                                    )
+                                    .expect("materialize source");
+                                assert_eq!(count, 2);
+                            }
+                            (Err(old), Err(new)) => {
+                                assert_eq!(format!("{old:?}"), format!("{new:?}"))
+                            }
+                            pair => panic!("preflight parity: {pair:?}"),
+                        }
+                        Ok(())
+                    })
+                    .expect("snapshot parity");
+                }
+            }
+        }
+    }
+    drop(conn);
+    remove_db(&path);
+}
+
 /// Serializes the process-global function-pointer trace sink used by rusqlite.
 static TRACE_GUARD: Mutex<()> = Mutex::new(());
 /// SQL statements executed while a tuner test connection has tracing enabled.

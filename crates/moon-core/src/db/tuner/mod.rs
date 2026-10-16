@@ -434,6 +434,57 @@ pub(super) fn tuner_source_usdt_on(conn: &Connection, q: &Query) -> ReadResult<O
         .ok_or(ReadFail::NotReady)
 }
 
+/// Build active and USDT deal sources using one preflight when their inputs match.
+///
+/// Args:
+///     conn: Pinned snapshot holding report, valuation and current-rate inputs stable.
+///     q: Scope before the shared all-history floor.
+///
+/// Returns:
+///     Floored scope, active source and optional USDT source for a Quote+USDT request. Other
+///     requests leave USDT unresolved so the caller can preflight it after reading active rows.
+fn tuner_deal_sources_on(
+    conn: &Connection,
+    q: &Query,
+) -> ReadResult<(Query, String, DealOverlaySource)> {
+    let mut q = q.clone();
+    q.floor_all_history();
+    if q.metric != crate::db::ProfitMetric::Quote || !q.prefer_usdt {
+        let (q, src) = tuner_source_on(conn, &q)?;
+        return Ok((q, src, DealOverlaySource::Deferred));
+    }
+    let (active, usdt) = crate::db::analytics::projection_with_usdt_on(conn, &q)?;
+    let src =
+        crate::db::analytics::unified_from_mode(conn, &q, active)?.ok_or(ReadFail::NotReady)?;
+    let usdt_src = match usdt {
+        Some(projection) if projection == active => Some(src.clone()),
+        Some(projection) => Some(
+            crate::db::analytics::unified_from_mode(conn, &q, projection)?
+                .ok_or(ReadFail::NotReady)?,
+        ),
+        None => None,
+    };
+    Ok((q, src, DealOverlaySource::Resolved(usdt_src)))
+}
+
+/// Snapshot-local overlay decision, deferred until active rows have been read when necessary.
+enum DealOverlaySource {
+    /// The shared money preflight already resolved the overlay, including unavailable money.
+    Resolved(Option<String>),
+    /// Active and overlay metrics require independent preflights.
+    Deferred,
+}
+
+impl DealOverlaySource {
+    /// Resolve the overlay without repeating an already completed scope preflight.
+    fn resolve(self, conn: &Connection, q: &Query) -> ReadResult<Option<String>> {
+        match self {
+            Self::Resolved(source) => Ok(source),
+            Self::Deferred => tuner_source_usdt_on(conn, q),
+        }
+    }
+}
+
 /// Open a reader and materialize tuner rows in the same snapshot as quote preflight.
 ///
 /// The snapshot ends when `read` returns, before the caller performs CPU-heavy optimization.

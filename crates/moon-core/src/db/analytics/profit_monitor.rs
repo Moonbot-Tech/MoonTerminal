@@ -5,7 +5,10 @@ mod tests;
 
 use rusqlite::Connection;
 
-use super::{Query, ScopeDecision, min_closedate, scope_decision_on, scoped, unified_from_mode};
+use super::{
+    Query, ScopeDecision, min_closedate, scope_decision_with_quote_reader_on, scoped,
+    unified_from_mode,
+};
 use crate::db::read_fail::read_fail_on;
 use crate::db::{ProfitScope, QuoteCurrency, ReadFail, ReadResult};
 
@@ -165,7 +168,11 @@ pub(super) fn profit_monitor_on(
     if q.from < 0 {
         q.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
     }
-    let decision = match scope_decision_on(conn, &q)? {
+    let decision = match scope_decision_with_quote_reader_on(
+        conn,
+        &q,
+        super::query::quote_breakdown_unfenced_on,
+    )? {
         ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
         decision => decision,
     };

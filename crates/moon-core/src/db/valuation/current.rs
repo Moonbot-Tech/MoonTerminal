@@ -403,6 +403,23 @@ pub(crate) fn current_rate_sql(
     rates: &CurrentRates,
     now_ms: i64,
 ) -> CoverageSql {
+    current_rate_sql_with_inputs(
+        alias,
+        columns,
+        rates,
+        now_ms,
+        &super::CoverageInputs::report(alias, columns),
+    )
+}
+
+/// Build current coverage over explicit normalized values, retaining raw-cell storage checks.
+pub(super) fn current_rate_sql_with_inputs(
+    alias: &str,
+    columns: &std::collections::HashSet<String>,
+    rates: &CurrentRates,
+    now_ms: i64,
+    inputs: &super::CoverageInputs,
+) -> CoverageSql {
     let has_quote = columns.contains("basecurrency");
     let has_profit = columns.contains("profitbtc");
     // The same guards the historical builder applies, from the one place that states them.
@@ -410,7 +427,7 @@ pub(crate) fn current_rate_sql(
         quote_known,
         numeric_profit,
         spent_value,
-    } = super::source_predicates(alias, columns);
+    } = super::source_predicates_with_inputs(alias, columns, inputs);
 
     // Without a quote column there is nothing to switch on, and naming it in an unreachable arm
     // would still fail at prepare time — so the arms are not even built.
@@ -435,7 +452,7 @@ pub(crate) fn current_rate_sql(
         }
         // Switched on the EFFECTIVE ordinal, like every other quote reference: a COIN-M row is
         // denominated in BTC, so it must pick the BTC arm rather than the identity one.
-        let quote = super::super::quote::effective_ordinal_expr(alias, columns);
+        let quote = &inputs.quote;
         (
             format!("(CASE ({quote}){rate_arms} END)"),
             format!("(CASE ({quote}){source_arms} END)"),
@@ -454,7 +471,7 @@ pub(crate) fn current_rate_sql(
             "({eligible} AND {numeric_profit} AND {rate_case} IS NULL
               AND ({quote}) IN ({}))",
             unroutable.join(","),
-            quote = super::super::quote::effective_ordinal_expr(alias, columns)
+            quote = inputs.quote
         )
     } else {
         "0".to_string()
@@ -462,7 +479,7 @@ pub(crate) fn current_rate_sql(
     let profit_usdt = if has_profit {
         format!(
             "CASE WHEN {valued} THEN ({settled}) * {rate_case} END",
-            settled = super::super::quote::settled_amount_expr(alias, columns, "profitbtc")
+            settled = inputs.profit
         )
     } else {
         "NULL".to_string()
