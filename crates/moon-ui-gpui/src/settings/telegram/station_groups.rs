@@ -12,6 +12,7 @@ use rust_i18n::t;
 use super::super::SettingsView;
 use super::server_bot::known_server;
 use crate::backend::station::job::Job;
+use crate::backend::station::{cores_sync, uid_translation::UidTranslation};
 use crate::design;
 
 impl SettingsView {
@@ -22,6 +23,12 @@ impl SettingsView {
         let seen = self.telegram.server.access_seen()?;
         let backend = self.backend.read(cx);
         let ours = backend.config.core_groups.clone();
+        let here = cores_sync::trace_cores(&backend.config);
+        let listing = backend
+            .station
+            .cores_seen
+            .as_ref()
+            .and_then(|seen| seen.as_deref());
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
         let Some(theirs) = seen.groups.as_ref() else {
@@ -36,7 +43,12 @@ impl SettingsView {
         if ours.is_empty() && theirs.is_empty() {
             return None;
         }
-        if same_groups(&ours, &seen.report_groups()) {
+        if same_station_groups(
+            &ours,
+            &seen.report_groups(),
+            &here,
+            listing.unwrap_or_default(),
+        ) {
             return Some(
                 div()
                     .text_color(muted)
@@ -78,6 +90,19 @@ impl SettingsView {
                 .into_any_element(),
         )
     }
+}
+
+/// Compare memberships in the station namespace; unresolved members keep the send action available.
+fn same_station_groups(
+    ours: &[CoreGroup],
+    theirs: &[CoreGroup],
+    here: &[cores_sync::LocalCore],
+    listing: &[moon_core::station_api::ListedCore],
+) -> bool {
+    let mut translated = ours.to_vec();
+    let mut translation = UidTranslation::new(here, listing);
+    translation.groups_to_station(&mut translated);
+    translation.unmapped() == 0 && same_groups(&translated, theirs)
 }
 
 /// Whether group names and positions match, ignoring member order within each group.

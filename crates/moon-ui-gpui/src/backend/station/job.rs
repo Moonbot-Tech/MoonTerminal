@@ -128,7 +128,8 @@ pub(crate) enum Job {
     BotOff {
         target: Target,
         restore: bool,
-        recovered: Option<bot::ReturnedBot>,
+        /// A quarantined bot and the source namespace captured before its service stopped.
+        recovered: Option<(bot::ReturnedBot, Vec<moon_core::station_api::ListedCore>)>,
     },
     /// Give the station's bot this token: a new bot, or a replacement that pairs anew.
     ServerToken {
@@ -283,7 +284,11 @@ pub(crate) enum Done {
         skipped: Vec<String>,
     },
     /// The station stopped polling and removed its bot; recovered data may be saved locally.
-    BotOff { returned: Option<bot::ReturnedBot> },
+    BotOff {
+        returned: Option<bot::ReturnedBot>,
+        /// The source namespace observed before removing the bot, retained for local save retries.
+        cores: Vec<moon_core::station_api::ListedCore>,
+    },
     /// The destination fingerprint awaits an explicit confirmation in the Station tab.
     AddressProbed(station::access::AddressChange),
     /// A new server's host key awaits an explicit confirmation before the install.
@@ -311,8 +316,13 @@ pub(crate) enum Done {
 
 /// Progress, structured readings and completion sent from the worker to Settings.
 pub(crate) enum Event {
+    /// Distinct source core identities dropped from a cross-host payload.
+    UnmappedCores(usize),
     /// Quarantined before removal; never starts a local poller until the successful end.
-    Returned(bot::ReturnedBot),
+    Returned {
+        returned: bot::ReturnedBot,
+        cores: Vec<moon_core::station_api::ListedCore>,
+    },
     Line(String),
     /// A core operation's Text result, independent of diagnostic lines.
     CoresResult(String),
@@ -322,7 +332,7 @@ pub(crate) enum Event {
 }
 
 /// Start `job` on its own thread.
-pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
+pub(crate) fn start(job: Job, here: Vec<cores_sync::LocalCore>) -> mpsc::Receiver<Event> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("station-setup".into())
@@ -338,10 +348,13 @@ pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
                     let _ = lines.send(Event::Line(line));
                 }
             };
-            let mut remember = |returned| {
-                let _ = tx.send(Event::Returned(returned));
+            let mut remember = |returned, cores| {
+                let _ = tx.send(Event::Returned { returned, cores });
             };
-            let done = match run(job, &mut remember, &mut say) {
+            let mut unmapped = |count| {
+                let _ = tx.send(Event::UnmappedCores(count));
+            };
+            let done = match run(job, &here, &mut remember, &mut unmapped, &mut say) {
                 Ok(done) => done,
                 Err(e) if e.downcast_ref::<NeedsAdminPassword>().is_some() => {
                     Done::NeedsAdminPassword
@@ -371,7 +384,9 @@ pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
 /// Execute one queued station job; return bot data only after server polling has stopped.
 fn run(
     job: Job,
-    remember: &mut dyn FnMut(bot::ReturnedBot),
+    here: &[cores_sync::LocalCore],
+    remember: &mut dyn FnMut(bot::ReturnedBot, Vec<moon_core::station_api::ListedCore>),
+    unmapped: &mut dyn FnMut(usize),
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<Done> {
     match job {
@@ -462,7 +477,7 @@ fn run(
                     say,
                 )?;
             }
-            let (transferred, bot) = set_bot(&target, bot, say)?;
+            let (transferred, bot) = set_bot(&target, bot, here, unmapped, say)?;
             Ok(Done::Installed {
                 transferred,
                 bot,
@@ -618,7 +633,7 @@ fn run(
             })
         }
         Job::Bot { target, bot } => {
-            let (transferred, bot) = set_bot(&target, bot, say)?;
+            let (transferred, bot) = set_bot(&target, bot, here, unmapped, say)?;
             Ok(Done::Ok {
                 transferred,
                 bot,
@@ -629,9 +644,34 @@ fn run(
             target,
             restore,
             recovered,
-        } => Ok(Done::BotOff {
-            returned: bot::return_bot(&target, restore, recovered, remember, say)?,
-        }),
+        } => {
+            let (recovered, retained_cores) = recovered
+                .map(|(returned, cores)| (Some(returned), cores))
+                .unwrap_or_default();
+            let retained_token = recovered.as_ref().map(|returned| returned.token.clone());
+            // A removal retry can find the service already stopped. Keep the original proven
+            // namespace for that same bot instead of replacing its grants with empty lists.
+            let fresh = if restore {
+                bot::bot_state(&target)
+                    .ok()
+                    .and_then(|state| state.station)
+                    .and_then(|status| status.cores)
+            } else {
+                None
+            };
+            let mut cores = Vec::new();
+            let mut retain = |returned: bot::ReturnedBot| {
+                cores = return_core_listing(
+                    &returned,
+                    fresh.as_deref(),
+                    retained_token.as_ref(),
+                    &retained_cores,
+                );
+                remember(returned, cores.clone());
+            };
+            let returned = bot::return_bot(&target, restore, recovered, &mut retain, say)?;
+            Ok(Done::BotOff { returned, cores })
+        }
         Job::ServerToken {
             target,
             token,
@@ -697,7 +737,16 @@ fn run(
                 bot_off: false,
             })
         }
-        Job::Groups { target, groups } => {
+        Job::Groups { target, mut groups } => {
+            let state = bot::bot_state(&target)?;
+            let listing = state
+                .station
+                .as_ref()
+                .and_then(|status| status.cores.as_deref());
+            let mut translation =
+                super::uid_translation::UidTranslation::new(here, listing.unwrap_or_default());
+            translation.groups_to_station(&mut groups);
+            unmapped(translation.unmapped());
             let saved = station::api::set_groups(&target, &groups)?;
             say(Progress::Text(match saved {
                 Some(_) => {
@@ -760,6 +809,23 @@ fn run(
     }
 }
 
+/// Prefer an authoritative fresh listing, including an empty one. A missing API on retry may
+/// reuse a quarantined namespace only for the same bot token; a replacement bot inherits none.
+fn return_core_listing(
+    returned: &bot::ReturnedBot,
+    fresh: Option<&[moon_core::station_api::ListedCore]>,
+    retained_token: Option<&Secret>,
+    retained: &[moon_core::station_api::ListedCore],
+) -> Vec<moon_core::station_api::ListedCore> {
+    if let Some(fresh) = fresh {
+        fresh.to_vec()
+    } else if retained_token.is_some_and(|token| token.expose() == returned.token.expose()) {
+        retained.to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
 /// Keep compatibility guidance as progress; available readings travel as typed facts instead.
 fn show_status(state: &BotState, say: &mut dyn FnMut(Progress)) {
     if let Some(station) = &state.station {
@@ -791,15 +857,31 @@ fn show_journal(text: &str, say: &mut dyn FnMut(Progress)) {
 fn set_bot(
     target: &Target,
     plan: BotPlan,
+    here: &[cores_sync::LocalCore],
+    unmapped: &mut dyn FnMut(usize),
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<(bool, Option<BotState>)> {
     match plan {
         BotPlan::Keep => Ok((false, None)),
         BotPlan::Transfer {
             token,
-            pairing,
+            mut pairing,
             change,
         } => {
+            // A just-installed or updated station may still be starting after its core push.
+            // Resolve its actual allocated identities before handing any viewer grant over.
+            let state = bot::wait_status(target, say)?;
+            let listing = state
+                .station
+                .as_ref()
+                .and_then(|status| status.cores.as_deref());
+            let mut translation =
+                super::uid_translation::UidTranslation::new(here, listing.unwrap_or_default());
+            if let Some(groups) = pairing.groups.as_mut() {
+                translation.groups_to_station(groups);
+            }
+            translation.access(&mut pairing, false);
+            unmapped(translation.unmapped());
             let state = bot::transfer_bot(target, &token, &pairing, &change, say)?;
             Ok((true, Some(state)))
         }

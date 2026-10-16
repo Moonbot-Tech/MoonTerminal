@@ -9,6 +9,68 @@ use moon_core::station_api::ListedCore;
 use moon_remote::error::StationError;
 use moon_remote::station::bot::BotState;
 
+/// Replacing a retained listing with an unavailable API loses XALPHA's proven grant after a
+/// partial removal; a replacement bot or an authoritative empty listing must not inherit it.
+#[test]
+fn issue_891_stopped_return_retry_preserves_only_the_same_bots_proven_namespace() {
+    use crate::backend::station::uid_translation::UidTranslation;
+    use moon_core::config::TelegramConfig;
+    use moon_core::station_api::Access;
+    use moon_remote::station::bot::ReturnedBot;
+
+    let token = Secret::new("synthetic-original");
+    let mut config = TelegramConfig::default();
+    config.pair_chat(101);
+    config.pair_chat(202);
+    config.chat_profile_mut(202).core_uids = vec![11];
+    let returned = ReturnedBot {
+        token: token.clone(),
+        access: Access::of(&config),
+    };
+    let here = [cores_sync::LocalCore {
+        uid: 1,
+        name: "XALPHA".into(),
+        address: Some("xalpha.example.invalid:4510".into()),
+        key_address: Some("xalpha.example.invalid:4510".into()),
+        endpoint_override: String::new(),
+        key_fp: "UNIT_01".into(),
+    }];
+    let retained = [ListedCore {
+        uid: 11,
+        name: "XALPHA".into(),
+        address: here[0].address.clone(),
+        key_fp: Some("UNIT_01".into()),
+        endpoint_override: Some(String::new()),
+    }];
+    let listing = super::return_core_listing(&returned, None, Some(&token), &retained);
+    let mut pairing = returned.access.clone();
+    let mut translation = UidTranslation::new(&here, &listing);
+    translation.access(&mut pairing, true);
+    assert_eq!(pairing.chat_access[0].core_uids, [1]);
+    assert_eq!(translation.unmapped(), 0);
+
+    let replacement = ReturnedBot {
+        token: Secret::new("synthetic-replacement"),
+        ..returned.clone()
+    };
+    assert!(super::return_core_listing(&replacement, None, Some(&token), &retained).is_empty());
+    assert!(super::return_core_listing(&returned, None, None, &retained).is_empty());
+    assert!(super::return_core_listing(&returned, Some(&[]), Some(&token), &retained).is_empty());
+    let fresh = [ListedCore {
+        uid: 1,
+        name: "XBETA".into(),
+        address: Some("xbeta.example.invalid:4510".into()),
+        ..retained[0].clone()
+    }];
+    let listing = super::return_core_listing(&returned, Some(&fresh), Some(&token), &retained);
+    assert_eq!(listing[0].name, "XBETA");
+    let mut pairing = returned.access.clone();
+    let mut translation = UidTranslation::new(&here, &listing);
+    translation.access(&mut pairing, true);
+    assert!(pairing.chat_access[0].core_uids.is_empty());
+    assert_eq!(translation.unmapped(), 1);
+}
+
 /// Create saved credentials without reading the vault or contacting a server.
 fn install_entry(uid: u64, name: &str, active: bool, key: &str) -> CoreKeyEntry {
     CoreKeyEntry {

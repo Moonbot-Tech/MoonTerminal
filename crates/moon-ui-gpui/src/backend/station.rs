@@ -33,6 +33,7 @@ pub(crate) mod job;
 pub(crate) mod pull;
 mod recovery;
 pub(crate) mod text;
+pub(crate) mod uid_translation;
 
 /// How often the backend drains a running job's channel.
 const POLL: Duration = Duration::from_millis(150);
@@ -75,6 +76,8 @@ pub(crate) struct StationJobs {
     pub(crate) running_label: Option<job::JobButton>,
     /// The last job's end: `Ok(summary)` or `Err(reason)`.
     pub(crate) outcome: Option<Result<String, String>>,
+    /// Distinct unmapped core identities reported by this user's payload translation.
+    unmapped_cores: usize,
     pub(crate) bot: Option<BotState>,
     /// UTC milliseconds when `bot` was read, so a view can name how old its numbers are.
     pub(crate) bot_read_ms: Option<i64>,
@@ -98,6 +101,8 @@ pub(crate) struct StationJobs {
     pub(crate) restored: u64,
     /// An incomplete removal or failed disk save retains the credential for another return attempt.
     returned: Option<moon_remote::station::bot::ReturnedBot>,
+    /// Source identities captured with the quarantined station bot, never terminal-numbered grants.
+    returned_cores: Vec<moon_core::station_api::ListedCore>,
     /// Bumped on every change of this state: part of the Settings window's repaint signature.
     pub(crate) revision: u64,
     /// Durable hand-over still awaiting a safe ownership decision.
@@ -427,7 +432,11 @@ impl Backend {
                 job::Job::BotOff {
                     target,
                     restore,
-                    recovered: self.station.returned.clone(),
+                    recovered: self
+                        .station
+                        .returned
+                        .clone()
+                        .map(|returned| (returned, self.station.returned_cores.clone())),
                 }
             }
             other => other,
@@ -474,13 +483,14 @@ impl Backend {
                 st.address_change = None;
                 st.install_probe = None;
                 st.outcome = None;
+                st.unmapped_cores = 0;
                 st.lines.clear();
                 st.status = None;
             }
             Kind::Quiet | Kind::Zone | Kind::Recovery => {}
         }
         st.revision = st.revision.wrapping_add(1);
-        let rx = job::start(job);
+        let rx = job::start(job, cores_sync::trace_cores(&self.config));
         st.task = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(POLL).await;
@@ -546,8 +556,13 @@ impl Backend {
     /// Apply one job event; `true` once the job has ended.
     fn station_event(&mut self, event: job::Event) -> bool {
         let done = match event {
-            job::Event::Returned(returned) => {
+            job::Event::UnmappedCores(count) => {
+                self.station.unmapped_cores = count;
+                return false;
+            }
+            job::Event::Returned { returned, cores } => {
                 self.station.returned = Some(returned);
+                self.station.returned_cores = cores;
                 return false;
             }
             job::Event::Line(line) => {
@@ -622,8 +637,9 @@ impl Backend {
             _ => t!("telegram.server.done").to_string(),
         };
         match done {
-            job::Done::BotOff { returned } => {
+            job::Done::BotOff { returned, cores } => {
                 self.station.returned = returned;
+                self.station.returned_cores = cores;
                 self.station_apply_returned();
             }
             job::Done::AddressProbed(change) => {
@@ -704,6 +720,7 @@ impl Backend {
         // A job that ended without the bot's state may have changed it: read it again.
         self.station.pending_refresh |= !said_bot;
         if !handing_over {
+            self.station_append_unmapped();
             return true;
         }
         if transferred {
@@ -729,7 +746,24 @@ impl Backend {
         } else {
             self.station.outcome = Some(Err(t!("telegram.server.local_bot_held").to_string()));
         }
+        self.station_append_unmapped();
         true
+    }
+
+    /// Keep a typed omission count visible beside the action's final result in both Settings tabs.
+    fn station_append_unmapped(&mut self) {
+        if self.station.unmapped_cores > 0
+            && let Some(outcome) = self.station.outcome.as_mut()
+        {
+            let text = match outcome {
+                Ok(text) | Err(text) => text,
+            };
+            text.push('\n');
+            text.push_str(&t!(
+                "telegram.server.cores_unmapped",
+                n = self.station.unmapped_cores
+            ));
+        }
     }
 
     /// Save before considering local transport admission; a known station keeps it suspended.
@@ -744,10 +778,12 @@ impl Backend {
             self.station.outcome = Some(Ok(t!("telegram.server.return_skipped").to_string()));
             return;
         };
+        let (translated, unmapped) =
+            returned_to_terminal(&self.config, &returned, &self.station.returned_cores);
         let restored = match save_returned_bot(
             &mut self.config,
             &mut self.preview,
-            &returned,
+            &translated,
             AppConfig::save_telegram,
         ) {
             Ok(restored) => restored,
@@ -762,8 +798,10 @@ impl Backend {
         };
         self.resume_terminal_telegram();
         if restored {
+            self.station.unmapped_cores = unmapped;
             self.station.restored = self.station.restored.wrapping_add(1);
         }
+        self.station.returned_cores.clear();
         self.station.outcome = Some(Ok(if restored {
             t!("telegram.server.return_done").to_string()
         } else {
@@ -835,6 +873,19 @@ impl Backend {
         self.resume_terminal_telegram();
         Ok(())
     }
+}
+
+/// Translate a clone at save time so failed saves retain the raw station grants for a safe retry.
+fn returned_to_terminal(
+    config: &AppConfig,
+    returned: &moon_remote::station::bot::ReturnedBot,
+    listing: &[moon_core::station_api::ListedCore],
+) -> (moon_remote::station::bot::ReturnedBot, usize) {
+    let here = cores_sync::trace_cores(config);
+    let mut translation = uid_translation::UidTranslation::new(&here, listing);
+    let mut translated = returned.clone();
+    translation.access(&mut translated.access, true);
+    (translated, translation.unmapped())
 }
 
 /// A Telegram configuration without its bot: no token, no paired chat, no access.

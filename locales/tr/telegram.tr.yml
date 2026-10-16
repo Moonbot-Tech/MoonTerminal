@@ -249,6 +249,7 @@ telegram.server.groups_same: "İstasyondaki çekirdek grupları terminaldekilerl
 telegram.server.groups_differ: "İstasyondaki çekirdek grupları: %{station} · bu terminalde: %{terminal}. Botun çekirdeğe göre raporu istasyonunkileri kullanır."
 telegram.server.groups_send: "Grupları istasyona gönder"
 telegram.server.groups_pushed: "İstasyona gönderilen çekirdek grupları: %{n}."
+telegram.server.cores_unmapped: "Kimliği benzersiz olarak eşleştirilemediği için atlanan çekirdekler: %{n}."
 telegram.server.groups_unsupported: "İstasyon çekirdek gruplarını henüz bilmiyor — çekirdeğe göre raporu gruplara bölmek için onu güncelleyin."
 telegram.server.cores_count: "istasyonda %{station} · burada %{here}"
 telegram.server.cores_sync_hint: "Çekirdek adıyla değil, adresiyle tanınır. İstasyon kendiliğinden hiçbir şey kaybetmez: Bağlantılar bölümündeki Kaydet istasyonu değiştirmez; bu terminalde bulunmayan bir çekirdek, siz buradan kaldırana kadar istasyonda kalır."

@@ -9,6 +9,69 @@ use moon_remote::ssh::Target;
 use moon_remote::station::access::AddressChange;
 use moon_remote::station::bot::ReturnedBot;
 
+/// Retrying a failed save must map raw station UID 1 to terminal XBETA UID 2 exactly once,
+/// while both the saved config and an open draft receive XALPHA UID 1 from station UID 11.
+#[test]
+fn issue_891_return_save_retry_keeps_raw_grants_and_updates_saved_and_draft_configs() {
+    use super::{cores_sync, returned_to_terminal};
+    use moon_core::config::ServerConfig;
+    use moon_core::station_api::ListedCore;
+
+    let key = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA=="; // gitleaks:allow
+    let servers = [(1, "XALPHA"), (2, "XBETA")]
+        .into_iter()
+        .map(|(uid, name)| {
+            let mut server: ServerConfig = serde_json::from_str("{\"id\":1}").unwrap();
+            server.uid = uid;
+            server.name = name.into();
+            server.key = Secret::new(key);
+            server.endpoint_override = format!("{name}.example.invalid:4510");
+            server.endpoint_to_station = true;
+            server
+        })
+        .collect();
+    let mut saved = AppConfig::headless(servers);
+    let listing: Vec<_> = cores_sync::trace_cores(&saved)
+        .iter()
+        .zip([11, 1])
+        .map(|(core, uid)| ListedCore {
+            uid,
+            name: core.name.clone(),
+            address: core.address.clone(),
+            key_fp: Some(core.key_fp.clone()),
+            endpoint_override: Some(core.endpoint_override.clone()),
+        })
+        .collect();
+    let mut access = TelegramConfig::default();
+    access.pair_chat(101);
+    access.pair_chat(202);
+    access.chat_profile_mut(202).core_uids = vec![11, 1, 99];
+    let raw = ReturnedBot {
+        token: Secret::new("synthetic-returned"),
+        access: Access::of(&access),
+    };
+    let mut draft = Some(saved.clone());
+    let (translated, unmapped) = returned_to_terminal(&saved, &raw, &listing);
+    assert_eq!(unmapped, 1);
+    assert_eq!(translated.access.chat_access[0].core_uids, [1, 2]);
+    assert!(
+        save_returned_bot(&mut saved, &mut draft, &translated, |_| Err(
+            anyhow::anyhow!("synthetic failure")
+        ))
+        .is_err()
+    );
+    assert!(saved.telegram.token.is_empty());
+    assert!(draft.as_ref().unwrap().telegram.token.is_empty());
+    assert_eq!(raw.access.chat_access[0].core_uids, [11, 1, 99]);
+    let (translated, unmapped) = returned_to_terminal(&saved, &raw, &listing);
+    assert_eq!(unmapped, 1);
+    assert!(save_returned_bot(&mut saved, &mut draft, &translated, |_| Ok(())).unwrap());
+    for config in [&saved, draft.as_ref().unwrap()] {
+        assert_eq!(config.telegram.chat_access[0].core_uids, [1, 2]);
+        assert_eq!(config.telegram.owner_chat_id, Some(101));
+    }
+}
+
 /// Ignoring station presence would start a second bot even without a pending hand-over journal.
 /// Removal permits local polling again, but cannot bypass unresolved or unreadable ownership.
 #[test]
@@ -361,7 +424,7 @@ fn queued_access_changes_and_forgetting_recheck_recovery_state() {
         .split("    fn station_next(")
         .next()
         .unwrap();
-    assert!(begin.find("job.changes_access()").unwrap() < begin.find("job::start(job)").unwrap());
+    assert!(begin.find("job.changes_access()").unwrap() < begin.find("job::start(job,").unwrap());
     assert!(begin.contains("self.station.access_refusal()"));
     let view = include_str!("../../settings/telegram/server_bot.rs");
     let forget = view
