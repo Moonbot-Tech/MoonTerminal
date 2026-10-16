@@ -347,10 +347,10 @@ impl ReadyPass {
     /// Returns:
     ///     "all" on every other axis, whatever the menu holds: the filter is drawn only on
     ///     "Entry/Exit", so it must not narrow a list where it cannot be seen. There, the
-    ///     user's menu choice, "all" until one is made.
+    ///     user's menu choice, "can tune" until one is made.
     pub(in crate::analytics) fn filter(&self, ticks_axis: bool) -> ReadyFilter {
         if ticks_axis {
-            self.chosen.unwrap_or(ReadyFilter::All)
+            self.chosen.unwrap_or(ReadyFilter::Can)
         } else {
             ReadyFilter::All
         }
