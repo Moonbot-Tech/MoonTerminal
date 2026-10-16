@@ -121,6 +121,29 @@ pub(super) fn listings_complete(generation: u64) -> bool {
         .clone();
     cores.is_some_and(|cores| all_listed(&cores, generation))
 }
+
+/// Required cores whose listing has not completed for `generation` — what the station log names
+/// when retention gives up waiting, since that barrier decides whether a pass deletes anything.
+/// `None` while the session has not published its cores yet, which holds the barrier as well.
+pub(super) fn unlisted(generation: u64) -> Option<Vec<u64>> {
+    let cores = REQUIRED_CORES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()?;
+    let listings = LISTINGS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Some(
+        cores
+            .into_iter()
+            .filter(|core| {
+                listings
+                    .get(core)
+                    .is_none_or(|entry| entry.1 != Some(generation))
+            })
+            .collect(),
+    )
+}
 static STATUS: Mutex<TapeCatchup> = Mutex::new(TapeCatchup {
     running: false,
     auto: None,
@@ -265,6 +288,21 @@ pub(crate) fn listing_generation(core: u64) -> Option<u64> {
 /// Queue completion after every submitted page so purge planning cannot outrun known trades.
 pub fn listed(core: u64, generation: u64) {
     super::send(Cmd::Listed { core, generation });
+}
+
+/// Settle at once the listing of a core that can attribute nothing: its platform is not in the
+/// exchange directory, so no report row can name a venue and the listing would protect no
+/// market. Left unlisted, such a core held [`listings_complete`] open forever, and every purge
+/// then kept all tape of every market — the age limit and the emulator choice alike. Applied
+/// directly: the queued [`listed`] only orders completion behind submitted pages, and there are
+/// none.
+///
+/// The cost, chosen by LinKvo on 2026-10-16: tape on such a core's own markets goes by age
+/// alone. Its trades are never known, so one straddling the retention edge loses its older part
+/// and its emulator tape stays until it ages out — as for a live close on an unknown venue.
+pub fn listed_empty(core: u64, generation: u64) {
+    listing_started(core, generation);
+    listing_applied(core, generation);
 }
 
 /// Apply a successful completion only when its retention generation is still current.

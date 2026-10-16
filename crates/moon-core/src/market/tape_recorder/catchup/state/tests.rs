@@ -464,6 +464,37 @@ fn retention_drops_tape_that_ages_out() {
     );
 }
 
+/// A required core on a platform the exchange directory does not know can never list; once its
+/// empty listing is settled, the barrier closes and aged tape goes. Before, every pass fell back
+/// to keeping all tape after ten minutes, and a station's file never shrank.
+#[test]
+fn a_venue_less_core_does_not_hold_aged_tape() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(1, true);
+    let core = 70_001;
+    catchup::require_listings(vec![core]);
+    catchup::listed_empty(core, catchup::relist_gen());
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    cache.insert(
+        "synthetic",
+        "SYNUSDT",
+        NOW - 3 * DAY,
+        NOW - 2 * DAY,
+        vec![],
+        crate::market::trade_replay::tick_tiles::TileSource::Core,
+    );
+    let mut state = RecorderCatchup::default();
+    settle(&mut state, &cache, NOW);
+    assert!(
+        cache
+            .held_spans("synthetic", "SYNUSDT", i64::MIN, i64::MAX)
+            .unwrap()
+            .is_empty()
+    );
+}
+
 /// Without a deferred request, forever retention would never revisit an emulator purge vetoed by an offline report.
 #[test]
 fn incomplete_listing_defers_emulator_purge() {
