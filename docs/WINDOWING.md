@@ -27,6 +27,11 @@ Current factories:
   button; minimizing a Main/group window never minimizes it.
 - `trade_window_options` - one closed trade replayed beside Main. Independent and hidden from
   the taskbar, like a detached chart, with a minimum size the detached-chart factory does not take.
+  Its titlebar uses Minimize, Maximize/Restore and Close, matching detached panels and Profit
+  Monitor. Double-clicking the title cluster uses MoonUI's native titlebar gesture. This is the
+  historical trade-detail window opened from Report, not the main manual-trading window.
+  The shared `WindowLayout.trade_window` geometry retains the restore rectangle, maximized flag
+  and display UUID; reopening passes that state through `window_bounds_for`.
 - `login_window_options` - the startup login prompt. Standalone, with the application icon and
   a taskbar button, because it can open before any group window exists.
 

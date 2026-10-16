@@ -1282,6 +1282,7 @@ fn secondary_window_frames_expose_maximize_without_changing_login() {
         "core_expert/render.rs",
         "diagnostics/debug_window.rs",
         "window/detached.rs",
+        "trade_window/render.rs",
     ] {
         let source = code_only(&read_unsplit(path));
         let mut checked = 0;
@@ -1307,16 +1308,31 @@ fn secondary_window_frames_expose_maximize_without_changing_login() {
     }
     let login = code_only(&fs::read_to_string(root.join("window/login.rs")).unwrap());
     assert!(!login.contains("MinimizeMaximizeClose"));
-    // The pinned MoonUI cannot request maximize without minimize. A taskbar-hidden chart/trade
-    // window must stay Close-only until the upstream frame exposes a maximize-and-close set.
-    for path in [
-        "chart_tabs/detached_host/render.rs",
-        "trade_window/render.rs",
-    ] {
-        let source = code_only(&fs::read_to_string(root.join(path)).unwrap());
-        assert!(source.contains(".controls(MoonWindowFrameControls::Close)"));
-        assert!(!source.contains("MinimizeMaximizeClose"));
-    }
+    // Detached live charts retain Close-only chrome; historical trade-detail windows use the
+    // same full set as detached panels and Profit Monitor.
+    let source = code_only(&read_src("chart_tabs/detached_host/render.rs"));
+    assert!(source.contains(".controls(MoonWindowFrameControls::Close)"));
+    assert!(!source.contains("MinimizeMaximizeClose"));
+}
+
+/// Losing the trade opener's saved state or its bounds observer breaks reopen-after-maximize.
+/// The title cluster already owns native drag/double-click input; no overlay may cover controls.
+#[test]
+fn trade_detail_window_keeps_geometry_and_native_chrome_wiring() {
+    let window = code_only(&read_src("trade_window/window.rs"));
+    assert!(window.contains("(geom.maximized, geom.fullscreen)"));
+    assert!(window.contains("window_bounds_for(saved_state.0, saved_state.1, bounds)"));
+    assert!(window.contains("saved.and_then(|geom| geom.display_uuid)"));
+    let constructor = braced_body(&window, "fn new_view(");
+    assert!(constructor.contains("window_geom_rect(window, cx)"));
+    assert!(constructor.contains("remembered_geometry(b.layout.trade_window, geom, cascade_px)"));
+    assert!(constructor.contains("b.layout.trade_window = Some(geom)"));
+    assert!(constructor.contains("b.layout_dirty = true"));
+    let render = code_only(&read_src("trade_window/render.rs"));
+    let header = braced_body(&render, "fn trade_header(");
+    assert!(header.contains(".title_cluster(title, cx)"));
+    assert!(header.contains("frame.visual_controls(cx).flex_none()"));
+    assert!(!header.contains(".hit_overlay("));
 }
 
 /// Restoring the old windowed-only reader or constant-false restore flags loses maximized charts;
