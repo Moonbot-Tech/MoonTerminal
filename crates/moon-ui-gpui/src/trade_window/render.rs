@@ -91,8 +91,69 @@ pub(super) fn rail_wraps(viewport_w: f32) -> bool {
     viewport_w < NARROW_W
 }
 
+/// Lay out title and controls without letting a long trade name squeeze the native buttons.
+///
+/// The settings and scale slots are supplied by the view; a headless layout test can exercise
+/// this same row without constructing a backend or fetching a trade. Embedded panes omit chrome.
+fn trade_header(
+    title: String,
+    embedded: bool,
+    settings: AnyElement,
+    scale: AnyElement,
+    cx: &App,
+) -> Div {
+    let p = MoonPalette::active(cx);
+    let frame = MoonWindowFrame::detached_chart("trade-window-frame", 0.0)
+        .header_height(HEADER_H)
+        .controls(MoonWindowFrameControls::MinimizeMaximizeClose)
+        .show_controls(design::show_custom_window_controls());
+    let title_el = match embedded {
+        true => div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_size(design::t_body(cx))
+            .text_color(moon(p.text))
+            .child(title)
+            .into_any_element(),
+        false => frame
+            .title_cluster(title, cx)
+            .h_full()
+            .flex_1()
+            .min_w_0()
+            .items_center()
+            .into_any_element(),
+    };
+    h_flex()
+        .h(design::fit_h_px(cx, HEADER_H, 13.0, 10.5))
+        .w_full()
+        .items_center()
+        .gap(design::ui_px(cx, design::CHROME_GAP))
+        .pl(design::ui_px(
+            cx,
+            if embedded {
+                8.0
+            } else {
+                design::titlebar_leading_inset()
+            },
+        ))
+        .pr(design::ui_px(cx, 6.0))
+        .border_b_1()
+        .border_color(moon(p.border))
+        .bg(moon(p.shell_high))
+        .child(title_el)
+        .child(design::chrome_section(cx).child(settings))
+        .child(design::chrome_divider(cx, p))
+        .child(design::chrome_section(cx).child(scale))
+        // Use the same frame for the title's native drag/double-click zone and the buttons.
+        // Fixed controls leave truncation to the title at the minimum supported window width.
+        .when(!embedded && design::show_custom_window_controls(), |el| {
+            el.child(frame.visual_controls(cx).flex_none())
+        })
+}
+
 impl Render for TradeWindowView {
-    /// Render the focused trade and its remembered neighbouring-trades control.
+    /// Render the focused trade with resizable chart space and native window controls.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // A pane leaves the keyboard to the window it sits in: no focus of its own to restore,
         // no keys, no window chrome (`Host::Embedded`).
@@ -102,31 +163,11 @@ impl Render for TradeWindowView {
         }
         let p = MoonPalette::active(cx);
         let narrow = rail_wraps(f32::from(window.viewport_size().width));
-        // The header's ACTUAL height, not the constant it is built from: that constant is scaled,
-        // so a raw value drifts under a non-default UI or font scale.
-        let header_h = design::fit_h_px(cx, HEADER_H, 13.0, 10.5);
-        let frame = MoonWindowFrame::detached_chart("trade-window-frame", 0.0)
-            .header_height(HEADER_H)
-            .controls(MoonWindowFrameControls::Close)
-            .show_controls(design::show_custom_window_controls());
         let title = format!("{} · {}", self.record.coin, self.stamps.1);
-        let title_el = match embedded {
-            true => div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_size(design::t_body(cx))
-                .text_color(moon(p.text))
-                .child(title)
-                .into_any_element(),
-            false => frame
-                .title_cluster(title, cx)
-                .h_full()
-                .flex_1()
-                .min_w_0()
-                .items_center()
-                .into_any_element(),
-        };
+        let settings = self.settings_popup_host(cx).into_any_element();
+        let scale =
+            crate::controls::scale_dropdown_for_trade_window(cx, self.scale(cx), cx.entity(), p);
+        let header = trade_header(title, embedded, settings, scale, cx);
         // Built per branch rather than cloned: `AnyElement` is single-use by construction, which
         // is also what keeps a stray second mount from silently sharing element ids.
         let body = self.chart_area(p, cx);
@@ -181,67 +222,7 @@ impl Render for TradeWindowView {
                         },
                     ))
             })
-            .child(
-                h_flex()
-                    .h(header_h)
-                    .w_full()
-                    .items_center()
-                    .gap(design::ui_px(cx, design::CHROME_GAP))
-                    // A pane has no traffic lights to clear.
-                    .pl(design::ui_px(
-                        cx,
-                        if embedded {
-                            8.0
-                        } else {
-                            design::titlebar_leading_inset()
-                        },
-                    ))
-                    .pr(design::ui_px(cx, 6.0))
-                    .border_b_1()
-                    .border_color(moon(p.border))
-                    .bg(moon(p.shell_high))
-                    .child(title_el)
-                    // THE SETTINGS POPUP: one ⚙ for everything this window draws, including the
-                    // "other trades" toggle that used to sit here as a bare checkbox. The header
-                    // has a hard minimum width and every control on it is `flex_none`; one button
-                    // is what fits beside the scale and the close control.
-                    .child(design::chrome_section(cx).child(self.settings_popup_host(cx)))
-                    // THE VERTICAL-SCALE CONTROL: one remembered zoom for every trade window,
-                    // written through `pick_scale` into `WindowLayout.trade_window_scale` and
-                    // restored when the next window opens. Auto (`None`) is the default when
-                    // nothing has been saved yet.
-                    //
-                    // The chart's own badge states what the pane is CURRENTLY on and is part of
-                    // this view's caption set; this trigger states what was PICKED. Reached
-                    // through the `controls` facade because the `scale` module behind it is
-                    // private.
-                    //
-                    // `chrome_section` is `flex_none`, for the same reason the close button below
-                    // is: the title cluster beside it is `flex_1().min_w_0()` and would otherwise
-                    // squeeze the trigger to nothing at the minimum window width. The row's own
-                    // `CHROME_GAP` supplies the space on both sides of the rule, so the divider
-                    // carries no margin of its own.
-                    .child(design::chrome_divider(cx, p))
-                    .child(design::chrome_section(cx).child(
-                        crate::controls::scale_dropdown_for_trade_window(
-                            cx,
-                            self.scale(cx),
-                            cx.entity(),
-                            p,
-                        ),
-                    ))
-                    // THE CLOSE BUTTON. `.controls(...)` and `.show_controls(...)` above only
-                    // CONFIGURE the frame; the buttons are drawn by this separate call, and
-                    // without it the window has no chrome affordance at all. That is not a
-                    // cosmetic loss here: `trade_window_options` hides the taskbar button too,
-                    // so an unmounted control leaves the window with no way out.
-                    //
-                    // `flex_none` because the sibling title cluster is `flex_1().min_w_0()` and
-                    // would otherwise squeeze the button to zero at the minimum window width.
-                    .when(!embedded && design::show_custom_window_controls(), |el| {
-                        el.child(frame.visual_controls(cx).flex_none())
-                    }),
-            )
+            .child(header)
             .when(narrow && !self.hide_rail, |el| {
                 el.child(figures::rail(
                     &self.record,
@@ -276,6 +257,9 @@ impl Render for TradeWindowView {
             .when(!embedded, |el| el.child(modifier_hook))
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 impl TradeWindowView {
     /// The chart, or the overlay that stands in for it.

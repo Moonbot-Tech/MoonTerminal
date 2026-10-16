@@ -155,6 +155,46 @@ fn remembered_trade_window_geometry_never_persists_a_cascade_offset() {
     }
 }
 
+/// Dropping the state flags while remembering or serializing a trade reopens it windowed;
+/// retaining a stale true flag prevents a restored window from reopening at its normal size.
+#[test]
+fn trade_window_maximize_and_restore_round_trip_through_layout() {
+    use gpui::{Bounds, WindowBounds, point, px, size};
+    use moon_core::config::layout::WindowLayout;
+    let display = uuid::Uuid::from_u128(0xfeed_cafe_dead_beef_0123_4567_89ab_cdef);
+    let previous = rect(100, 200, 1100, 720, Some(display));
+    for cascade in [0.0, 34.0] {
+        for maximized in [true, false] {
+            let mut observed = rect(100 + cascade as i32, 200 + cascade as i32, 1100, 720, None);
+            observed.maximized = maximized;
+            let mut layout = WindowLayout::default();
+            layout.trade_window = Some(remembered_geometry(Some(previous), observed, cascade));
+            let encoded = serde_json::to_string(&layout).expect("serialize layout");
+            let restored: WindowLayout = serde_json::from_str(&encoded).expect("restore layout");
+            let saved = restored.trade_window.expect("trade geometry retained");
+            assert_eq!(saved.display_uuid, Some(display));
+            let bounds = Bounds {
+                origin: point(px(saved.x as f32), px(saved.y as f32)),
+                size: size(px(saved.w as f32), px(saved.h as f32)),
+            };
+            let native = crate::window::windowing::window_bounds_for(
+                saved.maximized,
+                saved.fullscreen,
+                bounds,
+            );
+            let expected = Bounds {
+                origin: point(px(100.0), px(200.0)),
+                size: size(px(1100.0), px(720.0)),
+            };
+            match (maximized, native) {
+                (true, WindowBounds::Maximized(actual))
+                | (false, WindowBounds::Windowed(actual)) => assert_eq!(actual, expected),
+                (_, actual) => panic!("wrong reopened state: {actual:?}"),
+            }
+        }
+    }
+}
+
 /// Publishing only the focus when enabled, or the full history when disabled, hides/shows the
 /// wrong arrows. Restoring the retained snapshot must also preserve neighbours outside replay.
 #[test]
