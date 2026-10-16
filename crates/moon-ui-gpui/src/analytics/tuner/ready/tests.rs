@@ -2,7 +2,7 @@
 //! the rerun gap. No user data, no live view.
 // Not `super::*`: the parent's `gpui::*` brings gpui's own `test` attribute.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use super::super::ticks::readiness::Readiness;
@@ -180,4 +180,122 @@ fn strategies_are_counted_in_list_order_and_a_cancel_stops() {
     let cancelled = ReadyProgress::default();
     cancelled.cancel();
     assert!(count_strategies(groups, |_| Vec::new(), &cancelled, Duration::ZERO).is_none());
+}
+
+fn market(coin: &str) -> (String, String) {
+    ("EXA".to_string(), coin.to_string())
+}
+
+/// A finished pass: "1@1" has a tapeless row on XALPHA, "2@1" is fully covered.
+fn finished() -> ReadyPass {
+    let mut pass = ReadyPass::default();
+    let (seq, progress) = pass.begin(key(1, 1), Instant::now());
+    progress.wait_on("1@1", market("XALPHA"));
+    let counts = HashMap::from([
+        ("1@1".to_string(), ready(3, 3)),
+        ("2@1".to_string(), ready(40, 40)),
+    ]);
+    assert_eq!(pass.land(seq, Ok(Some(counts))), (true, false));
+    pass
+}
+
+/// Leaving the tab and coming back, or picking a row, moves the tape revision (the card's own
+/// replay files its markets) and nothing else: the finished counts stand, no pass starts and
+/// the finished caption stays.
+#[test]
+fn a_tape_move_that_touches_no_tapeless_row_keeps_the_finished_pass() {
+    let mut pass = finished();
+    let seq = pass.seq;
+    let moved = ReadyKey {
+        tape_rev: 7,
+        ..key(1, 1)
+    };
+    let refiled = HashSet::from([market("XBETA")]);
+    let stale = pass.stale_strategies(&moved, &refiled).expect("same scope");
+    assert!(stale.is_empty());
+    pass.adopt(moved);
+    assert_eq!(pass.launched, Some(moved));
+    assert_eq!(pass.seq, seq, "no new pass");
+    assert!(matches!(pass.run, ReadyRun::Done));
+    assert_eq!(pass.counts.len(), 2);
+    assert_eq!(
+        pass.status(2),
+        Some((
+            rust_i18n::t!("analytics.ready.done", n = 1, m = 2).to_string(),
+            false
+        ))
+    );
+    assert_eq!(
+        pass.stale_strategies(&moved, &HashSet::new()),
+        Some(HashSet::new()),
+        "the same inputs again ask for nothing"
+    );
+}
+
+/// A covered strategy is not recounted for its market's filing: only a tapeless row can gain.
+#[test]
+fn a_filing_recounts_only_the_strategies_waiting_on_it() {
+    let mut pass = finished();
+    let moved = ReadyKey {
+        tape_rev: 7,
+        ..key(1, 1)
+    };
+    let refiled = HashSet::from([market("XALPHA")]);
+    let stale = pass.stale_strategies(&moved, &refiled).expect("same scope");
+    assert_eq!(stale, HashSet::from(["1@1".to_string()]));
+    let (seq, progress) = pass.begin_partial(moved, Instant::now(), &stale);
+    assert_eq!(pass.counts.len(), 2, "the kept counts stay on screen");
+    assert_eq!(
+        progress.counts(),
+        (1, 2),
+        "the kept strategy counts as done, the stale one is still owed"
+    );
+    assert!(
+        pass.fraction().is_some_and(|f| f < 1.0),
+        "the bar is not full yet"
+    );
+    let counts = HashMap::from([("1@1".to_string(), ready(30, 30))]);
+    assert_eq!(pass.land(seq, Ok(Some(counts))), (true, false));
+    assert_eq!(pass.counts.len(), 2, "merged, not replaced");
+    assert_eq!(pass.counts["1@1"].fit, 30);
+    assert_eq!(pass.counts["2@1"].fit, 40);
+    assert_eq!(
+        pass.stale_strategies(&moved, &refiled),
+        Some(HashSet::new()),
+        "the recount left nothing waiting on XALPHA"
+    );
+}
+
+/// A report, scope or model move asks for a whole pass; so does anything before one finished.
+#[test]
+fn a_real_input_change_recounts_everything() {
+    let pass = finished();
+    let none = HashSet::new();
+    assert_eq!(
+        pass.stale_strategies(&key(1, 2), &none),
+        None,
+        "report moved"
+    );
+    assert_eq!(
+        pass.stale_strategies(&key(2, 1), &none),
+        None,
+        "scope moved"
+    );
+    let model = ReadyKey {
+        min_tail_s: 60,
+        ..key(1, 1)
+    };
+    assert_eq!(pass.stale_strategies(&model, &none), None, "model moved");
+    let mut running = ReadyPass::default();
+    assert_eq!(
+        running.stale_strategies(&key(1, 1), &none),
+        None,
+        "never ran"
+    );
+    running.begin(key(1, 1), Instant::now());
+    assert_eq!(
+        running.stale_strategies(&key(1, 1), &none),
+        None,
+        "still running"
+    );
 }
