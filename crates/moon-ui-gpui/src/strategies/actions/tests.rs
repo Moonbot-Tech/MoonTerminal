@@ -2,11 +2,13 @@
 
 use super::{
     FieldEditPlan, StartStopPlan, buy_refresh_enabled, field_edit_plan_authorized,
-    start_stop_core_scope, start_stop_payload, strategy_action_authorized, strategy_targets_exist,
+    retain_live_field_edits, start_stop_core_scope, start_stop_payload, strategy_action_authorized,
+    strategy_targets_exist,
 };
 use crate::strategies::filter::{QuickFilter, StrategyFilter};
 use crate::strategies::tree::ops::NavNode;
-use moon_core::feed::StrategyRow;
+use moon_core::feed::{FeedMsg, StrategyRow};
+use moon_core::session::CoreStore;
 use moon_core::session::store::CoreData;
 use std::collections::HashMap;
 
@@ -304,6 +306,157 @@ fn field_apply_refuses_a_missing_live_strategy() {
         .expect("field Apply dispatcher must exist")
         .1;
     assert!(apply.contains("strategy_targets_exist(&plan.targets"));
+}
+
+/// Build a synthetic snapshot row; folder paths distinguish bulk removal from single deletion.
+fn draft_row(id: u64, folder: &str) -> StrategyRow {
+    StrategyRow {
+        id,
+        name: format!("DROPS_{id:02}"),
+        kind: "Test".into(),
+        kind_ordinal: 0,
+        folder_path: folder.into(),
+        checked: false,
+        is_short: false,
+        fields: Vec::new(),
+    }
+}
+
+/// Publish exactly the same store message used for core-originated, folder and drag deletions.
+fn draft_snapshot(store: &mut CoreStore, core: u64, rows: Vec<StrategyRow>) {
+    store.ensure(core);
+    store
+        .core_mut(core)
+        .unwrap()
+        .apply(FeedMsg::Strategies(rows));
+}
+
+/// Keeping an orphan would leave the action bar pending and poison a later surviving edit.
+/// Matching id alone would instead discard the other core's still-live draft.
+#[test]
+fn field_drafts_drop_deleted_identity_and_allow_a_later_apply() {
+    const CORE_A: u64 = 7;
+    const CORE_B: u64 = 8;
+    let mut store = CoreStore::default();
+    draft_snapshot(&mut store, CORE_A, vec![draft_row(1, ""), draft_row(2, "")]);
+    draft_snapshot(&mut store, CORE_B, vec![draft_row(1, "")]);
+    let mut edits = HashMap::from([
+        ((CORE_A, 1, "OrderSize".into()), "20".into()),
+        ((CORE_A, 1, "Short".into()), "Yes".into()),
+        ((CORE_B, 1, "OrderSize".into()), "30".into()),
+    ]);
+    assert!(!retain_live_field_edits(&mut edits, &store));
+    draft_snapshot(&mut store, CORE_A, vec![draft_row(2, "")]);
+    assert!(retain_live_field_edits(&mut edits, &store));
+    assert_eq!(
+        edits,
+        HashMap::from([((CORE_B, 1, "OrderSize".into()), "30".into())])
+    );
+    let empty = FieldEditPlan::capture(&edits, Some(&[CORE_A]), None);
+    assert!(empty.edit_keys().is_empty());
+    assert!(empty.targets.is_empty() && empty.actions.is_empty());
+
+    edits.insert((CORE_A, 2, "OrderSize".into()), "40".into());
+    let next = FieldEditPlan::capture(&edits, Some(&[CORE_A]), None);
+    assert_eq!(next.targets, vec![(CORE_A, 2)]);
+    assert_eq!(
+        next.actions,
+        vec![(CORE_A, vec![(2, vec![("OrderSize".into(), "40".into())])])]
+    );
+    assert!(strategy_targets_exist(&next.targets, |(core, id)| {
+        crate::strategies::logic::row(&store, core, id).is_some()
+    }));
+}
+
+/// Cleaning only a selection/delete handler misses folder children, drag removals and hidden
+/// cores. Sequential store replacements must retire every absent draft without touching survivors.
+#[test]
+fn field_drafts_reconcile_folder_and_drag_removals_from_store() {
+    const CORE_A: u64 = 7;
+    const CORE_B: u64 = 8;
+    let mut store = CoreStore::default();
+    draft_snapshot(
+        &mut store,
+        CORE_A,
+        vec![
+            draft_row(1, "DROPS"),
+            draft_row(2, "DROPS/CHILD"),
+            draft_row(3, ""),
+        ],
+    );
+    draft_snapshot(&mut store, CORE_B, vec![draft_row(1, "")]);
+    let mut edits = HashMap::from([
+        ((CORE_A, 1, "OrderSize".into()), "10".into()),
+        ((CORE_A, 2, "OrderSize".into()), "20".into()),
+        ((CORE_A, 3, "OrderSize".into()), "30".into()),
+        ((CORE_B, 1, "OrderSize".into()), "40".into()),
+    ]);
+    draft_snapshot(&mut store, CORE_A, vec![draft_row(3, "")]);
+    assert!(retain_live_field_edits(&mut edits, &store));
+    let visible = FieldEditPlan::capture(&edits, Some(&[CORE_B]), None);
+    assert_eq!(visible.targets, vec![(CORE_B, 1)]);
+    assert_eq!(edits.len(), 2);
+    draft_snapshot(&mut store, CORE_A, Vec::new());
+    assert!(retain_live_field_edits(&mut edits, &store));
+    assert_eq!(
+        edits,
+        HashMap::from([((CORE_B, 1, "OrderSize".into()), "40".into())])
+    );
+    // Reappearance of a deleted id must not resurrect the abandoned values.
+    draft_snapshot(&mut store, CORE_A, vec![draft_row(1, "")]);
+    assert!(!retain_live_field_edits(&mut edits, &store));
+    assert!(
+        FieldEditPlan::capture(&edits, Some(&[CORE_A]), None)
+            .actions
+            .is_empty()
+    );
+}
+
+/// Reducing a racing captured batch would send a subset on the first click. Removing the guard
+/// sends a vanished id; failing to reconcile afterwards makes every following click fail too.
+#[test]
+fn field_drafts_rebuild_after_a_racing_apply_refuses_the_whole_plan() {
+    const CORE_A: u64 = 7;
+    let mut store = CoreStore::default();
+    draft_snapshot(&mut store, CORE_A, vec![draft_row(1, ""), draft_row(2, "")]);
+    let mut edits = HashMap::from([
+        ((CORE_A, 1, "OrderSize".into()), "10".into()),
+        ((CORE_A, 2, "OrderSize".into()), "20".into()),
+    ]);
+    let captured = FieldEditPlan::capture(&edits, Some(&[CORE_A]), Some(9));
+    draft_snapshot(&mut store, CORE_A, vec![draft_row(2, "")]);
+    let before_refresh = FieldEditPlan::capture(&edits, Some(&[CORE_A]), Some(9));
+    assert!(field_edit_plan_authorized(
+        &captured,
+        &before_refresh,
+        Some(9),
+        Some(&[CORE_A])
+    ));
+    assert!(!strategy_targets_exist(&captured.targets, |(core, id)| {
+        crate::strategies::logic::row(&store, core, id).is_some()
+    }));
+    assert!(retain_live_field_edits(&mut edits, &store));
+    let next = FieldEditPlan::capture(&edits, Some(&[CORE_A]), Some(9));
+    assert_eq!(next.targets, vec![(CORE_A, 2)]);
+    assert_eq!(
+        next.actions,
+        vec![(CORE_A, vec![(2, vec![("OrderSize".into(), "20".into())])])]
+    );
+    assert!(!field_edit_plan_authorized(
+        &captured,
+        &next,
+        Some(9),
+        Some(&[CORE_A])
+    ));
+    assert!(field_edit_plan_authorized(
+        &next,
+        &next,
+        Some(9),
+        Some(&[CORE_A])
+    ));
+    assert!(strategy_targets_exist(&next.targets, |(core, id)| {
+        crate::strategies::logic::row(&store, core, id).is_some()
+    }));
 }
 
 /// `tree/dialogs.rs:request_delete_selection` must store exact targets and generation in `TreeOp`;

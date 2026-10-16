@@ -119,11 +119,80 @@ fn start_stop_payload<'a>(
 }
 
 impl FieldEditPlan {
+    /// Capture visible draft identities and values without requiring a UI context.
+    ///
+    /// `edits` retains every core's drafts; `workspace` only confines this plan. The generation
+    /// is captured by the view so delayed clicks retain the existing authority checks.
+    fn capture(
+        edits: &HashMap<FieldEditKey, String>,
+        workspace: Option<&[CoreId]>,
+        workspace_generation: Option<u64>,
+    ) -> Self {
+        let mut edit_keys: Vec<FieldEditKey> = edits
+            .keys()
+            .filter(|(core, _, _)| strategy_core_is_visible(workspace, *core))
+            .cloned()
+            .collect();
+        edit_keys.sort();
+        let mut targets: Vec<Key> = edit_keys.iter().map(|(core, id, _)| (*core, *id)).collect();
+        targets.sort_unstable();
+        targets.dedup();
+        let actions = group_field_edits(edits, &edit_keys);
+        Self {
+            workspace_generation,
+            targets,
+            edit_keys,
+            actions,
+        }
+    }
+
     /// The drafts this plan covers, for a caller that must narrow them (see
     /// [`StrategiesView::sendable_field_edits`]).
     pub(super) fn edit_keys(&self) -> &[FieldEditKey] {
         &self.edit_keys
     }
+}
+
+/// Drop drafts whose `(core, id)` no longer appears in that core's live strategy snapshot.
+///
+/// The store is authoritative regardless of selection, workspace visibility, or deletion source.
+/// Returns whether any draft was removed; an empty map needs no store scan.
+fn retain_live_field_edits(edits: &mut HashMap<FieldEditKey, String>, store: &CoreStore) -> bool {
+    if edits.is_empty() {
+        return false;
+    }
+    let live = kind_ordinals(store, edits.keys().map(|(core, id, _)| (*core, *id)));
+    let before = edits.len();
+    edits.retain(|(core, id, _), _| live.contains_key(&(*core, *id)));
+    edits.len() != before
+}
+
+/// Group draft keys and their retained values into the canonical per-core command payload.
+///
+/// Shared by plan capture and dispatch of its sendable subset, preserving field order in both.
+fn group_field_edits(
+    edits: &HashMap<FieldEditKey, String>,
+    keys: &[FieldEditKey],
+) -> Vec<(CoreId, Vec<(u64, Vec<(String, String)>)>)> {
+    let mut grouped: std::collections::BTreeMap<
+        CoreId,
+        std::collections::BTreeMap<u64, Vec<(String, String)>>,
+    > = std::collections::BTreeMap::new();
+    for (core, id, field) in keys {
+        let Some(value) = edits.get(&(*core, *id, field.clone())) else {
+            continue;
+        };
+        grouped
+            .entry(*core)
+            .or_default()
+            .entry(*id)
+            .or_default()
+            .push((field.clone(), value.clone()));
+    }
+    grouped
+        .into_iter()
+        .map(|(core, strategies)| (core, strategies.into_iter().collect()))
+        .collect()
 }
 
 /// Return whether every captured target still belongs to the same workspace generation.
@@ -400,53 +469,23 @@ impl StrategiesView {
     /// Returns:
     ///     Canonical grouped edits plus every concrete `(core, strategy)` target.
     pub(super) fn field_edit_plan(&self, cx: &App) -> FieldEditPlan {
-        let mut edit_keys: Vec<FieldEditKey> = self
-            .field_edits
-            .keys()
-            .filter(|(core, _, _)| strategy_core_is_visible(self.workspace_cores.as_deref(), *core))
-            .cloned()
-            .collect();
-        edit_keys.sort();
-        let mut targets: Vec<Key> = edit_keys.iter().map(|(core, id, _)| (*core, *id)).collect();
-        targets.sort_unstable();
-        targets.dedup();
-
-        let actions = self.group_field_edits(&edit_keys);
-        FieldEditPlan {
-            workspace_generation: self.action_workspace_generation(cx),
-            targets,
-            edit_keys,
-            actions,
-        }
+        FieldEditPlan::capture(
+            &self.field_edits,
+            self.workspace_cores.as_deref(),
+            self.action_workspace_generation(cx),
+        )
     }
 
-    /// Group the given draft keys into the per-core payload the feed command carries.
+    /// Reconcile unsent drafts with the live store and retire widgets holding removed values.
     ///
-    /// Shared by the captured plan and by dispatch, which groups a SUBSET of the same drafts, so
-    /// the two cannot order or group one strategy's fields differently.
-    fn group_field_edits(
-        &self,
-        keys: &[FieldEditKey],
-    ) -> Vec<(CoreId, Vec<(u64, Vec<(String, String)>)>)> {
-        let mut grouped: std::collections::BTreeMap<
-            CoreId,
-            std::collections::BTreeMap<u64, Vec<(String, String)>>,
-        > = std::collections::BTreeMap::new();
-        for (core, id, field) in keys {
-            let Some(value) = self.field_edits.get(&(*core, *id, field.clone())) else {
-                continue;
-            };
-            grouped
-                .entry(*core)
-                .or_default()
-                .entry(*id)
-                .or_default()
-                .push((field.clone(), value.clone()));
+    /// Called on store refresh, including hidden cores, and after a racing Apply is refused.
+    /// Returns whether the action bar needs repainting; surviving drafts are preserved.
+    pub(super) fn reconcile_field_edits(&mut self, store: &CoreStore) -> bool {
+        if !retain_live_field_edits(&mut self.field_edits, store) {
+            return false;
         }
-        grouped
-            .into_iter()
-            .map(|(core, strategies)| (core, strategies.into_iter().collect()))
-            .collect()
+        self.clear_field_editor_cache();
+        true
     }
 
     /// The drafts among `keys` that the core would actually accept.
@@ -475,10 +514,10 @@ impl StrategiesView {
                 let Some(text) = self.field_edits.get(*key) else {
                     return false;
                 };
-                // A strategy or a kind this store cannot resolve is not judged here: the sender
-                // still has the snapshot's own value type to go on.
+                // No live row means there is no valid recipient. A live row without a schema
+                // remains sendable below, using the snapshot's own value type at the sender.
                 let Some(ord) = kinds.get(&(*core, *id)).copied() else {
-                    return true;
+                    return false;
                 };
                 let field = *fields
                     .entry((*core, ord, name.as_str()))
@@ -523,7 +562,7 @@ impl StrategiesView {
     ///     cx: View context used to reach the session and publish cleared visible editors.
     ///
     /// Returns:
-    ///     Nothing; a failed core dispatch returns before clearing any visible or hidden draft.
+    ///     Nothing; a failed dispatch retains drafts, while vanished targets lose their drafts.
     pub(super) fn apply_field_edits(
         &mut self,
         plan: &FieldEditPlan,
@@ -547,6 +586,10 @@ impl StrategiesView {
             !strategy_targets_exist(&plan.targets, |(core, id)| row(store, core, id).is_some())
         };
         if res {
+            log::warn!("field Apply refused: a target left the live strategy list");
+            let backend = self.backend.clone();
+            self.reconcile_field_edits(backend.read(cx).session.store());
+            cx.notify();
             return;
         }
         // Drafts the core would refuse are dropped HERE rather than in the captured plan: sending
@@ -566,7 +609,7 @@ impl StrategiesView {
         if sendable.is_empty() {
             return;
         }
-        let actions = self.group_field_edits(&sendable);
+        let actions = group_field_edits(&self.field_edits, &sendable);
         let b = self.backend.read(cx);
         if apply_to_orders && !self.can_refresh_buys(&sendable, b.session.store()) {
             return;

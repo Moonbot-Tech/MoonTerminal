@@ -394,6 +394,9 @@ impl StrategiesView {
             // notify of its own, and a cross-core cut waiting on its echo has a deadline that has
             // to elapse. Render alone would leave it pending until something repainted the window.
             let settle_cut = !this.cut_followups.is_empty();
+            // Draft cleanup follows the store, not a delete gesture or the visible signature:
+            // folder/drag/core deletes and changes on hidden cores all retire the same keys.
+            let drafts_dropped = this.reconcile_field_edits(b.session.store());
             if strategies_changed || goto {
                 if strategies_changed {
                     this.reconcile_ui_folders(b.session.store());
@@ -403,12 +406,12 @@ impl StrategiesView {
                 this.clamp_selected_section(cx);
                 this.persist_session(cx);
                 cx.notify();
-            } else if marker_moved || order_dropped {
+            } else if marker_moved || order_dropped || drafts_dropped {
                 // The arm above already repainted. This one covers the cases it does not reach:
                 // a core the preset HIDES connecting or leaving moves the marker's counts while
                 // `strategies_sig` — which folds only over cores the scope already shows — does
-                // not budge; and an expired reorder overlay changes what the tree draws without
-                // any core having sent anything.
+                // not budge; an expired reorder overlay changes what the tree draws without
+                // any core having sent anything; hidden-core removals can also retire drafts.
                 cx.notify();
             }
             // LAST, after the backend read above is released: this one takes `cx` mutably. Here
