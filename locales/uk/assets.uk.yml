@@ -2,6 +2,14 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
+# Per-core dust conversion; the existing Engine result supplies completion feedback.
+assets.dust.button: "Пил у %{token}"
+assets.dust.title: "Конвертація пилу"
+assets.dust.hint: "Конвертувати всі придатні малі залишки цього ядра в %{token}"
+assets.dust.question: "Конвертувати весь придатний пил ядра %{core} (%{venue}) в %{token}? Дія незворотна. Придатні залишки визначає біржа."
+assets.dust.unavailable: "Конвертацію скасовано: ядро відключено, не підтримується або поза поточною областю активів."
+assets.dust.failed: "Команду конвертації не надіслано: ядро недоступне."
+
 assets.window_title: "MoonTerminal — Активи"
 # Hint for the top-bar dust-threshold slider; 0 shows everything.
 assets.min_value_hint: "Ховати активи дешевші за N $ (0 — показати все; коліщатко миші змінює)"

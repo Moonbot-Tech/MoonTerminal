@@ -28,6 +28,7 @@ mod balances;
 mod cache;
 mod collect;
 mod columns;
+mod dust;
 mod render;
 mod roster_width;
 mod settings;
