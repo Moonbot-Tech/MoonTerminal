@@ -34,6 +34,13 @@ ignore = [
     # so it stays pinned and its yank is ignored until upstream publishes a clean version — then
     # drop this entry rather than widening it.
     { crate = "arrayref@0.3.9", reason = "yanked to force an upgrade to the compromised 0.3.10; see the note above" },
+    # 2026-10-16 — zip-rs yanked every release before 9.0.3 after GHSA-4v9h-p7m9-rh26,
+    # GHSA-vv5m-jxxh-4627 and GHSA-4684-h2q9-2vcp, all in `extract()` (symlink targets, SUID bits,
+    # permissions through symlinks). moon-core reads downloaded archives and is on 9.0.3; this
+    # 7.2.0 is only `rust_xlsxwriter`'s, which writes our own export files and never extracts.
+    # Its newest release still requires zip ^8.3, also fully yanked — drop this entry once
+    # rust_xlsxwriter accepts zip 9.
+    { crate = "zip@7.2.0", reason = "only rust_xlsxwriter's writer; the yank-causing advisories are all in extract(), which it never calls" },
 ]
 
 [bans]
