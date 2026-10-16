@@ -2,6 +2,14 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
+# Per-core dust conversion; the existing Engine result supplies completion feedback.
+assets.dust.button: "Bụi sang %{token}"
+assets.dust.title: "Chuyển đổi bụi"
+assets.dust.hint: "Chuyển tất cả số dư nhỏ đủ điều kiện của lõi này sang %{token}"
+assets.dust.question: "Chuyển tất cả bụi đủ điều kiện của lõi %{core} (%{venue}) sang %{token}? Không thể hoàn tác. Sàn giao dịch quyết định số dư đủ điều kiện."
+assets.dust.unavailable: "Đã hủy chuyển đổi: lõi ngoại tuyến, không được hỗ trợ hoặc ngoài phạm vi Tài sản hiện tại."
+assets.dust.failed: "Chưa gửi lệnh chuyển đổi: không thể kết nối với lõi."
+
 assets.window_title: "MoonTerminal — Tài sản"
 # Hint for the top-bar dust-threshold slider; 0 shows everything.
 assets.min_value_hint: "Ẩn tài sản trị giá dưới N $ (0 — hiện tất cả; con lăn chuột đổi)"

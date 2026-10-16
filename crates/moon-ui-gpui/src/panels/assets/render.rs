@@ -172,6 +172,7 @@ impl Render for AssetsView {
             .bg(rgb(p.table_body))
             .when(windowed, |this| this.child(assets_header(p, cx)))
             .child(core_bar)
+            .child(self.dust_core_headers(cx))
             .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)));
         // The asset table is always present. With wallets it uses its natural content height so the
         // lower section can expand; in a dock tab it fills the space above the footer.
