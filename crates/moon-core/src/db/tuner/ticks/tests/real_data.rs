@@ -773,6 +773,150 @@ fn print_report(items: &[(Deal, Verdict, String)], without_ms: usize) {
     );
 }
 
+/// A post-close tape shorter than this is the short-tail group.
+const SHORT_TAIL_MS: i64 = 60_000;
+
+/// The family of a core's sell reason, as a fixed label: an allow-list, never the reason's own
+/// words, so no ticker or strategy name in it can reach the output.
+fn reason_family(reason: &str) -> &'static str {
+    const FILTER_CHECK: &str = "Sell by FilterCheck:";
+    const FILTER_FNS: [(&str, &str); 7] = [
+        ("EMA", "Sell by FilterCheck:EMA"),
+        ("Max", "Sell by FilterCheck:Max"),
+        ("Min", "Sell by FilterCheck:Min"),
+        ("MAvg", "Sell by FilterCheck:MAvg"),
+        ("AVG", "Sell by FilterCheck:AVG"),
+        ("BTC", "Sell by FilterCheck:BTC"),
+        ("Vol", "Sell by FilterCheck:Vol"),
+    ];
+    const STOPS: [&str; 3] = [
+        "StopLoss AutoActivated",
+        "StopLoss Market Sell",
+        "TrailingStop AutoActivated",
+    ];
+    let reason = reason.trim();
+    if reason.eq_ignore_ascii_case(verify::REASON_TAKE) {
+        return verify::REASON_TAKE;
+    }
+    if let Some(line) = verify::REASONS_LINE
+        .iter()
+        .find(|r| verify::reason_starts_with(reason, r))
+    {
+        return line;
+    }
+    if verify::is_stop_reason(reason) {
+        return STOPS
+            .iter()
+            .find(|s| verify::reason_starts_with(reason, s))
+            .copied()
+            .unwrap_or("other");
+    }
+    if verify::reason_starts_with(reason, FILTER_CHECK) {
+        let rest = reason[FILTER_CHECK.len()..].trim_start();
+        let name: String = rest.chars().take_while(char::is_ascii_alphabetic).collect();
+        return FILTER_FNS
+            .iter()
+            .find(|(f, _)| name.eq_ignore_ascii_case(f))
+            .map_or("Sell by FilterCheck:other", |(_, label)| label);
+    }
+    "other"
+}
+
+/// Why a deal was not reproduced, off its verdict's own exit finding; `None` for a hit.
+fn miss_cause(finding: verify::ExitFinding) -> Option<String> {
+    use verify::{ExitFinding, ExitMiss, Unjudged};
+    Some(match finding {
+        ExitFinding::Hit => return None,
+        ExitFinding::Miss(ExitMiss::StopNotFired) => "✗stop-not-fired".to_string(),
+        ExitFinding::Miss(ExitMiss::NoLevel) => "✗no-level".to_string(),
+        ExitFinding::Miss(ExitMiss::Off(parts)) => {
+            let mut what: Vec<&str> = Vec::new();
+            if parts.level {
+                what.push("level");
+            }
+            if parts.late_ms.is_some() {
+                what.push("late");
+            }
+            if parts.first_unmatched.is_some() {
+                what.push("line");
+            }
+            format!("✗off({})", what.join("+"))
+        }
+        ExitFinding::Unjudged(Unjudged::Rule(rule)) => format!("··rule({rule:?})"),
+        ExitFinding::Unjudged(Unjudged::InGap) => "··in-gap".to_string(),
+        ExitFinding::Unjudged(Unjudged::TakeUnknown) => "··take-unknown".to_string(),
+        ExitFinding::Unjudged(Unjudged::OtherRule) => "··other-rule".to_string(),
+    })
+}
+
+/// The covered deals by (strategy kind, exit-reason family), split by verdict, the rows with the
+/// most deals not reproduced first. Counts only: nothing printed names a trade.
+/// `short_tail[i]` says whether `items[i]` holds under `SHORT_TAIL_MS` of tape past its close.
+fn print_reason_table(items: &[(Deal, Verdict, String)], short_tail: &[bool]) {
+    #[derive(Default)]
+    struct Row {
+        deals: usize,
+        hit: usize,
+        miss: usize,
+        unjudged: usize,
+        causes: std::collections::BTreeMap<String, usize>,
+    }
+    let mut rows: HashMap<(String, &'static str), Row> = HashMap::new();
+    for (deal, verdict, _) in items {
+        let row = rows
+            .entry((deal.kind.clone(), reason_family(&deal.sell_reason)))
+            .or_default();
+        row.deals += 1;
+        match verdict.exit_finding.verdict() {
+            Some(true) => row.hit += 1,
+            Some(false) => row.miss += 1,
+            None => row.unjudged += 1,
+        }
+        if let Some(cause) = miss_cause(verdict.exit_finding) {
+            *row.causes.entry(cause).or_default() += 1;
+        }
+    }
+    let mut rows: Vec<_> = rows.into_iter().collect();
+    rows.sort_by(|a, b| {
+        (b.1.miss + b.1.unjudged)
+            .cmp(&(a.1.miss + a.1.unjudged))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    let total = items.len().max(1);
+    let short_n = short_tail.iter().filter(|&&s| s).count();
+    // Not reproduced (✗ or ··) with a short tail: the group the tape, not the model, must fix.
+    let short_missed = items
+        .iter()
+        .zip(short_tail)
+        .filter(|((_, verdict, _), &short)| short && verdict.exit_finding.verdict() != Some(true))
+        .count();
+    eprintln!(
+        "
+----- exit reasons, by deals not reproduced -----"
+    );
+    for ((kind, family), row) in &rows {
+        let causes = row
+            .causes
+            .iter()
+            .map(|(c, n)| format!("{c} {n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "{kind:<12} {family:<36} deals {:>5} ({:>5.1}%) ✓ {:>5} ✗ {:>5} ·· {:>5}  {causes}",
+            row.deals,
+            row.deals as f64 * 100.0 / total as f64,
+            row.hit,
+            row.miss,
+            row.unjudged,
+        );
+    }
+    eprintln!(
+        "post-close tape under {} s: {short_n} of {} covered deals · {short_missed} of them not reproduced (✗ + ··)",
+        SHORT_TAIL_MS / 1000,
+        items.len()
+    );
+}
+
 fn round3(v: Option<f64>) -> Option<f64> {
     v.map(|d| (d * 1000.0).round() / 1000.0)
 }
@@ -956,6 +1100,8 @@ fn real_data_reproduction() {
     let mut partner_tally = PartnerTally::default();
     // Every covered deal with its verdict and venue, for the diagnostic report at the end.
     let mut report_items: Vec<(Deal, Verdict, String)> = Vec::new();
+    // Covered deals whose tape ends less than a minute after the close.
+    let mut short_tail: Vec<bool> = Vec::new();
     let mut take_diag = TakeFillDiag::default();
     let mut stop_diag = StopSlipDiag::default();
     let mut late_diag = LateBookedDiag::default();
@@ -1290,10 +1436,21 @@ fn real_data_reproduction() {
                 deal.close_ms,
             );
             if let Ok(dir) = std::env::var("MOON_TICKS_DUMP") {
+                // The dump carries the custom-EMA sell formula too, for an analysis outside.
+                let mut dump_keys = keys.clone();
+                dump_keys
+                    .extend(["SellByCustomEMA", "SellEMADelay", "SellByFilters"].map(String::from));
+                let dump_values = strategy_values_at(
+                    deal.strategy_id,
+                    Some(deal.core_uid),
+                    deal.buy_ms,
+                    &dump_keys,
+                )
+                .unwrap_or_else(|| values.clone());
                 dump_deal(
                     &dir,
                     &deal,
-                    &values,
+                    &dump_values,
                     &ticks,
                     &held,
                     exit_points.as_deref(),
@@ -1451,6 +1608,12 @@ fn real_data_reproduction() {
             *unfit.entry(why).or_default() += 1;
         }
         report_items.push((deal.clone(), archived, venue.clone()));
+        // Measured as the table does (`load.rs`, `row.held`): the held coverage's end past the
+        // close — `ticks` is only the model window's prints. No hull is the shortest tail.
+        let long_tail = covered
+            .hull()
+            .is_some_and(|(_, to)| to.saturating_sub(deal.close_ms).max(0) >= SHORT_TAIL_MS);
+        short_tail.push(!long_tail);
         take_diag.add(&deal, &ticks, &exit, exit_points.as_deref());
         stop_diag.add(&deal, &ticks, &exit);
         late_diag.add(&deal, &exit, exit_points.as_deref(), fit);
@@ -1488,6 +1651,7 @@ fn real_data_reproduction() {
         search::run(searched, kind, &defaults);
     }
     print_report(&report_items, read.without_ms);
+    print_reason_table(&report_items, &short_tail);
     eprintln!("kinds: {kinds_seen:?}");
     eprintln!(
         "with tape: {with_tape} · entry ✓ {entry_hits}/{entry_n} · exit ✓ {exit_hits}/{exit_n} · \
