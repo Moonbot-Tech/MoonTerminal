@@ -35,6 +35,8 @@ struct Due {
     window: AutoWindow,
     /// The chat's grant when the read was spawned; finish compares it again.
     access: TelegramReportAccess,
+    /// Chat preference captured with its schedule; the bot default is only a fallback.
+    view: moon_core::config::telegram_menu::ReportView,
 }
 
 /// What a test hands the read instead of the report database: one page for every due report.
@@ -127,6 +129,7 @@ fn due_reports(host: &dyn TgHost, file: &NotifyFile, now_utc: i64) -> Vec<Due> {
                     kind,
                     window,
                     access: access.clone(),
+                    view: entry.report_view.unwrap_or(telegram.bot.report_view),
                 });
             }
         }
@@ -159,10 +162,19 @@ fn read_all(due: &[Due], inputs: &AutoInputs, injected: Option<&InjectedAuto>) -
             return due.iter().map(|_| Err(())).collect();
         }
     };
+    read_all_on(&conn, due, inputs)
+}
+
+/// Render scheduled reports on an injected connection using each chat's captured preference.
+fn read_all_on(conn: &rusqlite::Connection, due: &[Due], inputs: &AutoInputs) -> Vec<Read> {
     due.iter()
         .map(|item| {
             let caption = caption(item.kind, &item.window, inputs.zone);
-            read_auto_report(&conn, &item.window, caption, inputs, &item.access).map_err(|error| {
+            let inputs = AutoInputs {
+                view: item.view,
+                ..inputs.clone()
+            };
+            read_auto_report(conn, &item.window, caption, &inputs, &item.access).map_err(|error| {
                 log::warn!(
                     "telegram auto report {:?} for chat {} not read: {error}",
                     item.kind,
@@ -204,7 +216,7 @@ fn offset_label(at: i64, zone: Tz) -> String {
 
 /// Queue what was read, on the owner thread, and always clear the busy flag.
 ///
-/// A report is queued only while its chat is still paired with the same grant, still has the
+/// A report is queued only while its chat is still paired with the same grant and view, still has the
 /// report on, and has not recorded its slot meanwhile; queuing records the slot. A chat with
 /// nothing to report records it without a message. A failed read records nothing.
 fn finish(host: &mut dyn TgHost, store_ptr: usize, due: Vec<Due>, reads: Vec<Read>, now_utc: i64) {
@@ -221,11 +233,18 @@ fn finish(host: &mut dyn TgHost, store_ptr: usize, due: Vec<Due>, reads: Vec<Rea
         .zip(reads)
         .filter(|(item, _)| {
             let telegram = &host.config().telegram;
+            let view = lock_store(&store)
+                .file
+                .chats
+                .get(&item.chat)
+                .and_then(|entry| entry.report_view)
+                .unwrap_or(telegram.bot.report_view);
             let same = telegram.authorized_chat_ids.contains(&item.chat)
-                && telegram.report_access(item.chat).as_ref() == Some(&item.access);
+                && telegram.report_access(item.chat).as_ref() == Some(&item.access)
+                && view == item.view;
             if !same {
                 log::debug!(
-                    "telegram auto report skipped for chat {}: grant changed",
+                    "telegram auto report skipped for chat {}: grant or view changed",
                     item.chat
                 );
             }

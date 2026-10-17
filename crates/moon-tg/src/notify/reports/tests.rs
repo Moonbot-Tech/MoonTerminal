@@ -6,6 +6,100 @@ use moon_core::telegram::notify::{AutoReport, ChatNotify};
 use super::{InjectedAuto, offset_label};
 use crate::notify::test_host::{CHAT, TempRoot, TickHost};
 
+/// A scheduled report must use the saved mode for both its table and its view-switch caption.
+#[test]
+fn scheduled_reports_follow_the_chat_pick_and_only_fall_back_when_unset() {
+    use moon_core::config::{
+        CoreGroup, ReportLayout,
+        telegram_menu::{ReportBasis, ReportView},
+    };
+    use moon_core::telegram::api::ReplyMarkup;
+    let _locale = crate::test_locale::force("en");
+    let root = TempRoot::new("auto-chat-view");
+    let mut host = host_with(&root, &[AutoReport::Hourly], Some(at(13, 0)));
+    host.config.telegram.bot.report_view = ReportView::Exchanges;
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT,
+        newrecid INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'CORE_A',1,100,5,100,1);",
+    )
+    .unwrap();
+    let inputs = crate::report::AutoInputs {
+        zone: chrono_tz::UTC,
+        basis: ReportBasis::Close,
+        layout: ReportLayout::default(),
+        view: ReportView::Exchanges,
+        order: moon_core::session::core_order::CoreOrder::new(&host.config),
+        names: Default::default(),
+        venues: Default::default(),
+        groups: vec![CoreGroup {
+            name: "GROUP_A".into(),
+            cores: vec![1],
+        }],
+    };
+    for (saved, expected, label) in [
+        (
+            Some(ReportView::Groups),
+            ReportView::Groups,
+            "View: Groups ▾",
+        ),
+        (None, ReportView::Exchanges, "View: Exchanges ▾"),
+    ] {
+        host.edit(|file| file.chats.get_mut(&CHAT).unwrap().report_view = saved);
+        let mut due = super::due_reports(&host, &host.file(), at(14, 2));
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].view, expected);
+        // Retain the scheduler's actual request path but place its frozen slot over this fixture.
+        due[0].window.from = 0;
+        due[0].window.to = 200;
+        let page = super::read_all_on(&conn, &due, &inputs)
+            .pop()
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            page.html.contains("GROUP_A"),
+            saved.is_some(),
+            "the table follows the chat preference"
+        );
+        let ReplyMarkup::Inline(markup) = page.keyboard else {
+            panic!("inline")
+        };
+        assert_eq!(markup.inline_keyboard[0][0].text, label);
+    }
+}
+
+/// A preference changed during a database read must be retried, not queued in the stale mode.
+#[test]
+fn a_scheduled_read_with_a_stale_view_does_not_spend_the_slot() {
+    use moon_core::config::telegram_menu::ReportView;
+    let root = TempRoot::new("auto-view-race");
+    let mut host = host_with(&root, &[AutoReport::Hourly], Some(at(13, 0)));
+    let due = super::due_reports(&host, &host.file(), at(14, 2));
+    let next = if due[0].view == ReportView::Groups {
+        ReportView::Cores
+    } else {
+        ReportView::Groups
+    };
+    host.edit(|file| file.chats.get_mut(&CHAT).unwrap().report_view = Some(next));
+    let store = host.state.notify_store_override.as_ref().unwrap();
+    let store_ptr = std::sync::Arc::as_ptr(store).addr();
+    let page = crate::report::AutoPage {
+        html: "<p>stale</p>".into(),
+        keyboard: moon_core::telegram::api::ReplyMarkup::Inline(
+            moon_core::telegram::api::InlineKeyboardMarkup::from_rows(Vec::new()),
+        ),
+        cores: None,
+    };
+    super::finish(&mut host, store_ptr, due, vec![Ok(Some(page))], at(14, 2));
+    assert!(host.outbox().is_empty());
+    assert_eq!(
+        host.file().chats[&CHAT].ledger.reports.hourly.slot_utc,
+        Some(at(13, 0))
+    );
+}
+
 /// UTC seconds of 2026-10-03 at `hour:minute`.
 fn at(hour: u32, minute: u32) -> i64 {
     chrono_tz::UTC
