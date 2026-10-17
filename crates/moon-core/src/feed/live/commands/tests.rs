@@ -539,3 +539,24 @@ fn two_destinations_in_one_move_each_come_out_contiguous() {
     assert!(at(11) < at(12), "D1 joiners keep their order: {order:?}");
     assert!(at(21) < at(22), "D2 joiners keep their order: {order:?}");
 }
+
+/// A chart-text request the current client already applied is not re-sent; a new client, another
+/// market or a failed send (which leaves `applied` false) asks again.
+#[test]
+fn chart_text_repeats_are_sent_only_when_not_yet_applied() {
+    let mut wanted = super::ChartTextWanted::default();
+    assert!(wanted.wants("AAA-BBB".into(), true));
+    wanted.applied = true; // the send succeeded
+    assert!(!wanted.wants("AAA-BBB".into(), true));
+
+    wanted.begin_client();
+    assert!(wanted.wants("AAA-BBB".into(), true));
+    wanted.applied = true;
+
+    assert!(wanted.wants("CCC-BBB".into(), true));
+    assert_eq!(wanted.market, "CCC-BBB");
+    wanted.applied = true;
+    assert!(wanted.wants("CCC-BBB".into(), false));
+    wanted.applied = false; // that send failed
+    assert!(wanted.wants("CCC-BBB".into(), false));
+}

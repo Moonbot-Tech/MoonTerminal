@@ -976,9 +976,9 @@ pub(super) fn drain_commands(
                 market,
                 need_filters,
             }) => {
-                chart_text.market = market;
-                chart_text.need_filters = need_filters;
-                chart_text.send(client, server.id);
+                if chart_text.wants(market, need_filters) {
+                    chart_text.send(client, server.id);
+                }
             }
             Ok(CoreCmd::ChartAlertDelete { market, obj_uid }) => {
                 if let Err(error) = client.chart_alerts().delete(market.clone(), obj_uid) {

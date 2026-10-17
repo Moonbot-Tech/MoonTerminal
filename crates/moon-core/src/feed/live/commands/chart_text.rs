@@ -23,6 +23,17 @@ impl ChartTextWanted {
         self.applied = false;
     }
 
+    /// Record a coordinator request; `false` when this client already holds exactly that one,
+    /// so the repeat is not sent again. A failed send leaves `applied` false, so it retries.
+    pub(super) fn wants(&mut self, market: String, need_filters: bool) -> bool {
+        if self.applied && self.market == market && self.need_filters == need_filters {
+            return false;
+        }
+        self.market = market;
+        self.need_filters = need_filters;
+        true
+    }
+
     pub(super) fn send(&mut self, client: &MoonClient, server_id: u64) {
         let result = if self.need_filters && !self.market.is_empty() {
             client
