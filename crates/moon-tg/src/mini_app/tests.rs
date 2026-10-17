@@ -2215,6 +2215,7 @@ fn store_settings_trades_ledger_follows_the_on_edge() {
                         ..NotifyLedger::default()
                     },
                     revision: 2,
+                    report_view: None,
                 },
             );
         })
@@ -2323,6 +2324,7 @@ fn store_settings_clears_down_announced_only_when_down_turns_off() {
                         ..NotifyLedger::default()
                     },
                     revision: 3,
+                    report_view: None,
                 },
             );
         })
@@ -2835,4 +2837,20 @@ fn station_trades_without_display_id_get_their_own_replay_job() {
         super::charts::job_key(&trade(901)),
         super::charts::job_key(&trade(902))
     );
+}
+/// Replacing notification settings must retain the chat's separately chosen report mode.
+#[test]
+fn notification_saves_preserve_the_chat_report_view() {
+    use moon_core::config::telegram_menu::ReportView;
+    use moon_core::telegram::notify::{ChatNotify, NotifyFile};
+    let mut file = NotifyFile::default();
+    file.chats.insert(
+        42,
+        ChatNotify {
+            report_view: Some(ReportView::Groups),
+            ..Default::default()
+        },
+    );
+    super::settings::commit_settings(&mut file, 42, Default::default(), 100, chrono_tz::UTC);
+    assert_eq!(file.chats[&42].report_view, Some(ReportView::Groups));
 }

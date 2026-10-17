@@ -224,6 +224,7 @@ fn view_words(view: ReportView) -> String {
     match view {
         ReportView::Exchanges => t!("telegram.menu_editor.view_exchanges"),
         ReportView::Cores => t!("telegram.menu_editor.view_cores"),
+        ReportView::Groups => t!("telegram.report_groups"),
     }
     .to_string()
 }

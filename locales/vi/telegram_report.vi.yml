@@ -69,6 +69,8 @@ telegram.button_daily: "Theo ngày"
 telegram.report_days: "Ngày"
 
 telegram.report_cores: "Core"
+telegram.report_groups: "Nhóm"
+telegram.report_view_switch: "Chế độ: %{view}"
 
 telegram.report_profit: "Lãi / lỗ"
 

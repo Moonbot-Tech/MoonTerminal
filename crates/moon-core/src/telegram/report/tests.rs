@@ -22,6 +22,29 @@ fn scoped_custom_callback_preserves_exchange_and_dates() {
     assert_eq!(ReportRequest::parse_callback(&encoded), Some(request));
 }
 
+/// Group navigation preserves the same maximum-size dates, exchange scope and frozen bounds.
+#[test]
+fn groups_callbacks_preserve_scoped_frozen_navigation() {
+    use crate::config::telegram_menu::{ReportBasis, ReportView};
+    let mut request = ReportRequest::dates("2026-01-01", "2026-12-31")
+        .unwrap()
+        .in_view(ReportView::Groups);
+    request.window = request.bounds(0, chrono_tz::UTC);
+    request.scope = super::ReportScope::Venue(crate::feed::ExchangeId {
+        code: 255,
+        dex: u32::MAX,
+    });
+    request.page = 10000;
+    request.exchanges_open = true;
+    request.basis = Some(ReportBasis::Open);
+    request.select_view = true;
+    let encoded = request.callback();
+    assert!(encoded.len() <= 64, "{encoded}");
+    assert_eq!(ReportRequest::parse_callback(&encoded), Some(request));
+    let preset = ReportRequest::preset(Period::Today).resolve_view(ReportView::Groups);
+    assert_eq!(preset.callback(), "r:g:t:0");
+}
+
 /// The exchange-list bit round-trips; a missing or unknown flag stays collapsed.
 #[test]
 fn callback_exchange_list_flag_defaults_to_collapsed() {
@@ -252,12 +275,13 @@ fn the_month_slot_reports_up_to_the_day_just_ended() {
     assert_eq!(window.from, local(zone, 2026, 12, 1, 0, 0));
 }
 
-/// A button of the retired view by groups, still in a chat's history, opens by cores; one scoped to
-/// a single group no longer decodes.
+/// Group callbacks restore summaries, retaining the frozen scope and basis; retired scopes fail.
 #[test]
-fn retired_group_buttons() {
+fn group_buttons_and_retired_single_group_scopes() {
     let request = ReportRequest::parse_callback("r:gkz:t:0").unwrap();
     assert!(!request.by_exchange && !request.daily);
+    assert!(request.by_group);
+    assert_eq!(request.callback(), "r:gkz:t:0");
     assert_eq!(request.scope, super::ReportScope::All);
     assert!(request.exchanges_open);
     assert_eq!(ReportRequest::parse_callback("r:cq1a2b:t:0"), None);

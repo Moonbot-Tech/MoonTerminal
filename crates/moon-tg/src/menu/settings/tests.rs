@@ -67,6 +67,24 @@ fn the_view_screen_marks_the_current_view() {
     }
 }
 
+/// Removing Groups from the default-view picker must not hide saved group reports from owners.
+#[test]
+fn the_default_view_picker_offers_groups() {
+    let _locale = crate::test_locale::force("ru");
+    let (_, _, rows) = super::view(ReportView::Exchanges);
+    let groups = rows
+        .iter()
+        .flatten()
+        .find(|button| {
+            action(button)
+                == Some(MenuAction::Settings(SettingsAction::SetView(
+                    ReportView::Groups,
+                )))
+        })
+        .expect("Groups is a selectable default view");
+    assert!(groups.text.ends_with("Группы"), "{}", groups.text);
+}
+
 /// The notifications screen switches every rule and automatic report and offers the down presets
 /// with the current one marked.
 #[test]

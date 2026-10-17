@@ -1416,7 +1416,7 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
     assert!(html.len() < 10_000);
 }
 
-/// Collapsed markup is one row of Exchanges + All cores; expanding shows today's list plus Back.
+/// The exchange drill-down keeps its two-button row beside the separate persistent mode control.
 #[test]
 fn collapsed_keyboard_hides_exchanges_until_opened() {
     let _locale = crate::test_locale::force("ru");
@@ -1447,8 +1447,8 @@ fn collapsed_keyboard_hides_exchanges_until_opened() {
     };
     assert_eq!(
         markup.inline_keyboard.len(),
-        1,
-        "today has no extra view row"
+        2,
+        "navigation and the persistent view control have separate rows"
     );
     assert_eq!(markup.inline_keyboard[0].len(), 2);
     assert!(
@@ -2133,8 +2133,8 @@ fn closed_trades_carry_their_own_money() {
     assert_eq!(unproven.volume_native, None);
 }
 
-/// Moving the period back into the table would hide it from the chat preview; a single day
-/// names its date once, and its buttons are one row in either view.
+/// Moving the period into the table hides it from previews; a single day names its date once
+/// and keeps navigation separate from the persistent mode control in either view.
 #[test]
 fn a_days_report_is_compact() {
     let _locale = crate::test_locale::force("en");
@@ -2175,7 +2175,7 @@ fn a_days_report_is_compact() {
         };
         assert_eq!(
             markup.inline_keyboard.len(),
-            1,
+            2,
             "{:?}",
             markup.inline_keyboard
         );
@@ -2302,14 +2302,14 @@ fn cores_are_listed_under_their_groups() {
         panic!("expected inline navigation")
     };
     assert!(
-        markup.inline_keyboard.iter().flatten().all(|button| {
-            !button
+        markup.inline_keyboard.iter().flatten().any(|button| {
+            button
                 .callback_data
                 .as_deref()
-                .unwrap_or_default()
-                .starts_with("r:g")
+                .and_then(ReportRequest::parse_callback)
+                .is_some_and(|request| request.select_view)
         }),
-        "no view by groups is offered"
+        "a persistent view switch is offered"
     );
     // The view by exchanges and by days stay flat.
     request.by_exchange = true;
@@ -2344,6 +2344,278 @@ fn cores_are_listed_under_their_groups() {
         page.rows
             .iter()
             .all(|row| matches!(row, super::Row::Line(..)))
+    );
+}
+
+/// Summaries retain overlapping groups in saved order without double-counting the headline.
+/// Dropping ungrouped cores, counting idle groups, or emitting core rows would break this fixture.
+#[test]
+fn groups_summarize_activity_and_keep_the_scope_total() {
+    use moon_core::config::{CoreGroup, telegram_menu::ReportView};
+    let _locale = crate::test_locale::force("en");
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'CORE_A',1,150,10,100,1),(2,'CORE_B',1,150,20,100,1),(3,'CORE_C',1,150,0,100,1),(4,'CORE_D',1,50,90,100,1);
+        ATTACH ':memory:' AS valuation;
+        CREATE TABLE valuation.trade_values (
+            source_kind INTEGER, core_uid INTEGER, row_id INTEGER, algorithm_version INTEGER,
+            closedate INTEGER, quote_ordinal INTEGER, profit_quote REAL, spent_quote REAL,
+            rate_minute_utc INTEGER, rate_usdt REAL, profit_usdt REAL, spent_usdt REAL);
+        CREATE TABLE valuation.rates (
+            algorithm_version INTEGER, quote_ordinal INTEGER, minute_utc INTEGER,
+            provider TEXT, symbol TEXT, orientation INTEGER, leg2_provider TEXT,
+            leg2_symbol TEXT, leg2_orientation INTEGER, resolved_minute_utc INTEGER);").unwrap();
+    let groups = vec![
+        CoreGroup {
+            name: "GROUP_B".into(),
+            cores: vec![2],
+        },
+        CoreGroup {
+            name: "GROUP_A".into(),
+            cores: vec![2, 1],
+        },
+        CoreGroup {
+            name: "GROUP_IDLE".into(),
+            cores: vec![4],
+        },
+    ];
+    let read = |groups: &[CoreGroup], access| {
+        super::read_page_with(
+            &conn,
+            ReportRequest::new(Period::Today, false).in_view(ReportView::Groups),
+            100,
+            200,
+            chrono_tz::UTC,
+            ReportBasis::Close,
+            moon_core::config::ReportLayout::default(),
+            &Default::default(),
+            groups,
+            |_| (Default::default(), access),
+        )
+        .unwrap()
+    };
+    let page = read(&groups, super::TelegramReportAccess::Owner);
+    let rows = page
+        .rows
+        .iter()
+        .map(|row| {
+            assert!(
+                matches!(row, Row::Line(None, ..)),
+                "summary rows have no core identity"
+            );
+            (row.name(), row.total().totals[0].profit, row.total().orders)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        vec![
+            ("GROUP_B", 20.0, 1),
+            ("GROUP_A", 30.0, 2),
+            ("Ungrouped", 0.0, 1)
+        ]
+    );
+    assert_eq!((page.total.totals[0].profit, page.total.orders), (30.0, 3));
+    let html = report_html(&page);
+    assert!(rich_message_fits(&html));
+    let table = html.split("</table>").next().unwrap();
+    assert!(!table.contains("CORE_"), "{table}");
+    assert!(table.contains("<tr><td>GROUP_A</td>"), "{table}");
+    assert!(
+        table.contains("<b>Total</b></th><th align=\"right\"><b>+30.00$</b></th>"),
+        "{table}"
+    );
+    let single = vec![CoreGroup {
+        name: "GROUP_ALL".into(),
+        cores: vec![1, 2, 3],
+    }];
+    let page = read(&single, super::TelegramReportAccess::Owner);
+    assert_eq!(page.rows.len(), 1, "one group remains a summary");
+    assert_eq!(page.rows[0].name(), "GROUP_ALL");
+    let restricted = read(&groups, super::TelegramReportAccess::Viewer(vec![1, 3]));
+    assert_eq!(
+        restricted.rows.iter().map(Row::name).collect::<Vec<_>>(),
+        vec!["GROUP_A", "Ungrouped"]
+    );
+    assert_eq!(
+        (restricted.total.totals[0].profit, restricted.total.orders),
+        (10.0, 2)
+    );
+    let fallback = read(&[], super::TelegramReportAccess::Owner);
+    assert_eq!(fallback.rows.len(), 3);
+    assert!(
+        fallback
+            .rows
+            .iter()
+            .all(|row| matches!(row, Row::Line(Some(_), ..)))
+    );
+}
+
+/// Picking the visible switch must survive a host reload and govern every later period button.
+/// One-off exchange drill-downs must not overwrite that saved choice.
+#[test]
+fn groups_choice_survives_restart_and_period_changes() {
+    use crate::notify::test_host::{CHAT, TempRoot, TickHost};
+    let _locale = crate::test_locale::force("en");
+    let root = TempRoot::new("groups-mode");
+    let mut host = TickHost::open(root.notifications());
+    host.admit(CHAT);
+    let mut page = layout_page(Default::default());
+    page.request.by_exchange = true;
+    let moon_core::telegram::api::ReplyMarkup::Inline(keyboard) = super::render::keyboard(&page)
+    else {
+        panic!("inline report");
+    };
+    let picked = keyboard
+        .inline_keyboard
+        .iter()
+        .flatten()
+        .filter_map(|button| {
+            button
+                .callback_data
+                .as_deref()
+                .and_then(ReportRequest::parse_callback)
+        })
+        .find(|request| request.select_view)
+        .expect("visible view switch");
+    assert!(picked.by_group);
+    let picked = super::chat_request(&host, CHAT, picked).unwrap();
+    assert!(picked.by_group && !picked.select_view);
+    drop(host);
+    let mut host = TickHost::open(root.notifications());
+    host.admit(CHAT);
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'CORE_A',1,150,10,100,1);").unwrap();
+    let groups = vec![CoreGroup {
+        name: "GROUP_A".into(),
+        cores: vec![1],
+    }];
+    for period in [
+        Period::Today,
+        Period::Yesterday,
+        Period::Month,
+        Period::LastMonth,
+        Period::Hour,
+    ] {
+        let request = super::chat_request(&host, CHAT, ReportRequest::preset(period)).unwrap();
+        assert!(request.by_group && !request.by_exchange && !request.daily);
+        let page = super::read_page_with(
+            &conn,
+            request,
+            100,
+            200,
+            chrono_tz::UTC,
+            ReportBasis::Close,
+            Default::default(),
+            &Default::default(),
+            &groups,
+            |_| (Default::default(), TelegramReportAccess::Owner),
+        )
+        .unwrap();
+        let html = report_html(&page);
+        assert!(html.contains("<b>Report · Groups</b>"), "{html}");
+        assert!(html.contains("<tr><td>GROUP_A</td>"), "{html}");
+        assert!(!html.contains("CORE_A"), "{html}");
+    }
+    let old_menu = ReportRequest::parse_callback("r:p:t:0").unwrap();
+    assert!(super::chat_request(&host, CHAT, old_menu).unwrap().by_group);
+    let custom = ReportRequest::dates("2026-10-01", "2026-10-02").unwrap();
+    assert!(super::chat_request(&host, CHAT, custom).unwrap().by_group);
+    let one_off = ReportRequest::parse_callback("r:c1.0kz:t:0:x64,c8").unwrap();
+    assert!(!super::chat_request(&host, CHAT, one_off).unwrap().by_group);
+    assert!(
+        super::chat_request(&host, CHAT, ReportRequest::preset(Period::Today))
+            .unwrap()
+            .by_group
+    );
+    assert!(
+        !super::chat_request(&host, CHAT + 1, ReportRequest::preset(Period::Today))
+            .unwrap()
+            .by_group
+    );
+    let mut exchange = ReportRequest::new(Period::Today, false);
+    exchange.select_view = true;
+    super::chat_request(&host, CHAT, exchange).unwrap();
+    drop(host);
+    let host = TickHost::open(root.notifications());
+    assert!(
+        super::chat_request(&host, CHAT, ReportRequest::preset(Period::Yesterday))
+            .unwrap()
+            .by_exchange
+    );
+}
+
+/// A failed atomic preference write must refuse a view switch and retain the prior stored mode.
+#[test]
+fn groups_choice_save_failure_keeps_the_old_mode() {
+    use crate::notify::test_host::{CHAT, TempRoot, TickHost};
+    let root = TempRoot::new("groups-save-failure");
+    let host = TickHost::open(root.notifications());
+    let store = host.state.notify_store_override.as_ref().unwrap();
+    let before = host.file();
+    let mut request = ReportRequest::new(Period::Today, false)
+        .in_view(moon_core::config::telegram_menu::ReportView::Groups);
+    request.select_view = true;
+    // An existing directory used as a file is an unconditional atomic-save failure.
+    crate::notify::tick::lock_store(store).path =
+        root.notifications().parent().unwrap().to_path_buf();
+    assert!(super::chat_request(&host, CHAT, request).is_err());
+    assert_eq!(host.file(), before);
+}
+
+/// Oversized summary tables must page using actual layout limits and keep the scope total.
+#[test]
+fn groups_pages_fit_the_saved_layout() {
+    use moon_core::config::{CoreGroup, ReportColumn, telegram_menu::ReportView};
+    let _locale = crate::test_locale::force("en");
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'CORE_A',1,150,10,100,1);").unwrap();
+    let groups = (0..180)
+        .map(|id| CoreGroup {
+            name: format!("GROUP_{id}_{}", "<&>".repeat(30)),
+            cores: vec![1],
+        })
+        .collect::<Vec<_>>();
+    let mut seen = Vec::new();
+    for index in 0..180 {
+        let mut request = ReportRequest::new(Period::Today, false).in_view(ReportView::Groups);
+        request.page = index;
+        let page = super::read_page_with(
+            &conn,
+            request,
+            100,
+            200,
+            chrono_tz::UTC,
+            ReportBasis::Close,
+            moon_core::config::ReportLayout {
+                columns: vec![
+                    ReportColumn::Profit,
+                    ReportColumn::Trades,
+                    ReportColumn::Native,
+                    ReportColumn::Average,
+                ],
+                ..Default::default()
+            },
+            &Default::default(),
+            &groups,
+            |_| (Default::default(), super::TelegramReportAccess::Owner),
+        )
+        .unwrap();
+        assert!(page.pages > 1);
+        assert!(rich_message_fits(&report_html(&page)));
+        assert_eq!((page.total.totals[0].profit, page.total.orders), (10.0, 1));
+        seen.extend(page.rows.iter().map(|row| row.name().to_owned()));
+        if index + 1 == page.pages {
+            break;
+        }
+    }
+    assert_eq!(
+        seen,
+        groups
+            .iter()
+            .map(|group| group.name.clone())
+            .collect::<Vec<_>>()
     );
 }
 

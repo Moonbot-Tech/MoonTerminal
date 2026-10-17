@@ -145,6 +145,8 @@ pub(super) fn report_html(page: &Page) -> String {
         t!("telegram.report_days")
     } else if page.request.by_exchange {
         t!("telegram.report_exchanges")
+    } else if page.request.by_group {
+        t!("telegram.report_groups")
     } else {
         t!("telegram.report_cores")
     };
@@ -196,7 +198,7 @@ pub(super) fn report_html(page: &Page) -> String {
         html.push_str(&format!("<th align=\"right\">{}</th>", escape(&label)));
     }
     html.push_str("</tr>");
-    let by_core = !page.request.by_exchange && !page.request.daily;
+    let by_core = !page.request.by_exchange && !page.request.by_group && !page.request.daily;
     for row in ordered_rows(page) {
         match row {
             OrderedRow::Data(row) => html.push_str(&row_html(row, by_core, &page.layout)),
@@ -485,6 +487,8 @@ pub(super) fn preview_table(page: &Page) -> crate::preview::PreviewTable {
         t!("telegram.report_days")
     } else if page.request.by_exchange {
         t!("telegram.report_exchanges")
+    } else if page.request.by_group {
+        t!("telegram.report_groups")
     } else {
         t!("telegram.report_cores")
     };
@@ -495,7 +499,7 @@ pub(super) fn preview_table(page: &Page) -> crate::preview::PreviewTable {
         heading.to_string()
     }];
     header.extend(column_headers(&page.layout));
-    let by_core = !page.request.by_exchange && !page.request.daily;
+    let by_core = !page.request.by_exchange && !page.request.by_group && !page.request.daily;
     let rows = ordered_rows(page)
         .into_iter()
         .map(|row| {
@@ -693,6 +697,7 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
                         let mut next = request.clone();
                         next.scope = *scope;
                         next.by_exchange = false;
+                        next.by_group = false;
                         next.daily = false;
                         next.page = 0;
                         next.exchanges_open = true;
@@ -712,6 +717,7 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
         open.exchanges_open = true;
         let mut cores = request.clone();
         cores.by_exchange = false;
+        cores.by_group = false;
         cores.daily = false;
         cores.page = 0;
         let menu = t!("telegram.report_exchanges_menu");
@@ -744,7 +750,7 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
     ] {
         // A single day has nothing to split by days.
         if (daily && !request.period.spans_days())
-            || (request.by_exchange == exchanges && request.daily == daily)
+            || (request.by_exchange == exchanges && request.daily == daily && !request.by_group)
             // The collapsed top row already carries All cores; do not repeat it below.
             || (!request.exchanges_open && !exchanges && !daily)
         {
@@ -752,6 +758,7 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
         }
         let mut next = request.clone();
         next.by_exchange = exchanges;
+        next.by_group = false;
         next.daily = daily;
         next.page = 0;
         if exchanges {
@@ -765,6 +772,28 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
         _ if !views.is_empty() => rows.push(views),
         _ => {}
     }
+    // The exchange dropdown remains a one-off drill-down. Only this control saves a chat mode.
+    use moon_core::config::telegram_menu::ReportView;
+    let (current, next) = if request.by_exchange {
+        (ReportView::Exchanges, ReportView::Groups)
+    } else if request.by_group {
+        (ReportView::Groups, ReportView::Cores)
+    } else {
+        (ReportView::Cores, ReportView::Exchanges)
+    };
+    let key = match current {
+        ReportView::Exchanges => "telegram.report_exchanges",
+        ReportView::Groups => "telegram.report_groups",
+        ReportView::Cores => "telegram.report_cores",
+    };
+    let mut switch = request.clone().in_view(next);
+    switch.select_view = true;
+    switch.scope = ReportScope::All;
+    switch.page = 0;
+    rows.push(vec![InlineKeyboardButton::callback(
+        t!("telegram.report_view_switch", view = t!(key)).to_string(),
+        switch.callback(),
+    )]);
     let mut nav = Vec::new();
     if request.page > 0 {
         let mut prev = request.clone();

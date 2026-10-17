@@ -70,6 +70,8 @@ telegram.button_daily: "Por día"
 telegram.report_days: "Días"
 
 telegram.report_cores: "Núcleos"
+telegram.report_groups: "Grupos"
+telegram.report_view_switch: "Vista: %{view}"
 
 telegram.report_profit: "Resultado"
 

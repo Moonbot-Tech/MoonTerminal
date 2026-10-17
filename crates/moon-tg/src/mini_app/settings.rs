@@ -180,6 +180,7 @@ pub(super) fn commit_settings(
     file.chats.insert(
         chat,
         ChatNotify {
+            report_view: previous.report_view,
             settings,
             ledger,
             revision,

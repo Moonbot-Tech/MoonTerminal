@@ -33,7 +33,7 @@ use render::{render, report_html};
 /// One report row, retaining core identity because archived names can be reused.
 #[derive(Clone, Debug)]
 pub(super) enum Row {
-    /// An exchange, a core or a day, with its money and a UID only for a core.
+    /// An exchange, group summary, core or day, with its money and a UID only for a core.
     Line(Option<u64>, String, QuoteBreakdown),
     /// A core listed under an earlier group; Details includes it once on each page.
     Repeat(Option<u64>, String, QuoteBreakdown),
@@ -145,7 +145,7 @@ pub(crate) struct AutoCaption {
 
 /// Read off the owner thread and recheck the saved chat authorization before returning any money.
 ///
-/// A request whose view the chat did not pick opens in the bot's `report_view`; a request that does
+/// A request whose view the chat did not pick follows its saved mode, then the bot default; one that does
 /// not carry its basis yet is read on the bot's `period_basis`, using its sanitized layout.
 pub(crate) fn telegram_report(
     host: &mut dyn TgHost,
@@ -158,8 +158,14 @@ pub(crate) fn telegram_report(
         return;
     };
     let owner = access == TelegramReportAccess::Owner;
+    let request = match chat_request(host, chat, request) {
+        Ok(request) => request,
+        Err(()) => {
+            answer(&reply, t!("telegram.settings.not_saved").to_string());
+            return;
+        }
+    };
     let bot = &host.config().telegram.bot;
-    let request = request.resolve_view(bot.report_view);
     // A page's own buttons carry the basis it was read on; a fresh request takes the bot's.
     let basis = request.basis.unwrap_or(bot.period_basis);
     let layout = bot.message_layout.report.sanitized();
@@ -220,6 +226,49 @@ pub(crate) fn telegram_report(
             }
         })
     }));
+}
+
+/// Resolve a period's per-chat mode or atomically save an explicit view switch.
+/// A failed save leaves the prior preference intact and refuses the switch.
+fn chat_request(
+    host: &dyn TgHost,
+    chat: i64,
+    mut request: ReportRequest,
+) -> Result<ReportRequest, ()> {
+    use moon_core::config::telegram_menu::ReportView;
+    let fallback = host.config().telegram.bot.report_view;
+    let store = crate::notify::tick::current_store(host);
+    if request.select_view {
+        let view = if request.by_exchange {
+            ReportView::Exchanges
+        } else if request.by_group {
+            ReportView::Groups
+        } else {
+            ReportView::Cores
+        };
+        let store = store.ok_or(())?;
+        let mut guard = crate::notify::tick::lock_store(&store);
+        if guard.file.chats.get(&chat).and_then(|row| row.report_view) != Some(view) {
+            guard
+                .update(|file| file.chats.entry(chat).or_default().report_view = Some(view))
+                .map_err(|error| {
+                    log::warn!("telegram report view not saved for chat {chat}: {error}");
+                })?;
+        }
+        request.select_view = false;
+        Ok(request)
+    } else {
+        let view = store
+            .and_then(|store| {
+                crate::notify::tick::lock_store(&store)
+                    .file
+                    .chats
+                    .get(&chat)
+                    .and_then(|row| row.report_view)
+            })
+            .unwrap_or(fallback);
+        Ok(request.resolve_view(view))
+    }
 }
 
 /// A report notice exposes navigation limited to the admission grant, including on /start.
@@ -297,9 +346,9 @@ fn read_page_on(
 
 /// Connection-injected reader lets fixtures exercise the exact production query contract.
 ///
-/// `groups` are the bot's saved core groups: the view by cores lists its cores under them, as the
-/// Profit monitor does ([`sections`]). A group's header carries the database's own total over its
-/// cores, so a core in two groups counts in each, while the headline counts every core once.
+/// `groups` are the bot's saved core groups: cores lists members under their headers, while groups
+/// lists one summary per group. Both query each group's total over its cores, so overlapping
+/// membership counts in each group while the headline counts every core once.
 /// The supplied layout also sizes the pages and their repeated group headers.
 #[allow(clippy::too_many_arguments)]
 fn read_page_with(
@@ -384,7 +433,11 @@ fn read_page_with(
         date_from: Some(from),
         date_to: Some(to),
     };
-    let by_core = !request.daily && !request.by_exchange;
+    if groups.is_empty() {
+        request.by_group = false;
+    }
+    let by_group = !request.daily && !request.by_exchange && request.by_group;
+    let by_core = !request.daily && !request.by_exchange && !by_group;
     let mut rows_by = Vec::new();
     // The core of each row of the view by cores, by position.
     let mut row_cores = Vec::new();
@@ -420,6 +473,18 @@ fn read_page_with(
         ) {
             let group = whole(Some(members.iter().map(|&index| cores[index].0).collect()));
             rows_by.push((section_label(venue), group));
+        }
+    } else if by_group {
+        let ids = cores.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        for section in sections::summary_sections(&ids, groups) {
+            let name = section.group.map_or_else(
+                || t!("profit_monitor.group.ungrouped").to_string(),
+                |group| group.name.clone(),
+            );
+            let slice = whole(Some(
+                section.members.iter().map(|&index| ids[index]).collect(),
+            ));
+            rows_by.push((name, slice));
         }
     } else {
         for (id, name) in cores {

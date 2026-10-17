@@ -69,6 +69,8 @@ telegram.button_daily: "Günlük"
 telegram.report_days: "Günler"
 
 telegram.report_cores: "Çekirdekler"
+telegram.report_groups: "Gruplar"
+telegram.report_view_switch: "Görünüm: %{view}"
 
 telegram.report_profit: "Kâr / zarar"
 

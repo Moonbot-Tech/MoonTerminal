@@ -657,6 +657,9 @@ impl NotifyLedger {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct ChatNotify {
+    /// This chat's chosen report mode; absent entries follow the bot's default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_view: Option<crate::config::telegram_menu::ReportView>,
     /// What this chat asked to be told.
     pub settings: NotifySettings,
     /// Decisions already recorded, independently of Telegram delivery acknowledgements.

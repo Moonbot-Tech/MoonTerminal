@@ -70,6 +70,8 @@ telegram.button_daily: "По дням"
 telegram.report_days: "Дни"
 
 telegram.report_cores: "Ядра"
+telegram.report_groups: "Группы"
+telegram.report_view_switch: "Вид: %{view}"
 
 telegram.report_profit: "Результат"
 

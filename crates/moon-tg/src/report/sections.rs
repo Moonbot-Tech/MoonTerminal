@@ -1,4 +1,4 @@
-//! Where the cores of a report by cores go under the saved core groups.
+//! Saved core-group memberships for detailed and summary reports.
 //!
 //! The Profit monitor's rules (`moon-ui-gpui` `analytics/profit_monitor/sections.rs`), which this
 //! crate cannot import from a binary crate, so the report reads the same way the window does:
@@ -10,6 +10,7 @@
 //!
 //! The Profit monitor gives a section of one core no subtotal. Here every section's header row
 //! carries its total, and the caller, which reads the totals, reuses that core's own for it.
+//! Summary rows use the same membership but retain even a single section covering every core.
 
 use std::collections::HashSet;
 
@@ -30,6 +31,13 @@ pub(super) struct Section<'a> {
 ///     cores: The listed cores' ids, in display order.
 ///     groups: The bot's core groups in resolved display order.
 pub(super) fn sections<'a>(cores: &[u64], groups: &'a [CoreGroup]) -> Option<Vec<Section<'a>>> {
+    let out = summary_sections(cores, groups);
+    (out.len() >= 2).then_some(out)
+}
+
+/// Saved groups and ungrouped membership, including a single section covering every core.
+/// Unlike core section headings, a summary row remains useful when it is the only row.
+pub(super) fn summary_sections<'a>(cores: &[u64], groups: &'a [CoreGroup]) -> Vec<Section<'a>> {
     let mut out: Vec<Section<'a>> = groups
         .iter()
         .map(|group| Section {
@@ -53,7 +61,7 @@ pub(super) fn sections<'a>(cores: &[u64], groups: &'a [CoreGroup]) -> Option<Vec
             members: loose,
         });
     }
-    (out.len() >= 2).then_some(out)
+    out
 }
 
 #[cfg(test)]
