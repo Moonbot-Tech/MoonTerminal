@@ -5,13 +5,17 @@
 | Tutorial page generator (`docs/tour/index.html`) | [`tour/`](tour/README.md) |
 | Render benchmark (native terminal) | this file, below |
 | Telegram Mini App preview and interaction check | [`miniapp_preview/`](#telegram-mini-app-preview), below |
+| Synthetic report replica for Analytics timing | `gen_replica.py` (usage in its docstring) |
+| Figma plugin for the N3 MoonProto contracts | [`figma-moonproto-contract-inspector/`](figma-moonproto-contract-inspector/README.md) |
 
 ## Telegram Mini App preview
 
 `node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk|tr|pt|vi] [--only <screen>]`
 renders every Mini App screen from the synthetic payloads in `miniapp_preview/fixtures/` (shaped
 like `crates/moon-core/src/telegram/web/dto.rs`) at 421x900, 390x844, 320x740 and 1024x768, light and dark, into
-`<dir>` (default `tools/miniapp_preview/out/`, ignored), then checks the owner commands the page
+`<dir>` (default `tools/miniapp_preview/out/`, ignored). The tick-chart screens — closed trades, open
+positions, coin sheets, long core names — render at 390x844 only (light and dark), from the
+seeded payloads in `miniapp_preview/tick_fixtures.mjs`. It then checks the owner commands the page
 sends and exits non-zero on a failure or a page error. No core or bot is needed. Install its two
 packages once with `npm install` run inside `tools/miniapp_preview` (`playwright-core`, `js-yaml`;
 nothing is committed); it drives the system Chrome from the standard install path on Windows,
