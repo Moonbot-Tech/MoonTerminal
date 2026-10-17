@@ -30,7 +30,7 @@ pub(in crate::analytics::tuner) use select::{
 use super::super::AnalyticsView;
 use super::auto_picks::{AutoFilter, AutoView};
 use super::ready::ReadyClass;
-use super::ready::{ReadyFilter, ReadyView};
+use super::ready::{ReadyFilter, ReadyPass, ReadyView};
 use super::ticks::readiness::Readiness;
 use super::{
     COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, COL_BIT_READY, METRIC_COLS,
@@ -109,6 +109,25 @@ pub(in crate::analytics::tuner) fn pick_best(
         .collect();
     rows.sort_by(|(a, _, ar), (b, _, br)| br.fit.cmp(&ar.fit).then_with(|| a.cmp(b)));
     rows.into_iter().take(top).map(|(key, _, _)| key).collect()
+}
+
+/// Resolve one scoped, ranked batch from visible keys for both the label and its action.
+fn best_keys<'a>(
+    keys: impl Iterator<Item = &'a str>,
+    ready: &ReadyPass,
+    cores: Option<&[u64]>,
+    top: usize,
+) -> Vec<String> {
+    pick_best(
+        keys.filter(|key| best_key_in_scope(key, cores))
+            .filter_map(|key| {
+                ready
+                    .counts
+                    .get(key)
+                    .map(|r| (key.to_string(), ready.class(key), *r))
+            }),
+        top,
+    )
 }
 
 /// Restore a saved strategy-list sort only when its stable key still names a real column.
@@ -739,22 +758,26 @@ impl AnalyticsView {
         self.ready.filter(self.strat_mode.shows_ready())
     }
 
-    /// Select from the current list scope and filters, using only readiness counts already available.
+    /// The exact batch the label counts and the click starts, resolved against current state.
+    fn strat_best_keys(&self) -> Vec<String> {
+        self.strategy_data.data().map_or_else(Vec::new, |data| {
+            best_keys(
+                self.visible_indices()
+                    .iter()
+                    .map(|&i| data.strategies[i].key.as_str()),
+                &self.ready,
+                self.action_core_ids(),
+                usize::from(self.ticks.best_top),
+            )
+        })
+    }
+
+    /// Count and run the shared selection over the current list scope and readiness counts.
     fn strat_best_controls(&self, cx: &Context<Self>) -> Option<AnyElement> {
         if !self.strat_mode.shows_ready() {
             return None;
         }
-        let n = self.strategy_data.data().map_or(0, |data| {
-            self.visible_indices()
-                .iter()
-                .filter(|&&i| {
-                    let key = &data.strategies[i].key;
-                    best_key_in_scope(key, self.action_core_ids())
-                        && matches!(self.ready.class(key), ReadyClass::Can { .. })
-                })
-                .take(usize::from(self.ticks.best_top))
-                .count()
-        });
+        let n = self.strat_best_keys().len();
         let readiness_running = matches!(self.ready.run, super::ready::ReadyRun::Running { .. });
         let view = cx.entity();
         let run_view = view.clone();
@@ -773,21 +796,7 @@ impl AnalyticsView {
                     if matches!(this.ready.run, super::ready::ReadyRun::Running { .. }) {
                         return;
                     }
-                    let keys = this.strategy_data.data().map_or_else(Vec::new, |data| {
-                        pick_best(
-                            this.visible_indices().iter().filter_map(|&i| {
-                                let key = &data.strategies[i].key;
-                                if !best_key_in_scope(key, this.action_core_ids()) {
-                                    return None;
-                                }
-                                this.ready
-                                    .counts
-                                    .get(key)
-                                    .map(|r| (key.clone(), this.ready.class(key), *r))
-                            }),
-                            usize::from(this.ticks.best_top),
-                        )
-                    });
+                    let keys = this.strat_best_keys();
                     this.start_best_run(keys, cx);
                 })
             }),
