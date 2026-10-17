@@ -250,7 +250,7 @@ impl StrategiesView {
             }
         };
 
-        let axis = self.backend.read(cx).report_axis(self.display_zone);
+        let axis = self.backend.read(cx).report_axis_arc(self.display_zone);
         let zone = self.display_zone;
         let count = rows.order.len();
         let shown = Rc::new(shown);

@@ -536,7 +536,8 @@ impl ReportPanel {
         let seeded_valuation_mode = backend.read(cx).valuation_mode();
         let display_zone =
             moon_core::util::display_time::zone_or_utc(backend.read(cx).header_clock_zone());
-        let seeded_axis = backend.read(cx).report_axis(display_zone);
+        let seeded_axis = backend.read(cx).report_axis_arc(display_zone);
+        let last_axis_rev = backend.read(cx).report_axis_rev(display_zone);
         // The retained connection, schema, and preferences are loaded after construction so a
         // workspace transition never waits for SQLite open/schema work on the GPUI thread.
         let cores = Vec::new();
@@ -794,11 +795,15 @@ impl ReportPanel {
             // period filter is built from, so it is compared and repainted here rather than polled
             // by the render path. Compare-then-notify, like every other counter above: the
             // backend wakes far more often than a core adopts an offset.
-            let axis = this.backend.read(cx).report_axis(this.display_zone);
-            if axis != this.axis {
-                this.axis = axis;
-                this.request_requery(cx);
-                cx.notify();
+            let revision = this.backend.read(cx).report_axis_rev(this.display_zone);
+            if revision != this.last_axis_rev {
+                this.last_axis_rev = revision;
+                let axis = this.backend.read(cx).report_axis_arc(this.display_zone);
+                if axis != this.axis {
+                    this.axis = axis;
+                    this.request_requery(cx);
+                    cx.notify();
+                }
             }
         })
         .detach();
@@ -847,7 +852,8 @@ impl ReportPanel {
             this.display_zone = zone;
             // The axis carries the zone as well as the offsets, so a zone change invalidates the
             // cached copy even though nothing was measured.
-            this.axis = this.backend.read(cx).report_axis(zone);
+            this.axis = this.backend.read(cx).report_axis_arc(zone);
+            this.last_axis_rev = this.backend.read(cx).report_axis_rev(zone);
             this.display_zone_fields_dirty = true;
             this.natural_widths.clear();
             if this.period == Period::All {
@@ -871,6 +877,7 @@ impl ReportPanel {
             // whose offsets were measured in an earlier session must render corrected times on its
             // FIRST paint, not on the first backend wake after it.
             axis: seeded_axis,
+            last_axis_rev,
             display_zone_fields_dirty: false,
             group,
             generation,

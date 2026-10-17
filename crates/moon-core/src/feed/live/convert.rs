@@ -36,7 +36,7 @@ pub(super) use identity::{
 pub(super) use news_trace::{
     license_state_from_proto, news_snapshot_from_proto, problems_from_proto, telegram_from_proto,
 };
-pub(super) use orders::build_order_rows;
+pub(super) use orders::{build_captured_rows, build_snapshot_rows, overlay_captured_rows};
 pub use orders::{percentage_stop_price, percentage_take_price};
 pub(super) use settings::{
     client_settings_from_proto, profit_state_from_proto, runtime_state_from_proto,
@@ -49,7 +49,7 @@ use identity::api_days_and_unlimited;
 #[cfg(test)]
 use news_trace::{problems_supported, wire_text};
 #[cfg(test)]
-use orders::{overlay_captured_rows, stop_distance_pct, stop_loss_line_price};
+use orders::{stop_distance_pct, stop_loss_line_price};
 #[cfg(test)]
 use wallet::display_folder_paths;
 

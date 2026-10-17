@@ -271,24 +271,39 @@ pub(super) fn run_service(
     let mut retry_at: Option<Instant> = None;
     let mut retry_failures: u32 = 0;
     while alive.upgrade().is_some() {
-        let Ok(saved) = config.lock().map(|cfg| cfg.clone()) else {
+        // Only what the loop compares is taken under the lock; the whole config (token included)
+        // is copied only on the rare pass that starts the listener.
+        let Ok((desired, has_token)) = config.lock().map(|cfg| {
+            (
+                (cfg.mini_app_enabled, cfg.authorized_chat_ids.clone()),
+                !cfg.token.is_empty(),
+            )
+        }) else {
             break;
         };
-        let desired = (saved.mini_app_enabled, saved.authorized_chat_ids.clone());
-        let Ok(current_labels) = labels.lock().map(|labels| labels.clone()) else {
+        let Ok(fresh_labels) = labels
+            .lock()
+            .map(|labels| (*labels != previous_labels).then(|| labels.clone()))
+        else {
             break;
         };
         let change = change_of(
             previous.as_ref(),
             &previous_labels,
             &desired,
-            &current_labels,
+            fresh_labels.as_ref().unwrap_or(&previous_labels),
         );
-        if change == Change::InPlace && owner.update(desired.1.clone(), current_labels.clone()) {
+        let current_labels = || {
+            fresh_labels
+                .clone()
+                .unwrap_or_else(|| previous_labels.clone())
+        };
+        if change == Change::InPlace && owner.update(desired.1.clone(), current_labels()) {
             // A new pairing or language keeps the tunnel: its address is in every chat's menu.
             previous = Some(desired.clone());
-            previous_labels = current_labels;
+            previous_labels = current_labels();
         } else if change != Change::None {
+            let current_labels = current_labels();
             super::menu::MenuIntent::publish(
                 &menu,
                 &desired.1,
@@ -299,7 +314,10 @@ pub(super) fn run_service(
             owner.stop();
             retry_at = None;
             retry_failures = 0;
-            if desired.0 && !saved.token.is_empty() {
+            if desired.0 && has_token {
+                let Ok(saved) = config.lock().map(|cfg| cfg.clone()) else {
+                    break;
+                };
                 match start_desired(
                     &mut owner,
                     &saved,
@@ -328,13 +346,13 @@ pub(super) fn run_service(
             &owner.status(),
             &previous_labels,
         );
-        if desired.0
-            && !saved.token.is_empty()
-            && matches!(owner.status(), MiniAppStatus::Failed { .. })
-        {
+        if desired.0 && has_token && matches!(owner.status(), MiniAppStatus::Failed { .. }) {
             if retry_at.is_none() {
                 schedule_mini_app_retry(&mut retry_at, &mut retry_failures);
             } else if retry_at.is_some_and(|at| Instant::now() >= at) {
+                let Ok(saved) = config.lock().map(|cfg| cfg.clone()) else {
+                    break;
+                };
                 match start_desired(
                     &mut owner,
                     &saved,
@@ -369,14 +387,32 @@ pub(super) fn run_service(
                 last_status = status;
             }
         }
-        if let Some(rx) = owner.api_rx.as_ref() {
-            for request in rx.try_iter().take(64) {
-                let _ = tx.try_send(super::Work::MiniApp(request));
+        let idle = idle_interval(desired.0, owner.api_rx.is_some(), retry_at.is_some());
+        match owner.api_rx.as_ref().map(|rx| (rx.recv_timeout(idle), rx)) {
+            // A request ends the wait at once; the burst behind it is drained without waiting.
+            Some((Ok(first), rx)) => {
+                let _ = tx.try_send(super::Work::MiniApp(first));
+                for request in rx.try_iter().take(63) {
+                    let _ = tx.try_send(super::Work::MiniApp(request));
+                }
+            }
+            Some((Err(std::sync::mpsc::RecvTimeoutError::Timeout), _)) => {}
+            Some((Err(std::sync::mpsc::RecvTimeoutError::Disconnected), _)) | None => {
+                thread::sleep(idle);
             }
         }
-        thread::sleep(Duration::from_millis(50));
     }
     owner.stop();
+}
+
+/// How long one owner pass waits: 50 ms while the Mini App is on, serving or retrying, so a
+/// request or a config change lands fast; 250 ms when it is off and only a switch-on can arrive.
+fn idle_interval(enabled: bool, has_api_rx: bool, retry_pending: bool) -> Duration {
+    if enabled || has_api_rx || retry_pending {
+        Duration::from_millis(50)
+    } else {
+        Duration::from_millis(250)
+    }
 }
 
 /// What a change of the saved Mini App intent asks of the owner.

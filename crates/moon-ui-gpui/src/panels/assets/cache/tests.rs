@@ -9,6 +9,89 @@ use moon_core::config::TotalMode;
 use std::hint::black_box;
 use std::time::Instant;
 
+/// Dropping the pending-market retry strands late catalogue labels and disabled Sell actions.
+#[test]
+fn repaint_rebuilds_while_a_market_is_unresolved() {
+    use super::market_rebuild_due;
+    use crate::panels::common::GateStep;
+
+    let key = (17, 0);
+    let due = market_rebuild_due(GateStep::Repaint, true);
+    assert_eq!(
+        assets_refresh(Some(key), key, Some(4), 4, due),
+        AssetsRefresh::Full
+    );
+    assert!(!market_rebuild_due(GateStep::Idle, true));
+}
+
+/// Restoring unconditional clock rebuilds wastes the retained rows after catalogue resolution.
+#[test]
+fn repaint_skips_rebuild_when_all_markets_resolved() {
+    use super::market_rebuild_due;
+    use crate::panels::common::GateStep;
+
+    let key = (17, 0);
+    let due = market_rebuild_due(GateStep::Repaint, false);
+    assert_eq!(
+        assets_refresh(Some(key), key, Some(4), 4, due),
+        AssetsRefresh::None
+    );
+    assert!(market_rebuild_due(GateStep::Rebuild, false));
+}
+
+/// Missing names or configured markets from invalidation freezes captions and wallet quote filters.
+#[test]
+fn label_signature_tracks_core_renames_and_configured_quotes() {
+    use super::asset_labels_sig;
+    let mut servers = synthetic_servers();
+    servers[0].market = "BTCUSDT".to_string();
+    let baseline = asset_labels_sig([(1, "core-one"), (2, "core-two")].into_iter(), &servers);
+    assert_eq!(
+        baseline,
+        asset_labels_sig([(1, "core-one"), (2, "core-two")].into_iter(), &servers)
+    );
+    assert_ne!(
+        baseline,
+        asset_labels_sig([(1, "renamed"), (2, "core-two")].into_iter(), &servers)
+    );
+    assert_ne!(
+        baseline,
+        asset_labels_sig([(1, "core-one"), (2, "renamed")].into_iter(), &servers)
+    );
+    servers[0].market = "BTCUSDC".to_string();
+    assert_ne!(
+        baseline,
+        asset_labels_sig([(1, "core-one"), (2, "core-two")].into_iter(), &servers)
+    );
+}
+
+/// Restoring full clock rebuilds or dropping retry selection would strand initially missing wallets.
+#[test]
+fn repaint_tick_keeps_caches_and_retries_transfers() {
+    use super::repaint_retries_transfers;
+    use crate::panels::common::GateStep;
+
+    let key = (17, 1.0f64.to_bits());
+    let stored = (Some(key), Some(4));
+    let (refresh, next_key, next_sale) = assets_observe_step(stored.0, key, stored.1, 4, false);
+    assert_eq!(refresh, AssetsRefresh::None);
+    assert_eq!((next_key, next_sale), stored);
+    assert!(repaint_retries_transfers(refresh, GateStep::Repaint));
+    assert!(!repaint_retries_transfers(refresh, GateStep::Idle));
+    assert!(!repaint_retries_transfers(
+        AssetsRefresh::Full,
+        GateStep::Repaint
+    ));
+    let requests: Vec<_> = missing_transfer_cores([(1, 0), (2, 1), (3, 0)].into_iter()).collect();
+    assert_eq!(requests, [1, 3]);
+    let (refresh, next_key, next_sale) = assets_observe_step(stored.0, key, stored.1, 5, false);
+    assert_eq!(
+        (refresh, next_key, next_sale),
+        (AssetsRefresh::SaleOnly, stored.0, Some(5))
+    );
+    assert!(repaint_retries_transfers(refresh, GateStep::Repaint));
+}
+
 /// Restoring a wall-second retry bypasses the 250 ms floor and adds commands and repaints.
 #[test]
 fn assets_observer_step_preserves_admitted_gate_cadence() {

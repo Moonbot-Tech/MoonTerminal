@@ -90,9 +90,18 @@ pub fn read_core_keys() -> anyhow::Result<Vec<CoreKeyEntry>> {
 /// Refuses to write over a file this process never opened; see [`refuse_blind_overwrite`].
 pub fn write_servers(sf: &ServersFile) -> anyhow::Result<()> {
     ensure_servers_writable()?;
-    let enc = crypto::encrypt_config(toml::to_string(sf)?.as_bytes())?;
-    super::toml_io::write_atomic(&paths::servers_path(), &enc, "servers.enc")
-        .context("запись servers.enc")?;
+    let plain = zeroize::Zeroizing::new(toml::to_string(sf)?);
+    let enc = crypto::encrypt_config(plain.as_bytes())?;
+    // The ciphertext differs on every save, so the memo is keyed on the plaintext; slots still
+    // waiting for the disk always force the write.
+    super::toml_io::write_atomic_memo(
+        &paths::servers_path(),
+        plain.as_bytes(),
+        &enc,
+        may_skip_servers_write(crypto::access_state()),
+        "servers.enc",
+    )
+    .context("запись servers.enc")?;
     // Only now are the key slots actually on disk. Marking them persisted before the write would
     // hide a failed one: the flag is the only thing that asks for the retry.
     crypto::mark_persisted();
@@ -109,6 +118,11 @@ pub(super) fn ensure_servers_writable() -> anyhow::Result<()> {
         paths::servers_path().exists(),
         crypto::access_state().opened,
     )
+}
+
+/// An unchanged servers.enc may be skipped only when no key slot is still waiting to reach disk.
+fn may_skip_servers_write(access: crypto::AccessState) -> bool {
+    !access.needs_rewrite
 }
 
 /// Refuse to replace an existing `servers.enc` that this process never opened.

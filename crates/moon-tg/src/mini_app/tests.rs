@@ -1964,6 +1964,7 @@ fn empty_store(path: PathBuf) -> NotifyStore {
         path,
         file: NotifyFile::default(),
         allowed: None,
+        wake: Default::default(),
     }
 }
 

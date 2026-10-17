@@ -222,11 +222,13 @@ fn strategy_stop_flags(snap: &moonproto::MoonStateSnapshot, strat_id: u64) -> (b
 ///     o: The order.
 ///     strat_flags: [`strategy_stop_flags`] per strategy id, shared by one batch's rows and valid
 ///         only for `snap`.
+///     stop_overrides: This core's stop choices copied once for this build.
 fn build_order_row(
     server_id: u64,
     snap: &moonproto::MoonStateSnapshot,
     o: &Order,
     strat_flags: &mut HashMap<u64, (bool, bool, bool)>,
+    stop_overrides: &HashMap<u64, [Option<bool>; 3]>,
 ) -> OrderRow {
     // Display name for the market. Hyperliquid spot names pairs by INDEX ("@206"); moonproto
     // provides the human-readable name in `market_name_mb_classic` ("UENAUSDT"). Store the classic
@@ -522,13 +524,17 @@ fn build_order_row(
     // trader declined the stop his strategy is about to give this order", so without the override
     // switching a working order's stop off would redraw as ON on the very next frame. The override
     // expires as soon as the wire disagrees, so a stop the core arms anyway comes back on its own.
-    let stop_eff = |kind: crate::feed::OrderStopKind, wire: bool, strat_on: bool| -> bool {
-        crate::feed::trade::stop_override(server_id, o.uid, kind, wire).unwrap_or(
-            wire || crate::feed::stop_inherited_from_strategy(
-                crate::feed::order_entry_filled(o),
-                strat_on,
-            ),
-        )
+    let stop_eff = |kind, wire: bool, strat_on: bool| -> bool {
+        stop_overrides
+            .get(&o.uid)
+            .and_then(|flags| flags[crate::feed::trade::stop_kind_tag(kind) as usize])
+            .filter(|on| *on == wire)
+            .unwrap_or(
+                wire || crate::feed::stop_inherited_from_strategy(
+                    crate::feed::order_entry_filled(o),
+                    strat_on,
+                ),
+            )
     };
     // A function of the snapshot and the strategy id alone, so one answer serves every order of the
     // batch that carries this id.
@@ -809,27 +815,35 @@ pub(super) fn stop_distance_pct(level: Option<f64>, base: f64, is_short: bool) -
     Some(if is_short { -raw } else { raw })
 }
 
-/// Build the current order rows and overlay captured order events from this drain.
-///
-/// Event rows preserve terminal states that may disappear from the retained
-/// snapshot before the application processes the event queue.
-/// Builds the complete snapshot and overlays captured events in their original order.
-pub(in crate::feed::live) fn build_order_rows(
+/// Builds the complete retained snapshot only when a publication is due.
+pub(in crate::feed::live) fn build_snapshot_rows(
+    server_id: u64,
+    snap: &moonproto::MoonStateSnapshot,
+) -> Vec<OrderRow> {
+    let mut strat_flags = HashMap::new();
+    let stop_overrides = crate::feed::trade::stop_overrides_for(server_id);
+    let mut order_rows = Vec::with_capacity(snap.orders().len());
+    for o in snap.orders().iter() {
+        order_rows.push(build_order_row(
+            server_id,
+            snap,
+            o,
+            &mut strat_flags,
+            &stop_overrides,
+        ));
+    }
+    diag_order_batch(server_id, snap, &order_rows);
+    order_rows
+}
+
+/// Projects this turn's captured orders before their terminal states leave the snapshot.
+pub(in crate::feed::live) fn build_captured_rows(
     server_id: u64,
     snap: &moonproto::MoonStateSnapshot,
     events: &[Event],
 ) -> Vec<OrderRow> {
     let mut strat_flags = HashMap::new();
-    let mut order_rows = Vec::with_capacity(snap.orders().len());
-    for o in snap.orders().iter() {
-        order_rows.push(build_order_row(server_id, snap, o, &mut strat_flags));
-    }
-
-    // Snapshot is the live view. Terminal statuses can be removed from that view
-    // before the app drains the event queue, so MoonProto carries an Arc<Order>
-    // on Created/Updated/Removed. Overlay those captured rows onto the full live
-    // snapshot: OrderLineStore still receives a complete seen-set, while closed
-    // rows cannot vanish into BackstopMissing.
+    let stop_overrides = crate::feed::trade::stop_overrides_for(server_id);
     let mut captured = Vec::new();
     for ev in events {
         let Event::Order(order_event) = ev else {
@@ -838,16 +852,19 @@ pub(in crate::feed::live) fn build_order_rows(
         let Some(order) = order_event.order() else {
             continue;
         };
-        captured.push(build_order_row(server_id, snap, order, &mut strat_flags));
+        captured.push(build_order_row(
+            server_id,
+            snap,
+            order,
+            &mut strat_flags,
+            &stop_overrides,
+        ));
     }
-    overlay_captured_rows(&mut order_rows, captured);
-
-    diag_order_batch(server_id, snap, &order_rows);
-    order_rows
+    captured
 }
 
 /// Replaces the first matching snapshot row or appends an absent captured UID.
-pub(super) fn overlay_captured_rows(
+pub(in crate::feed::live) fn overlay_captured_rows(
     rows: &mut Vec<OrderRow>,
     captured: impl IntoIterator<Item = OrderRow>,
 ) {

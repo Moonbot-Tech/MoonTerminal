@@ -146,6 +146,7 @@ fn forget_unpaired_removes_the_chat_and_keeps_its_outbox_row() {
         path: path.clone(),
         file: NotifyFile::default(),
         allowed: None,
+        wake: Default::default(),
     };
     store
         .update(|file| {

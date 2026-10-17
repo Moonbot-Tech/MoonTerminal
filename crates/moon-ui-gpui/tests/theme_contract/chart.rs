@@ -1114,6 +1114,7 @@ fn an_emptied_chart_panel_drops_its_trade_history_target() {
 /// a panel: its own override through the setter, and — for a panel that follows the global default —
 /// a ⧉ press in another group window, which rewrites that default without ever walking this stack
 /// and is heard only through the backend observer.
+/// Hidden observers must refresh history immediately when their settings change.
 #[test]
 fn a_trade_kind_change_re_runs_the_durable_history_query() {
     let source =
@@ -1123,24 +1124,28 @@ fn a_trade_kind_change_re_runs_the_durable_history_query() {
         body.contains("self.requery_trade_history_on_trade_kinds(cx)"),
         "set_chart_graphics must re-run the history query, or a re-ticked flag shows nothing"
     );
-    // BOTH constructors carry a copy of this observer — `new_main` for Main panes and `new_addto`
-    // for numbered AddToChart/Custom ones — and the second copy is precisely the ⧉ target. Counting
-    // the branches instead of inspecting the first match is what makes this test see the copy that
-    // was missed when the re-query was first hooked up.
-    let branches = source
-        .matches("if settings_sig != this.settings_sig {")
-        .count();
-    assert_eq!(
-        branches, 2,
-        "both panel constructors must observe the settings signature"
+    let construct = code_only(&read_src("panels/chart/construct.rs"));
+    for constructor in ["fn new_with_kind(", "fn new_addto("] {
+        let body = braced_body(&construct, constructor);
+        let observer = braced_body(body, "cx.observe(&backend, |this, backend, cx|");
+        assert!(
+            !observer.contains("this.scene_visible.then(||")
+                && observer.contains("chart_settings_sig(")
+                && observer.contains("this.apply_settings_signature(settings_sig, cx)"),
+            "{constructor}: its observer must always build and apply settings signatures"
+        );
+    }
+    let settings = code_only(&read_src("panels/chart/settings_sig.rs"));
+    let apply = braced_body(&settings, "fn apply_settings_signature(");
+    assert!(
+        apply.contains("if signature != self.settings_sig {") && !apply.contains("scene_visible"),
+        "the shared apply path must compare settings regardless of visibility"
     );
-    let requeries = source
-        .matches("this.requery_trade_history_on_trade_kinds(cx)")
-        .count();
-    assert_eq!(
-        requeries, branches,
-        "a panel following the global default hears a graphics change only in its observer, so \
-         every copy of that branch must re-run the query"
+    let changed = braced_body(apply, "if signature != self.settings_sig {");
+    assert!(
+        changed.contains("self.settings_sig = signature")
+            && changed.contains("self.requery_trade_history_on_trade_kinds(cx)"),
+        "applying settings must adopt them and re-run the durable trade-kind query"
     );
 }
 

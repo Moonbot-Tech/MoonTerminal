@@ -2,6 +2,7 @@
 
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use moon_core::config::WindowLayout;
 use moon_ui::DockTopologyByName;
@@ -220,12 +221,23 @@ enum WorkerCommand {
     Shutdown(PersistenceSnapshot, Sender<PersistenceAck>),
 }
 
+/// Minimum spacing between two live snapshot dispatches: a drag or resize dirties the layout every
+/// tick, and each dispatch clones every authority.
+pub(crate) const DOCK_DISPATCH_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Whether a snapshot may be dispatched at `now`, given when the previous one was accepted.
+pub(crate) fn dock_dispatch_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|last| now.saturating_duration_since(last) >= DOCK_DISPATCH_INTERVAL)
+}
+
 /// One serial standard-thread worker with at most one debounced request in flight.
 pub(crate) struct PersistenceCoordinator {
     commands: Option<Sender<WorkerCommand>>,
     acknowledgements: Receiver<PersistenceAck>,
     worker: Option<JoinHandle<()>>,
     in_flight: Option<PersistenceClasses>,
+    /// When the last debounced snapshot was accepted, for [`DOCK_DISPATCH_INTERVAL`].
+    last_dispatch: Option<Instant>,
     /// Independent sink used only if the worker cannot perform the final quit snapshot.
     fallback: Box<dyn PersistenceSink>,
 }
@@ -277,6 +289,7 @@ impl PersistenceCoordinator {
             acknowledgements: ack_rx,
             worker,
             in_flight: None,
+            last_dispatch: None,
             fallback,
         }
     }
@@ -303,7 +316,13 @@ impl PersistenceCoordinator {
             return false;
         }
         self.in_flight = Some(classes);
+        self.last_dispatch = Some(Instant::now());
         true
+    }
+
+    /// Whether the dispatch window since the last accepted snapshot has elapsed at `now`.
+    pub(crate) fn dispatch_due(&self, now: Instant) -> bool {
+        dock_dispatch_due(self.last_dispatch, now)
     }
 
     /// Poll the one outstanding debounced acknowledgement without blocking GPUI.

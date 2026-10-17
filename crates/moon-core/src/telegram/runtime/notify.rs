@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -62,6 +62,52 @@ pub struct NotifyStore {
     /// `Some(set)` is a viewer limited to that set. A chat absent from a published
     /// map is unpaired. Not part of the on-disk document.
     pub allowed: Option<BTreeMap<i64, Option<BTreeSet<u64>>>>,
+    /// Rung after every saved change so the sender drains it at once instead of on its next poll.
+    pub wake: Arc<NotifyWake>,
+}
+
+/// Wakes the sender thread: a generation counter bumped on every outbox change and on stop.
+///
+/// The sender reads the generation BEFORE it snapshots the outbox and waits only while it is
+/// unchanged, so a change landing between the snapshot and the wait is never missed.
+#[derive(Debug, Default)]
+pub struct NotifyWake {
+    generation: Mutex<u64>,
+    changed: Condvar,
+}
+
+impl NotifyWake {
+    /// Record a change and wake every waiter.
+    pub fn bump(&self) {
+        let mut generation = self.lock();
+        *generation = generation.wrapping_add(1);
+        drop(generation);
+        self.changed.notify_all();
+    }
+
+    /// The current generation, to hand to [`Self::wait_past`].
+    pub fn generation(&self) -> u64 {
+        *self.lock()
+    }
+
+    /// Block up to `timeout` while the generation is still `seen`.
+    ///
+    /// Returns:
+    ///     `true` when the generation moved, `false` on timeout.
+    pub fn wait_past(&self, seen: u64, timeout: Duration) -> bool {
+        let guard = self.lock();
+        let (guard, _) = self
+            .changed
+            .wait_timeout_while(guard, timeout, |generation| *generation == seen)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard != seen
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, u64> {
+        self.generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 impl NotifyStore {
@@ -81,6 +127,7 @@ impl NotifyStore {
             path,
             file,
             allowed: None,
+            wake: Arc::default(),
         };
         store.sweep_charts();
         Ok(store)
@@ -134,6 +181,7 @@ impl NotifyStore {
         }
         next.save(&self.path)?;
         self.file = next;
+        self.wake.bump();
         Ok(())
     }
 
@@ -217,6 +265,7 @@ impl NotifyStore {
         let result = edit(&mut next);
         next.save(&self.path)?;
         self.file = next;
+        self.wake.bump();
         Ok(result)
     }
 
@@ -605,7 +654,10 @@ pub(crate) fn spawn_sender(
 fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
     let mut api = BotApi::new(token);
     api.set_liveness(alive.clone());
-    let store_path = lock_store(&store).path.clone();
+    let (store_path, wake) = {
+        let store = lock_store(&store);
+        (store.path.clone(), Arc::clone(&store.wake))
+    };
     let mut last_sent: HashMap<i64, Instant> = HashMap::new();
     let mut ready_at: HashMap<i64, Instant> = HashMap::new();
     let mut backoff: HashMap<i64, Duration> = HashMap::new();
@@ -615,13 +667,15 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
     let mut stale: Vec<(i64, i64)> = Vec::new();
 
     while alive.upgrade().is_some() {
+        // Read before the snapshot: a change after this point moves it and cuts the wait short.
+        let seen = wake.generation();
         let pending = snapshot(&store);
         if pending.is_empty() {
             last_sent.clear();
             ready_at.clear();
             backoff.clear();
             delivered.clear();
-            wait_while_alive(&alive, WAIT_SLICE);
+            wait_while_alive(&alive, &wake, seen, WAIT_SLICE);
             continue;
         }
         let live: HashSet<i64> = pending.iter().map(|row| row.chat).collect();
@@ -798,7 +852,7 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
         }
         tidy_replaced(&mut api, &mut stale);
         if !progressed || hit_global_cap {
-            wait_while_alive(&alive, WAIT_SLICE);
+            wait_while_alive(&alive, &wake, seen, WAIT_SLICE);
         }
     }
 }
@@ -1011,20 +1065,18 @@ fn prune_window(sent_at: &mut VecDeque<Instant>, now: Instant) {
     }
 }
 
-/// Sleep up to `total`, returning as soon as the service owner is dropped.
-fn wait_while_alive(alive: &Weak<()>, total: Duration) {
-    let start = Instant::now();
-    while start.elapsed() < total {
-        if alive.upgrade().is_none() {
-            return;
-        }
-        let remaining = total.saturating_sub(start.elapsed());
-        std::thread::sleep(remaining.min(Duration::from_millis(100)));
+/// Wait up to `total` for an outbox change past `seen`, returning at once when the service owner
+/// is already gone. Stopping the service bumps `wake`, so shutdown never waits out the slice.
+/// Never called with the store lock held.
+fn wait_while_alive(alive: &Weak<()>, wake: &NotifyWake, seen: u64, total: Duration) {
+    if alive.upgrade().is_none() {
+        return;
     }
+    wake.wait_past(seen, total);
 }
 
 /// Recover a poisoned outbox lock. The sender must keep draining after a caller panicked.
-fn lock_store(store: &Mutex<NotifyStore>) -> std::sync::MutexGuard<'_, NotifyStore> {
+pub(super) fn lock_store(store: &Mutex<NotifyStore>) -> std::sync::MutexGuard<'_, NotifyStore> {
     store
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

@@ -1,5 +1,28 @@
 use super::source_priced;
 
+/// Rebuilding on price ticks wastes a catalog allocation; reusing a changed catalog hides markets.
+#[test]
+fn market_names_follow_catalog_revision_and_unknown_always_rebuilds() {
+    use super::cached_market_names;
+    use std::sync::Arc;
+
+    let mut cache = None;
+    let first = cached_market_names(&mut cache, Some((1, 1)), || ["SYNQUOTE".into()].into());
+    let same = cached_market_names(&mut cache, Some((1, 1)), || {
+        panic!("unchanged catalog rebuilt")
+    });
+    assert!(Arc::ptr_eq(&first, &same));
+    let changed = cached_market_names(&mut cache, Some((1, 2)), || {
+        ["SYNQUOTE".into(), "NEWQUOTE".into()].into()
+    });
+    assert!(!Arc::ptr_eq(&first, &changed));
+    assert!(changed.contains("NEWQUOTE"));
+    let unknown = cached_market_names(&mut cache, None, || ["UNKNOWNQUOTE".into()].into());
+    let unknown_again = cached_market_names(&mut cache, None, || ["OTHERQUOTE".into()].into());
+    assert!(!Arc::ptr_eq(&unknown, &unknown_again));
+    assert!(unknown_again.contains("OTHERQUOTE"));
+}
+
 /// A global-sourced account needs a usable base-currency rate.
 #[test]
 fn global_source_requires_a_finite_positive_rate() {

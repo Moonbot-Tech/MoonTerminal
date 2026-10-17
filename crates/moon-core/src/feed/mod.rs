@@ -33,6 +33,7 @@ pub use report_traces::{ArchivedLineKind, ArchivedOrderTrace, ReportTracesOutcom
 pub use strategies::field_text_is_valid;
 pub use types::*;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::{Duration, Instant};
@@ -44,7 +45,78 @@ use crate::db::ReportTx;
 use crate::market::SharedMarketStore;
 
 pub type FeedRx = Receiver<FeedMsg>;
-pub type FeedWakeTx = Sender<()>;
+
+/// Coalesced wake from feed threads to the UI.
+///
+/// Clones share one latch. [`FeedWakeTx::notify`] sends a token only when the UI
+/// has cleared the previous wake, so a burst from every core wakes the UI once.
+#[derive(Clone)]
+pub struct FeedWakeTx {
+    tx: Sender<()>,
+    pending: Arc<AtomicBool>,
+}
+
+impl FeedWakeTx {
+    /// Wake the UI unless a wake is already waiting for [`FeedWakeRx::clear`].
+    ///
+    /// Returns:
+    ///     Nothing. A disconnected UI drops the token.
+    pub fn notify(&self) {
+        if !self.pending.swap(true, Ordering::AcqRel) {
+            let _ = self.tx.send(());
+        }
+    }
+}
+
+/// UI side of [`FeedWakeTx`].
+///
+/// [`FeedWakeRx::clear`] runs after duplicate tokens are discarded and before the
+/// session drain. Clearing later loses a message that arrives during the drain:
+/// its notify sees the latch still set and sends no token.
+pub struct FeedWakeRx {
+    rx: Receiver<()>,
+    pending: Arc<AtomicBool>,
+}
+
+impl FeedWakeRx {
+    /// Block until the next wake, or until every sender is dropped.
+    ///
+    /// Returns:
+    ///     `Ok(())` for a wake. `Err` when the channel is disconnected.
+    pub fn recv(&self) -> Result<(), std::sync::mpsc::RecvError> {
+        self.rx.recv()
+    }
+
+    /// Take a wake token that is already queued.
+    ///
+    /// Returns:
+    ///     `Ok(())` when a token was waiting. `Err` when the queue is empty or
+    ///     the channel is disconnected.
+    pub fn try_recv(&self) -> Result<(), std::sync::mpsc::TryRecvError> {
+        self.rx.try_recv()
+    }
+
+    /// Allow the next [`FeedWakeTx::notify`] to send. A token already queued stays.
+    pub fn clear(&self) {
+        self.pending.store(false, Ordering::Release);
+    }
+}
+
+/// Build one wake pair. Every [`FeedWakeTx`] clone shares this latch.
+///
+/// Returns:
+///     The sender feed threads clone, and the receiver the UI loop owns.
+pub fn feed_wake_pair() -> (FeedWakeTx, FeedWakeRx) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let pending = Arc::new(AtomicBool::new(false));
+    (
+        FeedWakeTx {
+            tx,
+            pending: Arc::clone(&pending),
+        },
+        FeedWakeRx { rx, pending },
+    )
+}
 
 /// Timestamp indicating that any Assets view rendered recently, in Unix milliseconds.
 /// The UI stamps it from every `AssetsView::render`; feed threads use it to choose the cadence for
@@ -160,7 +232,7 @@ impl FeedTx {
     pub fn send(&self, msg: FeedMsg) -> Result<(), SendError<FeedMsg>> {
         self.data.send(msg)?;
         if let Some(wake) = &self.wake {
-            let _ = wake.send(());
+            wake.notify();
         }
         Ok(())
     }

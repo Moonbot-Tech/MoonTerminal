@@ -42,7 +42,7 @@ impl ReportPanel {
         // These stamps render replicated columns, so they follow the report axis rather than the
         // header clock -- the same split the Report grid makes for the very same two values.
         let axis = self.report_axis();
-        open_trade_record(&self.backend, axis, target, cx);
+        open_trade_record(&self.backend, (*axis).clone(), target, cx);
     }
 
     /// Resolve one row into everything the window needs, or nothing.

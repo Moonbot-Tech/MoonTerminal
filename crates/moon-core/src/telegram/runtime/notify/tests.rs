@@ -663,3 +663,54 @@ fn a_redraw_outlives_its_minute_and_a_notification_does_not() {
     assert!(super::redraw_outlived(redraw, 1_061));
     assert!(!super::redraw_outlived(card, 100_000));
 }
+
+/// An enqueue from another thread wakes a waiting sender well before its slice runs out.
+#[test]
+fn a_cross_thread_enqueue_wakes_the_waiter() {
+    let root = TempRoot::new("wake-enqueue");
+    let store = std::sync::Arc::new(Mutex::new(
+        NotifyStore::open(root.path("notifications.json")).expect("open"),
+    ));
+    let wake = std::sync::Arc::clone(&store.lock().unwrap().wake);
+    let seen = wake.generation();
+    let writer = std::sync::Arc::clone(&store);
+    let join = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        writer
+            .lock()
+            .unwrap()
+            .enqueue(1, "<b>hi</b>".into(), Some(vec![]), 0)
+            .expect("enqueue");
+        std::time::Instant::now()
+    });
+    assert!(wake.wait_past(seen, std::time::Duration::from_secs(10)));
+    let woke = std::time::Instant::now();
+    // Measured from the save's return: the fsync itself is the disk's time, not the wake's.
+    let saved = join.join().unwrap();
+    assert!(woke.saturating_duration_since(saved) < std::time::Duration::from_millis(500));
+}
+
+/// With nothing changing, the wait returns `false` after its timeout.
+#[test]
+fn an_unchanged_generation_times_out() {
+    let wake = super::NotifyWake::default();
+    let started = std::time::Instant::now();
+    assert!(!wake.wait_past(wake.generation(), std::time::Duration::from_millis(60)));
+    assert!(started.elapsed() >= std::time::Duration::from_millis(60));
+}
+
+/// Stopping rings the wake, so a sender mid-wait leaves at once rather than after the slice.
+#[test]
+fn stop_wakes_the_waiter_at_once() {
+    let wake = std::sync::Arc::new(super::NotifyWake::default());
+    let seen = wake.generation();
+    let stopper = std::sync::Arc::clone(&wake);
+    let started = std::time::Instant::now();
+    let join = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        stopper.bump();
+    });
+    assert!(wake.wait_past(seen, std::time::Duration::from_secs(5)));
+    assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    join.join().unwrap();
+}

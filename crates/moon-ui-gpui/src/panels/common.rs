@@ -925,18 +925,38 @@ pub(crate) fn panel_band(cx: &App) -> Div {
 /// Coalesces panel repaint requests by data signature and wall-clock second. A signature change or a
 /// new second bucket makes a notification eligible, while a monotonic 250 ms floor limits accepted
 /// requests to at most 4 Hz.
-#[derive(Default)]
 pub(crate) struct RenderGate {
     last_sig: u64,
     last_sec: u64,
     last_notify_at: Option<Instant>,
+    active: bool,
+    pending: bool,
+}
+
+/// Work admitted by the shared signature and clock gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GateStep {
+    Rebuild,
+    Repaint,
+    Idle,
+}
+
+impl Default for RenderGate {
+    /// Detached panels remain live without a dock activation callback.
+    fn default() -> Self {
+        Self {
+            last_sig: 0,
+            last_sec: 0,
+            last_notify_at: None,
+            active: true,
+            pending: false,
+        }
+    }
 }
 
 impl RenderGate {
-    /// Returns whether `sig` changed or `now_ms` entered a new second bucket and the 250 ms floor has
-    /// elapsed. Updates the accepted signature, bucket, and monotonic timestamp only when returning
-    /// true.
-    pub(crate) fn should_notify(&mut self, sig: u64, now_ms: f64) -> bool {
+    /// Separates data work from clock repainting, retaining one catch-up while hidden.
+    pub(crate) fn step(&mut self, sig: u64, now_ms: f64) -> GateStep {
         let sec = (now_ms as u64) / 1000;
         let changed = sig != self.last_sig || sec != self.last_sec;
         let now = Instant::now();
@@ -944,15 +964,53 @@ impl RenderGate {
             .last_notify_at
             .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(250));
         if changed && due {
+            let step = if sig != self.last_sig {
+                GateStep::Rebuild
+            } else {
+                GateStep::Repaint
+            };
             self.last_sig = sig;
             self.last_sec = sec;
             self.last_notify_at = Some(now);
-            true
+            if self.active {
+                step
+            } else {
+                self.pending = true;
+                GateStep::Idle
+            }
         } else {
+            GateStep::Idle
+        }
+    }
+
+    /// Preserves the notification contract for consumers that need no work distinction.
+    pub(crate) fn should_notify(&mut self, sig: u64, now_ms: f64) -> bool {
+        self.step(sig, now_ms) != GateStep::Idle
+    }
+
+    /// Returns one catch-up request when a hidden panel with deferred work becomes visible.
+    pub(crate) fn set_active(&mut self, active: bool) -> bool {
+        let catch_up = active && !self.active && self.pending;
+        self.active = active;
+        if catch_up {
+            self.pending = false;
+        }
+        catch_up
+    }
+
+    /// Defers explicit invalidations that bypass the periodic gate while their tab is hidden.
+    pub(crate) fn defer_if_inactive(&mut self) -> bool {
+        if self.active {
             false
+        } else {
+            self.pending = true;
+            true
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 /// Builds the toolbar action that opens a fresh detached window for a panel. After a successful
 /// spawn it removes the source panel when its dock handle is available and records a unique

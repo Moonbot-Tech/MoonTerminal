@@ -118,6 +118,8 @@ pub struct AssetsView {
     gate: RenderGate,
     /// Inputs represented by the current caches: data revisions and the dust threshold.
     cache_sig: Option<(u64, u64)>,
+    /// Catalogue-dependent rows need periodic retries until both market and label resolve.
+    has_unresolved_market: bool,
     /// Order revisions represented by the cached sale markers.
     sale_sig: Option<u64>,
     /// Effective cores represented by the current rows and sale markers.
@@ -229,7 +231,11 @@ impl AssetsView {
             let sig = this.assets_sig(b);
             let key = this.cache_key(sig);
             let sale = cache::sale_sig(b, &this.cached_cores);
-            let gate_due = this.gate.should_notify(cache::mix(sig, sale), now);
+            let step = this.gate.step(cache::mix(sig, sale), now);
+            if this.gate.defer_if_inactive() {
+                return;
+            }
+            let gate_due = cache::market_rebuild_due(step, this.has_unresolved_market);
             let (refresh, cache_sig, sale_sig) =
                 cache::assets_observe_step(this.cache_sig, key, this.sale_sig, sale, gate_due);
             this.cache_sig = cache_sig;
@@ -237,13 +243,18 @@ impl AssetsView {
             match refresh {
                 cache::AssetsRefresh::Full => {
                     this.rebuild_cache(b);
-                    cx.notify();
                 }
                 cache::AssetsRefresh::SaleOnly => {
                     this.sell_marked = Rc::new(this.collect_sell_marked(b));
-                    cx.notify();
                 }
                 cache::AssetsRefresh::None => {}
+            }
+            let repaint = cache::repaint_retries_transfers(refresh, step);
+            if repaint {
+                this.request_missing_transfers(b);
+            }
+            if refresh != cache::AssetsRefresh::None || repaint {
+                cx.notify();
             }
         })
         .detach();
@@ -394,6 +405,7 @@ impl AssetsView {
             transfer_input: None,
             gate: RenderGate::default(),
             cache_sig: None,
+            has_unresolved_market: false,
             sale_sig: None,
             cached_cores: Vec::new(),
             cached_entries: Rc::new(Vec::new()),

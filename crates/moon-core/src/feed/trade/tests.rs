@@ -1,5 +1,36 @@
 use super::*;
 
+/// Batch reads must isolate cores and preserve the per-kind agreement rule used by packet assembly.
+#[test]
+fn batch_stop_overrides_match_individual_reads() {
+    let core = u64::MAX - 702;
+    note_stop_override(core, 101, OrderStopKind::StopLoss, false);
+    note_stop_override(core, 101, OrderStopKind::Trailing, true);
+    note_stop_override(core, 102, OrderStopKind::VStop, false);
+    note_stop_override(core + 1, 103, OrderStopKind::StopLoss, true);
+    let batch = stop_overrides_for(core);
+    assert!(!batch.contains_key(&103));
+    for uid in [101, 102, 103] {
+        for kind in [
+            OrderStopKind::StopLoss,
+            OrderStopKind::Trailing,
+            OrderStopKind::VStop,
+        ] {
+            for wire in [false, true] {
+                let from_batch = batch
+                    .get(&uid)
+                    .and_then(|flags| flags[stop_kind_tag(kind) as usize])
+                    .filter(|on| *on == wire);
+                assert_eq!(from_batch, stop_override(core, uid, kind, wire));
+            }
+        }
+    }
+    stop_overrides_map()
+        .lock()
+        .unwrap()
+        .retain(|(server, _), _| *server != core && *server != core + 1);
+}
+
 #[test]
 /// Regression target: deleting `with_market_stop` from `trade::new_order_params` makes a visible
 /// Stop Market selection place a stop-limit order instead.

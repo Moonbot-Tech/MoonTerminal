@@ -58,7 +58,7 @@ impl ReportPanel {
             &data.core_uids,
             vis,
             p,
-            &axis,
+            axis.as_ref(),
             self.display_zone,
             cx,
         );
@@ -89,7 +89,7 @@ impl ReportPanel {
                     &view_row,
                     selection.contains(data.row_keys.get(ri).copied().flatten()),
                     p,
-                    &axis,
+                    axis.as_ref(),
                     display_zone,
                 )
             })

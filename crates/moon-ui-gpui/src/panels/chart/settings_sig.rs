@@ -67,7 +67,7 @@ pub(super) struct ChartSettingsSig {
     /// A core's newly-measured clock offset, in the signature for the same reason as
     /// `chart_graphics`: an idle chart must learn about it the same way it learns about a
     /// chart-graphics edit from elsewhere, instead of waiting on some unrelated repaint.
-    pub(super) report_axis: moon_core::db::ReportAxis,
+    pub(super) report_axis_rev: u64,
 }
 
 impl PartialEq for ChartSettingsSig {
@@ -91,7 +91,7 @@ impl PartialEq for ChartSettingsSig {
             && self.candle_view == other.candle_view
             && (std::rc::Rc::ptr_eq(&self.chart_labels, &other.chart_labels)
                 || self.chart_labels == other.chart_labels)
-            && self.report_axis == other.report_axis
+            && self.report_axis_rev == other.report_axis_rev
     }
 }
 
@@ -135,6 +135,30 @@ pub(super) fn chart_settings_sig(
             cfg.sanitize();
             std::rc::Rc::new(cfg)
         },
-        report_axis: backend.report_axis(crate::chartdx::axes::display_zone()),
+        report_axis_rev: backend.report_axis_rev(crate::chartdx::axes::display_zone()),
     }
 }
+
+impl ChartPanel {
+    /// Apply changed settings immediately so hidden charts keep history and trace queries current.
+    pub(super) fn apply_settings_signature(
+        &mut self,
+        signature: ChartSettingsSig,
+        cx: &mut Context<Self>,
+    ) {
+        if signature != self.settings_sig {
+            self.settings_sig = signature;
+            self.view_dirty = true;
+            self.requery_trade_history_on_trade_kinds(cx);
+            self.requery_trade_history_on_core_scope(cx);
+            self.request_trace_lines(true, cx);
+            self.sync_trace_lines(true, cx);
+            self.sync_chart_text(cx);
+            crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
+            cx.notify();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

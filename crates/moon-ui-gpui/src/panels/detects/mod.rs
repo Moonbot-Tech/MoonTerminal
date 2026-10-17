@@ -382,7 +382,8 @@ impl DetectsPanel {
                 // an older row would only be overwritten in place. Keeping the rest would buy each
                 // of them a market snapshot for nothing, which is what a replay is full of.
                 if newest_of_market.insert(det.market.as_str()) {
-                    fresh.push(det);
+                    // The store keeps `Arc<DetectRow>`; the card list borrows the row.
+                    fresh.push(&**det);
                 }
             }
             if fresh.is_empty() {

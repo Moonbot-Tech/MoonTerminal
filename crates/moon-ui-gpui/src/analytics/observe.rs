@@ -81,8 +81,13 @@ impl AnalyticsView {
     ///     Nothing; an axis change retires in-flight read identities other than a live joint
     ///     suggestion, and schedules a writer-driven catch-up.
     pub(super) fn observe_report_axis(&mut self, cx: &mut Context<Self>) {
-        let axis = self.backend.read(cx).report_axis(self.display_zone);
-        if axis == self.axis {
+        let revision = self.backend.read(cx).report_axis_rev(self.display_zone);
+        if revision == self.last_axis_rev {
+            return;
+        }
+        let axis = self.backend.read(cx).report_axis_arc(self.display_zone);
+        if *axis == self.axis {
+            self.last_axis_rev = revision;
             return;
         }
         if refresh::defer_axis_adoption(
@@ -93,7 +98,8 @@ impl AnalyticsView {
         ) {
             return;
         }
-        self.axis = axis;
+        self.axis = (*axis).clone();
+        self.last_axis_rev = revision;
         self.seq = self.seq.wrapping_add(1);
         self.cal_seq = self.cal_seq.wrapping_add(1);
         self.cancel_reads_for_axis_move();

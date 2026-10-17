@@ -8,21 +8,34 @@ impl Default for CoreData {
     }
 }
 
+/// Retained cores sharing one report-offset invalidation epoch.
 #[derive(Default)]
 pub struct CoreStore {
     cores: HashMap<CoreId, CoreData>,
+    time_offset_epoch: Arc<AtomicU64>,
 }
 
 impl CoreStore {
+    /// Insert a core with the fleet epoch so every offset adoption invalidates the axis.
     pub fn ensure(&mut self, id: CoreId) {
-        self.cores.entry(id).or_default();
+        self.cores.entry(id).or_insert_with(|| {
+            let mut core = CoreData::new();
+            core.time_offset_epoch = self.time_offset_epoch.clone();
+            core
+        });
+    }
+
+    /// Return the fleet revision advanced by changed offset snapshots and core removals.
+    pub fn time_offset_epoch(&self) -> u64 {
+        self.time_offset_epoch.load(Ordering::Relaxed)
     }
 
     /// Remove account data for a core whose server was removed from configuration.
-    /// The session lifecycle separately removes its feed handle, market client, and coordination
-    /// state.
+    /// Invalidate measured axes even when configuration still retains the deactivated core.
+    /// The session lifecycle separately removes its feed handle, market client, and coordination state.
     pub fn remove(&mut self, id: CoreId) {
         self.cores.remove(&id);
+        self.time_offset_epoch.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn core(&self, id: CoreId) -> Option<&CoreData> {

@@ -106,7 +106,13 @@ impl ScheduleCoordinator {
     fn strategy_commit(&self, core_uid: u64) {
         let mut state = self.lock();
         state.committed_cores.insert(core_uid);
+        let was_ready = state.strategy_ready;
         recompute_strategy_ready(&mut state);
+        // Every core commits on every strategy refresh; only a readiness change is news to the
+        // scheduler, so the steady stream wakes nobody.
+        if state.strategy_ready == was_ready {
+            return;
+        }
         state.wake_revision = state.wake_revision.wrapping_add(1);
         drop(state);
         self.wake.notify_all();

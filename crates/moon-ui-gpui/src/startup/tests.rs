@@ -329,3 +329,27 @@ fn report_recovery_stays_between_uid_floor_and_writer_start() {
     assert!(recovery < app_run);
     assert!(app_run < writer);
 }
+
+/// A drag dirties the layout on every 100 ms tick; the live snapshot is dispatched at most once
+/// per [`crate::persistence::coordinator::DOCK_DISPATCH_INTERVAL`], and the dirty flag survives every deferred tick.
+#[test]
+fn dock_dispatch_admits_two_of_ten_marks_at_100ms_steps() {
+    let start = Instant::now();
+    let mut last = None;
+    let mut dirty = false;
+    let mut dispatches = 0;
+    for step in 0..10u64 {
+        let now = start + Duration::from_millis(step * 100);
+        dirty = true;
+        if crate::persistence::coordinator::dock_dispatch_due(last, now) {
+            dispatches += 1;
+            dirty = false;
+            last = Some(now);
+        }
+        if step % 5 != 0 {
+            assert!(dirty, "a deferred tick at {step} keeps the edit dirty");
+        }
+    }
+    assert_eq!(dispatches, 2);
+    assert!(dirty, "the trailing edit stays dirty for the next window");
+}

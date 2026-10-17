@@ -318,7 +318,7 @@ impl DatedWriter {
         }
         if let Some(f) = self.file.as_mut() {
             // Remove line breaks from msg so one entry occupies one file line.
-            let msg = redact::addresses(msg).replace(['\n', '\r'], " ");
+            let msg = one_line(redact::addresses(msg));
             let _ = writeln!(f, "{hms}\t{level}\t{target}\t{msg}");
         }
     }
@@ -759,6 +759,16 @@ impl log::Log for TeeLogger {
 
     fn flush(&self) {
         self.inner.flush();
+    }
+}
+
+/// `msg` with every line break turned into a space, borrowed through when it has none — the common
+/// case, so a typical record allocates nothing here.
+fn one_line(msg: std::borrow::Cow<'_, str>) -> std::borrow::Cow<'_, str> {
+    if msg.contains(['\n', '\r']) {
+        std::borrow::Cow::Owned(msg.replace(['\n', '\r'], " "))
+    } else {
+        msg
     }
 }
 

@@ -338,6 +338,9 @@ impl OrdersPanel {
             let b = backend.read(cx);
             let (scope, signatures, current) = this.resolve_inputs(b);
             let due = this.gate.should_notify(signatures.0, now);
+            if this.gate.defer_if_inactive() {
+                return;
+            }
             let (action, key) = orders_observe_step(
                 this.cache_key.as_ref(),
                 OrdersInputs {
@@ -685,6 +688,9 @@ impl OrdersPanel {
 
     /// Resolve cache inputs once for explicit UI rebuilds, preserving all existing callers.
     pub(super) fn rebuild_cache(&mut self, b: &Backend) {
+        if self.gate.defer_if_inactive() {
+            return;
+        }
         let (scope, signatures, current) = self.resolve_inputs(b);
         let key = self.cache_key_with(b, &scope, signatures, current);
         self.rebuild_cache_with(b, &scope, key);

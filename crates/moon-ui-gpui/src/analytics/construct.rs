@@ -105,6 +105,7 @@ impl AnalyticsView {
             // The axis carries the zone beside the offsets, so it is stale even though nothing
             // new was measured.
             this.axis = this.backend.read(cx).report_axis(zone);
+            this.last_axis_rev = this.backend.read(cx).report_axis_rev(zone);
             this.coin_lists.invalidate_display_time();
             this.cal_dirty = true;
             this.reload(cx);
@@ -309,10 +310,12 @@ impl AnalyticsView {
         // Seeded so a window opened on a fleet measured in an earlier session renders corrected
         // times on its first paint, not on the first backend wake after it.
         let seeded_axis = backend.read(cx).report_axis(display_zone);
+        let last_axis_rev = backend.read(cx).report_axis_rev(display_zone);
         let mut this = Self {
             backend,
             display_zone,
             axis: seeded_axis,
+            last_axis_rev,
             display_zone_fields_dirty: false,
             report_generation,
             valuation_generation,

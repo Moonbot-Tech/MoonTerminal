@@ -50,6 +50,28 @@ impl MarketRoleState {
         self.applied = None;
     }
 
+    /// Whether this assignment is already the retained plan.
+    ///
+    /// A non-provider assignment matches only an empty account-only plan, the same normalization
+    /// as [`MarketPlan::new`], so the caller can skip cloning lists that `update` would drop.
+    pub(super) fn is_desired(
+        &self,
+        provider: bool,
+        markets: &[String],
+        orderbook: &[String],
+    ) -> bool {
+        let Some(plan) = self.desired.as_ref() else {
+            return false;
+        };
+        if provider {
+            plan.provider
+                && plan.markets.as_slice() == markets
+                && plan.orderbook_markets.as_slice() == orderbook
+        } else {
+            !plan.provider && plan.markets.is_empty() && plan.orderbook_markets.is_empty()
+        }
+    }
+
     /// Records a complete desired plan and returns whether it changed.
     pub(super) fn update(
         &mut self,

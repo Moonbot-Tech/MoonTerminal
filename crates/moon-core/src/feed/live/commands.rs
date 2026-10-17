@@ -65,11 +65,17 @@ pub(super) fn lock_and_adopt_latest_market_role<'a>(
 ) -> std::sync::MutexGuard<'a, Option<MarketRoleAssignment>> {
     let latest = latest_market_role.lock();
     if let Some(assignment) = latest.as_ref() {
-        *force_market_sample |= market_role.update(
+        if !market_role.is_desired(
             assignment.provider,
-            assignment.markets.clone(),
-            assignment.orderbook_markets.clone(),
-        );
+            &assignment.markets,
+            &assignment.orderbook_markets,
+        ) {
+            *force_market_sample |= market_role.update(
+                assignment.provider,
+                assignment.markets.clone(),
+                assignment.orderbook_markets.clone(),
+            );
+        }
     }
     latest
 }
@@ -970,9 +976,9 @@ pub(super) fn drain_commands(
                 market,
                 need_filters,
             }) => {
-                chart_text.market = market;
-                chart_text.need_filters = need_filters;
-                chart_text.send(client, server.id);
+                if chart_text.wants(market, need_filters, std::time::Instant::now()) {
+                    chart_text.send(client, server.id);
+                }
             }
             Ok(CoreCmd::ChartAlertDelete { market, obj_uid }) => {
                 if let Err(error) = client.chart_alerts().delete(market.clone(), obj_uid) {
@@ -1356,7 +1362,7 @@ pub(super) fn drain_commands(
                     client,
                     server.id,
                 );
-                if !chart_text.applied {
+                if chart_text.due(std::time::Instant::now()) {
                     chart_text.send(client, server.id);
                 }
                 *orders_mutated |= client_settings_sequence.drive(client, server.id);

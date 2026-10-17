@@ -305,7 +305,12 @@ impl ScreenerView {
                     .get(&row.core)
                     .cloned()
                     .unwrap_or_else(|| SharedString::from(format!("#{}", row.core)));
-                Entry { row, core_name }
+                Entry {
+                    market_uc: row.market.to_uppercase(),
+                    coin_uc: row.coin.to_uppercase(),
+                    row,
+                    core_name,
+                }
             }));
         }
 
@@ -313,10 +318,7 @@ impl ScreenerView {
         // sharing its exchange — so both halves of "shown / total" count distinct markets, not rows.
         self.total = distinct_markets(&entries);
         if !coin_filter.is_empty() {
-            entries.retain(|e| {
-                e.row.market.to_uppercase().contains(&coin_filter)
-                    || e.row.coin.to_uppercase().contains(&coin_filter)
-            });
+            entries.retain(|entry| matches_coin_filter(entry, &coin_filter));
         }
         if min_vol > 0.0 {
             entries.retain(|e| e.row.vol_24h >= min_vol);
@@ -744,6 +746,14 @@ fn distinct_markets(entries: &[Entry]) -> usize {
         .collect::<HashSet<_>>()
         .len()
 }
+
+/// Match an already-normalized filter against cached market and coin search text.
+fn matches_coin_filter(entry: &Entry, filter_uc: &str) -> bool {
+    entry.market_uc.contains(filter_uc) || entry.coin_uc.contains(filter_uc)
+}
+
+#[cfg(test)]
+mod tests;
 
 /// Build the window header with native minimize, maximize, and close controls.
 fn screener_header(p: MoonPalette, cx: &App) -> impl IntoElement {

@@ -132,6 +132,8 @@ pub struct AnalyticsView {
     /// list per frame for a value that moves only when a core adopts an offset or the zone
     /// changes — both of which write this field directly.
     axis: ReportAxis,
+    /// Backend axis revision last examined; deferred adoptions leave it unchanged.
+    last_axis_rev: u64,
     /// Whether custom-period pickers need redisplay after a zone identity change.
     display_zone_fields_dirty: bool,
     /// Report-writer generation observed only while this window exists.

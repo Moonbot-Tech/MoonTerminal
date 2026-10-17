@@ -230,6 +230,12 @@ pub struct DrainStats {
     /// A core named its exchange (`FeedMsg::Identity`). A headless host re-maps its providers
     /// on this edge ([`SessionManager::map_cores_to_themselves`]).
     pub identity: bool,
+    /// Sound scans should walk every core on this drain.
+    ///
+    /// Set for status, detects, orders, order lines, problems, core config, and trade-sound
+    /// messages. Status counts because a scan seeds its cursor the first time it sees a core,
+    /// and that seed has to land before the first live detect or the detect stays silent.
+    pub sound_inputs: bool,
 }
 
 /// Which order book a core's provider pulls, from the venue its platform code names.

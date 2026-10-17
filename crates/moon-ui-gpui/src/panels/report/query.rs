@@ -335,7 +335,7 @@ impl ReportPanel {
             period_basis: super::period_basis_for(self.closed_only, self.period_basis),
             // The SAME axis the cells are rendered on, so a window can never be built on one axis
             // while a timestamp inside it is printed on another.
-            axis: self.report_axis(),
+            axis: (*self.report_axis()).clone(),
             strategies: normalized_strategy_filter_keys(self.selected_strategies.as_ref()),
             strategy_name_mask,
             // Read from the backend at build time rather than mirrored into the panel: the rows,

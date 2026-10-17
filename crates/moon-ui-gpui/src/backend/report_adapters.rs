@@ -6,6 +6,31 @@ use moon_core::db::valuation::ValuationMode;
 use moon_core::session::CoreId;
 use moon_core::session::core_order::CoreOrder;
 use moon_core::session::core_order::OrderedCores;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+/// Offset epoch and configured server identities that determine the measured axis.
+type AxisKey = (u64, u64);
+
+/// Hash precisely the configured mapping from live core ids to durable report identities.
+fn axis_servers_key(servers: impl Iterator<Item = (CoreId, u64)>) -> u64 {
+    let mut key = std::collections::hash_map::DefaultHasher::new();
+    for server in servers {
+        server.hash(&mut key);
+    }
+    key.finish()
+}
+
+/// Return the shared axis only when both its display zone and source inputs match.
+fn axis_cache_lookup(
+    entries: &[(chrono_tz::Tz, AxisKey, Arc<moon_core::db::ReportAxis>)],
+    zone: chrono_tz::Tz,
+    key: AxisKey,
+) -> Option<Arc<moon_core::db::ReportAxis>> {
+    entries.iter().find_map(|(cached_zone, cached_key, axis)| {
+        (*cached_zone == zone && *cached_key == key).then(|| axis.clone())
+    })
+}
 
 impl Backend {
     /// The core-warning axis toggles (CPU / memory / connectivity / ping).
@@ -108,6 +133,35 @@ impl Backend {
     /// Returns:
     ///     The axis to render and to build period bounds on.
     pub(crate) fn report_axis(&self, zone: chrono_tz::Tz) -> moon_core::db::ReportAxis {
+        (*self.report_axis_arc(zone)).clone()
+    }
+
+    /// Hash the configured identity mapping; names and unrelated settings do not affect the axis.
+    fn report_axis_key(&self) -> AxisKey {
+        (
+            self.session.store().time_offset_epoch(),
+            axis_servers_key(
+                self.config
+                    .servers
+                    .iter()
+                    .map(|server| (server.id, server.uid)),
+            ),
+        )
+    }
+
+    /// Return a cheap invalidation token for the measured axis in this display zone.
+    pub(crate) fn report_axis_rev(&self, zone: chrono_tz::Tz) -> u64 {
+        let mut revision = std::collections::hash_map::DefaultHasher::new();
+        (self.report_axis_key(), zone).hash(&mut revision);
+        revision.finish()
+    }
+
+    /// Share one measured axis per zone until an offset or configured identity changes.
+    pub(crate) fn report_axis_arc(&self, zone: chrono_tz::Tz) -> Arc<moon_core::db::ReportAxis> {
+        let key = self.report_axis_key();
+        if let Some(axis) = axis_cache_lookup(&self.report_axes.borrow(), zone, key) {
+            return axis;
+        }
         let store = self.session.store();
         let measured = self
             .config
@@ -125,7 +179,11 @@ impl Backend {
                 ))
             })
             .collect();
-        moon_core::db::ReportAxis::from_measured(measured, zone)
+        let axis = Arc::new(moon_core::db::ReportAxis::from_measured(measured, zone));
+        let mut entries = self.report_axes.borrow_mut();
+        entries.retain(|(cached_zone, _, _)| *cached_zone != zone);
+        entries.push((zone, key, axis.clone()));
+        axis
     }
 
     /// Activate the valuation mode a Settings save just committed.
@@ -149,3 +207,6 @@ impl Backend {
         self.report_revision.update(cx, |_, cx| cx.notify());
     }
 }
+
+#[cfg(test)]
+mod tests;

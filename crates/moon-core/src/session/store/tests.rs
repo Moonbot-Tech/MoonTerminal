@@ -1,12 +1,55 @@
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
 
 use super::{BalanceState, ConnStatus, CoreData};
 use crate::feed::{
     ApiKeyExpiry, ChartTextRows, ConnFault, ConnFaultKind, CoreConfig, CoreConfigArea,
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
-    CoreConfigRejection, CoreEndpoint, CoreIdentityFacts, CoreStartupStatus, CoreSysStatus,
-    FeedMsg, FieldMask, OrderRow, OrderTrace, OrderTracePoint,
+    CoreConfigRejection, CoreEndpoint, CoreIdentityFacts, CoreLogLine, CoreStartupStatus,
+    CoreSysStatus, DetectRow, FeedMsg, FieldMask, OrderRow, OrderTrace, OrderTracePoint,
 };
+
+/// Dropping the shared bump, or bumping unchanged messages, must invalidate this fleet cache test.
+#[test]
+fn time_offset_epoch_bumps_only_on_changed_offset() {
+    let mut store = super::CoreStore::default();
+    store.ensure(41);
+    store.ensure(42);
+    assert_eq!(store.time_offset_epoch(), 0);
+    let status = crate::feed::CoreTimeOffsetStatus {
+        offset_secs: Some(3_600),
+        observed_at_utc: 10_000,
+        ..Default::default()
+    };
+    store
+        .core_mut(41)
+        .unwrap()
+        .apply(FeedMsg::TimeOffset(status));
+    assert_eq!(store.time_offset_epoch(), 1);
+    store.ensure(41);
+    store
+        .core_mut(41)
+        .unwrap()
+        .apply(FeedMsg::TimeOffset(status));
+    store
+        .core_mut(42)
+        .unwrap()
+        .apply(FeedMsg::TimeOffset(status));
+    assert_eq!(store.time_offset_epoch(), 2);
+    store
+        .core_mut(41)
+        .unwrap()
+        .apply(FeedMsg::TimeOffset(crate::feed::CoreTimeOffsetStatus {
+            offset_secs: Some(7_200),
+            ..status
+        }));
+    assert_eq!(store.time_offset_epoch(), 3);
+    assert_eq!(store.core(41).unwrap().time_offset_rev, 2);
+    store.remove(41);
+    assert_eq!(store.time_offset_epoch(), 4);
+    store.remove(99);
+    assert_eq!(store.time_offset_epoch(), 5);
+}
 
 /// A core with the given freshness inputs; everything else stays at its default.
 fn core(assets_rev: u64, rate_known: bool, stale: bool, status: ConnStatus) -> CoreData {
@@ -490,10 +533,9 @@ fn a_skewed_batch_lands_within_a_second_of_true_utc() {
     let mut cd = CoreData::new();
     let raw = now + 7_200_000.0;
 
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw, now),
-        traced_order_row(2, raw, now),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![traced_order_row(1, raw, now), traced_order_row(2, raw, now)].into(),
+    ));
 
     assert!((cd.orders[0].create_time_ms - now).abs() < 1_000.0);
     let retained = cd
@@ -512,7 +554,9 @@ fn an_honest_utc_core_passes_through_byte_identical() {
     let now = crate::util::now_unix_ms();
     let mut cd = CoreData::new();
 
-    cd.apply(FeedMsg::Orders(vec![order_row(1, now), order_row(2, now)]));
+    cd.apply(FeedMsg::Orders(
+        vec![order_row(1, now), order_row(2, now)].into(),
+    ));
 
     assert_eq!(cd.orders[0].create_time_ms, now);
     assert_eq!(cd.orders[1].create_time_ms, now);
@@ -529,10 +573,10 @@ fn the_same_raw_batch_applied_twice_does_not_shift_twice() {
     let raw = now + 7_200_000.0;
     let batch = || vec![traced_order_row(1, raw, now), traced_order_row(2, raw, now)];
 
-    cd.apply(FeedMsg::Orders(batch()));
+    cd.apply(FeedMsg::Orders(batch().into()));
     let first = cd.orders[0].create_time_ms;
 
-    cd.apply(FeedMsg::Orders(batch()));
+    cd.apply(FeedMsg::Orders(batch().into()));
     let second = cd.orders[0].create_time_ms;
 
     assert_eq!(first, second);
@@ -545,10 +589,9 @@ fn begin_connection_attempt_clears_the_clock_skew_estimate() {
     let now = crate::util::now_unix_ms();
     let mut cd = CoreData::new();
     let raw = now + 7_200_000.0;
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw, now),
-        traced_order_row(2, raw, now),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![traced_order_row(1, raw, now), traced_order_row(2, raw, now)].into(),
+    ));
     assert_eq!(cd.clock_skew.skew_ms(), 7_200_000.0);
 
     cd.begin_connection_attempt();
@@ -570,7 +613,7 @@ fn a_later_adoption_repairs_lines_retained_by_an_earlier_batch() {
     let raw = now - 7_200_000.0;
 
     // Batch 1: a single new order — one vote, not enough to adopt yet, so it is retained raw.
-    cd.apply(FeedMsg::Orders(vec![traced_order_row(1, raw, now)]));
+    cd.apply(FeedMsg::Orders(vec![traced_order_row(1, raw, now)].into()));
     let rev_after_batch1 = cd.order_lines_rev;
     let retained_before = cd
         .order_lines
@@ -584,11 +627,14 @@ fn a_later_adoption_repairs_lines_retained_by_an_earlier_batch() {
     );
 
     // Batch 2: two more new orders agreeing on the same bucket — now enough votes to adopt.
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw, now),
-        traced_order_row(2, raw, now),
-        traced_order_row(3, raw, now),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![
+            traced_order_row(1, raw, now),
+            traced_order_row(2, raw, now),
+            traced_order_row(3, raw, now),
+        ]
+        .into(),
+    ));
 
     let retained_after = cd
         .order_lines
@@ -615,10 +661,13 @@ fn a_reconnect_then_a_new_adoption_leaves_retained_create_ms_correct() {
     let raw1 = now1 + 7_200_000.0;
 
     // First connection adopts a +2h skew and retains uid 1 corrected under it.
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw1, now1),
-        traced_order_row(2, raw1, now1),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![
+            traced_order_row(1, raw1, now1),
+            traced_order_row(2, raw1, now1),
+        ]
+        .into(),
+    ));
     assert_eq!(cd.clock_skew.skew_ms(), 7_200_000.0);
     let retained_first = cd
         .order_lines
@@ -637,10 +686,13 @@ fn a_reconnect_then_a_new_adoption_leaves_retained_create_ms_correct() {
     // fresh uid agreeing on the same bucket.
     let now2 = crate::util::now_unix_ms();
     let raw2 = now2 - 5_400_000.0;
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw2, now2),
-        traced_order_row(10, raw2, now2),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![
+            traced_order_row(1, raw2, now2),
+            traced_order_row(10, raw2, now2),
+        ]
+        .into(),
+    ));
     assert_eq!(cd.clock_skew.skew_ms(), -5_400_000.0);
 
     let retained_second = cd
@@ -668,10 +720,9 @@ fn a_reconnect_on_the_same_core_does_not_move_a_retained_start() {
     let mut cd = CoreData::new();
     let raw = now + 7_200_000.0;
 
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw, now),
-        traced_order_row(2, raw, now),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![traced_order_row(1, raw, now), traced_order_row(2, raw, now)].into(),
+    ));
     assert_eq!(cd.clock_skew.skew_ms(), 7_200_000.0);
     let retained_before = cd
         .order_lines
@@ -685,10 +736,9 @@ fn a_reconnect_on_the_same_core_does_not_move_a_retained_start() {
     cd.begin_connection_attempt();
     assert_eq!(cd.clock_skew.skew_ms(), 0.0);
 
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw, now),
-        traced_order_row(2, raw, now),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![traced_order_row(1, raw, now), traced_order_row(2, raw, now)].into(),
+    ));
     assert_eq!(cd.clock_skew.skew_ms(), 7_200_000.0);
 
     let retained_after = cd
@@ -1376,4 +1426,211 @@ fn a_drain_after_a_give_up_keeps_the_verdict() {
         cd.core_config_edit.as_ref().map(|row| row.phase),
         Some(CoreConfigEditPhase::GaveUp)
     );
+}
+
+/// The raw ring is a diagnostic tail, not a second copy of the formatted log.
+///
+/// Breakage: trimming `server_log_raw` with `MAX_LOG` keeps six thousand lines in memory, and
+/// cloning every line of a long batch pays for rows FireTest never reads. The snapshot must stay
+/// oldest-to-newest, or the latency measurement reads the batch backwards.
+#[test]
+fn raw_server_log_keeps_the_newest_512_of_a_long_batch() {
+    let mut cd = CoreData::new();
+    let lines: Vec<CoreLogLine> = (0..6_000)
+        .map(|index| CoreLogLine {
+            time_ms: index,
+            recv_ms: index,
+            msg: index.to_string(),
+        })
+        .collect();
+
+    cd.apply(FeedMsg::ServerLog(lines));
+
+    assert_eq!(cd.server_log_raw.len(), 512);
+    assert_eq!(cd.log.len(), 5_000);
+    assert_eq!(
+        cd.log.front().map(|line| line.msg.as_str()),
+        Some("1000"),
+        "the formatted ring drops the oldest lines"
+    );
+    assert_eq!(cd.log.back().map(|line| line.msg.as_str()), Some("5999"));
+    assert_eq!(
+        cd.server_log_raw.front().map(|line| line.msg.as_str()),
+        Some("5488")
+    );
+    assert_eq!(
+        cd.server_log_raw.back().map(|line| line.msg.as_str()),
+        Some("5999")
+    );
+    let snapshot = cd.raw_server_log_snapshot(300);
+    let expected: Vec<String> = (5_700..6_000).map(|index| index.to_string()).collect();
+    let got: Vec<String> = snapshot.into_iter().map(|line| line.msg).collect();
+    assert_eq!(got, expected);
+}
+
+fn detect_row(seq: u64, market: &str) -> DetectRow {
+    DetectRow {
+        seq,
+        market: market.to_string(),
+        time_ms: 0.0,
+        sound_alert: false,
+        keep_alert_secs: 60,
+        add_to_chart: 0,
+        keep_in_chart_secs: 60,
+        sound_name: None,
+        is_alert: false,
+        kind: 0,
+        is_short: false,
+        msg: String::new(),
+        strat_name: String::new(),
+    }
+}
+
+/// Five thousand detects over ten markets keep the ring at `MAX_DETECTS` and share the newest row.
+///
+/// Breakage: cloning the row into `latest_detect` keeps a second full copy, and `Arc::ptr_eq`
+/// fails. Evicting the newest of a market, or keeping more than two thousand rows, fails the
+/// length and sequence checks.
+#[test]
+fn the_detect_index_shares_the_newest_row_in_the_ring() {
+    let mut cd = CoreData::new();
+    let rows: Vec<DetectRow> = (0..5_000)
+        .map(|seq| detect_row(seq, &format!("M{}", seq % 10)))
+        .collect();
+
+    cd.apply(FeedMsg::Detects(rows));
+
+    assert_eq!(cd.detects.len(), 2_000);
+    assert_eq!(cd.latest_detect.len(), 10);
+    for market_index in 0..10 {
+        let market = format!("M{market_index}");
+        let latest = cd
+            .latest_detect
+            .get(&market)
+            .unwrap_or_else(|| panic!("missing {market}"));
+        let newest = cd
+            .detects
+            .iter()
+            .rev()
+            .find(|row| row.market == market)
+            .unwrap_or_else(|| panic!("ring missing {market}"));
+        assert!(
+            Arc::ptr_eq(latest, newest),
+            "{market} index must be the ring row"
+        );
+        assert_eq!(latest.seq, 4_990 + market_index);
+    }
+}
+
+/// Flattening captured turns into only the final row loses the 101 reprice before 102.
+#[test]
+fn coalesced_turns_preserve_every_line_reprice_for_both_publications() {
+    let now = crate::util::now_unix_ms();
+    let turns: Vec<Vec<OrderRow>> = [100.0, 101.0, 102.0]
+        .into_iter()
+        .map(|price| {
+            let mut row = order_row(991, now - 10_000.0);
+            row.market = "SYNQUOTE".into();
+            row.buy_price = price;
+            vec![row]
+        })
+        .collect();
+    let prices = |core: &CoreData| -> Vec<f32> {
+        core.order_lines
+            .iter_market("SYNQUOTE")
+            .find(|o| o.uid == 991)
+            .unwrap()
+            .lines[0]
+            .steps
+            .iter()
+            .map(|(_, price)| *price)
+            .collect()
+    };
+    let mut sequential = CoreData::new();
+    for turn in &turns {
+        sequential.apply(FeedMsg::OrderLines(turn.clone().into()));
+    }
+    assert_eq!(prices(&sequential), [100.0, 101.0, 102.0]);
+    for table in [false, true] {
+        let mut core = CoreData::new();
+        let payload = crate::feed::OrderRows {
+            rows: turns.last().unwrap().clone(),
+            captured_turns: turns.clone(),
+        };
+        core.apply(if table {
+            FeedMsg::Orders(payload)
+        } else {
+            FeedMsg::OrderLines(payload)
+        });
+        assert_eq!(prices(&core), prices(&sequential));
+    }
+}
+
+/// A removed cancelled UID must be retained as Cancel rather than disappear into BackstopMissing.
+#[test]
+fn coalesced_terminal_row_survives_an_empty_snapshot() {
+    let mut row = order_row(992, crate::util::now_unix_ms() - 10_000.0);
+    row.market = "SYNQUOTE".into();
+    row.status = "Cancel".into();
+    row.job_is_done = true;
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::Orders(crate::feed::OrderRows {
+        rows: vec![row.clone()],
+        captured_turns: vec![vec![row]],
+    }));
+    let retained = core
+        .order_lines
+        .iter_market("SYNQUOTE")
+        .find(|o| o.uid == 992)
+        .unwrap();
+    assert_eq!(
+        retained.closed_reason,
+        Some(crate::session::order_lines::OrderCloseReason::Cancel)
+    );
+}
+
+/// Complete-snapshot replay of partial turns would close and revive unrelated orders after a gap.
+#[test]
+fn coalesced_partial_turns_after_a_gap_do_not_close_unrelated_orders() {
+    let now = crate::util::now_unix_ms();
+    let rows: Vec<_> = [993, 994]
+        .into_iter()
+        .map(|uid| {
+            let mut row = order_row(uid, now - 10_000.0);
+            row.market = "SYNQUOTE".into();
+            row.buy_price = 100.0;
+            row
+        })
+        .collect();
+    let mut cases = Vec::new();
+    for table in [false, true] {
+        for empty in [false, true] {
+            let mut core = CoreData::new();
+            core.apply(FeedMsg::Orders(rows.clone().into()));
+            let revision = core.order_lines.rev;
+            cases.push((core, table, empty, revision));
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(2_600));
+    for (mut core, table, empty, revision) in cases {
+        let payload = crate::feed::OrderRows {
+            rows: rows.clone(),
+            captured_turns: vec![if empty { vec![] } else { vec![rows[0].clone()] }],
+        };
+        core.apply(if table {
+            FeedMsg::Orders(payload)
+        } else {
+            FeedMsg::OrderLines(payload)
+        });
+        assert_eq!(
+            core.order_lines.rev, revision,
+            "no transient close or revival"
+        );
+        for uid in [993, 994] {
+            let state = core.order_lines.order_state(uid).unwrap();
+            assert!(state.active);
+            assert_eq!(state.closed_reason, None);
+            assert_eq!(state.closed_rev, None);
+        }
+    }
 }

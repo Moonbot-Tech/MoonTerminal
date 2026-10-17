@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::applog::LogLine;
 use crate::feed::{
@@ -31,7 +32,8 @@ mod rows;
 pub use core_store::*;
 pub use rows::*;
 use rows::{
-    MAX_DETECTS, MAX_ENGINE_ACTIONS, MAX_LOG, MAX_REPORT_TRACES, MAX_TG_EVENTS, MAX_TG_OPENED,
+    MAX_DETECTS, MAX_ENGINE_ACTIONS, MAX_LOG, MAX_REPORT_TRACES, MAX_SERVER_LOG_RAW, MAX_TG_EVENTS,
+    MAX_TG_OPENED,
 };
 
 /// Retained account-plane and operational state for one configured core.
@@ -48,14 +50,16 @@ pub struct CoreData {
     /// `order_lines` and the table. See `session::clock_skew` for the design.
     pub clock_skew: CoreClockSkew,
     /// Recent core detects, trimmed as a ring buffer to `MAX_DETECTS`.
-    pub detects: VecDeque<DetectRow>,
+    /// The ring and [`Self::latest_detect`] share each row through `Arc`.
+    pub detects: VecDeque<Arc<DetectRow>>,
     /// Newest detect per MARKET, for the chart caption that prints "what last fired here".
     ///
     /// An index rather than a search: the caption is resolved per pane on an order revision, and
     /// finding the newest detect for one market means walking the ring — two thousand string
     /// compares — for the common case of a market that never had one. One entry per market that
-    /// HAS fired, which is a fraction of the ring and never larger than it.
-    pub latest_detect: HashMap<String, DetectRow>,
+    /// HAS fired, which is a fraction of the ring and never larger than it. The `Arc` is the same
+    /// allocation as that row in [`Self::detects`].
+    pub latest_detect: HashMap<String, Arc<DetectRow>>,
     /// What this core's strategies asked to report to Telegram, oldest first, trimmed to
     /// [`MAX_TG_EVENTS`]; see [`CoreData::push_tg_event`].
     pub tg_events: VecDeque<TgEventRow>,
@@ -253,8 +257,10 @@ pub struct CoreData {
     report_traces_order: VecDeque<i64>,
     /// Recent core server-log lines, trimmed as a ring buffer to `MAX_LOG`.
     pub log: VecDeque<LogLine>,
-    /// Raw server-log lines with terminal receipt times for diagnostics and FireTest measurements.
-    /// The UI continues to read the formatted `log`.
+    /// Raw server-log lines capped at 512.
+    ///
+    /// The only reader is FireTest through [`Self::raw_server_log_snapshot`]. The formatted
+    /// [`Self::log`] stays the UI ring at [`MAX_LOG`].
     pub server_log_raw: VecDeque<crate::feed::CoreLogLine>,
     /// Latest typed core resource telemetry from protocol-v4 `Event::KernelHealth`.
     /// The Core Status panel observes it through `sys_rev`.
@@ -445,6 +451,8 @@ pub struct CoreData {
     pub time_offset: crate::feed::CoreTimeOffsetStatus,
     /// Advances when the offset above changes, gating the Core Status column that renders it.
     pub time_offset_rev: u64,
+    /// Shared fleet revision, also advanced by offsets seeded through apply.
+    time_offset_epoch: Arc<AtomicU64>,
 }
 
 /// When a listed ban runs out, in Unix milliseconds.
@@ -595,6 +603,7 @@ impl CoreData {
             news_rev: 0,
             time_offset: crate::feed::CoreTimeOffsetStatus::default(),
             time_offset_rev: 0,
+            time_offset_epoch: Arc::default(),
         }
     }
 
@@ -851,6 +860,22 @@ impl CoreData {
         changed
     }
 
+    /// Replays captured event turns in order without applying the complete-snapshot backstop.
+    fn ingest_captured_turns(&mut self, turns: &mut [Vec<OrderRow>]) -> bool {
+        let mut changed = false;
+        for turn in turns {
+            changed |= self
+                .clock_skew
+                .observe(turn, |uid| self.order_lines.knows(uid), now_unix_ms())
+                .is_some();
+            self.clock_skew.correct(turn);
+            changed |= self
+                .order_lines
+                .update_partial(turn, self.clock_skew.generation());
+        }
+        changed
+    }
+
     /// Apply an account-plane message to this core.
     ///
     /// The coordinator routes `Identity`, `CoreBase`, and `MarketDataChanged` without applying them
@@ -871,6 +896,7 @@ impl CoreData {
                 if self.time_offset != status {
                     self.time_offset = status;
                     self.time_offset_rev = self.time_offset_rev.wrapping_add(1);
+                    self.time_offset_epoch.fetch_add(1, Ordering::Relaxed);
                 }
             }
             FeedMsg::Status(s) => {
@@ -936,21 +962,23 @@ impl CoreData {
                     self.telegram_rev = self.telegram_rev.wrapping_add(1);
                 }
             }
-            FeedMsg::Orders(mut orders) => {
+            FeedMsg::Orders(mut payload) => {
                 // Observe and correct clock skew, then update the retained line store (traces,
                 // nodes, and closures) from the corrected batch before moving it into the table
                 // list. Separate revisions gate the table and chart: every batch matters to the
                 // table, while only render-affecting order-line changes matter to the chart.
-                let changed = self.ingest_order_rows(&mut orders);
-                self.orders = orders;
+                let mut changed = self.ingest_captured_turns(&mut payload.captured_turns);
+                changed |= self.ingest_order_rows(&mut payload.rows);
+                self.orders = payload.rows;
                 self.orders_table_rev = self.orders_table_rev.wrapping_add(1);
                 if changed {
                     self.order_lines_rev = self.order_lines_rev.wrapping_add(1);
                     self.order_lines_rev_ms = now_unix_ms_i64();
                 }
             }
-            FeedMsg::OrderLines(mut orders) => {
-                let changed = self.ingest_order_rows(&mut orders);
+            FeedMsg::OrderLines(mut payload) => {
+                let mut changed = self.ingest_captured_turns(&mut payload.captured_turns);
+                changed |= self.ingest_order_rows(&mut payload.rows);
                 if changed {
                     self.order_lines_rev = self.order_lines_rev.wrapping_add(1);
                     self.order_lines_rev_ms = now_unix_ms_i64();
@@ -967,8 +995,11 @@ impl CoreData {
                         self.detects_rev.wrapping_add(1)
                     ));
                     for det in detects {
-                        // Newest wins, and arrival order is the ring's order.
-                        self.latest_detect.insert(det.market.clone(), det.clone());
+                        // Newest wins, and arrival order is the ring's order. One allocation is
+                        // shared with the per-market index.
+                        let det = Arc::new(det);
+                        self.latest_detect
+                            .insert(det.market.clone(), Arc::clone(&det));
                         self.detects.push_back(det);
                     }
                     if self.detects.len() > MAX_DETECTS {
@@ -1387,16 +1418,21 @@ impl CoreData {
             FeedMsg::ServerLog(lines) => {
                 if !lines.is_empty() {
                     let pushed = lines.len() as u64;
-                    for l in lines {
-                        self.server_log_raw.push_back(l.clone());
+                    // A batch larger than the raw cap clones only its newest lines into the raw
+                    // ring. The formatted log still takes every line, then trims to `MAX_LOG`.
+                    let raw_from = lines.len().saturating_sub(MAX_SERVER_LOG_RAW);
+                    for (idx, l) in lines.into_iter().enumerate() {
+                        if idx >= raw_from {
+                            self.server_log_raw.push_back(l.clone());
+                        }
                         self.log.push_back(LogLine::core(l.time_ms, l.msg));
                     }
                     if self.log.len() > MAX_LOG {
                         let drop = self.log.len() - MAX_LOG;
                         self.log.drain(0..drop);
                     }
-                    if self.server_log_raw.len() > MAX_LOG {
-                        let drop = self.server_log_raw.len() - MAX_LOG;
+                    if self.server_log_raw.len() > MAX_SERVER_LOG_RAW {
+                        let drop = self.server_log_raw.len() - MAX_SERVER_LOG_RAW;
                         self.server_log_raw.drain(0..drop);
                     }
                     self.log_rev = self.log_rev.wrapping_add(1);

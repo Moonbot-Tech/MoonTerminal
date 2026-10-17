@@ -22,6 +22,35 @@ mod controls;
 mod model;
 mod table;
 
+#[cfg(test)]
+mod tests;
+
+/// Includes translated tool labels in the row identity so a language switch rebuilds them.
+fn locale_data_sig(data: u64, locale: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut h);
+    locale.hash(&mut h);
+    h.finish()
+}
+
+/// Invalidates resolved coin labels when their provider publishes a new catalogue.
+fn catalogue_data_sig(data: u64, revision: Option<(CoreId, u64, u64)>) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut h);
+    revision.hash(&mut h);
+    h.finish()
+}
+
+/// Resolved rows need only painting on clock ticks; unresolved labels must be retried.
+fn alerts_should_rebuild(
+    changed: bool,
+    step: crate::panels::common::GateStep,
+    has_unresolved_coin: bool,
+) -> bool {
+    use crate::panels::common::GateStep;
+    changed || step == GateStep::Rebuild || (step == GateStep::Repaint && has_unresolved_coin)
+}
+
 use model::{AlCol, AlertsViewState, ArmFilter, FigRow, KindFilter, sort_rows};
 
 use std::collections::{HashMap, HashSet};
@@ -74,8 +103,10 @@ pub struct AlertsPanel {
     /// the gate below: that gate's 250 ms floor is there to thin idle repaints, not to delay a
     /// figure that actually moved.
     rows_sig: Option<u64>,
-    /// Periodic self-heal for everything the signature cannot see. See [`Self::data_sig`].
+    /// Periodic repaint and retry of coin names that have not acquired a catalogue identity.
     gate: RenderGate,
+    /// Empty canonical identities may be fallback labels, so keep retrying them each second.
+    has_unresolved_coin: bool,
     coin_input: Entity<MoonInputState>,
     /// Mirror of the coin field, so a rebuild needs no context to read the input.
     query: String,
@@ -175,21 +206,19 @@ impl AlertsPanel {
         // Rebuild only when the data behind the rows actually changed. The backend notifies on
         // every drain — several times a second — and nothing about a figure list changes that often.
         cx.observe(&backend, |this, backend, cx| {
-            // Two independent reasons to rebuild, exactly as Orders has them: the data behind the
-            // rows changed, or the gate's periodic tick came round for everything the signature
-            // cannot see. The first must NOT go through the gate — its 250 ms floor would swallow a
-            // figure that really moved and leave it unshown until some later drain.
-            let rebuild = {
-                let b = backend.read(cx);
-                let sig = this.data_sig(b);
-                let changed = this.rows_sig != Some(sig);
-                let due = this
-                    .gate
-                    .should_notify(sig, moon_chart::paint::now_unix_ms());
-                changed || due
-            };
-            if rebuild {
-                this.refresh(cx);
+            let b = backend.read(cx);
+            let sig = this.data_sig(b);
+            let step = this.gate.step(sig, moon_chart::paint::now_unix_ms());
+            if this.gate.defer_if_inactive() {
+                return;
+            }
+            // Real figure edits bypass the periodic floor to preserve their current latency.
+            if alerts_should_rebuild(this.rows_sig != Some(sig), step, this.has_unresolved_coin) {
+                this.rebuild(b);
+                this.rows_sig = Some(sig);
+                cx.notify();
+            } else if step == crate::panels::common::GateStep::Repaint {
+                cx.notify();
             }
         })
         .detach();
@@ -233,6 +262,7 @@ impl AlertsPanel {
             rows: Rc::new(Vec::new()),
             rows_sig: None,
             gate: RenderGate::default(),
+            has_unresolved_coin: false,
             coin_input,
             query: String::new(),
             alert_strategies: Rc::new(HashMap::new()),
@@ -266,11 +296,8 @@ impl AlertsPanel {
     /// row, a disconnect greys its Alert box), and the cores' `Alerts` strategies, which the
     /// Strategy column resolves names from and the row dropdown offers.
     ///
-    /// It is a HINT, not the whole truth, and that is why the caller feeds it to the shared
-    /// [`RenderGate`] rather than comparing it directly. A row also carries values this fold does
-    /// not reach — the market catalogue behind the coin, the locale behind the tool's name — and a
-    /// strict signature would freeze every one of them until an unrelated figure was edited. The
-    /// gate's one-second bucket is what makes those self-heal, exactly as it does for Orders.
+    /// The locale covers translated tool names; provider catalogue revisions refresh coin labels.
+    /// Market names without a canonical identity also retain a periodic lookup retry.
     fn data_sig(&self, b: &Backend) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         b.figures.borrow().rev().hash(&mut h);
@@ -278,6 +305,7 @@ impl AlertsPanel {
         for s in b.session.sessions().iter().filter(|s| scope.contains(s.id)) {
             s.id.hash(&mut h);
             s.name.hash(&mut h);
+            catalogue_data_sig(0, b.session.market_source().catalog_revision(s.id)).hash(&mut h);
             if let Some(core) = b.session.store().core(s.id) {
                 // Connection state decides whether a row's Alert box may be ticked at all, so it
                 // belongs to the fold as much as the names do.
@@ -288,11 +316,14 @@ impl AlertsPanel {
                 core.strategies_rev.hash(&mut h);
             }
         }
-        h.finish()
+        locale_data_sig(h.finish(), rust_i18n::locale().as_ref())
     }
 
     /// Rebuilds the row set from the store, applying both filters, the coin query and the sort.
     fn rebuild(&mut self, b: &Backend) {
+        if self.gate.defer_if_inactive() {
+            return;
+        }
         // Limit the panel to cores in its own group, then to the core filter.
         let scope = self.effective_scope(b);
         let names: HashMap<CoreId, String> = b
@@ -357,6 +388,7 @@ impl AlertsPanel {
         // `(core, market)`: the rows are built in the same order, so a position is free where a
         // key would allocate a market name per row to look itself up with.
         let ms = b.session.market_source();
+        self.has_unresolved_coin = false;
         let mut coin_of: Vec<String> = vec![String::new(); figures.len()];
         let mut by_core: HashMap<CoreId, Vec<usize>> = HashMap::new();
         for (ix, (core, ..)) in figures.iter().enumerate() {
@@ -371,7 +403,10 @@ impl AlertsPanel {
                 .iter()
                 .copied()
                 .zip(ms.market_labels(core, &distinct))
-                .map(|(market, label)| (market, label.display_coin().to_string()))
+                .map(|(market, label)| {
+                    self.has_unresolved_coin |= label.canonic.is_empty();
+                    (market, label.display_coin().to_string())
+                })
                 .collect();
             for ix in positions {
                 if let Some(coin) = coins.get(figures[ix].1.as_str()) {
@@ -414,6 +449,9 @@ impl AlertsPanel {
     ///
     /// Split from [`Self::refresh`] because a constructor has no repaint to ask for yet.
     fn reload(&mut self, cx: &App) {
+        if self.gate.defer_if_inactive() {
+            return;
+        }
         let backend = self.backend.clone();
         let b = backend.read(cx);
         self.rebuild(b);
@@ -779,6 +817,14 @@ impl Focusable for AlertsPanel {
 }
 
 impl Panel for AlertsPanel {
+    /// Coalesces hidden-tab work into one rebuild when the panel becomes visible.
+    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.gate.set_active(active) {
+            self.reload(cx);
+            cx.notify();
+        }
+    }
+
     fn closable(&self, _cx: &App) -> bool {
         true
     }

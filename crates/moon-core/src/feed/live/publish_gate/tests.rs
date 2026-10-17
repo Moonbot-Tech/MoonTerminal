@@ -1,5 +1,57 @@
 use super::*;
 
+/// Removing the cooldown rebuilds on every 5 ms event instead of publishing at 0/50/100/150/200.
+#[test]
+fn lines_burst_is_leading_edge_and_coalesced() {
+    let start = Instant::now();
+    let mut lines = deadline::CoalescedDeadline::new(ORDER_LINES_PERIOD);
+    let mut published = Vec::new();
+    for ms in (0..=200).step_by(5) {
+        let now = start + Duration::from_millis(ms);
+        lines.queue(now);
+        if OrdersPublish::decide(false, lines.is_due(now)).is_some() {
+            published.push(ms);
+            lines.mark_attempt(now);
+        }
+    }
+    assert_eq!(published, [0, 50, 100, 150, 200]);
+}
+
+/// Ignoring a queued line deadline in the sleep fold loses the trailing publish on a quiet core.
+#[test]
+fn trailing_lines_publish_without_another_event() {
+    let start = Instant::now();
+    let mut lines = deadline::CoalescedDeadline::new(ORDER_LINES_PERIOD);
+    lines.queue(start);
+    lines.mark_attempt(start);
+    lines.queue(start + Duration::from_millis(5));
+    let wait = lines.wait(start + Duration::from_millis(5)).unwrap();
+    assert_eq!(wait, Duration::from_millis(45));
+    assert_eq!(
+        OrdersPublish::decide(false, lines.is_due(start + Duration::from_millis(50))),
+        Some(OrdersPublish::Lines)
+    );
+}
+
+/// A missing snapshot must retain queued line work without a zero-duration busy loop.
+#[test]
+fn missing_snapshot_defers_lines_and_table() {
+    let now = Instant::now();
+    let mut lines = deadline::CoalescedDeadline::new(ORDER_LINES_PERIOD);
+    let mut table = deadline::CoalescedDeadline::new(ORDERS_TABLE_PERIOD);
+    lines.queue(now);
+    table.queue(now);
+    assert_eq!(
+        OrdersPublish::decide(table.is_due(now), lines.is_due(now)),
+        Some(OrdersPublish::Table)
+    );
+    lines.defer(now);
+    table.defer(now);
+    assert!(lines.is_queued());
+    assert_eq!(lines.wait(now), Some(Duration::from_millis(50)));
+    assert_eq!(table.wait(now), Some(Duration::from_millis(250)));
+}
+
 /// Removing the restart gate would restore the exited letter; collapsing empty suffixes would
 /// lose the distinction between a reported release and an unknown build.
 #[test]

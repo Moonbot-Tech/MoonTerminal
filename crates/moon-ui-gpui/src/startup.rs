@@ -63,6 +63,10 @@ fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut Persistenc
     if coordinator.is_in_flight() {
         return;
     }
+    // A drag dirties the layout every tick; deferring keeps the flags set for the next window.
+    if !coordinator.dispatch_due(Instant::now()) {
+        return;
+    }
 
     let save_layout = backend.layout_dirty;
     let save_classic = backend.dock_dirty || backend.detached_dirty;

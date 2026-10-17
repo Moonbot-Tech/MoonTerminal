@@ -167,6 +167,10 @@ pub(super) fn restore_sort(
 pub(super) struct Entry {
     pub(super) row: ScreenerRow,
     pub(super) core_name: SharedString,
+    /// Normalized search text, leaving the market's display and chart identity intact.
+    pub(super) market_uc: String,
+    /// Normalized coin text shared by all filter comparisons for this entry.
+    pub(super) coin_uc: String,
 }
 
 /// Parse the minimum volume from the DVol filter, such as `500`, `500k`, or `2m`.

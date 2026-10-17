@@ -48,6 +48,25 @@ pub use wallet::*;
 #[cfg(test)]
 use client_trade::TEMP_BLACKLIST_MAX;
 
+/// A final complete order view and the captured event turns preceding it.
+#[derive(Debug, Clone)]
+pub struct OrderRows {
+    /// Complete snapshot overlaid with every captured turn in arrival order.
+    pub rows: Vec<OrderRow>,
+    /// Ordered partial turns retained so intermediate line reprices reach the store.
+    pub captured_turns: Vec<Vec<OrderRow>>,
+}
+
+impl From<Vec<OrderRow>> for OrderRows {
+    /// Wraps a complete snapshot that has no captured event turns.
+    fn from(rows: Vec<OrderRow>) -> Self {
+        Self {
+            rows,
+            captured_turns: Vec::new(),
+        }
+    }
+}
+
 /// Account updates and transient notifications delivered from one core's feed.
 // `CoreConfig` is delivered by value on the feed. Boxing it allocates on every such message.
 #[derive(Debug, Clone)]
@@ -144,11 +163,11 @@ pub enum FeedMsg {
         epoch: u64,
     },
     /// Open core orders across all markets.
-    Orders(Vec<OrderRow>),
+    Orders(OrderRows),
     /// Fast order snapshot only for the chart/order-line store. The Orders table remains gated by
     /// `Orders`, while the chart retains a brief terminal status between `OrderEvent::Updated` and
     /// deferred removal.
-    OrderLines(Vec<OrderRow>),
+    OrderLines(OrderRows),
     /// Batch of new detects accumulated during one event-drain tick.
     Detects(Vec<DetectRow>),
     /// What this core's strategies asked to report to Telegram during one event-drain tick, for

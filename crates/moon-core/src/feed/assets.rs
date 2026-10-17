@@ -4,6 +4,8 @@
 
 use moonproto::state::{BalancesState, ExchangeKind, MarketsState, TransferAssetsState};
 use moonproto::{BaseCurrency, OrderType};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use super::{
     AssetRow, AssetsSnapshot, GlobalBalanceRow, TransferAssetRow, TransferAssetsSnapshot,
@@ -13,6 +15,26 @@ use super::{
 // One stablecoin list, in `symbol`, with the rest of the currency knowledge: this file used to
 // carry its own copy and the two were kept in sync by a comment.
 use crate::symbol::is_usd_stable as is_stable;
+
+/// Last known client epoch and catalog revision paired with its shared market names.
+pub(super) type MarketNamesCache = Option<((u64, u64), Arc<HashSet<String>>)>;
+
+/// Reuses market names for a known catalog revision; unknown revisions always rebuild.
+pub(super) fn cached_market_names(
+    cache: &mut MarketNamesCache,
+    revision: Option<(u64, u64)>,
+    build: impl FnOnce() -> HashSet<String>,
+) -> Arc<HashSet<String>> {
+    if let Some((_, names)) = cache
+        .as_ref()
+        .filter(|(cached_key, _)| Some(*cached_key) == revision)
+    {
+        return names.clone();
+    }
+    let names = Arc::new(build());
+    *cache = revision.map(|key| (key, names.clone()));
+    names
+}
 
 /// Exchange rate of the `quote` currency in USDT (USDT≈1, BTC≈the BTC/USDT rate).
 /// Uses the core's standard `base_currency_price`; falls back to 1 for stablecoins, otherwise 0.
@@ -127,18 +149,16 @@ pub(super) fn to_exchange_kind(w: WalletKind) -> ExchangeKind {
 ///
 /// Empty markets are omitted, while dust filtering remains a UI concern. The global row also
 /// records whether its published free/total USD valuation is complete and finite.
+/// `names` shares the catalog across asset publications until its revision changes.
 pub(super) fn build_assets(
     markets: &MarketsState,
+    names: Arc<HashSet<String>>,
     balances: &BalancesState,
     base_currency: &str,
     futures_account: bool,
 ) -> AssetsSnapshot {
     let mut rows = Vec::new();
     let mut leverage = std::collections::HashMap::new();
-    // Core market-name catalog for gating the UI's `Market sell` button. Sell resolution accepts
-    // the exact row market plus the `<coin><quote>` and `<coin>_<quote>` forms.
-    let market_names: std::collections::HashSet<String> =
-        markets.iter().map(|h| h.name().to_string()).collect();
     // COIN-M / quarterly: the wallet is denominated in the coin itself (BTC/ETH/…), not USDT,
     // and the exchange duplicates the SAME coin balance across all its contracts (PERP plus all
     // expirations). Calculate equity as the sum over UNIQUE coins (deduplicated), or BTC would
@@ -369,7 +389,7 @@ pub(super) fn build_assets(
         global,
         futures_account,
         base_currency: base_currency.trim().to_string(),
-        markets: market_names,
+        markets: names,
         leverage,
     }
 }

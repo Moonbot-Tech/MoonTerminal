@@ -1,6 +1,6 @@
 //! Per-core retained store of chart order lines. moonproto keeps terminal orders only until
 //! deferred cleanup, so we retain cancelled and filled orders ourselves for the session, up to
-//! a memory safety cap, and render them semi-transparently.
+//! a per-market keep with a per-core backstop, and render them semi-transparently.
 //!
 //! Each line is a staircase of `(t_ms, price)` steps: from `t_ms`, the price remains at `price`
 //! until the next step. Repricing appends a step (knot). The line begins at order creation and
@@ -11,6 +11,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::feed::{OrderRow, OrderTrace};
 use crate::util::now_unix_ms;
@@ -51,9 +52,54 @@ pub struct OrderLineState {
 
 /// Per-core capacity of the closed-order ring, equal to the `max_closed_orders` slider maximum.
 ///
-/// New entries are pushed to the back and the oldest fall from the front, without sorting or a
-/// pruning scan. Open orders are not capped and remain while active.
+/// New entries are pushed to the back and the oldest fall from the front. This is the backstop
+/// across every market. Each market also keeps at most [`closed_keep_for`] closed orders, so one
+/// market cannot spend the whole ring and hide another market's newest lines. Open orders are not
+/// capped and remain while active.
 const CLOSED_RING_CAP: usize = 5000;
+
+/// Process-wide per-market closed-order keep. Stores copy it at construction and again on the
+/// next close, so a saved-config change reaches cores that already exist.
+static CLOSED_KEEP_PER_MARKET: AtomicUsize = AtomicUsize::new(CLOSED_RING_CAP);
+
+/// Publish the per-market closed-order keep.
+///
+/// `n` is clamped to `1..=CLOSED_RING_CAP`. Existing stores adopt the value on their next
+/// `OrderLineStore::remember_closed`; nothing is pruned at the call itself, so a settings draft
+/// that never reaches a successful save must not call this.
+///
+/// Args:
+///     n: Requested keep. Values outside `1..=CLOSED_RING_CAP` are clamped.
+pub fn set_closed_keep_per_market(n: usize) {
+    CLOSED_KEEP_PER_MARKET.store(n.clamp(1, CLOSED_RING_CAP), Ordering::Relaxed);
+}
+
+/// Per-market retain count for a chart's `max_closed_orders` setting.
+///
+/// Drawing already caps each market, so retention is twice that cap: the lines the chart can
+/// show stay in the store, with headroom for a close that arrives before the next draw. The
+/// result is clamped to `1000..=CLOSED_RING_CAP`.
+///
+/// Args:
+///     max_closed_orders: Newest closed orders the chart draws for one market.
+///
+/// Returns:
+///     How many closed orders that market may retain.
+pub fn closed_keep_for(max_closed_orders: u32) -> usize {
+    (max_closed_orders as usize)
+        .saturating_mul(2)
+        .clamp(1000, CLOSED_RING_CAP)
+}
+
+/// Applies saved theme limits together so switching themes never drops drawable history.
+pub fn apply_orders_config(orders: &crate::config::orders::OrdersStyleSet) {
+    set_closed_keep_per_market(closed_keep_for(
+        orders
+            .light
+            .max_closed_orders
+            .max(orders.dark.max_closed_orders),
+    ));
+}
 
 /// Grace period in milliseconds before an order missing from a snapshot is marked closed.
 ///
@@ -400,14 +446,30 @@ impl RetainedOrder {
 }
 
 /// Per-core order-line store covering all markets.
-#[derive(Default)]
 pub struct OrderLineStore {
     orders: HashMap<u64, RetainedOrder>,
-    /// Closed-order UIDs in closure order, providing the only cap on retained closed orders.
+    /// Closed-order UIDs in closure order. The global backstop is [`CLOSED_RING_CAP`].
     ///
-    /// A newly closed UID enters at the back and overflow leaves from the front, without sorting or
-    /// a pruning scan.
+    /// A newly closed UID enters at the back and overflow leaves from the front. Entries whose
+    /// order is no longer closed are batch-pruned, with at most half a cap of dead slack.
     closed_ring: VecDeque<u64>,
+    /// Closed UIDs per market, oldest at the front.
+    ///
+    /// `market_draw_orders` caps each market, so the retain cap does too. An empty queue is
+    /// removed. A uid that closes again is dropped from this queue first, so it occupies one slot.
+    closed_per_market: HashMap<String, VecDeque<u64>>,
+    /// Membership of the market queues, allowing first closes to skip queue and ring scans.
+    closed_queued: HashSet<u64>,
+    /// Evicted UIDs still in the ring; detects UID reuse before a later batch compacts them.
+    closed_dead: HashSet<u64>,
+    /// How many closed orders one market may retain.
+    ///
+    /// Initialised from [`CLOSED_KEEP_PER_MARKET`]. `remember_closed` copies that static in only
+    /// when it differs from `closed_keep_loaded`, which is what lets a test assign this field
+    /// directly without the next close restoring the process-wide value.
+    closed_keep: usize,
+    /// Last keep read from [`CLOSED_KEEP_PER_MARKET`].
+    closed_keep_loaded: usize,
     /// UIDs of currently open orders only.
     ///
     /// Closure removes an entry and revival adds it back, so update-time backstop and auto-fit work
@@ -427,6 +489,31 @@ pub struct OrderLineStore {
     update_generation: u64,
 }
 
+impl Default for OrderLineStore {
+    /// Empty store whose per-market keep is the process-wide value.
+    ///
+    /// Returns:
+    ///     A store with no orders and `closed_keep` loaded from [`CLOSED_KEEP_PER_MARKET`].
+    fn default() -> Self {
+        let keep = CLOSED_KEEP_PER_MARKET.load(Ordering::Relaxed);
+        Self {
+            orders: HashMap::new(),
+            closed_ring: VecDeque::new(),
+            closed_per_market: HashMap::new(),
+            closed_queued: HashSet::new(),
+            closed_dead: HashSet::new(),
+            closed_keep: keep,
+            closed_keep_loaded: keep,
+            open_uids: Vec::new(),
+            open_by_market: HashMap::new(),
+            auto_fit_ranges: BTreeMap::new(),
+            rev: 0,
+            seq_counter: 0,
+            update_generation: 0,
+        }
+    }
+}
+
 impl OrderLineStore {
     /// Applies a fresh order-row batch and returns whether retained render state changed.
     ///
@@ -442,13 +529,21 @@ impl OrderLineStore {
     ///         `entry_fill_ms` RE-DERIVED from its row in this batch, if it has one — see
     ///         `RetainedOrder::correction_gen`.
     pub fn update(&mut self, rows: &[OrderRow], skew_generation: u64) -> bool {
+        self.update_rows(rows, skew_generation, true)
+    }
+
+    /// Applies corrected rows, checking absent UIDs only for a complete snapshot.
+    fn update_rows(&mut self, rows: &[OrderRow], skew_generation: u64, complete: bool) -> bool {
         let now_ms = now_unix_ms();
         self.update_generation = self.update_generation.wrapping_add(1);
         let generation = self.update_generation;
         let mut changed = false;
         // UIDs closed by an explicit `job_is_done` flag in this update are remembered after the
         // loop because the loop holds a mutable borrow of `self.orders` through its entry.
+        // Revived UIDs leave the closed queues in that same gap: the queue update needs
+        // `&mut self`, which this loop does not have.
         let mut close_now: Vec<u64> = Vec::new();
+        let mut reopened: Vec<u64> = Vec::new();
         let mut closed_this_update: Vec<u64> = Vec::new();
 
         // Assign fresh UIDs in order. Each receives the smallest number not held by a currently
@@ -537,6 +632,7 @@ impl OrderLineStore {
                 // Closure cleanup is deferred, so a UID revived within this batch may still be
                 // indexed. Keep that reservation instead of appending a duplicate open UID.
                 became_open = !self.open_uids.contains(&r.uid);
+                reopened.push(r.uid);
                 changed = true;
             }
             if order.strat_id != r.strat_id || order.strat_name != r.strat_name {
@@ -694,6 +790,13 @@ impl OrderLineStore {
             }
         }
 
+        // Untrack before recording closes. A uid that revives and closes again in this
+        // batch is in both lists; dropping it first is what lets the new close count once
+        // instead of being removed by a later untrack.
+        for uid in reopened {
+            self.untrack_closed_uid(uid);
+        }
+
         for uid in close_now {
             self.remember_closed(uid);
         }
@@ -708,7 +811,10 @@ impl OrderLineStore {
             let Some(ord) = self.orders.get_mut(&uid) else {
                 continue;
             };
-            if ord.seen_generation != generation && now_ms - ord.last_seen_ms > CLOSE_GRACE_MS {
+            if complete
+                && ord.seen_generation != generation
+                && now_ms - ord.last_seen_ms > CLOSE_GRACE_MS
+            {
                 ord.closed_ms = Some(ord.last_seen_ms);
                 ord.closed_reason = Some(OrderCloseReason::BackstopMissing);
                 ord.closed_store_ms = Some(now_ms);
@@ -797,23 +903,178 @@ impl OrderLineStore {
         }
     }
 
-    /// Records a UID's closure and enforces the retained-history safety cap.
+    /// Records a UID's closure and enforces the per-market keep and the core backstop.
     ///
     /// `update` removes all closed UIDs from the open index in one batch so a snapshot that closes
-    /// many orders does not repeatedly scan the live-order vector.
+    /// many orders does not repeatedly scan the live-order vector. A uid that is no longer closed
+    /// (it reopened later in the same batch) is not queued. A previous queue entry for this uid is
+    /// removed first, so a reopen followed by another close occupies one slot. Ordinary first
+    /// closes take amortized constant time; dead ring entries are compacted in batches.
+    ///
+    /// Args:
+    ///     uid: Order that `update` marked closed, or that a later row in the batch revived.
     fn remember_closed(&mut self, uid: u64) {
-        self.closed_ring.push_back(uid);
-        while self.closed_ring.len() > CLOSED_RING_CAP {
-            let Some(old_uid) = self.closed_ring.pop_front() else {
+        self.adopt_closed_keep();
+        // Drop the previous close before pushing. Otherwise a re-close counts twice and the
+        // market queue evicts a line the chart still has room to draw.
+        self.untrack_closed_uid(uid);
+        if let Some(market) = self
+            .orders
+            .get(&uid)
+            .filter(|order| order.closed_ms.is_some())
+            .map(|order| order.market.clone())
+        {
+            self.closed_per_market
+                .entry(market.clone())
+                .or_default()
+                .push_back(uid);
+            self.closed_ring.push_back(uid);
+            self.closed_queued.insert(uid);
+            if self.evict_market_overflow(&market) {
+                // Keep at most half a ring of dead slack, amortizing full-ring compaction.
+                let dead = self.closed_ring.len() - self.closed_queued.len();
+                if dead > self.closed_ring.len() / 2 || dead > CLOSED_RING_CAP / 2 {
+                    self.prune_dead_ring();
+                }
+            }
+        }
+        self.enforce_global_ring();
+    }
+
+    /// Copy [`CLOSED_KEEP_PER_MARKET`] into this store when the static has changed.
+    ///
+    /// A test that assigns `closed_keep` and leaves `closed_keep_loaded` equal to the static
+    /// keeps that assignment. The saved-config setter changes the static, and the next close
+    /// picks the new keep up.
+    fn adopt_closed_keep(&mut self) {
+        let live = CLOSED_KEEP_PER_MARKET.load(Ordering::Relaxed);
+        if live != self.closed_keep_loaded {
+            self.closed_keep = live;
+            self.closed_keep_loaded = live;
+        }
+    }
+
+    /// Whether `uid` is retained and currently closed.
+    ///
+    /// Args:
+    ///     uid: Order id.
+    ///
+    /// Returns:
+    ///     `true` when the order is in the store and has a close time.
+    fn is_closed(&self, uid: u64) -> bool {
+        self.orders
+            .get(&uid)
+            .is_some_and(|order| order.closed_ms.is_some())
+    }
+
+    /// Remove `uid` from its market queue and from the global ring.
+    ///
+    /// The order itself stays. Used when an order reopens, and before a re-close is pushed,
+    /// so the uid is not counted twice. An empty market queue is removed. A first close has no
+    /// queue membership and does not scan either index.
+    ///
+    /// Args:
+    ///     uid: Order id to drop from the closed indexes.
+    fn untrack_closed_uid(&mut self, uid: u64) {
+        let dead = self.closed_dead.remove(&uid);
+        if self.closed_queued.contains(&uid) || dead {
+            self.unlink_from_market_queue(uid);
+            self.closed_ring.retain(|queued| *queued != uid);
+        }
+    }
+
+    /// Remove `uid` from the market queue of the order that still holds it.
+    ///
+    /// Args:
+    ///     uid: Order id. No-op when the order is already gone, because its market is then unknown.
+    fn unlink_from_market_queue(&mut self, uid: u64) {
+        if !self.closed_queued.remove(&uid) {
+            return;
+        }
+        let Some(market) = self.orders.get(&uid).map(|order| order.market.clone()) else {
+            return;
+        };
+        let empty = self
+            .closed_per_market
+            .get_mut(&market)
+            .is_some_and(|queue| {
+                queue.retain(|queued| *queued != uid);
+                queue.is_empty()
+            });
+        if empty {
+            self.closed_per_market.remove(&market);
+        }
+    }
+
+    /// Drop the oldest closed orders of `market` until its queue is within `closed_keep`.
+    ///
+    /// A queued uid that is no longer closed is popped and left in `orders` (it is open, or
+    /// already gone). An empty queue is removed.
+    ///
+    /// Args:
+    ///     market: Market whose queue just grew.
+    ///
+    /// Returns:
+    ///     Whether a queue entry was removed, leaving dead ring slack.
+    fn evict_market_overflow(&mut self, market: &str) -> bool {
+        let keep = self.closed_keep;
+        let mut removed = false;
+        loop {
+            let over = self
+                .closed_per_market
+                .get(market)
+                .is_some_and(|queue| queue.len() > keep);
+            if !over {
+                break;
+            }
+            let Some(old) = self
+                .closed_per_market
+                .get_mut(market)
+                .and_then(|queue| queue.pop_front())
+            else {
                 break;
             };
-            if self
-                .orders
-                .get(&old_uid)
-                .is_some_and(|order| order.closed_ms.is_some())
-            {
-                self.orders.remove(&old_uid);
+            removed = true;
+            self.closed_queued.remove(&old);
+            self.closed_dead.insert(old);
+            if self.is_closed(old) {
+                self.orders.remove(&old);
             }
+        }
+        if self
+            .closed_per_market
+            .get(market)
+            .is_some_and(|queue| queue.is_empty())
+        {
+            self.closed_per_market.remove(market);
+        }
+        removed
+    }
+
+    /// Removes dead ring entries by queue membership, including UIDs reused later in this batch.
+    fn prune_dead_ring(&mut self) {
+        let queued = &self.closed_queued;
+        self.closed_ring.retain(|uid| queued.contains(uid));
+        self.closed_dead.clear();
+    }
+
+    /// Evict the oldest closed orders until live membership is within [`CLOSED_RING_CAP`].
+    ///
+    /// A front entry that is not closed is popped and skipped, matching the per-market rule:
+    /// the ring must not keep a dead uid, and popping one must not delete a live order. A
+    /// live eviction is also removed from its market queue. Dead slack is excluded from the
+    /// capacity and batch-compacted above; total ring length is at most the cap plus half a cap.
+    fn enforce_global_ring(&mut self) {
+        while self.closed_queued.len() > CLOSED_RING_CAP {
+            let Some(old) = self.closed_ring.pop_front() else {
+                break;
+            };
+            self.closed_dead.remove(&old);
+            if !self.closed_queued.contains(&old) {
+                continue;
+            }
+            self.unlink_from_market_queue(old);
+            self.orders.remove(&old);
         }
     }
 
@@ -828,7 +1089,8 @@ impl OrderLineStore {
     /// Returns orders to draw for a market: every open order, followed by at most `max_closed`
     /// newest closed orders, in reverse ring order.
     ///
-    /// The result is not sorted, and the store separately caps retained closed history via its ring.
+    /// The result is not sorted. Retained closed history is capped per market, and the ring
+    /// caps the core across markets.
     ///
     /// This once took a caller-supplied `keep` visibility predicate, applied before the cap so a
     /// hidden order could not push a visible one off the chart. The chart's only order-visibility
@@ -853,7 +1115,8 @@ impl OrderLineStore {
             if taken >= max_closed {
                 break;
             }
-            // A revived and reclosed UID may occur in the ring twice, so deduplicate it.
+            // `remember_closed` drops a previous entry before a re-close. A duplicate that
+            // remains is still ignored, so it cannot take a second draw slot.
             if !seen.insert(*uid) {
                 continue;
             }
@@ -914,6 +1177,11 @@ impl OrderLineStore {
     /// to answer "have we ever seen it before", not "is it new".
     pub fn knows(&self, uid: u64) -> bool {
         self.orders.contains_key(&uid)
+    }
+
+    /// Applies a captured turn without treating absent UIDs as missing from a snapshot.
+    pub fn update_partial(&mut self, rows: &[OrderRow], skew_generation: u64) -> bool {
+        self.update_rows(rows, skew_generation, false)
     }
 }
 
