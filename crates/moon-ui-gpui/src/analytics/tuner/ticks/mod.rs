@@ -34,10 +34,15 @@ use crate::design;
 use crate::design::{moon, moon_alpha};
 use columns::*;
 pub(in crate::analytics::tuner) use fetch::strategy_field_defaults;
-pub(in crate::analytics::tuner) use load::replay_batch;
+pub(in crate::analytics::tuner) use load::{Fetched, PassReads, fetch_batch, replay_fetched};
+// The readiness bench times the reads and the model apart and runs the auto-pick itself.
+#[cfg(test)]
+pub(in crate::analytics::tuner) use load::{archived_lines, calibrate_lags, replay_timing};
 use moon_core::market::trade_replay::TickStatus;
 use state::{DealRow, TapeStatus};
 pub(in crate::analytics::tuner) use summary::readiness_refusal;
+#[cfg(test)]
+pub(in crate::analytics::tuner) use tape::{PackedTape, PendingDeal, prepare_sample};
 
 mod accuracy;
 mod cfg;

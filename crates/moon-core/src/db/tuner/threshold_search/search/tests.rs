@@ -1207,3 +1207,21 @@ fn install_job_carries_the_read_cancellation_onto_the_pool() {
     assert!(seen);
     assert!(!install_job(crate::db::current_is_cancelled));
 }
+
+/// Every task of a parallel map sees the caller's token, and the results keep the items' order
+/// however the pool schedules them.
+#[test]
+fn par_map_job_keeps_order_and_carries_the_token_into_every_task() {
+    let items: Vec<usize> = (0..200).collect();
+    let token = crate::db::ReadCancellation::new();
+    token.cancel();
+    let seen = crate::db::with_read_cancellation(token, || {
+        par_map_job(items.clone(), |i| (i, crate::db::current_is_cancelled()))
+    });
+    assert_eq!(seen.iter().map(|(i, _)| *i).collect::<Vec<_>>(), items);
+    assert!(seen.iter().all(|(_, cancelled)| *cancelled));
+    let plain = par_map_job(items, |i| {
+        crate::db::current_is_cancelled() || i == usize::MAX
+    });
+    assert!(plain.iter().all(|cancelled| !cancelled));
+}

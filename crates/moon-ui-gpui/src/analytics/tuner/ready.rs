@@ -2,10 +2,12 @@
 //! progress line above the table — on the "Entry/Exit" axis only.
 //!
 //! The pass reads the list scope's deals once, then replays them strategy by strategy through
-//! the card's own stage C (`ticks::replay_batch`) and counts each strategy with the card's own
-//! [`Readiness::of_rows`]; the verdict is the card's (`ticks::readiness_refusal`). It never
-//! runs the search. It runs only while the "Entry/Exit" axis is on screen, one strategy at a
-//! time with a pause between them, and publishes to the view at most once per progress tick —
+//! the card's own stage C (`ticks::fetch_batch` and `ticks::replay_fetched`) and counts each
+//! strategy with the card's own [`Readiness::of_rows`]; the verdict is the card's
+//! (`ticks::readiness_refusal`). It never runs the search. It runs only while the "Entry/Exit"
+//! axis is on screen — the rows the list draws first, the reads of the next strategies beside
+//! the replay of the current ones in the tuner's pool — and publishes to the view at most once
+//! per progress tick —
 //! never once per strategy: every `cx.notify()` rebuilds the whole Analytics tree.
 //!
 //! It reruns when the list's scope is reloaded by hand or the model settings change (at once),
@@ -26,6 +28,7 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::auto_picks::AutoEmpty;
+use super::ticks::Fetched;
 use super::ticks::readiness::Readiness;
 use super::ticks::readiness_refusal;
 use super::ticks::state::{DealRow, RowAddress, TapeStatus, TicksData};
@@ -41,9 +44,6 @@ const RERUN_GAP: Duration = Duration::from_secs(60);
 const PROGRESS_TICK: Duration = Duration::from_millis(250);
 /// Pause before a busy database is asked again.
 const RETRY_AFTER: Duration = Duration::from_secs(5);
-/// Pause between two strategies of a pass: the terminal runs beside live trading, and the
-/// replay of a strategy is a burst of CPU; the pause hands the cores back between bursts.
-const STRATEGY_PAUSE: Duration = Duration::from_millis(30);
 
 /// What one strategy's readiness says, as the column and the filter read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,6 +208,14 @@ pub(in crate::analytics) struct ReadyProgress {
     /// Strategies a partial pass keeps from the last one: counted as done from the start.
     kept: AtomicUsize,
     cancelled: AtomicBool,
+    /// Tape bytes fetched and not yet counted, and the most ever held at once.
+    inflight: AtomicUsize,
+    peak: AtomicUsize,
+    /// Signalled whenever the replay frees tape bytes, for a fetch thread waiting for room.
+    room: (Mutex<()>, std::sync::Condvar),
+    /// The size of every chunk the replay took, in order.
+    #[cfg(test)]
+    chunks: Mutex<Vec<usize>>,
     partial: Mutex<Vec<(String, Readiness)>>,
     /// `(strategy, (exchange key, market))` of each replayed row left without tape: the only
     /// rows a later filing can change.
@@ -260,6 +268,53 @@ impl ReadyProgress {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push((key.to_string(), market));
+    }
+
+    /// The most tape bytes the pass held at once.
+    #[cfg(test)]
+    pub(in crate::analytics) fn peak_bytes(&self) -> usize {
+        self.peak.load(Ordering::Relaxed)
+    }
+
+    fn hold(&self, bytes: usize) {
+        let now = self.inflight.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        self.peak.fetch_max(now, Ordering::Relaxed);
+    }
+
+    fn release(&self, bytes: usize) {
+        self.inflight.fetch_sub(bytes, Ordering::Relaxed);
+        let (lock, freed) = &self.room;
+        let _held = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        freed.notify_all();
+    }
+
+    /// Tape bytes fetched and not yet counted.
+    fn inflight(&self) -> usize {
+        self.inflight.load(Ordering::Relaxed)
+    }
+
+    /// Wait until fewer than `budget` bytes are held, or `cancelled` says stop (the pass was
+    /// cancelled or its replay side is gone).
+    ///
+    /// Returns:
+    ///     `false` when told to stop while waiting.
+    fn wait_for_room(&self, budget: usize, cancelled: &impl Fn() -> bool) -> bool {
+        let (lock, freed) = &self.room;
+        let mut held = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while self.inflight() >= budget {
+            if cancelled() {
+                return false;
+            }
+            held = freed
+                .wait_timeout(held, Duration::from_millis(50))
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+        !cancelled()
     }
 
     fn push(&self, key: String, ready: Readiness) {
@@ -730,77 +785,227 @@ pub(in crate::analytics::tuner) fn group_by_strategy(
     out
 }
 
-/// Count every strategy, one at a time: its rows with an address replayed by `replay` (the
-/// card's stage C), the others kept as the card keeps them (no address), then counted with
-/// [`Readiness::of_rows`]. Each count is handed to `progress` as it is made.
+/// Tape bytes a pass reads ahead of the replay: the fetch thread starts no further strategy
+/// while the chunk being replayed and the ones fetched behind it hold this much. The check
+/// comes before each strategy's fetch, so the most ever held is this budget plus the one
+/// strategy fetched just under it.
+pub(in crate::analytics::tuner) const READY_INFLIGHT_BYTES: usize = 256 << 20;
+
+/// How a pass cuts its strategies into chunks.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::analytics::tuner) struct ChunkLimits {
+    /// Strategies in the first chunk, so the first counts land after a short read; each next
+    /// chunk doubles, up to `max_count`.
+    pub(in crate::analytics::tuner) first_count: usize,
+    /// Most strategies in one chunk.
+    pub(in crate::analytics::tuner) max_count: usize,
+    /// Tape bytes in memory at which the fetch thread waits for the replay to free some
+    /// ([`READY_INFLIGHT_BYTES`]).
+    pub(in crate::analytics::tuner) max_bytes: usize,
+}
+
+impl ChunkLimits {
+    /// The app's: four strategies first, then up to enough to keep every pool thread busy.
+    pub(in crate::analytics::tuner) fn app() -> Self {
+        Self {
+            first_count: 4,
+            max_count: (2 * moon_core::db::tuner::threshold_search::search_threads()).max(4),
+            max_bytes: READY_INFLIGHT_BYTES,
+        }
+    }
+}
+
+/// One strategy of a chunk: its addressed rows as fetched (`None` when it has none - nothing
+/// is asked or replayed for it) and its rows without an address.
+struct Fetching {
+    key: String,
+    fetched: Option<Fetched>,
+    unaddressed: Vec<DealRow>,
+    bytes: usize,
+}
+
+/// Set when the replay side of a pass ends, by a return or a panic, so a fetch thread waiting
+/// for room stops instead of waiting for bytes nobody will free.
+struct ConsumerGone<'a>(&'a AtomicBool);
+
+impl Drop for ConsumerGone<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// The raw prints a fetched batch holds.
+fn tape_bytes(fetched: &Fetched) -> usize {
+    fetched
+        .tapes
+        .values()
+        .map(|(ticks, _, _)| ticks.len() * std::mem::size_of::<moon_core::feed::types::Tick>())
+        .sum()
+}
+
+/// Count every strategy: its rows with an address fetched by `fetch` and replayed by `replay`
+/// (the card's stage C), the others kept as the card keeps them (no address), then counted
+/// with [`Readiness::of_rows`]. Each count is handed to `progress` as it is made.
+///
+/// The strategies go in `groups`' order, in chunks ([`ChunkLimits`]): one thread of its own
+/// fetches the next chunk - the blocking waits on the tape worker stay off the pool - while
+/// the tuner's pool replays the current one, one task per strategy. A strategy's rows are
+/// counted alone, never mixed with another's, so the card's memory cap applies per strategy.
+/// Chunks go in priority order; within a chunk each strategy pushes its count to `progress`
+/// as it finishes, so counts inside one chunk land in any order.
 ///
 /// Args:
 ///     groups: Each strategy's rows ([`group_by_strategy`]).
-///     replay: Replays a batch of addressed deals; `ticks::replay_batch` in the app.
-///     progress: Takes each count; a cancel stops the loop.
-///     pause: The pause between two strategies ([`STRATEGY_PAUSE`] in the app).
+///     fetch: Reads a batch of addressed deals; `ticks::fetch_batch` in the app.
+///     replay: Replays what `fetch` read; `ticks::replay_fetched` in the app.
+///     progress: Takes each count; a cancel stops the pass at the next strategy - up to one
+///         strategy's fetch later, since a fetch under way is not interrupted.
+///     limits: The chunk cut ([`ChunkLimits::app`] in the app).
+///     now_ms: One clock for the whole pass ([`Readiness::of_rows`]).
+///     min_tail_s: One tail floor for the whole pass.
 ///
 /// Returns:
 ///     Every strategy's counts, or `None` when the pass was cancelled midway.
 pub(in crate::analytics::tuner) fn count_strategies(
     groups: Vec<StrategyRows>,
-    mut replay: impl FnMut(Vec<(Deal, Arc<RowAddress>)>) -> Vec<DealRow>,
+    fetch: impl Fn(Vec<(Deal, Arc<RowAddress>)>) -> Fetched + Sync,
+    replay: impl Fn(Fetched) -> Vec<DealRow> + Sync,
     progress: &ReadyProgress,
-    pause: Duration,
+    limits: ChunkLimits,
+    now_ms: i64,
+    min_tail_s: u32,
 ) -> Option<HashMap<String, Readiness>> {
     progress.total.store(groups.len(), Ordering::Relaxed);
+    let cancelled = || progress.is_cancelled() || moon_core::db::current_is_cancelled();
+    if cancelled() {
+        return None;
+    }
+    let token = moon_core::db::current_read_cancellation();
+    let budget = limits.max_bytes.max(1);
+    let max_count = limits.max_count.max(1);
+    let first_count = limits.first_count.clamp(1, max_count);
+    // Depth zero: the fetch thread holds the chunk it fetched ahead until the replay takes it.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<Fetching>>(0);
     let mut out = HashMap::with_capacity(groups.len());
-    for (i, (key, rows)) in groups.into_iter().enumerate() {
-        if progress.is_cancelled() || moon_core::db::current_is_cancelled() {
-            return None;
-        }
-        if i > 0 && !pause.is_zero() {
-            std::thread::sleep(pause);
-        }
-        let mut targets = Vec::new();
-        let mut unaddressed = Vec::new();
-        for (deal, address) in rows {
-            match address {
-                Some(address) => targets.push((deal, address)),
-                None => unaddressed.push(DealRow {
-                    deal,
-                    tape: TapeStatus::NoAddress,
-                    verdict: None,
-                    address: None,
-                    ticks: None,
-                    entry_line: None,
-                    held: None,
-                }),
+    let gone = AtomicBool::new(false);
+    let finished = std::thread::scope(|scope| {
+        let fetch = &fetch;
+        let gone = &gone;
+        let stop = move || cancelled() || gone.load(Ordering::Relaxed);
+        let fetcher = move || {
+            let mut chunk: Vec<Fetching> = Vec::new();
+            let mut cap = first_count;
+            for (key, rows) in groups {
+                if cancelled() {
+                    return;
+                }
+                // Memory full: what is fetched goes to the replay, and nothing more is read
+                // until the replay frees room.
+                if progress.inflight() >= budget {
+                    if !chunk.is_empty() {
+                        if tx.send(std::mem::take(&mut chunk)).is_err() {
+                            return;
+                        }
+                        cap = (cap * 2).min(max_count);
+                    }
+                    if !progress.wait_for_room(budget, &stop) {
+                        return;
+                    }
+                }
+                let mut targets = Vec::new();
+                let mut unaddressed = Vec::new();
+                for (deal, address) in rows {
+                    match address {
+                        Some(address) => targets.push((deal, address)),
+                        None => unaddressed.push(DealRow {
+                            deal,
+                            tape: TapeStatus::NoAddress,
+                            verdict: None,
+                            address: None,
+                            ticks: None,
+                            entry_line: None,
+                            held: None,
+                        }),
+                    }
+                }
+                let fetched = (!targets.is_empty()).then(|| fetch(targets));
+                let item_bytes = fetched.as_ref().map_or(0, tape_bytes);
+                progress.hold(item_bytes);
+                chunk.push(Fetching {
+                    key,
+                    fetched,
+                    unaddressed,
+                    bytes: item_bytes,
+                });
+                // A full chunk goes at once, so nothing past it is read before it is taken.
+                if chunk.len() >= cap {
+                    if tx.send(std::mem::take(&mut chunk)).is_err() {
+                        return;
+                    }
+                    cap = (cap * 2).min(max_count);
+                }
+            }
+            if !chunk.is_empty() {
+                let _ = tx.send(chunk);
+            }
+        };
+        // Owned here, so returning early drops it and a fetch thread waiting to hand a chunk
+        // over sees the send fail and ends.
+        let rx = rx;
+        let _gone = ConsumerGone(gone);
+        scope.spawn(move || match token {
+            Some(token) => moon_core::db::with_read_cancellation(token, fetcher),
+            None => fetcher(),
+        });
+        loop {
+            if cancelled() {
+                return false;
+            }
+            let Ok(chunk) = rx.recv() else {
+                break;
+            };
+            #[cfg(test)]
+            progress.chunks.lock().unwrap().push(chunk.len());
+            let counted = moon_core::db::tuner::threshold_search::par_map_job(chunk, |item| {
+                if cancelled() {
+                    return None;
+                }
+                let Fetching {
+                    key,
+                    fetched,
+                    unaddressed,
+                    bytes,
+                } = item;
+                let replayed = fetched.map(&replay).unwrap_or_default();
+                for address in replayed
+                    .iter()
+                    .filter(|row| row.tape != TapeStatus::Covered)
+                    .filter_map(|row| row.address.as_ref())
+                {
+                    progress.wait_on(&key, (address.exchange_key.clone(), address.market.clone()));
+                }
+                // The card's memory cap on its tape, so a fit row the card would let go of is
+                // not counted here either.
+                let mut data = TicksData {
+                    rows: replayed.into_iter().chain(unaddressed).collect(),
+                    ..Default::default()
+                };
+                data.retain_within_cap();
+                let ready = Readiness::of_rows(&data.rows, now_ms, min_tail_s);
+                progress.release(bytes);
+                progress.push(key.clone(), ready);
+                Some((key, ready))
+            });
+            for counted in counted {
+                let Some((key, ready)) = counted else {
+                    return false;
+                };
+                out.insert(key, ready);
             }
         }
-        let replayed = if targets.is_empty() {
-            Vec::new()
-        } else {
-            replay(targets)
-        };
-        for address in replayed
-            .iter()
-            .filter(|row| row.tape != TapeStatus::Covered)
-            .filter_map(|row| row.address.as_ref())
-        {
-            progress.wait_on(&key, (address.exchange_key.clone(), address.market.clone()));
-        }
-        // The card's memory cap on its tape, so a fit row the card would let go of is not
-        // counted here either.
-        let mut data = TicksData {
-            rows: replayed.into_iter().chain(unaddressed).collect(),
-            ..Default::default()
-        };
-        data.retain_within_cap();
-        let ready = Readiness::of_rows(
-            &data.rows,
-            chrono::Utc::now().timestamp_millis(),
-            super::ticks::tail::effective_s(),
-        );
-        progress.push(key.clone(), ready);
-        out.insert(key, ready);
-    }
-    Some(out)
+        !cancelled()
+    });
+    finished.then_some(out)
 }
 
 impl AnalyticsView {
@@ -914,7 +1119,22 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// The pass's second stage: every strategy replayed and counted, one at a time.
+    /// The strategy-list keys in the order the pass counts them: the rows the user sees first
+    /// in the list's current sort, whatever the tuning filter hides
+    /// ([`super::list::ready_priority_indices`]).
+    fn ready_priority_order(&self) -> Vec<String> {
+        let Some(data) = self.strategy_data.data() else {
+            return Vec::new();
+        };
+        let all = &data.strategies;
+        super::list::ready_priority_indices(all, self.strat_visible_key(all))
+            .into_iter()
+            .filter_map(|i| all.get(i))
+            .map(|g| g.key.clone())
+            .collect()
+    }
+
+    /// The pass's second stage: every strategy replayed and counted, chunk by chunk.
     fn run_ready_replay(
         &mut self,
         key: ReadyKey,
@@ -925,17 +1145,7 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) {
         let addresses = self.resolve_addresses(&deals, cx);
-        let order: Vec<String> = self
-            .strategy_data
-            .data()
-            .map(|data| {
-                self.visible_indices()
-                    .iter()
-                    .filter_map(|i| data.strategies.get(*i))
-                    .map(|g| g.key.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let order = self.ready_priority_order();
         let mut groups = group_by_strategy(deals, &addresses, &order);
         if let Some(only) = &only {
             groups.retain(|(key, _)| only.contains(key));
@@ -943,31 +1153,36 @@ impl AnalyticsView {
         let defaults = self.filter_defaults(cx);
         let klines = self.backend.read(cx).session.market_source().kline_cache();
         let model = key.model;
+        let min_tail_s = super::ticks::tail::effective_s();
         self.spawn_latest_db(
             &[ReadLane::TicksReady],
             false,
             cx,
             move || {
                 let long_position_ms = moon_core::market::trade_replay::long_position_ms();
-                // Every strategy's replay is pure CPU and runs beside a search: in the tuner's
-                // pool it shares the search's CPU budget instead of adding a thread on top.
-                moon_core::db::tuner::threshold_search::install_job(|| {
-                    count_strategies(
-                        groups,
-                        |targets| {
-                            super::ticks::replay_batch(
-                                targets,
-                                &defaults,
-                                model,
-                                klines.as_ref(),
-                                long_position_ms,
-                                false,
-                            )
-                        },
-                        &progress,
-                        STRATEGY_PAUSE,
-                    )
-                })
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                // One strategy reader for the whole pass.
+                let reads = super::ticks::PassReads::new();
+                // The reads on a thread of their own, the replay in the tuner's pool: there it
+                // shares the search's CPU budget instead of adding threads on top.
+                count_strategies(
+                    groups,
+                    |targets| super::ticks::fetch_batch(targets, long_position_ms),
+                    |fetched| {
+                        super::ticks::replay_fetched(
+                            fetched,
+                            &defaults,
+                            model,
+                            klines.as_ref(),
+                            now_ms,
+                            Some(&reads),
+                        )
+                    },
+                    &progress,
+                    ChunkLimits::app(),
+                    now_ms,
+                    min_tail_s,
+                )
             },
             move |this, counts, cx| this.finish_ready_pass(key, seq, Ok(counts), cx),
         );

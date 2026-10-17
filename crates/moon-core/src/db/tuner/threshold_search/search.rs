@@ -228,6 +228,33 @@ pub fn install_job<R: Send>(f: impl FnOnce() -> R + Send) -> R {
     })
 }
 
+/// Map `items` in parallel inside the tuner's search pool, each task under the caller's
+/// read-cancellation token — for a crate that has no rayon of its own (the readiness pass).
+///
+/// The token is a thread-local ([`crate::db::current_read_cancellation`]), so it is carried
+/// into every task: a task's own `current_is_cancelled` checks would otherwise read `false`.
+///
+/// Args:
+///     items: The work, one task each.
+///     f: The task; must not block on another thread's answer (it runs on a pool worker).
+///
+/// Returns:
+///     Each item's result, in the order of `items`.
+pub fn par_map_job<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
+    let cancellation = crate::db::current_read_cancellation();
+    install(|| {
+        items
+            .into_par_iter()
+            .map(|item| match &cancellation {
+                Some(cancellation) => {
+                    crate::db::with_read_cancellation(cancellation.clone(), || f(item))
+                }
+                None => f(item),
+            })
+            .collect()
+    })
+}
+
 /// Most threads of the pool the variant columns are scored on ([`install_column`]): a column is
 /// one replay of the sample, a fraction of a second on two threads, and a pool this small takes
 /// little from the tuner's budget, the rest of which is the search's ([`pool_split_of`]).

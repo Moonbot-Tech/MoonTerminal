@@ -34,7 +34,7 @@ use moon_core::db::tuner::ticks::{
     Deal, DealsRead, EntryParams, ModelSettings, OwnLines, ParamKind, TICK_PARAMS, deltas,
     entry_model_for, infer_tick, model_window, params, prepare_deal, required_spans, verify,
 };
-use moon_core::db::tuner::{strategy_current_values, strategy_values_at};
+use moon_core::db::tuner::{StrategyValuesReader, strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
 use moon_core::feed::strategy_deps::FieldDeps;
 use moon_core::feed::types::Tick;
@@ -598,8 +598,60 @@ pub(in crate::analytics::tuner) fn replay_batch(
     long_position_ms: i64,
     calibrate: bool,
 ) -> Vec<DealRow> {
-    let mut tapes = held_tapes(&targets, long_position_ms);
-    let mut rows: Vec<DealRow> = targets
+    let fetched = fetch_batch(targets, long_position_ms);
+    // Before any row is replayed: each core's step lag, off these rows' archives.
+    if calibrate {
+        calibrate_lags(&fetched, defaults, model);
+    }
+    replay_fetched(
+        fetched,
+        defaults,
+        model,
+        klines,
+        moon_core::util::now_unix_ms_i64(),
+        None,
+    )
+}
+
+/// What one readiness pass reads once and shares across its rows and threads: the strategies'
+/// values ([`StrategyValuesReader`]). The card's own load reads each row afresh.
+pub(in crate::analytics::tuner) struct PassReads {
+    pub(in crate::analytics::tuner) values: StrategyValuesReader,
+}
+
+impl PassReads {
+    /// Fresh reads for one pass.
+    pub(in crate::analytics::tuner) fn new() -> Self {
+        Self {
+            values: StrategyValuesReader::new(),
+        }
+    }
+}
+
+/// What a batch's replay reads before the model runs: the rows, still without their tape,
+/// each one's held tape by report uid and each one's archived lines.
+pub(in crate::analytics::tuner) struct Fetched {
+    pub(in crate::analytics::tuner) rows: Vec<DealRow>,
+    pub(in crate::analytics::tuner) tapes: HashMap<i64, HeldTape>,
+    pub(in crate::analytics::tuner) traces: HashMap<i64, ArchivedLines>,
+}
+
+/// The I/O half of [`replay_batch`]: the held tape of every target asked in one batch, then
+/// the archived lines of every row.
+///
+/// Args:
+///     targets: The deals to replay, each with where its prints live.
+///     long_position_ms: One window split for the whole batch ([`ask_held`]).
+///
+/// Returns:
+///     The rows in the order of `targets`, every one `Missing` until replayed, and what was
+///     read for them.
+pub(in crate::analytics::tuner) fn fetch_batch(
+    targets: Vec<(Deal, Arc<RowAddress>)>,
+    long_position_ms: i64,
+) -> Fetched {
+    let tapes = held_tapes(&targets, long_position_ms);
+    let rows: Vec<DealRow> = targets
         .into_iter()
         .map(|(deal, address)| DealRow {
             deal,
@@ -611,17 +663,54 @@ pub(in crate::analytics::tuner) fn replay_batch(
             held: None,
         })
         .collect();
-    let mut traces = archived_lines(&rows);
-    // Before any row is replayed: each core's step lag, off these rows' archives.
-    if calibrate {
-        super::lags::calibrate_from(&rows, &traces, defaults, model);
+    let traces = archived_lines(&rows);
+    Fetched {
+        rows,
+        tapes,
+        traces,
     }
-    let now_ms = moon_core::util::now_unix_ms_i64();
+}
+
+/// Recalibrate each core's step lag and round trip off a fetched batch's archives — the
+/// process-global values every later replay reads ([`replay_batch`]'s `calibrate`).
+pub(in crate::analytics::tuner) fn calibrate_lags(
+    fetched: &Fetched,
+    defaults: &HashMap<String, f64>,
+    model: ModelSettings,
+) {
+    super::lags::calibrate_from(&fetched.rows, &fetched.traces, defaults, model);
+}
+
+/// The CPU half of [`replay_batch`]: the model on every fetched row.
+///
+/// Args:
+///     fetched: What [`fetch_batch`] read.
+///     defaults: The strategy-field defaults of the live schema.
+///     model: The model settings, one set for the whole batch.
+///     klines: The kline cache the live deltas read, when the market source has one.
+///     now_ms: One clock for the batch's "cannot be fetched" verdicts.
+///     reads: A pass's shared reads; `None` reads every row afresh.
+///
+/// Returns:
+///     The replayed rows, in the order they were fetched.
+pub(in crate::analytics::tuner) fn replay_fetched(
+    fetched: Fetched,
+    defaults: &HashMap<String, f64>,
+    model: ModelSettings,
+    klines: Option<&KlineCache>,
+    now_ms: i64,
+    reads: Option<&PassReads>,
+) -> Vec<DealRow> {
+    let Fetched {
+        mut rows,
+        mut tapes,
+        mut traces,
+    } = fetched;
     for row in &mut rows {
         let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
         let tape = tapes.remove(&row.deal.report_uid);
         let answered = tape.is_some();
-        replay_row_with(row, defaults, model, lines, tape, klines);
+        replay_row_with(row, defaults, model, lines, tape, klines, reads);
         // Said at load, not after a walk: a row the venue cannot serve is not
         // "missing" — it would only ever come back refused. The fetch job's own
         // path (`replay_row` after a walk) is NOT given this: its retries and its
@@ -820,10 +909,10 @@ fn own_values(deals: &[Deal], keys: &[String]) -> OwnValues {
 /// line's points, and whether the core answered for the deal with lines at all — without them
 /// a missing entry line proves nothing (`record::entry_placement`).
 #[derive(Clone, Debug, Default)]
-pub(super) struct ArchivedLines {
-    pub(super) entry_points: Option<Arc<[(i64, f64)]>>,
-    pub(super) exit_points: Option<Vec<(i64, f64)>>,
-    pub(super) answered: bool,
+pub(in crate::analytics::tuner) struct ArchivedLines {
+    pub(in crate::analytics::tuner) entry_points: Option<Arc<[(i64, f64)]>>,
+    pub(in crate::analytics::tuner) exit_points: Option<Vec<(i64, f64)>>,
+    pub(in crate::analytics::tuner) answered: bool,
 }
 
 impl ArchivedLines {
@@ -849,7 +938,7 @@ impl ArchivedLines {
 }
 
 /// The archived lines of every deal, read once per core.
-fn archived_lines(rows: &[DealRow]) -> HashMap<i64, ArchivedLines> {
+pub(in crate::analytics::tuner) fn archived_lines(rows: &[DealRow]) -> HashMap<i64, ArchivedLines> {
     let mut by_core: HashMap<u64, Vec<i64>> = HashMap::new();
     for row in rows {
         by_core
@@ -870,7 +959,7 @@ fn archived_lines(rows: &[DealRow]) -> HashMap<i64, ArchivedLines> {
 }
 
 /// The held prints of one deal's window, their coverage, and the window that was asked for.
-type HeldTape = (Vec<Tick>, Coverage, ReplayWindow);
+pub(in crate::analytics::tuner) type HeldTape = (Vec<Tick>, Coverage, ReplayWindow);
 
 /// The held prints of one deal's window, through the worker. `None` when the worker did not
 /// answer in time.
@@ -922,7 +1011,20 @@ pub(super) fn replay_row(
         .address
         .as_ref()
         .and_then(|address| held_tape(address, &row.deal, long_position_ms));
-    replay_row_with(row, defaults, model, lines, tape, klines);
+    replay_row_with(row, defaults, model, lines, tape, klines, None);
+}
+
+/// Call `read`, adding its time to the [`replay_timing`] slot named by `slot` in a test build;
+/// just call it otherwise.
+macro_rules! timed {
+    ($slot:ident, $read:expr) => {{
+        #[cfg(test)]
+        let started = std::time::Instant::now();
+        let out = ($read)();
+        #[cfg(test)]
+        replay_timing::$slot.add(started.elapsed());
+        out
+    }};
 }
 
 /// Run the model on one row from a tape already asked for. A covered row keeps its tape and
@@ -938,6 +1040,7 @@ pub(super) fn replay_row_with(
     lines: ArchivedLines,
     tape: Option<HeldTape>,
     klines: Option<&KlineCache>,
+    reads: Option<&PassReads>,
 ) {
     row.ticks = None;
     row.entry_line = lines.entry_points.clone();
@@ -973,12 +1076,17 @@ pub(super) fn replay_row_with(
     // axis ✓ 65 % where the bench on the same trades read 92 %).
     row.deal.tick = infer_tick(&ticks);
     let keys = params::param_keys();
-    let values = strategy_values_at(
-        row.deal.strategy_id,
-        Some(row.deal.core_uid),
-        row.deal.buy_ms,
-        &keys,
-    )
+    let values = timed!(STRATEGY_VALUES, || {
+        let (sid, core, at) = (
+            row.deal.strategy_id,
+            Some(row.deal.core_uid),
+            row.deal.buy_ms,
+        );
+        match reads {
+            Some(reads) => reads.values.values_at(sid, core, at, &keys),
+            None => strategy_values_at(sid, core, at, &keys),
+        }
+    })
     .unwrap_or_default();
     let sv = params::StrategyValues {
         values: &values,
@@ -993,15 +1101,17 @@ pub(super) fn replay_row_with(
     // The deltas along the window, before the record's inputs: the stop anchor reads the stop
     // through them. The bars they were read off go with the deal for SellLevel's look-back.
     if let Some(cache) = klines {
-        let history = deltas::track_for(
-            cache,
-            &address.exchange_key,
-            &address.market,
-            address.btc_market.as_deref(),
-            &row.deal,
-            &ticks,
-            &covered,
-        );
+        let history = timed!(KLINES, || {
+            deltas::track_for(
+                cache,
+                &address.exchange_key,
+                &address.market,
+                address.btc_market.as_deref(),
+                &row.deal,
+                &ticks,
+                &covered,
+            )
+        });
         row.deal.delta_track = history.track;
         row.deal.bars = history.bars;
     }
@@ -1091,4 +1201,48 @@ pub(super) fn carryable(before: &Deal, now: &Deal) -> bool {
         && before.buy_price == now.buy_price
         && before.sell_price == now.sell_price
         && before.order_open_ms() == now.order_open_ms()
+}
+
+/// Time spent in the replay's per-row reads, summed over every thread — for the readiness
+/// bench, which tells the reads inside the model's half from the model itself. Only a test
+/// build counts ([`timed`]).
+#[cfg(test)]
+pub(in crate::analytics::tuner) mod replay_timing {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Calls and nanoseconds of one kind of read.
+    pub(in crate::analytics::tuner) struct Slot {
+        pub(in crate::analytics::tuner) calls: AtomicU64,
+        pub(in crate::analytics::tuner) nanos: AtomicU64,
+    }
+
+    impl Slot {
+        const fn new() -> Self {
+            Self {
+                calls: AtomicU64::new(0),
+                nanos: AtomicU64::new(0),
+            }
+        }
+
+        pub(in crate::analytics::tuner) fn add(&self, took: std::time::Duration) {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.nanos.fetch_add(
+                u64::try_from(took.as_nanos()).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
+        }
+
+        /// `(calls, seconds)` so far.
+        pub(in crate::analytics::tuner) fn read(&self) -> (u64, f64) {
+            (
+                self.calls.load(Ordering::Relaxed),
+                self.nanos.load(Ordering::Relaxed) as f64 / 1e9,
+            )
+        }
+    }
+
+    /// `strategy_values_at`, once per replayed row.
+    pub(in crate::analytics::tuner) static STRATEGY_VALUES: Slot = Slot::new();
+    /// `deltas::track_for`, the kline reads of the live deltas.
+    pub(in crate::analytics::tuner) static KLINES: Slot = Slot::new();
 }
