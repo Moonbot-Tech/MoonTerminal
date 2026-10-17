@@ -58,12 +58,19 @@ struct Shard {
     saved: HashMap<u64, Vec<Saved>>,
     bytes: usize,
     clock: u64,
+    /// Count sorting passes so a regression can distinguish bypassing from insert-and-evict.
+    #[cfg(test)]
+    eviction_passes: usize,
 }
 
 impl Shard {
     /// Let go of the shard's least recently used replays until `budget` holds at most `bytes`
     /// or the shard is empty, giving each one's bytes back.
     fn evict_to(&mut self, budget: &Budget, bytes: usize) {
+        #[cfg(test)]
+        {
+            self.eviction_passes += 1;
+        }
         let mut stamps: Vec<(u64, u64)> = self
             .saved
             .iter()
@@ -143,7 +150,8 @@ impl ReplayCache {
     /// Replaying outside the lock permits concurrent misses for the same point. Waiting for
     /// another Rayon job while holding a lock could deadlock its nested deal replay instead.
     /// A miss that takes the budget over evicts this cache's own oldest replays of the shard
-    /// it lands in, the new one last.
+    /// it lands in, the new one last. If even releasing that entire shard cannot make room,
+    /// serve the replay uncached without allocating or sorting an eviction list.
     pub(super) fn replay(
         &self,
         params: &[(EntryParams, ExitParams)],
@@ -175,13 +183,24 @@ impl ReplayCache {
         let mut shard = shard.lock().unwrap_or_else(PoisonError::into_inner);
         shard.clock += 1;
         let clock = shard.clock;
-        let kept = shard.saved.entry(hash).or_default();
         // Another restart replayed the same point meanwhile: one copy is kept.
-        if let Some(saved) = kept.iter_mut().find(|s| s.params == params) {
+        if let Some(saved) = shard
+            .saved
+            .get_mut(&hash)
+            .and_then(|kept| kept.iter_mut().find(|s| s.params == params))
+        {
             saved.used = clock;
             return replayed;
         }
-        kept.push(Saved {
+        let outside_shard = self
+            .budget
+            .held
+            .load(Ordering::Relaxed)
+            .saturating_sub(shard.bytes);
+        if outside_shard > self.budget.bytes - entry_bytes {
+            return replayed;
+        }
+        shard.saved.entry(hash).or_default().push(Saved {
             params: params.to_vec(),
             replayed: replayed.clone(),
             used: clock,
@@ -204,7 +223,7 @@ impl ReplayCache {
 pub struct SearchProfile {
     /// Requests answered from [`ReplayCache`].
     pub replay_hits: u64,
-    /// Requests the cache replayed and kept.
+    /// Requests replayed after a lookup miss, including those bypassing retention under pressure.
     pub replay_misses: u64,
     /// Requests too wide for the cache, replayed every time.
     pub replay_uncached: u64,

@@ -161,6 +161,52 @@ fn caches_share_one_budget_and_release_it_when_dropped() {
     assert_eq!(limit.held(), 0);
 }
 
+/// External pressure must bypass admission without sorting or evicting this cache's useful hit.
+#[test]
+fn another_cache_filling_the_budget_does_not_thrash_a_miss() {
+    let own = vec![(EntryParams::Fact, ExitParams::default())];
+    let entry = ReplayCache::entry_bytes(&own);
+    let limit = budget(entry * SHARDS * 4);
+    let first = ReplayCache::within(limit);
+    let other = ReplayCache::within(limit);
+    first.replay(&own, Replayed::default);
+    let mut point = own.clone();
+    for i in 1..SHARDS * 4 {
+        point[0].1.model.latency_ms = i as f64;
+        other.replay(&point, Replayed::default);
+    }
+    assert_eq!(limit.held(), limit.bytes);
+    let mut miss = vec![own[0].clone(); 2];
+    let own_shard = key_hash(&own) as usize % SHARDS;
+    // Force a miss into the nonempty shard; even evicting its old entry cannot fit this one.
+    for i in 0.. {
+        miss[0].1.model.latency_ms = f64::from(i);
+        if key_hash(&miss) as usize % SHARDS == own_shard {
+            break;
+        }
+    }
+    let calls = AtomicUsize::new(0);
+    for _ in 0..20 {
+        first.replay(&miss, || {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Replayed::default()
+        });
+        assert_eq!(limit.held(), limit.bytes);
+    }
+    assert_eq!(calls.load(Ordering::Relaxed), 20);
+    first.replay(&own, || panic!("external pressure evicted an existing hit"));
+    for shard in &first.shards {
+        assert_eq!(shard.lock().unwrap().eviction_passes, 0);
+    }
+    drop(other);
+    assert_eq!(limit.held(), entry);
+    first.replay(&miss, Replayed::default);
+    first.replay(&miss, || panic!("released budget did not admit the miss"));
+    assert!(limit.held() <= limit.bytes);
+    drop(first);
+    assert_eq!(limit.held(), 0);
+}
+
 /// Equal keys hash alike, a signed zero included; the hash reads every field.
 #[test]
 fn equal_keys_hash_alike_and_every_field_counts() {
