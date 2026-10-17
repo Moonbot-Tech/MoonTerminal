@@ -342,23 +342,6 @@ fn observed_uid_floor(
     .max()
 }
 
-/// Seed the tuner tail floor from a loaded layout before station jobs can read it.
-///
-/// Args:
-///     layout: The layout loaded at startup. A saved `analytics_ticks.min_tail_s` is installed;
-///         `None` installs the axis default.
-///
-/// Returns:
-///     Nothing.
-pub(crate) fn seed_tuner_floor(layout: &WindowLayout) {
-    crate::analytics::AnalyticsView::seed_tape_min_tail_s(
-        layout
-            .analytics_ticks
-            .as_ref()
-            .and_then(|saved| saved.min_tail_s),
-    );
-}
-
 /// Initialize persistence, configuration, application services, and the GPUI event loop.
 ///
 /// Core-keyed durable state is loaded before configuration because config loading may assign and
@@ -531,7 +514,6 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     // is memoized process-wide, so every later first-run default answers from the disk as it was at
     // launch rather than as startup has since left it.
     let mut layout = WindowLayout::load(moon_core::config::profile_age());
-    seed_tuner_floor(&layout);
     let mut saved_chart_specs = chart_persist::load_all();
 
     // Carry the trade-mark and bottom-volume settings out of `theme.toml` into the per-tab chart

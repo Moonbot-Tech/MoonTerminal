@@ -44,9 +44,8 @@ use crate::market::{CandleReadParams, ChartHistoryBuffers, ChartHistoryRead};
 use crate::venue::{Brand, Venue};
 pub use coverage::Coverage;
 pub use settings::{
-    cleanup_at_startup, long_position_ms, margin_ms, min_tail_s, record_tail_ms,
-    set_cleanup_at_startup, set_long_position_min, set_margin_s, set_min_tail_s, set_tape_autoload,
-    set_tape_autoload_cores, tape_autoload, tape_autoload_cores,
+    cleanup_at_startup, long_position_ms, margin_ms, set_cleanup_at_startup, set_long_position_min,
+    set_margin_s, set_tape_autoload, set_tape_autoload_cores, tape_autoload, tape_autoload_cores,
 };
 pub use tick_tiles::TileSource;
 pub use worker::{TickAnswer, TickQuery, query_held};

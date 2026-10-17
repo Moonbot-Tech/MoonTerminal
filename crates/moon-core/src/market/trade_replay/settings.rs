@@ -21,29 +21,6 @@ static LONG_POSITION_MIN: AtomicU32 =
 /// Live value of `[trade_replay] cleanup_at_startup`.
 static CLEANUP_AT_STARTUP: AtomicBool = AtomicBool::new(false);
 static INIT: OnceLock<()> = OnceLock::new();
-/// Process-wide tuner floor pushed by the station's controller, independent of local storage.
-static MIN_TAIL_S: AtomicU32 = AtomicU32::new(crate::db::tuner::ticks::tail::DEFAULT_MIN_TAIL_S);
-
-/// Apply the floor, invalidating catch-up only when the recorded horizon changes.
-pub fn set_min_tail_s(s: u32) {
-    use crate::db::tuner::ticks::tail::{clamp_min_tail_s, record_tail_ms};
-    let margin = margin_ms();
-    let s = clamp_min_tail_s(s);
-    let before = MIN_TAIL_S.swap(s, Ordering::Relaxed);
-    if record_tail_ms(before, margin) != record_tail_ms(s, margin) {
-        crate::market::tape_recorder::catchup::window_changed();
-    }
-}
-
-/// Current process-wide tuner floor in seconds.
-pub fn min_tail_s() -> u32 {
-    MIN_TAIL_S.load(Ordering::Relaxed)
-}
-
-/// Tail required by both the recorder and the tuner, including the configured margin.
-pub fn record_tail_ms() -> i64 {
-    crate::db::tuner::ticks::tail::record_tail_ms(min_tail_s(), margin_ms())
-}
 
 /// Load the file into the cells once; every setter calls it first, or the file's value would
 /// land on top of the tab's on the first read.

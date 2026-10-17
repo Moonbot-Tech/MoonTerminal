@@ -5,8 +5,8 @@ mod pacing;
 mod state;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, RwLock};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 
 use super::{Cmd, TradeId};
 use crate::market::trade_replay::venue_caps::{self, ArchiveRoute, Fetchable, TradeRoute};
@@ -14,8 +14,6 @@ use crate::market::trade_replay::{Coverage, ReplayWindow};
 use crate::station_api::TapeCatchup;
 use crate::venue::Venue;
 
-pub(crate) use crate::market::source::ARCHIVE_WAIT;
-pub(crate) use executor::CoreSpanFetch;
 pub(super) use executor::PassResult;
 pub(super) use state::RecorderCatchup;
 
@@ -25,14 +23,12 @@ pub(super) fn stop_worker() {
 }
 
 /// One resolved closed trade supplied by the session, with true-UTC entry and exit stamps.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CatchupTrade {
     pub id: TradeId,
     pub exchange: String,
     pub market: String,
-    pub venue: Option<Venue>,
-    /// Captured exchange identity for the core archive fallback.
-    pub core: Option<crate::market::source::ReplayAddress>,
+    pub venue: Venue,
     pub open_ms: i64,
     pub close_ms: i64,
     /// Whether this listed trade was emulated.
@@ -42,30 +38,9 @@ pub struct CatchupTrade {
     pub tunable: bool,
 }
 
-impl std::fmt::Debug for CatchupTrade {
-    /// Describe the trade without formatting the address's worker handles.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CatchupTrade")
-            .field("id", &self.id)
-            .field("exchange", &self.exchange)
-            .field("market", &self.market)
-            .field("venue", &self.venue)
-            .field(
-                "core",
-                &self.core.as_ref().map(|address| &address.exchange_key),
-            )
-            .field("open_ms", &self.open_ms)
-            .field("close_ms", &self.close_ms)
-            .field("emulator", &self.emulator)
-            .field("tunable", &self.tunable)
-            .finish()
-    }
-}
-
 /// Sources available for the job's missing focus stretches.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Source {
-    Core,
     Rest(TradeRoute),
     Archive(ArchiveRoute),
     Both(TradeRoute, ArchiveRoute),
@@ -78,31 +53,6 @@ pub(crate) struct CatchupJob {
     pub(crate) missing: Coverage,
     pub(crate) expires_at_ms: i64,
     pub(crate) source: Source,
-    /// Captured boundary distinguishes a missing tuner tail from an ordinary focus gap.
-    pub(crate) tail_start_ms: i64,
-}
-
-/// One immutable window shape shared by live catch-up planning and retention.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Shape {
-    pub margin_ms: i64,
-    pub long_ms: i64,
-    pub tail_ms: i64,
-}
-
-impl Shape {
-    /// Capture one consistent set of settings for recording and retention.
-    pub(super) fn current() -> Self {
-        let margin_ms = crate::market::trade_replay::margin_ms();
-        Self {
-            margin_ms,
-            long_ms: crate::market::trade_replay::long_position_ms(),
-            tail_ms: crate::db::tuner::ticks::tail::record_tail_ms(
-                crate::market::trade_replay::min_tail_s(),
-                margin_ms,
-            ),
-        }
-    }
 }
 
 /// A pure planning pass and the reasons trades did not require a request.
@@ -116,7 +66,6 @@ pub(crate) struct CatchupPlan {
     /// IDs let the recorder settle a whole planning batch without planning each row again.
     pub(crate) complete_ids: Vec<TradeId>,
     pub(crate) permanent_ids: Vec<TradeId>,
-    pub(crate) tail_final_ids: Vec<TradeId>,
 }
 
 /// Terminal refusals stay closed; recoverable failures wait for the next hourly pass.
@@ -154,20 +103,6 @@ static RELIST_GEN: AtomicU64 = AtomicU64::new(0);
 static LISTINGS: Mutex<std::collections::BTreeMap<u64, (u64, Option<u64>)>> =
     Mutex::new(std::collections::BTreeMap::new());
 static SWITCH_GEN: AtomicU64 = AtomicU64::new(0);
-static TAIL_FINAL: AtomicU32 = AtomicU32::new(0);
-static CORE_FETCH: RwLock<Option<CoreSpanFetch>> = RwLock::new(None);
-
-/// Install the session's archive reader; the catch-up worker invokes it outside this lock.
-pub(crate) fn set_core_fetch(fetch: CoreSpanFetch) {
-    *CORE_FETCH
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(fetch);
-}
-
-/// Final incomplete tails in the recorder's current settings generation, for station status.
-pub fn tail_final() -> u32 {
-    TAIL_FINAL.load(Ordering::Relaxed)
-}
 /// Include offline sessions in the protection barrier, not only successful listing spawns.
 static REQUIRED_CORES: Mutex<Option<Vec<u64>>> = Mutex::new(None);
 
@@ -216,8 +151,6 @@ static STATUS: Mutex<TapeCatchup> = Mutex::new(TapeCatchup {
     max_age_days: None,
     record_emulator: None,
     tuner_only: None,
-    min_tail_s: None,
-    tail_final: None,
     db_bytes: None,
     tape_trades: None,
     tape_ages: Vec::new(),
@@ -271,13 +204,11 @@ pub fn set_keep(max_age_days: u16, record_emulator: bool) {
         max_age_days: old_days,
         record_emulator: old_emulator,
         tuner_only: None,
-        min_tail_s: None,
     })
     .removes_tape(crate::station_api::TapeKeep {
         max_age_days,
         record_emulator,
         tuner_only: None,
-        min_tail_s: None,
     }) {
         PURGE_WANTED.store(true, Ordering::Relaxed);
     }
@@ -357,6 +288,21 @@ pub(crate) fn listing_generation(core: u64) -> Option<u64> {
 /// Queue completion after every submitted page so purge planning cannot outrun known trades.
 pub fn listed(core: u64, generation: u64) {
     super::send(Cmd::Listed { core, generation });
+}
+
+/// Settle at once the listing of a core that can attribute nothing: its platform is not in the
+/// exchange directory, so no report row can name a venue and the listing would protect no
+/// market. Left unlisted, such a core held [`listings_complete`] open forever, and every purge
+/// then kept all tape of every market — the age limit and the emulator choice alike. Applied
+/// directly: the queued [`listed`] only orders completion behind submitted pages, and there are
+/// none.
+///
+/// The cost, chosen by LinKvo on 2026-10-16: tape on such a core's own markets goes by age
+/// alone. Its trades are never known, so one straddling the retention edge loses its older part
+/// and its emulator tape stays until it ages out — as for a live close on an unknown venue.
+pub fn listed_empty(core: u64, generation: u64) {
+    listing_started(core, generation);
+    listing_applied(core, generation);
 }
 
 /// Apply a successful completion only when its retention generation is still current.
@@ -457,8 +403,6 @@ pub fn status() -> TapeCatchup {
     status.max_age_days = Some(max_age_days());
     status.record_emulator = Some(record_emulator());
     status.tuner_only = Some(tuner_only());
-    status.min_tail_s = Some(crate::market::trade_replay::min_tail_s());
-    status.tail_final = Some(tail_final());
     status
 }
 
@@ -471,38 +415,40 @@ pub(crate) fn note_no_route() {
 }
 
 /// Shape exactly the same focus as live recording, using the settings of this planning pass.
-pub(super) fn needed(trade: &CatchupTrade, shape: &Shape) -> Coverage {
-    let margin = shape.margin_ms.max(0);
-    let window = ReplayWindow {
+pub(super) fn needed(trade: &CatchupTrade, margin_ms: i64, long_ms: i64) -> Coverage {
+    let margin = margin_ms.max(0);
+    ReplayWindow {
         from_ms: trade.open_ms.saturating_sub(margin),
         to_ms: trade.close_ms.saturating_add(margin),
         open_ms: trade.open_ms,
         close_ms: trade.close_ms,
         margin_ms: margin,
-        long_position_ms: shape.long_ms,
+        long_position_ms: long_ms,
         over_budget: false,
-    };
-    crate::db::tuner::ticks::tail::focus_with_tail(&window, shape.tail_ms)
+    }
+    .focus_spans()
 }
 
 /// Prefer expiring REST-only tape, omit held or latched rows, and leave live tails alone.
-pub(super) fn plan(
+pub(crate) fn plan(
     trades: &[CatchupTrade],
     held: impl Fn(&CatchupTrade) -> Coverage,
     latched: &HashMap<TradeId, Latch>,
     now_ms: i64,
-    shape: &Shape,
+    margin_ms: i64,
+    long_ms: i64,
 ) -> CatchupPlan {
-    plan_with(trades, held, latched, now_ms, shape, true)
+    plan_with(trades, held, latched, now_ms, margin_ms, long_ms, true)
 }
 
 /// Plan against the archive choice captured for this recorder pass, leaving REST unchanged.
-pub(super) fn plan_with(
+pub(crate) fn plan_with(
     trades: &[CatchupTrade],
     held: impl Fn(&CatchupTrade) -> Coverage,
     latched: &HashMap<TradeId, Latch>,
     now_ms: i64,
-    shape: &Shape,
+    margin_ms: i64,
+    long_ms: i64,
     archives: bool,
 ) -> CatchupPlan {
     let mut result = CatchupPlan::default();
@@ -522,18 +468,16 @@ pub(super) fn plan_with(
             result.permanent_ids.push(trade.id);
             continue;
         }
-        let focus = needed(trade, shape).clip(&Coverage::one((edge, i64::MAX)));
+        let focus = needed(trade, margin_ms, long_ms).clip(&Coverage::one((edge, i64::MAX)));
         let mut missing = focus.minus(&held(trade));
         if missing.is_empty() {
             result.complete += 1;
             result.complete_ids.push(trade.id);
             continue;
         }
-        let tail_start_ms = trade.close_ms.saturating_add(shape.margin_ms.max(0));
-        let tail_only = state::tail_only(&missing, tail_start_ms);
         if trade
             .close_ms
-            .saturating_add(shape.margin_ms.max(shape.tail_ms).max(0))
+            .saturating_add(margin_ms.max(0))
             .saturating_add(super::plan::GIVE_UP_MS)
             > now_ms
         {
@@ -543,69 +487,23 @@ pub(super) fn plan_with(
         let Some((from, to)) = focus.hull() else {
             continue;
         };
-        // Core archives supplement only post-close tails and cannot recover older stretches.
-        let core_tail = tail_only
-            && trade.core.is_some()
-            && missing.spans().iter().all(|&(from, _)| {
-                from >= now_ms.saturating_sub(executor::CORE_ARCHIVE_RETENTION_MS)
-            });
-        if core_tail
-            && trade.venue.is_none_or(|venue| {
-                matches!(
-                    venue_caps::fetchable_with(
-                        venue,
-                        &trade.market,
-                        missing.hull().expect("nonempty missing tail").0,
-                        now_ms,
-                        archives,
-                    ),
-                    Fetchable::NoRoute | Fetchable::OutOfRetention
-                )
-            })
-        {
-            result.jobs.push(CatchupJob {
-                trade: trade.clone(),
-                missing,
-                expires_at_ms: trade
-                    .close_ms
-                    .saturating_add(executor::CORE_ARCHIVE_RETENTION_MS),
-                source: Source::Core,
-                tail_start_ms,
-            });
-            continue;
-        }
-        let Some(venue) = trade.venue else {
-            // The core source serves tails only; latch ordinary gaps without tail counters.
-            result.permanent_ids.push(trade.id);
-            if tail_only {
-                result.no_route += 1;
-                result.tail_final_ids.push(trade.id);
-            }
-            continue;
-        };
-        let rest = venue_caps::trade_route(venue);
+        let rest = venue_caps::trade_route(trade.venue);
         let archive = archives
-            .then(|| venue_caps::archive_route(venue, &trade.market))
+            .then(|| venue_caps::archive_route(trade.venue, &trade.market))
             .flatten();
-        match venue_caps::fetchable_with(venue, &trade.market, from, now_ms, archives) {
+        match venue_caps::fetchable_with(trade.venue, &trade.market, from, now_ms, archives) {
             Fetchable::NoRoute => {
                 result.no_route += 1;
                 result.permanent_ids.push(trade.id);
-                if tail_only {
-                    result.tail_final_ids.push(trade.id);
-                }
                 continue;
             }
             Fetchable::OutOfRetention => {
                 // A REST-only window crossing the edge may still recover its reachable exit.
-                if venue_caps::fetchable_with(venue, &trade.market, to, now_ms, archives)
+                if venue_caps::fetchable_with(trade.venue, &trade.market, to, now_ms, archives)
                     != Fetchable::Rest
                 {
                     result.out_of_reach += 1;
                     result.permanent_ids.push(trade.id);
-                    if tail_only {
-                        result.tail_final_ids.push(trade.id);
-                    }
                     continue;
                 }
                 let earliest = rest
@@ -651,14 +549,13 @@ pub(super) fn plan_with(
                     .hull()
                     .map_or(i64::MAX, |(from, _)| from.saturating_add(retention))
             }),
-            Source::Archive(_) | Source::Core => i64::MAX,
+            Source::Archive(_) => i64::MAX,
         };
         result.jobs.push(CatchupJob {
             trade: trade.clone(),
             missing,
             expires_at_ms,
             source,
-            tail_start_ms,
         });
     }
     result.jobs.sort_by(|a, b| {

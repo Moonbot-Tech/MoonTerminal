@@ -41,7 +41,6 @@ pub mod search;
 pub mod settings;
 pub mod stats;
 pub mod strike;
-pub mod tail;
 pub mod unmodelled;
 pub mod verify;
 

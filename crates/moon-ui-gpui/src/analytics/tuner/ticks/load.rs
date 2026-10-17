@@ -697,13 +697,7 @@ fn ask_held(
     query_held(TickQuery {
         exchange_key: address.exchange_key.clone(),
         market: address.market.clone(),
-        spans: moon_core::db::tuner::ticks::tail::focus_with_tail(
-            &window,
-            moon_core::db::tuner::ticks::tail::record_tail_ms(
-                super::tail::current_s(),
-                margin_ms(),
-            ),
-        ),
+        spans: window.focus_spans(),
         reply,
     });
     Some((rx, window))

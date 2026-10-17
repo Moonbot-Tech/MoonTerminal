@@ -26,47 +26,6 @@ pub(crate) mod autoload;
 pub(in crate::analytics::tuner) mod job;
 mod station;
 
-/// Whether the station is still filling candidates before venue work can begin.
-pub(super) fn station_active() -> bool {
-    station::active()
-}
-
-/// Whether station-first candidates can be offered before the venue's reach is checked.
-pub(super) fn station_available() -> bool {
-    crate::backend::station::known_cached()
-}
-
-/// Count recoverable rows and station candidates not already refused in this generation.
-pub(super) fn station_load_candidate(row: &super::state::DealRow, now_ms: i64) -> bool {
-    if !row.station_candidate() {
-        return false;
-    }
-    let Some(address) = &row.address else {
-        return false;
-    };
-    let from = row.held.map_or(row.deal.buy_ms, |(_, trail)| {
-        row.deal
-            .close_ms
-            .saturating_add(trail.max(0))
-            .saturating_add(1)
-    });
-    let to = row
-        .deal
-        .close_ms
-        .saturating_add(moon_core::db::tuner::ticks::tail::record_tail_ms(
-            super::tail::current_s(),
-            margin_ms(),
-        ));
-    job::reachable_after_station(
-        address.venue,
-        &address.market,
-        from,
-        to,
-        row.deal.close_ms,
-        now_ms,
-    ) || station::candidate(row.deal.report_uid)
-}
-
 /// How long one blocking receive holds a background-pool thread before checking back.
 const LISTEN_SLICE: Duration = Duration::from_secs(2);
 
@@ -240,16 +199,6 @@ fn schema_default(type_name: &str, default: Option<&str>) -> Option<f64> {
 }
 
 impl AnalyticsView {
-    /// Re-read covered short rows as well as refusals after a station writes new tape.
-    pub(super) fn refresh_station_tape(&mut self, cx: &mut Context<Self>) {
-        let generation = station::filed_generation();
-        if generation != self.ticks.station_generation {
-            self.ticks.station_generation = generation;
-            self.ticks.judged_under = None;
-            self.reload_ticks(cx);
-        }
-    }
-
     /// Queue every fetchable row of the table with the job, oldest first: a fresh batch when
     /// none runs, or added to the running one — the startup autoload's, or a previous window's
     /// — which already knows some of them and takes the rest.
@@ -269,77 +218,27 @@ impl AnalyticsView {
         if self.ticks.tape_reading {
             return;
         }
-        if origin == job::RowOrigin::Autoload && station::active() {
-            return;
-        }
         let Some(data) = self.ticks.data.data() else {
             return;
         };
         let backend = self.backend.read(cx);
         let resolver = FetchResolver::of(backend);
         let now_ms = moon_core::util::time::now_unix_ms_i64();
-        let station_first = autoload::station_target().is_some();
         let mut rows: Vec<job::QueuedRow> = data
-            .rows
-            .iter()
-            .filter(|row| {
-                if station_first {
-                    row.station_candidate()
-                        && (origin == job::RowOrigin::User || station_load_candidate(row, now_ms))
-                } else {
-                    row.fetchable_at(now_ms, super::tail::effective_s())
-                }
-            })
+            .fetchable()
             .filter(|row| origin == job::RowOrigin::User || row.autoload_ready_at(now_ms))
             .filter_map(|row| resolver.queued_row(row.deal.clone(), row.address.clone()?, origin))
             .collect();
         // Oldest first, so the ones nearest the venues' retention edge go before it moves; the
         // job pops from the end.
         rows.reverse();
-        if rows.is_empty() {
-            return;
-        }
         let wanted: HashSet<i64> = rows.iter().map(|r| r.deal.report_uid).collect();
         let defaults = strategy_field_defaults(backend);
-        if station_first {
-            let rx = station::prefill_then_enqueue(rows, defaults, origin);
+        if job::enqueue(rows, defaults) > 0 {
             self.attach_fetch_listener(cx);
-            cx.spawn(async move |this, cx| {
-                let executor = cx.update(|cx| cx.background_executor().clone());
-                let mut rx = rx;
-                loop {
-                    let (returned_rx, received) = executor
-                        .spawn(async move {
-                            let received = rx.recv_timeout(LISTEN_SLICE);
-                            (rx, received)
-                        })
-                        .await;
-                    rx = returned_rx;
-                    match received {
-                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        Err(mpsc::RecvTimeoutError::Timeout) => {
-                            if this.update(cx, |_, _| ()).is_err() {
-                                return;
-                            }
-                        }
-                    }
-                }
-                let _ = this.update(cx, |this, cx| {
-                    this.refresh_station_tape(cx);
-                    if job::progress().active {
-                        this.attach_fetch_listener(cx);
-                    }
-                    job::prioritize(&wanted);
-                    cx.notify();
-                });
-            })
-            .detach();
-        } else {
-            if job::enqueue(rows, defaults) > 0 {
-                self.attach_fetch_listener(cx);
-            }
-            job::prioritize(&wanted);
         }
+        // The user asked for THESE rows: before whatever else their venues hold.
+        job::prioritize(&wanted);
         cx.notify();
     }
 
@@ -372,7 +271,6 @@ impl AnalyticsView {
         // Read before the stop: the job clears its in-flight rows on their own threads the
         // moment the cancelled walks return, and no row event follows a cancellation.
         let in_flight = job::progress().in_flight;
-        station::cancel();
         job::stop();
         autoload::cancel();
         self.ticks.edit_rows(
@@ -438,7 +336,7 @@ impl AnalyticsView {
                 }
                 // The batch is over and the channel was drained: nothing more will come until
                 // the next start, which attaches afresh.
-                if !job::progress().active && !station::active() {
+                if !job::progress().active {
                     break;
                 }
             }
@@ -452,14 +350,9 @@ impl AnalyticsView {
         // to unmark it.
         let active = job::progress().active;
         let mut answered = false;
-        let mut station_filled = false;
         let edits: Vec<(i64, RowEdit)> = events
             .into_iter()
             .filter_map(|event| match event {
-                job::JobEvent::StationFilled => {
-                    station_filled = true;
-                    None
-                }
                 job::JobEvent::Started(uid) if active => Some((uid, RowEdit::MarkFetching)),
                 job::JobEvent::Released(uid) => Some((uid, RowEdit::UnmarkFetching)),
                 job::JobEvent::Row(answer) => {
@@ -470,9 +363,6 @@ impl AnalyticsView {
             })
             .collect();
         self.ticks.edit_rows(edits);
-        if station_filled {
-            self.refresh_station_tape(cx);
-        }
         // Rows joined the replayable set: the variant columns are due a rescore — once.
         if answered {
             self.arm_ticks_variants(cx);

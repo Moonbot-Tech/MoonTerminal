@@ -1365,7 +1365,6 @@ fn a_tiles_reader_gets_the_ring_as_core_tiles_the_walk_no_longer_asks_for() {
         (from <= to).then(|| crate::market::source::CoreReplayTicks {
             ticks: vec![tick(from, 1.0), tick(to, 2.0)],
             covered: (from, to),
-            archive_answered: true,
         })
     });
     assert_eq!(

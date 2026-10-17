@@ -26,7 +26,6 @@
 //! max_age_days = 1825    # five years when absent; 0 keeps forever; finite limits 1..3650
 //! record_emulator = true # on when absent
 //! tuner_only = false     # off when absent: keep tape only for trades the tuner can use
-//! min_tail_s = 60        # follows the terminal tuner when pushed; 60 seconds when absent
 //! ```
 //!
 //! `[update]` is whether the station updates itself from the release; on when absent, set from
@@ -118,8 +117,6 @@ pub struct Tape {
     pub record_emulator: Option<bool>,
     /// Keep and fetch tape only for trades the tuner can use; absent means off.
     pub tuner_only: Option<bool>,
-    /// Minimum post-close tape in seconds; absent means the shared 60-second default.
-    pub min_tail_s: Option<u32>,
 }
 
 /// `[telegram]` as written.

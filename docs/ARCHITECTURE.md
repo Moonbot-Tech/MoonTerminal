@@ -599,16 +599,6 @@ and before the install's locks, migrations, and database opens. It raises the so
 logged and does not stop startup. A `--fixture` run can open the relocated replica during
 bootstrap, which is earlier than this raise. Windows has no such limit.
 
-### Station trade tape (`trades.sqlite`)
-
-The tape recorder retains each closed deal through `close + record_tail_ms`: the greatest of
-the recording margin, the model's tail pad and the tuner tail floor (default 60 seconds), synced
-by the terminal. Catch-up also plans retained deals whose recorded tails are short. It tries
-venue REST and daily archives first, then the core archive for tail stretches inside its 48-hour
-retention. Two answered, incomplete tail-only passes with successful filing finalise a dead tail;
-deferred or failed reads remain retryable, and status counts finalised tails in `tail_final`.
-The terminal requests station tails before enqueueing the remaining missing tape.
-
 ### The order-trace archive (`order_traces.sqlite`)
 
 The core serves traces of closed trades on `request_traces(ReportUID)` from an archive

@@ -14,7 +14,7 @@
 //! 1. read every closed trade with millisecond stamps of the last [`HORIZON_MS`] across every
 //!    core, under the axis' own filter — strategy trades the tuner can be run on;
 //! 2. resolve each through the live source; drop the rows whose tape `trades.sqlite` already
-//!    holds ([`super::station::drop_held`], one bounds read per market); with a
+//!    holds ([`drop_held`], answered off the span table's bounds, one read per market); with a
 //!    station set up, ask it first for what the rest lack of their windows
 //!    ([`super::station::fill`]) and drop what it covered — the station records the live stream
 //!    around every trade while the terminal is off, and costs neither a core nor a venue;
@@ -51,11 +51,12 @@ use std::collections::HashMap;
 use super::job::{self, QueuedRow};
 use super::{FetchResolver, strategy_field_defaults};
 use crate::Backend;
-use moon_core::db::tuner::ticks::{Deal, model_window};
+use moon_core::db::tuner::ticks::{Deal, model_window, required_spans};
 use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
 use moon_core::market::trade_replay::worker::{self as replay_worker};
 use moon_core::market::trade_replay::{
-    long_position_ms, margin_ms, tape_autoload, tape_autoload_cores,
+    Coverage, ReplayWindow, long_position_ms, margin_ms, tape_autoload, tape_autoload_cores,
+    trade_cache,
 };
 
 /// How far back the autoload looks, whatever the venue documents: the longest retention a
@@ -66,7 +67,7 @@ const HORIZON_MS: i64 = 30 * 24 * 3_600_000;
 /// minutes deep on a hot coin and a day or somewhat more on the quietest measured (27.09,
 /// `STATION.md` §7.1), so two days covers what any archive can still hold. A market is one
 /// archive request of up to a few megabytes, so rows past this are not offered.
-pub(super) const CORE_HORIZON_MS: i64 = 48 * 3_600_000;
+const CORE_HORIZON_MS: i64 = 48 * 3_600_000;
 
 /// How long the first pass waits after the tick first finds the switch on — for the cores to
 /// come up and report their catalogs, so the first pass resolves most rows at once.
@@ -126,37 +127,6 @@ fn lock() -> std::sync::MutexGuard<'static, Autoload> {
         .get_or_init(|| Mutex::new(Autoload::default()))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Current cancellation generation shared by station-prefill and autoload passes.
-pub(super) fn generation() -> u64 {
-    lock().generation
-}
-
-/// Station target only while the common reachability backoff permits another attempt.
-pub(super) fn station_target() -> Option<moon_remote::ssh::Target> {
-    if lock().station_back_at.is_some_and(|at| Instant::now() < at) {
-        return None;
-    }
-    crate::backend::station::known_target()
-}
-
-/// Record station reachability for both manual and automatic passes.
-pub(super) fn station_answered(unreachable: bool) {
-    lock().station_back_at = unreachable.then(|| Instant::now() + STATION_BACKOFF);
-}
-
-/// Serialize the hand-over against Stop, so an obsolete prefill cannot restart a batch.
-pub(super) fn enqueue_if_current(
-    generation: u64,
-    rows: Vec<QueuedRow>,
-    defaults: HashMap<String, f64>,
-) -> usize {
-    let st = lock();
-    if st.generation != generation || !tape_autoload() {
-        return 0;
-    }
-    job::enqueue(rows, defaults)
 }
 
 /// The switch went off: re-arm so a later on starts from a fresh read, and drop every row this
@@ -282,7 +252,7 @@ fn start_pass(backend: &Backend, left: Option<Vec<Deal>>, attempts: u32, generat
     let axis = backend.report_axis(chrono_tz::UTC);
     let attempt = attempts + 1;
     // Read when the pass starts: a server set up or forgotten meanwhile counts from the next one.
-    let station = station_target();
+    let station = crate::backend::station::known_target();
     // A thread of its own, not the background executor: the station's round trips are blocking
     // SSH and may take minutes over a month of trades.
     let spawned = std::thread::Builder::new()
@@ -366,8 +336,34 @@ fn run_pass(
         };
         resolved.push(row);
     }
-    let stop = || lock().generation != generation || !(tape_autoload() || tape_autoload_cores());
-    let (resolved, held, from_station) = super::station::prefill(resolved, station.as_ref(), stop);
+    let place = |row: &QueuedRow| {
+        (
+            row.address.exchange_key.clone(),
+            row.address.market.clone(),
+            row.window,
+        )
+    };
+    let held_spans = |exchange: &str, market: &str, from_ms, to_ms| {
+        trade_cache::handle()?.held_spans(exchange, market, from_ms, to_ms)
+    };
+    let (mut resolved, mut held) = drop_held(resolved, place, held_spans);
+    let mut from_station = 0usize;
+    let station = station.filter(|_| {
+        !resolved.is_empty() && lock().station_back_at.is_none_or(|at| Instant::now() >= at)
+    });
+    if let Some(target) = station {
+        // A Stop, a flip that outlived this pass, or both switches going off end the station's
+        // round trips between two requests.
+        let stop =
+            || lock().generation != generation || !(tape_autoload() || tape_autoload_cores());
+        let unreachable = super::station::fill(&resolved, place, &target, stop).unreachable;
+        lock().station_back_at = unreachable.then(|| Instant::now() + STATION_BACKOFF);
+        let before = resolved.len();
+        let (rest, _) = drop_held(resolved, place, held_spans);
+        from_station = before - rest.len();
+        held += from_station;
+        resolved = rest;
+    }
     let mut rows = Vec::new();
     let mut core_rows = Vec::new();
     for row in resolved {
@@ -529,6 +525,53 @@ fn file_from_cores(rows: Vec<QueuedRow>, cores_generation: u64) {
     if let Err(e) = spawned {
         log::warn!("[x] ticks autoload: core filing thread did not start: {e}");
     }
+}
+
+/// Drop the rows whose tape the disk already holds — every stretch the model needs of the
+/// window (`required_spans`, the rule the axis marks a row covered by) inside the spans
+/// `trades.sqlite` has filed for the market. One bounds read per market, over the stretch its
+/// rows span; a market whose read did not happen keeps every row — the job then asks, as it
+/// always did.
+///
+/// Args:
+///     rows: The candidates.
+///     place: A row's `(exchange key, market, window)`.
+///     held_spans: `(exchange, market, from_ms, to_ms)` → the stored spans' bounds, `None` when
+///         the read did not happen.
+///
+/// Returns:
+///     The rows still worth the job, and how many were dropped as held.
+fn drop_held<T>(
+    rows: Vec<T>,
+    place: impl Fn(&T) -> (String, String, ReplayWindow),
+    held_spans: impl Fn(&str, &str, i64, i64) -> Option<Vec<(i64, i64)>>,
+) -> (Vec<T>, usize) {
+    let mut by_market: HashMap<(String, String), Vec<(T, Coverage)>> = HashMap::new();
+    for row in rows {
+        let (exchange, market, window) = place(&row);
+        by_market
+            .entry((exchange, market))
+            .or_default()
+            .push((row, required_spans(&window)));
+    }
+    let mut kept = Vec::new();
+    let mut held = 0usize;
+    for ((exchange, market), group) in by_market {
+        let bounds = group
+            .iter()
+            .filter_map(|(_, need)| need.hull())
+            .reduce(|(a_from, a_to), (b_from, b_to)| (a_from.min(b_from), a_to.max(b_to)));
+        let stored = bounds
+            .and_then(|(from_ms, to_ms)| held_spans(&exchange, &market, from_ms, to_ms))
+            .map(Coverage::from_spans);
+        for (row, need) in group {
+            match &stored {
+                Some(stored) if !need.is_empty() && stored.covers(&need) => held += 1,
+                _ => kept.push(row),
+            }
+        }
+    }
+    (kept, held)
 }
 
 #[cfg(test)]

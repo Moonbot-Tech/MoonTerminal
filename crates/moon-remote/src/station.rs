@@ -275,12 +275,6 @@ pub fn with_tape(
         if let Some(tuner_only) = keep.tuner_only {
             wanted.insert("tuner_only".into(), toml::Value::Boolean(tuner_only));
         }
-        if let Some(min_tail_s) = keep.min_tail_s {
-            wanted.insert(
-                "min_tail_s".into(),
-                toml::Value::Integer(i64::from(min_tail_s)),
-            );
-        }
     }
     let section = file
         .entry("tape")
@@ -387,7 +381,6 @@ fn reported_tape(conn: &AdminConn) -> anyhow::Result<Option<ReportedTape>> {
                     max_age_days: catchup.max_age_days?,
                     record_emulator: catchup.record_emulator?,
                     tuner_only: catchup.tuner_only,
-                    min_tail_s: catchup.min_tail_s,
                 })
             });
             (tape, switches, keep)
@@ -432,18 +425,7 @@ fn tape_verdict(
         (Some((applied, choices, retained)), _, _)
             if applied == tape
                 && switches.is_none_or(|wanted| choices == Some(wanted))
-                && keep.is_none_or(|wanted| {
-                    retained.is_some_and(|applied| {
-                        applied.max_age_days == wanted.max_age_days
-                            && applied.record_emulator == wanted.record_emulator
-                            && wanted
-                                .tuner_only
-                                .is_none_or(|value| applied.tuner_only == Some(value))
-                            && wanted
-                                .min_tail_s
-                                .is_none_or(|value| applied.min_tail_s == Some(value))
-                    })
-                }) =>
+                && keep.is_none_or(|wanted| retained == Some(wanted)) =>
         {
             TapeVerdict::Applied
         }
@@ -452,8 +434,7 @@ fn tape_verdict(
             TapeVerdict::Outdated
         }
         (Some((_, _, Some(retained))), _, Some(wanted))
-            if (wanted.tuner_only.is_some() && retained.tuner_only.is_none())
-                || (wanted.min_tail_s.is_some() && retained.min_tail_s.is_none()) =>
+            if wanted.tuner_only.is_some() && retained.tuner_only.is_none() =>
         {
             TapeVerdict::Outdated
         }
