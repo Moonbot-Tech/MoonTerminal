@@ -1,25 +1,61 @@
 //! The deal table's row order — a permutation over the loaded rows, filtered by the "fit only"
-//! switch and chip, cached against the data generation, sort, filters and tail floor so an
+//! switch and chip, cached against the data generation, sort, filters, tail floor and source reach so an
 //! unrelated repaint reuses it instead of sorting hundreds of deals per frame.
 
 use super::columns::*;
 use super::state::{DealRow, TapeStatus, TicksState};
 use super::why::{DealChip, DealWhy};
 
-/// One classification per row publication and effective tail floor.
+/// Classification reused while rows, the floor and source availability remain unchanged.
 pub(in crate::analytics::tuner) struct Classified {
     rows_rev: u64,
     min_tail_s: u32,
+    source_switches: (bool, bool),
+    at_ms: i64,
+    valid_until_ms: i64,
     chips: Vec<DealChip>,
 }
 
-/// Reuse the primary classification across filter, sort and count work.
+/// The next retention edge that can change a covered short tail's sample bucket.
+fn next_source_change(row: &DealRow, min_tail_s: u32, now_ms: i64) -> Option<i64> {
+    use moon_core::market::trade_replay::venue_caps::{
+        ARCHIVE_DEPTH_MS, RETENTION_SAFETY_MS, archive_route, trade_route,
+    };
+    let address = row.address.as_ref()?;
+    let (_, trail) = row.held?;
+    if row.tape != TapeStatus::Covered || trail >= i64::from(min_tail_s) * 1_000 {
+        return None;
+    }
+    let from = row.deal.close_ms.saturating_add(trail.max(0));
+    [
+        Some(moon_core::market::CORE_ARCHIVE_RETENTION_MS),
+        address
+            .venue
+            .and_then(trade_route)
+            .and_then(|route| route.retention_ms())
+            .map(|retention| retention.saturating_sub(RETENTION_SAFETY_MS)),
+        address
+            .venue
+            .and_then(|venue| archive_route(venue, &address.market))
+            .map(|_| ARCHIVE_DEPTH_MS),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|retention| from.saturating_add(retention).saturating_add(1))
+    .filter(|&edge| edge > now_ms)
+    .min()
+}
+
+/// Reuse classification until a source switch, retention edge, row or floor changes.
 fn classify(state: &mut TicksState, min_tail_s: u32, now_ms: i64) {
-    if state
-        .classified
-        .as_ref()
-        .is_some_and(|c| c.rows_rev == state.rows_rev && c.min_tail_s == min_tail_s)
-    {
+    let source_switches = super::tail::switches();
+    if state.classified.as_ref().is_some_and(|c| {
+        c.rows_rev == state.rows_rev
+            && c.min_tail_s == min_tail_s
+            && c.source_switches == source_switches
+            && now_ms >= c.at_ms
+            && now_ms < c.valid_until_ms
+    }) {
         return;
     }
     let chips = state
@@ -32,9 +68,24 @@ fn classify(state: &mut TicksState, min_tail_s: u32, now_ms: i64) {
                 .collect()
         })
         .unwrap_or_default();
+    let valid_until_ms = state
+        .data
+        .data()
+        .and_then(|data| {
+            data.rows
+                .iter()
+                .filter_map(|row| next_source_change(row, min_tail_s, now_ms))
+                .min()
+        })
+        .unwrap_or(i64::MAX);
+    state.order = None;
+    state.chip_counts = None;
     state.classified = Some(Classified {
         rows_rev: state.rows_rev,
         min_tail_s,
+        source_switches,
+        at_ms: now_ms,
+        valid_until_ms,
         chips,
     });
 }
@@ -50,7 +101,7 @@ pub(in crate::analytics::tuner) struct OrderCache {
     pub(in crate::analytics::tuner) order: Vec<usize>,
 }
 
-/// Rebuild only when rows, sorting, either filter or the sample's tail floor changes.
+/// Rebuild after classification changes, sorting or either filter changes.
 pub(in crate::analytics::tuner) fn order_for(
     state: &mut TicksState,
     min_tail_s: u32,
@@ -244,7 +295,7 @@ impl ChipCounts {
     }
 }
 
-/// Recount only after row publication or a tail-floor change, never on an unrelated repaint.
+/// Recount after classification changes, never on an unrelated repaint.
 pub(in crate::analytics::tuner) fn counts_at(
     state: &mut TicksState,
     min_tail_s: u32,

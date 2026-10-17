@@ -122,6 +122,40 @@ fn unlisted_load_reach_is_core_aware() {
     assert_eq!(short_rows[0].tape, TapeStatus::Covered);
     assert_eq!(short_rows[0].held, Some((30_000, 0)));
     assert!(short_rows[0].verdict.is_some());
+    let gapped = super::Fetched {
+        rows: vec![row.clone()],
+        tapes: [(
+            1,
+            (
+                ticks
+                    .iter()
+                    .copied()
+                    .filter(|tick| tick.time_ms <= 110_000.0 || tick.time_ms >= 150_000.0)
+                    .collect(),
+                moon_core::market::trade_replay::Coverage::from_spans([
+                    (70_000, 110_000),
+                    (150_000, 180_000),
+                ]),
+                window,
+            ),
+        )]
+        .into(),
+        traces: Default::default(),
+    };
+    let gapped_rows = super::replay_fetched(
+        gapped,
+        &Default::default(),
+        Default::default(),
+        None,
+        500_000_000,
+        None,
+    );
+    assert_ne!(
+        gapped_rows[0].tape,
+        TapeStatus::Covered,
+        "a later island cannot waive a hole in the model pad"
+    );
+    assert!(gapped_rows[0].verdict.is_none());
     let fetched = super::Fetched {
         rows: vec![row],
         tapes: [(

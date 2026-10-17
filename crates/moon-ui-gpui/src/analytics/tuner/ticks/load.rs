@@ -1091,7 +1091,9 @@ pub(super) fn replay_row_with(
     // Coverage is the worker's own word on what was walked; a quiet run-up with no print in it
     // is covered all the same, which the tape's first stamp could not tell from a missing one.
     // What must be covered is the model's own rule (`required_spans`), not the whole margin.
-    let short_allowed = !super::tail::fillable_at(
+    let short_allowed = row.held.is_some_and(|(_, trail)| {
+        trail < moon_core::db::tuner::ticks::tail::floor_ms(super::tail::current_s())
+    }) && !super::tail::fillable_at(
         &address,
         row.deal.report_uid,
         window.close_ms,

@@ -177,16 +177,18 @@ pub(super) fn prefill(
     // the pull must not be remembered, and one that lands later is the same single sample.
     let mut stopped = false;
     let allow_short = |row: &super::job::QueuedRow, stored: &Coverage| {
-        !super::super::tail::fillable_at(
-            &row.address,
-            row.deal.report_uid,
-            row.window.close_ms,
-            stored
-                .hull()
-                .map_or(0, |(_, to)| to.saturating_sub(row.window.close_ms).max(0)),
-            moon_core::util::time::now_unix_ms_i64(),
-            super::super::tail::switches(),
-        )
+        let trail = stored
+            .hull()
+            .map_or(0, |(_, to)| to.saturating_sub(row.window.close_ms).max(0));
+        trail < floor_ms(super::super::tail::current_s())
+            && !super::super::tail::fillable_at(
+                &row.address,
+                row.deal.report_uid,
+                row.window.close_ms,
+                trail,
+                moon_core::util::time::now_unix_ms_i64(),
+                super::super::tail::switches(),
+            )
     };
     let (rows, held, from_station, filled) =
         prefill_rows(rows, place, held_spans, allow_short, |rows| {

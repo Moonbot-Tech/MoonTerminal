@@ -404,6 +404,81 @@ fn chip_state() -> TicksState {
     state
 }
 
+/// Keeping a classification past its exact core-retention edge strands the row outside fit-only.
+#[test]
+fn short_tail_cache_expires_at_the_core_retention_edge() {
+    use super::super::state::RowAddress;
+    use super::super::why::DealChip;
+    use std::sync::Arc;
+    let mut state = replayable_state(1);
+    let row = &mut state.data.data_mut().unwrap().rows[0];
+    row.deal.coin = "XALPHA".into();
+    row.address = Some(Arc::new(RowAddress {
+        core_uid: 1,
+        venue: None,
+        exchange_key: "EX-XX".into(),
+        market: "XALPHA".into(),
+        btc_market: None,
+    }));
+    row.held = Some((30_000, 30_000));
+    let edge = row.deal.close_ms + 30_000 + 48 * 3_600_000;
+    state.only_fit = true;
+    assert_eq!(
+        super::counts_at(&mut state, 60, edge).get(DealChip::ShortTail),
+        1
+    );
+    assert!(order_for(&mut state, 60, edge).is_empty());
+    assert_eq!(
+        super::counts_at(&mut state, 60, edge + 1).get(DealChip::AcceptedShortTail),
+        1
+    );
+    assert_eq!(order_for(&mut state, 60, edge + 1), [0]);
+}
+
+/// A prior switch snapshot must invalidate both footer counts and fit-only order without new rows.
+#[test]
+fn source_switch_changes_retire_all_derived_chip_caches() {
+    use super::super::state::RowAddress;
+    use super::super::why::DealChip;
+    use std::sync::Arc;
+    let mut state = replayable_state(1);
+    let row = &mut state.data.data_mut().unwrap().rows[0];
+    row.deal.coin = "XALPHA".into();
+    row.address = Some(Arc::new(RowAddress {
+        core_uid: 1,
+        venue: None,
+        exchange_key: "EX-XX".into(),
+        market: "XALPHA".into(),
+        btc_market: None,
+    }));
+    row.held = Some((30_000, 30_000));
+    let now = row.deal.close_ms + 3_600_000;
+    let live = super::super::tail::switches();
+    state.only_fit = true;
+    super::counts_at(&mut state, 60, now);
+    order_for(&mut state, 60, now);
+    // Model a coherent prior frame under the opposite core switch, without racing global settings.
+    let previous = if live.1 {
+        DealChip::AcceptedShortTail
+    } else {
+        DealChip::ShortTail
+    };
+    let classified = state.classified.as_mut().unwrap();
+    classified.source_switches = (live.0, !live.1);
+    classified.chips = vec![previous];
+    let counts = state.chip_counts.as_mut().unwrap();
+    counts.counts = [0; DealChip::ALL.len()];
+    counts.counts[previous as usize] = 1;
+    state.order.as_mut().unwrap().order = if live.1 { vec![0] } else { vec![] };
+    let counts = super::counts_at(&mut state, 60, now);
+    assert_eq!(counts.get(DealChip::ShortTail), usize::from(live.1));
+    assert_eq!(
+        counts.get(DealChip::AcceptedShortTail),
+        usize::from(!live.1)
+    );
+    assert_eq!(order_for(&mut state, 60, now).len(), usize::from(!live.1));
+}
+
 /// Grouping by reason must keep the fit sample first and preserve chronological ties.
 #[test]
 fn reason_sort_groups_the_sample_first_then_exclusion_buckets() {
