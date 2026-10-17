@@ -16,8 +16,7 @@ pub(super) struct KeepPolicy {
     pub record_emulator: bool,
     /// Keep tape only for trades the tuner can replay.
     pub tuner_only: bool,
-    pub margin_ms: i64,
-    pub long_ms: i64,
+    pub shape: catchup::Shape,
 }
 
 /// Keep fresh unattributable spans, real-trade edges, and all live plain windows.
@@ -55,14 +54,16 @@ pub(super) fn keep_map(
             let mut untunable = Coverage::none();
             let mut recorded = Coverage::none();
             for trade in grouped.get(key).into_iter().flatten() {
-                let focus = catchup::needed(trade, policy.margin_ms, policy.long_ms);
+                let focus = catchup::needed(trade, &policy.shape);
                 let drop_untunable = policy.tuner_only && !trade.tunable;
                 if trade.emulator || drop_untunable {
                     // Unlisted real closes can have tails after the close-age cutoff. Only
-                    // beyond that cutoff plus margin is emulator or untunable subtraction
+                    // beyond that cutoff plus the full tail is emulator or untunable subtraction
                     // attributable.
                     let listed = focus.clip(&Coverage::one((
-                        policy.listed_from.saturating_add(policy.margin_ms.max(0)),
+                        policy.listed_from.saturating_add(
+                            policy.shape.margin_ms.max(policy.shape.tail_ms).max(0),
+                        ),
                         i64::MAX,
                     )));
                     if trade.emulator && trade.tunable && policy.record_emulator {

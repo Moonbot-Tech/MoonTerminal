@@ -31,21 +31,66 @@ fn review_only_transient_compaction_failures_retry() {
             failure: Some(failure),
             freed: 0,
         };
-        assert!(!state.retention_tick(&cache, NOW, &HashMap::new()));
+        assert!(!state.retention_tick(
+            &cache,
+            NOW,
+            &HashMap::new(),
+            &catchup::Shape {
+                margin_ms: crate::market::trade_replay::margin_ms(),
+                long_ms: crate::market::trade_replay::long_position_ms(),
+                tail_ms: crate::market::trade_replay::margin_ms()
+            }
+        ));
         if failure == CompactFail::NotShrinkable {
             assert_eq!(state.retention.retry_at, None);
-            assert!(!state.retention_tick(&cache, NOW + 60_000, &HashMap::new()));
+            assert!(!state.retention_tick(
+                &cache,
+                NOW + 60_000,
+                &HashMap::new(),
+                &catchup::Shape {
+                    margin_ms: crate::market::trade_replay::margin_ms(),
+                    long_ms: crate::market::trade_replay::long_position_ms(),
+                    tail_ms: crate::market::trade_replay::margin_ms()
+                }
+            ));
             catchup::set_keep(0, false);
             assert!(
-                state.retention_tick(&cache, NOW + 60_001, &HashMap::new()),
+                state.retention_tick(
+                    &cache,
+                    NOW + 60_001,
+                    &HashMap::new(),
+                    &catchup::Shape {
+                        margin_ms: crate::market::trade_replay::margin_ms(),
+                        long_ms: crate::market::trade_replay::long_position_ms(),
+                        tail_ms: crate::market::trade_replay::margin_ms()
+                    }
+                ),
                 "a new purge must still run"
             );
             catchup::set_keep(0, true);
             catchup::take_purge_wanted();
         } else {
             assert_eq!(state.retention.retry_at, Some(NOW + 60_000));
-            assert!(!state.retention_tick(&cache, NOW + 59_999, &HashMap::new()));
-            assert!(state.retention_tick(&cache, NOW + 60_000, &HashMap::new()));
+            assert!(!state.retention_tick(
+                &cache,
+                NOW + 59_999,
+                &HashMap::new(),
+                &catchup::Shape {
+                    margin_ms: crate::market::trade_replay::margin_ms(),
+                    long_ms: crate::market::trade_replay::long_position_ms(),
+                    tail_ms: crate::market::trade_replay::margin_ms()
+                }
+            ));
+            assert!(state.retention_tick(
+                &cache,
+                NOW + 60_000,
+                &HashMap::new(),
+                &catchup::Shape {
+                    margin_ms: crate::market::trade_replay::margin_ms(),
+                    long_ms: crate::market::trade_replay::long_position_ms(),
+                    tail_ms: crate::market::trade_replay::margin_ms()
+                }
+            ));
         }
     }
 }
@@ -83,7 +128,7 @@ fn review_terminal_closes_do_not_accumulate_retention_rows() {
             Cmd::Closed {
                 exchange: trade.exchange.clone(),
                 market: trade.market.clone(),
-                venue: Some(trade.venue),
+                venue: trade.venue,
                 trade: trade.id,
                 open_ms: trade.open_ms,
                 close_ms: trade.close_ms,
@@ -143,7 +188,16 @@ fn review_purge_requests_survive_every_busy_phase() {
             },
         };
         catchup::set_keep(0, false);
-        assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+        assert!(state.retention_tick(
+            &cache,
+            NOW,
+            &HashMap::new(),
+            &catchup::Shape {
+                margin_ms: crate::market::trade_replay::margin_ms(),
+                long_ms: crate::market::trade_replay::long_position_ms(),
+                tail_ms: crate::market::trade_replay::margin_ms()
+            }
+        ));
         assert!(
             catchup::PURGE_WANTED.load(Ordering::Relaxed),
             "phase {phase} lost the request"
@@ -153,7 +207,16 @@ fn review_purge_requests_survive_every_busy_phase() {
             at_ms: NOW - 1,
             freed_bytes: 0,
         });
-        assert!(state.retention_tick(&cache, NOW + 1, &HashMap::new()));
+        assert!(state.retention_tick(
+            &cache,
+            NOW + 1,
+            &HashMap::new(),
+            &catchup::Shape {
+                margin_ms: crate::market::trade_replay::margin_ms(),
+                long_ms: crate::market::trade_replay::long_position_ms(),
+                tail_ms: crate::market::trade_replay::margin_ms()
+            }
+        ));
         assert!(matches!(
             catchup::status().purge,
             Some(crate::station_api::TapePurge::Running { .. })
@@ -178,8 +241,11 @@ fn review_queued_purge_runs_after_the_current_pass() {
     trade.emulator = true;
     let focus = catchup::needed(
         &trade,
-        crate::market::trade_replay::margin_ms(),
-        crate::market::trade_replay::long_position_ms(),
+        &catchup::Shape {
+            margin_ms: crate::market::trade_replay::margin_ms(),
+            long_ms: crate::market::trade_replay::long_position_ms(),
+            tail_ms: crate::market::trade_replay::margin_ms(),
+        },
     );
     let (from, to) = focus.hull().unwrap();
     cache.insert(
@@ -200,7 +266,16 @@ fn review_queued_purge_runs_after_the_current_pass() {
     };
     catchup::set_keep(0, false);
     assert!(
-        state.retention_tick(&cache, NOW, &HashMap::new()),
+        state.retention_tick(
+            &cache,
+            NOW,
+            &HashMap::new(),
+            &catchup::Shape {
+                margin_ms: crate::market::trade_replay::margin_ms(),
+                long_ms: crate::market::trade_replay::long_position_ms(),
+                tail_ms: crate::market::trade_replay::margin_ms()
+            }
+        ),
         "queued maintenance must keep catch-up paused"
     );
     assert!(matches!(
@@ -232,8 +307,11 @@ fn real_trade_closed_after_listing_protects_shared_emulator_tape() {
     let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
     let focus = catchup::needed(
         &real,
-        crate::market::trade_replay::margin_ms(),
-        crate::market::trade_replay::long_position_ms(),
+        &catchup::Shape {
+            margin_ms: crate::market::trade_replay::margin_ms(),
+            long_ms: crate::market::trade_replay::long_position_ms(),
+            tail_ms: crate::market::trade_replay::margin_ms(),
+        },
     );
     let (from, to) = focus.hull().unwrap();
     cache.insert(
@@ -265,7 +343,7 @@ fn real_trade_closed_after_listing_protects_shared_emulator_tape() {
         Cmd::Closed {
             exchange: real.exchange.clone(),
             market: real.market.clone(),
-            venue: Some(real.venue),
+            venue: real.venue,
             trade: real.id,
             open_ms: real.open_ms,
             close_ms: real.close_ms,
@@ -308,7 +386,16 @@ fn disk_full_during_trim_reports_no_room() {
         rx,
         progress: Arc::default(),
     };
-    assert!(!state.retention_tick(&cache, NOW, &HashMap::new()));
+    assert!(!state.retention_tick(
+        &cache,
+        NOW,
+        &HashMap::new(),
+        &catchup::Shape {
+            margin_ms: crate::market::trade_replay::margin_ms(),
+            long_ms: crate::market::trade_replay::long_position_ms(),
+            tail_ms: crate::market::trade_replay::margin_ms()
+        }
+    ));
     assert!(matches!(
         catchup::status().purge,
         Some(crate::station_api::TapePurge::Failed {
@@ -321,7 +408,16 @@ fn disk_full_during_trim_reports_no_room() {
     catchup::take_purge_wanted();
     state.retention.attributed_deferred = true;
     assert!(
-        !state.retention_tick(&cache, NOW + 60_000, &HashMap::new()),
+        !state.retention_tick(
+            &cache,
+            NOW + 60_000,
+            &HashMap::new(),
+            &catchup::Shape {
+                margin_ms: crate::market::trade_replay::margin_ms(),
+                long_ms: crate::market::trade_replay::long_position_ms(),
+                tail_ms: crate::market::trade_replay::margin_ms()
+            }
+        ),
         "a completed listing must not bypass the disk-full backoff"
     );
 }
@@ -338,7 +434,16 @@ fn narrowing_publishes_running_while_listing() {
     catchup::set_keep(30, true);
     let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
     let mut state = RecorderCatchup::default();
-    assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+    assert!(state.retention_tick(
+        &cache,
+        NOW,
+        &HashMap::new(),
+        &catchup::Shape {
+            margin_ms: crate::market::trade_replay::margin_ms(),
+            long_ms: crate::market::trade_replay::long_position_ms(),
+            tail_ms: crate::market::trade_replay::margin_ms()
+        }
+    ));
     assert!(matches!(
         catchup::status().purge,
         Some(crate::station_api::TapePurge::Running { done: 0, total: 0 })
@@ -421,7 +526,16 @@ impl Drop for RetentionSettings {
 /// Poll fixture maintenance to its outcome with a bounded deadline and no production fetches.
 fn settle(state: &mut RecorderCatchup, cache: &TradeCache, now: i64) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while state.retention_tick(cache, now, &HashMap::new()) {
+    while state.retention_tick(
+        cache,
+        now,
+        &HashMap::new(),
+        &catchup::Shape {
+            margin_ms: crate::market::trade_replay::margin_ms(),
+            long_ms: crate::market::trade_replay::long_position_ms(),
+            tail_ms: crate::market::trade_replay::margin_ms(),
+        },
+    ) {
         assert!(
             std::time::Instant::now() < deadline,
             "maintenance did not settle"
@@ -464,9 +578,7 @@ fn retention_drops_tape_that_ages_out() {
     );
 }
 
-/// A required core on a platform the exchange directory does not know can never list; once its
-/// empty listing is settled, the barrier closes and aged tape goes. Before, every pass fell back
-/// to keeping all tape after ten minutes, and a station's file never shrank.
+/// A venue-less core with a successfully enumerated empty report must not hold unrelated aged tape.
 #[test]
 fn a_venue_less_core_does_not_hold_aged_tape() {
     let _lock = SWITCH_LOCK.lock().unwrap();
@@ -475,7 +587,8 @@ fn a_venue_less_core_does_not_hold_aged_tape() {
     catchup::set_keep(1, true);
     let core = 70_001;
     catchup::require_listings(vec![core]);
-    catchup::listed_empty(core, catchup::relist_gen());
+    catchup::listing_started(core, catchup::relist_gen());
+    catchup::listing_applied(core, catchup::relist_gen());
     let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
     cache.insert(
         "synthetic",
@@ -508,8 +621,11 @@ fn incomplete_listing_defers_emulator_purge() {
     trade.emulator = true;
     let focus = catchup::needed(
         &trade,
-        crate::market::trade_replay::margin_ms(),
-        crate::market::trade_replay::long_position_ms(),
+        &catchup::Shape {
+            margin_ms: crate::market::trade_replay::margin_ms(),
+            long_ms: crate::market::trade_replay::long_position_ms(),
+            tail_ms: crate::market::trade_replay::margin_ms(),
+        },
     );
     let (from, to) = focus.hull().unwrap();
     cache.insert(
@@ -522,7 +638,16 @@ fn incomplete_listing_defers_emulator_purge() {
     );
     let mut state = RecorderCatchup::default();
     state.submit(vec![trade.clone()]);
-    assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+    assert!(state.retention_tick(
+        &cache,
+        NOW,
+        &HashMap::new(),
+        &catchup::Shape {
+            margin_ms: crate::market::trade_replay::margin_ms(),
+            long_ms: crate::market::trade_replay::long_position_ms(),
+            tail_ms: crate::market::trade_replay::margin_ms()
+        }
+    ));
     settle(&mut state, &cache, NOW + 600_000);
     assert_eq!(
         cache
@@ -555,7 +680,16 @@ fn narrowing_during_a_fetch_never_refiles_purged_tape() {
         active: true,
         ..Default::default()
     };
-    assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+    assert!(state.retention_tick(
+        &cache,
+        NOW,
+        &HashMap::new(),
+        &catchup::Shape {
+            margin_ms: crate::market::trade_replay::margin_ms(),
+            long_ms: crate::market::trade_replay::long_position_ms(),
+            tail_ms: crate::market::trade_replay::margin_ms()
+        }
+    ));
     assert!(matches!(state.retention.phase, Phase::Listing { .. }));
     cache.insert(
         "synthetic",
@@ -598,7 +732,16 @@ fn ticks_continue_while_a_trim_runs() {
     };
     let before = std::time::Instant::now();
     for _ in 0..10 {
-        assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+        assert!(state.retention_tick(
+            &cache,
+            NOW,
+            &HashMap::new(),
+            &catchup::Shape {
+                margin_ms: crate::market::trade_replay::margin_ms(),
+                long_ms: crate::market::trade_replay::long_position_ms(),
+                tail_ms: crate::market::trade_replay::margin_ms()
+            }
+        ));
     }
     assert!(before.elapsed() < std::time::Duration::from_secs(1));
     assert!(!state.active);
@@ -632,7 +775,16 @@ fn done_is_published_after_the_queue_recount() {
     };
     STATUS.lock().unwrap().purge =
         Some(crate::station_api::TapePurge::Running { done: 1, total: 1 });
-    assert!(state.retention_tick(&cache, NOW, &HashMap::new()));
+    assert!(state.retention_tick(
+        &cache,
+        NOW,
+        &HashMap::new(),
+        &catchup::Shape {
+            margin_ms: crate::market::trade_replay::margin_ms(),
+            long_ms: crate::market::trade_replay::long_position_ms(),
+            tail_ms: crate::market::trade_replay::margin_ms()
+        }
+    ));
     assert_eq!(catchup::status().pending, 1);
     assert!(matches!(
         catchup::status().purge,
@@ -640,13 +792,25 @@ fn done_is_published_after_the_queue_recount() {
     ));
     tx.send(Ok(catchup::needed(
         &trade,
-        crate::market::trade_replay::margin_ms(),
-        crate::market::trade_replay::long_position_ms(),
+        &catchup::Shape {
+            margin_ms: crate::market::trade_replay::margin_ms(),
+            long_ms: crate::market::trade_replay::long_position_ms(),
+            tail_ms: crate::market::trade_replay::margin_ms(),
+        },
     )
     .spans()
     .to_vec()))
         .unwrap();
-    assert!(!state.retention_tick(&cache, NOW, &HashMap::new()));
+    assert!(!state.retention_tick(
+        &cache,
+        NOW,
+        &HashMap::new(),
+        &catchup::Shape {
+            margin_ms: crate::market::trade_replay::margin_ms(),
+            long_ms: crate::market::trade_replay::long_position_ms(),
+            tail_ms: crate::market::trade_replay::margin_ms()
+        }
+    ));
     assert_eq!(catchup::status().pending, 0);
     assert!(matches!(
         catchup::status().purge,
@@ -741,6 +905,8 @@ struct Restore {
     status: crate::station_api::TapeCatchup,
     margin_s: u32,
     long_min: u32,
+    min_tail_s: u32,
+    tail_final: u32,
 }
 
 impl Restore {
@@ -750,6 +916,8 @@ impl Restore {
             status: catchup::status(),
             margin_s: (crate::market::trade_replay::margin_ms() / 1000) as u32,
             long_min: (crate::market::trade_replay::long_position_ms() / 60_000) as u32,
+            min_tail_s: crate::market::trade_replay::min_tail_s(),
+            tail_final: catchup::tail_final(),
         }
     }
 }
@@ -760,6 +928,8 @@ impl Drop for Restore {
         catchup::set_switches(self.status.auto.unwrap(), self.status.archives.unwrap());
         crate::market::trade_replay::set_margin_s(self.margin_s);
         crate::market::trade_replay::set_long_position_min(self.long_min);
+        crate::market::trade_replay::set_min_tail_s(self.min_tail_s);
+        catchup::TAIL_FINAL.store(self.tail_final, std::sync::atomic::Ordering::Relaxed);
         *STATUS.lock().unwrap() = self.status.clone();
     }
 }
@@ -773,15 +943,444 @@ fn row() -> CatchupTrade {
         },
         exchange: "synthetic".into(),
         market: "SYNUSDT".into(),
-        venue: Venue {
+        venue: Some(Venue {
             brand: Brand::Bybit,
             kind: MarketKind::Futures,
-        },
+        }),
         open_ms: NOW - DAY - 60_000,
+        core: None,
         close_ms: NOW - DAY,
         emulator: false,
         tunable: true,
     }
+}
+
+/// Reapplying a floor must preserve settlement; widening must expose just the missing tail.
+#[test]
+fn min_tail_changes_replan_settled_rows_once() {
+    use crate::market::trade_replay::{min_tail_s, record_tail_ms, set_margin_s, set_min_tail_s};
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    set_margin_s(30);
+    set_min_tail_s(60);
+    let trade = row();
+    let held = Coverage::one((trade.open_ms - 30_000, trade.close_ms + 60_000));
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    let shape = || catchup::Shape {
+        margin_ms: 30_000,
+        long_ms: DAY,
+        tail_ms: record_tail_ms(),
+    };
+    assert_eq!(
+        state
+            .prepare(|_| held.clone(), NOW, &shape(), true)
+            .complete,
+        1
+    );
+    let generation = catchup::switches().0;
+    set_min_tail_s(60);
+    assert_eq!(catchup::switches().0, generation);
+    state.submit(vec![trade.clone()]);
+    assert!(
+        state
+            .prepare(
+                |_| panic!("unchanged floor rechecked tape"),
+                NOW,
+                &shape(),
+                true
+            )
+            .jobs
+            .is_empty()
+    );
+    set_min_tail_s(120);
+    assert_eq!(min_tail_s(), 120);
+    assert_eq!(record_tail_ms(), 120_000);
+    state.submit(vec![trade.clone()]);
+    let batch = state.prepare(|_| held.clone(), NOW, &shape(), true);
+    assert_eq!(
+        batch.jobs[0].missing.spans(),
+        &[(trade.close_ms + 60_001, trade.close_ms + 120_000)]
+    );
+}
+
+/// Changing a floor hidden by the recording margin must preserve settled catch-up windows.
+#[test]
+fn floor_below_recording_margin_preserves_generation() {
+    use crate::market::trade_replay::{set_margin_s, set_min_tail_s};
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    set_margin_s(180);
+    set_min_tail_s(60);
+    let generation = catchup::switches().0;
+    set_min_tail_s(90);
+    assert_eq!(catchup::switches().0, generation);
+}
+
+/// Only two answered, successfully filed, tail-only passes may finalise an incomplete tail.
+#[test]
+fn empty_archive_tail_finalises_after_two_answers() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let shape = catchup::Shape {
+        margin_ms: 30_000,
+        long_ms: DAY,
+        tail_ms: 60_000,
+    };
+    let trade = row();
+    let held = Coverage::one((trade.open_ms - 30_000, trade.close_ms + 30_000));
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    cache.insert(
+        &trade.exchange,
+        &trade.market,
+        held.hull().unwrap().0,
+        held.hull().unwrap().1,
+        vec![],
+        crate::market::trade_replay::TileSource::Core,
+    );
+    assert!(cache.sync(std::time::Duration::from_secs(2)));
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    for pass in 0..2 {
+        let now = NOW + pass * HOUR_MS;
+        let batch = state.prepare(|_| held.clone(), now, &shape, true);
+        let result = executor::run_pass_with_core(
+            batch.jobs,
+            || now,
+            &gate::ReplayGate::new(),
+            (
+                |_, _, _, _, _| panic!("archive-only job"),
+                |_, _, _, _| {
+                    (
+                        Ok(crate::market::trade_replay::archive::ArchiveFill {
+                            covered: Coverage::none(),
+                            ticks: vec![],
+                            deferred: None,
+                        }),
+                        0,
+                    )
+                },
+                None,
+            ),
+            0,
+            executor::run_job_at,
+            |_, _| {},
+        );
+        assert!(result.finished[0].attempted);
+        assert_eq!(result.finished[0].failure, None);
+        state.finish(&cache, result, now);
+        assert_eq!(
+            state.latched.get(&trade.id) == Some(&Latch::Permanent),
+            pass == 1
+        );
+    }
+    assert_eq!(catchup::tail_final(), 1);
+}
+
+/// Shared day grouping must classify empty ordinary gaps independently of the first tail job.
+#[test]
+fn shared_empty_archive_day_preserves_each_jobs_attempt_state() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let shape = catchup::Shape {
+        margin_ms: 30_000,
+        long_ms: DAY,
+        tail_ms: 60_000,
+    };
+    for tail_first in [true, false] {
+        let tail = row();
+        let mut gap = tail.clone();
+        gap.id.rec_id += 1;
+        let mut state = RecorderCatchup::default();
+        state.submit(vec![tail.clone(), gap.clone()]);
+        let mut batch = state.prepare(
+            |trade| {
+                Coverage::one((
+                    trade.open_ms - 30_000,
+                    trade.close_ms + if trade.id == tail.id { 30_000 } else { 29_999 },
+                ))
+            },
+            NOW,
+            &shape,
+            true,
+        );
+        batch
+            .jobs
+            .sort_by_key(|job| (job.trade.id == tail.id) != tail_first);
+        assert_eq!(batch.jobs.len(), 2);
+        let result = executor::run_pass_with_core(
+            batch.jobs,
+            || NOW,
+            &gate::ReplayGate::new(),
+            (
+                |_, _, _, _, _| panic!("archive-only fixture"),
+                |_, _, _, _| {
+                    (
+                        Ok(crate::market::trade_replay::archive::ArchiveFill {
+                            covered: Coverage::none(),
+                            ticks: vec![],
+                            deferred: None,
+                        }),
+                        0,
+                    )
+                },
+                None,
+            ),
+            0,
+            executor::run_job_at,
+            |_, _| {},
+        );
+        assert_eq!(result.finished.len(), 2);
+        for finished in result.finished {
+            assert_eq!(finished.attempted, finished.job.trade.id == tail.id);
+            assert!(finished.failure.is_none());
+        }
+    }
+}
+
+/// Ring-only answers after a timed-out archive wait must never consume clean tail attempts.
+#[test]
+fn timed_out_partial_core_answers_do_not_finalise_a_tail() {
+    use crate::market::{MarketDataSource, MarketStore};
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let shape = catchup::Shape {
+        margin_ms: 30_000,
+        long_ms: DAY,
+        tail_ms: 60_000,
+    };
+    let mut trade = row();
+    trade.venue = None;
+    trade.core = Some(crate::market::source::ReplayAddress {
+        history: MarketDataSource::new(MarketStore::shared(0.0)),
+        venue: None,
+        exchange_key: trade.exchange.clone(),
+        cache: None,
+    });
+    let held = Coverage::one((trade.open_ms - 30_000, trade.close_ms + 30_000));
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    cache.insert(
+        &trade.exchange,
+        &trade.market,
+        held.hull().unwrap().0,
+        held.hull().unwrap().1,
+        vec![],
+        crate::market::trade_replay::TileSource::Core,
+    );
+    assert!(cache.sync(std::time::Duration::from_secs(2)));
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    for pass in 0..2 {
+        let now = NOW + pass * HOUR_MS;
+        let batch = state.prepare(|_| held.clone(), now, &shape, true);
+        assert_eq!(batch.jobs.len(), 1);
+        let result = executor::run_pass_with_core(
+            batch.jobs,
+            || now,
+            &gate::ReplayGate::new(),
+            (
+                |_, _, _, _, _| panic!("core-only fixture"),
+                |_, _, _, _| panic!("core-only fixture"),
+                Some(Arc::new(|ask| {
+                    Some(crate::market::source::CoreReplayTicks {
+                        ticks: vec![],
+                        covered: (ask.from_ms, ask.from_ms + 100),
+                        archive_answered: false,
+                    })
+                })),
+            ),
+            0,
+            executor::run_job_at,
+            |job, answer| {
+                for &(from, to) in answer.file.spans() {
+                    cache.insert(
+                        &job.trade.exchange,
+                        &job.trade.market,
+                        from,
+                        to,
+                        vec![],
+                        crate::market::trade_replay::TileSource::Core,
+                    );
+                }
+            },
+        );
+        assert_eq!(result.finished[0].failure, Some(Failure::Retry));
+        assert_eq!(
+            result.finished[0].fault.as_ref().unwrap().detail,
+            "core archive wait did not answer"
+        );
+        assert!(cache.sync(std::time::Duration::from_secs(2)));
+        state.finish(&cache, result, now);
+        assert_ne!(state.latched.get(&trade.id), Some(&Latch::Permanent));
+        assert!(!state.tail_tries.contains_key(&trade.id));
+    }
+}
+
+/// Faults and unfiled answers must not consume the two clean attempts allowed for a tail.
+#[test]
+fn incomplete_tail_finalises_only_after_two_clean_passes() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let shape = catchup::Shape {
+        margin_ms: 30_000,
+        long_ms: DAY,
+        tail_ms: 60_000,
+    };
+    for mode in [
+        "clean",
+        "no_room",
+        "archive_pending",
+        "fault",
+        "unfiled",
+        "non_tail",
+    ] {
+        let trade = row();
+        let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+        let held_end = trade.close_ms + if mode == "non_tail" { 29_999 } else { 30_000 };
+        cache.insert(
+            &trade.exchange,
+            &trade.market,
+            trade.open_ms - 30_000,
+            held_end,
+            vec![],
+            crate::market::trade_replay::TileSource::Core,
+        );
+        let mut state = RecorderCatchup::default();
+        state.submit(vec![trade.clone()]);
+        for pass in 0..2 {
+            let now = NOW + pass * HOUR_MS;
+            let batch = state.prepare(
+                |_| Coverage::one((trade.open_ms - 30_000, held_end)),
+                now,
+                &shape,
+                true,
+            );
+            let job = batch.jobs.into_iter().next().unwrap();
+            if mode == "no_room" {
+                state.filing_refused(trade.exchange.clone(), trade.market.clone());
+            }
+            let filed = if mode == "unfiled" {
+                job.missing.clone()
+            } else {
+                Coverage::none()
+            };
+            state.finish(
+                &cache,
+                PassResult {
+                    finished: vec![executor::FinishedJob {
+                        job,
+                        failure: (mode == "archive_pending").then_some(Failure::Retry),
+                        fault: (mode == "fault").then(|| Fault {
+                            reason: CatchupFailReason::Network,
+                            detail: "fixture fault".into(),
+                        }),
+                        attempted: mode != "archive_pending",
+                        filed,
+                    }],
+                    archive_bytes: 0,
+                },
+                now,
+            );
+            assert_eq!(
+                state.latched.get(&trade.id) == Some(&Latch::Permanent),
+                mode == "clean" && pass == 1,
+                "{mode} pass {pass}"
+            );
+        }
+        assert_eq!(catchup::tail_final(), u32::from(mode == "clean"), "{mode}");
+        if mode == "clean" {
+            state.submit(vec![trade.clone()]);
+            assert!(
+                state
+                    .prepare(
+                        |_| panic!("final tail re-read"),
+                        NOW + 2 * HOUR_MS,
+                        &shape,
+                        true
+                    )
+                    .jobs
+                    .is_empty()
+            );
+        } else {
+            assert!(!state.pending.is_empty(), "{mode}");
+            assert!(!state.tail_tries.contains_key(&trade.id), "{mode}");
+        }
+    }
+}
+
+/// A failed coverage read must never be interpreted as a clean empty tail response.
+#[test]
+fn unavailable_held_read_does_not_finalise_tail() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    // A directory cannot be opened as SQLite; the cache worker exits without answering reads.
+    let cache = TradeCache::open_evictable(std::env::temp_dir()).unwrap();
+    let trade = row();
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    let shape = catchup::Shape {
+        margin_ms: 30_000,
+        long_ms: DAY,
+        tail_ms: 60_000,
+    };
+    for pass in 0..2 {
+        let now = NOW + pass * HOUR_MS;
+        let job = state
+            .prepare(
+                |_| Coverage::one((trade.open_ms - 30_000, trade.close_ms + 30_000)),
+                now,
+                &shape,
+                true,
+            )
+            .jobs
+            .remove(0);
+        state.finish(
+            &cache,
+            PassResult {
+                finished: vec![executor::FinishedJob {
+                    job,
+                    failure: None,
+                    fault: None,
+                    attempted: true,
+                    filed: Coverage::none(),
+                }],
+                archive_bytes: 0,
+            },
+            now,
+        );
+    }
+    assert!(!state.tail_tries.contains_key(&trade.id));
+    assert!(matches!(
+        state.latched.get(&trade.id),
+        Some(Latch::RetryAfter(_))
+    ));
+}
+
+/// With no reachable source, a missing tail is final without spending either retry pass.
+#[test]
+fn venue_less_tail_without_source_is_final_immediately() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let mut trade = row();
+    trade.venue = None;
+    trade.open_ms -= 3 * DAY;
+    trade.close_ms -= 3 * DAY;
+    let shape = catchup::Shape {
+        margin_ms: 30_000,
+        long_ms: DAY,
+        tail_ms: 60_000,
+    };
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    let batch = state.prepare(
+        |_| Coverage::one((trade.open_ms - 30_000, trade.close_ms + 30_000)),
+        NOW,
+        &shape,
+        true,
+    );
+    assert!(batch.jobs.is_empty());
+    assert_eq!(state.latched.get(&trade.id), Some(&Latch::Permanent));
+    assert_eq!(catchup::tail_final(), 1);
 }
 
 /// Widening must fetch only the newly missing margin, identical snapped values must retain
@@ -798,7 +1397,16 @@ fn margin_changes_replan_settled_rows_without_deleting_held_tape() {
     state.submit(vec![trade.clone()]);
     assert_eq!(
         state
-            .prepare(|_| held.clone(), NOW, margin_ms(), DAY, true)
+            .prepare(
+                |_| held.clone(),
+                NOW,
+                &catchup::Shape {
+                    margin_ms: margin_ms(),
+                    long_ms: DAY,
+                    tail_ms: margin_ms()
+                },
+                true
+            )
             .complete,
         1
     );
@@ -809,8 +1417,11 @@ fn margin_changes_replan_settled_rows_without_deleting_held_tape() {
             .prepare(
                 |_| panic!("same snapped value rechecked disk"),
                 NOW,
-                margin_ms(),
-                DAY,
+                &catchup::Shape {
+                    margin_ms: margin_ms(),
+                    long_ms: DAY,
+                    tail_ms: margin_ms()
+                },
                 true
             )
             .jobs
@@ -818,7 +1429,16 @@ fn margin_changes_replan_settled_rows_without_deleting_held_tape() {
     );
     set_margin_s(60);
     state.submit(vec![trade.clone()]);
-    let plan = state.prepare(|_| held.clone(), NOW, margin_ms(), DAY, true);
+    let plan = state.prepare(
+        |_| held.clone(),
+        NOW,
+        &catchup::Shape {
+            margin_ms: margin_ms(),
+            long_ms: DAY,
+            tail_ms: margin_ms(),
+        },
+        true,
+    );
     assert_eq!(plan.jobs.len(), 1);
     assert_eq!(
         plan.jobs[0].missing,
@@ -830,13 +1450,31 @@ fn margin_changes_replan_settled_rows_without_deleting_held_tape() {
     let wider = Coverage::one((trade.open_ms - 60_000, trade.close_ms + 60_000));
     assert_eq!(
         state
-            .prepare(|_| wider.clone(), NOW, margin_ms(), DAY, true)
+            .prepare(
+                |_| wider.clone(),
+                NOW,
+                &catchup::Shape {
+                    margin_ms: margin_ms(),
+                    long_ms: DAY,
+                    tail_ms: margin_ms()
+                },
+                true
+            )
             .complete,
         1
     );
     set_margin_s(30);
     state.submit(vec![trade]);
-    let plan = state.prepare(|_| wider.clone(), NOW, margin_ms(), DAY, true);
+    let plan = state.prepare(
+        |_| wider.clone(),
+        NOW,
+        &catchup::Shape {
+            margin_ms: margin_ms(),
+            long_ms: DAY,
+            tail_ms: margin_ms(),
+        },
+        true,
+    );
     assert_eq!(plan.complete, 1);
     assert!(plan.jobs.is_empty());
 }
@@ -850,7 +1488,16 @@ fn settled_request_fault_is_not_retried_on_the_next_hour() {
     let mut state = RecorderCatchup::default();
     state.submit(vec![trade.clone()]);
     let job = state
-        .prepare(|_| Coverage::none(), NOW, 0, DAY, true)
+        .prepare(
+            |_| Coverage::none(),
+            NOW,
+            &catchup::Shape {
+                margin_ms: 0,
+                long_ms: DAY,
+                tail_ms: 0,
+            },
+            true,
+        )
         .jobs
         .remove(0);
     let cache = TradeCache::open_evictable(std::path::PathBuf::from(":memory:")).unwrap();
@@ -861,6 +1508,7 @@ fn settled_request_fault_is_not_retried_on_the_next_hour() {
                 job,
                 failure: Some(Failure::Permanent),
                 attempted: true,
+                filed: Coverage::none(),
                 fault: Some(Fault {
                     reason: CatchupFailReason::RequestFault,
                     detail: "request fault: HTTP 400".into(),
@@ -882,8 +1530,11 @@ fn settled_request_fault_is_not_retried_on_the_next_hour() {
             .prepare(
                 |_| panic!("permanent request fault retried"),
                 NOW + HOUR_MS,
-                0,
-                DAY,
+                &catchup::Shape {
+                    margin_ms: 0,
+                    long_ms: DAY,
+                    tail_ms: 0
+                },
                 true
             )
             .jobs
@@ -909,7 +1560,16 @@ fn long_threshold_changes_replan_only_missing_middle() {
     state.submit(vec![trade.clone()]);
     assert_eq!(
         state
-            .prepare(|_| held.clone(), NOW, 0, long_position_ms(), true)
+            .prepare(
+                |_| held.clone(),
+                NOW,
+                &catchup::Shape {
+                    margin_ms: 0,
+                    long_ms: long_position_ms(),
+                    tail_ms: 0
+                },
+                true
+            )
             .complete,
         1
     );
@@ -920,8 +1580,11 @@ fn long_threshold_changes_replan_only_missing_middle() {
             .prepare(
                 |_| panic!("same threshold rechecked disk"),
                 NOW,
-                0,
-                long_position_ms(),
+                &catchup::Shape {
+                    margin_ms: 0,
+                    long_ms: long_position_ms(),
+                    tail_ms: 0
+                },
                 true
             )
             .jobs
@@ -929,7 +1592,16 @@ fn long_threshold_changes_replan_only_missing_middle() {
     );
     set_long_position_min(120);
     state.submit(vec![trade.clone()]);
-    let plan = state.prepare(|_| held.clone(), NOW, 0, long_position_ms(), true);
+    let plan = state.prepare(
+        |_| held.clone(),
+        NOW,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: long_position_ms(),
+            tail_ms: 0,
+        },
+        true,
+    );
     assert_eq!(plan.jobs.len(), 1);
     assert_eq!(
         plan.jobs[0].missing,
@@ -940,8 +1612,11 @@ fn long_threshold_changes_replan_only_missing_middle() {
             .prepare(
                 |_| Coverage::one((trade.open_ms, trade.close_ms)),
                 NOW,
-                0,
-                long_position_ms(),
+                &catchup::Shape {
+                    margin_ms: 0,
+                    long_ms: long_position_ms(),
+                    tail_ms: 0
+                },
                 true
             )
             .complete,
@@ -954,8 +1629,11 @@ fn long_threshold_changes_replan_only_missing_middle() {
             .prepare(
                 |_| panic!("same clamped threshold rechecked disk"),
                 NOW,
-                0,
-                long_position_ms(),
+                &catchup::Shape {
+                    margin_ms: 0,
+                    long_ms: long_position_ms(),
+                    tail_ms: 0
+                },
                 true
             )
             .jobs
@@ -972,19 +1650,46 @@ fn archive_switch_change_replans_refused_and_completed_rows() {
     let trade = row();
     let mut state = RecorderCatchup::default();
     state.submit(vec![trade.clone()]);
-    let refused = state.prepare(|_| Coverage::none(), NOW, 0, DAY, false);
+    let refused = state.prepare(
+        |_| Coverage::none(),
+        NOW,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+        false,
+    );
     assert_eq!(refused.no_route, 1);
     assert!(refused.jobs.is_empty());
     state.submit(vec![trade.clone()]);
     assert!(
         state
-            .prepare(|_| panic!("latched row asked disk"), NOW, 0, DAY, false)
+            .prepare(
+                |_| panic!("latched row asked disk"),
+                NOW,
+                &catchup::Shape {
+                    margin_ms: 0,
+                    long_ms: DAY,
+                    tail_ms: 0
+                },
+                false
+            )
             .jobs
             .is_empty()
     );
     catchup::set_switches(true, true);
     state.submit(vec![trade.clone()]);
-    let planned = state.prepare(|_| Coverage::none(), NOW, 0, DAY, true);
+    let planned = state.prepare(
+        |_| Coverage::none(),
+        NOW,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+        true,
+    );
     assert_eq!(planned.jobs.len(), 1);
     assert!(matches!(
         planned.jobs[0].source,
@@ -992,7 +1697,23 @@ fn archive_switch_change_replans_refused_and_completed_rows() {
     ));
     assert_eq!(
         state
-            .prepare(|trade| catchup::needed(trade, 0, DAY), NOW, 0, DAY, true)
+            .prepare(
+                |trade| catchup::needed(
+                    trade,
+                    &catchup::Shape {
+                        margin_ms: 0,
+                        long_ms: DAY,
+                        tail_ms: 0
+                    }
+                ),
+                NOW,
+                &catchup::Shape {
+                    margin_ms: 0,
+                    long_ms: DAY,
+                    tail_ms: 0
+                },
+                true
+            )
             .complete,
         1
     );
@@ -1004,8 +1725,11 @@ fn archive_switch_change_replans_refused_and_completed_rows() {
             .prepare(
                 |_| panic!("unchanged generation rechecked tape"),
                 NOW,
-                0,
-                DAY,
+                &catchup::Shape {
+                    margin_ms: 0,
+                    long_ms: DAY,
+                    tail_ms: 0
+                },
                 true
             )
             .jobs
@@ -1015,7 +1739,16 @@ fn archive_switch_change_replans_refused_and_completed_rows() {
     state.submit(vec![trade]);
     assert_eq!(
         state
-            .prepare(|_| Coverage::none(), NOW, 0, DAY, true)
+            .prepare(
+                |_| Coverage::none(),
+                NOW,
+                &catchup::Shape {
+                    margin_ms: 0,
+                    long_ms: DAY,
+                    tail_ms: 0
+                },
+                true
+            )
             .jobs
             .len(),
         1
@@ -1030,7 +1763,16 @@ fn prepare_plans_with_the_archive_choice_it_is_handed() {
     catchup::set_switches(true, true);
     let mut state = RecorderCatchup::default();
     state.submit(vec![row()]);
-    let plan = state.prepare(|_| Coverage::none(), NOW, 0, DAY, false);
+    let plan = state.prepare(
+        |_| Coverage::none(),
+        NOW,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+        false,
+    );
     assert_eq!(
         plan.no_route, 1,
         "archives off in the snapshot leaves no source"
@@ -1052,7 +1794,15 @@ fn auto_off_queues_without_dispatch_and_running_tracks_pass_settlement() {
         ..RecorderCatchup::default()
     };
     state.submit(vec![row()]);
-    state.tick(&cache, NOW, 0, DAY);
+    state.tick(
+        &cache,
+        NOW,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+    );
     assert!(matches!(
         receiver.try_recv(),
         Err(mpsc::TryRecvError::Empty)
@@ -1060,21 +1810,45 @@ fn auto_off_queues_without_dispatch_and_running_tracks_pass_settlement() {
     assert!(!catchup::status().running);
     assert_eq!(catchup::status().pending, 1);
     catchup::set_switches(true, true);
-    state.tick(&cache, NOW, 0, DAY);
+    state.tick(
+        &cache,
+        NOW,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+    );
     let pass = receiver
         .try_recv()
         .expect("queued trade dispatched after enabling auto");
     assert_eq!(pass.jobs.len(), 1);
     assert!(catchup::status().running);
     assert_eq!(catchup::status().last_pass_ms, Some(NOW));
-    state.tick(&cache, NOW + 1, 0, DAY);
+    state.tick(
+        &cache,
+        NOW + 1,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+    );
     assert!(matches!(
         receiver.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
     // Reload while running: the old pass may settle, but its permanent refusal must not survive.
     catchup::set_switches(false, false);
-    state.tick(&cache, NOW + 2, 0, DAY);
+    state.tick(
+        &cache,
+        NOW + 2,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+    );
     assert!(catchup::status().running);
     state.finish(
         &cache,
@@ -1087,6 +1861,7 @@ fn auto_off_queues_without_dispatch_and_running_tracks_pass_settlement() {
                     failure: Some(Failure::Permanent),
                     fault: None,
                     attempted: true,
+                    filed: Coverage::none(),
                 })
                 .collect(),
             archive_bytes: 0,
@@ -1105,6 +1880,7 @@ fn pass_report_counts_every_failure_but_logs_a_bounded_few() {
     let job = CatchupJob {
         missing: Coverage::one((trade.open_ms, trade.close_ms)),
         expires_at_ms: i64::MAX,
+        tail_start_ms: i64::MAX,
         source: catchup::Source::Archive(
             crate::market::trade_replay::venue_caps::ArchiveRoute::BybitTradingDaily,
         ),
@@ -1153,6 +1929,7 @@ fn reserve_refused_filing_counts_as_no_room() {
     let job = CatchupJob {
         missing: Coverage::one((trade.open_ms, trade.close_ms)),
         expires_at_ms: i64::MAX,
+        tail_start_ms: i64::MAX,
         source: catchup::Source::Archive(
             crate::market::trade_replay::venue_caps::ArchiveRoute::BybitTradingDaily,
         ),
@@ -1168,6 +1945,7 @@ fn reserve_refused_filing_counts_as_no_room() {
                 failure: None,
                 fault: None,
                 attempted: true,
+                filed: Coverage::none(),
             }],
             archive_bytes: 0,
         },
@@ -1218,7 +1996,15 @@ fn backlog_drains_in_bounded_passes_that_each_move_the_status() {
     .enumerate()
     {
         let now = NOW + chunk as i64;
-        state.tick(&cache, now, 0, DAY);
+        state.tick(
+            &cache,
+            now,
+            &catchup::Shape {
+                margin_ms: 0,
+                long_ms: DAY,
+                tail_ms: 0,
+            },
+        );
         let pass = receiver
             .try_recv()
             .expect("pending work starts the next pass at once");
@@ -1248,6 +2034,7 @@ fn backlog_drains_in_bounded_passes_that_each_move_the_status() {
                         failure: None,
                         fault: fault.clone(),
                         attempted: true,
+                        filed: Coverage::none(),
                     })
                     .collect(),
                 archive_bytes: 0,
@@ -1266,7 +2053,15 @@ fn backlog_drains_in_bounded_passes_that_each_move_the_status() {
     }
     // Archive-only rows tie on expiry, so the plan takes the newest close first.
     assert_eq!(taken, (0..total as i64).collect::<Vec<_>>());
-    state.tick(&cache, NOW + 10, 0, DAY);
+    state.tick(
+        &cache,
+        NOW + 10,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+    );
     assert!(
         receiver.try_recv().is_err(),
         "retries wait for the next hour"
@@ -1292,13 +2087,21 @@ fn spent_archive_budget_holds_archive_jobs_until_the_hour_rolls() {
     let archive_row = row();
     let mut rest_row = row();
     rest_row.id.rec_id = 92;
-    rest_row.venue = Venue {
+    rest_row.venue = Some(Venue {
         brand: Brand::Gate,
         kind: MarketKind::Spot,
-    };
+    });
     state.submit(vec![archive_row.clone(), rest_row.clone()]);
 
-    state.tick(&cache, NOW, 0, DAY);
+    state.tick(
+        &cache,
+        NOW,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+    );
     let pass = receiver.try_recv().expect("REST work still starts a pass");
     let ids: Vec<_> = pass.jobs.iter().map(|job| job.trade.id).collect();
     assert_eq!(ids, vec![rest_row.id], "archive job left out of the pass");
@@ -1314,6 +2117,7 @@ fn spent_archive_budget_holds_archive_jobs_until_the_hour_rolls() {
                     failure: Some(executor::Failure::Retry),
                     fault: None,
                     attempted: true,
+                    filed: Coverage::none(),
                 })
                 .collect(),
             archive_bytes: executor::ARCHIVE_BYTES_PER_PASS,
@@ -1321,7 +2125,15 @@ fn spent_archive_budget_holds_archive_jobs_until_the_hour_rolls() {
         NOW,
     );
 
-    state.tick(&cache, NOW + 1, 0, DAY);
+    state.tick(
+        &cache,
+        NOW + 1,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+    );
     assert!(
         receiver.try_recv().is_err(),
         "no pass starts for archive work alone while the budget is spent"
@@ -1334,7 +2146,15 @@ fn spent_archive_budget_holds_archive_jobs_until_the_hour_rolls() {
     assert!(!state.active);
 
     let next_hour = (NOW.div_euclid(HOUR_MS) + 1) * HOUR_MS;
-    state.tick(&cache, next_hour, 0, DAY);
+    state.tick(
+        &cache,
+        next_hour,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+    );
     let pass = receiver
         .try_recv()
         .expect("the hour roll re-admits archive jobs");
@@ -1354,7 +2174,18 @@ fn admissible_filters_archive_jobs_only_once_the_budget_is_spent() {
             trade
         })
         .collect();
-    let jobs = catchup::plan(&rows, |_| Coverage::none(), &HashMap::new(), NOW, 0, DAY).jobs;
+    let jobs = catchup::plan(
+        &rows,
+        |_| Coverage::none(),
+        &HashMap::new(),
+        NOW,
+        &catchup::Shape {
+            margin_ms: 0,
+            long_ms: DAY,
+            tail_ms: 0,
+        },
+    )
+    .jobs;
     assert_eq!(admissible(jobs.clone(), 0, NOW).len(), PASS_JOBS);
     assert!(admissible(jobs, executor::ARCHIVE_BYTES_PER_PASS, NOW).is_empty());
 }

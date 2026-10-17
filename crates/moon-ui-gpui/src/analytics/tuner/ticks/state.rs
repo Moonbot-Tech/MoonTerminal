@@ -73,13 +73,20 @@ pub(in crate::analytics::tuner) struct DealRow {
     /// where the order stood before the tape begins, and the core's first moves.
     pub(in crate::analytics::tuner) entry_line: Option<Arc<[(i64, f64)]>>,
     /// What the terminal HOLDS of the window, as `(lead_ms, trail_ms)`: how far before the
-    /// entry and past the exit the held coverage reaches, clipped to what the window asks for
-    /// (the setting's margin, floored for the model). `None` until the tape stage answered, or
+    /// entry and past the exit the held coverage reaches, including the requested tail.
+    /// `None` until the tape stage answered, or
     /// when it holds nothing. The table's "tape" column; each replay uses this row's own trail.
     pub(in crate::analytics::tuner) held: Option<(i64, i64)>,
 }
 
 impl DealRow {
+    /// Offer unresolved tape and reproduced short tails to the station before venue checks.
+    pub(in crate::analytics::tuner) fn station_candidate(&self) -> bool {
+        self.address.is_some()
+            && (matches!(self.tape, TapeStatus::Missing | TapeStatus::Refused(_))
+                || (self.reproduced() && !super::tail::holds(self.held)))
+    }
+
     /// Automatic reloads wait for publication; an explicit fetch can still requeue the row.
     pub(in crate::analytics::tuner) fn autoload_ready_at(&self, now_ms: i64) -> bool {
         !matches!(self.tape,
@@ -552,6 +559,8 @@ pub(in crate::analytics) struct TicksState {
     /// The task listening to the process-wide fetch job (`fetch::job`) for this view; `None`
     /// until a batch is started or found running. Dropped with the view, which ends it.
     pub(in crate::analytics::tuner) fetch_task: Option<gpui::Task<()>>,
+    /// Last station filing this view re-read, even when no venue job was queued.
+    pub(in crate::analytics::tuner) station_generation: u64,
     /// Whether that task is still in its loop — it ends with the batch, and the next batch
     /// attaches a fresh one.
     pub(in crate::analytics::tuner) fetch_listening: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -642,6 +651,7 @@ impl Default for TicksState {
             order: None,
             rows_rev: 0,
             fetch_task: None,
+            station_generation: 0,
             fetch_listening: Default::default(),
             tape_reading: false,
             judged_under: None,

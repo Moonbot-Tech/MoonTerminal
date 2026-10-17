@@ -4,6 +4,38 @@ use crate::venue::{Brand, MarketKind, Venue};
 
 const DAY: i64 = 86_400_000;
 
+/// Tail-aware attribution must protect shared real tape, then release it beyond the close-age edge.
+#[test]
+fn retained_real_tail_survives_emulator_subtraction_until_age_edge() {
+    let real = trade(100_000, 110_000, false);
+    let emulated = trade(120_000, 130_000, true);
+    let key = inventory().keys[0].clone();
+    let kept = |edge| {
+        keep_map(
+            &inventory(),
+            &[real.clone(), emulated.clone()],
+            &HashMap::new(),
+            &HashSet::new(),
+            KeepPolicy {
+                edge: Some(edge),
+                listed_from: i64::MIN,
+                record_emulator: false,
+                tuner_only: false,
+                shape: catchup::Shape {
+                    margin_ms: 30_000,
+                    long_ms: DAY,
+                    tail_ms: 60_000,
+                },
+            },
+        )
+        .remove(&key)
+        .unwrap()
+    };
+    assert!(kept(110_000).contains_ms(170_000));
+    assert!(!kept(110_000).contains_ms(170_001));
+    assert!(!kept(110_001).contains_ms(170_000));
+}
+
 /// An offline protecting core cannot authorize clipping an unlisted trade's old entry.
 #[test]
 fn incomplete_listing_defers_the_age_clip() {
@@ -50,8 +82,11 @@ fn keep_map_drops_untunable_tape_only_when_tuner_only_is_on() {
         listed_from: i64::MIN,
         record_emulator: true,
         tuner_only,
-        margin_ms: 10,
-        long_ms: 1000,
+        shape: catchup::Shape {
+            margin_ms: 10,
+            long_ms: 1000,
+            tail_ms: 10,
+        },
     };
     let kept_with = |tuner_only| {
         keep_map(
@@ -93,8 +128,11 @@ fn tuner_only_keeps_tape_a_recorded_stamped_emulator_trade_shares() {
         listed_from: i64::MIN,
         record_emulator: true,
         tuner_only: true,
-        margin_ms: 10,
-        long_ms: 1000,
+        shape: catchup::Shape {
+            margin_ms: 10,
+            long_ms: 1000,
+            tail_ms: 10,
+        },
     };
     let kept = keep_map(
         &inventory(),
@@ -121,11 +159,12 @@ fn trade(open: i64, close: i64, emulator: bool) -> catchup::CatchupTrade {
         },
         exchange: "synthetic".into(),
         market: "SYNUSDT".into(),
-        venue: Venue {
+        venue: Some(Venue {
             brand: Brand::Bybit,
             kind: MarketKind::Futures,
-        },
+        }),
         open_ms: open,
+        core: None,
         close_ms: close,
         emulator,
         tunable: true,
@@ -158,8 +197,11 @@ fn kept(
             listed_from: i64::MIN,
             record_emulator: emulator,
             tuner_only: false,
-            margin_ms: 10,
-            long_ms: 1000,
+            shape: catchup::Shape {
+                margin_ms: 10,
+                long_ms: 1000,
+                tail_ms: 10,
+            },
         },
     )
     .remove(&inventory().keys[0])
@@ -254,8 +296,11 @@ fn unlisted_old_real_windows_survive_emulator_subtraction() {
             listed_from,
             record_emulator: false,
             tuner_only: false,
-            margin_ms: 60_000,
-            long_ms: 1000,
+            shape: catchup::Shape {
+                margin_ms: 60_000,
+                long_ms: 1000,
+                tail_ms: 10,
+            },
         },
     );
     let keep = map.remove(&inventory().keys[0]).unwrap();
@@ -288,8 +333,11 @@ fn trim_applies_keep_map() {
             listed_from: i64::MIN,
             record_emulator: true,
             tuner_only: false,
-            margin_ms: 10,
-            long_ms: 1000,
+            shape: catchup::Shape {
+                margin_ms: 10,
+                long_ms: 1000,
+                tail_ms: 10,
+            },
         },
     );
     let outcome = cache

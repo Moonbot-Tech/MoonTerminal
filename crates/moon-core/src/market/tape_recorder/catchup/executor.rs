@@ -16,7 +16,24 @@ use crate::station_api::CatchupFailReason;
 
 /// Compressed archive traffic admitted during one hourly pass.
 pub(crate) const ARCHIVE_BYTES_PER_PASS: u64 = 2 * 1024 * 1024 * 1024;
+/// Forty core asks at the five-second archive deadline bound a pass's core wait to 200 seconds.
+pub(super) const CORE_ASKS_PER_PASS: usize = 40;
 const DAY_MS: i64 = 86_400_000;
+/// Core chart archives refuse stretches older than their fixed 48-hour retention.
+pub(super) const CORE_ARCHIVE_RETENTION_MS: i64 = 48 * 3_600_000;
+
+/// One inclusive post-close stretch addressed to the trade's captured core exchange.
+pub(crate) struct CoreSpanAsk {
+    pub address: crate::market::source::ReplayAddress,
+    pub market: String,
+    pub from_ms: i64,
+    pub to_ms: i64,
+}
+
+/// Session-backed reader preserves exhaustive coverage, including quiet and partial spans.
+pub(crate) type CoreSpanFetch = std::sync::Arc<
+    dyn Fn(&CoreSpanAsk) -> Option<crate::market::source::CoreReplayTicks> + Send + Sync,
+>;
 
 /// Page transport seam, identical to the public REST fetcher's route and slice contract.
 pub(crate) type FetchRest = fn(
@@ -378,7 +395,9 @@ fn run_archive(
     );
     let mut outcome = match result {
         Ok(fill) => JobOutcome {
-            waiting: (fill.covered.is_empty() && fill.deferred.is_none())
+            waiting: (fill.covered.is_empty()
+                && fill.deferred.is_none()
+                && !super::state::tail_only(&job.missing, job.tail_start_ms))
                 || matches!(
                     fill.deferred,
                     Some(
@@ -431,6 +450,7 @@ fn portions(
     now_ms: i64,
 ) -> (Option<TradeRoute>, Coverage, Option<ArchiveRoute>, Coverage) {
     match job.source {
+        Source::Core => (None, Coverage::none(), None, Coverage::none()),
         Source::Rest(route) => (Some(route), job.missing.clone(), None, Coverage::none()),
         Source::Archive(route) => (None, Coverage::none(), Some(route), job.missing.clone()),
         Source::Both(rest, archive) => {
@@ -466,6 +486,7 @@ pub(super) fn run_job_at(
     fetch_archive: FetchArchive,
 ) -> JobOutcome {
     match job.source {
+        Source::Core => JobOutcome::default(),
         Source::Rest(route) => run_rest(job, route, now_ms, gate, fetch_rest),
         Source::Archive(route) => run_archive(job, route, fetch_archive, u64::MAX),
         Source::Both(_, _) => {
@@ -492,6 +513,8 @@ pub(crate) struct FinishedJob {
     pub(crate) fault: Option<Fault>,
     /// Incomplete work may count as failed unless only a host or budget deferred it.
     pub(crate) attempted: bool,
+    /// Answered coverage must actually be held before an incomplete pass can finalise a tail.
+    pub(crate) filed: Coverage,
 }
 
 /// Pass accounting includes deferred jobs so they remain pending until the next hourly retry.
@@ -535,13 +558,40 @@ pub(super) fn run_pass_with(
     transports: (FetchRest, FetchArchive),
     already_downloaded: u64,
     run: impl Fn(&CatchupJob, i64, &gate::ReplayGate, FetchRest, FetchArchive) -> JobOutcome,
+    file: impl FnMut(&CatchupJob, &JobOutcome),
+) -> PassResult {
+    let core_fetch = super::CORE_FETCH
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    run_pass_with_core(
+        jobs,
+        now,
+        gate,
+        (transports.0, transports.1, core_fetch),
+        already_downloaded,
+        run,
+        file,
+    )
+}
+
+/// Execute venue sources first, then offer only still-missing retained tails to the core.
+pub(super) fn run_pass_with_core(
+    jobs: Vec<CatchupJob>,
+    now: impl Fn() -> i64,
+    gate: &gate::ReplayGate,
+    transports: (FetchRest, FetchArchive, Option<CoreSpanFetch>),
+    already_downloaded: u64,
+    run: impl Fn(&CatchupJob, i64, &gate::ReplayGate, FetchRest, FetchArchive) -> JobOutcome,
     mut file: impl FnMut(&CatchupJob, &JobOutcome),
 ) -> PassResult {
-    let (fetch_rest, fetch_archive) = transports;
+    let (fetch_rest, fetch_archive, core_fetch) = transports;
     let mut downloaded = already_downloaded;
     let mut groups = HashMap::<DayKey, Coverage>::new();
     let mut fetched = HashMap::<DayKey, (JobOutcome, bool)>::new();
     let mut stopped_hosts = HashSet::new();
+    let mut stopped_cores = HashSet::new();
+    let mut core_asks = 0;
     let mut finished = Vec::new();
     let mut prepared = Vec::new();
     for job in jobs {
@@ -652,6 +702,11 @@ pub(super) fn run_pass_with(
                         fetched.insert(key.clone(), (answer, skipped));
                     }
                     let (mut answer, skipped) = fetched[&key].clone();
+                    // Grouped days may serve both ordinary gaps and tail-only jobs.
+                    if !skipped && answer.failure.is_none() && answer.file.is_empty() {
+                        answer.waiting = !super::state::tail_only(&job.missing, job.tail_start_ms);
+                    }
+                    attempted |= !skipped && !answer.waiting;
                     all_unknown &= answer.archive_unknown && !skipped;
                     // One missing daily file does not refuse the trade's other requested days.
                     if answer.archive_unknown {
@@ -671,8 +726,97 @@ pub(super) fn run_pass_with(
                 }
             }
         }
+        let core_missing = job.missing.minus(&outcome.file).clip(&Coverage::one((
+            job.tail_start_ms.saturating_add(1),
+            i64::MAX,
+        )));
+        let mut core_filed = false;
+        let mut core_unclean = false;
+        if let Some(address) = &job.trade.core {
+            for &(from_ms, to_ms) in core_missing.spans() {
+                let from_ms = from_ms.max(now().saturating_sub(CORE_ARCHIVE_RETENTION_MS));
+                if from_ms > to_ms {
+                    continue;
+                }
+                let skipped = if core_asks >= CORE_ASKS_PER_PASS {
+                    Some("core asks budget spent this pass")
+                } else if stopped_cores.contains(&job.trade.id.core) {
+                    Some("core stopped earlier this pass")
+                } else {
+                    None
+                };
+                if let Some(detail) = skipped {
+                    deferred = true;
+                    merge(
+                        &mut outcome,
+                        JobOutcome {
+                            failure: Some(Failure::Retry),
+                            fault: Some(Fault::new(CatchupFailReason::Other, detail)),
+                            ..JobOutcome::default()
+                        },
+                    );
+                    continue;
+                }
+                attempted = true;
+                let answer = core_fetch.as_ref().and_then(|fetch| {
+                    core_asks += 1;
+                    fetch(&CoreSpanAsk {
+                        address: address.clone(),
+                        market: job.trade.market.clone(),
+                        from_ms,
+                        to_ms,
+                    })
+                });
+                if let Some(answer) = answer {
+                    if !answer.archive_answered {
+                        core_unclean = true;
+                        failed_fetch = true;
+                        stopped_cores.insert(job.trade.id.core);
+                    }
+                    let mut part = JobOutcome {
+                        file: Coverage::one(answer.covered),
+                        ticks: answer.ticks,
+                        failure: (!answer.archive_answered).then_some(Failure::Retry),
+                        fault: (!answer.archive_answered).then(|| {
+                            Fault::new(CatchupFailReason::Other, "core archive wait did not answer")
+                        }),
+                        ..JobOutcome::default()
+                    };
+                    clip(&mut part, &Coverage::one((from_ms, to_ms)));
+                    core_filed |= !part.file.is_empty();
+                    merge(&mut outcome, part);
+                } else {
+                    stopped_cores.insert(job.trade.id.core);
+                    failed_fetch = true;
+                    merge(
+                        &mut outcome,
+                        JobOutcome {
+                            failure: Some(Failure::Retry),
+                            fault: Some(Fault::new(
+                                CatchupFailReason::Network,
+                                "core archive span unavailable",
+                            )),
+                            ..JobOutcome::default()
+                        },
+                    );
+                }
+            }
+        }
+        // Exhaustive core coverage repairs a venue refusal for the same missing stretch.
+        if core_filed && !core_unclean && job.missing.minus(&outcome.file).is_empty() {
+            outcome.failure = None;
+            outcome.fault = None;
+        }
+        if core_unclean {
+            // A late archive can still repair a venue refusal; ring-only tape is not final.
+            outcome.failure = Some(Failure::Retry);
+            outcome.fault = Some(Fault::new(
+                CatchupFailReason::Other,
+                "core archive wait did not answer",
+            ));
+        }
         clip(&mut outcome, &job.missing);
-        if !old.is_empty() || outcome.file.is_empty() {
+        if core_filed || !old.is_empty() || outcome.file.is_empty() {
             file(&job, &outcome);
         }
         finished.push(FinishedJob {
@@ -680,6 +824,7 @@ pub(super) fn run_pass_with(
             failure: outcome.failure,
             fault: outcome.fault,
             attempted: attempted && (!deferred || failed_fetch),
+            filed: outcome.file,
         });
     }
     PassResult {
