@@ -524,10 +524,10 @@ fn build_order_row(
     // trader declined the stop his strategy is about to give this order", so without the override
     // switching a working order's stop off would redraw as ON on the very next frame. The override
     // expires as soon as the wire disagrees, so a stop the core arms anyway comes back on its own.
-    let stop_eff = |index: usize, wire: bool, strat_on: bool| -> bool {
+    let stop_eff = |kind, wire: bool, strat_on: bool| -> bool {
         stop_overrides
             .get(&o.uid)
-            .and_then(|flags| flags[index])
+            .and_then(|flags| flags[crate::feed::trade::stop_kind_tag(kind) as usize])
             .filter(|on| *on == wire)
             .unwrap_or(
                 wire || crate::feed::stop_inherited_from_strategy(
@@ -586,9 +586,17 @@ fn build_order_row(
         is_short: o.is_short,
         size,
         remaining_size,
-        sl_on: stop_eff(0, o.stops.stop_loss_enabled(), sl_strat),
-        ts_on: stop_eff(1, o.stops.trailing_enabled(), ts_strat),
-        vstop_on: stop_eff(2, o.vstop_on, vstop_strat),
+        sl_on: stop_eff(
+            crate::feed::OrderStopKind::StopLoss,
+            o.stops.stop_loss_enabled(),
+            sl_strat,
+        ),
+        ts_on: stop_eff(
+            crate::feed::OrderStopKind::Trailing,
+            o.stops.trailing_enabled(),
+            ts_strat,
+        ),
+        vstop_on: stop_eff(crate::feed::OrderStopKind::VStop, o.vstop_on, vstop_strat),
         sl_fixed: o.stops.stop_loss_fixed(),
         ts_fixed: o.stops.trailing_fixed(),
         vstop_fixed: o.vstop_fixed,

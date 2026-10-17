@@ -859,6 +859,213 @@ fn per_market_keep_preserves_the_drawable_closed_window() {
     }
 }
 
+/// Eager compaction would scan every close; unbounded slack would grow after market evictions.
+#[test]
+fn repeated_market_closes_bound_ring_slack_and_membership() {
+    let mut store = OrderLineStore {
+        closed_keep: 1000,
+        ..Default::default()
+    };
+    for uid in 1..=5000 {
+        let mut row = order(uid);
+        row.job_is_done = true;
+        store.update_partial(&[row], 0);
+        assert!(store.closed_ring.len() <= CLOSED_RING_CAP + CLOSED_RING_CAP / 2);
+        assert!(store.closed_dead.len() <= CLOSED_RING_CAP / 2);
+        assert!(store.closed_dead.len() <= store.closed_ring.len() / 2);
+        assert_eq!(store.closed_queued.len(), (uid as usize).min(1000));
+        assert_eq!(
+            store.closed_dead.len() + store.closed_queued.len(),
+            store.closed_ring.len()
+        );
+    }
+    assert_eq!(store.orders.len(), 1000);
+    assert!(
+        store.closed_ring.len() > 1000,
+        "dead slack must be compacted in batches"
+    );
+    assert_eq!(
+        store
+            .market_draw_orders("BTCUSDT", 500)
+            .iter()
+            .map(|row| row.uid)
+            .collect::<Vec<_>>(),
+        (4501..=5000).rev().collect::<Vec<_>>()
+    );
+    // Reusing a UID still present as dead slack must remove its old closure position first.
+    let reused = *store.closed_dead.iter().next().unwrap();
+    let mut row = order(reused);
+    row.job_is_done = true;
+    store.update_partial(&[row], 0);
+    assert_eq!(
+        store
+            .closed_ring
+            .iter()
+            .filter(|uid| **uid == reused)
+            .count(),
+        1
+    );
+    assert_eq!(store.market_draw_orders("BTCUSDT", 1)[0].uid, reused);
+    assert_eq!(store.closed_queued.len(), 1000);
+    assert_eq!(
+        store.closed_dead.len() + store.closed_queued.len(),
+        store.closed_ring.len()
+    );
+}
+
+/// Overlaying earlier captured turns would re-close an evicted UID and displace a newer line.
+#[test]
+fn coalesced_terminal_turns_keep_the_same_newest_lines_as_sequential_publishes() {
+    let turns: Vec<Vec<OrderRow>> = [(1, 1000), (1001, 1001)]
+        .into_iter()
+        .map(|(first, last)| {
+            (first..=last)
+                .map(|uid| {
+                    let mut row = order(uid);
+                    row.job_is_done = true;
+                    row.status = "Cancel".into();
+                    row
+                })
+                .collect()
+        })
+        .collect();
+    let core = || {
+        let mut core = crate::session::store::CoreData::new();
+        core.order_lines = OrderLineStore {
+            closed_keep: 1000,
+            ..Default::default()
+        };
+        core
+    };
+    let newest = |core: &crate::session::store::CoreData| {
+        core.order_lines
+            .market_draw_orders("BTCUSDT", 500)
+            .iter()
+            .map(|row| row.uid)
+            .collect::<Vec<_>>()
+    };
+    let mut sequential = core();
+    for turn in &turns {
+        sequential.apply(crate::feed::FeedMsg::Orders(turn.clone().into()));
+    }
+    for table in [false, true] {
+        let mut coalesced = core();
+        let payload = crate::feed::live::coalesced_order_rows(vec![], turns.clone());
+        assert_eq!(
+            payload.rows.iter().map(|row| row.uid).collect::<Vec<_>>(),
+            [1001]
+        );
+        coalesced.apply(if table {
+            crate::feed::FeedMsg::Orders(payload)
+        } else {
+            crate::feed::FeedMsg::OrderLines(payload)
+        });
+        assert_eq!(newest(&coalesced), (502..=1001).rev().collect::<Vec<_>>());
+        assert_eq!(newest(&coalesced), newest(&sequential));
+        assert_eq!(
+            coalesced
+                .order_lines
+                .order_state(500)
+                .unwrap()
+                .closed_reason,
+            Some(OrderCloseReason::Cancel)
+        );
+    }
+}
+
+/// Replaying the final turn twice would re-close its oldest evicted UID as the newest line.
+#[test]
+fn a_single_oversized_terminal_turn_matches_an_uncoalesced_publish() {
+    let rows: Vec<_> = (1..=1001)
+        .map(|uid| {
+            let mut row = order(uid);
+            row.job_is_done = true;
+            row.status = "Cancel".into();
+            row
+        })
+        .collect();
+    let mut plain = OrderLineStore {
+        closed_keep: 1000,
+        ..Default::default()
+    };
+    plain.update(&rows, 0);
+    for table in [false, true] {
+        let mut core = crate::session::store::CoreData::new();
+        core.order_lines = OrderLineStore {
+            closed_keep: 1000,
+            ..Default::default()
+        };
+        let payload = crate::feed::live::coalesced_order_rows(vec![], vec![rows.clone()]);
+        assert!(payload.captured_turns.is_empty());
+        core.apply(if table {
+            crate::feed::FeedMsg::Orders(payload)
+        } else {
+            crate::feed::FeedMsg::OrderLines(payload)
+        });
+        assert_eq!(core.order_lines.closed_ring, plain.closed_ring);
+        assert_eq!(core.order_lines.closed_queued, plain.closed_queued);
+        assert_eq!(core.order_lines.closed_dead, plain.closed_dead);
+        assert_eq!(
+            core.order_lines
+                .orders
+                .keys()
+                .copied()
+                .collect::<HashSet<_>>(),
+            (2..=1001).collect()
+        );
+        assert_eq!(
+            core.order_lines
+                .market_draw_orders("BTCUSDT", 500)
+                .iter()
+                .map(|row| row.uid)
+                .collect::<Vec<_>>(),
+            (502..=1001).rev().collect::<Vec<_>>()
+        );
+    }
+}
+
+/// Replaying an earlier captured X over a later snapshot-only turn would publish stale prices.
+#[test]
+fn coalesced_snapshot_only_turn_keeps_the_newest_snapshot_row() {
+    let mut older = order(1);
+    older.buy_price = 100.0;
+    let mut current = older.clone();
+    current.buy_price = 102.0;
+    let mut terminal = order(2);
+    terminal.job_is_done = true;
+    terminal.status = "Cancel".into();
+    for table in [false, true] {
+        let payload = crate::feed::live::coalesced_order_rows(
+            vec![current.clone()],
+            vec![vec![older.clone(), terminal.clone()], vec![]],
+        );
+        assert_eq!(payload.rows.len(), 1);
+        assert_eq!(payload.rows[0].buy_price, 102.0);
+        let mut core = crate::session::store::CoreData::new();
+        core.apply(if table {
+            crate::feed::FeedMsg::Orders(payload)
+        } else {
+            crate::feed::FeedMsg::OrderLines(payload)
+        });
+        let retained = core.order_lines.orders.get(&1).unwrap();
+        assert_eq!(
+            retained.lines[LineKind::Buy as usize]
+                .steps
+                .iter()
+                .map(|(_, price)| *price)
+                .collect::<Vec<_>>(),
+            [100.0, 102.0]
+        );
+        assert_eq!(
+            core.order_lines.order_state(2).unwrap().closed_reason,
+            Some(OrderCloseReason::Cancel)
+        );
+        if table {
+            assert_eq!(core.orders[0].buy_price, 102.0);
+        }
+    }
+}
+
 /// Sparse markets must not leave empty queues or queue entries the global ring already dropped.
 /// Otherwise a core that visits many quiet markets grows its closed indexes without a bound.
 #[test]

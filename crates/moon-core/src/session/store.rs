@@ -856,6 +856,22 @@ impl CoreData {
         changed
     }
 
+    /// Replays captured event turns in order without applying the complete-snapshot backstop.
+    fn ingest_captured_turns(&mut self, turns: &mut [Vec<OrderRow>]) -> bool {
+        let mut changed = false;
+        for turn in turns {
+            changed |= self
+                .clock_skew
+                .observe(turn, |uid| self.order_lines.knows(uid), now_unix_ms())
+                .is_some();
+            self.clock_skew.correct(turn);
+            changed |= self
+                .order_lines
+                .update_partial(turn, self.clock_skew.generation());
+        }
+        changed
+    }
+
     /// Apply an account-plane message to this core.
     ///
     /// The coordinator routes `Identity`, `CoreBase`, and `MarketDataChanged` without applying them
@@ -946,17 +962,7 @@ impl CoreData {
                 // nodes, and closures) from the corrected batch before moving it into the table
                 // list. Separate revisions gate the table and chart: every batch matters to the
                 // table, while only render-affecting order-line changes matter to the chart.
-                let mut changed = false;
-                for turn in &mut payload.captured_turns {
-                    changed |= self
-                        .clock_skew
-                        .observe(turn, |uid| self.order_lines.knows(uid), now_unix_ms())
-                        .is_some();
-                    self.clock_skew.correct(turn);
-                    changed |= self
-                        .order_lines
-                        .update_partial(turn, self.clock_skew.generation());
-                }
+                let mut changed = self.ingest_captured_turns(&mut payload.captured_turns);
                 changed |= self.ingest_order_rows(&mut payload.rows);
                 self.orders = payload.rows;
                 self.orders_table_rev = self.orders_table_rev.wrapping_add(1);
@@ -966,17 +972,7 @@ impl CoreData {
                 }
             }
             FeedMsg::OrderLines(mut payload) => {
-                let mut changed = false;
-                for turn in &mut payload.captured_turns {
-                    changed |= self
-                        .clock_skew
-                        .observe(turn, |uid| self.order_lines.knows(uid), now_unix_ms())
-                        .is_some();
-                    self.clock_skew.correct(turn);
-                    changed |= self
-                        .order_lines
-                        .update_partial(turn, self.clock_skew.generation());
-                }
+                let mut changed = self.ingest_captured_turns(&mut payload.captured_turns);
                 changed |= self.ingest_order_rows(&mut payload.rows);
                 if changed {
                     self.order_lines_rev = self.order_lines_rev.wrapping_add(1);

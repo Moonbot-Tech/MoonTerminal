@@ -60,10 +60,14 @@ pub(super) fn market_dirty_from_events(
                 // expose market names here. The terminal still narrows the wake
                 // to provider-wanted markets instead of waking all charts on
                 // every domain event.
-                wanted_flags = Some(or_wanted(wanted_flags, MarketDirtyFlags::HISTORY));
+                wanted_flags = Some(wanted_flags.map_or(MarketDirtyFlags::HISTORY, |flags| {
+                    flags | MarketDirtyFlags::HISTORY
+                }));
             }
             Event::Markets(MarketsEvent::PricesUpdated { .. }) => {
-                wanted_flags = Some(or_wanted(wanted_flags, MarketDirtyFlags::HISTORY));
+                wanted_flags = Some(wanted_flags.map_or(MarketDirtyFlags::HISTORY, |flags| {
+                    flags | MarketDirtyFlags::HISTORY
+                }));
             }
             // The core's chart archive was merged into this market's retained rings. `Ready` is an
             // apply barrier in MoonProto, so the older rows are already readable here. They sit
@@ -93,7 +97,9 @@ pub(super) fn market_dirty_from_events(
                 | MarketsEvent::NewMarketsAdded { .. }
                 | MarketsEvent::IndexesUpdated { .. },
             ) => {
-                wanted_flags = Some(or_wanted(wanted_flags, MarketDirtyFlags::MARKET_META));
+                wanted_flags = Some(wanted_flags.map_or(MarketDirtyFlags::MARKET_META, |flags| {
+                    flags | MarketDirtyFlags::MARKET_META
+                }));
             }
             _ => {}
         }
@@ -107,14 +113,6 @@ pub(super) fn market_dirty_from_events(
         .into_iter()
         .map(|(market, flags)| MarketDirty::new(market, flags))
         .collect()
-}
-
-/// OR `add` into the flags already owed to every wanted market.
-fn or_wanted(current: Option<MarketDirtyFlags>, add: MarketDirtyFlags) -> MarketDirtyFlags {
-    match current {
-        Some(flags) => flags | add,
-        None => add,
-    }
 }
 
 #[cfg(test)]

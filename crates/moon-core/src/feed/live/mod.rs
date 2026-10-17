@@ -118,6 +118,22 @@ pub(in crate::feed) use shared_config::SharedConfigSequence;
 pub(crate) use shared_config::core_config_from_proto;
 use startup_watchdog::{StartupStalled, StartupWatchdog};
 
+/// Combines the snapshot with the last event turn, replaying only earlier turns separately.
+pub(crate) fn coalesced_order_rows(
+    mut rows: Vec<crate::feed::OrderRow>,
+    mut captured_turns: Vec<Vec<crate::feed::OrderRow>>,
+) -> crate::feed::OrderRows {
+    // An empty last turn marks a newer snapshot-only update and intentionally overlays nothing.
+    // The overlaid turn is ingested once through the complete rows, including its evictions.
+    if let Some(last) = captured_turns.pop() {
+        overlay_captured_rows(&mut rows, last);
+    }
+    crate::feed::OrderRows {
+        rows,
+        captured_turns,
+    }
+}
+
 /// `ServerInfo` allocation observed at `ServerRestart`, pinned until version publication.
 ///
 /// `_snap` is the `Arc<MoonStateSnapshot>` from `client.snapshot()`. That snapshot owns a clone of
@@ -612,19 +628,14 @@ pub(super) fn run(
         if orders_mutated && server.feed.orders {
             if let Some(snap) = client.snapshot() {
                 snapshotless_orders = false;
-                let mut rows = build_snapshot_rows(server.id, &snap);
-                let captured_turns = std::mem::take(&mut pending_turns);
-                overlay_captured_rows(&mut rows, captured_turns.iter().flatten().cloned());
+                let rows = coalesced_order_rows(
+                    build_snapshot_rows(server.id, &snap),
+                    std::mem::take(&mut pending_turns),
+                );
                 let published_at = Instant::now();
                 orders_table.mark_attempt(published_at);
                 orders_lines.mark_attempt(published_at);
-                if tx
-                    .send(FeedMsg::Orders(crate::feed::OrderRows {
-                        rows,
-                        captured_turns,
-                    }))
-                    .is_err()
-                {
+                if tx.send(FeedMsg::Orders(rows)).is_err() {
                     break;
                 }
             }
@@ -2391,9 +2402,10 @@ pub(super) fn run(
                 match client.snapshot() {
                     Some(snap) => {
                         snapshotless_orders = false;
-                        let mut rows = build_snapshot_rows(server.id, &snap);
-                        let captured_turns = std::mem::take(&mut pending_turns);
-                        overlay_captured_rows(&mut rows, captured_turns.iter().flatten().cloned());
+                        let rows = coalesced_order_rows(
+                            build_snapshot_rows(server.id, &snap),
+                            std::mem::take(&mut pending_turns),
+                        );
                         let published_at = Instant::now();
                         orders_lines.mark_attempt(published_at);
                         if publish == OrdersPublish::Table {
@@ -2403,13 +2415,7 @@ pub(super) fn run(
                             // the cost of building them.
                             orders_table.mark_attempt(published_at);
                         }
-                        if tx
-                            .send(publish.message(crate::feed::OrderRows {
-                                rows,
-                                captured_turns,
-                            }))
-                            .is_err()
-                        {
+                        if tx.send(publish.message(rows)).is_err() {
                             break;
                         }
                     }

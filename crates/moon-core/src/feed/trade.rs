@@ -1040,7 +1040,8 @@ fn stop_memory_get(server_id: u64, uid: u64, kind: OrderStopKind) -> Option<(boo
         .copied()
 }
 
-fn stop_kind_tag(kind: OrderStopKind) -> u8 {
+/// Maps stop kinds to their shared override-array and stop-memory indices.
+pub(in crate::feed) fn stop_kind_tag(kind: OrderStopKind) -> u8 {
     match kind {
         OrderStopKind::StopLoss => 0,
         OrderStopKind::Trailing => 1,

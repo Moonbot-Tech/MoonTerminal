@@ -108,14 +108,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     moon_core::applog::set_file_logging(cfg.log_to_file, cfg.log_retention_days);
     // Per-market closed-order keep. One call, beside the other process-wide config
     // knobs, and nowhere near the feed-wake channel or its drain loop.
-    moon_core::session::order_lines::set_closed_keep_per_market(
-        moon_core::session::order_lines::closed_keep_for(
-            cfg.orders
-                .light
-                .max_closed_orders
-                .max(cfg.orders.dark.max_closed_orders),
-        ),
-    );
+    moon_core::session::order_lines::apply_orders_config(&cfg.orders);
     moon_core::applog::purge_old();
     let group_list = crate::window::group_window::groups(&cfg);
     log::info!("groups: {group_list:?} (servers: {})", cfg.servers.len());
