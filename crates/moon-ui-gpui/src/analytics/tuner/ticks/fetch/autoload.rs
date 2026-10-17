@@ -127,7 +127,7 @@ std::thread_local! {
     static HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// The autoload lock, released on drop; taking it twice on one thread panics in debug builds.
+/// The autoload lock, released on drop; taking it twice on one thread panics.
 struct Held(std::sync::MutexGuard<'static, Autoload>);
 
 impl std::ops::Deref for Held {
@@ -151,7 +151,7 @@ impl Drop for Held {
 }
 
 fn lock() -> Held {
-    debug_assert!(
+    assert!(
         !HELD.with(std::cell::Cell::get),
         "autoload lock taken twice on one thread: std::sync::Mutex is not re-entrant and would hang"
     );
