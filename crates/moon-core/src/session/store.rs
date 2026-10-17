@@ -941,21 +941,43 @@ impl CoreData {
                     self.telegram_rev = self.telegram_rev.wrapping_add(1);
                 }
             }
-            FeedMsg::Orders(mut orders) => {
+            FeedMsg::Orders(mut payload) => {
                 // Observe and correct clock skew, then update the retained line store (traces,
                 // nodes, and closures) from the corrected batch before moving it into the table
                 // list. Separate revisions gate the table and chart: every batch matters to the
                 // table, while only render-affecting order-line changes matter to the chart.
-                let changed = self.ingest_order_rows(&mut orders);
-                self.orders = orders;
+                let mut changed = false;
+                for turn in &mut payload.captured_turns {
+                    changed |= self
+                        .clock_skew
+                        .observe(turn, |uid| self.order_lines.knows(uid), now_unix_ms())
+                        .is_some();
+                    self.clock_skew.correct(turn);
+                    changed |= self
+                        .order_lines
+                        .update_partial(turn, self.clock_skew.generation());
+                }
+                changed |= self.ingest_order_rows(&mut payload.rows);
+                self.orders = payload.rows;
                 self.orders_table_rev = self.orders_table_rev.wrapping_add(1);
                 if changed {
                     self.order_lines_rev = self.order_lines_rev.wrapping_add(1);
                     self.order_lines_rev_ms = now_unix_ms_i64();
                 }
             }
-            FeedMsg::OrderLines(mut orders) => {
-                let changed = self.ingest_order_rows(&mut orders);
+            FeedMsg::OrderLines(mut payload) => {
+                let mut changed = false;
+                for turn in &mut payload.captured_turns {
+                    changed |= self
+                        .clock_skew
+                        .observe(turn, |uid| self.order_lines.knows(uid), now_unix_ms())
+                        .is_some();
+                    self.clock_skew.correct(turn);
+                    changed |= self
+                        .order_lines
+                        .update_partial(turn, self.clock_skew.generation());
+                }
+                changed |= self.ingest_order_rows(&mut payload.rows);
                 if changed {
                     self.order_lines_rev = self.order_lines_rev.wrapping_add(1);
                     self.order_lines_rev_ms = now_unix_ms_i64();

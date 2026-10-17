@@ -911,3 +911,22 @@ fn reclosed_uid_occupies_one_queue_slot() {
     assert_eq!(queue.iter().filter(|uid| **uid == 7).count(), 1);
     assert_eq!(store.closed_ring.iter().filter(|uid| **uid == 7).count(), 1);
 }
+
+/// Treating a captured turn as complete would falsely close an unrelated order after a gap.
+#[test]
+fn partial_updates_leave_absent_orders_open_but_full_updates_keep_the_backstop() {
+    let mut store = OrderLineStore::default();
+    store.update(&[order(42)], 0);
+    store.orders.get_mut(&42).unwrap().last_seen_ms -= CLOSE_GRACE_MS + 1.0;
+
+    assert!(!store.update_partial(&[], 0));
+    assert!(store.order_state(42).unwrap().active);
+    assert!(store.update_partial(&[order(43)], 0));
+    assert!(store.order_state(42).unwrap().active);
+
+    assert!(store.update(&[order(43)], 0));
+    assert_eq!(
+        store.order_state(42).unwrap().closed_reason,
+        Some(OrderCloseReason::BackstopMissing)
+    );
+}

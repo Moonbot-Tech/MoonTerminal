@@ -1006,6 +1006,20 @@ pub(super) fn stop_override(
         .filter(|on| *on == wire_now)
 }
 
+/// Copies this core's explicit stop choices under one lock for an entire row build.
+pub(super) fn stop_overrides_for(
+    server_id: u64,
+) -> std::collections::HashMap<u64, [Option<bool>; 3]> {
+    let overrides = stop_overrides_map().lock().unwrap();
+    if overrides.is_empty() {
+        return std::collections::HashMap::new();
+    }
+    overrides
+        .iter()
+        .filter_map(|(&(core, uid), flags)| (core == server_id).then_some((uid, *flags)))
+        .collect()
+}
+
 /// Remembers stop parameters erased by disabling. Key: (core, order uid, stop kind) →
 /// (fixed, level, spread|vol). It lives until process exit and holds only a handful of entries
 /// per session because writes occur only when a stop is manually disabled from the order table

@@ -514,6 +514,11 @@ impl OrderLineStore {
     ///         `entry_fill_ms` RE-DERIVED from its row in this batch, if it has one — see
     ///         `RetainedOrder::correction_gen`.
     pub fn update(&mut self, rows: &[OrderRow], skew_generation: u64) -> bool {
+        self.update_rows(rows, skew_generation, true)
+    }
+
+    /// Applies corrected rows, checking absent UIDs only for a complete snapshot.
+    fn update_rows(&mut self, rows: &[OrderRow], skew_generation: u64, complete: bool) -> bool {
         let now_ms = now_unix_ms();
         self.update_generation = self.update_generation.wrapping_add(1);
         let generation = self.update_generation;
@@ -791,7 +796,10 @@ impl OrderLineStore {
             let Some(ord) = self.orders.get_mut(&uid) else {
                 continue;
             };
-            if ord.seen_generation != generation && now_ms - ord.last_seen_ms > CLOSE_GRACE_MS {
+            if complete
+                && ord.seen_generation != generation
+                && now_ms - ord.last_seen_ms > CLOSE_GRACE_MS
+            {
                 ord.closed_ms = Some(ord.last_seen_ms);
                 ord.closed_reason = Some(OrderCloseReason::BackstopMissing);
                 ord.closed_store_ms = Some(now_ms);
@@ -1135,6 +1143,11 @@ impl OrderLineStore {
     /// to answer "have we ever seen it before", not "is it new".
     pub fn knows(&self, uid: u64) -> bool {
         self.orders.contains_key(&uid)
+    }
+
+    /// Applies a captured turn without treating absent UIDs as missing from a snapshot.
+    pub fn update_partial(&mut self, rows: &[OrderRow], skew_generation: u64) -> bool {
+        self.update_rows(rows, skew_generation, false)
     }
 }
 

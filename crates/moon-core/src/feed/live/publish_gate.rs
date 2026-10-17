@@ -9,6 +9,9 @@ use super::*;
 /// free to be edited without the other.
 pub(super) const ORDERS_TABLE_PERIOD: Duration = Duration::from_millis(250);
 
+/// Leading-edge cadence for chart order lines during bursts.
+pub(super) const ORDER_LINES_PERIOD: Duration = Duration::from_millis(50);
+
 /// What one orders turn publishes.
 ///
 /// Only the two things a turn can actually send: "nothing" is the absence of one, spelled `None` by
@@ -17,7 +20,7 @@ pub(super) const ORDERS_TABLE_PERIOD: Duration = Duration::from_millis(250);
 pub(super) enum OrdersPublish {
     /// The whole retained table, on the [`ORDERS_TABLE_PERIOD`] throttle.
     Table,
-    /// Only the chart's order lines, immediately on an order event.
+    /// Only the chart's order lines, on the leading-edge 50 ms throttle.
     Lines,
 }
 
@@ -30,15 +33,14 @@ impl OrdersPublish {
     /// Args:
     ///     table_due: Whether the table's throttle says it may publish now — see
     ///         `CoalescedDeadline::is_due`, which answers only for work actually queued.
-    ///     has_line_event: Whether this batch carried an event the chart's order lines must see at
-    ///         once.
+    ///     lines_due: Whether queued line work has reached its leading-edge deadline.
     ///
     /// Returns:
     ///     The publication, or `None` when this turn owes nothing.
-    pub(super) fn decide(table_due: bool, has_line_event: bool) -> Option<Self> {
+    pub(super) fn decide(table_due: bool, lines_due: bool) -> Option<Self> {
         if table_due {
             Some(Self::Table)
-        } else if has_line_event {
+        } else if lines_due {
             Some(Self::Lines)
         } else {
             None
@@ -46,7 +48,7 @@ impl OrdersPublish {
     }
 
     /// The message this publication puts on the channel.
-    pub(super) fn message(self, rows: Vec<crate::feed::OrderRow>) -> FeedMsg {
+    pub(super) fn message(self, rows: crate::feed::OrderRows) -> FeedMsg {
         match self {
             Self::Table => FeedMsg::Orders(rows),
             Self::Lines => FeedMsg::OrderLines(rows),

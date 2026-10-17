@@ -20,7 +20,7 @@ use client_slot::{ClientSlotGuard, RunStateSeen};
 use loop_helpers::{
     closed_row_uid, hex_dump, should_publish_assets, tg_opened, trace_field_indices,
 };
-use publish_gate::{ORDERS_TABLE_PERIOD, OrdersPublish};
+use publish_gate::{ORDER_LINES_PERIOD, ORDERS_TABLE_PERIOD, OrdersPublish};
 pub(in crate::feed) use run_guards::{EndpointUnusable, KeyUnreadable, NeverOperational};
 use run_guards::{reconnect_is_operational, run_failed, startup_poll_settled};
 use strategy_publish::{
@@ -50,6 +50,7 @@ mod temp_blacklist;
 #[cfg(test)]
 mod tests;
 mod trace_backfill;
+mod ui_trace_asks;
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, sync_channel};
@@ -65,7 +66,7 @@ use moonproto::{
 };
 
 use self::trace_backfill::TracePacer;
-use super::assets::{build_assets, build_transfer_assets};
+use super::assets::{build_assets, build_transfer_assets, cached_market_names};
 use super::strategies::{
     alert_params, build_schema_model, detect_strat_name, fmt_field, schema_default_fields,
     strat_db_dump, strat_display_name, strat_field_bool, strat_kind_name, tg_detect,
@@ -98,9 +99,9 @@ pub(in crate::feed) use client_settings::ClientSettingsSequence;
 pub(in crate::feed) use commands::ChartTextWanted;
 use commands::{CommandDrain, LocalStratEdits, StrategyPlacementGuard, drain_commands};
 use convert::{
-    build_order_rows, client_settings_from_proto, license_state_from_proto,
-    profit_state_from_proto, runtime_state_from_proto, settings_event_snapshot,
-    sys_status_from_proto, telegram_from_proto,
+    build_captured_rows, build_snapshot_rows, client_settings_from_proto, license_state_from_proto,
+    overlay_captured_rows, profit_state_from_proto, runtime_state_from_proto,
+    settings_event_snapshot, sys_status_from_proto, telegram_from_proto,
 };
 pub use convert::{percentage_stop_price, percentage_take_price};
 use deadline::CoalescedDeadline;
@@ -380,6 +381,8 @@ pub(super) fn run(
     // keeps the first publication of a connection where it has always been rather than one
     // interval earlier.
     let mut orders_table = CoalescedDeadline::idle_since(ORDERS_TABLE_PERIOD, Instant::now());
+    let mut orders_lines = CoalescedDeadline::new(ORDER_LINES_PERIOD);
+    let mut pending_turns: Vec<Vec<crate::feed::OrderRow>> = Vec::new();
     // Latched while the client has no state snapshot to build order rows from, so the condition is
     // reported once per episode instead of on every turn.
     let mut snapshotless_orders = false;
@@ -387,6 +390,7 @@ pub(super) fn run(
     // Assets snapshot rate cap: minimum 1 s between publishes while the Assets view is active,
     // otherwise 5 s. Publication still requires a domain event; this is not a periodic timer.
     let mut last_assets = Instant::now();
+    let mut market_names_cache = None;
     // Coalesced repair requests for account changes that need a fresh balance or wallet snapshot,
     // plus the recurring API-key expiration poll.
     let mut account_reconciliation = AccountReconciliation::new(Instant::now());
@@ -454,6 +458,7 @@ pub(super) fn run(
     // `trace_ask_rx`. Locals of this attempt like `pending_alive`: a reconnect starts the queue
     // empty, and MoonProto fails what was in flight on its own.
     let mut trace_pacer = TracePacer::default();
+    let mut ui_trace_asks = ui_trace_asks::UiTraceAsks::default();
     let trace_sink = crate::db::order_traces::sink();
     let (trace_ask_sink, trace_ask_rx) = AskSink::new(wake_tx.clone());
     // Field indices of `ReportUID` and `CloseDate`, resolved once per schema revision as the
@@ -565,6 +570,7 @@ pub(super) fn run(
             return Ok(());
         }
         for uid in trace_asks {
+            ui_trace_asks.ask(uid);
             trace_pacer.push_front(uid);
         }
         while let Ok(uids) = trace_ask_rx.try_recv() {
@@ -583,12 +589,13 @@ pub(super) fn run(
                 crate::feed::core_label(server.id)
             );
             trace_pacer.answered(report_uid, false);
-            if tx
-                .send(FeedMsg::ReportTraces {
-                    report_uid,
-                    outcome: crate::feed::ReportTracesOutcome::Failed(error.to_string()),
-                })
-                .is_err()
+            if ui_trace_asks.deliver(report_uid)
+                && tx
+                    .send(FeedMsg::ReportTraces {
+                        report_uid,
+                        outcome: crate::feed::ReportTracesOutcome::Failed(error.to_string()),
+                    })
+                    .is_err()
             {
                 return Ok(());
             }
@@ -605,9 +612,19 @@ pub(super) fn run(
         if orders_mutated && server.feed.orders {
             if let Some(snap) = client.snapshot() {
                 snapshotless_orders = false;
-                let order_rows = build_order_rows(server.id, &snap, &[]);
-                orders_table.mark_attempt(Instant::now());
-                if tx.send(FeedMsg::Orders(order_rows)).is_err() {
+                let mut rows = build_snapshot_rows(server.id, &snap);
+                let captured_turns = std::mem::take(&mut pending_turns);
+                overlay_captured_rows(&mut rows, captured_turns.iter().flatten().cloned());
+                let published_at = Instant::now();
+                orders_table.mark_attempt(published_at);
+                orders_lines.mark_attempt(published_at);
+                if tx
+                    .send(FeedMsg::Orders(crate::feed::OrderRows {
+                        rows,
+                        captured_turns,
+                    }))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -2031,10 +2048,12 @@ pub(super) fn run(
                                 lines: lines.clone(),
                             });
                         }
-                        let _ = tx.send(FeedMsg::ReportTraces {
-                            report_uid: ticket.report_uid,
-                            outcome: crate::feed::ReportTracesOutcome::Ready(lines),
-                        });
+                        if ui_trace_asks.deliver(ticket.report_uid) {
+                            let _ = tx.send(FeedMsg::ReportTraces {
+                                report_uid: ticket.report_uid,
+                                outcome: crate::feed::ReportTracesOutcome::Ready(lines),
+                            });
+                        }
                     }
                     Event::Report(ReportEvent::TraceFailed { ticket, error }) => {
                         log::warn!(
@@ -2043,10 +2062,12 @@ pub(super) fn run(
                             ticket.report_uid
                         );
                         trace_pacer.answered(ticket.report_uid, false);
-                        let _ = tx.send(FeedMsg::ReportTraces {
-                            report_uid: ticket.report_uid,
-                            outcome: crate::feed::ReportTracesOutcome::Failed(error.clone()),
-                        });
+                        if ui_trace_asks.deliver(ticket.report_uid) {
+                            let _ = tx.send(FeedMsg::ReportTraces {
+                                report_uid: ticket.report_uid,
+                                outcome: crate::feed::ReportTracesOutcome::Failed(error.clone()),
+                            });
+                        }
                     }
                     // Typed report-database replica: send schema, rows, catch-up state, and
                     // reconciliation results to the SQLite writer, the sole write-connection owner.
@@ -2346,44 +2367,56 @@ pub(super) fn run(
             }
         }
 
-        // A snapshot is cheap (an Arc clone), but read it only after an actual domain event. Throttle
-        // the UI order table to about 4 Hz while updating the chart/order-line store immediately on
-        // OrderEvent. Otherwise a short terminal status (Cancel/Fail with deferred-removal=0) can be
-        // missed between two table ticks.
+        // Capture this turn now so terminal states survive removal during the line cooldown.
+        // Full row construction is reserved for a due table or leading-edge line publication.
         let orders_now = Instant::now();
         if server.feed.orders && has_orders_table_event {
             orders_table.queue(orders_now);
         }
-        if server.feed.orders && (had_domain_event || orders_table.is_queued()) {
-            let publish =
-                OrdersPublish::decide(orders_table.is_due(orders_now), has_order_line_event);
+        if server.feed.orders && has_order_line_event {
+            orders_lines.queue(orders_now);
+            if let Some(snap) = client.snapshot() {
+                pending_turns.push(build_captured_rows(server.id, &snap, &events));
+            }
+        }
+        if server.feed.orders
+            && (had_domain_event || orders_table.is_queued() || orders_lines.is_queued())
+        {
+            let publish = OrdersPublish::decide(
+                orders_table.is_due(orders_now),
+                orders_lines.is_due(orders_now),
+            );
             // Read the snapshot only for a publication that is actually owed, as above.
             if let Some(publish) = publish {
                 match client.snapshot() {
                     Some(snap) => {
                         snapshotless_orders = false;
-                        let rows = build_order_rows(server.id, &snap, &events);
+                        let mut rows = build_snapshot_rows(server.id, &snap);
+                        let captured_turns = std::mem::take(&mut pending_turns);
+                        overlay_captured_rows(&mut rows, captured_turns.iter().flatten().cloned());
+                        let published_at = Instant::now();
+                        orders_lines.mark_attempt(published_at);
                         if publish == OrdersPublish::Table {
                             // Not `orders_now`: that is when the turn DECIDED, and the cooldown
                             // has to run from when the table actually went out, after the rows
                             // were built. Stamping the earlier moment shortens every period by
                             // the cost of building them.
-                            orders_table.mark_attempt(Instant::now());
+                            orders_table.mark_attempt(published_at);
                         }
-                        if tx.send(publish.message(rows)).is_err() {
+                        if tx
+                            .send(publish.message(crate::feed::OrderRows {
+                                rows,
+                                captured_turns,
+                            }))
+                            .is_err()
+                        {
                             break;
                         }
                     }
-                    // No state to build rows from — reachable only once MoonProto's runtime is
-                    // gone for good, since it publishes the snapshot before the events that carry
-                    // it and clears it only at teardown. Both halves here are the TABLE's: it is
-                    // the only publication that carries a deadline and the only one that still owes
-                    // a send after being declined. `defer` keeps that debt while stopping `wait`
-                    // from answering zero every pass — the shape this replaced spun the thread at
-                    // 100%, and an unlogged version of it would publish nothing just as quietly,
-                    // which is what the once-per-episode warning is for.
-                    None if publish == OrdersPublish::Table => {
+                    // Retain both debts while preventing a zero-wait loop at client teardown.
+                    None => {
                         orders_table.defer(orders_now);
+                        orders_lines.defer(orders_now);
                         if !snapshotless_orders {
                             snapshotless_orders = true;
                             log::warn!(
@@ -2393,7 +2426,6 @@ pub(super) fn run(
                             );
                         }
                     }
-                    None => {}
                 }
             }
         }
@@ -2642,7 +2674,23 @@ pub(super) fn run(
                 let futures_account = info
                     .as_ref()
                     .is_some_and(|i| i.supports(moonproto::ExchangeTypeMask::FUTURES));
-                let assets = build_assets(snap.markets(), snap.balances(), &base, futures_account);
+                let names = cached_market_names(
+                    &mut market_names_cache,
+                    client_slot.catalog_revision(),
+                    || {
+                        snap.markets()
+                            .iter()
+                            .map(|h| h.name().to_string())
+                            .collect()
+                    },
+                );
+                let assets = build_assets(
+                    snap.markets(),
+                    names,
+                    snap.balances(),
+                    &base,
+                    futures_account,
+                );
                 if tx.send(FeedMsg::Assets(assets)).is_err() {
                     break;
                 }
@@ -2732,6 +2780,11 @@ pub(super) fn run(
             .orders
             .then(|| orders_table.wait(wait_now))
             .flatten();
+        let order_lines_wait = server
+            .feed
+            .orders
+            .then(|| orders_lines.wait(wait_now))
+            .flatten();
         // Without this a deferred strategy-edit publish would sleep until whichever unrelated
         // deadline fires next — the API-key poll, minutes out on a quiet core — instead of the
         // ~250 ms rate-limit window it is actually waiting on. The latch never loses the edit,
@@ -2754,6 +2807,7 @@ pub(super) fn run(
         let trace_wait = trace_pacer.next_due(wait_now);
         let wake_wait = [
             order_wait,
+            order_lines_wait,
             account_wait,
             startup_wait,
             strat_edit_wait,

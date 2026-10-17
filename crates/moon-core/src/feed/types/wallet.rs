@@ -150,7 +150,7 @@ pub struct AssetsSnapshot {
     /// Names of every market in the core's catalog. The UI gates the Market Sell button on this
     /// set because a coin can be sold only when `<coin><quote>` exists. For example, if a USDC
     /// account has no `USDTUSDC` market, the button for USDT is hidden.
-    pub markets: std::collections::HashSet<String>,
+    pub markets: std::sync::Arc<std::collections::HashSet<String>>,
     /// Per-core leverage from `leverage_x` for every tracked market, not only markets with a
     /// position. The toolbar reads it for the main chart's coin. Markets without account data are
     /// omitted because the core resets their `leverage_x` to 1, leaving their actual leverage

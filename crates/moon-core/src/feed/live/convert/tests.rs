@@ -103,6 +103,27 @@ fn overlay_matches_reference_over_synthetic_streams() {
     assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
 }
 
+/// Table publication must drain every pending turn, including a terminal UID absent from snapshot.
+#[test]
+fn pending_turns_overlay_in_order_and_preserve_removed_terminal_uid() {
+    let turns = vec![
+        vec![overlay_row(7, 1)],
+        vec![overlay_row(7, 2)],
+        vec![{
+            let mut row = overlay_row(8, 3);
+            row.status = "Cancel".into();
+            row
+        }],
+    ];
+    let mut rows = vec![overlay_row(7, 0)];
+    overlay_captured_rows(&mut rows, turns.into_iter().flatten());
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].status, "revision-2");
+    assert_eq!(rows[1].uid, 8);
+    assert_eq!(rows[1].status, "Cancel");
+    assert!(rows[1].job_is_done);
+}
+
 /// Measures overlay work independently of input cloning over 50 synthetic batches.
 #[test]
 #[ignore]

@@ -491,10 +491,9 @@ fn a_skewed_batch_lands_within_a_second_of_true_utc() {
     let mut cd = CoreData::new();
     let raw = now + 7_200_000.0;
 
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw, now),
-        traced_order_row(2, raw, now),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![traced_order_row(1, raw, now), traced_order_row(2, raw, now)].into(),
+    ));
 
     assert!((cd.orders[0].create_time_ms - now).abs() < 1_000.0);
     let retained = cd
@@ -513,7 +512,9 @@ fn an_honest_utc_core_passes_through_byte_identical() {
     let now = crate::util::now_unix_ms();
     let mut cd = CoreData::new();
 
-    cd.apply(FeedMsg::Orders(vec![order_row(1, now), order_row(2, now)]));
+    cd.apply(FeedMsg::Orders(
+        vec![order_row(1, now), order_row(2, now)].into(),
+    ));
 
     assert_eq!(cd.orders[0].create_time_ms, now);
     assert_eq!(cd.orders[1].create_time_ms, now);
@@ -530,10 +531,10 @@ fn the_same_raw_batch_applied_twice_does_not_shift_twice() {
     let raw = now + 7_200_000.0;
     let batch = || vec![traced_order_row(1, raw, now), traced_order_row(2, raw, now)];
 
-    cd.apply(FeedMsg::Orders(batch()));
+    cd.apply(FeedMsg::Orders(batch().into()));
     let first = cd.orders[0].create_time_ms;
 
-    cd.apply(FeedMsg::Orders(batch()));
+    cd.apply(FeedMsg::Orders(batch().into()));
     let second = cd.orders[0].create_time_ms;
 
     assert_eq!(first, second);
@@ -546,10 +547,9 @@ fn begin_connection_attempt_clears_the_clock_skew_estimate() {
     let now = crate::util::now_unix_ms();
     let mut cd = CoreData::new();
     let raw = now + 7_200_000.0;
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw, now),
-        traced_order_row(2, raw, now),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![traced_order_row(1, raw, now), traced_order_row(2, raw, now)].into(),
+    ));
     assert_eq!(cd.clock_skew.skew_ms(), 7_200_000.0);
 
     cd.begin_connection_attempt();
@@ -571,7 +571,7 @@ fn a_later_adoption_repairs_lines_retained_by_an_earlier_batch() {
     let raw = now - 7_200_000.0;
 
     // Batch 1: a single new order — one vote, not enough to adopt yet, so it is retained raw.
-    cd.apply(FeedMsg::Orders(vec![traced_order_row(1, raw, now)]));
+    cd.apply(FeedMsg::Orders(vec![traced_order_row(1, raw, now)].into()));
     let rev_after_batch1 = cd.order_lines_rev;
     let retained_before = cd
         .order_lines
@@ -585,11 +585,14 @@ fn a_later_adoption_repairs_lines_retained_by_an_earlier_batch() {
     );
 
     // Batch 2: two more new orders agreeing on the same bucket — now enough votes to adopt.
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw, now),
-        traced_order_row(2, raw, now),
-        traced_order_row(3, raw, now),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![
+            traced_order_row(1, raw, now),
+            traced_order_row(2, raw, now),
+            traced_order_row(3, raw, now),
+        ]
+        .into(),
+    ));
 
     let retained_after = cd
         .order_lines
@@ -616,10 +619,13 @@ fn a_reconnect_then_a_new_adoption_leaves_retained_create_ms_correct() {
     let raw1 = now1 + 7_200_000.0;
 
     // First connection adopts a +2h skew and retains uid 1 corrected under it.
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw1, now1),
-        traced_order_row(2, raw1, now1),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![
+            traced_order_row(1, raw1, now1),
+            traced_order_row(2, raw1, now1),
+        ]
+        .into(),
+    ));
     assert_eq!(cd.clock_skew.skew_ms(), 7_200_000.0);
     let retained_first = cd
         .order_lines
@@ -638,10 +644,13 @@ fn a_reconnect_then_a_new_adoption_leaves_retained_create_ms_correct() {
     // fresh uid agreeing on the same bucket.
     let now2 = crate::util::now_unix_ms();
     let raw2 = now2 - 5_400_000.0;
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw2, now2),
-        traced_order_row(10, raw2, now2),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![
+            traced_order_row(1, raw2, now2),
+            traced_order_row(10, raw2, now2),
+        ]
+        .into(),
+    ));
     assert_eq!(cd.clock_skew.skew_ms(), -5_400_000.0);
 
     let retained_second = cd
@@ -669,10 +678,9 @@ fn a_reconnect_on_the_same_core_does_not_move_a_retained_start() {
     let mut cd = CoreData::new();
     let raw = now + 7_200_000.0;
 
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw, now),
-        traced_order_row(2, raw, now),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![traced_order_row(1, raw, now), traced_order_row(2, raw, now)].into(),
+    ));
     assert_eq!(cd.clock_skew.skew_ms(), 7_200_000.0);
     let retained_before = cd
         .order_lines
@@ -686,10 +694,9 @@ fn a_reconnect_on_the_same_core_does_not_move_a_retained_start() {
     cd.begin_connection_attempt();
     assert_eq!(cd.clock_skew.skew_ms(), 0.0);
 
-    cd.apply(FeedMsg::Orders(vec![
-        traced_order_row(1, raw, now),
-        traced_order_row(2, raw, now),
-    ]));
+    cd.apply(FeedMsg::Orders(
+        vec![traced_order_row(1, raw, now), traced_order_row(2, raw, now)].into(),
+    ));
     assert_eq!(cd.clock_skew.skew_ms(), 7_200_000.0);
 
     let retained_after = cd
@@ -1470,5 +1477,118 @@ fn the_detect_index_shares_the_newest_row_in_the_ring() {
             "{market} index must be the ring row"
         );
         assert_eq!(latest.seq, 4_990 + market_index);
+    }
+}
+
+/// Flattening captured turns into only the final row loses the 101 reprice before 102.
+#[test]
+fn coalesced_turns_preserve_every_line_reprice_for_both_publications() {
+    let now = crate::util::now_unix_ms();
+    let turns: Vec<Vec<OrderRow>> = [100.0, 101.0, 102.0]
+        .into_iter()
+        .map(|price| {
+            let mut row = order_row(991, now - 10_000.0);
+            row.market = "SYNQUOTE".into();
+            row.buy_price = price;
+            vec![row]
+        })
+        .collect();
+    let prices = |core: &CoreData| -> Vec<f32> {
+        core.order_lines
+            .iter_market("SYNQUOTE")
+            .find(|o| o.uid == 991)
+            .unwrap()
+            .lines[0]
+            .steps
+            .iter()
+            .map(|(_, price)| *price)
+            .collect()
+    };
+    let mut sequential = CoreData::new();
+    for turn in &turns {
+        sequential.apply(FeedMsg::OrderLines(turn.clone().into()));
+    }
+    assert_eq!(prices(&sequential), [100.0, 101.0, 102.0]);
+    for table in [false, true] {
+        let mut core = CoreData::new();
+        let payload = crate::feed::OrderRows {
+            rows: turns.last().unwrap().clone(),
+            captured_turns: turns.clone(),
+        };
+        core.apply(if table {
+            FeedMsg::Orders(payload)
+        } else {
+            FeedMsg::OrderLines(payload)
+        });
+        assert_eq!(prices(&core), prices(&sequential));
+    }
+}
+
+/// A removed cancelled UID must be retained as Cancel rather than disappear into BackstopMissing.
+#[test]
+fn coalesced_terminal_row_survives_an_empty_snapshot() {
+    let mut row = order_row(992, crate::util::now_unix_ms() - 10_000.0);
+    row.market = "SYNQUOTE".into();
+    row.status = "Cancel".into();
+    row.job_is_done = true;
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::Orders(crate::feed::OrderRows {
+        rows: vec![row.clone()],
+        captured_turns: vec![vec![row]],
+    }));
+    let retained = core
+        .order_lines
+        .iter_market("SYNQUOTE")
+        .find(|o| o.uid == 992)
+        .unwrap();
+    assert_eq!(
+        retained.closed_reason,
+        Some(crate::session::order_lines::OrderCloseReason::Cancel)
+    );
+}
+
+/// Complete-snapshot replay of partial turns would close and revive unrelated orders after a gap.
+#[test]
+fn coalesced_partial_turns_after_a_gap_do_not_close_unrelated_orders() {
+    let now = crate::util::now_unix_ms();
+    let rows: Vec<_> = [993, 994]
+        .into_iter()
+        .map(|uid| {
+            let mut row = order_row(uid, now - 10_000.0);
+            row.market = "SYNQUOTE".into();
+            row.buy_price = 100.0;
+            row
+        })
+        .collect();
+    let mut cases = Vec::new();
+    for table in [false, true] {
+        for empty in [false, true] {
+            let mut core = CoreData::new();
+            core.apply(FeedMsg::Orders(rows.clone().into()));
+            let revision = core.order_lines.rev;
+            cases.push((core, table, empty, revision));
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(2_600));
+    for (mut core, table, empty, revision) in cases {
+        let payload = crate::feed::OrderRows {
+            rows: rows.clone(),
+            captured_turns: vec![if empty { vec![] } else { vec![rows[0].clone()] }],
+        };
+        core.apply(if table {
+            FeedMsg::Orders(payload)
+        } else {
+            FeedMsg::OrderLines(payload)
+        });
+        assert_eq!(
+            core.order_lines.rev, revision,
+            "no transient close or revival"
+        );
+        for uid in [993, 994] {
+            let state = core.order_lines.order_state(uid).unwrap();
+            assert!(state.active);
+            assert_eq!(state.closed_reason, None);
+            assert_eq!(state.closed_rev, None);
+        }
     }
 }
