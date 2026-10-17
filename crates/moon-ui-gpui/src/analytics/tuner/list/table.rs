@@ -2,6 +2,7 @@
 //! one row per strategy group, and the sortable column header. The controls it renders
 //! under — filters, sort state, column masks — live in the parent (`list`).
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MOON_SCROLLBAR_TRACK, MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonPalette,
@@ -763,10 +764,11 @@ impl AnalyticsView {
             return None;
         }
         let (text, warn) = self.auto_picks.status(total)?;
-        Some(auto_progress_row(
+        Some(progress_row(
             text,
             warn,
             self.auto_picks.fraction(),
+            false,
             p,
             cx,
         ))
@@ -789,25 +791,12 @@ impl AnalyticsView {
     }
 }
 
-/// The auto-pick's progress line, as a free function so a layout probe can draw it.
-///
-/// One line, the full width of the strategy card, clipped at the right edge. A text child
-/// with `min_w_0` and no nowrap, inside this horizontal row, was measured at zero width and
-/// wrapped one glyph per line, so the card grew a strip hundreds of pixels tall.
-///
-/// Args:
-///     text: The progress or result sentence.
-///     warn: Draw it amber, as a failed read.
-///     fraction: The running batch's 0..=1 progress, for the thin bar; `None` when not running.
-///     p: Active palette.
-///     cx: App, for sizing.
-///
-/// Returns:
-///     The row; its sentence carries the `an-auto-progress-txt` debug selector.
-pub(in crate::analytics::tuner) fn auto_progress_row(
+/// Shared progress bar and caption, with optional wrapping for the readiness estimate.
+pub(in crate::analytics::tuner) fn progress_row(
     text: String,
     warn: bool,
     fraction: Option<f32>,
+    wrap: bool,
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -827,8 +816,19 @@ pub(in crate::analytics::tuner) fn auto_progress_row(
             )
     });
     h_flex()
-        .id("an-auto-progress")
-        .debug_selector(|| "an-auto-progress".to_string())
+        .id(if wrap {
+            "an-ready-progress"
+        } else {
+            "an-auto-progress"
+        })
+        .debug_selector(move || {
+            if wrap {
+                "an-ready-progress"
+            } else {
+                "an-auto-progress"
+            }
+            .to_string()
+        })
         .w_full()
         .self_stretch()
         .flex_none()
@@ -842,10 +842,17 @@ pub(in crate::analytics::tuner) fn auto_progress_row(
         .children(bar)
         .child(
             div()
-                .debug_selector(|| "an-auto-progress-txt".to_string())
+                .debug_selector(move || {
+                    if wrap {
+                        "an-ready-progress-txt"
+                    } else {
+                        "an-auto-progress-txt"
+                    }
+                    .to_string()
+                })
                 .flex_1()
                 .min_w_0()
-                .truncate()
+                .when(!wrap, |el| el.truncate())
                 .child(text),
         )
         .into_any_element()

@@ -46,6 +46,57 @@ pub(super) fn unmodelled_map<'a>(
         .collect()
 }
 
+/// Render the same watched exit fields for a strategy read independently by the batch.
+pub(super) fn strategy_warns(
+    name: &str,
+    own: &HashMap<String, String>,
+    defaults: &HashMap<String, f64>,
+    deps: &FieldDeps,
+    human: bool,
+) -> Vec<String> {
+    let fields = unmodelled_fields(own, defaults, deps);
+    if fields.is_empty() {
+        return Vec::new();
+    }
+    let fields = fields
+        .iter()
+        .map(|f| {
+            (
+                f.key.to_string(),
+                f.value.clone(),
+                crate::strategies::sections::section_display_title(f.section.schema_title(), human),
+                f.rule.is_some(),
+            )
+        })
+        .collect();
+    warn_lines(vec![(name.to_string(), fields)], Vec::new())
+}
+
+/// Format single-card and batch warnings identically before write consent.
+fn warn_lines(rows: Vec<WarnRow>, unread: Vec<String>) -> Vec<String> {
+    let mut warns = Vec::new();
+    if !rows.is_empty() {
+        warns.push(t!("analytics.ticks.unmodelled_save").to_string());
+    }
+    warns.extend(rows.into_iter().map(|(name, fields)| {
+        let fields: Vec<String> = fields
+            .into_iter()
+            .map(|(key, value, section, _)| format!("{key} = {value} ({section})"))
+            .collect();
+        format!("{name}: {}", fields.join(", "))
+    }));
+    if !unread.is_empty() {
+        warns.push(
+            t!(
+                "analytics.ticks.unmodelled_unread",
+                names = unread.join(", ")
+            )
+            .to_string(),
+        );
+    }
+    warns
+}
+
 impl AnalyticsView {
     /// The warning's rows for `strategies`, in the order given, a strategy once; the ones without
     /// a field outside the model left out. The names of the strategies the load has not read —
@@ -224,27 +275,7 @@ impl AnalyticsView {
     ) -> Vec<String> {
         let (rows, unread) =
             self.ticks_unmodelled_rows(targets.iter().map(|t| (t.sid, t.core)), cx);
-        let mut warns = Vec::new();
-        if !rows.is_empty() {
-            warns.push(t!("analytics.ticks.unmodelled_save").to_string());
-        }
-        warns.extend(rows.into_iter().map(|(name, fields)| {
-            let fields: Vec<String> = fields
-                .into_iter()
-                .map(|(key, value, section, _)| format!("{key} = {value} ({section})"))
-                .collect();
-            format!("{name}: {}", fields.join(", "))
-        }));
-        if !unread.is_empty() {
-            warns.push(
-                t!(
-                    "analytics.ticks.unmodelled_unread",
-                    names = unread.join(", ")
-                )
-                .to_string(),
-            );
-        }
-        warns
+        warn_lines(rows, unread)
     }
 }
 

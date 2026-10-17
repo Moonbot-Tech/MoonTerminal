@@ -162,7 +162,7 @@ fn the_auto_progress_line_sits_under_the_toolbar() {
     );
     let el = braced_body(&table, "fn auto_progress_el(");
     assert!(
-        el.contains("auto_progress_row("),
+        el.contains("progress_row("),
         "the card must draw the same row the layout probe measures"
     );
 }

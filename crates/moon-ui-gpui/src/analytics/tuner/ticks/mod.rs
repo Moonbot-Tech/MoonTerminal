@@ -38,24 +38,25 @@ pub(in crate::analytics::tuner) use load::{Fetched, PassReads, fetch_batch, repl
 // The readiness bench times the reads and the model apart and runs the auto-pick itself.
 #[cfg(test)]
 pub(in crate::analytics::tuner) use load::{archived_lines, calibrate_lags, replay_timing};
-use moon_core::market::trade_replay::TickStatus;
-use state::{DealRow, TapeStatus};
+use state::DealRow;
 pub(in crate::analytics::tuner) use summary::readiness_refusal;
 #[cfg(test)]
 pub(in crate::analytics::tuner) use tape::{PackedTape, PendingDeal, prepare_sample};
 
 mod accuracy;
+/// Sequential searches and checked bulk consent for the strategy list's best picks.
+pub(in crate::analytics::tuner) mod best;
 mod cfg;
 pub(in crate::analytics::tuner) mod columns;
 mod delta_summary;
-mod estimate;
+pub(in crate::analytics::tuner) mod estimate;
 pub(crate) mod fetch;
 mod grid;
 mod lags;
 mod layout;
 mod load;
 pub(in crate::analytics) mod model_cfg;
-mod ranges;
+pub(in crate::analytics::tuner) mod ranges;
 pub(in crate::analytics::tuner) mod readiness;
 mod refiled;
 mod report;
@@ -70,6 +71,7 @@ mod tape;
 mod trade_pane;
 mod unmodelled;
 mod variants;
+pub(in crate::analytics::tuner) mod why;
 
 #[cfg(test)]
 mod tests;
@@ -89,10 +91,11 @@ impl AnalyticsView {
         // The order is settled before the data is viewed: both live in `ticks`, and the sort
         // cache needs the mutable half. It is the SHOWN rows: with the switch on, only the
         // sample the variants run on.
-        let drawn = rows::order_for(&mut self.ticks).len();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let min_tail_s = tail::effective_s();
+        let drawn = rows::order_for(&mut self.ticks, min_tail_s, now_ms).len();
+        let counts = rows::counts_at(&mut self.ticks, min_tail_s, now_ms);
         let only_fit = self.ticks.only_fit;
-        // The sample the variants and the search run on, for the status line.
-        let fit = self.ticks.data.data().map(|d| d.fit()).unwrap_or(0);
         // The rows the scope holds but the table does not show, for the caption and for the
         // empty state: a period entirely before the millisecond stamps is not an empty period,
         // and the table must say which it is rather than draw the shared "no trades".
@@ -105,20 +108,17 @@ impl AnalyticsView {
         let summary = self.ticks.data.view(|d| d.rows.is_empty()).map(|d| {
             (
                 d.rows.len(),
-                d.covered(),
                 if fetch::station_available() {
-                    let now = moon_core::util::time::now_unix_ms_i64();
                     d.rows
                         .iter()
-                        .filter(|row| fetch::station_load_candidate(row, now))
+                        .filter(|row| fetch::station_load_candidate(row, now_ms))
                         .count()
                 } else {
-                    d.fetchable().count()
+                    d.fetchable_at(now_ms, min_tail_s).count()
                 },
-                d.without_ms,
             )
         });
-        let (body, total, covered, fetchable, without_ms) = match summary {
+        let (body, fetchable) = match summary {
             Err(crate::load_state::Note::Empty) if left_out != (0, 0, 0) => (
                 crate::load_state::muted(
                     t!(
@@ -133,37 +133,32 @@ impl AnalyticsView {
                     cx,
                 ),
                 0usize,
-                0usize,
-                0usize,
-                left_out.0,
             ),
             Err(note) => (
                 super::super::note_el("an-ticks-note", note, 10.0, p, cx),
-                0usize,
-                0usize,
-                0usize,
                 0usize,
             ),
             // Rows loaded, none shown: the switch hid every one. Said in words, with the
             // count, rather than drawn as a blank list — while the tape stage still reads,
             // no row is covered yet and the note says that instead.
-            Ok((total, covered, fetchable, without_ms)) if drawn == 0 => (
-                crate::load_state::muted(
-                    if self.ticks.tape_reading {
-                        t!("analytics.ticks.fetch_reading").to_string()
-                    } else {
-                        t!("analytics.ticks.none_fit", hidden = total).to_string()
-                    },
-                    10.0,
-                    p,
-                    cx,
-                ),
-                total,
-                covered,
+            Ok((total, fetchable)) if drawn == 0 => (
+                if self.ticks.chip.is_some() {
+                    filtered_empty_el(chip_action(cx.entity().downgrade()), p, cx)
+                } else {
+                    crate::load_state::muted(
+                        if self.ticks.tape_reading {
+                            t!("analytics.ticks.fetch_reading").to_string()
+                        } else {
+                            t!("analytics.ticks.none_fit", hidden = total).to_string()
+                        },
+                        10.0,
+                        p,
+                        cx,
+                    )
+                },
                 fetchable,
-                without_ms,
             ),
-            Ok((total, covered, fetchable, without_ms)) => {
+            Ok((_, fetchable)) => {
                 let weak = cx.entity().downgrade();
                 let row_h = deal_row_h(cx);
                 let list =
@@ -184,10 +179,11 @@ impl AnalyticsView {
                                     row,
                                     selected,
                                     plan,
-                                    weak.clone(),
+                                    deal_action(weak.clone()),
                                     p,
                                     scale,
                                     row_h,
+                                    (min_tail_s, now_ms),
                                     app,
                                 ))
                             })
@@ -198,7 +194,7 @@ impl AnalyticsView {
                     .radius(0.0)
                     .scrollbar_visibility(MoonScrollbarVisibility::Hover)
                     .into_any_element();
-                (list, total, covered, fetchable, without_ms)
+                (list, fetchable)
             }
         };
         // The batch is the process's (`fetch::job`), not this window's: the caption reads its
@@ -261,9 +257,14 @@ impl AnalyticsView {
         // out of how many — with what the scope holds beyond the table, and the switch that
         // hides the rest. How well the MODEL does on that sample is the KPI caption's ✓
         // shares (`ticks_kpi`), not a size.
-        let status = coverage_caption(covered, fit, total, without_ms, left_out.1, left_out.2)
-            + &self.ticks_short_tail_note()
-            + &self.ticks_holed_note();
+        let chips = chips_el(
+            counts,
+            self.ticks.chip,
+            left_out,
+            chip_action(cx.entity().downgrade()),
+            p,
+            cx,
+        );
         // How many rows read live deltas, and — in the tooltip — how well each one's history
         // reproduces the core (`delta_summary`).
         let deltas = self
@@ -397,6 +398,7 @@ impl AnalyticsView {
                             .child(model_settings),
                     ),
             )
+            .child(legend_el(p, cx))
             .child(self.deal_header(p, cx))
             // The virtual list owns its own scrolling.
             .child(div().w_full().flex_1().min_h_0().child(body))
@@ -404,7 +406,8 @@ impl AnalyticsView {
                 h_flex()
                     .w_full()
                     .flex_none()
-                    .h(design::fit_h_px(cx, 26.0, 12.0, 7.0))
+                    .flex_wrap()
+                    .py(design::ui_px(cx, 5.0))
                     .px(design::ui_px(cx, DEAL_ROW_PAD_X))
                     .items_center()
                     .gap(design::ui_px(cx, 8.0))
@@ -414,7 +417,7 @@ impl AnalyticsView {
                     .font_family(design::ui_font())
                     .text_size(design::t_caption(cx))
                     .text_color(moon(p.text_muted))
-                    .child(div().flex_1().min_w_0().truncate().child(status))
+                    .child(chips)
                     .children(deltas)
                     .child(only_switch),
             )
@@ -481,63 +484,19 @@ impl AnalyticsView {
     /// heading sits in the same box as the column's cells ([`deal_cell`], [`coin_cell`]), so
     /// the two rows share every width, minimum and shrink rule and cannot drift apart.
     fn deal_header(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement + use<> {
-        let scale = design::font_scale(cx);
-        let sortable =
-            |id: SharedString, title: String, key: &'static str, col: Option<&DealCol>| {
-                let arrow = sort_arrow_of(&self.ticks.sort, key);
-                let tip = match col {
-                    Some(col) if col.key == COL_DURATION => {
-                        format!("{title} · {}", t!("analytics.ticks.duration_tip"))
-                    }
-                    Some(col) if col.key == COL_MODEL => {
-                        format!("{title} · {}", t!("analytics.ticks.model_col_tip"))
-                    }
-                    _ => title.clone(),
-                };
-                match col {
-                    Some(col) => deal_cell(col, scale),
-                    None => coin_cell(scale),
-                }
-                .id(id)
-                // The heading is cut to its column like a cell; the whole of it on hover.
-                .tooltip(crate::panels::common::text_tooltip(tip))
-                .cursor_pointer()
-                .text_color(if arrow.is_empty() {
-                    moon(p.text_soft)
-                } else {
-                    moon(p.amber)
-                })
-                .child(format!("{title}{arrow}"))
-                .on_click(cx.listener(move |this, _, _, cx| {
+        let view = cx.entity().downgrade();
+        deal_header_el(
+            &self.ticks.sort,
+            self.ticks.var_stats.is_some(),
+            std::rc::Rc::new(move |key, _, app| {
+                let _ = view.update(app, |this, cx| {
                     toggle_sort_key(&mut this.ticks.sort, key);
-                    this.ticks.order = None;
                     cx.notify();
-                }))
-            };
-        h_flex()
-            .w_full()
-            .flex_none()
-            .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
-            .px(design::ui_px(cx, DEAL_ROW_PAD_X))
-            .gap(design::ui_px(cx, DEAL_ROW_GAP))
-            .items_center()
-            .text_size(design::t_caption(cx))
-            .text_color(moon(p.text_soft))
-            .bg(moon(p.table_head))
-            .child(sortable(
-                "an-ticks-hdr-coin".into(),
-                t!("analytics.col.coin").to_string(),
-                COL_COIN,
-                None,
-            ))
-            .children(shown_deal_cols(self.ticks.var_stats.is_some()).map(|c| {
-                sortable(
-                    SharedString::from(format!("an-ticks-hdr-{}", c.key)),
-                    column_title(c),
-                    c.key,
-                    Some(c),
-                )
-            }))
+                });
+            }),
+            p,
+            cx,
+        )
     }
 
     /// The right column of the axis: the matrix on top, the grid panel below it.
@@ -841,48 +800,6 @@ fn held_text(held: Option<(i64, i64)>) -> String {
     }
 }
 
-/// The mark of the tape column and its tooltip.
-fn tape_mark(tape: TapeStatus) -> (&'static str, String) {
-    match tape {
-        TapeStatus::Covered => ("●", t!("analytics.ticks.tape_covered").to_string()),
-        TapeStatus::Missing => ("○", t!("analytics.ticks.tape_missing").to_string()),
-        TapeStatus::Fetching => ("…", t!("analytics.ticks.tape_fetching").to_string()),
-        TapeStatus::NoAddress => ("·", t!("analytics.ticks.tape_no_address").to_string()),
-        // The two refusals said at load, for every row the venue cannot serve, in words; the
-        // rest come back from a walk and name the venue's own answer.
-        TapeStatus::Refused(TickStatus::NoRoute) => {
-            ("✕", t!("analytics.ticks.tape_no_route").to_string())
-        }
-        TapeStatus::Refused(TickStatus::ArchivePending { retry_at_ms }) => {
-            ("○", archive_pending_caption(retry_at_ms))
-        }
-        TapeStatus::Refused(TickStatus::OutOfRetention { retention_ms }) => (
-            "✕",
-            t!(
-                "analytics.ticks.tape_retention",
-                hours = retention_ms / 3_600_000
-            )
-            .to_string(),
-        ),
-        TapeStatus::Refused(status) => (
-            "✕",
-            t!(
-                "analytics.ticks.tape_refused",
-                status = format!("{status:?}")
-            )
-            .to_string(),
-        ),
-    }
-}
-
-/// Name the exchange publication wait with an approximate UTC time in every locale.
-fn archive_pending_caption(retry_at_ms: i64) -> String {
-    let expected = chrono::DateTime::from_timestamp_millis(retry_at_ms)
-        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|| retry_at_ms.to_string());
-    t!("analytics.ticks.tape_archive_pending", expected = expected).to_string()
-}
-
 /// The box of one column's cell — the heading's and the row's alike: the descriptor's width
 /// and minimum, shrinking with the table past its preferred width, the text cut rather than
 /// wrapped, aligned as the column says. One builder for both rows is what keeps the headings
@@ -927,79 +844,312 @@ fn shown_deal_cols(show_plan: bool) -> impl Iterator<Item = &'static DealCol> {
         .filter(move |col| show_plan || col.key != COL_PLAN)
 }
 
-/// The status line's coverage part: how many rows have their tape, out of how many, how many of
-/// those the model reproduces — the sample the variants and the search run on — and what the
-/// scope holds beyond the table: rows without millisecond stamps always, the service rows and the
-/// untunable ones only when there are any.
-fn coverage_caption(
-    covered: usize,
-    fit: usize,
-    total: usize,
-    without_ms: usize,
-    service: usize,
-    untunable: usize,
-) -> String {
-    let mut caption = t!(
-        "analytics.ticks.coverage",
-        covered = covered,
-        total = total,
-        fit = fit,
-        without = without_ms
-    )
-    .to_string();
-    if service > 0 {
-        caption.push_str(" · ");
-        caption.push_str(&t!("analytics.ticks.coverage_service", n = service));
-    }
-    if untunable > 0 {
-        caption.push_str(" · ");
-        caption.push_str(&t!("analytics.ticks.coverage_untunable", n = untunable));
-    }
-    caption
+/// Every heading explains its quantity; symbols are composed here rather than in dictionaries.
+type SortAction = std::rc::Rc<dyn Fn(&'static str, &mut Window, &mut App)>;
+
+/// Share the production header with layout probes, including all hover trigger identities.
+fn deal_header_el(
+    sort: &Option<(String, bool)>,
+    show_plan: bool,
+    pick: SortAction,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let scale = design::font_scale(cx);
+    let sortable = |title: String, key: &'static str, col: Option<&DealCol>| {
+        let arrow = sort_arrow_of(sort, key);
+        let pick = pick.clone();
+        let el = match col {
+            Some(col) => deal_cell(col, scale),
+            None => coin_cell(scale),
+        };
+        el.id(SharedString::from(format!("an-ticks-hdr-{key}")))
+            .debug_selector(move || format!("an-ticks-hdr-{key}"))
+            .tooltip(crate::panels::common::text_tooltip(column_tip(key)))
+            .cursor_pointer()
+            .text_color(moon(if arrow.is_empty() {
+                p.text_soft
+            } else {
+                p.amber
+            }))
+            .child(
+                div()
+                    .truncate()
+                    .debug_selector(move || format!("an-ticks-hdr-text-{key}"))
+                    .child(format!("{title}{arrow}")),
+            )
+            .on_click(move |_, w, app| pick(key, w, app))
+    };
+    h_flex()
+        .debug_selector(|| "an-ticks-header".to_string())
+        .w_full()
+        .flex_none()
+        .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
+        .px(design::ui_px(cx, DEAL_ROW_PAD_X))
+        .gap(design::ui_px(cx, DEAL_ROW_GAP))
+        .items_center()
+        .text_size(design::t_caption(cx))
+        .bg(moon(p.table_head))
+        .child(sortable(
+            t!("analytics.col.coin").to_string(),
+            COL_COIN,
+            None,
+        ))
+        .children(shown_deal_cols(show_plan).map(|c| sortable(column_title(c), c.key, Some(c))))
+        .into_any_element()
 }
 
-/// The mark of the model column — one glyph per group — and its tooltip with the deviations.
-fn model_mark(row: &DealRow) -> (String, String) {
-    let Some(v) = row.verdict else {
-        return (String::new(), String::new());
+/// Explain the quantity in every column, preserving glyphs in code.
+fn column_tip(key: &str) -> String {
+    let locale = format!("analytics.ticks.col_tip.{key}");
+    let text = t!(locale.as_str()).to_string();
+    match key {
+        COL_MODEL => format!("{text}\n✓ · ✗ · ·"),
+        COL_TAPE => format!("{text}\n● · ◐ · ○ · … · ✕ · ·"),
+        _ => text,
+    }
+}
+
+/// A wrapping symbol key keeps the model and tape marks understandable in a narrow dock.
+fn legend_el(p: MoonPalette, cx: &App) -> impl IntoElement + use<> {
+    h_flex()
+        .debug_selector(|| "an-ticks-legend".to_string())
+        .w_full()
+        .flex_none()
+        .flex_wrap()
+        .px(design::ui_px(cx, DEAL_ROW_PAD_X))
+        .py(design::ui_px(cx, 3.0))
+        .gap(design::ui_px(cx, 8.0))
+        .font_family(design::ui_font())
+        .text_size(design::t_caption(cx))
+        .text_color(moon(p.text_muted))
+        .children(
+            [
+                ("hit", "✓", p.green),
+                ("miss", "✗", p.red),
+                ("unjudged", "·", p.text_muted),
+                ("hole", "◐", p.amber),
+            ]
+            .into_iter()
+            .map(|(key, glyph, color)| {
+                let locale = format!("analytics.ticks.legend.{key}");
+                div()
+                    .flex_none()
+                    .text_color(moon(color))
+                    .debug_selector(move || format!("an-ticks-legend-{key}"))
+                    .child(format!("{glyph} {}", t!(locale.as_str())))
+            }),
+        )
+}
+
+/// One callback serves chips, reset and the empty state without introducing repaint tasks.
+type ChipAction = std::rc::Rc<dyn Fn(Option<why::DealChip>, &mut Window, &mut App)>;
+
+/// Apply one filter edit and request exactly one repaint.
+fn chip_action(view: WeakEntity<AnalyticsView>) -> ChipAction {
+    std::rc::Rc::new(move |chip, _, app| {
+        let _ = view.update(app, |this, cx| {
+            this.ticks.chip = chip;
+            cx.notify();
+        });
+    })
+}
+
+/// Whole-population counters wrap as intact controls, with static exclusions kept noninteractive.
+fn chips_el(
+    counts: rows::ChipCounts,
+    active: Option<why::DealChip>,
+    left_out: (usize, usize, usize),
+    pick: ChipAction,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let mut el = h_flex()
+        .debug_selector(|| "an-ticks-chips".to_string())
+        .w_full()
+        .min_w_0()
+        .flex_none()
+        .flex_wrap()
+        .gap(design::ui_px(cx, 6.0))
+        .items_center()
+        .font_family(design::ui_font())
+        .text_size(design::t_caption(cx));
+    for chip in why::DealChip::ALL {
+        let key = chip.key();
+        let label = format!("{}: {}", chip.label(counts.min_tail_s), counts.get(chip));
+        let tip_key = format!("analytics.ticks.chip.{key}_tip");
+        let pick = pick.clone();
+        el = el.child(
+            div()
+                .id(SharedString::from(format!("an-ticks-chip-tip-{key}")))
+                .debug_selector(move || format!("an-ticks-chip-{key}"))
+                .flex_none()
+                .tooltip(crate::panels::common::text_tooltip(
+                    t!(tip_key.as_str(), min = counts.min_tail_s).to_string(),
+                ))
+                .child(
+                    MoonButton::new(SharedString::from(format!("an-ticks-chip-{key}")))
+                        .variant(if active == Some(chip) {
+                            MoonButtonVariant::Amber
+                        } else {
+                            MoonButtonVariant::Soft
+                        })
+                        .label(label)
+                        .on_click(move |_, w, app| {
+                            pick(
+                                if active == Some(chip) {
+                                    None
+                                } else {
+                                    Some(chip)
+                                },
+                                w,
+                                app,
+                            )
+                        })
+                        .render(),
+                ),
+        );
+    }
+    for (key, n) in [
+        ("without_ms", left_out.0),
+        ("service", left_out.1),
+        ("untunable", left_out.2),
+    ] {
+        let label_key = format!("analytics.ticks.chip.{key}");
+        let tip_key = format!("analytics.ticks.chip.{key}_tip");
+        el = el.child(
+            div()
+                .id(SharedString::from(format!("an-ticks-chip-tip-{key}")))
+                .debug_selector(move || format!("an-ticks-chip-{key}"))
+                .flex_none()
+                .border_1()
+                .border_dashed()
+                .border_color(moon(p.border))
+                .rounded(design::ui_px(cx, 3.0))
+                .px(design::ui_px(cx, 7.0))
+                .py(design::ui_px(cx, 2.0))
+                .text_color(moon(p.text_muted))
+                .tooltip(crate::panels::common::text_tooltip(
+                    t!(tip_key.as_str()).to_string(),
+                ))
+                .child(format!("{}: {n}", t!(label_key.as_str()))),
+        );
+    }
+    if let Some(chip) = active {
+        el = el.child(
+            h_flex()
+                .debug_selector(|| "an-ticks-chip-reset-box".to_string())
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .debug_selector(|| "an-ticks-chip-filter-name".to_string())
+                        .child(
+                            t!(
+                                "analytics.ticks.chip.filter",
+                                name = chip.label(counts.min_tail_s)
+                            )
+                            .to_string(),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .debug_selector(|| "an-ticks-chip-reset-link".to_string())
+                        .child(
+                            MoonButton::new("an-ticks-chip-reset")
+                                .variant(MoonButtonVariant::Ghost)
+                                .label(t!("analytics.ticks.chip.reset").to_string())
+                                .on_click(move |_, w, app| pick(None, w, app))
+                                .render(),
+                        ),
+                ),
+        );
+    }
+    el.into_any_element()
+}
+
+/// A filter that hides the population has an immediate escape in the table body.
+fn filtered_empty_el(pick: ChipAction, p: MoonPalette, cx: &App) -> AnyElement {
+    v_flex()
+        .debug_selector(|| "an-ticks-filter-empty".to_string())
+        .w_full()
+        .flex_1()
+        .min_w_0()
+        .items_center()
+        .justify_center()
+        .gap(design::ui_px(cx, 6.0))
+        .text_color(moon(p.text_muted))
+        .text_size(design::t_caption(cx))
+        .font_family(design::ui_font())
+        .child(
+            div()
+                .debug_selector(|| "an-ticks-filter-empty-text".to_string())
+                .child(t!("analytics.ticks.chip.empty").to_string()),
+        )
+        .child(
+            MoonButton::new("an-ticks-empty-reset")
+                .variant(MoonButtonVariant::Ghost)
+                .label(t!("analytics.ticks.chip.reset_filter").to_string())
+                .on_click(move |_, w, app| pick(None, w, app))
+                .render(),
+        )
+        .into_any_element()
+}
+
+/// One glyph per model group without allocating hover text on every repaint.
+fn model_glyph(verdict: Option<moon_core::db::tuner::ticks::Verdict>) -> String {
+    let Some(v) = verdict else {
+        return String::new();
     };
     let glyph = |x: Option<bool>| match x {
         Some(true) => "✓",
         Some(false) => "✗",
         None => "·",
     };
-    let dev = |d: Option<f64>| match d {
-        Some(d) => {
-            let (text, _) = rows::paint_fixed(d, 3);
-            format!("{text} %")
-        }
-        None => "—".to_string(),
-    };
-    (
-        format!("{}{}", glyph(v.entry), glyph(v.exit)),
-        t!(
-            "analytics.ticks.model_tip",
-            entry = dev(v.entry_dev_pct),
-            exit = dev(v.exit_dev_pct)
-        )
-        .to_string(),
-    )
+    format!("{}{}", glyph(v.entry), glyph(v.exit))
 }
 
 /// One deal row. A click shows it in the trade pane, while the pane is open; a double-click
 /// opens the trade window on it, as a Report row does.
+type DealAction = std::rc::Rc<dyn Fn(i64, &ClickEvent, &mut Window, &mut App)>;
+
+/// Keep row interactions outside the layout builder so probes exercise the same cell tree.
+fn deal_action(view: WeakEntity<AnalyticsView>) -> DealAction {
+    std::rc::Rc::new(move |uid, ev, _, app| {
+        let _ = view.update(app, |this, cx| match ev.click_count() {
+            1 => this.ticks_select_deal(uid, cx),
+            _ => this.open_deal_window(uid, cx),
+        });
+    })
+}
+
+/// Draw only a visible row, with lazy hover explanations and shared classification inputs.
 #[allow(clippy::too_many_arguments)]
 fn deal_row(
     row: &DealRow,
     selected: bool,
     plan: PlanCell,
-    view: WeakEntity<AnalyticsView>,
+    action: DealAction,
     p: MoonPalette,
     scale: f32,
     row_h: f32,
+    sample: (u32, i64),
     cx: &App,
 ) -> AnyElement {
     let d = &row.deal;
+    let (min_tail_s, now_ms) = sample;
+    let why = why::DealWhy::of(row, min_tail_s, now_ms);
+    let tape_why = if row.tape == state::TapeStatus::Covered {
+        why::DealWhy::tape_of(row, min_tail_s, now_ms)
+    } else {
+        why
+    };
+    let verdict = row.verdict;
     let result = rows::result_pct(row);
     let cell = |col: &DealCol, text: String, color: u32, tip: Option<String>| {
         let el = deal_cell(col, scale).text_color(moon(color));
@@ -1008,7 +1158,44 @@ fn deal_row(
         } else {
             el.font_family(design::ui_font())
         };
-        let el = el.child(text);
+        let key = col.key;
+        let uid = d.report_uid;
+        let el = el
+            .debug_selector(move || format!("an-ticks-cell-{key}-{uid}"))
+            .child(
+                div()
+                    .truncate()
+                    .debug_selector(move || format!("an-ticks-text-{key}-{uid}"))
+                    .child(text),
+            );
+        if col.key == COL_TAPE || col.key == COL_WHY || (col.key == COL_MODEL && verdict.is_some())
+        {
+            let tape = col.key == COL_TAPE;
+            let reason = col.key == COL_WHY;
+            let covered = row.tape == state::TapeStatus::Covered;
+            return el
+                .id(SharedString::from(format!(
+                    "an-ticks-{}-{}",
+                    col.key, d.report_uid
+                )))
+                .tooltip(move |window, cx| {
+                    let text = if tape {
+                        tape_why.tape_tip().text()
+                    } else if reason && covered {
+                        format!(
+                            "{}\n\n{}",
+                            tape_why.tape_tip().text(),
+                            why.model_tip(verdict.as_ref()).text()
+                        )
+                    } else if reason {
+                        tape_why.tape_tip().text()
+                    } else {
+                        why.model_tip(verdict.as_ref()).text()
+                    };
+                    crate::panels::common::text_tooltip(text)(window, cx)
+                })
+                .into_any_element();
+        }
         match tip {
             Some(tip) if !tip.is_empty() => el
                 .id(SharedString::from(format!(
@@ -1020,14 +1207,18 @@ fn deal_row(
             _ => el.into_any_element(),
         }
     };
-    let (tape_glyph, tape_tip) = tape_mark(row.tape);
-    let (model_glyph, model_tip) = model_mark(row);
+    let (tape_glyph, tape_tone) = tape_why.tape_glyph();
+    let model_glyph = model_glyph(verdict);
     let text = p.text;
     // The outer slot is `Some` only once В1 has been scored. Until then the plan column is
     // empty on every row and is not drawn.
     let show_plan = plan.0.is_some();
     let mut el = h_flex()
         .id(SharedString::from(format!("an-tickrow-{}", d.report_uid)))
+        .debug_selector({
+            let uid = d.report_uid;
+            move || format!("an-tickrow-{uid}")
+        })
         .w_full()
         .h(px(row_h))
         .px(design::ui_px(cx, DEAL_ROW_PAD_X))
@@ -1091,12 +1282,12 @@ fn deal_row(
             ),
             COL_TAPE => (
                 tape_glyph.to_string(),
-                match row.tape {
-                    TapeStatus::Covered => p.green,
-                    TapeStatus::Fetching => p.amber,
-                    _ => p.text_muted,
+                match tape_tone {
+                    why::Tone::Good => p.green,
+                    why::Tone::Warning => p.amber,
+                    why::Tone::Muted => p.text_muted,
                 },
-                Some(tape_tip.clone()),
+                None,
             ),
             COL_MODEL => (
                 model_glyph.clone(),
@@ -1105,7 +1296,16 @@ fn deal_row(
                     Some(false) => p.red,
                     None => p.text_muted,
                 },
-                Some(model_tip.clone()),
+                None,
+            ),
+            COL_WHY => (
+                why.short(),
+                if why == why::DealWhy::Fit {
+                    p.green
+                } else {
+                    p.text_muted
+                },
+                None,
             ),
             _ => (String::new(), text, None),
         };
@@ -1114,14 +1314,6 @@ fn deal_row(
     let uid = d.report_uid;
     el = el
         .hover(move |s| s.bg(moon_alpha(p.panel_high, 0.9)))
-        .on_click(move |ev: &ClickEvent, _window, app| {
-            // The view may already be gone; a dropped window is not an error here.
-            let _ = view.update(app, |this, cx| match ev.click_count() {
-                // The first click of a double-click lands here too: the pane shows the deal the
-                // window then opens on.
-                1 => this.ticks_select_deal(uid, cx),
-                _ => this.open_deal_window(uid, cx),
-            });
-        });
+        .on_click(move |ev, window, app| action(uid, ev, window, app));
     el.into_any_element()
 }

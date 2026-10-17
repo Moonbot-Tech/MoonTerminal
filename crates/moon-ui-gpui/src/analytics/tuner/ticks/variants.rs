@@ -455,7 +455,7 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(self.ticks.sugg, SuggState::Running { .. }) {
+        if !self.ticks.search_available() {
             return;
         }
         if !self.ticks_confirm_long_search(only, window, cx) {
@@ -496,7 +496,7 @@ impl AnalyticsView {
         only: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
-        if matches!(self.ticks.sugg, SuggState::Running { .. }) {
+        if !self.ticks.search_available() {
             return;
         }
         let pending = self.prepared_deals();

@@ -2,6 +2,21 @@
 
 use super::{RANGE_INPUT_PREFIX, Slot, parse_cell, range_input_id};
 
+/// Dropping the selected value or omitting a default-only field would silently narrow a batch search.
+#[test]
+fn automatic_batch_grids_cover_own_values_and_default_only_fields() {
+    use moon_core::db::tuner::ticks::TICK_PARAMS;
+    use std::collections::HashMap;
+    let own = HashMap::from([("SellPrice".into(), "9.7".into())]);
+    let defaults = HashMap::from([("sellprice".into(), 1.0), ("stoploss".into(), -3.0)]);
+    let grids = super::auto_grids_for("Spread", &own, &defaults);
+    let sell = grids.values(TICK_PARAMS.iter().find(|f| f.key == "SellPrice").unwrap());
+    assert!(!sell.is_empty());
+    assert!(sell.first().unwrap() <= &9.7 && sell.last().unwrap() >= &9.7);
+    let stop = grids.values(TICK_PARAMS.iter().find(|f| f.key == "StopLoss").unwrap());
+    assert!(!stop.is_empty());
+}
+
 /// An empty cell is automatic; a comma is the decimal point; text that is no number is refused,
 /// not read as zero.
 #[test]

@@ -359,7 +359,7 @@ fn count_text(value: f64) -> String {
 
 /// A duration as a person reads it: seconds under a minute, minutes under an hour, else hours
 /// and minutes.
-pub(super) fn duration_text(duration: Duration) -> String {
+pub(in crate::analytics::tuner) fn duration_text(duration: Duration) -> String {
     let secs = duration.as_secs();
     if secs < 60 {
         t!("analytics.ticks.dur_s", s = secs.max(1)).to_string()

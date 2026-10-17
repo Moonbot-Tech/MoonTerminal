@@ -1,6 +1,6 @@
 //! The strategy table's "Tuning" pieces ("Entry/Exit" only): the readiness cell, the progress
 //! line and the filter's empty states. The same widgets as the auto-pick's on "By coin" — the
-//! progress line is literally [`auto_progress_row`] — with the readiness pass's words.
+//! progress line uses the shared bar with a wrapping readiness caption.
 
 use gpui::*;
 use moon_ui::{MoonButton, MoonButtonVariant, MoonPalette, h_flex, v_flex};
@@ -10,7 +10,7 @@ use super::super::super::super::AnalyticsView;
 use super::super::super::ready::{ReadyClass, ReadyFilter, cell_tip};
 use super::super::super::ticks::readiness::Readiness;
 use super::super::super::{READY_MIN_W, READY_W};
-use super::auto_progress_row;
+use super::progress_row;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::GroupStat;
@@ -36,7 +36,7 @@ impl AnalyticsView {
             return None;
         }
         let (text, warn) = self.ready.status(total)?;
-        Some(auto_progress_row(text, warn, self.ready.fraction(), p, cx))
+        Some(progress_row(text, warn, self.ready.fraction(), true, p, cx))
     }
 
     /// The list emptied by the "Tuning" filter: what it needs and the button that shows every

@@ -1,36 +1,100 @@
 //! The deal table's row order — a permutation over the loaded rows, filtered by the "fit only"
-//! switch and cached against the data generation, the sort and the switch, so a repaint
-//! that changed none of them reuses it instead of sorting hundreds of deals per frame.
+//! switch and chip, cached against the data generation, sort, filters and tail floor so an
+//! unrelated repaint reuses it instead of sorting hundreds of deals per frame.
 
 use super::columns::*;
 use super::state::{DealRow, TapeStatus, TicksState};
+use super::why::{DealChip, DealWhy};
+
+/// One classification per row publication and effective tail floor.
+pub(in crate::analytics::tuner) struct Classified {
+    rows_rev: u64,
+    min_tail_s: u32,
+    chips: Vec<DealChip>,
+}
+
+/// Reuse the primary classification across filter, sort and count work.
+fn classify(state: &mut TicksState, min_tail_s: u32, now_ms: i64) {
+    if state
+        .classified
+        .as_ref()
+        .is_some_and(|c| c.rows_rev == state.rows_rev && c.min_tail_s == min_tail_s)
+    {
+        return;
+    }
+    let chips = state
+        .data
+        .data()
+        .map(|d| {
+            d.rows
+                .iter()
+                .map(|r| DealWhy::of(r, min_tail_s, now_ms).chip())
+                .collect()
+        })
+        .unwrap_or_default();
+    state.classified = Some(Classified {
+        rows_rev: state.rows_rev,
+        min_tail_s,
+        chips,
+    });
+}
 
 /// The sorted order and what it was built for.
 pub(in crate::analytics::tuner) struct OrderCache {
     pub(in crate::analytics::tuner) rows_rev: u64,
     pub(in crate::analytics::tuner) sort: Option<(String, bool)>,
     pub(in crate::analytics::tuner) only_fit: bool,
+    pub(in crate::analytics::tuner) chip: Option<DealChip>,
+    pub(in crate::analytics::tuner) min_tail_s: u32,
     /// Indices into `TicksData::rows` — the shown rows only, when the switch hides the rest.
     pub(in crate::analytics::tuner) order: Vec<usize>,
 }
 
-/// The current order, rebuilt only when the rows, the sort or the "fit only" switch changed.
-pub(in crate::analytics::tuner) fn order_for(state: &mut TicksState) -> &[usize] {
+/// Rebuild only when rows, sorting, either filter or the sample's tail floor changes.
+pub(in crate::analytics::tuner) fn order_for(
+    state: &mut TicksState,
+    min_tail_s: u32,
+    now_ms: i64,
+) -> &[usize] {
+    classify(state, min_tail_s, now_ms);
     let fresh = state.order.as_ref().is_some_and(|c| {
-        c.rows_rev == state.rows_rev && c.sort == state.sort && c.only_fit == state.only_fit
+        c.rows_rev == state.rows_rev
+            && c.sort == state.sort
+            && c.only_fit == state.only_fit
+            && c.chip == state.chip
+            && c.min_tail_s == min_tail_s
     });
     if !fresh {
         let rows: &[DealRow] = state.data.data().map(|d| d.rows.as_slice()).unwrap_or(&[]);
         let mut order: Vec<usize> = (0..rows.len())
-            .filter(|&i| !state.only_fit || rows[i].fit())
+            .filter(|&i| {
+                let reason = state.classified.as_ref().expect("classified rows").chips[i];
+                (!state.only_fit || reason == DealChip::Fit)
+                    && state.chip.is_none_or(|chip| {
+                        if chip == DealChip::WithTape {
+                            DealChip::tape(&rows[i]).is_some()
+                        } else {
+                            reason == chip
+                        }
+                    })
+            })
             .collect();
         if let Some((key, desc)) = &state.sort {
-            sort_indices(rows, &state.plan, &mut order, key, *desc);
+            sort_indices(
+                rows,
+                &state.plan,
+                &mut order,
+                key,
+                *desc,
+                &state.classified.as_ref().expect("classified rows").chips,
+            );
         }
         state.order = Some(OrderCache {
             rows_rev: state.rows_rev,
             sort: state.sort.clone(),
             only_fit: state.only_fit,
+            chip: state.chip,
+            min_tail_s,
             order,
         });
     }
@@ -97,12 +161,14 @@ fn model_rank(row: &DealRow) -> u8 {
     }
 }
 
+/// Stable sorts preserve the loaded chronological order within equal values or reason buckets.
 fn sort_indices(
     rows: &[DealRow],
     plan: &std::collections::HashMap<i64, (f64, f64)>,
     order: &mut [usize],
     key: &str,
     desc: bool,
+    chips: &[DealChip],
 ) {
     let by_f64 = |f: &dyn Fn(&DealRow) -> f64, order: &mut [usize]| {
         order.sort_by(|&a, &b| {
@@ -154,9 +220,62 @@ fn sort_indices(
         }),
         COL_TAPE => by_f64(&|r| f64::from(tape_rank(r.tape)), order),
         COL_MODEL => by_f64(&|r| f64::from(model_rank(r)), order),
+        COL_WHY => order.sort_by(|&a, &b| {
+            let cmp = chips[a].rank().cmp(&chips[b].rank());
+            if desc { cmp.reverse() } else { cmp }
+        }),
         // `COL_TIME` and anything unknown: by the entry time.
         _ => by_f64(&|r| r.deal.buy_ms as f64, order),
     }
+}
+
+/// Cached counts for the entire population; the tape bucket deliberately overlaps the others.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::analytics::tuner) struct ChipCounts {
+    pub(in crate::analytics::tuner) rows_rev: u64,
+    pub(in crate::analytics::tuner) min_tail_s: u32,
+    pub(in crate::analytics::tuner) counts: [usize; 7],
+}
+
+impl ChipCounts {
+    /// Read one bucket in the same order the footer uses.
+    pub(in crate::analytics::tuner) fn get(self, chip: DealChip) -> usize {
+        self.counts[chip as usize]
+    }
+}
+
+/// Recount only after row publication or a tail-floor change, never on an unrelated repaint.
+pub(in crate::analytics::tuner) fn counts_at(
+    state: &mut TicksState,
+    min_tail_s: u32,
+    now_ms: i64,
+) -> ChipCounts {
+    classify(state, min_tail_s, now_ms);
+    if let Some(counts) = state
+        .chip_counts
+        .filter(|c| c.rows_rev == state.rows_rev && c.min_tail_s == min_tail_s)
+    {
+        return counts;
+    }
+    let mut counts = ChipCounts {
+        rows_rev: state.rows_rev,
+        min_tail_s,
+        counts: [0; 7],
+    };
+    if let Some(data) = state.data.data() {
+        for (row, chip) in data
+            .rows
+            .iter()
+            .zip(&state.classified.as_ref().expect("classified rows").chips)
+        {
+            counts.counts[*chip as usize] += 1;
+            if DealChip::tape(row).is_some() {
+                counts.counts[DealChip::WithTape as usize] += 1;
+            }
+        }
+    }
+    state.chip_counts = Some(counts);
+    counts
 }
 
 // Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`

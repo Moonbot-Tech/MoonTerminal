@@ -308,6 +308,7 @@ fn consent(state: &TicksState) -> WriteConfirm {
     WriteConfirm {
         write: InlineWrite {
             authority: SaveAuthority {
+                producer: crate::analytics::tuner::save::SaveProducer::Selection,
                 dialog_seq: 7,
                 workspace_generation: Some(9),
                 workspace_cores: Some(vec![33]),

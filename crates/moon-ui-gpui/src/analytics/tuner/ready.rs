@@ -222,7 +222,25 @@ pub(in crate::analytics) struct ReadyProgress {
     waiting: Mutex<Vec<(String, (String, String))>>,
 }
 
+/// Remaining time at the observed pass speed, after a three-second warm-up.
+fn eta(done_this_pass: usize, total_this_pass: usize, elapsed: Duration) -> Option<Duration> {
+    if done_this_pass == 0 || elapsed < Duration::from_secs(3) || done_this_pass >= total_this_pass
+    {
+        return None;
+    }
+    Some(elapsed.mul_f64((total_this_pass - done_this_pass) as f64 / done_this_pass as f64))
+}
+
 impl ReadyProgress {
+    /// Estimate remaining replay time using only work performed in this pass, excluding kept rows.
+    fn remaining(&self, elapsed: Duration) -> Option<Duration> {
+        eta(
+            self.done.load(Ordering::Relaxed),
+            self.total.load(Ordering::Relaxed),
+            elapsed,
+        )
+    }
+
     /// Strategies counted so far and how many the pass holds, the kept ones included.
     pub(in crate::analytics) fn counts(&self) -> (usize, usize) {
         let kept = self.kept.load(Ordering::Relaxed);
@@ -688,10 +706,22 @@ impl ReadyPass {
             ReadyRun::Idle => None,
             ReadyRun::Running { progress } => {
                 let (done, _) = progress.counts();
-                Some((
-                    t!("analytics.ready.progress", k = done.min(total), m = total).to_string(),
-                    false,
-                ))
+                let remaining = self
+                    .started
+                    .and_then(|start| progress.remaining(start.elapsed()));
+                let text = match remaining {
+                    Some(remaining) => t!(
+                        "analytics.ready.progress_eta",
+                        k = done.min(total),
+                        m = total,
+                        eta = super::ticks::estimate::duration_text(remaining)
+                    )
+                    .to_string(),
+                    None => {
+                        t!("analytics.ready.progress", k = done.min(total), m = total).to_string()
+                    }
+                };
+                Some((text, false))
             }
             ReadyRun::Done => {
                 let n = self
@@ -737,14 +767,34 @@ impl ReadyPass {
 /// Args:
 ///     ready: The strategy's counts.
 pub(in crate::analytics) fn cell_tip(ready: &Readiness) -> String {
-    readiness_refusal(ready).unwrap_or_else(|| {
+    let headline = readiness_refusal(ready).unwrap_or_else(|| {
         t!(
             "analytics.ready.tip_can",
             n = ready.fit,
             min = Readiness::min()
         )
         .to_string()
-    })
+    });
+    let mut lines = vec![
+        headline,
+        t!(
+            "analytics.ticks.why.breakdown",
+            deals = ready.deals,
+            no_tape = ready.no_tape,
+            short_tail = ready.short_tail,
+            holed = ready.holed,
+            missed = ready.missed,
+            unjudged = ready.unjudged,
+            fit = ready.fit
+        )
+        .to_string(),
+        t!("analytics.ticks.why.floor", min = Readiness::min()).to_string(),
+    ];
+    if ready.fetchable > 0 {
+        let key = super::plural_key("analytics.ticks.why.fetchable", ready.fetchable);
+        lines.push(t!(key.as_str(), n = ready.fetchable).to_string());
+    }
+    lines.join("\n")
 }
 
 /// One strategy's rows before their replay: the deals, each with where its prints live.
@@ -1026,7 +1076,7 @@ impl AnalyticsView {
     /// Arm a pass when the list is loaded on "Entry/Exit" and its inputs moved since the last
     /// launch. Called on every render of the strategy list; cheap when nothing moved.
     pub(in crate::analytics::tuner) fn ensure_ready_pass(&mut self, cx: &mut Context<Self>) {
-        if !self.strat_mode.shows_ready() {
+        if !self.strat_mode.shows_ready() || self.ticks.best_running {
             return;
         }
         let loaded = self.strategy_data.data().is_some()
@@ -1054,6 +1104,10 @@ impl AnalyticsView {
                 let _ = this.update(cx, |this, cx| {
                     // A later change re-armed the timer with its own key; this one is retired.
                     if this.ready.launched != Some(key) {
+                        return;
+                    }
+                    if this.ticks.best_running {
+                        this.ready.launched = None;
                         return;
                     }
                     // A report or tape change does not cut a running pass short — on a busy

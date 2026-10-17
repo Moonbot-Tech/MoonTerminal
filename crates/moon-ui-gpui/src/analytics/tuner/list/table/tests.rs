@@ -16,10 +16,269 @@ use super::super::super::auto_picks::{AutoClass, AutoFilter};
 use super::super::super::ready::{ReadyClass, ReadyFilter};
 use super::super::{auto_filter_el, auto_filter_on_axis, ready_filter_el, ready_filter_on_axis};
 use super::{
-    auto_cell_el, auto_cell_text, auto_computing_el, auto_empty_el, auto_progress_row,
-    ready_cell_el, ready_cell_text, ready_computing_el, ready_empty_el, strat_list_frame,
+    auto_cell_el, auto_cell_text, auto_computing_el, auto_empty_el, progress_row, ready_cell_el,
+    ready_cell_text, ready_computing_el, ready_empty_el, strat_list_frame,
 };
 use crate::design;
+
+/// Production batch controls and readiness progress at the card's actual available width.
+struct BestLayoutProbe {
+    top: u8,
+    running: bool,
+    text: String,
+}
+
+impl Render for BestLayoutProbe {
+    /// Draw the real controls and a naturally wrapping reference caption to detect truncation.
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        v_flex()
+            .w_full()
+            .debug_selector(|| "best-list".into())
+            .child(
+                h_flex()
+                    .w_full()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(
+                        div()
+                            .debug_selector(|| "best-search".into())
+                            .flex_1()
+                            .min_w(design::ui_px(cx, 120.0))
+                            .h(design::ui_px(cx, 22.0)),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "best-type".into())
+                            .flex_none()
+                            .w(design::ui_px(cx, 116.0))
+                            .h(design::ui_px(cx, 22.0)),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "best-lists".into())
+                            .flex_none()
+                            .w(design::ui_px(cx, 96.0))
+                            .h(design::ui_px(cx, 22.0)),
+                    )
+                    .child(ready_filter_el(ReadyFilter::Can, Rc::new(|_, _| {}), cx))
+                    .child(super::super::best_controls_el(
+                        self.top,
+                        5,
+                        self.running,
+                        Rc::new(|_, _| {}),
+                        Rc::new(|_| {}),
+                        cx,
+                    ))
+                    .child(
+                        div().debug_selector(|| "best-active".into()).child(
+                            MoonCheckbox::new("best-active-box")
+                                .label(t!("analytics.strat.active_only").to_string()),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "best-cols".into())
+                            .flex_none()
+                            .w(design::ui_px(cx, 30.0))
+                            .h(design::ui_px(cx, 22.0)),
+                    ),
+            )
+            .child(super::progress_row(
+                self.text.clone(),
+                false,
+                Some(0.5),
+                true,
+                p,
+                cx,
+            ))
+            .child(
+                h_flex()
+                    .w_full()
+                    .px(design::ui_px(cx, 12.0))
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(div().flex_none().w(design::ui_px(cx, 56.0)))
+                    .child(
+                        div()
+                            .debug_selector(|| "best-reference".into())
+                            .flex_1()
+                            .min_w_0()
+                            .font_family(design::ui_font())
+                            .text_size(design::t_caption(cx))
+                            .child(self.text.clone()),
+                    ),
+            )
+    }
+}
+
+/// A long translation must wrap rather than clip either batch control or the ETA caption.
+#[gpui::test]
+fn best_controls_and_eta_fit_every_language_theme_zoom_and_list_width(
+    cx: &mut gpui::TestAppContext,
+) {
+    for mode in [UiThemeMode::Light, UiThemeMode::Dark] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(mode, 1.0),
+                cx,
+            )
+        });
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for zoom in [1.0, 1.25] {
+                for width in [LIST_W, CARD_WIDTHS[0], CARD_WIDTHS[1], CARD_WIDTHS[2]] {
+                    for top in [3, 5, 10] {
+                        for running in [false, true] {
+                            let text = t!(
+                                "analytics.ready.progress_eta",
+                                k = 123,
+                                m = 641,
+                                eta = super::super::super::ticks::estimate::duration_text(
+                                    std::time::Duration::from_secs(7200)
+                                )
+                            )
+                            .to_string();
+                            let window = cx
+                                .open_window(gpui::size(px(width * zoom), px(400.0)), |_, _| {
+                                    BestLayoutProbe { top, running, text }
+                                });
+                            let mut visual =
+                                gpui::VisualTestContext::from_window(window.into(), cx);
+                            visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                            for _ in 0..3 {
+                                visual.update(|window, cx| {
+                                    let _ = window.draw(cx);
+                                });
+                            }
+                            let list = visual.debug_bounds("best-list").expect("list");
+                            for sel in [
+                                "best-search",
+                                "best-type",
+                                "best-lists",
+                                "best-active",
+                                "best-cols",
+                                "an-best-controls",
+                                "an-best-button",
+                                "an-best-picker",
+                                "an-strat-ready-tip",
+                                "an-ready-progress-txt",
+                            ] {
+                                let b = visual.debug_bounds(sel).expect(sel);
+                                assert!(
+                                    b.left() >= list.left() - px(0.5)
+                                        && b.right() <= list.right() + px(0.5),
+                                    "{sel} escaped: {} {mode:?} {zoom} {width}",
+                                    language.code()
+                                );
+                            }
+                            let caption = visual
+                                .debug_bounds("an-ready-progress-txt")
+                                .expect("caption");
+                            let reference =
+                                visual.debug_bounds("best-reference").expect("reference");
+                            assert!(
+                                caption.size.height + px(0.5) >= reference.size.height,
+                                "ETA truncated: {} {mode:?} {zoom} {width}",
+                                language.code()
+                            );
+                            for (sel, label) in [
+                                (
+                                    "an-best-button",
+                                    format!("{} · 5", t!("analytics.ready.best")),
+                                ),
+                                (
+                                    "an-best-picker",
+                                    t!("analytics.ready.best_top", n = top).to_string(),
+                                ),
+                            ] {
+                                let need = visual
+                                    .update(|_, cx| design::ui_body_text_width(cx, &label, 400.0));
+                                assert!(
+                                    f32::from(visual.debug_bounds(sel).expect(sel).size.width)
+                                        + 0.5
+                                        >= need,
+                                    "{sel} label clipped: {} {zoom}",
+                                    language.code()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Render the exact readiness tooltip factory instead of a hand-built substitute for its text.
+struct ReadyTipProbe;
+
+impl Render for ReadyTipProbe {
+    /// Use full exclusion counts and an actionable fetchable line to exercise the longest tip.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let text = super::super::super::ready::cell_tip(
+            &super::super::super::ticks::readiness::Readiness {
+                deals: 999,
+                no_tape: 100,
+                short_tail: 100,
+                holed: 100,
+                missed: 100,
+                unjudged: 100,
+                fit: 499,
+                covered: 899,
+                fetchable: 100,
+            },
+        );
+        let tip = crate::panels::common::text_tooltip(text)(window, cx);
+        v_flex().w_full().child(
+            div()
+                .debug_selector(|| "ready-tip".into())
+                .flex()
+                .self_start()
+                .child(tip),
+        )
+    }
+}
+
+/// Losing MoonTooltip's width cap or wrapping would overflow the readiness pill's breakdown.
+#[gpui::test]
+fn readiness_breakdown_tooltip_wraps_inside_its_max_width(cx: &mut gpui::TestAppContext) {
+    for mode in [UiThemeMode::Light, UiThemeMode::Dark] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(mode, 1.0),
+                cx,
+            )
+        });
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for zoom in [1.0, 1.25] {
+                let window = cx.open_window(gpui::size(px(LIST_W * zoom), px(900.0)), |_, _| {
+                    ReadyTipProbe
+                });
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let tip = visual.debug_bounds("ready-tip").expect("tooltip");
+                assert!(
+                    tip.size.width <= px(260.0 * zoom + 0.5),
+                    "tooltip exceeds max width: {} {mode:?} {zoom}",
+                    language.code()
+                );
+                // Four explicit lines plus a wrapped breakdown must occupy more than four caption lines.
+                assert!(
+                    tip.size.height > px(4.0 * 14.0 * zoom),
+                    "tooltip failed to wrap: {} {mode:?} {zoom}",
+                    language.code()
+                );
+            }
+        }
+    }
+}
 
 /// Width of the probe window, in font px: a narrow strategy list.
 const LIST_W: f32 = 340.0;
@@ -192,10 +451,11 @@ impl Render for ProgressProbe {
         v_flex()
             .w_full()
             .debug_selector(|| "probe-list".into())
-            .child(auto_progress_row(
+            .child(progress_row(
                 self.text.clone(),
                 self.warn,
                 self.fraction,
+                false,
                 p,
                 cx,
             ))
@@ -322,10 +582,11 @@ impl Render for CardProgressProbe {
         let card = strat_list_frame(
             p,
             toolbar,
-            Some(auto_progress_row(
+            Some(progress_row(
                 self.text.clone(),
                 self.warn,
                 self.fraction,
+                false,
                 p,
                 cx,
             )),
