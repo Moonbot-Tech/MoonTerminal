@@ -1,4 +1,7 @@
+//! Persistence and headless layout coverage for the trade-window settings.
+
 // NOT `use super::*`: the parent imports `gpui::*`, whose `test` macro shadows `#[test]`.
+use gpui::AppContext;
 use moon_core::market::candles::{
     CANDLE_MODE_FILLED, CANDLE_MODE_OFF, CANDLE_MODE_OUTLINE, CANDLE_MODE_OUTLINE_IN_ZONE,
     CandleViewCfg,
@@ -8,6 +11,119 @@ use super::{
     PINNED_TF_MIN, TRADE_WINDOW_MODES, candles_for_default, pinned_candle_view,
     trade_window_mode_segment,
 };
+
+/// A trade-window edit must survive restart without changing Main or resetting the other flag.
+#[test]
+fn price_line_toggles_round_trip_independently() {
+    use moon_core::config::{ChartTabKind, layout::WindowLayout};
+    let mut layout = WindowLayout::default();
+    let main = layout.chart_graphics_for(ChartTabKind::Main);
+    let shipped = layout.chart_graphics_for(ChartTabKind::Trade);
+    assert!(shipped.last_price_line && shipped.mark_price_line);
+    for (last, mark) in [(false, true), (true, false), (false, false), (true, true)] {
+        let mut cfg = layout.chart_graphics_for(ChartTabKind::Trade);
+        cfg.last_price_line = last;
+        cfg.mark_price_line = mark;
+        layout.store_chart_graphics(ChartTabKind::Trade, cfg);
+        let encoded = serde_json::to_string(&layout).expect("serialize trade preferences");
+        layout = serde_json::from_str(&encoded).expect("reload trade preferences");
+        let restored = layout.chart_graphics_for(ChartTabKind::Trade);
+        assert_eq!(
+            (restored.last_price_line, restored.mark_price_line),
+            (last, mark)
+        );
+        assert_eq!(layout.chart_graphics_for(ChartTabKind::Main), main);
+    }
+}
+
+/// Capture the actual production checkbox rows without constructing a backend or opening a trade.
+struct PriceLinesHarness {
+    boxes: std::rc::Rc<std::cell::RefCell<Vec<gpui::Bounds<gpui::Pixels>>>>,
+}
+
+impl gpui::Render for PriceLinesHarness {
+    /// Render the rows at the popup's production width with inert change handlers.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement, Styled};
+        let boxes = self.boxes.clone();
+        gpui::div().w(gpui::px(super::ROW_W)).child(
+            super::price_line_rows(
+                moon_core::config::ChartGraphicsCfg::default(),
+                crate::design::ui_px(cx, 6.0),
+                |_, _, _| {},
+            )
+            .on_children_prepainted(move |bounds, _, _| *boxes.borrow_mut() = bounds),
+        )
+    }
+}
+
+/// An oversized translation or shrinking row must not clip either checkbox label in the popup.
+#[gpui::test]
+fn price_line_popup_rows_fit_every_locale(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi"] {
+        let _locale = crate::test_locale::force(locale);
+        for mode in [
+            moon_core::config::UiThemeMode::Dark,
+            moon_core::config::UiThemeMode::Light,
+            moon_core::config::UiThemeMode::Graphite,
+            moon_core::config::UiThemeMode::LightExperimental,
+            moon_core::config::UiThemeMode::DarkExperimental,
+        ] {
+            cx.update(|cx| {
+                moon_ui::MoonTheme::install_config(
+                    crate::startup::moon_theme_config_for_presentation(mode, 1.0),
+                    cx,
+                )
+            });
+            let boxes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let sink = boxes.clone();
+            let handle = cx.add_window(move |_, _| PriceLinesHarness { boxes: sink });
+            cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+                .unwrap();
+            let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+            for (index, selector) in [
+                "trade-window-settings-last-price:label",
+                "trade-window-settings-mark-price:label",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let label = visual
+                    .debug_bounds(selector)
+                    .expect("production checkbox label");
+                let row = boxes.borrow()[index];
+                assert!(
+                    label.left() >= row.left()
+                        && label.right() <= row.right() + gpui::px(0.5)
+                        && label.top() >= row.top()
+                        && label.bottom() <= row.bottom() + gpui::px(0.5),
+                    "{locale}: price-line label clipped: {label:?} in {row:?}"
+                );
+            }
+            let boxes = boxes.borrow();
+            assert_eq!(boxes.len(), 2);
+            for bounds in boxes.iter() {
+                assert!(
+                    bounds.origin.x >= gpui::px(0.0)
+                        && bounds.right() <= gpui::px(super::ROW_W + 0.5),
+                    "{locale}: price-line row clipped: {bounds:?}"
+                );
+                assert!(bounds.size.height > gpui::px(0.0));
+            }
+            assert!(
+                boxes[0].bottom() <= boxes[1].origin.y,
+                "{locale}: overlapping rows"
+            );
+            cx.update_window(handle.into(), |_, window, _| window.remove_window())
+                .unwrap();
+        }
+    }
+}
 
 /// Resetting zone widths in the replay pin would replace a new user's 50/50 settings.
 #[test]

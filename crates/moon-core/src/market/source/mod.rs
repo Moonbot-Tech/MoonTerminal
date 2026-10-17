@@ -14,6 +14,7 @@ mod price_fit;
 mod read;
 mod refresh;
 mod replay;
+mod replay_prices;
 #[cfg(test)]
 mod tests;
 mod volume;

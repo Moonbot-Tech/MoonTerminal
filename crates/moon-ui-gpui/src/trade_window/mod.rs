@@ -12,8 +12,9 @@
 //! # How the frozen data reaches the chart
 //!
 //! The window owns its own [`ChartPanel`], and therefore its own chart engine. That engine is
-//! handed a `moon_core::market::trade_replay::TradeReplaySeries` and reads from it INSTEAD of the
-//! live market source. Because the override lives on the engine rather than in any registry, a
+//! handed a `moon_core::market::trade_replay::TradeReplaySeries` for its frozen candles and prints.
+//! Price lines supplement those rows from retained history, bounded to the replay's own window.
+//! Because the override lives on the engine rather than in any registry, a
 //! replay is structurally incapable of reaching the user's main chart: that engine holds `None`
 //! and there is no shared key the two could collide on.
 //!

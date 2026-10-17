@@ -312,6 +312,7 @@ struct WindowSwitches {
     show_corridor: bool,
 }
 
+/// Render the trade-window controls with the same persisted graphics flags as the chart.
 fn render_settings_popup(
     entity: Entity<TradeWindowView>,
     switches: WindowSwitches,
@@ -591,6 +592,24 @@ fn render_settings_popup(
             ),
         )
         .child(
+            popup_group("frame-price-lines", t!("chart.graphics.frame_lines")).child(
+                price_line_rows(graphics, gap, {
+                    let entity = entity.clone();
+                    move |mark, value, app| {
+                        entity.update(app, |this, cx| {
+                            this.write_graphics(cx, |cfg| {
+                                if mark {
+                                    cfg.mark_price_line = value;
+                                } else {
+                                    cfg.last_price_line = value;
+                                }
+                            });
+                        });
+                    }
+                }),
+            ),
+        )
+        .child(
             popup_group("frame-volumes", t!("chart.volumes.title"))
                 .child(v_flex().w(px(ROW_W)).gap(gap).child(volumes_cb)),
         )
@@ -617,6 +636,30 @@ fn render_settings_popup(
             ),
         )
         .into_any_element()
+}
+
+/// The two price-line rows, sharing the main chart's labels and the window's storage handler.
+fn price_line_rows(
+    graphics: ChartGraphicsCfg,
+    gap: Pixels,
+    on_change: impl Fn(bool, bool, &mut App) + Clone + 'static,
+) -> Div {
+    let last_change = on_change.clone();
+    v_flex()
+        .w(px(ROW_W))
+        .gap(gap)
+        .child(
+            MoonCheckbox::new("trade-window-settings-last-price")
+                .label(t!("chart.graphics.last_price_line").to_string())
+                .checked(graphics.last_price_line)
+                .on_change(move |value: &bool, _, app| last_change(false, *value, app)),
+        )
+        .child(
+            MoonCheckbox::new("trade-window-settings-mark-price")
+                .label(t!("chart.graphics.mark_price_line").to_string())
+                .checked(graphics.mark_price_line)
+                .on_change(move |value: &bool, _, app| on_change(true, *value, app)),
+        )
 }
 
 #[cfg(test)]

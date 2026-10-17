@@ -496,19 +496,35 @@ impl ChartDataState {
                 || pr.candle_resync;
             let mut history = if read_history {
                 let read_timer = crate::diag::timer();
-                // An engine holding a frozen replay answers from it and never touches the live
-                // source: the rows are already fetched, already clipped, and belong to a trade
-                // that closed. The live arm below is byte-identical to what it always was, which
-                // is the point — the main chart's path is not conditional on this feature.
+                // Replay candles and prints stay frozen. Price lines come from retained archive
+                // history, clipped to that replay; late archive answers trigger this read again.
                 let history = match self.trade_replay.as_ref() {
-                    Some(series) => Some(series.read_with_price_window(
-                        pane.view.epoch_ms,
-                        history_from,
-                        history_to,
-                        price_scan,
-                        candle_params_opt,
-                        &mut pr.history_buffers,
-                    )),
+                    Some(series) => {
+                        let mut read = series.read_with_price_window(
+                            pane.view.epoch_ms,
+                            history_from,
+                            history_to,
+                            price_scan,
+                            candle_params_opt,
+                            &mut pr.history_buffers,
+                        );
+                        read.price_line_capacity = source.read_replay_price_lines(
+                            pane.core,
+                            &pane.market,
+                            (
+                                series
+                                    .window
+                                    .from_ms
+                                    .max((epoch_ms + f64::from(history_from)).round() as i64),
+                                series
+                                    .window
+                                    .to_ms
+                                    .min((epoch_ms + f64::from(history_to)).round() as i64),
+                            ),
+                            &mut pr.history_buffers,
+                        );
+                        Some(read)
+                    }
                     None => source.read_chart_history_into(
                         pane.core,
                         &pane.market,

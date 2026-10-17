@@ -125,11 +125,11 @@ pub(in crate::chartdx) struct ChartDataState {
     /// Index of the warning badge under the cursor.
     pub(in crate::chartdx) warn_hovered: Option<usize>,
     pub(in crate::chartdx) market_source: Option<MarketDataSource>,
-    /// Frozen market history this engine draws INSTEAD of the live source, when it has one.
+    /// Frozen candles and prints this engine draws instead of live rows, when it has a replay.
     ///
     /// Set only by the trade window, which owns its own engine. While it is `Some`, the history
-    /// read below is answered from these rows and the live source is never consulted — so a replay
-    /// cannot reach the user's main chart even by mistake: that engine's field is `None` and there
+    /// reads candles and prints from these rows, with price lines copied from retained history
+    /// only inside the replay window. A replay cannot reach the user's main chart: its field is `None` and there
     /// is no shared key either could collide on. Contrast `moon_core::fixture`, whose bench state
     /// is process-wide by design.
     pub(in crate::chartdx) trade_replay:
