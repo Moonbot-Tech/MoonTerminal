@@ -57,3 +57,59 @@ fn a_finished_joint_search_copies_the_axis_move_onto_the_result() {
         "hardcoding the mark on Done drops the copy"
     );
 }
+
+/// A joint search started off a Drops scope must not search or fill xPriceDelta.
+///
+/// The completion closure needs an `AnalyticsView`, which these tests do not construct.
+/// This pins the two branches that decide it. The scoring of a missing Detect value is
+/// covered by the moon-core search tests.
+///
+/// Breakage this pins: building `locked` from the checkbox alone. The default mask admits
+/// every mapped field, so xPriceDelta would be searched on a MoonShot scope and its Min
+/// written back into the box.
+#[test]
+fn a_joint_search_excludes_detect_outside_a_drops_scope() {
+    let source = include_str!("../actions.rs").replace("\r\n", "\n");
+    let body = source
+        .split_once("fn suggest_into_v1(")
+        .expect("suggest_into_v1")
+        .1
+        .split("\n    /// Stop the running joint search")
+        .next()
+        .expect("suggest_into_v1 body");
+    assert!(
+        body.contains("if FIELDS[fi].class == FieldClass::Detect && !drops_only {"),
+        "a Detect field outside a Drops scope is excluded from the search"
+    );
+    assert!(
+        body.contains("Some((None, None))"),
+        "exclusion is the locked (None, None) state, not a fixed numeric bound"
+    );
+    let completion = body
+        .split_once("move |this, sugg, cx|")
+        .expect("completion")
+        .1;
+    assert!(
+        completion.contains("if field.class == FieldClass::Detect && !drops_only {"),
+        "the completion must keep the scope captured when the search started"
+    );
+}
+
+/// A single-field click on a hidden Detect row must return before a search starts.
+#[test]
+fn a_single_field_search_refuses_a_hidden_detect_field() {
+    let source = include_str!("../actions.rs").replace("\r\n", "\n");
+    let body = source
+        .split_once("fn suggest_one_into_v1(")
+        .expect("suggest_one_into_v1")
+        .1
+        .split("\n    /// Copy bounds v1")
+        .next()
+        .expect("suggest_one body");
+    let before_spawn = body.split("self.spawn_db(").next().expect("spawn");
+    assert!(
+        before_spawn
+            .contains("if !super::offer_field(FIELDS[fi].class, self.scope_is_drops_only())"),
+        "the refusal must happen before the search is dispatched"
+    );
+}

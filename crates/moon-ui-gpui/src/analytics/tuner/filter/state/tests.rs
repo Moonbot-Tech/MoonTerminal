@@ -9,10 +9,33 @@ use super::{
     restore_train, seed_of, staged_dirty, train_frac,
 };
 use moon_core::db::tuner::FIELDS;
+use moon_core::db::tuner::FieldClass;
 use moon_core::db::tuner::StratFilters;
 use moon_core::db::tuner::threshold_search::{
     EDGES_MAX, EDGES_MAX_LIGHT, EDGES_MIN, RESTARTS_MIN, SearchHandle, restarts_max,
 };
+
+/// The master checkbox counts a Detect field only while the scope is offering it.
+///
+/// The oracle is the default mask, which ticks every mapped field, with that one Detect bit
+/// then turned off. On a Drops scope the master follows it. On any other scope the hidden
+/// field is not part of "all".
+///
+/// Breakage this pins: `all_mapped_enabled` going back to "every mapped field". The master
+/// would sit unchecked on a MoonShot scope while every visible box is on.
+#[test]
+fn the_master_checkbox_ignores_a_hidden_detect_field() {
+    let mut state = TunerState::load(None, None, None, None, None, false);
+    let detect = FIELDS
+        .iter()
+        .position(|spec| spec.class == FieldClass::Detect)
+        .expect("a Detect field");
+    assert!(state.all_mapped_enabled(true));
+    assert!(state.all_mapped_enabled(false));
+    state.enabled[detect] = false;
+    assert!(!state.all_mapped_enabled(true));
+    assert!(state.all_mapped_enabled(false));
+}
 
 /// Manual Filters refreshes must use the same compound source as report-driven refreshes.
 ///

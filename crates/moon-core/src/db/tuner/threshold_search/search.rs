@@ -471,10 +471,56 @@ impl Workspace {
 pub(super) struct Columns {
     /// Per-trade profit, COALESCEd to zero, in chronological order.
     pub(super) profits: Vec<f64>,
-    /// Per-field effective values, NULL already folded to `0.0`, same order. Retained so a final
-    /// bound set can be scored on rows no descent saw — bins answer "which quantile", not "does
-    /// this trade pass this range".
+    /// Per-field effective values, same order. NULL is already folded to `0.0`, except on a
+    /// Detect field, where a missing number is NaN and the Min does not apply to that row.
+    /// Retained so a final bound set can be scored on rows no descent saw — bins answer "which
+    /// quantile", not "does this trade pass this range".
     pub(super) vals: Vec<Vec<f64>>,
+}
+
+/// Whether one trade's value passes a field's inclusive bounds.
+///
+/// A Detect Min does not apply to a missing value (NaN). That row never carried the detect's
+/// number, and the what-if SQL keeps it with `IS NULL OR value >= min`. A Min-only field's Max
+/// is never saved, so it never filters here either.
+///
+/// Args:
+///     fi: Index into `FIELDS`.
+///     v: The trade's effective value. NaN is a missing Detect number.
+///     from: Inclusive lower bound, or `None` when the field has no minimum.
+///     to: Inclusive upper bound, or `None` when the field has no maximum.
+///
+/// Returns:
+///     Whether the trade stays in under those bounds.
+fn value_passes(fi: usize, v: f64, from: Option<f64>, to: Option<f64>) -> bool {
+    let spec = &super::super::FIELDS[fi];
+    let min_ok = match from {
+        Some(_) if spec.class == super::super::FieldClass::Detect && !v.is_finite() => true,
+        Some(bound) => v >= bound,
+        None => true,
+    };
+    let max_ok = spec.min_only() || to.is_none_or(|bound| v <= bound);
+    min_ok && max_ok
+}
+
+/// Quantile edges over an ascending sample.
+///
+/// An empty sample (a Detect column whose every train value is missing) yields a flat zero
+/// edge list. No finite trade is binned against it: those rows take the "Min does not apply"
+/// bin instead.
+///
+/// Args:
+///     sorted_asc: Train values, lowest first. Empty when none of them are finite.
+///     ne: Quantile edge count. Must be at least 1.
+///
+/// Returns:
+///     `ne + 1` edges. The first and last are the sample's minimum and maximum.
+fn quantile_edges(sorted_asc: &[f64], ne: usize) -> Vec<f64> {
+    if sorted_asc.is_empty() {
+        return vec![0.0; ne + 1];
+    }
+    let m = sorted_asc.len();
+    (0..=ne).map(|k| sorted_asc[k * (m - 1) / ne]).collect()
 }
 
 /// Prepared sample: the shared columns plus the quantile bins derived from them. Built once per
@@ -547,12 +593,26 @@ impl Search {
         // reads them: a bound set is scored against the raw values in `tally`, not against bins.
         let mut edges: Vec<Vec<f64>> = Vec::with_capacity(nf);
         let mut bins: Vec<u16> = Vec::with_capacity(nf * n);
-        for col in &cols.vals {
-            let mut sorted = col[..n].to_vec();
+        for (fi, col) in cols.vals.iter().enumerate() {
+            let detect = super::super::FIELDS
+                .get(fi)
+                .is_some_and(|spec| spec.class == super::super::FieldClass::Detect);
+            // Missing Detect values stay out of the edges. Counted as zeros they pile up at the
+            // bottom, and every Min then looks like it removed those deals.
+            let mut sorted: Vec<f64> = if detect {
+                col[..n].iter().copied().filter(|v| v.is_finite()).collect()
+            } else {
+                col[..n].to_vec()
+            };
             sorted.sort_by(|a, b| a.total_cmp(b));
-            let e: Vec<f64> = (0..=ne).map(|k| sorted[k * (n - 1) / ne]).collect();
+            let e = quantile_edges(&sorted, ne);
+            let top = ne.saturating_sub(1) as u16;
             bins.extend(col[..n].iter().map(|v| {
-                if *v < e[0] {
+                if detect && !v.is_finite() {
+                    // A Min-only slice always runs to the top edge, so this row passes every
+                    // candidate the descent is allowed to keep.
+                    top
+                } else if *v < e[0] {
                     BELOW
                 } else {
                     // The last edge is inclusive, so clamp it into the top bin.
@@ -560,7 +620,11 @@ impl Search {
                     let mut hi = ne;
                     while lo + 1 < hi {
                         let m = (lo + hi) / 2;
-                        if *v >= e[m] { lo = m } else { hi = m }
+                        if *v >= e[m] {
+                            lo = m;
+                        } else {
+                            hi = m;
+                        }
                     }
                     lo.min(ne - 1) as u16
                 }
@@ -583,10 +647,7 @@ impl Search {
             }
             for (t, slot) in base_fail.iter_mut().enumerate() {
                 let v = col[t];
-                // A Min-only field's Max is never saved, so it never filters.
-                let ok = lo.is_none_or(|l| v >= l)
-                    && (super::super::FIELDS[fi].min_only() || hi.is_none_or(|h| v <= h));
-                if !ok {
+                if !value_passes(fi, v, *lo, *hi) {
                     *slot += 1;
                 }
             }
@@ -687,7 +748,10 @@ impl Search {
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
         let (bins, vals) = (self.bins_of(fi), &self.cols.vals[fi][..self.n]);
         for (b, v) in bins.iter().zip(vals) {
-            if *b != BELOW && (i..j).contains(&(*b as usize)) {
+            // A missing Detect value shares the top bin so the Min keeps the row, but it is not
+            // itself a threshold. `f64::min` would also skip NaN; saying so keeps a future
+            // change to `total_cmp` from publishing NaN as the saved bound.
+            if *b != BELOW && (i..j).contains(&(*b as usize)) && v.is_finite() {
                 lo = lo.min(*v);
                 hi = hi.max(*v);
             }
@@ -721,7 +785,7 @@ impl Search {
             let passes = self.base_fail[t] == 0
                 && applied.iter().all(|(fi, from, to)| {
                     let v = self.cols.vals[*fi][t];
-                    v >= *from && (super::super::FIELDS[*fi].min_only() || v <= *to)
+                    value_passes(*fi, v, Some(*from), Some(*to))
                 });
             if passes {
                 out.push(self.cols.profits[t]);

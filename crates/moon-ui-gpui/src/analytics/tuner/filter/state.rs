@@ -600,16 +600,21 @@ impl TunerState {
             .map(|(_, support)| (*support, set.folds))
     }
 
-    /// Whether every MAPPED field takes part in the automatic search.
+    /// Whether every field the grid is offering takes part in the automatic search.
     ///
     /// Unmapped fields have no strategy parameter to write, so "all enabled" has never meant all
-    /// of them. One definition, because the master checkbox's tick and its caption's click both
-    /// ask this question and must not answer it differently.
-    pub(in crate::analytics::tuner) fn all_mapped_enabled(&self) -> bool {
+    /// of them. A Detect field the current scope is not showing is not part of the question
+    /// either: counting it would leave the master unchecked while every visible box is on.
+    /// One definition, because the master checkbox's tick and its caption's click both ask this
+    /// question and must not answer it differently.
+    ///
+    /// Args:
+    ///     drops_only: Whether the scope offers Detect fields.
+    pub(in crate::analytics::tuner) fn all_mapped_enabled(&self, drops_only: bool) -> bool {
         FIELDS
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.mapped())
+            .filter(|(_, spec)| spec.mapped() && super::offer_field(spec.class, drops_only))
             .all(|(fi, _)| self.enabled[fi])
     }
 

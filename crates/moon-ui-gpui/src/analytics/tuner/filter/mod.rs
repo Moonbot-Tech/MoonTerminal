@@ -5,6 +5,8 @@
 //! the raw strings the user typed and start empty on every open because they describe one
 //! strategy's search. Only the search SETTINGS persist — restart count, quantile depth, seed,
 //! train share, which fields the checkboxes admit, and whether the search composes their set.
+//! The Detect group is offered only when every strategy in the current scope is a Drops detect,
+//! and its parameter is never written onto a strategy of another kind.
 
 // Files of this axis.
 /// Its auto-suggestion and the write it produces.
@@ -29,6 +31,7 @@ use super::super::{AnalyticsView, LoadState};
 pub(in crate::analytics::tuner) use super::shared::{N_VAR, TunerKind, card, glyph_btn};
 use crate::design;
 use crate::design::{moon, moon_alpha};
+use moon_core::db::analytics::GroupStat;
 use moon_core::db::tuner::threshold_search::{ComposeDecision, ComposeSkip};
 use moon_core::db::tuner::{FIELDS, FieldClass, StratFilters};
 pub(in crate::analytics::tuner) use state::{flag_of, fmt_bound, parse_num, staged_dirty};
@@ -58,13 +61,17 @@ impl AnalyticsView {
     ///
     /// Unmapped fields stay out even when switching everything on — "all enabled" means all
     /// MAPPED, because a field with no strategy parameter has nowhere to write its threshold.
+    /// A Detect field the scope is not showing is left as it was when turning the visible set
+    /// on, and is cleared with the rest when turning everything off.
     ///
     /// Args:
     ///     on: Whether every mapped field takes part in the search.
     ///     cx: GPUI context used to persist and repaint.
     fn set_all_fields_enabled(&mut self, on: bool, cx: &mut Context<Self>) {
+        let drops_only = self.scope_is_drops_only();
         for (fi, spec) in FIELDS.iter().enumerate() {
-            self.tuner.enabled[fi] = on && spec.mapped();
+            let offered = offer_field(spec.class, drops_only);
+            self.tuner.enabled[fi] = master_bit(self.tuner.enabled[fi], on, spec.mapped(), offered);
         }
         self.tuner.invalidate_suggest();
         self.persist_tuner_fields(cx);
@@ -81,6 +88,29 @@ impl AnalyticsView {
         // Row keys are `strategyid@core_uid`, so the scope is per strategy AND per core.
         q.strategies = self.visible_target_keys(self.read_core_ids());
         q
+    }
+
+    /// Whether the read scope the By-filter tab already uses is entirely Drops detects.
+    ///
+    /// The strategy list's kind dropdown filters the table only. This reads the loaded rows,
+    /// the same set `tuner_query` scopes, so hiding MoonShot in the list cannot reveal
+    /// xPriceDelta while those deals are still in the search.
+    fn scope_is_drops_only(&self) -> bool {
+        let Some(data) = self.strategy_data.data() else {
+            return false;
+        };
+        let selected = self.visible_target_keys(self.read_core_ids());
+        drops_only_scope(&data.strategies, &selected)
+    }
+
+    /// SignalType of one write target, from the strategy list the page already loaded.
+    ///
+    /// `None` when that list is missing or has no row for the target. Save then treats the
+    /// target as not Drops and strips a Detect parameter rather than guessing a kind.
+    fn strategy_kind(&self, sid: i64, core: Option<u64>) -> Option<String> {
+        self.strategy_data
+            .data()
+            .and_then(|data| kind_of(&data.strategies, sid, core).map(str::to_string))
     }
 
     /// Read numeric strategy-field defaults used to hide unconfigured threshold chips — the
@@ -467,6 +497,7 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let in_w = 60.0;
+        let drops_only = self.scope_is_drops_only();
         let mut head = h_flex()
             .w_full()
             .px(design::ui_px(cx, 8.0))
@@ -481,7 +512,7 @@ impl AnalyticsView {
                     MoonCheckbox::new("tun-en-all")
                         // The master checkbox ignores unmapped fields (no matching
                         // strategy parameter): 'all enabled' = all MAPPED ones.
-                        .checked(self.tuner.all_mapped_enabled())
+                        .checked(self.tuner.all_mapped_enabled(drops_only))
                         .size(design::CONTROL_TIER)
                         .on_change({
                             let view = cx.entity();
@@ -508,7 +539,7 @@ impl AnalyticsView {
                     .cursor_pointer()
                     .child(t!("analytics.tuner.field").to_string())
                     .on_click(cx.listener(|this, _, _, cx| {
-                        let all_on = this.tuner.all_mapped_enabled();
+                        let all_on = this.tuner.all_mapped_enabled(this.scope_is_drops_only());
                         this.set_all_fields_enabled(!all_on, cx);
                     })),
             )
@@ -582,6 +613,11 @@ impl AnalyticsView {
         let mut grid = v_flex().w_full().child(head);
         let mut last_class: Option<FieldClass> = None;
         for (fi, field) in FIELDS.iter().enumerate() {
+            // Skipping the row also skips its header: the header is emitted from this loop,
+            // and Detect is its own parent, so a hidden Detect field leaves no empty group.
+            if !offer_field(field.class, drops_only) {
+                continue;
+            }
             let class = field.class;
             // Headers: the MoonBot section (the parent), then the indented
             // subgroup (BV/SV inside Volumes, the Δ2/Δ3 slots inside Deltas).
@@ -1202,3 +1238,195 @@ impl AnalyticsView {
         hdr.into_any_element()
     }
 }
+
+/// Whether a strategy kind is a Drops detect.
+///
+/// The schema column stores `Drops` and a MoonBot export stores `DropsDetection`. Both name
+/// the same kind. Anything else, including an empty string, is not a Drops strategy.
+///
+/// Args:
+///     kind: `SignalType` text from the loaded strategy row.
+fn is_drops_kind(kind: &str) -> bool {
+    let kind = kind.trim();
+    kind.eq_ignore_ascii_case("DropsDetection") || kind.eq_ignore_ascii_case("Drops")
+}
+
+/// Whether every kind in the iterator is a Drops detect.
+///
+/// An empty iterator is not Drops-only. "All of nothing" would show xPriceDelta on a scope
+/// that has no strategy to save it onto.
+///
+/// Args:
+///     kinds: Strategy kinds in the scope being judged.
+///
+/// Returns:
+///     `true` only when the iterator yields at least one kind and each one is Drops.
+fn drops_only_kinds<I, S>(kinds: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut any = false;
+    for kind in kinds {
+        any = true;
+        if !is_drops_kind(kind.as_ref()) {
+            return false;
+        }
+    }
+    any
+}
+
+/// Whether the loaded strategy rows, narrowed by the current selection, are all Drops detects.
+///
+/// An empty selection means the whole loaded list, which is what an empty `q.strategies` means
+/// for the tuner query. A selected key the list does not contain fails closed: the page cannot
+/// prove that target is Drops.
+///
+/// Args:
+///     strategies: Loaded strategy rows, unfiltered by the list's kind dropdown.
+///     selected: Read-scope keys as `(strategy id, core)`. Empty means every loaded row.
+///
+/// Returns:
+///     `true` only when that scope is non-empty and every kind in it is Drops.
+fn drops_only_scope(strategies: &[GroupStat], selected: &[(i64, Option<u64>)]) -> bool {
+    if strategies.is_empty() {
+        return false;
+    }
+    if selected.is_empty() {
+        return drops_only_kinds(strategies.iter().map(|row| row.kind.as_str()));
+    }
+    let mut kinds = Vec::with_capacity(selected.len());
+    for &(sid, core) in selected {
+        let Some(kind) = kind_of(strategies, sid, core) else {
+            return false;
+        };
+        kinds.push(kind);
+    }
+    drops_only_kinds(kinds)
+}
+
+/// Kind text of one `strategyid@core` row, or the bare id when the key has no core.
+fn kind_of(strategies: &[GroupStat], sid: i64, core: Option<u64>) -> Option<&str> {
+    let key = match core {
+        Some(core) => format!("{sid}@{core}"),
+        None => sid.to_string(),
+    };
+    strategies
+        .iter()
+        .find(|row| row.key == key)
+        .map(|row| row.kind.as_str())
+}
+
+/// Whether the grid offers this field on the current scope.
+///
+/// Detect is the only class the scope can hide. Every other class stays, including on a
+/// mixed or non-Drops selection.
+///
+/// Args:
+///     class: Field class from `FIELDS`.
+///     drops_only: Whether [`drops_only_scope`] accepted the current scope.
+fn offer_field(class: FieldClass, drops_only: bool) -> bool {
+    class != FieldClass::Detect || drops_only
+}
+
+/// Next checkbox bit when the master switch is clicked.
+///
+/// Turning the visible set on does not tick a field the grid is not showing. Turning
+/// everything off clears that hidden field too, so returning to a Drops scope does not
+/// revive a search the user cleared.
+///
+/// Args:
+///     currently: The bit stored before the click.
+///     on: Whether the master click is switching the set on.
+///     mapped: Whether the field has a strategy parameter.
+///     offered: Whether the grid is showing the field.
+///
+/// Returns:
+///     The bit to store.
+fn master_bit(currently: bool, on: bool, mapped: bool, offered: bool) -> bool {
+    if on && !offered {
+        currently
+    } else {
+        on && mapped && offered
+    }
+}
+
+/// Whether `key` is a strategy parameter of a Detect field.
+///
+/// Matched through `FIELDS`, so a second Detect parameter is covered without a hard-coded name.
+fn is_detect_param(key: &str) -> bool {
+    FIELDS.iter().any(|spec| {
+        spec.class == FieldClass::Detect && (spec.p_min == Some(key) || spec.p_max == Some(key))
+    })
+}
+
+/// Change list to write onto a strategy of `kind`.
+///
+/// A Drops strategy keeps every parameter. Any other kind, including an unknown one, loses
+/// Detect parameters. The rest of the list is unchanged.
+///
+/// Args:
+///     changes: Shared parameter edits, including a Comment stamp when one was added.
+///     kind: The target's `SignalType`, or `None` when the loaded list has no row for it.
+///
+/// Returns:
+///     The edits that may be written onto that target.
+fn changes_for_kind(changes: &[(String, String)], kind: Option<&str>) -> Vec<(String, String)> {
+    if kind.is_some_and(is_drops_kind) {
+        return changes.to_vec();
+    }
+    changes
+        .iter()
+        .filter(|(key, _)| !is_detect_param(key))
+        .cloned()
+        .collect()
+}
+
+/// Per-target change lists, with Detect parameters removed from every non-Drops target.
+///
+/// When every target receives the same list, that list is the shared payload and the second
+/// value is `None`. A mixed selection has no shared list: the confirmation dialog draws the
+/// shared list as written to every target, and draws one group per target only when the shared
+/// list is empty. Returning the anchor's list there would show `DropsPriceDelta` on a MoonShot
+/// target the write does not touch.
+///
+/// Args:
+///     changes: Shared edits before the kind filter.
+///     kinds: One kind per target, aligned with the target list. `None` is not Drops.
+///
+/// Returns:
+///     The shared payload (empty when the targets differ), and per-target lists when they differ.
+fn changes_by_target(
+    changes: &[(String, String)],
+    kinds: &[Option<&str>],
+) -> (Vec<(String, String)>, Option<Vec<Vec<(String, String)>>>) {
+    let tailored: Vec<Vec<(String, String)>> = kinds
+        .iter()
+        .map(|kind| changes_for_kind(changes, *kind))
+        .collect();
+    let uniform = tailored.windows(2).all(|pair| pair[0] == pair[1]);
+    if uniform {
+        let preview = tailored.first().cloned().unwrap_or_default();
+        (preview, None)
+    } else {
+        (Vec::new(), Some(tailored))
+    }
+}
+
+/// Whether a tailored save still has a parameter to write.
+///
+/// A mixed selection can leave the anchor's preview empty while another target still has
+/// edits. That is a real write. An empty shared list, or a per-target set whose every list
+/// is empty, is not.
+fn changes_remain(
+    preview: &[(String, String)],
+    per_target: Option<&[Vec<(String, String)>]>,
+) -> bool {
+    match per_target {
+        Some(all) => all.iter().any(|row| !row.is_empty()),
+        None => !preview.is_empty(),
+    }
+}
+
+#[cfg(test)]
+mod tests;

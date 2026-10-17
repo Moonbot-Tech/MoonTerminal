@@ -64,10 +64,16 @@ impl AnalyticsView {
         let seed = seed_of(&self.tuner.seed);
         let train_frac = train_frac(self.tuner.train_pct);
         // Unchecked boxes: the field is not searched; with bounds filled in it
-        // still participates as a fixed filter.
+        // still participates as a fixed filter. A Detect field outside a Drops-only
+        // scope is excluded even when its box is still ticked: the default mask admits
+        // every mapped field, and searching xPriceDelta there would score other detects'
+        // deals as if the Min applied to them.
+        let drops_only = self.scope_is_drops_only();
         let locked: Vec<Option<(Option<f64>, Option<f64>)>> = (0..FIELDS.len())
             .map(|fi| {
-                if self.tuner.enabled[fi] {
+                if FIELDS[fi].class == FieldClass::Detect && !drops_only {
+                    Some((None, None))
+                } else if self.tuner.enabled[fi] {
                     None
                 } else {
                     let (from, to) = &self.tuner.bounds[0][fi];
@@ -225,6 +231,12 @@ impl AnalyticsView {
                         res.fields.into_iter().map(|f| (f.field, f)).collect();
                     for (fi, field) in FIELDS.iter().enumerate() {
                         // Leave fields that were not searched alone (fixed/disabled).
+                        // `drops_only` is the scope from when the search started: a scope
+                        // change while it runs must not wipe a Detect bound the result
+                        // never searched, and must not fill one in for a non-Drops scope.
+                        if field.class == FieldClass::Detect && !drops_only {
+                            continue;
+                        }
                         if !this.tuner.enabled[fi] {
                             continue;
                         }
@@ -324,10 +336,15 @@ impl AnalyticsView {
     /// Args:
     ///     cx: GPUI context used to execute and publish the suggestion.
     pub(in crate::analytics::tuner) fn suggest_one_into_v1(&mut self, cx: &mut Context<Self>) {
+        let fi = self.tuner.sel_field;
+        // The selected row can still be a Detect field after the scope leaves Drops.
+        // Starting a search would suggest a Min the save path then has to throw away.
+        if !super::offer_field(FIELDS[fi].class, self.scope_is_drops_only()) {
+            return;
+        }
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
         self.tuner.stop_suggest();
-        let fi = self.tuner.sel_field;
         let field = FIELDS[fi].col.to_string();
         let q = self.tuner_query();
         // This search holds nothing back, so its automatic minimum is one tenth of the whole
@@ -513,8 +530,13 @@ impl AnalyticsView {
         if !bulk {
             changes.push(self.analyzer_comment());
         }
+        let (changes, per_target) = self.changes_for_targets(&targets, &changes);
+        if !super::changes_remain(&changes, per_target.as_deref()) {
+            log::info!("analytics: 'Save' — neither mapped thresholds nor changed ignore flags");
+            return;
+        }
         // No notes: a threshold reads perfectly well as "now → next".
-        self.open_change_dialog(targets, changes, None, Vec::new(), warns, false, cx);
+        self.open_change_dialog(targets, changes, per_target, Vec::new(), warns, false, cx);
     }
 
     /// "Make a copy": the same change set, but the target is a NEW strategy
@@ -532,7 +554,25 @@ impl AnalyticsView {
         };
         let (mut changes, warns) = self.build_strategy_changes(false);
         changes.push(self.analyzer_comment());
+        let (changes, _) = self.changes_for_targets(std::slice::from_ref(&target), &changes);
         self.open_copy_with(target, changes, warns, window, cx);
+    }
+
+    /// Apply the Drops-only Detect filter to one shared change list.
+    ///
+    /// Kinds come from the loaded strategy list. A target that list does not name is not
+    /// treated as Drops, so a stale xPriceDelta cannot be written onto it.
+    fn changes_for_targets(
+        &self,
+        targets: &[SaveTarget],
+        changes: &[(String, String)],
+    ) -> (Vec<(String, String)>, Option<Vec<Vec<(String, String)>>>) {
+        let kinds: Vec<Option<String>> = targets
+            .iter()
+            .map(|target| self.strategy_kind(target.sid, target.core))
+            .collect();
+        let kind_refs: Vec<Option<&str>> = kinds.iter().map(|kind| kind.as_deref()).collect();
+        super::changes_by_target(changes, &kind_refs)
     }
 
     /// The SHARED tail of "Make a copy" (all axes): an auto-uniqued name for the new
