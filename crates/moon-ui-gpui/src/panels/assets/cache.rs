@@ -15,6 +15,24 @@ pub(super) fn total_modes_sig(servers: &[moon_core::config::ServerConfig]) -> u6
 #[cfg(test)]
 mod tests;
 
+/// Hashes cached captions and fallback-quote configuration that have no data revision.
+pub(super) fn asset_labels_sig<'a>(
+    cores: impl Iterator<Item = (CoreId, &'a str)>,
+    servers: &[moon_core::config::ServerConfig],
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for (id, name) in cores {
+        id.hash(&mut h);
+        name.hash(&mut h);
+    }
+    for server in servers {
+        server.id.hash(&mut h);
+        server.market.hash(&mut h);
+    }
+    h.finish()
+}
+
 /// Cache work selected from explicit full-row, sale-marker, and periodic inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AssetsRefresh {
@@ -59,6 +77,14 @@ pub(super) fn assets_observe_step(
     }
 }
 
+/// Clock ticks retry missing snapshots without replacing retained row or wallet caches.
+pub(super) fn repaint_retries_transfers(
+    refresh: AssetsRefresh,
+    step: crate::panels::common::GateStep,
+) -> bool {
+    step == crate::panels::common::GateStep::Repaint && refresh != AssetsRefresh::Full
+}
+
 /// Combines full-cache and order-only identities for the existing repaint gate.
 pub(super) fn mix(assets: u64, sale: u64) -> u64 {
     assets.wrapping_mul(31).wrapping_add(sale)
@@ -92,7 +118,7 @@ pub(super) fn sale_sig(b: &Backend, cores: &[(CoreId, String)]) -> u64 {
 }
 
 impl AssetsView {
-    /// Full-cache signature for assets, transfers, balance trust, and account-total settings.
+    /// Full-cache signature for data, trust, captions, fallback quotes and account-total settings.
     pub(super) fn assets_sig(&self, b: &Backend) -> u64 {
         use std::hash::{Hash, Hasher};
         let store = b.session.store();
@@ -102,8 +128,12 @@ impl AssetsView {
         // out-of-scope settings whose changes can conservatively trigger an extra rebuild.
         // One hasher for every merge key: the key holds strings, so it is hashed, but only once.
         let mut keys = std::collections::hash_map::DefaultHasher::new();
-        let sig = self
-            .query_cores(b)
+        let cores = self.query_cores(b);
+        let labels = asset_labels_sig(
+            cores.iter().map(|(id, name)| (*id, name.as_str())),
+            &b.config.servers,
+        );
+        let sig = cores
             .iter()
             // Include CoreId so canonical reordering invalidates the cache when state is unchanged.
             .map(|(id, _)| (*id, store.core(*id)))
@@ -126,6 +156,8 @@ impl AssetsView {
         sig.wrapping_mul(31)
             .wrapping_add(keys.finish())
             .wrapping_mul(31)
+            .wrapping_add(labels)
+            .wrapping_mul(31)
             .wrapping_add(total_modes_sig(&b.config.servers))
     }
 
@@ -143,6 +175,9 @@ impl AssetsView {
     /// Returns:
     ///     Nothing; retained state is reconciled and every render cache is replaced in place.
     pub(super) fn rebuild_cache(&mut self, b: &Backend) {
+        if self.gate.defer_if_inactive() {
+            return;
+        }
         let sig = self.assets_sig(b);
         // Cache membership data; the dropdown ranks again at render time.
         let cores: Vec<(CoreId, String)> = self.scope_cores(b).into_iter().collect();

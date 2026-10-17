@@ -229,7 +229,11 @@ impl AssetsView {
             let sig = this.assets_sig(b);
             let key = this.cache_key(sig);
             let sale = cache::sale_sig(b, &this.cached_cores);
-            let gate_due = this.gate.should_notify(cache::mix(sig, sale), now);
+            let step = this.gate.step(cache::mix(sig, sale), now);
+            if this.gate.defer_if_inactive() {
+                return;
+            }
+            let gate_due = step == crate::panels::common::GateStep::Rebuild;
             let (refresh, cache_sig, sale_sig) =
                 cache::assets_observe_step(this.cache_sig, key, this.sale_sig, sale, gate_due);
             this.cache_sig = cache_sig;
@@ -237,13 +241,18 @@ impl AssetsView {
             match refresh {
                 cache::AssetsRefresh::Full => {
                     this.rebuild_cache(b);
-                    cx.notify();
                 }
                 cache::AssetsRefresh::SaleOnly => {
                     this.sell_marked = Rc::new(this.collect_sell_marked(b));
-                    cx.notify();
                 }
                 cache::AssetsRefresh::None => {}
+            }
+            let repaint = cache::repaint_retries_transfers(refresh, step);
+            if repaint {
+                this.request_missing_transfers(b);
+            }
+            if refresh != cache::AssetsRefresh::None || repaint {
+                cx.notify();
             }
         })
         .detach();

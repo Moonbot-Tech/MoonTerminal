@@ -9,6 +9,15 @@ impl Focusable for OrdersPanel {
     }
 }
 impl Panel for OrdersPanel {
+    /// Coalesces hidden-tab work into one rebuild when the panel becomes visible.
+    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.gate.set_active(active) {
+            let backend = self.backend.clone();
+            self.rebuild_cache(backend.read(cx));
+            cx.notify();
+        }
+    }
+
     fn panel_name(&self) -> &'static str {
         "Orders"
     }
