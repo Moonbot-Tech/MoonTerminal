@@ -5,6 +5,43 @@ use super::{
 };
 use std::path::{Path, PathBuf};
 
+/// Holding the process memo during a slow write must not stall an unrelated path's memo check.
+#[test]
+fn a_slow_writer_does_not_block_another_paths_memo_check() {
+    let slow = Scratch::new("slow-writer");
+    let other = Scratch::new("other-writer");
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(move || {
+            super::write_atomic_memo_with(
+                &slow.file(),
+                b"key",
+                b"bytes",
+                true,
+                "test",
+                |_, _, _| {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(())
+                },
+            )
+            .unwrap();
+        });
+        started_rx.recv().unwrap();
+        let checker = scope.spawn(move || {
+            super::write_atomic_memo(&other.file(), b"other", b"bytes", true, "test").unwrap();
+            checked_tx.send(()).unwrap();
+        });
+        let checked = checked_rx.recv_timeout(std::time::Duration::from_secs(5));
+        release_tx.send(()).unwrap();
+        writer.join().unwrap();
+        checker.join().unwrap();
+        assert!(checked.is_ok(), "another path waited for the slow writer");
+    });
+}
+
 /// Bind the absent-file branch in [`load_or_default`] to `defaults_for_absent_file`.
 ///
 /// The plausible breakage is treating `defaults_for_absent_file` as a redundant wrapper and

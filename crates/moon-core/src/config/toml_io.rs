@@ -192,25 +192,42 @@ pub(crate) fn write_atomic_memo(
     may_skip: bool,
     label: &str,
 ) -> anyhow::Result<()> {
+    write_atomic_memo_with(path, memo_key, bytes, may_skip, label, write_atomic_raw)
+}
+
+/// Check and update the memo around a writer without holding its global lock during disk I/O.
+fn write_atomic_memo_with(
+    path: &Path,
+    memo_key: &[u8],
+    bytes: &[u8],
+    may_skip: bool,
+    label: &str,
+    write: impl FnOnce(&Path, &[u8], &str) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
     let hash = content_hash(memo_key);
+    let stamp = file_stamp(path);
     let mut memo = WRITE_MEMO
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if may_skip && memo_hit(memo.get(path), hash, memo_key.len(), file_stamp(path)) {
+    if may_skip && memo_hit(memo.get(path), hash, memo_key.len(), stamp) {
         return Ok(());
     }
     memo.remove(path);
-    write_atomic_raw(path, bytes, label)?;
+    drop(memo);
+    write(path, bytes, label)?;
     if let Some((file_len, mtime)) = file_stamp(path) {
-        memo.insert(
-            path.to_path_buf(),
-            Memo {
-                hash,
-                key_len: memo_key.len(),
-                file_len,
-                mtime,
-            },
-        );
+        WRITE_MEMO
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                path.to_path_buf(),
+                Memo {
+                    hash,
+                    key_len: memo_key.len(),
+                    file_len,
+                    mtime,
+                },
+            );
     }
     Ok(())
 }
