@@ -69,7 +69,7 @@ pub(in crate::analytics::tuner) fn order_for(
         let mut order: Vec<usize> = (0..rows.len())
             .filter(|&i| {
                 let reason = state.classified.as_ref().expect("classified rows").chips[i];
-                (!state.only_fit || reason == DealChip::Fit)
+                (!state.only_fit || matches!(reason, DealChip::Fit | DealChip::AcceptedShortTail))
                     && state.chip.is_none_or(|chip| {
                         if chip == DealChip::WithTape {
                             DealChip::tape(&rows[i]).is_some()
@@ -234,7 +234,7 @@ fn sort_indices(
 pub(in crate::analytics::tuner) struct ChipCounts {
     pub(in crate::analytics::tuner) rows_rev: u64,
     pub(in crate::analytics::tuner) min_tail_s: u32,
-    pub(in crate::analytics::tuner) counts: [usize; 7],
+    pub(in crate::analytics::tuner) counts: [usize; DealChip::ALL.len()],
 }
 
 impl ChipCounts {
@@ -260,7 +260,7 @@ pub(in crate::analytics::tuner) fn counts_at(
     let mut counts = ChipCounts {
         rows_rev: state.rows_rev,
         min_tail_s,
-        counts: [0; 7],
+        counts: [0; DealChip::ALL.len()],
     };
     if let Some(data) = state.data.data() {
         for (row, chip) in data

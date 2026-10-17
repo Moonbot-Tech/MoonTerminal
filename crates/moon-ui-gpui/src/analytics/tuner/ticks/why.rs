@@ -13,6 +13,7 @@ pub(in crate::analytics::tuner) enum DealChip {
     WithTape,
     NoTape,
     Fit,
+    AcceptedShortTail,
     ShortTail,
     Hole,
     ModelMiss,
@@ -21,10 +22,11 @@ pub(in crate::analytics::tuner) enum DealChip {
 
 impl DealChip {
     /// Footer order includes the overlapping tape count before the exclusive buckets.
-    pub(in crate::analytics::tuner) const ALL: [Self; 7] = [
+    pub(in crate::analytics::tuner) const ALL: [Self; 8] = [
         Self::WithTape,
         Self::NoTape,
         Self::Fit,
+        Self::AcceptedShortTail,
         Self::ShortTail,
         Self::Hole,
         Self::ModelMiss,
@@ -37,6 +39,7 @@ impl DealChip {
             Self::WithTape => "with_tape",
             Self::NoTape => "no_tape",
             Self::Fit => "fit",
+            Self::AcceptedShortTail => "accepted_short_tail",
             Self::ShortTail => "short_tail",
             Self::Hole => "hole",
             Self::ModelMiss => "model_miss",
@@ -48,12 +51,13 @@ impl DealChip {
     pub(in crate::analytics::tuner) fn rank(self) -> u8 {
         match self {
             Self::Fit => 0,
-            Self::WithTape => 1,
-            Self::NoTape => 2,
-            Self::ShortTail => 3,
-            Self::Hole => 4,
-            Self::ModelMiss => 5,
-            Self::Unjudged => 6,
+            Self::AcceptedShortTail => 1,
+            Self::WithTape => 2,
+            Self::NoTape => 3,
+            Self::ShortTail => 4,
+            Self::Hole => 5,
+            Self::ModelMiss => 6,
+            Self::Unjudged => 7,
         }
     }
 
@@ -109,6 +113,7 @@ impl Tip {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::analytics::tuner) enum DealWhy {
     Fit,
+    AcceptedShortTail,
     NoTape { fetchable: bool },
     NoAddress,
     Fetching,
@@ -148,13 +153,17 @@ impl DealWhy {
         if let Some(why) = Self::of_exit(Some(verdict)) {
             return why;
         }
-        if let Some(why) = Self::tail_or_gap(row, min_tail_s) {
+        if let Some(why) = Self::tail_or_gap(row, min_tail_s, now_ms) {
             return why;
         }
         if row.ticks.is_none() {
             return Self::LostTape;
         }
-        Self::Fit
+        if row.short_tail_at(min_tail_s, now_ms) {
+            Self::AcceptedShortTail
+        } else {
+            Self::Fit
+        }
     }
 
     /// Project the exit independently of entry, as the accuracy denominator requires.
@@ -176,18 +185,25 @@ impl DealWhy {
         now_ms: i64,
     ) -> Self {
         if row.tape == TapeStatus::Covered {
-            Self::tail_or_gap(row, min_tail_s).unwrap_or(Self::Fit)
+            Self::tail_or_gap(row, min_tail_s, now_ms).unwrap_or_else(|| {
+                if row.short_tail_at(min_tail_s, now_ms) {
+                    Self::AcceptedShortTail
+                } else {
+                    Self::Fit
+                }
+            })
         } else {
             Self::of(row, min_tail_s, now_ms)
         }
     }
 
     /// Share the tape exclusions between the primary reason and the tape-only projection.
-    fn tail_or_gap(row: &DealRow, min_tail_s: u32) -> Option<Self> {
+    fn tail_or_gap(row: &DealRow, min_tail_s: u32, now_ms: i64) -> Option<Self> {
         let trail_ms = row.held.map_or(0, |(_, trail)| trail.max(0));
         if !row.held.is_some_and(|(_, trail)| {
             moon_core::db::tuner::ticks::tail::reaches(trail, i64::from(min_tail_s) * 1_000)
-        }) {
+        }) && !row.short_tail_at(min_tail_s, now_ms)
+        {
             return Some(Self::ShortTail {
                 trail_ms,
                 min_s: min_tail_s,
@@ -205,6 +221,7 @@ impl DealWhy {
     pub(in crate::analytics::tuner) fn chip(self) -> DealChip {
         match self {
             Self::Fit => DealChip::Fit,
+            Self::AcceptedShortTail => DealChip::AcceptedShortTail,
             Self::NoTape { .. } | Self::NoAddress | Self::Fetching | Self::Refused(_) => {
                 DealChip::NoTape
             }
@@ -219,6 +236,7 @@ impl DealWhy {
     fn key(self) -> &'static str {
         match self {
             Self::Fit => "fit",
+            Self::AcceptedShortTail => "accepted_short_tail",
             Self::NoTape { fetchable: true } => "missing_fetchable",
             Self::NoTape { fetchable: false } => "missing",
             Self::NoAddress => "no_address",
@@ -261,6 +279,7 @@ impl DealWhy {
             }
             Self::Refused(TickStatus::RateLimited { retry_in_s }) => (0, 0, 0, 0, 0, retry_in_s),
             Self::Fit
+            | Self::AcceptedShortTail
             | Self::NoTape { .. }
             | Self::NoAddress
             | Self::Fetching
@@ -309,6 +328,7 @@ impl DealWhy {
             Self::ShortTail { .. } => Some(t!("analytics.ticks.why.extend_tail").to_string()),
             Self::Refused(TickStatus::ArchivePending { .. }) => Some(self.translated(".todo")),
             Self::Fit
+            | Self::AcceptedShortTail
             | Self::NoTape { fetchable: false }
             | Self::Fetching
             | Self::Refused(
@@ -360,7 +380,10 @@ impl DealWhy {
             what: self.short(),
             why: self.translated(".why"),
             todo: self.todo(),
-            not_your_fault: !matches!(self, Self::Fit | Self::ShortTail { .. }),
+            not_your_fault: !matches!(
+                self,
+                Self::Fit | Self::AcceptedShortTail | Self::ShortTail { .. }
+            ),
         };
         if let Some(verdict) = verdict {
             let entry = format!(
@@ -381,10 +404,10 @@ impl DealWhy {
         tip
     }
 
-    /// A covered but incomplete tape is amber, so it cannot look ready for the search.
+    /// Keep incomplete tape amber even when an unfillable tail is admitted to the sample.
     pub(in crate::analytics::tuner) fn tape_glyph(self) -> (&'static str, Tone) {
         match self {
-            Self::ShortTail { .. } => ("●", Tone::Warning),
+            Self::ShortTail { .. } | Self::AcceptedShortTail => ("●", Tone::Warning),
             Self::Hole { .. } => ("◐", Tone::Warning),
             Self::Fit
             | Self::EntryMissed(_)

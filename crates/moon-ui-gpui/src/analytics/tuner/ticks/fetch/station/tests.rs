@@ -7,6 +7,36 @@ use super::{Filled, ReplayWindow, Unfillable, lacking, note_filed, prefill_rows}
 /// Serializes tests that read or write the process-wide unfillable set.
 static UNFILLABLE_TEST: Mutex<()> = Mutex::new(());
 
+/// A latched final row stops waiting even if its timestamps still lie inside core retention.
+#[test]
+fn station_final_tail_no_longer_waits_for_a_source() {
+    let _guard = UNFILLABLE_TEST
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let row = queued_unservable(-91_401);
+    let now = row.window.close_ms + 3_600_000;
+    super::unfillable().uids.remove(&row.deal.report_uid);
+    assert!(super::super::super::tail::fillable_at(
+        &row.address,
+        row.deal.report_uid,
+        row.window.close_ms,
+        30_000,
+        now,
+        (false, true)
+    ));
+    super::unfillable().uids.insert(row.deal.report_uid);
+    let fillable = super::super::super::tail::fillable_at(
+        &row.address,
+        row.deal.report_uid,
+        row.window.close_ms,
+        30_000,
+        now,
+        (false, true),
+    );
+    super::unfillable().uids.remove(&row.deal.report_uid);
+    assert!(!fillable);
+}
+
 /// A disk-held row must not invalidate the view when the station filed no new pieces.
 #[test]
 fn already_held_rows_do_not_bump_the_station_filing_generation() {
@@ -15,6 +45,7 @@ fn already_held_rows_do_not_bump_the_station_filing_generation() {
         vec![trade("HELD", 100_000, 110_000)],
         |row| row.clone(),
         |_, _, _, _| Some(vec![(0, 1_000_000)]),
+        |_, _| false,
         |_| panic!("held row must not reach the station"),
     );
     assert_eq!(held, 1);
@@ -150,6 +181,7 @@ fn empty_station_answer_is_remembered_when_nothing_else_can_fetch() {
             )
         },
         |_, _, _, _| None,
+        |_, _| false,
         |_| Filled {
             markets: 1,
             ..Default::default()
@@ -267,6 +299,7 @@ fn station_fills_short_tail_before_the_remaining_rows_are_queued() {
                 },
             )])
         },
+        |_, _| false,
         |rows| {
             offered.set(rows.len());
             let wants = lacking(

@@ -1,14 +1,14 @@
-//! The shortest tape past the close a deal must hold to be worked on: a row whose held trail
-//! (`DealRow::held`) is shorter is not fit (`DealRow::fit`), so the fact's baseline, the variant
-//! columns and the search all run on the same deals. Each deal's own held trail is its exit
-//! horizon and is never under this floor.
+//! The desired tape past close for the sample. Fillable short tails wait for extension;
+//! unfillable ones remain usable with an explicit mark, so old stored history is not lost.
+//! The fact's baseline, variants and search share that admission rule. Each deal's own held
+//! trail remains its exit horizon even when the missing tail cannot be recovered.
 //!
 //! A deal with a 30 s tail cuts its variant's exit 30 s past its close: a variant that fills a
 //! hair off the fact's price reaches its take or its Price Down line later than the fact did, is
 //! left open at the cut, and the point is never the answer (`search::closing`) — an exit search
 //! refuses it outright, an entry search can only steer through it. Short tails can be extended
 //! by the existing fetch job while REST or a daily archive still serves the missing time;
-//! otherwise the deal remains outside the sample.
+//! otherwise the deal joins the sample with an explicit short-tail mark.
 //!
 //! A tape with a hole between the buy and the close (`Deal::gap`) is left out the same way. A
 //! variant whose rules reach into the hole ends there unanswered (`ExitKind::InGap`), which the
@@ -72,6 +72,46 @@ pub(in crate::analytics::tuner) fn holds(held: Option<(i64, i64)>) -> bool {
 /// Whether `held` reaches `min_s` seconds past the close.
 fn reaches(held: Option<(i64, i64)>, min_s: u32) -> bool {
     held.is_some_and(|(_, trail_ms)| core_reaches(trail_ms, i64::from(min_s) * 1_000))
+}
+
+/// Whether enabled sources can still extend a row's tail; station-final rows stop waiting.
+pub(in crate::analytics::tuner) fn fillable_at(
+    address: &super::state::RowAddress,
+    uid: i64,
+    close_ms: i64,
+    trail_ms: i64,
+    now_ms: i64,
+    switches: (bool, bool),
+) -> bool {
+    use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
+    if !super::fetch::station::candidate(uid) {
+        return false;
+    }
+    let from = close_ms.saturating_add(trail_ms.max(0));
+    (switches.0
+        && matches!(
+            fetchable(address.venue, &address.market, from, now_ms),
+            Fetchable::Rest | Fetchable::Archive
+        ))
+        || (switches.1
+            && from >= now_ms.saturating_sub(moon_core::market::CORE_ARCHIVE_RETENTION_MS))
+}
+
+/// Current automatic-source switches, shared by held counts and sample membership.
+pub(in crate::analytics::tuner) fn switches() -> (bool, bool) {
+    (
+        moon_core::market::trade_replay::tape_autoload(),
+        moon_core::market::trade_replay::tape_autoload_cores(),
+    )
+}
+
+/// Keep all pre-close requirements while allowing an irrecoverable post-close shortfall.
+pub(in crate::analytics::tuner) fn through_close(
+    window: &moon_core::market::trade_replay::ReplayWindow,
+) -> moon_core::market::trade_replay::Coverage {
+    moon_core::db::tuner::ticks::required_spans(window).clip(
+        &moon_core::market::trade_replay::Coverage::one((window.from_ms, window.close_ms)),
+    )
 }
 
 /// A typed value in seconds: a whole number, clamped to the store's longest margin; anything

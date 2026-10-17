@@ -1091,7 +1091,20 @@ pub(super) fn replay_row_with(
     // Coverage is the worker's own word on what was walked; a quiet run-up with no print in it
     // is covered all the same, which the tape's first stamp could not tell from a missing one.
     // What must be covered is the model's own rule (`required_spans`), not the whole margin.
-    if ticks.is_empty() || !covered.covers(&required_spans(&window)) {
+    let short_allowed = !super::tail::fillable_at(
+        &address,
+        row.deal.report_uid,
+        window.close_ms,
+        row.held.map_or(0, |(_, trail)| trail),
+        chrono::Utc::now().timestamp_millis(),
+        super::tail::switches(),
+    );
+    let required = if short_allowed {
+        super::tail::through_close(&window)
+    } else {
+        required_spans(&window)
+    };
+    if ticks.is_empty() || !covered.covers(&required) {
         row.tape = TapeStatus::Missing;
         row.verdict = None;
         return;

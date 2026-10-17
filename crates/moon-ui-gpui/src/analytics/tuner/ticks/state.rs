@@ -80,11 +80,34 @@ pub(in crate::analytics::tuner) struct DealRow {
 }
 
 impl DealRow {
+    /// A covered short tail is usable only when no enabled source can extend it.
+    pub(in crate::analytics::tuner) fn short_tail_at(&self, min_s: u32, now_ms: i64) -> bool {
+        let (Some(address), Some((_, trail))) = (&self.address, self.held) else {
+            return false;
+        };
+        self.tape == TapeStatus::Covered
+            && trail >= 0
+            && trail < i64::from(min_s) * 1_000
+            && !super::tail::fillable_at(
+                address,
+                self.deal.report_uid,
+                self.deal.close_ms,
+                trail,
+                now_ms,
+                super::tail::switches(),
+            )
+    }
+
     /// Offer unresolved tape and reproduced short tails to the station before venue checks.
     pub(in crate::analytics::tuner) fn station_candidate(&self) -> bool {
         self.address.is_some()
             && (matches!(self.tape, TapeStatus::Missing | TapeStatus::Refused(_))
-                || (self.reproduced() && !super::tail::holds(self.held)))
+                || (self.reproduced()
+                    && !super::tail::holds(self.held)
+                    && !self.short_tail_at(
+                        super::tail::effective_s(),
+                        chrono::Utc::now().timestamp_millis(),
+                    )))
     }
 
     /// Automatic reloads wait for publication; an explicit fetch can still requeue the row.
@@ -134,6 +157,9 @@ impl DealRow {
             );
         }
         let trail_ms = self.held.map_or(0, |(_, trail)| trail.max(0));
+        if self.short_tail_at(min_tail_s, now_ms) {
+            return false;
+        }
         self.reproduced()
             && trail_ms < i64::from(min_tail_s) * 1_000
             && if address.venue.is_some() {
@@ -162,10 +188,16 @@ impl DealRow {
     }
 
     /// Whether the variants and the search run on this row: it is [`Self::reproduced`], holds
-    /// the shortest tail past the close (`tail`) and has no hole between the buy and the close
+    /// the shortest tail or an unfillable short tail, and has no hole between the buy and the close
     /// (`Deal::gap`). The table shows every row; this is the sample.
     pub(in crate::analytics::tuner) fn fit(&self) -> bool {
-        self.reproduced() && super::tail::holds(self.held) && self.deal.gap.is_none()
+        self.reproduced()
+            && (super::tail::holds(self.held)
+                || self.short_tail_at(
+                    super::tail::effective_s(),
+                    chrono::Utc::now().timestamp_millis(),
+                ))
+            && self.deal.gap.is_none()
     }
 
     /// Whether the tape covers the window and the model reproduced the trade on its own

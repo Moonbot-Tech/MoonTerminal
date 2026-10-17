@@ -115,7 +115,7 @@ fn unpublished_rows_are_offered_by_reload_and_marked_fetching() {
     );
 }
 
-/// Restricting fetchable rows to Missing strands pad-covered tails even on archive venues.
+/// Enabled archives still extend short tails; disabled venues admit old tape instead of waiting.
 #[test]
 fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     use super::super::state::RowAddress;
@@ -139,8 +139,21 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     };
     row.deal.coin = "XALPHA".into();
     assert!(
+        super::super::tail::fillable_at(
+            row.address.as_ref().unwrap(),
+            row.deal.report_uid,
+            row.deal.close_ms,
+            30_000,
+            now,
+            (true, false),
+        ),
+        "daily archive beyond REST retention remains reachable when enabled"
+    );
+    let venues_on = moon_core::market::trade_replay::tape_autoload();
+    assert_eq!(
         row.fetchable_at(now, 60),
-        "daily archive beyond REST retention"
+        venues_on,
+        "old short tails wait only for enabled archives"
     );
     let data = TicksData {
         rows: vec![row.clone()],
@@ -148,8 +161,8 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     };
     assert_eq!(
         data.fetchable_at(now, 60).count(),
-        1,
-        "button offers the covered row"
+        usize::from(venues_on),
+        "an admitted short tail is not counted again as waiting for tape"
     );
     row.held = Some((30_000, 60_000));
     assert!(!row.fetchable_at(now, 60), "enough tail needs no refill");

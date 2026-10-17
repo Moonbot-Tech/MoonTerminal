@@ -59,7 +59,7 @@ fn unfillable() -> MutexGuard<'static, Unfillable> {
 }
 
 /// Whether a station-only row still deserves an automatic request in this generation.
-pub(super) fn candidate(uid: i64) -> bool {
+pub(in crate::analytics::tuner) fn candidate(uid: i64) -> bool {
     !unfillable().uids.contains(&uid)
 }
 
@@ -109,36 +109,44 @@ pub(super) fn filed_generation() -> u64 {
     FILED.load(Ordering::Acquire)
 }
 
-/// Discard only rows whose stored coverage includes the current tuner tail floor.
+/// Discard complete rows and unfillable short tails whose pre-close tape is complete.
 pub(super) fn drop_held<T>(
     rows: Vec<T>,
     place: impl Fn(&T) -> (String, String, ReplayWindow),
     held_spans: impl Fn(&str, &str, i64, i64) -> Option<Vec<(i64, i64)>>,
+    allow_short: impl Fn(&T, &Coverage) -> bool,
 ) -> (Vec<T>, usize) {
     let floor = floor_ms(super::super::tail::current_s());
-    let mut by_market: HashMap<(String, String), Vec<(T, Coverage)>> = HashMap::new();
+    let mut by_market: HashMap<(String, String), Vec<(T, Coverage, ReplayWindow)>> = HashMap::new();
     for row in rows {
         let (exchange, market, window) = place(&row);
+        let need = required_with_floor(&window, floor);
         by_market
             .entry((exchange, market))
             .or_default()
-            .push((row, required_with_floor(&window, floor)));
+            .push((row, need, window));
     }
     let mut kept = Vec::new();
     let mut held = 0;
     for ((exchange, market), group) in by_market {
         let bounds = group
             .iter()
-            .filter_map(|(_, need)| need.hull())
+            .filter_map(|(_, need, _)| need.hull())
             .reduce(|(a, b), (c, d)| (a.min(c), b.max(d)));
         let stored = bounds
             .and_then(|(from, to)| held_spans(&exchange, &market, from, to))
             .map(Coverage::from_spans);
-        for (row, need) in group {
-            if stored
-                .as_ref()
-                .is_some_and(|stored| !need.is_empty() && stored.covers(&need))
-            {
+        for (row, need, window) in group {
+            if stored.as_ref().is_some_and(|stored| {
+                let focus = focus_with_tail(
+                    &window,
+                    record_tail_ms(super::super::tail::current_s(), margin_ms()),
+                );
+                !need.is_empty()
+                    && (stored.covers(&need)
+                        || (allow_short(&row, &stored.clip(&focus))
+                            && stored.covers(&super::super::tail::through_close(&window))))
+            }) {
                 held += 1;
             } else {
                 kept.push(row);
@@ -165,23 +173,42 @@ pub(super) fn prefill(
     let held_spans = |exchange: &str, market: &str, from, to| {
         trade_cache::handle()?.held_spans(exchange, market, from, to)
     };
+    // Sampled at the end of the fill, before the second disk check: a stop that lands during
+    // the pull must not be remembered, and one that lands later is the same single sample.
+    let mut stopped = false;
+    let allow_short = |row: &super::job::QueuedRow, stored: &Coverage| {
+        !super::super::tail::fillable_at(
+            &row.address,
+            row.deal.report_uid,
+            row.window.close_ms,
+            stored
+                .hull()
+                .map_or(0, |(_, to)| to.saturating_sub(row.window.close_ms).max(0)),
+            moon_core::util::time::now_unix_ms_i64(),
+            super::super::tail::switches(),
+        )
+    };
+    let (rows, held, from_station, filled) =
+        prefill_rows(rows, place, held_spans, allow_short, |rows| {
+            let Some(target) = target.filter(|_| !stop()) else {
+                return Filled::default();
+            };
+            let candidates: Vec<_> = rows
+                .iter()
+                .filter(|row| {
+                    row.origin == super::job::RowOrigin::User || candidate(row.deal.report_uid)
+                })
+                .collect();
+            let filled = fill(&candidates, |row| place(row), target, &stop);
+            super::autoload::station_answered(filled.unreachable);
+            stopped = stop();
+            filled
+        });
+    commit_station_answer(&rows, filled, stopped);
     let rows = rows
         .into_iter()
         .filter(|row| row.origin == super::job::RowOrigin::User || candidate(row.deal.report_uid))
         .collect();
-    // Sampled at the end of the fill, before the second disk check: a stop that lands during
-    // the pull must not be remembered, and one that lands later is the same single sample.
-    let mut stopped = false;
-    let (rows, held, from_station, filled) = prefill_rows(rows, place, held_spans, |rows| {
-        let Some(target) = target.filter(|_| !stop()) else {
-            return Filled::default();
-        };
-        let filled = fill(rows, place, target, &stop);
-        super::autoload::station_answered(filled.unreachable);
-        stopped = stop();
-        filled
-    });
-    commit_station_answer(&rows, filled, stopped);
     (rows, held, from_station)
 }
 
@@ -216,15 +243,16 @@ fn prefill_rows<T>(
     rows: Vec<T>,
     place: impl Fn(&T) -> (String, String, ReplayWindow),
     held_spans: impl Fn(&str, &str, i64, i64) -> Option<Vec<(i64, i64)>>,
+    allow_short: impl Fn(&T, &Coverage) -> bool,
     fill: impl FnOnce(&[T]) -> Filled,
 ) -> (Vec<T>, usize, usize, Filled) {
-    let (rows, held) = drop_held(rows, &place, &held_spans);
+    let (rows, held) = drop_held(rows, &place, &held_spans, &allow_short);
     if rows.is_empty() {
         return (rows, held, 0, Filled::default());
     }
     let filled = fill(&rows);
     let before = rows.len();
-    let (rows, _) = drop_held(rows, place, held_spans);
+    let (rows, _) = drop_held(rows, place, held_spans, allow_short);
     let from_station = before - rows.len();
     (rows, held + from_station, from_station, filled)
 }

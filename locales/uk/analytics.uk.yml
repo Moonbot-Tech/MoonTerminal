@@ -1,6 +1,10 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.chip.accepted_short_tail: "для підбору: короткий хвіст"
+analytics.ticks.chip.accepted_short_tail_tip: "Угоди для підбору з повною стрічкою до закриття. Хвіст короткий, і жодне ввімкнене джерело не може його доповнити."
+analytics.ticks.why.accepted_short_tail: "короткий хвіст (для підбору)"
+analytics.ticks.why.accepted_short_tail.why: "Стрічка покриває угоду до закриття. Увімкнені джерела не можуть доповнити хвіст, тому підбір використовує доступну стрічку. Варіанти, що виходять за її межі, залишаються відкритими."
 analytics.ticks.col.why: "чому не у вибірці"
 analytics.ticks.legend.hit: "збіглося"
 analytics.ticks.legend.miss: "модель вийшла інакше"

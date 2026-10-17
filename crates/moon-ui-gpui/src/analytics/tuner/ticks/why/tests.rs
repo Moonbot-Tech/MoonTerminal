@@ -194,6 +194,7 @@ fn every_reason_has_distinct_keys_and_resolves_in_every_language() {
     );
     reasons.extend([
         DealWhy::Fit,
+        DealWhy::AcceptedShortTail,
         DealWhy::NoTape { fetchable: false },
         DealWhy::NoTape { fetchable: true },
         DealWhy::NoAddress,
@@ -379,4 +380,59 @@ fn missing_tape_offers_fetch_only_with_a_resolved_source() {
             assert!(reason.tape_tip().todo.is_none());
         }
     }
+}
+
+/// Restoring a strict tail gate would lose old deals; relaxing every tail would skip fresh refills.
+#[test]
+fn unfillable_short_tail_is_in_the_sample_but_fresh_tape_waits() {
+    use crate::analytics::tuner::ticks::readiness::Readiness;
+    use crate::analytics::tuner::ticks::tail::fillable_at;
+    let mut row = row();
+    row.address = Some(Arc::new(RowAddress {
+        core_uid: 1,
+        venue: None,
+        exchange_key: "EX-XX".into(),
+        market: "XALPHA".into(),
+        btc_market: None,
+    }));
+    row.held = Some((30_000, 30_000));
+    let old_now = row.deal.close_ms + 49 * 3_600_000;
+    let fresh_now = row.deal.close_ms + 3_600_000;
+    assert!(!fillable_at(
+        row.address.as_ref().unwrap(),
+        1,
+        row.deal.close_ms,
+        30_000,
+        old_now,
+        (false, true)
+    ));
+    assert!(fillable_at(
+        row.address.as_ref().unwrap(),
+        1,
+        row.deal.close_ms,
+        30_000,
+        fresh_now,
+        (false, true)
+    ));
+    assert_eq!(DealWhy::of(&row, 60, old_now), DealWhy::AcceptedShortTail);
+    assert_eq!(
+        DealWhy::of(&row, 60, fresh_now),
+        DealWhy::ShortTail {
+            trail_ms: 30_000,
+            min_s: 60
+        }
+    );
+    assert!(row.fit());
+    let old = Readiness::of_rows([&row], old_now, 60);
+    assert_eq!((old.covered, old.fit, old.fetchable), (1, 1, 0));
+    let fresh = Readiness::of_rows([&row], fresh_now, 60);
+    assert_eq!((fresh.covered, fresh.fit, fresh.fetchable), (1, 0, 1));
+    row.deal.gap = Some(gap());
+    assert!(
+        !row.fit(),
+        "short-tail admission never admits a pre-close gap"
+    );
+    row.deal.gap = None;
+    row.tape = TapeStatus::Missing;
+    assert!(!row.fit(), "a tail exception cannot create missing tape");
 }

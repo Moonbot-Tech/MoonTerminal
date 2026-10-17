@@ -159,7 +159,7 @@ impl Render for NarrowDealProbe {
         let counts = super::super::rows::ChipCounts {
             rows_rev: 0,
             min_tail_s: 60,
-            counts: [0; 7],
+            counts: [0; super::super::why::DealChip::ALL.len()],
         };
         v_flex()
             .w_full()
@@ -388,6 +388,7 @@ fn deal_table_symbols_and_filters_fit_all_presentations(cx: &mut gpui::TestAppCo
                             "with_tape",
                             "no_tape",
                             "fit",
+                            "accepted_short_tail",
                             "short_tail",
                             "hole",
                             "model_miss",

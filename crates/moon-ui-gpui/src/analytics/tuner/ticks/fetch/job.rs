@@ -1397,7 +1397,12 @@ fn serve_cluster(
         );
         // Pad coverage reproduces the fact but does not finish a requested short-tail refill.
         // Keep the existing retry/continuation budget until that tail reaches the sample floor.
-        let pending_tape = if answer.reproduced() && !super::super::tail::holds(answer.held) {
+        let pending_tape = if answer.reproduced()
+            && !super::super::tail::holds(answer.held)
+            && !answer.short_tail_at(
+                super::super::tail::effective_s(),
+                chrono::Utc::now().timestamp_millis(),
+            ) {
             TapeStatus::Missing
         } else {
             answer.tape

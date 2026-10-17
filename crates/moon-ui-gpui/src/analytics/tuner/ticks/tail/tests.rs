@@ -33,6 +33,49 @@ fn effective_seconds_are_the_core_floor() {
     assert_eq!(i64::from(effective_s()) * 1_000, floor_ms(current_s()));
 }
 
+/// Ignoring either source switch would admit a fillable tail or keep unavailable tape waiting.
+#[test]
+fn short_tail_reach_respects_venue_and_core_switches() {
+    use super::super::state::RowAddress;
+    use moon_core::venue::{Brand, MarketKind, Venue};
+    let address = RowAddress {
+        core_uid: 1,
+        venue: Some(Venue {
+            brand: Brand::Binance,
+            kind: MarketKind::Spot,
+        }),
+        exchange_key: "EX-XX".into(),
+        market: "XALPHAUSDT".into(),
+        btc_market: None,
+    };
+    let now = 100 * 86_400_000;
+    let old = now - 49 * 3_600_000;
+    assert!(super::fillable_at(
+        &address,
+        1,
+        old,
+        30_000,
+        now,
+        (true, false)
+    ));
+    assert!(!super::fillable_at(
+        &address,
+        1,
+        old,
+        30_000,
+        now,
+        (false, true)
+    ));
+    assert!(!super::fillable_at(
+        &address,
+        1,
+        now - 3_600_000,
+        30_000,
+        now,
+        (false, false)
+    ));
+}
+
 /// A station-held minute must fit a thirty-second replay window, clearing the short-tail count.
 #[test]
 fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
@@ -110,8 +153,8 @@ fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
         entry_line: None,
         held: Some((30_000, 30_000)),
     };
-    assert!(!row.fit());
-    assert!(row.station_candidate());
+    assert!(row.fit(), "an old unfillable short tail remains usable");
+    assert!(!row.station_candidate());
     assert!(!row.fetchable_at(500_000_000, 60));
     let window = replay_window_ms(100_000, 110_000, 30_000).unwrap();
     let focus = moon_core::db::tuner::ticks::tail::focus_with_tail(&window, 60_000);

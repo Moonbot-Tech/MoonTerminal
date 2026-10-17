@@ -55,7 +55,7 @@ impl Readiness {
         for row in rows {
             out.deals += 1;
             let chip = DealWhy::of(row, min_tail_s, now_ms).chip();
-            out.fit += usize::from(chip == DealChip::Fit);
+            out.fit += usize::from(matches!(chip, DealChip::Fit | DealChip::AcceptedShortTail));
             out.no_tape += usize::from(chip == DealChip::NoTape);
             out.short_tail += usize::from(chip == DealChip::ShortTail);
             out.holed += usize::from(chip == DealChip::Hole);

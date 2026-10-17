@@ -1,6 +1,10 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.chip.accepted_short_tail: "usable: short tail"
+analytics.ticks.chip.accepted_short_tail_tip: "Usable trades with complete tape through close. The tail is short and no enabled source can extend it."
+analytics.ticks.why.accepted_short_tail: "short tail (usable)"
+analytics.ticks.why.accepted_short_tail.why: "Tape covers the trade through close. No enabled source can extend its tail, so tuning uses the available tape. Variants that outlive it remain open."
 analytics.ticks.col.why: "why outside the sample"
 analytics.ticks.legend.hit: "matched"
 analytics.ticks.legend.miss: "model exited differently"

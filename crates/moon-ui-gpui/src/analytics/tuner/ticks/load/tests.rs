@@ -76,7 +76,7 @@ fn unlisted_load_reach_is_core_aware() {
     }
 
     let window = moon_core::db::tuner::ticks::model_window(&deal, 30_000, i64::MAX).unwrap();
-    let ticks = (70..=180)
+    let ticks: Vec<_> = (70..=180)
         .map(|second| moon_core::feed::types::Tick {
             time_ms: f64::from(second) * 1_000.0,
             price: if second < 110 { 1.0 } else { 1.01 },
@@ -93,6 +93,35 @@ fn unlisted_load_reach_is_core_aware() {
         entry_line: None,
         held: None,
     };
+    // Even a tail shorter than the model pad must preserve a fully held old trade.
+    let short = super::Fetched {
+        rows: vec![row.clone()],
+        tapes: [(
+            1,
+            (
+                ticks
+                    .iter()
+                    .copied()
+                    .filter(|tick| tick.time_ms <= 110_000.0)
+                    .collect(),
+                moon_core::market::trade_replay::Coverage::one((70_000, 110_000)),
+                window,
+            ),
+        )]
+        .into(),
+        traces: Default::default(),
+    };
+    let short_rows = super::replay_fetched(
+        short,
+        &Default::default(),
+        Default::default(),
+        None,
+        500_000_000,
+        None,
+    );
+    assert_eq!(short_rows[0].tape, TapeStatus::Covered);
+    assert_eq!(short_rows[0].held, Some((30_000, 0)));
+    assert!(short_rows[0].verdict.is_some());
     let fetched = super::Fetched {
         rows: vec![row],
         tapes: [(
