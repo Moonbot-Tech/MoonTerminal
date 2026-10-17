@@ -113,6 +113,8 @@ struct Shared {
 struct Worker {
     tx: Sender<Inbound>,
     held: Sender<TickQuery>,
+    /// The stores, so a Storage trim empties them on the caller's thread.
+    shared: Arc<Shared>,
 }
 
 /// The one coordinator, started on the first request and never stopped; its lanes start on the

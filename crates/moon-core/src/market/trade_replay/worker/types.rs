@@ -235,8 +235,6 @@ pub(super) enum Inbound {
     /// A lane armed a native follow-up for a request it answered; the coordinator polls it.
     /// Boxed for the same reason as [`Job::Native`].
     NativeWait(Box<(TradeReplayRequest, NativeWait)>),
-    /// Drop every held tile and remembered answer — see [`forget_tiles`].
-    ForgetTiles,
 }
 
 /// One unit of a lane's own queue: the venue calls of one request.

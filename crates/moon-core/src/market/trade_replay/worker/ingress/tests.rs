@@ -1,6 +1,7 @@
 //! Held readers progress independently of a blocked held request.
 
 use super::*;
+use crate::feed::Side;
 
 /// A slow first read cannot monopolize the pool's receiver or delay the second answer.
 #[test]
@@ -43,4 +44,42 @@ fn held_readers_answer_while_another_read_waits() {
         first.recv_timeout(Duration::from_secs(5)).unwrap().covered,
         Coverage::one((0, 9))
     );
+}
+
+/// A held query sent after `forget_tiles` returns never sees the forgotten prints, even while
+/// the coordinator is busy and has not drained a single message.
+#[test]
+fn held_query_after_forget_never_sees_forgotten_tiles() {
+    let tiles = Arc::new(Mutex::new(TickTileStore::default()));
+    let cache = Mutex::new(VecDeque::new());
+    let key: TileKey = ("VENUE_A".into(), "XFORGET".into());
+    let print = Tick {
+        time_ms: 5.0,
+        price: 1.0,
+        qty: 1.0,
+        side: Side::Buy,
+    };
+    lock_tiles(&tiles).insert(key.clone(), 0, 9, vec![print], TileSource::Core);
+    // The coordinator's queue exists but nothing ever reads it: a busy coordinator.
+    let (_busy, _never_drained) = mpsc::channel::<Inbound>();
+    let readers = tiles.clone();
+    let pool = held_pool(move |query| {
+        let key: TileKey = (query.exchange_key.clone(), query.market.clone());
+        TickAnswer {
+            ticks: lock_tiles(&readers).read(&key, 0, 9),
+            covered: query.spans.clone(),
+            settled: true,
+        }
+    });
+    forget_stores(&tiles, &cache);
+    let (reply, answer) = mpsc::channel();
+    pool.send(TickQuery {
+        exchange_key: key.0.clone(),
+        market: key.1.clone(),
+        spans: Coverage::one((0, 9)),
+        reply,
+    })
+    .unwrap();
+    let answer = answer.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(answer.ticks.is_empty());
 }

@@ -47,10 +47,26 @@ pub fn query_held(query: TickQuery) {
 /// For the Storage tab, after it cut `trades.sqlite` down: the disk is the tile store's memory
 /// and the two must not disagree about what is held — a held-data query reads the tiles first,
 /// and would go on answering "held" for prints the file no longer has until the process
-/// restarted. Emptied, the tiles fill again from the trimmed disk on the next ask. Returns at
-/// once; a lane mid-walk files what it fetched into the emptied store as it always did.
+/// restarted. Emptied, the tiles fill again from the trimmed disk on the next ask. Done on the
+/// calling thread, not through the coordinator's queue: held readers no longer wait behind it,
+/// so a query sent after this returns must already find the store empty. A lane mid-walk files
+/// what it fetched into the emptied store as it always did.
 pub fn forget_tiles() {
-    send(Inbound::ForgetTiles);
+    let shared = &worker().shared;
+    forget_stores(&shared.tiles, &shared.cache);
+}
+
+/// Empty the tile store and the remembered answers together.
+pub(super) fn forget_stores(
+    tiles: &Mutex<TickTileStore>,
+    cache: &Mutex<VecDeque<(OutcomeKey, Remembered)>>,
+) {
+    lock_tiles(tiles).forget();
+    cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    log::info!("[x] trade-replay tiles and remembered answers dropped after a trim");
 }
 
 /// Lazily start the coordinator and independent held readers over the same tile store.
@@ -66,15 +82,16 @@ fn worker() -> &'static Worker {
         });
         let readers = shared.clone();
         let held = held_pool(move |query| held_answer(&readers.tiles, query));
+        let coordinator = shared.clone();
         let spawned = std::thread::Builder::new()
             .name("trade-replay".into())
-            .spawn(move || run(&rx, shared));
+            .spawn(move || run(&rx, coordinator));
         if let Err(error) = &spawned {
             // Nothing to fall back to, and the caller's own timeout is what will surface it; say
             // so once rather than failing silently.
             log::warn!("[x] trade-replay worker did not start: {error}");
         }
-        Worker { tx, held }
+        Worker { tx, held, shared }
     })
 }
 
@@ -159,17 +176,6 @@ pub(super) fn enqueue(
                 request.close_ms
             );
             queue.push_back(Job::Capture(request, spans, false));
-        }
-        Inbound::ForgetTiles => {
-            // Straight here, not through the queue: nothing queued behind it may keep
-            // answering from tiles the disk has already lost.
-            lock_tiles(&shared.tiles).forget();
-            shared
-                .cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clear();
-            log::info!("[x] trade-replay tiles and remembered answers dropped after a trim");
         }
     }
 }
