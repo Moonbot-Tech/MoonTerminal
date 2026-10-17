@@ -78,9 +78,11 @@ fn unfenced_quote_breakdown(conn: &Connection, q: &Query) -> QuoteBreakdown {
 /// Computing coverage against normalized columns must preserve raw storage and cache freshness.
 /// A normalized quote substituted into a raw storage check would incorrectly accept text money.
 /// Both fenced Analytics reads and the flattenable monitor path must match the frozen SQL oracle.
+/// Pin rates and their freshness clock so parallel worker tests cannot change the comparison input.
 #[test]
 fn normalized_quote_breakdown_matches_unfenced_sql() {
     use super::super::valuation::{ALGORITHM_VERSION, ValuationMode};
+    let _rates = super::super::valuation::pin_current_rates();
     let path = temp_db("normalized-coverage-parity");
     let conn = build_replica_multi_core(
         &path,
