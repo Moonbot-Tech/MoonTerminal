@@ -44,6 +44,8 @@ pub(super) struct SaveTarget {
 /// Immutable authority carried from Save/Copy preparation through final command dispatch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SaveAuthority {
+    /// Selection or immutable batch generation that produced this confirmation.
+    pub(super) producer: super::save::SaveProducer,
     /// Dialog/draft sequence captured before any asynchronous preview or live-core read.
     pub(super) dialog_seq: u64,
     /// Workspace generation for Auto, or `None` for intentionally unscoped Classic behavior.
@@ -70,6 +72,8 @@ pub(in crate::analytics::tuner) fn tagged(sel: impl Into<String>, el: impl IntoE
 /// A prepared save: target(s) + the list of changes. Single selection = 1 target;
 /// Ctrl- or Shift-built multi-selection = N targets (the same changes for each). Copy = always 1.
 pub(super) struct SaveDialog {
+    /// Captured per-strategy old values for a batch preview, aligned with per_target.
+    pub(super) per_target_olds: Option<Vec<Vec<Option<String>>>>,
     /// Producer identity that must still match before any target is dispatched.
     pub(super) authority: SaveAuthority,
     pub(super) targets: Vec<SaveTarget>,

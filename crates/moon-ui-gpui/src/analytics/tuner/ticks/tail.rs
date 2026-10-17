@@ -31,7 +31,6 @@ use moon_ui::{MoonInput, MoonInputEvent, MoonInputState, MoonPalette};
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
-use super::state::TicksData;
 use crate::design;
 
 #[cfg(test)]
@@ -81,52 +80,10 @@ fn parse_s(text: &str) -> Option<u32> {
     text.trim().parse::<u32>().ok().map(clamp_min_tail_s)
 }
 
-impl TicksData {
-    /// Rows the model reproduces, with their tape, left out only for a tail shorter than the
-    /// setting — what the footer counts.
-    fn short_tail(&self) -> usize {
-        self.rows
-            .iter()
-            .filter(|r| r.reproduced() && !holds(r.held))
-            .count()
-    }
-
-    /// Rows the model reproduces, with their tape and its tail, left out only for a hole in
-    /// the tape — what the footer counts beside the short tails; a row both short and holed is
-    /// counted under the tail.
-    fn holed(&self) -> usize {
-        self.rows
-            .iter()
-            .filter(|r| r.reproduced() && holds(r.held) && r.deal.gap.is_some())
-            .count()
-    }
-}
-
 impl AnalyticsView {
     /// Seed the saved floor before station jobs can read it, without constructing a view.
     pub(crate) fn seed_tape_min_tail_s(secs: Option<u32>) {
         replace(secs);
-    }
-
-    /// The footer's note on the rows the tail left out, with its leading separator; empty when
-    /// none.
-    pub(super) fn ticks_short_tail_note(&self) -> String {
-        match self.ticks.data.data().map(|d| d.short_tail()) {
-            Some(n) if n > 0 => format!(
-                " · {}",
-                t!("analytics.ticks.tail_short", n = n, s = effective_s())
-            ),
-            _ => String::new(),
-        }
-    }
-
-    /// The footer's note on the rows a hole in the tape left out, with its leading separator;
-    /// empty when none.
-    pub(super) fn ticks_holed_note(&self) -> String {
-        match self.ticks.data.data().map(|d| d.holed()) {
-            Some(n) if n > 0 => format!(" · {}", t!("analytics.ticks.holed", n = n)),
-            _ => String::new(),
-        }
     }
 
     /// The model popover's "Sample" section: its heading and the shortest tail's box.

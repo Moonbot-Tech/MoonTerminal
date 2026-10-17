@@ -468,6 +468,14 @@ impl Drop for TicksState {
 
 /// State of the "Entry/Exit" mode.
 pub(in crate::analytics) struct TicksState {
+    /// Session-only maximum number of strategies selected for a batch search.
+    pub(in crate::analytics::tuner) best_top: u8,
+    /// Monotonic identity of the batch producer, including cancelled runs.
+    pub(in crate::analytics::tuner) best_seq: u64,
+    /// Ordered batch results and the single active search handle.
+    pub(in crate::analytics::tuner) best: Option<super::best::BestRun>,
+    /// Whether the batch runner currently owns the search controls.
+    pub(in crate::analytics::tuner) best_running: bool,
     pub(in crate::analytics::tuner) data: LoadState<TicksData>,
     /// The period `data`'s rows were read under, `(from, to)` in UTC seconds as the query holds
     /// them — set with the rows they describe, so a report names the rows' period and not one a
@@ -573,7 +581,7 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) sort: Option<(String, bool)>,
     /// The table shows only the rows fit for the search ([`DealRow::fit`]) — the sample the
     /// variants and the search actually run on: tape covering the window, and the model
-    /// reproducing the trade. Off by default: the rows without their tape are the ones the
+    /// reproducing the trade, with its tape still retained. Off by default: the rows without their tape are the ones the
     /// fetch button exists for, and a filter that hides them hides the work to be done.
     ///
     /// The model's verdict became part of the sample on the developer's call (2026-09-23): a
@@ -583,6 +591,12 @@ pub(in crate::analytics) struct TicksState {
     /// is fitted on itself — is why the cut is the verdict on the trade's OWN settings, taken
     /// once per load, never the variant's.
     pub(in crate::analytics::tuner) only_fit: bool,
+    /// Optional footer filter, combined with the sample-only switch.
+    pub(in crate::analytics::tuner) chip: Option<super::why::DealChip>,
+    /// Population counts independent of the currently displayed filter.
+    pub(in crate::analytics::tuner) chip_counts: Option<super::rows::ChipCounts>,
+    /// Primary reason classification shared by row filtering, ordering and footer counts.
+    pub(in crate::analytics::tuner) classified: Option<super::rows::Classified>,
     /// The sorted row order, cached against `rows_rev` and the sort.
     pub(in crate::analytics::tuner) order: Option<super::rows::OrderCache>,
     /// Bumped whenever `data` changes, so the cached order is rebuilt.
@@ -631,8 +645,13 @@ pub(in crate::analytics) struct TicksState {
 }
 
 impl Default for TicksState {
+    /// Start with the top five strategies and no active batch search.
     fn default() -> Self {
         Self {
+            best_top: 5,
+            best_seq: 0,
+            best: None,
+            best_running: false,
             data: LoadState::default(),
             loaded_period: None,
             variant: HashMap::new(),
@@ -679,6 +698,9 @@ impl Default for TicksState {
             dirty: true,
             sort: Some((super::columns::COL_TIME.to_string(), true)),
             only_fit: false,
+            chip: None,
+            chip_counts: None,
+            classified: None,
             order: None,
             rows_rev: 0,
             fetch_task: None,
@@ -817,6 +839,12 @@ impl TicksState {
     /// The scope changed: every row belongs to the previous scope. The fetch batch is the
     /// process's, not the scope's, and runs on; its answers land on rows by id where present.
     pub(in crate::analytics) fn invalidate(&mut self) {
+        self.cancel_best();
+        self.invalidate_selection();
+    }
+
+    /// Retire card state after a selection click without retiring the independent batch.
+    pub(in crate::analytics) fn invalidate_selection(&mut self) {
         self.write_confirm = None;
         self.retire_rows();
         // A running search and its last answer describe the previous scope's deals.

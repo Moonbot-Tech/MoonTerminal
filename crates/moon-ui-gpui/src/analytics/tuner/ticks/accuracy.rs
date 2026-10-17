@@ -11,7 +11,7 @@
 //! numbers the model runs under.
 
 use gpui::*;
-use moon_core::db::tuner::ticks::verify::{ExitFinding, Unjudged};
+use moon_core::db::tuner::ticks::verify::Unjudged;
 use moon_core::db::tuner::ticks::{ModelSettings, Verdict};
 use moon_ui::MoonPalette;
 use rust_i18n::t;
@@ -86,16 +86,28 @@ impl UncheckedWhy {
         Self::Pending,
     ];
 
+    /// Project the shared exit explanation without letting entry misses hide unchecked exits.
     fn of(verdict: Option<&Verdict>) -> Option<Self> {
-        let Some(verdict) = verdict else {
-            return Some(Self::Pending);
-        };
-        match verdict.exit_finding {
-            ExitFinding::Unjudged(Unjudged::Rule(_)) => Some(Self::Rule),
-            ExitFinding::Unjudged(Unjudged::TakeUnknown) => Some(Self::TakeUnknown),
-            ExitFinding::Unjudged(Unjudged::InGap) => Some(Self::Gap),
-            ExitFinding::Unjudged(Unjudged::OtherRule) => Some(Self::OtherRule),
-            ExitFinding::Hit | ExitFinding::Miss(_) => None,
+        use super::why::DealWhy;
+        match DealWhy::of_exit(verdict) {
+            Some(DealWhy::Unjudged(Unjudged::Rule(_))) => Some(Self::Rule),
+            Some(DealWhy::Unjudged(Unjudged::TakeUnknown)) => Some(Self::TakeUnknown),
+            Some(DealWhy::Unjudged(Unjudged::InGap)) => Some(Self::Gap),
+            Some(DealWhy::Unjudged(Unjudged::OtherRule)) => Some(Self::OtherRule),
+            Some(DealWhy::NoVerdict) => Some(Self::Pending),
+            Some(
+                DealWhy::Fit
+                | DealWhy::NoTape { .. }
+                | DealWhy::NoAddress
+                | DealWhy::Fetching
+                | DealWhy::Refused(_)
+                | DealWhy::EntryMissed(_)
+                | DealWhy::ExitMissed(_)
+                | DealWhy::ShortTail { .. }
+                | DealWhy::Hole { .. }
+                | DealWhy::LostTape,
+            )
+            | None => None,
         }
     }
 

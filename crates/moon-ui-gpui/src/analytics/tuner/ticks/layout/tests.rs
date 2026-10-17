@@ -32,6 +32,439 @@ use super::super::summary::{
 use crate::design;
 use crate::load_state::LoadState;
 
+/// Synthetic deals exercise every primary-reason family without touching a live report.
+fn deal_rows() -> Vec<super::super::state::DealRow> {
+    use super::super::state::{DealRow, TapeStatus};
+    use super::super::tape::PackedTape;
+    use moon_core::db::tuner::ticks::verify::{EntryFinding, ExitFinding, ExitMiss, Unjudged};
+    use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
+    use moon_core::market::trade_replay::TickStatus;
+    let base = DealRow {
+        deal: Deal {
+            report_uid: 1,
+            core_uid: 1,
+            core_name: "CORE_A".into(),
+            strategy_id: 1,
+            kind: "Spread".into(),
+            coin: "XALPHA".into(),
+            buy_ms: 1_000,
+            close_ms: 2_000,
+            buy_price: 1.0,
+            sell_price: 1.01,
+            spent: 100.0,
+            is_short: false,
+            sell_reason: "StopLoss".into(),
+            fact_pnl: 0.0,
+            sizing: None,
+            pnl_pct: false,
+            profit: Some(1.0),
+            deltas: Deltas::default(),
+            tick: None,
+            pre_spike_ask: None,
+            archived_take: None,
+            fact_modifier: None,
+            hook_depth_pct: None,
+            hook_stated_take_pct: None,
+            strike_detect: None,
+            step_lag_ms: 0.0,
+            round_trip_ms: None,
+            stop_anchor: None,
+            delta_track: None,
+            bars: None,
+            own_entry: None,
+            buy_set_ms: None,
+            corridor: None,
+            entry_placed: None,
+            gap: None,
+        },
+        tape: TapeStatus::Covered,
+        verdict: Some(Verdict {
+            entry: Some(true),
+            exit: Some(true),
+            entry_finding: EntryFinding::Hit,
+            exit_finding: ExitFinding::Hit,
+            entry_dev_pct: None,
+            exit_dev_pct: None,
+            fill: None,
+            exit_kind: None,
+            line_points: None,
+            fill_clock_ms: None,
+            rules: Default::default(),
+            stop: Default::default(),
+        }),
+        address: None,
+        ticks: Some(PackedTape::pack(Vec::new())),
+        entry_line: None,
+        held: Some((60_000, 120_000)),
+    };
+    (0..12)
+        .map(|i| {
+            let mut row = base.clone();
+            row.deal.report_uid = i + 1;
+            match i {
+                0 => {}
+                1 => {
+                    row.tape = TapeStatus::Missing;
+                    row.verdict = None;
+                }
+                2 => row.tape = TapeStatus::NoAddress,
+                3 => row.tape = TapeStatus::Fetching,
+                4 => row.tape = TapeStatus::Refused(TickStatus::NoTrades),
+                5 => {
+                    let v = row.verdict.as_mut().unwrap();
+                    v.entry = Some(false);
+                    v.entry_finding = EntryFinding::Off;
+                }
+                6 => {
+                    let v = row.verdict.as_mut().unwrap();
+                    v.exit = Some(false);
+                    v.exit_finding = ExitFinding::Miss(ExitMiss::NoLevel);
+                }
+                7 => {
+                    let v = row.verdict.as_mut().unwrap();
+                    v.exit = None;
+                    v.exit_finding = ExitFinding::Unjudged(Unjudged::OtherRule);
+                }
+                8 => row.verdict = None,
+                9 => row.held = Some((60_000, 30_000)),
+                10 => {
+                    row.deal.gap = Some(moon_core::db::tuner::ticks::gap::TapeGap {
+                        from_ms: 1_100,
+                        to_ms: 1_800,
+                        fact_line: None,
+                        fact_stop: None,
+                    })
+                }
+                _ => row.ticks = None,
+            }
+            row
+        })
+        .collect()
+}
+
+/// Probe the actual table, legend, filter controls and filtered-empty state together.
+struct DealProbe {
+    active: bool,
+    table: bool,
+}
+
+/// Exercise the minimum-window sample table and its narrowest filter footer independently.
+struct NarrowDealProbe;
+
+impl Render for NarrowDealProbe {
+    /// Keep the real column minima and use the longest active ShortTail label.
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let row = deal_rows().remove(0);
+        let counts = super::super::rows::ChipCounts {
+            rows_rev: 0,
+            min_tail_s: 60,
+            counts: [0; 7],
+        };
+        v_flex()
+            .w_full()
+            .child(
+                div()
+                    .w_full()
+                    .overflow_hidden()
+                    .debug_selector(|| "minimum-table".into())
+                    .child(super::super::deal_header_el(
+                        &None,
+                        false,
+                        Rc::new(|_, _, _| {}),
+                        p,
+                        cx,
+                    ))
+                    .child(super::super::deal_row(
+                        &row,
+                        false,
+                        super::super::PlanCell(None),
+                        Rc::new(|_, _, _, _| {}),
+                        p,
+                        design::font_scale(cx),
+                        super::super::deal_row_h(cx),
+                        (60, 0),
+                        cx,
+                    )),
+            )
+            .child(
+                div()
+                    .w(design::ui_px(cx, 208.0))
+                    .debug_selector(|| "minimum-footer".into())
+                    .child(super::super::chips_el(
+                        counts,
+                        Some(super::super::why::DealChip::ShortTail),
+                        (0, 0, 0),
+                        Rc::new(|_, _, _| {}),
+                        p,
+                        cx,
+                    )),
+            )
+    }
+}
+
+/// At the 860px window minimum the explanation precedes clipped metrics and reset remains reachable.
+#[gpui::test]
+fn minimum_window_keeps_reason_and_narrow_footer_reset_visible(cx: &mut gpui::TestAppContext) {
+    for theme in [UiThemeMode::Light, UiThemeMode::Dark] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+                cx,
+            )
+        });
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for zoom in [1.0, 1.25] {
+                // 860 minus the 470px expanded pane and the shared 28px outer spacing.
+                let window = cx.open_window(
+                    gpui::size(px((860.0 - 470.0 - 28.0) * zoom), px(1000.0 * zoom)),
+                    |_, _| NarrowDealProbe,
+                );
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                visual.update(|w, cx| w.set_content_zoom(zoom, cx));
+                for _ in 0..3 {
+                    visual.update(|w, cx| {
+                        let _ = w.draw(cx);
+                    });
+                }
+                let table = visual.debug_bounds("minimum-table").unwrap();
+                for selector in ["an-ticks-hdr-why", "an-ticks-cell-why-1"] {
+                    let cell = visual.debug_bounds(selector).unwrap();
+                    assert!(
+                        cell.left() >= table.left() && cell.right() <= table.right() + px(0.5),
+                        "{selector}: {language:?} {theme:?} {zoom} {cell:?}/{table:?}"
+                    );
+                }
+                let footer = visual.debug_bounds("minimum-footer").unwrap();
+                for selector in [
+                    "an-ticks-chip-reset-box",
+                    "an-ticks-chip-filter-name",
+                    "an-ticks-chip-reset-link",
+                ] {
+                    let cell = visual.debug_bounds(selector).unwrap();
+                    assert!(
+                        cell.size.width > px(0.0)
+                            && cell.left() >= footer.left()
+                            && cell.right() <= footer.right() + px(0.5),
+                        "{selector}: {language:?} {zoom} {cell:?}/{footer:?}"
+                    );
+                }
+                visual.update(|w, _| w.remove_window());
+            }
+        }
+    }
+}
+
+impl Render for DealProbe {
+    /// Use production builders so descriptor, tooltip and wrapping regressions reach the matrix.
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use super::super::state::{TicksData, TicksState};
+        use super::super::why::DealChip;
+        use super::super::{
+            PlanCell, chips_el, deal_header_el, deal_row, filtered_empty_el, legend_el,
+        };
+        let p = MoonPalette::active(cx);
+        let mut state = TicksState::default();
+        state.data.apply(Ok(TicksData {
+            rows: deal_rows(),
+            ..Default::default()
+        }));
+        let counts = super::super::rows::counts_at(&mut state, 60, 0);
+        let pick: super::super::ChipAction = Rc::new(|_, _, _| {});
+        let action: super::super::DealAction = Rc::new(|_, _, _, _| {});
+        let mut body = v_flex()
+            .debug_selector(|| "deal-probe".to_string())
+            .w_full()
+            .min_w_0()
+            .child(legend_el(p, cx));
+        if self.table {
+            body = body
+                .child(deal_header_el(&None, false, Rc::new(|_, _, _| {}), p, cx))
+                .children(state.data.data().unwrap().rows.iter().map(|row| {
+                    deal_row(
+                        row,
+                        false,
+                        PlanCell(None),
+                        action.clone(),
+                        p,
+                        design::font_scale(cx),
+                        super::super::deal_row_h(cx),
+                        (60, 0),
+                        cx,
+                    )
+                }));
+        }
+        body.child(chips_el(
+            counts,
+            self.active.then_some(DealChip::Hole),
+            (23, 9, 14),
+            pick.clone(),
+            p,
+            cx,
+        ))
+        .child(filtered_empty_el(pick, p, cx))
+    }
+}
+
+/// Chips must keep complete labels and wrap; rows and headers must share bounded cells.
+#[gpui::test]
+fn deal_table_symbols_and_filters_fit_all_presentations(cx: &mut gpui::TestAppContext) {
+    use super::super::columns::{DEAL_COIN_MIN_W, DEAL_ROW_GAP, DEAL_ROW_PAD_X};
+    // The coordinator retains the existing minima: rows are probed only where the whole table fits.
+    let column_min = DEAL_COIN_MIN_W
+        + super::super::shown_deal_cols(false)
+            .map(|col| col.min_w)
+            .sum::<f32>();
+    let spacing =
+        2.0 * DEAL_ROW_PAD_X + super::super::shown_deal_cols(false).count() as f32 * DEAL_ROW_GAP;
+    for theme in [UiThemeMode::Light, UiThemeMode::Dark] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+                cx,
+            )
+        });
+        let table_min = cx
+            .update(|cx| design::font_w(cx, column_min) + f32::from(design::ui_px(cx, spacing)))
+            .ceil();
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for zoom in [1.0, 1.25] {
+                for width in [400.0, 520.0, table_min, 1440.0] {
+                    for active in [false, true] {
+                        let window = cx.open_window(
+                            gpui::size(px(width * zoom), px(1000.0 * zoom)),
+                            |_, _| DealProbe {
+                                active,
+                                table: width >= table_min,
+                            },
+                        );
+                        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                        visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                        for _ in 0..3 {
+                            visual.update(|w, cx| {
+                                let _ = w.draw(cx);
+                            });
+                        }
+                        let host = visual.debug_bounds("deal-probe").expect("table host");
+                        let inside = |bounds: gpui::Bounds<gpui::Pixels>,
+                                      parent: gpui::Bounds<gpui::Pixels>,
+                                      label: &str| {
+                            assert!(
+                                bounds.left() + px(0.5) >= parent.left()
+                                    && bounds.right() <= parent.right() + px(0.5),
+                                "{label} outside parent: {bounds:?}/{parent:?} {} {theme:?} {zoom}/{width}",
+                                language.code()
+                            );
+                        };
+                        let footer = visual.debug_bounds("an-ticks-chips").expect("footer");
+                        inside(footer, host, "footer");
+                        inside(
+                            visual
+                                .debug_bounds("an-ticks-filter-empty")
+                                .expect("empty state"),
+                            host,
+                            "empty state",
+                        );
+                        inside(
+                            visual
+                                .debug_bounds("an-ticks-filter-empty-text")
+                                .expect("empty text"),
+                            host,
+                            "empty text",
+                        );
+                        if active {
+                            inside(
+                                visual
+                                    .debug_bounds("an-ticks-chip-reset-box")
+                                    .expect("reset filter"),
+                                footer,
+                                "reset filter",
+                            );
+                        }
+                        let mut tops = Vec::new();
+                        for key in [
+                            "with_tape",
+                            "no_tape",
+                            "fit",
+                            "short_tail",
+                            "hole",
+                            "model_miss",
+                            "unjudged",
+                            "without_ms",
+                            "service",
+                            "untunable",
+                        ] {
+                            let chip = visual
+                                .debug_bounds(selector(format!("an-ticks-chip-{key}")))
+                                .expect("chip");
+                            inside(chip, footer, key);
+                            assert!(
+                                chip.top() >= footer.top()
+                                    && chip.bottom() <= footer.bottom() + px(0.5)
+                            );
+                            tops.push(chip.top());
+                        }
+                        if width == 400.0 {
+                            assert!(tops.iter().any(|top| *top > tops[0]), "footer must wrap");
+                        }
+                        for key in ["hit", "miss", "unjudged", "hole"] {
+                            inside(
+                                visual
+                                    .debug_bounds(selector(format!("an-ticks-legend-{key}")))
+                                    .expect("legend item"),
+                                host,
+                                "legend",
+                            );
+                        }
+                        for row in if width >= table_min {
+                            deal_rows()
+                        } else {
+                            Vec::new()
+                        } {
+                            for col in super::super::shown_deal_cols(false) {
+                                let cell = visual
+                                    .debug_bounds(selector(format!(
+                                        "an-ticks-cell-{}-{}",
+                                        col.key, row.deal.report_uid
+                                    )))
+                                    .expect("row cell");
+                                inside(cell, host, col.key);
+                                let text = visual
+                                    .debug_bounds(selector(format!(
+                                        "an-ticks-text-{}-{}",
+                                        col.key, row.deal.report_uid
+                                    )))
+                                    .expect("cell text");
+                                inside(text, cell, col.key);
+                                let header = visual
+                                    .debug_bounds(selector(format!("an-ticks-hdr-{}", col.key)))
+                                    .expect("header trigger");
+                                inside(header, host, "header");
+                                inside(
+                                    visual
+                                        .debug_bounds(selector(format!(
+                                            "an-ticks-hdr-text-{}",
+                                            col.key
+                                        )))
+                                        .expect("header text"),
+                                    header,
+                                    "header text",
+                                );
+                                assert!(
+                                    (f32::from(cell.left()) - f32::from(header.left())).abs() < 1.0
+                                );
+                            }
+                        }
+                        visual.update(|w, _| w.remove_window());
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The real Stops section contributes two editable numeric knobs, without copying mockup fields.
 fn fields() -> [&'static str; 2] {
     let knobs = super::super::sections::scope_knobs(&["DropsDetection".to_string()]);
@@ -417,7 +850,13 @@ fn every_ticks_language_has_the_same_keys_and_no_raw_card_text() {
             }
         }
         for key in en.iter().filter(|key| {
-            key.starts_with("analytics.ticks.kpi.") || key.starts_with("analytics.ticks.pick.")
+            key.starts_with("analytics.ticks.kpi.")
+                || key.starts_with("analytics.ticks.pick.")
+                || key.starts_with("analytics.ticks.why.")
+                || key.starts_with("analytics.ticks.legend.")
+                || key.starts_with("analytics.ticks.col_tip.")
+                || key.starts_with("analytics.ticks.chip.")
+                || key.starts_with("analytics.ticks.best.")
         }) {
             assert!(!t!(key.as_str()).contains("analytics."), "raw key: {key}");
         }

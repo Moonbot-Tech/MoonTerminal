@@ -6,6 +6,88 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// A larger CORE_B sample outside the focused group must never displace CORE_A in a pick.
+#[test]
+fn best_pick_obeys_action_scope_even_when_read_scope_is_unrestricted() {
+    use super::super::ticks::readiness::Readiness;
+    let rows = [("101@11", 20), ("202@22", 100)];
+    let picked = super::pick_best(
+        rows.into_iter()
+            .filter(|(key, _)| super::best_key_in_scope(key, Some(&[11])))
+            .map(|(key, fit)| {
+                (
+                    key.into(),
+                    ReadyClass::Can { fit },
+                    Readiness {
+                        fit,
+                        ..Default::default()
+                    },
+                )
+            }),
+        5,
+    );
+    assert_eq!(picked, ["101@11"]);
+}
+
+/// Accepting Few/Pending or sorting by key first would select the wrong batch sample.
+#[test]
+fn best_selection_requires_can_and_orders_fit_then_key_before_truncating() {
+    use super::super::ticks::readiness::Readiness;
+    let rows = || {
+        [
+            (
+                "CORE_Z".into(),
+                ReadyClass::Can { fit: 40 },
+                Readiness {
+                    fit: 40,
+                    ..Default::default()
+                },
+            ),
+            (
+                "CORE_A".into(),
+                ReadyClass::Can { fit: 40 },
+                Readiness {
+                    fit: 40,
+                    ..Default::default()
+                },
+            ),
+            (
+                "CORE_B".into(),
+                ReadyClass::Can { fit: 60 },
+                Readiness {
+                    fit: 60,
+                    ..Default::default()
+                },
+            ),
+            (
+                "CORE_C".into(),
+                ReadyClass::Few { fit: 19 },
+                Readiness {
+                    fit: 999,
+                    ..Default::default()
+                },
+            ),
+            (
+                "CORE_D".into(),
+                ReadyClass::Pending,
+                Readiness {
+                    fit: 999,
+                    ..Default::default()
+                },
+            ),
+            ("CORE_E".into(), ReadyClass::NoTape, Readiness::default()),
+            ("CORE_F".into(), ReadyClass::Unread, Readiness::default()),
+        ]
+        .into_iter()
+    };
+    assert_eq!(super::pick_best(rows(), 2), vec!["CORE_B", "CORE_A"]);
+    assert_eq!(
+        super::pick_best(rows(), 10),
+        vec!["CORE_B", "CORE_A", "CORE_Z"]
+    );
+    assert!(super::pick_best(rows(), 0).is_empty());
+}
+
 use moon_core::db::analytics::GroupStat;
 
 use super::super::auto_picks::{AutoClass, AutoFilter, AutoPicks, AutoView};

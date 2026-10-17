@@ -939,7 +939,9 @@ fn prepared_axis_state(job: SuggestJob) -> TunerState {
 fn parked_save_dialog() -> Arc<super::super::super::shared::SaveDialog> {
     use super::super::super::shared::{SaveAuthority, SaveDialog, SaveTarget};
     Arc::new(SaveDialog {
+        per_target_olds: None,
         authority: SaveAuthority {
+            producer: crate::analytics::tuner::save::SaveProducer::Selection,
             dialog_seq: 1,
             workspace_generation: None,
             workspace_cores: None,

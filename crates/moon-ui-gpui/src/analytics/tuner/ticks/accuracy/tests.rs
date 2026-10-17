@@ -116,3 +116,16 @@ fn nothing_to_count_prints_a_dash() {
     assert_eq!(pct_text(None), "—");
     assert_eq!(pct_text(Some(85.54)), "85.5 %");
 }
+
+/// An entry miss must not remove the exit's independent unchecked reason from the footer.
+#[test]
+fn an_entry_miss_keeps_the_unchecked_exit_reason() {
+    let mut row = verdict(Some(false), None);
+    row.exit_finding = moon_core::db::tuner::ticks::verify::ExitFinding::Unjudged(
+        moon_core::db::tuner::ticks::verify::Unjudged::InGap,
+    );
+    let accuracy = Accuracy::of([Some(&row)]);
+    assert_eq!(accuracy.entry.misses, 1);
+    assert_eq!(accuracy.exit.unjudged, 1);
+    assert_eq!(accuracy.main_unchecked_why(), Some(UncheckedWhy::Gap));
+}

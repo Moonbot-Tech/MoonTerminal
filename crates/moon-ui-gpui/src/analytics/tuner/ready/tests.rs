@@ -19,6 +19,37 @@ use moon_core::db::tuner::ticks::{Deal, Deltas, ModelSettings};
 
 mod real_data;
 
+/// Removing the warm-up or completion guards would show unstable or finished-pass estimates.
+#[test]
+fn eta_waits_for_work_and_warmup_and_stops_at_completion() {
+    assert_eq!(super::eta(0, 10, Duration::from_secs(10)), None);
+    assert_eq!(super::eta(1, 10, Duration::from_millis(2999)), None);
+    assert_eq!(super::eta(10, 10, Duration::from_secs(10)), None);
+    assert_eq!(super::eta(11, 10, Duration::from_secs(10)), None);
+    assert_eq!(
+        super::eta(2, 8, Duration::from_secs(3)),
+        Some(Duration::from_secs(9))
+    );
+    assert_eq!(
+        super::eta(2, 14, Duration::from_secs(3)),
+        Some(Duration::from_secs(18))
+    );
+}
+
+/// Kept strategies must not inflate measured speed during a partial readiness pass.
+#[test]
+fn partial_eta_excludes_kept_strategies() {
+    let progress = ReadyProgress::default();
+    progress.done.store(2, Ordering::Relaxed);
+    progress.total.store(8, Ordering::Relaxed);
+    progress.kept.store(100, Ordering::Relaxed);
+    assert_eq!(progress.counts(), (102, 108));
+    assert_eq!(
+        progress.remaining(Duration::from_secs(6)),
+        Some(Duration::from_secs(18))
+    );
+}
+
 fn deal(uid: i64, strategy_id: i64, core_uid: u64) -> Deal {
     Deal {
         report_uid: uid,
@@ -74,6 +105,49 @@ fn ready(fit: usize, covered: usize) -> Readiness {
         fit,
         covered,
         fetchable: 0,
+        ..Readiness::default()
+    }
+}
+
+/// Even a no-tape refusal names the search floor and omits a zero-yield fetch suggestion.
+#[test]
+fn readiness_tooltips_show_the_floor_breakdown_and_only_positive_fetch_yield() {
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let counts = Readiness {
+            deals: 31,
+            no_tape: 7,
+            short_tail: 2,
+            holed: 1,
+            missed: 3,
+            unjudged: 4,
+            fit: 14,
+            covered: 24,
+            fetchable: 0,
+        };
+        let text = super::cell_tip(&counts);
+        assert!(text.contains(&Readiness::min().to_string()));
+        assert!(text.contains("31") && text.contains("14"));
+        let key = super::super::plural_key("analytics.ticks.why.fetchable", 0);
+        let fetch_line = rust_i18n::t!(key.as_str(), n = 0).to_string();
+        assert!(!text.contains(&fetch_line));
+        let counts = Readiness {
+            fetchable: 9,
+            ..counts
+        };
+        for n in [1, 2, 9, 21] {
+            let key = super::super::plural_key("analytics.ticks.why.fetchable", n);
+            assert!(
+                super::cell_tip(&Readiness {
+                    fetchable: n,
+                    ..counts
+                })
+                .contains(&rust_i18n::t!(key.as_str(), n = n).to_string())
+            );
+        }
+        let text = super::cell_tip(&Readiness::default());
+        assert!(text.contains(&Readiness::min().to_string()));
+        assert!(!text.contains("analytics."));
     }
 }
 

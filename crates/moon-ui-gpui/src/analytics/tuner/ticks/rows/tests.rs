@@ -356,7 +356,10 @@ fn uids(state: &mut TicksState) -> Vec<i64> {
         .data()
         .map(|d| d.rows.iter().map(|r| r.deal.report_uid).collect())
         .unwrap_or_default();
-    order_for(state).iter().map(|&i| rows[i]).collect()
+    order_for(state, super::super::tail::effective_s(), 0)
+        .iter()
+        .map(|&i| rows[i])
+        .collect()
 }
 
 #[test]
@@ -366,10 +369,117 @@ fn the_default_order_is_newest_entry_first() {
     assert_eq!(uids(&mut state), [1, 3, 2]);
 }
 
+/// A mixed population separates the six exclusion buckets and the retained-tape requirement.
+fn chip_state() -> TicksState {
+    let mut state = replayable_state(8);
+    let rows = &mut state.data.data_mut().unwrap().rows;
+    for row in rows.iter_mut() {
+        row.held = Some((60_000, 90_000));
+    }
+    rows[1].tape = TapeStatus::Missing;
+    rows[2].held = Some((60_000, 30_000));
+    rows[3].deal.gap = Some(moon_core::db::tuner::ticks::gap::TapeGap {
+        from_ms: 4_100,
+        to_ms: 4_500,
+        fact_line: None,
+        fact_stop: None,
+    });
+    rows[4].verdict = Some(verdict(Some(false), Some(true)));
+    rows[5].verdict = Some(verdict(Some(true), None));
+    rows[6].ticks = None;
+    rows[7].tape = TapeStatus::NoAddress;
+    state
+}
+
+/// Grouping by reason must keep the fit sample first and preserve chronological ties.
+#[test]
+fn reason_sort_groups_the_sample_first_then_exclusion_buckets() {
+    use super::super::columns::COL_WHY;
+    let mut state = chip_state();
+    state.sort = Some((COL_WHY.to_string(), false));
+    assert_eq!(order_for(&mut state, 60, 0), [0, 1, 7, 2, 3, 4, 5, 6]);
+    state.sort = Some((COL_WHY.to_string(), true));
+    assert_eq!(order_for(&mut state, 60, 0), [5, 6, 4, 3, 2, 1, 7, 0]);
+}
+
+/// A stale order must not survive either filter control or a changed tail floor.
+#[test]
+fn chip_order_cache_reuses_and_invalidates_all_classification_inputs() {
+    use super::super::why::DealChip;
+    let mut state = chip_state();
+    let ptr = order_for(&mut state, 60, 0).as_ptr();
+    assert_eq!(order_for(&mut state, 60, 100).as_ptr(), ptr);
+    state.chip = Some(DealChip::Fit);
+    assert_eq!(order_for(&mut state, 60, 100), [0]);
+    assert_eq!(state.order.as_ref().unwrap().chip, Some(DealChip::Fit));
+    assert!(order_for(&mut state, 120, 100).is_empty());
+    assert_eq!(state.order.as_ref().unwrap().min_tail_s, 120);
+    state.data.data_mut().unwrap().rows[0].held = Some((60_000, 180_000));
+    state.rows_rev += 1;
+    assert_eq!(order_for(&mut state, 120, 100), [0]);
+}
+
+/// Footer buckets partition the entire population, with tape presence as an overlapping filter.
+#[test]
+fn chip_filters_counts_and_sample_switch_agree_on_retained_tape() {
+    use super::super::why::DealChip;
+    let mut state = chip_state();
+    state.sort = None;
+    for (chip, expected) in [
+        (DealChip::WithTape, vec![0, 2, 3, 4, 5, 6]),
+        (DealChip::NoTape, vec![1, 7]),
+        (DealChip::Fit, vec![0]),
+        (DealChip::ShortTail, vec![2]),
+        (DealChip::Hole, vec![3]),
+        (DealChip::ModelMiss, vec![4]),
+        (DealChip::Unjudged, vec![5, 6]),
+    ] {
+        state.chip = Some(chip);
+        assert_eq!(order_for(&mut state, 60, 0), expected);
+        let counts = super::counts_at(&mut state, 60, 0);
+        assert_eq!(counts.get(chip), expected.len());
+    }
+    let counts = super::counts_at(&mut state, 60, 0);
+    assert_eq!(counts.counts[1..].iter().sum::<usize>(), 8);
+    state.chip = None;
+    state.only_fit = true;
+    assert_eq!(
+        order_for(&mut state, 60, 0),
+        [0],
+        "lost tape is not a searchable row"
+    );
+    state.chip = Some(DealChip::Unjudged);
+    assert!(
+        order_for(&mut state, 60, 0).is_empty(),
+        "filters are conjunctive"
+    );
+}
+
+/// Counts stay cached on unrelated changes, and rebuild on row publication or tail-floor edits.
+#[test]
+fn chip_counts_recount_only_for_population_or_floor_changes() {
+    use super::super::why::DealChip;
+    let mut state = chip_state();
+    let counts = super::counts_at(&mut state, 60, 0);
+    state.chip = Some(DealChip::Hole);
+    state.only_fit = true;
+    // Bypass publication deliberately: a cache hit must not even inspect changed row contents.
+    state.data.data_mut().unwrap().rows[0].ticks = None;
+    assert_eq!(super::counts_at(&mut state, 60, 100), counts);
+    state.data.data_mut().unwrap().rows[0].ticks = Some(tape_of(3));
+    let longer = super::counts_at(&mut state, 120, 100);
+    assert_eq!(longer.get(DealChip::ShortTail), 4);
+    assert_eq!(longer.get(DealChip::Fit), 0);
+    state.data.data_mut().unwrap().rows[0].held = Some((60_000, 180_000));
+    state.rows_rev += 1;
+    assert_eq!(super::counts_at(&mut state, 120, 100).get(DealChip::Fit), 1);
+}
+
 #[test]
 fn the_sample_switch_keeps_the_covered_rows_the_model_reproduced() {
-    // Row 2: covered, both groups ✓. Row 1: no tape. Row 3: refused, and the entry a miss.
+    // Row 2: covered, both groups hit, and retained tape. Row 1: no tape. Row 3: refused.
     let mut state = state();
+    state.data.data_mut().unwrap().rows[1].ticks = Some(tape_of(3));
     assert!(
         !TicksState::default().only_fit,
         "off by default: the rows without tape are what the fetch button is for"
@@ -447,7 +557,7 @@ fn tape_and_model_sort_by_rank_and_the_cache_follows_the_sort() {
     assert_eq!(uids(&mut state)[2], 1, "unanswered last");
     // The cache is keyed by rows_rev and sort: an unchanged pair reuses it.
     let before = state.order.as_ref().map(|c| c.order.clone());
-    let again: Vec<usize> = order_for(&mut state).to_vec();
+    let again: Vec<usize> = order_for(&mut state, super::super::tail::effective_s(), 0).to_vec();
     assert_eq!(before.as_deref(), Some(again.as_slice()));
 }
 

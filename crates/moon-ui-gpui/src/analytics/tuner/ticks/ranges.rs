@@ -39,6 +39,44 @@ const RANGE_INPUT_PREFIX: &str = "r:";
 /// The reset's icon: the undo arrow of the embedded MoonUI set — "back to what it was".
 const RESET_ICON: &str = "icons/undo-2.svg";
 
+/// Resolve automatic search grids from live population, defaults and the strategy's own values.
+pub(in crate::analytics::tuner) fn auto_grids_for(
+    kind: &str,
+    own: &std::collections::HashMap<String, String>,
+    defaults: &std::collections::HashMap<String, f64>,
+) -> Grids {
+    use moon_core::db::tuner::ticks::params::range::{Population, field_span, steps_of};
+    let deps = moon_core::feed::strategy_deps::FieldDeps::bundled();
+    let numbers: Vec<&'static str> = TICK_PARAMS
+        .iter()
+        .filter(|f| f.kind == ParamKind::Num)
+        .map(|f| f.key)
+        .collect();
+    let mut keys: Vec<String> = numbers.iter().map(|k| k.to_string()).collect();
+    for key in &numbers {
+        keys.extend(deps.conditions_of(key).map(str::to_string));
+    }
+    let live = moon_core::db::tuner::live_strategies(&keys);
+    let population = Population::of(&live, defaults, &deps);
+    let kinds = [kind.to_string()];
+    let mut grids = Grids::default();
+    for key in numbers {
+        let default = defaults.get(&key.to_ascii_lowercase()).copied();
+        let selected: Vec<f64> = own
+            .get(key)
+            .and_then(|v| v.trim().replace(',', ".").parse::<f64>().ok())
+            .or(default)
+            .into_iter()
+            .collect();
+        let span = field_span(&population.values(&kinds, key), default, &selected);
+        let points = resolve(span.as_ref(), &TickRange::default(), false, steps_of(None)).points;
+        if !points.is_empty() {
+            grids.insert(key, points);
+        }
+    }
+    grids
+}
+
 /// One cell of a range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Slot {

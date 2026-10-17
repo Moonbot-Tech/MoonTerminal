@@ -122,6 +122,19 @@ pub(super) fn verdict_of(
     Verdict::Apply
 }
 
+/// Refuse automatic advice when the scored variant closes too few deals.
+pub(super) fn sample_verdict(verdict: Verdict, too_few: Option<usize>) -> Verdict {
+    if verdict == Verdict::Apply
+        && let Some(n) = too_few
+    {
+        Verdict::Cannot(
+            t!("analytics.ticks.var_too_few", n = n, min = MIN_SEARCH_DEALS).to_string(),
+        )
+    } else {
+        verdict
+    }
+}
+
 /// Translate the tag independently of the explanatory sentence.
 pub(super) fn tag(verdict: &Verdict) -> String {
     t!(match verdict {
@@ -252,7 +265,7 @@ fn open_line(n: usize, profit: f64) -> Option<String> {
 }
 
 /// Remove no-op edits and resolve section labels from descriptors or the loaded schema grid.
-fn change_rows(
+pub(super) fn change_rows(
     changes: &[(String, String)],
     now: &HashMap<String, NowValue>,
     grid: &[GridSection],
@@ -312,20 +325,14 @@ impl SummaryModel {
             )),
         };
         let result = state.current_result();
-        let mut verdict = verdict_of(
+        let verdict = verdict_of(
             running,
             state.search_too_few(),
             state.sugg_refusal.as_deref(),
             result,
             state.has_changes(),
         );
-        if verdict == Verdict::Apply
-            && let Some(n) = state.variant_too_few()
-        {
-            verdict = Verdict::Cannot(
-                t!("analytics.ticks.var_too_few", n = n, min = MIN_SEARCH_DEALS).to_string(),
-            );
-        }
+        let verdict = sample_verdict(verdict, state.variant_too_few());
         let data = state.data.data();
         let (fit, hold) = match state.sugg {
             SuggState::Running { sample, .. } => sample,

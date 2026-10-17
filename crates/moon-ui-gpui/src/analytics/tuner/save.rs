@@ -23,6 +23,61 @@ use crate::design::{moon, moon_alpha};
 #[cfg(test)]
 mod tests;
 
+/// The source whose exact ordered targets authorize a pending confirmation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::analytics::tuner) enum SaveProducer {
+    Selection,
+    BestRun { seq: u64 },
+}
+
+/// Resolve the complete live producer target set without falling back to table selection.
+fn producer_targets(
+    producer: &SaveProducer,
+    selection: Vec<SaveTarget>,
+    best: Option<(u64, Vec<SaveTarget>)>,
+) -> Option<Vec<SaveTarget>> {
+    match producer {
+        SaveProducer::Selection => Some(selection),
+        SaveProducer::BestRun { seq } => best
+            .filter(|(current, _)| current == seq)
+            .map(|(_, targets)| targets),
+    }
+}
+
+/// Show every captured old and new value under its strategy and concrete core destination.
+pub(in crate::analytics::tuner) fn batch_group_el(
+    target: &SaveTarget,
+    core: &str,
+    changes: &[(String, String)],
+    olds: &[Option<String>],
+    cx: &App,
+) -> AnyElement {
+    let mut group = v_flex()
+        .w_full()
+        .min_w_0()
+        .debug_selector(|| "an-best-save-group".into())
+        .child(
+            div()
+                .w_full()
+                .px(design::ui_px(cx, 10.0))
+                .py(design::ui_px(cx, 6.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(format!("{} · {core}", target.name)),
+        );
+    for (index, (key, value)) in changes.iter().enumerate() {
+        let old = olds.get(index).and_then(|v| v.as_deref()).unwrap_or("—");
+        group = group.child(
+            div()
+                .w_full()
+                .min_w_0()
+                .px(design::ui_px(cx, 10.0))
+                .py(design::ui_px(cx, 3.0))
+                .child(format!("{key}: {old} → {value}")),
+        );
+    }
+    group.into_any_element()
+}
+
 /// Ceiling on how long a bulk-write watch waits for core evidence past `submitted`,
 /// well past the upstream confirmation window (45s) so a late-but-real echo still has time to
 /// land before this fires. Past it, any pair still unresolved -- no note and no core-reported
@@ -112,7 +167,132 @@ fn resolve_complete_target_cores(
         .collect()
 }
 
+/// Reject an entire batch when any destination lies outside current action authority.
+fn best_targets_in_scope(targets: &[SaveTarget], cores: Option<&[u64]>) -> bool {
+    targets.iter().all(|t| {
+        t.core
+            .is_some_and(|c| cores.is_none_or(|ids| ids.contains(&c)))
+    })
+}
+
+/// A failed or changed current-value read cannot authorize a captured batch answer.
+fn captured_values_match(
+    captured: &HashMap<String, super::ticks::state::NowValue>,
+    fresh: &HashMap<String, String>,
+) -> bool {
+    captured.iter().all(|(key, value)| {
+        matches!(value,
+        super::ticks::state::NowValue::Same(old) if fresh.get(key) == Some(old))
+    })
+}
+
 impl AnalyticsView {
+    /// Name the concrete destinations consistently in the result pane and confirmation.
+    pub(in crate::analytics::tuner) fn best_core_list(&self, targets: &[SaveTarget]) -> String {
+        let mut cores: Vec<_> = targets
+            .iter()
+            .filter_map(|t| t.core)
+            .map(|core| self.core_names.resolve(core, &core.to_string()).to_string())
+            .collect();
+        cores.sort();
+        cores.dedup();
+        cores.join(", ")
+    }
+
+    /// Re-read checked targets and refuse stale current values before publishing consent.
+    pub(in crate::analytics::tuner) fn open_best_save(&mut self, cx: &mut Context<Self>) {
+        let Some(run) = self.ticks.best.as_ref().filter(|r| r.done) else {
+            return;
+        };
+        let (targets, per_target, _) = super::ticks::best::bulk_payload(&run.results, &run.checked);
+        if targets.is_empty() {
+            return;
+        }
+        let expected: Vec<_> = run
+            .results
+            .iter()
+            .filter(|r| r.is_apply() && run.checked.contains(&r.key))
+            .map(|r| r.now.clone())
+            .collect();
+        let mut warns = vec![
+            t!(
+                "analytics.ticks.best.warning",
+                cores = self.best_core_list(&targets)
+            )
+            .to_string(),
+        ];
+        warns.extend(super::ticks::best::bulk_warns(&run.results, &run.checked));
+        let authority =
+            self.capture_save_authority(&targets, SaveProducer::BestRun { seq: run.seq }, cx);
+        let defaults = self.filter_defaults(cx);
+        let read_targets = targets.clone();
+        self.spawn_db(
+            false,
+            cx,
+            move || {
+                read_targets
+                    .iter()
+                    .zip(&expected)
+                    .map(|(target, captured)| {
+                        let keys: Vec<_> = captured.keys().cloned().collect();
+                        let fresh = moon_core::db::tuner::strategy_current_values_opt(
+                            target.sid,
+                            target.core,
+                            &keys,
+                        )?;
+                        let fresh: HashMap<_, _> = keys
+                            .into_iter()
+                            .filter_map(|key| {
+                                fresh
+                                    .get(&key)
+                                    .cloned()
+                                    .or_else(|| {
+                                        defaults
+                                            .get(&key.to_ascii_lowercase())
+                                            .map(ToString::to_string)
+                                    })
+                                    .map(|value| (key, value))
+                            })
+                            .collect();
+                        captured_values_match(captured, &fresh).then_some(fresh)
+                    })
+                    .collect::<Option<Vec<_>>>()
+            },
+            move |view, fresh, cx| {
+                if !view.save_authority_is_current(&authority, &targets, cx) {
+                    return;
+                }
+                let Some(fresh) = fresh else {
+                    view.write_error = Some(t!("analytics.ticks.best.values_stale").to_string());
+                    cx.notify();
+                    return;
+                };
+                let olds = per_target
+                    .iter()
+                    .zip(&fresh)
+                    .map(|(changes, values)| {
+                        changes
+                            .iter()
+                            .map(|(key, _)| values.get(key).cloned())
+                            .collect()
+                    })
+                    .collect();
+                view.tuner.save_dialog = Some(Arc::new(SaveDialog {
+                    authority,
+                    targets,
+                    changes: Vec::new(),
+                    per_target: Some(per_target),
+                    per_target_olds: Some(olds),
+                    olds: Vec::new(),
+                    notes: Vec::new(),
+                    warns,
+                    copy: false,
+                }));
+                cx.notify();
+            },
+        );
+    }
+
     /// Capture authority when the user opens the inline confirmation, before final consent.
     pub(in crate::analytics::tuner) fn begin_inline_write(
         &self,
@@ -121,7 +301,7 @@ impl AnalyticsView {
         cx: &App,
     ) -> InlineWrite {
         InlineWrite {
-            authority: self.capture_save_authority(&targets, cx),
+            authority: self.capture_save_authority(&targets, SaveProducer::Selection, cx),
             targets,
             changes,
         }
@@ -151,15 +331,21 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Capture the complete workspace and selection identity for a Save or Copy producer.
+    /// Capture the complete workspace and ordered target identity for a Save or Copy producer.
     ///
     /// Args:
     ///     targets: Ordered effective strategy targets represented by the producer.
+    ///     producer: Selection authority or the immutable batch generation.
     ///     cx: Application context used to read the shared workspace generation.
     ///
     /// Returns:
     ///     Immutable authority token; Classic deliberately carries no workspace generation/scope.
-    fn capture_save_authority(&self, targets: &[SaveTarget], cx: &App) -> SaveAuthority {
+    fn capture_save_authority(
+        &self,
+        targets: &[SaveTarget],
+        producer: SaveProducer,
+        cx: &App,
+    ) -> SaveAuthority {
         let workspace_cores = self
             .workspace_scope
             .as_ref()
@@ -169,6 +355,7 @@ impl AnalyticsView {
             revision.read(cx).generation()
         });
         SaveAuthority {
+            producer,
             dialog_seq: self.tuner.dialog_seq,
             workspace_generation,
             workspace_cores,
@@ -176,22 +363,37 @@ impl AnalyticsView {
         }
     }
 
-    /// Return whether a carried Save authority still equals the live workspace and selection.
+    /// Return whether a carried Save authority still equals the live workspace and its producer.
     ///
     /// Args:
     ///     authority: Producer authority carried through preview and confirmation.
     ///     targets: Exact dialog targets whose payload would be dispatched.
-    ///     cx: Application context used to read current revision and effective selection.
+    ///     cx: Application context used to read current revision and effective producer targets.
     ///
     /// Returns:
-    ///     `true` only when no scope, selection, or draft transition occurred.
+    ///     `true` only when no scope, producer, target-set or draft transition occurred.
     pub(in crate::analytics::tuner) fn save_authority_is_current(
         &self,
         authority: &SaveAuthority,
         targets: &[SaveTarget],
         cx: &App,
     ) -> bool {
-        let current_targets = self.selected_targets();
+        let best = self.ticks.best.as_ref().filter(|r| r.done).map(|run| {
+            (
+                run.seq,
+                super::ticks::best::bulk_payload(&run.results, &run.checked).0,
+            )
+        });
+        let Some(current_targets) =
+            producer_targets(&authority.producer, self.selected_targets(), best)
+        else {
+            return false;
+        };
+        if matches!(authority.producer, SaveProducer::BestRun { .. })
+            && !best_targets_in_scope(targets, self.action_core_ids())
+        {
+            return false;
+        }
         let workspace_cores = self
             .workspace_scope
             .as_ref()
@@ -241,7 +443,7 @@ impl AnalyticsView {
         let Some((sid, core)) = targets.first().map(|t| (t.sid, t.core)) else {
             return;
         };
-        let authority = self.capture_save_authority(&targets, cx);
+        let authority = self.capture_save_authority(&targets, SaveProducer::Selection, cx);
         // A row that carries a NOTE never draws the "now" side, so reading it would be a
         // round trip whose result is discarded. The coins axis annotates every row.
         let needs_olds =
@@ -249,6 +451,7 @@ impl AnalyticsView {
         if !needs_olds {
             let olds = vec![None; changes.len()];
             self.tuner.save_dialog = Some(Arc::new(SaveDialog {
+                per_target_olds: None,
                 authority,
                 targets,
                 changes,
@@ -281,6 +484,7 @@ impl AnalyticsView {
                     .map(|(k, _)| olds_map.get(k).cloned())
                     .collect();
                 this.tuner.save_dialog = Some(Arc::new(SaveDialog {
+                    per_target_olds: None,
                     authority: req,
                     targets,
                     changes,
@@ -909,6 +1113,23 @@ impl AnalyticsView {
                     .text_color(moon(p.text_muted))
                     .child(names.join(", ")),
             );
+        }
+        if dlg.changes.is_empty()
+            && let Some(per_target) = &dlg.per_target
+        {
+            for (index, (target, changes)) in dlg.targets.iter().zip(per_target).enumerate() {
+                let core = target
+                    .core
+                    .map(|c| self.core_names.resolve(c, &c.to_string()).to_string())
+                    .unwrap_or_default();
+                let olds = dlg
+                    .per_target_olds
+                    .as_ref()
+                    .and_then(|all| all.get(index))
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                list = list.child(batch_group_el(target, &core, changes, olds, cx));
+            }
         }
         for (i, (k, v)) in dlg.changes.iter().enumerate() {
             // Single: "now → next" (current muted, new amber). Bulk: the "now" differs per

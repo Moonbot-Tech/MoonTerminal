@@ -36,7 +36,7 @@ fn effective_seconds_are_the_core_floor() {
 /// A station-held minute must fit a thirty-second replay window, clearing the short-tail count.
 #[test]
 fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
-    use super::super::state::{DealRow, RowAddress, TapeStatus, TicksData};
+    use super::super::state::{DealRow, RowAddress, TapeStatus};
     use moon_core::db::tuner::ticks::verify::{EntryFinding, ExitFinding, RuleFlags, StopFacts};
     use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
     use moon_core::market::trade_replay::{Coverage, TickStatus, replay_window_ms};
@@ -121,11 +121,6 @@ fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
     assert_eq!(row.held, Some((30_000, 60_000)));
     assert!(row.fit());
     assert!(!row.station_candidate());
-    let data = TicksData {
-        rows: vec![row.clone()],
-        ..Default::default()
-    };
-    assert_eq!(data.short_tail(), 0);
     for status in [
         TickStatus::NoRoute,
         TickStatus::OutOfRetention { retention_ms: 1 },

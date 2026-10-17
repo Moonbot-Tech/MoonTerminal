@@ -189,3 +189,61 @@ fn a_fit_row_without_its_tape_is_not_in_the_sample() {
     assert_eq!(ready.covered, 2);
     assert_eq!(ready.too_few(), Some(1));
 }
+
+/// Every deal is subtracted exactly once; dropped retained tape is counted as unjudged.
+#[test]
+fn the_breakdown_partitions_overlapping_exclusions() {
+    let mut short = fit_row(3);
+    short.held = Some((0, 0));
+    let mut hole = fit_row(4);
+    hole.deal.gap = Some(moon_core::db::tuner::ticks::gap::TapeGap {
+        from_ms: 1_100,
+        to_ms: 1_800,
+        fact_line: None,
+        fact_stop: None,
+    });
+    short.deal.gap = hole.deal.gap.clone();
+    let mut unjudged = fit_row(6);
+    unjudged.verdict = Some(verdict(Some(true), None));
+    unjudged.deal.gap = hole.deal.gap.clone();
+    let lost = DealRow {
+        ticks: None,
+        ..fit_row(7)
+    };
+    let rows = [
+        fit_row(1),
+        bare_row(2),
+        short,
+        hole,
+        missed_row(5),
+        unjudged,
+        lost,
+    ];
+    let ready = Readiness::of_rows(&rows, 0, 60);
+    assert_eq!(
+        (
+            ready.deals,
+            ready.no_tape,
+            ready.short_tail,
+            ready.holed,
+            ready.missed,
+            ready.unjudged
+        ),
+        (7, 1, 1, 1, 1, 2)
+    );
+    assert_eq!(
+        ready.deals
+            - ready.no_tape
+            - ready.short_tail
+            - ready.holed
+            - ready.missed
+            - ready.unjudged,
+        ready.fit
+    );
+    assert_eq!(
+        ready.fit,
+        rows.iter()
+            .filter(|row| row.fit() && row.ticks.is_some())
+            .count()
+    );
+}

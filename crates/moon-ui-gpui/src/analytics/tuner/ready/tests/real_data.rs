@@ -32,17 +32,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use super::super::super::ticks::ranges::auto_grids_for;
 use moon_core::config::paths;
 use moon_core::db::tuner::threshold_search::{SearchHandle, install_job};
 use moon_core::db::tuner::ticks::params::param_keys;
-use moon_core::db::tuner::ticks::params::range::{
-    Grids, Population, TickRange, field_span, resolve, steps_of,
-};
 use moon_core::db::tuner::ticks::search::{
     DEFAULT_MAX_PASSES, SearchParams, SearchProfile, Suggested, suggest_with_candidate,
 };
 use moon_core::db::tuner::ticks::unmodelled::watched_keys;
-use moon_core::db::tuner::ticks::{Deal, ModelSettings, ParamKind, TICK_PARAMS};
+use moon_core::db::tuner::ticks::{Deal, ModelSettings};
 use moon_core::market::kline_cache::KlineCache;
 use moon_core::symbol::{coin_match_key, coin_of_market};
 use rusqlite::{Connection, OpenFlags};
@@ -174,41 +172,6 @@ fn addresses(
             });
     }
     out
-}
-
-/// The axis' automatic grids for one strategy — moon-core's `ticks` real-data bench's
-/// `auto_grids`: the live strategies of `kind`, the strategy's own values as the selection.
-fn auto_grids(kind: &str, own: &HashMap<String, String>, defaults: &HashMap<String, f64>) -> Grids {
-    let deps = moon_core::feed::strategy_deps::FieldDeps::bundled();
-    let numbers: Vec<&'static str> = TICK_PARAMS
-        .iter()
-        .filter(|f| f.kind == ParamKind::Num)
-        .map(|f| f.key)
-        .collect();
-    let mut keys: Vec<String> = numbers.iter().map(|k| k.to_string()).collect();
-    for key in &numbers {
-        keys.extend(deps.conditions_of(key).map(str::to_string));
-    }
-    let live = moon_core::db::tuner::live_strategies(&keys);
-    let population = Population::of(&live, defaults, &deps);
-    let steps = steps_of(None);
-    let kinds = [kind.to_string()];
-    let mut grids = Grids::default();
-    for key in numbers {
-        let default = defaults.get(&key.to_ascii_lowercase()).copied();
-        let selected: Vec<f64> = own
-            .get(key)
-            .and_then(|v| v.trim().replace(',', ".").parse::<f64>().ok())
-            .or(default)
-            .into_iter()
-            .collect();
-        let span = field_span(&population.values(&kinds, key), default, &selected);
-        let points = resolve(span.as_ref(), &TickRange::default(), false, steps).points;
-        if !points.is_empty() {
-            grids.insert(key, points);
-        }
-    }
-    grids
 }
 
 /// One strategy's rows split as `count_strategies` splits them.
@@ -668,7 +631,7 @@ fn ready_real_data_bench() {
             continue;
         };
         let kind = first.deal.kind.clone();
-        let grids = auto_grids(&kind, &first.own, &defaults);
+        let grids = auto_grids_for(&kind, &first.own, &defaults);
         let held = HashMap::new();
         let locked = HashSet::new();
         for (mode, vary_entry) in [("exit", false), ("both", true)] {

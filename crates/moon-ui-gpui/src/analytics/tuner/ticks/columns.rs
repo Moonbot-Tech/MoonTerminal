@@ -1,5 +1,5 @@
 //! Columns of the DEAL table of the "Entry/Exit" axis: what each shows, its width, and the
-//! sort it offers. Hand-laid like the coin table, because the two trailing cells (tape, model)
+//! sort it offers. Hand-laid like the coin table, because the leading status cells (tape, model)
 //! are marks, not metrics, and no shared descriptor draws a mark. The heading and the row
 //! cells are built from the SAME descriptor through one box (`ticks::deal_cell`), so they
 //! cannot drift apart horizontally.
@@ -44,6 +44,8 @@ pub(in crate::analytics::tuner) const COL_HELD: &str = "held";
 pub(in crate::analytics::tuner) const COL_REASON: &str = "reason";
 pub(in crate::analytics::tuner) const COL_TAPE: &str = "tape";
 pub(in crate::analytics::tuner) const COL_MODEL: &str = "model";
+/// The reason a row belongs to, or sits outside, the search sample.
+pub(in crate::analytics::tuner) const COL_WHY: &str = "why";
 
 const fn col(
     key: &'static str,
@@ -63,13 +65,33 @@ const fn col(
     }
 }
 
-/// The columns after the coin, in reading order: the strategy kind, whose core, what came of it
-/// (per cent and money) and what В1 would make of it, how long it was held, how much tape the terminal holds around it, why it closed,
-/// and the two marks of this axis. The prices and the market deltas were dropped on
-/// 2026-09-20, the entry time on 2026-09-21: this table is the axis's SAMPLE — which trades
-/// have their tape and how the model does on them — and every other figure is one
-/// double-click away in the trade window.
+/// Keep tape, model and sample explanation immediately after the coin so narrow cards clip
+/// numeric metrics before the reason a deal cannot join the search sample.
 pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
+    col(
+        COL_TAPE,
+        "analytics.ticks.col.tape",
+        40.0,
+        36.0,
+        Align::Center,
+        false,
+    ),
+    col(
+        COL_MODEL,
+        "analytics.ticks.col.model",
+        48.0,
+        40.0,
+        Align::Center,
+        false,
+    ),
+    col(
+        COL_WHY,
+        "analytics.ticks.col.why",
+        150.0,
+        96.0,
+        Align::Left,
+        false,
+    ),
     col(
         COL_KIND,
         "analytics.ticks.col.kind",
@@ -134,22 +156,6 @@ pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
         168.0,
         96.0,
         Align::Left,
-        false,
-    ),
-    col(
-        COL_TAPE,
-        "analytics.ticks.col.tape",
-        40.0,
-        36.0,
-        Align::Center,
-        false,
-    ),
-    col(
-        COL_MODEL,
-        "analytics.ticks.col.model",
-        48.0,
-        40.0,
-        Align::Center,
         false,
     ),
 ];

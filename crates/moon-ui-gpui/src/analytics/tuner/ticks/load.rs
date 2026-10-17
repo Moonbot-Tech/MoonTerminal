@@ -80,7 +80,15 @@ struct ScopeView {
 impl AnalyticsView {
     /// Recompute the axis for the current scope.
     pub(in crate::analytics) fn reload_ticks(&mut self, cx: &mut Context<Self>) {
-        self.reload_ticks_inner(false, true, cx);
+        self.reload_ticks_inner(false, true, false, cx);
+    }
+
+    /// Replace card rows for a new selection while preserving the independently scoped batch.
+    pub(in crate::analytics::tuner) fn reload_ticks_for_selection(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        self.reload_ticks_inner(false, true, true, cx);
     }
 
     /// Recompute report-stale data through the writer-driven catch-up path.
@@ -89,13 +97,15 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
-        self.reload_ticks_inner(true, show_overlay, cx);
+        self.reload_ticks_inner(true, show_overlay, false, cx);
     }
 
+    /// Reload card data with independent report catch-up and batch-lifetime policies.
     fn reload_ticks_inner(
         &mut self,
         after_report: bool,
         show_overlay: bool,
+        keep_best: bool,
         cx: &mut Context<Self>,
     ) {
         if !after_report {
@@ -118,6 +128,9 @@ impl AnalyticsView {
         // finished at all, and said nothing.
         if !after_report {
             self.latest_reads.cancel(&[ReadLane::TicksSearch]);
+            if !keep_best {
+                self.ticks.cancel_best();
+            }
             self.ticks.stop_search("manual reload");
         }
         let req = self.ticks.seq;
@@ -419,6 +432,7 @@ impl AnalyticsView {
     /// new settings when it gets there and is left alone: cancelling its lane would drop the
     /// rows it is about to publish.
     pub(in crate::analytics::tuner) fn ticks_replay_again(&mut self, cx: &mut Context<Self>) {
+        self.close_best_run(cx);
         if !matches!(self.ticks.data, crate::load_state::LoadState::Ready(_)) {
             return;
         }

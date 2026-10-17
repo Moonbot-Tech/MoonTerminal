@@ -7,13 +7,39 @@ use super::fetch_wait_text;
 fn unpublished_tape_caption_names_the_expected_utc_time_in_every_language() {
     for language in moon_core::config::Language::ALL {
         let _locale = crate::test_locale::force(language.code());
-        let (mark, caption) = super::tape_mark(super::TapeStatus::Refused(
+        let caption = super::why::DealWhy::Refused(
             moon_core::market::trade_replay::TickStatus::ArchivePending {
                 retry_at_ms: 216_000_000,
             },
-        ));
-        assert_eq!(mark, "○");
+        )
+        .tape_tip()
+        .text();
         assert!(caption.contains("1970-01-03 12:00 UTC"));
+        assert!(
+            caption.contains(&rust_i18n::t!("analytics.ticks.why.archive_pending").to_string())
+        );
+        assert!(
+            caption.contains(
+                &rust_i18n::t!(
+                    "analytics.ticks.why.archive_pending.why",
+                    expected = "1970-01-03 12:00 UTC"
+                )
+                .to_string()
+            )
+        );
+        assert!(
+            caption.contains(
+                &rust_i18n::t!(
+                    "analytics.ticks.why.todo",
+                    action = rust_i18n::t!(
+                        "analytics.ticks.why.archive_pending.todo",
+                        expected = "1970-01-03 12:00 UTC"
+                    )
+                )
+                .to_string()
+            )
+        );
+        assert!(caption.contains(&rust_i18n::t!("analytics.ticks.why.not_your_fault").to_string()));
         assert!(!caption.contains("analytics.") && !caption.contains("ArchivePending"));
     }
 }
