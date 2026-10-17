@@ -774,12 +774,17 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
     }
     // The exchange dropdown remains a one-off drill-down. Only this control saves a chat mode.
     use moon_core::config::telegram_menu::ReportView;
-    let (current, next) = if request.by_exchange {
-        (ReportView::Exchanges, ReportView::Groups)
+    let current = request.view_mode.unwrap_or(if request.by_exchange {
+        ReportView::Exchanges
     } else if request.by_group {
-        (ReportView::Groups, ReportView::Cores)
+        ReportView::Groups
     } else {
-        (ReportView::Cores, ReportView::Exchanges)
+        ReportView::Cores
+    });
+    let next = match current {
+        ReportView::Exchanges => ReportView::Groups,
+        ReportView::Groups => ReportView::Cores,
+        ReportView::Cores => ReportView::Exchanges,
     };
     let key = match current {
         ReportView::Exchanges => "telegram.report_exchanges",

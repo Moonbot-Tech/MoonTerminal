@@ -2519,6 +2519,25 @@ fn groups_choice_survives_restart_and_period_changes() {
     }
     let old_menu = ReportRequest::parse_callback("r:p:t:0").unwrap();
     assert!(super::chat_request(&host, CHAT, old_menu).unwrap().by_group);
+    for legacy in [
+        "r:e:t:0",
+        "r:c:y:0",
+        "r:e:m:0",
+        "r:c:l:0",
+        "r:c:2026-10-01,2026-10-02:0",
+    ] {
+        let request = ReportRequest::parse_callback(legacy).unwrap();
+        assert!(
+            super::chat_request(&host, CHAT, request).unwrap().by_group,
+            "{legacy}"
+        );
+    }
+    let frozen = ReportRequest::parse_callback("r:ez:t:0:x64,c8").unwrap();
+    assert!(
+        super::chat_request(&host, CHAT, frozen)
+            .unwrap()
+            .by_exchange
+    );
     let custom = ReportRequest::dates("2026-10-01", "2026-10-02").unwrap();
     assert!(super::chat_request(&host, CHAT, custom).unwrap().by_group);
     let one_off = ReportRequest::parse_callback("r:c1.0kz:t:0:x64,c8").unwrap();
@@ -2543,6 +2562,48 @@ fn groups_choice_survives_restart_and_period_changes() {
             .unwrap()
             .by_exchange
     );
+}
+
+/// Daily and one-off venue pages must label and cycle the saved mode rather than their table view.
+#[test]
+fn groups_switch_uses_the_saved_mode_on_one_off_pages() {
+    use crate::notify::test_host::{CHAT, TempRoot, TickHost};
+    use moon_core::config::telegram_menu::ReportView;
+    let _locale = crate::test_locale::force("en");
+    let root = TempRoot::new("groups-one-off-mode");
+    let mut host = TickHost::open(root.notifications());
+    host.admit(CHAT);
+    let daily = ReportRequest::new(Period::Month, true);
+    let scoped = ReportRequest::parse_callback("r:c1.0kz:t:0:x64,c8").unwrap();
+    for request in [daily, scoped] {
+        host.edit(|file| {
+            file.chats.entry(CHAT).or_default().report_view = Some(ReportView::Groups)
+        });
+        let mut page = layout_page(Default::default());
+        page.request = super::chat_request(&host, CHAT, request).unwrap();
+        let moon_core::telegram::api::ReplyMarkup::Inline(keyboard) =
+            super::render::keyboard(&page)
+        else {
+            panic!("inline report");
+        };
+        let (button, next) = keyboard
+            .inline_keyboard
+            .iter()
+            .flatten()
+            .find_map(|button| {
+                let request = ReportRequest::parse_callback(button.callback_data.as_deref()?)?;
+                request.select_view.then_some((button, request))
+            })
+            .expect("persistent view control");
+        assert_eq!(button.text, "View: Groups");
+        assert!(
+            !next.by_exchange && !next.by_group && !next.daily,
+            "Groups cycles to Cores"
+        );
+        super::chat_request(&host, CHAT, next).unwrap();
+        let later = super::chat_request(&host, CHAT, ReportRequest::preset(Period::Today)).unwrap();
+        assert!(!later.by_exchange && !later.by_group && !later.daily);
+    }
 }
 
 /// A failed atomic preference write must refuse a view switch and retain the prior stored mode.

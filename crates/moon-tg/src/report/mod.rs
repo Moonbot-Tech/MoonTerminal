@@ -256,6 +256,7 @@ fn chat_request(
                 })?;
         }
         request.select_view = false;
+        request.view_mode = Some(view);
         Ok(request)
     } else {
         let view = store
@@ -267,7 +268,20 @@ fn chat_request(
                     .and_then(|row| row.report_view)
             })
             .unwrap_or(fallback);
-        Ok(request.resolve_view(view))
+        // Before `p`, period menus baked in e/c without a frozen window. Rendered report
+        // navigation carries a window, so only these fresh, unscoped period choices migrate.
+        if request.window.is_none()
+            && request.scope == ReportScope::All
+            && request.page == 0
+            && !request.exchanges_open
+            && !request.daily
+            && !request.by_group
+        {
+            request.follow_view = true;
+        }
+        let mut request = request.resolve_view(view);
+        request.view_mode = Some(view);
+        Ok(request)
     }
 }
 

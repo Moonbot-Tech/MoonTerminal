@@ -79,6 +79,9 @@ pub struct ReportRequest {
     pub by_group: bool,
     /// A view-switch callback saves its mode for this chat before reading the report.
     pub select_view: bool,
+    /// Current persistent mode for the view control, resolved by the host rather than encoded.
+    /// A one-off drill-down or daily table can display a different view without changing it.
+    pub view_mode: Option<crate::config::telegram_menu::ReportView>,
     pub scope: ReportScope,
     pub page: usize,
     /// Frozen UTC bounds for paging; explicit refresh clears these before resolving a preset.
@@ -102,6 +105,7 @@ impl ReportRequest {
             by_exchange: !daily,
             by_group: false,
             select_view: false,
+            view_mode: None,
             scope: ReportScope::All,
             page: 0,
             window: None,
@@ -266,6 +270,7 @@ impl ReportRequest {
             by_exchange: view == "e" || view == "p",
             by_group: view == "g",
             select_view,
+            view_mode: None,
             scope,
             page,
             window,
