@@ -142,7 +142,7 @@ pub(super) fn keeps_corridor(entry: &EntryParams, own: &MshotParams, deltas: &[D
             let near_too = variant.model.entry_method != EntryMethod::Shift;
             variant.never_closer_than(own, deltas, near_too)
         }
-        EntryParams::Fact => true,
+        EntryParams::Fact | EntryParams::Drops(_) => true,
     }
 }
 
@@ -151,7 +151,7 @@ pub(super) fn keeps_corridor(entry: &EntryParams, own: &MshotParams, deltas: &[D
 pub(super) fn ordered(entry: &EntryParams) -> bool {
     match entry {
         EntryParams::MoonShot(params) => params.is_ordered(),
-        EntryParams::Fact => true,
+        EntryParams::Fact | EntryParams::Drops(_) => true,
     }
 }
 

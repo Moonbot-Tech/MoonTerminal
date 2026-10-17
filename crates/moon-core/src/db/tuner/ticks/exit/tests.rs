@@ -5,6 +5,18 @@ use crate::db::tuner::ticks::{Deal, Deltas, Fill, ModelSettings};
 use crate::feed::types::Side as TickSide;
 use crate::feed::types::Tick;
 
+/// Adding an entry-model kind must never enable MoonShot's sell-at-last-price rule on it.
+#[test]
+fn take_model_for_is_moonshot_only() {
+    assert!(super::sell_order::take_model_for(
+        crate::db::tuner::ticks::entry::KIND_MOONSHOT
+    ));
+    assert!(!super::sell_order::take_model_for(
+        crate::db::tuner::ticks::drops::KIND_DROPS
+    ));
+    assert!(!super::sell_order::take_model_for("PumpsDetection"));
+}
+
 pub(super) fn tick(t_ms: i64, price: f64) -> Tick {
     Tick {
         time_ms: t_ms as f64,
@@ -43,6 +55,7 @@ pub(super) fn deal(short: bool) -> Deal {
         archived_take: None,
         fact_modifier: None,
         hook_depth_pct: None,
+        drops_detect: None,
         hook_stated_take_pct: None,
         strike_detect: None,
         step_lag_ms: 0.0,

@@ -50,14 +50,11 @@ use rayon::prelude::*;
 use super::exit::line::LinePoint;
 use super::mshot::{CorridorStep, EntryMethod, MshotEntry, MshotParams};
 use super::params::range::Grids;
-use super::params::{
-    ParamGroup, ParamKind, StrategyValues, TICK_PARAMS, TickParam, exit_params, mshot_params,
-};
+use super::params::{ParamGroup, ParamKind, StrategyValues, TICK_PARAMS, TickParam, exit_params};
 use super::settings::ModelSettings;
 use super::unmodelled::same_value;
 use super::{
-    Deal, Deltas, EntryParams, ExitModel, ExitParams, Fill, Outcome, entry_model_for, simulate,
-    simulate_from,
+    Deal, Deltas, EntryParams, ExitModel, ExitParams, Fill, Outcome, simulate, simulate_from,
 };
 use crate::db::metrics::Tally;
 use crate::db::tuner::threshold_search::search::{install, install_column, restart_seed};

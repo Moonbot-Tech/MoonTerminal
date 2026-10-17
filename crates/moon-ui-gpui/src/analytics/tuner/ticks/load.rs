@@ -32,8 +32,8 @@ use moon_core::db::order_traces::{TraceEntry, read_many};
 use moon_core::db::tuner::ticks::params::range::{FieldSpan, Population, field_span};
 use moon_core::db::tuner::ticks::unmodelled::watched_keys;
 use moon_core::db::tuner::ticks::{
-    Deal, DealsRead, EntryParams, ModelSettings, OwnLines, ParamKind, TICK_PARAMS, deltas,
-    entry_model_for, infer_tick, model_window, params, prepare_deal, required_spans, verify,
+    Deal, DealsRead, ModelSettings, OwnLines, ParamKind, TICK_PARAMS, deltas, infer_tick,
+    model_window, params, prepare_deal, required_spans, verify,
 };
 use moon_core::db::tuner::{StrategyValuesReader, strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
@@ -1455,11 +1455,7 @@ pub(super) fn replay_row_with(
         values: &values,
         defaults,
     };
-    let entry = if entry_model_for(&row.deal.kind) {
-        EntryParams::MoonShot(params::mshot_params(&sv, model))
-    } else {
-        EntryParams::Fact
-    };
+    let entry = params::entry_params_for(&row.deal.kind, &sv, model);
     let exit = params::exit_params(&sv, model);
     // The deltas along the window, before the record's inputs: the stop anchor reads the stop
     // through them. The bars they were read off go with the deal for SellLevel's look-back.

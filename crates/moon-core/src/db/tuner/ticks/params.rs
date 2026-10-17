@@ -10,6 +10,9 @@
 
 use std::collections::HashMap;
 
+use super::EntryParams;
+use super::drops::{DropsParams, KIND_DROPS};
+use super::entry::{KIND_MOONSHOT, entry_model_for};
 use super::exit::{ExitParams, StopStep, UnmodelledRule};
 use super::mshot::{MSHOT_PRICEBUG_CAP_PCT, MarketSign, Modifiers, MshotParams, UsePrice};
 use super::settings::ModelSettings;
@@ -448,6 +451,20 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "MShotAddPriceBug",
 ];
 
+/// Calibration inputs remain outside the model while Drops is gated off; they become knobs
+/// or model-only fields only when that gate opens.
+const DROPS_INPUT_KEYS: &[&str] = &[
+    "DropsMaxTime",
+    "DropsPriceMA",
+    "DropsLastPriceMA",
+    "DropsPriceDelta",
+    "DropsPriceIsLow",
+    "DropsUseLastPrice",
+    "buyPrice",
+    "buyPriceLastTrade",
+    "Use30SecOldASK",
+];
+
 /// The switches of the sell rules the model does NOT have — read only to tell that one is on,
 /// which keeps the trade out of the verdict and the search ([`unmodelled_rule`]). Not
 /// [`MODEL_ONLY_KEYS`]: the model acts on none of them, and the grid draws them as outside it.
@@ -481,7 +498,8 @@ pub fn is_model_only(key: &str) -> bool {
 }
 
 /// Every field name the models read — [`TICK_PARAMS`], [`MODEL_ONLY_KEYS`] and the switches of
-/// the rules they do not have ([`RULE_SWITCH_KEYS`]) — for a `strategy_current_values` read,
+/// the rules they do not have ([`RULE_SWITCH_KEYS`]), plus gated calibration inputs
+/// ([`DROPS_INPUT_KEYS`]) — for a `strategy_current_values` read,
 /// each once: a knob for some kinds is model-only for others (`MaxModifier`).
 pub fn param_keys() -> Vec<String> {
     let mut keys: Vec<String> = Vec::new();
@@ -490,6 +508,7 @@ pub fn param_keys() -> Vec<String> {
         .map(|p| p.key)
         .chain(MODEL_ONLY_KEYS.iter().copied())
         .chain(RULE_SWITCH_KEYS.iter().copied())
+        .chain(DROPS_INPUT_KEYS.iter().copied())
     {
         if !keys.iter().any(|k| k == key) {
             keys.push(key.to_string());
@@ -581,6 +600,38 @@ pub fn mshot_params(v: &StrategyValues<'_>, model: ModelSettings) -> MshotParams
         },
         max_modifier: v.num("MaxModifier", 0.0),
         model,
+    }
+}
+
+/// Read the schema's spelling (`buyPrice`, not the grid's `BuyPrice`) and schema defaults.
+/// The final fallback is `DropsParams::default()` (zeros); callers must exclude rows with
+/// unknown defaults, as the calibration bench does.
+pub fn drops_params(v: &StrategyValues<'_>) -> DropsParams {
+    let base = DropsParams::default();
+    DropsParams {
+        max_time_s: v.num("DropsMaxTime", f64::from(base.max_time_s)).max(0.0) as u32,
+        price_ma_s: v.num("DropsPriceMA", f64::from(base.price_ma_s)).max(0.0) as u32,
+        last_price_ma: v
+            .num("DropsLastPriceMA", f64::from(base.last_price_ma))
+            .max(0.0) as u32,
+        price_delta_pct: v.num("DropsPriceDelta", base.price_delta_pct),
+        price_is_low: v.bool("DropsPriceIsLow", base.price_is_low),
+        use_last_price: v.bool("DropsUseLastPrice", base.use_last_price),
+        buy_price_pct: v.num("buyPrice", base.buy_price_pct),
+        buy_price_last_trade: v.bool("buyPriceLastTrade", base.buy_price_last_trade),
+        use_30s_old_ask: v.bool("Use30SecOldASK", base.use_30s_old_ask),
+    }
+}
+
+/// Resolve the kind's parameters only after its calibrated entry-model gate permits replay.
+pub fn entry_params_for(kind: &str, v: &StrategyValues<'_>, model: ModelSettings) -> EntryParams {
+    if !entry_model_for(kind) {
+        return EntryParams::Fact;
+    }
+    match kind {
+        KIND_MOONSHOT => EntryParams::MoonShot(mshot_params(v, model)),
+        KIND_DROPS => EntryParams::Drops(drops_params(v)),
+        _ => EntryParams::Fact,
     }
 }
 

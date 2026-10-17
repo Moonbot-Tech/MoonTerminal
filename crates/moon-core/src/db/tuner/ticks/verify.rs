@@ -165,7 +165,16 @@ pub fn verify(
     let outcome = simulate(deal, ticks, entry, exit, entry_line);
     let (entry_finding, entry_dev) = match (entry, outcome.fill) {
         (EntryParams::Fact, _) => (EntryFinding::Fact, None),
-        (EntryParams::MoonShot(_), None) => (EntryFinding::Unfilled, None),
+        (EntryParams::MoonShot(_) | EntryParams::Drops(_), None) => (EntryFinding::Unfilled, None),
+        (EntryParams::Drops(_), Some(fill)) => {
+            let dev = deviation_pct(fill.price, deal.buy_price);
+            let finding = if dev.is_some_and(|d| d.abs() <= super::drops::PRICE_TOLERANCE_PCT) {
+                EntryFinding::Hit
+            } else {
+                EntryFinding::Off
+            };
+            (finding, dev)
+        }
         (EntryParams::MoonShot(params), Some(fill)) => {
             let dev = deviation_pct(fill.price, deal.buy_price);
             let ok = dev.is_some_and(|d| d.abs() <= entry_tolerance_pct(params, deal));

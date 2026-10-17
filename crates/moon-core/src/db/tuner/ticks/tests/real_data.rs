@@ -39,6 +39,7 @@ use crate::market::kline_cache::KlineCache;
 use crate::market::trade_replay::{Coverage, TickQuery, long_position_ms, query_held};
 use crate::symbol::{coin_match_key, coin_of_market};
 
+mod drops;
 mod money;
 mod search;
 
@@ -691,7 +692,7 @@ fn partners_of(
 ) -> Vec<Partner> {
     deals
         .iter()
-        .filter(|d| entry_model_for(&d.kind))
+        .filter(|d| d.kind == super::entry::KIND_MOONSHOT)
         .filter_map(|d| {
             let venue = venues.get(&d.core_uid)?.clone();
             let values = strategy_values_at(d.strategy_id, Some(d.core_uid), d.buy_ms, keys)?;
@@ -725,7 +726,10 @@ fn partners_of(
 /// (`calibrate::replace_round_trip_samples`, the median per core).
 fn core_round_trips(deals: &[Deal]) -> HashMap<u64, f64> {
     let mut samples: HashMap<u64, Vec<i64>> = HashMap::new();
-    for deal in deals.iter().filter(|d| entry_model_for(&d.kind)) {
+    for deal in deals
+        .iter()
+        .filter(|d| d.kind == super::entry::KIND_MOONSHOT)
+    {
         let (Some(points), _, _) = archived_lines(deal) else {
             continue;
         };
@@ -1189,17 +1193,14 @@ fn real_data_reproduction() {
             (Some(base), Some(rt)) => base + rt,
             _ => latency,
         };
-        let entry = if entry_model_for(&deal.kind) {
-            EntryParams::MoonShot(mshot_params(
-                &sv,
-                ModelSettings {
-                    latency_ms: core_latency,
-                    ..ModelSettings::default()
-                },
-            ))
-        } else {
-            EntryParams::Fact
-        };
+        let entry = super::params::entry_params_for(
+            &deal.kind,
+            &sv,
+            ModelSettings {
+                latency_ms: core_latency,
+                ..ModelSettings::default()
+            },
+        );
         let mut exit = exit_params(&sv, ModelSettings::default());
         if std::env::var_os("MOON_TICKS_LATENCY_EXIT").is_some() {
             exit.model.latency_ms = core_latency;
@@ -1545,11 +1546,8 @@ fn real_data_reproduction() {
                 values: &laid,
                 defaults: &defaults,
             };
-            let v_entry = if entry_model_for(&deal.kind) {
-                EntryParams::MoonShot(mshot_params(&lsv, ModelSettings::default()))
-            } else {
-                EntryParams::Fact
-            };
+            let v_entry =
+                super::params::entry_params_for(&deal.kind, &lsv, ModelSettings::default());
             let v_exit = exit_params(&lsv, ModelSettings::default());
             let out = simulate(&deal, &ticks, &v_entry, &v_exit, entry_line.as_deref());
             eprintln!(

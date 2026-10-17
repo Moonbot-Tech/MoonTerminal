@@ -162,6 +162,7 @@ fn no_reading_without_terms_or_a_rule_take() {
     assert_eq!(FactModifier::of(&d, &bare, None), None);
     let no_depth = Deal {
         hook_depth_pct: None,
+        drops_detect: None,
         ..d
     };
     assert_eq!(FactModifier::of(&no_depth, &p, None), None);

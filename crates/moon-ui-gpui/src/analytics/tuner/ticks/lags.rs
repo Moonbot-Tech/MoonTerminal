@@ -62,11 +62,11 @@ pub(super) fn calibrate_from(
     let mut samples: HashMap<u64, Vec<i64>> = HashMap::new();
     let mut round_trips: HashMap<u64, Vec<i64>> = HashMap::new();
     for row in rows {
-        // Only the kinds the entry model replays: another kind's entry line moves on its own
+        // Only MoonShot: another kind's entry line moves on its own
         // rules and would skew the median a MoonShot of the same core runs on.
         if let Some(points) = traces
             .get(&row.deal.report_uid)
-            .filter(|_| moon_core::db::tuner::ticks::entry_model_for(&row.deal.kind))
+            .filter(|_| row.deal.kind == moon_core::db::tuner::ticks::entry::KIND_MOONSHOT)
             .and_then(|lines| lines.entry_points.as_deref())
         {
             round_trips

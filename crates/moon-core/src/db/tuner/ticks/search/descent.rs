@@ -299,11 +299,7 @@ pub(super) fn params_of(
         values: &values,
         defaults,
     };
-    let entry = if entry_model_for(kind) {
-        EntryParams::MoonShot(mshot_params(&sv, model))
-    } else {
-        EntryParams::Fact
-    };
+    let entry = crate::db::tuner::ticks::params::entry_params_for(kind, &sv, model);
     (entry, exit_params(&sv, model))
 }
 

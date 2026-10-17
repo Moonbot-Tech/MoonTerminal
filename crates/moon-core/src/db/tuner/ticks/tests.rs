@@ -14,6 +14,131 @@ use crate::feed::types::Side;
 mod real_data;
 mod required;
 
+/// Explicit values override defaults, while omitted values retain the schema's defaults.
+#[test]
+fn drops_params_read_all_fields_and_defaults() {
+    let values = HashMap::from([
+        ("DropsMaxTime".into(), "100".into()),
+        ("DropsPriceMA".into(), "20".into()),
+        ("DropsLastPriceMA".into(), "2".into()),
+        ("DropsPriceDelta".into(), "3.5".into()),
+        ("DropsPriceIsLow".into(), "YES".into()),
+        ("DropsUseLastPrice".into(), "YES".into()),
+        ("buyPrice".into(), "-0.5".into()),
+        ("buyPriceLastTrade".into(), "YES".into()),
+        ("Use30SecOldASK".into(), "NO".into()),
+    ]);
+    let defaults = HashMap::from([("buyprice".into(), -2.0), ("use30secoldask".into(), 1.0)]);
+    let p = params::drops_params(&StrategyValues {
+        values: &values,
+        defaults: &defaults,
+    });
+    assert_eq!(
+        p,
+        drops::DropsParams {
+            max_time_s: 100,
+            price_ma_s: 20,
+            last_price_ma: 2,
+            price_delta_pct: 3.5,
+            price_is_low: true,
+            use_last_price: true,
+            buy_price_pct: -0.5,
+            buy_price_last_trade: true,
+            use_30s_old_ask: false,
+        }
+    );
+    let fallback = params::drops_params(&StrategyValues {
+        values: &HashMap::new(),
+        defaults: &defaults,
+    });
+    assert_eq!(fallback.buy_price_pct, -2.0);
+    assert!(fallback.use_30s_old_ask);
+    assert_eq!(fallback.max_time_s, 0);
+}
+
+/// Leaving calibration keys out of the requested snapshot would silently replace strategy inputs.
+#[test]
+fn param_keys_include_drops_fields() {
+    let keys = param_keys();
+    for key in [
+        "DropsMaxTime",
+        "DropsPriceMA",
+        "DropsLastPriceMA",
+        "DropsPriceDelta",
+        "DropsPriceIsLow",
+        "DropsUseLastPrice",
+        "buyPrice",
+        "buyPriceLastTrade",
+        "Use30SecOldASK",
+    ] {
+        assert!(keys.iter().any(|k| k == key), "missing {key}");
+    }
+}
+
+/// Classifying gated inputs as fixed model fields would hide their Outside grid status.
+#[test]
+fn drops_inputs_fetched_but_not_model_only() {
+    let keys = param_keys();
+    for key in [
+        "DropsMaxTime",
+        "DropsPriceMA",
+        "DropsLastPriceMA",
+        "DropsPriceDelta",
+        "DropsPriceIsLow",
+        "DropsUseLastPrice",
+        "buyPrice",
+        "buyPriceLastTrade",
+        "Use30SecOldASK",
+    ] {
+        assert!(!params::is_model_only(key), "model-only {key}");
+        assert!(keys.iter().any(|k| k == key), "missing {key}");
+    }
+}
+
+/// The own strategy must keep its factual entry even when there is no detector history.
+#[test]
+fn entry_fill_drops_own_strategy_is_fact() {
+    let own = drops::DropsParams {
+        price_delta_pct: 3.0,
+        ..Default::default()
+    };
+    let mut d = deal();
+    d.kind = drops::KIND_DROPS.into();
+    d.own_entry = Some(EntryParams::Drops(own.clone()));
+    assert_eq!(
+        entry_fill(&d, &[], &EntryParams::Drops(own.clone()), None),
+        Some(fact_fill(&d))
+    );
+    let changed = drops::DropsParams {
+        price_delta_pct: 4.0,
+        ..own
+    };
+    assert_eq!(
+        entry_fill(&d, &[], &EntryParams::Drops(changed), None),
+        None
+    );
+}
+
+/// Dispatch must not activate DropsDetection ahead of real-data calibration.
+#[test]
+fn entry_params_for_drops_is_fact_while_gated() {
+    let values = HashMap::new();
+    let defaults = HashMap::new();
+    let sv = StrategyValues {
+        values: &values,
+        defaults: &defaults,
+    };
+    assert!(!entry_model_for(drops::KIND_DROPS));
+    assert_eq!(
+        params::entry_params_for(drops::KIND_DROPS, &sv, ModelSettings::default()),
+        EntryParams::Fact
+    );
+    assert!(matches!(
+        params::entry_params_for(entry::KIND_MOONSHOT, &sv, ModelSettings::default()),
+        EntryParams::MoonShot(_)
+    ));
+}
+
 fn tick(t_ms: i64, price: f64, side: Side) -> Tick {
     Tick {
         time_ms: t_ms as f64,
@@ -53,6 +178,7 @@ pub(super) fn deal() -> Deal {
         archived_take: None,
         fact_modifier: None,
         hook_depth_pct: None,
+        drops_detect: None,
         hook_stated_take_pct: None,
         strike_detect: None,
         step_lag_ms: 0.0,
@@ -1806,6 +1932,7 @@ fn a_hook_without_its_depth_is_not_a_known_take() {
     assert!(model.take_known(&hook_deal()));
     let no_depth = Deal {
         hook_depth_pct: None,
+        drops_detect: None,
         ..hook_deal()
     };
     assert!(!model.take_known(&no_depth));
@@ -1969,6 +2096,7 @@ fn an_unknown_take_leaves_the_exit_unanswered() {
     );
     let blind = Deal {
         hook_depth_pct: None,
+        drops_detect: None,
         ..hook_deal()
     };
     let v = verify(&blind, &ticks, &EntryParams::Fact, &params, None, None);

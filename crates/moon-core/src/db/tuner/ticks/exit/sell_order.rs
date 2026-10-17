@@ -231,7 +231,7 @@ pub fn take_is_recorded(kind: &str) -> bool {
 /// MoonStrike (whose own rules [`ExitModel::take_known`] checks), and a
 /// Spread trade without an archived line is judged by it perfectly well.
 pub fn take_model_for(kind: &str) -> bool {
-    crate::db::tuner::ticks::entry::entry_model_for(kind)
+    kind == crate::db::tuner::ticks::entry::KIND_MOONSHOT
 }
 
 /// Whether `MShotSellAtLastPrice` lifts this trade's take to the pre-spike ask: the field is

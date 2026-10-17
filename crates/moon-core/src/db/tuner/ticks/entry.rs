@@ -5,10 +5,12 @@
 //! the strategy's own parameters, with no order book and no core state. MoonShot qualifies (a
 //! limit at a fixed distance below the price, walking a corridor); a Combo, a Strike or a
 //! volume detect does not — their entry is a detect the core made on data the tape does not
-//! carry, and the axis takes it from the report as it happened. MoonHook (the same corridor,
-//! `Hook*` fields) is the first candidate for a second implementation; it adds one arm to
-//! [`entry_model_for`] and nothing to the UI.
+//! carry, and the axis takes it from the report as it happened. Enabling a kind requires arms
+//! in [`entry_model_for`] and `entry_params_for`, knobs in `TICK_PARAMS`, and a refusal status
+//! through fills, scoring and verification. DropsDetection has a model in `drops.rs`, kept off
+//! because replay disagreed with the core on real deals (see the ignored real-data Drops bench).
 
+use super::drops::DropsEntry;
 use super::mshot::{EntryMethod, MshotEntry};
 use super::{Deal, EntryParams, Fill};
 use crate::feed::types::Tick;
@@ -46,5 +48,12 @@ impl EntryModel for MshotEntry<'_> {
             }
             _ => self.run(deal, ticks, line),
         }
+    }
+}
+
+impl EntryModel for DropsEntry<'_> {
+    /// Long-only replay; archived corridor points carry no DropsDetection inputs.
+    fn fill(&self, deal: &Deal, ticks: &[Tick], _line: Option<&[(i64, f64)]>) -> Option<Fill> {
+        self.trace(deal, ticks).fill
     }
 }
