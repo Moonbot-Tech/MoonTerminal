@@ -1604,22 +1604,11 @@ fn scope_signature(
         &(&read.all, read.without_ms, read.service, read.untunable),
     );
     super::signature::hash_sorted(&mut hasher, now.iter());
-    super::signature::hash_sorted(
-        &mut hasher,
-        own.iter().map(|(key, values)| {
-            let mut values: Vec<_> = values.iter().collect();
-            values.sort();
-            (key, values)
-        }),
-    );
+    super::signature::hash_sorted_maps(&mut hasher, own.iter());
     super::signature::hash_sorted(&mut hasher, spans.iter());
-    super::signature::hash_sorted(
+    super::signature::hash_sorted_maps(
         &mut hasher,
-        selected.iter().map(|(key, values)| {
-            let mut values: Vec<_> = values.iter().collect();
-            values.sort();
-            (key, values)
-        }),
+        selected.iter().map(|(key, values)| (key, values)),
     );
     super::signature::hash_sorted(&mut hasher, defaults.iter());
     hasher.write(deps.fingerprint().as_bytes());

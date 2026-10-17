@@ -720,8 +720,8 @@ impl TicksState {
         now_ms: i64,
     ) {
         self.reload_until_ms = match (&key, self.data.data()) {
-            (Some(_), Some(data)) => {
-                super::signature::settled_until(&data.rows, super::tail::effective_s(), now_ms)
+            (Some(key), Some(data)) => {
+                super::signature::settled_until(&data.rows, key.sample.min_tail_s, now_ms)
             }
             _ => i64::MAX,
         };

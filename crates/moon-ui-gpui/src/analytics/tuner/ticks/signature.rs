@@ -154,6 +154,26 @@ pub(in crate::analytics::tuner) fn addresses_signature(
     hasher.finish()
 }
 
+/// Fold keyed value maps into `hasher` in key order, each map's entries sorted too.
+pub(in crate::analytics::tuner) fn hash_sorted_maps<'a, K: Ord + std::fmt::Debug>(
+    hasher: &mut DefaultHasher,
+    entries: impl IntoIterator<
+        Item = (
+            K,
+            &'a std::sync::Arc<std::collections::HashMap<String, String>>,
+        ),
+    >,
+) {
+    hash_sorted(
+        hasher,
+        entries.into_iter().map(|(key, values)| {
+            let mut values: Vec<_> = values.iter().collect();
+            values.sort();
+            (key, values)
+        }),
+    );
+}
+
 /// Fold `entries` into `hasher` in key order.
 pub(in crate::analytics::tuner) fn hash_sorted<K: Ord + std::fmt::Debug, V: std::fmt::Debug>(
     hasher: &mut DefaultHasher,
