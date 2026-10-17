@@ -105,11 +105,14 @@ impl SaveCoreGroup {
             return false;
         }
         let cores = self.cores.clone();
-        self.backend.update(cx, |backend, _| {
-            backend.edit_core_groups(move |groups| {
-                groups.push(CoreGroup { name, cores });
-                true
-            })
+        self.backend.update(cx, |backend, cx| {
+            backend.edit_core_groups(
+                move |groups| {
+                    groups.push(CoreGroup { name, cores });
+                    true
+                },
+                cx,
+            )
         })
     }
 }
@@ -362,14 +365,17 @@ impl ManageCoreGroups {
         let name = unique_group_name(&existing, &typed);
         let settled = if name.is_empty() { key.clone() } else { name };
         let stored = settled.clone();
-        self.backend.update(cx, |backend, _| {
-            backend.edit_core_groups(move |groups| match groups.get_mut(index) {
-                Some(group) if group.name != stored => {
-                    group.name = stored;
-                    true
-                }
-                _ => false,
-            })
+        self.backend.update(cx, |backend, cx| {
+            backend.edit_core_groups(
+                move |groups| match groups.get_mut(index) {
+                    Some(group) if group.name != stored => {
+                        group.name = stored;
+                        true
+                    }
+                    _ => false,
+                },
+                cx,
+            )
         });
         if let Some(row) = self.rows.iter_mut().find(|row| row.key == key) {
             row.key = settled.clone();
@@ -405,8 +411,8 @@ impl ManageCoreGroups {
         }) else {
             return;
         };
-        self.backend.update(cx, |backend, _| {
-            backend.edit_core_groups(|groups| move_group(groups, from, to))
+        self.backend.update(cx, |backend, cx| {
+            backend.edit_core_groups(|groups| move_group(groups, from, to), cx)
         });
         self.armed = None;
         cx.notify();
@@ -422,11 +428,14 @@ impl ManageCoreGroups {
         let Some(index) = self.index_of(&key, cx) else {
             return;
         };
-        self.backend.update(cx, |backend, _| {
-            backend.edit_core_groups(|groups| {
-                groups.remove(index);
-                true
-            })
+        self.backend.update(cx, |backend, cx| {
+            backend.edit_core_groups(
+                |groups| {
+                    groups.remove(index);
+                    true
+                },
+                cx,
+            )
         });
         self.armed = None;
         cx.notify();

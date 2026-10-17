@@ -72,6 +72,7 @@ telegram.report_days: "Ngày"
 
 telegram.report_cores: "Core"
 telegram.report_groups: "Nhóm"
+telegram.report_groups_missing: "Các nhóm chưa được chuyển đến trạm; terminal sẽ tự động gửi chúng."
 telegram.report_view_switch: "Chế độ: %{view}"
 
 telegram.report_profit: "Lãi / lỗ"

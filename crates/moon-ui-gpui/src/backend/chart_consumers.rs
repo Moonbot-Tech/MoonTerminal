@@ -19,6 +19,7 @@ impl Backend {
     ///
     /// Args:
     ///     edit: The mutation, reporting whether it changed anything worth sanitizing.
+    ///     cx: Backend context used to schedule safe station group synchronization.
     ///
     /// Returns:
     ///     Whether the saved list actually changed. `false` covers a refused edit AND one the
@@ -27,6 +28,7 @@ impl Backend {
     pub(crate) fn edit_core_groups(
         &mut self,
         edit: impl FnOnce(&mut Vec<CoreGroup>) -> bool,
+        cx: &mut gpui::Context<Self>,
     ) -> bool {
         let mut groups = self.config.core_groups.clone();
         if !edit(&mut groups) {
@@ -41,6 +43,7 @@ impl Backend {
         }
         self.config.core_groups = groups;
         self.config_dirty = true;
+        self.station_groups_sync(cx);
         true
     }
 

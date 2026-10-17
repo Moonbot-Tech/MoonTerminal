@@ -72,6 +72,7 @@ telegram.report_days: "Días"
 
 telegram.report_cores: "Núcleos"
 telegram.report_groups: "Grupos"
+telegram.report_groups_missing: "Los grupos aún no han llegado a la estación; el terminal los enviará automáticamente."
 telegram.report_view_switch: "Vista: %{view}"
 
 telegram.report_profit: "Resultado"

@@ -82,6 +82,8 @@ struct Page {
     caption: Option<AutoCaption>,
     /// Exchange summary or ranked roster, absent in the existing global views.
     exchange: Option<drill::Exchange>,
+    /// Groups were selected but none have reached this host; show a note and only the total.
+    groups_missing: bool,
 }
 
 /// Build a synthetic local-day table through the production layout walk, without reading storage.
@@ -137,6 +139,7 @@ pub(crate) fn preview_table(layout: &ReportLayout) -> crate::preview::PreviewTab
         cores: vec![],
         caption: None,
         exchange: None,
+        groups_missing: false,
     };
     render::preview_table(&page)
 }
@@ -452,9 +455,8 @@ fn read_page_with(
         date_from: Some(from),
         date_to: Some(to),
     };
-    if groups.is_empty() {
-        request.by_group = false;
-    }
+    let groups_missing =
+        groups.is_empty() && request.by_group && !request.daily && !request.by_exchange;
     if request.scope != ReportScope::All && !request.daily && !request.by_group {
         let drilldowns = exchange_drilldowns(&snap, &accessible, &venues, &filter)?;
         let roster_count = cores
@@ -489,6 +491,7 @@ fn read_page_with(
             cores: accessible.iter().map(|(id, _)| *id).collect(),
             caption: None,
             exchange: None,
+            groups_missing,
         };
         return drill::read(&snap, page, &filter, &cores, groups, roster_count);
     }
@@ -530,7 +533,7 @@ fn read_page_with(
             let group = whole(Some(members.iter().map(|&index| cores[index].0).collect()));
             rows_by.push((section_label(venue), group));
         }
-    } else if by_group {
+    } else if by_group && !groups_missing {
         let ids = cores.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         for section in sections::summary_sections(&ids, groups) {
             let name = section.group.map_or_else(
@@ -542,7 +545,7 @@ fn read_page_with(
             ));
             rows_by.push((name, slice));
         }
-    } else {
+    } else if !groups_missing {
         for (id, name) in cores {
             let core = whole(Some(vec![id]));
             rows_by.push((name, core));
@@ -640,6 +643,7 @@ fn read_page_with(
             cores: Vec::new(),
             caption: None,
             exchange: None,
+            groups_missing,
         }))
     };
     let size = paging::fitting_page_size(&active, fits);
@@ -661,6 +665,7 @@ fn read_page_with(
         cores: accessible.iter().map(|(id, _)| *id).collect(),
         caption: None,
         exchange: None,
+        groups_missing,
     })
 }
 

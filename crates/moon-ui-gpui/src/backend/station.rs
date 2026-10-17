@@ -30,6 +30,7 @@ use rust_i18n::t;
 use crate::Backend;
 
 pub(crate) mod cores_sync;
+pub(crate) mod groups_sync;
 pub(crate) mod job;
 pub(crate) mod pull;
 mod recovery;
@@ -68,6 +69,8 @@ enum Kind {
     /// The header clock's zone pushed to the station: appends its line, keeps the outcome, and
     /// like a quiet read does not hold the buttons.
     Zone,
+    /// Automatic group writes preserve the user's outcome and latch each payload attempt.
+    Groups,
     /// A startup read that resolves durable bot ownership.
     Recovery,
 }
@@ -140,6 +143,8 @@ pub(crate) struct StationJobs {
     /// The zone the last zone push carried: after it ends the zone is pushed again only when the
     /// header clock moved meanwhile, so a station that refuses it is not asked again at once.
     zone_pushed: Option<String>,
+    /// Destination-scoped automatic group attempts, retained even after failed writes.
+    groups_sync: groups_sync::GroupsSync,
     /// Latest tuner tail waiting for an idle station and a capability report.
     min_tail_pending: Option<u32>,
     /// Last automatic floor attempted, used to avoid retrying the same failed write at once.
@@ -153,7 +158,7 @@ impl Kind {
     /// Work the user did not ask for and need not wait on: a user's job pressed meanwhile starts
     /// right after it.
     fn is_background(self) -> bool {
-        matches!(self, Self::Quiet | Self::Tail | Self::Zone)
+        matches!(self, Self::Quiet | Self::Tail | Self::Zone | Self::Groups)
     }
 }
 
@@ -386,6 +391,32 @@ fn read_known_target() -> Option<moon_remote::ssh::Target> {
 }
 
 impl Backend {
+    /// Send changed local groups after a read or edit; running jobs defer admission until idle.
+    pub(crate) fn station_groups_sync(&mut self, cx: &mut Context<Self>) {
+        let here = cores_sync::trace_cores(&self.config);
+        let access = self
+            .station
+            .bot
+            .as_ref()
+            .and_then(|bot| bot.access.as_ref());
+        let listing = self
+            .station
+            .cores_seen
+            .as_ref()
+            .and_then(|seen| seen.as_deref());
+        let Some(job) = self.station.groups_sync.take_job(
+            self.station.running,
+            known_target(),
+            access,
+            &self.config.core_groups,
+            &here,
+            listing.unwrap_or_default(),
+        ) else {
+            return;
+        };
+        self.station_begin(job, false, Kind::Groups, cx);
+    }
+
     /// Retain the newest tuner setting across running jobs, then use the station tape path.
     pub(crate) fn station_min_tail_sync(&mut self, secs: u32, cx: &mut Context<Self>) {
         self.station.min_tail_pending = Some(secs);
@@ -578,10 +609,14 @@ impl Backend {
                 st.lines.clear();
                 st.status = None;
             }
-            Kind::Quiet | Kind::Tail | Kind::Zone | Kind::Recovery => {}
+            Kind::Quiet | Kind::Tail | Kind::Zone | Kind::Groups | Kind::Recovery => {}
         }
         st.revision = st.revision.wrapping_add(1);
-        let rx = job::start(job, cores_sync::trace_cores(&self.config));
+        let rx = if kind == Kind::Groups {
+            job::start_groups_sync(job, cores_sync::trace_cores(&self.config))
+        } else {
+            job::start(job, cores_sync::trace_cores(&self.config))
+        };
         st.task = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(POLL).await;
@@ -645,6 +680,7 @@ impl Backend {
         if self.station.kind != Kind::Zone || self.station.zone_pushed.as_deref() != Some(wanted) {
             self.station_zone_sync(cx);
         }
+        self.station_groups_sync(cx);
     }
 
     /// Apply one job event; `true` once the job has ended.
@@ -686,8 +722,8 @@ impl Backend {
             self.station_apply_recovery(done);
             return true;
         }
-        if kind == Kind::Zone {
-            // A zone push refreshes bot state and core identities; its line says what happened.
+        if kind == Kind::Zone || kind == Kind::Groups {
+            // Background writes refresh bot state and identities without replacing user outcomes.
             match done {
                 job::Done::Ok { bot, .. } | job::Done::Installed { bot, .. } => {
                     if let Some(bot) = bot {

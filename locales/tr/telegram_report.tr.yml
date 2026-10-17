@@ -72,6 +72,7 @@ telegram.report_days: "Günler"
 
 telegram.report_cores: "Çekirdekler"
 telegram.report_groups: "Gruplar"
+telegram.report_groups_missing: "Gruplar henüz istasyona ulaşmadı; terminal bunları otomatik olarak gönderecek."
 telegram.report_view_switch: "Görünüm: %{view}"
 
 telegram.report_profit: "Kâr / zarar"
