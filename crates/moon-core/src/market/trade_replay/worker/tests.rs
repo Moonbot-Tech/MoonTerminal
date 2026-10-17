@@ -158,7 +158,8 @@ fn cached_retry_keeps_wider_tick_coverage() {
     wide.partial = true;
     let route = trade_route(wide.venue.expect("known venue")).expect("tick route");
     let key = OutcomeKey {
-        venue: wide.venue.expect("known venue"),
+        venue: wide.venue,
+        exchange: "3:00000000".into(),
         host: route.host(),
         market: "BTCUSDT".to_owned(),
         from_ms: wide.window.from_ms,
@@ -179,7 +180,7 @@ fn cached_retry_keeps_wider_tick_coverage() {
     let Some(Remembered::Ready { mut series, .. }) = remember_lookup(&cache, &key, 42) else {
         panic!("retry cache missing")
     };
-    let stage = stage_and_stamp(series.venue.expect("known venue"), &key, &mut series);
+    let stage = stage_and_stamp(series.venue, &key, &mut series);
     assert_eq!(series.tick_status, TickStatus::Streaming);
     let narrow = core_series(true);
     assert!(!preserves_coverage(
@@ -298,7 +299,8 @@ fn core_replay_rechecks_after_candles_and_keeps_context() {
         route: Some(route),
         archive: None,
         key: OutcomeKey {
-            venue: bars.venue.expect("known venue"),
+            venue: bars.venue,
+            exchange: "3:00000000".into(),
             host: route.host(),
             market: "BTCUSDT".into(),
             from_ms: bars.window.from_ms,
@@ -781,7 +783,8 @@ fn tile_stage(request: &TradeReplayRequest) -> TickStage {
         route: Some(route),
         archive: None,
         key: OutcomeKey {
-            venue: request.address.venue.expect("known venue"),
+            venue: request.address.venue,
+            exchange: "3:00000000".into(),
             host: route.host(),
             market: request.market.clone(),
             from_ms: request.window.from_ms,
@@ -911,7 +914,8 @@ fn model_archive_request_is_limited_to_three_days() {
 /// Construct archive-capable stages without assuming that Bybit has a REST endpoint.
 fn tile_stage_for_archive(request: &TradeReplayRequest) -> TickStage {
     let key = OutcomeKey {
-        venue: request.address.venue.expect("known venue"),
+        venue: request.address.venue,
+        exchange: "3:00000000".into(),
         host: "synthetic",
         market: request.market.clone(),
         from_ms: request.window.from_ms,
@@ -919,7 +923,7 @@ fn tile_stage_for_archive(request: &TradeReplayRequest) -> TickStage {
         margin_ms: request.window.margin_ms,
         long_position_ms: request.window.long_position_ms,
     };
-    tick_stage_for(request.address.venue.expect("known venue"), &key, &[])
+    tick_stage_for(request.address.venue, &key, &[])
 }
 
 /// Turning publication gaps into NoRoute strands linear rows; inverse and PERP stay terminal.
@@ -1244,7 +1248,7 @@ fn a_window_past_the_routes_retention_still_queues_its_tick_stage() {
     let mut request = tile_request(reply);
     request.address.venue = crate::venue::venue(4);
     let key = tile_stage(&request).key;
-    let stage = tick_stage_for(request.address.venue.expect("known venue"), &key, &[]);
+    let stage = tick_stage_for(request.address.venue, &key, &[]);
     assert_eq!(stage.route, Some(TradeRoute::BinanceUsdMAggTrades));
 }
 
@@ -1494,15 +1498,15 @@ fn probe_one_slice_against_the_venue() {
     );
 }
 
-/// LinKvo 15.10: a core on a venue the exchange directory does not know (Aster, a broker through
-/// MoonProto) showed only "unknown venue", although the core held the trade's prints. Its request
-/// now reaches the worker: with no route it costs no call and answers the unknown venue, on an
-/// idle lane — and its core's own prints, read first, replace that answer.
+/// Refusing unlisted venues before the tick stage would hide previously captured trade prints.
 #[test]
 fn an_unknown_venue_is_served_from_its_core() {
     let (reply, _rx) = mpsc::channel();
     let mut request = tile_request(reply);
-    request.address.venue = None;
+    request.address = crate::fixture::unlisted::source(200)
+        .replay_address(200)
+        .unwrap();
+    request.market = "XALPHA".into();
     assert_eq!(lane_key(&request).0, "");
     let served = serve(
         &rest::agent(),
@@ -1510,17 +1514,115 @@ fn an_unknown_venue_is_served_from_its_core() {
         &Mutex::new(VecDeque::new()),
         &request,
     );
+    assert!(matches!(served.outcome, TradeReplayOutcome::Ready(_)));
+    let stage = served.tick_stage.as_ref().expect("routeless tick stage");
+    assert!(stage.route.is_none());
+    assert!(stage.archive.is_none());
+    let tiles = Mutex::new(TickTileStore::default());
     assert!(matches!(
-        served.outcome,
-        TradeReplayOutcome::Empty(TradeReplayEmpty::UnknownVenue)
+        serve_ticks(&rest::agent(), &ReplayGate::new(), &request, stage, &tiles),
+        Err(Some(TickStatus::NoRoute))
     ));
-    assert!(served.tick_stage.is_none(), "no route: no tick walk");
+    for &(from, to) in request.window.focus_spans().spans() {
+        tiles.lock().unwrap().insert(
+            (
+                crate::fixture::unlisted::EXCHANGE_KEY.into(),
+                request.market.clone(),
+            ),
+            from,
+            to,
+            vec![tick(from + 1, 10.0)],
+            TileSource::Core,
+        );
+    }
+    let (series, _) =
+        serve_ticks(&rest::agent(), &ReplayGate::new(), &request, stage, &tiles).unwrap();
+    assert!(series.source.is_ticks());
+    assert!(series.venue.is_none());
+    let first_key = stage.key.clone();
+    request.address.exchange_key = "201:00000000".into();
+    let other = serve(
+        &rest::agent(),
+        &ReplayGate::new(),
+        &Mutex::new(VecDeque::new()),
+        &request,
+    );
+    assert_ne!(first_key, other.tick_stage.unwrap().key);
     let mut native = core_series(true);
     native.venue = None;
-    let served = core_first(|| Some(native.clone()), || served);
+    let served = core_first(
+        || Some(native.clone()),
+        || Served {
+            outcome: served.outcome,
+            tick_stage: None,
+        },
+    );
     let TradeReplayOutcome::Ready(series) = served.outcome else {
         panic!("the core's own prints are hidden behind the unknown venue")
     };
     assert_eq!(series.source, TradeReplaySource::CoreTicks);
     assert!(series.venue.is_none());
+}
+
+/// Reopening an unlisted chart must reuse settled tape instead of queuing another tick stage.
+#[test]
+fn unlisted_settled_answer_is_reused() {
+    let (reply, _rx) = mpsc::channel();
+    let mut request = tile_request(reply);
+    request.address = crate::fixture::unlisted::source(200)
+        .replay_address(200)
+        .unwrap();
+    request.market = "XALPHA".into();
+    let cache = Mutex::new(VecDeque::new());
+    let agent = rest::agent();
+    let gate = ReplayGate::new();
+    let first = serve(&agent, &gate, &cache, &request);
+    let key = first.tick_stage.unwrap().key;
+    let mut series = core_series(true);
+    series.venue = None;
+    let expected = request.identity;
+    remember_store(
+        &cache,
+        request.intent,
+        key,
+        Remembered::Ready {
+            series,
+            ticks_settled: true,
+        },
+    );
+    let second = serve(&agent, &gate, &cache, &request);
+    assert!(second.tick_stage.is_none());
+    let TradeReplayOutcome::Ready(series) = second.outcome else {
+        panic!("settled tape lost")
+    };
+    assert_eq!(series.identity, expected);
+    assert_eq!(series.source, TradeReplaySource::CoreTicks);
+}
+
+/// Dropping unlisted closes at ingress would lose the free archive capture at close time.
+#[test]
+fn unlisted_close_submits_capture() {
+    let address = crate::fixture::unlisted::source(200)
+        .replay_address(200)
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    ingress::capture_with(
+        CaptureRequest {
+            address,
+            market: "XALPHA".into(),
+            open_ms: 1_000,
+            close_ms: 2_000,
+            margin_ms: 0,
+            long_position_ms: 300_000,
+        },
+        |inbound| tx.send(inbound).unwrap(),
+    );
+    let Inbound::Capture(request) = rx.recv().unwrap() else {
+        panic!("close was not captured")
+    };
+    assert!(request.address.venue.is_none());
+    assert_eq!(
+        request.address.exchange_key,
+        crate::fixture::unlisted::EXCHANGE_KEY
+    );
 }

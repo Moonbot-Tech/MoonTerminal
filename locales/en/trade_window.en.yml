@@ -89,7 +89,6 @@ trade_window.empty.no_data: "The market has no data for this period."
 
 trade_window.empty.no_endpoint: "%{brand} has no public history source this build can use."
 
-trade_window.empty.unknown_venue: "This build does not recognise the core's exchange."
 
 trade_window.empty.core_offline: "The trade's core is not connected, so its exchange and market cannot be identified."
 

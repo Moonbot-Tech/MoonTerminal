@@ -98,10 +98,10 @@ fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
         }),
         address: Some(Arc::new(RowAddress {
             core_uid: 1,
-            venue: Venue {
+            venue: Some(Venue {
                 brand: Brand::Bybit,
                 kind: MarketKind::Spot,
-            },
+            }),
             exchange_key: "synthetic".into(),
             market: "XALPHAUSDT".into(),
             btc_market: None,

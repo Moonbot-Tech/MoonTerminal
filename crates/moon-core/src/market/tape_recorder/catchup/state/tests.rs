@@ -486,6 +486,79 @@ fn pass_settling_during_a_trim_does_not_block_the_tick() {
 const DAY: i64 = 86_400_000;
 const NOW: i64 = 500 * DAY;
 
+/// Settling a recovered recent exit must latch an expired entry without falsely counting full tape.
+#[test]
+fn unlisted_mixed_age_settlement_never_replans_expired_entry() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let mut trade = row();
+    trade.venue = None;
+    trade.exchange = crate::fixture::unlisted::EXCHANGE_KEY.into();
+    trade.open_ms = NOW - 49 * HOUR_MS;
+    trade.close_ms = NOW - HOUR_MS;
+    trade.core = Some(
+        crate::fixture::unlisted::source(trade.id.core)
+            .replay_address(trade.id.core)
+            .unwrap(),
+    );
+    let shape = catchup::Shape {
+        margin_ms: 1_000,
+        long_ms: HOUR_MS,
+        tail_ms: 2_000,
+    };
+    let focus = catchup::needed(&trade, &shape);
+    let recent = *focus.spans().last().unwrap();
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    let batch = state.prepare(|_| Coverage::none(), NOW, &shape, true);
+    assert_eq!(batch.jobs.len(), 1);
+    let result = executor::run_pass_with_core(
+        batch.jobs,
+        || NOW,
+        &gate::ReplayGate::new(),
+        (
+            |_, _, _, _, _| panic!("unlisted REST"),
+            |_, _, _, _| panic!("unlisted archive"),
+            Some(Arc::new(move |ask| {
+                assert_eq!((ask.from_ms, ask.to_ms), recent);
+                (
+                    Some(crate::market::source::CoreReplayTicks {
+                        ticks: vec![],
+                        covered: recent,
+                        archive_answered: true,
+                    }),
+                    false,
+                )
+            })),
+        ),
+        0,
+        executor::run_job_at,
+        |job, answer| {
+            for &(from, to) in answer.file.spans() {
+                cache.insert(
+                    &job.trade.exchange,
+                    &job.trade.market,
+                    from,
+                    to,
+                    vec![],
+                    crate::market::trade_replay::TileSource::Core,
+                );
+            }
+        },
+    );
+    assert!(cache.sync(std::time::Duration::from_secs(2)));
+    state.finish(&cache, result, NOW);
+    assert_eq!(state.latched.get(&trade.id), Some(&Latch::Permanent));
+    assert!(!state.tape_complete.contains(&trade.id));
+    assert!(
+        state
+            .prepare(|_| Coverage::one(recent), NOW, &shape, true)
+            .jobs
+            .is_empty()
+    );
+}
+
 /// Preserve global retention switches and barriers around asynchronous recorder fixtures.
 struct RetentionSettings {
     enabled: bool,
@@ -1182,11 +1255,14 @@ fn timed_out_partial_core_answers_do_not_finalise_a_tail() {
                 |_, _, _, _, _| panic!("core-only fixture"),
                 |_, _, _, _| panic!("core-only fixture"),
                 Some(Arc::new(|ask| {
-                    Some(crate::market::source::CoreReplayTicks {
-                        ticks: vec![],
-                        covered: (ask.from_ms, ask.from_ms + 100),
-                        archive_answered: false,
-                    })
+                    (
+                        Some(crate::market::source::CoreReplayTicks {
+                            ticks: vec![],
+                            covered: (ask.from_ms, ask.from_ms + 100),
+                            archive_answered: false,
+                        }),
+                        false,
+                    )
                 })),
             ),
             0,
@@ -1212,7 +1288,7 @@ fn timed_out_partial_core_answers_do_not_finalise_a_tail() {
         assert!(cache.sync(std::time::Duration::from_secs(2)));
         state.finish(&cache, result, now);
         assert_ne!(state.latched.get(&trade.id), Some(&Latch::Permanent));
-        assert!(!state.tail_tries.contains_key(&trade.id));
+        assert!(!state.core_gap_tries.contains_key(&trade.id));
     }
 }
 
@@ -1303,9 +1379,164 @@ fn incomplete_tail_finalises_only_after_two_clean_passes() {
             );
         } else {
             assert!(!state.pending.is_empty(), "{mode}");
-            assert!(!state.tail_tries.contains_key(&trade.id), "{mode}");
+            assert!(!state.core_gap_tries.contains_key(&trade.id), "{mode}");
         }
     }
+}
+
+/// Answered empty rings must not stop another job on the core, and must cap gaps after two passes.
+#[test]
+fn unlisted_answered_misses_do_not_stop_core_and_finalise_after_two_passes() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let mut trade = row();
+    trade.venue = None;
+    trade.exchange = crate::fixture::unlisted::EXCHANGE_KEY.into();
+    trade.core = Some(
+        crate::fixture::unlisted::source(trade.id.core)
+            .replay_address(trade.id.core)
+            .unwrap(),
+    );
+    let mut second = trade.clone();
+    second.id.rec_id += 1;
+    let shape = catchup::Shape {
+        margin_ms: 30_000,
+        long_ms: DAY,
+        tail_ms: 60_000,
+    };
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone(), second.clone()]);
+    for pass in 0..2 {
+        let now = NOW + pass * HOUR_MS;
+        let batch = state.prepare(|_| Coverage::none(), now, &shape, true);
+        assert_eq!(batch.jobs.len(), 2);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let result = executor::run_pass_with_core(
+            batch.jobs,
+            || now,
+            &gate::ReplayGate::new(),
+            (
+                |_, _, _, _, _| panic!("core-only fixture"),
+                |_, _, _, _| panic!("core-only fixture"),
+                Some(Arc::new(move |_| {
+                    counted.fetch_add(1, Ordering::Relaxed);
+                    (None, true)
+                })),
+            ),
+            0,
+            executor::run_job_at,
+            |_, _| {},
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert!(result.finished.iter().all(|job| job.attempted
+            && job.failure.is_none()
+            && job.fault.is_none()
+            && job.filed.is_empty()));
+        state.finish(&cache, result, now);
+        for id in [trade.id, second.id] {
+            assert_eq!(state.latched.get(&id) == Some(&Latch::Permanent), pass == 1);
+        }
+    }
+    state.submit(vec![trade, second]);
+    assert!(
+        state
+            .prepare(
+                |_| panic!("final gap re-read"),
+                NOW + 2 * HOUR_MS,
+                &shape,
+                true
+            )
+            .jobs
+            .is_empty()
+    );
+}
+
+/// Unlisted in-trade holes must stop spending core requests after two clean partial answers.
+#[test]
+fn unlisted_non_tail_gap_finalises_after_two_clean_answers() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let mut trade = row();
+    trade.venue = None;
+    trade.exchange = crate::fixture::unlisted::EXCHANGE_KEY.into();
+    trade.core = Some(
+        crate::fixture::unlisted::source(trade.id.core)
+            .replay_address(trade.id.core)
+            .unwrap(),
+    );
+    let shape = catchup::Shape {
+        margin_ms: 30_000,
+        long_ms: DAY,
+        tail_ms: 60_000,
+    };
+    let cache = TradeCache::open_evictable(":memory:".into()).unwrap();
+    let mut held = Coverage::one((trade.open_ms - 30_000, trade.open_ms + 1_000));
+    cache.insert(
+        &trade.exchange,
+        &trade.market,
+        trade.open_ms - 30_000,
+        trade.open_ms + 1_000,
+        vec![],
+        crate::market::trade_replay::TileSource::Core,
+    );
+    assert!(cache.sync(std::time::Duration::from_secs(2)));
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    for pass in 0..2 {
+        let now = NOW + pass * HOUR_MS;
+        let batch = state.prepare(|_| held.clone(), now, &shape, true);
+        assert_eq!(batch.jobs.len(), 1);
+        let job = batch.jobs.into_iter().next().unwrap();
+        assert!(!tail_only(&job.missing, job.tail_start_ms));
+        let from = trade.open_ms + 1_001 + pass * 1_000;
+        let to = from + 999;
+        let filed = Coverage::one((from, to));
+        assert!(job.missing.covers(&filed));
+        cache.insert(
+            &trade.exchange,
+            &trade.market,
+            from,
+            to,
+            vec![],
+            crate::market::trade_replay::TileSource::Core,
+        );
+        assert!(cache.sync(std::time::Duration::from_secs(2)));
+        held.add((from, to));
+        state.finish(
+            &cache,
+            PassResult {
+                finished: vec![executor::FinishedJob {
+                    job,
+                    failure: None,
+                    fault: None,
+                    attempted: true,
+                    filed,
+                }],
+                archive_bytes: 0,
+            },
+            now,
+        );
+        assert_eq!(
+            state.latched.get(&trade.id) == Some(&Latch::Permanent),
+            pass == 1
+        );
+    }
+    assert!(!state.tail_final.contains(&trade.id));
+    state.submit(vec![trade]);
+    assert!(
+        state
+            .prepare(
+                |_| panic!("final gap re-read"),
+                NOW + 2 * HOUR_MS,
+                &shape,
+                true
+            )
+            .jobs
+            .is_empty()
+    );
 }
 
 /// A failed coverage read must never be interpreted as a clean empty tail response.
@@ -1349,7 +1580,7 @@ fn unavailable_held_read_does_not_finalise_tail() {
             now,
         );
     }
-    assert!(!state.tail_tries.contains_key(&trade.id));
+    assert!(!state.core_gap_tries.contains_key(&trade.id));
     assert!(matches!(
         state.latched.get(&trade.id),
         Some(Latch::RetryAfter(_))

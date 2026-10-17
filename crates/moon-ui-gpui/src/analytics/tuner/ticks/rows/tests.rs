@@ -4,6 +4,75 @@ use super::{order_for, paint_fixed, result_pct};
 use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
 use moon_core::market::trade_replay::TickStatus;
 
+/// Core reach must not change known routeless rows' missing or short-tail offers.
+#[test]
+fn known_routeless_offers_keep_the_original_rule() {
+    use super::super::state::RowAddress;
+    use std::sync::Arc;
+    let now = 100 * 86_400_000;
+    for hours in [1, 49] {
+        let mut row = DealRow {
+            deal: deal(200, now - hours * 3_600_000, 1.0, 1.01, false),
+            tape: TapeStatus::Missing,
+            verdict: Some(verdict(Some(true), Some(true))),
+            address: Some(Arc::new(RowAddress {
+                core_uid: 1,
+                venue: Some(moon_core::venue::Venue {
+                    brand: moon_core::venue::Brand::Bybit,
+                    kind: moon_core::venue::MarketKind::Spot,
+                }),
+                exchange_key: "synthetic".into(),
+                market: "XALPHA".into(),
+                btc_market: None,
+            })),
+            ticks: None,
+            entry_line: None,
+            held: Some((30_000, 30_000)),
+        };
+        assert!(row.fetchable_at(now, 60));
+        row.tape = TapeStatus::Covered;
+        assert!(!row.fetchable_at(now, 60));
+        row.tape = TapeStatus::Refused(TickStatus::NoRoute);
+        assert!(!row.fetchable_at(now, 60));
+    }
+}
+
+/// No-station manual fetch must offer recent core-only holes and reproduced short tails.
+#[test]
+fn unlisted_manual_fetch_includes_recent_empty_and_short_tail_rows() {
+    use super::super::state::RowAddress;
+    use std::sync::Arc;
+    let now = 100 * 86_400_000;
+    let mut row = DealRow {
+        deal: deal(200, now - 3_600_000, 1.0, 1.01, false),
+        tape: TapeStatus::Missing,
+        verdict: None,
+        address: Some(Arc::new(RowAddress {
+            core_uid: 1,
+            venue: None,
+            exchange_key: moon_core::fixture::unlisted::EXCHANGE_KEY.into(),
+            market: "XALPHA".into(),
+            btc_market: None,
+        })),
+        ticks: None,
+        entry_line: None,
+        held: None,
+    };
+    assert!(row.fetchable_at(now, 60));
+    row.tape = TapeStatus::Covered;
+    row.verdict = Some(verdict(Some(true), Some(true)));
+    row.held = Some((30_000, 30_000));
+    assert!(row.fetchable_at(now, 60));
+    row.held = Some((30_000, 60_000));
+    assert!(!row.fetchable_at(now, 60));
+    row.deal.buy_ms = now - 49 * 3_600_000;
+    row.deal.close_ms = row.deal.buy_ms + 1_000;
+    row.held = Some((30_000, 30_000));
+    assert!(!row.fetchable_at(now, 60));
+    row.tape = TapeStatus::Missing;
+    assert!(!row.fetchable_at(now, 60));
+}
+
 /// Manual fetch keeps publication waits retryable; automatic reloads wait for the deadline.
 #[test]
 fn unpublished_rows_are_offered_by_reload_and_marked_fetching() {
@@ -13,10 +82,10 @@ fn unpublished_rows_are_offered_by_reload_and_marked_fetching() {
     let row = &mut state.data.data_mut().unwrap().rows[0];
     row.address = Some(Arc::new(RowAddress {
         core_uid: 1,
-        venue: moon_core::venue::Venue {
+        venue: Some(moon_core::venue::Venue {
             brand: moon_core::venue::Brand::Bybit,
             kind: moon_core::venue::MarketKind::Futures,
-        },
+        }),
         exchange_key: "UNIT_01".into(),
         market: "XALPHAUSDT".into(),
         btc_market: None,
@@ -59,7 +128,7 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
         verdict: Some(verdict(Some(true), Some(true))),
         address: Some(Arc::new(RowAddress {
             core_uid: 1,
-            venue: moon_core::venue::venue(4).expect("futures venue"),
+            venue: Some(moon_core::venue::venue(4).expect("futures venue")),
             exchange_key: "EX-XX".into(),
             market: "XALPHAUSDT".into(),
             btc_market: None,
@@ -89,7 +158,7 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     assert!(!row.fetchable_at(now, 60), "outside archive catch-up depth");
     row.deal.close_ms = now - 21 * day;
     Arc::make_mut(row.address.as_mut().unwrap()).venue =
-        moon_core::venue::venue(8).expect("REST-only venue");
+        Some(moon_core::venue::venue(8).expect("REST-only venue"));
     row.deal.close_ms = now - 60 * day;
     assert!(
         !row.fetchable_at(now, 60),
@@ -102,7 +171,7 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     assert_eq!(unavailable.fetchable_at(now, 60).count(), 0);
     row.deal.close_ms = now - 60_000;
     Arc::make_mut(row.address.as_mut().unwrap()).venue =
-        moon_core::venue::venue(4).expect("futures venue");
+        Some(moon_core::venue::venue(4).expect("futures venue"));
     assert!(row.fetchable_at(now, 60), "recent REST tail");
 }
 

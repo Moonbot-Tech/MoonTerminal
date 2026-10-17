@@ -1,5 +1,111 @@
 use super::*;
 
+/// Missing directory routes must stay unavailable regardless of age or archive settings.
+#[test]
+fn unlisted_fetchable_has_no_public_route() {
+    let now = 500 * 86_400_000;
+    for from in [now - 1_000, now - 400 * 86_400_000] {
+        assert_eq!(fetchable(None, "XALPHA", from, now), Fetchable::NoRoute);
+        for archives in [false, true] {
+            assert_eq!(
+                fetchable_with(None, "XALPHA", from, now, archives),
+                Fetchable::NoRoute
+            );
+        }
+    }
+}
+
+/// Unknown exchanges need contract terms before replay can value their prints.
+#[test]
+fn unlisted_tick_value_uses_only_explicit_contract_terms() {
+    assert_eq!(tick_value(None, None), TickValue::Unknown);
+    for (quote, expected) in [
+        (
+            "",
+            TickValue::InverseContracts {
+                usd_per_contract: 10.0,
+            },
+        ),
+        (
+            "USDT",
+            TickValue::LinearContracts {
+                coins_per_contract: 10.0,
+            },
+        ),
+    ] {
+        assert_eq!(tick_value(None, Some((quote, 10.0))), expected);
+    }
+    assert_eq!(tick_value(None, Some(("", 1.0))), TickValue::Base);
+    for size in [0.0, -10.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(tick_value(None, Some(("", size))), TickValue::Unknown);
+    }
+}
+
+/// Freeze directory behavior so Option support cannot change existing exchange replay rules.
+#[test]
+fn known_directory_fetchable_and_tick_value_golden() {
+    let now = 500 * 86_400_000;
+    // Platform ordinals and expected answers captured from the pre-Option route table.
+    for (code, recent, old, contracts) in [
+        (2, Fetchable::Archive, Fetchable::Archive, false),
+        (3, Fetchable::Rest, Fetchable::Rest, false),
+        (4, Fetchable::Rest, Fetchable::Archive, false),
+        (5, Fetchable::NoRoute, Fetchable::NoRoute, false),
+        (6, Fetchable::Rest, Fetchable::Archive, true),
+        (7, Fetchable::NoRoute, Fetchable::NoRoute, false),
+        (8, Fetchable::Rest, Fetchable::OutOfRetention, false),
+        (9, Fetchable::Rest, Fetchable::Rest, true),
+        (10, Fetchable::Rest, Fetchable::Rest, false),
+        (11, Fetchable::Rest, Fetchable::Rest, false),
+        (12, Fetchable::NoRoute, Fetchable::NoRoute, false),
+        (13, Fetchable::NoRoute, Fetchable::NoRoute, false),
+        (14, Fetchable::Rest, Fetchable::Rest, false),
+        (15, Fetchable::Rest, Fetchable::Rest, true),
+    ] {
+        let venue = crate::venue::venue(code);
+        assert!(venue.is_some(), "directory code {code}");
+        assert_eq!(
+            fetchable(venue, "SYNUSDT", now - 1_000, now),
+            recent,
+            "code {code}"
+        );
+        assert_eq!(
+            fetchable(venue, "SYNUSDT", now - 40 * 86_400_000, now),
+            old,
+            "code {code}"
+        );
+        assert_eq!(
+            tick_value(venue, None),
+            if contracts {
+                TickValue::Unknown
+            } else {
+                TickValue::Base
+            },
+            "code {code}"
+        );
+        for (quote, expected) in [
+            (
+                "",
+                TickValue::InverseContracts {
+                    usd_per_contract: 10.0,
+                },
+            ),
+            (
+                "USDT",
+                TickValue::LinearContracts {
+                    coins_per_contract: 10.0,
+                },
+            ),
+        ] {
+            assert_eq!(
+                tick_value(venue, Some((quote, 10.0))),
+                if contracts { expected } else { TickValue::Base },
+                "code {code}"
+            );
+        }
+    }
+}
+
 /// A displayed retention edge must match planning, including archive fallback just beyond it.
 #[test]
 fn reach_table_matches_fetchable_at_retention_edges() {
@@ -14,10 +120,13 @@ fn reach_table_matches_fetchable_at_retention_edges() {
         assert!((0..=u8::MAX).any(|code| crate::venue::venue(code) == Some(row.venue)));
         let edge = now - row.rest_retention_ms.unwrap_or(86_400_000) + RETENTION_SAFETY_MS;
         if row.rest.is_some() {
-            assert_eq!(fetchable(row.venue, "SYNUSDT", edge, now), Fetchable::Rest);
+            assert_eq!(
+                fetchable(Some(row.venue), "SYNUSDT", edge, now),
+                Fetchable::Rest
+            );
             if row.rest_retention_ms.is_some() {
                 assert_eq!(
-                    fetchable(row.venue, "SYNUSDT", edge - 1, now),
+                    fetchable(Some(row.venue), "SYNUSDT", edge - 1, now),
                     if row.archive.is_some() {
                         Fetchable::Archive
                     } else {
@@ -25,13 +134,13 @@ fn reach_table_matches_fetchable_at_retention_edges() {
                     }
                 );
                 assert_eq!(
-                    fetchable_with(row.venue, "SYNUSDT", edge - 1, now, false),
+                    fetchable_with(Some(row.venue), "SYNUSDT", edge - 1, now, false),
                     Fetchable::OutOfRetention
                 );
             }
         } else {
             assert_eq!(
-                fetchable(row.venue, "SYNUSDT", edge, now),
+                fetchable(Some(row.venue), "SYNUSDT", edge, now),
                 if row.archive.is_some() {
                     Fetchable::Archive
                 } else {
@@ -39,7 +148,7 @@ fn reach_table_matches_fetchable_at_retention_edges() {
                 }
             );
             assert_eq!(
-                fetchable_with(row.venue, "SYNUSDT", edge, now, false),
+                fetchable_with(Some(row.venue), "SYNUSDT", edge, now, false),
                 Fetchable::NoRoute
             );
         }
@@ -69,7 +178,7 @@ fn fetchable_uses_archive_beyond_rest_and_bounds_archive_depth() {
     ] {
         assert_eq!(
             fetchable(
-                Venue { brand, kind },
+                Some(Venue { brand, kind }),
                 "SYNUSDT",
                 now - age * 86_400_000,
                 now
@@ -172,22 +281,25 @@ fn kline_route_is_exact_for_reachable_and_synthetic_venue_pairs() {
 fn tick_value_follows_the_route_and_the_cores_contract_terms() {
     let v = |brand: Brand, kind: MarketKind| Venue { brand, kind };
     assert_eq!(
-        tick_value(v(Brand::Binance, MarketKind::Spot), Some(("", 100.0))),
+        tick_value(Some(v(Brand::Binance, MarketKind::Spot)), Some(("", 100.0))),
         TickValue::Base
     );
     assert_eq!(
-        tick_value(v(Brand::Binance, MarketKind::Futures), None),
+        tick_value(Some(v(Brand::Binance, MarketKind::Futures)), None),
         TickValue::Base
     );
     assert_eq!(
-        tick_value(v(Brand::Binance, MarketKind::Quarterly), Some(("", 100.0))),
+        tick_value(
+            Some(v(Brand::Binance, MarketKind::Quarterly)),
+            Some(("", 100.0))
+        ),
         TickValue::InverseContracts {
             usd_per_contract: 100.0
         }
     );
     assert_eq!(
         tick_value(
-            v(Brand::Gate, MarketKind::Futures),
+            Some(v(Brand::Gate, MarketKind::Futures)),
             Some(("USDT", 10_000.0))
         ),
         TickValue::LinearContracts {
@@ -195,16 +307,19 @@ fn tick_value_follows_the_route_and_the_cores_contract_terms() {
         }
     );
     assert_eq!(
-        tick_value(v(Brand::Okx, MarketKind::Futures), None),
+        tick_value(Some(v(Brand::Okx, MarketKind::Futures)), None),
         TickValue::Unknown
     );
     assert_eq!(
-        tick_value(v(Brand::Okx, MarketKind::Futures), Some(("USDT", 0.0))),
+        tick_value(
+            Some(v(Brand::Okx, MarketKind::Futures)),
+            Some(("USDT", 0.0))
+        ),
         TickValue::Unknown
     );
     // An empty quote beside a size of one is linear, as `market_quantity_unit` reads it.
     assert_eq!(
-        tick_value(v(Brand::Gate, MarketKind::Futures), Some(("", 1.0))),
+        tick_value(Some(v(Brand::Gate, MarketKind::Futures)), Some(("", 1.0))),
         TickValue::LinearContracts {
             coins_per_contract: 1.0
         }
@@ -407,7 +522,10 @@ fn bybit_archive_accepts_only_linear_symbols() {
         );
     }
     assert_eq!(archive_route(venue, "SYNUSD"), None);
-    assert_eq!(fetchable(venue, "SYNUSD", 1, 1000), Fetchable::NoRoute);
+    assert_eq!(
+        fetchable(Some(venue), "SYNUSD", 1, 1000),
+        Fetchable::NoRoute
+    );
 }
 
 /// Checking the left edge would refuse a trade whose exit remains within Gate spot retention.
@@ -420,10 +538,13 @@ fn gate_spot_crossing_29_day_edge_keeps_reachable_exit() {
         kind: MarketKind::Spot,
     };
     assert_eq!(
-        fetchable(venue, "SYNUSDT", hull.0, now),
+        fetchable(Some(venue), "SYNUSDT", hull.0, now),
         Fetchable::OutOfRetention
     );
-    assert_eq!(fetchable(venue, "SYNUSDT", hull.1, now), Fetchable::Rest);
+    assert_eq!(
+        fetchable(Some(venue), "SYNUSDT", hull.1, now),
+        Fetchable::Rest
+    );
 }
 
 /// Changing a path family, day separator or host breaks public daily archive downloads.

@@ -979,23 +979,30 @@ pub(super) fn held_tape(
     Some((answer.ticks, answer.covered, window))
 }
 
-/// Why a fetch of a row the terminal holds no tape for could only come back refused, said at
-/// load rather than after a walk: no public source for the venue, or a focus older than its
-/// REST and archive reach. `None` where the venue could serve it. The same rule the fetch
-/// job and the startup autoload apply (`fetchable`), asked here so the row does not
-/// read as fetchable — and is not queued — when it is not.
+/// Refuse windows beyond both public sources and the core archive before offering a fetch.
 fn unservable_status(address: &RowAddress, deal: &Deal, now_ms: i64) -> Option<TapeStatus> {
     let window = model_window(deal, margin_ms(), long_position_ms())?;
-    match fetchable(
-        address.venue,
-        &address.market,
-        window.focus_spans().hull()?.1,
-        now_ms,
-    ) {
+    let (from, to) = window.focus_spans().hull()?;
+    if address.venue.is_none() {
+        return (!super::fetch::job::reachable_after_station(
+            address.venue,
+            &address.market,
+            from,
+            to,
+            deal.close_ms,
+            now_ms,
+        ))
+        .then_some(TapeStatus::Refused(TickStatus::OutOfRetention {
+            retention_ms: moon_core::market::CORE_ARCHIVE_RETENTION_MS,
+        }));
+    }
+    match fetchable(address.venue, &address.market, to, now_ms) {
         Fetchable::Rest | Fetchable::Archive => None,
         Fetchable::NoRoute => Some(TapeStatus::Refused(TickStatus::NoRoute)),
         Fetchable::OutOfRetention => Some(TapeStatus::Refused(TickStatus::OutOfRetention {
-            retention_ms: trade_route(address.venue)
+            retention_ms: address
+                .venue
+                .and_then(trade_route)
                 .and_then(|route| route.retention_ms())
                 .unwrap_or(ARCHIVE_DEPTH_MS),
         })),
@@ -1252,3 +1259,6 @@ pub(in crate::analytics::tuner) mod replay_timing {
     /// `deltas::track_for`, the kline reads of the live deltas.
     pub(in crate::analytics::tuner) static KLINES: Slot = Slot::new();
 }
+
+#[cfg(test)]
+mod tests;

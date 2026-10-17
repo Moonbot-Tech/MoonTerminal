@@ -89,7 +89,6 @@ trade_window.empty.no_data: "Piyasada bu dönem için veri yok."
 
 trade_window.empty.no_endpoint: "%{brand} için bu derlemenin kullanacağı genel geçmiş kaynağı yok."
 
-trade_window.empty.unknown_venue: "Bu derleme çekirdeğin borsasını tanımıyor."
 
 trade_window.empty.core_offline: "İşlemin çekirdeği bağlı değil, borsa ve piyasa belirlenemiyor."
 

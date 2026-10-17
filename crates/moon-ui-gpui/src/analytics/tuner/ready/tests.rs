@@ -343,14 +343,39 @@ fn empty_fetch() -> Fetched {
 fn address() -> Arc<RowAddress> {
     Arc::new(RowAddress {
         core_uid: 1,
-        venue: moon_core::venue::Venue {
+        venue: Some(moon_core::venue::Venue {
             brand: moon_core::venue::Brand::Bybit,
             kind: moon_core::venue::MarketKind::Futures,
-        },
+        }),
         exchange_key: "2:00000000".into(),
         market: "XALPHAUSDT".into(),
         btc_market: None,
     })
+}
+
+/// Losing an unlisted address must not turn resolved rows into the pipeline's unaddressed set.
+#[test]
+fn unlisted_readiness_fetches_and_replays_resolved_rows() {
+    let mut address = address();
+    Arc::make_mut(&mut address).venue = None;
+    Arc::make_mut(&mut address).exchange_key = moon_core::fixture::unlisted::EXCHANGE_KEY.into();
+    let groups = vec![("200@1".into(), vec![(deal(200, 200, 1), Some(address))])];
+    let progress = ReadyProgress::default();
+    let counts = count_strategies(
+        groups,
+        fake_fetch,
+        fake_replay,
+        &progress,
+        ChunkLimits {
+            first_count: 1,
+            max_count: 1,
+            max_bytes: usize::MAX,
+        },
+        0,
+        0,
+    )
+    .expect("not cancelled");
+    assert_eq!(counts["200@1"].covered, 1);
 }
 
 /// A fake stage C read: the targets as rows, nothing asked of a worker.

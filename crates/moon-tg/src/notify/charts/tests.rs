@@ -40,6 +40,68 @@ fn ids(trades: &[ClosedTrade]) -> Vec<i64> {
     trades.iter().map(|t| t.rec_id).collect()
 }
 
+/// An unlisted exchange's recorded tape must draw without a directory venue or logo.
+#[test]
+fn unlisted_tape_draws_a_deal_picture() {
+    use moon_core::feed::{Side, Tick};
+    use moon_core::fixture::unlisted;
+    let source = unlisted::source(200);
+    let address = source.replay_address(200).unwrap();
+    assert!(address.venue.is_none());
+    let trade = ClosedTrade {
+        core: 200,
+        rec_id: 901,
+        coin: "XALPHA".into(),
+        buy_price: Some(10.0),
+        sell_price: Some(12.0),
+        profit_usd: Some(2.0),
+        ..ClosedTrade::default()
+    };
+    let tape = TradeTape {
+        exchange: address.exchange_key,
+        market: "XALPHA".into(),
+        open_ms: 100_000,
+        close_ms: 150_000,
+        settled: true,
+        covered: vec![(90_000, 153_000)],
+        ticks: vec![
+            Tick {
+                time_ms: 100_000.0,
+                price: 10.0,
+                qty: 1.0,
+                side: Side::Buy,
+            },
+            Tick {
+                time_ms: 150_000.0,
+                price: 12.0,
+                qty: 1.0,
+                side: Side::Sell,
+            },
+        ],
+    };
+    let spool = std::env::temp_dir().join(format!(
+        "unlisted-picture-{}-{}",
+        std::process::id(),
+        moon_core::util::now_unix_ms_i64()
+    ));
+    std::fs::create_dir_all(&spool).unwrap();
+    let file = draw_one(
+        &trade,
+        &tape,
+        &Lines::default(),
+        &Figures::of(&trade).unwrap(),
+        None,
+        chrono_tz::UTC,
+        &spool,
+    )
+    .expect("unlisted tape must draw");
+    let path = spool.join(file);
+    let png = std::fs::read(&path).unwrap();
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(spool).unwrap();
+}
+
 /// LinKvo's example, profit at least 100 or a loss of at least 12: either threshold sends, a
 /// result between them does not.
 #[test]

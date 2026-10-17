@@ -97,7 +97,10 @@ fn report_row<'a>(row: &'a DealRow, data: &'a TicksData) -> ReportRow<'a> {
         .map_or(&[][..], Vec::as_slice);
     ReportRow {
         deal,
-        venue: row.address.as_ref().map(|a| venue_name(a.venue)),
+        venue: row
+            .address
+            .as_ref()
+            .map(|a| venue_name(a.venue, &a.exchange_key)),
         tape: tape_class(row.tape),
         verdict: row.verdict.as_ref(),
         outside_model: outside,
@@ -129,11 +132,20 @@ fn tape_class(tape: TapeStatus) -> TapeClass {
     }
 }
 
-/// A venue as the report names it: the brand's own display name and the market in English. Not
+/// A venue as the report names it: a stable exchange code if unlisted, otherwise the brand
+/// and the market in English. Not
 /// `venue_label`, which localizes the market — the report is one text for every reader — and
 /// not `Debug`, whose spelling follows the variant names rather than the brand's.
-fn venue_name(venue: moon_core::venue::Venue) -> String {
+fn venue_name(venue: Option<moon_core::venue::Venue>, exchange_key: &str) -> String {
     use moon_core::venue::MarketKind;
+    let Some(venue) = venue else {
+        return exchange_key
+            .split(':')
+            .next()
+            .and_then(|code| code.parse().ok())
+            .map(moon_core::venue::unlisted_label)
+            .unwrap_or_else(|| exchange_key.to_owned());
+    };
     let market = match venue.kind {
         MarketKind::Spot => "Spot",
         MarketKind::Futures => "Futures",
@@ -192,3 +204,6 @@ fn save(text: &str) -> Result<PathBuf, String> {
     std::fs::write(&path, text).map_err(|e| e.to_string())?;
     Ok(path)
 }
+
+#[cfg(test)]
+mod tests;

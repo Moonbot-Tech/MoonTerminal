@@ -4,6 +4,173 @@ use crate::venue::{Brand, MarketKind};
 const DAY: i64 = 86_400_000;
 const NOW: i64 = 500 * DAY;
 
+/// The unlisted branch must leave Binance futures' REST plan and settlement fields unchanged.
+#[test]
+fn known_binance_futures_plan_snapshot() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let row = trade(206, Brand::Binance, MarketKind::Futures, DAY);
+    let shape = Shape {
+        margin_ms: 0,
+        long_ms: DAY,
+        tail_ms: 0,
+    };
+    let plan = plan_with(
+        &[row],
+        |_| Coverage::none(),
+        &HashMap::new(),
+        NOW,
+        &shape,
+        false,
+    );
+    let snapshot: Vec<_> = plan
+        .jobs
+        .iter()
+        .map(|job| {
+            (
+                job.trade.id.rec_id,
+                format!("{:?}", job.source),
+                job.missing
+                    .spans()
+                    .iter()
+                    .map(|&(from, to)| (from - NOW, to - NOW))
+                    .collect::<Vec<_>>(),
+                job.expires_at_ms - NOW,
+                job.tail_start_ms - NOW,
+            )
+        })
+        .collect();
+    assert_eq!(
+        format!("{snapshot:?}"),
+        "[(206, \"Rest(BinanceUsdMAggTrades)\", [(-86460000, -86400000)], 86340000, -86400000)]"
+    );
+    assert_eq!(
+        (
+            plan.complete,
+            plan.no_route,
+            plan.out_of_reach,
+            plan.too_fresh
+        ),
+        (0, 0, 0, 0)
+    );
+    assert!(
+        plan.complete_ids.is_empty()
+            && plan.permanent_ids.is_empty()
+            && plan.tail_final_ids.is_empty()
+    );
+}
+
+/// Restricting core recovery to tails would strand recent in-trade gaps on unlisted exchanges.
+#[test]
+fn unlisted_core_recovers_full_gap_and_finalizes_expired_remainder() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let hour = 3_600_000;
+    let mut row = trade(205, Brand::Binance, MarketKind::Futures, 10 * hour);
+    row.venue = None;
+    row.exchange = crate::fixture::unlisted::EXCHANGE_KEY.into();
+    row.core = Some(
+        crate::fixture::unlisted::source(row.id.core)
+            .replay_address(row.id.core)
+            .unwrap(),
+    );
+    let shape = Shape {
+        margin_ms: 0,
+        long_ms: 100 * DAY,
+        tail_ms: 0,
+    };
+    let recent = (row.open_ms, row.close_ms);
+    let planned = plan(
+        &[row.clone()],
+        |_| Coverage::none(),
+        &HashMap::new(),
+        NOW,
+        &shape,
+    );
+    assert_eq!(planned.jobs.len(), 1);
+    assert!(matches!(planned.jobs[0].source, Source::Core));
+    assert_eq!(planned.jobs[0].missing.spans(), &[recent]);
+    let result = executor::run_pass_with_core(
+        planned.jobs,
+        || NOW,
+        &gate::ReplayGate::new(),
+        (
+            no_rest,
+            no_archive,
+            Some(std::sync::Arc::new(move |ask| {
+                assert_eq!((ask.from_ms, ask.to_ms), recent);
+                (
+                    Some(crate::market::source::CoreReplayTicks {
+                        ticks: vec![],
+                        covered: recent,
+                        archive_answered: true,
+                    }),
+                    false,
+                )
+            })),
+        ),
+        0,
+        executor::run_job_at,
+        |_, _| {},
+    );
+    assert_eq!(result.finished[0].filed.spans(), &[recent]);
+
+    row.open_ms = NOW - 49 * hour;
+    row.close_ms = NOW - hour;
+    let split = Shape {
+        margin_ms: 1_000,
+        long_ms: hour,
+        tail_ms: 2_000,
+    };
+    let focus = needed(&row, &split);
+    let recent = *focus.spans().last().unwrap();
+    let mixed = plan(
+        &[row.clone()],
+        |_| Coverage::none(),
+        &HashMap::new(),
+        NOW,
+        &split,
+    );
+    assert_eq!(mixed.jobs.len(), 1);
+    assert_eq!(mixed.jobs[0].missing, focus);
+    assert!(
+        mixed.permanent_ids.is_empty(),
+        "the recent gap must finish before latching the row"
+    );
+    let expired = plan(
+        &[row.clone()],
+        |_| Coverage::one(recent),
+        &HashMap::new(),
+        NOW,
+        &split,
+    );
+    assert!(expired.jobs.is_empty());
+    assert_eq!(expired.permanent_ids, vec![row.id]);
+    let latched = HashMap::from([(row.id, Latch::Permanent)]);
+    assert!(
+        plan(
+            &[row.clone()],
+            |_| Coverage::one(recent),
+            &latched,
+            NOW,
+            &split
+        )
+        .jobs
+        .is_empty()
+    );
+
+    row.close_ms = NOW - 49 * hour;
+    row.open_ms = row.close_ms - 60_000;
+    let old = plan(
+        &[row.clone()],
+        |_| Coverage::one((row.open_ms - 1_000, row.close_ms + 1_000)),
+        &HashMap::new(),
+        NOW,
+        &split,
+    );
+    assert!(old.jobs.is_empty());
+    assert_eq!(old.permanent_ids, vec![row.id]);
+    assert_eq!(old.tail_final_ids, vec![row.id]);
+}
+
 /// A skipped second core ask is a budget deferral rather than a second failed network attempt.
 #[test]
 fn stopped_core_defers_without_a_failed_attempt() {
@@ -25,7 +192,11 @@ fn stopped_core_defers_without_a_failed_attempt() {
         vec![first, second],
         || NOW,
         &gate::ReplayGate::new(),
-        (no_rest, no_archive, Some(std::sync::Arc::new(|_| None))),
+        (
+            no_rest,
+            no_archive,
+            Some(std::sync::Arc::new(|_| (None, false))),
+        ),
         0,
         executor::run_job_at,
         |_, _| {},
@@ -40,19 +211,18 @@ fn stopped_core_defers_without_a_failed_attempt() {
 /// A span crossing the archive edge must recover its retained suffix instead of dropping it all.
 #[test]
 fn core_archive_clips_a_span_crossing_retention() {
-    use crate::market::{MarketDataSource, MarketStore};
     let _lock = SWITCH_LOCK.lock().unwrap();
-    let edge = NOW - executor::CORE_ARCHIVE_RETENTION_MS;
+    let edge = NOW - crate::market::source::CORE_ARCHIVE_RETENTION_MS;
     let mut row = job(204, Brand::Bybit, MarketKind::Futures);
     row.source = Source::Core;
-    row.tail_start_ms = edge - 1_000;
+    row.trade.venue = None;
+    row.tail_start_ms = NOW;
     row.missing = Coverage::one((edge - 100, edge + 100));
-    row.trade.core = Some(crate::market::source::ReplayAddress {
-        history: MarketDataSource::new(MarketStore::shared(0.0)),
-        venue: None,
-        exchange_key: "CORE_A".into(),
-        cache: None,
-    });
+    row.trade.core = Some(
+        crate::fixture::unlisted::source(row.trade.id.core)
+            .replay_address(row.trade.id.core)
+            .unwrap(),
+    );
     let result = executor::run_pass_with_core(
         vec![row],
         || NOW,
@@ -62,11 +232,14 @@ fn core_archive_clips_a_span_crossing_retention() {
             no_archive,
             Some(std::sync::Arc::new(move |ask| {
                 assert_eq!((ask.from_ms, ask.to_ms), (edge, edge + 100));
-                Some(crate::market::source::CoreReplayTicks {
-                    ticks: vec![],
-                    covered: (ask.from_ms, ask.to_ms),
-                    archive_answered: true,
-                })
+                (
+                    Some(crate::market::source::CoreReplayTicks {
+                        ticks: vec![],
+                        covered: (ask.from_ms, ask.to_ms),
+                        archive_answered: true,
+                    }),
+                    false,
+                )
             })),
         ),
         0,
@@ -103,7 +276,7 @@ fn core_outage_stops_repeated_asks_and_preserves_permanent_refusal() {
             no_archive,
             Some(std::sync::Arc::new(move |_| {
                 counted.fetch_add(1, Ordering::Relaxed);
-                None
+                (None, false)
             })),
         ),
         0,
@@ -158,11 +331,14 @@ fn core_archive_asks_are_capped_per_pass() {
             no_archive,
             Some(std::sync::Arc::new(move |ask| {
                 counted.fetch_add(1, Ordering::Relaxed);
-                Some(crate::market::source::CoreReplayTicks {
-                    ticks: vec![],
-                    covered: (ask.from_ms, ask.to_ms),
-                    archive_answered: true,
-                })
+                (
+                    Some(crate::market::source::CoreReplayTicks {
+                        ticks: vec![],
+                        covered: (ask.from_ms, ask.to_ms),
+                        archive_answered: true,
+                    }),
+                    false,
+                )
             })),
         ),
         0,
@@ -225,9 +401,10 @@ fn core_archive_tail_respects_retention_coverage_and_venue_priority() {
         NOW,
         &shape,
     );
-    assert!(gap.jobs.is_empty());
+    assert_eq!(gap.jobs.len(), 1);
+    assert!(matches!(gap.jobs[0].source, Source::Core));
     assert_eq!(gap.no_route, 0);
-    assert_eq!(gap.permanent_ids, vec![row.id]);
+    assert!(gap.permanent_ids.is_empty());
     assert!(gap.tail_final_ids.is_empty());
     let mut without_core = row.clone();
     without_core.core = None;
@@ -245,11 +422,14 @@ fn core_archive_tail_respects_retention_coverage_and_venue_priority() {
     let counted = calls.clone();
     let core: executor::CoreSpanFetch = Arc::new(move |ask| {
         counted.fetch_add(1, Ordering::Relaxed);
-        Some(CoreReplayTicks {
-            ticks: vec![],
-            covered: (ask.from_ms, ask.to_ms),
-            archive_answered: true,
-        })
+        (
+            Some(CoreReplayTicks {
+                ticks: vec![],
+                covered: (ask.from_ms, ask.to_ms),
+                archive_answered: true,
+            }),
+            false,
+        )
     });
     let mut filed = Coverage::none();
     let result = executor::run_pass_with_core(
@@ -275,7 +455,7 @@ fn core_archive_tail_respects_retention_coverage_and_venue_priority() {
         vec![job.clone()],
         || NOW,
         &gate::ReplayGate::new(),
-        (good_rest, no_archive, Some(Arc::new(|_| None))),
+        (good_rest, no_archive, Some(Arc::new(|_| (None, false)))),
         0,
         executor::run_job_at,
         |_, _| {},
@@ -283,9 +463,9 @@ fn core_archive_tail_respects_retention_coverage_and_venue_priority() {
     assert_eq!(failed.finished[0].failure, Some(executor::Failure::Retry));
     assert!(failed.finished[0].fault.is_some());
 
-    // One millisecond outside the core's reach must finalise rather than schedule a read.
+    // A tail ending one millisecond outside the core's reach must finalise without a read.
     let mut old = row.clone();
-    old.close_ms = NOW - executor::CORE_ARCHIVE_RETENTION_MS - 30_002;
+    old.close_ms = NOW - crate::market::source::CORE_ARCHIVE_RETENTION_MS - 60_001;
     old.open_ms = old.close_ms - 60_000;
     let old_held = Coverage::one((old.open_ms - 30_000, old.close_ms + 30_000));
     let expired = plan(
@@ -298,10 +478,29 @@ fn core_archive_tail_respects_retention_coverage_and_venue_priority() {
     assert!(expired.jobs.is_empty());
     assert_eq!(expired.tail_final_ids, vec![old.id]);
     let mut expired_job = job.clone();
-    expired_job.tail_start_ms = old.close_ms + 30_000;
-    expired_job.missing = Coverage::one((old.close_ms + 30_001, old.close_ms + 60_000));
+    let edge = NOW - crate::market::source::CORE_ARCHIVE_RETENTION_MS;
+    expired_job.tail_start_ms = edge - 60_000;
+    expired_job.missing = Coverage::one((edge - 60_000, edge - 1));
     executor::run_pass_with_core(
         vec![expired_job],
+        || NOW,
+        &gate::ReplayGate::new(),
+        (good_rest, no_archive, Some(core.clone())),
+        0,
+        executor::run_job_at,
+        |_, _| {},
+    );
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        1,
+        "expired jobs make zero core asks"
+    );
+    let mut crossing_job = job.clone();
+    let edge = NOW - crate::market::source::CORE_ARCHIVE_RETENTION_MS;
+    crossing_job.tail_start_ms = edge - 2;
+    crossing_job.missing = Coverage::one((edge - 1, edge + 30_000));
+    executor::run_pass_with_core(
+        vec![crossing_job],
         || NOW,
         &gate::ReplayGate::new(),
         (good_rest, no_archive, Some(core.clone())),
@@ -367,11 +566,14 @@ fn core_archive_tail_files_only_reported_coverage() {
             good_rest,
             no_archive,
             Some(std::sync::Arc::new(|_| {
-                Some(crate::market::source::CoreReplayTicks {
-                    ticks: vec![tick(NOW - 80_000)],
-                    covered: (NOW - 85_000, NOW - 70_000),
-                    archive_answered: true,
-                })
+                (
+                    Some(crate::market::source::CoreReplayTicks {
+                        ticks: vec![tick(NOW - 80_000)],
+                        covered: (NOW - 85_000, NOW - 70_000),
+                        archive_answered: true,
+                    }),
+                    false,
+                )
             })),
         ),
         0,

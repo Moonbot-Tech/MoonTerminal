@@ -143,9 +143,9 @@ impl QueuedRow {
     }
 }
 
-/// Whole missing windows use the usual exit reach; short tails use their first missing stamp.
-pub(super) fn reachable_after_station(
-    venue: moon_core::venue::Venue,
+/// Known venues keep their source reach; unlisted windows need overlap with core retention.
+pub(in crate::analytics::tuner) fn reachable_after_station(
+    venue: Option<moon_core::venue::Venue>,
     market: &str,
     from_ms: i64,
     to_ms: i64,
@@ -157,7 +157,11 @@ pub(super) fn reachable_after_station(
     matches!(
         fetchable(venue, market, venue_from, now_ms),
         Fetchable::Rest | Fetchable::Archive
-    ) || from_ms >= now_ms.saturating_sub(super::autoload::CORE_HORIZON_MS)
+    ) || if venue.is_none() {
+        to_ms >= now_ms.saturating_sub(moon_core::market::CORE_ARCHIVE_RETENTION_MS)
+    } else {
+        from_ms >= now_ms.saturating_sub(moon_core::market::CORE_ARCHIVE_RETENTION_MS)
+    }
 }
 
 /// What the job tells whoever listens.

@@ -33,8 +33,8 @@ pub(crate) struct RecorderCatchup {
     pending: HashMap<TradeId, CatchupTrade>,
     latched: HashMap<TradeId, Latch>,
     complete: HashSet<TradeId>,
-    /// Clean incomplete tail passes are bounded independently of ordinary hourly retries.
-    tail_tries: HashMap<TradeId, u8>,
+    /// Cap clean core answers for tails and unlisted gaps independently of hourly retries.
+    core_gap_tries: HashMap<TradeId, u8>,
     /// Final tail IDs remain countable until a setting change or retention expires them.
     tail_final: HashSet<TradeId>,
     /// Retained coverage can outlive catch-up's shorter archive-reach settlement horizon.
@@ -491,7 +491,7 @@ impl RecorderCatchup {
             self.complete.insert(id);
             self.tape_complete.insert(id);
             self.pending.remove(&id);
-            self.tail_tries.remove(&id);
+            self.core_gap_tries.remove(&id);
         }
         self.publish_pending();
         batch
@@ -518,7 +518,7 @@ impl RecorderCatchup {
             self.latched.retain(|_, latch| *latch != Latch::Permanent);
             self.complete.clear();
             self.tape_complete.clear();
-            self.tail_tries.clear();
+            self.core_gap_tries.clear();
             self.tail_final.clear();
             for trade in self.known.values() {
                 self.pending.insert(trade.id, trade.clone());
@@ -564,7 +564,7 @@ impl RecorderCatchup {
         {
             self.complete.remove(&trade.id);
             self.latched.remove(&trade.id);
-            self.tail_tries.remove(&trade.id);
+            self.core_gap_tries.remove(&trade.id);
             self.tail_final.remove(&trade.id);
         }
         let expired: Vec<_> = self
@@ -576,7 +576,7 @@ impl RecorderCatchup {
         for id in expired {
             self.complete.remove(&id);
             self.latched.remove(&id);
-            self.tail_tries.remove(&id);
+            self.core_gap_tries.remove(&id);
             self.tail_final.remove(&id);
             if !self.pending.contains_key(&id) {
                 self.known.remove(&id);
@@ -664,7 +664,7 @@ impl RecorderCatchup {
         }
     }
 
-    /// Settle after all filing commands; a reserve refusal or failed write must remain missing.
+    /// Settle after filing; cap clean unfilled core-only gaps while keeping failed writes retryable.
     pub(crate) fn finish(&mut self, cache: &TradeCache, result: PassResult, now_ms: i64) {
         if self.maintenance_busy() {
             self.deferred_finish = Some((result, now_ms));
@@ -699,16 +699,31 @@ impl RecorderCatchup {
             }
             let remaining = job.missing.minus(&held);
             let complete = read_answered && remaining.is_empty();
-            if complete {
+            let expired_core_gap = job.trade.venue.is_none()
+                && read_answered
+                && !remaining.is_empty()
+                && remaining.spans().iter().all(|&(_, to)| {
+                    to < now_ms.saturating_sub(crate::market::CORE_ARCHIVE_RETENTION_MS)
+                });
+            if expired_core_gap {
+                // Keep retained recovery successful without calling expired coverage complete.
+                self.pending.remove(&job.trade.id);
+                self.latched.insert(job.trade.id, Latch::Permanent);
+                self.core_gap_tries.remove(&job.trade.id);
+                if tail_only(&remaining, job.tail_start_ms) {
+                    self.tail_final.insert(job.trade.id);
+                }
+            } else if complete {
                 self.pending.remove(&job.trade.id);
                 self.latched.remove(&job.trade.id);
-                self.tail_tries.remove(&job.trade.id);
+                self.core_gap_tries.remove(&job.trade.id);
                 if self.complete.insert(job.trade.id) {
                     filled += 1;
                 }
                 self.tape_complete.insert(job.trade.id);
             } else {
-                let clean_tail = finished.attempted
+                let is_tail = tail_only(&remaining, job.tail_start_ms);
+                let clean_core_gap = finished.attempted
                     && finished.failure.is_none()
                     && finished.fault.is_none()
                     && read_answered
@@ -716,14 +731,16 @@ impl RecorderCatchup {
                     && !self
                         .refused
                         .contains(&(job.trade.exchange.clone(), job.trade.market.clone()))
-                    && tail_only(&remaining, job.tail_start_ms);
-                let final_tail = clean_tail && {
-                    let tries = self.tail_tries.entry(job.trade.id).or_default();
+                    && (is_tail || job.trade.venue.is_none());
+                let final_gap = clean_core_gap && {
+                    let tries = self.core_gap_tries.entry(job.trade.id).or_default();
                     *tries = tries.saturating_add(1);
                     *tries >= 2
                 };
-                if final_tail {
-                    self.tail_final.insert(job.trade.id);
+                if final_gap {
+                    if is_tail {
+                        self.tail_final.insert(job.trade.id);
+                    }
                     self.pending.remove(&job.trade.id);
                     self.latched.insert(job.trade.id, Latch::Permanent);
                 } else {

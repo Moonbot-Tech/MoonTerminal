@@ -609,6 +609,11 @@ retention. Two answered, incomplete tail-only passes with successful filing fina
 deferred or failed reads remain retryable, and status counts finalised tails in `tail_final`.
 The terminal requests station tails before enqueueing the remaining missing tape.
 
+An exchange absent from the venue directory is keyed by its exchange key (code + dex) and
+market, never its display caption. Its core is the only source of past prints within the
+48-hour archive retention, shared by recorder catch-up and trade replay. Coverage beyond
+that retention is final and is never retried.
+
 ### The order-trace archive (`order_traces.sqlite`)
 
 The core serves traces of closed trades on `request_traces(ReportUID)` from an archive

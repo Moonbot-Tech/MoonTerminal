@@ -438,3 +438,16 @@ fn an_unknown_venue_resolves_without_a_venue() {
         Err(ReplayAddressError::NotConnected)
     ));
 }
+/// Missing catalog terms must never guess base valuation for an unlisted core.
+#[test]
+fn venue_caps_unlisted_replay_without_terms_is_unknown() {
+    let source = crate::fixture::unlisted::source(42);
+    assert_eq!(
+        source.replay_tick_value(42, "XALPHA"),
+        crate::market::trade_replay::venue_caps::TickValue::Unknown,
+    );
+    assert_eq!(
+        source.replay_tick_value(99, "XALPHA"),
+        crate::market::trade_replay::venue_caps::TickValue::Unknown,
+    );
+}

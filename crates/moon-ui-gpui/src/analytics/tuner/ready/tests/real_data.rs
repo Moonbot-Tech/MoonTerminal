@@ -152,7 +152,7 @@ fn addresses(
         out.entry((deal.core_uid, deal.coin.clone()))
             .or_insert_with(|| {
                 let &(code, dex) = exchanges.get(&deal.core_uid)?;
-                let venue = moon_core::venue::venue(code)?;
+                let venue = moon_core::venue::venue(code);
                 let exchange_key = format!("{code}:{dex:08x}");
                 let coin = coin_match_key(&deal.coin);
                 let mut markets: Vec<&String> = inventory

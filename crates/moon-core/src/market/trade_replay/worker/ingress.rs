@@ -21,7 +21,12 @@ pub fn request(request: TradeReplayRequest) {
 /// Args:
 ///     request: The trade and where its core is.
 pub fn capture(request: CaptureRequest) {
-    send(Inbound::Capture(request));
+    capture_with(request, send);
+}
+
+/// Submit an already resolved close without requiring directory membership or catalog access.
+pub(super) fn capture_with(request: CaptureRequest, submit: impl FnOnce(Inbound)) {
+    submit(Inbound::Capture(request));
 }
 
 /// Queue one read of the held prints for some stretches of a market — see [`TickQuery`].

@@ -1,6 +1,17 @@
 use super::remembered_geometry;
 use moon_core::config::layout::GeomRect;
 
+/// An unbranded core must retain its reported exchange name in the no-route caption.
+#[test]
+fn unlisted_no_route_caption_names_the_exchange() {
+    let venue = moon_core::venue::CoreVenue::identify(
+        moon_core::fixture::unlisted::CODE,
+        "",
+        Some(moon_core::fixture::unlisted::CAPTION),
+    );
+    assert_eq!(super::render::no_route_brand(None, Some(&venue)), "EX-XX");
+}
+
 /// New tick groups must replace a streaming snapshot without reframing or reverting to candles.
 #[test]
 fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {

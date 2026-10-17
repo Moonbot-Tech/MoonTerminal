@@ -318,7 +318,7 @@ impl SessionManager {
         let market_source = MarketDataSource::new(market.clone());
         let catchup_source = market_source.clone();
         crate::market::tape_recorder::catchup::set_core_fetch(Arc::new(move |ask| {
-            catchup_source.capture_core_span(
+            catchup_source.capture_core_span_answer(
                 &ask.address,
                 &ask.market,
                 ask.from_ms,
@@ -1027,8 +1027,7 @@ impl SessionManager {
         if open_ms <= 0 || close_ms < open_ms {
             return;
         }
-        // A venue the exchange directory does not know (`venue: None`) is recorded live like any
-        // other; only the recorder's REST catch-up leaves it out.
+        // Recording and core catch-up use exchange identity even without a public venue route.
         crate::market::tape_recorder::trade_closed(
             &address.exchange_key,
             &market,
@@ -1041,11 +1040,6 @@ impl SessionManager {
         // `trades.sqlite` is the terminal's capture; a station keeps its tape in the recorder's
         // own file and never opens this one (STATION.md §4.3).
         if crate::feed::station::enabled() {
-            return;
-        }
-        // The trade window serves an unknown venue from its core's own prints only and never
-        // reads these tiles for it, so they are not filed.
-        if address.venue.is_none() {
             return;
         }
         crate::market::trade_replay::worker::capture(

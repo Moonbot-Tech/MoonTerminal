@@ -89,7 +89,6 @@ trade_window.empty.no_data: "За цей час на ринку немає да�
 
 trade_window.empty.no_endpoint: "У %{brand} немає публічного джерела історії, з яким працює ця збірка."
 
-trade_window.empty.unknown_venue: "Ця збірка не розпізнає біржу ядра."
 
 trade_window.empty.core_offline: "Ядро угоди не підключено, тож біржу й ринок не визначити."
 

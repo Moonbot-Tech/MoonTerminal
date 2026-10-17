@@ -434,3 +434,8 @@ fn gate_and_htx_never_fold() {
         );
     }
 }
+/// Diagnostic identity must remain code-derived even when the core reports a caption.
+#[test]
+fn venue_caps_unlisted_label_is_code_derived() {
+    assert_eq!(super::unlisted_label(200), "#200");
+}
