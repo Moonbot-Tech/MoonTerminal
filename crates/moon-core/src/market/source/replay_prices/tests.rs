@@ -53,7 +53,7 @@ fn replay_price_lines_clip_marks_and_discard_invalid_prices() {
     assert!(out.last_points.is_empty());
 }
 
-/// An unavailable provider must clear stale replay lines without replacing candles or prints.
+/// An unavailable provider clears stale lines and stays retryable without replacing other data.
 #[test]
 fn replay_price_lines_clear_stale_buffers_when_provider_is_unavailable() {
     let source =
@@ -69,8 +69,14 @@ fn replay_price_lines_clear_stale_buffers_when_provider_is_unavailable() {
         ..Default::default()
     });
     assert_eq!(
-        source.read_replay_price_lines(1, "SYNTHETIC", (1000, 3000), &mut out),
-        1
+        source.read_replay_price_lines(
+            1,
+            "SYNTHETIC",
+            (1000, 3000),
+            &mut out,
+            &mut crate::market::ChartHistoryCursor::default(),
+        ),
+        None
     );
     assert!(out.last_points.is_empty() && out.mark_points.is_empty());
     assert_eq!(out.candles.len(), 1);

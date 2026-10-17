@@ -7,6 +7,31 @@ use moon_core::market::candles::{
 
 use super::window::{chart_history_floor_ms, hide_start_rel};
 
+/// A live tick must not re-copy frozen replay price lines; a late archive merge must do so.
+#[test]
+fn replay_history_ignores_live_ticks_but_reads_archive_merges() {
+    let mut revisions = moon_core::market::MarketRevisions {
+        history: 100,
+        archive: 7,
+        ..Default::default()
+    };
+    let initial = super::history_signature(Some(revisions), true);
+    let mut reads = 0;
+    for tick in 101..201 {
+        revisions.history = tick;
+        revisions.meta = tick;
+        if super::history_signature(Some(revisions), true) != initial {
+            reads += 1;
+        }
+    }
+    assert_eq!(reads, 0);
+    let live = super::history_signature(Some(revisions), false);
+    revisions.history += 1;
+    assert_ne!(super::history_signature(Some(revisions), false), live);
+    revisions.archive += 1;
+    assert_ne!(super::history_signature(Some(revisions), true), initial);
+}
+
 /// Losing the composed bar's own duration makes the backend cull a visible minute range as
 /// though it were a five-second mini-candle, recreating the daily chart's narrow sliver.
 #[test]

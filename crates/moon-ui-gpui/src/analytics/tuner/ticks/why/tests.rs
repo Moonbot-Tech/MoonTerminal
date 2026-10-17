@@ -1,5 +1,6 @@
 //! Synthetic deal reasons protect sample membership, translation coverage and independent marks.
 
+use crate::analytics::tuner::ticks::tail::Admission;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -369,7 +370,7 @@ fn missing_tape_offers_fetch_only_with_a_resolved_source() {
         market: "XALPHAUSDT".into(),
         btc_market: None,
     }));
-    assert!(row.fetchable_at(0, 60));
+    assert!(row.fetchable_with(&Admission::at(60, 0)));
     assert_eq!(
         DealWhy::of(&row, 60, 0),
         DealWhy::NoTape { fetchable: true }

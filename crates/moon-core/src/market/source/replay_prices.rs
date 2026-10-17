@@ -1,6 +1,6 @@
 //! Retained price lines for a trade replay, independent of live chart cursors.
 
-use super::{ChartHistoryBuffers, MarketDataSource, price_rows_to_points};
+use super::{ChartHistoryBuffers, ChartHistoryCursor, MarketDataSource, price_rows_to_points};
 use crate::feed::PricePoint;
 use crate::session::CoreId;
 
@@ -10,56 +10,51 @@ impl MarketDataSource {
     /// Bounds are inclusive UTC milliseconds and already clipped to the replay window. The
     /// shared archive gate requests missing history without blocking; an archive notification
     /// causes the chart to read again. Missing mark history remains empty, including on spot.
-    /// Returns the capacity needed by either line, without changing any live consumer cursor.
+    /// Reuses this replay consumer's row scratch without advancing any live consumer cursor.
+    /// Returns the capacity needed by either line, or `None` until provider readers are ready.
     pub fn read_replay_price_lines(
         &self,
         core: CoreId,
         market: &str,
         window: (i64, i64),
         out: &mut ChartHistoryBuffers,
-    ) -> usize {
+        cursor: &mut ChartHistoryCursor,
+    ) -> Option<usize> {
         out.last_points.clear();
         out.mark_points.clear();
-        let Some((provider, client, epoch, archive)) = ({
+        let (provider, client, epoch, archive) = {
             let inner = self.inner.read().expect("market source poisoned");
             inner.core_provider.get(&core).and_then(|provider| {
                 let (client, epoch) = inner.clients.get(provider)?.get_with_epoch()?;
                 Some((*provider, client, epoch, inner.archive.clone()))
             })
-        }) else {
-            return 1;
-        };
-        let Some(readers) = client
+        }?;
+        let readers = client
             .snapshot_versioned()
-            .and_then(|snapshot| snapshot.market_history_readers(market))
-        else {
-            return 1;
-        };
+            .and_then(|snapshot| snapshot.market_history_readers(market))?;
         archive.request(provider, market, &client, epoch);
         if window.0 > window.1 {
-            return 1;
+            return Some(1);
         }
         if let Some(reader) = readers.last_prices {
-            let mut rows = Vec::new();
             reader.copy_time_range_ms(
                 window.0,
                 window.1.saturating_add(1),
                 reader.capacity(),
-                &mut rows,
+                &mut cursor.last_price_rows,
             );
-            price_rows_to_points(&rows, &mut out.last_points);
+            price_rows_to_points(&cursor.last_price_rows, &mut out.last_points);
         }
         if let Some(reader) = readers.mark_prices {
-            let mut rows = Vec::new();
             reader.copy_time_range_ms(
                 window.0,
                 window.1.saturating_add(1),
                 reader.capacity(),
-                &mut rows,
+                &mut cursor.mark_price_rows,
             );
-            price_rows_to_points(&rows, &mut out.mark_points);
+            price_rows_to_points(&cursor.mark_price_rows, &mut out.mark_points);
         }
-        prepare_replay_price_lines(window, out)
+        Some(prepare_replay_price_lines(window, out))
     }
 }
 

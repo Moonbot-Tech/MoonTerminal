@@ -97,7 +97,7 @@ impl QueuedRow {
     pub(super) fn fetchable_after_station(&self, now_ms: i64) -> bool {
         use moon_core::db::tuner::ticks::tail::{floor_ms, required_with_floor};
         use moon_core::market::trade_replay::trade_cache;
-        let need = required_with_floor(&self.window, floor_ms(super::super::tail::current_s()));
+        let need = required_with_floor(&self.window, floor_ms(super::super::tail::effective_s()));
         let Some((from, to)) = need.hull() else {
             return false;
         };
@@ -166,7 +166,7 @@ pub(in crate::analytics::tuner) fn reachable_after_station(
 
 /// What the job tells whoever listens.
 pub(in crate::analytics::tuner) enum JobEvent {
-    /// Station tape reached disk; the open view must re-read its held queries.
+    /// Station filing or refusal changed; the view must reload tape for the current sample.
     StationFilled,
     /// A request went out for this row.
     Started(i64),
@@ -180,7 +180,7 @@ pub(in crate::analytics::tuner) enum JobEvent {
     Released(i64),
 }
 
-/// Notify an attached view after a station fill, even when no venue rows remain.
+/// Notify an attached view after station filing or refusal, even without queued venue rows.
 pub(super) fn station_filled() {
     lock(job()).notify(JobEvent::StationFilled);
 }
@@ -1374,6 +1374,7 @@ fn serve_cluster(
     let covered_ms = walk_covered.width_ms();
     // Every row on its own off the tiles: the walk's one answer says how the venue behaved,
     // the coverage says which rows it reached.
+    let admission = super::super::tail::Admission::current();
     for (position, mut row) in rows.into_iter().enumerate() {
         let uid = row.deal.report_uid;
         let replayed_at = Instant::now();
@@ -1398,11 +1399,9 @@ fn serve_cluster(
         // Pad coverage reproduces the fact but does not finish a requested short-tail refill.
         // Keep the existing retry/continuation budget until that tail reaches the sample floor.
         let pending_tape = if answer.reproduced()
-            && !super::super::tail::holds(answer.held)
-            && !answer.short_tail_at(
-                super::super::tail::effective_s(),
-                chrono::Utc::now().timestamp_millis(),
-            ) {
+            && !admission.holds(answer.held)
+            && !answer.short_tail_with(&admission)
+        {
             TapeStatus::Missing
         } else {
             answer.tape

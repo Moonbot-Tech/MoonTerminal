@@ -26,6 +26,7 @@
 //! `MOON_READY_BENCH_SEED` (1), `MOON_READY_BENCH_RESTARTS` (10). The variables are read HERE
 //! only; the application never moves its data root on one.
 
+use crate::analytics::tuner::ticks::tail::Admission;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -416,7 +417,7 @@ fn ready_real_data_bench() {
                 row.tape,
                 row.fit(),
                 row.ticks.is_some(),
-                row.fetchable_at(now_ms, min_tail_s),
+                row.fetchable_with(&Admission::at(min_tail_s, now_ms)),
                 row.held,
                 row.verdict
             );

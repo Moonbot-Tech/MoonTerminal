@@ -37,8 +37,11 @@ pub(super) fn station_available() -> bool {
 }
 
 /// Count recoverable rows and station candidates not already refused in this generation.
-pub(super) fn station_load_candidate(row: &super::state::DealRow, now_ms: i64) -> bool {
-    if !row.station_candidate() {
+pub(super) fn station_load_candidate(
+    row: &super::state::DealRow,
+    admission: &super::tail::Admission,
+) -> bool {
+    if !row.station_candidate_with(admission) {
         return false;
     }
     let Some(address) = &row.address else {
@@ -63,8 +66,8 @@ pub(super) fn station_load_candidate(row: &super::state::DealRow, now_ms: i64) -
         from,
         to,
         row.deal.close_ms,
-        now_ms,
-    ) || station::candidate(row.deal.report_uid)
+        admission.now_ms,
+    ) || admission.candidate(row.deal.report_uid)
 }
 
 /// How long one blocking receive holds a background-pool thread before checking back.
@@ -233,11 +236,15 @@ fn schema_default(type_name: &str, default: Option<&str>) -> Option<f64> {
 }
 
 impl AnalyticsView {
-    /// Re-read covered short rows as well as refusals after a station writes new tape.
+    /// Re-read tape after filing or refusal changes so newly admitted tails regain their tape.
     pub(super) fn refresh_station_tape(&mut self, cx: &mut Context<Self>) {
         let generation = station::filed_generation();
-        if generation != self.ticks.station_generation {
+        let refusal_revision = station::refusal_revision();
+        if generation != self.ticks.station_generation
+            || refusal_revision != self.ticks.station_refusal_revision
+        {
             self.ticks.station_generation = generation;
+            self.ticks.station_refusal_revision = refusal_revision;
             self.ticks.judged_under = None;
             self.reload_ticks(cx);
         }
@@ -271,16 +278,18 @@ impl AnalyticsView {
         let backend = self.backend.read(cx);
         let resolver = FetchResolver::of(backend);
         let now_ms = moon_core::util::time::now_unix_ms_i64();
+        let admission = super::tail::Admission::at(super::tail::effective_s(), now_ms);
         let station_first = autoload::station_target().is_some();
         let mut rows: Vec<job::QueuedRow> = data
             .rows
             .iter()
             .filter(|row| {
                 if station_first {
-                    row.station_candidate()
-                        && (origin == job::RowOrigin::User || station_load_candidate(row, now_ms))
+                    row.station_candidate_with(&admission)
+                        && (origin == job::RowOrigin::User
+                            || station_load_candidate(row, &admission))
                 } else {
-                    row.fetchable_at(now_ms, super::tail::effective_s())
+                    row.fetchable_with(&admission)
                 }
             })
             .filter(|row| origin == job::RowOrigin::User || row.autoload_ready_at(now_ms))

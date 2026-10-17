@@ -11,6 +11,7 @@ pub(in crate::analytics::tuner) struct Classified {
     rows_rev: u64,
     min_tail_s: u32,
     source_switches: (bool, bool),
+    refusal_revision: u64,
     at_ms: i64,
     valid_until_ms: i64,
     chips: Vec<DealChip>,
@@ -46,25 +47,28 @@ fn next_source_change(row: &DealRow, min_tail_s: u32, now_ms: i64) -> Option<i64
     .min()
 }
 
-/// Reuse classification until a source switch, retention edge, row or floor changes.
+/// Reuse classification until a refusal, source switch, retention edge, row or floor changes.
 fn classify(state: &mut TicksState, min_tail_s: u32, now_ms: i64) {
     let source_switches = super::tail::switches();
+    let refusal_revision = super::fetch::station::refusal_revision();
     if state.classified.as_ref().is_some_and(|c| {
         c.rows_rev == state.rows_rev
             && c.min_tail_s == min_tail_s
             && c.source_switches == source_switches
+            && c.refusal_revision == refusal_revision
             && now_ms >= c.at_ms
             && now_ms < c.valid_until_ms
     }) {
         return;
     }
+    let admission = super::tail::Admission::at(min_tail_s, now_ms);
     let chips = state
         .data
         .data()
         .map(|d| {
             d.rows
                 .iter()
-                .map(|r| DealWhy::of(r, min_tail_s, now_ms).chip())
+                .map(|r| DealWhy::of_with(r, &admission).chip())
                 .collect()
         })
         .unwrap_or_default();
@@ -84,6 +88,7 @@ fn classify(state: &mut TicksState, min_tail_s: u32, now_ms: i64) {
         rows_rev: state.rows_rev,
         min_tail_s,
         source_switches,
+        refusal_revision: admission.refusal_revision,
         at_ms: now_ms,
         valid_until_ms,
         chips,

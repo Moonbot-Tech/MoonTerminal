@@ -93,6 +93,7 @@ impl AnalyticsView {
         // sample the variants run on.
         let now_ms = chrono::Utc::now().timestamp_millis();
         let min_tail_s = tail::effective_s();
+        let admission = tail::Admission::at(min_tail_s, now_ms);
         let drawn = rows::order_for(&mut self.ticks, min_tail_s, now_ms).len();
         let counts = rows::counts_at(&mut self.ticks, min_tail_s, now_ms);
         let only_fit = self.ticks.only_fit;
@@ -111,7 +112,7 @@ impl AnalyticsView {
                 if fetch::station_available() {
                     d.rows
                         .iter()
-                        .filter(|row| fetch::station_load_candidate(row, now_ms))
+                        .filter(|row| fetch::station_load_candidate(row, &admission))
                         .count()
                 } else {
                     d.fetchable_at(now_ms, min_tail_s).count()

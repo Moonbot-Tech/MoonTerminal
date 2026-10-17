@@ -52,9 +52,10 @@ impl Readiness {
         min_tail_s: u32,
     ) -> Self {
         let mut out = Self::default();
+        let admission = super::tail::Admission::at(min_tail_s, now_ms);
         for row in rows {
             out.deals += 1;
-            let chip = DealWhy::of(row, min_tail_s, now_ms).chip();
+            let chip = DealWhy::of_with(row, &admission).chip();
             out.fit += usize::from(matches!(chip, DealChip::Fit | DealChip::AcceptedShortTail));
             out.no_tape += usize::from(chip == DealChip::NoTape);
             out.short_tail += usize::from(chip == DealChip::ShortTail);
@@ -64,7 +65,7 @@ impl Readiness {
             if DealChip::tape(row) == Some(DealChip::WithTape) {
                 out.covered += 1;
             }
-            if row.fetchable_at(now_ms, min_tail_s) {
+            if row.fetchable_with(&admission) {
                 out.fetchable += 1;
             }
         }

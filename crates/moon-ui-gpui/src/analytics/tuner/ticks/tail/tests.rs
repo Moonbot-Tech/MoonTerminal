@@ -1,5 +1,6 @@
 //! The shortest tail a deal must hold.
 
+use crate::analytics::tuner::ticks::tail::Admission;
 use moon_core::db::tuner::ticks::tail::{MAX_MIN_TAIL_S, floor_ms};
 
 use super::{current_s, effective_s, parse_s, reaches};
@@ -154,8 +155,8 @@ fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
         held: Some((30_000, 30_000)),
     };
     assert!(row.fit(), "an old unfillable short tail remains usable");
-    assert!(!row.station_candidate());
-    assert!(!row.fetchable_at(500_000_000, 60));
+    assert!(!row.station_candidate_with(&super::Admission::current()));
+    assert!(!row.fetchable_with(&Admission::at(60, 500_000_000)));
     let window = replay_window_ms(100_000, 110_000, 30_000).unwrap();
     let focus = moon_core::db::tuner::ticks::tail::focus_with_tail(&window, 60_000);
     let covered = Coverage::one((70_000, 170_000)).clip(&focus);
@@ -163,14 +164,14 @@ fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
     row.held = Some((row.deal.buy_ms - from, to - row.deal.close_ms));
     assert_eq!(row.held, Some((30_000, 60_000)));
     assert!(row.fit());
-    assert!(!row.station_candidate());
+    assert!(!row.station_candidate_with(&super::Admission::current()));
     for status in [
         TickStatus::NoRoute,
         TickStatus::OutOfRetention { retention_ms: 1 },
     ] {
         row.tape = TapeStatus::Refused(status);
         row.held = None;
-        assert!(row.station_candidate());
-        assert!(!row.fetchable_at(500_000_000, 60));
+        assert!(row.station_candidate_with(&super::Admission::current()));
+        assert!(!row.fetchable_with(&Admission::at(60, 500_000_000)));
     }
 }

@@ -83,10 +83,73 @@ pub(in crate::analytics::tuner) fn fillable_at(
     now_ms: i64,
     switches: (bool, bool),
 ) -> bool {
-    use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
     if !super::fetch::station::candidate(uid) {
         return false;
     }
+    source_fillable_at(address, close_ms, trail_ms, now_ms, switches)
+}
+
+/// One pass shares time, floor, switches and station refusals across every row.
+pub(in crate::analytics::tuner) struct Admission {
+    pub min_s: u32,
+    pub now_ms: i64,
+    pub refusal_revision: u64,
+    switches: (bool, bool),
+    refused: std::collections::HashSet<i64>,
+}
+
+impl Admission {
+    /// Capture admission inputs once before walking a population.
+    pub fn at(min_s: u32, now_ms: i64) -> Self {
+        let (refusal_revision, refused) = super::fetch::station::refusal_snapshot();
+        Self {
+            min_s: clamp_min_tail_s(min_s),
+            now_ms,
+            refusal_revision,
+            switches: switches(),
+            refused,
+        }
+    }
+
+    /// Capture the current sample policy for a fit or fetch pass.
+    pub fn current() -> Self {
+        Self::at(effective_s(), moon_core::util::time::now_unix_ms_i64())
+    }
+
+    /// Whether held coverage reaches this pass's captured floor.
+    pub fn holds(&self, held: Option<(i64, i64)>) -> bool {
+        reaches(held, self.min_s)
+    }
+
+    /// Whether this pass can extend a row without reading process globals per row.
+    pub fn fillable(&self, row: &super::state::DealRow, trail: i64) -> bool {
+        self.candidate(row.deal.report_uid)
+            && row.address.as_ref().is_some_and(|address| {
+                source_fillable_at(
+                    address,
+                    row.deal.close_ms,
+                    trail,
+                    self.now_ms,
+                    self.switches,
+                )
+            })
+    }
+
+    /// Whether this pass has no latched station refusal for a row.
+    pub fn candidate(&self, uid: i64) -> bool {
+        !self.refused.contains(&uid)
+    }
+}
+
+/// Test enabled source retention independently of station refusal membership.
+fn source_fillable_at(
+    address: &super::state::RowAddress,
+    close_ms: i64,
+    trail_ms: i64,
+    now_ms: i64,
+    switches: (bool, bool),
+) -> bool {
+    use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
     let from = close_ms.saturating_add(trail_ms.max(0));
     (switches.0
         && matches!(

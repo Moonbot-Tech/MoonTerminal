@@ -1,6 +1,7 @@
 use super::super::columns::{COL_HELD, COL_MODEL, COL_PROFIT, COL_RESULT, COL_TAPE, COL_TIME};
 use super::super::state::{DealRow, TapeStatus, TicksData, TicksState};
 use super::{order_for, paint_fixed, result_pct};
+use crate::analytics::tuner::ticks::tail::Admission;
 use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
 use moon_core::market::trade_replay::TickStatus;
 
@@ -29,11 +30,11 @@ fn known_routeless_offers_keep_the_original_rule() {
             entry_line: None,
             held: Some((30_000, 30_000)),
         };
-        assert!(row.fetchable_at(now, 60));
+        assert!(row.fetchable_with(&Admission::at(60, now)));
         row.tape = TapeStatus::Covered;
-        assert!(!row.fetchable_at(now, 60));
+        assert!(!row.fetchable_with(&Admission::at(60, now)));
         row.tape = TapeStatus::Refused(TickStatus::NoRoute);
-        assert!(!row.fetchable_at(now, 60));
+        assert!(!row.fetchable_with(&Admission::at(60, now)));
     }
 }
 
@@ -58,19 +59,19 @@ fn unlisted_manual_fetch_includes_recent_empty_and_short_tail_rows() {
         entry_line: None,
         held: None,
     };
-    assert!(row.fetchable_at(now, 60));
+    assert!(row.fetchable_with(&Admission::at(60, now)));
     row.tape = TapeStatus::Covered;
     row.verdict = Some(verdict(Some(true), Some(true)));
     row.held = Some((30_000, 30_000));
-    assert!(row.fetchable_at(now, 60));
+    assert!(row.fetchable_with(&Admission::at(60, now)));
     row.held = Some((30_000, 60_000));
-    assert!(!row.fetchable_at(now, 60));
+    assert!(!row.fetchable_with(&Admission::at(60, now)));
     row.deal.buy_ms = now - 49 * 3_600_000;
     row.deal.close_ms = row.deal.buy_ms + 1_000;
     row.held = Some((30_000, 30_000));
-    assert!(!row.fetchable_at(now, 60));
+    assert!(!row.fetchable_with(&Admission::at(60, now)));
     row.tape = TapeStatus::Missing;
-    assert!(!row.fetchable_at(now, 60));
+    assert!(!row.fetchable_with(&Admission::at(60, now)));
 }
 
 /// Manual fetch keeps publication waits retryable; automatic reloads wait for the deadline.
@@ -151,7 +152,7 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     );
     let venues_on = moon_core::market::trade_replay::tape_autoload();
     assert_eq!(
-        row.fetchable_at(now, 60),
+        row.fetchable_with(&Admission::at(60, now)),
         venues_on,
         "old short tails wait only for enabled archives"
     );
@@ -165,16 +166,22 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
         "an admitted short tail is not counted again as waiting for tape"
     );
     row.held = Some((30_000, 60_000));
-    assert!(!row.fetchable_at(now, 60), "enough tail needs no refill");
+    assert!(
+        !row.fetchable_with(&Admission::at(60, now)),
+        "enough tail needs no refill"
+    );
     row.held = Some((30_000, 30_000));
     row.deal.close_ms = now - 400 * day;
-    assert!(!row.fetchable_at(now, 60), "outside archive catch-up depth");
+    assert!(
+        !row.fetchable_with(&Admission::at(60, now)),
+        "outside archive catch-up depth"
+    );
     row.deal.close_ms = now - 21 * day;
     Arc::make_mut(row.address.as_mut().unwrap()).venue =
         Some(moon_core::venue::venue(8).expect("REST-only venue"));
     row.deal.close_ms = now - 60 * day;
     assert!(
-        !row.fetchable_at(now, 60),
+        !row.fetchable_with(&Admission::at(60, now)),
         "unsupported old tape stays excluded"
     );
     let unavailable = TicksData {
@@ -185,7 +192,10 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     row.deal.close_ms = now - 60_000;
     Arc::make_mut(row.address.as_mut().unwrap()).venue =
         Some(moon_core::venue::venue(4).expect("futures venue"));
-    assert!(row.fetchable_at(now, 60), "recent REST tail");
+    assert!(
+        row.fetchable_with(&Admission::at(60, now)),
+        "recent REST tail"
+    );
 }
 
 /// A held-read started before a fetch must not put its old pad tail back over the extension.
@@ -942,11 +952,15 @@ fn a_fit_row_without_its_tape_is_the_one_that_lost_it() {
         entry_line: None,
         held: Some((60_000, 60_000)),
     };
-    assert!(!row.lost_tape());
+    let admission = super::super::tail::Admission::current();
+    assert!(!row.lost_tape(&admission));
     row.ticks = None;
-    assert!(row.lost_tape());
+    assert!(row.lost_tape(&admission));
     row.verdict = Some(verdict(Some(false), Some(true)));
-    assert!(!row.lost_tape(), "an unfit row keeps no tape by design");
+    assert!(
+        !row.lost_tape(&admission),
+        "an unfit row keeps no tape by design"
+    );
 }
 
 /// A reproduced row whose tape stops short of the shortest tail past the close is out of the

@@ -130,10 +130,18 @@ pub(in crate::analytics::tuner) enum DealWhy {
 impl DealWhy {
     /// Classify a row using one captured tail floor and clock for the whole population.
     pub(in crate::analytics::tuner) fn of(row: &DealRow, min_tail_s: u32, now_ms: i64) -> Self {
+        Self::of_with(row, &super::tail::Admission::at(min_tail_s, now_ms))
+    }
+
+    /// Reuse the population's source and refusal snapshot for its primary classification.
+    pub(in crate::analytics::tuner) fn of_with(
+        row: &DealRow,
+        admission: &super::tail::Admission,
+    ) -> Self {
         match row.tape {
             TapeStatus::Missing => {
                 return Self::NoTape {
-                    fetchable: row.fetchable_at(now_ms, min_tail_s),
+                    fetchable: row.fetchable_with(admission),
                 };
             }
             TapeStatus::NoAddress => return Self::NoAddress,
@@ -153,13 +161,13 @@ impl DealWhy {
         if let Some(why) = Self::of_exit(Some(verdict)) {
             return why;
         }
-        if let Some(why) = Self::tail_or_gap(row, min_tail_s, now_ms) {
+        if let Some(why) = Self::tail_or_gap(row, admission) {
             return why;
         }
         if row.ticks.is_none() {
             return Self::LostTape;
         }
-        if row.short_tail_at(min_tail_s, now_ms) {
+        if row.short_tail_with(admission) {
             Self::AcceptedShortTail
         } else {
             Self::Fit
@@ -184,25 +192,27 @@ impl DealWhy {
         min_tail_s: u32,
         now_ms: i64,
     ) -> Self {
+        let admission = super::tail::Admission::at(min_tail_s, now_ms);
         if row.tape == TapeStatus::Covered {
-            Self::tail_or_gap(row, min_tail_s, now_ms).unwrap_or_else(|| {
-                if row.short_tail_at(min_tail_s, now_ms) {
+            Self::tail_or_gap(row, &admission).unwrap_or_else(|| {
+                if row.short_tail_with(&admission) {
                     Self::AcceptedShortTail
                 } else {
                     Self::Fit
                 }
             })
         } else {
-            Self::of(row, min_tail_s, now_ms)
+            Self::of_with(row, &admission)
         }
     }
 
     /// Share the tape exclusions between the primary reason and the tape-only projection.
-    fn tail_or_gap(row: &DealRow, min_tail_s: u32, now_ms: i64) -> Option<Self> {
+    fn tail_or_gap(row: &DealRow, admission: &super::tail::Admission) -> Option<Self> {
+        let min_tail_s = admission.min_s;
         let trail_ms = row.held.map_or(0, |(_, trail)| trail.max(0));
         if !row.held.is_some_and(|(_, trail)| {
             moon_core::db::tuner::ticks::tail::reaches(trail, i64::from(min_tail_s) * 1_000)
-        }) && !row.short_tail_at(min_tail_s, now_ms)
+        }) && !row.short_tail_with(admission)
         {
             return Some(Self::ShortTail {
                 trail_ms,

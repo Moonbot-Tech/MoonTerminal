@@ -80,34 +80,30 @@ pub(in crate::analytics::tuner) struct DealRow {
 }
 
 impl DealRow {
-    /// A covered short tail is usable only when no enabled source can extend it.
-    pub(in crate::analytics::tuner) fn short_tail_at(&self, min_s: u32, now_ms: i64) -> bool {
-        let (Some(address), Some((_, trail))) = (&self.address, self.held) else {
+    /// Classify a short tail against the pass's shared admission inputs.
+    pub(in crate::analytics::tuner) fn short_tail_with(
+        &self,
+        admission: &super::tail::Admission,
+    ) -> bool {
+        let (Some(_), Some((_, trail))) = (&self.address, self.held) else {
             return false;
         };
         self.tape == TapeStatus::Covered
             && trail >= 0
-            && trail < i64::from(min_s) * 1_000
-            && !super::tail::fillable_at(
-                address,
-                self.deal.report_uid,
-                self.deal.close_ms,
-                trail,
-                now_ms,
-                super::tail::switches(),
-            )
+            && trail < i64::from(admission.min_s) * 1_000
+            && !admission.fillable(self, trail)
     }
 
-    /// Offer unresolved tape and reproduced short tails to the station before venue checks.
-    pub(in crate::analytics::tuner) fn station_candidate(&self) -> bool {
+    /// Offer station candidates using the same policy throughout the pass.
+    pub(in crate::analytics::tuner) fn station_candidate_with(
+        &self,
+        admission: &super::tail::Admission,
+    ) -> bool {
         self.address.is_some()
             && (matches!(self.tape, TapeStatus::Missing | TapeStatus::Refused(_))
                 || (self.reproduced()
-                    && !super::tail::holds(self.held)
-                    && !self.short_tail_at(
-                        super::tail::effective_s(),
-                        chrono::Utc::now().timestamp_millis(),
-                    )))
+                    && !admission.holds(self.held)
+                    && !self.short_tail_with(admission)))
     }
 
     /// Automatic reloads wait for publication; an explicit fetch can still requeue the row.
@@ -127,8 +123,13 @@ impl DealRow {
         }
     }
 
-    /// Keep known-venue offers unchanged and offer unlisted rows within core retention.
-    pub(in crate::analytics::tuner) fn fetchable_at(&self, now_ms: i64, min_tail_s: u32) -> bool {
+    /// Check fetch reach against the population's captured source policy and clock.
+    pub(in crate::analytics::tuner) fn fetchable_with(
+        &self,
+        admission: &super::tail::Admission,
+    ) -> bool {
+        let now_ms = admission.now_ms;
+        let min_tail_s = admission.min_s;
         let Some(address) = &self.address else {
             return false;
         };
@@ -157,7 +158,7 @@ impl DealRow {
             );
         }
         let trail_ms = self.held.map_or(0, |(_, trail)| trail.max(0));
-        if self.short_tail_at(min_tail_s, now_ms) {
+        if self.short_tail_with(admission) {
             return false;
         }
         self.reproduced()
@@ -191,12 +192,13 @@ impl DealRow {
     /// the shortest tail or an unfillable short tail, and has no hole between the buy and the close
     /// (`Deal::gap`). The table shows every row; this is the sample.
     pub(in crate::analytics::tuner) fn fit(&self) -> bool {
+        self.fit_with(&super::tail::Admission::current())
+    }
+
+    /// Apply sample membership with one time and source snapshot for the whole population.
+    pub(in crate::analytics::tuner) fn fit_with(&self, admission: &super::tail::Admission) -> bool {
         self.reproduced()
-            && (super::tail::holds(self.held)
-                || self.short_tail_at(
-                    super::tail::effective_s(),
-                    chrono::Utc::now().timestamp_millis(),
-                ))
+            && (admission.holds(self.held) || self.short_tail_with(admission))
             && self.deal.gap.is_none()
     }
 
@@ -211,8 +213,11 @@ impl DealRow {
     /// Carried into a new scope it would stay tapeless: stage C reads only the rows it was not
     /// handed, so the narrower selection it now fits in would never get it back. A report reload
     /// is the same scope, where the cap would only drop it again; a scope reload re-reads it.
-    pub(in crate::analytics::tuner) fn lost_tape(&self) -> bool {
-        self.fit() && self.ticks.is_none()
+    pub(in crate::analytics::tuner) fn lost_tape(
+        &self,
+        admission: &super::tail::Admission,
+    ) -> bool {
+        self.fit_with(admission) && self.ticks.is_none()
     }
 
     /// Take everything a replay learned about this row from its answer: the tape's word, the
@@ -358,9 +363,10 @@ impl TicksData {
         now_ms: i64,
         min_tail_s: u32,
     ) -> impl Iterator<Item = &DealRow> {
+        let admission = super::tail::Admission::at(min_tail_s, now_ms);
         self.rows
             .iter()
-            .filter(move |r| r.fetchable_at(now_ms, min_tail_s))
+            .filter(move |r| r.fetchable_with(&admission))
     }
 
     /// The table's tuning readiness: its sample, covered and fetchable rows, on one clock —
@@ -375,14 +381,18 @@ impl TicksData {
 
     /// Rows fit for the search ([`DealRow::fit`]), tape in memory or not.
     pub(in crate::analytics::tuner) fn fit(&self) -> usize {
-        self.rows.iter().filter(|r| r.fit()).count()
+        let admission = super::tail::Admission::current();
+        self.rows.iter().filter(|r| r.fit_with(&admission)).count()
     }
 
     /// Fit rows whose tape is in memory — what the variants and the search replay. A row the
     /// model does not reproduce is out whatever its tape: what the model answers for a variant
     /// of it is not an answer (`fit_for_search`).
     pub(in crate::analytics::tuner) fn replayable(&self) -> impl Iterator<Item = &DealRow> {
-        self.rows.iter().filter(|r| r.fit() && r.ticks.is_some())
+        let admission = super::tail::Admission::current();
+        self.rows
+            .iter()
+            .filter(move |r| r.fit_with(&admission) && r.ticks.is_some())
     }
 
     /// The share gate per group: whether the model reproduces at least `gate` (a fraction) of
@@ -638,6 +648,8 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) fetch_task: Option<gpui::Task<()>>,
     /// Last station filing this view re-read, even when no venue job was queued.
     pub(in crate::analytics::tuner) station_generation: u64,
+    /// Refusal changes can admit rows whose retained tape must be loaded again.
+    pub(in crate::analytics::tuner) station_refusal_revision: u64,
     /// Whether that task is still in its loop — it ends with the batch, and the next batch
     /// attaches a fresh one.
     pub(in crate::analytics::tuner) fetch_listening: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -737,6 +749,7 @@ impl Default for TicksState {
             rows_rev: 0,
             fetch_task: None,
             station_generation: 0,
+            station_refusal_revision: 0,
             fetch_listening: Default::default(),
             tape_reading: false,
             judged_under: None,
@@ -1174,13 +1187,14 @@ impl TicksData {
     /// out of the variant columns. Run after every change of the retained set: the bulk load
     /// and each fetched row.
     pub(in crate::analytics::tuner) fn retain_within_cap(&mut self) {
+        let admission = super::tail::Admission::current();
         let mut held = 0usize;
         // Newest first: the rows are chronological, so walk them backwards.
         for row in self.rows.iter_mut().rev() {
             let Some(bytes) = row.ticks.as_ref().map(PackedTape::bytes) else {
                 continue;
             };
-            if !row.fit() || held + bytes > MAX_RETAINED_BYTES {
+            if !row.fit_with(&admission) || held + bytes > MAX_RETAINED_BYTES {
                 row.ticks = None;
             } else {
                 held += bytes;
@@ -1191,11 +1205,12 @@ impl TicksData {
     /// What the table holds of its tape, for the load's log line: the rows, the fit ones, the
     /// fit ones with their tape in memory, those the cap let go, and the prints and bytes held.
     pub(in crate::analytics::tuner) fn tape_budget(&self) -> TapeBudget {
+        let admission = super::tail::Admission::current();
         let mut budget = TapeBudget {
             rows: self.rows.len(),
             ..TapeBudget::default()
         };
-        for row in self.rows.iter().filter(|r| r.fit()) {
+        for row in self.rows.iter().filter(|r| r.fit_with(&admission)) {
             budget.fit += 1;
             match &row.ticks {
                 Some(tape) => {

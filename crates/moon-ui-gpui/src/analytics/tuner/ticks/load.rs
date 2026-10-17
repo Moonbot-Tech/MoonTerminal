@@ -342,6 +342,7 @@ impl AnalyticsView {
             false,
             cx,
             move || {
+                let admission = super::tail::Admission::current();
                 let rows: Vec<DealRow> = read
                     .deals
                     .into_iter()
@@ -353,7 +354,7 @@ impl AnalyticsView {
                         let before = judged
                             .get(&deal.report_uid)
                             .filter(|before| address.is_some() && carryable(&before.deal, &deal))
-                            .filter(|before| after_report || !before.lost_tape())
+                            .filter(|before| after_report || !before.lost_tape(&admission))
                             .cloned();
                         let mut row = DealRow {
                             deal,

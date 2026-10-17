@@ -27,19 +27,44 @@ static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 /// Stop serializes against the final enqueue without tying user rows to autoload switches.
 static CONTROL: Mutex<u64> = Mutex::new(0);
 
-/// Rows already refused by the station and beyond every remaining source in this generation.
+/// Station refusals survive unrelated filings, but not changes to their admission inputs.
 #[derive(Default)]
 struct Unfillable {
-    generation: (u64, u64),
-    uids: HashSet<i64>,
+    generation: (u64, u32, (bool, bool)),
+    revision: u64,
+    uids: HashMap<i64, (String, String)>,
 }
 
 impl Unfillable {
-    /// New filing or station finalisation permits another station attempt.
-    fn refresh(&mut self, generation: (u64, u64)) {
+    /// A changed floor, source policy or station finalisation permits another attempt.
+    fn refresh(&mut self, generation: (u64, u32, (bool, bool))) {
         if self.generation != generation {
             self.generation = generation;
-            self.uids.clear();
+            if !self.uids.is_empty() {
+                self.uids.clear();
+                self.revision += 1;
+            }
+        }
+    }
+
+    /// Remember a refusal and invalidate classifications only when membership changes.
+    fn refuse(&mut self, uid: i64, exchange: &str, market: &str) {
+        if self
+            .uids
+            .insert(uid, (exchange.into(), market.into()))
+            .is_none()
+        {
+            self.revision += 1;
+        }
+    }
+
+    /// Only a filing on this market can make its refused rows worth checking again.
+    fn filed(&mut self, exchange: &str, market: &str) {
+        let before = self.uids.len();
+        self.uids
+            .retain(|_, key| key.0 != exchange || key.1 != market);
+        if self.uids.len() != before {
+            self.revision += 1;
         }
     }
 }
@@ -52,15 +77,27 @@ fn unfillable() -> MutexGuard<'static, Unfillable> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     rows.refresh((
-        filed_generation(),
         crate::backend::station::tail_final_cached(),
+        super::super::tail::effective_s(),
+        super::super::tail::switches(),
     ));
     rows
 }
 
 /// Whether a station-only row still deserves an automatic request in this generation.
 pub(in crate::analytics::tuner) fn candidate(uid: i64) -> bool {
-    !unfillable().uids.contains(&uid)
+    !unfillable().uids.contains_key(&uid)
+}
+
+/// One pass's refusal membership and revision, without a global lock for every row.
+pub(in crate::analytics::tuner) fn refusal_snapshot() -> (u64, HashSet<i64>) {
+    let rows = unfillable();
+    (rows.revision, rows.uids.keys().copied().collect())
+}
+
+/// Refresh admission caches even when no tape row changed.
+pub(in crate::analytics::tuner) fn refusal_revision() -> u64 {
+    unfillable().revision
 }
 
 /// Only actual station filing invalidates held-row queries.
@@ -116,7 +153,25 @@ pub(super) fn drop_held<T>(
     held_spans: impl Fn(&str, &str, i64, i64) -> Option<Vec<(i64, i64)>>,
     allow_short: impl Fn(&T, &Coverage) -> bool,
 ) -> (Vec<T>, usize) {
-    let floor = floor_ms(super::super::tail::current_s());
+    drop_held_at(
+        super::super::tail::effective_s(),
+        rows,
+        place,
+        held_spans,
+        allow_short,
+    )
+}
+
+/// Apply the held-row rule at one captured floor, clamping it like sample admission.
+fn drop_held_at<T>(
+    min_s: u32,
+    rows: Vec<T>,
+    place: impl Fn(&T) -> (String, String, ReplayWindow),
+    held_spans: impl Fn(&str, &str, i64, i64) -> Option<Vec<(i64, i64)>>,
+    allow_short: impl Fn(&T, &Coverage) -> bool,
+) -> (Vec<T>, usize) {
+    let min_s = moon_core::db::tuner::ticks::tail::clamp_min_tail_s(min_s);
+    let floor = floor_ms(min_s);
     let mut by_market: HashMap<(String, String), Vec<(T, Coverage, ReplayWindow)>> = HashMap::new();
     for row in rows {
         let (exchange, market, window) = place(&row);
@@ -138,10 +193,7 @@ pub(super) fn drop_held<T>(
             .map(Coverage::from_spans);
         for (row, need, window) in group {
             if stored.as_ref().is_some_and(|stored| {
-                let focus = focus_with_tail(
-                    &window,
-                    record_tail_ms(super::super::tail::current_s(), margin_ms()),
-                );
+                let focus = focus_with_tail(&window, record_tail_ms(min_s, margin_ms()));
                 !need.is_empty()
                     && (stored.covers(&need)
                         || (allow_short(&row, &stored.clip(&focus))
@@ -180,7 +232,7 @@ pub(super) fn prefill(
         let trail = stored
             .hull()
             .map_or(0, |(_, to)| to.saturating_sub(row.window.close_ms).max(0));
-        trail < floor_ms(super::super::tail::current_s())
+        trail < floor_ms(super::super::tail::effective_s())
             && !super::super::tail::fillable_at(
                 &row.address,
                 row.deal.report_uid,
@@ -216,8 +268,7 @@ pub(super) fn prefill(
 
 /// File a station answer, then remember rows it left uncovered when nothing else can fetch them.
 ///
-/// `note_filed` runs first. A non-zero `pieces` advances the filing generation, and the refusal
-/// set refreshes against that generation before the new uids are added.
+/// Filing invalidates only the affected market's refusals before this answer is remembered.
 ///
 /// Args:
 ///     rows: Rows still missing after the station pass.
@@ -232,12 +283,24 @@ fn commit_station_answer(rows: &[super::job::QueuedRow], filled: Filled, stopped
         return;
     }
     let now = moon_core::util::time::now_unix_ms_i64();
-    let refused: Vec<i64> = rows
+    let refused: Vec<_> = rows
         .iter()
         .filter(|row| !row.fetchable_after_station(now))
-        .map(|row| row.deal.report_uid)
         .collect();
-    unfillable().uids.extend(refused);
+    let mut refusals = unfillable();
+    let before = refusals.revision;
+    for row in refused {
+        refusals.refuse(
+            row.deal.report_uid,
+            &row.address.exchange_key,
+            &row.address.market,
+        );
+    }
+    let changed = before != refusals.revision;
+    drop(refusals);
+    if changed {
+        super::job::station_filled();
+    }
 }
 
 /// Preserve disk-before/station/disk-after ordering with the same coverage rule on both sides.
@@ -403,6 +466,7 @@ pub(super) fn fill<T>(
         filled.pieces += 1;
         filled.prints += ticks.len();
         cache.insert_from_station(&want.exchange, &want.market, from_ms, to_ms, ticks);
+        unfillable().filed(&want.exchange, &want.market);
     });
     // Whatever came before an error or a stop is filed too: the pass judges the rows by the file
     // right after this.
