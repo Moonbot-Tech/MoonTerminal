@@ -305,6 +305,22 @@ fn tape_keep_keys_parse() {
     assert!(from_station_file(&unknown, Some(&dir)).is_err());
 }
 
+/// Legacy station configuration keeps the 60-second floor; a pushed value survives reload.
+#[test]
+fn tape_min_tail_defaults_and_pushed_value_parse() {
+    use moon_core::db::tuner::ticks::tail::DEFAULT_MIN_TAIL_S;
+    let dir = creds("tape_min_tail", &[(3, "k1")]);
+    let core = "[[core]]\nuid = 3\nname = \"CORE_A\"\n";
+    let absent = from_station_file(core, Some(&dir)).unwrap();
+    assert_eq!(absent.tape.min_tail_s.unwrap_or(DEFAULT_MIN_TAIL_S), 60);
+    let configured =
+        from_station_file(&format!("{core}[tape]\nmin_tail_s = 120\n"), Some(&dir)).unwrap();
+    assert_eq!(
+        configured.tape.min_tail_s.unwrap_or(DEFAULT_MIN_TAIL_S),
+        120
+    );
+}
+
 /// The tuner-only key parses, and its absence reads as off: an older terminal that never sends
 /// it must leave every station fetching every trade.
 #[test]

@@ -11,6 +11,14 @@ use crate::station_api::CatchupFailReason;
 
 const HOUR_MS: i64 = 3_600_000;
 
+/// Whether every missing span starts strictly beyond the recorded margin.
+pub(super) fn tail_only(missing: &Coverage, tail_start_ms: i64) -> bool {
+    missing
+        .spans()
+        .iter()
+        .all(|&(from, _)| from > tail_start_ms)
+}
+
 /// Warn lines one pass writes per failure reason; the summary line counts the rest.
 pub(super) const WARN_PER_REASON: usize = 5;
 
@@ -25,6 +33,10 @@ pub(crate) struct RecorderCatchup {
     pending: HashMap<TradeId, CatchupTrade>,
     latched: HashMap<TradeId, Latch>,
     complete: HashSet<TradeId>,
+    /// Clean incomplete tail passes are bounded independently of ordinary hourly retries.
+    tail_tries: HashMap<TradeId, u8>,
+    /// Final tail IDs remain countable until a setting change or retention expires them.
+    tail_final: HashSet<TradeId>,
     /// Retained coverage can outlive catch-up's shorter archive-reach settlement horizon.
     tape_complete: HashSet<TradeId>,
     /// Resolved identities also protect retained tape during later purge planning.
@@ -84,6 +96,7 @@ impl RecorderCatchup {
         cache: &TradeCache,
         now: i64,
         live: &HashMap<super::super::Key, Coverage>,
+        shape: &super::Shape,
     ) -> bool {
         use super::super::retention::{self, Phase};
         use crate::market::trade_replay::trade_cache::{Compact, CompactFail, TrimProgress};
@@ -120,10 +133,6 @@ impl RecorderCatchup {
                 super::PURGE_WANTED.store(true, Ordering::Relaxed);
             }
         }
-        let window = (
-            crate::market::trade_replay::margin_ms(),
-            crate::market::trade_replay::long_position_ms(),
-        );
         let phase = std::mem::replace(&mut self.retention.phase, Phase::Idle);
         let mut status = None;
         self.retention.phase = match phase {
@@ -197,8 +206,7 @@ impl RecorderCatchup {
                             listed_from: super::edge_ms(now),
                             record_emulator: super::record_emulator(),
                             tuner_only: super::tuner_only(),
-                            margin_ms: window.0,
-                            long_ms: window.1,
+                            shape: *shape,
                         },
                     );
                     let progress = Arc::new(TrimProgress::default());
@@ -267,7 +275,7 @@ impl RecorderCatchup {
                 for (trade, rx) in reads {
                     match rx.try_recv() {
                         Ok(Ok(spans)) => {
-                            let focus = super::needed(&trade, window.0, window.1);
+                            let focus = super::needed(&trade, shape);
                             if Coverage::from_spans(spans).covers(&focus) {
                                 complete.insert(trade.id);
                             }
@@ -463,27 +471,29 @@ impl RecorderCatchup {
         &mut self,
         held: impl Fn(&CatchupTrade) -> Coverage,
         now_ms: i64,
-        margin: i64,
-        long: i64,
+        shape: &super::Shape,
         archives: bool,
     ) -> CatchupPlan {
         self.prune(now_ms);
         self.route_skipped();
         let ready: Vec<_> = self.pending.values().cloned().collect();
         let batch = if archives {
-            super::plan(&ready, held, &self.latched, now_ms, margin, long)
+            super::plan(&ready, held, &self.latched, now_ms, shape)
         } else {
-            super::plan_with(&ready, held, &self.latched, now_ms, margin, long, false)
+            super::plan_with(&ready, held, &self.latched, now_ms, shape, false)
         };
         for &id in &batch.permanent_ids {
             self.latched.insert(id, Latch::Permanent);
             self.pending.remove(&id);
         }
+        self.tail_final.extend(&batch.tail_final_ids);
         for &id in &batch.complete_ids {
             self.complete.insert(id);
             self.tape_complete.insert(id);
             self.pending.remove(&id);
+            self.tail_tries.remove(&id);
         }
+        self.publish_pending();
         batch
     }
 
@@ -508,6 +518,8 @@ impl RecorderCatchup {
             self.latched.retain(|_, latch| *latch != Latch::Permanent);
             self.complete.clear();
             self.tape_complete.clear();
+            self.tail_tries.clear();
+            self.tail_final.clear();
             for trade in self.known.values() {
                 self.pending.insert(trade.id, trade.clone());
             }
@@ -552,6 +564,8 @@ impl RecorderCatchup {
         {
             self.complete.remove(&trade.id);
             self.latched.remove(&trade.id);
+            self.tail_tries.remove(&trade.id);
+            self.tail_final.remove(&trade.id);
         }
         let expired: Vec<_> = self
             .known
@@ -562,6 +576,8 @@ impl RecorderCatchup {
         for id in expired {
             self.complete.remove(&id);
             self.latched.remove(&id);
+            self.tail_tries.remove(&id);
+            self.tail_final.remove(&id);
             if !self.pending.contains_key(&id) {
                 self.known.remove(&id);
                 self.skipped.remove(&id);
@@ -571,7 +587,7 @@ impl RecorderCatchup {
     }
 
     /// Lazily start one fetch thread and submit work only after the prior pass settled.
-    pub(crate) fn tick(&mut self, cache: &TradeCache, now_ms: i64, margin: i64, long: i64) {
+    pub(crate) fn tick(&mut self, cache: &TradeCache, now_ms: i64, shape: &super::Shape) {
         self.prune(now_ms);
         if self.active {
             return;
@@ -582,7 +598,7 @@ impl RecorderCatchup {
         }
         let batch = self.prepare(
             |trade| {
-                let focus = super::needed(trade, margin, long);
+                let focus = super::needed(trade, shape);
                 let Some((from, to)) = focus.hull() else {
                     return Coverage::none();
                 };
@@ -593,8 +609,7 @@ impl RecorderCatchup {
                 )
             },
             now_ms,
-            margin,
-            long,
+            shape,
             archives,
         );
         {
@@ -670,23 +685,52 @@ impl RecorderCatchup {
                 }
                 continue;
             }
-            let held = job.missing.spans().iter().flat_map(|&(from, to)| {
-                cache
-                    .held_spans(&job.trade.exchange, &job.trade.market, from, to)
-                    .unwrap_or_default()
-            });
-            let complete = Coverage::from_spans(held).covers(&job.missing);
+            let mut held = Coverage::none();
+            let mut read_answered = true;
+            for &(from, to) in job.missing.spans() {
+                match cache.held_spans(&job.trade.exchange, &job.trade.market, from, to) {
+                    Some(spans) => {
+                        for span in spans {
+                            held.add(span);
+                        }
+                    }
+                    None => read_answered = false,
+                }
+            }
+            let remaining = job.missing.minus(&held);
+            let complete = read_answered && remaining.is_empty();
             if complete {
                 self.pending.remove(&job.trade.id);
                 self.latched.remove(&job.trade.id);
+                self.tail_tries.remove(&job.trade.id);
                 if self.complete.insert(job.trade.id) {
                     filled += 1;
                 }
                 self.tape_complete.insert(job.trade.id);
             } else {
-                self.pending.insert(job.trade.id, job.trade.clone());
-                self.latched
-                    .insert(job.trade.id, Latch::RetryAfter(next_pass(now_ms)));
+                let clean_tail = finished.attempted
+                    && finished.failure.is_none()
+                    && finished.fault.is_none()
+                    && read_answered
+                    && held.covers(&finished.filed)
+                    && !self
+                        .refused
+                        .contains(&(job.trade.exchange.clone(), job.trade.market.clone()))
+                    && tail_only(&remaining, job.tail_start_ms);
+                let final_tail = clean_tail && {
+                    let tries = self.tail_tries.entry(job.trade.id).or_default();
+                    *tries = tries.saturating_add(1);
+                    *tries >= 2
+                };
+                if final_tail {
+                    self.tail_final.insert(job.trade.id);
+                    self.pending.remove(&job.trade.id);
+                    self.latched.insert(job.trade.id, Latch::Permanent);
+                } else {
+                    self.pending.insert(job.trade.id, job.trade.clone());
+                    self.latched
+                        .insert(job.trade.id, Latch::RetryAfter(next_pass(now_ms)));
+                }
                 if finished.attempted {
                     failed += 1;
                     let fault = finished.fault.or_else(|| {
@@ -744,6 +788,10 @@ impl RecorderCatchup {
 
     /// Keep queued and retrying trades visible while a pass is running or waiting for its hour.
     fn publish_pending(&self) {
+        super::TAIL_FINAL.store(
+            self.tail_final.len().min(u32::MAX as usize) as u32,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         STATUS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

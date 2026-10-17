@@ -1,4 +1,7 @@
+use super::super::station::drop_held;
 use super::*;
+use moon_core::db::tuner::ticks::tail::{floor_ms, required_with_floor};
+use moon_core::market::trade_replay::ReplayWindow;
 
 /// A trade `(exchange, market, open_ms, close_ms)` and its window.
 fn trade(market: &str, open_ms: i64, close_ms: i64) -> (String, String, ReplayWindow) {
@@ -13,7 +16,12 @@ fn trade(market: &str, open_ms: i64, close_ms: i64) -> (String, String, ReplayWi
 fn only_the_rows_the_disk_fully_holds_are_dropped() {
     let base = 1_790_000_000_000;
     let held_trade = trade("M", base, base + 10_000);
-    let need = required_spans(&held_trade.2).hull().expect("a need");
+    let need = required_with_floor(
+        &held_trade.2,
+        floor_ms(super::super::super::tail::current_s()),
+    )
+    .hull()
+    .expect("a need");
     let hole_trade = trade("M", base + 3_600_000, base + 3_610_000);
     let other_market = trade("N", base, base + 10_000);
     let unread_market = trade("U", base, base + 10_000);
@@ -106,4 +114,27 @@ fn with_the_core_switch_off_skips_keep_their_reasons() {
         row_path((false, false), true, true, recent, now),
         RowPath::VenueOff
     );
+}
+
+/// The tick holds the autoload lock on the UI thread while it starts a pass; a second take on the
+/// same thread must fail loudly, never hang the terminal as the station-target read once did.
+#[test]
+#[should_panic(expected = "autoload lock taken twice")]
+fn a_second_take_of_the_lock_on_one_thread_panics_instead_of_hanging() {
+    let _held = super::lock();
+    let _again = super::lock();
+}
+
+/// A tick-style caller reads the station target from the lock it already holds, and returns.
+#[test]
+fn the_station_target_is_read_under_the_held_lock_without_retaking_it() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let held = super::lock();
+        let _ = super::station_target_of(&held);
+        drop(held);
+        tx.send(()).unwrap();
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(5))
+        .expect("station target read under the held lock did not return");
 }

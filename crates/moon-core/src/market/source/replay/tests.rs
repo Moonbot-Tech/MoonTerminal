@@ -1,5 +1,48 @@
 use super::*;
 
+/// Empty tail captures need an answered, bracketing ring; replay and partial rings still refuse.
+#[test]
+fn quiet_tail_capture_requires_answered_bracketing_bounds() {
+    let window = ReplayWindow {
+        from_ms: 130_001,
+        to_ms: 160_000,
+        open_ms: 130_001,
+        close_ms: 160_000,
+        margin_ms: 0,
+        long_position_ms: 300_000,
+        over_budget: false,
+    };
+    for (rule, answered, bounds, accepted) in [
+        (CoreSpanRule::Overlap, true, [129_000, 165_000], true),
+        (CoreSpanRule::Overlap, false, [129_000, 165_000], false),
+        (
+            CoreSpanRule::BracketPosition,
+            true,
+            [129_000, 165_000],
+            false,
+        ),
+        (CoreSpanRule::Overlap, true, [120_000, 129_000], false),
+        (CoreSpanRule::Overlap, true, [165_000, 170_000], false),
+    ] {
+        let mut capture = ReplayCapture::new(window, 10, rule);
+        for stamp in bounds {
+            capture.push(Tick {
+                time_ms: stamp as f64,
+                price: 10.0,
+                qty: 1.0,
+                side: Side::Buy,
+            });
+        }
+        let result = capture.finish(answered);
+        assert_eq!(result.is_some(), accepted);
+        if let Some(result) = result {
+            assert!(result.ticks.is_empty());
+            assert_eq!(result.covered, (130_001, 160_000));
+            assert!(result.archive_answered);
+        }
+    }
+}
+
 /// Periodic selection must keep the newest two even after an older in-window resend.
 #[test]
 fn live_capture_small_budget_survives_late_in_window_resend() {
@@ -165,7 +208,7 @@ fn capture_budgets_only_the_requested_interval_and_preserves_late_rows() {
         });
     }
     let result = capture
-        .finish()
+        .finish(false)
         .expect("unrelated history must not spend the interval budget");
     assert_eq!(
         result
@@ -186,7 +229,7 @@ fn capture_budgets_only_the_requested_interval_and_preserves_late_rows() {
         });
     }
     assert!(
-        too_many.finish().is_none(),
+        too_many.finish(false).is_none(),
         "a truncated requested interval must not claim coverage"
     );
 }

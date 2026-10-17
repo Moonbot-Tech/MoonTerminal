@@ -198,8 +198,10 @@ impl AnalyticsView {
         if let Some(saved) = backend.read(cx).layout.analytics_ticks.as_ref() {
             ticks.restore(saved);
             tuner::ticks::model_cfg::replace(saved.model);
-            tuner::ticks::tail::replace(saved.min_tail_s);
         }
+        backend.update(cx, |backend, cx| {
+            backend.station_min_tail_sync(tuner::ticks::tail::current_s(), cx);
+        });
         // Strategy-list and coin-table sorts are persisted in layout.toml (`table_sorts`). Unknown keys return to the same
         // profit-descending default used before this preference existed.
         let saved_strat_sort =
