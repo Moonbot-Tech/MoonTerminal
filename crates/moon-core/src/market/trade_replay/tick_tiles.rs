@@ -33,7 +33,7 @@
 
 use std::collections::HashMap;
 
-use super::TickPlan;
+use super::{Coverage, TickPlan};
 use crate::feed::types::Tick;
 
 /// Ceiling on raw ticks held across every tile.
@@ -117,9 +117,102 @@ pub(crate) struct TickTileStore {
     next_seq: u64,
     held_ticks: usize,
     tile_count: usize,
+    /// Last observed filing and tiles still needing inspection at that revision.
+    hydrated: HashMap<TileKey, (u64, Coverage)>,
+    /// Reject disk reads that started before a Storage trim discarded the tiles.
+    generation: u64,
 }
 
 impl TickTileStore {
+    /// Clear tiles and freshness together, invalidating disk reads already in flight.
+    pub fn forget(&mut self) {
+        let generation = self.generation.wrapping_add(1);
+        *self = Self::default();
+        self.generation = generation;
+    }
+
+    /// Gaps need disk data; held tiles need another inspection only after a market filing.
+    pub fn hydration_plan(
+        &mut self,
+        key: &TileKey,
+        focus: &Coverage,
+        revision: u64,
+    ) -> (u64, Coverage) {
+        let held = Coverage::from_spans(
+            self.tiles
+                .get(key)
+                .into_iter()
+                .flatten()
+                .map(|tile| (tile.from_ms, tile.to_ms)),
+        );
+        let mut needed = focus.minus(&held);
+        if !held.is_empty() {
+            let entry = self.hydrated.entry(key.clone()).or_insert_with(|| {
+                (
+                    revision,
+                    if revision == 0 {
+                        Coverage::none()
+                    } else {
+                        held.clone()
+                    },
+                )
+            });
+            if entry.0 != revision {
+                *entry = (revision, held.clone());
+            }
+            entry.1 = entry.1.clip(&held);
+            for &span in entry.1.clip(focus).spans() {
+                needed.add(span);
+            }
+        }
+        (self.generation, needed)
+    }
+
+    /// File a successful disk read only if no trim replaced the store while it was waiting.
+    pub fn hydrate_from(
+        &mut self,
+        key: &TileKey,
+        generation: u64,
+        revision: u64,
+        asked: (i64, i64),
+        spans: Vec<super::trade_cache::StoredSpan>,
+    ) {
+        if self.generation != generation {
+            return;
+        }
+        let mut checked = Coverage::one(asked);
+        for span in spans {
+            checked.add((span.from_ms, span.to_ms));
+            self.insert(
+                key.clone(),
+                span.from_ms,
+                span.to_ms,
+                span.ticks,
+                span.source,
+            );
+        }
+        let held = Coverage::from_spans(
+            self.tiles
+                .get(key)
+                .into_iter()
+                .flatten()
+                .map(|tile| (tile.from_ms, tile.to_ms)),
+        );
+        // Do not retain metadata for evicted tiles or misses: its size follows the tile limit.
+        if held.is_empty() {
+            return;
+        }
+        let entry = self.hydrated.entry(key.clone()).or_default();
+        // An older concurrent read must not acknowledge a newer filing's inspection.
+        if entry.0 > revision {
+            return;
+        }
+        if entry.0 != revision {
+            *entry = (revision, held.clone());
+        }
+        entry.1 = entry.1.minus(&checked).clip(&held);
+    }
+
     /// Sub-spans of `[from_ms, to_ms]` no tile of `key` covers, ascending and disjoint.
     ///
     /// Args:
@@ -319,6 +412,7 @@ impl TickTileStore {
             self.tile_count -= 1;
             if tiles.is_empty() {
                 self.tiles.remove(&key);
+                self.hydrated.remove(&key);
             }
         }
     }

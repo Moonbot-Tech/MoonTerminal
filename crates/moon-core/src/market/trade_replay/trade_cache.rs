@@ -78,6 +78,7 @@ use rusqlite::OptionalExtension;
 use super::tick_tiles::TileSource;
 use crate::feed::types::Tick;
 pub use filed::filed_since;
+pub(super) use filed::market_revision;
 pub(super) use filed::note as note_filed;
 pub use remote::{TapeFile, decode_prints, encode_prints};
 pub use trim::{Compact, CompactFail, Inventory, KeepMap, TrimOutcome, TrimProgress, TrimReport};
@@ -99,6 +100,15 @@ impl Table {
             Self::Legacy => "spans",
             Self::Packs => "packs",
         }
+    }
+
+    /// The overlap read shared by archive decoding and its query-plan regression test.
+    fn read_sql(self) -> String {
+        format!(
+            "SELECT rowid, from_ms, to_ms, ticks, source FROM {}
+             WHERE exchange = ?1 AND market = ?2 AND to_ms >= ?3 AND from_ms <= ?4",
+            self.name()
+        )
     }
 
     /// Selects this table's oldest victim using the same age and rowid ordering as eviction.
@@ -186,6 +196,7 @@ pub struct StoredSpan {
     pub source: TileSource,
 }
 
+/// Queued archive operations; a failed read stays distinct from a successful empty result.
 enum Op {
     Insert {
         exchange: String,
@@ -200,7 +211,7 @@ enum Op {
         market: String,
         from_ms: i64,
         to_ms: i64,
-        reply: mpsc::Sender<Vec<StoredSpan>>,
+        reply: mpsc::Sender<rusqlite::Result<Vec<StoredSpan>>>,
     },
     /// The bounds of every stored span intersecting a stretch — what is held, without reading
     /// a single print.
@@ -341,7 +352,7 @@ impl TradeCache {
 
     /// Every stored span intersecting `[from_ms, to_ms]`, ascending.
     ///
-    /// `None` means the read did not happen (worker gone or busy past [`READ_TIMEOUT`]), which
+    /// `None` means the read failed (SQL error, worker gone or busy past [`READ_TIMEOUT`]), which
     /// the caller must not mistake for "nothing stored".
     pub fn read(
         &self,
@@ -360,7 +371,7 @@ impl TradeCache {
                 reply,
             })
             .ok()?;
-        rx.recv_timeout(READ_TIMEOUT).ok()
+        rx.recv_timeout(READ_TIMEOUT).ok()?.ok()
     }
 
     /// The bounds `(from_ms, to_ms)` of every stored span of a market intersecting
@@ -556,6 +567,7 @@ pub fn maintenance_handle() -> Option<TradeCache> {
     CACHE.get_or_init(|| TradeCache::open(path)).clone()
 }
 
+/// Open both archive layouts and add range-read indexes without changing the archive version.
 fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     crate::db::wal::enable(conn)?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -579,6 +591,7 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             PRIMARY KEY(exchange, market, from_ms)
         );
         CREATE INDEX IF NOT EXISTS spans_updated ON spans(updated_ms);
+        CREATE INDEX IF NOT EXISTS spans_market_to ON spans(exchange, market, to_ms);
         CREATE TABLE IF NOT EXISTS packs(
             exchange TEXT NOT NULL,
             market TEXT NOT NULL,
@@ -590,7 +603,8 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             updated_ms INTEGER NOT NULL,
             PRIMARY KEY(exchange, market, from_ms)
         );
-        CREATE INDEX IF NOT EXISTS packs_updated ON packs(updated_ms);",
+        CREATE INDEX IF NOT EXISTS packs_updated ON packs(updated_ms);
+        CREATE INDEX IF NOT EXISTS packs_market_to ON packs(exchange, market, to_ms);",
     )?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     repair_gate_futures_offset_walks(conn)?;
@@ -919,20 +933,11 @@ fn serve(
             reply,
         } => {
             let mut dropped = 0i64;
-            let spans = match read_spans_dropping(
-                conn,
-                &exchange,
-                &market,
-                from_ms,
-                to_ms,
-                Some(&mut dropped),
-            ) {
-                Ok(spans) => spans,
-                Err(e) => {
-                    log::warn!("trade cache read failed {exchange}/{market}: {e}");
-                    Vec::new()
-                }
-            };
+            let spans =
+                read_spans_dropping(conn, &exchange, &market, from_ms, to_ms, Some(&mut dropped));
+            if let Err(e) = &spans {
+                log::warn!("trade cache read failed {exchange}/{market}: {e}");
+            }
             // A row that did not decode left the file: the ceiling must not keep counting it.
             *held -= dropped;
             let _ = reply.send(spans);
@@ -1295,11 +1300,7 @@ fn read_spans_dropping(
     for table in Table::ALL {
         let mut broken = Vec::new();
         {
-            let mut stmt = conn.prepare_cached(&format!(
-                "SELECT rowid, from_ms, to_ms, ticks, source FROM {}
-                 WHERE exchange = ?1 AND market = ?2 AND to_ms >= ?3 AND from_ms <= ?4",
-                table.name()
-            ))?;
+            let mut stmt = conn.prepare_cached(&table.read_sql())?;
             let mut rows = stmt.query(rusqlite::params![exchange, market, from_ms, to_ms])?;
             while let Some(r) = rows.next()? {
                 let rowid: i64 = r.get(0)?;

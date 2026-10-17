@@ -2,6 +2,69 @@ use super::codec::encode_legacy;
 use super::*;
 use crate::feed::types::Side;
 
+/// Both archive layouts use the end-bound index for the production blob read.
+#[test]
+fn overlap_reads_use_market_to_indexes_without_changing_archive_version() {
+    let conn = conn();
+    // Reopening an existing v3 archive adds indexes without dropping its rows.
+    conn.execute(
+        "INSERT INTO spans VALUES ('VENUE_A', 'XALPHA', 0, 9, X'', 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("DROP INDEX spans_market_to; DROP INDEX packs_market_to;")
+        .unwrap();
+    init_schema(&conn).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM spans", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))
+            .unwrap(),
+        3
+    );
+    for table in Table::ALL {
+        let mut statement = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", table.read_sql()))
+            .unwrap();
+        let plan = statement
+            .query_map(rusqlite::params!["VENUE_A", "XALPHA", 5, 8], |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join(" ");
+        assert!(
+            plan.contains(&format!("{}_market_to", table.name())),
+            "{plan}"
+        );
+    }
+}
+
+/// SQL failure is retryable rather than a successful empty archive read.
+#[test]
+fn worker_read_preserves_sql_failure() {
+    let conn = conn();
+    conn.execute_batch("DROP TABLE packs").unwrap();
+    let (reply, rx) = mpsc::channel();
+    serve(
+        &conn,
+        Op::Read {
+            exchange: "VENUE_A".into(),
+            market: "XALPHA".into(),
+            from_ms: 0,
+            to_ms: 9,
+            reply,
+        },
+        &mut 0,
+        || None,
+    );
+    assert!(rx.recv().unwrap().is_err());
+}
+
 /// Measure page overhead and encoded payload through the recorder's production span writer.
 #[test]
 #[ignore = "synthetic tail storage measurement"]

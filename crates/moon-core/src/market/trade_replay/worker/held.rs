@@ -83,9 +83,10 @@ pub(super) fn flatten_runs(
 /// captured for this market, not only what this session saw. A read that times out hydrates
 /// nothing and costs at worst a fetch the disk could have spared.
 ///
-/// The disk is read BEFORE the tile lock is taken: a read waits on the cache thread for up to
-/// its timeout, and a progress publisher or a held-data query blocked on the lock for that long
-/// would be paying for a disk it never asked about.
+/// Brief locks plan the gaps and insert the result; disk I/O runs with no tile lock held.
+/// A read waits on the cache thread for up to its timeout, and a progress publisher or another
+/// held-data query must not pay for a disk it never asked about. A filing invalidates only its
+/// market's inspected tiles; failed reads leave those tiles retryable.
 pub(super) fn hydrate(
     tiles: &Mutex<TickTileStore>,
     persisted: Option<&super::trade_cache::TradeCache>,
@@ -95,26 +96,30 @@ pub(super) fn hydrate(
     let Some(cache) = persisted else {
         return;
     };
-    let mut read = Vec::new();
-    for &(from_ms, to_ms) in focus.spans() {
-        read.extend(
-            cache
-                .read(&key.0, &key.1, from_ms, to_ms)
-                .unwrap_or_default(),
-        );
-    }
-    if read.is_empty() {
-        return;
-    }
-    let mut store = lock_tiles(tiles);
-    for span in read {
-        store.insert(
-            key.clone(),
-            span.from_ms,
-            span.to_ms,
-            span.ticks,
-            span.source,
-        );
+    hydrate_with(
+        tiles,
+        key,
+        focus,
+        || trade_cache::market_revision(key),
+        |from, to| cache.read(&key.0, &key.1, from, to),
+    );
+}
+
+/// Revision and read seams keep repeat, failure and concurrent-filing tests deterministic.
+fn hydrate_with(
+    tiles: &Mutex<TickTileStore>,
+    key: &TileKey,
+    focus: &Coverage,
+    revision: impl Fn() -> u64,
+    mut read: impl FnMut(i64, i64) -> Option<Vec<trade_cache::StoredSpan>>,
+) {
+    // Sample before reading: a filing during I/O must invalidate the next query too.
+    let revision = revision();
+    let (generation, needed) = lock_tiles(tiles).hydration_plan(key, focus, revision);
+    for &(from, to) in needed.spans() {
+        if let Some(spans) = read(from, to) {
+            lock_tiles(tiles).hydrate_from(key, generation, revision, (from, to), spans);
+        }
     }
 }
 
@@ -143,3 +148,6 @@ pub(super) fn held_answer(tiles: &Mutex<TickTileStore>, query: &TickQuery) -> Ti
     ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
     TickAnswer { ticks, covered }
 }
+
+#[cfg(test)]
+mod tests;

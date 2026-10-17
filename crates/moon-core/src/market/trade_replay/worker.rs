@@ -14,8 +14,8 @@
 //! batch ([`ReplayIntent::Model`]) — a walk of the batch takes a minute or three, and a window
 //! opened meanwhile would show "loading" for exactly that long; the two lanes pace each other
 //! through the gate instead, and the batch slows down while the window loads. One COORDINATOR
-//! thread owns the queue and everything that is not a venue call — the held-tape reads, the
-//! core captures, the native follow-ups — so those answer while every lane is busy.
+//! thread owns captures and native follow-ups. A small held-read pool shares the tile store,
+//! so held queries answer while the coordinator and every venue lane are busy.
 //! `moon-core` has no async runtime, so these are plain blocking threads and `mpsc` pairs,
 //! exactly like the kline cache and the report valuation worker beside them.
 //!
@@ -109,9 +109,10 @@ struct Shared {
     back: Sender<Inbound>,
 }
 
-/// Handle to the process-wide replay coordinator.
+/// Handle to the process-wide replay coordinator and independent held readers.
 struct Worker {
     tx: Sender<Inbound>,
+    held: Sender<TickQuery>,
 }
 
 /// The one coordinator, started on the first request and never stopped; its lanes start on the
