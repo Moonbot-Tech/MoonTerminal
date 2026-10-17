@@ -1352,8 +1352,8 @@ impl AnalyticsView {
         self.ready.stale_strategies(key, &refiled, now_ms)
     }
 
-    /// Run the pass now: the scope's deals off the database, their addresses resolved here,
-    /// then the per-strategy replay in the background.
+    /// Run the pass now: the scope's deals off the database and their addresses resolved
+    /// beside the read, then the per-strategy replay in the background.
     ///
     /// Args:
     ///     key: The inputs it runs with.
@@ -1366,6 +1366,7 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) {
         let q = self.tuner_query_all();
+        let mut resolver = self.address_resolver(cx);
         let (seq, progress) = match &only {
             Some(only) => self.ready.begin_partial(key, Instant::now(), only),
             None => self.ready.begin(key, Instant::now()),
@@ -1374,13 +1375,20 @@ impl AnalyticsView {
             &[ReadLane::TicksReady],
             false,
             cx,
-            move || moon_core::db::tuner::ticks::read_deals(&q),
+            move || {
+                moon_core::db::tuner::ticks::read_deals(&q).map(|read| {
+                    let addresses = super::ticks::resolve_in(&mut resolver, &read.deals);
+                    (read.deals, addresses)
+                })
+            },
             move |this, read, cx| {
                 if this.ready.seq != seq {
                     return;
                 }
                 match read {
-                    Ok(read) => this.run_ready_replay(key, seq, read.deals, only, progress, cx),
+                    Ok((deals, addresses)) => {
+                        this.run_ready_replay(key, seq, deals, addresses, only, progress, cx)
+                    }
                     Err(fail) => this.finish_ready_pass(key, seq, Err(fail), cx),
                 }
             },
@@ -1411,11 +1419,11 @@ impl AnalyticsView {
         key: ReadyKey,
         seq: u64,
         deals: Vec<Deal>,
+        addresses: HashMap<(u64, String), Option<Arc<RowAddress>>>,
         only: Option<HashSet<String>>,
         progress: Arc<ReadyProgress>,
         cx: &mut Context<Self>,
     ) {
-        let addresses = self.resolve_addresses(&deals, cx);
         let order = self.ready_priority_order();
         let mut groups = group_by_strategy(deals, &addresses, &order);
         if let Some(recount) = self.ready.recount_set(&groups, only.as_ref(), &progress) {

@@ -88,6 +88,19 @@ pub(in crate::analytics::tuner) struct FetchResolver {
     btc_markets: HashMap<u64, Option<String>>,
 }
 
+/// Where each deal's prints live, per distinct `(core, coin)` — `resolver` asked once per
+/// distinct pair, off the UI thread. A core that is not connected, or a coin its catalog does
+/// not spell, resolves to nothing and the row says so.
+pub(in crate::analytics::tuner) fn resolve_in(
+    resolver: &mut FetchResolver,
+    deals: &[Deal],
+) -> HashMap<(u64, String), Option<Arc<RowAddress>>> {
+    deals
+        .iter()
+        .map(|deal| ((deal.core_uid, deal.coin.clone()), resolver.address(deal)))
+        .collect()
+}
+
 impl FetchResolver {
     pub(in crate::analytics::tuner) fn of(backend: &Backend) -> Self {
         Self {

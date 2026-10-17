@@ -33,7 +33,7 @@ use super::{sort_arrow_of, toggle_sort_key};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use columns::*;
-pub(in crate::analytics::tuner) use fetch::strategy_field_defaults;
+pub(in crate::analytics::tuner) use fetch::{resolve_in, strategy_field_defaults};
 pub(in crate::analytics::tuner) use load::{Fetched, PassReads, fetch_batch, replay_fetched};
 // The readiness bench times the reads and the model apart and runs the auto-pick itself.
 #[cfg(test)]

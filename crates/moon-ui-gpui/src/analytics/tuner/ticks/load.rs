@@ -54,7 +54,8 @@ const HELD_ANSWER_WAIT: Duration = Duration::from_secs(240);
 
 /// What stage A brings back: the deals, the grid's "now" values, the strategies' own values, the
 /// exit fields outside the model they switch on, the selected strategies' values, the rules all
-/// of it was read under — the grid chooses its rows by them — and the search ranges' spans.
+/// of it was read under — the grid chooses its rows by them — the search ranges' spans, the
+/// reload key's scope signature and where each deal's prints live.
 type StageA = (
     Result<DealsRead, ReadFail>,
     HashMap<String, NowValue>,
@@ -64,6 +65,7 @@ type StageA = (
     FieldDeps,
     Arc<HashMap<&'static str, FieldSpan>>,
     Option<u64>,
+    HashMap<(u64, String), Option<Arc<RowAddress>>>,
 );
 
 /// What stage B publishes beside the rows: the strategies' values, the grid's layout, the
@@ -170,6 +172,7 @@ impl AnalyticsView {
         });
         self.ticks.data.begin();
         self.ticks.kpi.begin();
+        let mut resolver = self.address_resolver(cx);
         self.spawn_latest_db(
             &[ReadLane::Ticks],
             show_overlay,
@@ -231,10 +234,24 @@ impl AnalyticsView {
                     .map(|read| {
                         scope_signature(read, &now, &own, &spans, &selected, &defaults, &deps)
                     });
-                (deals, now, own, Arc::new(unmodelled), selected, deps, spans, scope)
+                let addresses = deals
+                    .as_ref()
+                    .map(|read| super::fetch::resolve_in(&mut resolver, &read.deals))
+                    .unwrap_or_default();
+                (
+                    deals,
+                    now,
+                    own,
+                    Arc::new(unmodelled),
+                    selected,
+                    deps,
+                    spans,
+                    scope,
+                    addresses,
+                )
             },
             move |this,
-                  (deals, now, own, unmodelled, selected, deps, spans, scope): StageA,
+                  (deals, now, own, unmodelled, selected, deps, spans, scope, addresses): StageA,
                   cx| {
                 if this.ticks.seq != req {
                     return;
@@ -269,7 +286,6 @@ impl AnalyticsView {
                     &deps,
                 )
                 .into();
-                let addresses = this.resolve_addresses(&read.deals, cx);
                 let key = scope.map(|scope| ReloadKey {
                     scope,
                     period,
@@ -332,19 +348,13 @@ impl AnalyticsView {
         );
     }
 
-    /// Where each deal's prints live, per distinct `(core, coin)` — the fetch's own resolver,
-    /// asked once per distinct pair. A core that is not connected, or a coin its catalog does
-    /// not spell, resolves to nothing and the row says so.
-    pub(in crate::analytics::tuner) fn resolve_addresses(
+    /// The fetch's own resolver, taken on the UI thread to resolve deals off it
+    /// ([`super::fetch::resolve_in`]).
+    pub(in crate::analytics::tuner) fn address_resolver(
         &self,
-        deals: &[Deal],
         cx: &Context<Self>,
-    ) -> HashMap<(u64, String), Option<Arc<RowAddress>>> {
-        let mut resolver = super::fetch::FetchResolver::of(self.backend.read(cx));
-        deals
-            .iter()
-            .map(|deal| ((deal.core_uid, deal.coin.clone()), resolver.address(deal)))
-            .collect()
+    ) -> super::fetch::FetchResolver {
+        super::fetch::FetchResolver::of(self.backend.read(cx))
     }
 
     /// Stage B: the rows, published at once — each with what the last load already judged of

@@ -273,10 +273,16 @@ impl AnalyticsView {
         };
         let mut query = self.tuner_query_all();
         query.strategies = vec![(sid, Some(core))];
+        let mut resolver = self.address_resolver(cx);
         self.spawn_db(
             false,
             cx,
-            move || moon_core::db::tuner::ticks::read_deals(&query),
+            move || {
+                moon_core::db::tuner::ticks::read_deals(&query).map(|read| {
+                    let addresses = super::fetch::resolve_in(&mut resolver, &read.deals);
+                    (read.deals, addresses)
+                })
+            },
             move |view, read, cx| {
                 if !view
                     .ticks
@@ -287,7 +293,7 @@ impl AnalyticsView {
                     return;
                 }
                 match read {
-                    Ok(read) => view.best_search(seq, key, read.deals, cx),
+                    Ok((deals, addresses)) => view.best_search(seq, key, deals, addresses, cx),
                     Err(_) => view.close_best_run(cx),
                 }
             },
@@ -300,9 +306,12 @@ impl AnalyticsView {
         seq: u64,
         key: String,
         deals: Vec<moon_core::db::tuner::ticks::Deal>,
+        addresses: std::collections::HashMap<
+            (u64, String),
+            Option<std::sync::Arc<super::state::RowAddress>>,
+        >,
         cx: &mut Context<Self>,
     ) {
-        let addresses = self.resolve_addresses(&deals, cx);
         let Some((sid, core)) = parse_key(&key) else {
             self.close_best_run(cx);
             return;
