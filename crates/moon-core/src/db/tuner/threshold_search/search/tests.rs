@@ -61,12 +61,17 @@ fn best_pair_reference(
     min_n: usize,
     tot_c: usize,
     floor: f64,
+    open_top: bool,
 ) -> Option<(usize, usize)> {
     let ne = pre_profit.len() - 1;
     let mut best: Option<(usize, usize)> = None;
     let mut best_p = floor;
     for i in 0..ne {
         for j in (i + 1)..=ne {
+            // A Min-only field's slice always runs to the top edge.
+            if open_top && j != ne {
+                continue;
+            }
             let c = pre_count[j] - pre_count[i];
             if c < min_n {
                 continue;
@@ -273,6 +278,7 @@ fn best_for_field_reference(
         s.min_n,
         tot_c,
         tot_p + improvement_margin(tot_p),
+        FIELDS[fi].min_only(),
     )
 }
 
@@ -349,7 +355,7 @@ fn from_snapshot() -> Option<(Vec<f64>, Vec<Vec<f64>>)> {
     let nf = FIELDS.len();
     let cols = FIELDS
         .iter()
-        .map(|s| format!("\"{}\"", s.col))
+        .map(|s| crate::db::tuner::comment_field::raw_column_sql(s.col))
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(

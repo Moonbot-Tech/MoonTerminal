@@ -899,3 +899,53 @@ fn round_bound_keeps_a_value_already_on_its_grid() {
         assert!(round_bound(v, false) <= v, "lower bound {v}");
     }
 }
+
+/// A Min-only field (the Drops `xPriceDelta`) is never suggested or scored with an upper bound,
+/// because Save writes only its Min: (2.9, -10), (3.0, +20), (3.1, -3), (3.2, +1) must not pick [3.0, 3.0].
+#[test]
+fn a_min_only_field_cuts_from_below_only() {
+    let mut vals = vec![(2.9, -10.0), (3.0, 20.0), (3.1, -3.0), (3.2, 1.0)];
+    let s = best_range_bounded(&mut vals, 1, 4, false, true).expect("cutting 2.9 improves");
+    assert_eq!((s.from, s.to), (Some(3.0), Some(3.2)));
+    assert_eq!(s.profit, 18.0);
+    let v = Variant {
+        bounds: vec![Bound {
+            field: "xpricedelta".into(),
+            from: Some(3.0),
+            to: Some(3.0),
+        }],
+        ..Variant::default()
+    };
+    let sql = v.where_sql();
+    assert!(sql.contains(">= 3"), "{sql}");
+    assert!(
+        !sql.contains("<="),
+        "the unsaved Max must not filter: {sql}"
+    );
+}
+
+/// A deal of another detect has no `xPriceDelta`; a DropsPriceDelta Min must leave it in.
+#[test]
+fn a_detect_min_keeps_rows_without_the_value() {
+    let v = Variant {
+        bounds: vec![Bound {
+            field: "xpricedelta".into(),
+            from: Some(3.0),
+            to: None,
+        }],
+        ..Variant::default()
+    };
+    let conn = Connection::open_in_memory().expect("memory db");
+    let kept: i64 = conn
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM (SELECT NULL AS xpricedelta UNION ALL SELECT 2.9 \
+                 UNION ALL SELECT 3.0) o WHERE 1=1{}",
+                v.where_sql()
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .expect("count");
+    assert_eq!(kept, 2);
+}

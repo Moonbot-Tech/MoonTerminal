@@ -16,6 +16,8 @@ mod tests;
 /// trades, must not cover all `tot_c` of them (that is functionally no filter), and must beat
 /// `floor`.
 ///
+/// `open_top` restricts the slice to end at the last edge (a lower bound only).
+///
 /// `floor` is supplied rather than derived from a baseline here: both callers happen to build it
 /// the same way, as the no-filter profit plus [`super::super::metrics::improvement_margin`], but
 /// taking the finished threshold keeps `f64::NEG_INFINITY` — "accept any slice" — expressible,
@@ -37,6 +39,7 @@ pub(super) fn best_pair(
     min_n: usize,
     tot_c: usize,
     floor: f64,
+    open_top: bool,
 ) -> Option<(usize, usize)> {
     let last = profit_at.len() - 1;
     // A slice keeping nothing is not a filter, and admitting it would let the lower edge run
@@ -55,7 +58,10 @@ pub(super) fn best_pair(
     let mut admitted = 0usize;
     let mut min_any: Option<(f64, usize)> = None;
     let mut min_dropping: Option<(f64, usize)> = None;
-    for j in 1..=last {
+    // A field whose strategy parameter is a Min alone can only cut from below, so its slice
+    // must run to the top edge: anything else would score an upper bound Save never writes.
+    let first_j = if open_top { last.max(1) } else { 1 };
+    for j in first_j..=last {
         if count_at[j] < min_n {
             continue;
         }

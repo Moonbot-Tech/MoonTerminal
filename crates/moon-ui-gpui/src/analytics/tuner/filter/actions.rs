@@ -587,6 +587,8 @@ impl AnalyticsView {
         let (mut delta_touched, mut volume_touched, mut bvsv_touched, mut ping_touched) =
             (false, false, false, false);
         let mut base_touched = false;
+        // Any Filters-section threshold written; a detect threshold alone is not one.
+        let mut filter_touched = false;
         // Slot fields with v1 thresholds — candidates for Delta2/Delta3.
         let mut slot_wanted: Vec<(&'static str, Option<f64>, Option<f64>)> = Vec::new();
         for (fi, spec) in FIELDS.iter().enumerate() {
@@ -603,13 +605,14 @@ impl AnalyticsView {
                 let Some(param) = param else { continue };
                 let Some(v) = parse_num(txt) else { continue };
                 changes.push((param.to_string(), fmt_plain(v)));
+                filter_touched |= *class != FieldClass::Detect;
                 match class {
                     FieldClass::Delta => delta_touched = true,
                     FieldClass::Volume => volume_touched = true,
                     FieldClass::BvSv => bvsv_touched = true,
                     FieldClass::Ping => ping_touched = true,
                     FieldClass::Base => base_touched = true,
-                    FieldClass::Filter | FieldClass::DeltaSlot => {}
+                    FieldClass::Filter | FieldClass::DeltaSlot | FieldClass::Detect => {}
                 }
             }
         }
@@ -707,6 +710,7 @@ impl AnalyticsView {
                     changes.push((format!("Delta{n}_Max"), fmt_plain(v)));
                 }
                 delta_touched = true;
+                filter_touched = true;
             }
         }
         // Ignore flags: auto-enable the classes whose thresholds we write, PLUS explicit
@@ -719,7 +723,8 @@ impl AnalyticsView {
         let force = force_enable && has_params;
         let f = self.tuner.strat.clone();
         let mut flags: Vec<(&'static str, bool)> = Vec::new(); // (flag, ignore)
-        if force || f.ignore_filters {
+        // A detect threshold is live under IgnoreFilters, so writing it alone clears nothing.
+        if filter_touched && (force || f.ignore_filters) {
             flags.push(("IgnoreFilters", false));
         }
         if delta_touched && (force || f.ignore_delta) {

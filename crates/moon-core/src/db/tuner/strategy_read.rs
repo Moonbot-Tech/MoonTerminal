@@ -92,8 +92,10 @@ pub struct StratFilters {
 impl StratFilters {
     /// Whether the current strategy flags ignore the field class.
     pub fn class_ignored(&self, class: FieldClass) -> bool {
-        self.ignore_filters
+        // A detect threshold is the signal itself: IgnoreFilters leaves it live.
+        (class != FieldClass::Detect && self.ignore_filters)
             || match class {
+                FieldClass::Detect => false,
                 FieldClass::Filter => false,
                 // BV/SV is a Filters/Volume subgroup gated by BOTH IgnoreVolume and its own
                 // UseBV_SV_Filter switch.

@@ -99,7 +99,7 @@ fn linear_pick_matches_the_exhaustive_scan() {
         }
         for &min_n in &[1usize, 2, 5] {
             for &floor in &[f64::NEG_INFINITY, 0.0, 1.0] {
-                let fast = best_pair(&profit_at, &count_at, min_n, tot_c, floor);
+                let fast = best_pair(&profit_at, &count_at, min_n, tot_c, floor, false);
                 let slow = best_pair_reference(&profit_at, &count_at, min_n, tot_c, floor);
                 assert_eq!(
                     fast, slow,
@@ -132,13 +132,13 @@ fn a_slice_covering_every_trade_is_rejected() {
     let profit_at = vec![0.0, 0.0, 0.0, 50.0, 50.0];
     let count_at = vec![0usize, 0, 0, 10, 10];
     assert_eq!(
-        best_pair(&profit_at, &count_at, 1, 10, f64::NEG_INFINITY),
+        best_pair(&profit_at, &count_at, 1, 10, f64::NEG_INFINITY, false),
         None
     );
     // With one trade parked outside the edges, the same slice no longer covers everything and
     // becomes a legitimate filter.
     assert_eq!(
-        best_pair(&profit_at, &count_at, 1, 11, f64::NEG_INFINITY),
+        best_pair(&profit_at, &count_at, 1, 11, f64::NEG_INFINITY, false),
         Some((0, 3))
     );
 }

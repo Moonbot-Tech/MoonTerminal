@@ -1267,7 +1267,7 @@ fn snapshot_scopes(want: usize, min_trades: usize) -> Vec<Scope> {
     let nf = FIELDS.len();
     let cols = FIELDS
         .iter()
-        .map(|s| format!("\"{}\"", s.col))
+        .map(|s| crate::db::tuner::comment_field::raw_column_sql(s.col))
         .collect::<Vec<_>>()
         .join(", ");
     // The SAME row predicates as the pick above and as the running window's defaults. Without
@@ -1729,7 +1729,7 @@ fn pinned_scope(strategy_id: i64, core_uid: i64) -> Option<Scope> {
     let nf = FIELDS.len();
     let cols = FIELDS
         .iter()
-        .map(|s| format!("\"{}\"", s.col))
+        .map(|s| crate::db::tuner::comment_field::raw_column_sql(s.col))
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(

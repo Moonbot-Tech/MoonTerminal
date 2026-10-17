@@ -583,7 +583,9 @@ impl Search {
             }
             for (t, slot) in base_fail.iter_mut().enumerate() {
                 let v = col[t];
-                let ok = lo.is_none_or(|l| v >= l) && hi.is_none_or(|h| v <= h);
+                // A Min-only field's Max is never saved, so it never filters.
+                let ok = lo.is_none_or(|l| v >= l)
+                    && (super::super::FIELDS[fi].min_only() || hi.is_none_or(|h| v <= h));
                 if !ok {
                     *slot += 1;
                 }
@@ -719,7 +721,7 @@ impl Search {
             let passes = self.base_fail[t] == 0
                 && applied.iter().all(|(fi, from, to)| {
                     let v = self.cols.vals[*fi][t];
-                    v >= *from && v <= *to
+                    v >= *from && (super::super::FIELDS[*fi].min_only() || v <= *to)
                 });
             if passes {
                 out.push(self.cols.profits[t]);
@@ -1153,6 +1155,7 @@ impl Search {
             self.min_n,
             tot_c,
             floor,
+            super::super::FIELDS[fi].min_only(),
         )
     }
 

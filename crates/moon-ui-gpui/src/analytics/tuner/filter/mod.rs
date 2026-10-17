@@ -1143,6 +1143,7 @@ impl AnalyticsView {
             FieldClass::DeltaSlot => t!("analytics.tuner.grp_slot"),
             FieldClass::Delta => t!("analytics.tuner.grp_delta"),
             FieldClass::Volume => t!("analytics.tuner.grp_volume"),
+            FieldClass::Detect => t!("analytics.tuner.grp_detect"),
         }
         .to_string();
         // Subgroup of a MoonBot section (BV/SV in Volumes, the Δ2/Δ3 slots in Deltas):
@@ -1166,8 +1167,10 @@ impl AnalyticsView {
                     .text_color(moon(p.text_soft))
                     .child(label),
             );
-        if strat.found && !(sub && class != FieldClass::BvSv) {
-            let (flag, cur_ignore) = flag_of(class, strat);
+        if strat.found
+            && let Some((flag, cur_ignore)) = flag_of(class, strat)
+            && !(sub && class != FieldClass::BvSv)
+        {
             let staged = self.tuner.staged_ignore.get(flag).copied();
             let shown = staged.unwrap_or(cur_ignore);
             hdr = hdr.child(
@@ -1183,7 +1186,8 @@ impl AnalyticsView {
                     })
                     .child(if shown { "ignore=YES" } else { "ignore=NO" })
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        let (_, cur) = flag_of(class, &this.tuner.strat.clone());
+                        let cur =
+                            flag_of(class, &this.tuner.strat.clone()).is_some_and(|(_, cur)| cur);
                         let now = this.tuner.staged_ignore.get(flag).copied().unwrap_or(cur);
                         if !now == cur {
                             this.tuner.staged_ignore.remove(flag);

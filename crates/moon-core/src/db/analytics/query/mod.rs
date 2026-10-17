@@ -1014,6 +1014,11 @@ pub(in crate::db) fn unified_from_mode(
                         "({}) AS \"basecurrency\"",
                         super::super::quote::effective_ordinal_expr("r", &src.cols)
                     )
+                } else if let Some(derived) =
+                    super::super::tuner::comment_field::derived_sql(c, "r", &src.cols)
+                {
+                    // A tuner field the core writes into the comment, parsed per row here.
+                    format!("{derived} AS \"{c}\"")
                 } else if src.cols.contains(*c) {
                     format!("r.\"{c}\"")
                 } else {

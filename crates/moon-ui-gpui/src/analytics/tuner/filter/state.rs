@@ -825,15 +825,17 @@ pub(in crate::analytics::tuner) fn staged_dirty(
 pub(in crate::analytics::tuner) fn flag_of(
     class: FieldClass,
     f: &StratFilters,
-) -> (&'static str, bool) {
-    match class {
+) -> Option<(&'static str, bool)> {
+    Some(match class {
         FieldClass::Filter => ("IgnoreFilters", f.ignore_filters),
         FieldClass::Ping => ("IgnorePing", f.ignore_ping),
         FieldClass::Base => ("IgnoreBase", f.ignore_base),
         FieldClass::BvSv => ("UseBV_SV_Filter", !f.use_bvsv),
         FieldClass::Delta | FieldClass::DeltaSlot => ("IgnoreDelta", f.ignore_delta),
         FieldClass::Volume => ("IgnoreVolume", f.ignore_volume),
-    }
+        // A detect threshold has no Ignore flag of its own.
+        FieldClass::Detect => return None,
+    })
 }
 
 // The sibling uses explicit imports because the parent's `gpui::*` re-export shadows `#[test]`.
