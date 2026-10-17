@@ -18,7 +18,11 @@ pub(in crate::analytics::tuner) struct Classified {
 }
 
 /// The next retention edge that can change a covered short tail's sample bucket.
-fn next_source_change(row: &DealRow, min_tail_s: u32, now_ms: i64) -> Option<i64> {
+pub(in crate::analytics::tuner) fn next_source_change(
+    row: &DealRow,
+    min_tail_s: u32,
+    now_ms: i64,
+) -> Option<i64> {
     use moon_core::market::trade_replay::venue_caps::{
         ARCHIVE_DEPTH_MS, RETENTION_SAFETY_MS, archive_route, trade_route,
     };

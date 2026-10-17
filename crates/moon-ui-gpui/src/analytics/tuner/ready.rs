@@ -179,7 +179,8 @@ pub(in crate::analytics) struct ReadyKey {
     /// Bumped on every hand-made reload of the strategy list (period, mode, metric, cores).
     pub(in crate::analytics) scope_gen: u64,
     /// The report generation: a trade closed or a row was rewritten. The valuation generation
-    /// is left out — a revaluation moves no deal's tape or sample.
+    /// is left out — a revaluation moves no deal's tape or sample. A move recounts only the
+    /// strategies whose deals changed ([`ReadyPass::recount_set`]).
     pub(in crate::analytics) report_gen: u64,
     /// The tape store's revision: prints were filed for some market. Only a filed market some
     /// listed strategy trades on makes counts stale ([`ReadyPass::stale_strategies`]).
@@ -188,15 +189,22 @@ pub(in crate::analytics) struct ReadyKey {
     pub(in crate::analytics) model: ModelSettings,
     /// The minimum tape tail past the close a row needs to be fit, in seconds.
     pub(in crate::analytics) min_tail_s: u32,
+    /// The station's refusal revision: a refused or admitted row changes its verdict.
+    pub(in crate::analytics) refusal_revision: u64,
+    /// The automatic tape sources (venue, cores): whether a short tail can still be filled.
+    pub(in crate::analytics) switches: (bool, bool),
 }
 
 impl ReadyKey {
-    /// Whether moving from `self` to `next` makes every count wrong at once (another scope or
-    /// another model), rather than a few strategies' counts stale (a report or tape change).
+    /// Whether moving from `self` to `next` makes every count wrong at once (another scope,
+    /// model, tail floor, station refusal set or source switch), rather than a few strategies'
+    /// counts stale (a report or tape change).
     pub(in crate::analytics) fn restarts(&self, next: &ReadyKey) -> bool {
         self.scope_gen != next.scope_gen
             || self.model != next.model
             || self.min_tail_s != next.min_tail_s
+            || self.refusal_revision != next.refusal_revision
+            || self.switches != next.switches
     }
 }
 
@@ -220,6 +228,9 @@ pub(in crate::analytics) struct ReadyProgress {
     /// `(strategy, (exchange key, market))` of each replayed row left without tape: the only
     /// rows a later filing can change.
     waiting: Mutex<Vec<(String, (String, String))>>,
+    /// Per counted strategy, the earliest moment the clock alone changes one of its rows'
+    /// verdicts ([`verdict_deadline`]).
+    deadlines: Mutex<Vec<(String, Option<i64>)>>,
 }
 
 /// Remaining time at the observed pass speed, after a three-second warm-up.
@@ -335,6 +346,22 @@ impl ReadyProgress {
         !cancelled()
     }
 
+    fn settle(&self, key: String, deadline: Option<i64>) {
+        self.deadlines
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((key, deadline));
+    }
+
+    fn drain_deadlines(&self) -> Vec<(String, Option<i64>)> {
+        std::mem::take(
+            &mut *self
+                .deadlines
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
     fn push(&self, key: String, ready: Readiness) {
         self.partial
             .lock()
@@ -379,6 +406,16 @@ pub(in crate::analytics) struct ReadyPass {
     markets: HashMap<(String, String), HashSet<String>>,
     /// The running pass recounts only some strategies and merges into `counts`.
     partial: bool,
+    /// Each counted strategy's deals and addresses, folded ([`group_signature`]): a report
+    /// move recounts only the strategies whose signature changed.
+    signatures: HashMap<String, u64>,
+    /// The running pass's signatures of the strategies it recounts, adopted when it lands.
+    pending: HashMap<String, u64>,
+    /// When the clock alone flips a verdict of some strategy's rows (a retention edge, an
+    /// archive retry); past it, that strategy is recounted.
+    deadlines: HashMap<String, i64>,
+    /// Strategies whose deadline passed and for which a pass is armed.
+    due: HashSet<String>,
     /// Bumped whenever `counts` or `run` changes, so the list's memo knows to re-sort.
     pub(in crate::analytics) generation: u64,
     /// `counts` classified, shared with the list's memo.
@@ -402,6 +439,10 @@ impl Default for ReadyPass {
             counts: HashMap::new(),
             markets: HashMap::new(),
             partial: false,
+            signatures: HashMap::new(),
+            pending: HashMap::new(),
+            deadlines: HashMap::new(),
+            due: HashSet::new(),
             generation: 0,
             classes: Arc::default(),
             chosen: None,
@@ -537,8 +578,12 @@ impl ReadyPass {
         if self.ran.is_none_or(|ran| ran.restarts(&key)) {
             self.counts.clear();
             self.classes = Arc::default();
+            self.signatures.clear();
+            self.deadlines.clear();
         }
         self.partial = only.is_some();
+        self.pending.clear();
+        self.due.clear();
         match only {
             None => self.markets.clear(),
             // The recount files its strategies' tapeless rows afresh.
@@ -607,16 +652,29 @@ impl ReadyPass {
         if seq != self.seq {
             return (false, false);
         }
+        let mut deadlines = Vec::new();
         if let ReadyRun::Running { progress } = &self.run {
             let waiting = progress.drain_waiting();
+            deadlines = progress.drain_deadlines();
             self.wait(waiting);
         }
         match result {
             Ok(Some(counts)) => {
+                let pending = std::mem::take(&mut self.pending);
                 if self.partial {
+                    self.signatures.extend(pending);
+                    self.deadlines.retain(|k, _| !counts.contains_key(k));
                     self.counts.extend(counts);
                 } else {
+                    self.signatures = pending;
+                    self.deadlines.clear();
                     self.counts = counts;
+                }
+                for (key, deadline) in deadlines {
+                    match deadline {
+                        Some(at) => self.deadlines.insert(key, at),
+                        None => self.deadlines.remove(&key),
+                    };
                 }
                 self.reclassify();
                 self.run = ReadyRun::Done;
@@ -643,21 +701,22 @@ impl ReadyPass {
     ///     refiled: The markets filed since the finished pass's tape revision, as
     ///         `trade_cache::filed_since` names them.
     ///
+    ///     now_ms: The clock, against the strategies' verdict deadlines.
+    ///
     /// Returns:
-    ///     `None` when only a whole pass answers it: no finished pass, another scope, model or
-    ///     report. Otherwise the strategies trading on a refiled market — empty when the move
-    ///     touched none of them (a tab switch, a selection, a print filed for another list),
-    ///     and then the finished counts stand as they are.
+    ///     `None` when only a whole pass answers it: no finished pass, another scope, model,
+    ///     tail floor, refusal set or source switch. Otherwise the strategies trading on a
+    ///     refiled market or past a verdict deadline — empty when the move touched none of them
+    ///     (a tab switch, a selection, a print filed for another list). A report move adds the
+    ///     strategies whose deals changed once the pass has read them ([`Self::recount_set`]).
     pub(in crate::analytics) fn stale_strategies(
         &self,
         key: &ReadyKey,
         refiled: &HashSet<(String, String)>,
+        now_ms: i64,
     ) -> Option<HashSet<String>> {
         let ran = self.ran?;
-        if !matches!(self.run, ReadyRun::Done)
-            || ran.restarts(key)
-            || ran.report_gen != key.report_gen
-        {
+        if !matches!(self.run, ReadyRun::Done) || ran.restarts(key) {
             return None;
         }
         Some(
@@ -665,9 +724,103 @@ impl ReadyPass {
                 .iter()
                 .filter_map(|m| self.markets.get(m))
                 .flatten()
+                .chain(self.due.iter())
+                .chain(
+                    self.deadlines
+                        .iter()
+                        .filter(|(_, at)| **at <= now_ms)
+                        .map(|(k, _)| k),
+                )
                 .cloned()
                 .collect(),
         )
+    }
+
+    /// Whether the finished counts stand for `key` as they are: nothing went stale and the
+    /// report did not move (a move must read the deals to know what changed).
+    pub(in crate::analytics::tuner) fn stands(
+        &self,
+        key: &ReadyKey,
+        stale: Option<&HashSet<String>>,
+    ) -> bool {
+        stale.is_some_and(HashSet::is_empty)
+            && self.ran.is_some_and(|ran| ran.report_gen == key.report_gen)
+    }
+
+    /// Move the strategies whose verdict deadline passed to `due`, once.
+    ///
+    /// Returns:
+    ///     Whether any did — a finished pass then has strategies to recount though its
+    ///     inputs did not move.
+    pub(in crate::analytics::tuner) fn take_due(&mut self, now_ms: i64) -> bool {
+        if !matches!(self.run, ReadyRun::Done) {
+            return false;
+        }
+        let due: Vec<String> = self
+            .deadlines
+            .iter()
+            .filter(|(_, at)| **at <= now_ms)
+            .map(|(k, _)| k.clone())
+            .collect();
+        if due.is_empty() {
+            return false;
+        }
+        for key in &due {
+            self.deadlines.remove(key);
+        }
+        self.due.extend(due);
+        true
+    }
+
+    /// Settle what the running pass recounts once its deals are read and grouped.
+    ///
+    /// Args:
+    ///     groups: Every strategy of the scope with its rows ([`group_by_strategy`]).
+    ///     only: For a partial pass, the strategies already known stale; `None` for a whole
+    ///         pass.
+    ///     progress: The running pass's handle; its kept and total counts are set here.
+    ///
+    /// Returns:
+    ///     `None` for a whole pass. Otherwise `only` plus every strategy whose deals or
+    ///     addresses changed and every new one. A strategy gone from the scope loses its count.
+    pub(in crate::analytics::tuner) fn recount_set(
+        &mut self,
+        groups: &[StrategyRows],
+        only: Option<&HashSet<String>>,
+        progress: &ReadyProgress,
+    ) -> Option<HashSet<String>> {
+        let signatures: HashMap<String, u64> = groups
+            .iter()
+            .map(|(key, rows)| (key.clone(), group_signature(rows)))
+            .collect();
+        let Some(only) = only else {
+            self.pending = signatures;
+            return None;
+        };
+        let recount: HashSet<String> = signatures
+            .iter()
+            .filter(|(key, sig)| only.contains(*key) || self.signatures.get(*key) != Some(sig))
+            .map(|(key, _)| key.clone())
+            .collect();
+        let before = self.counts.len();
+        self.counts.retain(|k, _| signatures.contains_key(k));
+        self.signatures.retain(|k, _| signatures.contains_key(k));
+        self.deadlines.retain(|k, _| signatures.contains_key(k));
+        self.markets.retain(|_, keys| {
+            keys.retain(|k| signatures.contains_key(k) && !recount.contains(k));
+            !keys.is_empty()
+        });
+        if self.counts.len() != before {
+            self.reclassify();
+        }
+        self.pending = signatures
+            .into_iter()
+            .filter(|(key, _)| recount.contains(key))
+            .collect();
+        let kept = self.counts.keys().filter(|k| !recount.contains(*k)).count();
+        progress.kept.store(kept, Ordering::Relaxed);
+        progress.total.store(recount.len(), Ordering::Relaxed);
+        Some(recount)
     }
 
     /// Take `key` as the finished pass's own inputs: nothing it counted moved.
@@ -833,6 +986,52 @@ pub(in crate::analytics::tuner) fn group_by_strategy(
     rest.sort_by(|a, b| a.0.cmp(&b.0));
     out.extend(rest);
     out
+}
+
+/// One strategy's deals and where their prints live, folded: equal signatures replay the same
+/// rows ([`super::ticks::signature::signature_of`] over the deals, every address beside).
+pub(in crate::analytics::tuner) fn group_signature(
+    rows: &[(Deal, Option<Arc<RowAddress>>)],
+) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write_u64(super::ticks::signature::signature_of(
+        rows.iter().map(|(deal, _)| deal),
+    ));
+    super::ticks::signature::hash_sorted(
+        &mut hasher,
+        rows.iter()
+            .map(|(deal, address)| ((deal.core_uid, deal.report_uid), address)),
+    );
+    hasher.finish()
+}
+
+/// The earliest moment past `now_ms` at which the clock alone changes a verdict among `rows`:
+/// a retention edge of a covered short tail (the same edge the card's chip cache waits for,
+/// [`super::ticks::rows::next_source_change`]) or an archive retry coming due.
+pub(in crate::analytics::tuner) fn verdict_deadline(
+    rows: &[DealRow],
+    now_ms: i64,
+    min_tail_s: u32,
+) -> Option<i64> {
+    rows.iter()
+        .filter_map(|row| {
+            let retry = match row.tape {
+                TapeStatus::Refused(
+                    moon_core::market::trade_replay::TickStatus::ArchivePending { retry_at_ms },
+                ) => Some(retry_at_ms),
+                _ => None,
+            };
+            [
+                super::ticks::rows::next_source_change(row, min_tail_s, now_ms),
+                retry,
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|&at| at > now_ms)
+            .min()
+        })
+        .min()
 }
 
 /// Tape bytes a pass reads ahead of the replay: the fetch thread starts no further strategy
@@ -1042,6 +1241,10 @@ pub(in crate::analytics::tuner) fn count_strategies(
                 };
                 data.retain_within_cap();
                 let ready = Readiness::of_rows(&data.rows, now_ms, min_tail_s);
+                progress.settle(
+                    key.clone(),
+                    verdict_deadline(&data.rows, now_ms, min_tail_s),
+                );
                 progress.release(bytes);
                 progress.push(key.clone(), ready);
                 Some((key, ready))
@@ -1070,6 +1273,8 @@ impl AnalyticsView {
             tape_rev: moon_core::market::trade_replay::trade_cache::filed_since(u64::MAX).0,
             model: super::ticks::model_cfg::current(),
             min_tail_s: super::ticks::tail::effective_s(),
+            refusal_revision: super::ticks::fetch::station::refusal_revision(),
+            switches: super::ticks::tail::switches(),
         }
     }
 
@@ -1085,12 +1290,22 @@ impl AnalyticsView {
                 crate::analytics::profit_load::ProfitLoadState::Loading
             );
         let key = self.ready_key();
-        if !loaded || self.ready.launched == Some(key) {
+        if !loaded {
             return;
+        }
+        let now_ms = moon_core::util::time::now_unix_ms_i64();
+        if self.ready.launched == Some(key) {
+            // The inputs stand, but the clock may have flipped some strategy's verdict.
+            if !self.ready.take_due(now_ms) {
+                return;
+            }
         }
         // A tab switch or a selection moves the tape revision (the card's own replay files its
         // markets) and nothing else; a finished pass none of whose markets were filed stands.
-        if self.ready_stale(&key).is_some_and(|stale| stale.is_empty()) {
+        if self
+            .ready
+            .stands(&key, self.ready_stale(&key, now_ms).as_ref())
+        {
             self.ready.adopt(key);
             return;
         }
@@ -1118,9 +1333,11 @@ impl AnalyticsView {
                         this.ready.queued = true;
                         return;
                     }
-                    match this.ready_stale(&key) {
-                        Some(stale) if stale.is_empty() => this.ready.adopt(key),
-                        only => this.run_ready_pass(key, only, cx),
+                    let stale = this.ready_stale(&key, moon_core::util::time::now_unix_ms_i64());
+                    if this.ready.stands(&key, stale.as_ref()) {
+                        this.ready.adopt(key);
+                    } else {
+                        this.run_ready_pass(key, stale, cx);
                     }
                 });
             });
@@ -1129,10 +1346,10 @@ impl AnalyticsView {
 
     /// The strategies a pass for `key` must recount ([`ReadyPass::stale_strategies`]), with
     /// the markets filed since the finished pass read off the tape store now.
-    fn ready_stale(&self, key: &ReadyKey) -> Option<HashSet<String>> {
+    fn ready_stale(&self, key: &ReadyKey, now_ms: i64) -> Option<HashSet<String>> {
         let since = self.ready.ran?.tape_rev;
         let (_, refiled) = moon_core::market::trade_replay::trade_cache::filed_since(since);
-        self.ready.stale_strategies(key, &refiled)
+        self.ready.stale_strategies(key, &refiled, now_ms)
     }
 
     /// Run the pass now: the scope's deals off the database, their addresses resolved here,
@@ -1201,8 +1418,8 @@ impl AnalyticsView {
         let addresses = self.resolve_addresses(&deals, cx);
         let order = self.ready_priority_order();
         let mut groups = group_by_strategy(deals, &addresses, &order);
-        if let Some(only) = &only {
-            groups.retain(|(key, _)| only.contains(key));
+        if let Some(recount) = self.ready.recount_set(&groups, only.as_ref(), &progress) {
+            groups.retain(|(key, _)| recount.contains(key));
         }
         let defaults = self.filter_defaults(cx);
         let klines = self.backend.read(cx).session.market_source().kline_cache();

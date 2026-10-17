@@ -64,7 +64,7 @@ mod risk;
 pub(in crate::analytics::tuner) mod rows;
 mod sample;
 mod sections;
-mod signature;
+pub(in crate::analytics::tuner) mod signature;
 pub(in crate::analytics) mod state;
 mod summary;
 pub(in crate::analytics) mod tail;
