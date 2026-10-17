@@ -5,7 +5,7 @@
 //! stamps, what came of it, whether the terminal holds its tape, and whether the model
 //! reproduces the fact; a double-click opens the trade window on it. Every row of the scope is
 //! shown; the switch under the table narrows it to the sample the variants and the search run
-//! on — the rows whose tape covers the window AND which the model reproduces (`DealRow::fit`) —
+//! on — the rows whose tape covers the window AND which the model reproduces (`DealRow::fit_with`) —
 //! and the status line says how many that is out of the scope; the table's head opens the model's
 //! settings (`cfg.rs`), which decide its ✓ column. Under the table, behind a rail, the trade pane
 //! (`trade_pane.rs`): the selected deal as its trade window draws it, with the variants' trades
@@ -93,6 +93,7 @@ impl AnalyticsView {
         // sample the variants run on.
         let now_ms = chrono::Utc::now().timestamp_millis();
         let min_tail_s = tail::effective_s();
+        let admission = tail::Admission::at(min_tail_s, now_ms);
         let drawn = rows::order_for(&mut self.ticks, min_tail_s, now_ms).len();
         let counts = rows::counts_at(&mut self.ticks, min_tail_s, now_ms);
         let only_fit = self.ticks.only_fit;
@@ -111,7 +112,7 @@ impl AnalyticsView {
                 if fetch::station_available() {
                     d.rows
                         .iter()
-                        .filter(|row| fetch::station_load_candidate(row, now_ms))
+                        .filter(|row| fetch::station_load_candidate(row, &admission))
                         .count()
                 } else {
                     d.fetchable_at(now_ms, min_tail_s).count()
@@ -183,7 +184,7 @@ impl AnalyticsView {
                                     p,
                                     scale,
                                     row_h,
-                                    (min_tail_s, now_ms),
+                                    &admission,
                                     app,
                                 ))
                             })
@@ -1138,14 +1139,13 @@ fn deal_row(
     p: MoonPalette,
     scale: f32,
     row_h: f32,
-    sample: (u32, i64),
+    admission: &tail::Admission,
     cx: &App,
 ) -> AnyElement {
     let d = &row.deal;
-    let (min_tail_s, now_ms) = sample;
-    let why = why::DealWhy::of(row, min_tail_s, now_ms);
+    let why = why::DealWhy::of_with(row, admission);
     let tape_why = if row.tape == state::TapeStatus::Covered {
-        why::DealWhy::tape_of(row, min_tail_s, now_ms)
+        why::DealWhy::tape_of_with(row, admission)
     } else {
         why
     };

@@ -7,6 +7,7 @@ use super::super::summary::{SummaryModel, Verdict};
 use super::super::tape::PackedTape;
 use super::Readiness;
 use crate::analytics::tuner::ready::ReadyClass;
+use crate::analytics::tuner::ticks::tail::Admission;
 use moon_core::db::tuner::ticks::{Deal, Deltas};
 
 fn deal(uid: i64) -> Deal {
@@ -243,7 +244,7 @@ fn the_breakdown_partitions_overlapping_exclusions() {
     assert_eq!(
         ready.fit,
         rows.iter()
-            .filter(|row| row.fit() && row.ticks.is_some())
+            .filter(|row| row.fit_with(&Admission::current()) && row.ticks.is_some())
             .count()
     );
 }

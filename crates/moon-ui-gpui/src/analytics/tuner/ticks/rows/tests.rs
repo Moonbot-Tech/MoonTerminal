@@ -1,6 +1,7 @@
 use super::super::columns::{COL_HELD, COL_MODEL, COL_PROFIT, COL_RESULT, COL_TAPE, COL_TIME};
 use super::super::state::{DealRow, TapeStatus, TicksData, TicksState};
 use super::{order_for, paint_fixed, result_pct};
+use crate::analytics::tuner::ticks::tail::Admission;
 use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
 use moon_core::market::trade_replay::TickStatus;
 
@@ -29,11 +30,11 @@ fn known_routeless_offers_keep_the_original_rule() {
             entry_line: None,
             held: Some((30_000, 30_000)),
         };
-        assert!(row.fetchable_at(now, 60));
+        assert!(row.fetchable_with(&Admission::at(60, now)));
         row.tape = TapeStatus::Covered;
-        assert!(!row.fetchable_at(now, 60));
+        assert!(!row.fetchable_with(&Admission::at(60, now)));
         row.tape = TapeStatus::Refused(TickStatus::NoRoute);
-        assert!(!row.fetchable_at(now, 60));
+        assert!(!row.fetchable_with(&Admission::at(60, now)));
     }
 }
 
@@ -58,19 +59,19 @@ fn unlisted_manual_fetch_includes_recent_empty_and_short_tail_rows() {
         entry_line: None,
         held: None,
     };
-    assert!(row.fetchable_at(now, 60));
+    assert!(row.fetchable_with(&Admission::at(60, now)));
     row.tape = TapeStatus::Covered;
     row.verdict = Some(verdict(Some(true), Some(true)));
     row.held = Some((30_000, 30_000));
-    assert!(row.fetchable_at(now, 60));
+    assert!(row.fetchable_with(&Admission::at(60, now)));
     row.held = Some((30_000, 60_000));
-    assert!(!row.fetchable_at(now, 60));
+    assert!(!row.fetchable_with(&Admission::at(60, now)));
     row.deal.buy_ms = now - 49 * 3_600_000;
     row.deal.close_ms = row.deal.buy_ms + 1_000;
     row.held = Some((30_000, 30_000));
-    assert!(!row.fetchable_at(now, 60));
+    assert!(!row.fetchable_with(&Admission::at(60, now)));
     row.tape = TapeStatus::Missing;
-    assert!(!row.fetchable_at(now, 60));
+    assert!(!row.fetchable_with(&Admission::at(60, now)));
 }
 
 /// Manual fetch keeps publication waits retryable; automatic reloads wait for the deadline.
@@ -115,7 +116,7 @@ fn unpublished_rows_are_offered_by_reload_and_marked_fetching() {
     );
 }
 
-/// Restricting fetchable rows to Missing strands pad-covered tails even on archive venues.
+/// Enabled archives still extend short tails; disabled venues admit old tape instead of waiting.
 #[test]
 fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     use super::super::state::RowAddress;
@@ -139,8 +140,21 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     };
     row.deal.coin = "XALPHA".into();
     assert!(
-        row.fetchable_at(now, 60),
-        "daily archive beyond REST retention"
+        super::super::tail::fillable_at(
+            row.address.as_ref().unwrap(),
+            row.deal.report_uid,
+            row.deal.close_ms,
+            30_000,
+            now,
+            (true, false),
+        ),
+        "daily archive beyond REST retention remains reachable when enabled"
+    );
+    let venues_on = moon_core::market::trade_replay::tape_autoload();
+    assert_eq!(
+        row.fetchable_with(&Admission::at(60, now)),
+        venues_on,
+        "old short tails wait only for enabled archives"
     );
     let data = TicksData {
         rows: vec![row.clone()],
@@ -148,20 +162,26 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     };
     assert_eq!(
         data.fetchable_at(now, 60).count(),
-        1,
-        "button offers the covered row"
+        usize::from(venues_on),
+        "an admitted short tail is not counted again as waiting for tape"
     );
     row.held = Some((30_000, 60_000));
-    assert!(!row.fetchable_at(now, 60), "enough tail needs no refill");
+    assert!(
+        !row.fetchable_with(&Admission::at(60, now)),
+        "enough tail needs no refill"
+    );
     row.held = Some((30_000, 30_000));
     row.deal.close_ms = now - 400 * day;
-    assert!(!row.fetchable_at(now, 60), "outside archive catch-up depth");
+    assert!(
+        !row.fetchable_with(&Admission::at(60, now)),
+        "outside archive catch-up depth"
+    );
     row.deal.close_ms = now - 21 * day;
     Arc::make_mut(row.address.as_mut().unwrap()).venue =
         Some(moon_core::venue::venue(8).expect("REST-only venue"));
     row.deal.close_ms = now - 60 * day;
     assert!(
-        !row.fetchable_at(now, 60),
+        !row.fetchable_with(&Admission::at(60, now)),
         "unsupported old tape stays excluded"
     );
     let unavailable = TicksData {
@@ -172,7 +192,10 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     row.deal.close_ms = now - 60_000;
     Arc::make_mut(row.address.as_mut().unwrap()).venue =
         Some(moon_core::venue::venue(4).expect("futures venue"));
-    assert!(row.fetchable_at(now, 60), "recent REST tail");
+    assert!(
+        row.fetchable_with(&Admission::at(60, now)),
+        "recent REST tail"
+    );
 }
 
 /// A held-read started before a fetch must not put its old pad tail back over the extension.
@@ -389,6 +412,81 @@ fn chip_state() -> TicksState {
     rows[6].ticks = None;
     rows[7].tape = TapeStatus::NoAddress;
     state
+}
+
+/// Keeping a classification past its exact core-retention edge strands the row outside fit-only.
+#[test]
+fn short_tail_cache_expires_at_the_core_retention_edge() {
+    use super::super::state::RowAddress;
+    use super::super::why::DealChip;
+    use std::sync::Arc;
+    let mut state = replayable_state(1);
+    let row = &mut state.data.data_mut().unwrap().rows[0];
+    row.deal.coin = "XALPHA".into();
+    row.address = Some(Arc::new(RowAddress {
+        core_uid: 1,
+        venue: None,
+        exchange_key: "EX-XX".into(),
+        market: "XALPHA".into(),
+        btc_market: None,
+    }));
+    row.held = Some((30_000, 30_000));
+    let edge = row.deal.close_ms + 30_000 + 48 * 3_600_000;
+    state.only_fit = true;
+    assert_eq!(
+        super::counts_at(&mut state, 60, edge).get(DealChip::ShortTail),
+        1
+    );
+    assert!(order_for(&mut state, 60, edge).is_empty());
+    assert_eq!(
+        super::counts_at(&mut state, 60, edge + 1).get(DealChip::AcceptedShortTail),
+        1
+    );
+    assert_eq!(order_for(&mut state, 60, edge + 1), [0]);
+}
+
+/// A prior switch snapshot must invalidate both footer counts and fit-only order without new rows.
+#[test]
+fn source_switch_changes_retire_all_derived_chip_caches() {
+    use super::super::state::RowAddress;
+    use super::super::why::DealChip;
+    use std::sync::Arc;
+    let mut state = replayable_state(1);
+    let row = &mut state.data.data_mut().unwrap().rows[0];
+    row.deal.coin = "XALPHA".into();
+    row.address = Some(Arc::new(RowAddress {
+        core_uid: 1,
+        venue: None,
+        exchange_key: "EX-XX".into(),
+        market: "XALPHA".into(),
+        btc_market: None,
+    }));
+    row.held = Some((30_000, 30_000));
+    let now = row.deal.close_ms + 3_600_000;
+    let live = super::super::tail::switches();
+    state.only_fit = true;
+    super::counts_at(&mut state, 60, now);
+    order_for(&mut state, 60, now);
+    // Model a coherent prior frame under the opposite core switch, without racing global settings.
+    let previous = if live.1 {
+        DealChip::AcceptedShortTail
+    } else {
+        DealChip::ShortTail
+    };
+    let classified = state.classified.as_mut().unwrap();
+    classified.source_switches = (live.0, !live.1);
+    classified.chips = vec![previous];
+    let counts = state.chip_counts.as_mut().unwrap();
+    counts.counts = [0; DealChip::ALL.len()];
+    counts.counts[previous as usize] = 1;
+    state.order.as_mut().unwrap().order = if live.1 { vec![0] } else { vec![] };
+    let counts = super::counts_at(&mut state, 60, now);
+    assert_eq!(counts.get(DealChip::ShortTail), usize::from(live.1));
+    assert_eq!(
+        counts.get(DealChip::AcceptedShortTail),
+        usize::from(!live.1)
+    );
+    assert_eq!(order_for(&mut state, 60, now).len(), usize::from(!live.1));
 }
 
 /// Grouping by reason must keep the fit sample first and preserve chronological ties.
@@ -826,7 +924,10 @@ fn the_cap_keeps_only_the_fit_rows_tapes_and_counts_them_packed() {
         ],
         ..TicksData::default()
     };
-    assert!(data.rows[0].fit() && !data.rows[1].fit());
+    assert!(
+        data.rows[0].fit_with(&Admission::current())
+            && !data.rows[1].fit_with(&Admission::current())
+    );
     data.retain_within_cap();
     assert!(data.rows[0].ticks.is_some());
     assert!(
@@ -854,11 +955,15 @@ fn a_fit_row_without_its_tape_is_the_one_that_lost_it() {
         entry_line: None,
         held: Some((60_000, 60_000)),
     };
-    assert!(!row.lost_tape());
+    let admission = super::super::tail::Admission::current();
+    assert!(!row.lost_tape(&admission));
     row.ticks = None;
-    assert!(row.lost_tape());
+    assert!(row.lost_tape(&admission));
     row.verdict = Some(verdict(Some(false), Some(true)));
-    assert!(!row.lost_tape(), "an unfit row keeps no tape by design");
+    assert!(
+        !row.lost_tape(&admission),
+        "an unfit row keeps no tape by design"
+    );
 }
 
 /// A reproduced row whose tape stops short of the shortest tail past the close is out of the
@@ -875,9 +980,9 @@ fn a_reproduced_row_with_a_short_tail_is_not_fit() {
         entry_line: None,
         held: Some((60_000, 0)),
     };
-    assert!(!row.fit());
+    assert!(!row.fit_with(&Admission::current()));
     row.held = Some((60_000, 7_200_000));
-    assert!(row.fit());
+    assert!(row.fit_with(&Admission::current()));
 }
 
 /// A reproduced row with a hole in its tape is out of the sample: a variant reaching into the
@@ -893,14 +998,14 @@ fn a_reproduced_row_with_a_hole_in_its_tape_is_not_fit() {
         entry_line: None,
         held: Some((60_000, 7_200_000)),
     };
-    assert!(row.fit());
+    assert!(row.fit_with(&Admission::current()));
     row.deal.gap = Some(moon_core::db::tuner::ticks::gap::TapeGap {
         from_ms: 1_500,
         to_ms: 2_500,
         fact_line: None,
         fact_stop: None,
     });
-    assert!(!row.fit());
+    assert!(!row.fit_with(&Admission::current()));
 }
 
 /// A percent that rounds to zero must not read `-0.00`. The sign the colour uses is the same

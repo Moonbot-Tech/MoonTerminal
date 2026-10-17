@@ -1,6 +1,10 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.chip.accepted_short_tail: "utilizável: cauda curta"
+analytics.ticks.chip.accepted_short_tail_tip: "Operações utilizáveis com fita completa até o fechamento. A cauda é curta e nenhuma fonte ativada pode ampliá-la."
+analytics.ticks.why.accepted_short_tail: "cauda curta (utilizável)"
+analytics.ticks.why.accepted_short_tail.why: "A fita cobre a operação até o fechamento. Nenhuma fonte ativada pode ampliar a cauda, então o ajuste usa a fita disponível. Variantes que a ultrapassam permanecem abertas."
 analytics.ticks.col.why: "por que fora da amostra"
 analytics.ticks.legend.hit: "coincidiu"
 analytics.ticks.legend.miss: "o modelo saiu diferente"

@@ -7,6 +7,153 @@ use moon_core::market::candles::{
 
 use super::window::{chart_history_floor_ms, hide_start_rel};
 
+/// Local readiness needs timed retries at unchanged archive revisions, then freezes on acceptance.
+#[test]
+fn replay_retry_progresses_without_following_the_live_tick_clock() {
+    use moon_core::market::{MarketRevisions, ReplayPriceLinesRead};
+    use std::time::{Duration, Instant};
+    let start = Instant::now();
+    let mut revisions = MarketRevisions {
+        archive: 7,
+        generation: 1,
+        ..Default::default()
+    };
+    let cached = super::history_signature(Some(revisions), true);
+    let mut retry = super::next_replay_price_retry(None, start);
+    let mut reads = 1;
+    for ms in (0..10_000).step_by(50) {
+        let now = start + Duration::from_millis(ms);
+        revisions.history += 1;
+        let source_changed = super::history_signature(Some(revisions), true) != cached;
+        if source_changed || super::replay_price_retry_due(retry, now) {
+            reads += 1;
+            let demand = ReplayPriceLinesRead {
+                capacity: 1,
+                retry_at: (reads == 2).then_some(now + Duration::from_secs(3)),
+            };
+            retry = super::next_replay_price_retry(Some(demand), now);
+        }
+    }
+    assert_eq!(
+        reads, 3,
+        "one unready read, one local refusal, then acceptance"
+    );
+    assert!(retry.is_none());
+}
+
+/// Consuming the provider-generation edge must not strand a quiet pane with empty price lines.
+#[test]
+fn a_quiet_replay_retries_missing_readers_at_the_same_archive_revision() {
+    // The debug chart sync stack exceeds the Windows test harness's default thread stack.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(quiet_replay_retry)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Drive both pull guards and the actual replay read on a quiet, provider-less chart.
+fn quiet_replay_retry() {
+    use gpui::{Bounds, GpuFrameInfo, point, px, size};
+    use moon_core::config::ChartTheme;
+    use moon_core::market::trade_replay::{
+        Coverage, TickStatus, TickThinning, TradeReplaySeries, TradeReplaySource, replay_window_ms,
+    };
+    use moon_core::market::{MarketDataSource, MarketStore};
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+    let window = replay_window_ms(100_000, 110_000, 30_000).unwrap();
+    let mut engine = crate::chartdx::ChartEngine::new(0.0, ChartTheme::default());
+    engine.open(42, "XALPHAUSDT");
+    engine.set_follow(false, 140_000.0);
+    engine.set_trade_replay(Some(Rc::new(TradeReplaySeries {
+        source: TradeReplaySource::CoreTicks,
+        venue: None,
+        window,
+        tf_ms: 60_000,
+        candles: Vec::new(),
+        ticks: vec![moon_core::feed::Tick {
+            time_ms: 105_000.0,
+            price: 1.0,
+            qty: 1.0,
+            side: moon_core::feed::Side::Buy,
+        }],
+        identity: 1,
+        tick_status: TickStatus::Served,
+        thinning: TickThinning::Raw,
+        partial: false,
+        side_slots: Vec::new(),
+        covered: Coverage::one((window.from_ms, window.to_ms)),
+    })));
+    engine.set_scene_visible(true);
+    let mut data = engine.data.borrow_mut();
+    data.set_market_source(Some(MarketDataSource::new(MarketStore::shared(0.0))));
+    data.frame(GpuFrameInfo {
+        now: Instant::now(),
+        bounds: Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(1000.0), px(600.0)),
+        },
+        scale_factor: 1.0,
+        content_zoom: 1.0,
+        presentable: true,
+    });
+    {
+        let mut render = data.render.borrow_mut();
+        let pane = render.panes.iter_mut().find(|pane| pane.active).unwrap();
+        assert_eq!(pane.source_archive, 0);
+        assert!(pane.replay_prices_retry_at.is_some());
+        pane.replay_prices_retry_at = Some(Instant::now() + Duration::from_secs(60));
+    }
+    assert!(
+        !data.pull_market_source_if_visible(),
+        "pending does not mean every frame"
+    );
+    let overdue = Instant::now() - Duration::from_secs(1);
+    {
+        let mut render = data.render.borrow_mut();
+        let pane = render.panes.iter_mut().find(|pane| pane.active).unwrap();
+        pane.replay_prices_retry_at = Some(overdue);
+    }
+    assert!(
+        data.pull_market_source_if_visible(),
+        "no new market revision is required"
+    );
+    let render = data.render.borrow();
+    let pane = render.panes.iter().find(|pane| pane.active).unwrap();
+    assert_eq!(pane.source_archive, 0);
+    assert!(
+        pane.replay_prices_retry_at.is_some_and(|at| at > overdue),
+        "the due read reschedules unavailable readers"
+    );
+}
+
+/// A live tick must not re-copy frozen replay price lines; a late archive merge must do so.
+#[test]
+fn replay_history_ignores_live_ticks_but_reads_archive_merges() {
+    let mut revisions = moon_core::market::MarketRevisions {
+        history: 100,
+        archive: 7,
+        ..Default::default()
+    };
+    let initial = super::history_signature(Some(revisions), true);
+    let mut reads = 0;
+    for tick in 101..201 {
+        revisions.history = tick;
+        revisions.meta = tick;
+        if super::history_signature(Some(revisions), true) != initial {
+            reads += 1;
+        }
+    }
+    assert_eq!(reads, 0);
+    let live = super::history_signature(Some(revisions), false);
+    revisions.history += 1;
+    assert_ne!(super::history_signature(Some(revisions), false), live);
+    revisions.archive += 1;
+    assert_ne!(super::history_signature(Some(revisions), true), initial);
+}
+
 /// Losing the composed bar's own duration makes the backend cull a visible minute range as
 /// though it were a five-second mini-candle, recreating the daily chart's narrow sliver.
 #[test]

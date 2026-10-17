@@ -6,6 +6,46 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Scope, absent counts, readiness and the top limit must not drift between count and action.
+#[test]
+fn best_label_counts_the_same_mixed_selection_the_action_runs() {
+    use super::super::ticks::readiness::Readiness;
+    let mut ready = ReadyPass::default();
+    for (key, fit) in [
+        ("101@11", 30),
+        ("102@11", 50),
+        ("103@11", 50),
+        ("104@11", 2),
+        ("105@22", 100),
+        ("invalid", 100),
+        ("106@11", 200),
+    ] {
+        ready.counts.insert(
+            key.into(),
+            Readiness {
+                fit,
+                covered: fit,
+                deals: fit,
+                ..Default::default()
+            },
+        );
+    }
+    // 106@11 has counts but is hidden by the list's filters.
+    let visible = [
+        "101@11", "102@11", "103@11", "104@11", "105@22", "invalid", "107@11",
+    ];
+    for (top, expected) in [
+        (2, vec!["102@11", "103@11"]),
+        (5, vec!["102@11", "103@11", "101@11"]),
+    ] {
+        let label_count = super::best_keys(visible.into_iter(), &ready, Some(&[11]), top).len();
+        let run_keys = super::best_keys(visible.into_iter(), &ready, Some(&[11]), top);
+        assert_eq!(label_count, expected.len());
+        assert_eq!(run_keys, expected);
+        assert_eq!(label_count, run_keys.len());
+    }
+}
+
 /// A larger CORE_B sample outside the focused group must never displace CORE_A in a pick.
 #[test]
 fn best_pick_obeys_action_scope_even_when_read_scope_is_unrestricted() {

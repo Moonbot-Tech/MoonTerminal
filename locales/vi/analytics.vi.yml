@@ -1,6 +1,10 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.chip.accepted_short_tail: "dùng được: đuôi ngắn"
+analytics.ticks.chip.accepted_short_tail_tip: "Giao dịch dùng được có dữ liệu đầy đủ đến lúc đóng. Đuôi ngắn và không có nguồn đang bật nào có thể bổ sung."
+analytics.ticks.why.accepted_short_tail: "đuôi ngắn (dùng được)"
+analytics.ticks.why.accepted_short_tail.why: "Dữ liệu bao phủ giao dịch đến lúc đóng. Không có nguồn đang bật nào có thể bổ sung đuôi, nên việc tinh chỉnh dùng dữ liệu hiện có. Các biến thể vượt quá dữ liệu vẫn để mở."
 analytics.ticks.col.why: "vì sao ngoài mẫu"
 analytics.ticks.legend.hit: "khớp"
 analytics.ticks.legend.miss: "mô hình thoát khác"

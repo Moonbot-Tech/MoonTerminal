@@ -1,6 +1,10 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.chip.accepted_short_tail: "kullanılabilir: kısa kuyruk"
+analytics.ticks.chip.accepted_short_tail_tip: "Kapanışa kadar eksiksiz işlem verisi olan kullanılabilir işlemler. Kuyruk kısa ve etkin kaynaklar onu uzatamıyor."
+analytics.ticks.why.accepted_short_tail: "kısa kuyruk (kullanılabilir)"
+analytics.ticks.why.accepted_short_tail.why: "İşlem verisi kapanışa kadar eksiksiz. Etkin kaynaklar kuyruğu uzatamadığından ayarlama mevcut veriyi kullanır. Verinin ötesine geçen varyantlar açık kalır."
 analytics.ticks.col.why: "neden örneklem dışında"
 analytics.ticks.legend.hit: "eşleşti"
 analytics.ticks.legend.miss: "model farklı çıktı"

@@ -196,6 +196,34 @@ fn spacing_allows(last_send: Option<Instant>, now: Instant) -> bool {
 }
 
 impl ArchiveGate {
+    /// When local demand should be re-offered; accepted requests stay owned by MoonProto.
+    /// A capped refusal is final for its client, while spacing and readiness refusals are not.
+    pub(super) fn retry_at(
+        &self,
+        provider: CoreId,
+        market: &str,
+        epoch: u64,
+        now: Instant,
+    ) -> Option<Instant> {
+        let state = self.state.lock().expect("archive gate poisoned");
+        let request = state
+            .markets
+            .get(&provider)
+            .and_then(|markets| markets.get(market))
+            .filter(|request| request.epoch == epoch);
+        let spacing = state
+            .last_send
+            .map_or(now, |last| last + ARCHIVE_SEND_SPACING);
+        match request.map(|request| request.outcome) {
+            Some(Outcome::Accepted | Outcome::Answered) => None,
+            Some(Outcome::Refused { count, .. }) if count >= ARCHIVE_MAX_REFUSALS => None,
+            Some(Outcome::Refused { at, .. }) => {
+                Some((at + ARCHIVE_SEND_RETRY).max(spacing).max(now))
+            }
+            None => Some(spacing.max(now)),
+        }
+    }
+
     /// Ask `client` for `market`'s accumulated chart archive, at most once per installed client.
     ///
     /// Called from the chart history read, so the settled case — "already asked" — must stay cheap:

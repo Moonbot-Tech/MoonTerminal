@@ -26,6 +26,7 @@
 //! `MOON_READY_BENCH_SEED` (1), `MOON_READY_BENCH_RESTARTS` (10). The variables are read HERE
 //! only; the application never moves its data root on one.
 
+use crate::analytics::tuner::ticks::tail::Admission;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -245,6 +246,7 @@ fn ms(d: Duration) -> String {
     format!("{:.1} ms", d.as_secs_f64() * 1000.0)
 }
 
+/// Measure complete offline readiness and picks, with uncancelled replays for parity output.
 #[test]
 #[ignore = "needs MOON_TICKS_DATA_DIR"]
 fn ready_real_data_bench() {
@@ -413,9 +415,9 @@ fn ready_real_data_bench() {
                 "row\t{key}\t{}\t{:?}\tfit={}\tticks={}\tfetchable={}\theld={:?}\t{:?}",
                 row.deal.report_uid,
                 row.tape,
-                row.fit(),
+                row.fit_with(&Admission::current()),
                 row.ticks.is_some(),
-                row.fetchable_at(now_ms, min_tail_s),
+                row.fetchable_with(&Admission::at(min_tail_s, now_ms)),
                 row.held,
                 row.verdict
             );
@@ -454,6 +456,7 @@ fn ready_real_data_bench() {
                     klines.as_ref(),
                     now_ms,
                     Some(&reads),
+                    None,
                 );
                 record(&rows);
                 rows
@@ -554,6 +557,7 @@ fn ready_real_data_bench() {
                 klines.as_ref(),
                 now_ms,
                 Some(&reads),
+                None,
             );
             replay_t += t.elapsed();
             let mut data = TicksData {
@@ -605,7 +609,7 @@ fn ready_real_data_bench() {
         let mut own: HashMap<(i64, u64), Arc<HashMap<String, String>>> = HashMap::new();
         let mut pending: Vec<PendingDeal> = rows
             .iter()
-            .filter(|r| r.fit() && r.ticks.is_some())
+            .filter(|r| r.fit_with(&Admission::current()) && r.ticks.is_some())
             .filter_map(|row| {
                 let base = own
                     .entry((row.deal.strategy_id, row.deal.core_uid))

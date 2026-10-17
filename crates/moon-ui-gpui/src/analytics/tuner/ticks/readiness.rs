@@ -26,7 +26,7 @@ pub(in crate::analytics) struct Readiness {
     pub(in crate::analytics) missed: usize,
     /// Unchecked deals, including those whose retained tape the memory cap dropped.
     pub(in crate::analytics) unjudged: usize,
-    /// Rows the search would learn on: fit ([`DealRow::fit`]) with their tape in memory — the
+    /// Rows the search would learn on: fit ([`DealRow::fit_with`]) with their tape in memory — the
     /// card's sample (`TicksData::replayable`).
     pub(in crate::analytics) fit: usize,
     /// Rows whose window the tape covers, fit or not.
@@ -52,10 +52,11 @@ impl Readiness {
         min_tail_s: u32,
     ) -> Self {
         let mut out = Self::default();
+        let admission = super::tail::Admission::at(min_tail_s, now_ms);
         for row in rows {
             out.deals += 1;
-            let chip = DealWhy::of(row, min_tail_s, now_ms).chip();
-            out.fit += usize::from(chip == DealChip::Fit);
+            let chip = DealWhy::of_with(row, &admission).chip();
+            out.fit += usize::from(matches!(chip, DealChip::Fit | DealChip::AcceptedShortTail));
             out.no_tape += usize::from(chip == DealChip::NoTape);
             out.short_tail += usize::from(chip == DealChip::ShortTail);
             out.holed += usize::from(chip == DealChip::Hole);
@@ -64,7 +65,7 @@ impl Readiness {
             if DealChip::tape(row) == Some(DealChip::WithTape) {
                 out.covered += 1;
             }
-            if row.fetchable_at(now_ms, min_tail_s) {
+            if row.fetchable_with(&admission) {
                 out.fetchable += 1;
             }
         }

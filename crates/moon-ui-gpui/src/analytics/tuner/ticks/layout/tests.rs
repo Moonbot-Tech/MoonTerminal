@@ -156,10 +156,11 @@ impl Render for NarrowDealProbe {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let row = deal_rows().remove(0);
+        let admission = super::super::tail::Admission::at(60, 0);
         let counts = super::super::rows::ChipCounts {
             rows_rev: 0,
             min_tail_s: 60,
-            counts: [0; 7],
+            counts: [0; super::super::why::DealChip::ALL.len()],
         };
         v_flex()
             .w_full()
@@ -183,7 +184,7 @@ impl Render for NarrowDealProbe {
                         p,
                         design::font_scale(cx),
                         super::super::deal_row_h(cx),
-                        (60, 0),
+                        &admission,
                         cx,
                     )),
             )
@@ -271,6 +272,7 @@ impl Render for DealProbe {
             ..Default::default()
         }));
         let counts = super::super::rows::counts_at(&mut state, 60, 0);
+        let admission = super::super::tail::Admission::at(60, 0);
         let pick: super::super::ChipAction = Rc::new(|_, _, _| {});
         let action: super::super::DealAction = Rc::new(|_, _, _, _| {});
         let mut body = v_flex()
@@ -290,7 +292,7 @@ impl Render for DealProbe {
                         p,
                         design::font_scale(cx),
                         super::super::deal_row_h(cx),
-                        (60, 0),
+                        &admission,
                         cx,
                     )
                 }));
@@ -388,6 +390,7 @@ fn deal_table_symbols_and_filters_fit_all_presentations(cx: &mut gpui::TestAppCo
                             "with_tape",
                             "no_tape",
                             "fit",
+                            "accepted_short_tail",
                             "short_tail",
                             "hole",
                             "model_miss",

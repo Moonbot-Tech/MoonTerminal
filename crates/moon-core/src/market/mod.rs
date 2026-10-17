@@ -31,8 +31,9 @@ pub use source::{
     MarketLabel, MarketLimits, MarketQuantityUnit, MarketRevisions, MarketTickerReadout,
     MarketWindowsReadout, MaxOrder, MaxOrderSource, OrderSizeRules, PathPrefixRows,
     PriceLineUpdate, PriceProfileRow, ProfileWindow, ReplayAddress, ReplayAddressError,
-    SIDE_BUCKET_MS, SideVolumeBucket, VolumeAt, VolumeSpan, VolumeSpanReadout, WindowFigures,
-    pick_market_for_coin, pick_market_for_identity, side_slots_of_ticks,
+    ReplayPriceLinesRead, SIDE_BUCKET_MS, SideVolumeBucket, VolumeAt, VolumeSpan,
+    VolumeSpanReadout, WindowFigures, pick_market_for_coin, pick_market_for_identity,
+    side_slots_of_ticks,
 };
 
 /// Shared market buffer owned by moon-core, not by a GPUI entity. Live feeds only wake

@@ -342,6 +342,7 @@ impl AnalyticsView {
             false,
             cx,
             move || {
+                let admission = super::tail::Admission::current();
                 let rows: Vec<DealRow> = read
                     .deals
                     .into_iter()
@@ -353,7 +354,7 @@ impl AnalyticsView {
                         let before = judged
                             .get(&deal.report_uid)
                             .filter(|before| address.is_some() && carryable(&before.deal, &deal))
-                            .filter(|before| after_report || !before.lost_tape())
+                            .filter(|before| after_report || !before.lost_tape(&admission))
                             .cloned();
                         let mut row = DealRow {
                             deal,
@@ -624,6 +625,7 @@ pub(in crate::analytics::tuner) fn replay_batch(
         klines,
         moon_core::util::now_unix_ms_i64(),
         None,
+        None,
     )
 }
 
@@ -704,9 +706,11 @@ pub(in crate::analytics::tuner) fn calibrate_lags(
 ///     klines: The kline cache the live deltas read, when the market source has one.
 ///     now_ms: One clock for the batch's "cannot be fetched" verdicts.
 ///     reads: A pass's shared reads; `None` reads every row afresh.
+///     handle: A batch search's cancellation; checked before starting each row.
 ///
 /// Returns:
-///     The replayed rows, in the order they were fetched.
+///     Rows in fetch order, possibly only partly replayed when cancelled. The batch caller
+///     discards them on cancellation rather than publishing partial results.
 pub(in crate::analytics::tuner) fn replay_fetched(
     fetched: Fetched,
     defaults: &HashMap<String, f64>,
@@ -714,6 +718,7 @@ pub(in crate::analytics::tuner) fn replay_fetched(
     klines: Option<&KlineCache>,
     now_ms: i64,
     reads: Option<&PassReads>,
+    handle: Option<&moon_core::db::tuner::threshold_search::SearchHandle>,
 ) -> Vec<DealRow> {
     let Fetched {
         mut rows,
@@ -721,6 +726,9 @@ pub(in crate::analytics::tuner) fn replay_fetched(
         mut traces,
     } = fetched;
     for row in &mut rows {
+        if handle.is_some_and(|handle| handle.is_cancelled()) {
+            break;
+        }
         let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
         let tape = tapes.remove(&row.deal.report_uid);
         let answered = tape.is_some();
@@ -1091,7 +1099,22 @@ pub(super) fn replay_row_with(
     // Coverage is the worker's own word on what was walked; a quiet run-up with no print in it
     // is covered all the same, which the tape's first stamp could not tell from a missing one.
     // What must be covered is the model's own rule (`required_spans`), not the whole margin.
-    if ticks.is_empty() || !covered.covers(&required_spans(&window)) {
+    let short_allowed = row.held.is_some_and(|(_, trail)| {
+        trail < moon_core::db::tuner::ticks::tail::floor_ms(super::tail::current_s())
+    }) && !super::tail::fillable_at(
+        &address,
+        row.deal.report_uid,
+        window.close_ms,
+        row.held.map_or(0, |(_, trail)| trail),
+        chrono::Utc::now().timestamp_millis(),
+        super::tail::switches(),
+    );
+    let required = if short_allowed {
+        super::tail::through_close(&window)
+    } else {
+        required_spans(&window)
+    };
+    if ticks.is_empty() || !covered.covers(&required) {
         row.tape = TapeStatus::Missing;
         row.verdict = None;
         return;

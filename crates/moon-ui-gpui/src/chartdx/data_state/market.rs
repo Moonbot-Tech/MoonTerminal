@@ -1,5 +1,7 @@
 //! Synchronizes market history, the order book, and automatic Y scaling.
 
+use std::time::{Duration, Instant};
+
 use moon_core::config::{SpanAnchor as LabelAnchor, VolumeSpanKey};
 use moon_core::market::{LiqSpanReadout, PriceLineUpdate, VolumeAt, VolumeSpan, VolumeSpanReadout};
 
@@ -35,6 +37,7 @@ impl ChartDataState {
         };
         let layout = self.container.borrow().layout(area);
         let now = now_unix_ms();
+        let retry_now = Instant::now();
         let res = [self.w as f32, self.h as f32];
         let mut st = self.render.borrow_mut();
         let mut container = self.container.borrow_mut();
@@ -266,14 +269,17 @@ impl ChartDataState {
             // never reach behind it, so this forces a full window re-read exactly once per archive.
             let source_archive = source_revs.map(|revs| revs.archive).unwrap_or(0);
             let source_archive_changed = source_archive != pr.source_archive;
-            let mut history_source_sig = 0xcbf29ce4_84222325u64;
-            if let Some(revs) = source_revs {
-                history_source_sig = mix_sig(history_source_sig, revs.provider);
-                history_source_sig = mix_sig(history_source_sig, revs.generation);
-                history_source_sig = mix_sig(history_source_sig, revs.history);
-                history_source_sig = mix_sig(history_source_sig, revs.meta);
+            let replay_retry_due = self.trade_replay.is_some()
+                && replay_price_retry_due(pr.replay_prices_retry_at, retry_now);
+            if self.trade_replay.is_none() {
+                pr.replay_prices_retry_at = None;
             }
-            history_source_sig = mix_sig(history_source_sig, pr.history_cursor.cache_completions());
+            let mut history_source_sig =
+                history_signature(source_revs, self.trade_replay.is_some());
+            if self.trade_replay.is_none() {
+                history_source_sig =
+                    mix_sig(history_source_sig, pr.history_cursor.cache_completions());
+            }
             if self.trade_replay.is_none() && self.candle_view.tf_ms() > 60_000 {
                 history_source_sig = mix_sig(history_source_sig, (now / 60_000.0) as u64);
             }
@@ -493,22 +499,42 @@ impl ChartDataState {
             let read_history = history_source_changed
                 || force_history_reset
                 || price_window_changed
-                || pr.candle_resync;
+                || pr.candle_resync
+                || replay_retry_due;
             let mut history = if read_history {
                 let read_timer = crate::diag::timer();
-                // An engine holding a frozen replay answers from it and never touches the live
-                // source: the rows are already fetched, already clipped, and belong to a trade
-                // that closed. The live arm below is byte-identical to what it always was, which
-                // is the point — the main chart's path is not conditional on this feature.
+                // Replay candles and prints stay frozen. Price lines come from retained archive
+                // history, clipped to that replay; late archive answers trigger this read again.
                 let history = match self.trade_replay.as_ref() {
-                    Some(series) => Some(series.read_with_price_window(
-                        pane.view.epoch_ms,
-                        history_from,
-                        history_to,
-                        price_scan,
-                        candle_params_opt,
-                        &mut pr.history_buffers,
-                    )),
+                    Some(series) => {
+                        let mut read = series.read_with_price_window(
+                            pane.view.epoch_ms,
+                            history_from,
+                            history_to,
+                            price_scan,
+                            candle_params_opt,
+                            &mut pr.history_buffers,
+                        );
+                        let price_read = source.read_replay_price_lines(
+                            pane.core,
+                            &pane.market,
+                            (
+                                series
+                                    .window
+                                    .from_ms
+                                    .max((epoch_ms + f64::from(history_from)).round() as i64),
+                                series
+                                    .window
+                                    .to_ms
+                                    .min((epoch_ms + f64::from(history_to)).round() as i64),
+                            ),
+                            &mut pr.history_buffers,
+                            &mut pr.history_cursor,
+                        );
+                        read.price_line_capacity = price_read.map_or(1, |read| read.capacity);
+                        pr.replay_prices_retry_at = next_replay_price_retry(price_read, retry_now);
+                        Some(read)
+                    }
                     None => source.read_chart_history_into(
                         pane.core,
                         &pane.market,
@@ -536,10 +562,8 @@ impl ChartDataState {
             if read_history {
                 pr.source_history_sig = history_source_sig;
                 pr.source_generation = source_generation;
-                // Only once the read actually HAPPENED. `market_revisions` answers from the
-                // provider map alone, while the read bails when the client, snapshot or readers
-                // are momentarily absent — committing there would consume the one-shot archive
-                // revision without ever reading the rows it announced, and nothing re-raises it.
+                // Live reads consume an archive edge only after reading. Replay reads can
+                // still lack provider readers; their independent deadline keeps them pending.
                 if history.is_some() {
                     pr.source_archive = source_archive;
                 }
@@ -2120,6 +2144,35 @@ impl ChartDataState {
 
 #[cfg(test)]
 mod tests;
+
+/// Frozen replay lines follow provider changes and archive merges, never live tick metadata.
+fn history_signature(revisions: Option<moon_core::market::MarketRevisions>, replay: bool) -> u64 {
+    let mut sig = 0xcbf29ce4_84222325u64;
+    if let Some(revs) = revisions {
+        sig = mix_sig(sig, revs.provider);
+        sig = mix_sig(sig, revs.generation);
+        if replay {
+            sig = mix_sig(sig, revs.archive);
+        } else {
+            sig = mix_sig(sig, revs.history);
+            sig = mix_sig(sig, revs.meta);
+        }
+    }
+    sig
+}
+
+/// Retry local readiness at its deadline even when a quiet replay's source signature is stable.
+pub(super) fn replay_price_retry_due(retry_at: Option<Instant>, now: Instant) -> bool {
+    retry_at.is_some_and(|at| now >= at)
+}
+
+/// Missing readers remain pending even when their archive revision already matches the cache.
+fn next_replay_price_retry(
+    read: Option<moon_core::market::ReplayPriceLinesRead>,
+    now: Instant,
+) -> Option<Instant> {
+    read.map_or(Some(now + Duration::from_millis(250)), |read| read.retry_at)
+}
 
 /// One placed mini-candle as a candle instance: the range is the body (open and close are its
 /// ends, ordered by direction so the layer colours it), no volume, and its actual duration.

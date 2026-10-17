@@ -1,6 +1,10 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.chip.accepted_short_tail: "utilizable: cola corta"
+analytics.ticks.chip.accepted_short_tail_tip: "Operaciones utilizables con cinta completa hasta el cierre. La cola es corta y ninguna fuente habilitada puede ampliarla."
+analytics.ticks.why.accepted_short_tail: "cola corta (utilizable)"
+analytics.ticks.why.accepted_short_tail.why: "La cinta cubre la operación hasta el cierre. Ninguna fuente habilitada puede ampliar la cola, por lo que el ajuste usa la cinta disponible. Las variantes que la exceden siguen abiertas."
 analytics.ticks.col.why: "por qué fuera de la muestra"
 analytics.ticks.legend.hit: "coincidió"
 analytics.ticks.legend.miss: "el modelo salió distinto"

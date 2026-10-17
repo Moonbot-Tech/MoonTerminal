@@ -57,6 +57,7 @@ fn only_the_rows_the_disk_fully_holds_are_dropped() {
             "N" => Some(Vec::new()),
             _ => None,
         },
+        |_, _| false,
     );
     assert_eq!(held, 1);
     let mut markets: Vec<(String, i64)> = kept
@@ -72,6 +73,49 @@ fn only_the_rows_the_disk_fully_holds_are_dropped() {
             ("U".to_string(), base),
         ]
     );
+}
+
+/// The old deal is held with its short tape; the fresh deal must still reach the fetch queue.
+#[test]
+fn old_short_tape_is_held_while_a_fresh_tail_stays_queued() {
+    let now = 100 * 86_400_000;
+    let old_close = now - 49 * 3_600_000;
+    let fresh_close = now - 3_600_000;
+    let address = crate::analytics::tuner::ticks::state::RowAddress {
+        core_uid: 1,
+        venue: None,
+        exchange_key: "EX-XX".into(),
+        market: "XALPHA".into(),
+        btc_market: None,
+    };
+    let (queued, held) = drop_held(
+        vec![
+            trade("OLD", old_close - 10_000, old_close),
+            trade("FRESH", fresh_close - 10_000, fresh_close),
+        ],
+        |row| row.clone(),
+        |_, market, _, _| {
+            let close = if market == "OLD" {
+                old_close
+            } else {
+                fresh_close
+            };
+            Some(vec![(close - 40_000, close + 30_000)])
+        },
+        |row, _| {
+            !crate::analytics::tuner::ticks::tail::fillable_at(
+                &address,
+                1,
+                row.2.close_ms,
+                0,
+                now,
+                (false, true),
+            )
+        },
+    );
+    assert_eq!(held, 1);
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].1, "FRESH");
 }
 
 /// The defaults (cores on, venues off): every recent row goes to the cores — no route, past the

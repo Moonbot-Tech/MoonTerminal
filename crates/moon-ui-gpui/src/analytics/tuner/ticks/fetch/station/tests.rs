@@ -1,11 +1,166 @@
 //! What the autoload asks the station for.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::{Filled, ReplayWindow, Unfillable, lacking, note_filed, prefill_rows};
 
 /// Serializes tests that read or write the process-wide unfillable set.
 static UNFILLABLE_TEST: Mutex<()> = Mutex::new(());
+
+/// Drop a fixture refusal while preserving the store's snapshot invalidation invariant.
+fn forget(uid: i64) {
+    let mut rows = super::unfillable();
+    if rows.uids.remove(&uid).is_some() {
+        rows.revision += 1;
+    }
+}
+
+/// Repainting unchanged rows must share membership instead of allocating another set.
+#[test]
+fn refusal_snapshots_share_an_arc_until_membership_changes() {
+    let mut rows = Unfillable::default();
+    let (_, empty) = rows.snapshot();
+    assert!(Arc::ptr_eq(&empty, &rows.snapshot().1));
+    rows.refuse(91, "synthetic", "XALPHA");
+    let (revision, refused) = rows.snapshot();
+    assert!(!Arc::ptr_eq(&empty, &refused));
+    assert!(refused.contains(&91));
+    assert!(!empty.contains(&91));
+    rows.refuse(91, "synthetic", "XALPHA");
+    rows.filed("synthetic", "XBETA");
+    let (same_revision, same) = rows.snapshot();
+    assert_eq!(same_revision, revision);
+    assert!(Arc::ptr_eq(&refused, &same));
+    rows.filed("synthetic", "XALPHA");
+    let (_, cleared) = rows.snapshot();
+    assert!(!Arc::ptr_eq(&refused, &cleared));
+    assert!(cleared.is_empty());
+    assert!(
+        refused.contains(&91),
+        "an in-progress pass keeps its captured membership"
+    );
+}
+
+/// A refusal must refresh chips and counts, and unrelated filings must keep the tail admitted.
+#[test]
+fn refusal_refreshes_cached_classification_until_its_market_is_filed() {
+    use super::super::super::state::{DealRow, TapeStatus, TicksData, TicksState};
+    use super::super::super::{rows, tail, why::DealChip};
+    use moon_core::db::tuner::ticks::Verdict;
+    use moon_core::db::tuner::ticks::verify::{EntryFinding, ExitFinding, RuleFlags, StopFacts};
+    let _guard = UNFILLABLE_TEST.lock().unwrap_or_else(|p| p.into_inner());
+    let queued = queued_unservable(-91_510);
+    let uid = queued.deal.report_uid;
+    let now = queued.window.close_ms + 3_600_000;
+    let row = DealRow {
+        deal: queued.deal.clone(),
+        tape: TapeStatus::Covered,
+        verdict: Some(Verdict {
+            entry: Some(true),
+            entry_dev_pct: None,
+            exit: Some(true),
+            exit_dev_pct: None,
+            fill: None,
+            exit_kind: None,
+            line_points: None,
+            entry_finding: EntryFinding::Hit,
+            exit_finding: ExitFinding::Hit,
+            fill_clock_ms: None,
+            rules: RuleFlags::default(),
+            stop: StopFacts::default(),
+        }),
+        address: Some(queued.address.clone()),
+        ticks: Some(super::super::super::tape::PackedTape::pack(Vec::new())),
+        entry_line: None,
+        held: Some((30_000, 30_000)),
+    };
+    let mut state = TicksState::default();
+    state.only_fit = true;
+    state.data.apply(Ok(TicksData {
+        rows: vec![row],
+        ..Default::default()
+    }));
+    let before = rows::counts_at(&mut state, 60, now);
+    assert_eq!(before.get(DealChip::ShortTail), 1);
+    assert!(rows::order_for(&mut state, 60, now).is_empty());
+    super::commit_station_answer(
+        &[queued],
+        Filled {
+            markets: 1,
+            ..Default::default()
+        },
+        false,
+    );
+    let after = rows::counts_at(&mut state, 60, now);
+    assert_eq!(after.get(DealChip::AcceptedShortTail), 1);
+    assert_eq!(rows::order_for(&mut state, 60, now), &[0]);
+    let admission = tail::Admission::at(60, now);
+    assert!(state.data.data().unwrap().rows[0].fit_with(&admission));
+    super::unfillable().filed("synthetic", "XBETAUSDT");
+    assert_eq!(
+        rows::counts_at(&mut state, 60, now).get(DealChip::AcceptedShortTail),
+        1
+    );
+    assert!(
+        !state.data.data().unwrap().rows[0].station_candidate_with(&tail::Admission::at(60, now))
+    );
+    super::unfillable().filed("synthetic", "XALPHAUSDT");
+    assert_eq!(
+        rows::counts_at(&mut state, 60, now).get(DealChip::ShortTail),
+        1
+    );
+    assert!(rows::order_for(&mut state, 60, now).is_empty());
+    assert!(!state.data.data().unwrap().rows[0].fit_with(&tail::Admission::at(60, now)));
+    assert!(!super::unfillable().uids.contains_key(&uid));
+
+    // A clamped request must agree at its boundary in disk skipping and sample admission.
+    let cap_ms = moon_core::db::tuner::ticks::tail::floor_ms(u32::MAX);
+    for (trail, expected) in [(cap_ms, true), (cap_ms - 1, false)] {
+        let row = &mut state.data.data_mut().unwrap().rows[0];
+        row.held = Some((30_000, trail));
+        let admission = tail::Admission::at(u32::MAX, now);
+        assert_eq!(row.fit_with(&admission), expected);
+        let window = trade("XALPHAUSDT", row.deal.buy_ms, row.deal.close_ms).2;
+        let (_, held) = super::drop_held_at(
+            u32::MAX,
+            vec![row.clone()],
+            |_| ("synthetic".into(), "XALPHAUSDT".into(), window),
+            |_, _, _, _| Some(vec![(window.from_ms, window.close_ms + trail)]),
+            |row, _| row.short_tail_with(&admission),
+        );
+        assert_eq!(held == 1, expected);
+    }
+}
+
+/// A latched final row stops waiting even if its timestamps still lie inside core retention.
+#[test]
+fn station_final_tail_no_longer_waits_for_a_source() {
+    let _guard = UNFILLABLE_TEST
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let row = queued_unservable(-91_401);
+    let now = row.window.close_ms + 3_600_000;
+    forget(row.deal.report_uid);
+    assert!(super::super::super::tail::fillable_at(
+        &row.address,
+        row.deal.report_uid,
+        row.window.close_ms,
+        30_000,
+        now,
+        (false, true)
+    ));
+    super::unfillable().refuse(row.deal.report_uid, "synthetic", "XALPHAUSDT");
+    let fillable = super::super::super::tail::fillable_at(
+        &row.address,
+        row.deal.report_uid,
+        row.window.close_ms,
+        30_000,
+        now,
+        (false, true),
+    );
+    forget(row.deal.report_uid);
+    assert!(!fillable);
+}
 
 /// A disk-held row must not invalidate the view when the station filed no new pieces.
 #[test]
@@ -15,6 +170,7 @@ fn already_held_rows_do_not_bump_the_station_filing_generation() {
         vec![trade("HELD", 100_000, 110_000)],
         |row| row.clone(),
         |_, _, _, _| Some(vec![(0, 1_000_000)]),
+        |_, _| false,
         |_| panic!("held row must not reach the station"),
     );
     assert_eq!(held, 1);
@@ -22,19 +178,31 @@ fn already_held_rows_do_not_bump_the_station_filing_generation() {
     assert_eq!(super::filed_generation(), before);
 }
 
-/// Remembering an unservable station miss prevents repeated autoload requests and load counts.
+/// Unrelated filings preserve accepted tails; relevant filings and policy changes retry them.
 #[test]
-fn station_misses_are_excluded_until_filing_or_finalisation_changes() {
+fn station_misses_survive_unrelated_filings() {
     let mut refused = Unfillable::default();
-    refused.refresh((7, 2));
-    refused.uids.insert(91);
-    refused.refresh((7, 2));
-    assert!(refused.uids.contains(&91));
-    refused.refresh((7, 3));
+    refused.refresh((7, 60, (true, true)));
+    refused.refuse(91, "synthetic", "XALPHA");
+    let revision = refused.revision;
+    refused.filed("synthetic", "XBETA");
+    refused.filed("other", "XALPHA");
+    assert!(refused.uids.contains_key(&91));
+    assert_eq!(refused.revision, revision);
+    refused.filed("synthetic", "XALPHA");
     assert!(refused.uids.is_empty());
-    refused.uids.insert(91);
-    refused.refresh((8, 3));
-    assert!(refused.uids.is_empty());
+    assert_ne!(refused.revision, revision);
+    for generation in [
+        (8, 60, (true, true)),
+        (8, 120, (true, true)),
+        (8, 120, (false, true)),
+    ] {
+        refused.refuse(91, "synthetic", "XALPHA");
+        let revision = refused.revision;
+        refused.refresh(generation);
+        assert!(refused.uids.is_empty());
+        assert_ne!(refused.revision, revision);
+    }
 }
 
 /// A refused station-only row drops out of the footer and the next automatic prefill.
@@ -103,9 +271,15 @@ fn an_unservable_row_is_not_offered_or_counted_again() {
         held: None,
     };
     let now = 500_000_000;
-    assert!(super::super::station_load_candidate(&row, now));
-    super::unfillable().uids.insert(row.deal.report_uid);
-    assert!(!super::super::station_load_candidate(&row, now));
+    assert!(super::super::station_load_candidate(
+        &row,
+        &super::super::super::tail::Admission::at(60, now)
+    ));
+    super::unfillable().refuse(row.deal.report_uid, "synthetic", "XALPHAUSDT");
+    assert!(!super::super::station_load_candidate(
+        &row,
+        &super::super::super::tail::Admission::at(60, now)
+    ));
     let address = row.address.as_ref().unwrap().clone();
     let window = moon_core::db::tuner::ticks::model_window(&row.deal, 30_000, 60_000).unwrap();
     let source =
@@ -125,7 +299,7 @@ fn an_unservable_row_is_not_offered_or_counted_again() {
         remaining.is_empty(),
         "the next autoload must not offer the row again"
     );
-    super::unfillable().uids.remove(&row.deal.report_uid);
+    forget(row.deal.report_uid);
 }
 
 /// An empty station answer for a row no later source can fetch must be remembered.
@@ -139,7 +313,7 @@ fn empty_station_answer_is_remembered_when_nothing_else_can_fetch() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let queued = queued_unservable(-91_302);
     let uid = queued.deal.report_uid;
-    super::unfillable().uids.remove(&uid);
+    forget(uid);
     let (rows, _, _, filled) = prefill_rows(
         vec![queued],
         |row| {
@@ -150,6 +324,7 @@ fn empty_station_answer_is_remembered_when_nothing_else_can_fetch() {
             )
         },
         |_, _, _, _| None,
+        |_, _| false,
         |_| Filled {
             markets: 1,
             ..Default::default()
@@ -162,10 +337,10 @@ fn empty_station_answer_is_remembered_when_nothing_else_can_fetch() {
     );
     super::commit_station_answer(&rows, filled, false);
     assert!(
-        super::unfillable().uids.contains(&uid),
+        super::unfillable().uids.contains_key(&uid),
         "an empty station answer must remember a row nothing else can fetch"
     );
-    super::unfillable().uids.remove(&uid);
+    forget(uid);
 }
 
 /// A Bybit row from 1970: no trade route, and the missing tape is outside the core horizon.
@@ -267,6 +442,7 @@ fn station_fills_short_tail_before_the_remaining_rows_are_queued() {
                 },
             )])
         },
+        |_, _| false,
         |rows| {
             offered.set(rows.len());
             let wants = lacking(

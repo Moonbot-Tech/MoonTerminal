@@ -97,6 +97,7 @@ impl UncheckedWhy {
             Some(DealWhy::NoVerdict) => Some(Self::Pending),
             Some(
                 DealWhy::Fit
+                | DealWhy::AcceptedShortTail
                 | DealWhy::NoTape { .. }
                 | DealWhy::NoAddress
                 | DealWhy::Fetching

@@ -1,6 +1,10 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.chip.accepted_short_tail: "для подбора: короткий хвост"
+analytics.ticks.chip.accepted_short_tail_tip: "Сделки для подбора с полной лентой до закрытия. Хвост короткий, и ни один включённый источник не может его дополнить."
+analytics.ticks.why.accepted_short_tail: "короткий хвост (для подбора)"
+analytics.ticks.why.accepted_short_tail.why: "Лента покрывает сделку до закрытия. Включённые источники не могут дополнить хвост, поэтому подбор использует доступную ленту. Варианты, выходящие за её пределы, остаются открытыми."
 analytics.ticks.col.why: "почему не в подборе"
 analytics.ticks.legend.hit: "совпало"
 analytics.ticks.legend.miss: "модель вышла иначе"

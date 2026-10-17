@@ -595,6 +595,7 @@ impl ChartDataState {
         true
     }
 
+    /// Pull source/view changes and due replay demand without waking the parent window.
     pub(crate) fn pull_market_source_if_visible(&mut self) -> bool {
         if !self.scene_visible {
             return false;
@@ -603,7 +604,14 @@ impl ChartDataState {
             return false;
         };
         let source_sig = self.source_market_signature(&source);
-        if !self.view_dirty && source_sig == self.last_source_market_sig {
+        let retry_due = self.trade_replay.is_some() && {
+            let now = Instant::now();
+            self.render.borrow().panes.iter().any(|pane| {
+                pane.active
+                    && super::market::replay_price_retry_due(pane.replay_prices_retry_at, now)
+            })
+        };
+        if !self.view_dirty && source_sig == self.last_source_market_sig && !retry_due {
             return false;
         }
         if self.container.borrow().target_ref(0).is_none() {
@@ -617,6 +625,7 @@ impl ChartDataState {
             && !source_changed
             && !pulled_book
             && sig == self.last_prepared_market_sig
+            && !retry_due
         {
             self.last_source_market_sig = source_sig;
             return false;

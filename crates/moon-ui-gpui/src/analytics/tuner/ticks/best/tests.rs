@@ -8,6 +8,45 @@ use moon_core::db::metrics::Tally;
 use moon_core::db::tuner::ticks::search::{SearchMiss, SearchResult};
 use std::collections::{HashMap, HashSet};
 
+/// Removing the pre-replay guard would waste CPU and let a cancelled answer reach landing.
+#[test]
+fn cancelled_before_replay_neither_calls_replay_nor_lands() {
+    let handle = moon_core::db::tuner::threshold_search::SearchHandle::new();
+    handle.cancel();
+    let calls = std::cell::Cell::new(0);
+    let answer = super::while_active(&handle, || {
+        calls.set(calls.get() + 1);
+        result("1")
+    });
+    let mut run = BestRun {
+        seq: 7,
+        keys: vec!["1".into()],
+        next: 0,
+        results: vec![],
+        handle: Some(handle),
+        checked: HashSet::new(),
+        done: false,
+    };
+    if let Some(answer) = answer {
+        run.land(7, answer);
+    }
+    assert_eq!(calls.get(), 0);
+    assert!(run.results.is_empty());
+    assert_eq!(run.next, 0);
+}
+
+/// Removing the post-replay guard would publish a partial batch cancelled between rows.
+#[test]
+fn cancellation_during_replay_discards_its_answer() {
+    let handle = moon_core::db::tuner::threshold_search::SearchHandle::new();
+    assert!(super::while_active(&handle, || 42).is_some());
+    let answer = super::while_active(&handle, || {
+        handle.cancel();
+        42
+    });
+    assert!(answer.is_none());
+}
+
 /// Selection clicks and axis moves must preserve batch results; workspace changes must retire them.
 #[test]
 fn selection_and_axis_keep_finished_batch_but_scope_drops_it() {
