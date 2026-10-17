@@ -1230,6 +1230,7 @@ impl AnalyticsView {
                             klines.as_ref(),
                             now_ms,
                             Some(&reads),
+                            None,
                         )
                     },
                     &progress,

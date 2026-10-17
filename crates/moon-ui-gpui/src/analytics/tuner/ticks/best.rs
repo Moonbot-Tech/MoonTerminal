@@ -106,6 +106,15 @@ fn validated_answer(
         .and_then(|found| sample_floor(deals.saturating_sub(found.stats.left_open)).map(|()| found))
 }
 
+/// Skip replay after cancellation and discard work cancelled before it can be published.
+fn while_active<T>(handle: &SearchHandle, work: impl FnOnce() -> T) -> Option<T> {
+    if handle.is_cancelled() {
+        return None;
+    }
+    let result = work();
+    (!handle.is_cancelled()).then_some(result)
+}
+
 /// Aligned strategy edits and captured old values in pick order.
 pub(in crate::analytics::tuner) type BestPayload = (
     Vec<SaveTarget>,
@@ -285,7 +294,7 @@ impl AnalyticsView {
         );
     }
 
-    /// Replay held tape and reuse the existing search with the card's default settings.
+    /// Replay held tape while the batch is active, then search with the card's default settings.
     fn best_search(
         &mut self,
         seq: u64,
@@ -333,18 +342,24 @@ impl AnalyticsView {
             false,
             cx,
             move || {
+                if handle.is_cancelled() {
+                    return None;
+                }
                 let fetched = super::fetch_batch(
                     targets,
                     moon_core::market::trade_replay::long_position_ms(),
                 );
-                let rows = super::replay_fetched(
-                    fetched,
-                    &defaults,
-                    model,
-                    klines.as_ref(),
-                    chrono::Utc::now().timestamp_millis(),
-                    None,
-                );
+                let rows = while_active(&handle, || {
+                    super::replay_fetched(
+                        fetched,
+                        &defaults,
+                        model,
+                        klines.as_ref(),
+                        chrono::Utc::now().timestamp_millis(),
+                        None,
+                        Some(&handle),
+                    )
+                })?;
                 let mut kinds: Vec<String> = rows.iter().map(|r| r.deal.kind.clone()).collect();
                 kinds.sort();
                 kinds.dedup();
@@ -367,7 +382,7 @@ impl AnalyticsView {
                         BestResult::new(key, target, Err(SearchMiss::Nothing), HashMap::new());
                     result.verdict =
                         Verdict::Cannot(t!("analytics.ticks.best.read_failed").to_string());
-                    return result;
+                    return while_active(&handle, || result);
                 };
                 let warns = super::unmodelled::strategy_warns(
                     &target.name,
@@ -434,9 +449,12 @@ impl AnalyticsView {
                 });
                 let mut result = BestResult::new(key, target, outcome, now);
                 result.warns = warns;
-                result
+                while_active(&handle, || result)
             },
             move |view, result, cx| {
+                let Some(result) = result else {
+                    return;
+                };
                 if !view
                     .ticks
                     .best

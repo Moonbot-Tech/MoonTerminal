@@ -624,6 +624,7 @@ pub(in crate::analytics::tuner) fn replay_batch(
         klines,
         moon_core::util::now_unix_ms_i64(),
         None,
+        None,
     )
 }
 
@@ -704,9 +705,11 @@ pub(in crate::analytics::tuner) fn calibrate_lags(
 ///     klines: The kline cache the live deltas read, when the market source has one.
 ///     now_ms: One clock for the batch's "cannot be fetched" verdicts.
 ///     reads: A pass's shared reads; `None` reads every row afresh.
+///     handle: A batch search's cancellation; checked before starting each row.
 ///
 /// Returns:
-///     The replayed rows, in the order they were fetched.
+///     Rows in fetch order, possibly only partly replayed when cancelled. The batch caller
+///     discards them on cancellation rather than publishing partial results.
 pub(in crate::analytics::tuner) fn replay_fetched(
     fetched: Fetched,
     defaults: &HashMap<String, f64>,
@@ -714,6 +717,7 @@ pub(in crate::analytics::tuner) fn replay_fetched(
     klines: Option<&KlineCache>,
     now_ms: i64,
     reads: Option<&PassReads>,
+    handle: Option<&moon_core::db::tuner::threshold_search::SearchHandle>,
 ) -> Vec<DealRow> {
     let Fetched {
         mut rows,
@@ -721,6 +725,9 @@ pub(in crate::analytics::tuner) fn replay_fetched(
         mut traces,
     } = fetched;
     for row in &mut rows {
+        if handle.is_some_and(|handle| handle.is_cancelled()) {
+            break;
+        }
         let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
         let tape = tapes.remove(&row.deal.report_uid);
         let answered = tape.is_some();
