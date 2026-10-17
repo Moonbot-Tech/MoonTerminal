@@ -1,7 +1,7 @@
 use super::super::schema::{SettingsFile, default_ui_scale};
 use super::{
     ConfigLoad, Memo, atomic_tmp_path, load_or_default, load_or_default_status, memo_hit,
-    write_atomic,
+    write_atomic, write_atomic_memo,
 };
 use std::path::{Path, PathBuf};
 
@@ -184,14 +184,63 @@ fn an_external_modify_or_delete_forces_the_rewrite() {
     assert_eq!(std::fs::read(s.file()).unwrap(), b"alpha");
 }
 
+/// Comparing stamps instead of bytes would silently keep a foreign same-length rewrite.
+#[test]
+fn a_foreign_rewrite_with_the_same_length_and_mtime_is_overwritten() {
+    let s = Scratch::new("same-stamp");
+    write_atomic(&s.file(), b"alpha", "test").unwrap();
+    let modified = std::fs::metadata(s.file()).unwrap().modified().unwrap();
+    std::fs::write(s.file(), b"beta!").unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(s.file())
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(s.file()).unwrap().modified().unwrap(),
+        modified
+    );
+    write_atomic(&s.file(), b"alpha", "test").unwrap();
+    assert_eq!(std::fs::read(s.file()).unwrap(), b"alpha");
+}
+
+/// Skipping must be based on disk bytes even when this process has never saved the file.
+#[test]
+fn identical_bytes_skip_without_a_memo() {
+    let s = Scratch::new("no-memo");
+    std::fs::write(s.file(), b"alpha").unwrap();
+    s.block_writes();
+    write_atomic(&s.file(), b"alpha", "test").unwrap();
+}
+
+/// A failed encrypted save must invalidate the prior plaintext memo and retry on the next call.
 #[test]
 fn a_failed_write_clears_the_memo() {
     let s = Scratch::new("failed");
-    write_atomic(&s.file(), b"alpha", "t").unwrap();
+    write_atomic_memo(&s.file(), b"alpha", b"cipher-a", true, "t").unwrap();
     s.block_writes();
-    assert!(write_atomic(&s.file(), b"beta!", "t").is_err());
-    // The disk still holds "alpha", but the memo no longer vouches for it: the write is attempted.
-    assert!(write_atomic(&s.file(), b"alpha", "t").is_err());
+    assert!(write_atomic_memo(&s.file(), b"beta!", b"cipher-b", true, "t").is_err());
+    assert!(write_atomic_memo(&s.file(), b"alpha", b"cipher-c", true, "t").is_err());
+    s.unblock_writes();
+    write_atomic_memo(&s.file(), b"beta!", b"cipher-d", true, "t").unwrap();
+    assert_eq!(std::fs::read(s.file()).unwrap(), b"cipher-d");
+}
+
+/// Fresh encryption nonces may skip unchanged plaintext, but pending key slots must reach disk.
+#[test]
+fn encrypted_memo_skips_nonce_changes_but_not_forced_or_deleted_writes() {
+    let s = Scratch::new("encrypted");
+    write_atomic_memo(&s.file(), b"alpha", b"cipher-a", true, "t").unwrap();
+    s.block_writes();
+    write_atomic_memo(&s.file(), b"alpha", b"cipher-b", true, "t").unwrap();
+    assert!(write_atomic_memo(&s.file(), b"alpha", b"cipher-c", false, "t").is_err());
+    s.unblock_writes();
+    write_atomic_memo(&s.file(), b"alpha", b"cipher-d", false, "t").unwrap();
+    assert_eq!(std::fs::read(s.file()).unwrap(), b"cipher-d");
+    std::fs::remove_file(s.file()).unwrap();
+    write_atomic_memo(&s.file(), b"alpha", b"cipher-e", true, "t").unwrap();
+    assert_eq!(std::fs::read(s.file()).unwrap(), b"cipher-e");
 }
 
 #[test]

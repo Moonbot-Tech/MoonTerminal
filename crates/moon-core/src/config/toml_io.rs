@@ -131,9 +131,13 @@ pub fn save<T: Serialize>(path: &Path, value: &T, label: &str) -> anyhow::Result
 }
 
 /// Writes a file through a temporary sibling plus rename. A direct `fs::write` can leave a
-/// truncated config if the process or power fails during the write.
+/// truncated config if the process or power fails during the write. Compare actual bytes before
+/// skipping: length and mtime cannot detect foreign rewrites on coarse-timestamp filesystems.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
-    write_atomic_memo(path, bytes, bytes, true, label)
+    if std::fs::read(path).is_ok_and(|on_disk| on_disk == bytes) {
+        return Ok(());
+    }
+    write_atomic_raw(path, bytes, label)
 }
 
 /// What this process last wrote to a path: content hash and length of the memo key, plus the
@@ -146,11 +150,11 @@ pub(crate) struct Memo {
     pub(crate) mtime: Option<std::time::SystemTime>,
 }
 
-/// Process-wide record of the last successful write per path, so a save of unchanged content
-/// costs a hash instead of a create + fsync + rename.
+/// Process-wide record for encrypted files whose fresh nonces prevent direct byte comparison.
 static WRITE_MEMO: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<PathBuf, Memo>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Hash an encrypted file's plaintext memo key without retaining its secrets.
 fn content_hash(bytes: &[u8]) -> u64 {
     use std::hash::{Hash as _, Hasher as _};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -158,14 +162,15 @@ fn content_hash(bytes: &[u8]) -> u64 {
     h.finish()
 }
 
+/// Read an encrypted file's stamp outside the process memo lock.
 fn file_stamp(path: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
     std::fs::metadata(path)
         .ok()
         .map(|m| (m.len(), m.modified().ok()))
 }
 
-/// The write may be skipped: the same content was written last time AND the file on disk still
-/// carries that write's length and mtime (nobody modified or deleted it since).
+/// An encrypted write may be skipped when its plaintext key and the stored file stamp match.
+/// Plain files instead compare their bytes, since a matching stamp cannot prove equal contents.
 pub(crate) fn memo_hit(
     memo: Option<&Memo>,
     hash: u64,
@@ -232,6 +237,7 @@ fn write_atomic_memo_with(
     Ok(())
 }
 
+/// Atomically replace a file, propagating errors so the caller retries a failed save.
 fn write_atomic_raw(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).with_context(|| format!("создание папки для {label}"))?;
