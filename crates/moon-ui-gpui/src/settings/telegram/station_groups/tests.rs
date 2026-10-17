@@ -1,6 +1,7 @@
 use moon_core::config::CoreGroup;
 
-use super::{names, same_groups};
+use super::names;
+use crate::backend::station::groups_sync::same_groups;
 
 /// Comparing raw numbers would call the wrong group identical and keep offering the correct one.
 #[test]

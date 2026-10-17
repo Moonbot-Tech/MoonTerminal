@@ -155,9 +155,7 @@ pub(crate) enum Job {
     MiniApp { target: Target, on: bool },
     /// Make the terminal's header-clock zone the one the station's reports are cut in, live.
     Zone { target: Target, zone: String },
-    /// Send the terminal's saved core groups to the station, for the bot's report by cores —
-    /// only on the user's word: another terminal's groups are not overwritten by one that has
-    /// none.
+    /// Send saved core groups through the existing station translation and protocol.
     Groups {
         target: Target,
         groups: Vec<moon_core::config::CoreGroup>,
@@ -331,8 +329,25 @@ pub(crate) enum Event {
     Done(Done),
 }
 
-/// Start `job` on its own thread.
+/// Start explicit or existing background work with its original payload policy.
 pub(crate) fn start(job: Job, here: Vec<cores_sync::LocalCore>) -> mpsc::Receiver<Event> {
+    start_with_group_policy(job, here, false)
+}
+
+/// Start automatic groups, requiring complete translation again on the fresh station listing.
+pub(super) fn start_groups_sync(
+    job: Job,
+    here: Vec<cores_sync::LocalCore>,
+) -> mpsc::Receiver<Event> {
+    start_with_group_policy(job, here, true)
+}
+
+/// Run one station thread with an explicit policy for automatic group payloads.
+fn start_with_group_policy(
+    job: Job,
+    here: Vec<cores_sync::LocalCore>,
+    automatic_groups: bool,
+) -> mpsc::Receiver<Event> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("station-setup".into())
@@ -354,7 +369,14 @@ pub(crate) fn start(job: Job, here: Vec<cores_sync::LocalCore>) -> mpsc::Receive
             let mut unmapped = |count| {
                 let _ = tx.send(Event::UnmappedCores(count));
             };
-            let done = match run(job, &here, &mut remember, &mut unmapped, &mut say) {
+            let done = match run(
+                job,
+                &here,
+                automatic_groups,
+                &mut remember,
+                &mut unmapped,
+                &mut say,
+            ) {
                 Ok(done) => done,
                 Err(e) if e.downcast_ref::<NeedsAdminPassword>().is_some() => {
                     Done::NeedsAdminPassword
@@ -381,10 +403,11 @@ pub(crate) fn start(job: Job, here: Vec<cores_sync::LocalCore>) -> mpsc::Receive
     rx
 }
 
-/// Execute one queued station job; return bot data only after server polling has stopped.
+/// Execute one queued station job, rechecking automatic group safety before the remote write.
 fn run(
     job: Job,
     here: &[cores_sync::LocalCore],
+    automatic_groups: bool,
     remember: &mut dyn FnMut(bot::ReturnedBot, Vec<moon_core::station_api::ListedCore>),
     unmapped: &mut dyn FnMut(usize),
     say: &mut dyn FnMut(Progress),
@@ -737,16 +760,23 @@ fn run(
                 bot_off: false,
             })
         }
-        Job::Groups { target, mut groups } => {
+        Job::Groups { target, groups } => {
             let state = bot::bot_state(&target)?;
             let listing = state
                 .station
                 .as_ref()
                 .and_then(|status| status.cores.as_deref());
-            let mut translation =
-                super::uid_translation::UidTranslation::new(here, listing.unwrap_or_default());
-            translation.groups_to_station(&mut groups);
-            unmapped(translation.unmapped());
+            let (groups, missing) =
+                super::groups_sync::translated_groups(&groups, here, listing.unwrap_or_default());
+            unmapped(missing);
+            if automatic_groups && (groups.is_empty() || missing > 0) {
+                // Identity can change after queue admission; manual partial sends remain explicit.
+                return Ok(Done::Ok {
+                    transferred: false,
+                    bot: Some(state),
+                    bot_off: false,
+                });
+            }
             let saved = station::api::set_groups(&target, &groups)?;
             say(Progress::Text(match saved {
                 Some(_) => {

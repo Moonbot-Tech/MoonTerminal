@@ -52,6 +52,7 @@ fn layout_page(layout: ReportLayout) -> Page {
         cores: vec![],
         caption: None,
         exchange: None,
+        groups_missing: false,
     }
 }
 
@@ -697,6 +698,7 @@ fn full_total_is_the_tables_last_row_under_column_titles() {
         cores: Vec::new(),
         caption: None,
         exchange: None,
+        groups_missing: false,
     };
     for (daily, by_exchange, title) in [
         (false, false, "Cores"),
@@ -775,6 +777,7 @@ fn inline_buttons_keep_the_current_period() {
         cores: Vec::new(),
         caption: None,
         exchange: None,
+        groups_missing: false,
     };
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
@@ -817,6 +820,7 @@ fn unavailable_average_keeps_nonzero_exclusion_disclosure() {
         cores: Vec::new(),
         caption: None,
         exchange: None,
+        groups_missing: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -1223,6 +1227,7 @@ fn native_average_keeps_small_btc_amount_visible() {
         cores: Vec::new(),
         caption: None,
         exchange: None,
+        groups_missing: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -1328,6 +1333,7 @@ fn station_reports_and_help_limit_navigation_to_the_owner() {
         cores: Vec::new(),
         caption: None,
         exchange: None,
+        groups_missing: false,
     };
     for locale in ["ru", "en", "es"] {
         let _locale = crate::test_locale::force(locale);
@@ -1415,6 +1421,7 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
         cores: Vec::new(),
         caption: None,
         exchange: None,
+        groups_missing: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -1530,6 +1537,7 @@ fn a_core_is_one_row_with_its_full_name_in_details() {
         cores: Vec::new(),
         caption: None,
         exchange: None,
+        groups_missing: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -2115,6 +2123,7 @@ fn a_days_report_is_compact() {
             cores: Vec::new(),
             caption: None,
             exchange: None,
+            groups_missing: false,
         };
         let html = super::render::report_html(&page);
         let table = html.find("<table").unwrap();
@@ -2305,6 +2314,7 @@ fn cores_are_listed_under_their_groups() {
 
 /// Summaries retain overlapping groups in saved order without double-counting the headline.
 /// Dropping ungrouped cores, counting idle groups, or emitting core rows would break this fixture.
+/// An absent group list retains Groups with an explanation and the same full-scope total.
 #[test]
 fn groups_summarize_activity_and_keep_the_scope_total() {
     use moon_core::config::{CoreGroup, telegram_menu::ReportView};
@@ -2396,14 +2406,15 @@ fn groups_summarize_activity_and_keep_the_scope_total() {
         (restricted.total.totals[0].profit, restricted.total.orders),
         (10.0, 2)
     );
-    let fallback = read(&[], super::TelegramReportAccess::Owner);
-    assert_eq!(fallback.rows.len(), 3);
-    assert!(
-        fallback
-            .rows
-            .iter()
-            .all(|row| matches!(row, Row::Line(Some(_), ..)))
+    let missing = read(&[], super::TelegramReportAccess::Owner);
+    assert!(missing.rows.is_empty());
+    assert!(missing.request.by_group);
+    assert!(missing.groups_missing);
+    assert_eq!(
+        (missing.total.totals[0].profit, missing.total.orders),
+        (30.0, 3)
     );
+    assert!(report_html(&missing).contains(&*t!("telegram.report_groups_missing")));
 }
 
 /// Picking the visible switch must survive a host reload and govern every later period button.
@@ -2691,6 +2702,7 @@ fn a_repeat_alone_on_its_page_keeps_its_details() {
         cores: Vec::new(),
         caption: None,
         exchange: None,
+        groups_missing: false,
     };
     let details = |rows| {
         let html = super::report_html(&page(rows));
@@ -2733,6 +2745,7 @@ fn the_period_is_short() {
         cores: Vec::new(),
         caption: None,
         exchange: None,
+        groups_missing: false,
     };
     let period = |from, to, year| super::render::period(&page(from, to), year);
     assert_eq!(
@@ -2958,6 +2971,7 @@ fn per_row_page_with(
             cores: Vec::new(),
             caption: None,
             exchange: None,
+            groups_missing: false,
         }))
     };
     let size = paging::fitting_page_size(&active, fits);
@@ -2979,6 +2993,7 @@ fn per_row_page_with(
         cores: accessible.iter().map(|(id, _)| *id).collect(),
         caption: None,
         exchange: None,
+        groups_missing: false,
     })
 }
 
@@ -3004,6 +3019,98 @@ fn per_row_drilldowns(
         }
     }
     Ok(drilldowns)
+}
+
+/// Dropping the empty-groups flag would silently render Cores and conceal the selected mode.
+#[test]
+fn groups_missing_shows_localized_note_and_total_without_core_rows() {
+    use moon_core::config::{Language, telegram_menu::ReportView};
+    let conn = sliced_fixture(2, 1);
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for access in [
+            TelegramReportAccess::Owner,
+            TelegramReportAccess::Viewer(vec![1]),
+        ] {
+            let page = super::read_page_with(
+                &conn,
+                ReportRequest::new(Period::Today, false).in_view(ReportView::Groups),
+                0,
+                1000,
+                chrono_tz::UTC,
+                ReportBasis::Close,
+                ReportLayout::default(),
+                &Default::default(),
+                &[],
+                |_| (Default::default(), access.clone()),
+            )
+            .unwrap();
+            assert!(page.request.by_group);
+            assert!(page.groups_missing);
+            assert!(page.rows.is_empty());
+            assert_eq!(
+                page.total.orders,
+                if access == TelegramReportAccess::Owner {
+                    2
+                } else {
+                    1
+                }
+            );
+            let html = report_html(&page);
+            let note = t!("telegram.report_groups_missing").to_string();
+            assert_ne!(note, "telegram.report_groups_missing");
+            assert!(html.find(&super::escape(&note)).unwrap() < html.find("<table").unwrap());
+            assert!(html.contains(&*t!("telegram.report_total")));
+            assert!(!html.contains("Core 1"));
+            assert!(!html.contains("Core 2"));
+            assert!(!html.contains("<details>"));
+            let moon_core::telegram::api::ReplyMarkup::Inline(markup) =
+                super::render::keyboard(&page)
+            else {
+                panic!("inline keyboard required")
+            };
+            let switch = &markup.inline_keyboard[0][0];
+            assert_eq!(
+                switch.text,
+                format!(
+                    "{} ▾",
+                    t!(
+                        "telegram.report_view_switch",
+                        view = t!("telegram.report_groups")
+                    )
+                )
+            );
+        }
+    }
+}
+
+/// An empty period must still explain missing groups, while Cores and Exchanges stay unchanged.
+#[test]
+fn groups_missing_empty_period_keeps_note_and_totals_table() {
+    use moon_core::config::telegram_menu::ReportView;
+    let _locale = crate::test_locale::force("en");
+    let conn = sliced_fixture(0, 0);
+    for view in [ReportView::Groups, ReportView::Cores, ReportView::Exchanges] {
+        let page = super::read_page_with(
+            &conn,
+            ReportRequest::new(Period::Today, false).in_view(view),
+            0,
+            1000,
+            chrono_tz::UTC,
+            ReportBasis::Close,
+            ReportLayout::default(),
+            &Default::default(),
+            &[],
+            |_| (Default::default(), TelegramReportAccess::Owner),
+        )
+        .unwrap();
+        let html = report_html(&page);
+        assert_eq!(
+            html.contains(&*t!("telegram.report_groups_missing")),
+            view == ReportView::Groups
+        );
+        assert_eq!(html.contains("<table"), view == ReportView::Groups);
+    }
 }
 
 /// Populate both exchanges with partial-day trades, mixed quotes, and zero-profit activity.

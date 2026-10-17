@@ -138,6 +138,7 @@ pub(super) fn period(page: &Page, year: i32) -> String {
 
 /// HTML beginning with the report title and period so Telegram can preview every report page.
 /// Manual titles start with localized "Report"; automatic captions keep their own title.
+/// Missing groups retain their selected view and show an explanation above the totals table.
 /// Saved columns, group styles and whole-scope total placement govern the following table.
 /// The caller decides whether it fits Telegram's rich-message caps.
 pub(super) fn report_html(page: &Page) -> String {
@@ -186,9 +187,15 @@ pub(super) fn report_html(page: &Page) -> String {
         ));
     }
     html.push_str(&format!("<p>{preview_title}</p>"));
+    if page.groups_missing {
+        html.push_str(&format!(
+            "<p>{}</p>",
+            escape(&t!("telegram.report_groups_missing"))
+        ));
+    }
     if page.total.orders == 0 {
         html.push_str(&format!("<p>{}</p>", escape(&t!("telegram.report_empty"))));
-        if page.rows.is_empty() {
+        if page.rows.is_empty() && !page.groups_missing {
             return html;
         }
     }
@@ -216,6 +223,9 @@ pub(super) fn report_html(page: &Page) -> String {
         }
     }
     html.push_str("</table>");
+    if page.groups_missing {
+        return html;
+    }
     // The details name each core of the page once, however many groups list it: a repeat counts
     // only when its first listing is on another page. Core UIDs distinguish reused names.
     let mut lines: Vec<(Option<u64>, &String, &QuoteBreakdown)> = page

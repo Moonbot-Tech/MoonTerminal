@@ -72,6 +72,7 @@ telegram.report_days: "Дні"
 
 telegram.report_cores: "Ядра"
 telegram.report_groups: "Групи"
+telegram.report_groups_missing: "Групи ще не передані на станцію; вони надійдуть із термінала автоматично."
 telegram.report_view_switch: "Вигляд: %{view}"
 
 telegram.report_profit: "Прибуток / збиток"

@@ -1,8 +1,7 @@
 //! The station's copy of the terminal's saved core groups, for the bot's report by cores.
 //!
-//! Groups are sent on the user's word, never on their own: several terminals may serve one station,
-//! and one without groups must not wipe the set another sent. So the box compares what the station
-//! answered with the terminal's own groups and, when they differ, offers to send them.
+//! Complete non-empty groups synchronize automatically. The manual action remains available for
+//! unresolved memberships and explicit retries; both paths compare in the station namespace.
 
 use gpui::*;
 use moon_core::config::CoreGroup;
@@ -12,7 +11,7 @@ use rust_i18n::t;
 use super::super::SettingsView;
 use super::server_bot::known_server;
 use crate::backend::station::job::Job;
-use crate::backend::station::{cores_sync, uid_translation::UidTranslation};
+use crate::backend::station::{cores_sync, groups_sync::same_station_groups};
 use crate::design;
 
 impl SettingsView {
@@ -77,12 +76,15 @@ impl SettingsView {
                     MoonButton::new("server-groups-send")
                         .padding_x(12.0)
                         .label(t!("telegram.server.groups_send").to_string())
-                        .disabled(busy)
+                        .disabled(busy || ours.is_empty())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let Some(target) = known_server() else {
                                 return;
                             };
                             let groups = this.backend.read(cx).config.core_groups.clone();
+                            if groups.is_empty() {
+                                return;
+                            }
                             this.server_bot_run(Ok(Job::Groups { target, groups }), cx);
                         }))
                         .render(),
@@ -90,35 +92,6 @@ impl SettingsView {
                 .into_any_element(),
         )
     }
-}
-
-/// Compare memberships in the station namespace; unresolved members keep the send action available.
-fn same_station_groups(
-    ours: &[CoreGroup],
-    theirs: &[CoreGroup],
-    here: &[cores_sync::LocalCore],
-    listing: &[moon_core::station_api::ListedCore],
-) -> bool {
-    let mut translated = ours.to_vec();
-    let mut translation = UidTranslation::new(here, listing);
-    translation.groups_to_station(&mut translated);
-    translation.unmapped() == 0 && same_groups(&translated, theirs)
-}
-
-/// Whether group names and positions match, ignoring member order within each group.
-fn same_groups(a: &[CoreGroup], b: &[CoreGroup]) -> bool {
-    let key = |groups: &[CoreGroup]| {
-        let keyed: Vec<(String, Vec<u64>)> = groups
-            .iter()
-            .map(|group| {
-                let mut cores = group.cores.clone();
-                cores.sort_unstable();
-                (group.name.clone(), cores)
-            })
-            .collect();
-        keyed
-    };
-    key(a) == key(b)
 }
 
 /// The groups' names, comma-separated; a dash for none.
