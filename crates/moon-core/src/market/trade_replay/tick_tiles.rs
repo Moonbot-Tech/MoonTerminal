@@ -168,6 +168,31 @@ impl TickTileStore {
         (self.generation, needed)
     }
 
+    /// A store holding copies of `key`'s tiles that intersect `focus`, and nothing else.
+    pub fn snapshot(&self, key: &TileKey, focus: &Coverage) -> Self {
+        let mut copy = Self::default();
+        let tiles: Vec<TickTile> = self
+            .tiles
+            .get(key)
+            .into_iter()
+            .flatten()
+            .filter(|tile| {
+                focus
+                    .spans()
+                    .iter()
+                    .any(|&(from, to)| tile.to_ms >= from && tile.from_ms <= to)
+            })
+            .cloned()
+            .collect();
+        if !tiles.is_empty() {
+            copy.held_ticks = tiles.iter().map(|tile| tile.ticks.len()).sum();
+            copy.tile_count = tiles.len();
+            copy.next_seq = self.next_seq;
+            copy.tiles.insert(key.clone(), tiles);
+        }
+        copy
+    }
+
     /// File a successful disk read only if no trim replaced the store while it was waiting.
     pub fn hydrate_from(
         &mut self,

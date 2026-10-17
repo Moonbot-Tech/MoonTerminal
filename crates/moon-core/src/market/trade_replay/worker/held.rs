@@ -113,15 +113,46 @@ fn hydrate_with(
     key: &TileKey,
     focus: &Coverage,
     revision: impl Fn() -> u64,
+    read: impl FnMut(i64, i64) -> Option<Vec<trade_cache::StoredSpan>>,
+) -> bool {
+    hydrate_into(tiles, key, focus, revision, read, None)
+}
+
+/// [`hydrate_with`], optionally mirroring the focus into `answer`: the tiles held when the plan
+/// was taken plus every disk read, so another reader evicting shared tiles between the plan and
+/// the answer cannot shrink what this query proves held.
+fn hydrate_into(
+    tiles: &Mutex<TickTileStore>,
+    key: &TileKey,
+    focus: &Coverage,
+    revision: impl Fn() -> u64,
     mut read: impl FnMut(i64, i64) -> Option<Vec<trade_cache::StoredSpan>>,
+    mut answer: Option<&mut TickTileStore>,
 ) -> bool {
     // Sample before reading: a filing during I/O must invalidate the next query too.
     let revision = revision();
-    let (generation, needed) = lock_tiles(tiles).hydration_plan(key, focus, revision);
+    let (generation, needed) = {
+        let mut store = lock_tiles(tiles);
+        if let Some(answer) = answer.as_deref_mut() {
+            *answer = store.snapshot(key, focus);
+        }
+        store.hydration_plan(key, focus, revision)
+    };
     let mut settled = true;
     for &(from, to) in needed.spans() {
         match read(from, to) {
             Some(spans) => {
+                if let Some(answer) = answer.as_deref_mut() {
+                    for span in &spans {
+                        answer.insert(
+                            key.clone(),
+                            span.from_ms,
+                            span.to_ms,
+                            span.ticks.clone(),
+                            span.source,
+                        );
+                    }
+                }
                 lock_tiles(tiles).hydrate_from(key, generation, revision, (from, to), spans);
             }
             None => settled = false,
@@ -139,19 +170,48 @@ fn hydrate_with(
 ///     query: The stretches asked for.
 pub(super) fn held_answer(tiles: &Mutex<TickTileStore>, query: &TickQuery) -> TickAnswer {
     let key: TileKey = (query.exchange_key.clone(), query.market.clone());
-    let settled = hydrate(
-        tiles,
-        super::trade_cache::handle().as_ref(),
-        &key,
-        &query.spans,
-    );
-    let (covered, runs) = {
-        let store = lock_tiles(tiles);
-        let covered = held_coverage(&store, &key, &query.spans, Coverage::none());
-        let runs = read_coverage(&store, &key, &covered);
-        (covered, runs)
-    };
-    let mut ticks: Vec<Tick> = runs.into_iter().flat_map(|(_, run)| run).collect();
+    match super::trade_cache::handle() {
+        Some(cache) => answer_with(
+            tiles,
+            &key,
+            &query.spans,
+            || trade_cache::market_revision(&key),
+            |from, to| cache.read(&key.0, &key.1, from, to),
+        ),
+        None => {
+            let mirror = lock_tiles(tiles).snapshot(&key, &query.spans);
+            compose_answer(&mirror, &key, &query.spans, true)
+        }
+    }
+}
+
+/// Seams of [`held_answer`]. The answer is composed from this query's own mirror of the store,
+/// never re-read from the shared one: parallel held readers insert and evict between the plan
+/// and the answer, and the answer must equal what a serial read of the same tiles and disk gives.
+fn answer_with(
+    tiles: &Mutex<TickTileStore>,
+    key: &TileKey,
+    focus: &Coverage,
+    revision: impl Fn() -> u64,
+    read: impl FnMut(i64, i64) -> Option<Vec<trade_cache::StoredSpan>>,
+) -> TickAnswer {
+    let mut mirror = TickTileStore::default();
+    let settled = hydrate_into(tiles, key, focus, revision, read, Some(&mut mirror));
+    compose_answer(&mirror, key, focus, settled)
+}
+
+/// The held coverage of `focus` and every print inside it, ascending.
+fn compose_answer(
+    mirror: &TickTileStore,
+    key: &TileKey,
+    focus: &Coverage,
+    settled: bool,
+) -> TickAnswer {
+    let covered = held_coverage(mirror, key, focus, Coverage::none());
+    let mut ticks: Vec<Tick> = read_coverage(mirror, key, &covered)
+        .into_iter()
+        .flat_map(|(_, run)| run)
+        .collect();
     ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
     TickAnswer {
         ticks,

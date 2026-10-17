@@ -248,3 +248,40 @@ fn evicted_tape_is_read_again() {
     assert_eq!(calls.get(), 1);
     assert!(lock_tiles(&tiles).covers(&key, 0, 9));
 }
+
+/// Another reader evicting this query's planned-held tiles mid-read cannot shrink its answer:
+/// the answer equals a serial read of the same tiles and disk.
+#[test]
+fn concurrent_eviction_keeps_the_answer_whole() {
+    let tiles = Mutex::new(TickTileStore::default());
+    let key: TileKey = ("VENUE_A".into(), "XTHETA".into());
+    let disk = |from: i64, to: i64| Some(vec![span(from, to)]);
+    hydrate_with(&tiles, &key, &Coverage::one((0, 30_000)), || 1, disk);
+    let focus = Coverage::one((0, 60_000));
+    let serial = answer_with(&tiles, &key, &focus, || 1, disk);
+    let tiles = Mutex::new(TickTileStore::default());
+    hydrate_with(&tiles, &key, &Coverage::one((0, 30_000)), || 1, disk);
+    let raced = answer_with(
+        &tiles,
+        &key,
+        &focus,
+        || 1,
+        |from, to| {
+            // A second held reader fills the store past its tile ceiling between plan and answer.
+            for index in 0..super::super::super::tick_tiles::TILE_STORE_MAX_TILES {
+                lock_tiles(&tiles).insert(
+                    ("VENUE_B".into(), format!("X{index}")),
+                    0,
+                    9,
+                    vec![],
+                    TileSource::Core,
+                );
+            }
+            disk(from, to)
+        },
+    );
+    assert_eq!(serial.covered, Coverage::one((0, 60_000)));
+    assert_eq!(raced.covered, serial.covered);
+    assert_eq!(format!("{:?}", raced.ticks), format!("{:?}", serial.ticks));
+    assert!(raced.settled);
+}
