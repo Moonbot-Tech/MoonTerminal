@@ -119,7 +119,6 @@ fn keep_controls(ed: &TapeEd, disabled: bool, actions: &Actions, cx: &App) -> An
         max_age_days: DEFAULT_MAX_AGE_DAYS,
         record_emulator: true,
         tuner_only: None,
-        min_tail_s: None,
     });
     let presets = [30, 90, 180, 365, 1825, 0];
     let chips = h_flex()
@@ -206,7 +205,6 @@ pub(super) fn server_tape_block(
         max_age_days: DEFAULT_MAX_AGE_DAYS,
         record_emulator: true,
         tuner_only: None,
-        min_tail_s: None,
     });
     let label = t!("telegram.server.keep_emu_label").to_string();
     let on_emulator = actions.emulator.clone();

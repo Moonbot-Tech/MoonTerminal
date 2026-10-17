@@ -19,123 +19,6 @@ use super::{
 };
 use crate::design;
 
-/// Startup seeding must preserve a saved five-minute floor in a save before Analytics opens.
-///
-/// Emptying `seed_tuner_floor` leaves the process floor at its 60 s default, so a station that
-/// already reports 60 s is saved as 60 s instead of the layout's 300 s.
-#[test]
-fn startup_tail_seed_is_used_by_station_tape_save() {
-    // A separate test process keeps the boot-time global change away from parallel fit tests.
-    const CHILD: &str = "MOON_TEST_STARTUP_TAIL_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "settings::telegram::server_tape::tests::startup_tail_seed_is_used_by_station_tape_save",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("STARTUP_SEED_CHILD_RAN"),
-            "child stdout lacked STARTUP_SEED_CHILD_RAN:\n{stdout}"
-        );
-        assert!(
-            output.status.success(),
-            "child failed: {}\n{stdout}\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return;
-    }
-    println!("STARTUP_SEED_CHILD_RAN");
-    std::io::Write::flush(&mut std::io::stdout()).expect("flush stdout");
-    let mut layout = moon_core::config::WindowLayout::default();
-    layout.analytics_ticks = Some(moon_core::config::TicksAxisLayout {
-        min_tail_s: Some(300),
-        ..moon_core::config::TicksAxisLayout::default()
-    });
-    crate::startup::seed_tuner_floor(&layout);
-    let floor = crate::analytics::tape_min_tail_s();
-    let seen = moon_core::station_api::TapeKeep {
-        max_age_days: 90,
-        record_emulator: true,
-        tuner_only: Some(true),
-        min_tail_s: Some(60),
-    };
-    let saved = super::keep::job_keep(Some(seen), Some(seen));
-    assert_eq!(floor, 300);
-    assert_eq!(saved.unwrap().min_tail_s, Some(300));
-}
-
-/// A reported floor differing from the tuner must leave the save bar clean until the user edits.
-#[test]
-fn station_tape_tail_draft_follows_only_reported_capability() {
-    use moon_core::station_api::TapeKeep;
-    let old = TapeKeep {
-        max_age_days: 90,
-        record_emulator: true,
-        tuner_only: None,
-        min_tail_s: None,
-    };
-    let draft = TapeKeep {
-        min_tail_s: Some(999),
-        ..old
-    };
-    assert_eq!(
-        super::keep::job_keep(Some(old), Some(draft))
-            .unwrap()
-            .min_tail_s,
-        None
-    );
-    let seen = TapeKeep {
-        min_tail_s: Some(if crate::analytics::tape_min_tail_s() == 120 {
-            180
-        } else {
-            120
-        }),
-        ..old
-    };
-    let mut ed = TapeEd::default();
-    ed.take_keep(Some(Some(seen)));
-    assert_eq!(ed.draft_keep.unwrap().min_tail_s, seen.min_tail_s);
-    let _locale = crate::test_locale::force("en");
-    let tape = moon_core::station_api::TapeWindow {
-        margin_s: 30,
-        long_position_min: 60,
-    };
-    ed.seen = Some(tape);
-    ed.draft = Some(tape);
-    assert_eq!(
-        super::keep::bar_message(&ed, None, false),
-        (
-            rust_i18n::t!("telegram.server.tape_clean").to_string(),
-            false
-        )
-    );
-    ed.take_keep(Some(Some(old)));
-    assert_eq!(ed.draft_keep.unwrap().min_tail_s, None);
-    assert_eq!(
-        super::keep::job_keep(Some(seen), Some(draft))
-            .unwrap()
-            .min_tail_s,
-        Some(crate::analytics::tape_min_tail_s())
-    );
-    let report = TapeCatchup {
-        max_age_days: Some(90),
-        record_emulator: Some(true),
-        min_tail_s: Some(120),
-        tail_final: Some(7),
-        ..catchup()
-    };
-    assert_eq!(
-        super::keep::reported_keep(&report).unwrap().min_tail_s,
-        Some(120)
-    );
-}
-
 /// Preset prefixes typed inside custom numbers must not clear the field on the next render.
 #[test]
 fn custom_days_preserve_typed_preset_prefixes() {
@@ -145,7 +28,6 @@ fn custom_days_preserve_typed_preset_prefixes() {
             max_age_days: 1825,
             record_emulator: true,
             tuner_only: None,
-            min_tail_s: None,
         }),
         ..TapeEd::default()
     };
@@ -972,7 +854,6 @@ fn keep_reaches_only_new_stations() {
         max_age_days: 1825,
         record_emulator: true,
         tuner_only: None,
-        min_tail_s: None,
     };
     let mut ed = TapeEd::default();
     ed.take_keep(Some(Some(keep)));
@@ -1038,7 +919,6 @@ fn purge_counts_from_station_ages() {
         max_age_days: 30,
         record_emulator: false,
         tuner_only: None,
-        min_tail_s: None,
     };
     assert_eq!(
         purge_counts(&c, keep),
@@ -1098,13 +978,11 @@ fn lengthening_writes_without_confirmation() {
                 max_age_days: 180,
                 record_emulator: true,
                 tuner_only: None,
-                min_tail_s: None,
             }),
             draft_keep: Some(TapeKeep {
                 max_age_days: days,
                 record_emulator: true,
                 tuner_only: None,
-                min_tail_s: None,
             }),
             draft: Some(TapeWindow {
                 margin_s: 60,
@@ -1401,7 +1279,6 @@ fn full_probe(state: &str, width: f32) -> FullTapeProbe {
         max_age_days: 1825,
         record_emulator: true,
         tuner_only: Some(false),
-        min_tail_s: None,
     };
     let mut ed = TapeEd {
         seen: Some(window),
@@ -1438,7 +1315,6 @@ fn full_probe(state: &str, width: f32) -> FullTapeProbe {
                 max_age_days: 180,
                 record_emulator: false,
                 tuner_only: Some(false),
-                min_tail_s: None,
             });
             ed.confirm = state != "draft";
             if state == "confirm_unknown" {
@@ -1980,7 +1856,6 @@ fn job_keep_strips_tuner_only_when_the_station_stops_reporting_it() {
         max_age_days: 30,
         record_emulator: true,
         tuner_only: None,
-        min_tail_s: None,
     };
     let draft = TapeKeep {
         tuner_only: Some(true),

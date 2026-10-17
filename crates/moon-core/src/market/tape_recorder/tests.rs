@@ -428,9 +428,12 @@ fn pending_backfills_share_disk_reservation_until_confirmed() {
     assert_eq!(pending.load(Ordering::Acquire), 0);
 }
 
-/// Requiring a public venue at close would lose venue-less trade windows from retention.
+/// LinKvo 15.10: a core on a venue this build's directory does not know (a broker connected
+/// through MoonProto) got no deal picture — its trades never reached the recorder. Its close is
+/// now recorded like any other, and only the catch-up, which needs the venue's REST route, leaves
+/// it out; a known venue's close still reaches the catch-up as before.
 #[test]
-fn a_close_on_an_unknown_venue_is_recorded_and_known_to_catchup() {
+fn a_close_on_an_unknown_venue_is_recorded_without_catchup() {
     let _guard = catchup::tests::SWITCH_LOCK.lock().unwrap();
     catchup::enable();
     let now = Instant::now();
@@ -451,8 +454,8 @@ fn a_close_on_an_unknown_venue_is_recorded_and_known_to_catchup() {
     };
     let unknown = TradeId { core: 9, rec_id: 1 };
     let known = TradeId { core: 8, rec_id: 2 };
-    let broker = ("CORE_A".to_string(), "XALPHA".to_string());
-    let bybit = ("CORE_B".to_string(), "XBETA".to_string());
+    let broker = ("77:00000000".to_string(), "ROLO".to_string());
+    let bybit = ("2:00000000".to_string(), "SYNUSDT".to_string());
     for (key, id, venue) in [
         (&broker, unknown, None),
         (
@@ -495,8 +498,8 @@ fn a_close_on_an_unknown_venue_is_recorded_and_known_to_catchup() {
         "the unknown venue's trade is recorded"
     );
     assert!(
-        recorder.catchup.knows(unknown),
-        "venue-less closes retain their trade windows for catch-up and retention"
+        !recorder.catchup.knows(unknown),
+        "no REST route: no catch-up"
     );
     assert!(
         recorder.catchup.knows(known),

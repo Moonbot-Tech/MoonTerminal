@@ -18,7 +18,6 @@
 //! undo → the terminal's bot stays down, and the user is told to take it off the station. Ownership is journaled before
 //! suspension and cleared only after the end is safely applied, so quitting cannot release it.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -41,30 +40,14 @@ const POLL: Duration = Duration::from_millis(150);
 /// How many of a job's lines are kept.
 const MAX_LINES: usize = 400;
 
-/// Render-time station facts, refreshed by host reads and backend status observations.
-static KNOWN: AtomicBool = AtomicBool::new(false);
-static TAIL_FINAL: AtomicU64 = AtomicU64::new(u64::MAX);
-
-/// Read station presence without accessing the hosts file.
-pub(crate) fn known_cached() -> bool {
-    KNOWN.load(Ordering::Acquire)
-}
-
-/// Last reported final-tail count; an unread or unsupported count stays distinct from zero.
-pub(crate) fn tail_final_cached() -> u64 {
-    TAIL_FINAL.load(Ordering::Acquire)
-}
-
 /// Who started a job, which decides what its end may change.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Kind {
     /// A button: owns the progress lines and the outcome.
     #[default]
     User,
-    /// A bot/core read that preserves the user's outcome.
+    /// A read of bot state and core identities that preserves the user's outcome.
     Quiet,
-    /// An automatic tail-floor write must not retry directly from its own completion.
-    Tail,
     /// The header clock's zone pushed to the station: appends its line, keeps the outcome, and
     /// like a quiet read does not hold the buttons.
     Zone,
@@ -140,10 +123,6 @@ pub(crate) struct StationJobs {
     /// The zone the last zone push carried: after it ends the zone is pushed again only when the
     /// header clock moved meanwhile, so a station that refuses it is not asked again at once.
     zone_pushed: Option<String>,
-    /// Latest tuner tail waiting for an idle station and a capability report.
-    min_tail_pending: Option<u32>,
-    /// Last automatic floor attempted, used to avoid retrying the same failed write at once.
-    min_tail_pushed: Option<u32>,
     /// The startup read was attempted: it is never repeated, whatever it found.
     prefetched: bool,
     task: Option<Task<()>>,
@@ -153,31 +132,11 @@ impl Kind {
     /// Work the user did not ask for and need not wait on: a user's job pressed meanwhile starts
     /// right after it.
     fn is_background(self) -> bool {
-        matches!(self, Self::Quiet | Self::Tail | Self::Zone)
+        matches!(self, Self::Quiet | Self::Zone)
     }
 }
 
 impl StationJobs {
-    /// Retry after unrelated work, or when the requested floor changed during the last push.
-    fn min_tail_retry_due(&self) -> bool {
-        self.kind != Kind::Tail || self.min_tail_pending != self.min_tail_pushed
-    }
-
-    /// Retain the latest tail until a status acknowledges it, retrying when idle and supported.
-    fn take_min_tail_job(&mut self, target: Option<moon_remote::ssh::Target>) -> Option<job::Job> {
-        if self.running {
-            return None;
-        }
-        let secs = self.min_tail_pending?;
-        let bot = self.bot.as_ref()?;
-        let catchup = bot.station.as_ref()?.tape_catchup.as_deref()?;
-        if catchup.min_tail_s? == secs {
-            self.min_tail_pending = None;
-            return None;
-        }
-        min_tail_job(bot, catchup, target?, secs)
-    }
-
     /// Keep the retry action available while removal or the local save still needs recovery.
     pub(crate) fn has_returned_bot(&self) -> bool {
         self.returned.is_some()
@@ -238,14 +197,6 @@ impl StationJobs {
 
     /// Retain a listing through a restart gap; an answering old station reports unsupported.
     fn observe_bot(&mut self, bot: BotState) {
-        TAIL_FINAL.store(
-            bot.station
-                .as_ref()
-                .and_then(|status| status.tape_catchup.as_ref())
-                .and_then(|catchup| catchup.tail_final)
-                .map_or(u64::MAX, u64::from),
-            Ordering::Release,
-        );
         if let Some(status) = &bot.station {
             self.cores_seen = Some(status.cores.clone());
             self.core_uid_high_water = status.core_uid_high_water;
@@ -347,35 +298,8 @@ impl StationJobs {
     }
 }
 
-/// Build a tail-only policy update from the capable station's already-resolved report.
-fn min_tail_job(
-    bot: &BotState,
-    catchup: &moon_core::station_api::TapeCatchup,
-    target: moon_remote::ssh::Target,
-    secs: u32,
-) -> Option<job::Job> {
-    Some(job::Job::Tape {
-        target,
-        tape: bot.tape?,
-        catchup: None,
-        keep: Some(moon_core::station_api::TapeKeep {
-            max_age_days: catchup.max_age_days?,
-            record_emulator: catchup.record_emulator?,
-            tuner_only: catchup.tuner_only,
-            min_tail_s: Some(secs),
-        }),
-    })
-}
-
 /// The station's server this terminal set up, if any (`remote/hosts.toml`).
 pub(crate) fn known_target() -> Option<moon_remote::ssh::Target> {
-    let target = read_known_target();
-    KNOWN.store(target.is_some(), Ordering::Release);
-    target
-}
-
-/// Resolve the configured host for actions while refreshing the render cache at the caller.
-fn read_known_target() -> Option<moon_remote::ssh::Target> {
     let hosts = moon_remote::hosts::Hosts::load(&moon_remote::hosts::Hosts::path()).ok()?;
     let host = hosts.first_set_up()?;
     let (name, port) = host.addr.rsplit_once(':')?;
@@ -386,21 +310,6 @@ fn read_known_target() -> Option<moon_remote::ssh::Target> {
 }
 
 impl Backend {
-    /// Retain the newest tuner setting across running jobs, then use the station tape path.
-    pub(crate) fn station_min_tail_sync(&mut self, secs: u32, cx: &mut Context<Self>) {
-        self.station.min_tail_pending = Some(secs);
-        self.station_push_min_tail(cx);
-    }
-
-    /// Push only after a capability report, preserving the station's acknowledged policy.
-    fn station_push_min_tail(&mut self, cx: &mut Context<Self>) {
-        let Some(job) = self.station.take_min_tail_job(known_target()) else {
-            return;
-        };
-        self.station.min_tail_pushed = self.station.min_tail_pending;
-        self.station_begin(job, false, Kind::Tail, cx);
-    }
-
     /// Start the user's `job`; `hand_over` journals ownership and suspends the terminal's bot. During a
     /// quiet read or a zone push it waits for that; during another job it is not started (the
     /// buttons wait).
@@ -578,7 +487,7 @@ impl Backend {
                 st.lines.clear();
                 st.status = None;
             }
-            Kind::Quiet | Kind::Tail | Kind::Zone | Kind::Recovery => {}
+            Kind::Quiet | Kind::Zone | Kind::Recovery => {}
         }
         st.revision = st.revision.wrapping_add(1);
         let rx = job::start(job, cores_sync::trace_cores(&self.config));
@@ -634,9 +543,6 @@ impl Backend {
         }
         if !self.station.running && std::mem::take(&mut self.station.pending_refresh) {
             self.station_refresh_bot(cx);
-        }
-        if self.station.min_tail_retry_due() {
-            self.station_push_min_tail(cx);
         }
         // Last: with the bot's state as now read, its zone may lag the header clock's. After a push
         // itself only when the header clock moved during it: the same zone refused would be sent
@@ -710,14 +616,9 @@ impl Backend {
             }
             return true;
         }
-        if kind == Kind::Quiet || kind == Kind::Tail {
+        if kind == Kind::Quiet {
             // A quiet read refreshes bot state and core identities while preserving the user's
             // outcome; a failed read records its error instead.
-            if kind == Kind::Tail
-                && matches!(&done, job::Done::Ok { .. } | job::Done::Installed { .. })
-            {
-                self.station.pending_refresh = true;
-            }
             self.station.apply_quiet(done);
             return true;
         }

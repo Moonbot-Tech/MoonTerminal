@@ -615,43 +615,6 @@ fn report_groups_use_saved_order_with_legacy_and_renamed_fallback() {
     let back: Access = serde_json::from_str(&serde_json::to_string(&access).unwrap()).unwrap();
     assert_eq!(names(&back), ["Renamed", "Zulu", "alpha"]);
 }
-/// Tail capability additions must accept legacy JSON, omit absent keys and preserve new counts.
-#[test]
-fn tape_tail_fields_are_additive() {
-    let old = serde_json::json!({
-        "pending": 0, "filled": 0, "no_route": 0, "out_of_reach": 0,
-        "failed": 0, "last_pass_ms": null, "archive_bytes": 0
-    });
-    let mut report: TapeCatchup = serde_json::from_value(old).unwrap();
-    assert_eq!((report.min_tail_s, report.tail_final), (None, None));
-    let value = serde_json::to_value(&report).unwrap();
-    assert!(value.get("min_tail_s").is_none() && value.get("tail_final").is_none());
-    report.min_tail_s = Some(120);
-    report.tail_final = Some(7);
-    let encoded = serde_json::to_value(&report).unwrap();
-    assert_eq!(encoded["min_tail_s"], 120);
-    assert_eq!(encoded["tail_final"], 7);
-    assert_eq!(
-        serde_json::from_value::<TapeCatchup>(encoded).unwrap(),
-        report
-    );
-    let old_keep = serde_json::json!({"max_age_days": 90, "record_emulator": true});
-    let mut keep: super::TapeKeep = serde_json::from_value(old_keep).unwrap();
-    assert_eq!(keep.min_tail_s, None);
-    assert!(
-        serde_json::to_value(keep)
-            .unwrap()
-            .get("min_tail_s")
-            .is_none()
-    );
-    keep.min_tail_s = Some(120);
-    assert_eq!(serde_json::to_value(keep).unwrap()["min_tail_s"], 120);
-    assert_eq!(
-        serde_json::from_value::<super::TapeKeep>(serde_json::to_value(keep).unwrap()).unwrap(),
-        keep
-    );
-}
-
 /// Both UI confirmation and station purge scheduling must treat infinity and emulator removal alike.
 #[test]
 fn tape_keep_destructive_changes_share_one_rule() {
@@ -659,7 +622,6 @@ fn tape_keep_destructive_changes_share_one_rule() {
         max_age_days: days,
         record_emulator: emulator,
         tuner_only: None,
-        min_tail_s: None,
     };
     for (seen, draft, age, emu) in [
         (keep(0, true), keep(30, true), true, false),
@@ -683,7 +645,6 @@ fn tape_keep_tuner_only_is_destructive_only_when_switched_on() {
         max_age_days: 0,
         record_emulator: true,
         tuner_only,
-        min_tail_s: None,
     };
     for (seen, draft, drops) in [
         (keep(Some(false)), keep(Some(true)), true),

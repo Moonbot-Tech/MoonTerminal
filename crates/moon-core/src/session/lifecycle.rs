@@ -316,16 +316,6 @@ impl SessionManager {
     ) -> Self {
         let market = MarketStore::shared(epoch_ms);
         let market_source = MarketDataSource::new(market.clone());
-        let catchup_source = market_source.clone();
-        crate::market::tape_recorder::catchup::set_core_fetch(Arc::new(move |ask| {
-            catchup_source.capture_core_span(
-                &ask.address,
-                &ask.market,
-                ask.from_ms,
-                ask.to_ms,
-                Some(Instant::now() + crate::market::tape_recorder::catchup::ARCHIVE_WAIT),
-            )
-        }));
         // The optional local kline cache preserves candle history across restarts. The station
         // draws no candles and keeps no such file.
         if !crate::feed::station::enabled() {
@@ -848,8 +838,16 @@ impl SessionManager {
         let Ok(address) = self.market_source.replay_address(core) else {
             return false;
         };
-        // Known trade windows protect tape even when public venue addressing is unavailable.
-        let venue = address.venue;
+        // The catch-up fetches from a venue's public REST: a venue the directory does not know
+        // has no route, so its core is not listed. Its listing still counts as complete — it
+        // could protect nothing — or the retention barrier would wait on it forever.
+        let Some(venue) = address.venue else {
+            crate::market::tape_recorder::catchup::listed_empty(
+                core,
+                crate::market::tape_recorder::catchup::relist_gen(),
+            );
+            return true;
+        };
         let catalog_ready = self.market_source.tradable_coins(core).is_some();
         if !catalog_ready {
             return false;
@@ -953,7 +951,6 @@ impl SessionManager {
                             exchange: address.exchange_key.clone(),
                             market,
                             venue,
-                            core: Some(address.clone()),
                             open_ms,
                             close_ms,
                             emulator: row.emulator,

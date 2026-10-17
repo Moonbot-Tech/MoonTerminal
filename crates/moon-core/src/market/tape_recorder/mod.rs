@@ -23,8 +23,7 @@
 //!   second; a ring that overwrote unread rows leaves an honest gap. No archive is asked again;
 //! - **long position** — past `long_position_min` the pair is let go; at the exit it is selected
 //!   again and the archive asked for the stretch before the exit;
-//! - **exit** — the pair stays selected through the tuner's tail floor or the margin, whichever
-//!   is longer, until that tail is filed;
+//! - **exit** — the pair stays selected until `exit + margin_s` is filed, then is let go;
 //! - trades of one key, from any core, share one selection until the last of them is filed.
 //!
 //! There is no cap on pairs and no cancelled recording. Each flush lands in
@@ -567,6 +566,8 @@ impl Recorder {
 
     /// Apply events and reserve-checked recovery filings on the recorder thread alone.
     fn apply(&mut self, cmd: Cmd, now_ms: i64) {
+        let margin = crate::market::trade_replay::margin_ms();
+        let long = crate::market::trade_replay::long_position_ms();
         match cmd {
             Cmd::Watch { key, until_ms } => self.watch_key(key, until_ms, now_ms),
             Cmd::Listed { core, generation } => catchup::listing_applied(core, generation),
@@ -623,7 +624,6 @@ impl Recorder {
                 open_ms,
                 emulator,
             } => {
-                let shape = catchup::Shape::current();
                 if emulator == Some(true) && !catchup::record_emulator() {
                     return;
                 }
@@ -647,10 +647,10 @@ impl Recorder {
                 // What the file already holds of a trade open across the station's restart is
                 // not recorded twice.
                 if verdict == OpenVerdict::Resume {
-                    self.prime(&key, open_ms.saturating_sub(shape.margin_ms), now_ms);
+                    self.prime(&key, open_ms.saturating_sub(margin), now_ms);
                 }
                 let task = self.tasks.entry(key).or_insert_with(KeyTask::new);
-                task.opened(trade, open_ms, &shape, emulator);
+                task.opened(trade, open_ms, margin, long, emulator);
             }
             Cmd::Closed {
                 exchange,
@@ -661,7 +661,6 @@ impl Recorder {
                 close_ms,
                 emulator,
             } => {
-                let shape = catchup::Shape::current();
                 line(&format!("close {exchange} {market} {open_ms}..{close_ms}"));
                 let key = (exchange, market);
                 self.closed.closed(trade, &key, open_ms, close_ms);
@@ -674,26 +673,30 @@ impl Recorder {
                 {
                     self.prime(
                         &key,
-                        open_ms.saturating_sub(shape.margin_ms),
-                        close_ms.saturating_add(shape.tail_ms),
+                        open_ms.saturating_sub(margin),
+                        close_ms.saturating_add(margin),
                     );
                 }
                 let task = self.tasks.entry(key.clone()).or_insert_with(KeyTask::new);
-                task.closed(trade, open_ms, close_ms, &shape, emulator);
+                task.closed(trade, open_ms, close_ms, margin, long, emulator);
                 if !catchup::record_emulator() {
                     task.discard_emulator();
                     if task.is_done() {
                         self.tasks.remove(&key);
                     }
                 }
-                // Retention also needs known windows on cores without a public venue route.
-                if catchup::enabled() && emulator != Some(true) {
+                // The catch-up fetches from a venue's public REST: a venue the directory does
+                // not know has no route, so its trade stays with the live recording alone. Its
+                // prints are kept inside the retention period like any other; what it lacks is
+                // the known trade's own window, which `retention::keep_map` also keeps past the
+                // retention edge — so such a trade straddling the edge loses its older part.
+                if let Some(venue) = venue.filter(|_| catchup::enabled() && emulator != Some(true))
+                {
                     self.catchup.protect(vec![catchup::CatchupTrade {
                         id: trade,
                         exchange: key.0,
                         market: key.1,
                         venue,
-                        core: None,
                         open_ms,
                         close_ms,
                         emulator: false,
@@ -781,12 +784,14 @@ impl Recorder {
             .iter()
             .map(|(key, task)| (key.clone(), task.real_needed()))
             .collect();
-        let shape = catchup::Shape::current();
-        let purging = self
-            .catchup
-            .retention_tick(&self.cache, now_ms, &live, &shape);
+        let purging = self.catchup.retention_tick(&self.cache, now_ms, &live);
         if !purging {
-            self.catchup.tick(&self.cache, now_ms, &shape);
+            self.catchup.tick(
+                &self.cache,
+                now_ms,
+                crate::market::trade_replay::margin_ms(),
+                crate::market::trade_replay::long_position_ms(),
+            );
         }
         self.collect_replies(now, now_ms);
         self.expire(now);

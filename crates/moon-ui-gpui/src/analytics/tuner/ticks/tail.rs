@@ -18,15 +18,12 @@
 //! moved.
 //!
 //! Held for the whole process like the model's settings (`model_cfg`): every path that asks
-//! whether a row is fit reads it here. Seeded from the saved layout at app startup;
-//! written by the model popover's "Sample" section.
+//! whether a row is fit reads it here. Seeded from the saved layout when an analytics view
+//! opens; written by the model popover's "Sample" section.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use gpui::*;
-use moon_core::db::tuner::ticks::tail::{
-    DEFAULT_MIN_TAIL_S, clamp_min_tail_s, reaches as core_reaches,
-};
 use moon_ui::{MoonInput, MoonInputEvent, MoonInputState, MoonPalette};
 use rust_i18n::t;
 
@@ -37,6 +34,13 @@ use crate::design;
 #[cfg(test)]
 mod tests;
 
+/// The default shortest tail, seconds: a minute (LinKvo, 2026-09-24).
+const DEFAULT_MIN_TAIL_S: u32 = 60;
+
+/// The longest the setting may ask for — the longest margin the tape store fetches
+/// (`moon_core::config::storage::MAX_TRADE_MARGIN_S`): a longer one would leave every deal out.
+const MAX_MIN_TAIL_S: u32 = moon_core::config::storage::MAX_TRADE_MARGIN_S;
+
 /// The shortest tail in force, seconds.
 static MIN_TAIL_S: AtomicU32 = AtomicU32::new(DEFAULT_MIN_TAIL_S);
 
@@ -44,19 +48,22 @@ static MIN_TAIL_S: AtomicU32 = AtomicU32::new(DEFAULT_MIN_TAIL_S);
 const INPUT_ID: &str = "tail:min";
 
 /// The shortest tail as set, seconds.
-pub(crate) fn current_s() -> u32 {
+pub(in crate::analytics::tuner) fn current_s() -> u32 {
     MIN_TAIL_S.load(Ordering::Relaxed)
 }
 
-/// The clamped shortest tail in force, independent of the terminal's tape margin.
+/// The shortest tail in force, seconds: the setting, but never past the tape store's margin
+/// (`[trade_replay] margin`, the Storage tab) — a row holds at most that much past its close,
+/// and a minimum above it would leave every deal out.
 pub(in crate::analytics::tuner) fn effective_s() -> u32 {
-    clamp_min_tail_s(current_s())
+    let margin_s = moon_core::market::trade_replay::margin_ms() / 1_000;
+    current_s().min(u32::try_from(margin_s.max(0)).unwrap_or(u32::MAX))
 }
 
 /// Put a saved value in force; `None` is the default.
 pub(in crate::analytics) fn replace(secs: Option<u32>) {
     MIN_TAIL_S.store(
-        clamp_min_tail_s(secs.unwrap_or(DEFAULT_MIN_TAIL_S)),
+        secs.unwrap_or(DEFAULT_MIN_TAIL_S).min(MAX_MIN_TAIL_S),
         Ordering::Relaxed,
     );
 }
@@ -72,13 +79,16 @@ pub(in crate::analytics::tuner) fn holds(held: Option<(i64, i64)>) -> bool {
 
 /// Whether `held` reaches `min_s` seconds past the close.
 fn reaches(held: Option<(i64, i64)>, min_s: u32) -> bool {
-    held.is_some_and(|(_, trail_ms)| core_reaches(trail_ms, i64::from(min_s) * 1_000))
+    held.is_some_and(|(_, trail_ms)| trail_ms >= i64::from(min_s) * 1_000)
 }
 
 /// A typed value in seconds: a whole number, clamped to the store's longest margin; anything
 /// else is refused.
 fn parse_s(text: &str) -> Option<u32> {
-    text.trim().parse::<u32>().ok().map(clamp_min_tail_s)
+    text.trim()
+        .parse::<u32>()
+        .ok()
+        .map(|s| s.min(MAX_MIN_TAIL_S))
 }
 
 impl TicksData {
@@ -103,11 +113,6 @@ impl TicksData {
 }
 
 impl AnalyticsView {
-    /// Seed the saved floor before station jobs can read it, without constructing a view.
-    pub(crate) fn seed_tape_min_tail_s(secs: Option<u32>) {
-        replace(secs);
-    }
-
     /// The footer's note on the rows the tail left out, with its leading separator; empty when
     /// none.
     pub(super) fn ticks_short_tail_note(&self) -> String {
@@ -181,8 +186,6 @@ impl AnalyticsView {
                 let typed = state.read(cx).value().to_string();
                 if let Some(secs) = parse_s(&typed).filter(|&secs| secs != current_s()) {
                     MIN_TAIL_S.store(secs, Ordering::Relaxed);
-                    this.backend
-                        .update(cx, |backend, cx| backend.station_min_tail_sync(secs, cx));
                     this.persist_ticks_settings(cx);
                     this.reload_ticks(cx);
                 }
