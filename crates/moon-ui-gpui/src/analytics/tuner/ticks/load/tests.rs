@@ -1,4 +1,8 @@
-//! Core-only rows use the same retention rule at load time and when offered for fetch.
+//! Core-only rows use the same retention rule at load time and when offered for fetch; a
+//! settled miss is carried only while a replay would say the same; stage C's chunked replay
+//! gives the rows an unbounded one gives.
+
+mod carry;
 
 use super::unservable_status;
 use crate::analytics::tuner::ticks::state::{RowAddress, TapeStatus};
@@ -110,6 +114,7 @@ fn unlisted_load_reach_is_core_aware() {
         )]
         .into(),
         traces: Default::default(),
+        settled: Default::default(),
     };
     let short_rows = super::replay_fetched(
         short,
@@ -142,6 +147,7 @@ fn unlisted_load_reach_is_core_aware() {
         )]
         .into(),
         traces: Default::default(),
+        settled: Default::default(),
     };
     let gapped_rows = super::replay_fetched(
         gapped,
@@ -170,6 +176,7 @@ fn unlisted_load_reach_is_core_aware() {
         )]
         .into(),
         traces: Default::default(),
+        settled: Default::default(),
     };
     let rows = super::replay_fetched(
         fetched,
@@ -190,4 +197,43 @@ fn unlisted_load_reach_is_core_aware() {
         ..Default::default()
     };
     assert_eq!(data.covered(), 1);
+}
+
+/// A field-rules edit, a schema default or a selected strategy's value that moved changes the
+/// reload's key, so the fast path does not keep the warning, grid and replay inputs of before.
+#[test]
+fn rules_defaults_and_selection_reach_the_scope_signature() {
+    use moon_core::feed::strategy_deps::FieldDeps;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    let read = moon_core::db::tuner::ticks::DealsRead::default();
+    let deps = FieldDeps::parse("\"FieldA\" = \"FieldB=1\"");
+    let defaults = HashMap::from([("FieldA".to_string(), 1.0)]);
+    let selected = vec![(
+        (1, Some(1)),
+        Arc::new(HashMap::from([("FieldA".to_string(), "2".to_string())])),
+    )];
+    let sign = |selected: &[super::SelectedValues], defaults: &HashMap<String, f64>, deps| {
+        super::scope_signature(
+            &read,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            selected,
+            defaults,
+            deps,
+        )
+    };
+    let base = sign(&selected, &defaults, &deps);
+    let same = deps.clone();
+    assert_eq!(base, sign(&selected, &defaults, &same));
+    let edited = FieldDeps::parse("\"FieldA\" = \"FieldB=2\"");
+    assert_ne!(base, sign(&selected, &defaults, &edited), "rules edited");
+    let moved = HashMap::from([("FieldA".to_string(), 3.0)]);
+    assert_ne!(base, sign(&selected, &moved, &deps), "default moved");
+    let reselected = vec![(
+        (1, Some(1)),
+        Arc::new(HashMap::from([("FieldA".to_string(), "4".to_string())])),
+    )];
+    assert_ne!(base, sign(&reselected, &defaults, &deps), "selection moved");
 }

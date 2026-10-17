@@ -367,6 +367,7 @@ fn ready_real_data_bench() {
             rows,
             tapes: HashMap::new(),
             traces,
+            settled: Default::default(),
         },
         &defaults,
         model,

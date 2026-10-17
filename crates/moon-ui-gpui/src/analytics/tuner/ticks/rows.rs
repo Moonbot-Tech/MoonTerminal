@@ -18,17 +18,70 @@ pub(in crate::analytics::tuner) struct Classified {
 }
 
 /// The next retention edge that can change a covered short tail's sample bucket.
-fn next_source_change(row: &DealRow, min_tail_s: u32, now_ms: i64) -> Option<i64> {
-    use moon_core::market::trade_replay::venue_caps::{
-        ARCHIVE_DEPTH_MS, RETENTION_SAFETY_MS, archive_route, trade_route,
-    };
+pub(in crate::analytics::tuner) fn next_source_change(
+    row: &DealRow,
+    min_tail_s: u32,
+    now_ms: i64,
+) -> Option<i64> {
     let address = row.address.as_ref()?;
     let (_, trail) = row.held?;
     if row.tape != TapeStatus::Covered || trail >= i64::from(min_tail_s) * 1_000 {
         return None;
     }
-    let from = row.deal.close_ms.saturating_add(trail.max(0));
-    [
+    retention_edge(
+        address,
+        [row.deal.close_ms.saturating_add(trail.max(0))],
+        now_ms,
+    )
+}
+
+/// The first instant past `now_ms` at which the clock alone can move one row's verdict: a
+/// covered short tail's source edge ([`next_source_change`]), or for a missing row any retention
+/// edge its window, close or held trail crosses — where "cannot be fetched" starts to be said
+/// or a short tail stops being fillable and is admitted. The card's reload validity and the
+/// list's readiness deadlines both read this one rule.
+pub(in crate::analytics::tuner) fn next_verdict_flip(
+    row: &DealRow,
+    min_tail_s: u32,
+    now_ms: i64,
+) -> Option<i64> {
+    if row.tape != TapeStatus::Missing {
+        return next_source_change(row, min_tail_s, now_ms);
+    }
+    let address = row.address.as_ref()?;
+    let deal = &row.deal;
+    let window = moon_core::db::tuner::ticks::model_window(
+        deal,
+        moon_core::market::trade_replay::margin_ms(),
+        moon_core::market::trade_replay::long_position_ms(),
+    );
+    let hull = window.as_ref().and_then(|w| w.focus_spans().hull());
+    let close = window.as_ref().map_or(deal.close_ms, |w| w.close_ms);
+    let trail = row
+        .held
+        .map(|(_, trail)| close.saturating_add(trail.max(0)));
+    retention_edge(
+        address,
+        hull.into_iter()
+            .flat_map(|(from, to)| [from, to])
+            .chain([deal.close_ms, close])
+            .chain(trail),
+        now_ms,
+    )
+}
+
+/// The earliest instant past `now_ms` at which any of `anchors` falls out of one of the
+/// address's sources: the core archive, the venue's REST route (less its safety margin) or its
+/// daily archive.
+fn retention_edge(
+    address: &super::state::RowAddress,
+    anchors: impl IntoIterator<Item = i64>,
+    now_ms: i64,
+) -> Option<i64> {
+    use moon_core::market::trade_replay::venue_caps::{
+        ARCHIVE_DEPTH_MS, RETENTION_SAFETY_MS, archive_route, trade_route,
+    };
+    let retentions: Vec<i64> = [
         Some(moon_core::market::CORE_ARCHIVE_RETENTION_MS),
         address
             .venue
@@ -42,9 +95,16 @@ fn next_source_change(row: &DealRow, min_tail_s: u32, now_ms: i64) -> Option<i64
     ]
     .into_iter()
     .flatten()
-    .map(|retention| from.saturating_add(retention).saturating_add(1))
-    .filter(|&edge| edge > now_ms)
-    .min()
+    .collect();
+    anchors
+        .into_iter()
+        .flat_map(|anchor| {
+            retentions
+                .iter()
+                .map(move |&retention| anchor.saturating_add(retention).saturating_add(1))
+        })
+        .filter(|&edge| edge > now_ms)
+        .min()
 }
 
 /// Reuse classification until a refusal, source switch, retention edge, row or floor changes.

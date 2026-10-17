@@ -89,3 +89,74 @@ fn a_switch_default_is_one_or_zero_and_a_number_keeps_its_value() {
     assert_eq!(schema_default("Double", Some("1.5%")), Some(1.5));
     assert_eq!(schema_default("String", Some("abc")), None);
 }
+
+/// Resolving off the UI thread gives the map the per-deal loop gave, one entry per distinct
+/// `(core, coin)`.
+#[test]
+fn resolve_in_matches_the_per_deal_loop() {
+    let resolver = || super::FetchResolver {
+        source: moon_core::fixture::unlisted::source(1),
+        quotes: Default::default(),
+        addresses: Default::default(),
+        btc_markets: Default::default(),
+    };
+    let deal = |report_uid: i64, coin: &str| moon_core::db::tuner::ticks::Deal {
+        report_uid,
+        coin: coin.into(),
+        ..synthetic_deal()
+    };
+    let deals = [deal(1, "XALPHA"), deal(2, "XALPHA"), deal(3, "XNOPE")];
+    let mut old = resolver();
+    let expected: std::collections::HashMap<_, _> = deals
+        .iter()
+        .map(|d| ((d.core_uid, d.coin.clone()), old.address(d)))
+        .collect();
+    let resolved = super::resolve_in(&mut resolver(), &deals);
+    let print = |map: &std::collections::HashMap<(u64, String), Option<_>>| {
+        let mut entries: Vec<_> = map.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        format!("{entries:?}")
+    };
+    assert_eq!(print(&resolved), print(&expected));
+    assert_eq!(resolved.len(), 2);
+}
+
+fn synthetic_deal() -> moon_core::db::tuner::ticks::Deal {
+    moon_core::db::tuner::ticks::Deal {
+        report_uid: 1,
+        core_uid: 1,
+        core_name: "CORE_X".into(),
+        strategy_id: 1,
+        kind: "Spread".into(),
+        coin: "XALPHA".into(),
+        buy_ms: 100_000,
+        close_ms: 110_000,
+        buy_price: 1.0,
+        sell_price: 1.01,
+        spent: 100.0,
+        is_short: false,
+        sell_reason: String::new(),
+        fact_pnl: 0.0,
+        sizing: None,
+        pnl_pct: false,
+        profit: None,
+        deltas: Default::default(),
+        tick: None,
+        pre_spike_ask: None,
+        archived_take: None,
+        fact_modifier: None,
+        hook_depth_pct: None,
+        hook_stated_take_pct: None,
+        strike_detect: None,
+        step_lag_ms: 0.0,
+        round_trip_ms: None,
+        stop_anchor: None,
+        delta_track: None,
+        bars: None,
+        own_entry: None,
+        buy_set_ms: None,
+        corridor: None,
+        entry_placed: None,
+        gap: None,
+    }
+}

@@ -60,5 +60,10 @@ pub fn filed_since(since: u64) -> (u64, HashSet<(String, String)>) {
     (log.rev, fresh)
 }
 
+/// Last filing for one market, without collecting every changed market on each held read.
+pub(in crate::market::trade_replay) fn market_revision(key: &(String, String)) -> u64 {
+    lock().by_market.get(key).copied().unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests;

@@ -681,6 +681,52 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) schema_reload: Option<u64>,
     /// The grid's sections the user opened; every section starts folded (`grid.rs`).
     pub(in crate::analytics::tuner) open_sections: HashSet<ParamSection>,
+    /// The rows the last tape stage left "missing" after a held read that read every stretch
+    /// it needed, by `reportuid`, with what that verdict was made under: a reload carries such a
+    /// row while all of it still holds instead of asking the store again (`load.rs`, stage B).
+    pub(in crate::analytics::tuner) settled: HashMap<i64, SettledMiss>,
+    /// What the published rows were loaded from, once their tape stage has judged them: a
+    /// report-driven reload under an equal key keeps them as they are (`signature.rs`).
+    pub(in crate::analytics::tuner) reload_key: Option<super::signature::ReloadKey>,
+    /// The instant the clock alone may move a row settled under `reload_key`
+    /// (`signature::settled_until`); the key no longer stands for the rows from then on.
+    pub(in crate::analytics::tuner) reload_until_ms: i64,
+    /// The last replay and tape lines logged; a pass that would print the same says nothing.
+    pub(in crate::analytics::tuner) logged: (Option<String>, Option<String>),
+}
+
+/// A "missing" verdict made off a held read that read every stretch it needed — not merely
+/// answered — and what it was made under. Stage B carries the row while all of it holds.
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::analytics::tuner) struct SettledMiss {
+    /// The held coverage the verdict read, as the row keeps it.
+    pub(in crate::analytics::tuner) held: Option<(i64, i64)>,
+    /// Whether the short tail was admitted (`load::short_allowed`) when the verdict was made.
+    pub(in crate::analytics::tuner) short_allowed: bool,
+    pub(in crate::analytics::tuner) model: moon_core::db::tuner::ticks::ModelSettings,
+    pub(in crate::analytics::tuner) sample: super::signature::SamplePolicy,
+    /// The station refusals' revision (`fetch::station::refusal_revision`).
+    pub(in crate::analytics::tuner) refusal_revision: u64,
+    /// The exchange key, market and venue the read asked.
+    pub(in crate::analytics::tuner) market: (String, String, Option<moon_core::venue::Venue>),
+}
+
+impl TicksState {
+    /// Record the key the published rows were settled under, with the instant the clock alone
+    /// may move one of them.
+    pub(in crate::analytics::tuner) fn settle_key(
+        &mut self,
+        key: Option<super::signature::ReloadKey>,
+        now_ms: i64,
+    ) {
+        self.reload_until_ms = match (&key, self.data.data()) {
+            (Some(key), Some(data)) => {
+                super::signature::settled_until(&data.rows, key.sample.min_tail_s, now_ms)
+            }
+            _ => i64::MAX,
+        };
+        self.reload_key = key;
+    }
 }
 
 impl Default for TicksState {
@@ -755,6 +801,10 @@ impl Default for TicksState {
             keys_sig: None,
             schema_reload: None,
             open_sections: HashSet::new(),
+            settled: HashMap::new(),
+            reload_key: None,
+            reload_until_ms: i64::MAX,
+            logged: (None, None),
         }
     }
 }
@@ -1141,6 +1191,17 @@ impl TicksState {
         self.var_untraded = 0;
         self.set_fact = None;
         self.base_open = 0;
+    }
+
+    /// Put the published rows back in force after a reload that found nothing to change: the
+    /// load's `begin` left them as the stale side of a load in flight.
+    pub(in crate::analytics::tuner) fn resume(&mut self) {
+        if let LoadState::Loading { stale: Some(v) } = &self.data {
+            self.data = LoadState::Ready(Arc::clone(v));
+        }
+        if let LoadState::Loading { stale: Some(v) } = &self.kpi {
+            self.kpi = LoadState::Ready(Arc::clone(v));
+        }
     }
 
     /// Publish one loaded picture (or its failure) to both load states at once.

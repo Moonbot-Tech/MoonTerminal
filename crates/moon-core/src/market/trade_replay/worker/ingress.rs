@@ -37,7 +37,9 @@ pub(super) fn capture_with(request: CaptureRequest, submit: impl FnOnce(Inbound)
 /// Args:
 ///     query: The stretches and where to answer.
 pub fn query_held(query: TickQuery) {
-    send(Inbound::Held(query));
+    if worker().held.send(query).is_err() {
+        log::warn!("[x] trade-replay held query dropped: readers are not running");
+    }
 }
 
 /// Drop every tile the worker holds in memory, and every remembered answer with them.
@@ -45,31 +47,94 @@ pub fn query_held(query: TickQuery) {
 /// For the Storage tab, after it cut `trades.sqlite` down: the disk is the tile store's memory
 /// and the two must not disagree about what is held — a held-data query reads the tiles first,
 /// and would go on answering "held" for prints the file no longer has until the process
-/// restarted. Emptied, the tiles fill again from the trimmed disk on the next ask. Returns at
-/// once; a lane mid-walk files what it fetched into the emptied store as it always did.
+/// restarted. Emptied, the tiles fill again from the trimmed disk on the next ask. Done on the
+/// calling thread, not through the coordinator's queue: held readers no longer wait behind it,
+/// so a query sent after this returns must already find the store empty. A lane mid-walk files
+/// what it fetched into the emptied store as it always did.
 pub fn forget_tiles() {
-    send(Inbound::ForgetTiles);
+    let shared = &worker().shared;
+    forget_stores(&shared.tiles, &shared.cache);
 }
 
-pub(super) fn send(inbound: Inbound) {
-    let worker = WORKER.get_or_init(|| {
+/// Empty the tile store and the remembered answers together.
+pub(super) fn forget_stores(
+    tiles: &Mutex<TickTileStore>,
+    cache: &Mutex<VecDeque<(OutcomeKey, Remembered)>>,
+) {
+    lock_tiles(tiles).forget();
+    cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    log::info!("[x] trade-replay tiles and remembered answers dropped after a trim");
+}
+
+/// Lazily start the coordinator and independent held readers over the same tile store.
+fn worker() -> &'static Worker {
+    WORKER.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Inbound>();
-        let back = tx.clone();
+        let shared = Arc::new(Shared {
+            agent: rest::agent(),
+            gate: gate::shared(),
+            cache: Mutex::new(VecDeque::new()),
+            tiles: Mutex::new(TickTileStore::default()),
+            back: tx.clone(),
+        });
+        let readers = shared.clone();
+        let held = held_pool(move |query| held_answer(&readers.tiles, query));
+        let coordinator = shared.clone();
         let spawned = std::thread::Builder::new()
             .name("trade-replay".into())
-            .spawn(move || run(&rx, back));
+            .spawn(move || run(&rx, coordinator));
         if let Err(error) = &spawned {
             // Nothing to fall back to, and the caller's own timeout is what will surface it; say
             // so once rather than failing silently.
             log::warn!("[x] trade-replay worker did not start: {error}");
         }
-        Worker { tx }
-    });
+        Worker { tx, held, shared }
+    })
+}
+
+/// Send coordinator work; held queries use their own pool and never wait behind captures.
+pub(super) fn send(inbound: Inbound) {
     // A send failure means the worker thread is gone, which only happens if it never started.
-    if worker.tx.send(inbound).is_err() {
+    if worker().tx.send(inbound).is_err() {
         log::warn!("[x] trade-replay request dropped: worker is not running");
     }
 }
+
+/// Four readers bound parallel held answers; the receiver lock is released before disk I/O.
+fn held_pool(
+    answer: impl Fn(&TickQuery) -> TickAnswer + Send + Sync + 'static,
+) -> Sender<TickQuery> {
+    let (tx, rx) = mpsc::channel::<TickQuery>();
+    let rx = Arc::new(Mutex::new(rx));
+    let answer = Arc::new(answer);
+    for index in 0..4 {
+        let rx = rx.clone();
+        let answer = answer.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("trade-held:{index}"))
+            .spawn(move || {
+                loop {
+                    let query = rx
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .recv();
+                    let Ok(query) = query else { return };
+                    let result = answer(&query);
+                    let _ = query.reply.send(result);
+                }
+            });
+        if let Err(error) = spawned {
+            log::warn!("[x] trade-replay held reader did not start: {error}");
+        }
+    }
+    tx
+}
+
+#[cfg(test)]
+mod tests;
 
 /// Where an inbound message lands: a replay request on its host's lane, a lane's native
 /// follow-up among the coordinator's timed waits, everything else in the coordinator's queue.
@@ -112,25 +177,13 @@ pub(super) fn enqueue(
             );
             queue.push_back(Job::Capture(request, spans, false));
         }
-        Inbound::Held(query) => queue.push_back(Job::Held(query)),
-        Inbound::ForgetTiles => {
-            // Straight here, not through the queue: nothing queued behind it may keep
-            // answering from tiles the disk has already lost.
-            *lock_tiles(&shared.tiles) = TickTileStore::default();
-            shared
-                .cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clear();
-            log::info!("[x] trade-replay tiles and remembered answers dropped after a trim");
-        }
     }
 }
 
 /// Coordinator loop: an internal priority queue, forever.
 ///
-/// Held-data queries, bounded native follow-ups and captures share this queue: held-data first,
-/// then native probes, then captures in arrival order ([`next_job`]); none of them calls a
+/// Bounded native follow-ups and captures share this queue: native probes first,
+/// then captures in arrival order ([`next_job`]); none of them calls a
 /// venue, so none waits for a lane. A replay request is handed to its host's lane on arrival
 /// ([`enqueue`]), and a lane hands back the native follow-up it arms. A capture is an in-process
 /// copy out of a core's ring, milliseconds; the settle pass of each capture is timed
@@ -139,15 +192,8 @@ pub(super) fn enqueue(
 ///
 /// Args:
 ///     rx: Queue of pending requests.
-///     back: A sender to the same queue, for the lanes' follow-ups.
-pub(super) fn run(rx: &Receiver<Inbound>, back: Sender<Inbound>) {
-    let shared = Arc::new(Shared {
-        agent: rest::agent(),
-        gate: gate::shared(),
-        cache: Mutex::new(VecDeque::new()),
-        tiles: Mutex::new(TickTileStore::default()),
-        back,
-    });
+///     shared: The stores shared with held readers and lanes, and the follow-up sender.
+pub(super) fn run(rx: &Receiver<Inbound>, shared: Arc<Shared>) {
     let tiles = &shared.tiles;
     let mut lanes: HashMap<LaneKey, Lane> = HashMap::new();
     let mut queue: VecDeque<Job> = VecDeque::new();
@@ -222,11 +268,6 @@ pub(super) fn run(rx: &Receiver<Inbound>, back: Sender<Inbound>) {
                         Instant::now() + Duration::from_millis(wait_ms as u64),
                     ));
                 }
-            }
-            Job::Held(query) => {
-                let answer = held_answer(tiles, &query);
-                // A dead receiver is the asker gone — a closed table — and costs nothing more.
-                let _ = query.reply.send(answer);
             }
             Job::Native(native) => {
                 let (request, mut wait) = *native;

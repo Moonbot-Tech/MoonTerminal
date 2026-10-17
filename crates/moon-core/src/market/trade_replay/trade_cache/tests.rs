@@ -2,6 +2,207 @@ use super::codec::encode_legacy;
 use super::*;
 use crate::feed::types::Side;
 
+/// Both archive layouts use the end-bound index for the production blob read.
+#[test]
+fn overlap_reads_use_market_to_indexes_without_changing_archive_version() {
+    let conn = conn();
+    // Reopening an existing v3 archive adds indexes without dropping its rows.
+    conn.execute(
+        "INSERT INTO spans VALUES ('VENUE_A', 'XALPHA', 0, 9, X'', 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("DROP INDEX spans_market_to; DROP INDEX packs_market_to;")
+        .unwrap();
+    init_schema(&conn).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM spans", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))
+            .unwrap(),
+        3
+    );
+    for table in Table::ALL {
+        let mut statement = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", table.read_sql()))
+            .unwrap();
+        let plan = statement
+            .query_map(rusqlite::params!["VENUE_A", "XALPHA", 5, 8], |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join(" ");
+        assert!(
+            plan.contains(&format!("{}_market_to", table.name())),
+            "{plan}"
+        );
+    }
+}
+
+/// The span-bounds read searches both tables by key, never scans them.
+#[test]
+fn span_bounds_read_uses_market_to_indexes() {
+    let conn = conn();
+    let mut statement = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {READ_SPAN_BOUNDS_SQL}"))
+        .unwrap();
+    let plan = statement
+        .query_map(rusqlite::params!["VENUE_A", "XALPHA", 5, 8], |row| {
+            row.get::<_, String>(3)
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join(" ");
+    // Each arm is a keyed index search, never a scan of the table.
+    assert!(!plan.contains("SCAN"), "{plan}");
+    for table in Table::ALL {
+        assert!(plan.contains(&format!("SEARCH {}", table.name())), "{plan}");
+    }
+}
+
+/// The worker answers raw rows and the reader decodes them into exactly what the in-thread
+/// read returns.
+#[test]
+fn raw_read_decodes_to_the_in_thread_read() {
+    let conn = conn();
+    let ticks = |times: &[i64]| -> Vec<Tick> {
+        times
+            .iter()
+            .map(|&t| Tick {
+                time_ms: t as f64,
+                price: 1.5,
+                qty: 2.0,
+                side: Side::Sell,
+            })
+            .collect()
+    };
+    let now = 1;
+    insert_span(
+        &conn,
+        "VENUE_A",
+        "XALPHA",
+        0,
+        99,
+        &ticks(&[3, 50]),
+        TileSource::Venue,
+        now,
+    )
+    .unwrap();
+    insert_span(
+        &conn,
+        "VENUE_A",
+        "XALPHA",
+        100,
+        199,
+        &ticks(&[150]),
+        TileSource::Core,
+        now,
+    )
+    .unwrap();
+    let (reply, rx) = mpsc::channel();
+    serve(
+        &conn,
+        Op::Read {
+            exchange: "VENUE_A".into(),
+            market: "XALPHA".into(),
+            from_ms: 0,
+            to_ms: 199,
+            reply,
+        },
+        &mut 0,
+        || None,
+    );
+    let (decoded, broken) = decode_raw(rx.recv().unwrap().unwrap(), "VENUE_A", "XALPHA");
+    assert!(broken.is_empty());
+    assert_eq!(
+        format!("{decoded:?}"),
+        format!(
+            "{:?}",
+            read_spans(&conn, "VENUE_A", "XALPHA", 0, 199).unwrap()
+        )
+    );
+    assert_eq!(decoded.len(), 2);
+}
+
+/// A broken row reported by two readers is deleted once and lowers the byte count once.
+#[test]
+fn a_broken_row_reported_twice_lowers_the_count_once() {
+    let conn = conn();
+    conn.execute(
+        "INSERT INTO packs VALUES ('VENUE_A', 'XALPHA', 0, 9, X'05ffffff', 5, 0, 0)",
+        [],
+    )
+    .unwrap();
+    let (reply, rx) = mpsc::channel();
+    serve(
+        &conn,
+        Op::Read {
+            exchange: "VENUE_A".into(),
+            market: "XALPHA".into(),
+            from_ms: 0,
+            to_ms: 9,
+            reply,
+        },
+        &mut 0,
+        || None,
+    );
+    let raw = rx.recv().unwrap().unwrap();
+    let (spans, first) = decode_raw(clone_raw(&raw), "VENUE_A", "XALPHA");
+    let (_, second) = decode_raw(raw, "VENUE_A", "XALPHA");
+    assert!(spans.is_empty());
+    assert_eq!(first.len(), 1);
+    let mut held = 100;
+    for row in first.into_iter().chain(second) {
+        serve(&conn, Op::DropBroken { row }, &mut held, || None);
+    }
+    assert_eq!(held, 96, "four blob bytes off, once");
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM packs", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+fn clone_raw(raw: &[RawSpan]) -> Vec<RawSpan> {
+    raw.iter()
+        .map(|r| RawSpan {
+            table: r.table,
+            rowid: r.rowid,
+            from_ms: r.from_ms,
+            to_ms: r.to_ms,
+            blob: r.blob.clone(),
+            source: r.source,
+        })
+        .collect()
+}
+
+/// SQL failure is retryable rather than a successful empty archive read.
+#[test]
+fn worker_read_preserves_sql_failure() {
+    let conn = conn();
+    conn.execute_batch("DROP TABLE packs").unwrap();
+    let (reply, rx) = mpsc::channel();
+    serve(
+        &conn,
+        Op::Read {
+            exchange: "VENUE_A".into(),
+            market: "XALPHA".into(),
+            from_ms: 0,
+            to_ms: 9,
+            reply,
+        },
+        &mut 0,
+        || None,
+    );
+    assert!(rx.recv().unwrap().is_err());
+}
+
 /// Measure page overhead and encoded payload through the recorder's production span writer.
 #[test]
 #[ignore = "synthetic tail storage measurement"]

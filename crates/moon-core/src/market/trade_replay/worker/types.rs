@@ -149,8 +149,8 @@ pub(crate) struct TickStage {
     pub(super) candles: Vec<ChartCandle>,
 }
 
-/// One unit of the coordinator's internal priority queue — everything that is not a venue call.
-/// The venue calls themselves ([`LaneJob`]) go to the host's lane the moment they arrive.
+/// One unit of the coordinator's priority queue: native probes and captures.
+/// Venue calls ([`LaneJob`]) and held reads use independent lanes and readers.
 pub(crate) enum Job {
     /// Boxed: a request with its wait is several times the size of the other units.
     Native(Box<(TradeReplayRequest, NativeWait)>),
@@ -158,8 +158,6 @@ pub(crate) enum Job {
     /// tile store and its disk — see [`CaptureRequest`] and [`capture_spans`]. The flag names
     /// the settle pass, the one that runs after the trail has printed and schedules nothing.
     Capture(CaptureRequest, Coverage, bool),
-    /// Answer a [`TickQuery`] from the tiles and the disk alone.
-    Held(TickQuery),
 }
 
 /// A trade that just closed on a connected core, whose prints the core's own retained archive
@@ -203,8 +201,8 @@ pub(super) const CAPTURE_SETTLE_SLACK: Duration = Duration::from_secs(5);
 ///
 /// The Entry/Exit tuner's question: is this trade's window covered, and if so, hand me the
 /// prints. Asked once per report row of a table, so it must cost a lock and a disk read, never
-/// a page. It goes to the coordinator's queue, which no venue call ever holds: the walks run
-/// on the lanes, so a table of rows is answered while every venue is being paged.
+/// a page. It goes to an independent bounded reader pool, so captures and native waits cannot
+/// hold up a table of rows while venue walks run on their lanes.
 pub struct TickQuery {
     /// The exchange half of the tile key — [`ReplayAddress::exchange_key`].
     pub exchange_key: String,
@@ -224,18 +222,19 @@ pub struct TickAnswer {
     /// The parts of the asked stretches the held prints are exhaustive over. `contains` on it
     /// answers whether a window is covered; a hole inside a span means a fetch would be needed.
     pub covered: Coverage,
+    /// Whether every disk read behind the answer succeeded. A read that failed or timed out
+    /// leaves its stretch out of `covered` without proving it empty, so a caller that keeps a
+    /// miss across reloads keeps only a settled one and asks again for the rest.
+    pub settled: bool,
 }
 
 /// What reaches the coordinator's one inbound channel.
 pub(super) enum Inbound {
     Replay(TradeReplayRequest),
     Capture(CaptureRequest),
-    Held(TickQuery),
     /// A lane armed a native follow-up for a request it answered; the coordinator polls it.
     /// Boxed for the same reason as [`Job::Native`].
     NativeWait(Box<(TradeReplayRequest, NativeWait)>),
-    /// Drop every held tile and remembered answer — see [`forget_tiles`].
-    ForgetTiles,
 }
 
 /// One unit of a lane's own queue: the venue calls of one request.
@@ -316,8 +315,7 @@ impl NativeWait {
     }
 }
 
-/// Pop the coordinator's next unit of work, by kind: every pending [`Job::Held`], then every
-/// [`Job::Native`], then the captures in arrival order; oldest first within each kind.
+/// Pop every pending [`Job::Native`] before captures; oldest first within each kind.
 ///
 /// Args:
 ///     queue: The coordinator's own pending-work deque.
@@ -325,15 +323,8 @@ impl NativeWait {
 /// Returns:
 ///     The next job to run, or `None` when the queue is empty.
 pub(super) fn next_job(queue: &mut VecDeque<Job>) -> Option<Job> {
-    // A held-data query costs a lock and a disk read; it goes ahead of the native probes so a
-    // table asking once per row is answered at once.
-    for pick in [
-        |job: &Job| matches!(job, Job::Held(_)),
-        |job: &Job| matches!(job, Job::Native(..)),
-    ] {
-        if let Some(index) = queue.iter().position(pick) {
-            return queue.remove(index);
-        }
+    if let Some(index) = queue.iter().position(|job| matches!(job, Job::Native(..))) {
+        return queue.remove(index);
     }
     queue.pop_front()
 }

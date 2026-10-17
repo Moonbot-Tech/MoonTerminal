@@ -590,6 +590,7 @@ fn unlisted_stored_trade_uses_recorder_then_terminal() {
             Some(trade_replay::TickAnswer {
                 ticks,
                 covered: trade_replay::Coverage::one((100_000, 150_000)),
+                settled: true,
             })
         },
     )
