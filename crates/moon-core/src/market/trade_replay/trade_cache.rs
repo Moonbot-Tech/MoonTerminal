@@ -196,6 +196,27 @@ pub struct StoredSpan {
     pub source: TileSource,
 }
 
+/// One stored row as the cache thread read it, its blob not yet decoded: decoding runs on the
+/// reader's thread, so the one connection's thread only runs SQL.
+struct RawSpan {
+    table: Table,
+    rowid: i64,
+    from_ms: i64,
+    to_ms: i64,
+    blob: Vec<u8>,
+    source: i64,
+}
+
+/// A row that did not decode, as reported back to the cache thread to be deleted.
+struct BrokenRow {
+    table: Table,
+    rowid: i64,
+    exchange: String,
+    market: String,
+    from_ms: i64,
+    bytes: i64,
+}
+
 /// Queued archive operations; a failed read stays distinct from a successful empty result.
 enum Op {
     Insert {
@@ -211,8 +232,11 @@ enum Op {
         market: String,
         from_ms: i64,
         to_ms: i64,
-        reply: mpsc::Sender<rusqlite::Result<Vec<StoredSpan>>>,
+        reply: mpsc::Sender<rusqlite::Result<Vec<RawSpan>>>,
     },
+    /// A row a reader could not decode: deleted if it is still the row that was read, and only
+    /// then taken off the byte count — two readers may report the same row.
+    DropBroken { row: BrokenRow },
     /// The bounds of every stored span intersecting a stretch — what is held, without reading
     /// a single print.
     Spans {
@@ -371,7 +395,12 @@ impl TradeCache {
                 reply,
             })
             .ok()?;
-        rx.recv_timeout(READ_TIMEOUT).ok()?.ok()
+        let raw = rx.recv_timeout(READ_TIMEOUT).ok()?.ok()?;
+        let (spans, broken) = decode_raw(raw, exchange, market);
+        for row in broken {
+            let _ = self.tx.send(Op::DropBroken { row });
+        }
+        Some(spans)
     }
 
     /// The bounds `(from_ms, to_ms)` of every stored span of a market intersecting
@@ -578,6 +607,14 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         }
         conn.execute_batch("DROP TABLE IF EXISTS spans; DROP TABLE IF EXISTS packs;")?;
     }
+    // A first open of a large file builds the range indexes; say how long that took, once.
+    let indexes_held: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN
+         ('spans_updated', 'spans_market_to', 'packs_updated', 'packs_market_to')",
+        [],
+        |r| r.get(0),
+    )?;
+    let started = std::time::Instant::now();
     // `spans` stays created: an older build opening this file expects it (module header).
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS spans(
@@ -606,6 +643,12 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS packs_updated ON packs(updated_ms);
         CREATE INDEX IF NOT EXISTS packs_market_to ON packs(exchange, market, to_ms);",
     )?;
+    if indexes_held < 4 {
+        log::info!(
+            "trade cache: range indexes built in {} ms",
+            started.elapsed().as_millis()
+        );
+    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     repair_gate_futures_offset_walks(conn)?;
     Ok(())
@@ -932,16 +975,22 @@ fn serve(
             to_ms,
             reply,
         } => {
-            let mut dropped = 0i64;
-            let spans =
-                read_spans_dropping(conn, &exchange, &market, from_ms, to_ms, Some(&mut dropped));
+            let spans = read_raw(conn, &exchange, &market, from_ms, to_ms);
             if let Err(e) = &spans {
                 log::warn!("trade cache read failed {exchange}/{market}: {e}");
             }
-            // A row that did not decode left the file: the ceiling must not keep counting it.
-            *held -= dropped;
             let _ = reply.send(spans);
         }
+        Op::DropBroken { row } => match drop_broken(conn, &row) {
+            // A row that did not decode left the file: the ceiling must not keep counting it.
+            Ok(true) => *held -= row.bytes,
+            Ok(false) => {}
+            Err(e) => log::warn!(
+                "trade cache: dropping a broken span of {}/{} failed: {e}",
+                row.exchange,
+                row.market
+            ),
+        },
         Op::Spans {
             exchange,
             market,
@@ -1286,60 +1335,115 @@ fn read_spans(
 }
 
 /// [`read_spans`], adding the blob bytes of every row it deleted to `dropped` — the worker
-/// carries the file's byte count and must take them off it. `None`: a reader that does not own
-/// the file ([`remote::TapeFile`]) leaves a broken row where it is and only skips it.
+/// carries the file's byte count and must take them off it; `None` leaves a broken row where it
+/// is and only skips it. The worker itself decodes on the reader's thread ([`TradeCache::read`]).
+#[cfg(test)]
 fn read_spans_dropping(
     conn: &rusqlite::Connection,
     exchange: &str,
     market: &str,
     from_ms: i64,
     to_ms: i64,
-    mut dropped: Option<&mut i64>,
+    dropped: Option<&mut i64>,
 ) -> rusqlite::Result<Vec<StoredSpan>> {
-    let mut out = Vec::new();
-    for table in Table::ALL {
-        let mut broken = Vec::new();
-        {
-            let mut stmt = conn.prepare_cached(&table.read_sql())?;
-            let mut rows = stmt.query(rusqlite::params![exchange, market, from_ms, to_ms])?;
-            while let Some(r) = rows.next()? {
-                let rowid: i64 = r.get(0)?;
-                let blob = r.get_ref(3)?.as_blob()?;
-                match table.decode(blob) {
-                    Ok(ticks) => out.push(StoredSpan {
-                        from_ms: r.get(1)?,
-                        to_ms: r.get(2)?,
-                        ticks,
-                        source: TileSource::from_code(r.get(4)?),
-                    }),
-                    Err(e) => broken.push((rowid, blob.len() as i64, e)),
-                }
+    let (spans, broken) = decode_raw(
+        read_raw(conn, exchange, market, from_ms, to_ms)?,
+        exchange,
+        market,
+    );
+    if let Some(dropped) = dropped {
+        for row in broken {
+            if drop_broken(conn, &row)? {
+                *dropped += row.bytes;
             }
         }
-        let Some(dropped) = dropped.as_deref_mut() else {
-            for (_, _, e) in broken {
+    }
+    Ok(spans)
+}
+
+/// Every row of the key intersecting `[from_ms, to_ms]`, from both tables, blobs undecoded.
+fn read_raw(
+    conn: &rusqlite::Connection,
+    exchange: &str,
+    market: &str,
+    from_ms: i64,
+    to_ms: i64,
+) -> rusqlite::Result<Vec<RawSpan>> {
+    let mut out = Vec::new();
+    for table in Table::ALL {
+        let mut stmt = conn.prepare_cached(&table.read_sql())?;
+        let mut rows = stmt.query(rusqlite::params![exchange, market, from_ms, to_ms])?;
+        while let Some(r) = rows.next()? {
+            out.push(RawSpan {
+                table,
+                rowid: r.get(0)?,
+                from_ms: r.get(1)?,
+                to_ms: r.get(2)?,
+                blob: r.get_ref(3)?.as_blob()?.to_vec(),
+                source: r.get(4)?,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Decode raw rows into spans ascending by `from_ms`, and name every row that did not decode.
+fn decode_raw(
+    raw: Vec<RawSpan>,
+    exchange: &str,
+    market: &str,
+) -> (Vec<StoredSpan>, Vec<BrokenRow>) {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut broken = Vec::new();
+    for row in raw {
+        match row.table.decode(&row.blob) {
+            Ok(ticks) => out.push(StoredSpan {
+                from_ms: row.from_ms,
+                to_ms: row.to_ms,
+                ticks,
+                source: TileSource::from_code(row.source),
+            }),
+            Err(e) => {
                 log::warn!(
-                    "trade cache: a {} span of {exchange}/{market} does not decode ({e}); skipped",
-                    table.name()
+                    "trade cache: a {} span of {exchange}/{market} does not decode ({e}); dropped to be fetched again",
+                    row.table.name()
                 );
+                broken.push(BrokenRow {
+                    table: row.table,
+                    rowid: row.rowid,
+                    exchange: exchange.to_string(),
+                    market: market.to_string(),
+                    from_ms: row.from_ms,
+                    bytes: row.blob.len() as i64,
+                });
             }
-            continue;
-        };
-        for (rowid, bytes, e) in broken {
-            log::warn!(
-                "trade cache: a {} span of {exchange}/{market} does not decode ({e}); dropped to be fetched again",
-                table.name()
-            );
-            conn.execute(
-                &format!("DELETE FROM {} WHERE rowid = ?1", table.name()),
-                [rowid],
-            )?;
-            *dropped += bytes;
         }
     }
     out.sort_by_key(|s| s.from_ms);
-    Ok(out)
+    (out, broken)
 }
+
+/// Delete a broken row if it is still the row that was read (its key and blob length match);
+/// `true` exactly when this call removed it.
+fn drop_broken(conn: &rusqlite::Connection, row: &BrokenRow) -> rusqlite::Result<bool> {
+    let removed = conn.execute(
+        &format!(
+            "DELETE FROM {} WHERE rowid = ?1 AND exchange = ?2 AND market = ?3 AND from_ms = ?4
+             AND LENGTH(ticks) = ?5",
+            row.table.name()
+        ),
+        rusqlite::params![row.rowid, row.exchange, row.market, row.from_ms, row.bytes],
+    )?;
+    Ok(removed == 1)
+}
+
+/// The bounds read of [`read_span_bounds`], shared with its query-plan regression test.
+const READ_SPAN_BOUNDS_SQL: &str = "SELECT from_ms, to_ms FROM spans
+     WHERE exchange = ?1 AND market = ?2 AND to_ms >= ?3 AND from_ms <= ?4
+     UNION ALL
+     SELECT from_ms, to_ms FROM packs
+     WHERE exchange = ?1 AND market = ?2 AND to_ms >= ?3 AND from_ms <= ?4
+     ORDER BY 1";
 
 /// The bounds of every span of a market intersecting `[from_ms, to_ms]`, from both tables,
 /// ascending — the columns alone, never the blob.
@@ -1350,14 +1454,7 @@ fn read_span_bounds(
     from_ms: i64,
     to_ms: i64,
 ) -> rusqlite::Result<Vec<(i64, i64)>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT from_ms, to_ms FROM spans
-         WHERE exchange = ?1 AND market = ?2 AND to_ms >= ?3 AND from_ms <= ?4
-         UNION ALL
-         SELECT from_ms, to_ms FROM packs
-         WHERE exchange = ?1 AND market = ?2 AND to_ms >= ?3 AND from_ms <= ?4
-         ORDER BY 1",
-    )?;
+    let mut stmt = conn.prepare_cached(READ_SPAN_BOUNDS_SQL)?;
     let rows = stmt.query_map(rusqlite::params![exchange, market, from_ms, to_ms], |r| {
         Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
     })?;
