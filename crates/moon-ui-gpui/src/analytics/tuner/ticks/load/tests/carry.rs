@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::super::{
-    Fetched, HeldTape, Misses, TapeBudget, miss_holds, replay_chunked, replay_fetched,
-    short_allowed,
+    Fetched, HeldTape, Misses, TapeBudget, miss_holds, missing_still_holds, replay_chunked,
+    replay_fetched, short_allowed, unservable_status,
 };
 use crate::analytics::tuner::ticks::signature::SamplePolicy;
 use crate::analytics::tuner::ticks::state::{DealRow, RowAddress, SettledMiss, TapeStatus};
@@ -286,4 +286,50 @@ fn tiny_budget_replays_like_unbounded() {
     }));
     assert_eq!(unbounded, tiny);
     assert_eq!(unbounded.0.len(), 4);
+}
+
+/// The fast path asks every settled miss again at the reload's clock: one whose short tail the
+/// clock made unfillable, or whose window fell out of retention, no longer holds — and the
+/// full reload then refuses the latter.
+#[test]
+fn settled_miss_stops_vouching_once_the_clock_moves_it() {
+    let deal = synthetic_deal(1);
+    let address = unlisted_address();
+    let trail = Some((30_000, 0));
+    let recent = deal.close_ms + 3_600_000;
+    let gone = deal.close_ms + moon_core::market::CORE_ARCHIVE_RETENTION_MS + 3_600_000;
+    let mut row = blank(1);
+    row.held = trail;
+    let settled = HashMap::from([(
+        1,
+        SettledMiss {
+            held: trail,
+            short_allowed: false,
+            model: Default::default(),
+            sample: sample(),
+            refusal_revision: 0,
+            market: (address.exchange_key.clone(), address.market.clone(), None),
+        },
+    )]);
+    assert!(missing_still_holds(&row, &settled, &admission(recent)));
+    assert!(
+        !missing_still_holds(&row, &settled, &admission(gone)),
+        "the clock moved the row"
+    );
+    assert!(
+        !missing_still_holds(&row, &HashMap::new(), &admission(recent)),
+        "a miss nobody settled is not vouched for"
+    );
+    assert_eq!(unservable_status(&address, &deal, recent), None);
+    assert!(matches!(
+        unservable_status(&address, &deal, gone),
+        Some(TapeStatus::Refused(_))
+    ));
+    let mut unaddressed = row.clone();
+    unaddressed.address = None;
+    assert!(missing_still_holds(
+        &unaddressed,
+        &HashMap::new(),
+        &admission(gone)
+    ));
 }

@@ -97,21 +97,45 @@ pub(in crate::analytics::tuner) struct ReloadKey {
 }
 
 /// Whether a report-driven reload may keep the published rows as they stand: the last load
-/// settled under a key equal to this one, and no row waits for a publication deadline that has
+/// settled under a key equal to this one, the clock has not reached `valid_until_ms` — the
+/// first instant a covered row's sample bucket moves ([`settled_until`]) — every missing row
+/// still reads as it did when judged (`missing_holds`: the retention edge and the short-tail
+/// admission, asked again at `now_ms`), and no row waits for a publication deadline that has
 /// passed (`refiled.rs` re-reads those).
 pub(in crate::analytics::tuner) fn can_skip(
     stored: Option<&ReloadKey>,
     now: &ReloadKey,
     rows: &[super::state::DealRow],
     now_ms: i64,
+    valid_until_ms: i64,
+    missing_holds: impl Fn(&super::state::DealRow) -> bool,
 ) -> bool {
     use moon_core::market::trade_replay::TickStatus;
     stored == Some(now)
+        && now_ms < valid_until_ms
+        && rows
+            .iter()
+            .filter(|r| r.tape == super::state::TapeStatus::Missing)
+            .all(missing_holds)
         && !rows.iter().any(|r| {
             matches!(r.tape,
                 super::state::TapeStatus::Refused(TickStatus::ArchivePending { retry_at_ms })
                     if retry_at_ms <= now_ms)
         })
+}
+
+/// The first instant after `now_ms` at which a covered row's verdict can move with the clock
+/// alone — a retention edge after which its short tail can no longer be extended
+/// ([`super::rows::next_source_change`]); `i64::MAX` when none can.
+pub(in crate::analytics::tuner) fn settled_until(
+    rows: &[super::state::DealRow],
+    min_tail_s: u32,
+    now_ms: i64,
+) -> i64 {
+    rows.iter()
+        .filter_map(|row| super::rows::next_source_change(row, min_tail_s, now_ms))
+        .min()
+        .unwrap_or(i64::MAX)
 }
 
 /// The resolved addresses, folded in key order.

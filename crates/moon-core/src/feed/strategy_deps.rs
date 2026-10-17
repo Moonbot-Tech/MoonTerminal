@@ -87,6 +87,14 @@ impl FieldDeps {
         Self { deps }
     }
 
+    /// The rules in field order, each with its conditions as parsed: a print two loads compare
+    /// equal by exactly when they hold the same rules.
+    pub fn fingerprint(&self) -> String {
+        let mut rules: Vec<_> = self.deps.iter().collect();
+        rules.sort_by(|a, b| a.0.cmp(b.0));
+        format!("{rules:?}")
+    }
+
     /// How many fields carry a rule.
     pub fn len(&self) -> usize {
         self.deps.len()

@@ -228,7 +228,9 @@ impl AnalyticsView {
                 let scope = deals
                     .as_ref()
                     .ok()
-                    .map(|read| scope_signature(read, &now, &own, &spans));
+                    .map(|read| {
+                        scope_signature(read, &now, &own, &spans, &selected, &defaults, &deps)
+                    });
                 (deals, now, own, Arc::new(unmodelled), selected, deps, spans, scope)
             },
             move |this,
@@ -285,11 +287,14 @@ impl AnalyticsView {
                     && let Some(key) = &key
                     && this.ticks.judged_under == Some(key.model)
                     && this.ticks.data.data().is_some_and(|d| {
+                        let admission = super::tail::Admission::current();
                         super::signature::can_skip(
                             this.ticks.reload_key.as_ref(),
                             key,
                             &d.rows,
-                            moon_core::util::time::now_unix_ms_i64(),
+                            admission.now_ms,
+                            this.ticks.reload_until_ms,
+                            |row| missing_still_holds(row, &this.ticks.settled, &admission),
                         )
                     })
                 {
@@ -588,7 +593,8 @@ impl AnalyticsView {
             log_changed(&mut self.ticks.logged.1, line);
             self.ticks.tape_reading = false;
             self.ticks.judged_under = Some(model);
-            self.ticks.reload_key = key;
+            self.ticks
+                .settle_key(key, moon_core::util::time::now_unix_ms_i64());
             // Every row was carried: no fold follows to rescore the variant columns, and the
             // load's `invalidate` has already dropped their scores and the plan column — a
             // narrower selection over deals already judged would keep the edits and show
@@ -688,7 +694,8 @@ impl AnalyticsView {
                     );
                 }
                 this.ticks.update_rows(rows);
-                this.ticks.reload_key = key;
+                this.ticks
+                    .settle_key(key, moon_core::util::time::now_unix_ms_i64());
                 if let Some(data) = this.ticks.data.data() {
                     let line = tape_line(data);
                     log_changed(&mut this.ticks.logged.1, line);
@@ -1550,13 +1557,34 @@ pub(super) fn miss_holds(
         ) == miss.short_allowed
 }
 
+/// Whether a missing row a settled load left would still be judged missing now: the clock has
+/// not carried it past a retention edge or into an admitted short tail. A row without an
+/// address waits on no clock; one without a settled miss cannot be vouched for.
+fn missing_still_holds(
+    row: &DealRow,
+    settled: &HashMap<i64, SettledMiss>,
+    admission: &super::tail::Admission,
+) -> bool {
+    let Some(address) = row.address.as_deref() else {
+        return true;
+    };
+    settled
+        .get(&row.deal.report_uid)
+        .is_some_and(|miss| miss_holds(row, miss, &row.deal, address, admission))
+}
+
 /// The scope's signature for a reload's key: its closed deals, the counts and baseline beside
-/// them, and the strategies' values and spans stage B publishes with the rows.
+/// them, the strategies' values and spans stage B publishes with the rows, and what the
+/// unmodelled warning, the grid and the replay are made from beside them — the selected
+/// strategies' values, the schema defaults and the field rules read this load.
 fn scope_signature(
     read: &DealsRead,
     now: &HashMap<String, NowValue>,
     own: &OwnValues,
     spans: &HashMap<&'static str, FieldSpan>,
+    selected: &[SelectedValues],
+    defaults: &HashMap<String, f64>,
+    deps: &FieldDeps,
 ) -> u64 {
     use std::hash::Hasher;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1575,6 +1603,16 @@ fn scope_signature(
         }),
     );
     super::signature::hash_sorted(&mut hasher, spans.iter());
+    super::signature::hash_sorted(
+        &mut hasher,
+        selected.iter().map(|(key, values)| {
+            let mut values: Vec<_> = values.iter().collect();
+            values.sort();
+            (key, values)
+        }),
+    );
+    super::signature::hash_sorted(&mut hasher, defaults.iter());
+    hasher.write(deps.fingerprint().as_bytes());
     hasher.finish()
 }
 

@@ -688,6 +688,9 @@ pub(in crate::analytics) struct TicksState {
     /// What the published rows were loaded from, once their tape stage has judged them: a
     /// report-driven reload under an equal key keeps them as they are (`signature.rs`).
     pub(in crate::analytics::tuner) reload_key: Option<super::signature::ReloadKey>,
+    /// The instant the clock alone may move a row settled under `reload_key`
+    /// (`signature::settled_until`); the key no longer stands for the rows from then on.
+    pub(in crate::analytics::tuner) reload_until_ms: i64,
     /// The last replay and tape lines logged; a pass that would print the same says nothing.
     pub(in crate::analytics::tuner) logged: (Option<String>, Option<String>),
 }
@@ -706,6 +709,24 @@ pub(in crate::analytics::tuner) struct SettledMiss {
     pub(in crate::analytics::tuner) refusal_revision: u64,
     /// The exchange key, market and venue the read asked.
     pub(in crate::analytics::tuner) market: (String, String, Option<moon_core::venue::Venue>),
+}
+
+impl TicksState {
+    /// Record the key the published rows were settled under, with the instant the clock alone
+    /// may move one of them.
+    pub(in crate::analytics::tuner) fn settle_key(
+        &mut self,
+        key: Option<super::signature::ReloadKey>,
+        now_ms: i64,
+    ) {
+        self.reload_until_ms = match (&key, self.data.data()) {
+            (Some(_), Some(data)) => {
+                super::signature::settled_until(&data.rows, super::tail::effective_s(), now_ms)
+            }
+            _ => i64::MAX,
+        };
+        self.reload_key = key;
+    }
 }
 
 impl Default for TicksState {
@@ -782,6 +803,7 @@ impl Default for TicksState {
             open_sections: HashSet::new(),
             settled: HashMap::new(),
             reload_key: None,
+            reload_until_ms: i64::MAX,
             logged: (None, None),
         }
     }

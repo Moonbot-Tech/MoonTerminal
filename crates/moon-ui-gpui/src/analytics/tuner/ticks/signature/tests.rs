@@ -115,13 +115,26 @@ fn same_uid_correction_changes_signature() {
 #[test]
 fn unchanged_report_with_tape_or_refusal_change_refreshes() {
     let stored = key(5, 2);
-    assert!(can_skip(Some(&stored), &key(5, 2), &[], 0));
-    assert!(!can_skip(Some(&stored), &key(6, 2), &[], 0), "tape refiled");
+    assert!(can_skip(
+        Some(&stored),
+        &key(5, 2),
+        &[],
+        0,
+        i64::MAX,
+        |_| true
+    ));
     assert!(
-        !can_skip(Some(&stored), &key(5, 3), &[], 0),
+        !can_skip(Some(&stored), &key(6, 2), &[], 0, i64::MAX, |_| true),
+        "tape refiled"
+    );
+    assert!(
+        !can_skip(Some(&stored), &key(5, 3), &[], 0, i64::MAX, |_| true),
         "refusal moved"
     );
-    assert!(!can_skip(None, &key(5, 2), &[], 0), "never settled");
+    assert!(
+        !can_skip(None, &key(5, 2), &[], 0, i64::MAX, |_| true),
+        "never settled"
+    );
 
     let waiting = DealRow {
         deal: deal(1, 1),
@@ -133,9 +146,72 @@ fn unchanged_report_with_tape_or_refusal_change_refreshes() {
         held: None,
     };
     let rows = [waiting];
-    assert!(can_skip(Some(&stored), &key(5, 2), &rows, 499));
+    assert!(can_skip(
+        Some(&stored),
+        &key(5, 2),
+        &rows,
+        499,
+        i64::MAX,
+        |_| true
+    ));
     assert!(
-        !can_skip(Some(&stored), &key(5, 2), &rows, 500),
+        !can_skip(Some(&stored), &key(5, 2), &rows, 500, i64::MAX, |_| true),
         "retry due"
     );
+}
+
+/// A covered short tail settled while a source could still extend it stops vouching for the
+/// rows at the retention edge: the fast path refuses from then on, and a missing row the clock
+/// moved refuses it at once.
+#[test]
+fn clock_edges_defeat_the_fast_path() {
+    use crate::analytics::tuner::ticks::state::RowAddress;
+    let close = deal(1, 1).close_ms;
+    let covered = DealRow {
+        deal: deal(1, 1),
+        tape: TapeStatus::Covered,
+        verdict: None,
+        address: Some(std::sync::Arc::new(RowAddress {
+            core_uid: 1,
+            venue: None,
+            exchange_key: moon_core::fixture::unlisted::EXCHANGE_KEY.into(),
+            market: "XALPHA".into(),
+            btc_market: None,
+        })),
+        ticks: None,
+        entry_line: None,
+        held: Some((30_000, 10_000)),
+    };
+    let rows = [covered];
+    let settled_at = close + 3_600_000;
+    let until = settled_until(&rows, 60, settled_at);
+    assert_eq!(
+        until,
+        close + 10_000 + moon_core::market::CORE_ARCHIVE_RETENTION_MS + 1
+    );
+    let stored = key(5, 2);
+    assert!(can_skip(
+        Some(&stored),
+        &key(5, 2),
+        &rows,
+        until - 1,
+        until,
+        |_| true
+    ));
+    assert!(
+        !can_skip(Some(&stored), &key(5, 2), &rows, until, until, |_| true),
+        "the short tail's admission deadline passed"
+    );
+
+    let mut missing = rows[0].clone();
+    missing.tape = TapeStatus::Missing;
+    assert!(!can_skip(
+        Some(&stored),
+        &key(5, 2),
+        &[missing],
+        0,
+        i64::MAX,
+        |_| false
+    ));
+    assert_eq!(settled_until(&[], 60, settled_at), i64::MAX);
 }
