@@ -13,6 +13,7 @@
 //! model settings' one latency.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use moon_core::db::tuner::strategy_values_at;
@@ -25,6 +26,10 @@ use super::state::DealRow;
 static LAGS: OnceLock<Mutex<HashMap<u64, f64>>> = OnceLock::new();
 /// Core uid → its replace round trip, milliseconds.
 static ROUND_TRIPS: OnceLock<Mutex<HashMap<u64, f64>>> = OnceLock::new();
+
+/// Bumped whenever a calibration changes some core's lag or round trip, so a consumer that
+/// counted under the old values knows to look again.
+static REVISION: AtomicU64 = AtomicU64::new(0);
 
 fn held(
     cell: &'static OnceLock<Mutex<HashMap<u64, f64>>>,
@@ -97,17 +102,52 @@ pub(super) fn calibrate_from(
             .or_default()
             .extend(calibrate::step_lag_samples(&row.deal, &exit, points));
     }
+    let mut moved = false;
     let mut store = lags();
     for (core, mut core_samples) in samples {
         if let Some(lag) = calibrate::median_step_lag(&mut core_samples) {
-            store.insert(core, lag);
+            moved |= store.insert(core, lag) != Some(lag);
         }
     }
+    drop(store);
     let mut store = held(&ROUND_TRIPS);
     for (core, mut core_samples) in round_trips {
         if let Some(round_trip) = calibrate::median_step_lag(&mut core_samples) {
-            store.insert(core, round_trip);
+            moved |= store.insert(core, round_trip) != Some(round_trip);
         }
+    }
+    if moved {
+        REVISION.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The calibration revision: moves whenever some core's lag or round trip changed.
+pub(in crate::analytics::tuner) fn revision() -> u64 {
+    REVISION.load(Ordering::Relaxed)
+}
+
+/// What the replay of `cores` steps on — each core's lag and round trip — folded into `hasher`.
+pub(in crate::analytics::tuner) fn hash_calibration(
+    hasher: &mut std::collections::hash_map::DefaultHasher,
+    cores: impl IntoIterator<Item = u64>,
+) {
+    let mut cores: Vec<u64> = cores.into_iter().collect();
+    cores.sort_unstable();
+    cores.dedup();
+    let lags = lags();
+    let round_trips = held(&ROUND_TRIPS);
+    for core in cores {
+        let lag = lags.get(&core).map(|v| v.to_bits());
+        let round_trip = round_trips.get(&core).map(|v| v.to_bits());
+        super::signature::hash_debug(hasher, &(core, lag, round_trip));
+    }
+}
+
+/// Put `core`'s calibration in force, as a load would.
+#[cfg(test)]
+pub(in crate::analytics::tuner) fn set_for_test(core: u64, lag: f64) {
+    if lags().insert(core, lag) != Some(lag) {
+        REVISION.fetch_add(1, Ordering::Relaxed);
     }
 }
 

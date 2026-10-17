@@ -31,6 +31,7 @@ use super::auto_picks::AutoEmpty;
 use super::ticks::Fetched;
 use super::ticks::readiness::Readiness;
 use super::ticks::readiness_refusal;
+use super::ticks::signature::SamplePolicy;
 use super::ticks::state::{DealRow, RowAddress, TapeStatus, TicksData};
 use crate::analytics::bg::ReadLane;
 use crate::analytics::refresh::CatchUpOutcome;
@@ -187,24 +188,36 @@ pub(in crate::analytics) struct ReadyKey {
     pub(in crate::analytics) tape_rev: u64,
     /// The model the rows are judged under.
     pub(in crate::analytics) model: ModelSettings,
-    /// The minimum tape tail past the close a row needs to be fit, in seconds.
-    pub(in crate::analytics) min_tail_s: u32,
+    /// The sample policy the rows are read and judged under: the tail floor, the automatic
+    /// sources, the model's margin and the long-position split — the card's own
+    /// ([`SamplePolicy`]).
+    pub(in crate::analytics) sample: SamplePolicy,
     /// The station's refusal revision: a refused or admitted row changes its verdict.
     pub(in crate::analytics) refusal_revision: u64,
-    /// The automatic tape sources (venue, cores): whether a short tail can still be filled.
-    pub(in crate::analytics) switches: (bool, bool),
+    /// The cores' catalogs: an address resolving where it did not (a core connecting, its
+    /// catalog arriving) changes the groups' signatures, so the deals are read again.
+    pub(in crate::analytics) addresses_rev: u64,
+    /// The step-lag calibration ([`super::ticks::lags::revision`]): a group replayed on a core
+    /// whose calibration moved is recounted ([`group_signature`]).
+    pub(in crate::analytics) calibration_rev: u64,
 }
 
 impl ReadyKey {
     /// Whether moving from `self` to `next` makes every count wrong at once (another scope,
-    /// model, tail floor, station refusal set or source switch), rather than a few strategies'
-    /// counts stale (a report or tape change).
+    /// model, sample policy or station refusal set), rather than a few strategies' counts stale
+    /// (a report, tape, address or calibration change).
     pub(in crate::analytics) fn restarts(&self, next: &ReadyKey) -> bool {
         self.scope_gen != next.scope_gen
             || self.model != next.model
-            || self.min_tail_s != next.min_tail_s
+            || self.sample != next.sample
             || self.refusal_revision != next.refusal_revision
-            || self.switches != next.switches
+    }
+
+    /// Whether moving to `next` must read the deals again to know which strategies changed.
+    fn rereads(&self, next: &ReadyKey) -> bool {
+        self.report_gen != next.report_gen
+            || self.addresses_rev != next.addresses_rev
+            || self.calibration_rev != next.calibration_rev
     }
 }
 
@@ -229,8 +242,8 @@ pub(in crate::analytics) struct ReadyProgress {
     /// rows a later filing can change.
     waiting: Mutex<Vec<(String, (String, String))>>,
     /// Per counted strategy, the earliest moment the clock alone changes one of its rows'
-    /// verdicts ([`verdict_deadline`]).
-    deadlines: Mutex<Vec<(String, Option<i64>)>>,
+    /// verdicts ([`verdict_deadline`]), and whether every held read behind it answered settled.
+    deadlines: Mutex<Vec<(String, Option<i64>, bool)>>,
 }
 
 /// Remaining time at the observed pass speed, after a three-second warm-up.
@@ -346,14 +359,14 @@ impl ReadyProgress {
         !cancelled()
     }
 
-    fn settle(&self, key: String, deadline: Option<i64>) {
+    fn settle(&self, key: String, deadline: Option<i64>, settled: bool) {
         self.deadlines
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((key, deadline));
+            .push((key, deadline, settled));
     }
 
-    fn drain_deadlines(&self) -> Vec<(String, Option<i64>)> {
+    fn drain_deadlines(&self) -> Vec<(String, Option<i64>, bool)> {
         std::mem::take(
             &mut *self
                 .deadlines
@@ -425,6 +438,9 @@ pub(in crate::analytics) struct ReadyPass {
     /// Debounce timer, progress ticker and retry timer; dropping one cancels it.
     pub(in crate::analytics) launch_task: Option<Task<()>>,
     pub(in crate::analytics) ticker: Option<Task<()>>,
+    /// Wakes the view at the earliest verdict deadline, so a passed one is acted on without
+    /// waiting for an unrelated render.
+    deadline_task: Option<Task<()>>,
 }
 
 impl Default for ReadyPass {
@@ -448,6 +464,7 @@ impl Default for ReadyPass {
             chosen: None,
             launch_task: None,
             ticker: None,
+            deadline_task: None,
         }
     }
 }
@@ -660,7 +677,15 @@ impl ReadyPass {
         }
         match result {
             Ok(Some(counts)) => {
-                let pending = std::mem::take(&mut self.pending);
+                let mut pending = std::mem::take(&mut self.pending);
+                // A strategy whose held reads did not all settle is not vouched for: no
+                // signature is adopted for it, and its deadline asks again soon.
+                for (key, _, settled) in &deadlines {
+                    if !settled {
+                        pending.remove(key);
+                        self.signatures.remove(key);
+                    }
+                }
                 if self.partial {
                     self.signatures.extend(pending);
                     self.deadlines.retain(|k, _| !counts.contains_key(k));
@@ -670,7 +695,7 @@ impl ReadyPass {
                     self.deadlines.clear();
                     self.counts = counts;
                 }
-                for (key, deadline) in deadlines {
+                for (key, deadline, _) in deadlines {
                     match deadline {
                         Some(at) => self.deadlines.insert(key, at),
                         None => self.deadlines.remove(&key),
@@ -736,15 +761,23 @@ impl ReadyPass {
         )
     }
 
-    /// Whether the finished counts stand for `key` as they are: nothing went stale and the
-    /// report did not move (a move must read the deals to know what changed).
+    /// Whether the finished counts stand for `key` as they are: nothing went stale and neither
+    /// the report, the addresses nor the calibration moved (a move must read the deals to know
+    /// what changed).
     pub(in crate::analytics::tuner) fn stands(
         &self,
         key: &ReadyKey,
         stale: Option<&HashSet<String>>,
     ) -> bool {
-        stale.is_some_and(HashSet::is_empty)
-            && self.ran.is_some_and(|ran| ran.report_gen == key.report_gen)
+        stale.is_some_and(HashSet::is_empty) && self.ran.is_some_and(|ran| !ran.rereads(key))
+    }
+
+    /// The earliest verdict deadline of a finished pass.
+    pub(in crate::analytics::tuner) fn next_deadline(&self) -> Option<i64> {
+        if !matches!(self.run, ReadyRun::Done) {
+            return None;
+        }
+        self.deadlines.values().copied().min()
     }
 
     /// Move the strategies whose verdict deadline passed to `due`, once.
@@ -988,8 +1021,9 @@ pub(in crate::analytics::tuner) fn group_by_strategy(
     out
 }
 
-/// One strategy's deals and where their prints live, folded: equal signatures replay the same
-/// rows ([`super::ticks::signature::signature_of`] over the deals, every address beside).
+/// One strategy's deals, where their prints live and the step-lag calibration of their cores,
+/// folded: equal signatures replay the same rows
+/// ([`super::ticks::signature::signature_of`] over the deals, every address and core beside).
 pub(in crate::analytics::tuner) fn group_signature(
     rows: &[(Deal, Option<Arc<RowAddress>>)],
 ) -> u64 {
@@ -1003,12 +1037,13 @@ pub(in crate::analytics::tuner) fn group_signature(
         rows.iter()
             .map(|(deal, address)| ((deal.core_uid, deal.report_uid), address)),
     );
+    super::ticks::lags::hash_calibration(&mut hasher, rows.iter().map(|(deal, _)| deal.core_uid));
     hasher.finish()
 }
 
 /// The earliest moment past `now_ms` at which the clock alone changes a verdict among `rows`:
-/// a retention edge of a covered short tail (the same edge the card's chip cache waits for,
-/// [`super::ticks::rows::next_source_change`]) or an archive retry coming due.
+/// a retention edge of a covered short tail or a missing row (the card's own rule,
+/// [`super::ticks::rows::next_verdict_flip`]) or an archive retry coming due.
 pub(in crate::analytics::tuner) fn verdict_deadline(
     rows: &[DealRow],
     now_ms: i64,
@@ -1023,7 +1058,7 @@ pub(in crate::analytics::tuner) fn verdict_deadline(
                 _ => None,
             };
             [
-                super::ticks::rows::next_source_change(row, min_tail_s, now_ms),
+                super::ticks::rows::next_verdict_flip(row, min_tail_s, now_ms),
                 retry,
             ]
             .into_iter()
@@ -1225,6 +1260,12 @@ pub(in crate::analytics::tuner) fn count_strategies(
                     unaddressed,
                     bytes,
                 } = item;
+                let settled = fetched.as_ref().is_none_or(|fetched| {
+                    fetched
+                        .rows
+                        .iter()
+                        .all(|row| fetched.settled.contains(&row.deal.report_uid))
+                });
                 let replayed = fetched.map(&replay).unwrap_or_default();
                 for address in replayed
                     .iter()
@@ -1241,10 +1282,12 @@ pub(in crate::analytics::tuner) fn count_strategies(
                 };
                 data.retain_within_cap();
                 let ready = Readiness::of_rows(&data.rows, now_ms, min_tail_s);
-                progress.settle(
-                    key.clone(),
-                    verdict_deadline(&data.rows, now_ms, min_tail_s),
-                );
+                let mut deadline = verdict_deadline(&data.rows, now_ms, min_tail_s);
+                if !settled {
+                    let retry = now_ms.saturating_add(RETRY_AFTER.as_millis() as i64);
+                    deadline = Some(deadline.map_or(retry, |at| at.min(retry)));
+                }
+                progress.settle(key.clone(), deadline, settled);
                 progress.release(bytes);
                 progress.push(key.clone(), ready);
                 Some((key, ready))
@@ -1263,7 +1306,7 @@ pub(in crate::analytics::tuner) fn count_strategies(
 
 impl AnalyticsView {
     /// The inputs a pass for the current view would run with.
-    fn ready_key(&self) -> ReadyKey {
+    fn ready_key(&self, cx: &App) -> ReadyKey {
         ReadyKey {
             scope_gen: self.auto_picks.scope_gen,
             report_gen: self
@@ -1272,10 +1315,25 @@ impl AnalyticsView {
                 .map_or(0, |generation| generation.load(Ordering::Relaxed)),
             tape_rev: moon_core::market::trade_replay::trade_cache::filed_since(u64::MAX).0,
             model: super::ticks::model_cfg::current(),
-            min_tail_s: super::ticks::tail::effective_s(),
+            sample: SamplePolicy::current(),
             refusal_revision: super::ticks::fetch::station::refusal_revision(),
-            switches: super::ticks::tail::switches(),
+            addresses_rev: self.catalogs_revision(cx),
+            calibration_rev: super::ticks::lags::revision(),
         }
+    }
+
+    /// Every configured core's catalog revision and whether it resolves an address, folded.
+    fn catalogs_revision(&self, cx: &App) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let backend = self.backend.read(cx);
+        let source = backend.session.market_source();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for server in &backend.config.servers {
+            server.id.hash(&mut hasher);
+            source.catalog_revision(server.id).hash(&mut hasher);
+            source.replay_address(server.id).is_ok().hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     /// Arm a pass when the list is loaded on "Entry/Exit" and its inputs moved since the last
@@ -1289,7 +1347,7 @@ impl AnalyticsView {
                 self.strategy_data,
                 crate::analytics::profit_load::ProfitLoadState::Loading
             );
-        let key = self.ready_key();
+        let key = self.ready_key(cx);
         if !loaded {
             return;
         }
@@ -1432,13 +1490,13 @@ impl AnalyticsView {
         let defaults = self.filter_defaults(cx);
         let klines = self.backend.read(cx).session.market_source().kline_cache();
         let model = key.model;
-        let min_tail_s = super::ticks::tail::effective_s();
+        let min_tail_s = key.sample.min_tail_s;
         self.spawn_latest_db(
             &[ReadLane::TicksReady],
             false,
             cx,
             move || {
-                let long_position_ms = moon_core::market::trade_replay::long_position_ms();
+                let long_position_ms = key.sample.long_position_ms;
                 let now_ms = chrono::Utc::now().timestamp_millis();
                 // One strategy reader for the whole pass.
                 let reads = super::ticks::PassReads::new();
@@ -1480,6 +1538,7 @@ impl AnalyticsView {
         if seq == self.ready.seq {
             self.ready.ticker = None;
         }
+        self.arm_ready_deadline(cx);
         // A finished pass changes what the list filters and sorts by.
         self.strat_visible = None;
         if landed && retry {
@@ -1512,6 +1571,25 @@ impl AnalyticsView {
                     break;
                 }
             }
+        }));
+    }
+
+    /// Wake the view at the finished pass's earliest verdict deadline: the next render takes
+    /// the due strategies ([`ReadyPass::take_due`]) and launches their recount.
+    fn arm_ready_deadline(&mut self, cx: &mut Context<Self>) {
+        let Some(at) = self.ready.next_deadline() else {
+            self.ready.deadline_task = None;
+            return;
+        };
+        let wait = at
+            .saturating_sub(moon_core::util::time::now_unix_ms_i64())
+            .max(0) as u64;
+        self.ready.deadline_task = Some(cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(Duration::from_millis(wait)).await;
+            cx.update(|cx| {
+                let _ = this.update(cx, |_, cx| cx.notify());
+            });
         }));
     }
 

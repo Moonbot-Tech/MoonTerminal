@@ -52,7 +52,7 @@ mod delta_summary;
 pub(in crate::analytics::tuner) mod estimate;
 pub(crate) mod fetch;
 mod grid;
-mod lags;
+pub(in crate::analytics::tuner) mod lags;
 mod layout;
 mod load;
 pub(in crate::analytics) mod model_cfg;

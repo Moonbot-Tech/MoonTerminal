@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use super::super::ticks::readiness::Readiness;
+use super::super::ticks::signature::SamplePolicy;
 use super::super::ticks::state::DealRow;
 use super::super::ticks::state::{RowAddress, TapeStatus, TicksData};
 use super::super::ticks::{Fetched, PackedTape};
@@ -95,10 +96,16 @@ fn key(scope_gen: u64, report_gen: u64) -> ReadyKey {
         scope_gen,
         report_gen,
         tape_rev: 0,
-        min_tail_s: 30,
         model: ModelSettings::default(),
+        sample: SamplePolicy {
+            min_tail_s: 30,
+            switches: (true, true),
+            margin_ms: 0,
+            long_position_ms: 0,
+        },
         refusal_revision: 0,
-        switches: (true, true),
+        addresses_rev: 0,
+        calibration_rev: 0,
     }
 }
 
@@ -392,7 +399,10 @@ fn a_real_input_change_recounts_everything() {
         "refusals moved"
     );
     let sources = ReadyKey {
-        switches: (false, true),
+        sample: SamplePolicy {
+            switches: (false, true),
+            ..key(1, 1).sample
+        },
         ..key(1, 1)
     };
     assert_eq!(
@@ -406,7 +416,10 @@ fn a_real_input_change_recounts_everything() {
         "scope moved"
     );
     let model = ReadyKey {
-        min_tail_s: 60,
+        sample: SamplePolicy {
+            min_tail_s: 60,
+            ..key(1, 1).sample
+        },
         ..key(1, 1)
     };
     assert_eq!(pass.stale_strategies(&model, &none, 0), None, "model moved");
@@ -481,7 +494,9 @@ fn unlisted_readiness_fetches_and_replays_resolved_rows() {
 
 /// A fake stage C read: the targets as rows, nothing asked of a worker.
 fn fake_fetch(targets: Vec<(Deal, Arc<RowAddress>)>) -> Fetched {
+    let settled = targets.iter().map(|(deal, _)| deal.report_uid).collect();
     Fetched {
+        settled,
         rows: targets
             .into_iter()
             .map(|(deal, address)| DealRow {
@@ -496,7 +511,6 @@ fn fake_fetch(targets: Vec<(Deal, Arc<RowAddress>)>) -> Fetched {
             .collect(),
         tapes: HashMap::new(),
         traces: HashMap::new(),
-        settled: Default::default(),
     }
 }
 
@@ -924,8 +938,8 @@ fn a_passed_verdict_deadline_recounts_its_strategy() {
     let mut pass = ReadyPass::default();
     let none = HashSet::new();
     let (seq, progress) = pass.begin(key(1, 1), Instant::now());
-    progress.settle("1@1".to_string(), Some(1_000));
-    progress.settle("2@1".to_string(), None);
+    progress.settle("1@1".to_string(), Some(1_000), true);
+    progress.settle("2@1".to_string(), None, true);
     let counts = HashMap::from([
         ("1@1".to_string(), ready(3, 3)),
         ("2@1".to_string(), ready(40, 40)),
@@ -963,4 +977,147 @@ fn verdict_deadline_is_the_next_archive_retry() {
     }));
     assert_eq!(verdict_deadline(&[passed], 600, 30), None);
     assert_eq!(verdict_deadline(&[row(TapeStatus::NoAddress)], 0, 30), None);
+}
+
+/// A missing row's verdict moves with the clock too (its window falls out of retention, or a
+/// short tail stops being fillable): the deadline names that edge, the card's own rule.
+#[test]
+fn verdict_deadline_names_a_missing_rows_retention_edge() {
+    let row = DealRow {
+        deal: deal(1, 1, 1),
+        tape: TapeStatus::Missing,
+        verdict: None,
+        address: Some(address()),
+        ticks: None,
+        entry_line: None,
+        held: None,
+    };
+    let now_ms = 2_000;
+    let at = verdict_deadline(std::slice::from_ref(&row), now_ms, 30).expect("an edge");
+    assert!(at > now_ms);
+    assert_eq!(
+        super::super::ticks::signature::settled_until(std::slice::from_ref(&row), 30, now_ms),
+        at,
+        "the card and the list read one rule"
+    );
+    assert_eq!(
+        verdict_deadline(std::slice::from_ref(&row), at, 30).map(|n| n > at),
+        Some(true)
+    );
+}
+
+/// The model margin and the long-position split change every window asked for: a whole pass.
+#[test]
+fn a_margin_or_long_position_change_restarts() {
+    // Two finished passes' worth of keys outgrow the default test stack in a debug build.
+    std::thread::Builder::new()
+        .stack_size(8 << 20)
+        .spawn(margin_or_long_position_change_restarts)
+        .expect("spawn")
+        .join()
+        .expect("no panic");
+}
+
+fn margin_or_long_position_change_restarts() {
+    let pass = finished();
+    let none = HashSet::new();
+    for sample in [
+        SamplePolicy {
+            margin_ms: 5_000,
+            ..key(1, 1).sample
+        },
+        SamplePolicy {
+            long_position_ms: 60_000,
+            ..key(1, 1).sample
+        },
+    ] {
+        let moved = ReadyKey {
+            sample,
+            ..key(1, 1)
+        };
+        assert!(key(1, 1).restarts(&moved));
+        assert_eq!(pass.stale_strategies(&moved, &none, 0), None);
+    }
+}
+
+/// A strategy whose held reads did not all settle keeps no signature: the next pass recounts
+/// it although its deals did not move, and its deadline asks again soon.
+#[test]
+fn an_unsettled_read_keeps_its_strategy_stale() {
+    let mut pass = ReadyPass::default();
+    let none = HashSet::new();
+    let groups = group_by_strategy(vec![deal(1, 1, 1), deal(2, 2, 1)], &HashMap::new(), &[]);
+    let (seq, progress) = pass.begin(key(1, 1), Instant::now());
+    assert_eq!(pass.recount_set(&groups, None, &progress), None);
+    progress.settle("1@1".to_string(), Some(5_000), false);
+    progress.settle("2@1".to_string(), None, true);
+    let counts = HashMap::from([
+        ("1@1".to_string(), ready(0, 0)),
+        ("2@1".to_string(), ready(40, 40)),
+    ]);
+    assert_eq!(pass.land(seq, Ok(Some(counts))), (true, false));
+    assert_eq!(pass.next_deadline(), Some(5_000));
+    let moved = key(1, 2);
+    let stale = pass.stale_strategies(&moved, &none, 0).expect("same scope");
+    let (_, progress) = pass.begin_partial(moved, Instant::now(), &stale);
+    assert_eq!(
+        pass.recount_set(&groups, Some(&stale), &progress),
+        Some(HashSet::from(["1@1".to_string()])),
+        "the unsettled strategy is owed a recount, the settled one stands"
+    );
+}
+
+/// A count of unsettled rows arms the retry deadline from the pipeline itself.
+#[test]
+fn the_pipeline_reports_unsettled_reads() {
+    let groups = vec![("1@1".to_string(), vec![(deal(1, 1, 1), Some(address()))])];
+    let progress = ReadyProgress::default();
+    count_strategies(
+        groups,
+        |targets| Fetched {
+            settled: Default::default(),
+            ..fake_fetch(targets)
+        },
+        fake_replay,
+        &progress,
+        limits(4),
+        0,
+        30,
+    )
+    .expect("not cancelled");
+    let deadlines = progress.drain_deadlines();
+    assert_eq!(deadlines.len(), 1);
+    assert!(!deadlines[0].2, "not settled");
+    assert!(deadlines[0].1.is_some_and(|at| at <= 5_000), "retried soon");
+}
+
+/// A calibration move changes the signature of the groups on that core only, and makes the
+/// finished counts read the deals again.
+#[test]
+fn a_calibration_move_recounts_the_cores_groups() {
+    let on = |core: u64| group_by_strategy(vec![deal(1, 1, core)], &HashMap::new(), &[]);
+    let (calibrated, other) = (on(9_301), on(9_302));
+    let before = (
+        super::group_signature(&calibrated[0].1),
+        super::group_signature(&other[0].1),
+    );
+    super::super::ticks::lags::set_for_test(9_301, 120.0);
+    assert_ne!(super::group_signature(&calibrated[0].1), before.0);
+    assert_eq!(super::group_signature(&other[0].1), before.1);
+    let pass = finished();
+    let moved = ReadyKey {
+        calibration_rev: 1,
+        ..key(1, 1)
+    };
+    let stale = pass.stale_strategies(&moved, &HashSet::new(), 0);
+    assert!(!moved.restarts(&key(1, 1)));
+    assert!(
+        !pass.stands(&moved, stale.as_ref()),
+        "the deals must be read"
+    );
+    let catalog = ReadyKey {
+        addresses_rev: 7,
+        ..key(1, 1)
+    };
+    assert!(!pass.stands(&catalog, stale.as_ref()), "an address landed");
 }

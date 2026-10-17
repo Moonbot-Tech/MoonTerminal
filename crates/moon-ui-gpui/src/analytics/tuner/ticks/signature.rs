@@ -62,7 +62,7 @@ pub(in crate::analytics::tuner) fn signature_of<'a>(
 /// a short tail can still be filled), the model's margin and the long-position split (the
 /// window asked for).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::analytics::tuner) struct SamplePolicy {
+pub(in crate::analytics) struct SamplePolicy {
     pub(in crate::analytics::tuner) min_tail_s: u32,
     pub(in crate::analytics::tuner) switches: (bool, bool),
     pub(in crate::analytics::tuner) margin_ms: i64,
@@ -73,7 +73,7 @@ impl SamplePolicy {
     /// The policy in force now.
     pub(in crate::analytics::tuner) fn current() -> Self {
         Self {
-            min_tail_s: super::tail::current_s(),
+            min_tail_s: super::tail::effective_s(),
             switches: super::tail::switches(),
             margin_ms: moon_core::market::trade_replay::margin_ms(),
             long_position_ms: moon_core::market::trade_replay::long_position_ms(),
@@ -124,16 +124,16 @@ pub(in crate::analytics::tuner) fn can_skip(
         })
 }
 
-/// The first instant after `now_ms` at which a covered row's verdict can move with the clock
-/// alone — a retention edge after which its short tail can no longer be extended
-/// ([`super::rows::next_source_change`]); `i64::MAX` when none can.
+/// The first instant after `now_ms` at which a row's verdict can move with the clock alone —
+/// a retention edge of a covered short tail or of a missing row
+/// ([`super::rows::next_verdict_flip`]); `i64::MAX` when none can.
 pub(in crate::analytics::tuner) fn settled_until(
     rows: &[super::state::DealRow],
     min_tail_s: u32,
     now_ms: i64,
 ) -> i64 {
     rows.iter()
-        .filter_map(|row| super::rows::next_source_change(row, min_tail_s, now_ms))
+        .filter_map(|row| super::rows::next_verdict_flip(row, min_tail_s, now_ms))
         .min()
         .unwrap_or(i64::MAX)
 }
