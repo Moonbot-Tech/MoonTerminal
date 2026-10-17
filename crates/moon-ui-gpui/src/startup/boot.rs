@@ -719,6 +719,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         let mut last_assets_rev_sum: u64 = 0;
         let mut chart_gate = SaveGate::new(SAVE_INTERVAL);
         let mut config_gate = SaveGate::new(SAVE_INTERVAL);
+        let mut figures_gate = SaveGate::new(SAVE_INTERVAL);
+        let mut badges_gate = SaveGate::new(SAVE_INTERVAL);
         loop {
             // How late this wake-up lands is the measurement, not an implementation detail: the
             // timer is a BACKGROUND one, but this task runs on the foreground executor, so
@@ -918,13 +920,13 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // the dirty-flag mechanism entirely. `order-cancel-lag` in particular
                     // places a real order that lands permanently in `reports.sqlite`.
                     if b.persist_allowed {
+                        let now = Instant::now();
                         {
                             // Writes config and layout files from THIS thread, into the folder
                             // beside the executable — which may be synchronised or on a share.
                             let _persist_us = crate::diag::scope(&crate::diag::PERSIST_DISPATCH_US);
                             dispatch_live_persistence(b, &mut coord_persistence.borrow_mut());
                         }
-                        let now = Instant::now();
                         if b.chart_specs_dirty {
                             let admitted = chart_gate.admit(now);
                             if admitted {
@@ -932,7 +934,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                                 b.chart_specs_dirty = false;
                             }
                         }
-                        if b.tab_badges_dirty {
+                        if b.tab_badges_dirty && badges_gate.admit(now) {
                             b.tab_badges.save();
                             b.tab_badges_dirty = false;
                         }
@@ -949,7 +951,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                                 b.core_updates_dirty = false;
                             }
                         }
-                        if b.figures.borrow().dirty {
+                        if b.figures.borrow().dirty && figures_gate.admit(now) {
                             b.figures.borrow_mut().save();
                         }
                         if b.config_dirty && config_gate.admit(now) {

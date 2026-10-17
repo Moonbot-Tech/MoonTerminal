@@ -133,6 +133,89 @@ pub fn save<T: Serialize>(path: &Path, value: &T, label: &str) -> anyhow::Result
 /// Writes a file through a temporary sibling plus rename. A direct `fs::write` can leave a
 /// truncated config if the process or power fails during the write.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
+    write_atomic_memo(path, bytes, bytes, true, label)
+}
+
+/// What this process last wrote to a path: content hash and length of the memo key, plus the
+/// file's length and mtime right after the write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Memo {
+    pub(crate) hash: u64,
+    pub(crate) key_len: usize,
+    pub(crate) file_len: u64,
+    pub(crate) mtime: Option<std::time::SystemTime>,
+}
+
+/// Process-wide record of the last successful write per path, so a save of unchanged content
+/// costs a hash instead of a create + fsync + rename.
+static WRITE_MEMO: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<PathBuf, Memo>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn content_hash(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
+fn file_stamp(path: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
+    std::fs::metadata(path)
+        .ok()
+        .map(|m| (m.len(), m.modified().ok()))
+}
+
+/// The write may be skipped: the same content was written last time AND the file on disk still
+/// carries that write's length and mtime (nobody modified or deleted it since).
+pub(crate) fn memo_hit(
+    memo: Option<&Memo>,
+    hash: u64,
+    key_len: usize,
+    on_disk: Option<(u64, Option<std::time::SystemTime>)>,
+) -> bool {
+    let (Some(memo), Some((len, mtime))) = (memo, on_disk) else {
+        return false;
+    };
+    memo.hash == hash
+        && memo.key_len == key_len
+        && memo.file_len == len
+        && memo.mtime.is_some()
+        && memo.mtime == mtime
+}
+
+/// [`write_atomic`] with the memo keyed on `memo_key` rather than the written bytes — for a file
+/// whose bytes differ on every save (servers.enc is re-encrypted with a fresh nonce). `may_skip`
+/// false forces the write while still refreshing the memo.
+pub(crate) fn write_atomic_memo(
+    path: &Path,
+    memo_key: &[u8],
+    bytes: &[u8],
+    may_skip: bool,
+    label: &str,
+) -> anyhow::Result<()> {
+    let hash = content_hash(memo_key);
+    let mut memo = WRITE_MEMO
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if may_skip && memo_hit(memo.get(path), hash, memo_key.len(), file_stamp(path)) {
+        return Ok(());
+    }
+    memo.remove(path);
+    write_atomic_raw(path, bytes, label)?;
+    if let Some((file_len, mtime)) = file_stamp(path) {
+        memo.insert(
+            path.to_path_buf(),
+            Memo {
+                hash,
+                key_len: memo_key.len(),
+                file_len,
+                mtime,
+            },
+        );
+    }
+    Ok(())
+}
+
+fn write_atomic_raw(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).with_context(|| format!("создание папки для {label}"))?;
     }

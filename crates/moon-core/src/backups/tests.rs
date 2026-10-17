@@ -124,3 +124,26 @@ fn no_expected_cores_keeps_an_empty_strategy_source_pending() {
 
     assert_eq!(coordinator.strategy_claim(), None);
 }
+
+/// Strategy commits arrive on every refresh; only the one that flips readiness may wake the
+/// scheduler, the rest leave the wake revision alone.
+#[test]
+fn strategy_commits_wake_only_on_a_readiness_change() {
+    let coordinator = ScheduleCoordinator::new();
+    coordinator.request(HashSet::from([10, 20]), false);
+    let revision = || coordinator.lock().wake_revision;
+
+    let start = revision();
+    coordinator.strategy_commit(10);
+    assert_eq!(revision(), start, "still not ready: no wake");
+    coordinator.strategy_commit(20);
+    let ready = revision();
+    assert_ne!(ready, start, "readiness flipped: wake");
+    coordinator.strategy_commit(10);
+    coordinator.strategy_commit(20);
+    assert_eq!(
+        revision(),
+        ready,
+        "already ready: repeated commits do not wake"
+    );
+}

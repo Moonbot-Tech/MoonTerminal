@@ -1,5 +1,8 @@
 use super::super::schema::{SettingsFile, default_ui_scale};
-use super::{ConfigLoad, load_or_default, load_or_default_status};
+use super::{
+    ConfigLoad, Memo, atomic_tmp_path, load_or_default, load_or_default_status, memo_hit,
+    write_atomic,
+};
 use std::path::{Path, PathBuf};
 
 /// Bind the absent-file branch in [`load_or_default`] to `defaults_for_absent_file`.
@@ -72,4 +75,107 @@ fn a_missing_file_reports_absent() {
     });
 
     assert_eq!(status, ConfigLoad::Absent);
+}
+
+/// A fresh scratch file path per test; the directory is removed by [`Scratch`]'s drop.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("moon-memo-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn file(&self) -> PathBuf {
+        self.0.join("cfg.json")
+    }
+
+    /// A directory squatting on the temp path makes every REAL write fail, so an `Ok` while it
+    /// stands proves the write was skipped.
+    fn block_writes(&self) {
+        std::fs::create_dir_all(atomic_tmp_path(&self.file())).unwrap();
+    }
+
+    fn unblock_writes(&self) {
+        std::fs::remove_dir_all(atomic_tmp_path(&self.file())).unwrap();
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn an_identical_save_is_skipped() {
+    let s = Scratch::new("same");
+    write_atomic(&s.file(), b"alpha", "t").unwrap();
+    s.block_writes();
+    assert!(
+        write_atomic(&s.file(), b"alpha", "t").is_ok(),
+        "equal bytes must not touch disk"
+    );
+}
+
+#[test]
+fn changed_content_is_written() {
+    let s = Scratch::new("changed");
+    write_atomic(&s.file(), b"alpha", "t").unwrap();
+    s.block_writes();
+    assert!(
+        write_atomic(&s.file(), b"beta!", "t").is_err(),
+        "changed bytes must be written"
+    );
+    s.unblock_writes();
+    write_atomic(&s.file(), b"beta!", "t").unwrap();
+    assert_eq!(std::fs::read(s.file()).unwrap(), b"beta!");
+}
+
+#[test]
+fn an_external_modify_or_delete_forces_the_rewrite() {
+    let s = Scratch::new("external");
+    write_atomic(&s.file(), b"alpha", "t").unwrap();
+    std::fs::write(s.file(), b"edited by hand").unwrap();
+    write_atomic(&s.file(), b"alpha", "t").unwrap();
+    assert_eq!(std::fs::read(s.file()).unwrap(), b"alpha");
+
+    std::fs::remove_file(s.file()).unwrap();
+    write_atomic(&s.file(), b"alpha", "t").unwrap();
+    assert_eq!(std::fs::read(s.file()).unwrap(), b"alpha");
+}
+
+#[test]
+fn a_failed_write_clears_the_memo() {
+    let s = Scratch::new("failed");
+    write_atomic(&s.file(), b"alpha", "t").unwrap();
+    s.block_writes();
+    assert!(write_atomic(&s.file(), b"beta!", "t").is_err());
+    // The disk still holds "alpha", but the memo no longer vouches for it: the write is attempted.
+    assert!(write_atomic(&s.file(), b"alpha", "t").is_err());
+}
+
+#[test]
+fn memo_hit_needs_equal_content_and_an_untouched_file() {
+    let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(7);
+    let memo = Memo {
+        hash: 1,
+        key_len: 5,
+        file_len: 9,
+        mtime: Some(t),
+    };
+    assert!(memo_hit(Some(&memo), 1, 5, Some((9, Some(t)))));
+    assert!(!memo_hit(None, 1, 5, Some((9, Some(t)))));
+    assert!(!memo_hit(Some(&memo), 2, 5, Some((9, Some(t)))));
+    assert!(!memo_hit(Some(&memo), 1, 5, Some((10, Some(t)))));
+    assert!(!memo_hit(
+        Some(&memo),
+        1,
+        5,
+        Some((9, Some(t + std::time::Duration::from_secs(1))))
+    ));
+    assert!(!memo_hit(Some(&memo), 1, 5, None));
+    assert!(!memo_hit(Some(&memo), 1, 5, Some((9, None))));
 }

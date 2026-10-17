@@ -1,6 +1,7 @@
 //! Tests for the config-store guards.
 
-use super::refuse_blind_overwrite;
+use super::{may_skip_servers_write, refuse_blind_overwrite};
+use crate::config::crypto::AccessState;
 
 /// The four states of "may this save replace servers.enc", stated as a table so a future edit to
 /// the condition has to disagree with the table rather than with a sentence.
@@ -26,4 +27,21 @@ fn only_an_unopened_existing_file_blocks_a_write() {
 fn the_refusal_says_why() {
     let message = refuse_blind_overwrite(true, false).unwrap_err().to_string();
     assert!(message.contains("не был прочитан"), "got: {message}");
+}
+
+/// An unchanged servers.enc is skipped only while every key slot is already on disk: a pending
+/// slot (new machine, password change) must be written even when the cores did not change.
+#[test]
+fn pending_key_slots_force_the_servers_write() {
+    let saved = AccessState {
+        opened: true,
+        machine_slots: 1,
+        password_set: false,
+        needs_rewrite: false,
+    };
+    assert!(may_skip_servers_write(saved));
+    assert!(!may_skip_servers_write(AccessState {
+        needs_rewrite: true,
+        ..saved
+    }));
 }

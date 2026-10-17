@@ -25,6 +25,27 @@ fn persistence_clears_dirty_flags_only_after_admission() {
     assert!(config.contains("b.config_dirty=false;"));
     assert!(persistence.contains("chart_gate.admit(now)"));
     assert!(persistence.contains("config_gate.admit(now)"));
+    assert!(persistence.contains("ifb.figures.borrow().dirty&&figures_gate.admit(now){"));
+    assert!(persistence.contains("ifb.tab_badges_dirty&&badges_gate.admit(now){"));
+    let badges = braced_source(persistence, "ifb.tab_badges_dirty&&badges_gate.admit(now)");
+    assert!(badges.contains("b.tab_badges_dirty=false;"));
+}
+
+/// The quit flush writes figures and tab badges unconditionally: a gate there would drop the last
+/// edit of a session.
+#[test]
+fn quit_flush_leaves_figures_and_badges_ungated() {
+    let source = include_str!("../boot.rs");
+    assert_eq!(source.matches("figures_gate.admit(").count(), 1);
+    assert_eq!(source.matches("badges_gate.admit(").count(), 1);
+    assert!(source.contains(
+        "            if b.tab_badges_dirty {
+"
+    ));
+    assert!(source.contains(
+        "            if b.figures.borrow().dirty {
+"
+    ));
 }
 
 /// Isolate the balanced admission block so a later unrelated clear cannot satisfy its assertion.
