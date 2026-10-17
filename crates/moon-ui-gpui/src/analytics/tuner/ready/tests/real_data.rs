@@ -243,7 +243,15 @@ fn mask_count(text: &str, label: &str) -> String {
     out
 }
 
+/// The process's CPU time so far, user and kernel, in seconds. NaN off Windows, where the bench
+/// reports wall time only.
+#[cfg(not(windows))]
+fn process_cpu_s() -> f64 {
+    f64::NAN
+}
+
 /// The process's CPU time so far, user and kernel, in seconds.
+#[cfg(windows)]
 fn process_cpu_s() -> f64 {
     use windows::Win32::Foundation::FILETIME;
     use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
