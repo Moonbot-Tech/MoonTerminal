@@ -139,40 +139,15 @@ pub(super) fn chart_settings_sig(
     }
 }
 
-/// Defer hidden work and apply a pending signature exactly once after reveal.
-pub(super) fn settings_step<Sig: PartialEq>(
-    visible: bool,
-    pending: bool,
-    prev_sig: &Sig,
-    new_sig: Option<&Sig>,
-) -> (bool, bool) {
-    if !visible {
-        return (false, true);
-    }
-    match new_sig {
-        Some(sig) => (pending || sig != prev_sig, false),
-        None => (false, pending),
-    }
-}
-
 impl ChartPanel {
-    /// Apply visible settings through the shared history and trace refresh path on notify or reveal.
+    /// Apply changed settings immediately so hidden charts keep history and trace queries current.
     pub(super) fn apply_settings_signature(
         &mut self,
-        signature: Option<ChartSettingsSig>,
+        signature: ChartSettingsSig,
         cx: &mut Context<Self>,
     ) {
-        let (apply, pending) = settings_step(
-            self.scene_visible,
-            self.settings_dirty_while_hidden,
-            &self.settings_sig,
-            signature.as_ref(),
-        );
-        self.settings_dirty_while_hidden = pending;
-        if apply {
-            if let Some(signature) = signature {
-                self.settings_sig = signature;
-            }
+        if signature != self.settings_sig {
+            self.settings_sig = signature;
             self.view_dirty = true;
             self.requery_trade_history_on_trade_kinds(cx);
             self.requery_trade_history_on_core_scope(cx);

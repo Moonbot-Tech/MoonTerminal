@@ -45,19 +45,6 @@ impl Render for ChartPanel {
         let became_visible = !self.scene_visible;
         self.scene_visible = true;
         self.chart.set_scene_visible(true);
-        if self.settings_dirty_while_hidden {
-            let signature = {
-                let backend = self.backend.read(cx);
-                super::chart_settings_sig(
-                    backend,
-                    self.chart_graphics,
-                    self.candle_view,
-                    self.chart_labels.clone(),
-                    self.default_kind,
-                )
-            };
-            self.apply_settings_signature(Some(signature), cx);
-        }
         self.chart
             .set_market_source(Some(self.backend.read(cx).session.market_source()));
         // The chart keeps the monitor's density under UI zoom: its sizes go through the platform

@@ -169,8 +169,6 @@ pub struct ChartPanel {
     /// UI settings applied during rendering. Cached dock panels are no longer awakened by every
     /// top-down Shell render, so a changed signature must notify this panel directly.
     settings_sig: ChartSettingsSig,
-    /// Hidden notifications defer signature construction until the first visible frame.
-    settings_dirty_while_hidden: bool,
     /// Axis revision last delivered to the chart engine.
     applied_report_axis_rev: Option<u64>,
     /// Whether to present smoothly at vsync as a focused chart instead of adapting to observed data.

@@ -243,15 +243,13 @@ impl ChartPanel {
                 };
                 (
                     sig,
-                    this.scene_visible.then(|| {
-                        chart_settings_sig(
-                            b,
-                            this.chart_graphics,
-                            this.candle_view,
-                            this.chart_labels.clone(),
-                            this.default_kind,
-                        )
-                    }),
+                    chart_settings_sig(
+                        b,
+                        this.chart_graphics,
+                        this.candle_view,
+                        this.chart_labels.clone(),
+                        this.default_kind,
+                    ),
                     b.panic_rev,
                     b.fav_rev,
                 )
@@ -331,7 +329,6 @@ impl ChartPanel {
             market_ref_epoch,
             data_sig: 0,
             settings_sig,
-            settings_dirty_while_hidden: false,
             applied_report_axis_rev: None,
             fast: true,
             scene_visible: false,
@@ -469,15 +466,13 @@ impl ChartPanel {
                 };
                 (
                     sig,
-                    this.scene_visible.then(|| {
-                        chart_settings_sig(
-                            b,
-                            this.chart_graphics,
-                            this.candle_view,
-                            this.chart_labels.clone(),
-                            this.default_kind,
-                        )
-                    }),
+                    chart_settings_sig(
+                        b,
+                        this.chart_graphics,
+                        this.candle_view,
+                        this.chart_labels.clone(),
+                        this.default_kind,
+                    ),
                     b.panic_rev,
                     b.fav_rev,
                 )
@@ -550,7 +545,6 @@ impl ChartPanel {
             market_ref_epoch,
             data_sig: 0,
             settings_sig,
-            settings_dirty_while_hidden: false,
             applied_report_axis_rev: None,
             fast: false,
             scene_visible: false,

@@ -1114,7 +1114,7 @@ fn an_emptied_chart_panel_drops_its_trade_history_target() {
 /// a panel: its own override through the setter, and — for a panel that follows the global default —
 /// a ⧉ press in another group window, which rewrites that default without ever walking this stack
 /// and is heard only through the backend observer.
-/// Hidden observers defer signature work; reveal must use that same query path before reading labels.
+/// Hidden observers must refresh history immediately when their settings change.
 #[test]
 fn a_trade_kind_change_re_runs_the_durable_history_query() {
     let source =
@@ -1129,41 +1129,23 @@ fn a_trade_kind_change_re_runs_the_durable_history_query() {
         let body = braced_body(&construct, constructor);
         let observer = braced_body(body, "cx.observe(&backend, |this, backend, cx|");
         assert!(
-            observer.contains("this.scene_visible.then(||")
+            !observer.contains("this.scene_visible.then(||")
                 && observer.contains("chart_settings_sig(")
                 && observer.contains("this.apply_settings_signature(settings_sig, cx)"),
-            "{constructor}: its observer must defer hidden signatures through the shared apply path"
+            "{constructor}: its observer must always build and apply settings signatures"
         );
     }
     let settings = code_only(&read_src("panels/chart/settings_sig.rs"));
     let apply = braced_body(&settings, "fn apply_settings_signature(");
     assert!(
-        apply.contains("let (apply, pending) = settings_step(")
-            && apply.contains("self.settings_dirty_while_hidden = pending"),
-        "the shared apply path must consume the signature comparison and pending state"
+        apply.contains("if signature != self.settings_sig {") && !apply.contains("scene_visible"),
+        "the shared apply path must compare settings regardless of visibility"
     );
-    let changed = braced_body(apply, "if apply {");
+    let changed = braced_body(apply, "if signature != self.settings_sig {");
     assert!(
         changed.contains("self.settings_sig = signature")
             && changed.contains("self.requery_trade_history_on_trade_kinds(cx)"),
         "applying settings must adopt them and re-run the durable trade-kind query"
-    );
-    let step = braced_body(&settings, "fn settings_step<");
-    assert!(
-        step.contains("sig != prev_sig") && step.contains("pending ||"),
-        "both a changed signature and deferred reveal must enter the apply branch"
-    );
-    let render = code_only(&read_src("panels/chart/render.rs"));
-    let consume = braced_body(&render, "if self.settings_dirty_while_hidden {");
-    assert!(
-        consume.contains("super::chart_settings_sig(")
-            && consume.contains("self.apply_settings_signature(Some(signature), cx)"),
-        "reveal must rebuild and apply deferred settings through the observer's helper"
-    );
-    assert!(
-        render.find("self.apply_settings_signature(").unwrap()
-            < render.find("self.settings_sig.chart_labels").unwrap(),
-        "deferred settings must be applied before the first visible frame reads labels"
     );
 }
 

@@ -1,6 +1,7 @@
 //! Independent Classic/shared-Auto dock layouts, all-core navigation rail, and chart reveal.
 
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -86,6 +87,42 @@ fn rail_inputs<'a, 'b>(
         .collect();
     inputs.retain(|input| live.displayed(Some(WorkspaceMode::AutoTrading), input.core));
     inputs
+}
+
+/// Hash complete roster facts by value, including payloads whose types do not implement Hash.
+/// Clock, palette, and window dimensions are intentionally absent from this key.
+fn rail_cache_key(
+    inputs: &[WorkspaceRosterInput],
+    group: &str,
+    selected: Option<CoreId>,
+    revisions: (u64, u64),
+    config: &moon_core::config::AppConfig,
+) -> u64 {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    revisions.hash(&mut hash);
+    group.hash(&mut hash);
+    selected.hash(&mut hash);
+    config.servers.len().hash(&mut hash);
+    for server in &config.servers {
+        server.id.hash(&mut hash);
+        server.name.hash(&mut hash);
+    }
+    // Stream full structural values into the hasher without allocating a formatted fleet string.
+    use std::fmt::Write as _;
+    write!(RailKeyWriter(&mut hash), "{:?}{inputs:?}", config.core_sort)
+        .expect("hash formatting is infallible");
+    hash.finish()
+}
+
+/// Feed Debug's structural value representation directly into a cache-key hasher.
+struct RailKeyWriter<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+
+impl std::fmt::Write for RailKeyWriter<'_> {
+    /// Hash each formatted fragment without retaining scratch text.
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.0.write(text.as_bytes());
+        Ok(())
+    }
 }
 
 mod rail_item;
@@ -482,12 +519,43 @@ impl Shell {
                     backend.workspace_core_availability_resolved(group, server, live)
                 },
             );
-            let roster = crate::workspace::derive_workspace_roster(
-                &inputs,
-                &self.group,
-                backend.valid_auto_workspace_core(&self.group),
-                configured_total,
-            );
+            let roster = {
+                let selected = backend.valid_auto_workspace_core(&self.group);
+                let key = rail_cache_key(
+                    &inputs,
+                    &self.group,
+                    selected,
+                    (
+                        backend.workspace_revision().read(cx).generation(),
+                        backend
+                            .auto_workspace_layout_revision()
+                            .read(cx)
+                            .generation(),
+                    ),
+                    &backend.config,
+                );
+                let mut cache = self.rail_cache.borrow_mut();
+                if cache
+                    .as_ref()
+                    .is_none_or(|(cached_key, _)| *cached_key != key)
+                {
+                    *cache = Some((
+                        key,
+                        Rc::new(crate::workspace::derive_workspace_roster(
+                            &inputs,
+                            &self.group,
+                            selected,
+                            configured_total,
+                        )),
+                    ));
+                }
+                cache
+                    .as_ref()
+                    .expect("roster cache is populated")
+                    .1
+                    .as_ref()
+                    .clone()
+            };
             let prefs = rail_settings::RailPrefs::restore(&backend.layout);
             (roster, prefs)
         };
