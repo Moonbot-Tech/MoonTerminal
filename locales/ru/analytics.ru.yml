@@ -868,6 +868,7 @@ analytics.ticks.long_body_unknown: "Подбор входа и выхода вм
 analytics.ticks.long_go: "Запустить"
 analytics.ticks.dur_s: "%{s} с"
 analytics.ticks.dur_m: "%{m} мин"
+analytics.ticks.dur_ms: "%{m} мин %{s} с"
 analytics.ticks.dur_hm: "%{h} ч %{m} мин"
 analytics.ticks.stats_converged: "сошёлся за %{n} прох."
 analytics.ticks.stats_cut: "не сошёлся за %{n} прох. — упёрся в предел"

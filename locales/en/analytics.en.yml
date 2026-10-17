@@ -868,6 +868,7 @@ analytics.ticks.long_body_unknown: "Entry and exit searched together: ≈ %{poin
 analytics.ticks.long_go: "Run"
 analytics.ticks.dur_s: "%{s} s"
 analytics.ticks.dur_m: "%{m} min"
+analytics.ticks.dur_ms: "%{m} min %{s} s"
 analytics.ticks.dur_hm: "%{h} h %{m} min"
 analytics.ticks.stats_converged: "converged in %{n} passes"
 analytics.ticks.stats_cut: "still improving after %{n} passes — cut by the limit"

@@ -454,3 +454,16 @@ fn unfillable_short_tail_is_in_the_sample_but_fresh_tape_waits() {
         "a tail exception cannot create missing tape"
     );
 }
+
+/// Deleting the ten-minute join would round a 10 min 50 s tape up to "11 min" and hide the
+/// leftover seconds a measured length keeps. Under ten minutes the estimate already keeps
+/// those seconds, so the tape must not assemble that phrase a second time.
+#[test]
+fn a_tape_length_keeps_seconds_the_estimate_would_round_away() {
+    let _locale = crate::test_locale::force("en");
+    assert_eq!(super::duration(80_000), "1 min 20 s");
+    assert_eq!(super::duration(80_900), "1 min 20 s");
+    assert_eq!(super::duration(600_000), "10 min");
+    assert_eq!(super::duration(650_000), "10 min 50 s");
+    assert_eq!(super::duration(3_600_000), "1 h 0 min");
+}

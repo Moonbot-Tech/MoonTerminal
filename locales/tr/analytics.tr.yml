@@ -868,6 +868,7 @@ analytics.ticks.long_body_unknown: "Giriş ve çıkış birlikte aranır: ≈ %{
 analytics.ticks.long_go: "Çalıştır"
 analytics.ticks.dur_s: "%{s} sn"
 analytics.ticks.dur_m: "%{m} dk"
+analytics.ticks.dur_ms: "%{m} dk %{s} sn"
 analytics.ticks.dur_hm: "%{h} sa %{m} dk"
 analytics.ticks.stats_converged: "%{n} geçişte yakınsadı"
 analytics.ticks.stats_cut: "%{n} geçişten sonra hâlâ iyileşiyor — sınıra takıldı"

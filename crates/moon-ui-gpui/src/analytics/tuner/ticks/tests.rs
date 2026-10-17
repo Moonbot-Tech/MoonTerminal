@@ -69,15 +69,17 @@ fn order_wait_needs_a_placement_before_the_fill() {
 }
 
 /// Printing a 90s pause as minutes would hide the seconds the next try honours, and printing
-/// a 10 minute pause as raw seconds would read as a stuck counter. The one-second floor of
-/// the search estimate must not turn a deadline that has just passed into "1 s".
+/// a 10 minute pause as raw seconds would read as a stuck counter. Past 90s the caption uses
+/// the search estimate, so 91s keeps its leftover seconds and ten minutes stays a whole-minute
+/// figure. The one-second floor of the search estimate must not turn a deadline that has just
+/// passed into "1 s".
 #[test]
 fn a_venue_wait_stays_in_seconds_through_ninety_then_reads_as_minutes() {
     let _locale = crate::test_locale::force("en");
     assert_eq!(fetch_wait_text(Duration::from_secs(0)), "0 s");
     assert_eq!(fetch_wait_text(Duration::from_secs(30)), "30 s");
     assert_eq!(fetch_wait_text(Duration::from_secs(90)), "90 s");
-    assert_eq!(fetch_wait_text(Duration::from_secs(91)), "2 min");
+    assert_eq!(fetch_wait_text(Duration::from_secs(91)), "1 min 31 s");
     assert_eq!(fetch_wait_text(Duration::from_secs(600)), "10 min");
     assert_eq!(
         fetch_wait_text(Duration::from_secs(3 * 3600 + 5 * 60)),

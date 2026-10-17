@@ -868,6 +868,7 @@ analytics.ticks.long_body_unknown: "Вхід і вихід підбирають�
 analytics.ticks.long_go: "Запустити"
 analytics.ticks.dur_s: "%{s} с"
 analytics.ticks.dur_m: "%{m} хв"
+analytics.ticks.dur_ms: "%{m} хв %{s} с"
 analytics.ticks.dur_hm: "%{h} год %{m} хв"
 analytics.ticks.stats_converged: "збігся за %{n} прох."
 analytics.ticks.stats_cut: "ще поліпшується після %{n} прох. — обрізано межею"

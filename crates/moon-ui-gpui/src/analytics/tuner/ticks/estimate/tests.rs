@@ -111,14 +111,25 @@ fn a_count_keeps_its_thousands_apart() {
     assert_eq!(count_text(4_456_380.0), "4\u{202f}456\u{202f}380");
 }
 
+/// Rounding an 80-second estimate up to "2 min" makes the button, the card and the tooltip
+/// read as twice the real time. Under ten minutes the leftover seconds stay, and a fraction
+/// of a second is dropped rather than rounding the minute up. At ten minutes the figure still
+/// rounds up to a whole minute, and an hour still reads as hours and minutes.
 #[test]
-fn a_duration_reads_in_the_largest_unit_it_needs() {
+fn a_duration_keeps_seconds_under_ten_minutes() {
     let _locale = crate::test_locale::force("en");
     assert_eq!(duration_text(Duration::from_millis(200)), "1 s");
+    assert_eq!(duration_text(Duration::from_secs(45)), "45 s");
     assert_eq!(duration_text(Duration::from_secs(59)), "59 s");
-    assert_eq!(duration_text(Duration::from_secs(61)), "2 min");
+    assert_eq!(duration_text(Duration::from_secs(60)), "1 min");
+    assert_eq!(duration_text(Duration::from_secs(80)), "1 min 20 s");
+    assert_eq!(duration_text(Duration::from_millis(80_900)), "1 min 20 s");
+    assert_eq!(duration_text(Duration::from_secs(599)), "9 min 59 s");
+    assert_eq!(duration_text(Duration::from_secs(600)), "10 min");
+    assert_eq!(duration_text(Duration::from_secs(601)), "11 min");
+    assert_eq!(duration_text(Duration::from_secs(3600)), "1 h 0 min");
     assert_eq!(
-        duration_text(Duration::from_secs(3 * 3600 + 5 * 60)),
+        duration_text(Duration::from_secs(3 * 3600 + 5 * 60 + 40)),
         "3 h 5 min"
     );
 }

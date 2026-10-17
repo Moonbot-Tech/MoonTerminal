@@ -868,6 +868,7 @@ analytics.ticks.long_body_unknown: "Vào lệnh và thoát lệnh được tìm 
 analytics.ticks.long_go: "Chạy"
 analytics.ticks.dur_s: "%{s} giây"
 analytics.ticks.dur_m: "%{m} phút"
+analytics.ticks.dur_ms: "%{m} phút %{s} giây"
 analytics.ticks.dur_hm: "%{h} giờ %{m} phút"
 analytics.ticks.stats_converged: "hội tụ sau %{n} lượt"
 analytics.ticks.stats_cut: "vẫn cải thiện sau %{n} lượt — bị cắt bởi giới hạn"

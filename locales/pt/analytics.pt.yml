@@ -868,6 +868,7 @@ analytics.ticks.long_body_unknown: "Entrada e saída buscadas juntas: variantes:
 analytics.ticks.long_go: "Rodar"
 analytics.ticks.dur_s: "%{s} s"
 analytics.ticks.dur_m: "%{m} min"
+analytics.ticks.dur_ms: "%{m} min %{s} s"
 analytics.ticks.dur_hm: "%{h} h %{m} min"
 analytics.ticks.stats_converged: "convergiu em passadas: %{n}"
 analytics.ticks.stats_cut: "ainda melhorando depois de passadas: %{n} — cortado pelo limite"

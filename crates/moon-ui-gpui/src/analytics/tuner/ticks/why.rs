@@ -474,12 +474,16 @@ fn unjudged_key(why: Unjudged) -> &'static str {
 }
 
 /// Reuse the tuner's localized duration units for measured tape lengths.
+///
+/// Under ten minutes the search estimate already keeps leftover seconds, so the tape uses
+/// that figure. From ten minutes to an hour the estimate rounds up to a whole minute, and a
+/// length that is not an exact minute joins the minute figure with the leftover seconds.
 fn duration(ms: i64) -> String {
     if ms <= 0 {
         return t!("analytics.ticks.dur_s", s = 0).to_string();
     }
     let secs = (ms as u64) / 1_000;
-    if (60..3_600).contains(&secs) && !secs.is_multiple_of(60) {
+    if ((10 * 60)..3_600).contains(&secs) && !secs.is_multiple_of(60) {
         format!(
             "{} {}",
             super::estimate::duration_text(std::time::Duration::from_secs(secs / 60 * 60)),

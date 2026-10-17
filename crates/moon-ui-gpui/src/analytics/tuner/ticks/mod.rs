@@ -740,9 +740,10 @@ fn deal_row_h(cx: &App) -> f32 {
 /// The remaining venue pause as the fetch caption prints it.
 ///
 /// Short waits stay in seconds through 90s, so a 30s backoff still counts in seconds. Past
-/// that the figure is the search estimate's ([`estimate::duration_text`]): minutes, then
-/// hours and minutes. A fraction of a second rounds up, so the caption does not claim the
-/// try is due before the deadline the dispatcher will honour.
+/// that the figure is the search estimate's ([`estimate::duration_text`]): minutes and seconds
+/// under ten minutes, whole minutes up to an hour, then hours and minutes. A fraction of a
+/// second rounds up, so the caption does not claim the try is due before the deadline the
+/// dispatcher will honour.
 ///
 /// Args:
 ///     wait: Time until the soonest waiting host's deadline.
