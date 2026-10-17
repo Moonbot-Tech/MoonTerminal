@@ -164,11 +164,6 @@ pub(crate) struct AutoWorkspaceLayoutRevision {
 }
 
 impl AutoWorkspaceLayoutRevision {
-    /// Return the layout authority generation for consumers that memoize derived presentation.
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation
-    }
-
     /// Advance the shared Auto-layout generation and notify every open Shell.
     ///
     /// Args:

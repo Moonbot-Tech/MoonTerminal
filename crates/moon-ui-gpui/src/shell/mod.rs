@@ -94,8 +94,6 @@ pub(crate) struct Shell {
     workspace_resize_state: Entity<MoonResizableState>,
     /// Last global logical rail width applied to this Shell's resize state.
     applied_auto_rail_width: f32,
-    /// Roster memo uses interior mutability because rail composition only borrows the Shell.
-    rail_cache: std::cell::RefCell<Option<(u64, Rc<crate::workspace::WorkspaceRoster>)>>,
     /// Workspace mode currently applied to `dock`, kept separate from persisted desired state.
     applied_workspace_mode: WorkspaceMode,
     /// Latest dock-layout reset generation this Shell has already served.

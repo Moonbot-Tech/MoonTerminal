@@ -547,7 +547,6 @@ impl Shell {
             auto_topology_guard_generation: 0,
             workspace_resize_state,
             applied_auto_rail_width: initial_auto_rail_width,
-            rail_cache: Default::default(),
             applied_workspace_mode: moon_core::config::WorkspaceMode::Classic,
             served_dock_layout_reset,
             last_auto_surface_revision,
