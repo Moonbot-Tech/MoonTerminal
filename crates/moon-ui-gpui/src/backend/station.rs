@@ -342,6 +342,7 @@ impl StationJobs {
         st.needs_old_admin = false;
         st.pending_refresh = false;
         st.zone_pushed = None;
+        st.groups_sync = groups_sync::GroupsSync::default();
         st.applying = false;
         st.applied = None;
         st.waiting = None;
@@ -399,18 +400,14 @@ impl Backend {
             .bot
             .as_ref()
             .and_then(|bot| bot.access.as_ref());
-        let listing = self
-            .station
-            .cores_seen
-            .as_ref()
-            .and_then(|seen| seen.as_deref());
+        let listing = groups_sync::listing(self.station.bot.as_ref());
         let Some(job) = self.station.groups_sync.take_job(
             self.station.running,
             known_target(),
             access,
             &self.config.core_groups,
             &here,
-            listing.unwrap_or_default(),
+            listing,
         ) else {
             return;
         };
@@ -688,6 +685,9 @@ impl Backend {
         let done = match event {
             job::Event::UnmappedCores(count) => {
                 self.station.unmapped_cores = count;
+                if self.station.kind == Kind::Groups {
+                    self.station.groups_sync.translation_seen(count);
+                }
                 return false;
             }
             job::Event::Returned { returned, cores } => {
