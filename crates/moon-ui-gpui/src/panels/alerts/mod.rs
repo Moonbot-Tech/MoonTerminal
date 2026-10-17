@@ -33,6 +33,14 @@ fn locale_data_sig(data: u64, locale: &str) -> u64 {
     h.finish()
 }
 
+/// Invalidates resolved coin labels when their provider publishes a new catalogue.
+fn catalogue_data_sig(data: u64, revision: Option<(CoreId, u64, u64)>) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut h);
+    revision.hash(&mut h);
+    h.finish()
+}
+
 /// Resolved rows need only painting on clock ticks; unresolved labels must be retried.
 fn alerts_should_rebuild(
     changed: bool,
@@ -288,8 +296,8 @@ impl AlertsPanel {
     /// row, a disconnect greys its Alert box), and the cores' `Alerts` strategies, which the
     /// Strategy column resolves names from and the row dropdown offers.
     ///
-    /// The locale covers translated tool names. Market names without a canonical identity retain
-    /// a periodic lookup retry because the catalogue is published independently of these inputs.
+    /// The locale covers translated tool names; provider catalogue revisions refresh coin labels.
+    /// Market names without a canonical identity also retain a periodic lookup retry.
     fn data_sig(&self, b: &Backend) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         b.figures.borrow().rev().hash(&mut h);
@@ -297,6 +305,7 @@ impl AlertsPanel {
         for s in b.session.sessions().iter().filter(|s| scope.contains(s.id)) {
             s.id.hash(&mut h);
             s.name.hash(&mut h);
+            catalogue_data_sig(0, b.session.market_source().catalog_revision(s.id)).hash(&mut h);
             if let Some(core) = b.session.store().core(s.id) {
                 // Connection state decides whether a row's Alert box may be ticked at all, so it
                 // belongs to the fold as much as the names do.

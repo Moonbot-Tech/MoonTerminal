@@ -44,6 +44,15 @@ pub(super) enum AssetsRefresh {
     None,
 }
 
+/// Retries catalogue-dependent rows on admitted clock ticks until their markets resolve.
+pub(super) fn market_rebuild_due(
+    step: crate::panels::common::GateStep,
+    has_unresolved_market: bool,
+) -> bool {
+    use crate::panels::common::GateStep;
+    step == GateStep::Rebuild || (step == GateStep::Repaint && has_unresolved_market)
+}
+
 /// Gives full-key changes and admitted gate ticks priority over order-only marker refreshes.
 pub(super) fn assets_refresh(
     prev_key: Option<(u64, u64)>,
@@ -205,6 +214,14 @@ impl AssetsView {
         // nothing per repaint. With no active sort this is a no-op and `collect`'s
         // descending-value order stands.
         let mut entries = self.collect(b);
+        let markets = b.session.market_source();
+        self.has_unresolved_market = entries.iter().any(|entry| {
+            !entry.market_exists
+                || markets
+                    .market_label(entry.core, &entry.row.market)
+                    .canonic
+                    .is_empty()
+        });
         self.sort_entries(&mut entries);
         self.cached_entries = Rc::new(entries);
         self.cached_aggs = Rc::new(self.per_core(b));

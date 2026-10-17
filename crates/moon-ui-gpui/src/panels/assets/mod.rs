@@ -118,6 +118,8 @@ pub struct AssetsView {
     gate: RenderGate,
     /// Inputs represented by the current caches: data revisions and the dust threshold.
     cache_sig: Option<(u64, u64)>,
+    /// Catalogue-dependent rows need periodic retries until both market and label resolve.
+    has_unresolved_market: bool,
     /// Order revisions represented by the cached sale markers.
     sale_sig: Option<u64>,
     /// Effective cores represented by the current rows and sale markers.
@@ -233,7 +235,7 @@ impl AssetsView {
             if this.gate.defer_if_inactive() {
                 return;
             }
-            let gate_due = step == crate::panels::common::GateStep::Rebuild;
+            let gate_due = cache::market_rebuild_due(step, this.has_unresolved_market);
             let (refresh, cache_sig, sale_sig) =
                 cache::assets_observe_step(this.cache_sig, key, this.sale_sig, sale, gate_due);
             this.cache_sig = cache_sig;
@@ -403,6 +405,7 @@ impl AssetsView {
             transfer_input: None,
             gate: RenderGate::default(),
             cache_sig: None,
+            has_unresolved_market: false,
             sale_sig: None,
             cached_cores: Vec::new(),
             cached_entries: Rc::new(Vec::new()),

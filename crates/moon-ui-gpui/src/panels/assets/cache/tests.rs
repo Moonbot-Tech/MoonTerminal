@@ -9,6 +9,36 @@ use moon_core::config::TotalMode;
 use std::hint::black_box;
 use std::time::Instant;
 
+/// Dropping the pending-market retry strands late catalogue labels and disabled Sell actions.
+#[test]
+fn repaint_rebuilds_while_a_market_is_unresolved() {
+    use super::market_rebuild_due;
+    use crate::panels::common::GateStep;
+
+    let key = (17, 0);
+    let due = market_rebuild_due(GateStep::Repaint, true);
+    assert_eq!(
+        assets_refresh(Some(key), key, Some(4), 4, due),
+        AssetsRefresh::Full
+    );
+    assert!(!market_rebuild_due(GateStep::Idle, true));
+}
+
+/// Restoring unconditional clock rebuilds wastes the retained rows after catalogue resolution.
+#[test]
+fn repaint_skips_rebuild_when_all_markets_resolved() {
+    use super::market_rebuild_due;
+    use crate::panels::common::GateStep;
+
+    let key = (17, 0);
+    let due = market_rebuild_due(GateStep::Repaint, false);
+    assert_eq!(
+        assets_refresh(Some(key), key, Some(4), 4, due),
+        AssetsRefresh::None
+    );
+    assert!(market_rebuild_due(GateStep::Rebuild, false));
+}
+
 /// Missing names or configured markets from invalidation freezes captions and wallet quote filters.
 #[test]
 fn label_signature_tracks_core_renames_and_configured_quotes() {
