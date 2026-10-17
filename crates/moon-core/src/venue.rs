@@ -23,6 +23,11 @@ use crate::symbol::Exchange;
 
 pub mod caption;
 
+/// Stable code-derived label for diagnostics of an unlisted exchange.
+pub fn unlisted_label(code: u8) -> String {
+    format!("#{code}")
+}
+
 /// What one core is connected to, as every consumer of a core list needs it.
 ///
 /// [`Self::id`] is the grouping key — two cores on one venue share it, and two Hyperliquid cores on

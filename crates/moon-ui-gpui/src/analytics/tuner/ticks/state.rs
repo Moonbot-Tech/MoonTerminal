@@ -104,9 +104,8 @@ impl DealRow {
         }
     }
 
-    /// Offer missing or unpublished tape again, and short tails while a source can fill them.
+    /// Keep known-venue offers unchanged and offer unlisted rows within core retention.
     pub(in crate::analytics::tuner) fn fetchable_at(&self, now_ms: i64, min_tail_s: u32) -> bool {
-        use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
         let Some(address) = &self.address else {
             return false;
         };
@@ -114,20 +113,52 @@ impl DealRow {
             self.tape,
             TapeStatus::Missing | TapeStatus::Refused(TickStatus::ArchivePending { .. })
         ) {
-            return true;
+            if address.venue.is_some() {
+                return true;
+            }
+            let Some((from, to)) = moon_core::db::tuner::ticks::model_window(
+                &self.deal,
+                moon_core::market::trade_replay::margin_ms(),
+                moon_core::market::trade_replay::long_position_ms(),
+            )
+            .and_then(|window| window.focus_spans().hull()) else {
+                return false;
+            };
+            return super::fetch::job::reachable_after_station(
+                address.venue,
+                &address.market,
+                from,
+                to,
+                self.deal.close_ms,
+                now_ms,
+            );
         }
         let trail_ms = self.held.map_or(0, |(_, trail)| trail.max(0));
         self.reproduced()
             && trail_ms < i64::from(min_tail_s) * 1_000
-            && matches!(
-                fetchable(
+            && if address.venue.is_some() {
+                use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
+                matches!(
+                    fetchable(
+                        address.venue,
+                        &address.market,
+                        self.deal.close_ms.saturating_add(trail_ms),
+                        now_ms
+                    ),
+                    Fetchable::Rest | Fetchable::Archive
+                )
+            } else {
+                super::fetch::job::reachable_after_station(
                     address.venue,
                     &address.market,
                     self.deal.close_ms.saturating_add(trail_ms),
+                    self.deal
+                        .close_ms
+                        .saturating_add(i64::from(min_tail_s) * 1_000),
+                    self.deal.close_ms,
                     now_ms,
-                ),
-                Fetchable::Rest | Fetchable::Archive
-            )
+                )
+            }
     }
 
     /// Whether the variants and the search run on this row: it is [`Self::reproduced`], holds
@@ -188,8 +219,8 @@ impl DealRow {
 #[derive(Clone, Debug)]
 pub(in crate::analytics::tuner) struct RowAddress {
     pub(in crate::analytics::tuner) core_uid: u64,
-    /// The venue the core is connected to — decides the public trade route and its retention.
-    pub(in crate::analytics::tuner) venue: moon_core::venue::Venue,
+    /// The directory venue, when known; cores also serve exchanges without public routes.
+    pub(in crate::analytics::tuner) venue: Option<moon_core::venue::Venue>,
     pub(in crate::analytics::tuner) exchange_key: String,
     pub(in crate::analytics::tuner) market: String,
     /// BTC's market on the same exchange, as the catalog spells it — the BTC deltas are read off

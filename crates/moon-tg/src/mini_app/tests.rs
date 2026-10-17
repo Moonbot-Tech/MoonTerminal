@@ -531,6 +531,77 @@ fn chart_trade_accepts_full_stretch_before_gapped_tail() {
     assert!(!super::charts::covers_trade(&covered, 99000, 200500));
 }
 
+/// Unlisted tape must survive recorder priority and a recorder miss without a venue catalog.
+#[test]
+fn unlisted_stored_trade_uses_recorder_then_terminal() {
+    use moon_core::fixture::unlisted;
+    use moon_core::market::{tape_recorder, trade_replay};
+    use moon_core::telegram::web::dto::ChartStateDto;
+    let source = unlisted::source(200);
+    let trade = crate::report::MiniTrade {
+        new_rec_id: 901,
+        report_uid: None,
+        sell_reason: None,
+        core_uid: 200,
+        rec_id: 1,
+        coin: "XALPHA".into(),
+        core_name: unlisted::CORE_NAME.into(),
+        is_short: false,
+        profit_usdt: None,
+        pct: None,
+        buy_utc: Some(100),
+        close_utc: 150,
+        buy_price: 10.0,
+        sell_price: 12.0,
+        quantity: 2.0,
+        bought_quantity: None,
+        entry_volume_rate: None,
+        strategy_id: None,
+        channel_name: String::new(),
+    };
+    let ticks = vec![moon_core::feed::Tick {
+        time_ms: 110_000.0,
+        price: 11.0,
+        qty: 2.0,
+        side: moon_core::feed::Side::Buy,
+    }];
+    let value = source.replay_tick_value(200, "XALPHA");
+    assert_eq!(value, trade_replay::venue_caps::TickValue::Unknown);
+    let (recorded, stage) = super::charts::stored_trade(
+        &trade,
+        unlisted::CAPTION,
+        value,
+        Ok(tape_recorder::RecorderSpan {
+            ticks: ticks.clone(),
+            covered: vec![(100_000, 150_000)],
+            settled: true,
+        }),
+        || panic!("recorder hit must not query terminal tiles"),
+    )
+    .unwrap();
+    assert_eq!(stage, "recorder");
+    assert_eq!(recorded.state, ChartStateDto::Ok);
+    let (held, stage) = super::charts::stored_trade(
+        &trade,
+        unlisted::CAPTION,
+        value,
+        Err(tape_recorder::TapeMiss::Unknown),
+        || {
+            Some(trade_replay::TickAnswer {
+                ticks,
+                covered: trade_replay::Coverage::one((100_000, 150_000)),
+            })
+        },
+    )
+    .unwrap();
+    assert_eq!(stage, "terminal");
+    assert_eq!(held.state, ChartStateDto::Ok);
+    assert_eq!(recorded.ticks.as_ref().unwrap().len(), 1);
+    assert_eq!(held.ticks.as_ref().unwrap().len(), 1);
+    assert!(recorded.volume.is_none());
+    assert!(held.volume.is_none());
+}
+
 /// Recorder and replay paths must send quote turnover with the same contract multiplier.
 #[test]
 fn chart_quote_volume_matches_replay_slots() {
@@ -640,7 +711,6 @@ fn chart_replay_states_follow_tick_status_and_actual_points() {
         (TradeReplayEmpty::NoDataInWindow, State::NoTape),
         (TradeReplayEmpty::CoreNotConnected, State::CatchingUp),
         (TradeReplayEmpty::DegenerateWindow, State::NoTape),
-        (TradeReplayEmpty::UnknownVenue, State::NoTape),
         (
             TradeReplayEmpty::NoEndpoint {
                 brand: moon_core::venue::Brand::Bybit,

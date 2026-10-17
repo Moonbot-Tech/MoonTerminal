@@ -3,6 +3,28 @@ use super::*;
 use moon_core::db::tuner::ticks::tail::{floor_ms, required_with_floor};
 use moon_core::market::trade_replay::ReplayWindow;
 
+/// Directory absence must select cores for a recent EX-XX row and stop after core retention.
+#[test]
+fn unlisted_rows_use_cores_only_within_retention() {
+    let now = 100 * 86_400_000;
+    for (age, expected) in [
+        (3_600_000, RowPath::Cores),
+        (49 * 3_600_000, RowPath::TooOldForCores),
+    ] {
+        let source = fetchable(None, "XALPHA", now - age, now);
+        assert_eq!(
+            row_path(
+                (true, true),
+                source != Fetchable::NoRoute,
+                matches!(source, Fetchable::Rest | Fetchable::Archive),
+                now - age,
+                now
+            ),
+            expected
+        );
+    }
+}
+
 /// A trade `(exchange, market, open_ms, close_ms)` and its window.
 fn trade(market: &str, open_ms: i64, close_ms: i64) -> (String, String, ReplayWindow) {
     let window = moon_core::market::trade_replay::replay_window_ms(open_ms, close_ms, 30_000)
@@ -58,7 +80,7 @@ fn only_the_rows_the_disk_fully_holds_are_dropped() {
 fn with_the_defaults_recent_rows_go_to_the_cores_and_never_to_the_venue() {
     let now = 1_790_000_000_000;
     let recent = now - 3_600_000;
-    let old = now - CORE_HORIZON_MS - 1;
+    let old = now - CORE_ARCHIVE_RETENTION_MS - 1;
     let defaults = (false, true);
     assert_eq!(
         row_path(defaults, false, false, recent, now),
@@ -72,7 +94,7 @@ fn with_the_defaults_recent_rows_go_to_the_cores_and_never_to_the_venue() {
     );
     // The horizon's own edge still counts as recent.
     assert_eq!(
-        row_path(defaults, false, false, now - CORE_HORIZON_MS, now),
+        row_path(defaults, false, false, now - CORE_ARCHIVE_RETENTION_MS, now),
         RowPath::Cores
     );
 }
@@ -88,7 +110,7 @@ fn with_both_switches_the_venue_takes_what_it_serves() {
     assert_eq!(row_path(both, false, false, recent, now), RowPath::Cores);
     assert_eq!(row_path(both, true, false, recent, now), RowPath::Cores);
     assert_eq!(
-        row_path(both, true, false, now - CORE_HORIZON_MS - 1, now),
+        row_path(both, true, false, now - CORE_ARCHIVE_RETENTION_MS - 1, now),
         RowPath::TooOldForCores
     );
 }

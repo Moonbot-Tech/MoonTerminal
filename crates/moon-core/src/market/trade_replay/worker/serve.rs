@@ -252,6 +252,30 @@ pub(super) fn retain_baseline(
     }
 }
 
+/// Reuse settled answers unchanged and queue unfinished ticks for either venue path.
+fn remembered_answer(
+    remembered: Option<Remembered>,
+    venue: Option<crate::venue::Venue>,
+    key: &OutcomeKey,
+) -> Option<Served> {
+    Some(match remembered? {
+        Remembered::Ready {
+            mut series,
+            ticks_settled,
+        } => {
+            let tick_stage = (!ticks_settled).then(|| stage_and_stamp(venue, key, &mut series));
+            Served {
+                outcome: TradeReplayOutcome::Ready(series),
+                tick_stage,
+            }
+        }
+        Remembered::Empty => Served {
+            outcome: TradeReplayOutcome::Empty(TradeReplayEmpty::NoDataInWindow),
+            tick_stage: None,
+        },
+    })
+}
+
 /// Answer one request: memory cache, then SQLite cache, then the network.
 ///
 /// The order is fixed and each step earns its place. The memory cache answers a reopen with no
@@ -277,13 +301,34 @@ pub(super) fn serve(
     cache: &Mutex<VecDeque<(OutcomeKey, Remembered)>>,
     request: &TradeReplayRequest,
 ) -> Served {
-    // A venue the exchange directory does not know has no public route to ask. Its core's own
-    // prints answer it when the core still holds them (`core_first`, which replaces this answer);
-    // this is the honest empty when it does not.
+    // Unlisted exchanges still read captured tiles and the core without a public route.
     let Some(venue) = request.address.venue else {
+        let key = OutcomeKey {
+            venue: None,
+            exchange: request.address.exchange_key.clone(),
+            host: "",
+            market: request.market.clone(),
+            from_ms: request.window.from_ms,
+            to_ms: request.window.to_ms,
+            margin_ms: request.window.margin_ms,
+            long_position_ms: request.window.long_position_ms,
+        };
+        let remembered = match request.intent.reuses_answers() {
+            true => remember_lookup(cache, &key, request.identity),
+            false => None,
+        };
+        if let Some(served) = remembered_answer(remembered, None, &key) {
+            return served;
+        }
+        let mut series = compose(
+            request,
+            None,
+            read_cached_bars(request.address.cache.as_ref(), request).unwrap_or_default(),
+        );
+        let stage = stage_and_stamp(None, &key, &mut series);
         return Served {
-            outcome: TradeReplayOutcome::Empty(TradeReplayEmpty::UnknownVenue),
-            tick_stage: None,
+            outcome: TradeReplayOutcome::Ready(series),
+            tick_stage: Some(stage),
         };
     };
     let Some(route) = kline_route(venue) else {
@@ -293,7 +338,8 @@ pub(super) fn serve(
         };
     };
     let key = OutcomeKey {
-        venue,
+        venue: Some(venue),
+        exchange: request.address.exchange_key.clone(),
         host: route.host(),
         market: request.market.clone(),
         from_ms: request.window.from_ms,
@@ -308,41 +354,14 @@ pub(super) fn serve(
         true => remember_lookup(cache, &key, request.identity),
         false => None,
     };
-    match remembered {
-        Some(Remembered::Ready {
-            series,
-            ticks_settled: true,
-        }) => {
-            // Sent exactly as stored: its own fields already carry the final answer, so no
-            // stage is re-decided and none is queued.
-            return Served {
-                outcome: TradeReplayOutcome::Ready(series),
-                tick_stage: None,
-            };
-        }
-        Some(Remembered::Ready {
-            mut series,
-            ticks_settled: false,
-        }) => {
-            let tick_stage = Some(stage_and_stamp(venue, &key, &mut series));
-            return Served {
-                outcome: TradeReplayOutcome::Ready(series),
-                tick_stage,
-            };
-        }
-        Some(Remembered::Empty) => {
-            return Served {
-                outcome: TradeReplayOutcome::Empty(TradeReplayEmpty::NoDataInWindow),
-                tick_stage: None,
-            };
-        }
-        None => {}
+    if let Some(served) = remembered_answer(remembered, Some(venue), &key) {
+        return served;
     }
 
     // The SQLite cache is read first and unconditionally: it costs no request and is not gated.
     if let Some(rows) = read_cached_bars(request.address.cache.as_ref(), request) {
         let mut series = compose(request, Some(venue), rows);
-        let tick_stage = stage_and_stamp(venue, &key, &mut series);
+        let tick_stage = stage_and_stamp(Some(venue), &key, &mut series);
         // Never settled here: a stage is always queued (`tick_stage_for`), its `Pending` must be
         // re-decided — or answered — on the next open, and the stage's own answer is what is
         // remembered settled or not.
@@ -546,7 +565,7 @@ pub(super) fn serve(
         series.tick_status = TickStatus::Failed;
         None
     } else {
-        Some(stage_and_stamp(venue, &key, &mut series))
+        Some(stage_and_stamp(Some(venue), &key, &mut series))
     };
     if complete {
         // Settled exactly when no stage was queued — a cancelled window, whose `Failed` is
@@ -586,7 +605,7 @@ pub(super) fn serve(
 /// Returns:
 ///     The stage to queue.
 pub(super) fn stage_and_stamp(
-    venue: crate::venue::Venue,
+    venue: Option<crate::venue::Venue>,
     key: &OutcomeKey,
     series: &mut TradeReplaySeries,
 ) -> TickStage {
@@ -621,14 +640,14 @@ pub(super) fn stage_and_stamp(
 /// Returns:
 ///     The stage to queue.
 pub(super) fn tick_stage_for(
-    venue: crate::venue::Venue,
+    venue: Option<crate::venue::Venue>,
     key: &OutcomeKey,
     candles: &[ChartCandle],
 ) -> TickStage {
     TickStage {
         baseline: None,
-        route: trade_route(venue),
-        archive: venue_caps::archive_route(venue, &key.market),
+        route: venue.and_then(trade_route),
+        archive: venue.and_then(|venue| venue_caps::archive_route(venue, &key.market)),
         key: key.clone(),
         candles: candles.to_vec(),
     }

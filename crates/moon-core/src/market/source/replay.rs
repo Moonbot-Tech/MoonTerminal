@@ -96,6 +96,7 @@ impl MarketDataSource {
         window: ReplayWindow,
     ) -> Option<CoreReplayTicks> {
         self.core_ticks(address, market, window, CoreSpanRule::BracketPosition, None)
+            .0
     }
 
     /// Copy whatever a matching core's ring holds inside `[from_ms, to_ms]` — the capture a
@@ -123,6 +124,19 @@ impl MarketDataSource {
         to_ms: i64,
         archive_deadline: Option<std::time::Instant>,
     ) -> Option<CoreReplayTicks> {
+        self.capture_core_span_answer(address, market, from_ms, to_ms, archive_deadline)
+            .0
+    }
+
+    /// Return retained tape and whether an answered, non-overflowing donor missed the window.
+    pub(crate) fn capture_core_span_answer(
+        &self,
+        address: &ReplayAddress,
+        market: &str,
+        from_ms: i64,
+        to_ms: i64,
+        archive_deadline: Option<std::time::Instant>,
+    ) -> (Option<CoreReplayTicks>, bool) {
         let window = ReplayWindow {
             from_ms,
             to_ms,
@@ -203,7 +217,7 @@ impl MarketDataSource {
         (donors, inner.archive.clone())
     }
 
-    /// Copy the best donor span and retain whether its archive wait actually answered.
+    /// Copy the best donor span and separately retain clean, answered window misses.
     fn core_ticks(
         &self,
         address: &ReplayAddress,
@@ -213,9 +227,10 @@ impl MarketDataSource {
         // One deadline for every donor, and the caller's for every span: a venue with a dozen
         // cores, or a long position's two ends, must not wait a dozen times.
         deadline: Option<std::time::Instant>,
-    ) -> Option<CoreReplayTicks> {
+    ) -> (Option<CoreReplayTicks>, bool) {
         let (donors, archive) = self.venue_donors(address);
         let mut best: Option<CoreReplayTicks> = None;
+        let mut answered_miss = false;
         for (provider, slot) in donors {
             let Some((client, epoch)) = slot.get_with_epoch() else {
                 continue;
@@ -291,7 +306,9 @@ impl MarketDataSource {
                         side: if row.is_buy() { Side::Buy } else { Side::Sell },
                     })
                 });
-                capture.finish(archive_answered)
+                let (ticks, missed) = capture.finish_answer(archive_answered);
+                answered_miss |= missed;
+                ticks
             });
             let Some(mut candidate) = captured else {
                 continue;
@@ -309,7 +326,7 @@ impl MarketDataSource {
                 break;
             }
         }
-        best
+        (best, answered_miss)
     }
 }
 
@@ -433,6 +450,14 @@ impl ReplayCapture {
         } else {
             self.ticks.push(tick);
         }
+    }
+
+    /// Preserve answered misses separately from overflow and unanswered archive reads.
+    fn finish_answer(self, archive_answered: bool) -> (Option<CoreReplayTicks>, bool) {
+        let clean = archive_answered && !self.overflow;
+        let ticks = self.finish(archive_answered);
+        let missed = clean && ticks.is_none();
+        (ticks, missed)
     }
 
     /// Freeze retained coverage, accepting quiet captures only after an answered archive.

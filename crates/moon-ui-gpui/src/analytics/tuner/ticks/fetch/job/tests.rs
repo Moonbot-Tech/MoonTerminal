@@ -17,12 +17,20 @@ use moon_core::market::trade_replay::TickStatus;
 fn after_station_only_reachable_missing_spans_are_queued() {
     use moon_core::venue::{Brand, MarketKind, Venue};
     let now = 100 * 86_400_000;
+    assert!(super::reachable_after_station(
+        None,
+        "XALPHA",
+        now - 50 * 3_600_000,
+        now - 3_600_000,
+        now - 3_600_000,
+        now
+    ));
     let core_only = Venue {
         brand: Brand::Bybit,
         kind: MarketKind::Spot,
     };
     assert!(super::reachable_after_station(
-        core_only,
+        Some(core_only),
         "XALPHAUSDT",
         now - 3_600_000,
         now - 3_500_000,
@@ -30,7 +38,7 @@ fn after_station_only_reachable_missing_spans_are_queued() {
         now
     ));
     assert!(!super::reachable_after_station(
-        core_only,
+        Some(core_only),
         "XALPHAUSDT",
         now - 3 * 86_400_000,
         now - 3 * 86_400_000 + 1_000,
@@ -42,7 +50,7 @@ fn after_station_only_reachable_missing_spans_are_queued() {
         kind: MarketKind::Spot,
     };
     assert!(super::reachable_after_station(
-        venue,
+        Some(venue),
         "XALPHAUSDT",
         now - 3 * 86_400_000,
         now - 3 * 86_400_000 + 1_000,

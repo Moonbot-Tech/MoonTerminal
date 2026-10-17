@@ -22,6 +22,7 @@
 use std::path::{Path, PathBuf};
 
 mod figures;
+pub mod unlisted;
 
 use crate::market::candles::{ChartCandle, resample};
 

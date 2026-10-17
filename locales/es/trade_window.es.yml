@@ -89,7 +89,6 @@ trade_window.empty.no_data: "El mercado no tiene datos para este período."
 
 trade_window.empty.no_endpoint: "%{brand} no tiene una fuente pública de historial que esta versión pueda usar."
 
-trade_window.empty.unknown_venue: "Esta versión no reconoce el exchange del core."
 
 trade_window.empty.core_offline: "El core de la operación no está conectado, así que no se puede identificar su exchange ni su mercado."
 

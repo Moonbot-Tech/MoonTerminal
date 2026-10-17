@@ -89,7 +89,6 @@ trade_window.empty.no_data: "O mercado não tem dados neste período."
 
 trade_window.empty.no_endpoint: "%{brand} não tem fonte pública de histórico que esta build saiba usar."
 
-trade_window.empty.unknown_venue: "Esta build não reconhece a corretora do núcleo."
 
 trade_window.empty.core_offline: "O núcleo da operação não está conectado, então a corretora e o mercado não podem ser identificados."
 

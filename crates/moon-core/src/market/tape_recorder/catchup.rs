@@ -543,39 +543,43 @@ pub(super) fn plan_with(
         let Some((from, to)) = focus.hull() else {
             continue;
         };
-        // Core archives supplement only post-close tails and cannot recover older stretches.
-        let core_tail = tail_only
+        // Unlisted exchanges recover every retained gap; known venues supplement tails only.
+        let core_tail = (trade.venue.is_none() || tail_only)
             && trade.core.is_some()
-            && missing.spans().iter().all(|&(from, _)| {
-                from >= now_ms.saturating_sub(executor::CORE_ARCHIVE_RETENTION_MS)
-            });
+            && if trade.venue.is_none() {
+                missing.spans().iter().any(|&(_, to)| {
+                    to >= now_ms.saturating_sub(crate::market::source::CORE_ARCHIVE_RETENTION_MS)
+                })
+            } else {
+                missing.spans().iter().all(|&(from, _)| {
+                    from >= now_ms.saturating_sub(crate::market::source::CORE_ARCHIVE_RETENTION_MS)
+                })
+            };
         if core_tail
-            && trade.venue.is_none_or(|venue| {
-                matches!(
-                    venue_caps::fetchable_with(
-                        venue,
-                        &trade.market,
-                        missing.hull().expect("nonempty missing tail").0,
-                        now_ms,
-                        archives,
-                    ),
-                    Fetchable::NoRoute | Fetchable::OutOfRetention
-                )
-            })
+            && matches!(
+                venue_caps::fetchable_with(
+                    trade.venue,
+                    &trade.market,
+                    missing.hull().expect("nonempty missing tail").0,
+                    now_ms,
+                    archives,
+                ),
+                Fetchable::NoRoute | Fetchable::OutOfRetention
+            )
         {
             result.jobs.push(CatchupJob {
                 trade: trade.clone(),
                 missing,
                 expires_at_ms: trade
                     .close_ms
-                    .saturating_add(executor::CORE_ARCHIVE_RETENTION_MS),
+                    .saturating_add(crate::market::source::CORE_ARCHIVE_RETENTION_MS),
                 source: Source::Core,
                 tail_start_ms,
             });
             continue;
         }
         let Some(venue) = trade.venue else {
-            // The core source serves tails only; latch ordinary gaps without tail counters.
+            // No retained core coverage remains; do not retry expired gaps.
             result.permanent_ids.push(trade.id);
             if tail_only {
                 result.no_route += 1;
@@ -587,7 +591,7 @@ pub(super) fn plan_with(
         let archive = archives
             .then(|| venue_caps::archive_route(venue, &trade.market))
             .flatten();
-        match venue_caps::fetchable_with(venue, &trade.market, from, now_ms, archives) {
+        match venue_caps::fetchable_with(Some(venue), &trade.market, from, now_ms, archives) {
             Fetchable::NoRoute => {
                 result.no_route += 1;
                 result.permanent_ids.push(trade.id);
@@ -598,7 +602,7 @@ pub(super) fn plan_with(
             }
             Fetchable::OutOfRetention => {
                 // A REST-only window crossing the edge may still recover its reachable exit.
-                if venue_caps::fetchable_with(venue, &trade.market, to, now_ms, archives)
+                if venue_caps::fetchable_with(Some(venue), &trade.market, to, now_ms, archives)
                     != Fetchable::Rest
                 {
                     result.out_of_reach += 1;

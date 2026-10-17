@@ -89,7 +89,6 @@ trade_window.empty.no_data: "Thị trường không có dữ liệu cho kỳ nà
 
 trade_window.empty.no_endpoint: "%{brand} không có nguồn lịch sử công khai mà bản này dùng được."
 
-trade_window.empty.unknown_venue: "Bản này không nhận ra sàn của core."
 
 trade_window.empty.core_offline: "Core của giao dịch chưa kết nối, nên không xác định được sàn và thị trường."
 

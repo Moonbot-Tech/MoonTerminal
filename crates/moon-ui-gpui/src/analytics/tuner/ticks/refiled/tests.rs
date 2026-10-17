@@ -56,10 +56,10 @@ fn row(uid: i64, market: &str, tape: TapeStatus) -> DealRow {
         verdict: None,
         address: Some(Arc::new(RowAddress {
             core_uid: 1,
-            venue: Venue {
+            venue: Some(Venue {
                 brand: Brand::Bybit,
                 kind: MarketKind::Futures,
-            },
+            }),
             exchange_key: "2:00000000".into(),
             market: market.into(),
             btc_market: None,

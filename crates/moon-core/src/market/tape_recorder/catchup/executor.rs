@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use super::{CatchupJob, Source};
 use crate::feed::Tick;
+use crate::market::source::CORE_ARCHIVE_RETENTION_MS;
 use crate::market::trade_replay::venue_caps::{ArchiveRoute, RETENTION_SAFETY_MS, TradeRoute};
 use crate::market::trade_replay::worker::{
     TICK_BUDGET, TickAbandon, TickObserver, TickVerdict, paginate_ticks,
@@ -19,8 +20,6 @@ pub(crate) const ARCHIVE_BYTES_PER_PASS: u64 = 2 * 1024 * 1024 * 1024;
 /// Forty core asks at the five-second archive deadline bound a pass's core wait to 200 seconds.
 pub(super) const CORE_ASKS_PER_PASS: usize = 40;
 const DAY_MS: i64 = 86_400_000;
-/// Core chart archives refuse stretches older than their fixed 48-hour retention.
-pub(super) const CORE_ARCHIVE_RETENTION_MS: i64 = 48 * 3_600_000;
 
 /// One inclusive post-close stretch addressed to the trade's captured core exchange.
 pub(crate) struct CoreSpanAsk {
@@ -30,9 +29,9 @@ pub(crate) struct CoreSpanAsk {
     pub to_ms: i64,
 }
 
-/// Session-backed reader preserves exhaustive coverage, including quiet and partial spans.
+/// Session-backed tape and a separate flag for clean answered window misses.
 pub(crate) type CoreSpanFetch = std::sync::Arc<
-    dyn Fn(&CoreSpanAsk) -> Option<crate::market::source::CoreReplayTicks> + Send + Sync,
+    dyn Fn(&CoreSpanAsk) -> (Option<crate::market::source::CoreReplayTicks>, bool) + Send + Sync,
 >;
 
 /// Page transport seam, identical to the public REST fetcher's route and slice contract.
@@ -726,10 +725,13 @@ pub(super) fn run_pass_with_core(
                 }
             }
         }
-        let core_missing = job.missing.minus(&outcome.file).clip(&Coverage::one((
-            job.tail_start_ms.saturating_add(1),
-            i64::MAX,
-        )));
+        let mut core_missing = job.missing.minus(&outcome.file);
+        if job.trade.venue.is_some() {
+            core_missing = core_missing.clip(&Coverage::one((
+                job.tail_start_ms.saturating_add(1),
+                i64::MAX,
+            )));
+        }
         let mut core_filed = false;
         let mut core_unclean = false;
         if let Some(address) = &job.trade.core {
@@ -758,7 +760,7 @@ pub(super) fn run_pass_with_core(
                     continue;
                 }
                 attempted = true;
-                let answer = core_fetch.as_ref().and_then(|fetch| {
+                let (answer, answered_miss) = core_fetch.as_ref().map_or((None, false), |fetch| {
                     core_asks += 1;
                     fetch(&CoreSpanAsk {
                         address: address.clone(),
@@ -785,7 +787,7 @@ pub(super) fn run_pass_with_core(
                     clip(&mut part, &Coverage::one((from_ms, to_ms)));
                     core_filed |= !part.file.is_empty();
                     merge(&mut outcome, part);
-                } else {
+                } else if !(job.trade.venue.is_none() && answered_miss) {
                     stopped_cores.insert(job.trade.id.core);
                     failed_fetch = true;
                     merge(

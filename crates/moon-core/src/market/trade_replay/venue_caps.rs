@@ -541,19 +541,22 @@ pub enum Fetchable {
     OutOfRetention,
 }
 
-/// Choose REST first, then a daily archive within the bounded catch-up depth.
-pub fn fetchable(venue: Venue, market: &str, from_ms: i64, now_ms: i64) -> Fetchable {
+/// Choose REST first, then a daily archive within the bounded catch-up depth; unlisted venues have no route.
+pub fn fetchable(venue: Option<Venue>, market: &str, from_ms: i64, now_ms: i64) -> Fetchable {
     fetchable_with(venue, market, from_ms, now_ms, true)
 }
 
-/// Choose a reachable source while respecting the station's archive recovery switch.
+/// Choose a reachable source while respecting the archive switch; unlisted venues have no route.
 pub fn fetchable_with(
-    venue: Venue,
+    venue: Option<Venue>,
     market: &str,
     from_ms: i64,
     now_ms: i64,
     archives: bool,
 ) -> Fetchable {
+    let Some(venue) = venue else {
+        return Fetchable::NoRoute;
+    };
     let rest = trade_route(venue);
     let archive = archives.then(|| archive_route(venue, market)).flatten();
     if rest.is_some_and(|route| {
@@ -847,13 +850,18 @@ pub const fn tick_qty_is_contracts(venue: Venue) -> bool {
 ///
 /// Returns:
 ///     See [`TickValue`].
-pub fn tick_value(venue: Venue, terms: Option<(&str, f64)>) -> TickValue {
-    if !tick_qty_is_contracts(venue) {
+///     An unlisted venue needs terms: positive non-unit sizes select contract valuation,
+///     exactly unit size selects base quantity; invalid or missing terms leave it unknown.
+pub fn tick_value(venue: Option<Venue>, terms: Option<(&str, f64)>) -> TickValue {
+    if venue.is_some_and(|venue| !tick_qty_is_contracts(venue)) {
         return TickValue::Base;
     }
     let Some((quote, contract_size)) = terms else {
         return TickValue::Unknown;
     };
+    if venue.is_none() && contract_size == 1.0 {
+        return TickValue::Base;
+    }
     if !contract_size.is_finite() || contract_size <= 0.0 {
         return TickValue::Unknown;
     }

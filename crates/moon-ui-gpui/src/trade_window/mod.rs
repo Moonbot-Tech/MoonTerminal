@@ -883,9 +883,7 @@ impl TradeWindowView {
             .replay_address(self.core)
         {
             Ok(address) => address,
-            // A venue this build does not know is NOT refused here (LinKvo 15.10): it resolves
-            // with no venue, and the worker serves its core's own prints, or says the venue is
-            // unknown when the core holds none.
+            // Unlisted venues resolve too: captured tiles and the core provide their prints.
             Err(moon_core::market::ReplayAddressError::NotConnected) => {
                 self.state = TradeWindowState::Empty(TradeReplayEmpty::CoreNotConnected);
                 cx.notify();
@@ -902,25 +900,13 @@ impl TradeWindowView {
         self.framed_this_sequence = false;
         cx.notify();
 
-        // How this market's prints are valued for the band: the core's contract terms decide on
-        // a contract route, and nothing else is asked on any other.
+        // Share the core's contract valuation across every replay consumer.
         let tick_value = {
             let backend = self.backend.read(cx);
-            let terms = backend
+            backend
                 .session
                 .market_source()
-                .market_contract_terms(self.core, &self.market);
-            // A venue the directory does not know names no contract route: its prints are
-            // valued as base coins, as any non-contract venue's are.
-            address.venue.map_or(
-                moon_core::market::trade_replay::venue_caps::TickValue::Base,
-                |venue| {
-                    moon_core::market::trade_replay::venue_caps::tick_value(
-                        venue,
-                        terms.as_ref().map(|(quote, size)| (quote.as_str(), *size)),
-                    )
-                },
-            )
+                .replay_tick_value(self.core, &self.market)
         };
         let (tx, rx) = mpsc::channel();
         worker::request(TradeReplayRequest {

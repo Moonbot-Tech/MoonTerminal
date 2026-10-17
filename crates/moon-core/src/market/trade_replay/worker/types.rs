@@ -92,7 +92,7 @@ pub(super) enum Remembered {
 /// What identifies one replay question, so an identical one is recognised on reopen.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) struct OutcomeKey {
-    /// Venue the rows were fetched for.
+    /// Directory venue the rows were fetched for, absent for an unlisted exchange.
     ///
     /// The host ALONE will not do, and the reason is not hypothetical. One host commonly answers
     /// both of a brand's markets — `api.bybit.com`, `api.gateio.ws` and `api.bitget.com` each do —
@@ -101,7 +101,9 @@ pub(super) struct OutcomeKey {
     /// replay and a futures replay of the same pair over the same window are one entry, and
     /// whichever ran first serves the other its candles — or its authoritative `Empty`. The venue
     /// is what actually separates them, so it is what the key carries.
-    pub(super) venue: crate::venue::Venue,
+    pub(super) venue: Option<crate::venue::Venue>,
+    /// Stable exchange identity also separates exchanges absent from the directory.
+    pub(super) exchange: String,
     /// Host the rows came from, which is the rate-limit budget they were fetched under.
     pub(super) host: &'static str,
     /// Exchange-native market name.

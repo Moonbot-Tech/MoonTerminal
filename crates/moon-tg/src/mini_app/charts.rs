@@ -336,18 +336,20 @@ fn read_trade(
         && !tape.ticks.is_empty()
         && covers_trade(&tape.covered, open, close)
     {
-        let value = tick_value(source, trade.core_uid, &tape.market);
-        let slots = quote_slots(&tape.ticks, value);
-        let dto = trade_ok(
-            dto,
+        let value = source.replay_tick_value(trade.core_uid, &tape.market);
+        if let Some(answer) = stored_trade(
             &trade,
-            tape.ticks,
-            Some(slots),
-            "recorder",
-            exchange,
-            TickThinning::Raw,
-        );
-        return (dto, "recorder");
+            &exchange,
+            value,
+            Ok(tape_recorder::RecorderSpan {
+                ticks: tape.ticks,
+                settled: tape.settled,
+                covered: tape.covered,
+            }),
+            || None,
+        ) {
+            return answer;
+        }
     }
     let now = moon_core::util::now_unix_ms_i64();
     // The core is not connected yet (a restart) or its catalog is not loaded: both recover on
@@ -360,56 +362,35 @@ fn read_trade(
         settle_trade(&mut dto, ChartStateDto::CatchingUp, None, None, None, now);
         return (dto, "no_market");
     };
-    let tick_value = tick_value(source, trade.core_uid, &market);
+    let tick_value = source.replay_tick_value(trade.core_uid, &market);
     let archive_lag = address
         .venue
         .and_then(|venue| trade_replay::venue_caps::archive_route(venue, &market))
         .map(|route| route.publish_lag_ms());
-    if !recorder_busy
-        && let Ok(span) = tape_recorder::market_tape(
+    let recorder = if !recorder_busy {
+        tape_recorder::market_tape(
             &address.exchange_key,
             &market,
             from,
             to,
             remaining(deadline, Duration::from_millis(1000)),
         )
-        && !span.ticks.is_empty()
-        && covers_trade(&span.covered, open, close)
-    {
-        let slots = quote_slots(&span.ticks, tick_value);
-        let dto = trade_ok(
-            dto,
-            &trade,
-            span.ticks,
-            Some(slots),
-            "recorder",
-            exchange,
-            TickThinning::Raw,
-        );
-        return (dto, "recorder");
-    }
-    let (reply, answer) = mpsc::channel();
-    trade_replay::query_held(trade_replay::TickQuery {
-        exchange_key: address.exchange_key.clone(),
-        market: market.clone(),
-        spans: Coverage::one((from, to)),
-        reply,
-    });
-    if let Ok(held) = answer.recv_timeout(remaining(deadline, Duration::from_millis(500)))
-        && !held.ticks.is_empty()
-        && held.covered.contains((open, close))
-    {
-        let slots = quote_slots(&held.ticks, tick_value);
-        let dto = trade_ok(
-            dto,
-            &trade,
-            held.ticks,
-            Some(slots),
-            "terminal",
-            exchange,
-            TickThinning::Raw,
-        );
-        return (dto, "terminal");
+    } else {
+        Err(tape_recorder::TapeMiss::Busy)
+    };
+    if let Some(answer) = stored_trade(&trade, &exchange, tick_value, recorder, || {
+        let (reply, answer) = mpsc::channel();
+        trade_replay::query_held(trade_replay::TickQuery {
+            exchange_key: address.exchange_key.clone(),
+            market: market.clone(),
+            spans: Coverage::one((from, to)),
+            reply,
+        });
+        answer
+            .recv_timeout(remaining(deadline, Duration::from_millis(500)))
+            .ok()
+    }) {
+        return answer;
     }
     let key = job_key(&trade);
     let mut jobs = jobs.lock().unwrap_or_else(PoisonError::into_inner);
@@ -496,6 +477,42 @@ fn read_trade(
         dto.levels = Some(trade_levels(&trade));
     }
     (dto, "replay")
+}
+
+/// Read already-resolved stored tape in priority order without requiring a live catalog.
+pub(super) fn stored_trade(
+    trade: &MiniTrade,
+    exchange: &str,
+    value: TickValue,
+    recorder: Result<tape_recorder::RecorderSpan, tape_recorder::TapeMiss>,
+    terminal: impl FnOnce() -> Option<trade_replay::TickAnswer>,
+) -> Option<(TradeTicksDto, &'static str)> {
+    let dto = trade_base(trade);
+    let (ticks, stage) = if let Ok(span) = recorder
+        && !span.ticks.is_empty()
+        && covers_trade(&span.covered, dto.open_ms, dto.close_ms)
+    {
+        (span.ticks, "recorder")
+    } else {
+        let held = terminal()?;
+        if held.ticks.is_empty() || !held.covered.contains((dto.open_ms, dto.close_ms)) {
+            return None;
+        }
+        (held.ticks, "terminal")
+    };
+    let slots = quote_slots(&ticks, value);
+    Some((
+        trade_ok(
+            dto,
+            trade,
+            ticks,
+            Some(slots),
+            stage,
+            exchange.to_owned(),
+            TickThinning::Raw,
+        ),
+        stage,
+    ))
 }
 
 /// Turn a replay state into the bounded answer the sheet acts on.
@@ -604,22 +621,6 @@ pub(super) fn covers_trade(covered: &[(i64, i64)], open: i64, close: i64) -> boo
     covered
         .iter()
         .any(|&(from, to)| from <= open && to >= close)
-}
-
-/// Resolve the same quantity interpretation used by the replay worker.
-fn tick_value(source: &MarketDataSource, core: u64, market: &str) -> TickValue {
-    let terms = source.market_contract_terms(core, market);
-    source
-        .replay_address(core)
-        .ok()
-        .and_then(|address| address.venue)
-        .map(|venue| {
-            trade_replay::venue_caps::tick_value(
-                venue,
-                terms.as_ref().map(|(quote, size)| (quote.as_str(), *size)),
-            )
-        })
-        .unwrap_or(TickValue::Unknown)
 }
 
 /// Sum raw quote turnover before thinning, using replay's contract terms and bucket clock.

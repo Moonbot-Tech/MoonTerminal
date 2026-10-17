@@ -90,10 +90,10 @@ fn an_unservable_row_is_not_offered_or_counted_again() {
         verdict: None,
         address: Some(Arc::new(RowAddress {
             core_uid: 1,
-            venue: Venue {
+            venue: Some(Venue {
                 brand: Brand::Bybit,
                 kind: MarketKind::Spot,
-            },
+            }),
             exchange_key: "synthetic".into(),
             market: "XALPHAUSDT".into(),
             btc_market: None,
@@ -217,10 +217,10 @@ fn queued_unservable(report_uid: i64) -> super::super::job::QueuedRow {
         verdict: None,
         address: Some(Arc::new(RowAddress {
             core_uid: 1,
-            venue: Venue {
+            venue: Some(Venue {
                 brand: Brand::Bybit,
                 kind: MarketKind::Spot,
-            },
+            }),
             exchange_key: "synthetic".into(),
             market: "XALPHAUSDT".into(),
             btc_market: None,

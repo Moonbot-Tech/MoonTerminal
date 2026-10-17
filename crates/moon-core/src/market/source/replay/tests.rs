@@ -1,5 +1,37 @@
 use super::*;
 
+/// An answered ring outside the ask is a clean miss; overflow and unanswered reads must retry.
+#[test]
+fn answered_window_miss_is_distinct_from_unavailable_capture() {
+    let window = ReplayWindow {
+        from_ms: 100_000,
+        to_ms: 110_000,
+        open_ms: 100_000,
+        close_ms: 110_000,
+        margin_ms: 0,
+        long_position_ms: 300_000,
+        over_budget: false,
+    };
+    for (answered, budget, stamps, expected) in [
+        (true, 2, vec![1_000, 2_000], true),
+        (false, 2, vec![1_000, 2_000], false),
+        (true, 1, vec![100_001, 100_002], false),
+    ] {
+        let mut capture = ReplayCapture::new(window, budget, CoreSpanRule::Overlap);
+        for time_ms in stamps {
+            capture.push(Tick {
+                time_ms: f64::from(time_ms),
+                price: 1.0,
+                qty: 1.0,
+                side: Side::Buy,
+            });
+        }
+        let (ticks, missed) = capture.finish_answer(answered);
+        assert!(ticks.is_none());
+        assert_eq!(missed, expected);
+    }
+}
+
 /// Empty tail captures need an answered, bracketing ring; replay and partial rings still refuse.
 #[test]
 fn quiet_tail_capture_requires_answered_bracketing_bounds() {

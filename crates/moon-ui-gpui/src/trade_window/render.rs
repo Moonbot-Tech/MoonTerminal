@@ -17,6 +17,17 @@ use super::{TradeWindowState, TradeWindowView, figures, strategy, traces};
 use crate::design;
 use crate::design::moon;
 
+/// Preserve the core's reported exchange caption when no directory brand exists.
+pub(super) fn no_route_brand(
+    brand: Option<moon_core::venue::Brand>,
+    venue: Option<&moon_core::venue::CoreVenue>,
+) -> String {
+    brand.map_or_else(
+        || crate::controls::venue_section_label(venue),
+        |brand| brand.display().to_string(),
+    )
+}
+
 /// The tick part of the window's caption: who answered, and how the prints were fitted into the
 /// budget — a reader zooming into the entry must know whether what they see there is every print.
 ///
@@ -335,12 +346,13 @@ impl TradeWindowView {
                     TickStatus::Disabled => {
                         t!("trade_window.source.candles_ticks_disabled", min = tf_min).to_string()
                     }
-                    // Bars come only from a known venue's route, so the brand is there; an empty
-                    // name is what a series without one would show.
                     TickStatus::NoRoute => t!(
                         "trade_window.source.candles_no_route",
                         min = tf_min,
-                        brand = brand.map_or("", |brand| brand.display())
+                        brand = no_route_brand(
+                            *brand,
+                            self.backend.read(cx).session.core_venues().get(&self.core)
+                        )
                     )
                     .to_string(),
                     TickStatus::ArchivePending { retry_at_ms } => t!(
@@ -458,9 +470,6 @@ impl TradeWindowView {
                         // The brand crosses from moon-core as an ENUM and becomes text here; the
                         // sentence around it is the dictionary's.
                         t!("trade_window.empty.no_endpoint", brand = brand.display()).to_string()
-                    }
-                    TradeReplayEmpty::UnknownVenue => {
-                        t!("trade_window.empty.unknown_venue").to_string()
                     }
                     TradeReplayEmpty::CoreNotConnected => {
                         t!("trade_window.empty.core_offline").to_string()

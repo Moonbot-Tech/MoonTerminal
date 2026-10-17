@@ -124,15 +124,12 @@ impl FetchResolver {
             .replay_address(deal.core_uid)
             .ok()
             .and_then(|address| {
-                // The tuner fetches from a venue's public REST: a venue the directory does not
-                // know stays unaddressed, as before its address resolved at all.
-                let venue = address.venue?;
                 let market = self
                     .source
                     .resolve_market(deal.core_uid, quote, &deal.coin)?;
                 Some(Arc::new(RowAddress {
                     core_uid: deal.core_uid,
-                    venue,
+                    venue: address.venue,
                     exchange_key: address.exchange_key,
                     market,
                     btc_market,
@@ -155,13 +152,9 @@ impl FetchResolver {
     ) -> Option<job::QueuedRow> {
         let window = model_window(&deal, margin_ms(), long_position_ms())?;
         let replay_address = self.source.replay_address(address.core_uid).ok()?;
-        let terms = self
+        let tick_value = self
             .source
-            .market_contract_terms(address.core_uid, &address.market);
-        let tick_value = moon_core::market::trade_replay::venue_caps::tick_value(
-            address.venue,
-            terms.as_ref().map(|(quote, size)| (quote.as_str(), *size)),
-        );
+            .replay_tick_value(address.core_uid, &address.market);
         Some(job::QueuedRow::new(
             deal,
             address,

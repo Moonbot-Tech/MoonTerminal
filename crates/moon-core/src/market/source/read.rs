@@ -380,6 +380,23 @@ impl MarketDataSource {
         })
     }
 
+    /// Resolve replay quantity valuation from the core's address and market contract terms.
+    pub fn replay_tick_value(
+        &self,
+        core: CoreId,
+        market: &str,
+    ) -> crate::market::trade_replay::venue_caps::TickValue {
+        let venue = self
+            .replay_address(core)
+            .ok()
+            .and_then(|address| address.venue);
+        let terms = self.market_contract_terms(core, market);
+        crate::market::trade_replay::venue_caps::tick_value(
+            venue,
+            terms.as_ref().map(|(quote, size)| (quote.as_str(), *size)),
+        )
+    }
+
     /// The ONE open kline cache, or `None` before the terminal supplied its path — for a reader
     /// that needs history bars without a replay address (the tuner's live deltas).
     pub fn kline_cache(&self) -> Option<crate::market::kline_cache::KlineCache> {

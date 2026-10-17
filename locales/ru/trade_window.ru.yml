@@ -89,7 +89,6 @@ trade_window.empty.no_data: "За это время по рынку нет да�
 
 trade_window.empty.no_endpoint: "У %{brand} нет публичного источника истории, который умеет терминал."
 
-trade_window.empty.unknown_venue: "Биржа ядра неизвестна этой версии терминала."
 
 trade_window.empty.core_offline: "Ядро сделки не подключено — биржу и рынок не определить."
 

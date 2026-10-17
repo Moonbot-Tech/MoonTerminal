@@ -23,7 +23,7 @@
 //!      rule (`inside_retention`: the exit inside the route's retention) go to the fetch job
 //!      ([`super::job::enqueue`]), whose tape stage asks the core's archive first and the venue
 //!      for the rest;
-//!    - with the core switch on, every other row that closed within [`CORE_HORIZON_MS`] — no
+//!    - with the core switch on, every other row that closed within [`CORE_ARCHIVE_RETENTION_MS`] — no
 //!      route (Bybit, Hyperliquid), past the venue's retention, or the venue switch off — is
 //!      filed straight from the core's archive ([`file_from_cores`]): no venue request at all;
 //! 4. a trade whose core is not connected yet, or whose catalog is not in, is kept and tried
@@ -52,6 +52,7 @@ use super::job::{self, QueuedRow};
 use super::{FetchResolver, strategy_field_defaults};
 use crate::Backend;
 use moon_core::db::tuner::ticks::{Deal, model_window};
+use moon_core::market::CORE_ARCHIVE_RETENTION_MS;
 use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
 use moon_core::market::trade_replay::worker::{self as replay_worker};
 use moon_core::market::trade_replay::{
@@ -61,12 +62,6 @@ use moon_core::market::trade_replay::{
 /// How far back the autoload looks, whatever the venue documents: the longest retention a
 /// route names is 90 days, and a month of rows is already thousands of walks.
 const HORIZON_MS: i64 = 30 * 24 * 3_600_000;
-
-/// How far back a row is worth the core's archive: it holds a few thousand prints per market,
-/// minutes deep on a hot coin and a day or somewhat more on the quietest measured (27.09,
-/// `STATION.md` §7.1), so two days covers what any archive can still hold. A market is one
-/// archive request of up to a few megabytes, so rows past this are not offered.
-pub(super) const CORE_HORIZON_MS: i64 = 48 * 3_600_000;
 
 /// How long the first pass waits after the tick first finds the switch on — for the cores to
 /// come up and report their catalogs, so the first pass resolves most rows at once.
@@ -493,7 +488,7 @@ enum RowPath {
 }
 
 /// The split of [`run_pass`]: the venue path where its switch is on and the venue serves the
-/// row; otherwise the cores within [`CORE_HORIZON_MS`] of the exit; otherwise the reason neither
+/// row; otherwise the cores within [`CORE_ARCHIVE_RETENTION_MS`] of the exit; otherwise the reason neither
 /// took it.
 ///
 /// Args:
@@ -513,7 +508,7 @@ fn row_path(
         return RowPath::Venue;
     }
     if cores_on {
-        return match close_ms >= now_ms - CORE_HORIZON_MS {
+        return match close_ms >= now_ms - CORE_ARCHIVE_RETENTION_MS {
             true => RowPath::Cores,
             false => RowPath::TooOldForCores,
         };
