@@ -101,3 +101,13 @@ fn unseen_counts_what_the_reader_missed() {
         "a cursor ahead of the counter must not underflow into a huge count"
     );
 }
+
+/// Folding a record onto one line keeps the old bytes exactly and borrows when there is no break.
+#[test]
+fn one_line_matches_the_old_replace_and_borrows_without_breaks() {
+    use std::borrow::Cow;
+    for msg in ["plain", "a\nb", "a\r\nb", "\r", "", "tail\n"] {
+        assert_eq!(one_line(Cow::Borrowed(msg)), msg.replace(['\n', '\r'], " "));
+    }
+    assert!(matches!(one_line(Cow::Borrowed("plain")), Cow::Borrowed(_)));
+}

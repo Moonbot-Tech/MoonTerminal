@@ -38,3 +38,17 @@ fn only_the_switch_restarts_the_tunnel() {
         Change::Restart
     );
 }
+
+/// The owner loop polls fast only while the Mini App is on, serving, or due a retry.
+#[test]
+fn idle_interval_is_fast_only_while_something_can_happen() {
+    use std::time::Duration;
+    let fast = Duration::from_millis(50);
+    assert_eq!(super::idle_interval(true, false, false), fast);
+    assert_eq!(super::idle_interval(false, true, false), fast);
+    assert_eq!(super::idle_interval(false, false, true), fast);
+    assert_eq!(
+        super::idle_interval(false, false, false),
+        Duration::from_millis(250)
+    );
+}

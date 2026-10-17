@@ -13,6 +13,7 @@ fn store_in(dir: &Path) -> NotifyStore {
         path: dir.join("telegram_notifications.json"),
         file: NotifyFile::default(),
         allowed: None,
+        wake: Default::default(),
     }
 }
 

@@ -71,6 +71,8 @@ pub struct TelegramService {
     mini_config: Arc<Mutex<TelegramConfig>>,
     labels: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
     notifications: Option<Arc<Mutex<NotifyStore>>>,
+    /// The sender's wake, rung on stop so it leaves its wait at once.
+    notify_wake: Option<Arc<notify::NotifyWake>>,
 }
 impl TelegramService {
     /// Start background transport only for a non-empty saved token.
@@ -174,6 +176,9 @@ impl TelegramService {
             },
             None => None,
         };
+        let notify_wake = notifications
+            .as_ref()
+            .map(|store| Arc::clone(&notify::lock_store(store).wake));
         Some(Self {
             alive: Some(alive),
             joins,
@@ -182,6 +187,7 @@ impl TelegramService {
             mini_config,
             labels,
             notifications,
+            notify_wake,
         })
     }
 
@@ -237,6 +243,9 @@ impl TelegramService {
     /// Signal shutdown immediately; the application can join on a background retirement thread.
     pub fn request_stop(&mut self) {
         self.alive = None;
+        if let Some(wake) = &self.notify_wake {
+            wake.bump();
+        }
     }
 }
 impl Drop for TelegramService {
