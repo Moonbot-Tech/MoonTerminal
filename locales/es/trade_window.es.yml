@@ -1,4 +1,7 @@
 _version: 1
+trade_window.focus: "Ver operación"
+trade_window.focus.tip: "Volver a la operación seleccionada y restablecer el zoom de tiempo y precio"
+trade_window.scale.tip: "Ajuste del rango vertical completo como porcentaje del precio de referencia. La etiqueta del gráfico sigue el zoom manual; cada una de las 10 franjas es una décima parte del rango."
 
 # Окно детали сделки: открывается по двойному клику на закрытой сделке в «Отчёте».
 # Свой файл, а не блок в report.yml: это отдельная область интерфейса (см. README).

@@ -85,11 +85,12 @@ pub(crate) fn step_scale(current: Option<f32>, scale_up: bool) -> Option<f32> {
 ///
 /// Tab and AddToChart-stack variants differ only in IDs and the `on_pick` destination; every
 /// caller passes the same `MoonSize::Xs` trigger. Appearance, tooltip, magnifier, and the
-/// localized short Auto marker are shared.
+/// localized short Auto marker are shared; the tooltip names the caller's scale semantics.
 fn scale_dropdown(
     _cx: &App,
     scale: Option<f32>,
     tip_id: &'static str,
+    tip_key: &'static str,
     dropdown_id: &'static str,
     item_key_prefix: &'static str,
     trigger_size: MoonButtonSize,
@@ -117,8 +118,8 @@ fn scale_dropdown(
     };
     div()
         .id(tip_id)
-        .tooltip(|_window, cx| {
-            cx.new(|_| MoonTooltipView::new(t!("toolbar.scale").to_string()))
+        .tooltip(move |_window, cx| {
+            cx.new(|_| MoonTooltipView::new(t!(tip_key).to_string()))
                 .into()
         })
         .child(
@@ -158,6 +159,7 @@ pub(crate) fn scale_dropdown_for_tabs(
         cx,
         scale,
         "tabs-scale-tip",
+        "toolbar.scale",
         "tabs-scale-dropdown",
         "scale-tab",
         MoonSize::Xs.into(),
@@ -196,6 +198,7 @@ pub(crate) fn scale_dropdown_for_trade_window(
         cx,
         scale,
         "trade-window-scale-tip",
+        "trade_window.scale.tip",
         "trade-window-scale-dropdown",
         "scale-trade",
         MoonSize::Xs.into(),
@@ -221,6 +224,7 @@ pub(crate) fn scale_dropdown_for_add_stack(
         cx,
         scale,
         "detached-stack-scale-tip",
+        "toolbar.scale",
         "detached-stack-scale-dropdown",
         "scale-stack",
         MoonSize::Xs.into(),

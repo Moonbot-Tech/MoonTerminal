@@ -270,12 +270,10 @@ impl ChartDataState {
                 bright_closed_trades: true,
                 ..self.chart_graphics
             });
-            // The auto-Y fit goes with them. A fit stretched to reach a live order's price would
-            // squash the very candles the window exists to show — so a frozen viewer's band is
-            // what its OWNER asks for: the trade's own lines while the window is fitted to the
-            // trade, nothing otherwise.
+            // Only live orders use this cache. Market sync reads the replay owner's settlement
+            // band directly, without waiting for a session-order refresh to fit the deal.
             let order_price = match frozen {
-                true => self.frozen_fit_range,
+                true => None,
                 false => session
                     .store()
                     .core(pane.core)

@@ -685,6 +685,26 @@ impl TradeWindowView {
         });
     }
 
+    /// Restore the selected trade after navigation, resetting this view's X and Y zoom only.
+    /// The remembered scale and framing preference for later windows remain the user's choice.
+    fn focus_trade(&mut self, cx: &mut Context<Self>) {
+        let (entry, exit) = utc_stamps_ms(
+            &self.record,
+            &self
+                .backend
+                .read(cx)
+                .report_axis(crate::chartdx::axes::display_zone()),
+        );
+        let Some((start, end)) = frame::fit_frame((entry, exit), std::iter::empty()) else {
+            return;
+        };
+        self.panel.update(cx, |panel, pcx| {
+            panel.force_scale(None, pcx);
+            panel.show_time_range(start, end, frame::FIT_PAD);
+        });
+        cx.notify();
+    }
+
     /// Close this window on a bare Escape.
     ///
     /// A SECOND way out, never the first: the close button in the header is the affordance, and a

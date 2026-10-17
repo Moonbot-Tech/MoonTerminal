@@ -1,4 +1,7 @@
 _version: 1
+trade_window.focus: "İşlemi göster"
+trade_window.focus.tip: "Seçili işleme dön ve zaman ile fiyat yakınlaştırmasını sıfırla"
+trade_window.scale.tip: "Tam dikey fiyat aralığı için referans fiyatın yüzdesi olarak ön ayar. Grafik rozeti elle yakınlaştırmayı izler; 10 ızgara bandının her biri aralığın onda biridir."
 
 # Окно детали сделки: открывается по двойному клику на закрытой сделке в «Отчёте».
 # Свой файл, а не блок в report.yml: это отдельная область интерфейса (см. README).
