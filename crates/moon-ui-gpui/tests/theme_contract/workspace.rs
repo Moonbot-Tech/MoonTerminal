@@ -736,8 +736,7 @@ fn every_workspace_scoped_surface_uses_the_effective_authority() {
     assert!(
         tuner_save.contains(
             "let authority = self.capture_save_authority(&targets, SaveProducer::Selection, cx);"
-        )
-            && tuner_save.matches("save_authority_is_current(").count() >= 4
+        ) && tuner_save.matches("save_authority_is_current(").count() >= 4
             && tuner_save.contains("save_authority_matches("),
         "Analytics tuner must retain exact authority through preview, confirmation, and async Save dispatch"
     );

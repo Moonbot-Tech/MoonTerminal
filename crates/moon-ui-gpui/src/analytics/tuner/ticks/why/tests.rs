@@ -360,10 +360,10 @@ fn missing_tape_offers_fetch_only_with_a_resolved_source() {
     );
     row.address = Some(Arc::new(RowAddress {
         core_uid: 1,
-        venue: moon_core::venue::Venue {
+        venue: Some(moon_core::venue::Venue {
             brand: moon_core::venue::Brand::Bybit,
             kind: moon_core::venue::MarketKind::Spot,
-        },
+        }),
         exchange_key: "synthetic".into(),
         market: "XALPHAUSDT".into(),
         btc_market: None,

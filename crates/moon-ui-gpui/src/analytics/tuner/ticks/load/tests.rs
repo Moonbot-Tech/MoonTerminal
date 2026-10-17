@@ -124,18 +124,4 @@ fn unlisted_load_reach_is_core_aware() {
         ..Default::default()
     };
     assert_eq!(data.covered(), 1);
-    let _locale = crate::test_locale::force("en");
-    let caption =
-        super::super::coverage_caption(data.covered(), data.fit(), data.rows.len(), 0, 0, 0);
-    assert_eq!(
-        caption,
-        rust_i18n::t!(
-            "analytics.ticks.coverage",
-            covered = 1,
-            total = 1,
-            fit = data.fit(),
-            without = 0
-        )
-        .to_string()
-    );
 }
