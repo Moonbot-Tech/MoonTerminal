@@ -50,7 +50,7 @@ use strategy_mask::*;
 /// sums items for report reads.
 mod sums;
 pub(in crate::db) use sums::*;
-pub use sums::{StrategyPurgeRows, query_totals, strategy_purge_rows};
+pub use sums::{StrategyPurgeRows, query_report_wins, query_totals, strategy_purge_rows};
 
 /// passes items for report reads.
 mod passes;

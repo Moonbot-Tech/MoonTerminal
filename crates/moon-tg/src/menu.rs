@@ -2,15 +2,14 @@
 //!
 //! A section is one message with an inline keyboard; pressing a button edits that message in place
 //! (the transport edits the message a callback came from), so the section turns into the report it
-//! asked for. Which buttons a section shows and in which rows is the bot's configured menu
-//! (`TelegramConfig::bot`); a button that opens a report carries the report's own callback, in the
-//! bot's default view.
+//! asked for. Period callbacks resolve the chat's stored view at press time, falling back to the
+//! bot's default when the chat has never selected a mode.
 
 use std::sync::mpsc::SyncSender;
 
 use crate::t;
 use chrono::NaiveDate;
-use moon_core::config::telegram_menu::{MenuItem, REPORT_SECTION, ReportView};
+use moon_core::config::telegram_menu::{MenuItem, REPORT_SECTION};
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::menu_action::MenuAction;
 use moon_core::telegram::report::{Period, ReportRequest};
@@ -40,12 +39,11 @@ pub(crate) fn run(
     reply: SyncSender<Response>,
 ) {
     let telegram = &host.config().telegram;
-    let view = telegram.bot.report_view;
     let navigation = navigation_keyboard(host.kind(), owner, telegram);
     let today = today(host);
     match action {
         MenuAction::Report => {
-            let rows = report_rows(view);
+            let rows = report_rows();
             let _ = reply.try_send(section(
                 t!("telegram.button_report").to_string(),
                 t!("telegram.menu.report_pick").to_string(),
@@ -65,7 +63,7 @@ pub(crate) fn run(
                 ),
                 None => t!("telegram.menu.custom_pick_from"),
             };
-            let rows = custom_rows(month, from, today, view);
+            let rows = custom_rows(month, from, today);
             let _ = reply.try_send(section(
                 t!("telegram.button_custom").to_string(),
                 hint.to_string(),
@@ -126,15 +124,15 @@ fn section(
     }
 }
 
-/// The Report section's buttons, in its fixed layout ([`REPORT_SECTION`]).
-fn report_rows(view: ReportView) -> Vec<Vec<InlineKeyboardButton>> {
+/// The fixed period buttons resolve the chat's current mode when pressed.
+fn report_rows() -> Vec<Vec<InlineKeyboardButton>> {
     let locale = rust_i18n::locale();
     REPORT_SECTION
         .iter()
         .map(|row| {
             row.iter()
                 .filter_map(|&item| {
-                    let data = report_callback(item, view)?;
+                    let data = report_callback(item)?;
                     Some(InlineKeyboardButton::callback(
                         button_text(item, locale.as_ref()),
                         data,
@@ -146,8 +144,8 @@ fn report_rows(view: ReportView) -> Vec<Vec<InlineKeyboardButton>> {
         .collect()
 }
 
-/// The callback of a Report section item: a report in the bot's view, or the custom screen.
-fn report_callback(item: MenuItem, view: ReportView) -> Option<String> {
+/// A period follows the chat's current mode; days and the custom screen have their own actions.
+fn report_callback(item: MenuItem) -> Option<String> {
     let period = match item {
         MenuItem::Today => Period::Today,
         MenuItem::Yesterday => Period::Yesterday,
@@ -165,7 +163,7 @@ fn report_callback(item: MenuItem, view: ReportView) -> Option<String> {
         }
         _ => return None,
     };
-    Some(ReportRequest::preset(period).in_view(view).callback())
+    Some(ReportRequest::preset(period).callback())
 }
 
 /// The custom-period screen: presets, the calendar of `month`, and the way back to the section.
@@ -173,7 +171,6 @@ fn custom_rows(
     month: Option<NaiveDate>,
     from: Option<NaiveDate>,
     today: NaiveDate,
-    view: ReportView,
 ) -> Vec<Vec<InlineKeyboardButton>> {
     use moon_core::telegram::report::Preset;
     let presets = Preset::ALL
@@ -191,7 +188,7 @@ fn custom_rows(
         })
         .collect();
     let mut rows = vec![presets];
-    rows.extend(calendar::rows(month, from, today, view));
+    rows.extend(calendar::rows(month, from, today));
     rows.push(vec![InlineKeyboardButton::callback(
         format!("\u{2b05}\u{fe0f} {}", t!("telegram.menu.back")),
         MenuAction::Report.callback(),

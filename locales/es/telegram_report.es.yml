@@ -1,5 +1,17 @@
 _version: 1
 telegram.report_title: "Informe"
+telegram.report_exchange_menu: "Bolsa"
+telegram.report_exchange_total: "Total de la bolsa"
+telegram.report_exchange_summary: "%{cores} núcleos · %{active} con operaciones · winrate %{winrate}% · orden media %{average}"
+telegram.report_by_groups: "Por grupos"
+telegram.report_best_cores: "Mejores núcleos"
+telegram.report_worst_cores: "Peores núcleos"
+telegram.report_hidden_prefix: "prefijo compartido oculto: %{prefix}"
+telegram.report_exchange_all: "Todos los núcleos · %{active} con operaciones"
+telegram.report_other_exchange: "Otra bolsa"
+telegram.report_back_exchange: "Volver a la bolsa"
+telegram.report_page_short: "Pág."
+telegram.report_rank_footer: "de peor a mejor · sin operaciones no se muestran"
 telegram.report_average_col: "Media %"
 telegram.report_volume_col: "Volumen"
 telegram.report_native_col: "En moneda"
@@ -8,7 +20,7 @@ telegram.help_hour: "Esta hora"
 
 telegram.help_daily: "Resultados diarios de este mes"
 
-telegram.help_intro: "Elige un período en el menú inferior. Pulsa de nuevo para actualizar. Selecciona un exchange para ver sus núcleos."
+telegram.help_intro: "Elige un período en el menú inferior. Pulsa de nuevo para actualizar el informe. Elige una bolsa para ver su resumen."
 
 telegram.help_commands: "Comandos y fechas propias"
 
@@ -29,26 +41,15 @@ telegram.report_calculation_extra: "El total incluye todo el grupo y período, t
 
 telegram.button_home: "Resumen"
 
-telegram.report_navigation_hint: "Elige el período en el menú inferior. Pulsa de nuevo para obtener un informe actualizado. Los botones del informe abren núcleos o días."
+telegram.report_navigation_hint: "Elige el período en el menú inferior. Pulsa de nuevo para actualizar. Los botones del informe cambian la vista o abren una bolsa."
 
 telegram.report_all_cores: "Todos los núcleos"
-
-telegram.report_by_days: "Por día"
-
-telegram.report_days_scope: "Días del exchange"
-
-telegram.report_cores_scope: "Núcleos del exchange"
-
-telegram.report_back: "Todos los exchanges"
 
 telegram.report_calculation: "Cómo se calcula"
 
 telegram.report_exchanges: "Exchanges"
 
-telegram.report_exchanges_menu: "Exchanges"
-
 telegram.report_exchanges_back: "Atrás"
-
 
 telegram.report_scope_unavailable: "Exchange no disponible"
 
@@ -70,13 +71,14 @@ telegram.button_daily: "Por día"
 telegram.report_days: "Días"
 
 telegram.report_cores: "Núcleos"
+telegram.report_groups: "Grupos"
+telegram.report_view_switch: "Vista: %{view}"
 
 telegram.report_profit: "Resultado"
 
 telegram.report_trades: "Operaciones"
 
 telegram.report_date: "Fecha"
-
 
 telegram.report_details: "Divisas y orden media"
 
@@ -90,7 +92,7 @@ telegram.report_next: "Siguiente"
 
 telegram.report_unvalued: "Sin valoración"
 
-telegram.report_empty: "No hay operaciones reales cerradas en este período."
+telegram.report_empty: "No hay operaciones cerradas en este período"
 
 telegram.report_scope: "Grupo seleccionado del historial · operaciones reales cerradas · tipos al operar. Historial local; los bots desconectados no se actualizan."
 telegram.report_scope_station: "Grupo seleccionado del historial de la estación · operaciones reales cerradas · tipos al operar. La estación copia el historial de los núcleos las 24 horas; los bots desconectados no se actualizan."

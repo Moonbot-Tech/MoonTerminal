@@ -1,5 +1,17 @@
 _version: 1
 telegram.report_title: "Отчёт"
+telegram.report_exchange_menu: "Биржа"
+telegram.report_exchange_total: "Итого по бирже"
+telegram.report_exchange_summary: "%{cores} ядер · со сделками %{active} · winrate %{winrate}% · ср. ордер %{average}"
+telegram.report_by_groups: "По группам"
+telegram.report_best_cores: "Лучшие ядра"
+telegram.report_worst_cores: "Худшие ядра"
+telegram.report_hidden_prefix: "общая часть имён скрыта: %{prefix}"
+telegram.report_exchange_all: "Все ядра биржи · %{active} со сделками"
+telegram.report_other_exchange: "Другая биржа"
+telegram.report_back_exchange: "Назад к бирже"
+telegram.report_page_short: "Стр."
+telegram.report_rank_footer: "от худшего к лучшему · ядра без сделок не показаны"
 telegram.report_average_col: "Средняя %"
 telegram.report_volume_col: "Объём"
 telegram.report_native_col: "В валюте"
@@ -8,7 +20,7 @@ telegram.help_hour: "Этот час"
 
 telegram.help_daily: "По дням за этот месяц"
 
-telegram.help_intro: "Выберите период в нижнем меню. Повторное нажатие обновляет отчёт. Нажмите биржу, чтобы открыть её ядра."
+telegram.help_intro: "Выберите период в нижнем меню. Повторное нажатие обновляет отчёт. Выберите биржу, чтобы открыть её сводку."
 
 telegram.help_commands: "Команды и свой период"
 
@@ -29,26 +41,15 @@ telegram.report_calculation_extra: "Итого охватывает всю вы�
 
 telegram.button_home: "Сводка"
 
-telegram.report_navigation_hint: "Период выбирайте в нижнем меню. Повторное нажатие запросит свежий отчёт. Под отчётом — переходы к ядрам и дням."
+telegram.report_navigation_hint: "Период выбирайте в нижнем меню. Повторное нажатие запросит свежий отчёт. Под отчётом — выбор вида и переход к бирже."
 
 telegram.report_all_cores: "Все ядра"
-
-telegram.report_by_days: "По дням"
-
-telegram.report_days_scope: "Дни биржи"
-
-telegram.report_cores_scope: "Ядра биржи"
-
-telegram.report_back: "Все биржи"
 
 telegram.report_calculation: "Как считается"
 
 telegram.report_exchanges: "Биржи"
 
-telegram.report_exchanges_menu: "Биржи"
-
 telegram.report_exchanges_back: "Назад"
-
 
 telegram.report_scope_unavailable: "Биржа недоступна"
 
@@ -70,13 +71,14 @@ telegram.button_daily: "По дням"
 telegram.report_days: "Дни"
 
 telegram.report_cores: "Ядра"
+telegram.report_groups: "Группы"
+telegram.report_view_switch: "Вид: %{view}"
 
 telegram.report_profit: "Результат"
 
 telegram.report_trades: "Сделки"
 
 telegram.report_date: "Дата"
-
 
 telegram.report_details: "Валюта и средний ордер"
 
@@ -90,7 +92,7 @@ telegram.report_next: "Далее"
 
 telegram.report_unvalued: "Нет оценки"
 
-telegram.report_empty: "За этот период закрытых реальных сделок нет."
+telegram.report_empty: "За этот период закрытых сделок нет"
 
 telegram.report_scope: "Выбранная группа в истории терминала · реальные закрытые сделки · курс на момент сделки. Данные локальной истории; выключенные боты не обновляются."
 telegram.report_scope_station: "Выбранная группа в истории станции · реальные закрытые сделки · курс на момент сделки. Станция копирует историю ядер круглосуточно; отключённые боты не обновляются."

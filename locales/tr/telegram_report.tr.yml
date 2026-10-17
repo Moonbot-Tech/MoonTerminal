@@ -1,5 +1,17 @@
 _version: 1
 telegram.report_title: "Rapor"
+telegram.report_exchange_menu: "Borsa"
+telegram.report_exchange_total: "Borsa toplamı"
+telegram.report_exchange_summary: "%{cores} çekirdek · %{active} işlem yapan · winrate %{winrate}% · ort. emir %{average}"
+telegram.report_by_groups: "Gruplara göre"
+telegram.report_best_cores: "En iyi çekirdekler"
+telegram.report_worst_cores: "En kötü çekirdekler"
+telegram.report_hidden_prefix: "ortak ad öneki gizlendi: %{prefix}"
+telegram.report_exchange_all: "Tüm borsa çekirdekleri · %{active} işlem yapan"
+telegram.report_other_exchange: "Diğer borsa"
+telegram.report_back_exchange: "Borsaya dön"
+telegram.report_page_short: "Sayfa"
+telegram.report_rank_footer: "en kötüden en iyiye · işlemsiz çekirdekler gizlendi"
 telegram.report_average_col: "Ort. %"
 telegram.report_volume_col: "Hacim"
 telegram.report_native_col: "Kote"
@@ -8,7 +20,7 @@ telegram.help_hour: "Bu saat"
 
 telegram.help_daily: "Bu ayın günlük sonuçları"
 
-telegram.help_intro: "Alt menüden bir dönem seçin. Taze rapor için yeniden dokunun. Çekirdeklerini açmak için bir borsa seçin."
+telegram.help_intro: "Alt menüden bir dönem seçin. Güncellemek için yeniden dokunun. Özetini açmak için bir borsa seçin."
 
 telegram.help_commands: "Komutlar ve özel tarihler"
 
@@ -29,23 +41,13 @@ telegram.report_calculation_extra: "Toplam, diğer sayfalar dahil seçilen grubu
 
 telegram.button_home: "Özet"
 
-telegram.report_navigation_hint: "Dönemi alt menüden seçin. Taze rapor için yeniden dokunun. Raporun altındaki düğmeler çekirdekleri veya günleri açar."
+telegram.report_navigation_hint: "Alt menüden dönemi seçin. Güncellemek için yeniden dokunun. Raporun altındaki düğmeler görünümü seçer veya bir borsa açar."
 
 telegram.report_all_cores: "Tüm çekirdekler"
-
-telegram.report_by_days: "Güne göre"
-
-telegram.report_days_scope: "Borsanın günleri"
-
-telegram.report_cores_scope: "Borsanın çekirdekleri"
-
-telegram.report_back: "Tüm borsalar"
 
 telegram.report_calculation: "Hesap ayrıntısı"
 
 telegram.report_exchanges: "Borsalar"
-
-telegram.report_exchanges_menu: "Borsalar"
 
 telegram.report_exchanges_back: "Geri"
 
@@ -69,6 +71,8 @@ telegram.button_daily: "Günlük"
 telegram.report_days: "Günler"
 
 telegram.report_cores: "Çekirdekler"
+telegram.report_groups: "Gruplar"
+telegram.report_view_switch: "Görünüm: %{view}"
 
 telegram.report_profit: "Kâr / zarar"
 
@@ -88,7 +92,7 @@ telegram.report_next: "Sonraki"
 
 telegram.report_unvalued: "Değer yok"
 
-telegram.report_empty: "Bu dönemde kapanmış gerçek işlem yok."
+telegram.report_empty: "Bu dönemde kapanmış işlem yok"
 
 telegram.report_scope: "Terminal geçmişinde seçilen grup · kapanmış gerçek işlemler · işlem anındaki kur. Yerel geçmiş; çevrimdışı botlar güncellenmez."
 telegram.report_scope_station: "İstasyon geçmişinde seçilen grup · kapanmış gerçek işlemler · işlem anındaki kur. İstasyon çekirdek geçmişini gün boyu kopyalar; çevrimdışı botlar güncellenmez."

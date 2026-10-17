@@ -155,15 +155,29 @@ fn unknown_ids_degrade_instead_of_failing() {
     assert_eq!(back, bot);
 }
 
-/// A bot saved with a retired view opens its reports by cores: the cores view carries the groups
-/// now, and days are a button of their own.
+/// Restoring groups must not remap saved summaries to cores; only days remains retired.
 #[test]
-fn retired_views_read_as_cores() {
-    for id in ["days", "groups"] {
+fn saved_groups_and_retired_days_read_their_views() {
+    for (id, expected) in [("days", ReportView::Cores), ("groups", ReportView::Groups)] {
         let json = format!(r#"{{"report_view": "{id}"}}"#);
         let bot: BotSettings = serde_json::from_str(&json).unwrap();
-        assert_eq!(bot.report_view, ReportView::Cores, "{id}");
+        assert_eq!(bot.report_view, expected, "{id}");
+        assert_eq!(ReportView::from_id(id), Some(expected));
     }
+}
+
+/// An older terminal omitting report_view cannot reset the station's groups preference or extras.
+#[test]
+fn partial_settings_preserve_groups_and_unknown_keys() {
+    let mut saved: BotSettings =
+        serde_json::from_str(r#"{"report_view":"groups","future_setting":{"enabled":true}}"#)
+            .unwrap();
+    let incoming: BotSettings = serde_json::from_str(r#"{"period_basis":"open"}"#).unwrap();
+    saved.merge_from(&incoming);
+    let encoded = serde_json::to_value(&saved).unwrap();
+    assert_eq!(encoded["report_view"], "groups");
+    assert_eq!(encoded["future_setting"]["enabled"], true);
+    assert_eq!(encoded["period_basis"], "open");
 }
 
 /// A menu saved while the Report section was configurable and the keyboard had a Mini App button

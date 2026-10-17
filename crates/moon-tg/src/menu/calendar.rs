@@ -6,7 +6,6 @@
 
 use crate::t;
 use chrono::{Datelike, Days, Months, NaiveDate};
-use moon_core::config::telegram_menu::ReportView;
 use moon_core::telegram::api::InlineKeyboardButton;
 use moon_core::telegram::menu_action::MenuAction;
 use moon_core::telegram::report::{MAX_SPAN_DAYS, ReportRequest};
@@ -22,12 +21,10 @@ const OUT: &str = "\u{00b7}";
 ///     month: The month to show; the first day's month, else today's, when absent.
 ///     from: The first day, once picked.
 ///     today: Today in the report zone; nothing after it can be picked or browsed to.
-///     view: The view the report opens in.
 pub(super) fn rows(
     month: Option<NaiveDate>,
     from: Option<NaiveDate>,
     today: NaiveDate,
-    view: ReportView,
 ) -> Vec<Vec<InlineKeyboardButton>> {
     let this_month = first_of(today);
     let month = first_of(month.or(from).unwrap_or(today)).min(this_month);
@@ -64,7 +61,7 @@ pub(super) fn rows(
         .collect();
     let mut day = month;
     while day.month() == month.month() {
-        week.push(day_cell(day, from, today, view));
+        week.push(day_cell(day, from, today));
         if week.len() == 7 {
             rows.push(std::mem::take(&mut week));
         }
@@ -81,12 +78,7 @@ pub(super) fn rows(
 }
 
 /// One day: picks the first day, picks the last and opens the report, or does nothing.
-fn day_cell(
-    day: NaiveDate,
-    from: Option<NaiveDate>,
-    today: NaiveDate,
-    view: ReportView,
-) -> InlineKeyboardButton {
+fn day_cell(day: NaiveDate, from: Option<NaiveDate>, today: NaiveDate) -> InlineKeyboardButton {
     let number = day.day().to_string();
     let noop = || InlineKeyboardButton::callback(OUT, MenuAction::Noop.callback());
     if day > today {
@@ -116,7 +108,7 @@ fn day_cell(
     } else {
         number
     };
-    InlineKeyboardButton::callback(text, request.in_view(view).callback())
+    InlineKeyboardButton::callback(text, request.callback())
 }
 
 /// The first day of `day`'s month.

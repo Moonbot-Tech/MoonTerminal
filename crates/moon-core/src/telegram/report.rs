@@ -75,14 +75,21 @@ pub struct ReportRequest {
     pub period: Period,
     pub daily: bool,
     pub by_exchange: bool,
+    /// Summarize saved core groups instead of listing their individual cores.
+    pub by_group: bool,
+    /// A view-switch callback saves its mode for this chat before reading the report.
+    pub select_view: bool,
+    /// Current persistent mode for the view control, resolved by the host rather than encoded.
+    /// A one-off drill-down or daily table can display a different view without changing it.
+    pub view_mode: Option<crate::config::telegram_menu::ReportView>,
     pub scope: ReportScope,
     pub page: usize,
     /// Frozen UTC bounds for paging; explicit refresh clears these before resolving a preset.
     pub window: Option<(i64, i64)>,
     /// Inline exchange list is expanded; a missing or unknown flag stays collapsed.
     pub exchanges_open: bool,
-    /// The chat did not pick a view (a period button or command): the bot's own default view
-    /// applies ([`Self::resolve_view`]). Never encoded in a callback — a callback names its view.
+    /// A period button or command follows the chat's saved mode, then the bot default
+    /// ([`Self::resolve_view`]); period-menu callbacks use `p` to resolve at press time.
     pub follow_view: bool,
     /// The timestamp the period applies to, once a report has been read on it: its paging and view
     /// buttons keep it, so an old message never mixes bases. `None` reads on the bot's basis now.
@@ -96,6 +103,9 @@ impl ReportRequest {
             period,
             daily,
             by_exchange: !daily,
+            by_group: false,
+            select_view: false,
+            view_mode: None,
             scope: ReportScope::All,
             page: 0,
             window: None,
@@ -118,7 +128,9 @@ impl ReportRequest {
         use crate::config::telegram_menu::ReportView;
         self.daily = false;
         self.by_exchange = view == ReportView::Exchanges;
+        self.by_group = view == ReportView::Groups;
         self.follow_view = false;
+        self.select_view = false;
         self
     }
 
@@ -141,12 +153,21 @@ impl ReportRequest {
             Period::LastMonth => "l".into(),
             Period::Dates(a, b) => format!("{a},{b}"),
         };
-        let view = if self.daily {
+        let view = if self.follow_view {
+            "p"
+        } else if self.daily {
             "d"
         } else if self.by_exchange {
             "e"
+        } else if self.by_group {
+            "g"
         } else {
             "c"
+        };
+        let view = if self.select_view {
+            view.to_ascii_uppercase()
+        } else {
+            view.to_string()
         };
         let scope = match self.scope {
             ReportScope::All => String::new(),
@@ -168,8 +189,7 @@ impl ReportRequest {
 
     /// Decode only this feature's callback namespace and bounded page indices.
     ///
-    /// A button of the retired view by groups (`g`) opens by cores, which carry the groups now; one
-    /// scoped to a single group (`q…`) no longer decodes.
+    /// Group summaries use `g`; retired single-group scopes (`q…`) no longer decode.
     pub fn parse_callback(value: &str) -> Option<Self> {
         if value.len() > 64 {
             return None;
@@ -179,9 +199,16 @@ impl ReportRequest {
             return None;
         }
         let (view, rest) = parts[1].split_at_checked(1)?;
+        let select_view = matches!(view, "E" | "C" | "G");
+        let view = if select_view {
+            view.to_ascii_lowercase()
+        } else {
+            view.to_string()
+        };
+        let view = view.as_str();
         let daily = match view {
             "d" => true,
-            "c" | "e" | "g" => false,
+            "c" | "e" | "g" | "p" => false,
             _ => return None,
         };
         // A trailing `o`/`z` is the basis the report was read on (none: the bot's basis now).
@@ -240,12 +267,15 @@ impl ReportRequest {
         Some(Self {
             period,
             daily,
-            by_exchange: view == "e",
+            by_exchange: view == "e" || view == "p",
+            by_group: view == "g",
+            select_view,
+            view_mode: None,
             scope,
             page,
             window,
             exchanges_open,
-            follow_view: false,
+            follow_view: view == "p",
             basis,
         })
     }

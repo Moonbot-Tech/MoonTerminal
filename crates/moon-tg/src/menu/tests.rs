@@ -1,5 +1,4 @@
 use chrono::NaiveDate;
-use moon_core::config::telegram_menu::ReportView;
 use moon_core::telegram::api::InlineKeyboardButton;
 use moon_core::telegram::menu_action::MenuAction;
 use moon_core::telegram::report::{Period, ReportRequest};
@@ -33,16 +32,16 @@ fn cell<'a>(rows: &'a [Vec<InlineKeyboardButton>], number: &str) -> &'a InlineKe
         .unwrap_or_else(|| panic!("no cell {number}"))
 }
 
-/// The Report section lays out its fixed buttons and opens reports in the bot's view.
+/// Period menus resolve the chat's latest view at press time, including from an older message.
 #[test]
-fn the_report_section_opens_reports_in_the_bot_view() {
-    let rows = super::report_rows(ReportView::Cores);
+fn the_report_section_resolves_the_chat_view_when_pressed() {
+    let rows = super::report_rows();
     assert_eq!(rows.iter().map(Vec::len).collect::<Vec<_>>(), vec![2, 2, 2]);
     let Press::Report(today) = press(&rows[0][0]) else {
         panic!("Today opens a report")
     };
     assert_eq!(today.period, Period::Today);
-    assert!(!today.by_exchange && !today.daily);
+    assert!(today.follow_view && !today.daily);
     let Press::Report(daily) = press(&rows[2][0]) else {
         panic!("Daily opens a report")
     };
@@ -61,7 +60,7 @@ fn the_report_section_opens_reports_in_the_bot_view() {
 #[test]
 fn the_custom_screen_offers_this_month_up_to_today() {
     // 2026-10-03 is a Saturday; October 2026 starts on a Thursday.
-    let rows = super::custom_rows(None, None, day(2026, 10, 3), ReportView::Exchanges);
+    let rows = super::custom_rows(None, None, day(2026, 10, 3));
     assert_eq!(rows[0].len(), 3, "presets");
     assert_eq!(
         press(&rows[0][2]),
@@ -113,28 +112,18 @@ fn the_custom_screen_offers_this_month_up_to_today() {
     }
 }
 
-/// With the first day picked, a later day opens the report over both in the bot's view, the first
+/// With the first day picked, a later day opens the report over both in the chat's view, the first
 /// day itself opens that day, and an earlier day starts the pick again.
 #[test]
 fn the_second_pick_opens_the_report() {
     let from = day(2026, 9, 28);
-    let rows = super::custom_rows(
-        Some(day(2026, 10, 1)),
-        Some(from),
-        day(2026, 10, 3),
-        ReportView::Cores,
-    );
+    let rows = super::custom_rows(Some(day(2026, 10, 1)), Some(from), day(2026, 10, 3));
     let Press::Report(request) = press(cell(&rows, "2")) else {
         panic!("the second pick opens a report")
     };
     assert_eq!(request.period, Period::Dates(from, day(2026, 10, 2)));
-    assert!(!request.daily && !request.by_exchange && !request.follow_view);
-    let rows = super::custom_rows(
-        Some(day(2026, 9, 1)),
-        Some(from),
-        day(2026, 10, 3),
-        ReportView::Cores,
-    );
+    assert!(!request.daily && request.follow_view);
+    let rows = super::custom_rows(Some(day(2026, 9, 1)), Some(from), day(2026, 10, 3));
     assert!(rows.iter().flatten().any(|b| b.text == "\u{2022}28"));
     let Press::Report(single) = press(cell(&rows, "28")) else {
         panic!("the first day opens its own report")
@@ -153,12 +142,7 @@ fn the_second_pick_opens_the_report() {
 #[test]
 fn a_period_stops_at_a_year() {
     let from = day(2025, 10, 1);
-    let rows = super::custom_rows(
-        Some(day(2026, 10, 1)),
-        Some(from),
-        day(2026, 10, 3),
-        ReportView::Exchanges,
-    );
+    let rows = super::custom_rows(Some(day(2026, 10, 1)), Some(from), day(2026, 10, 3));
     let Press::Report(longest) = press(cell(&rows, "1")) else {
         panic!("365 days on is still a period")
     };

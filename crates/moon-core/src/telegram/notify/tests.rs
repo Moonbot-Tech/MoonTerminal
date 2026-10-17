@@ -154,6 +154,7 @@ fn corrupt_file_is_an_error_and_is_left_in_place() {
     assert!(NotifyFile::load(&directory).is_err());
 }
 
+/// Synthetic persisted rules and ledgers exercise round-trip compatibility without live chats.
 fn sample_file() -> NotifyFile {
     let mut seen = BTreeMap::new();
     seen.insert(
@@ -163,6 +164,7 @@ fn sample_file() -> NotifyFile {
     let mut down_announced = BTreeSet::new();
     down_announced.insert(7);
     let chat = ChatNotify {
+        report_view: None,
         settings: NotifySettings {
             trades: TradeRule {
                 on: true,

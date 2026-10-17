@@ -351,25 +351,27 @@ pub enum ReportView {
     /// One row per core, under the terminal's saved core groups when there are any, as the
     /// Profit monitor lists them.
     Cores,
+    /// One summary row per saved core group, with overlapping membership retained.
+    Groups,
 }
 
 impl ReportView {
     /// Every view, in picker order.
-    pub const ALL: [Self; 2] = [Self::Exchanges, Self::Cores];
+    pub const ALL: [Self; 3] = [Self::Exchanges, Self::Cores, Self::Groups];
 
     /// Stable saved id.
     pub fn id(self) -> &'static str {
         match self {
             Self::Exchanges => "exchanges",
             Self::Cores => "cores",
+            Self::Groups => "groups",
         }
     }
 
-    /// The view saved as `id`. The retired `days` and `groups` views read as the cores view: the
-    /// cores view now carries the groups, and a split by days is a button of its own.
+    /// The view saved as `id`; the retired `days` id opens cores because days has its own button.
     pub(crate) fn from_id(id: &str) -> Option<Self> {
         match id {
-            "days" | "groups" => Some(Self::Cores),
+            "days" => Some(Self::Cores),
             id => Self::ALL.into_iter().find(|value| value.id() == id),
         }
     }

@@ -251,19 +251,16 @@ fn control_actions_round_trip() {
     }
 }
 
-/// A view-picker button of a retired view, still in a chat's history, picks the cores view, as a
-/// configuration saved with it loads.
+/// Saved settings buttons restore groups while the retired days button still selects cores.
 #[test]
 fn a_retired_view_button_picks_cores() {
     use crate::config::telegram_menu::ReportView;
     let cores = MenuAction::Settings(SettingsAction::SetView(ReportView::Cores)).callback();
-    for retired in ["days", "groups"] {
+    for (retired, expected) in [("days", ReportView::Cores), ("groups", ReportView::Groups)] {
         let data = cores.replace("cores", retired);
         assert_eq!(
             MenuAction::parse_callback(&data),
-            Some(MenuAction::Settings(SettingsAction::SetView(
-                ReportView::Cores
-            ))),
+            Some(MenuAction::Settings(SettingsAction::SetView(expected))),
             "{data}"
         );
     }

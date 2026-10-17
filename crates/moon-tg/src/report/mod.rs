@@ -23,6 +23,7 @@ use crate::TgHost;
 use crate::labels::{answer, navigation_keyboard, section_label};
 use moon_core::telegram::api::ReplyMarkup;
 
+mod drill;
 mod paging;
 mod render;
 mod sections;
@@ -33,7 +34,7 @@ use render::{render, report_html};
 /// One report row, retaining core identity because archived names can be reused.
 #[derive(Clone, Debug)]
 pub(super) enum Row {
-    /// An exchange, a core or a day, with its money and a UID only for a core.
+    /// An exchange, group summary, core or day, with its money and a UID only for a core.
     Line(Option<u64>, String, QuoteBreakdown),
     /// A core listed under an earlier group; Details includes it once on each page.
     Repeat(Option<u64>, String, QuoteBreakdown),
@@ -60,6 +61,7 @@ impl Row {
 }
 
 /// A complete page plus a full-period total, all read in one SQLite snapshot.
+#[derive(Clone)]
 struct Page {
     request: ReportRequest,
     from: i64,
@@ -78,6 +80,8 @@ struct Page {
     cores: Vec<u64>,
     /// An automatic report's own title and zone, which head the table in place of the view.
     caption: Option<AutoCaption>,
+    /// Exchange summary or ranked roster, absent in the existing global views.
+    exchange: Option<drill::Exchange>,
 }
 
 /// Build a synthetic local-day table through the production layout walk, without reading storage.
@@ -132,6 +136,7 @@ pub(crate) fn preview_table(layout: &ReportLayout) -> crate::preview::PreviewTab
         layout: layout.sanitized(),
         cores: vec![],
         caption: None,
+        exchange: None,
     };
     render::preview_table(&page)
 }
@@ -145,7 +150,7 @@ pub(crate) struct AutoCaption {
 
 /// Read off the owner thread and recheck the saved chat authorization before returning any money.
 ///
-/// A request whose view the chat did not pick opens in the bot's `report_view`; a request that does
+/// A request whose view the chat did not pick follows its saved mode, then the bot default; one that does
 /// not carry its basis yet is read on the bot's `period_basis`, using its sanitized layout.
 pub(crate) fn telegram_report(
     host: &mut dyn TgHost,
@@ -158,8 +163,14 @@ pub(crate) fn telegram_report(
         return;
     };
     let owner = access == TelegramReportAccess::Owner;
+    let request = match chat_request(host, chat, request) {
+        Ok(request) => request,
+        Err(()) => {
+            answer(&reply, t!("telegram.settings.not_saved").to_string());
+            return;
+        }
+    };
     let bot = &host.config().telegram.bot;
-    let request = request.resolve_view(bot.report_view);
     // A page's own buttons carry the basis it was read on; a fresh request takes the bot's.
     let basis = request.basis.unwrap_or(bot.period_basis);
     let layout = bot.message_layout.report.sanitized();
@@ -220,6 +231,63 @@ pub(crate) fn telegram_report(
             }
         })
     }));
+}
+
+/// Resolve a period's per-chat mode or atomically save an explicit view switch.
+/// A failed save leaves the prior preference intact and refuses the switch.
+fn chat_request(
+    host: &dyn TgHost,
+    chat: i64,
+    mut request: ReportRequest,
+) -> Result<ReportRequest, ()> {
+    use moon_core::config::telegram_menu::ReportView;
+    let fallback = host.config().telegram.bot.report_view;
+    let store = crate::notify::tick::current_store(host);
+    if request.select_view {
+        let view = if request.by_exchange {
+            ReportView::Exchanges
+        } else if request.by_group {
+            ReportView::Groups
+        } else {
+            ReportView::Cores
+        };
+        let store = store.ok_or(())?;
+        let mut guard = crate::notify::tick::lock_store(&store);
+        if guard.file.chats.get(&chat).and_then(|row| row.report_view) != Some(view) {
+            guard
+                .update(|file| file.chats.entry(chat).or_default().report_view = Some(view))
+                .map_err(|error| {
+                    log::warn!("telegram report view not saved for chat {chat}: {error}");
+                })?;
+        }
+        request.select_view = false;
+        request.view_mode = Some(view);
+        Ok(request)
+    } else {
+        let view = store
+            .and_then(|store| {
+                crate::notify::tick::lock_store(&store)
+                    .file
+                    .chats
+                    .get(&chat)
+                    .and_then(|row| row.report_view)
+            })
+            .unwrap_or(fallback);
+        // Before `p`, period menus baked in e/c without a frozen window. Rendered report
+        // navigation carries a window, so only these fresh, unscoped period choices migrate.
+        if request.window.is_none()
+            && request.scope == ReportScope::All
+            && request.page == 0
+            && !request.exchanges_open
+            && !request.daily
+            && !request.by_group
+        {
+            request.follow_view = true;
+        }
+        let mut request = request.resolve_view(view);
+        request.view_mode = Some(view);
+        Ok(request)
+    }
 }
 
 /// A report notice exposes navigation limited to the admission grant, including on /start.
@@ -297,9 +365,9 @@ fn read_page_on(
 
 /// Connection-injected reader lets fixtures exercise the exact production query contract.
 ///
-/// `groups` are the bot's saved core groups: the view by cores lists its cores under them, as the
-/// Profit monitor does ([`sections`]). A group's header carries the database's own total over its
-/// cores, so a core in two groups counts in each, while the headline counts every core once.
+/// `groups` are the bot's saved core groups: cores lists members under their headers, while groups
+/// lists one summary per group. Both query each group's total over its cores, so overlapping
+/// membership counts in each group while the headline counts every core once.
 /// The supplied layout also sizes the pages and their repeated group headers.
 #[allow(clippy::too_many_arguments)]
 fn read_page_with(
@@ -384,7 +452,48 @@ fn read_page_with(
         date_from: Some(from),
         date_to: Some(to),
     };
-    let by_core = !request.daily && !request.by_exchange;
+    if groups.is_empty() {
+        request.by_group = false;
+    }
+    if request.scope != ReportScope::All && !request.daily && !request.by_group {
+        let drilldowns = exchange_drilldowns(&snap, &accessible, &venues, &filter)?;
+        let roster_count = cores
+            .iter()
+            .map(|(id, _)| *id)
+            .chain(
+                venues
+                    .iter()
+                    .filter(|(id, _)| {
+                        in_scope(**id)
+                            && match &access {
+                                TelegramReportAccess::Owner => true,
+                                TelegramReportAccess::Viewer(ids) => ids.contains(id),
+                            }
+                    })
+                    .map(|(id, _)| *id),
+            )
+            .collect::<BTreeSet<_>>()
+            .len();
+        let page = Page {
+            request,
+            from,
+            to,
+            zone,
+            total: Default::default(),
+            rows: Vec::new(),
+            pages: 1,
+            drilldowns,
+            scope_label,
+            basis,
+            layout,
+            cores: accessible.iter().map(|(id, _)| *id).collect(),
+            caption: None,
+            exchange: None,
+        };
+        return drill::read(&snap, page, &filter, &cores, groups, roster_count);
+    }
+    let by_group = !request.daily && !request.by_exchange && request.by_group;
+    let by_core = !request.daily && !request.by_exchange && !by_group;
     let mut rows_by = Vec::new();
     // The core of each row of the view by cores, by position.
     let mut row_cores = Vec::new();
@@ -420,6 +529,18 @@ fn read_page_with(
         ) {
             let group = whole(Some(members.iter().map(|&index| cores[index].0).collect()));
             rows_by.push((section_label(venue), group));
+        }
+    } else if by_group {
+        let ids = cores.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        for section in sections::summary_sections(&ids, groups) {
+            let name = section.group.map_or_else(
+                || t!("profit_monitor.group.ungrouped").to_string(),
+                |group| group.name.clone(),
+            );
+            let slice = whole(Some(
+                section.members.iter().map(|&index| ids[index]).collect(),
+            ));
+            rows_by.push((name, slice));
         }
     } else {
         for (id, name) in cores {
@@ -518,6 +639,7 @@ fn read_page_with(
             layout: layout.clone(),
             cores: Vec::new(),
             caption: None,
+            exchange: None,
         }))
     };
     let size = paging::fitting_page_size(&active, fits);
@@ -538,6 +660,7 @@ fn read_page_with(
         layout,
         cores: accessible.iter().map(|(id, _)| *id).collect(),
         caption: None,
+        exchange: None,
     })
 }
 
@@ -585,7 +708,7 @@ pub(crate) struct AutoInputs {
     pub(crate) order: CoreOrder,
     pub(crate) names: db::CoreNames,
     pub(crate) venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
-    /// The bot's saved core groups, for a report in the view by cores.
+    /// The bot's saved groups, shared by core sections and group summaries.
     pub(crate) groups: Vec<CoreGroup>,
 }
 
@@ -605,7 +728,8 @@ pub(crate) fn read_auto_report(
     if matches!(access, TelegramReportAccess::Viewer(ids) if ids.is_empty()) {
         return Ok(None);
     }
-    let request = ReportRequest::new(window.period.clone(), false).in_view(inputs.view);
+    let mut request = ReportRequest::new(window.period.clone(), false).in_view(inputs.view);
+    request.view_mode = Some(inputs.view);
     let mut page = read_page_with(
         conn,
         request,
