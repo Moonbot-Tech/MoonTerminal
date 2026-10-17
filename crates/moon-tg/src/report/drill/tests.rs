@@ -98,7 +98,10 @@ fn strips_only_a_shared_separator_and_never_empties_a_name() {
     assert_eq!(shared_prefix(&["EX-XX", "EX-XX CORE_A"]), "");
     assert_eq!(shared_prefix(&["CORE_AA", "CORE_AB"]), "");
     assert_eq!(shared_prefix(&["CORE_A"]), "");
-    assert_eq!(shared_prefix(&["EX-XX / ", "EX-XX / CORE_A"]), "EX-XX ");
+    assert_eq!(shared_prefix(&["EX-XX / ", "EX-XX / CORE_A"]), "");
+    assert_eq!(shared_prefix(&["EX-XX ~ ", "EX-XX ~ CORE_A"]), "");
+    assert_eq!(shared_prefix(&["EX-XX / \u{7}", "EX-XX / CORE_A"]), "");
+    assert_eq!(shared_prefix(&["EX-XX / ~ ", "EX-XX / CORE_A"]), "");
     assert_eq!(
         shared_prefix(&["Ядро / CORE_A", "Ядро / CORE_B"]),
         "Ядро / "

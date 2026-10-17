@@ -147,7 +147,7 @@ pub(super) fn read(
     Ok(page)
 }
 
-/// Longest shared prefix ending at a separator, leaving a nonempty suffix in every name.
+/// Longest shared prefix ending at a separator, preserving identity beyond bare separators.
 pub(super) fn shared_prefix(names: &[&str]) -> String {
     if names.len() < 2 {
         return String::new();
@@ -157,9 +157,12 @@ pub(super) fn shared_prefix(names: &[&str]) -> String {
         .char_indices()
         .filter_map(|(index, ch)| (ch == ' ').then_some(index + ch.len_utf8()))
         .rfind(|&end| {
-            names
-                .iter()
-                .all(|name| name.starts_with(&first[..end]) && !name[end..].trim().is_empty())
+            names.iter().all(|name| {
+                name.starts_with(&first[..end])
+                    && name[end..].chars().any(|ch| {
+                        !ch.is_control() && !ch.is_whitespace() && !matches!(ch, '/' | '~')
+                    })
+            })
         })
         .map_or_else(String::new, |end| first[..end].to_string())
 }
