@@ -141,6 +141,9 @@ pub(super) fn period(page: &Page, year: i32) -> String {
 /// Saved columns, group styles and whole-scope total placement govern the following table.
 /// The caller decides whether it fits Telegram's rich-message caps.
 pub(super) fn report_html(page: &Page) -> String {
+    if page.exchange.is_some() {
+        return super::drill::html(page);
+    }
     let heading = if page.request.daily {
         t!("telegram.report_days")
     } else if page.request.by_exchange {
@@ -185,6 +188,9 @@ pub(super) fn report_html(page: &Page) -> String {
     html.push_str(&format!("<p>{preview_title}</p>"));
     if page.total.orders == 0 {
         html.push_str(&format!("<p>{}</p>", escape(&t!("telegram.report_empty"))));
+        if page.rows.is_empty() {
+            return html;
+        }
     }
     html.push_str(&format!(
         "<table compact><tr><th align=\"left\">{}</th>",
@@ -314,9 +320,14 @@ pub(super) fn row_html(row: &Row, by_core: bool, layout: &ReportLayout) -> Strin
 
 /// Draw the full-period total as a shaded band distinct from group headers.
 fn total_html(total: &QuoteBreakdown, layout: &ReportLayout) -> String {
+    named_total_html(total, layout, "telegram.report_total")
+}
+
+/// Render a total band with a scope-specific localized label.
+pub(super) fn named_total_html(total: &QuoteBreakdown, layout: &ReportLayout, key: &str) -> String {
     format!(
         "<tr><th align=\"left\"><b>{}</b></th>{}</tr>",
-        escape(&t!("telegram.report_total")),
+        escape(&t!(key)),
         value_cells(total, layout, "th", true, true)
     )
 }
@@ -440,6 +451,16 @@ fn column_headers(layout: &ReportLayout) -> Vec<String> {
             Some(t!(key).to_string())
         })
         .collect()
+}
+
+/// Reuse saved numeric columns in a scoped table's header.
+pub(super) fn table_header(key: &str, layout: &ReportLayout) -> String {
+    let mut html = format!("<tr><th align=\"left\">{}</th>", escape(&t!(key)));
+    for label in column_headers(layout) {
+        html.push_str(&format!("<th align=\"right\">{}</th>", escape(&label)));
+    }
+    html.push_str("</tr>");
+    html
 }
 
 /// A structural table row; HTML and native rendering consume this same placement walk.
@@ -657,7 +678,7 @@ fn compact_label(name: &str) -> String {
 }
 
 /// Use venue identity so localized captions and futures variants retain the same brand color.
-fn exchange_icon(scope: ReportScope) -> &'static str {
+pub(super) fn exchange_icon(scope: ReportScope) -> &'static str {
     use moon_core::venue::{Brand, venue};
     let brand = match scope {
         ReportScope::Venue(id) => venue(id.code).map(|v| v.brand),
@@ -674,105 +695,8 @@ fn exchange_icon(scope: ReportScope) -> &'static str {
     }
 }
 
-/// Inline actions affect the current report; global period choices live in the reply keyboard.
-pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
-    let request = &page.request;
-    let button = |key: &str, request: ReportRequest| {
-        let icon = match key {
-            "telegram.report_back" | "telegram.report_prev" => "\u{2b05}\u{fe0f}",
-            "telegram.report_next" => "\u{27a1}\u{fe0f}",
-            "telegram.report_all_cores" | "telegram.report_cores_scope" => "\u{1f9e9}",
-            "telegram.report_exchanges_back" => "\u{2190}",
-            _ => "\u{1f4c5}",
-        };
-        InlineKeyboardButton::callback(format!("{icon} {}", t!(key)), request.callback())
-    };
-    let mut rows = Vec::new();
-    if request.exchanges_open {
-        for chunk in page.drilldowns.chunks(2) {
-            rows.push(
-                chunk
-                    .iter()
-                    .map(|(name, scope)| {
-                        let mut next = request.clone();
-                        next.scope = *scope;
-                        next.by_exchange = false;
-                        next.by_group = false;
-                        next.daily = false;
-                        next.page = 0;
-                        next.exchanges_open = true;
-                        InlineKeyboardButton::callback(
-                            format!("{} {}", exchange_icon(*scope), compact_label(name)),
-                            next.callback(),
-                        )
-                    })
-                    .collect(),
-            );
-        }
-        let mut closed = request.clone();
-        closed.exchanges_open = false;
-        rows.push(vec![button("telegram.report_exchanges_back", closed)]);
-    } else {
-        let mut open = request.clone();
-        open.exchanges_open = true;
-        let mut cores = request.clone();
-        cores.by_exchange = false;
-        cores.by_group = false;
-        cores.daily = false;
-        cores.page = 0;
-        let menu = t!("telegram.report_exchanges_menu");
-        rows.push(vec![
-            InlineKeyboardButton::callback(format!("{menu} \u{25be}"), open.callback()),
-            button("telegram.report_all_cores", cores),
-        ]);
-    }
-    let mut views = Vec::new();
-    for (key, exchanges, daily) in [
-        ("telegram.report_back", true, false),
-        (
-            if request.scope == ReportScope::All {
-                "telegram.report_all_cores"
-            } else {
-                "telegram.report_cores_scope"
-            },
-            false,
-            false,
-        ),
-        (
-            if request.scope == ReportScope::All {
-                "telegram.report_by_days"
-            } else {
-                "telegram.report_days_scope"
-            },
-            false,
-            true,
-        ),
-    ] {
-        // A single day has nothing to split by days.
-        if (daily && !request.period.spans_days())
-            || (request.by_exchange == exchanges && request.daily == daily && !request.by_group)
-            // The collapsed top row already carries All cores; do not repeat it below.
-            || (!request.exchanges_open && !exchanges && !daily)
-        {
-            continue;
-        }
-        let mut next = request.clone();
-        next.by_exchange = exchanges;
-        next.by_group = false;
-        next.daily = daily;
-        next.page = 0;
-        if exchanges {
-            next.scope = ReportScope::All;
-        }
-        views.push(button(key, next));
-    }
-    // One row while it holds them: every row of buttons is a line the report no longer fits in.
-    match rows.last_mut() {
-        Some(top) if !request.exchanges_open && top.len() + views.len() <= 3 => top.extend(views),
-        _ if !views.is_empty() => rows.push(views),
-        _ => {}
-    }
-    // The exchange dropdown remains a one-off drill-down. Only this control saves a chat mode.
+/// Persistent mode control shared by the report and the expanded exchange picker.
+fn view_switch(request: &ReportRequest) -> InlineKeyboardButton {
     use moon_core::config::telegram_menu::ReportView;
     let current = request.view_mode.unwrap_or(if request.by_exchange {
         ReportView::Exchanges
@@ -781,37 +705,137 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
     } else {
         ReportView::Cores
     });
-    let next = match current {
-        ReportView::Exchanges => ReportView::Groups,
-        ReportView::Groups => ReportView::Cores,
-        ReportView::Cores => ReportView::Exchanges,
-    };
-    let key = match current {
-        ReportView::Exchanges => "telegram.report_exchanges",
-        ReportView::Groups => "telegram.report_groups",
-        ReportView::Cores => "telegram.report_cores",
+    let (key, next) = match current {
+        ReportView::Exchanges => ("telegram.report_exchanges", ReportView::Groups),
+        ReportView::Groups => ("telegram.report_groups", ReportView::Cores),
+        ReportView::Cores => ("telegram.report_cores", ReportView::Exchanges),
     };
     let mut switch = request.clone().in_view(next);
     switch.select_view = true;
     switch.scope = ReportScope::All;
     switch.page = 0;
-    rows.push(vec![InlineKeyboardButton::callback(
-        t!("telegram.report_view_switch", view = t!(key)).to_string(),
+    switch.exchanges_open = false;
+    InlineKeyboardButton::callback(
+        format!("{} ▾", t!("telegram.report_view_switch", view = t!(key))),
         switch.callback(),
-    )]);
-    let mut nav = Vec::new();
-    if request.page > 0 {
-        let mut prev = request.clone();
-        prev.page -= 1;
-        nav.push(button("telegram.report_prev", prev));
+    )
+}
+
+/// Inline actions affect the current report; global period choices live in the reply keyboard.
+pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
+    use moon_core::config::telegram_menu::ReportView;
+    let request = &page.request;
+    let callback =
+        |text: String, next: ReportRequest| InlineKeyboardButton::callback(text, next.callback());
+    let mut rows = Vec::new();
+    if request.exchanges_open {
+        for chunk in page.drilldowns.chunks(2) {
+            rows.push(
+                chunk
+                    .iter()
+                    .map(|(name, scope)| {
+                        let mut next = request.clone().in_view(ReportView::Exchanges);
+                        next.scope = *scope;
+                        next.page = 0;
+                        next.exchanges_open = false;
+                        callback(
+                            format!("{} {}", exchange_icon(*scope), compact_label(name)),
+                            next,
+                        )
+                    })
+                    .collect(),
+            );
+        }
+        let mut back = request.clone();
+        back.exchanges_open = false;
+        rows.push(vec![callback(
+            format!("← {}", t!("telegram.report_exchanges_back")),
+            back,
+        )]);
+        rows.push(vec![view_switch(request)]);
+    } else if page.exchange.is_some() {
+        if request.by_exchange {
+            let mut all = request.clone().in_view(ReportView::Cores);
+            all.page = 0;
+            rows.push(vec![callback(
+                t!(
+                    "telegram.report_exchange_all",
+                    active = page.exchange.as_ref().map_or(0, |exchange| exchange.active)
+                )
+                .to_string(),
+                all,
+            )]);
+            let mut back = request.clone();
+            back.scope = ReportScope::All;
+            back.follow_view = true;
+            back.page = 0;
+            let mut other = request.clone();
+            other.exchanges_open = true;
+            rows.push(vec![
+                callback(format!("← {}", t!("telegram.report_exchanges_back")), back),
+                callback(format!("{} ▾", t!("telegram.report_other_exchange")), other),
+            ]);
+        } else {
+            let mut nav = Vec::new();
+            if request.page > 0 {
+                let mut prev = request.clone();
+                prev.page -= 1;
+                nav.push(callback(
+                    format!("‹ {} {}", t!("telegram.report_page_short"), prev.page + 1),
+                    prev,
+                ));
+            }
+            if request.page + 1 < page.pages {
+                let mut next = request.clone();
+                next.page += 1;
+                nav.push(callback(
+                    format!("{} {} ›", t!("telegram.report_page_short"), next.page + 1),
+                    next,
+                ));
+            }
+            if !nav.is_empty() {
+                rows.push(nav);
+            }
+            let mut back = request.clone().in_view(ReportView::Exchanges);
+            back.page = 0;
+            rows.push(vec![callback(
+                format!("← {}", t!("telegram.report_back_exchange")),
+                back,
+            )]);
+        }
+    } else {
+        let mut open = request.clone();
+        open.exchanges_open = true;
+        rows.push(vec![
+            view_switch(request),
+            callback(format!("{} ▾", t!("telegram.report_exchange_menu")), open),
+        ]);
+        if page.total.orders > 0 || !page.rows.is_empty() {
+            let mut cores = request.clone().in_view(ReportView::Cores);
+            cores.scope = ReportScope::All;
+            cores.page = 0;
+            rows.push(vec![callback(
+                format!("🧩 {}", t!("telegram.report_all_cores")),
+                cores,
+            )]);
+        }
     }
-    if request.page + 1 < page.pages {
-        let mut next = request.clone();
-        next.page += 1;
-        nav.push(button("telegram.report_next", next));
-    }
-    if !nav.is_empty() {
-        rows.push(nav);
+    // Summary group pages and global tables retain the existing frozen-window paging.
+    if !request.exchanges_open && (page.exchange.is_none() || request.by_exchange) {
+        let mut nav = Vec::new();
+        if request.page > 0 {
+            let mut prev = request.clone();
+            prev.page -= 1;
+            nav.push(callback(format!("← {}", t!("telegram.report_prev")), prev));
+        }
+        if request.page + 1 < page.pages {
+            let mut next = request.clone();
+            next.page += 1;
+            nav.push(callback(format!("{} →", t!("telegram.report_next")), next));
+        }
+        if !nav.is_empty() {
+            rows.push(nav);
+        }
     }
     ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(rows))
 }

@@ -51,6 +51,7 @@ fn layout_page(layout: ReportLayout) -> Page {
         layout,
         cores: vec![],
         caption: None,
+        exchange: None,
     }
 }
 
@@ -131,7 +132,7 @@ fn report_preview_title_leads_every_kind() {
                         let after_title = &html[html.find("</p>").unwrap() + 4..];
                         assert!(
                             after_title.starts_with(if empty {
-                                "<p>No closed real trades in this period.</p><table compact>"
+                                "<p>No closed trades in this period</p>"
                             } else {
                                 "<table compact>"
                             }),
@@ -660,7 +661,7 @@ fn viewer_empty_or_unavailable_scope_never_becomes_global() {
 }
 
 /// Putting the total first or summing only visible rows would break the report's footer.
-/// All views, including empty tables, keep translated column titles and shaded footer cells.
+/// Nonempty views keep translated column titles and shaded totals; empty periods keep the notice.
 #[test]
 fn full_total_is_the_tables_last_row_under_column_titles() {
     let _locale = crate::test_locale::force("en");
@@ -695,6 +696,7 @@ fn full_total_is_the_tables_last_row_under_column_titles() {
         layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
+        exchange: None,
     };
     for (daily, by_exchange, title) in [
         (false, false, "Cores"),
@@ -716,6 +718,11 @@ fn full_total_is_the_tables_last_row_under_column_titles() {
             ) else {
                 panic!("expected report")
             };
+            if empty {
+                assert!(html.contains("No closed trades in this period"));
+                assert!(!html.contains("<table"));
+                continue;
+            }
             let table_start = html.find("<table").unwrap();
             let table_end = html.find("</table>").unwrap();
             let table = &html[table_start..table_end];
@@ -767,6 +774,7 @@ fn inline_buttons_keep_the_current_period() {
         layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
+        exchange: None,
     };
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
@@ -808,6 +816,7 @@ fn unavailable_average_keeps_nonzero_exclusion_disclosure() {
         layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
+        exchange: None,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -1213,6 +1222,7 @@ fn native_average_keeps_small_btc_amount_visible() {
         layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
+        exchange: None,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -1317,6 +1327,7 @@ fn station_reports_and_help_limit_navigation_to_the_owner() {
         layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
+        exchange: None,
     };
     for locale in ["ru", "en", "es"] {
         let _locale = crate::test_locale::force(locale);
@@ -1403,6 +1414,7 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
         layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
+        exchange: None,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -1420,73 +1432,32 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
 #[test]
 fn collapsed_keyboard_hides_exchanges_until_opened() {
     let _locale = crate::test_locale::force("ru");
-    let mut request = ReportRequest::new(Period::Today, false);
-    request.window = Some((0, 1));
-    let binance =
-        moon_core::telegram::report::ReportScope::Venue(moon_core::feed::ExchangeId::new(2));
-    let bybit =
-        moon_core::telegram::report::ReportScope::Venue(moon_core::feed::ExchangeId::new(6));
-    let page = Page {
-        request: request.clone(),
-        from: 0,
-        to: 1,
-        zone: chrono_tz::UTC,
-        total: QuoteBreakdown::default(),
-        rows: Vec::new(),
-        pages: 1,
-        drilldowns: vec![("Binance".into(), binance), ("Bybit".into(), bybit)],
-        scope_label: None,
-        basis: ReportBasis::Close,
-        layout: moon_core::config::ReportLayout::default(),
-        cores: Vec::new(),
-        caption: None,
-    };
+    let mut page = layout_page(Default::default());
+    page.request.window = Some((0, 1));
+    let binance = ReportScope::Venue(moon_core::feed::ExchangeId::new(2));
+    page.drilldowns = vec![("EX-XX".into(), binance)];
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
-        panic!("expected inline navigation")
+        panic!("inline")
     };
-    assert_eq!(
-        markup.inline_keyboard.len(),
-        2,
-        "navigation and the persistent view control have separate rows"
-    );
-    assert_eq!(markup.inline_keyboard[0].len(), 2);
-    assert!(
-        markup.inline_keyboard[0][0].text.starts_with(&format!(
-            "{} \u{25be}",
-            rust_i18n::t!("telegram.report_exchanges_menu")
-        )),
-        "{}",
-        markup.inline_keyboard[0][0].text
-    );
+    assert_eq!(markup.inline_keyboard.len(), 2);
+    assert_eq!(markup.inline_keyboard[0][0].text, "Вид: Биржи ▾");
+    assert_eq!(markup.inline_keyboard[0][1].text, "Биржа ▾");
+    assert_eq!(markup.inline_keyboard[1][0].text, "🧩 Все ядра");
     let opened = ReportRequest::parse_callback(
-        markup.inline_keyboard[0][0]
-            .callback_data
-            .as_deref()
-            .unwrap(),
-    )
-    .unwrap();
-    assert!(opened.exchanges_open);
-    assert_eq!(opened.period, Period::Today);
-    let cores = ReportRequest::parse_callback(
         markup.inline_keyboard[0][1]
             .callback_data
             .as_deref()
             .unwrap(),
     )
     .unwrap();
-    assert!(!cores.by_exchange);
-    assert!(!cores.daily);
-    assert!(!cores.exchanges_open);
-
-    let mut expanded = page;
-    expanded.request.exchanges_open = true;
-    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&expanded)
+    assert!(opened.exchanges_open);
+    assert!(!opened.select_view);
+    page.request = opened;
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
-        panic!("expected inline navigation")
+        panic!("inline")
     };
-    assert_eq!(markup.inline_keyboard[0].len(), 2, "two exchanges per row");
-    assert!(markup.inline_keyboard[0][0].text.contains("Binance"));
     let picked = ReportRequest::parse_callback(
         markup.inline_keyboard[0][0]
             .callback_data
@@ -1494,58 +1465,41 @@ fn collapsed_keyboard_hides_exchanges_until_opened() {
             .unwrap(),
     )
     .unwrap();
-    assert!(
-        picked.exchanges_open,
-        "picking an exchange must keep the list open"
-    );
     assert_eq!(picked.scope, binance);
-    let back = markup
-        .inline_keyboard
-        .iter()
-        .flatten()
-        .find(|button| {
-            button
-                .text
-                .contains(&rust_i18n::t!("telegram.report_exchanges_back").to_string())
-        })
-        .expect("expanded list has Back");
-    let closed = ReportRequest::parse_callback(back.callback_data.as_deref().unwrap()).unwrap();
-    assert!(!closed.exchanges_open);
-    assert_eq!(closed.period, Period::Today);
+    assert!(picked.by_exchange, "an exchange opens the summary");
+    assert!(!picked.exchanges_open);
+    assert!(!picked.select_view);
+    assert_eq!(picked.window, Some((0, 1)));
+    page.total = Default::default();
+    page.rows.clear();
+    page.request.exchanges_open = false;
+    page.request.scope = ReportScope::All;
+    let html = report_html(&page);
+    assert!(html.contains("За этот период закрытых сделок нет"));
+    assert!(!html.contains("<table"));
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
+    else {
+        panic!("inline")
+    };
+    assert_eq!(markup.inline_keyboard.len(), 1);
+    assert_eq!(markup.inline_keyboard[0].len(), 2);
 }
 
-/// Single-day navigation omits daily aggregation while longer periods still expose it.
+/// Daily reports remain available from commands while the mockup's keyboard keeps only its actions.
 #[test]
 fn today_omits_daily_navigation() {
-    for (period, expected) in [(Period::Today, false), (Period::Month, true)] {
-        let page = Page {
-            request: ReportRequest::new(period, false),
-            from: 0,
-            to: 1,
-            zone: chrono_tz::UTC,
-            total: QuoteBreakdown::default(),
-            rows: Vec::new(),
-            pages: 1,
-            drilldowns: Vec::new(),
-            scope_label: None,
-            basis: ReportBasis::Close,
-            layout: moon_core::config::ReportLayout::default(),
-            cores: Vec::new(),
-            caption: None,
-        };
+    for period in [Period::Today, Period::Month] {
+        let mut page = layout_page(Default::default());
+        page.request = ReportRequest::new(period, false);
         let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
         else {
-            panic!("expected inline navigation")
+            panic!("inline")
         };
-        assert!(markup.inline_keyboard.iter().all(|row| !row.is_empty()));
-        assert_eq!(
-            markup.inline_keyboard.iter().flatten().any(|button| {
-                ReportRequest::parse_callback(button.callback_data.as_deref().unwrap())
-                    .unwrap()
-                    .daily
-            }),
-            expected
-        );
+        assert!(markup.inline_keyboard.iter().flatten().all(|button| {
+            !ReportRequest::parse_callback(button.callback_data.as_deref().unwrap())
+                .unwrap()
+                .daily
+        }));
     }
 }
 
@@ -1575,6 +1529,7 @@ fn a_core_is_one_row_with_its_full_name_in_details() {
         layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
+        exchange: None,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -2159,6 +2114,7 @@ fn a_days_report_is_compact() {
             layout: moon_core::config::ReportLayout::default(),
             cores: Vec::new(),
             caption: None,
+            exchange: None,
         };
         let html = super::render::report_html(&page);
         let table = html.find("<table").unwrap();
@@ -2595,7 +2551,7 @@ fn groups_switch_uses_the_saved_mode_on_one_off_pages() {
                 request.select_view.then_some((button, request))
             })
             .expect("persistent view control");
-        assert_eq!(button.text, "View: Groups");
+        assert_eq!(button.text, "View: Groups ▾");
         assert!(
             !next.by_exchange && !next.by_group && !next.daily,
             "Groups cycles to Cores"
@@ -2734,6 +2690,7 @@ fn a_repeat_alone_on_its_page_keeps_its_details() {
         layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
+        exchange: None,
     };
     let details = |rows| {
         let html = super::report_html(&page(rows));
@@ -2775,6 +2732,7 @@ fn the_period_is_short() {
         layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
+        exchange: None,
     };
     let period = |from, to, year| super::render::period(&page(from, to), year);
     assert_eq!(
@@ -2999,6 +2957,7 @@ fn per_row_page_with(
             layout: layout.clone(),
             cores: Vec::new(),
             caption: None,
+            exchange: None,
         }))
     };
     let size = paging::fitting_page_size(&active, fits);
@@ -3019,6 +2978,7 @@ fn per_row_page_with(
         layout,
         cores: accessible.iter().map(|(id, _)| *id).collect(),
         caption: None,
+        exchange: None,
     })
 }
 
@@ -3120,6 +3080,10 @@ fn chat_report_sliced_reads_match_per_row_totals() {
         ] {
             for basis in [ReportBasis::Close, ReportBasis::Open] {
                 for (daily, by_exchange) in [(true, false), (false, true), (false, false)] {
+                    // Scoped summary and ranked cores intentionally supersede the frozen reader.
+                    if scope != ReportScope::All && !daily {
+                        continue;
+                    }
                     let mut request = ReportRequest::new(Period::Today, daily);
                     request.by_exchange = by_exchange;
                     request.scope = scope;

@@ -9,6 +9,40 @@ use super::{
     query_reports, query_totals,
 };
 
+/// Ignoring the grant, basis, activity or settled sign would count one of these winning decoys.
+#[test]
+fn exchange_win_counts_follow_report_filters_and_zero_is_not_a_win() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+        core_uid INTEGER, newrecid INTEGER, buydate INTEGER, closedate INTEGER,
+        profitbtc REAL, spentbtc REAL, basecurrency INTEGER, emulator INTEGER, deleted INTEGER);
+        INSERT INTO orders_rep VALUES
+        (1,1,110,150,5,100,1,0,0),
+        (1,2,110,160,-3,100,1,0,0),
+        (1,3,110,170,0,100,1,0,0),
+        (1,4,50,180,7,100,1,0,0),
+        (1,5,110,0,100,100,1,0,0),
+        (1,6,110,180,100,100,1,1,0),
+        (1,7,110,180,100,100,1,0,1),
+        (2,1,110,180,100,100,1,0,0);",
+    )
+    .unwrap();
+    let mut filter = ReportFilter {
+        core_uids: vec![1],
+        date_from: Some(100),
+        date_to: Some(200),
+        emulator: Some(false),
+        rows: RowScope::Closed,
+        ..Default::default()
+    };
+    assert_eq!(super::query_report_wins(&conn, &filter).unwrap(), (2, 4));
+    filter.period_basis = PeriodBasis::OpenDate;
+    assert_eq!(super::query_report_wins(&conn, &filter).unwrap(), (1, 3));
+    filter.core_uids = vec![crate::config::NO_MATCH_CORE_UID];
+    assert_eq!(super::query_report_wins(&conn, &filter).unwrap(), (0, 0));
+}
+
 /// Removing the exact core, exact coin, or inclusive close-date predicate from
 /// `query_chart_trade_history` admits one of the independently seeded decoys, while filtering on
 /// buy date drops record 11 even though its close date is inside the selected Report interval.

@@ -2,6 +2,36 @@
 
 use super::*;
 
+/// Count profitable closed rows using the same settled money, grants and time axis as totals.
+/// Returns wins and all closed rows; missing profit is never counted as a win.
+pub fn query_report_wins(conn: &Connection, filter: &ReportFilter) -> ReadResult<(i64, i64)> {
+    const CTX: &str = "reports: wins";
+    let filter = ReportFilter {
+        rows: RowScope::Closed,
+        ..filter.clone()
+    };
+    let sources = read_sources_res(conn)?;
+    let meta = report_strategy_meta(conn, &filter).map_err(|error| read_fail(CTX, error))?;
+    let mut result = (0, 0);
+    for src in sources {
+        let (where_sql, params) = build_where(&filter, &src.cols, &meta);
+        let profit = profit_column(&src).row_sql();
+        let sql = format!(
+            "SELECT COALESCE(SUM(({profit}) > 0), 0), COUNT(*) FROM {} r{where_sql}",
+            src.table
+        );
+        let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|value| value.as_ref()).collect();
+        let counts = conn
+            .query_row(&sql, refs.as_slice(), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|error| read_fail(CTX, error))?;
+        result.0 += counts.0;
+        result.1 += counts.1;
+    }
+    Ok(result)
+}
+
 /// SQL projecting the rec id the soft-delete protocol addresses a row by.
 ///
 /// `newrecid` is a real column only on the typed replica; a legacy source projects `0`, which

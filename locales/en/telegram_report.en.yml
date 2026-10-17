@@ -1,5 +1,17 @@
 _version: 1
 telegram.report_title: "Report"
+telegram.report_exchange_menu: "Exchange"
+telegram.report_exchange_total: "Exchange total"
+telegram.report_exchange_summary: "%{cores} cores · %{active} with trades · winrate %{winrate}% · avg order %{average}"
+telegram.report_by_groups: "By group"
+telegram.report_best_cores: "Best cores"
+telegram.report_worst_cores: "Worst cores"
+telegram.report_hidden_prefix: "shared name prefix hidden: %{prefix}"
+telegram.report_exchange_all: "All exchange cores · %{active} with trades"
+telegram.report_other_exchange: "Other exchange"
+telegram.report_back_exchange: "Back to exchange"
+telegram.report_page_short: "Page"
+telegram.report_rank_footer: "worst to best · cores without trades are hidden"
 telegram.report_average_col: "Avg %"
 telegram.report_volume_col: "Volume"
 telegram.report_native_col: "Quote"
@@ -8,7 +20,7 @@ telegram.help_hour: "This hour"
 
 telegram.help_daily: "Daily results this month"
 
-telegram.help_intro: "Choose a period in the bottom menu. Tap again for a fresh report. Select an exchange to open its cores."
+telegram.help_intro: "Choose a period in the bottom menu. Tap again for a fresh report. Select an exchange to open its summary."
 
 telegram.help_commands: "Commands and custom dates"
 
@@ -29,26 +41,15 @@ telegram.report_calculation_extra: "Total covers the entire selected group and p
 
 telegram.button_home: "Overview"
 
-telegram.report_navigation_hint: "Choose the period in the bottom menu. Tap again for a fresh report. Buttons beneath the report open cores or days."
+telegram.report_navigation_hint: "Choose the period in the bottom menu. Tap again for a fresh report. Buttons beneath the report select the view or open an exchange."
 
 telegram.report_all_cores: "All cores"
-
-telegram.report_by_days: "By day"
-
-telegram.report_days_scope: "Exchange by day"
-
-telegram.report_cores_scope: "Exchange cores"
-
-telegram.report_back: "All exchanges"
 
 telegram.report_calculation: "Calculation details"
 
 telegram.report_exchanges: "Exchanges"
 
-telegram.report_exchanges_menu: "Exchanges"
-
 telegram.report_exchanges_back: "Back"
-
 
 telegram.report_scope_unavailable: "Exchange unavailable"
 
@@ -79,7 +80,6 @@ telegram.report_trades: "Trades"
 
 telegram.report_date: "Date"
 
-
 telegram.report_details: "Currencies and average order"
 
 telegram.report_average: "Average order"
@@ -92,7 +92,7 @@ telegram.report_next: "Next"
 
 telegram.report_unvalued: "Unavailable"
 
-telegram.report_empty: "No closed real trades in this period."
+telegram.report_empty: "No closed trades in this period"
 
 telegram.report_scope: "Selected group in terminal history · closed real trades · rates at trade time. Local history; offline bots do not update."
 telegram.report_scope_station: "Selected group in the station's history · closed real trades · rates at trade time. The station copies the cores' history around the clock; offline bots do not update."

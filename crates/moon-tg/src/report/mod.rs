@@ -23,6 +23,7 @@ use crate::TgHost;
 use crate::labels::{answer, navigation_keyboard, section_label};
 use moon_core::telegram::api::ReplyMarkup;
 
+mod drill;
 mod paging;
 mod render;
 mod sections;
@@ -60,6 +61,7 @@ impl Row {
 }
 
 /// A complete page plus a full-period total, all read in one SQLite snapshot.
+#[derive(Clone)]
 struct Page {
     request: ReportRequest,
     from: i64,
@@ -78,6 +80,8 @@ struct Page {
     cores: Vec<u64>,
     /// An automatic report's own title and zone, which head the table in place of the view.
     caption: Option<AutoCaption>,
+    /// Exchange summary or ranked roster, absent in the existing global views.
+    exchange: Option<drill::Exchange>,
 }
 
 /// Build a synthetic local-day table through the production layout walk, without reading storage.
@@ -132,6 +136,7 @@ pub(crate) fn preview_table(layout: &ReportLayout) -> crate::preview::PreviewTab
         layout: layout.sanitized(),
         cores: vec![],
         caption: None,
+        exchange: None,
     };
     render::preview_table(&page)
 }
@@ -450,6 +455,43 @@ fn read_page_with(
     if groups.is_empty() {
         request.by_group = false;
     }
+    if request.scope != ReportScope::All && !request.daily && !request.by_group {
+        let drilldowns = exchange_drilldowns(&snap, &accessible, &venues, &filter)?;
+        let roster_count = cores
+            .iter()
+            .map(|(id, _)| *id)
+            .chain(
+                venues
+                    .iter()
+                    .filter(|(id, _)| {
+                        in_scope(**id)
+                            && match &access {
+                                TelegramReportAccess::Owner => true,
+                                TelegramReportAccess::Viewer(ids) => ids.contains(id),
+                            }
+                    })
+                    .map(|(id, _)| *id),
+            )
+            .collect::<BTreeSet<_>>()
+            .len();
+        let page = Page {
+            request,
+            from,
+            to,
+            zone,
+            total: Default::default(),
+            rows: Vec::new(),
+            pages: 1,
+            drilldowns,
+            scope_label,
+            basis,
+            layout,
+            cores: accessible.iter().map(|(id, _)| *id).collect(),
+            caption: None,
+            exchange: None,
+        };
+        return drill::read(&snap, page, &filter, &cores, groups, roster_count);
+    }
     let by_group = !request.daily && !request.by_exchange && request.by_group;
     let by_core = !request.daily && !request.by_exchange && !by_group;
     let mut rows_by = Vec::new();
@@ -597,6 +639,7 @@ fn read_page_with(
             layout: layout.clone(),
             cores: Vec::new(),
             caption: None,
+            exchange: None,
         }))
     };
     let size = paging::fitting_page_size(&active, fits);
@@ -617,6 +660,7 @@ fn read_page_with(
         layout,
         cores: accessible.iter().map(|(id, _)| *id).collect(),
         caption: None,
+        exchange: None,
     })
 }
 
@@ -664,7 +708,7 @@ pub(crate) struct AutoInputs {
     pub(crate) order: CoreOrder,
     pub(crate) names: db::CoreNames,
     pub(crate) venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
-    /// The bot's saved core groups, for a report in the view by cores.
+    /// The bot's saved groups, shared by core sections and group summaries.
     pub(crate) groups: Vec<CoreGroup>,
 }
 
@@ -684,7 +728,8 @@ pub(crate) fn read_auto_report(
     if matches!(access, TelegramReportAccess::Viewer(ids) if ids.is_empty()) {
         return Ok(None);
     }
-    let request = ReportRequest::new(window.period.clone(), false).in_view(inputs.view);
+    let mut request = ReportRequest::new(window.period.clone(), false).in_view(inputs.view);
+    request.view_mode = Some(inputs.view);
     let mut page = read_page_with(
         conn,
         request,

@@ -67,8 +67,9 @@ pub use report_read::{
     RowScope, SideFilter, StrategyPurgeRows, TotalsSlice, VALUATION_PROFIT_COLUMN,
     VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN, display_columns, distinct_cores,
     distinct_strategies, max_core_uid, open_rows_for_bound, query_chart_trade_history,
-    query_chart_trade_history_for_cores, query_mini_trades, query_notify_trades, query_reports,
-    query_totals, query_totals_sliced, report_coin_is_exact, rows_by_core, strategy_purge_rows,
+    query_chart_trade_history_for_cores, query_mini_trades, query_notify_trades, query_report_wins,
+    query_reports, query_totals, query_totals_sliced, report_coin_is_exact, rows_by_core,
+    strategy_purge_rows,
 };
 pub(crate) use report_read::{count_by_core, max_core_uid_in};
 pub use trade_meta::{TradeMeta, query_trade_meta};

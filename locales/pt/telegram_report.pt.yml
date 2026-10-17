@@ -1,5 +1,17 @@
 _version: 1
 telegram.report_title: "Relatório"
+telegram.report_exchange_menu: "Bolsa"
+telegram.report_exchange_total: "Total da bolsa"
+telegram.report_exchange_summary: "%{cores} núcleos · %{active} com operações · winrate %{winrate}% · ordem média %{average}"
+telegram.report_by_groups: "Por grupos"
+telegram.report_best_cores: "Melhores núcleos"
+telegram.report_worst_cores: "Piores núcleos"
+telegram.report_hidden_prefix: "prefixo comum oculto: %{prefix}"
+telegram.report_exchange_all: "Todos os núcleos · %{active} com operações"
+telegram.report_other_exchange: "Outra bolsa"
+telegram.report_back_exchange: "Voltar à bolsa"
+telegram.report_page_short: "Pág."
+telegram.report_rank_footer: "do pior ao melhor · núcleos sem operações ocultos"
 telegram.report_average_col: "Média %"
 telegram.report_volume_col: "Volume"
 telegram.report_native_col: "Na moeda"
@@ -8,7 +20,7 @@ telegram.help_hour: "Esta hora"
 
 telegram.help_daily: "Resultados diários neste mês"
 
-telegram.help_intro: "Escolha um período no menu de baixo. Toque de novo para um relatório novo. Selecione uma corretora para abrir os núcleos dela."
+telegram.help_intro: "Escolha um período no menu inferior. Toque novamente para atualizar. Escolha uma bolsa para abrir o resumo."
 
 telegram.help_commands: "Comandos e datas personalizadas"
 
@@ -30,23 +42,13 @@ telegram.report_calculation_extra: "O total cobre o grupo e o período seleciona
 
 telegram.button_home: "Visão geral"
 
-telegram.report_navigation_hint: "Escolha o período no menu de baixo. Toque de novo para um relatório novo. Os botões sob o relatório abrem núcleos ou dias."
+telegram.report_navigation_hint: "Escolha o período no menu inferior. Toque novamente para atualizar. Os botões abaixo do relatório mudam a vista ou abrem uma bolsa."
 
 telegram.report_all_cores: "Todos os núcleos"
-
-telegram.report_by_days: "Por dia"
-
-telegram.report_days_scope: "Dias da corretora"
-
-telegram.report_cores_scope: "Núcleos da corretora"
-
-telegram.report_back: "Todas as corretoras"
 
 telegram.report_calculation: "Detalhes do cálculo"
 
 telegram.report_exchanges: "Corretoras"
-
-telegram.report_exchanges_menu: "Corretoras"
 
 telegram.report_exchanges_back: "Voltar"
 
@@ -91,7 +93,7 @@ telegram.report_next: "Próxima"
 
 telegram.report_unvalued: "Indisponível"
 
-telegram.report_empty: "Não há operações reais fechadas neste período."
+telegram.report_empty: "Não há operações fechadas neste período"
 
 telegram.report_scope: "Grupo selecionado no histórico do terminal · operações reais fechadas · cotações no momento da operação. Histórico local; bots offline não atualizam."
 telegram.report_scope_station: "Grupo selecionado no histórico da estação · operações reais fechadas · cotações no momento da operação. A estação copia o histórico dos núcleos o tempo todo; bots offline não atualizam."

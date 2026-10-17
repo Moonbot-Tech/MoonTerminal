@@ -1,5 +1,17 @@
 _version: 1
 telegram.report_title: "Báo cáo"
+telegram.report_exchange_menu: "Sàn"
+telegram.report_exchange_total: "Tổng theo sàn"
+telegram.report_exchange_summary: "%{cores} lõi · %{active} có giao dịch · winrate %{winrate}% · lệnh TB %{average}"
+telegram.report_by_groups: "Theo nhóm"
+telegram.report_best_cores: "Lõi tốt nhất"
+telegram.report_worst_cores: "Lõi kém nhất"
+telegram.report_hidden_prefix: "đã ẩn phần tên chung: %{prefix}"
+telegram.report_exchange_all: "Tất cả lõi của sàn · %{active} có giao dịch"
+telegram.report_other_exchange: "Sàn khác"
+telegram.report_back_exchange: "Về sàn"
+telegram.report_page_short: "Trang"
+telegram.report_rank_footer: "từ kém nhất đến tốt nhất · ẩn lõi không giao dịch"
 telegram.report_average_col: "TB %"
 telegram.report_volume_col: "Khối lượng"
 telegram.report_native_col: "Tiền gốc"
@@ -8,7 +20,7 @@ telegram.help_hour: "Giờ này"
 
 telegram.help_daily: "Kết quả theo ngày trong tháng này"
 
-telegram.help_intro: "Chọn kỳ ở menu dưới. Nhấn lại để lấy báo cáo mới. Chọn sàn để mở các core của sàn."
+telegram.help_intro: "Chọn kỳ trong menu dưới. Nhấn lại để cập nhật báo cáo. Chọn sàn để mở tóm tắt."
 
 telegram.help_commands: "Lệnh và ngày tùy chọn"
 
@@ -29,23 +41,13 @@ telegram.report_calculation_extra: "Tổng gồm cả nhóm và kỳ đã chọn
 
 telegram.button_home: "Tổng quan"
 
-telegram.report_navigation_hint: "Chọn kỳ ở menu dưới. Nhấn lại để lấy báo cáo mới. Nút dưới báo cáo mở core hoặc ngày."
+telegram.report_navigation_hint: "Chọn kỳ trong menu dưới. Nhấn lại để cập nhật. Các nút bên dưới báo cáo chọn chế độ xem hoặc mở một sàn."
 
 telegram.report_all_cores: "Mọi core"
-
-telegram.report_by_days: "Theo ngày"
-
-telegram.report_days_scope: "Ngày của sàn"
-
-telegram.report_cores_scope: "Core của sàn"
-
-telegram.report_back: "Mọi sàn"
 
 telegram.report_calculation: "Cách tính"
 
 telegram.report_exchanges: "Sàn"
-
-telegram.report_exchanges_menu: "Sàn"
 
 telegram.report_exchanges_back: "Quay lại"
 
@@ -90,7 +92,7 @@ telegram.report_next: "Sau"
 
 telegram.report_unvalued: "Chưa định giá"
 
-telegram.report_empty: "Không có giao dịch thật đã đóng trong kỳ này."
+telegram.report_empty: "Không có giao dịch đã đóng trong kỳ này"
 
 telegram.report_scope: "Nhóm đã chọn trong lịch sử terminal · giao dịch thật đã đóng · tỷ giá lúc giao dịch. Lịch sử cục bộ; bot ngoại tuyến không cập nhật."
 telegram.report_scope_station: "Nhóm đã chọn trong lịch sử trạm · giao dịch thật đã đóng · tỷ giá lúc giao dịch. Trạm sao chép lịch sử core suốt ngày đêm; bot ngoại tuyến không cập nhật."
