@@ -41,6 +41,11 @@ ignore = [
     # Its newest release still requires zip ^8.3, also fully yanked — drop this entry once
     # rust_xlsxwriter accepts zip 9.
     { crate = "zip@7.2.0", reason = "only rust_xlsxwriter's writer; the yank-causing advisories are all in extract(), which it never calls" },
+    # 2026-10-17 — the same three extract() flaws now ship as RustSec advisories against zip < 9.0.0;
+    # only rust_xlsxwriter's 7.2.0 matches, and it never extracts. Drop with the entry above.
+    { id = "RUSTSEC-2026-0367", reason = "zip 7.2.0 is only rust_xlsxwriter's writer; the flaw is in extract(), never called" },
+    { id = "RUSTSEC-2026-0368", reason = "zip 7.2.0 is only rust_xlsxwriter's writer; the flaw is in extract(), never called" },
+    { id = "RUSTSEC-2026-0369", reason = "zip 7.2.0 is only rust_xlsxwriter's writer; the flaw is in extract(), never called" },
 ]
 
 [bans]
