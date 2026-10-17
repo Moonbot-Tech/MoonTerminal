@@ -243,34 +243,20 @@ impl ChartPanel {
                 };
                 (
                     sig,
-                    chart_settings_sig(
-                        b,
-                        this.chart_graphics,
-                        this.candle_view,
-                        this.chart_labels.clone(),
-                        this.default_kind,
-                    ),
+                    this.scene_visible.then(|| {
+                        chart_settings_sig(
+                            b,
+                            this.chart_graphics,
+                            this.candle_view,
+                            this.chart_labels.clone(),
+                            this.default_kind,
+                        )
+                    }),
                     b.panic_rev,
                     b.fav_rev,
                 )
             };
-            if settings_sig != this.settings_sig {
-                this.settings_sig = settings_sig;
-                this.view_dirty = true;
-                // A panel with NO override follows `layout.chart_graphics`, which a ⧉ press in
-                // another group window rewrites without ever walking this stack. This is the only
-                // place such a panel hears about it, so the trade-kind re-query hangs here too; it
-                // returns immediately unless that pair actually moved.
-                this.requery_trade_history_on_trade_kinds(cx);
-                this.requery_trade_history_on_core_scope(cx);
-                // ...and the trade style lives beside them: a default flipped to lines elsewhere
-                // has to start resolving here too.
-                this.request_trace_lines(true, cx);
-                this.sync_trace_lines(true, cx);
-                this.sync_chart_text(cx);
-                crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
-                cx.notify();
-            }
+            this.apply_settings_signature(settings_sig, cx);
             // Both market-button overrides in ONE condition: they settle on the same coordination
             // tick, and two conditions would notify twice and count two repaints in
             // `CHART_OBS_NOTIFY` for the one that actually happens. Both controls are GPUI overlay
@@ -345,6 +331,8 @@ impl ChartPanel {
             market_ref_epoch,
             data_sig: 0,
             settings_sig,
+            settings_dirty_while_hidden: false,
+            applied_report_axis_rev: None,
             fast: true,
             scene_visible: false,
             main_stack_scroll: false,
@@ -481,33 +469,20 @@ impl ChartPanel {
                 };
                 (
                     sig,
-                    chart_settings_sig(
-                        b,
-                        this.chart_graphics,
-                        this.candle_view,
-                        this.chart_labels.clone(),
-                        this.default_kind,
-                    ),
+                    this.scene_visible.then(|| {
+                        chart_settings_sig(
+                            b,
+                            this.chart_graphics,
+                            this.candle_view,
+                            this.chart_labels.clone(),
+                            this.default_kind,
+                        )
+                    }),
                     b.panic_rev,
                     b.fav_rev,
                 )
             };
-            if settings_sig != this.settings_sig {
-                this.settings_sig = settings_sig;
-                this.view_dirty = true;
-                // Same reason as the twin observer in `new_main`: a panel with no override of its
-                // own hears a ⧉ press from another group window only here, and the durable history
-                // query was narrowed by the previous trade-kind pair.
-                this.requery_trade_history_on_trade_kinds(cx);
-                this.requery_trade_history_on_core_scope(cx);
-                // ...and the trade style lives beside them: a default flipped to lines elsewhere
-                // has to start resolving here too.
-                this.request_trace_lines(true, cx);
-                this.sync_trace_lines(true, cx);
-                this.sync_chart_text(cx);
-                crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
-                cx.notify();
-            }
+            this.apply_settings_signature(settings_sig, cx);
             // One condition for both overrides; see the twin observer in `new_main`. Numbered
             // AddToChart and Custom panels are today's worst case at 1 Hz -- this is deliberately
             // ahead of that throttle.
@@ -575,6 +550,8 @@ impl ChartPanel {
             market_ref_epoch,
             data_sig: 0,
             settings_sig,
+            settings_dirty_while_hidden: false,
+            applied_report_axis_rev: None,
             fast: false,
             scene_visible: false,
             main_stack_scroll: false,

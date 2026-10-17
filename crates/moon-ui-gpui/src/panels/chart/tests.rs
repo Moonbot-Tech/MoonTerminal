@@ -1,11 +1,10 @@
 //! Static action-authority regressions for group-owned chart panels.
 
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
 use super::settings_sig::ChartSettingsSig;
 use moon_core::{
     config::{ChartGraphicsCfg, ChartLabelsCfg, ChartTheme, OrdersStyleSet},
-    db::{OffsetSegment, ReportAxis},
     market::CandleViewCfg,
 };
 
@@ -105,24 +104,13 @@ fn chart_stacks_pass_their_workspace_group_into_every_panel() {
     );
 }
 
-/// `panels/chart/mod.rs:ChartSettingsSig::eq` must compare report axes and global book widths.
+/// Signature equality must compare report-axis revisions and global book widths.
 ///
 /// Dropping that comparison leaves an idle chart asleep after a core's clock offset is measured,
 /// so its closed-trade arrows continue to use stale timestamps until an unrelated repaint.
 /// Omitting the width comparison similarly leaves a quiet chart at the previous book width.
 #[test]
 fn chart_settings_signature_changes_when_the_report_axis_changes() {
-    let identity_axis = ReportAxis::from_measured(Default::default(), chrono_tz::UTC);
-    let offset_axis = ReportAxis::from_measured(
-        HashMap::from([(
-            42,
-            vec![OffsetSegment {
-                from_utc: 0,
-                offset_secs: 3_600,
-            }],
-        )]),
-        chrono_tz::UTC,
-    );
     let identity = ChartSettingsSig {
         order_book_width_px: moon_core::config::book_width::DEFAULT,
         theme: ChartTheme::default(),
@@ -133,10 +121,10 @@ fn chart_settings_signature_changes_when_the_report_axis_changes() {
         chart_graphics: ChartGraphicsCfg::default(),
         candle_view: CandleViewCfg::default(),
         chart_labels: Rc::new(ChartLabelsCfg::default()),
-        report_axis: identity_axis,
+        report_axis_rev: 0,
     };
     let offset = ChartSettingsSig {
-        report_axis: offset_axis,
+        report_axis_rev: 1,
         ..identity.clone()
     };
 

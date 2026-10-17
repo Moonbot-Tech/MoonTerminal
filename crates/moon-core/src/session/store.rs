@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::applog::LogLine;
 use crate::feed::{
@@ -450,6 +451,8 @@ pub struct CoreData {
     pub time_offset: crate::feed::CoreTimeOffsetStatus,
     /// Advances when the offset above changes, gating the Core Status column that renders it.
     pub time_offset_rev: u64,
+    /// Shared fleet revision, also advanced by offsets seeded through apply.
+    time_offset_epoch: Arc<AtomicU64>,
 }
 
 /// When a listed ban runs out, in Unix milliseconds.
@@ -600,6 +603,7 @@ impl CoreData {
             news_rev: 0,
             time_offset: crate::feed::CoreTimeOffsetStatus::default(),
             time_offset_rev: 0,
+            time_offset_epoch: Arc::default(),
         }
     }
 
@@ -892,6 +896,7 @@ impl CoreData {
                 if self.time_offset != status {
                     self.time_offset = status;
                     self.time_offset_rev = self.time_offset_rev.wrapping_add(1);
+                    self.time_offset_epoch.fetch_add(1, Ordering::Relaxed);
                 }
             }
             FeedMsg::Status(s) => {

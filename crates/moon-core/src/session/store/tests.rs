@@ -9,6 +9,48 @@ use crate::feed::{
     CoreSysStatus, DetectRow, FeedMsg, FieldMask, OrderRow, OrderTrace, OrderTracePoint,
 };
 
+/// Dropping the shared bump, or bumping unchanged messages, must invalidate this fleet cache test.
+#[test]
+fn time_offset_epoch_bumps_only_on_changed_offset() {
+    let mut store = super::CoreStore::default();
+    store.ensure(41);
+    store.ensure(42);
+    assert_eq!(store.time_offset_epoch(), 0);
+    let status = crate::feed::CoreTimeOffsetStatus {
+        offset_secs: Some(3_600),
+        observed_at_utc: 10_000,
+        ..Default::default()
+    };
+    store
+        .core_mut(41)
+        .unwrap()
+        .apply(FeedMsg::TimeOffset(status));
+    assert_eq!(store.time_offset_epoch(), 1);
+    store.ensure(41);
+    store
+        .core_mut(41)
+        .unwrap()
+        .apply(FeedMsg::TimeOffset(status));
+    store
+        .core_mut(42)
+        .unwrap()
+        .apply(FeedMsg::TimeOffset(status));
+    assert_eq!(store.time_offset_epoch(), 2);
+    store
+        .core_mut(41)
+        .unwrap()
+        .apply(FeedMsg::TimeOffset(crate::feed::CoreTimeOffsetStatus {
+            offset_secs: Some(7_200),
+            ..status
+        }));
+    assert_eq!(store.time_offset_epoch(), 3);
+    assert_eq!(store.core(41).unwrap().time_offset_rev, 2);
+    store.remove(41);
+    assert_eq!(store.time_offset_epoch(), 4);
+    store.remove(99);
+    assert_eq!(store.time_offset_epoch(), 5);
+}
+
 /// A core with the given freshness inputs; everything else stays at its default.
 fn core(assets_rev: u64, rate_known: bool, stale: bool, status: ConnStatus) -> CoreData {
     let mut cd = CoreData::new();

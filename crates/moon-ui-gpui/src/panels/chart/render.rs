@@ -45,6 +45,19 @@ impl Render for ChartPanel {
         let became_visible = !self.scene_visible;
         self.scene_visible = true;
         self.chart.set_scene_visible(true);
+        if self.settings_dirty_while_hidden {
+            let signature = {
+                let backend = self.backend.read(cx);
+                super::chart_settings_sig(
+                    backend,
+                    self.chart_graphics,
+                    self.candle_view,
+                    self.chart_labels.clone(),
+                    self.default_kind,
+                )
+            };
+            self.apply_settings_signature(Some(signature), cx);
+        }
         self.chart
             .set_market_source(Some(self.backend.read(cx).session.market_source()));
         // The chart keeps the monitor's density under UI zoom: its sizes go through the platform
@@ -116,10 +129,10 @@ impl Render for ChartPanel {
             // The roster is GLOBAL: the same handle for every chart, taken straight off the
             // backend rather than through the per-tab settings signature beside it.
             let arb_view = b.arb_view.clone();
-            // Same reasoning as `chart_labels` just above: read off the settings signature, which
-            // the observer already restamped before this render ran, instead of rebuilding it here
-            // every frame.
-            let report_axis = self.settings_sig.report_axis.clone();
+            // Only fetch the shared axis when the signature's revision has moved.
+            let report_axis = (self.applied_report_axis_rev
+                != Some(self.settings_sig.report_axis_rev))
+            .then(|| b.report_axis_arc(crate::chartdx::axes::display_zone()));
             (
                 theme,
                 orders,
@@ -150,7 +163,6 @@ impl Render for ChartPanel {
             | self.chart.set_compare_lock_shown(self.compare_eligible)
             | self.chart.set_candle_view(candle_view)
             | self.chart.set_chart_graphics(chart_graphics)
-            | self.chart.set_report_axis(report_axis)
             | self.chart.set_chart_labels(chart_labels)
             | self.chart.set_arb_view(arb_view)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
@@ -161,6 +173,10 @@ impl Render for ChartPanel {
             | self
                 .chart
                 .apply_live(live_scope, follow.0, follow.1, now_unix_ms());
+        if let Some(axis) = report_axis {
+            settings_changed |= self.chart.set_report_axis((*axis).clone());
+            self.applied_report_axis_rev = Some(self.settings_sig.report_axis_rev);
+        }
         // While compare lock is active, preserve the anchor's Y window, overriding scale each
         // frame. The engine's set_locked_y is idempotent and returns false when unchanged; the
         // panel's set_locked_y handles clearing the lock and restoring configured/automatic scale.

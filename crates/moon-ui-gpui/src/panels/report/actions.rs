@@ -772,7 +772,7 @@ impl ReportPanel {
             // The SAME axis the grid renders on: a copied row and the row it was copied from
             // must not disagree, which they would the moment one of the two stopped being
             // corrected.
-            &self.report_axis(),
+            self.report_axis().as_ref(),
             self.display_zone,
         );
         cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -959,7 +959,7 @@ impl ReportPanel {
             &suggested_filter,
             fmt,
             all_cols,
-            &self.report_axis(),
+            self.report_axis().as_ref(),
             self.display_zone,
         );
         let handle = window.window_handle();

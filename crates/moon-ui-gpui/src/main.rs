@@ -108,6 +108,14 @@ struct Backend {
     valuation: Option<moon_core::db::valuation::ValuationHandle>,
     /// Dedicated wake channel for report-derived consumers.
     report_revision: Entity<ReportRevision>,
+    /// Current report axis per display zone, keyed by fleet offsets and configured identities.
+    report_axes: std::cell::RefCell<
+        Vec<(
+            chrono_tz::Tz,
+            (u64, u64),
+            std::sync::Arc<moon_core::db::ReportAxis>,
+        )>,
+    >,
     /// Dedicated wake channel for consumers that must retry after retained market data changes.
     market_data_revision: Entity<MarketDataRevision>,
     /// Dedicated wake channel for surfaces whose civil-time meaning follows the header clock.

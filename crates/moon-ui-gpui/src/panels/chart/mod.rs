@@ -67,6 +67,7 @@ use settings_sig::{
     DEBUG_HISTORY_FILL_SPAN_MS, chart_bootstrap_present_rate_hz, chart_settings_sig,
 };
 
+/// Dockable chart state that defers hidden settings work until its next visible frame.
 pub struct ChartPanel {
     backend: Entity<Backend>,
     /// Which kind's defaults this panel follows when it has no override of its own.
@@ -168,6 +169,10 @@ pub struct ChartPanel {
     /// UI settings applied during rendering. Cached dock panels are no longer awakened by every
     /// top-down Shell render, so a changed signature must notify this panel directly.
     settings_sig: ChartSettingsSig,
+    /// Hidden notifications defer signature construction until the first visible frame.
+    settings_dirty_while_hidden: bool,
+    /// Axis revision last delivered to the chart engine.
+    applied_report_axis_rev: Option<u64>,
     /// Whether to present smoothly at vsync as a focused chart instead of adapting to observed data.
     /// Main starts true; numbered AddToChart and Custom panels start false.
     fast: bool,

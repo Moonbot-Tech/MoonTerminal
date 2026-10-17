@@ -405,6 +405,7 @@ impl SessionManager {
                 continue;
             };
             if let Some(core) = self.store.core_mut(core_uid) {
+                // Apply through the retained core so seeded offsets also advance the fleet epoch.
                 core.apply(FeedMsg::TimeOffset(CoreTimeOffsetStatus {
                     offset_secs: Some(segment.offset_secs),
                     // The segment's OWN start, not the seed time: a value measured last week must

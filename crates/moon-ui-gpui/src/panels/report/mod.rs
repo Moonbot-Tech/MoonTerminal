@@ -655,7 +655,9 @@ pub struct ReportPanel {
     /// never inside `render`: it is read once per cell and once per filter, and rebuilding it
     /// there would walk the whole core list on every paint. Starts as the identity, which is the
     /// correct answer until something has actually been measured.
-    pub(super) axis: ReportAxis,
+    pub(super) axis: Arc<ReportAxis>,
+    /// Revision last compared with the backend's measured axis.
+    pub(super) last_axis_rev: u64,
     /// Whether picker civil values must be rewritten from their preserved absolute bounds.
     display_zone_fields_dirty: bool,
     pub(super) group: String,
@@ -885,7 +887,7 @@ impl ReportPanel {
     ///
     /// Returns:
     ///     The cached time axis for replicated report timestamps.
-    pub(super) fn report_axis(&self) -> ReportAxis {
+    pub(super) fn report_axis(&self) -> Arc<ReportAxis> {
         self.axis.clone()
     }
 

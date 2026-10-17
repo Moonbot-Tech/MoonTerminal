@@ -210,6 +210,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         reports,
         valuation,
         report_revision: report_revision.clone(),
+        report_axes: Default::default(),
         market_data_revision: market_data_revision.clone(),
         display_time_revision: display_time_revision.clone(),
         workspace_revision: workspace_revision.clone(),
