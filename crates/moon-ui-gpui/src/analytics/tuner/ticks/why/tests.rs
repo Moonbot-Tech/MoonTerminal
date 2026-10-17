@@ -170,8 +170,8 @@ fn fit_matches_the_search_oracle_across_tape_findings_tail_gaps_and_retention() 
                                 row.ticks = None;
                             }
                             assert_eq!(
-                                DealWhy::of(&row, floor, 0) == DealWhy::Fit,
-                                row.fit() && row.ticks.is_some()
+                                DealWhy::of_with(&row, &Admission::at(floor, 0)) == DealWhy::Fit,
+                                row.fit_with(&Admission::current()) && row.ticks.is_some()
                             );
                         }
                     }
@@ -181,7 +181,10 @@ fn fit_matches_the_search_oracle_across_tape_findings_tail_gaps_and_retention() 
     }
     let mut pending = row();
     pending.verdict = None;
-    assert_eq!(DealWhy::of(&pending, floor, 0), DealWhy::NoVerdict);
+    assert_eq!(
+        DealWhy::of_with(&pending, &Admission::at(floor, 0)),
+        DealWhy::NoVerdict
+    );
 }
 
 /// Distinct source reasons cannot collapse into debug output or silently use English fallback.
@@ -303,7 +306,7 @@ fn actions_and_reassurance_follow_the_contract() {
         for exit in exits() {
             let mut row = row();
             row.verdict = Some(verdict(entry, exit));
-            let why = DealWhy::of(&row, 60, 0);
+            let why = DealWhy::of_with(&row, &Admission::at(60, 0));
             if !matches!(entry, EntryFinding::Fact | EntryFinding::Hit) || exit != ExitFinding::Hit
             {
                 assert!(why.model_tip(row.verdict.as_ref()).not_your_fault);
@@ -324,7 +327,7 @@ fn model_and_tape_projections_remain_independent() {
     ));
     row.deal.gap = Some(gap());
     assert_eq!(
-        DealWhy::of(&row, 60, 0),
+        DealWhy::of_with(&row, &Admission::at(60, 0)),
         DealWhy::EntryMissed(EntryFinding::Off)
     );
     assert_eq!(
@@ -332,20 +335,23 @@ fn model_and_tape_projections_remain_independent() {
         Some(DealWhy::Unjudged(Unjudged::InGap))
     );
     assert_eq!(
-        DealWhy::tape_of(&row, 60, 0),
+        DealWhy::tape_of_with(&row, &Admission::at(60, 0)),
         DealWhy::Hole { len_ms: 119_000 }
     );
     assert_eq!(
-        DealWhy::tape_of(&row, 60, 0).tape_glyph(),
+        DealWhy::tape_of_with(&row, &Admission::at(60, 0)).tape_glyph(),
         ("◐", Tone::Warning)
     );
     row.verdict = Some(verdict(
         EntryFinding::Hit,
         ExitFinding::Unjudged(Unjudged::InGap),
     ));
-    assert_eq!(DealWhy::of(&row, 60, 0), DealWhy::Unjudged(Unjudged::InGap));
     assert_eq!(
-        DealWhy::tape_of(&row, 60, 0).tape_glyph(),
+        DealWhy::of_with(&row, &Admission::at(60, 0)),
+        DealWhy::Unjudged(Unjudged::InGap)
+    );
+    assert_eq!(
+        DealWhy::tape_of_with(&row, &Admission::at(60, 0)).tape_glyph(),
         ("◐", Tone::Warning)
     );
 }
@@ -357,7 +363,7 @@ fn missing_tape_offers_fetch_only_with_a_resolved_source() {
     let mut row = row();
     row.tape = TapeStatus::Missing;
     assert_eq!(
-        DealWhy::of(&row, 60, 0),
+        DealWhy::of_with(&row, &Admission::at(60, 0)),
         DealWhy::NoTape { fetchable: false }
     );
     row.address = Some(Arc::new(RowAddress {
@@ -372,10 +378,15 @@ fn missing_tape_offers_fetch_only_with_a_resolved_source() {
     }));
     assert!(row.fetchable_with(&Admission::at(60, 0)));
     assert_eq!(
-        DealWhy::of(&row, 60, 0),
+        DealWhy::of_with(&row, &Admission::at(60, 0)),
         DealWhy::NoTape { fetchable: true }
     );
-    assert!(DealWhy::of(&row, 60, 0).tape_tip().todo.is_some());
+    assert!(
+        DealWhy::of_with(&row, &Admission::at(60, 0))
+            .tape_tip()
+            .todo
+            .is_some()
+    );
     for exit in exits() {
         if let Some(reason) = DealWhy::of_exit(Some(&verdict(EntryFinding::Hit, exit))) {
             assert!(reason.tape_tip().todo.is_none());
@@ -415,25 +426,31 @@ fn unfillable_short_tail_is_in_the_sample_but_fresh_tape_waits() {
         fresh_now,
         (false, true)
     ));
-    assert_eq!(DealWhy::of(&row, 60, old_now), DealWhy::AcceptedShortTail);
     assert_eq!(
-        DealWhy::of(&row, 60, fresh_now),
+        DealWhy::of_with(&row, &Admission::at(60, old_now)),
+        DealWhy::AcceptedShortTail
+    );
+    assert_eq!(
+        DealWhy::of_with(&row, &Admission::at(60, fresh_now)),
         DealWhy::ShortTail {
             trail_ms: 30_000,
             min_s: 60
         }
     );
-    assert!(row.fit());
+    assert!(row.fit_with(&Admission::current()));
     let old = Readiness::of_rows([&row], old_now, 60);
     assert_eq!((old.covered, old.fit, old.fetchable), (1, 1, 0));
     let fresh = Readiness::of_rows([&row], fresh_now, 60);
     assert_eq!((fresh.covered, fresh.fit, fresh.fetchable), (1, 0, 1));
     row.deal.gap = Some(gap());
     assert!(
-        !row.fit(),
+        !row.fit_with(&Admission::current()),
         "short-tail admission never admits a pre-close gap"
     );
     row.deal.gap = None;
     row.tape = TapeStatus::Missing;
-    assert!(!row.fit(), "a tail exception cannot create missing tape");
+    assert!(
+        !row.fit_with(&Admission::current()),
+        "a tail exception cannot create missing tape"
+    );
 }

@@ -94,8 +94,8 @@ pub(in crate::analytics::tuner) struct Admission {
     pub min_s: u32,
     pub now_ms: i64,
     pub refusal_revision: u64,
-    switches: (bool, bool),
-    refused: std::collections::HashSet<i64>,
+    pub switches: (bool, bool),
+    refused: std::sync::Arc<std::collections::HashSet<i64>>,
 }
 
 impl Admission {

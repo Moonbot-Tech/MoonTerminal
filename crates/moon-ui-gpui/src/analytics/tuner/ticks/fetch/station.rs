@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use moon_core::db::tuner::ticks::tail::{
@@ -33,9 +33,20 @@ struct Unfillable {
     generation: (u64, u32, (bool, bool)),
     revision: u64,
     uids: HashMap<i64, (String, String)>,
+    snapshot_revision: u64,
+    snapshot: Arc<HashSet<i64>>,
 }
 
 impl Unfillable {
+    /// Rebuild membership only after a mutation; every unchanged pass shares the same set.
+    fn snapshot(&mut self) -> (u64, Arc<HashSet<i64>>) {
+        if self.snapshot_revision != self.revision {
+            self.snapshot = Arc::new(self.uids.keys().copied().collect());
+            self.snapshot_revision = self.revision;
+        }
+        (self.revision, Arc::clone(&self.snapshot))
+    }
+
     /// A changed floor, source policy or station finalisation permits another attempt.
     fn refresh(&mut self, generation: (u64, u32, (bool, bool))) {
         if self.generation != generation {
@@ -90,9 +101,8 @@ pub(in crate::analytics::tuner) fn candidate(uid: i64) -> bool {
 }
 
 /// One pass's refusal membership and revision, without a global lock for every row.
-pub(in crate::analytics::tuner) fn refusal_snapshot() -> (u64, HashSet<i64>) {
-    let rows = unfillable();
-    (rows.revision, rows.uids.keys().copied().collect())
+pub(in crate::analytics::tuner) fn refusal_snapshot() -> (u64, Arc<HashSet<i64>>) {
+    unfillable().snapshot()
 }
 
 /// Refresh admission caches even when no tape row changed.

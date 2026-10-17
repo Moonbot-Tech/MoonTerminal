@@ -3,6 +3,16 @@
 use super::{ChartHistoryBuffers, ChartHistoryCursor, MarketDataSource, price_rows_to_points};
 use crate::feed::PricePoint;
 use crate::session::CoreId;
+use std::time::Instant;
+
+/// Copied replay lines and the next local archive-demand retry, independent of live ticks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplayPriceLinesRead {
+    /// Capacity required by either drawable line, including an empty line's minimum.
+    pub capacity: usize,
+    /// Local demand is still deferred; `None` means accepted or final for this client.
+    pub retry_at: Option<Instant>,
+}
 
 impl MarketDataSource {
     /// Replace only the replay's price-line buffers from its provider's retained history.
@@ -11,7 +21,7 @@ impl MarketDataSource {
     /// shared archive gate requests missing history without blocking; an archive notification
     /// causes the chart to read again. Missing mark history remains empty, including on spot.
     /// Reuses this replay consumer's row scratch without advancing any live consumer cursor.
-    /// Returns the capacity needed by either line, or `None` until provider readers are ready.
+    /// Returns copied capacity and local demand's retry deadline, or `None` until readers exist.
     pub fn read_replay_price_lines(
         &self,
         core: CoreId,
@@ -19,7 +29,7 @@ impl MarketDataSource {
         window: (i64, i64),
         out: &mut ChartHistoryBuffers,
         cursor: &mut ChartHistoryCursor,
-    ) -> Option<usize> {
+    ) -> Option<ReplayPriceLinesRead> {
         out.last_points.clear();
         out.mark_points.clear();
         let (provider, client, epoch, archive) = {
@@ -33,8 +43,12 @@ impl MarketDataSource {
             .snapshot_versioned()
             .and_then(|snapshot| snapshot.market_history_readers(market))?;
         archive.request(provider, market, &client, epoch);
+        let retry_at = archive.retry_at(provider, market, epoch, Instant::now());
         if window.0 > window.1 {
-            return Some(1);
+            return Some(ReplayPriceLinesRead {
+                capacity: 1,
+                retry_at,
+            });
         }
         if let Some(reader) = readers.last_prices {
             reader.copy_time_range_ms(
@@ -54,7 +68,10 @@ impl MarketDataSource {
             );
             price_rows_to_points(&cursor.mark_price_rows, &mut out.mark_points);
         }
-        Some(prepare_replay_price_lines(window, out))
+        Some(ReplayPriceLinesRead {
+            capacity: prepare_replay_price_lines(window, out),
+            retry_at,
+        })
     }
 }
 

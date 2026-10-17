@@ -415,7 +415,7 @@ fn ready_real_data_bench() {
                 "row\t{key}\t{}\t{:?}\tfit={}\tticks={}\tfetchable={}\theld={:?}\t{:?}",
                 row.deal.report_uid,
                 row.tape,
-                row.fit(),
+                row.fit_with(&Admission::current()),
                 row.ticks.is_some(),
                 row.fetchable_with(&Admission::at(min_tail_s, now_ms)),
                 row.held,
@@ -609,7 +609,7 @@ fn ready_real_data_bench() {
         let mut own: HashMap<(i64, u64), Arc<HashMap<String, String>>> = HashMap::new();
         let mut pending: Vec<PendingDeal> = rows
             .iter()
-            .filter(|r| r.fit() && r.ticks.is_some())
+            .filter(|r| r.fit_with(&Admission::current()) && r.ticks.is_some())
             .filter_map(|row| {
                 let base = own
                     .entry((row.deal.strategy_id, row.deal.core_uid))

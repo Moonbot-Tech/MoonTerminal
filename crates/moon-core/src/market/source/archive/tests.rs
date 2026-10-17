@@ -1,5 +1,26 @@
 use super::*;
 
+/// A quiet replay must retry spacing and local refusals, but never resend accepted demand.
+#[test]
+fn replay_demand_deadlines_survive_spacing_refusal_and_client_replacement() {
+    let gate = ArchiveGate::default();
+    let now = Instant::now();
+    gate.state.lock().unwrap().last_send = Some(now);
+    assert_eq!(
+        gate.retry_at(1, "XALPHA", 1, now),
+        Some(now + ARCHIVE_SEND_SPACING)
+    );
+    claim(&gate, 1, "XALPHA", refused(1, 1, now));
+    let deadline = gate.retry_at(1, "XALPHA", 1, now).unwrap();
+    assert_eq!(deadline, now + ARCHIVE_SEND_RETRY);
+    assert_eq!(gate.retry_at(1, "XALPHA", 1, deadline), Some(deadline));
+    claim(&gate, 1, "XALPHA", accepted(1));
+    assert_eq!(gate.retry_at(1, "XALPHA", 1, deadline), None);
+    claim(&gate, 1, "XALPHA", refused(1, ARCHIVE_MAX_REFUSALS, now));
+    assert_eq!(gate.retry_at(1, "XALPHA", 1, deadline), None);
+    assert_eq!(gate.retry_at(1, "XALPHA", 2, deadline), Some(deadline));
+}
+
 fn accepted(epoch: u64) -> ArchiveRequest {
     ArchiveRequest {
         epoch,

@@ -154,7 +154,10 @@ fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
         entry_line: None,
         held: Some((30_000, 30_000)),
     };
-    assert!(row.fit(), "an old unfillable short tail remains usable");
+    assert!(
+        row.fit_with(&Admission::current()),
+        "an old unfillable short tail remains usable"
+    );
     assert!(!row.station_candidate_with(&super::Admission::current()));
     assert!(!row.fetchable_with(&Admission::at(60, 500_000_000)));
     let window = replay_window_ms(100_000, 110_000, 30_000).unwrap();
@@ -163,7 +166,7 @@ fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
     let (from, to) = covered.hull().unwrap();
     row.held = Some((row.deal.buy_ms - from, to - row.deal.close_ms));
     assert_eq!(row.held, Some((30_000, 60_000)));
-    assert!(row.fit());
+    assert!(row.fit_with(&Admission::current()));
     assert!(!row.station_candidate_with(&super::Admission::current()));
     for status in [
         TickStatus::NoRoute,

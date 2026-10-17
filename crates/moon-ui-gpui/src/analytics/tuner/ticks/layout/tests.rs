@@ -156,6 +156,7 @@ impl Render for NarrowDealProbe {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let row = deal_rows().remove(0);
+        let admission = super::super::tail::Admission::at(60, 0);
         let counts = super::super::rows::ChipCounts {
             rows_rev: 0,
             min_tail_s: 60,
@@ -183,7 +184,7 @@ impl Render for NarrowDealProbe {
                         p,
                         design::font_scale(cx),
                         super::super::deal_row_h(cx),
-                        (60, 0),
+                        &admission,
                         cx,
                     )),
             )
@@ -271,6 +272,7 @@ impl Render for DealProbe {
             ..Default::default()
         }));
         let counts = super::super::rows::counts_at(&mut state, 60, 0);
+        let admission = super::super::tail::Admission::at(60, 0);
         let pick: super::super::ChipAction = Rc::new(|_, _, _| {});
         let action: super::super::DealAction = Rc::new(|_, _, _, _| {});
         let mut body = v_flex()
@@ -290,7 +292,7 @@ impl Render for DealProbe {
                         p,
                         design::font_scale(cx),
                         super::super::deal_row_h(cx),
-                        (60, 0),
+                        &admission,
                         cx,
                     )
                 }));

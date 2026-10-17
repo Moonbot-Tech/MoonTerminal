@@ -26,7 +26,7 @@ pub(in crate::analytics) struct Readiness {
     pub(in crate::analytics) missed: usize,
     /// Unchecked deals, including those whose retained tape the memory cap dropped.
     pub(in crate::analytics) unjudged: usize,
-    /// Rows the search would learn on: fit ([`DealRow::fit`]) with their tape in memory — the
+    /// Rows the search would learn on: fit ([`DealRow::fit_with`]) with their tape in memory — the
     /// card's sample (`TicksData::replayable`).
     pub(in crate::analytics) fit: usize,
     /// Rows whose window the tape covers, fit or not.

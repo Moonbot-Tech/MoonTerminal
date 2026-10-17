@@ -128,11 +128,6 @@ pub(in crate::analytics::tuner) enum DealWhy {
 }
 
 impl DealWhy {
-    /// Classify a row using one captured tail floor and clock for the whole population.
-    pub(in crate::analytics::tuner) fn of(row: &DealRow, min_tail_s: u32, now_ms: i64) -> Self {
-        Self::of_with(row, &super::tail::Admission::at(min_tail_s, now_ms))
-    }
-
     /// Reuse the population's source and refusal snapshot for its primary classification.
     pub(in crate::analytics::tuner) fn of_with(
         row: &DealRow,
@@ -187,22 +182,20 @@ impl DealWhy {
     }
 
     /// Tape completeness is visible even when a model finding takes exclusion precedence.
-    pub(in crate::analytics::tuner) fn tape_of(
+    pub(in crate::analytics::tuner) fn tape_of_with(
         row: &DealRow,
-        min_tail_s: u32,
-        now_ms: i64,
+        admission: &super::tail::Admission,
     ) -> Self {
-        let admission = super::tail::Admission::at(min_tail_s, now_ms);
         if row.tape == TapeStatus::Covered {
-            Self::tail_or_gap(row, &admission).unwrap_or_else(|| {
-                if row.short_tail_with(&admission) {
+            Self::tail_or_gap(row, admission).unwrap_or_else(|| {
+                if row.short_tail_with(admission) {
                     Self::AcceptedShortTail
                 } else {
                     Self::Fit
                 }
             })
         } else {
-            Self::of_with(row, &admission)
+            Self::of_with(row, admission)
         }
     }
 

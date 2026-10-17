@@ -924,7 +924,10 @@ fn the_cap_keeps_only_the_fit_rows_tapes_and_counts_them_packed() {
         ],
         ..TicksData::default()
     };
-    assert!(data.rows[0].fit() && !data.rows[1].fit());
+    assert!(
+        data.rows[0].fit_with(&Admission::current())
+            && !data.rows[1].fit_with(&Admission::current())
+    );
     data.retain_within_cap();
     assert!(data.rows[0].ticks.is_some());
     assert!(
@@ -977,9 +980,9 @@ fn a_reproduced_row_with_a_short_tail_is_not_fit() {
         entry_line: None,
         held: Some((60_000, 0)),
     };
-    assert!(!row.fit());
+    assert!(!row.fit_with(&Admission::current()));
     row.held = Some((60_000, 7_200_000));
-    assert!(row.fit());
+    assert!(row.fit_with(&Admission::current()));
 }
 
 /// A reproduced row with a hole in its tape is out of the sample: a variant reaching into the
@@ -995,14 +998,14 @@ fn a_reproduced_row_with_a_hole_in_its_tape_is_not_fit() {
         entry_line: None,
         held: Some((60_000, 7_200_000)),
     };
-    assert!(row.fit());
+    assert!(row.fit_with(&Admission::current()));
     row.deal.gap = Some(moon_core::db::tuner::ticks::gap::TapeGap {
         from_ms: 1_500,
         to_ms: 2_500,
         fact_line: None,
         fact_stop: None,
     });
-    assert!(!row.fit());
+    assert!(!row.fit_with(&Admission::current()));
 }
 
 /// A percent that rounds to zero must not read `-0.00`. The sign the colour uses is the same

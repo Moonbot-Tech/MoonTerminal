@@ -1,11 +1,45 @@
 //! What the autoload asks the station for.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::{Filled, ReplayWindow, Unfillable, lacking, note_filed, prefill_rows};
 
 /// Serializes tests that read or write the process-wide unfillable set.
 static UNFILLABLE_TEST: Mutex<()> = Mutex::new(());
+
+/// Drop a fixture refusal while preserving the store's snapshot invalidation invariant.
+fn forget(uid: i64) {
+    let mut rows = super::unfillable();
+    if rows.uids.remove(&uid).is_some() {
+        rows.revision += 1;
+    }
+}
+
+/// Repainting unchanged rows must share membership instead of allocating another set.
+#[test]
+fn refusal_snapshots_share_an_arc_until_membership_changes() {
+    let mut rows = Unfillable::default();
+    let (_, empty) = rows.snapshot();
+    assert!(Arc::ptr_eq(&empty, &rows.snapshot().1));
+    rows.refuse(91, "synthetic", "XALPHA");
+    let (revision, refused) = rows.snapshot();
+    assert!(!Arc::ptr_eq(&empty, &refused));
+    assert!(refused.contains(&91));
+    assert!(!empty.contains(&91));
+    rows.refuse(91, "synthetic", "XALPHA");
+    rows.filed("synthetic", "XBETA");
+    let (same_revision, same) = rows.snapshot();
+    assert_eq!(same_revision, revision);
+    assert!(Arc::ptr_eq(&refused, &same));
+    rows.filed("synthetic", "XALPHA");
+    let (_, cleared) = rows.snapshot();
+    assert!(!Arc::ptr_eq(&refused, &cleared));
+    assert!(cleared.is_empty());
+    assert!(
+        refused.contains(&91),
+        "an in-progress pass keeps its captured membership"
+    );
+}
 
 /// A refusal must refresh chips and counts, and unrelated filings must keep the tail admitted.
 #[test]
@@ -106,7 +140,7 @@ fn station_final_tail_no_longer_waits_for_a_source() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let row = queued_unservable(-91_401);
     let now = row.window.close_ms + 3_600_000;
-    super::unfillable().uids.remove(&row.deal.report_uid);
+    forget(row.deal.report_uid);
     assert!(super::super::super::tail::fillable_at(
         &row.address,
         row.deal.report_uid,
@@ -124,7 +158,7 @@ fn station_final_tail_no_longer_waits_for_a_source() {
         now,
         (false, true),
     );
-    super::unfillable().uids.remove(&row.deal.report_uid);
+    forget(row.deal.report_uid);
     assert!(!fillable);
 }
 
@@ -265,7 +299,7 @@ fn an_unservable_row_is_not_offered_or_counted_again() {
         remaining.is_empty(),
         "the next autoload must not offer the row again"
     );
-    super::unfillable().uids.remove(&row.deal.report_uid);
+    forget(row.deal.report_uid);
 }
 
 /// An empty station answer for a row no later source can fetch must be remembered.
@@ -279,7 +313,7 @@ fn empty_station_answer_is_remembered_when_nothing_else_can_fetch() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let queued = queued_unservable(-91_302);
     let uid = queued.deal.report_uid;
-    super::unfillable().uids.remove(&uid);
+    forget(uid);
     let (rows, _, _, filled) = prefill_rows(
         vec![queued],
         |row| {
@@ -306,7 +340,7 @@ fn empty_station_answer_is_remembered_when_nothing_else_can_fetch() {
         super::unfillable().uids.contains_key(&uid),
         "an empty station answer must remember a row nothing else can fetch"
     );
-    super::unfillable().uids.remove(&uid);
+    forget(uid);
 }
 
 /// A Bybit row from 1970: no trade route, and the missing tape is outside the core horizon.

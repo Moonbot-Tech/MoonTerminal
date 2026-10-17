@@ -217,6 +217,8 @@ pub(in crate::chartdx) struct PaneRender {
     /// than this pane's cursors. Those rows are unreachable by an incremental drain, so the pane
     /// answers with a full history reset rather than the usual wake.
     pub(in crate::chartdx) source_archive: u64,
+    /// Retry unready readers or locally deferred archive demand without following live ticks.
+    pub(in crate::chartdx) replay_prices_retry_at: Option<std::time::Instant>,
     pub(in crate::chartdx) cross_upload: Vec<ChartCross>,
     /// LIQUIDATION trade-cross upload buffer using `side=2` in the same combo ring.
     pub(in crate::chartdx) liq_upload: Vec<ChartCross>,
@@ -614,6 +616,7 @@ impl PaneRender {
             source_history_sig: u64::MAX,
             source_generation: u64::MAX,
             source_archive: u64::MAX,
+            replay_prices_retry_at: None,
             cross_upload: Vec::new(),
             liq_upload: Vec::new(),
             last_line_rows: Vec::new(),

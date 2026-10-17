@@ -12,7 +12,7 @@
 //! The modelled trades are one replay per touched variant on the selected deal's tape — the same
 //! parameters and the same tape cut the columns are scored on (`search::variant_picture`) — run
 //! whenever the pane shows a new deal and whenever the columns are rescored, for the deals of
-//! the sample only (`DealRow::fit`): a trade the model does not reproduce has no variant to
+//! the sample only (`DealRow::fit_with`): a trade the model does not reproduce has no variant to
 //! draw, as it has no plan in the table.
 
 use gpui::prelude::FluentBuilder;
@@ -134,13 +134,14 @@ impl AnalyticsView {
         self.ticks.trade.model_seq = self.ticks.trade.model_seq.wrapping_add(1);
         let seq = self.ticks.trade.model_seq;
         let changes = self.ticks.variant_changes();
+        let admission = super::tail::Admission::current();
         let job = self.ticks.data.data().and_then(|data| {
             let uid = self.ticks.trade.uid?;
             let row = data
                 .rows
                 .iter()
                 .find(|r| r.deal.report_uid == uid)
-                .filter(|r| r.fit())?;
+                .filter(|r| r.fit_with(&admission))?;
             if changes.is_empty() {
                 return None;
             }

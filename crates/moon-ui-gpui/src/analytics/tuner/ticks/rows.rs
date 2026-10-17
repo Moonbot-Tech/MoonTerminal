@@ -49,8 +49,9 @@ fn next_source_change(row: &DealRow, min_tail_s: u32, now_ms: i64) -> Option<i64
 
 /// Reuse classification until a refusal, source switch, retention edge, row or floor changes.
 fn classify(state: &mut TicksState, min_tail_s: u32, now_ms: i64) {
-    let source_switches = super::tail::switches();
-    let refusal_revision = super::fetch::station::refusal_revision();
+    let admission = super::tail::Admission::at(min_tail_s, now_ms);
+    let source_switches = admission.switches;
+    let refusal_revision = admission.refusal_revision;
     if state.classified.as_ref().is_some_and(|c| {
         c.rows_rev == state.rows_rev
             && c.min_tail_s == min_tail_s
@@ -61,7 +62,6 @@ fn classify(state: &mut TicksState, min_tail_s: u32, now_ms: i64) {
     }) {
         return;
     }
-    let admission = super::tail::Admission::at(min_tail_s, now_ms);
     let chips = state
         .data
         .data()

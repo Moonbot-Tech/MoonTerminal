@@ -191,11 +191,6 @@ impl DealRow {
     /// Whether the variants and the search run on this row: it is [`Self::reproduced`], holds
     /// the shortest tail or an unfillable short tail, and has no hole between the buy and the close
     /// (`Deal::gap`). The table shows every row; this is the sample.
-    pub(in crate::analytics::tuner) fn fit(&self) -> bool {
-        self.fit_with(&super::tail::Admission::current())
-    }
-
-    /// Apply sample membership with one time and source snapshot for the whole population.
     pub(in crate::analytics::tuner) fn fit_with(&self, admission: &super::tail::Admission) -> bool {
         self.reproduced()
             && (admission.holds(self.held) || self.short_tail_with(admission))
@@ -203,7 +198,7 @@ impl DealRow {
     }
 
     /// Whether the tape covers the window and the model reproduced the trade on its own
-    /// settings (`fit_for_search`) — the part of [`Self::fit`] the footer's counts of the rows
+    /// settings (`fit_for_search`) — the part of [`Self::fit_with`] the footer's counts of the rows
     /// left out for their tape (a short tail, a hole) start from.
     pub(in crate::analytics::tuner) fn reproduced(&self) -> bool {
         self.tape == TapeStatus::Covered && self.verdict.as_ref().is_some_and(fit_for_search)
@@ -290,7 +285,7 @@ pub(in crate::analytics::tuner) struct TicksData {
     /// Trades the tuner cannot be run on — container or unresolved kinds, exits by hand or by
     /// the global panic sell — in the Fact column, not in the table.
     pub(in crate::analytics::tuner) untunable: usize,
-    /// One column: the rows fit for the search ([`DealRow::fit`]) whose tape is in memory — the
+    /// One column: the rows fit for the search ([`DealRow::fit_with`]) whose tape is in memory — the
     /// sample the variants replay, and the baseline they are compared with. The whole scope is not shown: the axis
     /// works on the fit rows only (the developer's call, 2026-09-23).
     pub(in crate::analytics::tuner) kpi: Vec<VarStats>,
@@ -379,7 +374,7 @@ impl TicksData {
         )
     }
 
-    /// Rows fit for the search ([`DealRow::fit`]), tape in memory or not.
+    /// Rows fit for the search ([`DealRow::fit_with`]), tape in memory or not.
     pub(in crate::analytics::tuner) fn fit(&self) -> usize {
         let admission = super::tail::Admission::current();
         self.rows.iter().filter(|r| r.fit_with(&admission)).count()
@@ -621,7 +616,7 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) dirty: bool,
     /// `(column key, descending)` of the deal table.
     pub(in crate::analytics::tuner) sort: Option<(String, bool)>,
-    /// The table shows only the rows fit for the search ([`DealRow::fit`]) — the sample the
+    /// The table shows only the rows fit for the search ([`DealRow::fit_with`]) — the sample the
     /// variants and the search actually run on: tape covering the window, and the model
     /// reproducing the trade, with its tape still retained. Off by default: the rows without their tape are the ones the
     /// fetch button exists for, and a filter that hides them hides the work to be done.
