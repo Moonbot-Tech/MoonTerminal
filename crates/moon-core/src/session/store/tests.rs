@@ -1,11 +1,12 @@
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
 
 use super::{BalanceState, ConnStatus, CoreData};
 use crate::feed::{
     ApiKeyExpiry, ChartTextRows, ConnFault, ConnFaultKind, CoreConfig, CoreConfigArea,
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
-    CoreConfigRejection, CoreEndpoint, CoreIdentityFacts, CoreStartupStatus, CoreSysStatus,
-    FeedMsg, FieldMask, OrderRow, OrderTrace, OrderTracePoint,
+    CoreConfigRejection, CoreEndpoint, CoreIdentityFacts, CoreLogLine, CoreStartupStatus,
+    CoreSysStatus, DetectRow, FeedMsg, FieldMask, OrderRow, OrderTrace, OrderTracePoint,
 };
 
 /// A core with the given freshness inputs; everything else stays at its default.
@@ -1376,4 +1377,98 @@ fn a_drain_after_a_give_up_keeps_the_verdict() {
         cd.core_config_edit.as_ref().map(|row| row.phase),
         Some(CoreConfigEditPhase::GaveUp)
     );
+}
+
+/// The raw ring is a diagnostic tail, not a second copy of the formatted log.
+///
+/// Breakage: trimming `server_log_raw` with `MAX_LOG` keeps six thousand lines in memory, and
+/// cloning every line of a long batch pays for rows FireTest never reads. The snapshot must stay
+/// oldest-to-newest, or the latency measurement reads the batch backwards.
+#[test]
+fn raw_server_log_keeps_the_newest_512_of_a_long_batch() {
+    let mut cd = CoreData::new();
+    let lines: Vec<CoreLogLine> = (0..6_000)
+        .map(|index| CoreLogLine {
+            time_ms: index,
+            recv_ms: index,
+            msg: index.to_string(),
+        })
+        .collect();
+
+    cd.apply(FeedMsg::ServerLog(lines));
+
+    assert_eq!(cd.server_log_raw.len(), 512);
+    assert_eq!(cd.log.len(), 5_000);
+    assert_eq!(
+        cd.log.front().map(|line| line.msg.as_str()),
+        Some("1000"),
+        "the formatted ring drops the oldest lines"
+    );
+    assert_eq!(cd.log.back().map(|line| line.msg.as_str()), Some("5999"));
+    assert_eq!(
+        cd.server_log_raw.front().map(|line| line.msg.as_str()),
+        Some("5488")
+    );
+    assert_eq!(
+        cd.server_log_raw.back().map(|line| line.msg.as_str()),
+        Some("5999")
+    );
+    let snapshot = cd.raw_server_log_snapshot(300);
+    let expected: Vec<String> = (5_700..6_000).map(|index| index.to_string()).collect();
+    let got: Vec<String> = snapshot.into_iter().map(|line| line.msg).collect();
+    assert_eq!(got, expected);
+}
+
+fn detect_row(seq: u64, market: &str) -> DetectRow {
+    DetectRow {
+        seq,
+        market: market.to_string(),
+        time_ms: 0.0,
+        sound_alert: false,
+        keep_alert_secs: 60,
+        add_to_chart: 0,
+        keep_in_chart_secs: 60,
+        sound_name: None,
+        is_alert: false,
+        kind: 0,
+        is_short: false,
+        msg: String::new(),
+        strat_name: String::new(),
+    }
+}
+
+/// Five thousand detects over ten markets keep the ring at `MAX_DETECTS` and share the newest row.
+///
+/// Breakage: cloning the row into `latest_detect` keeps a second full copy, and `Arc::ptr_eq`
+/// fails. Evicting the newest of a market, or keeping more than two thousand rows, fails the
+/// length and sequence checks.
+#[test]
+fn the_detect_index_shares_the_newest_row_in_the_ring() {
+    let mut cd = CoreData::new();
+    let rows: Vec<DetectRow> = (0..5_000)
+        .map(|seq| detect_row(seq, &format!("M{}", seq % 10)))
+        .collect();
+
+    cd.apply(FeedMsg::Detects(rows));
+
+    assert_eq!(cd.detects.len(), 2_000);
+    assert_eq!(cd.latest_detect.len(), 10);
+    for market_index in 0..10 {
+        let market = format!("M{market_index}");
+        let latest = cd
+            .latest_detect
+            .get(&market)
+            .unwrap_or_else(|| panic!("missing {market}"));
+        let newest = cd
+            .detects
+            .iter()
+            .rev()
+            .find(|row| row.market == market)
+            .unwrap_or_else(|| panic!("ring missing {market}"));
+        assert!(
+            Arc::ptr_eq(latest, newest),
+            "{market} index must be the ring row"
+        );
+        assert_eq!(latest.seq, 4_990 + market_index);
+    }
 }

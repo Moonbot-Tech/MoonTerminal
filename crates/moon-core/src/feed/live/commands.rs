@@ -65,11 +65,17 @@ pub(super) fn lock_and_adopt_latest_market_role<'a>(
 ) -> std::sync::MutexGuard<'a, Option<MarketRoleAssignment>> {
     let latest = latest_market_role.lock();
     if let Some(assignment) = latest.as_ref() {
-        *force_market_sample |= market_role.update(
+        if !market_role.is_desired(
             assignment.provider,
-            assignment.markets.clone(),
-            assignment.orderbook_markets.clone(),
-        );
+            &assignment.markets,
+            &assignment.orderbook_markets,
+        ) {
+            *force_market_sample |= market_role.update(
+                assignment.provider,
+                assignment.markets.clone(),
+                assignment.orderbook_markets.clone(),
+            );
+        }
     }
     latest
 }

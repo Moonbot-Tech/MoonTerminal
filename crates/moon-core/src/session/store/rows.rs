@@ -26,6 +26,12 @@ pub struct TgEventRow {
 /// Older history remains in `logs/<date>_<core>.log` files.
 pub(super) const MAX_LOG: usize = 5000;
 
+/// Raw server-log lines kept beside the formatted ring.
+///
+/// FireTest reads at most 300 of these through `raw_server_log_snapshot`. The formatted `log`
+/// stays at [`MAX_LOG`].
+pub(crate) const MAX_SERVER_LOG_RAW: usize = 512;
+
 /// Maximum number of undelivered Engine action toasts queued while no window is active.
 /// The active window's shell consumes the queue.
 pub(super) const MAX_ENGINE_ACTIONS: usize = 64;

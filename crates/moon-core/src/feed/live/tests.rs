@@ -89,6 +89,68 @@ fn failed_market_role_send_does_not_change_the_authoritative_snapshot() {
     drop(latest);
 }
 
+/// `commands.rs:lock_and_adopt_latest_market_role` clones the assignment only when it differs.
+///
+/// Breakage: adopting the same lists again sets `force_market_sample` and wakes every wanted
+/// chart. Skipping a changed list leaves the previous markets subscribed.
+#[test]
+fn an_unchanged_market_role_is_not_adopted_again() {
+    let (data_tx, _data_rx) = std::sync::mpsc::channel();
+    let (wake_tx, _wake_rx) = std::sync::mpsc::channel();
+    let latest_market_role = LatestMarketRole::default();
+    let cmd_tx = CoreCmdTx::new(data_tx, wake_tx, latest_market_role.clone());
+    let markets = vec!["BTCUSDT".to_owned()];
+    let books = vec!["BTCUSDT".to_owned()];
+    cmd_tx
+        .send(CoreCmd::SetMarket {
+            provider: true,
+            markets: markets.clone(),
+            orderbook_markets: books.clone(),
+        })
+        .unwrap();
+
+    let mut market_role = MarketRoleState::default();
+    let mut force_market_sample = false;
+    let latest = commands::lock_and_adopt_latest_market_role(
+        &latest_market_role,
+        &mut market_role,
+        &mut force_market_sample,
+    );
+    assert!(force_market_sample);
+    assert!(market_role.is_desired(true, &markets, &books));
+    assert!(!market_role.is_desired(true, &["ETHUSDT".to_owned()], &["ETHUSDT".to_owned()]));
+    drop(latest);
+
+    force_market_sample = false;
+    let latest = commands::lock_and_adopt_latest_market_role(
+        &latest_market_role,
+        &mut market_role,
+        &mut force_market_sample,
+    );
+    assert!(
+        !force_market_sample,
+        "the same assignment must not resample"
+    );
+    assert_eq!(market_role.wanted(), ["BTCUSDT"]);
+    drop(latest);
+
+    cmd_tx
+        .send(CoreCmd::SetMarket {
+            provider: true,
+            markets: vec!["ETHUSDT".to_owned()],
+            orderbook_markets: vec!["ETHUSDT".to_owned()],
+        })
+        .unwrap();
+    let latest = commands::lock_and_adopt_latest_market_role(
+        &latest_market_role,
+        &mut market_role,
+        &mut force_market_sample,
+    );
+    assert!(force_market_sample, "a changed list must resample");
+    assert_eq!(market_role.wanted(), ["ETHUSDT"]);
+    drop(latest);
+}
+
 /// `live/mod.rs:run` treating an exhausted drain budget as an empty queue would consume the only
 /// wake signal and block while commands remain queued.
 #[test]
