@@ -21,7 +21,8 @@ use std::time::Duration;
 use gpui::*;
 
 use super::super::super::AnalyticsView;
-use super::state::{DealRow, NowValue, OwnValues, RowAddress, TapeStatus, TicksData};
+use super::signature::{ReloadKey, SamplePolicy};
+use super::state::{DealRow, NowValue, OwnValues, RowAddress, SettledMiss, TapeStatus, TicksData};
 use super::tape;
 use super::unmodelled::{UnmodelledMap, unmodelled_map};
 use crate::analytics::bg::ReadLane;
@@ -62,6 +63,7 @@ type StageA = (
     Vec<SelectedValues>,
     FieldDeps,
     Arc<HashMap<&'static str, FieldSpan>>,
+    Option<u64>,
 );
 
 /// What stage B publishes beside the rows: the strategies' values, the grid's layout, the
@@ -111,6 +113,11 @@ impl AnalyticsView {
         if !after_report {
             self.report_busy_retries.reset();
         }
+        // Whether the rows in force were fully judged when this reload was asked: only then can
+        // a reload that finds nothing changed keep them (`signature.rs`). A tape stage the
+        // cancel below stops leaves rows it never judged.
+        let settled_before = !self.ticks.tape_reading
+            && matches!(self.ticks.data, crate::load_state::LoadState::Ready(_));
         self.latest_reads.cancel(&[
             ReadLane::Ticks,
             ReadLane::TicksReplay,
@@ -218,9 +225,15 @@ impl AnalyticsView {
                     })
                     .unwrap_or_default();
                 let spans = Arc::new(range_spans(&kinds, &selected, &defaults, &deps));
-                (deals, now, own, Arc::new(unmodelled), selected, deps, spans)
+                let scope = deals
+                    .as_ref()
+                    .ok()
+                    .map(|read| scope_signature(read, &now, &own, &spans));
+                (deals, now, own, Arc::new(unmodelled), selected, deps, spans, scope)
             },
-            move |this, (deals, now, own, unmodelled, selected, deps, spans): StageA, cx| {
+            move |this,
+                  (deals, now, own, unmodelled, selected, deps, spans, scope): StageA,
+                  cx| {
                 if this.ticks.seq != req {
                     return;
                 }
@@ -255,10 +268,48 @@ impl AnalyticsView {
                 )
                 .into();
                 let addresses = this.resolve_addresses(&read.deals, cx);
+                let key = scope.map(|scope| ReloadKey {
+                    scope,
+                    period,
+                    model: super::model_cfg::current(),
+                    sample: SamplePolicy::current(),
+                    refusal_revision: super::fetch::station::refusal_revision(),
+                    tape_rev: moon_core::market::trade_replay::trade_cache::filed_since(u64::MAX).0,
+                    addresses: super::signature::addresses_signature(&addresses),
+                });
+                // A report that moved without changing a closed deal of the scope — an open
+                // position's update, every few seconds live — reads the same rows: the ones in
+                // force stay, and stages B and C are not run again.
+                if after_report
+                    && settled_before
+                    && let Some(key) = &key
+                    && this.ticks.judged_under == Some(key.model)
+                    && this.ticks.data.data().is_some_and(|d| {
+                        super::signature::can_skip(
+                            this.ticks.reload_key.as_ref(),
+                            key,
+                            &d.rows,
+                            moon_core::util::time::now_unix_ms_i64(),
+                        )
+                    })
+                {
+                    this.ticks.resume();
+                    this.ticks.dirty = report_result_is_stale(
+                        report_req,
+                        this.current_report_generation(),
+                        false,
+                    );
+                    // The reload's cancel may have stopped a variant scoring in flight.
+                    this.arm_ticks_variants(cx);
+                    this.settle_report_refresh_retry(false, cx);
+                    cx.notify();
+                    return;
+                }
                 this.start_replay_stage(
                     req,
                     report_req,
                     after_report,
+                    key,
                     read,
                     ScopeView {
                         period,
@@ -306,6 +357,7 @@ impl AnalyticsView {
         req: u64,
         report_req: u64,
         after_report: bool,
+        key: Option<ReloadKey>,
         read: DealsRead,
         scope: ScopeView,
         addresses: HashMap<(u64, String), Option<Arc<RowAddress>>>,
@@ -337,12 +389,43 @@ impl AnalyticsView {
             &refiled,
             moon_core::util::time::now_unix_ms_i64(),
         );
+        // The rows the last stage left missing off a settled read, whose verdict was made under
+        // what is in force now and whose market gained no prints since: asking again would
+        // read the same.
+        let misses: HashMap<i64, (DealRow, SettledMiss)> = if self.ticks.judged_under == Some(model)
+        {
+            let sample = SamplePolicy::current();
+            let refusal_revision = super::fetch::station::refusal_revision();
+            self.ticks
+                .data
+                .data()
+                .map(|d| {
+                    d.rows
+                        .iter()
+                        .filter(|r| r.tape == TapeStatus::Missing)
+                        .filter_map(|r| {
+                            let miss = self.ticks.settled.get(&r.deal.report_uid)?;
+                            let fresh = miss.model == model
+                                && miss.sample == sample
+                                && miss.refusal_revision == refusal_revision
+                                && miss.held == r.held
+                                && !refiled
+                                    .contains(&(miss.market.0.clone(), miss.market.1.clone()));
+                            fresh.then(|| (r.deal.report_uid, (r.clone(), miss.clone())))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
         self.spawn_latest_db(
             &[ReadLane::TicksReplay],
             false,
             cx,
             move || {
                 let admission = super::tail::Admission::current();
+                let mut carried: HashSet<i64> = HashSet::new();
                 let rows: Vec<DealRow> = read
                     .deals
                     .into_iter()
@@ -355,6 +438,12 @@ impl AnalyticsView {
                             .get(&deal.report_uid)
                             .filter(|before| address.is_some() && carryable(&before.deal, &deal))
                             .filter(|before| after_report || !before.lost_tape(&admission))
+                            .or_else(|| {
+                                let (before, miss) = misses.get(&deal.report_uid)?;
+                                let address = address.as_deref()?;
+                                miss_holds(before, miss, &deal, address, &admission)
+                                    .then_some(before)
+                            })
                             .cloned();
                         let mut row = DealRow {
                             deal,
@@ -370,14 +459,12 @@ impl AnalyticsView {
                             held: None,
                         };
                         if let Some(before) = before {
+                            carried.insert(row.deal.report_uid);
                             row.take_replay(before);
                         }
                         row
                     })
                     .collect();
-                let carried = rows
-                    .iter()
-                    .any(|r| matches!(r.tape, TapeStatus::Covered | TapeStatus::Refused(_)));
                 let mut kinds: Vec<String> = rows.iter().map(|r| r.deal.kind.clone()).collect();
                 kinds.sort();
                 kinds.dedup();
@@ -411,6 +498,9 @@ impl AnalyticsView {
                     report_result_is_stale(report_req, this.current_report_generation(), false);
                 this.ticks.publish(Ok(data), false);
                 this.ticks.loaded_period = Some(period);
+                // The rows just published are judged once their tape stage folds.
+                this.ticks.reload_key = None;
+                this.ticks.settled.retain(|uid, _| carried.contains(uid));
                 // The published rows' refusals now stand checked against this revision: the ones
                 // whose market gained prints before it were not carried.
                 this.ticks.tape_rev = tape_rev;
@@ -419,7 +509,8 @@ impl AnalyticsView {
                 if super::fetch::job::progress().active {
                     this.attach_fetch_listener(cx);
                 }
-                this.start_tape_stage(req, carried.then_some(model), cx);
+                let carried = (!carried.is_empty()).then(|| (model, Arc::new(carried)));
+                this.start_tape_stage(req, carried, key, cx);
                 if after_report {
                     this.settle_report_refresh_retry(false, cx);
                 }
@@ -446,8 +537,9 @@ impl AnalyticsView {
         // Every verdict of the table is of the old settings now: none may be carried by a
         // reload until this stage has judged them all again.
         self.ticks.judged_under = None;
+        self.ticks.reload_key = None;
         let req = self.ticks.seq;
-        self.start_tape_stage(req, None, cx);
+        self.start_tape_stage(req, None, None, cx);
     }
 
     /// Stage C: the held tape of every published row, asked from the worker in one batch, the
@@ -456,12 +548,15 @@ impl AnalyticsView {
     ///
     /// Args:
     ///     req: The load generation this stage belongs to.
-    ///     carried: The settings the rows stage B carried were judged under, when it carried
-    ///         any: those rows are not read again. `None` reads and replays every row.
+    ///     carried: The settings the rows stage B carried were judged under, and those rows'
+    ///         `reportuid`s, when it carried any: those rows are not read again. `None` reads
+    ///         and replays every row.
+    ///     key: What the load's rows were read from; in force once this stage has judged them.
     fn start_tape_stage(
         &mut self,
         req: u64,
-        carried: Option<ModelSettings>,
+        carried: Option<(ModelSettings, Arc<HashSet<i64>>)>,
+        key: Option<ReloadKey>,
         cx: &mut Context<Self>,
     ) {
         // One set of model settings for the whole stage, read once: every row of a table is
@@ -469,7 +564,7 @@ impl AnalyticsView {
         let model = super::model_cfg::current();
         // Rows carried under settings changed since stage B read them are not carried: the
         // stage reads and replays them too, so the table folds under `model` alone.
-        let carried = carried.filter(|m| *m == model);
+        let carried = carried.filter(|(m, _)| *m == model).map(|(_, uids)| uids);
         // This stage's own generation: a stage started after it — a changed setting re-judging
         // the table under the same load — makes its answer stale, even though a cancelled
         // stage still hands its partial rows to `store` (`spawn_latest_db`).
@@ -482,14 +577,18 @@ impl AnalyticsView {
             .rows
             .iter()
             .filter(|r| {
-                carried.is_none() || !matches!(r.tape, TapeStatus::Covered | TapeStatus::Refused(_))
+                carried
+                    .as_ref()
+                    .is_none_or(|uids| !uids.contains(&r.deal.report_uid))
             })
             .filter_map(|r| Some((r.deal.clone(), r.address.clone()?)))
             .collect();
         if targets.is_empty() {
-            log_tape_budget(data);
+            let line = tape_line(data);
+            log_changed(&mut self.ticks.logged.1, line);
             self.ticks.tape_reading = false;
             self.ticks.judged_under = Some(model);
+            self.ticks.reload_key = key;
             // Every row was carried: no fold follows to rescore the variant columns, and the
             // load's `invalidate` has already dropped their scores and the plan column — a
             // narrower selection over deals already judged would keep the edits and show
@@ -505,6 +604,10 @@ impl AnalyticsView {
         // this instant are read again at the end, or the stage would fold the tape it read
         // BEFORE the answer over the answer.
         let reading_since = std::time::Instant::now();
+        // What a settled miss is judged under, read before the stage: a change during it makes
+        // the record disagree with the next reload, which then asks again.
+        let sample = SamplePolicy::current();
+        let refusal_revision = super::fetch::station::refusal_revision();
         self.spawn_latest_db(
             &[ReadLane::TicksReplay],
             false,
@@ -516,20 +619,24 @@ impl AnalyticsView {
                     // One threshold for the whole table, read once: every row of one load splits
                     // its window the same way.
                     let long_position_ms = moon_core::market::trade_replay::long_position_ms();
-                    let mut rows = replay_batch(
+                    // One read of the strategies for the whole stage, shared by every row.
+                    let reads = PassReads::new();
+                    let (mut rows, mut misses) = replay_table(
                         targets,
                         &defaults,
                         model,
                         klines.as_ref(),
                         long_position_ms,
-                        true,
+                        &reads,
                     );
-                    log_replay(&rows);
+                    let line = replay_line(&rows);
                     // Rows the job answered while the batch was read: read again, each behind
                     // whatever walk is running. A row the job answers during THIS loop is kept
                     // covered by the fold (`update_rows`), not re-read once more.
                     let late = super::fetch::job::finished_after(reading_since);
                     if !late.is_empty() {
+                        // Read again behind the job's answer: no settled read speaks for them.
+                        misses.retain(|uid, _| !late.contains(uid));
                         let traces = archived_lines(&rows);
                         for row in rows
                             .iter_mut()
@@ -549,21 +656,42 @@ impl AnalyticsView {
                                 lines,
                                 long_position_ms,
                                 klines.as_ref(),
+                                Some(&reads),
                             );
                         }
                     }
-                    rows
+                    (rows, misses, line)
                 })
             },
-            move |this, rows, cx| {
+            move |this, (rows, misses, line), cx| {
                 if this.ticks.seq != req || this.ticks.tape_seq != tape_req {
                     return;
                 }
                 this.ticks.tape_reading = false;
                 this.ticks.judged_under = Some(model);
+                log_changed(&mut this.ticks.logged.0, line);
+                // Every row this stage judged has its settled miss replaced by this stage's word.
+                for row in &rows {
+                    this.ticks.settled.remove(&row.deal.report_uid);
+                }
+                for (uid, (held, short_allowed, market)) in misses {
+                    this.ticks.settled.insert(
+                        uid,
+                        SettledMiss {
+                            held,
+                            short_allowed,
+                            model,
+                            sample,
+                            refusal_revision,
+                            market,
+                        },
+                    );
+                }
                 this.ticks.update_rows(rows);
+                this.ticks.reload_key = key;
                 if let Some(data) = this.ticks.data.data() {
-                    log_tape_budget(data);
+                    let line = tape_line(data);
+                    log_changed(&mut this.ticks.logged.1, line);
                 }
                 // The row the fetch job is out for says so again after the fold.
                 this.mark_fetch_in_flight();
@@ -588,10 +716,10 @@ impl AnalyticsView {
     }
 }
 
-/// Stage C's replay of a batch of rows: their held tape asked in one batch, their archived
-/// lines, each core's step lag calibrated off them, then the model on every row. Shared by the
-/// table's own stage C and the strategy list's readiness pass (`tuner::ready`), so the
-/// "Tuning" column counts exactly the rows the card would.
+/// Stage C's replay of the table: each core's step lag calibrated off the rows' archived
+/// lines first — they read no tape — then the held tape asked and replayed in chunks bounded by
+/// the prints they hold ([`replay_bounded`]), so the table never holds every row's raw tape at
+/// once. The rows come out as one unbounded batch would give them.
 ///
 /// Args:
 ///     targets: The deals to replay, each with where its prints live.
@@ -599,34 +727,161 @@ impl AnalyticsView {
 ///     model: The model settings, one set for the whole batch.
 ///     klines: The kline cache the live deltas read, when the market source has one.
 ///     long_position_ms: One window split for the whole batch ([`ask_held`]).
-///     calibrate: Whether the batch recalibrates each core's step lag and round trip. They
-///         are process-global and every replay reads them, so only the card's own load
-///         writes them; the readiness pass replays on whatever that load found.
+///     reads: The stage's shared reads of the strategies.
 ///
 /// Returns:
-///     The replayed rows, in the order of `targets`.
-pub(in crate::analytics::tuner) fn replay_batch(
+///     The replayed rows, in the order of `targets`, and the settled misses among them
+///     ([`Misses`]).
+fn replay_table(
     targets: Vec<(Deal, Arc<RowAddress>)>,
     defaults: &HashMap<String, f64>,
     model: ModelSettings,
     klines: Option<&KlineCache>,
     long_position_ms: i64,
-    calibrate: bool,
-) -> Vec<DealRow> {
-    let fetched = fetch_batch(targets, long_position_ms);
+    reads: &PassReads,
+) -> (Vec<DealRow>, Misses) {
+    let rows = blank_rows(targets);
+    let traces = archived_lines(&rows);
     // Before any row is replayed: each core's step lag, off these rows' archives.
-    if calibrate {
-        calibrate_lags(&fetched, defaults, model);
-    }
-    replay_fetched(
-        fetched,
+    super::lags::calibrate_from(&rows, &traces, defaults, model);
+    replay_chunked(
+        rows,
+        traces,
+        TapeBudget::app(),
+        |chunk| held_tapes(chunk, long_position_ms),
         defaults,
         model,
         klines,
         moon_core::util::now_unix_ms_i64(),
-        None,
-        None,
+        Some(reads),
     )
+}
+
+/// [`replay_bounded`] with the model on every chunk, noting the settled misses.
+#[allow(clippy::too_many_arguments)]
+fn replay_chunked(
+    rows: Vec<DealRow>,
+    traces: HashMap<i64, ArchivedLines>,
+    budget: TapeBudget,
+    held: impl FnMut(&[DealRow]) -> (HashMap<i64, HeldTape>, HashSet<i64>),
+    defaults: &HashMap<String, f64>,
+    model: ModelSettings,
+    klines: Option<&KlineCache>,
+    now_ms: i64,
+    reads: Option<&PassReads>,
+) -> (Vec<DealRow>, Misses) {
+    let mut misses = Misses::new();
+    let rows = replay_bounded(rows, traces, budget, held, |fetched| {
+        let settled = fetched.settled.clone();
+        replay_fetched_with(
+            fetched,
+            defaults,
+            model,
+            klines,
+            now_ms,
+            reads,
+            None,
+            &mut |row, short_allowed| {
+                if row.tape == TapeStatus::Missing
+                    && settled.contains(&row.deal.report_uid)
+                    && let Some(address) = row.address.as_ref()
+                {
+                    misses.insert(
+                        row.deal.report_uid,
+                        (
+                            row.held,
+                            short_allowed.unwrap_or(false),
+                            (
+                                address.exchange_key.clone(),
+                                address.market.clone(),
+                                address.venue,
+                            ),
+                        ),
+                    );
+                }
+            },
+        )
+    });
+    (rows, misses)
+}
+
+/// The rows a stage left missing off a settled held read, by `reportuid`: the held coverage
+/// read, whether the short tail was admitted, and the `(exchange key, market, venue)` asked.
+type Misses = HashMap<
+    i64,
+    (
+        Option<(i64, i64)>,
+        bool,
+        (String, String, Option<moon_core::venue::Venue>),
+    ),
+>;
+
+/// How far ahead stage C asks for held tape before it replays: at most `step` rows per ask, and
+/// a replay as soon as the prints read reach `max_bytes`.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::analytics::tuner) struct TapeBudget {
+    pub(in crate::analytics::tuner) step: usize,
+    pub(in crate::analytics::tuner) max_bytes: usize,
+}
+
+impl TapeBudget {
+    /// The app's: the readiness pass's in-flight tape budget, asked a few hundred rows at a time
+    /// so the worker's reader pool stays busy.
+    fn app() -> Self {
+        Self {
+            step: 256,
+            max_bytes: super::super::ready::READY_INFLIGHT_BYTES,
+        }
+    }
+}
+
+/// Ask and replay `rows` in chunks: each chunk's held tape is asked through `held`, and what
+/// was read is replayed through `replay` once its raw prints reach the budget — so at most the
+/// budget plus one chunk's prints are held at a time. Rows come out in their order.
+///
+/// Args:
+///     rows: The rows to replay, each with its address, still without tape.
+///     traces: Every row's archived lines, by `reportuid`.
+///     budget: The chunk cut.
+///     held: Asks the held tape of a chunk; returns the answers and the settled `reportuid`s.
+///     replay: Replays a fetched chunk.
+pub(in crate::analytics::tuner) fn replay_bounded(
+    rows: Vec<DealRow>,
+    mut traces: HashMap<i64, ArchivedLines>,
+    budget: TapeBudget,
+    mut held: impl FnMut(&[DealRow]) -> (HashMap<i64, HeldTape>, HashSet<i64>),
+    mut replay: impl FnMut(Fetched) -> Vec<DealRow>,
+) -> Vec<DealRow> {
+    let mut out = Vec::with_capacity(rows.len());
+    let mut pending = Fetched::default();
+    let mut bytes = 0usize;
+    let mut rest = rows.into_iter();
+    loop {
+        let chunk: Vec<DealRow> = rest.by_ref().take(budget.step.max(1)).collect();
+        let done = chunk.is_empty();
+        if !done {
+            let (tapes, settled) = held(&chunk);
+            bytes += tapes
+                .values()
+                .map(|(ticks, _, _)| ticks.len() * std::mem::size_of::<Tick>())
+                .sum::<usize>();
+            for row in &chunk {
+                if let Some(lines) = traces.remove(&row.deal.report_uid) {
+                    pending.traces.insert(row.deal.report_uid, lines);
+                }
+            }
+            pending.rows.extend(chunk);
+            pending.tapes.extend(tapes);
+            pending.settled.extend(settled);
+        }
+        if (done || bytes >= budget.max_bytes) && !pending.rows.is_empty() {
+            out.extend(replay(std::mem::take(&mut pending)));
+            bytes = 0;
+        }
+        if done {
+            return out;
+        }
+    }
 }
 
 /// What one readiness pass reads once and shares across its rows and threads: the strategies'
@@ -645,14 +900,17 @@ impl PassReads {
 }
 
 /// What a batch's replay reads before the model runs: the rows, still without their tape,
-/// each one's held tape by report uid and each one's archived lines.
+/// each one's held tape by report uid and each one's archived lines, and the rows whose held
+/// read read every stretch it needed (`TickAnswer::settled`).
+#[derive(Default)]
 pub(in crate::analytics::tuner) struct Fetched {
     pub(in crate::analytics::tuner) rows: Vec<DealRow>,
     pub(in crate::analytics::tuner) tapes: HashMap<i64, HeldTape>,
     pub(in crate::analytics::tuner) traces: HashMap<i64, ArchivedLines>,
+    pub(in crate::analytics::tuner) settled: HashSet<i64>,
 }
 
-/// The I/O half of [`replay_batch`]: the held tape of every target asked in one batch, then
+/// A batch's reads before the model: the held tape of every target asked in one batch, then
 /// the archived lines of every row.
 ///
 /// Args:
@@ -666,8 +924,20 @@ pub(in crate::analytics::tuner) fn fetch_batch(
     targets: Vec<(Deal, Arc<RowAddress>)>,
     long_position_ms: i64,
 ) -> Fetched {
-    let tapes = held_tapes(&targets, long_position_ms);
-    let rows: Vec<DealRow> = targets
+    let rows = blank_rows(targets);
+    let (tapes, settled) = held_tapes(&rows, long_position_ms);
+    let traces = archived_lines(&rows);
+    Fetched {
+        rows,
+        tapes,
+        traces,
+        settled,
+    }
+}
+
+/// The targets as rows still without their tape, each `Missing` until replayed.
+fn blank_rows(targets: Vec<(Deal, Arc<RowAddress>)>) -> Vec<DealRow> {
+    targets
         .into_iter()
         .map(|(deal, address)| DealRow {
             deal,
@@ -678,17 +948,13 @@ pub(in crate::analytics::tuner) fn fetch_batch(
             entry_line: None,
             held: None,
         })
-        .collect();
-    let traces = archived_lines(&rows);
-    Fetched {
-        rows,
-        tapes,
-        traces,
-    }
+        .collect()
 }
 
 /// Recalibrate each core's step lag and round trip off a fetched batch's archives — the
-/// process-global values every later replay reads ([`replay_batch`]'s `calibrate`).
+/// process-global values every later replay reads. Only the card's own load writes them; the
+/// readiness pass replays on whatever that load found.
+#[cfg(test)]
 pub(in crate::analytics::tuner) fn calibrate_lags(
     fetched: &Fetched,
     defaults: &HashMap<String, f64>,
@@ -697,7 +963,7 @@ pub(in crate::analytics::tuner) fn calibrate_lags(
     super::lags::calibrate_from(&fetched.rows, &fetched.traces, defaults, model);
 }
 
-/// The CPU half of [`replay_batch`]: the model on every fetched row.
+/// A batch's CPU half: the model on every fetched row.
 ///
 /// Args:
 ///     fetched: What [`fetch_batch`] read.
@@ -720,10 +986,36 @@ pub(in crate::analytics::tuner) fn replay_fetched(
     reads: Option<&PassReads>,
     handle: Option<&moon_core::db::tuner::threshold_search::SearchHandle>,
 ) -> Vec<DealRow> {
+    replay_fetched_with(
+        fetched,
+        defaults,
+        model,
+        klines,
+        now_ms,
+        reads,
+        handle,
+        &mut |_, _| {},
+    )
+}
+
+/// [`replay_fetched`], handing every replayed row to `on_row` with whether its short tail was
+/// admitted (`None` without a tape to judge).
+#[allow(clippy::too_many_arguments)]
+fn replay_fetched_with(
+    fetched: Fetched,
+    defaults: &HashMap<String, f64>,
+    model: ModelSettings,
+    klines: Option<&KlineCache>,
+    now_ms: i64,
+    reads: Option<&PassReads>,
+    handle: Option<&moon_core::db::tuner::threshold_search::SearchHandle>,
+    on_row: &mut dyn FnMut(&DealRow, Option<bool>),
+) -> Vec<DealRow> {
     let Fetched {
         mut rows,
         mut tapes,
         mut traces,
+        settled: _,
     } = fetched;
     for row in &mut rows {
         if handle.is_some_and(|handle| handle.is_cancelled()) {
@@ -732,7 +1024,7 @@ pub(in crate::analytics::tuner) fn replay_fetched(
         let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
         let tape = tapes.remove(&row.deal.report_uid);
         let answered = tape.is_some();
-        replay_row_with(row, defaults, model, lines, tape, klines, reads);
+        let short_allowed = replay_row_with(row, defaults, model, lines, tape, klines, reads);
         // Said at load, not after a walk: a row the venue cannot serve is not
         // "missing" — it would only ever come back refused. The fetch job's own
         // path (`replay_row` after a walk) is NOT given this: its retries and its
@@ -745,30 +1037,30 @@ pub(in crate::analytics::tuner) fn replay_fetched(
         {
             row.tape = unservable_status(address, &row.deal, now_ms).unwrap_or(TapeStatus::Missing);
         }
+        on_row(row, short_allowed);
     }
     rows
 }
 
-/// The held tape of every target, asked from the worker in one batch and collected in order.
-/// A query the worker did not answer in time, or one cancelled by a scope change, is absent.
-fn held_tapes(
-    targets: &[(Deal, Arc<RowAddress>)],
-    long_position_ms: i64,
-) -> HashMap<i64, HeldTape> {
+/// The held tape of every addressed row, asked from the worker in one batch and collected in
+/// order, and the rows whose answer read every stretch it needed. A query the worker did not
+/// answer in time, or one cancelled by a scope change, is absent.
+fn held_tapes(rows: &[DealRow], long_position_ms: i64) -> (HashMap<i64, HeldTape>, HashSet<i64>) {
     let deadline = std::time::Instant::now() + HELD_ANSWER_WAIT;
     let asked: Vec<(
         i64,
         mpsc::Receiver<moon_core::market::trade_replay::TickAnswer>,
         ReplayWindow,
-    )> = targets
+    )> = rows
         .iter()
-        .filter_map(|(deal, address)| {
-            let (rx, window) = ask_held(address, deal, long_position_ms)?;
-            Some((deal.report_uid, rx, window))
+        .filter_map(|row| {
+            let (rx, window) = ask_held(row.address.as_deref()?, &row.deal, long_position_ms)?;
+            Some((row.deal.report_uid, rx, window))
         })
         .collect();
     let asked_n = asked.len();
     let mut out = HashMap::with_capacity(asked_n);
+    let mut settled = HashSet::with_capacity(asked_n);
     let mut unanswered = 0usize;
     for (uid, rx, window) in asked {
         if moon_core::db::current_is_cancelled() {
@@ -779,6 +1071,9 @@ fn held_tapes(
             unanswered += 1;
             continue;
         };
+        if answer.settled {
+            settled.insert(uid);
+        }
         out.insert(uid, (answer.ticks, answer.covered, window));
     }
     if unanswered > 0 {
@@ -788,7 +1083,7 @@ fn held_tapes(
             HELD_ANSWER_WAIT.as_secs()
         );
     }
-    out
+    (out, settled)
 }
 
 /// One held query sent, with the window whose spans it asked for; the answer arrives on the
@@ -1033,7 +1328,8 @@ fn unservable_status(address: &RowAddress, deal: &Deal, now_ms: i64) -> Option<T
 
 /// Run the model on one row, from what the worker holds — asked here, one query; a row
 /// without an address is left as it is. `long_position_ms` is the row's own threshold — see
-/// [`ask_held`].
+/// [`ask_held`]; `reads` the caller's shared reads, `None` reads the strategies afresh.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn replay_row(
     row: &mut DealRow,
     defaults: &HashMap<String, f64>,
@@ -1041,12 +1337,13 @@ pub(super) fn replay_row(
     lines: ArchivedLines,
     long_position_ms: i64,
     klines: Option<&KlineCache>,
+    reads: Option<&PassReads>,
 ) {
     let tape = row
         .address
         .as_ref()
         .and_then(|address| held_tape(address, &row.deal, long_position_ms));
-    replay_row_with(row, defaults, model, lines, tape, klines, None);
+    replay_row_with(row, defaults, model, lines, tape, klines, reads);
 }
 
 /// Call `read`, adding its time to the [`replay_timing`] slot named by `slot` in a test build;
@@ -1068,6 +1365,8 @@ macro_rules! timed {
 /// The model inputs read off the order archive go through `prepare_deal`, and the live deltas
 /// through `deltas::track_for` — the same calls the `real_data` bench makes, so what it measures
 /// is what this table shows. Without the kline cache the deal keeps the report's snapshot.
+///
+/// Returns whether the row's short tail was admitted, once there was a tape to judge.
 pub(super) fn replay_row_with(
     row: &mut DealRow,
     defaults: &HashMap<String, f64>,
@@ -1076,19 +1375,17 @@ pub(super) fn replay_row_with(
     tape: Option<HeldTape>,
     klines: Option<&KlineCache>,
     reads: Option<&PassReads>,
-) {
+) -> Option<bool> {
     row.ticks = None;
     row.entry_line = lines.entry_points.clone();
     row.held = None;
     row.deal.delta_track = None;
     row.deal.bars = None;
-    let Some(address) = row.address.clone() else {
-        return;
-    };
+    let address = row.address.clone()?;
     let Some((ticks, covered, window)) = tape else {
         row.tape = TapeStatus::Missing;
         row.verdict = None;
-        return;
+        return None;
     };
     row.held = covered.hull().map(|(from, to)| {
         (
@@ -1099,13 +1396,12 @@ pub(super) fn replay_row_with(
     // Coverage is the worker's own word on what was walked; a quiet run-up with no print in it
     // is covered all the same, which the tape's first stamp could not tell from a missing one.
     // What must be covered is the model's own rule (`required_spans`), not the whole margin.
-    let short_allowed = row.held.is_some_and(|(_, trail)| {
-        trail < moon_core::db::tuner::ticks::tail::floor_ms(super::tail::current_s())
-    }) && !super::tail::fillable_at(
+    let short_allowed = short_allowed(
         &address,
         row.deal.report_uid,
         window.close_ms,
-        row.held.map_or(0, |(_, trail)| trail),
+        row.held,
+        super::tail::current_s(),
         chrono::Utc::now().timestamp_millis(),
         super::tail::switches(),
     );
@@ -1117,7 +1413,7 @@ pub(super) fn replay_row_with(
     if ticks.is_empty() || !covered.covers(&required) {
         row.tape = TapeStatus::Missing;
         row.verdict = None;
-        return;
+        return Some(short_allowed);
     }
     row.tape = TapeStatus::Covered;
     // The price grid off the prints themselves, as the `real_data` bench reads it: the live
@@ -1192,12 +1488,108 @@ pub(super) fn replay_row_with(
         lines.exit_points.as_deref(),
     ));
     row.ticks = Some(tape::PackedTape::pack(ticks));
+    Some(short_allowed)
 }
 
-/// One line per load on what its replay came to — the rows, those it covered, the exit share and
-/// each core's step lag — to hold against the `real_data` bench over the same trades. Read off
-/// the replayed rows alone: no second read of the database.
-fn log_replay(rows: &[DealRow]) {
+/// Whether a row may be judged on the tape through its close alone: its held trail is below the
+/// short-tail floor and no enabled source can still extend it (`tail::fillable_at`).
+fn short_allowed(
+    address: &RowAddress,
+    uid: i64,
+    close_ms: i64,
+    held: Option<(i64, i64)>,
+    min_tail_s: u32,
+    now_ms: i64,
+    switches: (bool, bool),
+) -> bool {
+    held.is_some_and(|(_, trail)| trail < moon_core::db::tuner::ticks::tail::floor_ms(min_tail_s))
+        && !super::tail::fillable_at(
+            address,
+            uid,
+            close_ms,
+            held.map_or(0, |(_, trail)| trail),
+            now_ms,
+            switches,
+        )
+}
+
+/// Whether a settled miss still describes the row a reload read for its deal: the same trade
+/// asked of the same market, a verdict the clock would not move — "cannot be fetched" not yet
+/// said, the short tail admitted or not as it was — so a replay would read and say the same.
+pub(super) fn miss_holds(
+    before: &DealRow,
+    miss: &SettledMiss,
+    deal: &Deal,
+    address: &RowAddress,
+    admission: &super::tail::Admission,
+) -> bool {
+    let Some(window) = model_window(deal, miss.sample.margin_ms, miss.sample.long_position_ms)
+    else {
+        return false;
+    };
+    carryable(&before.deal, deal)
+        && before.tape == TapeStatus::Missing
+        && (
+            address.exchange_key.as_str(),
+            address.market.as_str(),
+            address.venue,
+        ) == (
+            miss.market.0.as_str(),
+            miss.market.1.as_str(),
+            miss.market.2,
+        )
+        && unservable_status(address, deal, admission.now_ms).is_none()
+        && short_allowed(
+            address,
+            deal.report_uid,
+            window.close_ms,
+            miss.held,
+            miss.sample.min_tail_s,
+            admission.now_ms,
+            admission.switches,
+        ) == miss.short_allowed
+}
+
+/// The scope's signature for a reload's key: its closed deals, the counts and baseline beside
+/// them, and the strategies' values and spans stage B publishes with the rows.
+fn scope_signature(
+    read: &DealsRead,
+    now: &HashMap<String, NowValue>,
+    own: &OwnValues,
+    spans: &HashMap<&'static str, FieldSpan>,
+) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write_u64(super::signature::signature_of(&read.deals));
+    super::signature::hash_debug(
+        &mut hasher,
+        &(&read.all, read.without_ms, read.service, read.untunable),
+    );
+    super::signature::hash_sorted(&mut hasher, now.iter());
+    super::signature::hash_sorted(
+        &mut hasher,
+        own.iter().map(|(key, values)| {
+            let mut values: Vec<_> = values.iter().collect();
+            values.sort();
+            (key, values)
+        }),
+    );
+    super::signature::hash_sorted(&mut hasher, spans.iter());
+    hasher.finish()
+}
+
+/// Log `line` unless it is the one `last` holds: a pass that comes to the same says nothing.
+fn log_changed(last: &mut Option<String>, line: String) {
+    if last.as_deref() != Some(line.as_str()) {
+        log::info!(target: moon_core::diagnostics::TICKS_AXIS_TARGET, "{line}");
+        *last = Some(line);
+    }
+}
+
+/// The line on what a replay came to — the rows, those it covered, the exit share and each
+/// core's step lag — to hold against the `real_data` bench over the same trades. Read off the
+/// replayed rows alone: no second read of the database.
+fn replay_line(rows: &[DealRow]) -> String {
     let mut lags: Vec<(&str, f64)> = rows
         .iter()
         .map(|r| (r.deal.core_name.as_str(), r.deal.step_lag_ms))
@@ -1213,21 +1605,19 @@ fn log_replay(rows: &[DealRow]) {
             .filter_map(|r| r.verdict.as_ref())
             .map(|v| v.exit),
     );
-    log::info!(
-        target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+    format!(
         "[x] ticks replay: {} row(s), {covered} covered, exit ✓ {}/{} · step lag {lags:?}",
         rows.len(),
         exit.0,
         exit.1,
-    );
+    )
 }
 
-/// One line per load on what the table holds of its tape — the numbers the memory budget
-/// is judged by, read from the log instead of guessed.
-fn log_tape_budget(data: &TicksData) {
+/// The line on what the table holds of its tape — the numbers the memory budget is judged by,
+/// read from the log instead of guessed.
+fn tape_line(data: &TicksData) -> String {
     let b = data.tape_budget();
-    log::info!(
-        target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+    format!(
         "[x] ticks tape: {} row(s), {} fit, {} with tape in memory, {} let go by the cap · {} print(s), {:.1} MiB of {:.0} MiB",
         b.rows,
         b.fit,
@@ -1236,7 +1626,7 @@ fn log_tape_budget(data: &TicksData) {
         b.prints,
         b.bytes as f64 / 1_048_576.0,
         super::state::MAX_RETAINED_BYTES as f64 / 1_048_576.0
-    );
+    )
 }
 
 /// Whether what the last load judged of a trade still describes the row a reload read for it:

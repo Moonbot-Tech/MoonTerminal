@@ -411,6 +411,7 @@ fn empty_fetch() -> Fetched {
         rows: Vec::new(),
         tapes: HashMap::new(),
         traces: HashMap::new(),
+        settled: Default::default(),
     }
 }
 
@@ -469,6 +470,7 @@ fn fake_fetch(targets: Vec<(Deal, Arc<RowAddress>)>) -> Fetched {
             .collect(),
         tapes: HashMap::new(),
         traces: HashMap::new(),
+        settled: Default::default(),
     }
 }
 

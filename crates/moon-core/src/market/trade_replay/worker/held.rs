@@ -87,14 +87,16 @@ pub(super) fn flatten_runs(
 /// A read waits on the cache thread for up to its timeout, and a progress publisher or another
 /// held-data query must not pay for a disk it never asked about. A filing invalidates only its
 /// market's inspected tiles; failed reads leave those tiles retryable.
+///
+/// Returns whether every read it needed succeeded; without a disk there is nothing to read.
 pub(super) fn hydrate(
     tiles: &Mutex<TickTileStore>,
     persisted: Option<&super::trade_cache::TradeCache>,
     key: &TileKey,
     focus: &Coverage,
-) {
+) -> bool {
     let Some(cache) = persisted else {
-        return;
+        return true;
     };
     hydrate_with(
         tiles,
@@ -102,7 +104,7 @@ pub(super) fn hydrate(
         focus,
         || trade_cache::market_revision(key),
         |from, to| cache.read(&key.0, &key.1, from, to),
-    );
+    )
 }
 
 /// Revision and read seams keep repeat, failure and concurrent-filing tests deterministic.
@@ -112,15 +114,20 @@ fn hydrate_with(
     focus: &Coverage,
     revision: impl Fn() -> u64,
     mut read: impl FnMut(i64, i64) -> Option<Vec<trade_cache::StoredSpan>>,
-) {
+) -> bool {
     // Sample before reading: a filing during I/O must invalidate the next query too.
     let revision = revision();
     let (generation, needed) = lock_tiles(tiles).hydration_plan(key, focus, revision);
+    let mut settled = true;
     for &(from, to) in needed.spans() {
-        if let Some(spans) = read(from, to) {
-            lock_tiles(tiles).hydrate_from(key, generation, revision, (from, to), spans);
+        match read(from, to) {
+            Some(spans) => {
+                lock_tiles(tiles).hydrate_from(key, generation, revision, (from, to), spans);
+            }
+            None => settled = false,
         }
     }
+    settled
 }
 
 /// Answer a [`TickQuery`]: hydrate the tiles from the disk around the asked stretches, then
@@ -132,7 +139,7 @@ fn hydrate_with(
 ///     query: The stretches asked for.
 pub(super) fn held_answer(tiles: &Mutex<TickTileStore>, query: &TickQuery) -> TickAnswer {
     let key: TileKey = (query.exchange_key.clone(), query.market.clone());
-    hydrate(
+    let settled = hydrate(
         tiles,
         super::trade_cache::handle().as_ref(),
         &key,
@@ -146,7 +153,11 @@ pub(super) fn held_answer(tiles: &Mutex<TickTileStore>, query: &TickQuery) -> Ti
     };
     let mut ticks: Vec<Tick> = runs.into_iter().flat_map(|(_, run)| run).collect();
     ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
-    TickAnswer { ticks, covered }
+    TickAnswer {
+        ticks,
+        covered,
+        settled,
+    }
 }
 
 #[cfg(test)]

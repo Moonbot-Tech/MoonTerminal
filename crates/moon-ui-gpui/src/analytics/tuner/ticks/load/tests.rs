@@ -1,4 +1,8 @@
-//! Core-only rows use the same retention rule at load time and when offered for fetch.
+//! Core-only rows use the same retention rule at load time and when offered for fetch; a
+//! settled miss is carried only while a replay would say the same; stage C's chunked replay
+//! gives the rows an unbounded one gives.
+
+mod carry;
 
 use super::unservable_status;
 use crate::analytics::tuner::ticks::state::{RowAddress, TapeStatus};
@@ -110,6 +114,7 @@ fn unlisted_load_reach_is_core_aware() {
         )]
         .into(),
         traces: Default::default(),
+        settled: Default::default(),
     };
     let short_rows = super::replay_fetched(
         short,
@@ -142,6 +147,7 @@ fn unlisted_load_reach_is_core_aware() {
         )]
         .into(),
         traces: Default::default(),
+        settled: Default::default(),
     };
     let gapped_rows = super::replay_fetched(
         gapped,
@@ -170,6 +176,7 @@ fn unlisted_load_reach_is_core_aware() {
         )]
         .into(),
         traces: Default::default(),
+        settled: Default::default(),
     };
     let rows = super::replay_fetched(
         fetched,

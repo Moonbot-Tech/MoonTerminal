@@ -131,16 +131,23 @@ fn failed_hydration_remains_retryable() {
     let tiles = Mutex::new(TickTileStore::default());
     let key = ("VENUE_A".into(), "XGAMMA".into());
     let focus = Coverage::one((0, 9));
-    hydrate_with(&tiles, &key, &focus, || 1, |_, _| None);
+    assert!(
+        !hydrate_with(&tiles, &key, &focus, || 1, |_, _| None),
+        "a failed read is no settled miss"
+    );
     assert!(!lock_tiles(&tiles).covers(&key, 0, 9));
-    hydrate_with(
+    assert!(hydrate_with(
         &tiles,
         &key,
         &focus,
         || 1,
         |from, to| Some(vec![span(from, to)]),
+    ));
+    assert!(
+        hydrate_with(&tiles, &key, &focus, || 1, |_, _| None),
+        "nothing left to read settles the answer"
     );
-    hydrate_with(&tiles, &key, &focus, || 2, |_, _| None);
+    assert!(!hydrate_with(&tiles, &key, &focus, || 2, |_, _| None));
     let calls = Cell::new(0);
     hydrate_with(
         &tiles,

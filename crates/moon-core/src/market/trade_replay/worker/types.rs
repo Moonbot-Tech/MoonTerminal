@@ -222,6 +222,10 @@ pub struct TickAnswer {
     /// The parts of the asked stretches the held prints are exhaustive over. `contains` on it
     /// answers whether a window is covered; a hole inside a span means a fetch would be needed.
     pub covered: Coverage,
+    /// Whether every disk read behind the answer succeeded. A read that failed or timed out
+    /// leaves its stretch out of `covered` without proving it empty, so a caller that keeps a
+    /// miss across reloads keeps only a settled one and asks again for the rest.
+    pub settled: bool,
 }
 
 /// What reaches the coordinator's one inbound channel.

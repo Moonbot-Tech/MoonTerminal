@@ -16,6 +16,7 @@ fn held_readers_answer_while_another_read_waits() {
         TickAnswer {
             ticks: Vec::new(),
             covered: query.spans.clone(),
+            settled: true,
         }
     });
     let (first_reply, first) = mpsc::channel();

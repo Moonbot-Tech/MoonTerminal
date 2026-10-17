@@ -1375,6 +1375,8 @@ fn serve_cluster(
     // Every row on its own off the tiles: the walk's one answer says how the venue behaved,
     // the coverage says which rows it reached.
     let admission = super::super::tail::Admission::current();
+    // One read of the strategies for the cluster, shared by its rows.
+    let reads = super::super::PassReads::new();
     for (position, mut row) in rows.into_iter().enumerate() {
         let uid = row.deal.report_uid;
         let replayed_at = Instant::now();
@@ -1395,6 +1397,7 @@ fn serve_cluster(
             lines,
             row.window.long_position_ms,
             row.replay_address.cache.as_ref(),
+            Some(&reads),
         );
         // Pad coverage reproduces the fact but does not finish a requested short-tail refill.
         // Keep the existing retry/continuation budget until that tail reaches the sample floor.
