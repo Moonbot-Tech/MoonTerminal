@@ -746,3 +746,168 @@ fn wire_line_start_stays_inside_the_order_lifetime() {
     assert_eq!(wire_line_start(f64::NAN, create, now), 0.0);
     assert_eq!(wire_line_start(f64::INFINITY, create, now), 0.0);
 }
+
+/// Interleaved terminal rows, one market per step, so each market's newest closes stay
+/// inside a core-wide ring together.
+///
+/// Args:
+///     markets: Market names, cycled once per round.
+///     per_market: Closed orders to emit for each market.
+///     uid: First uid. Later rows use the following integers.
+///
+/// Returns:
+///     Terminal rows in close order.
+fn interleaved_terminal_rows(markets: &[String], per_market: usize, mut uid: u64) -> Vec<OrderRow> {
+    let mut rows = Vec::with_capacity(markets.len().saturating_mul(per_market));
+    for _ in 0..per_market {
+        for market in markets {
+            let mut row = order(uid);
+            uid += 1;
+            row.market.clone_from(market);
+            row.market_display.clone_from(market);
+            row.job_is_done = true;
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+/// Closed orders of `market` still retained.
+fn closed_on_market(store: &OrderLineStore, market: &str) -> usize {
+    store
+        .orders
+        .values()
+        .filter(|order| order.market == market && order.closed_ms.is_some())
+        .count()
+}
+
+/// Queue entries must not outlive the ring, and neither index may hold an empty or dead slot.
+fn assert_closed_indexes_fit(store: &OrderLineStore) {
+    let entries: usize = store
+        .closed_per_market
+        .values()
+        .map(|queue| queue.len())
+        .sum();
+    assert!(
+        entries <= store.closed_ring.len(),
+        "queue entries {entries} exceed ring {}",
+        store.closed_ring.len()
+    );
+    assert!(
+        store
+            .closed_per_market
+            .values()
+            .all(|queue| !queue.is_empty()),
+        "an empty market queue was kept"
+    );
+    assert!(
+        store.closed_ring.iter().all(|uid| {
+            store
+                .orders
+                .get(uid)
+                .is_some_and(|order| order.closed_ms.is_some())
+        }),
+        "the ring kept a uid that is not a closed order"
+    );
+    for queue in store.closed_per_market.values() {
+        for uid in queue {
+            assert!(
+                store
+                    .orders
+                    .get(uid)
+                    .is_some_and(|order| order.closed_ms.is_some()),
+                "market queue kept uid {uid} after it stopped being closed"
+            );
+        }
+    }
+}
+
+/// Lowering the per-market keep below the drawable window would hide a closed line the chart
+/// still asks for. Two times `max_closed_orders` is the keep that must not do that.
+#[test]
+fn per_market_keep_preserves_the_drawable_closed_window() {
+    let markets: Vec<String> = (0..3).map(|index| format!("SYN{index:03}")).collect();
+    let rows = interleaved_terminal_rows(&markets, 3000, 1);
+    let mut limited = OrderLineStore {
+        closed_keep: 1000,
+        ..Default::default()
+    };
+    assert!(limited.update(&rows, 0));
+    let mut full = OrderLineStore {
+        closed_keep: CLOSED_RING_CAP,
+        ..Default::default()
+    };
+    assert!(full.update(&rows, 0));
+    for market in &markets {
+        assert_eq!(
+            closed_on_market(&limited, market),
+            1000,
+            "{market} kept a closed-order count other than its keep"
+        );
+        let limited_draw: Vec<u64> = limited
+            .market_draw_orders(market, 500)
+            .iter()
+            .map(|order| order.uid)
+            .collect();
+        let full_draw: Vec<u64> = full
+            .market_draw_orders(market, 500)
+            .iter()
+            .map(|order| order.uid)
+            .collect();
+        assert_eq!(limited_draw.len(), 500, "{market}");
+        assert_eq!(limited_draw, full_draw, "{market}");
+    }
+}
+
+/// Sparse markets must not leave empty queues or queue entries the global ring already dropped.
+/// Otherwise a core that visits many quiet markets grows its closed indexes without a bound.
+#[test]
+fn sparse_markets_drop_queue_entries_the_global_ring_evicts() {
+    let markets: Vec<String> = (0..2000).map(|index| format!("SYN{index:04}")).collect();
+    let mut store = OrderLineStore::default();
+    let rows = interleaved_terminal_rows(&markets, 3, 1);
+    assert!(store.update(&rows, 0));
+    assert_eq!(store.closed_ring.len(), CLOSED_RING_CAP);
+    assert_closed_indexes_fit(&store);
+
+    let overflow: Vec<String> = (0..CLOSED_RING_CAP)
+        .map(|index| format!("OVF{index:04}"))
+        .collect();
+    let more = interleaved_terminal_rows(&overflow, 1, 10_000);
+    assert!(store.update(&more, 0));
+    assert_eq!(store.closed_ring.len(), CLOSED_RING_CAP);
+    assert_closed_indexes_fit(&store);
+    assert!(
+        !store.closed_per_market.contains_key("SYN0000"),
+        "a market whose orders the ring evicted kept its queue"
+    );
+}
+
+/// Leaving the previous close in the queue would make one order consume two keep slots and
+/// evict a different closed line the chart can still draw.
+#[test]
+fn reclosed_uid_occupies_one_queue_slot() {
+    let mut store = OrderLineStore::default();
+    let mut row = order(7);
+    row.market = "SYNRE".into();
+    row.market_display = row.market.clone();
+    row.job_is_done = true;
+    assert!(store.update(std::slice::from_ref(&row), 0));
+    assert_eq!(store.closed_per_market["SYNRE"].len(), 1);
+
+    row.job_is_done = false;
+    assert!(store.update(std::slice::from_ref(&row), 0));
+    assert!(store.order_state(7).unwrap().active);
+    assert!(
+        !store.closed_per_market.contains_key("SYNRE"),
+        "reopening left a closed queue behind"
+    );
+    assert!(!store.closed_ring.contains(&7));
+
+    row.job_is_done = true;
+    assert!(store.update(std::slice::from_ref(&row), 0));
+    let queue = &store.closed_per_market["SYNRE"];
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue.iter().filter(|uid| **uid == 7).count(), 1);
+    assert_eq!(store.closed_ring.iter().filter(|uid| **uid == 7).count(), 1);
+}

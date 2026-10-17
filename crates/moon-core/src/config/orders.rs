@@ -178,7 +178,10 @@ pub struct OrdersStyle {
     /// Whether to draw a pending order's entry line as dashed.
     pub pending_dashed: bool,
     /// Number of newest closed orders selected for chart drawing per market.
-    /// Closed-order storage is independently capped at 5000 entries per core.
+    ///
+    /// Closed orders are retained per market at twice this value, clamped to 1000..=5000,
+    /// so one market cannot spend the core's history and hide another's drawable lines.
+    /// A 5000-per-core ring remains the backstop across every market.
     pub max_closed_orders: u32,
 }
 

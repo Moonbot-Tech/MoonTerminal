@@ -310,6 +310,18 @@ impl SettingsView {
         match res {
             Ok(()) => {
                 let after = self.backend.read(cx).config.clone();
+                // Draft keystrokes and a pasted Orders set stay in the preview until this
+                // write succeeds. Applying the keep here, not in the draft callback, is what
+                // lets Cancel leave retained history alone.
+                moon_core::session::order_lines::set_closed_keep_per_market(
+                    moon_core::session::order_lines::closed_keep_for(
+                        after
+                            .orders
+                            .light
+                            .max_closed_orders
+                            .max(after.orders.dark.max_closed_orders),
+                    ),
+                );
                 moon_core::backups::update_daily_sources(&after);
                 self.status = Some((super::StatusMsg::Key("settings.saved"), false));
                 self.apply_settings(&before, cx);
