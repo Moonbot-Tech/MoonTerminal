@@ -188,7 +188,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     // Check the complete replica once because individual reads only detect
     // damage on pages reached by their query.
     moon_core::db::integrity::spawn_check();
-    let (feed_wake_tx, feed_wake_rx) = std::sync::mpsc::channel::<()>();
+    let (feed_wake_tx, feed_wake_rx) = moon_core::feed::feed_wake_pair();
     let updater = cx.new(|_| crate::update::UpdateController::new());
 
     // Read station presence and ownership before the constructor can start saved transport.
@@ -647,6 +647,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                 break;
             }
             while feed_wake_rx.try_recv().is_ok() {}
+            // Clear after the tokens already queued, and before the session drain. A
+            // message that arrives during the drain must still be able to send a wake.
+            feed_wake_rx.clear();
 
             cx.update(|cx| {
                 data_backend.update(cx, |b, cx| {
@@ -662,15 +665,19 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                         b.last_chart_alerts_activity = alerts_activity;
                         b.sync_remote_alerts();
                     }
-                    // Play core detect/alert sounds for new detects that specify a sound.
-                    let detect_played = b.play_detect_sounds();
-                    // Moonbot's price-approach alerts, on the same drain and behind their own
-                    // per-core revision gate. Preserve their detect-first admission policy; the
-                    // shared scheduler then serializes accepted clips with the trade lane.
-                    let alert_played = b.play_price_alert_sounds(detect_played);
-                    // Moonbot's network-problem alarm, on the core's own switch, last in the
-                    // same admission chain.
-                    b.play_problem_sounds(alert_played);
+                    // Scans walk every core. Run them only when this drain carried something
+                    // they read, including the status that seeds a core the first time.
+                    if drain.sound_inputs {
+                        // Play core detect/alert sounds for new detects that specify a sound.
+                        let detect_played = b.play_detect_sounds();
+                        // Moonbot's price-approach alerts, on the same drain and behind their own
+                        // per-core revision gate. Preserve their detect-first admission policy; the
+                        // shared scheduler then serializes accepted clips with the trade lane.
+                        let alert_played = b.play_price_alert_sounds(detect_played);
+                        // Moonbot's network-problem alarm, on the core's own switch, last in the
+                        // same admission chain.
+                        b.play_problem_sounds(alert_played);
+                    }
                     b.collect_trade_sounds();
                     b.pump_sounds();
                     if drain.order_lines_data {

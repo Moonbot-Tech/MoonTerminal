@@ -607,6 +607,25 @@ impl SessionManager {
         crate::feed::clear_core_name(id);
     }
 
+    /// Messages that can change a sound scan, including the silent seed a core gets the first
+    /// time a scan sees it.
+    ///
+    /// Price wakes and plain trade rows are absent: those scans read detect, order, problem, and
+    /// config revisions. `Status` is the first live sight of a core, so it has to request that
+    /// seed before a later detect arrives.
+    fn sound_input_msg(msg: &FeedMsg) -> bool {
+        matches!(
+            msg,
+            FeedMsg::Status(_)
+                | FeedMsg::Detects(_)
+                | FeedMsg::Orders(_)
+                | FeedMsg::OrderLines(_)
+                | FeedMsg::Problems(_)
+                | FeedMsg::CoreConfig { .. }
+                | FeedMsg::TradeSounds(_)
+        )
+    }
+
     /// Drain every core channel into the session stores.
     ///
     /// Account messages go to `CoreStore`. Live and synthetic feeds publish market payloads to the
@@ -620,6 +639,7 @@ impl SessionManager {
         for sess in &self.sessions {
             while let Ok(msg) = sess.handle.rx.try_recv() {
                 stats.any = true;
+                stats.sound_inputs |= Self::sound_input_msg(&msg);
                 match msg {
                     FeedMsg::ReportSync(progress) => {
                         if let Some(core) = self.store.core_mut(sess.id) {

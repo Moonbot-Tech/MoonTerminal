@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::db::{ReportAxis, ReportStamp};
+use crate::feed::{ConnStatus, FeedMsg, MarketDirty, MarketDirtyFlags};
 use crate::market::tape_recorder::TradeId;
 
 /// A later resolved or empty page must not erase the protecting identity skipped earlier.
@@ -262,4 +263,51 @@ fn tuner_can_replay_needs_both_millisecond_stamps() {
         ReportStamp::Millis(1_000),
         ReportStamp::Seconds(2)
     )));
+}
+
+/// A status-only drain must request a sound scan.
+///
+/// The detect scanner seeds its cursor on the first visit and stays silent. Leaving
+/// `Status` out of the gate would make the first live detect that seed, so a connect
+/// followed by a detect would play nothing.
+#[test]
+fn status_drain_marks_sound_inputs() {
+    let (mut session, tx) = super::trade_sound_tests::fixture();
+    tx.send(FeedMsg::Status(ConnStatus::Ready)).unwrap();
+    assert!(session.drain().sound_inputs);
+}
+
+/// Trades and prices must not request a sound scan.
+///
+/// Counting `MarketDataChanged` or `TradeOpened` would walk every core on each price
+/// wake. Those scans read detect, order, problem, and config revisions, so a price-only
+/// drain has nothing new for them.
+#[test]
+fn trade_and_price_drain_skips_sound_inputs() {
+    let (mut session, tx) = super::trade_sound_tests::fixture();
+    tx.send(FeedMsg::MarketDataChanged(vec![MarketDirty::new(
+        "BTCUSDT",
+        MarketDirtyFlags::HISTORY,
+    )]))
+    .unwrap();
+    tx.send(FeedMsg::TradeOpened {
+        rec_id: 7,
+        coin: "BTC".into(),
+        quote: "USDT".into(),
+        buy: ReportStamp::Seconds(1),
+        emulator: None,
+    })
+    .unwrap();
+    assert!(!session.drain().sound_inputs);
+}
+
+/// A detect batch must request a sound scan.
+///
+/// Dropping `Detects` from the gate would leave a new detect silent until some other
+/// sound message happened to arrive.
+#[test]
+fn detects_drain_marks_sound_inputs() {
+    let (mut session, tx) = super::trade_sound_tests::fixture();
+    tx.send(FeedMsg::Detects(Vec::new())).unwrap();
+    assert!(session.drain().sound_inputs);
 }

@@ -154,3 +154,34 @@ fn an_unfilled_entry_inherits_what_its_strategy_enables() {
     assert!(stop_inherited_from_strategy(false, true));
     assert!(!stop_inherited_from_strategy(false, false));
 }
+
+/// A burst must leave one wake, and a notify after clear must still enqueue.
+///
+/// Sending on every `notify`, or leaving the latch set across `clear`, would either
+/// wake the UI once per message or drop the message that arrives after the UI has
+/// started its drain. `clear` must not discard a token already queued.
+#[test]
+fn wake_latch_coalesces_until_clear_and_keeps_the_next_send() {
+    let (tx, rx) = super::feed_wake_pair();
+    let other = tx.clone();
+    for i in 0..1000 {
+        if i % 2 == 0 {
+            tx.notify();
+        } else {
+            other.notify();
+        }
+    }
+    assert!(rx.try_recv().is_ok());
+    assert!(rx.try_recv().is_err());
+    rx.clear();
+    tx.notify();
+    assert!(rx.try_recv().is_ok());
+    assert!(rx.try_recv().is_err());
+    rx.clear();
+    tx.notify();
+    rx.clear();
+    other.notify();
+    assert!(rx.try_recv().is_ok());
+    assert!(rx.try_recv().is_ok());
+    assert!(rx.try_recv().is_err());
+}
