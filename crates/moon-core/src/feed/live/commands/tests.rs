@@ -15,6 +15,7 @@ fn replacing_the_client_keeps_the_wanted_chart_text_market() {
         market: "ROSEUSDT".into(),
         need_filters: true,
         applied: true,
+        last_sent: Some(std::time::Instant::now()),
     };
     wanted.begin_client();
     assert_eq!(wanted.market, "ROSEUSDT");
@@ -540,23 +541,38 @@ fn two_destinations_in_one_move_each_come_out_contiguous() {
     assert!(at(21) < at(22), "D2 joiners keep their order: {order:?}");
 }
 
-/// A chart-text request the current client already applied is not re-sent; a new client, another
-/// market or a failed send (which leaves `applied` false) asks again.
+/// Unchanged requests stay suppressed until 30 seconds; client replacement, new demand and failed
+/// sends bypass the heartbeat deadline so the visible overlay is restored immediately.
 #[test]
-fn chart_text_repeats_are_sent_only_when_not_yet_applied() {
+fn chart_text_repeats_wait_for_the_repair_deadline() {
     let mut wanted = super::ChartTextWanted::default();
-    assert!(wanted.wants("AAA-BBB".into(), true));
+    let now = std::time::Instant::now();
+    assert!(wanted.wants("AAA-BBB".into(), true, now));
     wanted.applied = true; // the send succeeded
-    assert!(!wanted.wants("AAA-BBB".into(), true));
+    wanted.last_sent = Some(now);
+    assert!(!wanted.wants("AAA-BBB".into(), true, now));
+    let before = now + std::time::Duration::from_millis(29_999);
+    assert!(!wanted.wants("AAA-BBB".into(), true, before));
+    assert!(!wanted.due(before));
+    assert_eq!(
+        wanted.repair_wait(before),
+        Some(std::time::Duration::from_millis(1))
+    );
+    let heartbeat = now + std::time::Duration::from_secs(30);
+    assert!(wanted.wants("AAA-BBB".into(), true, heartbeat));
+    assert!(wanted.due(heartbeat));
+    wanted.last_sent = Some(heartbeat); // repair send succeeded
+    assert!(!wanted.wants("AAA-BBB".into(), true, heartbeat));
 
     wanted.begin_client();
-    assert!(wanted.wants("AAA-BBB".into(), true));
+    assert!(wanted.wants("AAA-BBB".into(), true, heartbeat));
     wanted.applied = true;
 
-    assert!(wanted.wants("CCC-BBB".into(), true));
+    assert!(wanted.wants("CCC-BBB".into(), true, heartbeat));
     assert_eq!(wanted.market, "CCC-BBB");
     wanted.applied = true;
-    assert!(wanted.wants("CCC-BBB".into(), false));
+    assert!(wanted.wants("CCC-BBB".into(), false, heartbeat));
     wanted.applied = false; // that send failed
-    assert!(wanted.wants("CCC-BBB".into(), false));
+    assert!(wanted.wants("CCC-BBB".into(), false, heartbeat));
+    assert_eq!(wanted.repair_wait(heartbeat), None);
 }

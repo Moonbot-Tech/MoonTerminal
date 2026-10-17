@@ -976,7 +976,7 @@ pub(super) fn drain_commands(
                 market,
                 need_filters,
             }) => {
-                if chart_text.wants(market, need_filters) {
+                if chart_text.wants(market, need_filters, std::time::Instant::now()) {
                     chart_text.send(client, server.id);
                 }
             }
@@ -1362,7 +1362,7 @@ pub(super) fn drain_commands(
                     client,
                     server.id,
                 );
-                if !chart_text.applied {
+                if chart_text.due(std::time::Instant::now()) {
                     chart_text.send(client, server.id);
                 }
                 *orders_mutated |= client_settings_sequence.drive(client, server.id);

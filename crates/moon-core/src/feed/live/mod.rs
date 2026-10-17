@@ -772,6 +772,11 @@ pub(super) fn run(
                 }
                 _ => false,
             };
+            if request_license_state {
+                // A resumed transport may have lost the overlay even though MoonClient survived.
+                chart_text.begin_client();
+                chart_text.send(&client, server.id);
+            }
             // Captured before `match ev` moves `ev`. Same predicate as the Ready mapping: an
             // in-loop reconnect is operational only once init has finished.
             let reconnected = matches!(
@@ -2818,6 +2823,7 @@ pub(super) fn run(
             startup_wait,
             strat_edit_wait,
             trace_wait,
+            chart_text.repair_wait(wait_now),
             Some(ping_clock.wait(wait_now)),
         ]
         .into_iter()
