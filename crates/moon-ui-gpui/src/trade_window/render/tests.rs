@@ -10,7 +10,7 @@ use gpui::{
 use moon_core::config::UiThemeMode;
 use moon_ui::{MoonButtonSegment, MoonDropdown, MoonPalette, MoonSize};
 
-use super::trade_header;
+use super::{focus_button, trade_header};
 
 /// Supply inert settings/scale triggers to the real header, without a backend or trade fetch.
 struct HeaderHarness {
@@ -43,6 +43,7 @@ impl Render for HeaderHarness {
             trade_header(
                 "UNIT_TRADE_LONG_NAME ".repeat(20),
                 false,
+                focus_button().render().into_any_element(),
                 settings,
                 scale,
                 cx,
@@ -82,7 +83,7 @@ fn trade_header_controls_fit_every_locale(cx: &mut gpui::TestAppContext) {
                 .unwrap();
                 let boxes = boxes.borrow();
                 let custom_controls = crate::design::show_custom_window_controls();
-                assert_eq!(boxes.len(), if custom_controls { 5 } else { 4 });
+                assert_eq!(boxes.len(), if custom_controls { 6 } else { 5 });
                 for bounds in boxes.iter() {
                     assert!(
                         bounds.origin.x >= px(0.0) && bounds.right() <= px(width + 0.5),
@@ -99,7 +100,7 @@ fn trade_header_controls_fit_every_locale(cx: &mut gpui::TestAppContext) {
                 // Three 25px native controls with two 2px gaps, independently specified by
                 // MoonUI's frame contract; dropping maximize or shrinking the group fails.
                 if custom_controls {
-                    assert_eq!(boxes[4].size.width, px(79.0));
+                    assert_eq!(boxes[5].size.width, px(79.0));
                 }
                 cx.update_window(handle.into(), |_, window, _| window.remove_window())
                     .unwrap();

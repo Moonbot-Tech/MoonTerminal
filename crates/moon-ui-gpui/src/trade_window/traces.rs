@@ -280,7 +280,7 @@ impl TradeWindowView {
         // from: the subject's span — from where its entry was placed, when the archive says —
         // widened by the shown neighbours within reach, and every price their lines and arrows
         // sit at. Kept on the window for `reframe`; the band goes to the chart only while the
-        // window is fitted, so the ordinary frame keeps fitting the prices alone.
+        // window is fitted; the ordinary frame still includes the subject's settled prices.
         // Where an entry was placed: the archived line's start, else the row's own placement.
         let placed_ms = |record: &ChartTradeRecord, lines: &[ArchivedOrderTrace]| {
             super::frame::entry_set_ms(lines)
@@ -357,10 +357,11 @@ impl TradeWindowView {
             }
         }
         self.fit_frame = super::frame::fit_frame(subject_span, spans);
-        let fit_range = self
-            .fit_trade
-            .then(|| super::frame::fit_price_range(prices))
-            .flatten();
+        let fit_range = super::frame::fit_price_range(if self.fit_trade {
+            prices
+        } else {
+            vec![self.record.buy_price as f32, self.record.sell_price as f32]
+        });
         // The same lines by `ReportUID`, for the arrows pass: it asks whether a trade's ENTRY has
         // a line so as not to draw the entry arrow over it (`chartdx::archived_lines`). Built from
         // the very traces the store is, so the two cannot disagree. The exit is not this map's

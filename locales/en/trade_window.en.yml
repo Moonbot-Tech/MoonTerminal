@@ -4,6 +4,9 @@ _version: 1
 # Свой файл, а не блок в report.yml: это отдельная область интерфейса (см. README).
 
 trade_window.open: "Open trade window"
+trade_window.focus: "Show trade"
+trade_window.focus.tip: "Return to the selected trade and reset time and price zoom"
+trade_window.scale.tip: "Preset for the full vertical price span, as a percentage of the scale reference price. The chart badge follows manual zoom; each of the 10 grid bands is one tenth of that span."
 
 trade_window.blocked.unresolved: "Trade window unavailable - the core is not connected"
 

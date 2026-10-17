@@ -10,7 +10,9 @@ use gpui::*;
 use moon_core::market::trade_replay::{
     TickStatus, TickThinning, TradeReplayEmpty, TradeReplayFailure, TradeReplaySource,
 };
-use moon_ui::{MoonButton, MoonPalette, MoonWindowFrame, MoonWindowFrameControls, h_flex, v_flex};
+use moon_ui::{
+    MoonButton, MoonPalette, MoonSize, MoonWindowFrame, MoonWindowFrameControls, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use super::{TradeWindowState, TradeWindowView, figures, strategy, traces};
@@ -102,6 +104,14 @@ pub(super) fn rail_wraps(viewport_w: f32) -> bool {
     viewport_w < NARROW_W
 }
 
+/// Build the same compact focus control for the real view and its headless header check.
+fn focus_button() -> MoonButton {
+    MoonButton::new("trade-window-focus")
+        .size(MoonSize::Xs)
+        .label(t!("trade_window.focus").to_string())
+        .tooltip(t!("trade_window.focus.tip").to_string())
+}
+
 /// Lay out title and controls without letting a long trade name squeeze the native buttons.
 ///
 /// The settings and scale slots are supplied by the view; a headless layout test can exercise
@@ -109,6 +119,7 @@ pub(super) fn rail_wraps(viewport_w: f32) -> bool {
 fn trade_header(
     title: String,
     embedded: bool,
+    focus: AnyElement,
     settings: AnyElement,
     scale: AnyElement,
     cx: &App,
@@ -153,6 +164,7 @@ fn trade_header(
         .border_color(moon(p.border))
         .bg(moon(p.shell_high))
         .child(title_el)
+        .child(design::chrome_section(cx).child(focus))
         .child(design::chrome_section(cx).child(settings))
         .child(design::chrome_divider(cx, p))
         .child(design::chrome_section(cx).child(scale))
@@ -178,7 +190,12 @@ impl Render for TradeWindowView {
         let settings = self.settings_popup_host(cx).into_any_element();
         let scale =
             crate::controls::scale_dropdown_for_trade_window(cx, self.scale(cx), cx.entity(), p);
-        let header = trade_header(title, embedded, settings, scale, cx);
+        let focus = focus_button()
+            .disabled(self.overlays_chart())
+            .on_click(cx.listener(|this, _, _, cx| this.focus_trade(cx)))
+            .render()
+            .into_any_element();
+        let header = trade_header(title, embedded, focus, settings, scale, cx);
         // Built per branch rather than cloned: `AnyElement` is single-use by construction, which
         // is also what keeps a stray second mount from silently sharing element ids.
         let body = self.chart_area(p, cx);

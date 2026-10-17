@@ -1,4 +1,7 @@
 _version: 1
+trade_window.focus: "Xem giao dịch"
+trade_window.focus.tip: "Trở về giao dịch đã chọn và đặt lại mức thu phóng thời gian và giá"
+trade_window.scale.tip: "Mức đặt sẵn cho toàn bộ khoảng giá theo chiều dọc, tính theo phần trăm giá tham chiếu. Nhãn trên biểu đồ theo mức thu phóng thủ công; mỗi dải trong 10 dải lưới bằng một phần mười khoảng này."
 
 # Окно детали сделки: открывается по двойному клику на закрытой сделке в «Отчёте».
 # Свой файл, а не блок в report.yml: это отдельная область интерфейса (см. README).

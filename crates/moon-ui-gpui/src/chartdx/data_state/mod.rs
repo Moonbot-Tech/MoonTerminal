@@ -143,7 +143,8 @@ pub(in crate::chartdx) struct ChartDataState {
     pub(in crate::chartdx) frozen_orders:
         Option<Rc<moon_core::session::order_lines::OrderLineStore>>,
     /// The price band the trade window asks the auto-Y fit to include beside the visible prices
-    /// — the trade's own lines, and its shown neighbours' — or `None` to fit the prices alone.
+    /// — at least the selected trade's settled entry and exit; fitted mode also includes its
+    /// lines and nearby neighbours. `None` fits only the visible market prices.
     ///
     /// Set with `frozen_orders`, by the same owner: a live chart takes this band from the
     /// session store's open orders (`auto_fit_range`), which an archived store never has.

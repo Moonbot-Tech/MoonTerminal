@@ -1,4 +1,4 @@
-//! Regression tests for the chart-history floor calculation.
+//! Regression tests for market fitting, replay transforms and history reads.
 
 use moon_core::market::CandleViewCfg;
 use moon_core::market::candles::{
@@ -6,6 +6,226 @@ use moon_core::market::candles::{
 };
 
 use super::window::{chart_history_floor_ms, hide_start_rel};
+
+/// Dropping the replay's settlement band hides report-priced arrows when exchange tape differs.
+#[test]
+fn trade_window_settlement_prices_match_axis_after_zoom() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(replay_price_transform)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Exercise actual replay frame preparation, wheel navigation and fixed-percent scaling.
+fn replay_price_transform() {
+    use gpui::{Bounds, GpuFrameInfo, point, px, size};
+    use moon_core::config::ChartTheme;
+    use moon_core::market::trade_replay::{
+        Coverage, TickStatus, TickThinning, TradeReplaySeries, TradeReplaySource, replay_window_ms,
+    };
+    use moon_core::market::{MarketDataSource, MarketStore};
+    use std::rc::Rc;
+    use std::time::Instant;
+
+    let window = replay_window_ms(100_000, 110_000, 30_000).unwrap();
+    for zoom in [0.75, 1.0, 1.5] {
+        let mut engine = crate::chartdx::ChartEngine::new(0.0, ChartTheme::default());
+        engine.open(42, "XALPHAUSDT");
+        engine.set_historical(true);
+        engine.set_frozen_orders(None, Some((2.2334, 2.276)));
+        engine.set_trade_history(Rc::new(vec![moon_core::db::ChartTradeRecord {
+            record_id: 1,
+            core_uid: 42,
+            coin: "XALPHAUSDT".into(),
+            buy_date: 100,
+            close_date: 110,
+            buy_ms: Some(100_000),
+            close_ms: Some(110_000),
+            sell_set_date: 100,
+            sell_set_ms: None,
+            buy_set_ms: None,
+            corridor: None,
+            buy_price: 2.276,
+            sell_price: 2.2334,
+            quantity: 130.0,
+            is_short: true,
+            emulator: false,
+            profit: Some(5.47),
+            quote: None,
+            profit_pct: Some(1.85),
+            report_uid: None,
+        }]));
+        engine.set_trade_replay(Some(Rc::new(TradeReplaySeries {
+            source: TradeReplaySource::CoreTicks,
+            venue: None,
+            window,
+            tf_ms: 60_000,
+            candles: Vec::new(),
+            ticks: vec![
+                moon_core::feed::Tick {
+                    time_ms: 100_000.0,
+                    price: 2.1,
+                    qty: 130.0,
+                    side: moon_core::feed::Side::Sell,
+                },
+                moon_core::feed::Tick {
+                    time_ms: 110_000.0,
+                    price: 2.12,
+                    qty: 130.0,
+                    side: moon_core::feed::Side::Buy,
+                },
+            ],
+            identity: 1,
+            tick_status: TickStatus::Served,
+            thinning: TickThinning::Raw,
+            partial: false,
+            side_slots: Vec::new(),
+            covered: Coverage::one((window.from_ms, window.to_ms)),
+        })));
+        engine.show_time_range(60_000.0, 180_000.0, 0.0);
+        engine.set_scene_visible(true);
+        let source = MarketDataSource::new(MarketStore::shared(0.0));
+        engine.set_market_source(Some(source.clone()));
+        for step in 0..5 {
+            if step == 1 {
+                engine.set_scale(Some(0.10));
+            }
+            if step == 2 {
+                let before = engine.pane_x_ppm(Some(0)).unwrap();
+                let mut input = crate::chartdx::input::ChartInput::default();
+                input.hovered_pane = Some(0);
+                engine.with_container_mut(|container| {
+                    assert!(input.wheel(
+                        100.0,
+                        false,
+                        crate::chartdx::input::WheelMode::Zoom,
+                        true,
+                        container,
+                        1000.0,
+                        1.0,
+                    ));
+                });
+                assert_eq!(engine.pane_x_ppm(Some(0)).unwrap(), before * 2.0);
+            }
+            if step >= 3 {
+                if step == 4 {
+                    // Repeating Show trade must undo both X navigation and a parked manual Y.
+                    engine.with_container_mut(|container| {
+                        let v = &mut container.panes_mut()[0].view;
+                        v.pan_x_px(800.0, 0.0, 1000.0);
+                        v.rmb_zoom(v.render_center, v.render_range, 80.0, 0.0);
+                    });
+                }
+                // These are the two operations Show trade applies to its own chart panel.
+                engine.reapply_scale(None);
+                engine.show_time_range(100_000.0, 110_000.0, 0.25);
+            }
+            let mut data = engine.data.borrow_mut();
+            data.mark_view_dirty();
+            data.frame(GpuFrameInfo {
+                now: Instant::now(),
+                bounds: Bounds {
+                    origin: point(px(20.0), px(80.0)),
+                    size: size(px(1000.0), px(600.0)),
+                },
+                scale_factor: 1.5 * zoom,
+                content_zoom: zoom,
+                presentable: true,
+            });
+            let render = data.render.borrow();
+            let pane = render.panes.iter().find(|pane| pane.active).unwrap();
+            let v = pane.view;
+            let logical = engine.container.borrow();
+            let view = &logical.panes()[0].view;
+            let mut markers = Vec::new();
+            let mut segs = Vec::new();
+            data.append_trade_history_geometry(
+                0,
+                42,
+                view,
+                &mut markers,
+                &mut segs,
+                None,
+                &mut None,
+            );
+            assert_eq!(markers.len(), 2);
+            let mut read = Vec::new();
+            for (marker, price) in markers.iter().zip([2.276_f32, 2.2334]) {
+                assert_eq!(
+                    marker.price, price,
+                    "markers must use report prices, not tape"
+                );
+                if step >= 3 {
+                    let x = v.bounds[0] + (marker.t_rel - v.view_time0) * v.time_to_px;
+                    assert!(x > v.bounds[0] && x < v.bounds[0] + v.bounds[2]);
+                }
+                // The marker shaders place the apex with this physical-pixel mapping.
+                let y = v.bounds[1] + v.bounds[3] - (marker.price - v.view_price0) * v.price_to_px;
+                assert!(
+                    y >= v.bounds[1] && y <= v.bounds[1] + v.bounds[3],
+                    "settled price clipped: zoom={zoom}, step={step}"
+                );
+                // Axis labels and cursor readouts invert in chart-design logical pixels.
+                let sf = 1.5;
+                let axis = v.view_price0
+                    + ((v.bounds[1] + v.bounds[3]) / sf - y / sf) / (v.price_to_px / sf);
+                assert!((axis - price).abs() < 1e-6, "zoom={zoom}, step={step}");
+                let expected_y = v.bounds[1] + v.bounds[3] * 0.5
+                    - (price - view.render_center) / view.render_range * v.bounds[3];
+                assert!((y - expected_y).abs() < 0.01, "view and GPU disagree");
+                read.push(axis);
+            }
+            let short_pct = (read[0] - read[1]) / read[0] * 100.0;
+            assert!((short_pct - 1.8717047).abs() < 0.0001);
+            if step == 1 || step == 2 {
+                assert_eq!(pane.scale_badge, Some(10));
+                let span = v.bounds[3] / v.price_to_px;
+                let center = v.view_price0 + span * 0.5;
+                assert!((span / center * 100.0 - 10.0).abs() < 0.001);
+            }
+            drop(logical);
+            drop(render);
+            drop(data);
+            engine.set_ruler(
+                Some(crate::chartdx::ruler::RulerSpan {
+                    pane: 0,
+                    t0_ms: 100_000.0,
+                    p0: read[0] as f64,
+                    t1_ms: 110_000.0,
+                    p1: read[1] as f64,
+                }),
+                &source,
+            );
+            assert!(
+                engine
+                    .state
+                    .borrow()
+                    .ruler
+                    .as_ref()
+                    .unwrap()
+                    .move_line
+                    .starts_with("-1.87%")
+            );
+        }
+    }
+}
+
+/// Applying replay's full union to Main would squash candles around distant live targets.
+#[test]
+fn main_price_fit_still_bounds_distant_orders() {
+    let ticks = Some((200.0, 210.0));
+    let orders = Some((400.0, 500.0));
+    assert_eq!(
+        moon_chart::view::admit_order_band(ticks, orders),
+        Some((200.0, 215.0))
+    );
+    assert_eq!(
+        moon_chart::view::fit_band(ticks, orders, true),
+        Some((200.0, 500.0))
+    );
+}
 
 /// Local readiness needs timed retries at unchanged archive revisions, then freezes on acceptance.
 #[test]
