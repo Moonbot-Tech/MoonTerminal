@@ -121,11 +121,46 @@ struct Autoload {
 
 static AUTOLOAD: OnceLock<Mutex<Autoload>> = OnceLock::new();
 
-fn lock() -> std::sync::MutexGuard<'static, Autoload> {
-    AUTOLOAD
+std::thread_local! {
+    /// This thread holds the autoload lock: the coordination tick takes it on the UI thread, so a
+    /// second take there would freeze the whole terminal instead of failing.
+    static HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The autoload lock, released on drop; taking it twice on one thread panics in debug builds.
+struct Held(std::sync::MutexGuard<'static, Autoload>);
+
+impl std::ops::Deref for Held {
+    type Target = Autoload;
+    fn deref(&self) -> &Autoload {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Held {
+    fn deref_mut(&mut self) -> &mut Autoload {
+        &mut self.0
+    }
+}
+
+impl Drop for Held {
+    /// Clear the per-thread mark, on a normal release and on an unwind alike.
+    fn drop(&mut self) {
+        HELD.with(|held| held.set(false));
+    }
+}
+
+fn lock() -> Held {
+    debug_assert!(
+        !HELD.with(std::cell::Cell::get),
+        "autoload lock taken twice on one thread: std::sync::Mutex is not re-entrant and would hang"
+    );
+    let guard = AUTOLOAD
         .get_or_init(|| Mutex::new(Autoload::default()))
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    HELD.with(|held| held.set(true));
+    Held(guard)
 }
 
 /// Current cancellation generation shared by station-prefill and autoload passes.
@@ -135,7 +170,12 @@ pub(super) fn generation() -> u64 {
 
 /// Station target only while the common reachability backoff permits another attempt.
 pub(super) fn station_target() -> Option<moon_remote::ssh::Target> {
-    if lock().station_back_at.is_some_and(|at| Instant::now() < at) {
+    station_target_of(&lock())
+}
+
+/// [`station_target`] for a caller already holding the lock — the tick, on the UI thread.
+fn station_target_of(st: &Autoload) -> Option<moon_remote::ssh::Target> {
+    if st.station_back_at.is_some_and(|at| Instant::now() < at) {
         return None;
     }
     crate::backend::station::known_target()
@@ -246,7 +286,8 @@ pub(crate) fn tick(backend: &Backend) {
             st.phase = Phase::Running;
             st.generation += 1;
             let generation = st.generation;
-            start_pass(backend, left, attempts, generation);
+            let station = station_target_of(&st);
+            start_pass(backend, left, attempts, generation, station);
         }
         waiting @ Phase::Waiting { .. } => st.phase = waiting,
         Phase::Running => match st.result.take() {
@@ -276,13 +317,20 @@ pub(crate) fn tick(backend: &Backend) {
 
 /// One pass on a thread of its own: read the deals (first pass only), resolve, ask the station,
 /// hand over, report what is left — unless the pass was cancelled or outlived meanwhile.
-fn start_pass(backend: &Backend, left: Option<Vec<Deal>>, attempts: u32, generation: u64) {
+///
+/// Called by the tick under the autoload lock, so `station` is read by the caller: this body must
+/// not take that lock again before its thread starts.
+fn start_pass(
+    backend: &Backend,
+    left: Option<Vec<Deal>>,
+    attempts: u32,
+    generation: u64,
+    station: Option<moon_remote::ssh::Target>,
+) {
     let resolver = FetchResolver::of(backend);
     let defaults = strategy_field_defaults(backend);
     let axis = backend.report_axis(chrono_tz::UTC);
     let attempt = attempts + 1;
-    // Read when the pass starts: a server set up or forgotten meanwhile counts from the next one.
-    let station = station_target();
     // A thread of its own, not the background executor: the station's round trips are blocking
     // SSH and may take minutes over a month of trades.
     let spawned = std::thread::Builder::new()

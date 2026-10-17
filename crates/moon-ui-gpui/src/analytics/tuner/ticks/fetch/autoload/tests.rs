@@ -115,3 +115,26 @@ fn with_the_core_switch_off_skips_keep_their_reasons() {
         RowPath::VenueOff
     );
 }
+
+/// The tick holds the autoload lock on the UI thread while it starts a pass; a second take on the
+/// same thread must fail loudly, never hang the terminal as the station-target read once did.
+#[test]
+#[should_panic(expected = "autoload lock taken twice")]
+fn a_second_take_of_the_lock_on_one_thread_panics_instead_of_hanging() {
+    let _held = super::lock();
+    let _again = super::lock();
+}
+
+/// A tick-style caller reads the station target from the lock it already holds, and returns.
+#[test]
+fn the_station_target_is_read_under_the_held_lock_without_retaking_it() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let held = super::lock();
+        let _ = super::station_target_of(&held);
+        drop(held);
+        tx.send(()).unwrap();
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(5))
+        .expect("station target read under the held lock did not return");
+}
