@@ -568,9 +568,18 @@ impl BenchDir {
 }
 
 impl Drop for BenchDir {
-    /// Connections are scoped inside this guard, so no live worker owns these files.
+    /// Retries transient file locks briefly, leaving leftovers rather than panicking in Drop.
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).expect("fixture cleanup");
+        for attempt in 0..50 {
+            match std::fs::remove_dir_all(&self.0) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) if attempt < 49 => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(_) => return,
+            }
+        }
     }
 }
 
