@@ -9,6 +9,25 @@ use crate::analytics::tuner::shared::{InlineWrite, SaveAuthority, SaveTarget};
 use moon_core::db::metrics::Tally;
 use moon_core::db::tuner::ticks::search::{MIN_HOLDOUT, SearchResult};
 
+/// Publishing stage-B rows must not turn an unanswered tape read into a zero-sample refusal.
+#[test]
+fn selected_strategy_waits_for_tape_before_refusing_the_sample() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = TicksState::default();
+    state.data.apply(Ok(TicksData::default()));
+    state.tape_reading = true;
+    state.sugg_refusal = Some("previous refusal".into());
+    let loading = SummaryModel::from_state(&state, "fixture".into(), false);
+    assert_eq!(loading.verdict, Verdict::Loading);
+    assert_eq!(loading.tag, "Loading…");
+    assert_eq!(loading.sentence, "reading the tape…");
+    state.tape_reading = false;
+    assert!(matches!(
+        SummaryModel::from_state(&state, "fixture".into(), false).verdict,
+        Verdict::Cannot(_)
+    ));
+}
+
 /// An expired startup forecast must not pin hundreds of remaining restarts to one second.
 #[test]
 fn remaining_time_tracks_observed_progress_after_the_startup_estimate_expires() {
@@ -341,6 +360,32 @@ fn changed_header_counts_only_differing_fields_and_localizes_varies() {
         "разные"
     );
     assert_eq!(model.changed_header, "Что поменялось · полей: 2");
+}
+
+/// A blank stored field must remain an explicit muted absence before the change arrow.
+#[test]
+fn changed_fields_show_absence_for_missing_empty_and_whitespace_old_values() {
+    for old in [None, Some(""), Some("  \t")] {
+        let mut state = TicksState::default();
+        state.set_variant("PriceToSwitch2Stop", "-2".into());
+        let mut data = TicksData::default();
+        if let Some(old) = old {
+            data.now
+                .insert("PriceToSwitch2Stop".into(), NowValue::Same(old.into()));
+        }
+        state.data.apply(Ok(data));
+        let model = SummaryModel::from_state(&state, "fixture".into(), false);
+        assert_eq!(model.changes.len(), 1);
+        assert_eq!(model.changes[0].old, "—");
+        assert_eq!(model.changes[0].new, "-2");
+    }
+    let changes = vec![("PriceToSwitch2Stop".into(), "-2".into())];
+    for old in ["0", "-1"] {
+        let now = HashMap::from([("PriceToSwitch2Stop".into(), NowValue::Same(old.into()))]);
+        assert_eq!(super::change_rows(&changes, &now, &[], false)[0].old, old);
+    }
+    let now = HashMap::from([("PriceToSwitch2Stop".into(), NowValue::Same("-2".into()))]);
+    assert!(super::change_rows(&changes, &now, &[], false).is_empty());
 }
 
 /// Capture a synthetic consent for the state tests without connecting to a real core.

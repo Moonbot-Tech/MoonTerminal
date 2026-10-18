@@ -15,6 +15,45 @@ use moon_core::db::tuner::ticks::verify::{
 use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
 use moon_core::market::trade_replay::TickStatus;
 
+/// Stage-B placeholders must say reading until the local replay answers, then expose its result.
+#[test]
+fn unanswered_tape_rows_are_neutral_without_hiding_known_coverage() {
+    let admission = Admission::at(60, 0);
+    let mut row = row();
+    row.tape = TapeStatus::Missing;
+    let pending = DealWhy::display_of_with(&row, &admission, true);
+    assert_eq!(pending, DealWhy::Reading);
+    assert_eq!(pending.tape_glyph(), ("…", Tone::Muted));
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        assert_eq!(
+            pending.short(),
+            rust_i18n::t!("analytics.ticks.fetch_reading")
+        );
+        assert!(pending.tape_tip().todo.is_none());
+    }
+    assert_ne!(
+        DealWhy::display_of_with(&row, &admission, false),
+        DealWhy::Reading
+    );
+    // Stage B carries an answered refusal while stage C reads other rows.
+    row.tape = TapeStatus::Refused(TickStatus::NoTrades);
+    assert_eq!(
+        DealWhy::display_of_with(&row, &admission, true),
+        DealWhy::Refused(TickStatus::NoTrades)
+    );
+    row.tape = TapeStatus::Covered;
+    assert_eq!(
+        DealWhy::display_of_with(&row, &admission, true),
+        DealWhy::Fit
+    );
+    row.tape = TapeStatus::NoAddress;
+    assert_eq!(
+        DealWhy::display_of_with(&row, &admission, true),
+        DealWhy::NoAddress
+    );
+}
+
 /// Build a coherent finding/verdict pair, rather than testing contradictory synthetic records.
 fn verdict(entry_finding: EntryFinding, exit_finding: ExitFinding) -> Verdict {
     Verdict {

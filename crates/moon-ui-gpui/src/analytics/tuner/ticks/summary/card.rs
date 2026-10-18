@@ -282,7 +282,7 @@ pub(in crate::analytics::tuner) fn summary_card_el(
         Verdict::Apply => (MoonTag::positive(), p.green),
         Verdict::DontApply(_) => (MoonTag::warning(), p.amber),
         Verdict::Cannot(_) => (MoonTag::danger(), p.red),
-        Verdict::Idle | Verdict::Running { .. } | Verdict::Unchecked(_) => {
+        Verdict::Idle | Verdict::Loading | Verdict::Running { .. } | Verdict::Unchecked(_) => {
             (MoonTag::new(), p.text_muted)
         }
     };
@@ -360,7 +360,7 @@ pub(in crate::analytics::tuner) fn summary_card_el(
                 acts.stop.clone(),
                 cx,
             )));
-    } else {
+    } else if m.verdict != Verdict::Loading {
         if m.train.is_some() || m.holdout.is_some() {
             let unit = crate::analytics::pnl_unit_label();
             let head = if unit.is_empty() {
@@ -419,7 +419,15 @@ pub(in crate::analytics::tuner) fn summary_card_el(
                                 .gap(design::ui_px(cx, 8.0))
                                 .font_family(design::mono())
                                 .text_size(design::t_body(cx))
-                                .child(div().text_color(moon(p.text_muted)).child(row.old.clone()))
+                                .child(
+                                    div()
+                                        .debug_selector({
+                                            let key = row.key.clone();
+                                            move || format!("an-ticks-change-old-{key}")
+                                        })
+                                        .text_color(moon(p.text_muted))
+                                        .child(row.old.clone()),
+                                )
                                 .child(div().text_color(moon(p.text_muted)).child("→"))
                                 .child(
                                     div()

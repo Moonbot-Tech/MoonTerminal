@@ -721,6 +721,7 @@ analytics.ticks.empty_left_out: "O período não tem nenhuma operação que o ei
 analytics.ticks.fetch_reading: "lendo o tape…"
 analytics.ticks.fetch_progress_at: "negócios: %{done}/%{total} · %{market}…"
 analytics.ticks.fetch_waiting: "negócios: %{done}/%{total} · aguardando a corretora"
+analytics.ticks.fetch_station_waiting: "negócios: %{done}/%{total} · aguardando a estação"
 analytics.ticks.fetch_venue_wait: "negócios: %{done}/%{total} · a corretora pediu para esperar · %{left}"
 analytics.ticks.col.kind: "tipo"
 analytics.ticks.col.plan: "plano V1"

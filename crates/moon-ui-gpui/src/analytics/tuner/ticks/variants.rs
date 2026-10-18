@@ -103,6 +103,23 @@ pub(super) fn passes_of(text: &str) -> usize {
         .clamp(1, 1_000)
 }
 
+/// Explain why the Search controls are waiting, deferring sample refusal until tape answers.
+fn search_status_tip(state: &super::state::TicksState) -> Option<String> {
+    if state.tape_reading {
+        return Some(t!("analytics.ticks.fetch_reading").to_string());
+    }
+    if state
+        .data
+        .data()
+        .is_some_and(|d| !d.kinds.is_empty() && d.single_kind().is_none())
+    {
+        return Some(t!("analytics.ticks.sugg_one_kind").to_string());
+    }
+    state
+        .search_too_few()
+        .map(|n| miss_note(SearchMiss::TooFew { n }, 0))
+}
+
 impl AnalyticsView {
     /// The replayable rows as the search and the columns take them, their tapes still packed:
     /// the caller hands them to [`prepare_sample`] off the UI thread, which unpacks them and
@@ -308,16 +325,12 @@ impl AnalyticsView {
     /// both the groups searched under the share gate ([`Self::ticks_gate_warnings`]) — the grid
     /// heading that says so can be scrolled away by the time the button is pressed. A scope of
     /// several kinds, which neither searches, says so on both.
+    /// An unanswered tape read takes precedence over sample refusal in both tooltips.
     pub(super) fn ticks_search_tips(&self) -> (String, String) {
+        if let Some(status) = search_status_tip(&self.ticks) {
+            return (status.clone(), status);
+        }
         let data = self.ticks.data.data();
-        if data.is_some_and(|d| !d.kinds.is_empty() && d.single_kind().is_none()) {
-            let refused = t!("analytics.ticks.sugg_one_kind").to_string();
-            return (refused.clone(), refused);
-        }
-        if let Some(n) = self.ticks.search_too_few() {
-            let refused = miss_note(SearchMiss::TooFew { n }, 0);
-            return (refused.clone(), refused);
-        }
         let one = match self.ticks.sel_field {
             Some(key) => t!("analytics.ticks.suggest_one_tip", field = key).to_string(),
             None => t!("analytics.ticks.suggest_one_none").to_string(),

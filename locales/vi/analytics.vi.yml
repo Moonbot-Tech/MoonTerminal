@@ -721,6 +721,7 @@ analytics.ticks.empty_left_out: "Kỳ không có giao dịch nào trục này đ
 analytics.ticks.fetch_reading: "đang đọc tape…"
 analytics.ticks.fetch_progress_at: "tape: %{done}/%{total} · %{market}…"
 analytics.ticks.fetch_waiting: "tape: %{done}/%{total} · đang đợi sàn"
+analytics.ticks.fetch_station_waiting: "tape: %{done}/%{total} · đang đợi trạm"
 analytics.ticks.fetch_venue_wait: "tape: %{done}/%{total} · sàn yêu cầu chờ · %{left}"
 analytics.ticks.col.kind: "dạng"
 analytics.ticks.col.plan: "kế hoạch V1"

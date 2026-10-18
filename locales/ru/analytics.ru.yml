@@ -721,6 +721,7 @@ analytics.ticks.empty_left_out: "В периоде нет сделок, по к�
 analytics.ticks.fetch_reading: "лента читается…"
 analytics.ticks.fetch_progress_at: "трейды: %{done}/%{total} · %{market}…"
 analytics.ticks.fetch_waiting: "трейды: %{done}/%{total} · ждём биржу"
+analytics.ticks.fetch_station_waiting: "трейды: %{done}/%{total} · ждём станцию"
 analytics.ticks.fetch_venue_wait: "трейды: %{done}/%{total} · биржа просит подождать · %{left}"
 analytics.ticks.col.kind: "тип"
 analytics.ticks.col.plan: "план В1"

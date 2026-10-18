@@ -721,6 +721,7 @@ analytics.ticks.empty_left_out: "Dönemde eksenin okuyabildiği işlem yok: ms d
 analytics.ticks.fetch_reading: "bant okunuyor…"
 analytics.ticks.fetch_progress_at: "piyasa işlemleri: %{done}/%{total} · %{market}…"
 analytics.ticks.fetch_waiting: "piyasa işlemleri: %{done}/%{total} · borsa bekleniyor"
+analytics.ticks.fetch_station_waiting: "piyasa işlemleri: %{done}/%{total} · istasyon bekleniyor"
 analytics.ticks.fetch_venue_wait: "piyasa işlemleri: %{done}/%{total} · borsa beklememizi istedi · %{left}"
 analytics.ticks.col.kind: "tür"
 analytics.ticks.col.plan: "V1 planı"

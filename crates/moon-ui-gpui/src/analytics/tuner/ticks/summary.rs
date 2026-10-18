@@ -44,6 +44,8 @@ pub(super) struct ConfirmModel {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Verdict {
     Idle,
+    /// The selected strategy's tape has not answered yet; no sample verdict is available.
+    Loading,
     Running {
         done: usize,
         total: usize,
@@ -154,6 +156,7 @@ pub(super) fn sample_verdict(verdict: Verdict, too_few: Option<usize>) -> Verdic
 pub(super) fn tag(verdict: &Verdict) -> String {
     t!(match verdict {
         Verdict::Idle => "analytics.ticks.sum.tag_idle",
+        Verdict::Loading => "common.loading",
         Verdict::Running { .. } => "analytics.ticks.sum.tag_running",
         Verdict::Cannot(_) => "analytics.ticks.sum.tag_cannot",
         Verdict::Apply => "analytics.ticks.sum.tag_apply",
@@ -185,6 +188,7 @@ pub(super) fn sentence(
 ) -> String {
     match verdict {
         Verdict::Idle => t!("analytics.ticks.sum.idle").to_string(),
+        Verdict::Loading => t!("analytics.ticks.fetch_reading").to_string(),
         Verdict::Running { .. } if hold_n == 0 => {
             t!("analytics.ticks.sum.running_whole", n = train_n).to_string()
         }
@@ -282,7 +286,8 @@ fn open_line(n: usize, profit: f64) -> Option<String> {
     })
 }
 
-/// Remove no-op edits and resolve section labels from descriptors or the loaded schema grid.
+/// Remove no-op edits and show an explicit absence for unset or blank strategy values.
+/// Section labels come from descriptors or the loaded schema grid.
 pub(super) fn change_rows(
     changes: &[(String, String)],
     now: &HashMap<String, NowValue>,
@@ -294,6 +299,7 @@ pub(super) fn change_rows(
         .filter_map(|(key, value)| {
             let old = match now.get(key) {
                 Some(NowValue::Same(old)) if old == value => return None,
+                Some(NowValue::Same(old)) if old.trim().is_empty() => String::from("—"),
                 Some(NowValue::Same(old)) => old.clone(),
                 Some(NowValue::Differs) => t!("analytics.ticks.sum.varies").to_string(),
                 None => String::from("—"),
@@ -325,7 +331,7 @@ pub(super) fn change_rows(
 }
 
 impl SummaryModel {
-    /// Build numerical rows and localised explanations exclusively from the displayed point.
+    /// Build advice from the displayed point, deferring sample refusal until its tape answers.
     pub(super) fn from_state(state: &TicksState, scope_label: String, human_labels: bool) -> Self {
         let running = match &state.sugg {
             SuggState::Idle => None,
@@ -356,13 +362,17 @@ impl SummaryModel {
             )),
         };
         let result = state.current_result();
-        let verdict = verdict_of(
-            running,
-            state.search_too_few(),
-            state.sugg_refusal.as_deref(),
-            result,
-            state.has_changes(),
-        );
+        let verdict = if state.tape_reading && running.is_none() {
+            Verdict::Loading
+        } else {
+            verdict_of(
+                running,
+                state.search_too_few(),
+                state.sugg_refusal.as_deref(),
+                result,
+                state.has_changes(),
+            )
+        };
         let verdict = sample_verdict(verdict, state.variant_too_few());
         let data = state.data.data();
         let (fit, hold) = match state.sugg {

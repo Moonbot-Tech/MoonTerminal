@@ -2,6 +2,48 @@ use std::time::Duration;
 
 use super::fetch_wait_text;
 
+/// A station handover with no queued venue rows must not advertise a stuck 0/0 fetch.
+#[test]
+fn empty_fetch_jobs_leave_only_the_local_read_caption() {
+    let _locale = crate::test_locale::force("en");
+    let progress = super::fetch::job::Progress::default();
+    for active in [false, true] {
+        for station in [false, true] {
+            assert!(super::fetch_caption(&progress, active, station, false).is_empty());
+            assert_eq!(
+                super::fetch_caption(&progress, active, station, true),
+                "reading the tape…"
+            );
+        }
+    }
+}
+
+/// A configured station must never be described as a venue, including stale venue backoff.
+#[test]
+fn fetch_waiting_names_the_active_source_and_preserves_venue_progress() {
+    let _locale = crate::test_locale::force("en");
+    let mut progress = super::fetch::job::Progress {
+        active: true,
+        done: 2,
+        total: 7,
+        ..Default::default()
+    };
+    assert_eq!(
+        super::fetch_caption(&progress, true, true, false),
+        "trades: 2/7 · waiting for the station"
+    );
+    assert_eq!(
+        super::fetch_caption(&progress, true, false, false),
+        "trades: 2/7 · waiting for the venue"
+    );
+    progress.venue_wait = Some(Duration::from_secs(30));
+    assert!(super::fetch_caption(&progress, true, true, false).contains("station"));
+    assert!(super::fetch_caption(&progress, true, false, false).contains("30"));
+    progress.in_flight = vec![(vec![1], "SYNTH".into())];
+    assert!(super::fetch_caption(&progress, true, false, false).contains("SYNTH"));
+    assert!(super::fetch_caption(&progress, false, true, false).is_empty());
+}
+
 /// A raw debug status or untranslated key would hide why a retryable row has no tape.
 #[test]
 fn unpublished_tape_caption_names_the_expected_utc_time_in_every_language() {

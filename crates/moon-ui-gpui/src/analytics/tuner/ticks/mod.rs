@@ -165,6 +165,7 @@ impl AnalyticsView {
                                 selected,
                                 plan,
                                 deal_action(weak.clone()),
+                                view.ticks.tape_reading,
                                 p,
                                 scale,
                                 row_h,
@@ -197,44 +198,12 @@ impl AnalyticsView {
         }
         // What the batch is doing goes into the caption, and only that: the sample's coverage
         // sits in the status line under the table, so the head says nothing when nothing runs.
-        let caption = if fetch_active && !progress.in_flight.is_empty() {
-            // Every market a request is out for, in the order they went out: the walks run in
-            // parallel across venues, and one name would read as one request.
-            let markets: Vec<&str> = progress
-                .in_flight
-                .iter()
-                .map(|(_, market)| market.as_str())
-                .collect();
-            t!(
-                "analytics.ticks.fetch_progress_at",
-                done = progress.done,
-                total = progress.total,
-                market = markets.join(" · ")
-            )
-            .to_string()
-        } else if fetch_active {
-            match progress.venue_wait {
-                // The venue asked for this pause. The figure is the same deadline the next
-                // try will honour, the soonest host when several are waiting.
-                Some(wait) => t!(
-                    "analytics.ticks.fetch_venue_wait",
-                    done = progress.done,
-                    total = progress.total,
-                    left = fetch_wait_text(wait)
-                )
-                .to_string(),
-                None => t!(
-                    "analytics.ticks.fetch_waiting",
-                    done = progress.done,
-                    total = progress.total
-                )
-                .to_string(),
-            }
-        } else if self.ticks.tape_reading {
-            t!("analytics.ticks.fetch_reading").to_string()
-        } else {
-            String::new()
-        };
+        let caption = fetch_caption(
+            &progress,
+            fetch_active,
+            crate::backend::station::known_cached(),
+            self.ticks.tape_reading,
+        );
         // The status line: the honest size of the sample — how many rows have their tape,
         // out of how many — with what the scope holds beyond the table, and the switch that
         // hides the rest. How well the MODEL does on that sample is the KPI caption's ✓
@@ -1050,6 +1019,60 @@ fn filtered_empty_el(pick: ChipAction, p: MoonPalette, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+/// Describe only nonempty fetch jobs, naming the configured source while waiting.
+/// Empty station handovers still allow the selected strategy's local read to be shown.
+fn fetch_caption(
+    progress: &fetch::job::Progress,
+    active: bool,
+    station: bool,
+    reading: bool,
+) -> String {
+    if active && progress.total > 0 {
+        if station {
+            return t!(
+                "analytics.ticks.fetch_station_waiting",
+                done = progress.done,
+                total = progress.total
+            )
+            .to_string();
+        }
+        if !progress.in_flight.is_empty() {
+            let markets: Vec<&str> = progress
+                .in_flight
+                .iter()
+                .map(|(_, market)| market.as_str())
+                .collect();
+            return t!(
+                "analytics.ticks.fetch_progress_at",
+                done = progress.done,
+                total = progress.total,
+                market = markets.join(" · ")
+            )
+            .to_string();
+        }
+        return match progress.venue_wait {
+            Some(wait) => t!(
+                "analytics.ticks.fetch_venue_wait",
+                done = progress.done,
+                total = progress.total,
+                left = fetch_wait_text(wait)
+            )
+            .to_string(),
+            None => t!(
+                "analytics.ticks.fetch_waiting",
+                done = progress.done,
+                total = progress.total
+            )
+            .to_string(),
+        };
+    }
+    if reading {
+        t!("analytics.ticks.fetch_reading").to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// One glyph per model group without allocating hover text on every repaint.
 fn model_glyph(verdict: Option<moon_core::db::tuner::ticks::Verdict>) -> String {
     let Some(v) = verdict else {
@@ -1077,13 +1100,14 @@ fn deal_action(view: WeakEntity<AnalyticsView>) -> DealAction {
     })
 }
 
-/// Draw only a visible row, with lazy hover explanations and shared classification inputs.
+/// Draw a visible row without claiming missing tape while its local read is unanswered.
 #[allow(clippy::too_many_arguments)]
 fn deal_row(
     row: &DealRow,
     selected: bool,
     plan: PlanCell,
     action: DealAction,
+    reading: bool,
     p: MoonPalette,
     scale: f32,
     row_h: f32,
@@ -1091,7 +1115,7 @@ fn deal_row(
     cx: &App,
 ) -> AnyElement {
     let d = &row.deal;
-    let why = why::DealWhy::of_with(row, admission);
+    let why = why::DealWhy::display_of_with(row, admission, reading);
     let tape_why = if row.tape == state::TapeStatus::Covered {
         why::DealWhy::tape_of_with(row, admission)
     } else {

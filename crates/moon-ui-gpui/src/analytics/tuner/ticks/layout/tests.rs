@@ -182,6 +182,7 @@ impl Render for NarrowDealProbe {
                         false,
                         super::super::PlanCell(None),
                         Rc::new(|_, _, _, _| {}),
+                        false,
                         p,
                         design::font_scale(cx),
                         super::super::deal_row_h(cx),
@@ -290,6 +291,7 @@ impl Render for DealProbe {
                         false,
                         PlanCell(None),
                         action.clone(),
+                        self.active,
                         p,
                         design::font_scale(cx),
                         super::super::deal_row_h(cx),
@@ -548,6 +550,7 @@ fn model(face: usize) -> SummaryModel {
             stopping: true,
         },
         8 => Verdict::Cannot(t!("analytics.ticks.sum.stopped_empty").to_string()),
+        9 => Verdict::Loading,
         _ => Verdict::Cannot(t!("analytics.ticks.sum.too_few", n = 3, min = 20).to_string()),
     };
     let active = (2..=6).contains(&face);
@@ -591,7 +594,7 @@ fn model(face: usize) -> SummaryModel {
                 .map(|key| ChangeRow {
                     key: key.to_string(),
                     section: t!("analytics.ticks.group_exit").to_string(),
-                    old: "1.31".to_string(),
+                    old: if face == 6 { "—" } else { "1.31" }.to_string(),
                     new: "2.47".to_string(),
                 })
                 .collect()
@@ -849,7 +852,7 @@ fn every_ticks_language_has_the_same_keys_and_no_raw_card_text() {
     for language in Language::ALL {
         assert_eq!(keys(language.code()), en, "{}", language.code());
         let _locale = crate::test_locale::force(language.code());
-        for face in 0..9 {
+        for face in 0..10 {
             let m = model(face);
             let mut text = vec![
                 m.title,
@@ -906,7 +909,7 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
             let _locale = crate::test_locale::force(language.code());
             for zoom in [1.0, 1.25] {
                 for width in [520.0, 400.0] {
-                    for face in 0..9 {
+                    for face in 0..10 {
                         let window = cx.open_window(
                             gpui::size(px(width * zoom), px(540.0 * zoom)),
                             |window, cx| {
@@ -985,6 +988,20 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                             );
                         }
                         let m = model(face);
+                        // Unset old values remain a visible full glyph before the arrow.
+                        for row in &m.changes {
+                            let old = visual
+                                .debug_bounds(selector(format!("an-ticks-change-old-{}", row.key)))
+                                .expect("old field value");
+                            inside(old, "old field value");
+                            let need = visual
+                                .update(|_, cx| design::mono_body_text_width(cx, &row.old, 400.0));
+                            assert!(
+                                f32::from(old.size.width) + 0.5 >= need,
+                                "old value clipped ({at}): {}",
+                                row.old
+                            );
+                        }
                         // Each profit head must sit over its own figures, not float as one group.
                         let rows: Vec<&str> = [
                             m.train.as_ref().map(|_| "an-ticks-sum-train-count"),

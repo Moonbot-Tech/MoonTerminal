@@ -721,6 +721,7 @@ analytics.ticks.empty_left_out: "El periodo no tiene operaciones que el eje pued
 analytics.ticks.fetch_reading: "leyendo la cinta…"
 analytics.ticks.fetch_progress_at: "trades: %{done}/%{total} · %{market}…"
 analytics.ticks.fetch_waiting: "trades: %{done}/%{total} · esperando al exchange"
+analytics.ticks.fetch_station_waiting: "trades: %{done}/%{total} · esperando a la estación"
 analytics.ticks.fetch_venue_wait: "trades: %{done}/%{total} · el exchange pidió esperar · %{left}"
 analytics.ticks.col.kind: "tipo"
 analytics.ticks.col.plan: "plan V1"
