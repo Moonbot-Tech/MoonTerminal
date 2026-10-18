@@ -8,6 +8,53 @@ use crate::db::tuner::ticks::{Deltas, ExitKind, ModelSettings, simulate, verify}
 use crate::feed::types::{Side, Tick};
 use crate::market::trade_replay::Coverage;
 
+/// SellDelay only changes ladder timing; a plain stop keeps its factual anchor.
+#[test]
+fn plain_stop_anchor_keeps_a_different_sell_delay() {
+    let d = stopped();
+    let p = book();
+    let anchor = StopAnchor::of(&d, &p, None);
+    let delayed = ExitParams {
+        sell_delay_ms: 10_000.0,
+        ..p
+    };
+    assert!(
+        anchor.holds(&d, fact_fill(), &delayed),
+        "plain stop ignores SellDelay"
+    );
+}
+
+/// Changing SellDelay shifts the ladder's eligibility and must discard the fact's stop.
+#[test]
+fn ladder_stop_anchor_rejects_a_different_sell_delay() {
+    let mut d = stopped();
+    d.core_name = "CORE_A".into();
+    d.coin = "XALPHA".into();
+    let p = ExitParams {
+        stop_loss_pct: -5.0,
+        second_stop: Some(StopStep {
+            after_s: 5.0,
+            switch_pct: -2.0,
+            level_pct: 0.0,
+        }),
+        ..ExitParams::default()
+    };
+    let anchor = StopAnchor::of(&d, &p, None);
+    let fill = Fill {
+        t_ms: 0,
+        price: 100.0,
+    };
+    assert!(anchor.holds(&d, fill, &p));
+    let delayed = ExitParams {
+        sell_delay_ms: 10_000.0,
+        ..p
+    };
+    assert!(
+        !anchor.holds(&d, fill, &delayed),
+        "a delayed ladder cannot inherit the fact's stop"
+    );
+}
+
 fn tick(t_ms: i64, price: f64) -> Tick {
     Tick {
         time_ms: t_ms as f64,

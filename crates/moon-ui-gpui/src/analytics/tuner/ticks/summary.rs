@@ -61,7 +61,13 @@ pub(super) enum Verdict {
 pub(super) enum Why {
     Train,
     HoldoutWorse,
-    HoldoutOpen { k: usize },
+    HoldoutOpen {
+        k: usize,
+    },
+    /// Held edits excluded deals that close under the current strategy settings.
+    HeldOpen {
+        n: usize,
+    },
     NoGain,
 }
 
@@ -73,7 +79,7 @@ pub(super) enum Unchecked {
     HandEdited,
 }
 
-/// Apply requires a strict gain on both slices and a closed, sufficient holdout.
+/// Apply requires strict gains, a closed sufficient holdout, and no sample loss from held edits.
 pub(super) fn verdict_of(
     running: Option<(usize, usize, Option<Duration>, usize)>,
     too_few: Option<usize>,
@@ -101,6 +107,11 @@ pub(super) fn verdict_of(
             None => Verdict::Idle,
         };
     };
+    if r.stats.left_open_by_held > 0 {
+        return Verdict::DontApply(Why::HeldOpen {
+            n: r.stats.left_open_by_held,
+        });
+    }
     if r.train.profit < r.fact_train.profit {
         return Verdict::DontApply(Why::Train);
     }
@@ -185,6 +196,9 @@ pub(super) fn sentence(
         Verdict::DontApply(Why::HoldoutWorse) => t!("analytics.ticks.sum.dont_holdout").to_string(),
         Verdict::DontApply(Why::HoldoutOpen { k }) => {
             t!("analytics.ticks.sum.dont_open", n = k).to_string()
+        }
+        Verdict::DontApply(Why::HeldOpen { n }) => {
+            t!("analytics.ticks.sum.dont_held_open", n = n).to_string()
         }
         Verdict::DontApply(Why::NoGain) => t!("analytics.ticks.sum.no_gain").to_string(),
         Verdict::Unchecked(Unchecked::Whole) => t!("analytics.ticks.sum.whole").to_string(),

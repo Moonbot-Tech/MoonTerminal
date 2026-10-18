@@ -142,6 +142,8 @@ pub struct SearchStats {
     /// Deals the strategies as they stand leave open inside the tape, taken out of the sample
     /// before the search (`closing::closable_at_base`).
     pub left_open: usize,
+    /// Deals left open by held edits that close as-is, making the scored sample smaller.
+    pub left_open_by_held: usize,
     /// Entry points scored by a whole search of the exit under them — a search of both groups
     /// ([`nested`]); zero for a search of one.
     pub entry_points: usize,

@@ -18,6 +18,72 @@ fn deal(short: bool) -> Deal {
 
 const HOUR: i64 = 3_600_000;
 
+/// A rolling delta of five at buy, then three when the old peak expires before sell booking.
+fn booked_stop() -> (Deal, ExitParams) {
+    use crate::db::tuner::ticks::deltas::{DeltaTrack, TrackInputs};
+    use crate::db::tuner::ticks::mshot::Modifiers;
+    let mut d = deal(false);
+    d.coin = "XALPHA".into();
+    d.core_name = "CORE_A".into();
+    let ticks: Vec<_> = [(-59_999, 105.0), (-49_999, 100.0), (-1, 103.0)]
+        .into_iter()
+        .map(|(t, p)| print(t, p))
+        .collect();
+    d.delta_track = Some(std::sync::Arc::new(
+        DeltaTrack::build(TrackInputs {
+            coin_bars: &[],
+            ticks: &ticks,
+            covered: &[(-60_000, 6_000)],
+            btc_bars: &[],
+            eval: (0, 6_000),
+            anchor: None,
+        })
+        .expect("delta track"),
+    ));
+    let p = ExitParams {
+        stop_loss_pct: -1.0,
+        stop_loss_modifier: 0.2,
+        sell_mods: Modifiers {
+            add_1m: 1.0,
+            ..Modifiers::default()
+        },
+        ..ExitParams::default()
+    };
+    assert!((d.deltas_at(0).d1m - 5.0).abs() < 1e-3, "buy delta");
+    assert!((d.deltas_at(6_000).d1m - 3.0).abs() < 1e-3, "booked delta");
+    (d, p)
+}
+
+/// Reading the modifier at buy would put the fact's gap stop below its replayed stop.
+#[test]
+fn barrier_r13_gap_stop_reads_the_sell_booking_clock() {
+    let (d, p) = booked_stop();
+    let covered = Coverage::from_spans([(-30_000, 30_000), (2 * HOUR - 30_000, 2 * HOUR + 30_000)]);
+    let stop = TapeGap::of(&d, &covered, &p, Some(&[(6_000, 105.0)]))
+        .unwrap()
+        .fact_stop
+        .unwrap();
+    assert!(
+        (stop.level - 98.4).abs() < 1e-3,
+        "booked gap stop: {}",
+        stop.level
+    );
+}
+
+/// The panic jump must use the booked stop level, or its activation is read too late.
+#[test]
+fn barrier_r13_stop_jump_reads_the_sell_booking_clock() {
+    let (mut d, p) = booked_stop();
+    d.sell_reason = "StopLoss Market Sell".into();
+    let line = [(6_000, 105.0), (10_000, 98.3), (12_000, 97.9)];
+    let anchor = crate::db::tuner::ticks::StopAnchor::of(&d, &p, Some(&line));
+    assert_eq!(
+        anchor.fired,
+        Some((10_000, d.sell_price)),
+        "booked stop jump"
+    );
+}
+
 /// A two-hour long position held at its two ends: the hole runs between the runs.
 #[test]
 fn a_long_positions_hole_lies_between_its_held_ends() {
@@ -92,6 +158,7 @@ fn the_facts_stop_bounds_the_hole_at_its_deepest_level() {
     d.stop_anchor = Some(crate::db::tuner::ticks::StopAnchor {
         entry_price: 100.0,
         entry_ms: 0,
+        sell_delay_ms: 0,
         stop_pct: -2.0,
         delay_s: 0.0,
         fast: false,

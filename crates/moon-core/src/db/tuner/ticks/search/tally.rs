@@ -43,13 +43,16 @@ pub(super) struct Cut<'a> {
     pub(super) of_kept: Vec<usize>,
     /// The dropped deals' ids.
     pub(super) left_open: Vec<i64>,
+    /// Deals excluded under held edits that close with the current strategy settings.
+    pub(super) left_open_by_held: usize,
 }
 
 /// Make the [`Cut`] of `deals` under `params` (`closing::closable_at_base`).
 pub(super) fn cut<'a>(deals: &'a [PreparedDeal], params: &SearchParams<'_>) -> Cut<'a> {
     let whole = Bases::of(deals);
     let (start, deps) = deps::dependents_of(params, &whole.owns);
-    let (kept, of_kept, left_open) = closing::closable_at_base(deals, &whole, params, &deps);
+    let (kept, of_kept, left_open, left_open_by_held) =
+        closing::closable_at_base(deals, &whole, params, &deps);
     Cut {
         whole,
         start,
@@ -57,6 +60,7 @@ pub(super) fn cut<'a>(deals: &'a [PreparedDeal], params: &SearchParams<'_>) -> C
         kept,
         of_kept,
         left_open,
+        left_open_by_held,
     }
 }
 
@@ -219,7 +223,8 @@ pub type DealResults = Vec<(i64, Option<(f64, f64)>)>;
 ///     deals, defaults, kind, values, model: As for [`variant_tally`].
 ///
 /// Returns:
-///     The score ([`VariantScore`]) and each deal's result ([`DealResults`]).
+///     The score in simulated close order ([`VariantScore`]) and each deal's result in input
+///     order ([`DealResults`]).
 pub fn variant_tally_by_deal(
     deals: &[PreparedDeal],
     defaults: &HashMap<String, f64>,
@@ -258,16 +263,24 @@ pub fn variant_tally_by_deal(
                     metric,
                     outcome.left_open(),
                     at_tape_end,
+                    outcome.exit.map(|exit| exit.t_ms),
                 )
             })
             .collect();
         let mut score = VariantScore::default();
-        for (_, _, metric, left_open, at_tape_end) in &scored {
+        for (_, _, metric, left_open, at_tape_end, _) in
+            scored.iter().filter(|deal| deal.2.is_none())
+        {
+            score.push(*metric, *left_open, *at_tape_end);
+        }
+        let mut chronological: Vec<_> = scored.iter().filter(|deal| deal.2.is_some()).collect();
+        chronological.sort_by_key(|deal| deal.5);
+        for (_, _, metric, left_open, at_tape_end, _) in chronological {
             score.push(*metric, *left_open, *at_tape_end);
         }
         let money = scored
             .into_iter()
-            .map(|(uid, result, _, _, _)| (uid, result))
+            .map(|(uid, result, _, _, _, _)| (uid, result))
             .collect();
         (score, money)
     })

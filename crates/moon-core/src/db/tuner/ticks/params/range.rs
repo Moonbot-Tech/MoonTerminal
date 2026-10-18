@@ -432,13 +432,22 @@ fn cut(
 pub struct Grids(HashMap<&'static str, Arc<[f64]>>);
 
 impl Grids {
-    /// Grids out of `(key, points)` pairs; the points are taken as they come.
+    /// Grids out of `(key, points)` pairs, excluding undefined strike sell levels.
     pub fn of(entries: impl IntoIterator<Item = (&'static str, Arc<[f64]>)>) -> Self {
-        Self(entries.into_iter().collect())
+        let mut grids = Self::default();
+        for (key, points) in entries {
+            grids.insert(key, points);
+        }
+        grids
     }
 
-    /// Set one field's points.
+    /// Set one field's points; MoonStrike's sell level is defined only above zero.
     pub fn insert(&mut self, key: &'static str, points: Arc<[f64]>) {
+        let points = if key == "MStrikeSellLevel" {
+            points.iter().copied().filter(|v| *v > 0.0).collect()
+        } else {
+            points
+        };
         self.0.insert(key, points);
     }
 

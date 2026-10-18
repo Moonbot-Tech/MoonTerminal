@@ -100,6 +100,7 @@ analytics.ticks.sum.apply: "A variante supera o resultado real tanto nas operaç
 analytics.ticks.sum.tag_dont: "Não aplicar"
 analytics.ticks.sum.dont_holdout: "V1 é pior que o resultado real nas operações reservadas. Pode estar ajustado demais ao histórico."
 analytics.ticks.sum.dont_open: "Operações reservadas que V1 deixou abertas: %{n}. O resultado delas não foi conferido por completo."
+analytics.ticks.sum.dont_held_open: "Operações deixadas abertas pelos valores fixados: %{n} — elas fecham com as configurações atuais, por isso o resultado usa uma amostra menor que a comparação."
 analytics.ticks.sum.dont_train: "V1 é pior que o resultado real mesmo nas operações usadas na busca."
 analytics.ticks.sum.no_gain: "V1 não melhora o resultado obtido pela estratégia."
 analytics.ticks.sum.tag_unchecked: "Não conferido"

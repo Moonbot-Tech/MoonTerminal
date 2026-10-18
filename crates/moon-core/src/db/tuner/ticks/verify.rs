@@ -609,12 +609,12 @@ fn verify_stop(
     let level = stop_level.unwrap_or_else(|| {
         level_off_buy(
             deal.buy_price,
-            stop_pct(exit, deal, deal.buy_ms),
+            stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms),
             deal.is_long(),
         )
     });
     let stated = stated_stop_level(&deal.sell_reason);
-    let panic_at = stop_jump_level(deal, exit);
+    let panic_at = stop_jump_level(deal, exit, exit_points);
     let mut activation: Option<i64> = None;
     let mut first_unmatched: Option<usize> = None;
     let points = exit_points.filter(|p| !p.is_empty()).map(|archived| {
@@ -666,7 +666,12 @@ fn verify_stop(
 /// `None` leaves the moment to the close. A `StopLoss Market Sell` can still be a trailing stop the
 /// core rewrote (the core's answer of 2026-09-24): read against the stop's level, its market sale
 /// stands short of it, no jump is found, and the moment is the close's as well.
-pub(super) fn stop_jump_level(deal: &Deal, exit: &ExitParams) -> Option<f64> {
+/// The fallback stop reads its modifier at sell booking, recovered from `exit_points`.
+pub(super) fn stop_jump_level(
+    deal: &Deal,
+    exit: &ExitParams,
+    exit_points: Option<&[(i64, f64)]>,
+) -> Option<f64> {
     let reason = deal.sell_reason.trim();
     if reason_starts_with(reason, REASON_TRAILING) {
         return (exit.trailing_pct != 0.0)
@@ -674,7 +679,7 @@ pub(super) fn stop_jump_level(deal: &Deal, exit: &ExitParams) -> Option<f64> {
             .flatten()
             .map(|peak| trailing_level(peak, deal.buy_price, exit, deal.is_long()));
     }
-    let pct = stop_pct(exit, deal, deal.buy_ms);
+    let pct = stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms);
     (reason_starts_with(reason, REASON_STOP) && pct != 0.0).then(|| {
         stated_stop_level(reason)
             .unwrap_or_else(|| level_off_buy(deal.buy_price, pct, deal.is_long()))

@@ -5,6 +5,24 @@ use std::collections::HashSet;
 use super::*;
 use crate::db::tuner::ticks::TICK_PARAMS;
 
+/// A typed range must never offer an undefined non-positive MoonStrike sell level.
+#[test]
+fn barrier_r6_strike_range_offers_only_positive_levels() {
+    use crate::db::tuner::ticks::params::range::{TickRange, resolve};
+    let resolved = resolve(
+        None,
+        &TickRange {
+            from: Some(0.0),
+            to: Some(2.0),
+            step: Some(1.0),
+        },
+        false,
+        20,
+    );
+    let grids = Grids::of([("MStrikeSellLevel", resolved.points)]);
+    assert_eq!(grids.values(field("MStrikeSellLevel")), &[1.0, 2.0]);
+}
+
 fn field(key: &str) -> &'static TickParam {
     TICK_PARAMS.iter().find(|f| f.key == key).expect("a knob")
 }

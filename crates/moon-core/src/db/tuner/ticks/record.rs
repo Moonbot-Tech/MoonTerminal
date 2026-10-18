@@ -37,6 +37,8 @@ pub struct StopAnchor {
     /// the take, where it starts every sell timer (`verify::fact_sell_start`).
     pub entry_price: f64,
     pub entry_ms: i64,
+    /// Effective `SellDelay` in milliseconds, which offsets the ladder's sell placement.
+    pub sell_delay_ms: i64,
     /// The stop the fact ran: its adjusted distance ([`stop_pct`]), delay and trigger.
     pub stop_pct: f64,
     pub delay_s: f64,
@@ -78,7 +80,7 @@ impl StopAnchor {
         let stopped = is_stop_reason(&deal.sell_reason);
         let fired = stopped.then(|| {
             // The level the jump is read against — the verdict's own (`verify::stop_jump_level`).
-            let at = stop_jump_level(deal, exit)
+            let at = stop_jump_level(deal, exit, exit_points)
                 .and_then(|level| archived_stop_jump(deal, level, exit_points))
                 .unwrap_or(deal.close_ms);
             (at, deal.sell_price)
@@ -86,6 +88,7 @@ impl StopAnchor {
         Self {
             entry_price: deal.buy_price,
             entry_ms: sell_start_ms,
+            sell_delay_ms: exit.sell_delay_ms.max(0.0) as i64,
             stop_pct: pct,
             delay_s: exit.stop_loss_delay_s,
             fast: exit.fast_stop_loss,
@@ -110,7 +113,8 @@ impl StopAnchor {
     }
 
     /// Whether a walk from `fill` under `params` runs the fact's own stop — the same entry (to
-    /// the price, and within the point tolerance in time) and the same stop settings.
+    /// the price, and within the point tolerance in time) and stop settings. SellDelay must
+    /// match only for a ladder, whose eligibility starts at sell placement.
     ///
     /// Args:
     ///     deal: The trade, for the adjusted stop distance.
@@ -118,6 +122,8 @@ impl StopAnchor {
     ///     params: The walk's sell parameters.
     pub fn holds(&self, deal: &Deal, fill: Fill, params: &ExitParams) -> bool {
         self.same_entry(fill, params)
+            && ((params.second_stop.is_none() && params.third_stop.is_none())
+                || params.sell_delay_ms.max(0.0) as i64 == self.sell_delay_ms)
             && stop_pct(params, deal, self.entry_ms) == self.stop_pct
             && params.stop_loss_delay_s == self.delay_s
             && params.fast_stop_loss == self.fast

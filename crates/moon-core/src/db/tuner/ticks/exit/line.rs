@@ -27,6 +27,7 @@ use crate::db::tuner::ticks::gap::{
 use crate::db::tuner::ticks::mshot::MSHOT_TAKE_LATENCY_MS;
 use crate::db::tuner::ticks::{Deal, Exit, ExitKind, Fill, reaches, round_to_step};
 use crate::feed::types::Tick;
+use std::collections::VecDeque;
 
 /// MoonShot's first take reaches the book `MSHOT_TAKE_LATENCY_MS` after arming, never sooner
 /// than a re-place (the model latency floor). Other kinds keep the replacement latency.
@@ -143,8 +144,12 @@ pub(super) struct Line {
     /// The last level sent to the book, pending or not: what a new level must differ from to
     /// be a move at all.
     last_sent: f64,
-    /// A move the exchange has not seen yet: when it lands, and at what level.
-    pending: Option<(i64, f64)>,
+    /// Moves the exchange has not seen yet, in arrival order: when each lands and its level.
+    pending: VecDeque<(i64, f64)>,
+    /// The last observed print and position direction, before the next replacement lands.
+    last_print: Option<(f64, bool)>,
+    /// Whether the market was already through the exchange's current replacement on arrival.
+    marketable_move: bool,
     /// The first print once the take was live: `None` until one came, `Some(None)` when it did
     /// not reach the untouched take, `Some(Some((t_ms, price)))` when it was through it — a take
     /// placed through the market fills at that print, as the core's does. Only a take the
@@ -179,7 +184,9 @@ impl Line {
             moved_at: None,
             core: take_placed,
             last_sent: take_placed,
-            pending: None,
+            pending: VecDeque::new(),
+            last_print: None,
+            marketable_move: false,
             first_live: None,
             prevailing: None,
             points: vec![LinePoint {
@@ -204,7 +211,7 @@ impl Line {
         if !advance(&mut self.core, &mut self.last_sent, level, order) {
             return false;
         }
-        self.pending = Some((t_ms + self.latency_ms, order));
+        self.pending.push_back((t_ms + self.latency_ms, order));
         self.points.push(LinePoint {
             t_ms: t_ms + self.latency_ms,
             price: order,
@@ -212,13 +219,15 @@ impl Line {
         true
     }
 
-    /// The move on its way lands on the exchange, when it is due by `t_ms`.
+    /// Apply every replacement due by `t_ms` in arrival order, retaining the first move's time.
     fn land(&mut self, t_ms: i64) {
-        if let Some((apply_at, level)) = self.pending.filter(|(apply_at, _)| t_ms >= *apply_at) {
+        while let Some((apply_at, level)) = self.pending.pop_front_if(|(at, _)| *at <= t_ms) {
             self.exch = level;
+            self.marketable_move = self
+                .last_print
+                .is_some_and(|(price, long)| reaches(price, level, !long));
             self.exch_moved = true;
             self.moved_at.get_or_insert(apply_at);
-            self.pending = None;
         }
     }
 
@@ -230,12 +239,13 @@ impl Line {
         }
     }
 
-    /// Remember the first print once the take is live, and whether the take was marketable:
+    /// Remember the latest print, and the first live print's marketability:
     /// the market ALREADY through the untouched take when it went live (`prevailing`), and
     /// that print through it too. A take crossed only later rests and fills at its level.
     /// Invariant: "through" is judged against the untouched take (`take`), never `exch` — a move
     /// landed by then already rules the marketable fill out (see [`Self::marketable_until`]).
     fn see_live(&mut self, t_ms: i64, price: f64, side: Side) {
+        self.last_print = Some((price, side.long));
         // A print at exactly `armed_at` is prevailing, never the first live one (as `fill_on`).
         if self.first_live.is_none() && t_ms > self.armed_at && t_ms >= self.live_at {
             let through = |p: f64| reaches(p, self.take, !side.long);
@@ -254,7 +264,8 @@ impl Line {
     }
 
     /// Fill at `t_ms`, `price` once either the take or an earlier replacement is on the book.
-    /// The take's own arrival still governs marketable-take tracking.
+    /// A replacement already through the prevailing market fills at the print; a resting
+    /// replacement fills at its limit. The take's own arrival governs marketable-take tracking.
     fn fill_on(&self, t_ms: i64, price: f64, side: Side) -> Option<Exit> {
         let book_live_at = self
             .moved_at
@@ -263,10 +274,13 @@ impl Line {
             .then_some(Exit {
                 t_ms,
                 // A take already through the market at its first live print fills at that print.
-                price: self
-                    .marketable_until(t_ms)
-                    .filter(|(at, _)| *at == t_ms)
-                    .map_or(self.exch, |(_, p)| p),
+                price: if self.marketable_move {
+                    price
+                } else {
+                    self.marketable_until(t_ms)
+                        .filter(|(at, _)| *at == t_ms)
+                        .map_or(self.exch, |(_, p)| p)
+                },
                 // What the print met: the take as placed, or a level a rule moved it to.
                 kind: if !self.exch_moved {
                     ExitKind::Take
@@ -354,6 +368,7 @@ pub fn walk_held(
         }
         line.see_before_live(t_ms, price);
         if t_ms <= fill.t_ms {
+            line.last_print = Some((price, side.long));
             continue;
         }
         last_t = t_ms;

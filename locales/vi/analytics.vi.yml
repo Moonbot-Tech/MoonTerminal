@@ -100,6 +100,7 @@ analytics.ticks.sum.apply: "Phương án tốt hơn thực tế cả trên các 
 analytics.ticks.sum.tag_dont: "Không áp dụng"
 analytics.ticks.sum.dont_holdout: "V1 kém hơn thực tế trên các giao dịch giữ lại. Có thể đã khớp quá mức với lịch sử."
 analytics.ticks.sum.dont_open: "Giao dịch giữ lại V1 để mở: %{n}. Kết quả của chúng chưa được kiểm tra đầy đủ."
+analytics.ticks.sum.dont_held_open: "Số giao dịch còn mở do các giá trị cố định: %{n} — chúng đóng với cài đặt hiện tại, nên kết quả dựa trên mẫu nhỏ hơn mẫu so sánh."
 analytics.ticks.sum.dont_train: "V1 kém hơn thực tế ngay cả trên các giao dịch dùng để tìm kiếm."
 analytics.ticks.sum.no_gain: "V1 không tốt hơn kết quả giao dịch của chiến lược."
 analytics.ticks.sum.tag_unchecked: "Chưa kiểm tra"

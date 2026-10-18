@@ -132,6 +132,12 @@ struct BookStop {
     series: Option<SeriesPoint>,
 }
 
+/// Which book event is due; their print-boundary rules differ even at the same timestamp.
+enum BookEvent {
+    Ticker,
+    Series,
+}
+
 /// The core's price series as the stop reads it (see [`SERIES_TICK_MS`]).
 struct SeriesPoint {
     /// The series' last point.
@@ -275,50 +281,65 @@ impl BookStop {
     /// the series ticks closing at or before it — and the earliest that put the stop past its
     /// level: the stop, at that moment and that price, and which of the two fired it.
     fn before(&mut self, until: i64) -> Option<(Exit, StopTrigger)> {
-        let by_ticker = self
-            .samples_before(until)
-            .map(|exit| (exit, StopTrigger::Ticker));
-        let by_series = self
-            .series_before(until)
-            .map(|exit| (exit, StopTrigger::Series));
-        match (by_ticker, by_series) {
-            (Some(t), Some(s)) => Some(if s.0.t_ms < t.0.t_ms { s } else { t }),
-            (t, s) => t.or(s),
-        }
+        self.before_with(until, |_| None)
     }
 
-    /// The ticker's arrivals strictly before `until` — the prints before it are all the proxy
-    /// has seen — and the first whose price (averaged, when the core averages) is past the
-    /// level.
-    fn samples_before(&mut self, until: i64) -> Option<Exit> {
-        while self.next_sample < until {
-            let at = self.next_sample;
-            self.next_sample += self.period_ms;
-            let Some(bid) = self.proxy else {
-                continue;
-            };
-            let avg = match (self.weight, self.avg) {
-                (Some(w), Some(avg)) => w * bid + (1.0 - w) * avg,
-                _ => bid,
-            };
-            self.avg = Some(avg);
-            if self.may_fire(at) && reaches(avg, self.level, self.long) {
-                return Some(stop_exit(at, bid));
+    /// Evaluate events in order, optionally updating the level immediately before each one.
+    fn before_with(
+        &mut self,
+        until: i64,
+        mut level_before: impl FnMut(i64) -> Option<f64>,
+    ) -> Option<(Exit, StopTrigger)> {
+        while let Some((at, event)) = self.next_event(until) {
+            if let Some(level) = level_before(at) {
+                self.level = level;
+            }
+            if let Some(exit) = self.evaluate_event(event) {
+                return Some(exit);
             }
         }
         None
     }
 
-    /// The series tick the pending prints fall in, when it closes by `until`: its point, and
-    /// the stop when that point is strictly past the level. The ticks after it up to `until`
-    /// brought no print and add no point.
-    fn series_before(&mut self, until: i64) -> Option<Exit> {
-        let series = self.series.as_mut()?;
-        if series.tick_end > until {
-            return None;
+    /// The earliest pending ticker arrival strictly before `until` or populated series tick
+    /// closing by it. Empty series ticks carry no price and need no evaluation.
+    fn next_event(&self, until: i64) -> Option<(i64, BookEvent)> {
+        let ticker = (self.next_sample < until).then_some((self.next_sample, BookEvent::Ticker));
+        let series = self.series.as_ref().and_then(|series| {
+            (series.candidate.is_some() && series.tick_end <= until)
+                .then_some((series.tick_end, BookEvent::Series))
+        });
+        match (ticker, series) {
+            (Some(t), Some(s)) => Some(if s.0 < t.0 { s } else { t }),
+            (t, s) => t.or(s),
         }
+    }
+
+    /// Evaluate one pending event after the ladder has reached its moment; ticker wins a tie.
+    fn evaluate_event(&mut self, event: BookEvent) -> Option<(Exit, StopTrigger)> {
+        match event {
+            BookEvent::Ticker => self.sample().map(|exit| (exit, StopTrigger::Ticker)),
+            BookEvent::Series => self.series_sample().map(|exit| (exit, StopTrigger::Series)),
+        }
+    }
+
+    /// Consume one ticker arrival, updating its average even when the stop cannot fire.
+    fn sample(&mut self) -> Option<Exit> {
+        let at = self.next_sample;
+        self.next_sample += self.period_ms;
+        let bid = self.proxy?;
+        let avg = match (self.weight, self.avg) {
+            (Some(w), Some(avg)) => w * bid + (1.0 - w) * avg,
+            _ => bid,
+        };
+        self.avg = Some(avg);
+        (self.may_fire(at) && reaches(avg, self.level, self.long)).then(|| stop_exit(at, bid))
+    }
+
+    /// Consume the populated series tick and fire only when its point is strictly past the level.
+    fn series_sample(&mut self) -> Option<Exit> {
+        let series = self.series.as_mut()?;
         let at = series.tick_end;
-        series.tick_end = next_series_tick(until, series.tick_ms);
         let point = series.candidate.take()?;
         series.point = Some(point);
         let past = if self.long {
@@ -335,6 +356,7 @@ impl BookStop {
     fn see(&mut self, tick: &Tick) {
         let price = f64::from(tick.price);
         if let Some(series) = self.series.as_mut() {
+            series.tick_end = next_series_tick(tick.time_ms as i64, series.tick_ms);
             series.see(price);
         }
         let stop_side = if self.long {
@@ -546,10 +568,9 @@ impl Stops {
         self.trailing.is_some() || self.ladder.as_ref().is_some_and(Ladder::pending)
     }
 
-    /// The ladder's steps due before `until`, moving the stop's level when one is taken. The step
-    /// is read on the ticker's arrivals before the print, and the stop's own arrivals up to it
-    /// then read the new level — within one gap between prints, the order of the two is not
-    /// kept.
+    /// The ladder's steps strictly before `until`, moving the stop's level when one is taken.
+    /// Book events advance this clock through their own moment before checking the price, so a
+    /// rung applies from its qualifying cycle without changing earlier decisions.
     fn climb(&mut self, until: i64) {
         let Some(level) = self.ladder.as_mut().and_then(|ladder| ladder.before(until)) else {
             return;
@@ -559,6 +580,22 @@ impl Stops {
             Trigger::Fast(fast) => fast.level = level,
             Trigger::Book(book) => book.level = level,
         }
+    }
+
+    /// Merge ticker and series events with ladder cycles, stopping at the first firing event.
+    /// The ladder includes a cycle at the event's own time, then reaches `until` only if quiet.
+    fn book_before(&mut self, until: i64) -> Option<(Exit, StopTrigger)> {
+        let ladder = &mut self.ladder;
+        let exit = match &mut self.trigger {
+            Trigger::Book(book) => book.before_with(until, |at| {
+                ladder.as_mut().and_then(|ladder| ladder.before(at + 1))
+            }),
+            Trigger::Off | Trigger::Fast(_) => None,
+        };
+        if exit.is_none() {
+            self.climb(until);
+        }
+        exit
     }
 
     /// The fact's own stop, when it fired by the print at `t_ms`.
@@ -591,11 +628,11 @@ impl Stops {
                 Trigger::Off | Trigger::Book(_) => None,
             }
         });
-        if by_fast.is_none() {
+        if by_fast.is_none() && !matches!(self.trigger, Trigger::Book(_)) {
             self.climb(t_ms);
         }
         let by_book = match &mut self.trigger {
-            Trigger::Book(book) => book.before(t_ms),
+            Trigger::Book(_) => self.book_before(t_ms),
             Trigger::Fast(_) => by_fast.map(|exit| (exit, StopTrigger::FastTick)),
             Trigger::Off => None,
         };
@@ -640,9 +677,11 @@ impl Stops {
             Trigger::Fast(fast) => fast.due(i64::MAX),
             Trigger::Off | Trigger::Book(_) => None,
         };
-        self.climb(fast_closes_at.map_or(tail, |at| at.max(tail)) + 1);
+        if !matches!(self.trigger, Trigger::Book(_)) {
+            self.climb(fast_closes_at.map_or(tail, |at| at.max(tail)) + 1);
+        }
         let by_book = match &mut self.trigger {
-            Trigger::Book(book) => book.before(tail + 1),
+            Trigger::Book(_) => self.book_before(tail + 1),
             Trigger::Fast(fast) => fast
                 .before(i64::MAX)
                 .map(|exit| (exit, StopTrigger::FastTick)),

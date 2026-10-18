@@ -100,6 +100,7 @@ analytics.ticks.sum.apply: "Varyant hem aramada kullanılan işlemlerde hem de a
 analytics.ticks.sum.tag_dont: "Uygulamayın"
 analytics.ticks.sum.dont_holdout: "V1 ayrılmış işlemlerde gerçek sonuçtan daha kötü. Geçmişe aşırı uyarlanmış olabilir."
 analytics.ticks.sum.dont_open: "V1 tarafından açık bırakılan ayrılmış işlemler: %{n}. Sonuçları tam olarak denetlenmedi."
+analytics.ticks.sum.dont_held_open: "Sabitlenen değerlerle açık kalan işlem sayısı: %{n} — bu işlemler mevcut ayarlarla kapanır, dolayısıyla sonuç karşılaştırmadan daha küçük bir örnekleme dayanır."
 analytics.ticks.sum.dont_train: "V1 aramada kullanılan işlemlerde bile gerçek sonuçtan daha kötü."
 analytics.ticks.sum.no_gain: "V1 stratejinin işlem sonucundan daha iyi değil."
 analytics.ticks.sum.tag_unchecked: "Denetlenmedi"

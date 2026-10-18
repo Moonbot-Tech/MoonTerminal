@@ -72,7 +72,7 @@ impl Replayed {
 }
 
 /// Replay `deals` under `params` on the entry `fills` read for them
-/// ([`super::fills::FillCache`]).
+/// ([`super::fills::FillCache`]), folding closed profits in simulated close order.
 pub(super) fn replay(
     deals: &[PreparedDeal],
     of_deal: &[usize],
@@ -80,10 +80,12 @@ pub(super) fn replay(
     fills: &[Option<Fill>],
 ) -> Replayed {
     let mut replayed = Replayed::default();
-    for (result, open, _) in results(deals, of_deal, params, Some(fills)) {
-        if open {
-            replayed.open += 1;
-        } else if let Some((money, _)) = result {
+    let mut results = results(deals, of_deal, params, Some(fills));
+    replayed.open = results.iter().filter(|deal| deal.left_open).count();
+    results.retain(|deal| deal.result.is_some());
+    results.sort_by_key(|deal| deal.exit_ms);
+    for deal in results {
+        if let Some((money, _)) = deal.result {
             replayed.closed.push(money);
         }
     }
@@ -107,30 +109,50 @@ pub(super) fn replay(
 ///     bases: The sample's bases ([`Bases::of`] over `deals`), kept by the search as they are.
 ///     params: The search's parameters: the held edits, the defaults, the kind, the model.
 ///     deps: The search's completion ([`super::deps::dependents_of`]) over `bases`.
+///
+/// Returns:
+///     Kept deals, their base indices, excluded ids, and the number closed as-is but open with
+///     held edits. The as-is replay starts from its own empty-point completion.
 pub(super) fn closable_at_base(
     deals: &[PreparedDeal],
     bases: &Bases<'_>,
     params: &SearchParams<'_>,
     deps: &super::deps::Dependents,
-) -> (Vec<PreparedDeal>, Vec<usize>, Vec<i64>) {
-    let point = deps.complete(&Point::new(), &bases.owns, params.held, params.defaults);
-    let base = bases.params(
-        params.held,
-        params.defaults,
-        &point,
-        params.kind,
-        params.model.sanitized(),
-    );
+) -> (Vec<PreparedDeal>, Vec<usize>, Vec<i64>, usize) {
+    let base_for = |held: &HashMap<String, String>| {
+        let point = deps.complete(&Point::new(), &bases.owns, held, params.defaults);
+        bases.params(
+            held,
+            params.defaults,
+            &point,
+            params.kind,
+            params.model.sanitized(),
+        )
+    };
+    let base = base_for(params.held);
     let mut kept = Vec::with_capacity(deals.len());
     let mut of_kept = Vec::with_capacity(deals.len());
     let mut left_open = Vec::new();
-    for (((_, open, _), deal), &base_of) in results(deals, &bases.of_deal, &base, None)
+    let as_is = (!params.held.is_empty()).then(|| {
+        let empty_held = HashMap::new();
+        let base = base_for(&empty_held);
+        results(deals, &bases.of_deal, &base, None)
+    });
+    let mut left_open_by_held = 0;
+    for (i, ((result, deal), &base_of)) in results(deals, &bases.of_deal, &base, None)
         .into_iter()
         .zip(deals)
         .zip(&bases.of_deal)
+        .enumerate()
     {
-        if open {
+        if result.left_open {
             left_open.push(deal.deal.report_uid);
+            if as_is
+                .as_ref()
+                .is_some_and(|results| results[i].result.is_some())
+            {
+                left_open_by_held += 1;
+            }
         } else {
             kept.push(deal.clone());
             of_kept.push(base_of);
@@ -145,7 +167,7 @@ pub(super) fn closable_at_base(
             left_open
         );
     }
-    (kept, of_kept, left_open)
+    (kept, of_kept, left_open, left_open_by_held)
 }
 
 #[cfg(test)]

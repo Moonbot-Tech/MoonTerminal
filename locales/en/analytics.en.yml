@@ -100,6 +100,7 @@ analytics.ticks.sum.apply: "The variant beats the fact both on the trades used t
 analytics.ticks.sum.tag_dont: "Do not apply"
 analytics.ticks.sum.dont_holdout: "V1 is worse than the fact on held-back trades. It may be overfitted to the history."
 analytics.ticks.sum.dont_open: "Held-back trades V1 left open: %{n}. Their result has not been fully checked."
+analytics.ticks.sum.dont_held_open: "Deals left open by the held values: %{n} — they close with the current settings, so the result is on a smaller sample than the comparison."
 analytics.ticks.sum.dont_train: "V1 is worse than the fact even on the trades used to search."
 analytics.ticks.sum.no_gain: "V1 is no better than how the strategy traded."
 analytics.ticks.sum.tag_unchecked: "Unchecked"

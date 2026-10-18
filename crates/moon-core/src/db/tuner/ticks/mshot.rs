@@ -51,8 +51,9 @@
 //! cannot tell where an order placed minutes earlier was), and the core's first moves inside
 //! the model's BLIND WINDOW — the first `MShotRaiseWait` / `MShotReplaceDelay` seconds of the
 //! tape, where a wait the core started before the tape began expires at a moment the tape
-//! gives no way to compute. A move archived in that window is taken as archived, moment and
-//! level both: the level is the core's own reference at work, and on a coarse grid the model's
+//! gives no way to compute. For the fact, a move in that window keeps its archived moment and
+//! level; a variant maps the level through its own placement rule. The archived level captures
+//! the core's own reference, and on a coarse grid the model's
 //! reference off the prints lands a step away often enough to turn the fill into a miss
 //! (2026-09-21, 458 deals: 4 entries lost to a modelled level, none gained by it). Seen on
 //! ARX the same day: the core re-placed 0.3 s into the tape after a wait of 30 s, and the model
@@ -462,7 +463,8 @@ impl<'a> MshotEntry<'a> {
     /// The fact's own level is the record's ([`Deal::entry_placed`]). A VARIANT's is the level
     /// its own far bound places off the same reference: the fact's level stands the fact's far
     /// bound off it, so the reference is read back from the level and this variant's bound
-    /// applied instead, through the same placement rule ([`Self::place`]).
+    /// applied instead, through the same placement rule ([`Self::place`]). Reuse of the fact's
+    /// level also requires the same two-step minimum flag.
     ///
     /// Whose parameters are the fact's is [`Deal::own_entry`]. A variant is always replayed on a
     /// prepared deal (`record::prepare_deal` fills it), and the one caller without it — the
@@ -483,7 +485,7 @@ impl<'a> MshotEntry<'a> {
             return Some(fact_level);
         };
         let (_, fact_far_pct) = own.bounds_pct(&deal.deltas_at(created_ms));
-        if fact_far_pct == far_pct {
+        if fact_far_pct == far_pct && own.minus_satoshi == self.params.minus_satoshi {
             return Some(fact_level);
         }
         Self::reference_of(fact_level, fact_far_pct, deal).map(|r| self.place(r, far_pct, deal))
@@ -531,7 +533,7 @@ impl<'a> MshotEntry<'a> {
     /// same reference, this variant's far bound — both far bounds read off the deltas as they
     /// stood when the fact's order was placed there, the moment its far bound was computed (the
     /// report's snapshot where the deal has no live track). The fact's own far bound gives the
-    /// level back.
+    /// level back when its two-step minimum flag is also unchanged.
     ///
     /// Args:
     ///     deal: The trade.
@@ -546,7 +548,7 @@ impl<'a> MshotEntry<'a> {
         let deltas = deal.deltas_at(placed_ms);
         let (_, fact_far) = own.bounds_pct(&deltas);
         let (_, far) = self.params.bounds_pct(&deltas);
-        if fact_far == far {
+        if fact_far == far && own.minus_satoshi == self.params.minus_satoshi {
             return Some(level);
         }
         Self::reference_of(level, fact_far, deal).map(|r| self.place(r, far, deal))
@@ -598,7 +600,8 @@ impl<'a> MshotEntry<'a> {
     ///     deal: The report row.
     ///     ticks: The window's prints, ascending.
     ///     line: The archived points of the trade's own entry line, in the archive's order,
-    ///         when the archive holds it.
+    ///         when the archive holds it. Fallback levels are anchored to this variant's bounds
+    ///         and two-step minimum before replay.
     pub(super) fn run(
         &self,
         deal: &Deal,
@@ -651,7 +654,8 @@ impl<'a> MshotEntry<'a> {
     }
 
     /// Args (beyond [`Self::run`]'s):
-    ///     moves: Where to record every move, when asked.
+    ///     moves: Where to record every move, when asked. Archived fallback prices are mapped
+    ///         through the variant's placement rule; an unprovable anchor gives no fill.
     fn run_traced(
         &self,
         deal: &Deal,
@@ -715,15 +719,15 @@ impl<'a> MshotEntry<'a> {
                     .filter(|l| !l.is_empty())
                     .map(archived_replacements)
                     .unwrap_or_default();
-                let start: Option<(i64, f64)> = moves
+                let mut start: Option<(i64, f64)> = moves
                     .iter()
                     .filter(|(t, _)| *t <= first_print_ms)
                     .max_by_key(|(t, _)| *t)
                     .or(moves.first())
                     .copied();
-                // The blind window: the core's moves archived inside it are applied as
-                // archived, because the wait behind each began before the tape did. Only moves
-                // after the start and before the fill count.
+                // The blind window keeps the core's move times because each wait began before
+                // the tape did. Only moves after the start and before the fill count; their
+                // levels are mapped to the variant below.
                 let blind_until_ms = first_print_ms + raise_wait_ms.max(replace_delay_ms) as i64;
                 hints = moves
                     .iter()
@@ -736,6 +740,15 @@ impl<'a> MshotEntry<'a> {
                     })
                     .copied()
                     .collect();
+                // The archive supplies the reference's history, not this variant's prices.
+                if let Some(EntryParams::MoonShot(own)) = deal.own_entry.as_ref() {
+                    if let Some((t, price)) = start.as_mut() {
+                        *price = self.anchored_level(deal, own, (*t, *price))?;
+                    }
+                    for (t, price) in &mut hints {
+                        *price = self.anchored_level(deal, own, (*t, *price))?;
+                    }
+                }
                 // The archive files a move as the old level's end and the new one's start, a
                 // few milliseconds apart and not always in that order; the hints are walked in
                 // time.

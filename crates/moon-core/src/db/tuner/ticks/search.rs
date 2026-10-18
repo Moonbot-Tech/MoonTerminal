@@ -176,6 +176,7 @@ fn search(
         kept,
         of_kept,
         left_open,
+        left_open_by_held,
     } = cut(deals, params);
     let deals = kept.as_slice();
     if deals.is_empty() || fields.is_empty() {
@@ -508,6 +509,7 @@ fn search(
         evaluations: evaluations.load(std::sync::atomic::Ordering::Relaxed),
         refused,
         left_open: left_open.len(),
+        left_open_by_held,
         entry_points: entry_scored.load(std::sync::atomic::Ordering::Relaxed),
         fills_reused: fill_cache.reused(),
     };

@@ -60,6 +60,17 @@ fn result() -> SearchResult {
     }
 }
 
+/// Sample losses caused by held edits must refuse advice even when both scored slices improve.
+#[test]
+fn held_open_sample_mismatch_refuses_apply() {
+    let mut r = result();
+    r.stats.left_open_by_held = 3;
+    assert_eq!(
+        verdict_of(None, None, None, Some(&r), true),
+        Verdict::DontApply(Why::HeldOpen { n: 3 })
+    );
+}
+
 /// Weakening strict gains, ignoring open trades, or checking holdout before train changes advice.
 #[test]
 fn verdicts_agree_with_both_slices_and_require_strict_gains() {

@@ -100,6 +100,7 @@ analytics.ticks.sum.apply: "Вариант лучше факта и на сде�
 analytics.ticks.sum.tag_dont: "Не применять"
 analytics.ticks.sum.dont_holdout: "На отложенных сделках В1 хуже факта. Похоже, он подогнан под историю."
 analytics.ticks.sum.dont_open: "В1 оставил незакрытые отложенные сделки: %{n}. Их результат не проверен до конца."
+analytics.ticks.sum.dont_held_open: "Сделок остаются открытыми из-за зафиксированных значений: %{n} — с текущими настройками они закрываются, результат посчитан на меньшей выборке, чем сравнение."
 analytics.ticks.sum.dont_train: "В1 хуже факта даже на сделках, где искал."
 analytics.ticks.sum.no_gain: "В1 не лучше того, как торговала стратегия."
 analytics.ticks.sum.tag_unchecked: "Не проверен"

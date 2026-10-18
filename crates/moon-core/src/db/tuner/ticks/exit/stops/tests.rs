@@ -96,6 +96,91 @@ fn bare_book_stop() -> ExitParams {
     }
 }
 
+/// A later rung must not rewrite earlier ticker or series decisions across a print gap.
+#[test]
+fn ladder_book_events_keep_their_own_levels() {
+    let mut moments = Vec::new();
+    for ema in [7.0, 0.0] {
+        for at_tail in [false, true] {
+            let p = ExitParams {
+                stop_loss_pct: -10.0,
+                stop_loss_ema: ema,
+                second_stop: Some(ladder::StopStep {
+                    after_s: 5.0,
+                    switch_pct: -1.0,
+                    level_pct: 1.0,
+                }),
+                ..bare_book_stop()
+            };
+            let ticks = [sold(1, 100.0), tick(9_500, 100.0)];
+            let d = Deal {
+                core_name: "CORE_A".into(),
+                coin: "XALPHA".into(),
+                ..deal(false)
+            };
+            let mut stops = Stops::new(&d, &ticks, fill(), &p, Side { long: true });
+            assert!(stops.on_print(&ticks[0], 1, 100.0).is_none());
+            let exit = if at_tail {
+                stops.after_tape(9_500)
+            } else {
+                stops.on_print(&ticks[1], 9_500, 100.0)
+            };
+            moments.push((ema, at_tail, exit.map(|e| e.t_ms)));
+        }
+    }
+    assert_eq!(
+        moments,
+        vec![
+            (7.0, false, Some(6_450)),
+            (7.0, true, Some(6_450)),
+            (0.0, false, Some(6_450)),
+            (0.0, true, Some(6_450))
+        ]
+    );
+}
+
+/// A warm averaged strike stop cannot fire on a rung before its qualifying ticker cycle.
+#[test]
+fn ladder_averaged_book_waits_for_the_qualifying_cycle() {
+    let p = ExitParams {
+        stop_loss_pct: -5.0,
+        stop_loss_ema: 3.0,
+        second_stop: Some(ladder::StopStep {
+            after_s: 5.0,
+            switch_pct: -2.0,
+            level_pct: 0.0,
+        }),
+        ..bare_book_stop()
+    };
+    let ticks = [sold(-1_000, 100.0), sold(100, 99.0), tick(10_000, 100.0)];
+    let d = Deal {
+        core_name: "CORE_A".into(),
+        coin: "XALPHA".into(),
+        ..deal(false)
+    };
+    let w = walk(&d, &ticks, fill(), 110.0, &p);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 6_450));
+}
+
+/// A series tick on a print boundary must not consume the ticker sample that reads that print.
+#[test]
+fn a_series_boundary_preserves_the_tickers_print_cutoff() {
+    let mut p = bare_book_stop();
+    p.stop_loss_ema = 0.0;
+    p.model.series_tick_ms = TICKER_PERIOD_MS;
+    let mut book = BookStop::new(true, 99.0, 0, 0, 1, &p, i64::MIN);
+    book.see(&sold(1, 100.0));
+    assert!(book.before(TICKER_PERIOD_MS).is_none());
+    book.see(&sold(TICKER_PERIOD_MS, 98.0));
+    let (exit, trigger) = book
+        .before(TICKER_PERIOD_MS + 1)
+        .expect("ticker reads the boundary print");
+    assert_eq!(
+        (exit.t_ms, trigger),
+        (TICKER_PERIOD_MS, StopTrigger::Ticker)
+    );
+}
+
 /// The book-watching stop (`FastStopLoss` off) reads the ticker's BID through the prints that
 /// hit it — taker sells — on the ticker's clock, not every print through the level.
 #[test]

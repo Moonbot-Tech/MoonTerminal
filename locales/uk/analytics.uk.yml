@@ -100,6 +100,7 @@ analytics.ticks.sum.apply: "Варіант кращий за факт і на у
 analytics.ticks.sum.tag_dont: "Не застосовувати"
 analytics.ticks.sum.dont_holdout: "На відкладених угодах В1 гірший за факт. Схоже, його підігнано під історію."
 analytics.ticks.sum.dont_open: "В1 залишив незакриті відкладені угоди: %{n}. Їхній результат не перевірено до кінця."
+analytics.ticks.sum.dont_held_open: "Угод залишаються відкритими через зафіксовані значення: %{n} — з поточними налаштуваннями вони закриваються, тому результат обчислено на меншій вибірці, ніж порівняння."
 analytics.ticks.sum.dont_train: "В1 гірший за факт навіть на угодах, де шукав."
 analytics.ticks.sum.no_gain: "В1 не кращий за те, як торгувала стратегія."
 analytics.ticks.sum.tag_unchecked: "Не перевірено"

@@ -92,6 +92,7 @@ fn repeated_point_search_preserves_the_answer() {
             evaluations: 52_210,
             refused: 0,
             left_open: 0,
+            left_open_by_held: 0,
             entry_points: 0,
             fills_reused: 52_209,
         }

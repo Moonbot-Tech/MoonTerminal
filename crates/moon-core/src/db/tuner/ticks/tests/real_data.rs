@@ -17,7 +17,7 @@
 //! that kind's fit deals, the Delta Modifiers section alone, and prints what it found); the
 //! application never moves its data root on a variable.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -111,7 +111,7 @@ fn dump_deal(
     let stop = super::super::exit::stops::stop_pct(exit, deal, deal.buy_ms);
     let level = super::super::exit::level_off_buy(deal.buy_price, stop, deal.is_long());
     let stated = verify::stated_stop_level(&deal.sell_reason);
-    let activation = verify::stop_jump_level(deal, exit)
+    let activation = verify::stop_jump_level(deal, exit, exit_points)
         .and_then(|jump_at| verify::archived_stop_jump(deal, jump_at, exit_points));
     let dir = PathBuf::from(dir);
     let _ = std::fs::create_dir_all(dir.join("ticks"));
@@ -503,7 +503,14 @@ struct StopSlipDiag {
 }
 
 impl StopSlipDiag {
-    fn add(&mut self, deal: &Deal, ticks: &[Tick], exit: &ExitParams) {
+    /// Compare the stopped fact's quote with its trigger at the archived sell booking.
+    fn add(
+        &mut self,
+        deal: &Deal,
+        ticks: &[Tick],
+        exit: &ExitParams,
+        exit_points: Option<&[(i64, f64)]>,
+    ) {
         if !verify::is_stop_reason(&deal.sell_reason) {
             return;
         }
@@ -511,7 +518,7 @@ impl StopSlipDiag {
             return;
         };
         let Some(trigger) = verify::stated_stop_level(&deal.sell_reason)
-            .or_else(|| verify::stop_jump_level(deal, exit))
+            .or_else(|| verify::stop_jump_level(deal, exit, exit_points))
             .filter(|l| l.is_finite() && *l > 0.0)
         else {
             return;
@@ -982,6 +989,7 @@ fn print_delta_quality(tracks: &[std::sync::Arc<deltas::DeltaTrack>], no_track: 
     }
 }
 
+/// Report reproduction and search eligibility globally and by strategy kind.
 #[test]
 #[ignore = "needs a live data root in MOON_TICKS_DATA_DIR"]
 fn real_data_reproduction() {
@@ -1613,7 +1621,7 @@ fn real_data_reproduction() {
             .is_some_and(|(_, to)| to.saturating_sub(deal.close_ms).max(0) >= SHORT_TAIL_MS);
         short_tail.push(!long_tail);
         take_diag.add(&deal, &ticks, &exit, exit_points.as_deref());
-        stop_diag.add(&deal, &ticks, &exit);
+        stop_diag.add(&deal, &ticks, &exit, exit_points.as_deref());
         late_diag.add(&deal, &exit, exit_points.as_deref(), fit);
         // Counted as the axis counts it (`load.rs::replay_row_with` passes both archived lines
         // whenever it has them): the entry off its archived line when there is one — without it
@@ -1649,6 +1657,24 @@ fn real_data_reproduction() {
         search::run(searched, kind, &defaults);
     }
     print_report(&report_items, read.without_ms);
+    let mut kinds: BTreeMap<_, _> = kinds_seen
+        .iter()
+        .map(|(kind, rows)| (kind.as_str(), (*rows, 0usize, 0usize, 0usize, 0usize)))
+        .collect();
+    for (deal, verdict, _) in &report_items {
+        let (_, covered, exit_ok, exit_judged, fit) = kinds.entry(deal.kind.as_str()).or_default();
+        *covered += 1;
+        if let Some(ok) = verdict.exit {
+            *exit_judged += 1;
+            *exit_ok += usize::from(ok);
+        }
+        *fit += usize::from(fit_for_search(verdict));
+    }
+    for (kind, (rows, covered, exit_ok, exit_judged, fit)) in kinds {
+        eprintln!(
+            "kind {kind}: rows {rows}, covered {covered}, exit ok {exit_ok}/{exit_judged}, fit {fit}"
+        );
+    }
     print_reason_table(&report_items, &short_tail);
     eprintln!("kinds: {kinds_seen:?}");
     eprintln!(
