@@ -332,8 +332,7 @@ fn station_final_tail_no_longer_waits_for_a_source() {
         row.deal.report_uid,
         row.window.close_ms,
         30_000,
-        now,
-        (false, true)
+        now
     ));
     super::unfillable().refuse(row.deal.report_uid, "synthetic", "XALPHAUSDT");
     let fillable = super::super::super::tail::fillable_at(
@@ -342,7 +341,6 @@ fn station_final_tail_no_longer_waits_for_a_source() {
         row.window.close_ms,
         30_000,
         now,
-        (false, true),
     );
     forget(row.deal.report_uid);
     assert!(!fillable);
@@ -369,7 +367,7 @@ fn already_held_rows_do_not_bump_the_station_filing_generation() {
 #[test]
 fn station_misses_survive_unrelated_filings() {
     let mut refused = Unfillable::default();
-    refused.refresh((7, 60, (true, true), (180_000, 300_000)));
+    refused.refresh((7, 60, (180_000, 300_000)));
     refused.refuse(91, "synthetic", "XALPHA");
     let revision = refused.revision;
     refused.filed("synthetic", "XBETA");
@@ -380,11 +378,10 @@ fn station_misses_survive_unrelated_filings() {
     assert!(refused.uids.is_empty());
     assert_ne!(refused.revision, revision);
     for generation in [
-        (8, 60, (true, true), (180_000, 300_000)),
-        (8, 120, (true, true), (180_000, 300_000)),
-        (8, 120, (false, true), (180_000, 300_000)),
-        (8, 120, (false, true), (600_000, 300_000)),
-        (8, 120, (false, true), (600_000, 1_800_000)),
+        (8, 60, (180_000, 300_000)),
+        (8, 120, (180_000, 300_000)),
+        (8, 120, (600_000, 300_000)),
+        (8, 120, (600_000, 1_800_000)),
     ] {
         refused.refuse(91, "synthetic", "XALPHA");
         let revision = refused.revision;

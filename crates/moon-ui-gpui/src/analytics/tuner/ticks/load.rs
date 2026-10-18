@@ -700,16 +700,9 @@ impl AnalyticsView {
                 // The rows still missing are what the user is looking at: a running batch
                 // takes them next.
                 this.ticks_prioritize_visible();
-                // With the venue autoload on, the rows of THIS table the venue can still serve
-                // go to the fetch without a press: the switch is the consent to spend the
-                // budget, and the startup pass covers only its own horizon (30 days, every
-                // core) — a wider period on the table would otherwise sit behind a button. The
-                // core autoload has no such gap: its reach is the cores' archives, two days,
-                // which the startup pass already walks for every core, and what closes after it
-                // the close-time capture files.
-                if moon_core::market::trade_replay::tape_autoload() {
-                    this.ticks_fetch_missing(cx);
-                }
+                // Fill this table's missing tape even beyond the startup pass's thirty-day scope.
+                this.ticks_fetch_missing(cx);
+
                 // The replayable set may have changed under the variant columns: rescore them.
                 this.arm_ticks_variants(cx);
                 cx.notify();
@@ -1396,7 +1389,6 @@ pub(super) fn replay_row_with(
         row.held,
         super::tail::current_s(),
         chrono::Utc::now().timestamp_millis(),
-        super::tail::switches(),
     );
     let required = if short_allowed {
         super::tail::through_close(&window)
@@ -1489,7 +1481,6 @@ fn short_allowed(
     held: Option<(i64, i64)>,
     min_tail_s: u32,
     now_ms: i64,
-    switches: (bool, bool),
 ) -> bool {
     held.is_some_and(|(_, trail)| trail < moon_core::db::tuner::ticks::tail::floor_ms(min_tail_s))
         && !super::tail::fillable_at(
@@ -1498,7 +1489,6 @@ fn short_allowed(
             close_ms,
             held.map_or(0, |(_, trail)| trail),
             now_ms,
-            switches,
         )
 }
 
@@ -1535,7 +1525,6 @@ pub(super) fn miss_holds(
             miss.held,
             miss.sample.min_tail_s,
             admission.now_ms,
-            admission.switches,
         ) == miss.short_allowed
 }
 

@@ -21,6 +21,7 @@ pub mod data;
 pub mod db;
 pub mod detect_diag;
 pub mod diagnostics;
+pub mod disk_reserve;
 pub mod feed;
 pub mod figures;
 pub mod fixture;

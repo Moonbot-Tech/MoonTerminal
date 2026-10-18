@@ -18,10 +18,6 @@ use std::time::{Duration, Instant};
 
 use moon_core::station_api::Disk;
 
-/// The free space always kept, at the least: 2 GiB.
-const MIN_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-/// The free space always kept, as a share of the filesystem: a tenth.
-const MIN_FREE_SHARE: u64 = 10;
 /// How often a lasting shortfall is warned about in the journal.
 const WARN_EVERY: Duration = Duration::from_secs(30 * 60);
 /// How long after asking for room the keeper looks again: long enough for the eviction and the
@@ -51,19 +47,14 @@ pub fn archive_budget() -> Option<u64> {
         .and_then(|root| crate::host::disk_space(root))
         .and_then(|disk| {
             fits(disk, 0)
-                .then(|| {
-                    moon_core::market::trade_replay::archive::reserve_budget(
-                        disk.free_bytes,
-                        disk.total_bytes,
-                    )
-                })
+                .then(|| moon_core::disk_reserve::spendable(disk.free_bytes, disk.total_bytes))
                 .flatten()
         })
 }
 
 /// The free space the station keeps on a filesystem of `total_bytes`.
 pub fn reserve(total_bytes: u64) -> u64 {
-    MIN_FREE_BYTES.max(total_bytes / MIN_FREE_SHARE)
+    moon_core::disk_reserve::reserve(total_bytes)
 }
 
 /// How many bytes the disk is short of its reserve; `None` while it has enough, or where the

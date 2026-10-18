@@ -2,9 +2,9 @@
 //!
 //! Kept separate from `reports.sqlite` by design: the reports replica is a recoverable
 //! cache (reset by `database_recreated`/resynchronization), while version history is the
-//! authoritative copy. Its per-strategy retention is bounded by the configured `version_limit`
-//! when a new version is inserted; lowering the limit does not globally prune existing history,
-//! and each strategy is pruned only on its next version insertion. Cross-database analytics
+//! authoritative copy. Its per-strategy retention is bounded by the built-in
+//! `MAX_VERSIONS_PER_STRATEGY` (4096); each strategy is pruned only when its next version
+//! is inserted. Cross-database analytics
 //! ("trades x version parameters") uses `ATTACH` from the reports reader, with single-database performance.
 //!
 //! The model is ported from mb_ai/moonbridge (its `storage/strategies.rs`):
@@ -28,7 +28,7 @@ pub mod backup;
 pub mod stats;
 mod write;
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, OnceLock};
 
@@ -182,54 +182,12 @@ impl StratSink {
 /// It is global rather than passed through SessionManager -> lifecycle -> feed, so the writer,
 /// like the database file itself, lives independently of session lifecycles.
 static SINK: OnceLock<Option<StratSink>> = OnceLock::new();
-/// Live write toggle (the Storage tab): when disabled, future `sink()` calls return `None`.
-/// Existing sink clones and queued messages are not revoked. Initialized from `storage.toml` on first access.
-static ENABLED: AtomicBool = AtomicBool::new(true);
-/// Live per-strategy version limit (0 means unlimited), consulted when a new version is inserted.
-/// Pruning then applies only to that strategy; lowering the limit does not prune existing history immediately.
-static VERSION_LIMIT: AtomicU32 = AtomicU32::new(0);
-static ENABLED_INIT: OnceLock<()> = OnceLock::new();
+/// Built-in history bound applied independently on each strategy version insertion.
+pub const MAX_VERSIONS_PER_STRATEGY: i64 = 4096;
 
-fn ensure_enabled_loaded() {
-    ENABLED_INIT.get_or_init(|| {
-        let cfg = crate::config::storage::load();
-        ENABLED.store(cfg.strategies.enabled, Ordering::Relaxed);
-        VERSION_LIMIT.store(cfg.strategies.version_limit, Ordering::Relaxed);
-    });
-}
-
-/// Channel to the writer; `None` means writing is disabled in settings or the database is unavailable.
+/// Channel to the writer; `None` means the database is unavailable.
 pub fn sink() -> Option<StratSink> {
-    ensure_enabled_loaded();
-    if !ENABLED.load(Ordering::Relaxed) {
-        return None;
-    }
     SINK.get_or_init(spawn_writer).clone()
-}
-
-/// Current state of the write toggle for the Storage tab.
-pub fn is_enabled() -> bool {
-    ensure_enabled_loaded();
-    ENABLED.load(Ordering::Relaxed)
-}
-
-/// Updates the live write toggle; the Storage tab writes both here and to `storage.toml`.
-pub fn set_enabled(on: bool) {
-    ensure_enabled_loaded();
-    ENABLED.store(on, Ordering::Relaxed);
-}
-
-/// Current version limit (0 means unlimited).
-pub fn version_limit() -> u32 {
-    ensure_enabled_loaded();
-    VERSION_LIMIT.load(Ordering::Relaxed)
-}
-
-/// Updates the live version limit; the Storage tab writes both here and to `storage.toml`.
-/// The new limit is applied to a strategy on its next version insertion.
-pub fn set_version_limit(v: u32) {
-    ensure_enabled_loaded();
-    VERSION_LIMIT.store(v, Ordering::Relaxed);
 }
 
 /// Write generation (0 until the writer records its first change).

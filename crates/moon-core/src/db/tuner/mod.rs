@@ -34,7 +34,7 @@ pub use fields::{FIELDS, FieldClass, FieldSpec, slot_type_for};
 pub use strategy_read::{
     LiveStrategy, StratFilters, StrategyValuesReader, live_strategies, strategy_cores,
     strategy_current_values, strategy_current_values_opt, strategy_filters, strategy_kinds,
-    strategy_values_at,
+    strategy_kinds_checked, strategy_values_at,
 };
 pub use time::{
     SliderProfiles, TimeAxes, TimeSuggest, TimeWindow, format_week_span, format_working_time,

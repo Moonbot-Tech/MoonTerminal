@@ -53,15 +53,9 @@ fn update_preserves_other_storage_values() {
     let _cleanup = TempConfigDir(dir.clone());
     let path = dir.join("storage.toml");
     let mut cfg = StorageCfg::default();
-    cfg.strategies.enabled = false;
-    cfg.strategies.version_limit = 17;
     cfg.strategies.ignore_fields = vec!["SyntheticField".into()];
-    cfg.trade_replay.persist_trades = false;
     cfg.trade_replay.margin_s = 180;
     cfg.trade_replay.long_position_min = 11;
-    cfg.trade_replay.autoload_missing = true;
-    cfg.trade_replay.autoload_cores = false;
-    cfg.trade_replay.cleanup_at_startup = true;
     save_at(&path, &cfg);
     update_at(&path, |cfg| cfg.trade_replay.margin_s = 601);
     let text = std::fs::read_to_string(&path).expect("updated file");
@@ -90,18 +84,10 @@ max_mb = 512
             .expect("save old config")
             .contains("max_mb")
     );
-    assert!(cfg.trade_replay.persist_trades);
-    // The autoload switch came after the margin and reads as OFF from a file without it: it
-    // spends the venues' budget, and may not switch itself on.
-    assert!(!cfg.trade_replay.autoload_missing);
-    // The core-archive autoload came last and reads as ON: it costs the cores' traffic only.
-    assert!(cfg.trade_replay.autoload_cores);
-    // An absent threshold takes the shared default; cleanup may not switch itself on.
     assert_eq!(
         cfg.trade_replay.long_position_min,
         DEFAULT_LONG_POSITION_MIN
     );
-    assert!(!cfg.trade_replay.cleanup_at_startup);
 }
 
 /// The long-position threshold round-trips through the file and is bounded where `load`
@@ -111,13 +97,10 @@ max_mb = 512
 fn long_position_min_round_trips_and_is_clamped_on_load() {
     let mut cfg = StorageCfg::default();
     cfg.trade_replay.long_position_min = 15;
-    cfg.trade_replay.cleanup_at_startup = true;
     let text = toml::to_string(&cfg).expect("serialises");
     assert!(text.contains("long_position_min = 15"), "{text}");
-    assert!(text.contains("cleanup_at_startup = true"), "{text}");
     let back: StorageCfg = toml::from_str(&text).expect("parses");
     assert_eq!(back.trade_replay.long_position_min, 15);
-    assert!(back.trade_replay.cleanup_at_startup);
     let zero: StorageCfg = toml::from_str(
         "[trade_replay]
 long_position_min = 0
@@ -147,13 +130,11 @@ autoload_missing = true
 ";
     let cfg: StorageCfg = toml::from_str(text).expect("old file parses");
     assert_eq!(cfg.trade_replay.margin_s, 900);
-    assert!(!cfg.trade_replay.persist_trades);
     assert!(
         !toml::to_string(&cfg)
             .expect("save old config")
             .contains("max_mb")
     );
-    assert!(cfg.trade_replay.autoload_missing);
     // A migrated value off the list lands on the nearest step where `load` snaps it — the
     // lower one on a tie, so 45 minutes becomes 30, not 60.
     let odd: StorageCfg = toml::from_str("[trade_replay]\nmargin_min = 45\n").expect("parses");
@@ -245,31 +226,56 @@ fn snap_lands_on_the_step_list() {
     assert_eq!(snap_trade_margin_s(u32::MAX), MAX_TRADE_MARGIN_S);
 }
 
-/// The core-archive autoload round-trips, and a file that carries only the venue switch — the
-/// shape every terminal wrote before 2026-09-28 — keeps that switch and reads the new one as on.
-#[test]
-fn autoload_cores_defaults_on_and_round_trips() {
-    let old: StorageCfg = toml::from_str(
-        "[trade_replay]
-autoload_missing = true
-",
-    )
-    .expect("old file parses");
-    assert!(old.trade_replay.autoload_missing);
-    assert!(old.trade_replay.autoload_cores);
-
-    let mut cfg = StorageCfg::default();
-    cfg.trade_replay.autoload_cores = false;
-    let text = toml::to_string(&cfg).expect("serialises");
-    assert!(text.contains("autoload_cores = false"), "{text}");
-    let back: StorageCfg = toml::from_str(&text).expect("parses");
-    assert!(!back.trade_replay.autoload_cores);
-}
-
 /// A long-position threshold from the file or a field lands inside the range, at both ends.
 #[test]
 fn the_long_position_threshold_is_clamped_to_its_range() {
     assert_eq!(clamp_long_position_min(15), 15);
     assert_eq!(clamp_long_position_min(0), 1);
     assert_eq!(clamp_long_position_min(500), 120);
+}
+
+/// Legacy false switches must neither reject a saved window nor survive its next update.
+#[test]
+fn legacy_toggles_load_and_are_dropped() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "moon-storage-legacy-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&dir).unwrap();
+    let _cleanup = TempConfigDir(dir.clone());
+    let path = dir.join("storage.toml");
+    std::fs::write(&path, "[strategies]\nenabled=false\nversion_limit=17\n\n[trade_replay]\npersist_trades=false\nautoload_missing=false\nautoload_cores=false\ncleanup_at_startup=false\nmax_mb=64\nmargin_s=180\nlong_position_min=11\n").unwrap();
+    let cfg = load_at(&path);
+    assert_eq!(
+        (
+            cfg.trade_replay.margin_s,
+            cfg.trade_replay.long_position_min
+        ),
+        (180, 11)
+    );
+    update_at(&path, |_| {});
+    let saved = std::fs::read_to_string(path).unwrap();
+    for key in [
+        "enabled",
+        "version_limit",
+        "persist_trades",
+        "autoload_missing",
+        "autoload_cores",
+        "cleanup_at_startup",
+        "max_mb",
+    ] {
+        assert!(!saved.contains(key), "{saved}");
+    }
+    let saved: StorageCfg = toml::from_str(&saved).unwrap();
+    assert_eq!(
+        (
+            saved.trade_replay.margin_s,
+            saved.trade_replay.long_position_min
+        ),
+        (180, 11)
+    );
 }

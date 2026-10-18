@@ -134,16 +134,13 @@ fn chunked(budget: TapeBudget) -> (Vec<DealRow>, Misses) {
 fn sample() -> SamplePolicy {
     SamplePolicy {
         min_tail_s: 60,
-        switches: (false, true),
         margin_ms: 30_000,
         long_position_ms: i64::MAX,
     }
 }
 
 fn admission(now_ms: i64) -> Admission {
-    let mut admission = Admission::at(60, now_ms);
-    admission.switches = (false, true);
-    admission
+    Admission::at(60, now_ms)
 }
 
 /// A settled miss is noted and, unchanged, carried; a failed read is not noted, so the reload
@@ -207,7 +204,6 @@ fn fillable_miss_is_replayed_once_its_window_passes() {
         trail,
         60,
         recent,
-        (false, true),
     );
     assert!(!short_then, "the core archive can still fill the tail");
     let miss = SettledMiss {

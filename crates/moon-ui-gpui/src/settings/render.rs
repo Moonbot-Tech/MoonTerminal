@@ -70,6 +70,7 @@ impl Render for SettingsView {
         } else {
             (chrome_width - nav::nav_w(cx)).max(0.0)
         };
+        self.storage_note_tab(self.active);
         let parts = match self.active {
             Tab::Cores => self.cores_page(narrow, body_width, cx),
             Tab::TgBot => self.tg_bot_page(body_width, cx),
@@ -81,7 +82,7 @@ impl Render for SettingsView {
             Tab::Hotkeys => self.hotkeys_page(window, cx),
             Tab::General => self.general_page(narrow, cx),
             Tab::Security => self.security_page(cx),
-            Tab::Storage => self.storage_page(cx),
+            Tab::Storage => self.storage_page(body_width, cx),
             Tab::Sounds => self.sounds_page(body_width, cx),
             Tab::TgNotify => self.tg_notify_page(body_width, cx),
             Tab::TgMessages => self.tg_messages_page(body_width, cx),

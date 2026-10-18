@@ -64,7 +64,7 @@ fn barrier_b6_terminal_reserve_returns_no_room() {
         &ReplayGate::new(),
         (root.path(), vec![day()]),
         (
-            || reserve_budget(1024 * 1024 * 1024, 10 * 1024 * 1024 * 1024),
+            || crate::disk_reserve::spendable(1024 * 1024 * 1024, 10 * 1024 * 1024 * 1024),
             u64::MAX,
         ),
         |_| panic!("terminal disk reserve must precede HTTP"),

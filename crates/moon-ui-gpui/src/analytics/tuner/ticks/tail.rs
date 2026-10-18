@@ -74,27 +74,25 @@ fn reaches(held: Option<(i64, i64)>, min_s: u32) -> bool {
     held.is_some_and(|(_, trail_ms)| core_reaches(trail_ms, i64::from(min_s) * 1_000))
 }
 
-/// Whether enabled sources can still extend a row's tail; station-final rows stop waiting.
+/// Whether sources can still extend a row's tail; station-final rows stop waiting.
 pub(in crate::analytics::tuner) fn fillable_at(
     address: &super::state::RowAddress,
     uid: i64,
     close_ms: i64,
     trail_ms: i64,
     now_ms: i64,
-    switches: (bool, bool),
 ) -> bool {
     if !super::fetch::station::candidate(uid) {
         return false;
     }
-    source_fillable_at(address, close_ms, trail_ms, now_ms, switches)
+    source_fillable_at(address, close_ms, trail_ms, now_ms)
 }
 
-/// One pass shares time, floor, switches and station refusals across every row.
+/// One pass shares time, floor and station refusals across every row.
 pub(in crate::analytics::tuner) struct Admission {
     pub min_s: u32,
     pub now_ms: i64,
     pub refusal_revision: u64,
-    pub switches: (bool, bool),
     refused: std::sync::Arc<std::collections::HashSet<i64>>,
 }
 
@@ -106,7 +104,6 @@ impl Admission {
             min_s: clamp_min_tail_s(min_s),
             now_ms,
             refusal_revision,
-            switches: switches(),
             refused,
         }
     }
@@ -125,13 +122,7 @@ impl Admission {
     pub fn fillable(&self, row: &super::state::DealRow, trail: i64) -> bool {
         self.candidate(row.deal.report_uid)
             && row.address.as_ref().is_some_and(|address| {
-                source_fillable_at(
-                    address,
-                    row.deal.close_ms,
-                    trail,
-                    self.now_ms,
-                    self.switches,
-                )
+                source_fillable_at(address, row.deal.close_ms, trail, self.now_ms)
             })
     }
 
@@ -141,31 +132,19 @@ impl Admission {
     }
 }
 
-/// Test enabled source retention independently of station refusal membership.
+/// Test source retention independently of station refusal membership.
 fn source_fillable_at(
     address: &super::state::RowAddress,
     close_ms: i64,
     trail_ms: i64,
     now_ms: i64,
-    switches: (bool, bool),
 ) -> bool {
     use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
     let from = close_ms.saturating_add(trail_ms.max(0));
-    (switches.0
-        && matches!(
-            fetchable(address.venue, &address.market, from, now_ms),
-            Fetchable::Rest | Fetchable::Archive
-        ))
-        || (switches.1
-            && from >= now_ms.saturating_sub(moon_core::market::CORE_ARCHIVE_RETENTION_MS))
-}
-
-/// Current automatic-source switches, shared by held counts and sample membership.
-pub(in crate::analytics::tuner) fn switches() -> (bool, bool) {
-    (
-        moon_core::market::trade_replay::tape_autoload(),
-        moon_core::market::trade_replay::tape_autoload_cores(),
-    )
+    matches!(
+        fetchable(address.venue, &address.market, from, now_ms),
+        Fetchable::Rest | Fetchable::Archive
+    ) || from >= now_ms.saturating_sub(moon_core::market::CORE_ARCHIVE_RETENTION_MS)
 }
 
 /// Keep all pre-close requirements while allowing an irrecoverable post-close shortfall.

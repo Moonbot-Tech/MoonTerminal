@@ -1,5 +1,43 @@
 use super::*;
 
+/// An unlimited or global trim would retain the oldest version or erase another strategy's history.
+#[test]
+fn version_retention_keeps_newest_4096_per_strategy() {
+    const CORE_A: u64 = 0x434f52455f41;
+    let (conn, mut state) = setup();
+    let mut oldest = 0;
+    for revision in 0..4097 {
+        let dumps = [
+            dump(1, "A", revision, ""),
+            dump(2, "B", revision.min(2), ""),
+        ];
+        apply_full_set(&conn, &mut state, CORE_A, "CORE_A", revision == 0, &dumps).unwrap();
+        if revision == 0 {
+            oldest = conn
+                .query_row(
+                    "SELECT MIN(valid_from) FROM strategy_versions WHERE strategy_id=1",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap();
+        }
+    }
+    let (count, first, last): (i64, i64, i64) = conn.query_row(
+        "SELECT COUNT(*), MIN(valid_from), MAX(valid_from) FROM strategy_versions WHERE core_uid=?1 AND strategy_id=1",
+        [CORE_A as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    assert_eq!(count, 4096);
+    assert!(first > oldest);
+    assert!(last >= first);
+    let other: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM strategy_versions WHERE core_uid=?1 AND strategy_id=2",
+            [CORE_A as i64],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(other, 3);
+}
+
 /// Frozen pre-optimization strip and hash encoding, preserving insertion order and clone behavior.
 fn old_hash_of(m: &Map<String, Value>, ignore: &HashSet<String>) -> i64 {
     let stripped: Map<String, Value> = m

@@ -416,16 +416,14 @@ fn unfillable_short_tail_is_in_the_sample_but_fresh_tape_waits() {
         1,
         row.deal.close_ms,
         30_000,
-        old_now,
-        (false, true)
+        old_now
     ));
     assert!(fillable_at(
         row.address.as_ref().unwrap(),
         1,
         row.deal.close_ms,
         30_000,
-        fresh_now,
-        (false, true)
+        fresh_now
     ));
     assert_eq!(
         DealWhy::of_with(&row, &Admission::at(60, old_now)),

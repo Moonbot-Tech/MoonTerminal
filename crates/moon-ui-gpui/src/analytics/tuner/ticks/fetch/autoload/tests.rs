@@ -9,7 +9,6 @@ mod replay;
 #[test]
 fn barrier_b6_cancelled_growth_keeps_whole_history_until_a_current_pass_completes() {
     let _restore = RestoreAutoload::take();
-    moon_core::market::trade_replay::set_tape_autoload(true);
     {
         let mut st = lock();
         st.whole_history = true;
@@ -23,7 +22,7 @@ fn barrier_b6_cancelled_growth_keeps_whole_history_until_a_current_pass_complete
     };
     let mut sources = FakeSources {
         prefill: Box::new(|rows, _, _| {
-            switched_off();
+            reset_for_station();
             (rows, 0, 0)
         }),
         venue_rows: 0,
@@ -62,8 +61,6 @@ fn barrier_b6_cancelled_growth_keeps_whole_history_until_a_current_pass_complete
 #[test]
 fn barrier_b6_station_arriving_mid_pass_prevents_venue_handoff() {
     let _restore = RestoreAutoload::take();
-    moon_core::market::trade_replay::set_tape_autoload(true);
-    moon_core::market::trade_replay::set_tape_autoload_cores(true);
     lock().phase = Phase::Running;
     let pass = Pass {
         generation: generation(),
@@ -189,8 +186,6 @@ fn resolver() -> FetchResolver {
 #[test]
 fn station_policy_blocks_fallback_even_without_a_reachable_target() {
     let _restore = RestoreAutoload::take();
-    moon_core::market::trade_replay::set_tape_autoload(true);
-    moon_core::market::trade_replay::set_tape_autoload_cores(true);
     let mut deal = super::super::tests::synthetic_deal();
     deal.buy_ms = moon_core::util::time::now_unix_ms_i64() - 20_000;
     deal.close_ms = deal.buy_ms + 10_000;
@@ -227,8 +222,6 @@ fn station_policy_blocks_fallback_even_without_a_reachable_target() {
 #[test]
 fn cancellation_mid_pass_never_enqueues_or_files_core_tape() {
     let _restore = RestoreAutoload::take();
-    moon_core::market::trade_replay::set_tape_autoload(true);
-    moon_core::market::trade_replay::set_tape_autoload_cores(true);
     lock().phase = Phase::Running;
     let mut deal = super::super::tests::synthetic_deal();
     deal.buy_ms = moon_core::util::time::now_unix_ms_i64() - 20_000;
@@ -241,7 +234,7 @@ fn cancellation_mid_pass_never_enqueues_or_files_core_tape() {
     };
     let mut sources = FakeSources {
         prefill: Box::new(|rows, _, _| {
-            switched_off();
+            reset_for_station();
             (rows, 0, 0)
         }),
         venue_rows: 0,
@@ -263,10 +256,9 @@ fn cancellation_mid_pass_never_enqueues_or_files_core_tape() {
     assert!(matches!(lock().phase, Phase::Armed));
 }
 
-/// Restore scheduler and source switches even if a synthetic pass fails an assertion.
+/// Restore scheduler state even if a synthetic pass fails an assertion.
 struct RestoreAutoload {
     saved: Autoload,
-    switches: (bool, bool),
     _window: crate::test_support::SharedWindowGuard,
 }
 
@@ -276,17 +268,14 @@ impl RestoreAutoload {
         let window = crate::test_support::SharedWindowGuard::take();
         Self {
             saved: std::mem::take(&mut *lock()),
-            switches: (tape_autoload(), tape_autoload_cores()),
             _window: window,
         }
     }
 }
 
 impl Drop for RestoreAutoload {
-    /// Restore switches before releasing process-wide settings isolation.
+    /// Restore the scheduler before releasing process-wide settings isolation.
     fn drop(&mut self) {
-        moon_core::market::trade_replay::set_tape_autoload(self.switches.0);
-        moon_core::market::trade_replay::set_tape_autoload_cores(self.switches.1);
         *lock() = std::mem::take(&mut self.saved);
     }
 }
@@ -318,31 +307,6 @@ fn growth_reads_whole_history_but_ordinary_startup_reads_thirty_days() {
         1
     );
     assert_eq!(sources.from, Some(0));
-}
-
-/// Growth must honor an explicit off, and cancellation must discard a completed stale pass.
-#[test]
-fn both_switches_off_prevent_launch_and_cancel_discards_results() {
-    let _restore = RestoreAutoload::take();
-    moon_core::market::trade_replay::set_tape_autoload(false);
-    moon_core::market::trade_replay::set_tape_autoload_cores(false);
-    tick_with(
-        || true,
-        || false,
-        || None,
-        |_, _, _, _, _, _| panic!("off must never launch"),
-    );
-    assert!(matches!(lock().phase, Phase::Armed));
-    {
-        let mut st = lock();
-        st.phase = Phase::Running;
-        st.result = Some((Vec::new(), 1));
-    }
-    let old_generation = generation();
-    switched_off();
-    assert_ne!(generation(), old_generation);
-    assert!(lock().result.is_none());
-    assert!(matches!(lock().phase, Phase::Armed));
 }
 
 /// Held rows leave progress before I/O; detached filing stays visible until completion or stop.
@@ -380,8 +344,6 @@ fn scheduled_growth_fills_both_gaps_without_a_tuner_and_resumes_without_requests
     use moon_core::market::trade_replay::trade_cache::TradeCache;
     let _restore = RestoreAutoload::take();
     let started = Instant::now();
-    moon_core::market::trade_replay::set_tape_autoload(false);
-    moon_core::market::trade_replay::set_tape_autoload_cores(true);
     moon_core::market::trade_replay::set_margin_s(600);
     let cache = TradeCache::open_with_ceiling(":memory:".into(), || None).unwrap();
     let mut deal = super::super::tests::synthetic_deal();
@@ -611,8 +573,6 @@ fn unlisted_rows_use_cores_only_within_retention() {
         let source = fetchable(None, "XALPHA", now - age, now);
         assert_eq!(
             row_path(
-                (true, true),
-                source != Fetchable::NoRoute,
                 matches!(source, Fetchable::Rest | Fetchable::Archive),
                 now - age,
                 now
@@ -702,14 +662,7 @@ fn old_short_tape_is_held_while_a_fresh_tail_stays_queued() {
             Some(vec![(close - 40_000, close + 30_000)])
         },
         |row, _| {
-            !crate::analytics::tuner::ticks::tail::fillable_at(
-                &address,
-                1,
-                row.2.close_ms,
-                0,
-                now,
-                (false, true),
-            )
+            !crate::analytics::tuner::ticks::tail::fillable_at(&address, 1, row.2.close_ms, 0, now)
         },
     );
     assert_eq!(held, 1);
@@ -717,67 +670,17 @@ fn old_short_tape_is_held_while_a_fresh_tail_stays_queued() {
     assert_eq!(queued[0].1, "FRESH");
 }
 
-/// The defaults (cores on, venues off): every recent row goes to the cores — no route, past the
-/// retention, or a route the venue still serves alike — and nothing older than the cores' reach.
-#[test]
-fn with_the_defaults_recent_rows_go_to_the_cores_and_never_to_the_venue() {
-    let now = 1_790_000_000_000;
-    let recent = now - 3_600_000;
-    let old = now - CORE_ARCHIVE_RETENTION_MS - 1;
-    let defaults = (false, true);
-    assert_eq!(
-        row_path(defaults, false, false, recent, now),
-        RowPath::Cores
-    );
-    assert_eq!(row_path(defaults, true, false, recent, now), RowPath::Cores);
-    assert_eq!(row_path(defaults, true, true, recent, now), RowPath::Cores);
-    assert_eq!(
-        row_path(defaults, true, true, old, now),
-        RowPath::TooOldForCores
-    );
-    // The horizon's own edge still counts as recent.
-    assert_eq!(
-        row_path(defaults, false, false, now - CORE_ARCHIVE_RETENTION_MS, now),
-        RowPath::Cores
-    );
-}
-
-/// With both switches on, the venue takes what it serves (its fetch asks the core first) and the
+/// The venue takes what it serves (its fetch asks the core first) and the
 /// cores take the rest that is recent enough.
 #[test]
-fn with_both_switches_the_venue_takes_what_it_serves() {
+fn venue_takes_what_it_serves_and_cores_take_recent_remainder() {
     let now = 1_790_000_000_000;
     let recent = now - 3_600_000;
-    let both = (true, true);
-    assert_eq!(row_path(both, true, true, recent, now), RowPath::Venue);
-    assert_eq!(row_path(both, false, false, recent, now), RowPath::Cores);
-    assert_eq!(row_path(both, true, false, recent, now), RowPath::Cores);
+    assert_eq!(row_path(true, recent, now), RowPath::Venue);
+    assert_eq!(row_path(false, recent, now), RowPath::Cores);
     assert_eq!(
-        row_path(both, true, false, now - CORE_ARCHIVE_RETENTION_MS - 1, now),
+        row_path(false, now - CORE_ARCHIVE_RETENTION_MS - 1, now),
         RowPath::TooOldForCores
-    );
-}
-
-/// With the core switch off the split is the one before it existed, each skip under its reason.
-#[test]
-fn with_the_core_switch_off_skips_keep_their_reasons() {
-    let now = 1_790_000_000_000;
-    let recent = now - 3_600_000;
-    assert_eq!(
-        row_path((true, false), true, true, recent, now),
-        RowPath::Venue
-    );
-    assert_eq!(
-        row_path((true, false), false, false, recent, now),
-        RowPath::NoRoute
-    );
-    assert_eq!(
-        row_path((true, false), true, false, recent, now),
-        RowPath::PastRetention
-    );
-    assert_eq!(
-        row_path((false, false), true, true, recent, now),
-        RowPath::VenueOff
     );
 }
 

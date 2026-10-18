@@ -1,6 +1,150 @@
 use super::codec::encode_legacy;
 use super::*;
 use crate::feed::types::Side;
+use std::sync::atomic::Ordering;
+
+/// Full compaction must stay in the writer queue so inserts on either side remain durable.
+#[test]
+fn full_compaction_preserves_queued_inserts() {
+    let dir = BenchDir::new("trade-daily-compact");
+    let cache = TradeCache::open_with_ceiling(dir.0.join("tape.sqlite"), || None).unwrap();
+    cache.insert("x", "M", 1, 1, vec![], TileSource::Venue);
+    let (reply, rx) = mpsc::channel();
+    cache.tx.send(Op::CompactFull { reply }).unwrap();
+    cache.insert("x", "M", 3, 3, vec![], TileSource::Venue);
+    assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), Ok(()));
+    assert!(cache.sync(Duration::from_secs(10)));
+    assert_eq!(
+        cache.held_spans("x", "M", 0, 4).unwrap(),
+        vec![(1, 1), (3, 3)]
+    );
+    assert_eq!(cache.compact_full(), Ok(Ok(())));
+}
+
+/// A live worker's late reply must differ from a dead queue or a dropped reply sender.
+#[test]
+fn full_compaction_distinguishes_timeout_from_dead_worker() {
+    let (tx, rx) = mpsc::channel();
+    let cache = TradeCache { tx };
+    assert_eq!(
+        cache.compact_full_with_timeout(Duration::ZERO),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+    let Op::CompactFull { reply } = rx.recv().unwrap() else {
+        panic!("expected compaction");
+    };
+    // The queued work still exists after the caller's deadline.
+    assert!(reply.send(Ok(())).is_err());
+    drop(rx);
+    assert_eq!(
+        cache.compact_full(),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    );
+
+    let (tx, rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || drop(rx.recv().unwrap()));
+    assert_eq!(
+        TradeCache { tx }.compact_full(),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    );
+    worker.join().unwrap();
+}
+
+/// Drive the actual queue worker with equal-sized synthetic packs and a fake disk probe.
+fn disk_limited_worker(probe: DiskProbe, cap: fn() -> Option<i64>, retained: usize) {
+    let dir = BenchDir::new("trade-disk-reserve");
+    let path = dir.0.join("synthetic.sqlite");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    init_schema(&conn).unwrap();
+    // Identical empty packs give each victim exactly the incoming pack's size.
+    for i in 0..4 {
+        insert_span(&conn, "x", "M", i, i, &[], TileSource::Venue, i).unwrap();
+    }
+    let held = held_bytes(&conn).unwrap();
+    assert!(held > 0);
+    let mut disk = DiskCeiling::new(path, probe);
+    disk.interval = Duration::MAX;
+    let limit = disk.limit(held, cap());
+    let held = prune(&conn, limit).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || run(conn, rx, held, cap, Some(disk)));
+    let cache = TradeCache { tx };
+    for i in 4..24 {
+        cache.insert("x", "M", i, i, vec![], TileSource::Venue);
+        assert!(cache.sync(Duration::from_secs(5)));
+        let spans = cache.held_spans("x", "M", 0, 30).unwrap();
+        let count = retained.min(i as usize + 1);
+        assert_eq!(spans.len(), count, "insert {i}");
+        if count > 0 {
+            assert_eq!(spans.last(), Some(&(i, i)));
+            assert_eq!(
+                spans.first(),
+                Some(&(i + 1 - count as i64, i + 1 - count as i64))
+            );
+        }
+    }
+    drop(cache);
+    worker.join().unwrap();
+}
+
+/// Re-crediting disk headroom after each insert would retain more than six packs.
+#[test]
+fn disk_probe_budget_is_constant_between_consecutive_inserts() {
+    disk_limited_worker(
+        |dir| {
+            let (main, wal) = crate::db::maint::db_sizes(&dir.join("synthetic.sqlite"));
+            Some((
+                2 * 1024 * 1024 * 1024 + (main + wal) / 2,
+                20 * 1024 * 1024 * 1024,
+            ))
+        },
+        max_bytes,
+        6,
+    );
+}
+
+/// Subtracting the physical shortfall on each insert would empty a non-shrinkable tape.
+#[test]
+fn disk_below_reserve_replaces_oldest_without_cascade() {
+    disk_limited_worker(|_| Some((0, 20 * 1024 * 1024 * 1024)), max_bytes, 4);
+}
+
+/// Carrying a roomy sample into the first low-disk probe would let queued inserts grow the tape.
+#[test]
+fn disk_drop_below_reserve_discards_previous_roomy_limit() {
+    let dir = BenchDir::new("trade-disk-drop");
+    let path = dir.0.join("synthetic.sqlite");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    init_schema(&conn).unwrap();
+    for i in 0..4 {
+        insert_span(&conn, "x", "M", i, i, &[], TileSource::Venue, i).unwrap();
+    }
+    let mut held = held_bytes(&conn).unwrap();
+    let original = held;
+    let mut disk = DiskCeiling::new(path, |_| Some((u64::MAX, u64::MAX)));
+    disk.interval = Duration::ZERO;
+    assert_eq!(disk.limit(held, max_bytes()), max_bytes());
+    disk.probe = |_| Some((0, 20 * 1024_u64.pow(3)));
+    let (tx, rx) = mpsc::channel();
+    let cache = TradeCache { tx };
+    for i in 4..24 {
+        cache.insert("x", "M", i, i, vec![], TileSource::Venue);
+        let snapshot = held;
+        serve(&conn, rx.recv().unwrap(), &mut held, || {
+            disk.limit(snapshot, max_bytes())
+        });
+        assert_eq!(held, original, "insert {i} grew the low-disk tape");
+        let spans = read_spans(&conn, "x", "M", 0, 30).unwrap();
+        assert_eq!(spans.len(), 4);
+        assert_eq!(spans.last().unwrap().from_ms, i);
+    }
+}
+
+/// A failed disk probe must still enforce the custom packed cap, including zero.
+#[test]
+fn disk_probe_failure_preserves_cap() {
+    disk_limited_worker(|_| None, || Some(0), 0);
+}
 
 /// Both archive layouts use the end-bound index for the production blob read.
 #[test]
@@ -1621,16 +1765,7 @@ fn measure_the_repack_on_a_real_file() {
         );
     }
     let t = Instant::now();
-    let report = trim::trim(&conn, &keep, false).expect("dry run");
-    println!(
-        "cleanup dry run cutting every span: {:.2} s, {} cut, {} print(s) / {:.1} MB would go",
-        t.elapsed().as_secs_f64(),
-        report.spans_cut,
-        report.prints_dropped,
-        report.bytes_dropped as f64 / 1e6
-    );
-    let t = Instant::now();
-    let report = trim::trim(&conn, &keep, true).expect("apply");
+    let report = trim::trim_progress(&conn, &keep, None).expect("apply");
     let applied = t.elapsed();
     let t = Instant::now();
     crate::db::wal::vacuum(&conn).expect("vacuum");
@@ -1722,4 +1857,66 @@ fn measure_reads_while_the_worker_repacks() {
         done_at
     );
     assert_eq!(legacy_left(&watcher), 0, "the worker moved everything");
+}
+
+/// A forced re-probe after an oversized victim must not ratchet the below-reserve budget down.
+#[test]
+fn disk_resampling_with_unequal_packs_preserves_budget() {
+    let dir = BenchDir::new("trade-resample");
+    let path = dir.0.join("synthetic.sqlite");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    init_schema(&conn).unwrap();
+    for (i, ticks) in [(0, vec![tick(0, Side::Buy); 20]), (1, vec![]), (2, vec![])] {
+        insert_span(&conn, "x", "M", i, i, &ticks, TileSource::Venue, i).unwrap();
+    }
+    let mut held = held_bytes(&conn).unwrap();
+    let mut disk = DiskCeiling::new(path, |_| Some((0, 20 * 1024 * 1024 * 1024)));
+    disk.interval = Duration::ZERO;
+    let original = disk.limit(held, max_bytes());
+    let (tx, rx) = mpsc::channel();
+    let cache = TradeCache { tx };
+    cache.insert("x", "M", 3, 3, vec![], TileSource::Venue);
+    let snapshot = held;
+    serve(&conn, rx.recv().unwrap(), &mut held, || {
+        disk.limit(snapshot, max_bytes())
+    });
+    assert!(
+        held < snapshot,
+        "unequal victim must leave unused packed budget"
+    );
+    assert_eq!(disk.limit(held, max_bytes()), original);
+    cache.insert("x", "M", 4, 4, vec![], TileSource::Venue);
+    let snapshot = held;
+    serve(&conn, rx.recv().unwrap(), &mut held, || {
+        disk.limit(snapshot, max_bytes())
+    });
+    assert!(
+        held > snapshot,
+        "re-probe must preserve room for replacement packs"
+    );
+    assert!(held <= original.unwrap());
+}
+
+/// An empty retention pass must not rewrite SQLite or increment its schema generation.
+#[test]
+fn empty_cleanup_skips_full_vacuum() {
+    let conn = conn();
+    let before: i64 = conn
+        .query_row("PRAGMA schema_version", [], |r| r.get(0))
+        .unwrap();
+    let mut held = 0;
+    let (tx, rx) = mpsc::channel();
+    let cache = TradeCache { tx };
+    let result = cache.trim_start(Arc::new(KeepMap::new()), Compact::Full, None);
+    serve(&conn, rx.recv().unwrap(), &mut held, || None);
+    let outcome = result.recv().unwrap().unwrap();
+    assert!(outcome.report.is_empty());
+    assert_eq!(outcome.compacted, Ok(()));
+    let after: i64 = conn
+        .query_row("PRAGMA schema_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        after, before,
+        "VACUUM increments schema_version even on an empty file"
+    );
 }

@@ -10,6 +10,21 @@ use crate::backups::NOON_MS;
 /// Test-only sequence for isolated temporary roots.
 static TEST_SEQ: AtomicU32 = AtomicU32::new(0);
 
+/// Selecting by directory name alone would expose unfinished or foreign snapshots in Settings.
+#[test]
+fn latest_snapshot_ignores_foreign_and_incomplete_directories() {
+    let root = temp_root("latest");
+    assert_eq!(latest_snapshot_ms_in(&root), None);
+    create_snapshot_dir(&root, "20260101-120000");
+    create_snapshot_dir(&root, "20260102-130000-manual");
+    let foreign = root.join("20260104-120000-manual");
+    std::fs::create_dir(&foreign).unwrap();
+    std::fs::write(foreign.join(DATABASE_NAME), b"SQLite format 3\0").unwrap();
+    create_snapshot_dir(&root, ".incoming-20260105-120000");
+    assert_eq!(latest_snapshot_ms_in(&root), Some(1_767_358_800_000));
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Create a unique temporary directory without adding a test-only dependency.
 fn temp_root(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
@@ -189,54 +204,6 @@ fn retention_keeps_every_snapshot_in_the_latest_seven_utc_periods() {
     );
     assert!(backups.join(retained_manual).exists());
     assert!(backups.join("2026-08-04").exists());
-    let _ = std::fs::remove_dir_all(root);
-}
-
-/// Replacing `SnapshotStore::publish_distinct`'s suffix loop with one rename to `base` would make
-/// the second manual click fail instead of preserving both on-demand recovery points.
-#[test]
-fn manual_publication_uses_a_collision_suffix() {
-    let root = temp_root("manual-collision");
-    let src = root.join("strategies.sqlite");
-    let backups = root.join("backups");
-    create_database(&src);
-    let stamp = "20260804-150000-manual";
-
-    let first = create_distinct_snapshot(&src, &backups, stamp).unwrap();
-    let second = create_distinct_snapshot(&src, &backups, stamp).unwrap();
-
-    assert_eq!(
-        first.file_name().and_then(|name| name.to_str()),
-        Some(stamp)
-    );
-    assert_eq!(
-        second.file_name().and_then(|name| name.to_str()),
-        Some("20260804-150000-manual-01")
-    );
-    let _ = std::fs::remove_dir_all(root);
-}
-
-/// Removing the `-manual` namespace would let a click during the exact noon second occupy the
-/// canonical scheduled name, so the worker would report `Current` instead of taking its own copy.
-#[test]
-fn a_manual_backup_at_noon_cannot_replace_the_scheduled_slot() {
-    let root = temp_root("manual-noon");
-    let src = root.join("strategies.sqlite");
-    let backups = root.join("backups");
-    create_database(&src);
-    let noon = 20_000 * DAY_MS + NOON_MS;
-
-    let manual = backup_manual_at(&src, &backups, noon).unwrap();
-    let scheduled = backup_due_into(&src, &backups, noon, 1, publish_current).unwrap();
-
-    assert_eq!(
-        manual.file_name().and_then(|name| name.to_str()),
-        Some("20241004-120000-manual")
-    );
-    assert_eq!(
-        scheduled,
-        DueOutcome::Created(backups.join("20241004-120000"))
-    );
     let _ = std::fs::remove_dir_all(root);
 }
 

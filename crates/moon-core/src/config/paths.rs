@@ -673,6 +673,11 @@ pub fn reports_db_path() -> PathBuf {
     db_dir().join(REPORTS_DB_FILE_NAMES[0])
 }
 
+/// Last completed UTC-noon database compaction slot, beside the SQLite files.
+pub fn compaction_marker_path() -> PathBuf {
+    db_dir().join(".compacted")
+}
+
 /// Report-replica path for a diagnostic that only names the file.
 ///
 /// [`reports_db_path`] creates the database directory and latches [`db_dir`]'s

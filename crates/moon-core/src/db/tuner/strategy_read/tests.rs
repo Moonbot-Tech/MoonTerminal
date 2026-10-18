@@ -2,6 +2,46 @@
 
 use super::*;
 
+/// A missing file is empty, but lenient strategy reads must never hide a broken retention schema.
+#[test]
+fn checked_kinds_distinguishes_absent_and_broken_database() {
+    const CHILD: &str = "MOON_STRATEGY_KINDS_TEST_CHILD";
+    if let Some(root) = std::env::var_os(CHILD) {
+        let root = std::path::PathBuf::from(root);
+        assert!(crate::config::paths::set_data_dir_override(root.clone()));
+        let path = crate::config::paths::strategies_db_path();
+        assert!(path.starts_with(&root));
+        assert!(!path.exists());
+        assert!(strategy_kinds_checked(&[(42, 7)]).unwrap().is_empty());
+        assert!(!path.exists(), "an absent database must not be created");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE strategy_versions (core_uid INTEGER, strategy_id INTEGER,
+             valid_from INTEGER, valid_to INTEGER);",
+        )
+        .unwrap();
+        assert!(strategy_kinds_checked(&[(42, 7)]).is_err());
+        assert!(strategy_kinds(&[(42, 7)]).is_empty());
+        drop(conn);
+        std::fs::write(&path, b"corrupt sqlite file").unwrap();
+        assert!(strategy_kinds_checked(&[(42, 7)]).is_err());
+        return;
+    }
+    let fixture = crate::db::test_support::temp_db("strategy-kinds-checked");
+    let root = fixture.parent().unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "db::tuner::strategy_read::tests::checked_kinds_distinguishes_absent_and_broken_database", "--nocapture"])
+        .env(CHILD, root)
+        .output().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn versions() -> Connection {
     let conn = Connection::open_in_memory().expect("memory db");
     conn.execute_batch(

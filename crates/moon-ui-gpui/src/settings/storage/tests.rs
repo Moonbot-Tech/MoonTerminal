@@ -1,4 +1,5 @@
-//! Storage page: the usage shares add up, and the page chrome fits the settings body.
+//! Storage page: the usage shares add up, and the three cards fit the settings body in every
+//! state, language and theme.
 
 use std::default::Default;
 use std::rc::Rc;
@@ -7,15 +8,30 @@ use gpui::{
     AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
+use moon_core::config::UiThemeMode;
+use moon_ui::MoonTheme;
 use std::collections::HashSet;
 
-use super::super::layout_probe::{ProbeSpec, Probed, sweep};
+use super::super::layout_probe::{ProbeSpec, Probed, SIZES, TextFace, check, leak};
 use super::core_data::{
     CoreCounts, CoreLine, CoreView, Group, Kinds, core_section_el, lines as core_lines,
 };
-use super::{
-    StorageCtx, StorageInfo, StorageView, figure_chunks, stat_items, storage_body_el, usage_parts,
-};
+use super::trades_cleanup::TapeCount;
+use super::{StorageCtx, StorageInfo, StorageView, StratCounts, storage_body_el, usage_parts};
+
+/// A late sizes stage must not replace a newer snapshot or clear its in-flight flag.
+#[test]
+fn older_generation_storage_results_are_ignored() {
+    let mut ed = super::build();
+    let old = ed.generation;
+    ed.reset_info();
+    ed.inflight = true;
+    assert!(!ed.receive_info(old, StorageInfo::default()));
+    assert!(ed.info.is_none());
+    assert!(ed.inflight);
+    assert!(ed.receive_info(ed.generation, StorageInfo::default()));
+    assert!(!ed.inflight);
+}
 
 /// Saving an unrelated choice from an old page must retain the reconciled shared window.
 #[test]
@@ -25,10 +41,9 @@ fn cached_storage_save_retains_reconciled_window() {
         cfg: moon_core::config::storage::StorageCfg::default(),
         info: None,
         inflight: false,
+        generation: 0,
+        tape_inflight: false,
         busy: false,
-        cleanup: None,
-        cleanup_inflight: false,
-        cleanup_dirty: false,
         core_data: super::core_data::CoreDataEd::default(),
     };
     ed.cfg.trade_replay.margin_s = 180;
@@ -36,11 +51,9 @@ fn cached_storage_save_retains_reconciled_window() {
     moon_core::market::trade_replay::set_margin_s(600);
     moon_core::market::trade_replay::set_long_position_min(10);
     ed.sync_shared_window();
-    ed.cfg.strategies.version_limit = 17;
     let saved = serde_json::to_value(&ed.cfg).expect("serialize cached config");
     assert_eq!(saved["trade_replay"]["margin_s"], 600);
     assert_eq!(saved["trade_replay"]["long_position_min"], 10);
-    assert_eq!(saved["strategies"]["version_limit"], 17);
     assert_eq!(moon_core::market::trade_replay::margin_ms(), 600_000);
 }
 
@@ -56,7 +69,7 @@ fn adopted_long_threshold_updates_input_without_an_edit(cx: &mut gpui::TestAppCo
     let _window = crate::test_support::SharedWindowGuard::take();
     let _locale = crate::test_locale::force("en");
     cx.update(moon_ui::init);
-    let (mut visual, _) = draw_page(cx, (860.0, 900.0), [100, 5]);
+    let (mut visual, _, _) = draw_page(cx, (860.0, 900.0), 5, Variant::Normal);
     let probe = visual.update(|window, cx| {
         let mut cfg = moon_core::config::storage::StorageCfg::default();
         cfg.trade_replay.long_position_min = 5;
@@ -108,6 +121,40 @@ fn adopted_long_threshold_updates_input_without_an_edit(cx: &mut gpui::TestAppCo
     visual.update(|_, cx| assert_eq!(probe.read(cx).edits, 1));
 }
 
+/// The fill estimate waits for a second sample with deals done, then divides what is left by the
+/// rate seen; a count that grows starts the sampling over.
+///
+/// Breaks on: an estimate from one sample, a rate taken from the wrong end, or a grown count
+/// keeping the stale first sample.
+#[gpui::test]
+fn the_fill_estimate_needs_two_samples(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let window = cx.add_empty_window();
+    window.update(|window, cx| {
+        let cfg = moon_core::config::storage::StorageCfg::default();
+        let mut ui = super::StorageUi::init(&cfg, window, cx);
+        let t0 = std::time::Instant::now();
+        assert_eq!(ui.fill_eta(300, t0), None);
+        assert_eq!(
+            ui.fill_eta(300, t0 + std::time::Duration::from_secs(5)),
+            None
+        );
+        // 100 deals in 10 s: 200 left take 20 s.
+        assert_eq!(
+            ui.fill_eta(200, t0 + std::time::Duration::from_secs(10)),
+            Some(20)
+        );
+        assert_eq!(
+            ui.fill_eta(400, t0 + std::time::Duration::from_secs(11)),
+            None
+        );
+        assert_eq!(
+            ui.fill_eta(300, t0 + std::time::Duration::from_secs(21)),
+            Some(30)
+        );
+    });
+}
+
 /// A probe host drawing whatever `build` returns inside the body box.
 struct Host {
     width: f32,
@@ -147,7 +194,8 @@ impl Probed for Host {
 /// a second time.
 ///
 /// Breaks on: `usage_parts` dropping a WAL, counting a missing klines file as anything but zero,
-/// or listing the databases in an order other than reports, strategies, trades, klines.
+/// or listing the databases in an order other than the mockup's reports, strategies, klines,
+/// trades.
 #[test]
 fn usage_shares_sum_to_the_total() {
     let _locale = crate::test_locale::force("en");
@@ -161,7 +209,7 @@ fn usage_shares_sum_to_the_total() {
 
     let parts = usage_parts(&info);
 
-    let expected = [400 + 12, 38, 200 + 31, 0];
+    let expected = [400 + 12, 38, 0, 200 + 31];
     assert_eq!(
         parts.iter().map(|part| part.bytes).collect::<Vec<_>>(),
         expected
@@ -172,10 +220,37 @@ fn usage_shares_sum_to_the_total() {
     );
 }
 
-/// The production Storage page from synthetic data: two connected cores, one archived and one
-/// syncing in the core table, two help lines open, a counted cleanup.
-fn page(fields: &[gpui::Entity<moon_ui::MoonInputState>; 2], cx: &App) -> AnyElement {
-    let open: HashSet<&'static str> = ["storage-trades-margin", "storage-core-hint"].into();
+/// The mockup's five states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Variant {
+    Normal,
+    /// No snapshot yet: rows dimmed under the counting line.
+    Loading,
+    /// The tape count failed: one red line.
+    Error,
+    /// The autoload is filling tape.
+    Filling,
+    /// No station set up.
+    NoStation,
+}
+
+const VARIANTS: [Variant; 5] = [
+    Variant::Normal,
+    Variant::Loading,
+    Variant::Error,
+    Variant::Filling,
+    Variant::NoStation,
+];
+
+/// The production Storage page from synthetic data: three cores in the core table (CORE_A
+/// connected, CORE_B syncing, CORE_C archived), the core help open, in one of the [`Variant`]s.
+fn page(
+    long_min: &gpui::Entity<moon_ui::MoonInputState>,
+    variant: Variant,
+    width: f32,
+    cx: &App,
+) -> AnyElement {
+    let open: HashSet<&'static str> = ["storage-core-hint"].into();
     let ctx = StorageCtx {
         weak: gpui::WeakEntity::new_invalid(),
         open: &open,
@@ -184,10 +259,10 @@ fn page(fields: &[gpui::Entity<moon_ui::MoonInputState>; 2], cx: &App) -> AnyEle
         counts: CoreCounts {
             uid,
             stored_name: name.into(),
-            reports: 12_345,
-            strategies: 48,
+            reports: 118_204,
+            strategies: 412,
             versions: 960,
-            traces: 7_777,
+            traces: 9_812,
             warnings: 31,
         },
         name: name.into(),
@@ -195,14 +270,9 @@ fn page(fields: &[gpui::Entity<moon_ui::MoonInputState>; 2], cx: &App) -> AnyEle
         syncing: syncing.map(String::from),
     };
     let cores = [
-        core_line(11, "Synthetic Binance Futures core", Group::Connected, None),
-        core_line(12, "Synthetic Bybit core", Group::Offline, Some("42%")),
-        core_line(
-            13,
-            "A retired synthetic core with a long name",
-            Group::Archive,
-            None,
-        ),
+        core_line(11, "CORE_A", Group::Connected, None),
+        core_line(12, "CORE_B", Group::Offline, Some("42%")),
+        core_line(13, "CORE_C", Group::Archive, None),
     ]
     .into_iter()
     .map(|line| (line.counts.uid, line))
@@ -228,61 +298,75 @@ fn page(fields: &[gpui::Entity<moon_ui::MoonInputState>; 2], cx: &App) -> AnyEle
         &ctx,
         cx,
     );
-    let info = StorageInfo {
-        reports: Some((400 << 20, 12 << 20)),
-        strategies: Some((38 << 20, 0)),
-        klines: Some((200 << 20, 31 << 20)),
-        trades: Some((1 << 30, 64 << 20)),
-        report_rows: Some(Ok(1_234_567)),
-        strat_live: 120,
-        strat_deleted: 7,
-        strat_versions: 4_321,
+    let mut info = StorageInfo {
+        reports: Some((1_300 << 20, 12 << 20)),
+        strategies: Some((11 << 20, 0)),
+        klines: Some((1_700 << 20, 31 << 20)),
+        trades: Some((11 << 30, 64 << 20)),
+        report_rows: Some(Ok(412_388)),
+        strat: Some(Ok(StratCounts {
+            live: 1_669,
+            deleted: 163,
+            versions: 2_720,
+        })),
+        tape: Some(Ok(TapeCount {
+            with_tape: 48_120,
+            long: 3_904,
+            incomplete_markets: 0,
+        })),
+        last_backup_ms: Some(1_790_000_000_000),
     };
-    let [version_limit, long_min] = fields.clone();
-    // No version limit: the field says so in place of a unit.
-    let mut cfg = moon_core::config::storage::StorageCfg::default();
-    cfg.strategies.version_limit = 0;
+    if variant == Variant::Error {
+        info.tape = Some(Err("the file is held by another process (synthetic)".into()));
+    }
     storage_body_el(
         StorageView {
-            info,
-            busy: false,
-            path: "C:/Users/synthetic-user-with-a-long-name/AppData/Roaming/MoonTerminal/data"
-                .into(),
-            cfg,
-            version_limit,
-            long_min,
-            cleanup: None,
+            loading: variant == Variant::Loading,
+            info: if variant == Variant::Loading {
+                StorageInfo::default()
+            } else {
+                info
+            },
+            cfg: moon_core::config::storage::StorageCfg::default(),
+            long_min: long_min.clone(),
+            station: variant != Variant::NoStation,
+            fill: (variant == Variant::Filling).then_some((214, Some(180))),
             core,
         },
         &ctx,
+        width,
         cx,
     )
 }
 
-/// Open the production Storage page ([`page`]) in a window of `size`, its two number fields
-/// seeded with `seeds`, and draw it until the layout settles.
+/// Open the production Storage page ([`page`]) in a window of `size`, its number field seeded
+/// with `seed`, and draw it until the layout settles.
 ///
 /// Returns:
-///     The drawn window and the two field states.
+///     The drawn window, the field state and the body's scroll handle.
 fn draw_page(
     cx: &mut gpui::TestAppContext,
     size: (f32, f32),
-    seeds: [u32; 2],
+    seed: u32,
+    variant: Variant,
 ) -> (
     gpui::VisualTestContext,
-    [gpui::Entity<moon_ui::MoonInputState>; 2],
+    gpui::Entity<moon_ui::MoonInputState>,
+    ScrollHandle,
 ) {
-    let mut states = None;
+    let mut state = None;
+    let scroll = ScrollHandle::new();
+    let handle = scroll.clone();
     let window = cx.open_window(gpui::size(px(size.0), px(size.1)), |window, cx| {
         let (width, height) = super::super::layout_probe::body_box(size, cx);
-        let made = seeds.map(|seed| super::super::common::number_state(seed, window, cx));
-        states = Some(made.clone());
+        let made = super::super::common::number_state(seed, window, cx);
+        state = Some(made.clone());
         // A `Root` above the page, as the Settings window has: the number input's `+` reads it.
         let host = gpui::AppContext::new(cx, |_| Host {
             width,
             height,
-            scroll: ScrollHandle::new(),
-            build: Rc::new(move |_, cx, _| page(&made, cx)),
+            scroll: handle,
+            build: Rc::new(move |_, cx, width| page(&made, variant, width, cx)),
         });
         moon_ui::Root::new(gpui::AnyView::from(host), window, cx)
     });
@@ -292,373 +376,443 @@ fn draw_page(
             let _ = window.draw(cx);
         });
     }
-    (visual, states.expect("window built"))
+    (visual, state.expect("window built"), scroll)
 }
 
-/// A figures line splits only before ` (` and ` · `, so every figure stays with its label.
-///
-/// Breaks on: a split at every space (a label torn from its figure) or a lost piece.
-#[test]
-fn figure_chunks_keep_each_figure_with_its_label() {
-    assert_eq!(
-        figure_chunks("Strategies: 1699 (deleted: 211) \u{b7} Versions: 2822"),
-        [
-            "Strategies: 1699",
-            "(deleted: 211)",
-            "\u{b7} Versions: 2822"
-        ]
-    );
-    assert_eq!(
-        figure_chunks("Size: 137.4 MB (+ WAL 7.2 MB)"),
-        ["Size: 137.4 MB", "(+ WAL 7.2 MB)"]
-    );
-    assert_eq!(figure_chunks("No file yet"), ["No file yet"]);
+/// Install the light or the dark theme, as the app presents it.
+fn theme(cx: &mut gpui::TestAppContext, mode: UiThemeMode) {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(mode, 1.0),
+            cx,
+        )
+    });
 }
 
-/// The strategies figures become three stat items without the single-line separators.
-///
-/// Breaks on: a stat item keeping its `·` or its parentheses, or a figure lost.
-#[test]
-fn stat_items_drop_the_line_separators() {
-    assert_eq!(
-        stat_items("Strategies: 1699 (deleted: 211) \u{b7} Versions: 2822"),
-        ["Strategies: 1699", "deleted: 211", "Versions: 2822"]
-    );
-}
+const DBS: [&str; 4] = ["reports", "strategies", "klines", "trades"];
 
-/// The Storage cards follow the mockup's two-wide grid: the light column and the trades column
-/// side by side end on one line, each column's last card reaching its bottom, so no card stands
-/// as an empty box; every setting row's control starts one row gap after its label column (or
-/// under it when the row wrapped); and each strategies stat item stays on one line — in every
-/// language at every swept size and a wide window.
-///
-/// Breaks on: columns of different heights, a control pinned to the card's far edge with a hole
-/// after the label, or a stat item wrapping inside "1699".
-#[gpui::test]
-fn storage_cards_align_to_the_grid(cx: &mut gpui::TestAppContext) {
-    use super::super::layout_probe::{SIZES, leak};
-    cx.update(moon_ui::init);
-    let rows = [
-        "storage-strat-enabled",
-        "storage-version-limit",
-        "storage-trades-enabled",
-        "storage-trades-margin",
-        "storage-trades-long",
-        "storage-trades-autoload",
-        "storage-trades-cleanup",
+/// Every caption line `variant` draws, by selector, with its text: the hints, the auto lines and
+/// the status line.
+fn captions(variant: Variant) -> Vec<(String, String)> {
+    let t = |k: &str| rust_i18n::t!(k).to_string();
+    let mut out = vec![
+        (
+            "storage-trades-margin-hint".to_string(),
+            t("storage.trades_margin_hint"),
+        ),
+        (
+            "storage-trades-long-hint".to_string(),
+            t("storage.trades_long_position_hint"),
+        ),
+        (
+            "storage-tape-auto-text".to_string(),
+            t(if variant == Variant::NoStation {
+                "storage.tape.auto_local"
+            } else {
+                "storage.tape.auto"
+            }),
+        ),
+        (
+            "storage-auto-text".to_string(),
+            // A loading page has no snapshot, so no backup stamp either.
+            super::maint_text((variant != Variant::Loading).then_some(1_790_000_000_000)),
+        ),
     ];
-    for language in moon_core::config::Language::ALL {
-        let _locale = crate::test_locale::force(language.code());
-        for size in SIZES.into_iter().chain([(1940.0, 1180.0)]) {
-            let at = format!("{} at {}x{}", language.code(), size.0, size.1);
-            let (mut visual, _states) = draw_page(cx, size, [100, 30]);
-            let (line, gap) = visual.update(|_, cx| {
-                (
-                    f32::from(crate::design::line_px(cx, 14.0)),
-                    crate::design::ui_value(cx, 16.0),
+    match variant {
+        Variant::Loading => out.push(("storage-loading".into(), t("storage.counting"))),
+        Variant::Error => out.push((
+            "storage-error".into(),
+            rust_i18n::t!(
+                "storage.count_failed",
+                db = t("storage.db.trades.title"),
+                err = "the file is held by another process (synthetic)"
+            )
+            .to_string(),
+        )),
+        Variant::Filling => out.push((
+            "storage-tape-fill".into(),
+            rust_i18n::t!(
+                "storage.tape.fill_eta",
+                n = 214,
+                eta = crate::display_text::fmt_duration_short(180.0)
+            )
+            .to_string(),
+        )),
+        Variant::Normal | Variant::NoStation => {}
+    }
+    out
+}
+
+/// Shape the actual caption face independently of the production layout-width estimate.
+fn shaped_caption_width(visual: &mut gpui::VisualTestContext, text: &str, mono: bool) -> f32 {
+    visual.update(|window, cx| {
+        let runs = [gpui::TextRun {
+            len: text.len(),
+            font: gpui::font(if mono {
+                crate::design::mono()
+            } else {
+                crate::design::ui_font()
+            }),
+            ..gpui::TextRun::default()
+        }];
+        f32::from(
+            window
+                .text_system()
+                .shape_line(
+                    text.to_owned().into(),
+                    crate::design::t_caption(cx),
+                    &runs,
+                    None,
                 )
-            });
-            let mut get = |sel: String| {
-                visual
-                    .debug_bounds(leak(sel.clone()))
-                    .unwrap_or_else(|| panic!("{sel} was not laid out ({at})"))
-            };
-            let light = get("storage-col-light".into());
-            let trades = get("storage-col-trades".into());
-            if light.origin.y == trades.origin.y {
-                let dh = (f32::from(light.size.height) - f32::from(trades.size.height)).abs();
+                .width,
+        )
+    })
+}
+
+/// A caption-size text in `sel` is tall enough for every line it needs at the box's width: the
+/// box is measured in the face the page draws it in, here the UI face or the mono one.
+fn assert_wraps(visual: &mut gpui::VisualTestContext, sel: &str, text: &str, mono: bool, at: &str) {
+    let b = visual
+        .debug_bounds(leak(sel.to_string()))
+        .unwrap_or_else(|| panic!("{sel} was not laid out ({at})"));
+    let width = shaped_caption_width(visual, text, mono);
+    let line = visual.update(|_, cx| f32::from(crate::design::line_px(cx, 12.0)));
+    let lines = ((width - 0.5) / f32::from(b.size.width).max(1.0))
+        .ceil()
+        .max(1.0);
+    assert!(
+        f32::from(b.size.height) + 0.5 >= lines * line,
+        "{sel} cuts {text:?} off ({} x {} for {lines} lines, {at})",
+        f32::from(b.size.width),
+        f32::from(b.size.height)
+    );
+}
+
+/// What the generic probe checks on every drawn page: the three cards and every row and line in
+/// the body, the cards and the database rows apart with the design gaps between them, each row's
+/// parts inside it, and the core table last.
+fn page_spec(variant: Variant) -> ProbeSpec {
+    let mut inside: Vec<String> = ["storage-total", "storage-tape", "storage-core-card"]
+        .map(String::from)
+        .to_vec();
+    let mut within = Vec::new();
+    for db in DBS {
+        let row = format!("storage-db-{db}");
+        inside.push(row.clone());
+        for part in ["-name", "-facts", "-size"] {
+            within.push((format!("{row}{part}"), row.clone()));
+            inside.push(format!("{row}{part}"));
+        }
+    }
+    for (sel, _) in captions(variant) {
+        inside.push(sel.clone());
+        within.push((sel, "probe-body".into()));
+    }
+    for card in ["storage-total", "storage-tape"] {
+        within.push((format!("{card}-title"), card.into()));
+    }
+    let rows: Vec<String> = DBS.iter().map(|db| format!("storage-db-{db}")).collect();
+    let stacked = rows
+        .windows(2)
+        .map(|pair| (pair[0].clone(), pair[1].clone(), 0.0))
+        .chain([
+            ("storage-total".into(), "storage-tape".into(), 12.0),
+            ("storage-tape".into(), "storage-core-card".into(), 12.0),
+        ])
+        .collect();
+    ProbeSpec {
+        container: "probe-body",
+        inside,
+        within,
+        no_overlap: vec![
+            ["storage-total", "storage-tape", "storage-core-card"]
+                .map(String::from)
+                .to_vec(),
+            rows,
+        ],
+        stacked,
+        last: Some("storage-core".into()),
+        ..ProbeSpec::default()
+    }
+}
+
+/// The production Storage page — the disk card with its four database rows and status lines,
+/// the tape card, and the real core table in its card — keeps every card, row and line inside
+/// the body, the cards and the rows apart with equal gaps (12 between cards, none between rows),
+/// each row's name, facts and size inside the row, every caption uncut and the core table last;
+/// in both themes, every language, every swept size and every state.
+///
+/// Breaks on: a card or row escaping the body, a hole where a removed row was, a facts line
+/// pushed out of its row, a hint or status caption cut off, a gap that differs between cards.
+#[gpui::test]
+fn storage_page_fits_the_body(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    for mode in [UiThemeMode::Light, UiThemeMode::Dark] {
+        theme(cx, mode);
+        for language in moon_core::config::Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for size in SIZES {
+                for variant in VARIANTS {
+                    let at = format!(
+                        "{mode:?} {} at {}x{} {variant:?}",
+                        language.code(),
+                        size.0,
+                        size.1
+                    );
+                    let (mut visual, _, scroll) = draw_page(cx, size, 30, variant);
+                    if let Err(broken) = check(&mut visual, Some(&scroll), &page_spec(variant)) {
+                        panic!("{broken} ({at})");
+                    }
+                    for (sel, text) in captions(variant) {
+                        assert_wraps(&mut visual, &sel, &text, false, &at);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// At the narrowest swept size the database facts sit beside the name only where they fit whole,
+/// and otherwise wrap under it, uncut, the size kept on the name's line; at the widest they fit
+/// beside the name. Both themes, every language.
+///
+/// Breaks on: the facts truncated to an ellipsis, the size pushed under the facts, or a wide row
+/// too narrow for its figures.
+#[gpui::test]
+fn storage_db_facts_wrap_when_narrow_and_fit_when_wide(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let narrow = SIZES
+        .iter()
+        .copied()
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .expect("sizes");
+    let wide = SIZES
+        .iter()
+        .copied()
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .expect("sizes");
+    for mode in [UiThemeMode::Light, UiThemeMode::Dark] {
+        theme(cx, mode);
+        for language in moon_core::config::Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            let facts = [
+                super::plural("storage.facts.reports", 412_388),
+                [
+                    super::plural("storage.facts.strategies", 1_669),
+                    super::plural("storage.facts.deleted", 163),
+                    super::plural("storage.facts.versions", 2_720),
+                ]
+                .join(" \u{b7} "),
+                rust_i18n::t!("storage.facts.klines").to_string(),
+                format!(
+                    "{} \u{b7} {}",
+                    super::plural("storage.facts.trades", 48_120),
+                    rust_i18n::t!("storage.facts.trades_long", n = 3_904)
+                ),
+            ];
+            let at = format!("{mode:?} {}", language.code());
+            let (mut visual, _, _) = draw_page(cx, narrow, 30, Variant::Normal);
+            for (db, text) in DBS.iter().zip(&facts) {
+                let sel = format!("storage-db-{db}-facts");
+                assert_wraps(&mut visual, &sel, text, true, &at);
+                let name = visual
+                    .debug_bounds(leak(format!("storage-db-{db}-name")))
+                    .expect("name laid out");
+                let size = visual
+                    .debug_bounds(leak(format!("storage-db-{db}-size")))
+                    .expect("size laid out");
+                let facts = visual.debug_bounds(leak(sel)).expect("facts laid out");
+                if f32::from(facts.origin.y) < f32::from(name.bottom_left().y) {
+                    // Beside the name: then the whole line fits, nothing is lost to an ellipsis.
+                    let need = shaped_caption_width(&mut visual, text, true);
+                    assert!(
+                        f32::from(facts.size.width) + 0.5 >= need,
+                        "{db}'s facts {text:?} are cut beside the name at the narrow size ({at})"
+                    );
+                }
                 assert!(
-                    dh <= 0.5,
-                    "the two card columns differ in height by {dh} ({at})"
+                    f32::from(size.origin.y) < f32::from(name.bottom_left().y),
+                    "{db}'s size left the name's line at the narrow size ({at})"
                 );
-                for (column, last) in [
-                    (light, "storage-card-klines"),
-                    (trades, "storage-card-trades"),
-                ] {
-                    let gap = f32::from(column.bottom_left().y - get(last.into()).bottom_left().y);
-                    assert!(
-                        gap.abs() <= 0.5,
-                        "{last} ends {gap} px above its column ({at})"
-                    );
-                }
             }
-            for row in rows {
-                let label = get(format!("{row}-label"));
-                let control = get(format!("{row}-control"));
-                if control.origin.y < label.bottom_left().y {
-                    let hole = f32::from(control.origin.x - label.right());
-                    assert!(
-                        (hole - gap).abs() <= 0.5,
-                        "{row}'s control is {hole} px from its label column, not one {gap} gap ({at})"
-                    );
-                } else {
-                    let dx = f32::from(control.origin.x - label.origin.x).abs();
-                    assert!(
-                        dx <= 0.5,
-                        "{row}'s wrapped control is not under its label ({at})"
-                    );
-                }
-            }
-            // The zero version limit reads «без лимита» on one line beside its field, in the card.
-            let note = get("storage-version-limit-off".into());
-            let card = get("storage-card-strategies".into());
-            assert!(
-                f32::from(note.right()) <= f32::from(card.right()) + 0.5
-                    && f32::from(note.size.height) < 2.0 * line,
-                "the no-limit note is cut or past its card ({at})"
-            );
-            for i in 0..3 {
-                let chunk = get(format!("storage-strat-rows-{i}"));
+            let (mut visual, _, _) = draw_page(cx, wide, 30, Variant::Normal);
+            for (db, text) in DBS.iter().zip(&facts) {
+                let b = visual
+                    .debug_bounds(leak(format!("storage-db-{db}-facts")))
+                    .expect("facts laid out");
+                let need = shaped_caption_width(&mut visual, text, true);
+                // The size is rendered in the same face at the same size and cannot wrap.
+                let single_line = visual
+                    .debug_bounds(leak(format!("storage-db-{db}-size")))
+                    .expect("size laid out");
                 assert!(
-                    f32::from(chunk.size.height) < 2.0 * line,
-                    "stat item {i} wraps: {} tall ({at})",
-                    f32::from(chunk.size.height)
+                    (f32::from(b.size.height) - f32::from(single_line.size.height)).abs() < 0.5,
+                    "{db}'s wide facts are not one line tall ({at})"
+                );
+                assert!(
+                    f32::from(b.size.width) + 0.5 >= need,
+                    "{db}'s facts {text:?} are cut on a wide page ({} < {need}, {at})",
+                    f32::from(b.size.width)
                 );
             }
         }
     }
 }
 
-/// Every number field on the production Storage page holds its seeded digits after drawing, and
-/// its box fits both step buttons plus the widest value the field accepts plus its unit (МБ, мин)
-/// and stays inside its card; a zero version limit shows «без лимита» beside its field, inside
-/// the card, in every language
-/// at every swept size.
+/// In a wide window the row labels, card titles and database names sit on one line, every
+/// language.
+#[gpui::test]
+fn storage_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let t = |k: &str| rust_i18n::t!(k).to_string();
+        let mut fits = vec![
+            (
+                "storage-trades-margin-label".into(),
+                t("storage.trades_margin"),
+            ),
+            (
+                "storage-trades-long-label".into(),
+                t("storage.trades_long_position"),
+            ),
+            ("storage-total-title".into(), t("storage.usage.total")),
+            ("storage-tape-title".into(), t("storage.db.trades.title")),
+        ];
+        for db in DBS {
+            fits.push((
+                format!("storage-db-{db}-name"),
+                t(&format!("storage.db.{db}.title")),
+            ));
+        }
+        let spec = ProbeSpec {
+            container: "probe-body",
+            fits: fits
+                .into_iter()
+                .map(|(sel, text)| (sel, text, TextFace::Ui))
+                .collect(),
+            ..ProbeSpec::default()
+        };
+        let (mut visual, _, _) = draw_page(cx, (1900.0, 1000.0), 30, Variant::Normal);
+        if let Err(broken) = check(&mut visual, None, &spec) {
+            panic!("{broken} ({} at 1900x1000)", language.code());
+        }
+    }
+}
+
+/// The tape card's five states at the narrowest size, both themes: its tag, both hints, the fill
+/// line and the auto line stay inside the card, uncut.
+///
+/// Breaks on: the shared-or-local tag pushed past the card, or a state's caption cut off.
+#[gpui::test]
+fn storage_tape_states_fit(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let narrow = SIZES
+        .iter()
+        .copied()
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .expect("sizes");
+    for mode in [UiThemeMode::Light, UiThemeMode::Dark] {
+        theme(cx, mode);
+        for language in moon_core::config::Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for variant in VARIANTS {
+                let at = format!("{mode:?} {} {variant:?}", language.code());
+                let (mut visual, _, _) = draw_page(cx, narrow, 30, variant);
+                let tag = if variant == Variant::NoStation {
+                    "storage.tape.local_only"
+                } else {
+                    "storage.tape.shared"
+                };
+                assert_wraps(
+                    &mut visual,
+                    "storage-tape-tag",
+                    &rust_i18n::t!(tag),
+                    false,
+                    &at,
+                );
+                let mut within = vec![("storage-tape-tag".to_string(), "storage-tape".to_string())];
+                for (sel, _) in captions(variant)
+                    .into_iter()
+                    .filter(|(sel, _)| sel.starts_with("storage-t"))
+                {
+                    within.push((sel, "storage-tape".into()));
+                }
+                let spec = ProbeSpec {
+                    container: "storage-tape",
+                    within,
+                    ..ProbeSpec::default()
+                };
+                if let Err(broken) = check(&mut visual, None, &spec) {
+                    panic!("{broken} ({at})");
+                }
+            }
+        }
+    }
+}
+
+/// The long-position field on the production Storage page holds its seeded digits after drawing,
+/// and its box fits both step buttons plus the widest value it accepts plus its unit and stays
+/// inside the tape card, in every language at every swept size.
 ///
 /// The oracle is built here from the control's own metrics: two square buttons (one control
 /// height each) plus the mono width of the range's widest end and of the unit. It does not call
 /// the field helper.
 ///
 /// Breaks on: a field seeded empty or only on blur, a field drawn over a state other than the
-/// page's, or a row/card that squeezes the field so the value has no room between `-` and `+`
-/// (the live symptom: an empty ~12 px box), or a field drawn without its unit.
+/// page's, or a row/card that squeezes the field so the value has no room between `-` and `+`,
+/// or a field drawn without its unit.
 #[gpui::test]
 fn storage_number_fields_show_their_digits(cx: &mut gpui::TestAppContext) {
-    use super::super::layout_probe::{SIZES, leak};
     cx.update(moon_ui::init);
-    // The unit each field must show beside its digits; a bare count has none.
-    let fields = [
-        ("storage-version-limit-n", 100u32, "10000", ""),
-        ("storage-trades-long-n", 5, "120", "storage.unit_min"),
-    ];
-    let cards = ["storage-card-strategies", "storage-card-trades"];
+    let (sel, seeded, widest) = ("storage-trades-long-n", 5u32, "120");
     for language in moon_core::config::Language::ALL {
         let _locale = crate::test_locale::force(language.code());
-        // The swept sizes plus a wide window, where the card columns sit side by side.
         for size in SIZES.into_iter().chain([(1940.0, 1180.0)]) {
-            let (mut visual, states) = draw_page(cx, size, [fields[0].1, fields[1].1]);
-            for (((sel, seeded, widest, unit_key), state), card) in
-                fields.iter().zip(states.iter()).zip(cards)
-            {
-                let text = visual.update(|_, cx| state.read(cx).value().to_string());
+            let at = format!("{} at {}x{}", language.code(), size.0, size.1);
+            let (mut visual, state, _) = draw_page(cx, size, seeded, Variant::Normal);
+            let text = visual.update(|_, cx| state.read(cx).value().to_string());
+            assert_eq!(text, seeded.to_string(), "{sel} lost its value ({at})");
+            let b = visual
+                .debug_bounds(sel)
+                .unwrap_or_else(|| panic!("{sel} was not laid out"));
+            let unit = rust_i18n::t!("storage.unit_min").to_string();
+            let need = visual.update(|_, cx| {
+                let m = crate::design::CONTROL_TIER.control_metrics();
+                2.0 * crate::design::ui_value(cx, m.height)
+                    + crate::design::ui_text_width_zoomed(cx, widest, m.font_size, 500.0, true)
+                    + crate::design::ui_text_width_zoomed(cx, &unit, m.font_size - 2.0, 400.0, true)
+            });
+            let card = visual
+                .debug_bounds("storage-tape")
+                .expect("the tape card laid out");
+            assert!(
+                f32::from(b.right()) <= f32::from(card.right()) + 0.5,
+                "{sel} with its unit {unit:?} paints past the tape card ({at})"
+            );
+            assert!(
+                f32::from(b.size.width) + 0.5 >= need,
+                "{sel} is {} wide, needs {need} for {widest:?} and {unit:?} ({at})",
+                f32::from(b.size.width)
+            );
+            // A click just inside the wrapper's right edge must land on `+` and step THIS state,
+            // where the field is on screen without scrolling.
+            let body = visual
+                .debug_bounds("probe-body")
+                .expect("probe body laid out");
+            if b.bottom_left().y < body.bottom_left().y {
+                let plus = gpui::point(b.right() - gpui::px(4.0), b.origin.y + b.size.height / 2.0);
+                visual.simulate_click(plus, gpui::Modifiers::none());
+                visual.run_until_parked();
+                let stepped = visual.update(|_, cx| state.read(cx).value().to_string());
                 assert_eq!(
-                    text,
-                    seeded.to_string(),
-                    "{sel} lost its value ({} at {}x{})",
-                    language.code(),
-                    size.0,
-                    size.1
+                    stepped,
+                    (seeded + 1).to_string(),
+                    "{sel}'s + is not at its right edge or not bound to its state ({at})"
                 );
-                let b = visual
-                    .debug_bounds(leak(sel.to_string()))
-                    .unwrap_or_else(|| panic!("{sel} was not laid out"));
-                let unit = if unit_key.is_empty() {
-                    String::new()
-                } else {
-                    rust_i18n::t!(*unit_key).to_string()
-                };
-                let need = visual.update(|_, cx| {
-                    let m = crate::design::CONTROL_TIER.control_metrics();
-                    2.0 * crate::design::ui_value(cx, m.height)
-                        + crate::design::ui_text_width_zoomed(cx, widest, m.font_size, 500.0, true)
-                        + crate::design::ui_text_width_zoomed(
-                            cx,
-                            &unit,
-                            m.font_size - 2.0,
-                            400.0,
-                            true,
-                        )
-                });
-                let card_box = visual
-                    .debug_bounds(card)
-                    .unwrap_or_else(|| panic!("{card} was not laid out"));
-                assert!(
-                    f32::from(b.right()) <= f32::from(card_box.right()) + 0.5,
-                    "{sel} with its unit {unit:?} paints past {card} ({} at {}x{})",
-                    language.code(),
-                    size.0,
-                    size.1
-                );
-                assert!(
-                    f32::from(b.size.width) + 0.5 >= need,
-                    "{sel} is {} wide, needs {need} for {widest:?} and {unit:?} between its buttons ({} at {}x{})",
-                    f32::from(b.size.width),
-                    language.code(),
-                    size.0,
-                    size.1
-                );
-                // The wrapper alone can be wide while the control inside it collapses or is bound
-                // to some other state. A click just inside the wrapper's right edge must land on
-                // `+` and step THIS state: the control spans the whole box and draws its value.
-                // Only where the field is on screen without scrolling (the wide window always).
-                // On screen means inside the scrolled body, not merely above the window's edge.
-                let body = visual
-                    .debug_bounds("probe-body")
-                    .expect("probe body laid out");
-                if b.bottom_left().y < body.bottom_left().y {
-                    let plus =
-                        gpui::point(b.right() - gpui::px(4.0), b.origin.y + b.size.height / 2.0);
-                    visual.simulate_click(plus, gpui::Modifiers::none());
-                    visual.run_until_parked();
-                    let stepped = visual.update(|_, cx| state.read(cx).value().to_string());
-                    assert_eq!(
-                        stepped,
-                        (seeded + 1).to_string(),
-                        "{sel}'s + is not at its right edge or not bound to its state ({} at {}x{})",
-                        language.code(),
-                        size.0,
-                        size.1
-                    );
-                } else {
-                    assert!(size.0 < 1900.0, "{sel} is off screen in the wide window");
-                }
+            } else {
+                assert!(size.0 < 1900.0, "{sel} is off screen in the wide window");
             }
-        }
-    }
-}
-
-/// The production Storage page — usage panel, the four translated database cards with their
-/// actions, number fields, switches and cleanup, and the real core table — keeps every card, the
-/// card actions, the core rows' footer and the open help inside the body, the cards apart, the
-/// help uncut, in every language at every swept size.
-#[gpui::test]
-fn storage_page_fits_the_body(cx: &mut gpui::TestAppContext) {
-    sweep(
-        cx,
-        |window, cx: &mut Context<Host>, (width, height)| {
-            let fields = [
-                super::super::common::number_state(100u32, window, cx),
-                super::super::common::number_state(5u32, window, cx),
-            ];
-            Host {
-                width,
-                height,
-                scroll: ScrollHandle::new(),
-                build: Rc::new(move |_, cx, _| page(&fields, cx)),
-            }
-        },
-        |_| ProbeSpec {
-            container: "probe-body",
-            wraps: vec![
-                (
-                    "storage-trades-margin-more-text".into(),
-                    rust_i18n::t!("storage.trades_margin_hint").to_string(),
-                ),
-                (
-                    "storage-core-hint-more-text".into(),
-                    rust_i18n::t!("storage.core_data_hint").to_string(),
-                ),
-            ],
-            inside: [
-                "storage-usage",
-                "storage-card-reports",
-                "storage-card-strategies",
-                "storage-card-trades",
-                "storage-card-klines",
-                "storage-trades-margin-more-text",
-                "storage-core",
-                "storage-core-hint-more-text",
-            ]
-            .map(String::from)
-            .to_vec(),
-            no_overlap: vec![
-                [
-                    "storage-card-reports",
-                    "storage-card-strategies",
-                    "storage-card-trades",
-                    "storage-card-klines",
-                ]
-                .map(String::from)
-                .to_vec(),
-            ],
-            last: Some("storage-core".into()),
-            ..ProbeSpec::default()
-        },
-    );
-}
-
-/// In a wide window the Storage cards' labels sit on one line — the card's label column grows to
-/// its longest label («Подгружать недостающую ленту из ядер при старте») — and the Reports card's
-/// caption spans the card instead of wrapping at half its width. Every language.
-#[gpui::test]
-fn storage_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
-    use super::super::layout_probe::{TextFace, probe_once};
-
-    cx.update(moon_ui::init);
-    let make = |window: &mut Window, cx: &mut Context<Host>, (width, height): (f32, f32)| {
-        let fields = [
-            super::super::common::number_state(100u32, window, cx),
-            super::super::common::number_state(5u32, window, cx),
-        ];
-        Host {
-            width,
-            height,
-            scroll: ScrollHandle::new(),
-            build: Rc::new(move |_, cx, _| page(&fields, cx)),
-        }
-    };
-    let rows = [
-        ("storage-strat-enabled", "storage.strategies_enabled"),
-        ("storage-version-limit", "storage.version_limit"),
-        ("storage-trades-enabled", "storage.trades_enabled"),
-        ("storage-trades-margin", "storage.trades_margin"),
-        ("storage-trades-long", "storage.trades_long_position"),
-        (
-            "storage-trades-autoload-cores",
-            "storage.trades_autoload_cores",
-        ),
-        ("storage-trades-autoload", "storage.trades_autoload"),
-        (
-            "storage-trades-cleanup-startup",
-            "storage.trades_cleanup_at_startup",
-        ),
-        ("storage-trades-cleanup", "storage.trades_cleanup"),
-    ];
-    for language in moon_core::config::Language::ALL {
-        let _locale = crate::test_locale::force(language.code());
-        let fits: Vec<_> = rows
-            .iter()
-            .map(|(id, key)| {
-                (
-                    format!("{id}-label"),
-                    rust_i18n::t!(*key).to_string(),
-                    TextFace::Ui,
-                )
-            })
-            .collect();
-        // The brief's cap is about 380 design px: every label up to it must fit one line, whatever
-        // the column's own cap is (a longer one may wrap by design).
-        let cap = cx.update(|cx| crate::design::ui_value(cx, 380.0));
-        let fits: Vec<_> = fits
-            .into_iter()
-            .filter(|(_, text, _): &(String, String, TextFace)| {
-                cx.update(|cx| crate::design::ui_body_text_width(cx, text, 400.0)) <= cap
-            })
-            .collect();
-        // The Reports caption has no column cap at all: it spans the card in every language.
-        let mut fits = fits;
-        fits.push((
-            "storage-reports-rows-hint".into(),
-            rust_i18n::t!("storage.db.reports.note").to_string(),
-            TextFace::Ui,
-        ));
-        let spec = ProbeSpec {
-            container: "probe-body",
-            fits,
-            ..ProbeSpec::default()
-        };
-        if let Err(broken) = probe_once(cx, (1900.0, 1000.0), &make, &spec) {
-            panic!("{broken} ({} at 1900x1000)", language.code());
         }
     }
 }

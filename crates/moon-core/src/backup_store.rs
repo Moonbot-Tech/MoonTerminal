@@ -83,35 +83,6 @@ impl<'a> SnapshotStore<'a> {
         }
     }
 
-    /// Publish a snapshot under the first free `base`, `base-01`, ... name.
-    ///
-    /// This is the config/manual policy: every operation remains distinct even when another
-    /// snapshot was taken in the same second.
-    pub(crate) fn publish_distinct(&self, staging: &Path, base: &str) -> anyhow::Result<PathBuf> {
-        let mut last_error: Option<std::io::Error> = None;
-        for attempt in 0..=99u32 {
-            let name = if attempt == 0 {
-                base.to_owned()
-            } else {
-                format!("{base}-{attempt:02}")
-            };
-            let destination = self.root.join(name);
-            if std::fs::symlink_metadata(&destination).is_ok() {
-                continue;
-            }
-            match std::fs::rename(staging, &destination) {
-                Ok(()) => return Ok(destination),
-                Err(error) => last_error = Some(error),
-            }
-        }
-        self.discard_staging(staging);
-        match last_error {
-            Some(error) => Err(anyhow::Error::from(error)
-                .context(format!("failed to publish distinct backup {base}"))),
-            None => anyhow::bail!("all backup names for {base} are occupied"),
-        }
-    }
-
     /// Publish one canonical slot name or accept a concurrently published domain-valid winner.
     ///
     /// Args:

@@ -133,7 +133,7 @@ strat.note_move_one_core: "Move works within one core — use cut and paste betw
 strat.note_pasted: "Pasted %{strategies} strategies into %{cores} cores"
 strat.note_nothing_to_paste: "Nothing to paste"
 strat.note_forgotten: "Forgotten forever: %{n} strategies, %{versions} versions"
-strat.note_forget_disabled: "Strategy storage is disabled: Settings -> General -> Storage"
+strat.note_forget_disabled: "The strategy database is unavailable — version history is not being written. See the log."
 strat.note_forget_pending: "The store is still busy — the result will appear on its own"
 strat.note_forget_failed: "Forget failed"
 

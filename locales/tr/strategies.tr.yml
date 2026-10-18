@@ -133,7 +133,7 @@ strat.note_move_one_core: "Taşıma tek çekirdeğin içinde çalışır — çe
 strat.note_pasted: "%{strategies} strateji %{cores} çekirdeğe yapıştırıldı"
 strat.note_nothing_to_paste: "Yapıştırılacak bir şey yok"
 strat.note_forgotten: "Sonsuza dek unutuldu: %{n} strateji, %{versions} sürüm"
-strat.note_forget_disabled: "Strateji deposu kapalı: Ayarlar → Genel → Depo"
+strat.note_forget_disabled: "Strateji veritabanı kullanılamıyor — sürüm geçmişi şu an yazılmıyor. Ayrıntılar günlükte."
 strat.note_forget_pending: "Depo hâlâ meşgul — sonuç kendiliğinden belirir"
 strat.note_forget_failed: "Unutma olmadı"
 

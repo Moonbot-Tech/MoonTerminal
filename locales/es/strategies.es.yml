@@ -133,7 +133,7 @@ strat.note_move_one_core: "Mover funciona dentro de un núcleo — use cortar y 
 strat.note_pasted: "Pegadas %{strategies} estrategias en %{cores} núcleos"
 strat.note_nothing_to_paste: "Nada que pegar"
 strat.note_forgotten: "Olvidadas para siempre: %{n} estrategias, %{versions} versiones"
-strat.note_forget_disabled: "El almacenamiento de estrategias está desactivado: Ajustes -> General -> Almacenamiento"
+strat.note_forget_disabled: "La BD de estrategias no está disponible — el historial de versiones no se escribe. Ver el registro."
 strat.note_forget_pending: "El almacén sigue ocupado — el resultado aparecerá solo"
 strat.note_forget_failed: "No se pudo olvidar"
 

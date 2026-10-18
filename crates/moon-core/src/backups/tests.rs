@@ -4,6 +4,22 @@ use super::*;
 use std::sync::Arc;
 use std::sync::mpsc;
 
+/// Removing a daily launcher or bypassing the shared wake must not silently disable maintenance.
+#[test]
+fn daily_wake_launches_compaction_and_all_backup_domains() {
+    let mut calls = Vec::new();
+    for generation in [None, Some(42), Some(43)] {
+        calls.clear();
+        launch_due_jobs_with(generation, |domain| calls.push(domain));
+        let mut expected = vec![DailyDomain::Settings, DailyDomain::OrderTraces];
+        if let Some(generation) = generation {
+            expected.push(DailyDomain::Strategy(generation));
+        }
+        expected.push(DailyDomain::Compaction);
+        assert_eq!(calls, expected);
+    }
+}
+
 /// Removing the exact-noon `>=` boundary would leave the new day's slots pending until tomorrow.
 #[test]
 fn exact_noon_belongs_to_the_new_daily_slot() {

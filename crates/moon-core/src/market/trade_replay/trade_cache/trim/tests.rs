@@ -84,7 +84,7 @@ fn a_span_inside_the_map_stays() {
     let conn = conn();
     file(&conn, ("x", "M"), 100, 199, &ticks(100, 199, 10));
     let map = keep(&[(("x", "M"), &[(0, 1_000)])]);
-    let report = trim(&conn, &map, true).expect("trim");
+    let report = trim_progress(&conn, &map, None).expect("trim");
     assert!(report.is_empty(), "{report:?}");
     assert_eq!(report.spans_total, 1);
     assert_eq!(
@@ -105,7 +105,7 @@ fn a_market_off_the_map_goes_whole() {
     file(&conn, ("x", "M"), 500, 599, &[]);
     file(&conn, ("x", "N"), 100, 199, &ticks(100, 199, 50));
     let map = keep(&[(("x", "N"), &[(0, 1_000)])]);
-    let report = trim(&conn, &map, true).expect("trim");
+    let report = trim_progress(&conn, &map, None).expect("trim");
     assert_eq!(report.spans_dropped, 2);
     assert_eq!(report.spans_cut, 0);
     assert_eq!(report.prints_dropped, 10);
@@ -131,7 +131,7 @@ fn a_straddling_span_is_cut_to_the_piece_inside() {
     let conn = conn();
     file(&conn, ("x", "M"), 0, 999, &ticks(0, 999, 100));
     let map = keep(&[(("x", "M"), &[(300, 600)])]);
-    let report = trim(&conn, &map, true).expect("trim");
+    let report = trim_progress(&conn, &map, None).expect("trim");
     assert_eq!(report.spans_cut, 1);
     assert_eq!(report.spans_dropped, 0);
     // 0..999 by 100 is ten prints; 300, 400, 500 and 600 stay.
@@ -164,7 +164,7 @@ fn a_hole_in_the_map_splits_a_span() {
     let conn = conn();
     file(&conn, ("x", "M"), 0, 999, &ticks(0, 999, 100));
     let map = keep(&[(("x", "M"), &[(0, 250), (750, 2_000)])]);
-    let report = trim(&conn, &map, true).expect("trim");
+    let report = trim_progress(&conn, &map, None).expect("trim");
     assert_eq!((report.spans_cut, report.spans_dropped), (1, 0));
     // 0, 100, 200 and 800, 900 stay; 300..700 go.
     assert_eq!(report.prints_dropped, 5);
@@ -182,7 +182,7 @@ fn the_ground_between_overlapping_trades_stays() {
     file(&conn, ("x", "M"), 0, 9_999, &ticks(0, 9_999, 100));
     // Two trades whose stretches overlap at 4_000..5_000.
     let map = keep(&[(("x", "M"), &[(2_000, 5_000), (4_000, 8_000)])]);
-    let report = trim(&conn, &map, true).expect("trim");
+    let report = trim_progress(&conn, &map, None).expect("trim");
     assert_eq!(
         bounds(&read_spans(&conn, "x", "M", 0, 10_000).expect("read")),
         vec![(2_000, 8_000, 61)]
@@ -190,39 +190,14 @@ fn the_ground_between_overlapping_trades_stays() {
     assert_eq!(report.prints_dropped, 100 - 61);
 }
 
-/// Everything a preview and an apply both count exactly — spans and prints; a cut's bytes are an
-/// estimate in the preview.
-fn exact(report: &TrimReport) -> (u64, i64, u64, u64, u64) {
-    (
-        report.spans_total,
-        report.bytes_total,
-        report.spans_dropped,
-        report.spans_cut,
-        report.prints_dropped,
-    )
-}
-
-/// A dry run counts exactly what an apply would remove and writes nothing.
+/// Applying a map cuts one market and removes an unclaimed peer with exact print counts.
 #[test]
-fn a_dry_run_counts_and_leaves_the_file_alone() {
+fn applying_a_map_counts_removed_prints() {
     let conn = conn();
     file(&conn, ("x", "M"), 0, 999, &ticks(0, 999, 100));
     file(&conn, ("y", "M"), 0, 999, &ticks(0, 999, 100));
     let map = keep(&[(("x", "M"), &[(300, 600)])]);
-    let dry = trim(&conn, &map, false).expect("dry run");
-    assert_eq!(
-        bounds(&read_spans(&conn, "x", "M", 0, 1_000).expect("read")),
-        vec![(0, 999, 10)]
-    );
-    assert_eq!(
-        bounds(&read_spans(&conn, "y", "M", 0, 1_000).expect("read")),
-        vec![(0, 999, 10)]
-    );
-    let wet = trim(&conn, &map, true).expect("apply");
-    assert_eq!(exact(&dry), exact(&wet));
-    // The whole `y` span is exact; the cut `x` span keeps 4 of its 10 prints' share.
-    let whole = encode(&ticks(0, 999, 100)).len() as i64;
-    assert_eq!(dry.bytes_dropped, whole + (whole - whole * 4 / 10));
+    let wet = trim_progress(&conn, &map, None).expect("apply");
     assert_eq!(
         (wet.spans_dropped, wet.spans_cut, wet.prints_dropped),
         (1, 1, 16)
@@ -269,9 +244,7 @@ fn legacy_rows_are_cleaned_like_packed_ones() {
     file_legacy(&conn, ("x", "N"), 0, 999, &ticks(0, 999, 100));
     file_legacy(&conn, ("x", "K"), 0, 999, &ticks(0, 999, 100));
     let map = keep(&[(("x", "M"), &[(300, 600)]), (("x", "K"), &[(0, 1_000)])]);
-    let dry = trim(&conn, &map, false).expect("dry run");
-    let report = trim(&conn, &map, true).expect("trim");
-    assert_eq!(exact(&dry), exact(&report));
+    let report = trim_progress(&conn, &map, None).expect("trim");
     assert_eq!((report.spans_dropped, report.spans_cut), (1, 1));
     assert_eq!(report.prints_dropped, 10 + 6);
     assert_eq!(

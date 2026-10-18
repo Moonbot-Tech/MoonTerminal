@@ -6,20 +6,13 @@
 //! is not "delete this trade's prints" — it is a [`KeepMap`]: per `(exchange_key, market)`, the
 //! union of the stretches the caller's set of trades still wants (their
 //! [`super::super::ReplayWindow::focus_spans`] at the margin in force), built by the caller
-//! from the report and from the live catalog. [`trim`] then clips every span to it: a span
+//! from the report and from the live catalog. [`trim_progress`] clips every span to it: a span
 //! outside the map's coverage goes whole, one that straddles an edge is cut to the pieces
 //! inside, one inside stays as it is. Edges only — the stretch between two trades whose
 //! stretches overlap is inside the union and is never touched.
 //!
-//! The same pass runs as a dry run for the tab's preview: it reads only the rows' bounds, byte
-//! lengths and print counts, opens the blob of a straddling span alone, and writes nothing. Its
-//! print counts are exact; its bytes are exact for what goes whole and an estimate for a cut —
-//! the kept share of the row's bytes, in proportion to the prints kept, because compressing
-//! every kept piece just to weigh it made each preview cost as much as the cleanup itself (every
-//! margin step reruns it, on the worker every read waits on). On disk the bytes come back only
-//! after the `VACUUM` the apply pass ends with, which is why the tab words the size as
-//! approximate. Both tables are clipped ([`super`]'s "Layout"); a cut piece is always written
-//! packed.
+//! Both tables are clipped atomically ([`super`]'s "Layout"); cut pieces are written packed.
+//! Compaction after the delete releases their unused disk pages separately.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -79,7 +72,12 @@ pub(super) fn disk_bytes(conn: &rusqlite::Connection) -> u64 {
 /// Release pages after commit; checkpoint contention is a retryable outcome.
 pub(super) fn compact(conn: &rusqlite::Connection, policy: Compact) -> Result<(), CompactFail> {
     match policy {
-        Compact::Full => conn.execute_batch("VACUUM").map_err(compact_failure)?,
+        Compact::Full => {
+            if !full_vacuum_has_room(conn) {
+                return Err(CompactFail::NoRoom);
+            }
+            conn.execute_batch("VACUUM").map_err(compact_failure)?;
+        }
         Compact::Incremental => incremental_vacuum(conn, "PRAGMA incremental_vacuum")?,
     }
     checkpoint(conn)
@@ -138,7 +136,7 @@ fn checkpoint(conn: &rusqlite::Connection) -> Result<(), CompactFail> {
     }
 }
 
-/// What one pass counted — and, when it applied, did.
+/// Counts of the spans, prints and packed bytes a committed retention pass removed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TrimReport {
     /// Spans the file held before the pass.
@@ -210,30 +208,10 @@ struct RowMeta {
     prints: i64,
 }
 
-/// Clip every span of both tables to `keep`; with `apply`, rewrite the file to match, in one
-/// transaction. A cut row's pieces are written packed whichever table it came from.
-///
-/// Args:
-///     conn: The open connection.
-///     keep: What to keep, per market.
-///     apply: `false` counts only; `true` deletes and rewrites.
-///
-/// Returns:
-///     The counts — of what would go, or of what went. Prints and whole-span bytes agree
-///     between the two; a cut's bytes are estimated by a dry run (module header).
-pub(super) fn trim(
-    conn: &rusqlite::Connection,
-    keep: &KeepMap,
-    apply: bool,
-) -> rusqlite::Result<TrimReport> {
-    trim_progress(conn, keep, apply, None)
-}
-
 /// Clip rows atomically while publishing progress for a non-blocking caller.
 pub(super) fn trim_progress(
     conn: &rusqlite::Connection,
     keep: &KeepMap,
-    apply: bool,
     progress: Option<&TrimProgress>,
 ) -> rusqlite::Result<TrimReport> {
     let mut rows = Vec::new();
@@ -262,11 +240,7 @@ pub(super) fn trim_progress(
     if let Some(p) = progress {
         p.total.store(rows.len() as u64, Ordering::Relaxed);
     }
-    let tx = if apply {
-        Some(conn.unchecked_transaction()?)
-    } else {
-        None
-    };
+    let tx = conn.unchecked_transaction()?;
     let mut report = TrimReport::default();
     for row in rows {
         if let Some(p) = progress {
@@ -290,9 +264,7 @@ pub(super) fn trim_progress(
         };
         if kept.is_empty() {
             whole(&mut report);
-            if let Some(tx) = &tx {
-                tx.prepare_cached(&delete)?.execute([row.rowid])?;
-            }
+            tx.prepare_cached(&delete)?.execute([row.rowid])?;
             continue;
         }
         let (blob, source, updated_ms): (Vec<u8>, i64, i64) = conn
@@ -303,9 +275,7 @@ pub(super) fn trim_progress(
             .query_row([row.rowid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         // The row goes first: the first piece usually starts where the row did, and the key
         // is `(exchange, market, from_ms)`.
-        if let Some(tx) = &tx {
-            tx.prepare_cached(&delete)?.execute([row.rowid])?;
-        }
+        tx.prepare_cached(&delete)?.execute([row.rowid])?;
         let ticks = match row.table.decode(&blob) {
             Ok(ticks) => ticks,
             Err(e) => {
@@ -325,41 +295,28 @@ pub(super) fn trim_progress(
         for &(from_ms, to_ms) in kept.spans() {
             let inside = ticks_within(&ticks, from_ms, to_ms);
             kept_prints += inside.len() as i64;
-            if let Some(tx) = &tx {
-                let piece = codec::encode(&inside);
-                kept_bytes += piece.len() as i64;
-                tx.prepare_cached(
-                    "INSERT INTO packs(exchange, market, from_ms, to_ms, ticks, prints, source, updated_ms)
-                     VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")?.execute(
-                    rusqlite::params![
-                        row.exchange,
-                        row.market,
-                        from_ms,
-                        to_ms,
-                        piece,
-                        inside.len() as i64,
-                        source,
-                        updated_ms
-                    ],
-                )?;
-            }
-        }
-        if tx.is_none() {
-            // The preview does not compress what it would keep: deflate is the whole cost of a
-            // cut, and the preview reruns on every step of the margin. The row's own bytes in
-            // proportion to the prints kept stand in for it.
-            kept_bytes = match ticks.len() as i64 {
-                0 => row.bytes,
-                n => row.bytes * kept_prints / n,
-            };
+            let piece = codec::encode(&inside);
+            kept_bytes += piece.len() as i64;
+            tx.prepare_cached(
+                "INSERT INTO packs(exchange, market, from_ms, to_ms, ticks, prints, source, updated_ms)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")?.execute(
+                rusqlite::params![
+                    row.exchange,
+                    row.market,
+                    from_ms,
+                    to_ms,
+                    piece,
+                    inside.len() as i64,
+                    source,
+                    updated_ms
+                ],
+            )?;
         }
         report.spans_cut += 1;
         report.bytes_dropped += (row.bytes - kept_bytes).max(0);
         report.prints_dropped += (ticks.len() as i64 - kept_prints).max(0) as u64;
     }
-    if let Some(tx) = tx {
-        tx.commit()?;
-    }
+    tx.commit()?;
     Ok(report)
 }
 
@@ -381,3 +338,15 @@ fn ticks_within(ticks: &[Tick], from_ms: i64, to_ms: i64) -> Vec<Tick> {
 
 #[cfg(test)]
 mod tests;
+
+/// Apply the shared two-copy VACUUM budget to file databases; memory databases need no disk.
+fn full_vacuum_has_room(conn: &rusqlite::Connection) -> bool {
+    let Some(path) = conn
+        .path()
+        .filter(|path| !path.is_empty())
+        .map(std::path::Path::new)
+    else {
+        return true;
+    };
+    crate::disk_reserve::vacuum_has_room(path)
+}

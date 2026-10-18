@@ -129,7 +129,6 @@ fn replay_over_data_copy() {
     let _restore = RestoreAutoload::take();
     moon_core::market::trade_replay::set_margin_s(600);
     moon_core::market::trade_replay::set_long_position_min(30);
-    moon_core::market::trade_replay::set_tape_autoload_cores(true);
     let started = Instant::now();
     let query = moon_core::db::analytics::Query {
         from: 0,

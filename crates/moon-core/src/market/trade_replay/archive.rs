@@ -177,68 +177,8 @@ fn disk_budget() -> Option<u64> {
 pub fn data_disk_budget() -> Option<u64> {
     let root = crate::config::paths::data_dir();
     let path = root.ancestors().find(|path| path.is_dir())?;
-    let (free, total) = disk_space(path)?;
-    reserve_budget(free, total)
-}
-
-/// Bytes spendable above the larger of 2 GiB and ten percent of the filesystem.
-pub fn reserve_budget(free: u64, total: u64) -> Option<u64> {
-    if total == 0 {
-        Some(u64::MAX)
-    } else {
-        free.checked_sub((2 * 1024 * 1024 * 1024).max(total / 10))
-    }
-}
-
-/// Query caller-available bytes without pulling a new filesystem dependency into the terminal.
-#[cfg(windows)]
-fn disk_space(path: &std::path::Path) -> Option<(u64, u64)> {
-    use std::os::windows::ffi::OsStrExt;
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        /// Return caller-available and total byte counts for the directory's volume.
-        fn GetDiskFreeSpaceExW(
-            path: *const u16,
-            free: *mut u64,
-            total: *mut u64,
-            all_free: *mut u64,
-        ) -> i32;
-    }
-    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let (mut free, mut total) = (0, 0);
-    // SAFETY: the path is NUL terminated and both output pointers refer to live u64 values.
-    let ok =
-        unsafe { GetDiskFreeSpaceExW(path.as_ptr(), &mut free, &mut total, std::ptr::null_mut()) };
-    (ok != 0).then_some((free, total))
-}
-
-/// Use the same Unix filesystem counters as the station's host sampler.
-#[cfg(unix)]
-fn disk_space(path: &std::path::Path) -> Option<(u64, u64)> {
-    use std::os::unix::ffi::OsStrExt;
-    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
-    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-    // SAFETY: the path is NUL terminated and stat points to writable storage for one statvfs.
-    let stat = unsafe {
-        if libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) != 0 {
-            return None;
-        }
-        stat.assume_init()
-    };
-    let block = match stat.f_frsize as u64 {
-        0 => stat.f_bsize as u64,
-        size => size,
-    };
-    Some((
-        (stat.f_bavail as u64).saturating_mul(block),
-        (stat.f_blocks as u64).saturating_mul(block),
-    ))
-}
-
-/// Unsupported hosts cannot prove that an archive fits above the reserve.
-#[cfg(not(any(windows, unix)))]
-fn disk_space(_path: &std::path::Path) -> Option<(u64, u64)> {
-    None
+    let (free, total) = crate::disk_reserve::disk_space(path)?;
+    crate::disk_reserve::spendable(free, total)
 }
 
 /// Streaming response boundary; tests provide readers instead of making HTTP requests.

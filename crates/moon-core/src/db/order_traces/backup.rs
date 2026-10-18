@@ -20,7 +20,7 @@ use rusqlite::{Connection, OpenFlags};
 use crate::backup_store::{ExactPublication, SnapshotStore, timestamp_prefix};
 use crate::backups::{DAY_MS, DueOutcome, RETAIN_PERIODS, due_slot_ms};
 use crate::config::paths;
-use crate::util::{now_unix_ms_i64, utc_stamp_compact};
+use crate::util::utc_stamp_compact;
 
 /// Name of the SQLite file inside every completed snapshot directory.
 const DATABASE_NAME: &str = paths::ORDER_TRACES_DB_FILE;
@@ -160,21 +160,6 @@ fn source_present(src: &Path) -> anyhow::Result<bool> {
     }
 }
 
-/// Create one distinct manual snapshot at an injected time and path.
-///
-/// Returns:
-///     The published directory, or `None` when the archive has not been created yet.
-fn backup_manual_at(src: &Path, backups: &Path, now_ms: i64) -> anyhow::Result<Option<PathBuf>> {
-    if !source_present(src)? {
-        return Ok(None);
-    }
-    let (store, staging) = assemble_snapshot(src, backups)?;
-    let name = format!("{}-manual", utc_stamp_compact(now_ms));
-    let published = store.publish_distinct(&staging, &name)?;
-    prune(backups, due_slot_ms(now_ms));
-    Ok(Some(published))
-}
-
 /// Back up the latest scheduled slot, or report that the lazy archive is still absent.
 fn backup_due_into(src: &Path, backups: &Path, now_ms: i64) -> anyhow::Result<DueOutcome> {
     let slot = due_slot_ms(now_ms);
@@ -210,19 +195,6 @@ pub(crate) fn backup_due_at(now_ms: i64) -> anyhow::Result<DueOutcome> {
         &paths::order_traces_db_path(),
         &paths::order_traces_backups_dir(),
         now_ms,
-    )
-}
-
-/// Create a distinct on-demand snapshot and apply the same seven-period retention policy.
-///
-/// Returns:
-///     Path to the newly published snapshot directory, or `None` when no trace has been archived
-///     yet and the database file does not exist.
-pub fn backup_now() -> anyhow::Result<Option<PathBuf>> {
-    backup_manual_at(
-        &paths::order_traces_db_path(),
-        &paths::order_traces_backups_dir(),
-        now_unix_ms_i64(),
     )
 }
 

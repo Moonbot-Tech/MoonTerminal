@@ -133,7 +133,7 @@ strat.note_move_one_core: "Переміщення працює в межах о�
 strat.note_pasted: "Вставлено стратегій: %{strategies}, ядер: %{cores}"
 strat.note_nothing_to_paste: "Нічого вставляти"
 strat.note_forgotten: "Забуто назавжди: стратегій %{n}, версій %{versions}"
-strat.note_forget_disabled: "Сховище стратегій вимкнено: Налаштування -> Загальне -> Сховище"
+strat.note_forget_disabled: "БД стратегій недоступна — історія версій зараз не пишеться. Подробиці в лозі."
 strat.note_forget_pending: "Сховище ще зайняте — результат з'явиться сам"
 strat.note_forget_failed: "Не вдалося забути"
 

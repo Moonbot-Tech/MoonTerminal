@@ -1,6 +1,4 @@
-//! The trade-tape cleanup of the Storage tab: what `trades.sqlite` may lose, counted for the
-//! preview under the button and cut for real on a press — or on the terminal's own initiative
-//! once the cores are up ([`startup`]).
+//! Automatic startup retention for `trades.sqlite`, completed before missing tape is loaded.
 //!
 //! The file knows markets and stretches of time, not trades (`trade_cache::trim`), so a cleanup
 //! is built the other way round: the report's rows are resolved to the markets the file spells —
@@ -13,7 +11,7 @@
 //!
 //! Only the tuner's rows claim ([`TapeOwner::is_tunable`]), each at the margin the tuner reads
 //! it with: what a wider margin left behind, the prints of manual sells, funding rows,
-//! container strategies and of trades the report no longer knows are what one press removes.
+//! container strategies and of trades the report no longer knows are removed by startup retention.
 //!
 //! Everything here runs on the background executor: the replica scan, the catalog lookups and
 //! the trim itself all block. The one thing taken on the UI thread is the [`CleanupContext`] —
@@ -24,23 +22,19 @@ pub(crate) mod startup;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use gpui::*;
-use moon_ui::{MoonButton, MoonPalette, h_flex, rgba_from};
-use rust_i18n::t;
-
-use super::super::SettingsView;
 use crate::Backend;
-use crate::design;
 use moon_core::db::ReportAxis;
 use moon_core::db::ReportStamp;
 use moon_core::db::tape_owners::{TapeOwner, read_tape_owners};
 use moon_core::db::tuner::ticks::{ORDER_WAIT_CAP_MS, model_window_at, order_open_at};
 use moon_core::market::MarketDataSource;
 use moon_core::market::trade_replay::trade_cache::{self, Inventory, KeepMap, TrimReport};
-use moon_core::market::trade_replay::{Coverage, long_position_ms, margin_ms, worker};
+use moon_core::market::trade_replay::{
+    Coverage, ReplayWindow, long_position_ms, margin_ms, worker,
+};
 use moon_core::symbol::Exchange;
 
-/// What one pass found — the preview's numbers, or the apply's.
+/// Retention counts kept for the startup log and owner-resolution diagnostics.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::settings) struct CleanupPreview {
     pub report: TrimReport,
@@ -51,6 +45,17 @@ pub(in crate::settings) struct CleanupPreview {
     /// Of those, rows that matched no market of the file either way; their prints, if any,
     /// count as nobody's.
     pub unresolved: usize,
+}
+
+/// The tuner's deals whose claim meets tape the file holds, for the Storage tab's facts line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::settings) struct TapeCount {
+    /// Deals with at least one held print inside their claim.
+    pub with_tape: usize,
+    /// Of those, positions longer than the long-position threshold: their claim is two ends.
+    pub long: usize,
+    /// Distinct markets whose held-spans read did not answer; both counts are lower bounds.
+    pub incomplete_markets: usize,
 }
 
 /// How far past the file's own time range the replica is read, in seconds, before the margin's
@@ -112,21 +117,20 @@ impl CleanupContext {
         }
     }
 
-    /// Count what a cleanup would remove, or remove it (`apply`) and compact the file.
+    /// Remove unclaimed tape and compact only a nonempty cut with enough filesystem room.
     /// Blocking; call from the background executor.
-    ///
-    /// Args:
-    ///     apply: `false` for the preview, `true` for the press.
-    pub(super) fn run(&self, apply: bool) -> anyhow::Result<CleanupPreview> {
-        // No file to maintain — the switch off and nothing ever written — reads as nothing to
-        // remove, not as a failure; the handle refuses to create the file for a count. With
-        // the switch on the handle is asked whatever the disk shows: a worker just started by
-        // the replay path creates the file on its own thread a moment later.
-        if !trade_cache::is_enabled() && !moon_core::config::paths::trades_db_path().exists() {
-            return Ok(CleanupPreview::default());
-        }
-        let cache = trade_cache::maintenance_handle()
+    pub(super) fn run(&self) -> anyhow::Result<CleanupPreview> {
+        let cache = trade_cache::handle()
             .ok_or_else(|| anyhow::anyhow!("trade cache worker is not running"))?;
+        self.run_with(&cache, owners_around)
+    }
+
+    /// Require complete owner metadata before building or applying any retention map.
+    fn run_with(
+        &self,
+        cache: &trade_cache::TradeCache,
+        owners: impl FnOnce(i64, i64, Margins) -> anyhow::Result<Vec<TapeOwner>>,
+    ) -> anyhow::Result<CleanupPreview> {
         let inventory = cache
             .inventory()
             .ok_or_else(|| anyhow::anyhow!("trade cache did not answer"))??;
@@ -134,12 +138,7 @@ impl CleanupContext {
             return Ok(CleanupPreview::default());
         };
         let margins = Margins::live();
-        let slack_s = OWNER_SLACK_S + margins.reach_s();
-        let owners = read_tape_owners(
-            from_ms.div_euclid(1_000) - slack_s,
-            to_ms.div_euclid(1_000) + slack_s,
-        )
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let owners = owners(from_ms, to_ms, margins)?;
         let claimants: Vec<&TapeOwner> = owners.iter().filter(|o| o.is_tunable()).collect();
         let (keep, mut preview) = build_keep(
             &inventory,
@@ -150,26 +149,54 @@ impl CleanupContext {
             |owner| self.live_address(owner),
         );
         let report = cache
-            .trim(Arc::new(keep), apply)
+            .trim(Arc::new(keep))
             .ok_or_else(|| anyhow::anyhow!("trade cache did not answer"))??;
-        if apply {
-            // The tiles in memory still hold what the file just lost; a held-data query would
-            // go on answering from them until a restart.
-            worker::forget_tiles();
-            log::info!(
-                "[x] trades cleanup: {} claimant row(s), {} by name, {} unresolved; {} span(s) dropped, {} cut, {} print(s) / {} bytes gone of {}",
-                preview.claimants,
-                preview.by_name,
-                preview.unresolved,
-                report.spans_dropped,
-                report.spans_cut,
-                report.prints_dropped,
-                report.bytes_dropped,
-                report.bytes_total
-            );
-        }
+        // The tiles in memory still hold what the file just lost; a held-data query would
+        // go on answering from them until a restart.
+        worker::forget_tiles();
+        log::info!(
+            "[x] trades cleanup: {} claimant row(s), {} by name, {} unresolved; {} span(s) dropped, {} cut, {} print(s) / {} bytes gone of {}",
+            preview.claimants,
+            preview.by_name,
+            preview.unresolved,
+            report.spans_dropped,
+            report.spans_cut,
+            report.prints_dropped,
+            report.bytes_dropped,
+            report.bytes_total
+        );
         preview.report = report;
         Ok(preview)
+    }
+
+    /// Count the tuner's deals with tape in the file, read the way [`Self::run`] claims: the same
+    /// widened owner bounds, clocks and market resolution, one held-spans read per market.
+    /// Blocking; call from the background executor.
+    pub(super) fn tape_count(&self) -> anyhow::Result<TapeCount> {
+        let cache = trade_cache::handle()
+            .ok_or_else(|| anyhow::anyhow!("trade cache worker is not running"))?;
+        let inventory = cache
+            .inventory()
+            .ok_or_else(|| anyhow::anyhow!("trade cache did not answer"))??;
+        let Some((from_ms, to_ms)) = inventory.range_ms else {
+            return Ok(TapeCount::default());
+        };
+        let margins = Margins::live();
+        let owners = owners_around(from_ms, to_ms, margins)?;
+        let claimants: Vec<&TapeOwner> = owners.iter().filter(|o| o.is_tunable()).collect();
+        count_with_tape(
+            &inventory,
+            &claimants,
+            &self.axis,
+            &self.quotes,
+            margins,
+            |owner| self.live_address(owner),
+            |(exchange, market)| {
+                Ok(cache
+                    .held_spans(exchange, market, from_ms, to_ms)
+                    .map(Coverage::from_spans))
+            },
+        )
     }
 
     /// Where a row's prints live by the live catalog, the way a trade window resolves it;
@@ -186,6 +213,68 @@ impl CleanupContext {
             .resolve_market(owner.core_uid, quote, &owner.coin)?;
         Some((address.exchange_key, market))
     }
+}
+
+/// The replica's rows that can claim prints of a file spanning `from_ms..=to_ms`: read wider by
+/// the clock slack and the margin's reach.
+fn owners_around(from_ms: i64, to_ms: i64, margins: Margins) -> anyhow::Result<Vec<TapeOwner>> {
+    let slack_s = OWNER_SLACK_S + margins.reach_s();
+    read_tape_owners(
+        from_ms.div_euclid(1_000) - slack_s,
+        to_ms.div_euclid(1_000) + slack_s,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Each row's markets, resolved once per distinct `(core, coin)`: the catalog's answer, or the
+/// coin's name against the file's markets.
+struct Resolver<'a> {
+    by_name: NameIndex,
+    quotes: &'a HashMap<u64, String>,
+    addresses: Addresses,
+}
+
+impl<'a> Resolver<'a> {
+    fn new(inventory: &Inventory, quotes: &'a HashMap<u64, String>) -> Self {
+        Self {
+            by_name: NameIndex::of(inventory),
+            quotes,
+            addresses: HashMap::new(),
+        }
+    }
+
+    /// The row's markets and whether the name stood in for the catalog.
+    fn resolve(
+        &mut self,
+        owner: &TapeOwner,
+        live: &mut impl FnMut(&TapeOwner) -> Option<(String, String)>,
+    ) -> &(Vec<(String, String)>, bool) {
+        let (by_name, quotes) = (&self.by_name, self.quotes);
+        self.addresses
+            .entry((owner.core_uid, owner.coin.clone()))
+            .or_insert_with(|| match live(owner) {
+                Some(key) => (vec![key], false),
+                None => {
+                    let quote = quotes
+                        .get(&owner.core_uid)
+                        .map(String::as_str)
+                        .unwrap_or_default();
+                    (by_name.matches(&owner.coin, quote), true)
+                }
+            })
+    }
+}
+
+/// The tuner's own window for one claim (`model_window_at`): from the entry order's creation
+/// where the row carries it, split by the pass's own threshold, not one read a moment later.
+fn claim_window(stamp: ClaimStamps, margins: Margins) -> Option<ReplayWindow> {
+    model_window_at(
+        order_open_at(stamp.buy_ms, stamp.buy_set_ms),
+        stamp.buy_ms,
+        stamp.close_ms,
+        margins.margin_ms,
+        margins.long_position_ms,
+    )
 }
 
 /// The union of every claimant's stretches, per market of the file.
@@ -205,26 +294,14 @@ fn build_keep(
     margins: Margins,
     mut live: impl FnMut(&TapeOwner) -> Option<(String, String)>,
 ) -> (KeepMap, CleanupPreview) {
-    let by_name = NameIndex::of(inventory);
+    let mut resolver = Resolver::new(inventory, quotes);
     let mut keep = KeepMap::new();
-    let mut addresses: Addresses = HashMap::new();
     let mut preview = CleanupPreview {
         claimants: claimants.len(),
         ..Default::default()
     };
     for owner in claimants {
-        let (keys, by_name_only) = addresses
-            .entry((owner.core_uid, owner.coin.clone()))
-            .or_insert_with(|| match live(owner) {
-                Some(key) => (vec![key], false),
-                None => {
-                    let quote = quotes
-                        .get(&owner.core_uid)
-                        .map(String::as_str)
-                        .unwrap_or_default();
-                    (by_name.matches(&owner.coin, quote), true)
-                }
-            });
+        let (keys, by_name_only) = resolver.resolve(owner, &mut live);
         if keys.is_empty() {
             preview.unresolved += 1;
             continue;
@@ -233,16 +310,8 @@ fn build_keep(
             preview.by_name += 1;
         }
         for stamp in stamps(axis, owner) {
-            // The tuner's own window (`model_window_at`): from the entry order's creation where
-            // the row carries it, so the lead the tuner fetched for the order's life is claimed
-            // with the trade — split by the pass's own threshold, not one read a moment later.
-            let Some(window) = model_window_at(
-                order_open_at(stamp.buy_ms, stamp.buy_set_ms),
-                stamp.buy_ms,
-                stamp.close_ms,
-                margins.margin_ms,
-                margins.long_position_ms,
-            ) else {
+            // The lead the tuner fetched for the order's life is claimed with the trade.
+            let Some(window) = claim_window(stamp, margins) else {
                 continue;
             };
             let focus = window.focus_spans();
@@ -255,6 +324,59 @@ fn build_keep(
         }
     }
     (keep, preview)
+}
+
+/// The deals of `claimants` whose claim meets a held print, counted once however many markets
+/// or clocks match, and of them the long ones.
+///
+/// Args:
+///     inventory: The file's markets, for the name fallback.
+///     claimants: The rows let claim.
+///     axis: The core clocks.
+///     quotes: Each core's quote, for spelling a coin by name.
+///     margins: The margins in force.
+///     live: The catalog's answer for a row, or `None`.
+///     held: What the file holds of one market; `None` when its read timed out, read once.
+fn count_with_tape(
+    inventory: &Inventory,
+    claimants: &[&TapeOwner],
+    axis: &ReportAxis,
+    quotes: &HashMap<u64, String>,
+    margins: Margins,
+    mut live: impl FnMut(&TapeOwner) -> Option<(String, String)>,
+    mut held: impl FnMut(&(String, String)) -> anyhow::Result<Option<Coverage>>,
+) -> anyhow::Result<TapeCount> {
+    let mut resolver = Resolver::new(inventory, quotes);
+    let mut stored: HashMap<(String, String), Coverage> = HashMap::new();
+    let mut out = TapeCount::default();
+    for owner in claimants {
+        let keys = resolver.resolve(owner, &mut live).0.clone();
+        let (mut with_tape, mut long) = (false, false);
+        for stamp in stamps(axis, owner) {
+            let Some(window) = claim_window(stamp, margins) else {
+                continue;
+            };
+            let focus = window.focus_spans();
+            for key in &keys {
+                if !stored.contains_key(key) {
+                    let coverage = held(key)?.unwrap_or_else(|| {
+                        out.incomplete_markets += 1;
+                        Coverage::none()
+                    });
+                    stored.insert(key.clone(), coverage);
+                }
+                if !focus.clip(&stored[key]).is_empty() {
+                    with_tape = true;
+                    long |= window.close_ms - window.open_ms > window.long_position_ms;
+                }
+            }
+        }
+        if with_tape {
+            out.with_tape += 1;
+            out.long += usize::from(long);
+        }
+    }
+    Ok(out)
 }
 
 /// Per distinct `(core, coin)`: the markets it claims on, and whether the name had to stand in
@@ -345,133 +467,6 @@ impl NameIndex {
         }
         out
     }
-}
-
-/// What a cleanup removed, for the status line: prints and the packed bytes they took.
-fn removal_detail(report: &TrimReport) -> String {
-    t!(
-        "storage.trades_cleanup_done",
-        prints = report.prints_dropped,
-        size = moon_tg::size_text(report.bytes_dropped.max(0) as u64)
-    )
-    .to_string()
-}
-
-impl SettingsView {
-    /// Count what the cleanup button would remove, on the background executor, and show it
-    /// under the button. One count at a time: an ask that lands while one runs marks it dirty,
-    /// and the running one asks again when it finishes — the margin may have moved twice while
-    /// the replica was being read.
-    pub(super) fn storage_cleanup_refresh(&mut self, cx: &mut Context<Self>) {
-        if self.storage.cleanup_inflight {
-            self.storage.cleanup_dirty = true;
-            return;
-        }
-        self.storage.cleanup_inflight = true;
-        self.storage.cleanup_dirty = false;
-        // Pending, not the last count: the margin may have moved, and a stale count would
-        // leave the button armed on numbers the press would no longer match.
-        self.storage.cleanup = None;
-        let context = CleanupContext::of(self.backend.read(cx));
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let result = executor.spawn(async move { context.run(false) }).await;
-            cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.storage.cleanup_inflight = false;
-                    this.storage.cleanup = Some(result.map_err(|e| e.to_string()));
-                    if this.storage.cleanup_dirty {
-                        this.storage_cleanup_refresh(cx);
-                    }
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
-    }
-
-    /// Run the cleanup for real through the tab's maintenance path; the status line names
-    /// what went, and the snapshot and the count are taken again afterwards.
-    fn trades_cleanup_press(&mut self, cx: &mut Context<Self>) {
-        let context = CleanupContext::of(self.backend.read(cx));
-        self.storage_op(cx, "storage.op_cleanup", move || {
-            context
-                .run(true)
-                .map(|preview| Some(removal_detail(&preview.report)))
-        });
-    }
-}
-
-/// The cleanup row: the button with the count beside it, its explanation behind "подробнее".
-///
-/// Args:
-///     s: Where the press goes.
-///     preview: The count; `None` while pending.
-///     busy: A maintenance operation runs.
-///     cx: Application context for theme and scale.
-pub(super) fn cleanup_el(
-    s: &super::StorageCtx,
-    col: crate::settings::common::LabelCol,
-    preview: Option<Result<CleanupPreview, String>>,
-    busy: bool,
-    cx: &App,
-) -> AnyElement {
-    let muted = rgba_from(MoonPalette::active(cx).text_muted, 1.0);
-    let line = match &preview {
-        None => t!("storage.trades_cleanup_pending").to_string(),
-        Some(Err(err)) => t!("storage.trades_cleanup_failed", err = err).to_string(),
-        Some(Ok(preview)) if preview.report.is_empty() => {
-            t!("storage.trades_cleanup_empty").to_string()
-        }
-        Some(Ok(preview)) => t!(
-            "storage.trades_cleanup_preview",
-            prints = preview.report.prints_dropped,
-            size = moon_tg::size_text(preview.report.bytes_dropped.max(0) as u64)
-        )
-        .to_string(),
-    };
-    // Pressable only with something counted to remove: an empty count is "nothing to do",
-    // a pending one may still be a large file being read.
-    let armed = !busy && matches!(&preview, Some(Ok(preview)) if !preview.report.is_empty());
-    let control = h_flex()
-        .flex_wrap()
-        .gap(design::ui_px(cx, 8.0))
-        .items_center()
-        .child(
-            // Spaces around the label: the fork's `MoonButton` `pad_x=0` bug, as
-            // the other tool buttons of the tab work around it.
-            MoonButton::new("trades-cleanup")
-                .variant(moon_ui::MoonButtonVariant::Neutral)
-                .label(format!("  {}  ", t!("storage.trades_cleanup_run")))
-                .disabled(!armed)
-                .on_click(s.click(|this, _, cx| this.trades_cleanup_press(cx)))
-                .render(),
-        )
-        // MIXED NODE: the count combines a localized label with figures in one
-        // text node — stays mono, like the tab's other readouts.
-        // It wraps beside the button rather than painting past the card; the basis is a floor
-        // so it drops under the button instead of collapsing to one glyph per line.
-        .child(
-            div()
-                .debug_selector(|| "trades-cleanup-estimate".into())
-                .flex_1()
-                .flex_basis(design::ui_px(cx, 200.0))
-                .min_w_0()
-                .text_color(muted)
-                .font_family(design::mono())
-                .child(line),
-        )
-        .into_any_element();
-    super::setting_row(
-        s,
-        col,
-        "storage-trades-cleanup",
-        t!("storage.trades_cleanup").to_string(),
-        None,
-        t!("storage.trades_cleanup_hint").to_string(),
-        control,
-        cx,
-    )
 }
 
 #[cfg(test)]

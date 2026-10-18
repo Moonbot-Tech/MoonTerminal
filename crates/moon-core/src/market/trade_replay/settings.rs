@@ -7,7 +7,7 @@
 
 use crate::station_api::TapeWindow;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Return the live tape window in the station API's seconds and minutes.
 pub fn window() -> TapeWindow {
@@ -38,15 +38,9 @@ pub fn normalize(window: TapeWindow) -> TapeWindow {
 /// Live value of `[trade_replay] margin_s` — how many seconds of prints a window asks for
 /// around a trade, per end ([`super::ReplayWindow::margin_ms`]).
 static MARGIN_S: AtomicU32 = AtomicU32::new(crate::config::storage::DEFAULT_TRADE_MARGIN_S);
-/// Live value of `[trade_replay] autoload_missing`.
-static TAPE_AUTOLOAD: AtomicBool = AtomicBool::new(false);
-/// Live value of `[trade_replay] autoload_cores`.
-static TAPE_AUTOLOAD_CORES: AtomicBool = AtomicBool::new(true);
 /// Live value of `[trade_replay] long_position_min`.
 static LONG_POSITION_MIN: AtomicU32 =
     AtomicU32::new(crate::config::storage::DEFAULT_LONG_POSITION_MIN);
-/// Live value of `[trade_replay] cleanup_at_startup`.
-static CLEANUP_AT_STARTUP: AtomicBool = AtomicBool::new(false);
 static INIT: OnceLock<()> = OnceLock::new();
 /// Process-wide tuner floor pushed by the station's controller, independent of local storage.
 static MIN_TAIL_S: AtomicU32 = AtomicU32::new(crate::db::tuner::ticks::tail::DEFAULT_MIN_TAIL_S);
@@ -78,18 +72,12 @@ fn init() {
     INIT.get_or_init(|| {
         let cfg = crate::config::storage::load();
         MARGIN_S.store(cfg.trade_replay.margin_s, Ordering::Relaxed);
-        TAPE_AUTOLOAD.store(cfg.trade_replay.autoload_missing, Ordering::Relaxed);
-        TAPE_AUTOLOAD_CORES.store(cfg.trade_replay.autoload_cores, Ordering::Relaxed);
         LONG_POSITION_MIN.store(cfg.trade_replay.long_position_min, Ordering::Relaxed);
-        CLEANUP_AT_STARTUP.store(cfg.trade_replay.cleanup_at_startup, Ordering::Relaxed);
         // Once per launch, so a file migrated from `margin_min` shows what it was read as.
         log::info!(
-            "[x] trade-replay settings: margin {} s, long position from {} min, tape autoload from venues {}, from cores {}, cleanup at startup {}",
+            "[x] trade-replay settings: margin {} s, long position from {} min",
             cfg.trade_replay.margin_s,
-            cfg.trade_replay.long_position_min,
-            cfg.trade_replay.autoload_missing,
-            cfg.trade_replay.autoload_cores,
-            cfg.trade_replay.cleanup_at_startup
+            cfg.trade_replay.long_position_min
         );
     });
 }
@@ -117,32 +105,6 @@ pub fn set_margin_s(secs: u32) {
     }
 }
 
-/// Whether the terminal fetches the tape of recent closed trades from the VENUES on its own once
-/// the cores are up — `[trade_replay] autoload_missing`.
-pub fn tape_autoload() -> bool {
-    init();
-    TAPE_AUTOLOAD.load(Ordering::Relaxed)
-}
-
-/// Move the live autoload switch; the Storage tab writes the file beside this.
-pub fn set_tape_autoload(on: bool) {
-    init();
-    TAPE_AUTOLOAD.store(on, Ordering::Relaxed);
-}
-
-/// Whether the terminal files what the cores' archives hold of recent closed trades on its own
-/// once the cores are up — `[trade_replay] autoload_cores`.
-pub fn tape_autoload_cores() -> bool {
-    init();
-    TAPE_AUTOLOAD_CORES.load(Ordering::Relaxed)
-}
-
-/// Move the live core-archive autoload switch; the Storage tab writes the file beside this.
-pub fn set_tape_autoload_cores(on: bool) {
-    init();
-    TAPE_AUTOLOAD_CORES.store(on, Ordering::Relaxed);
-}
-
 /// How long a position must be held to be walked as its two ends — `[trade_replay]
 /// long_position_min`, in milliseconds. Captured where a window is built
 /// ([`super::replay_window_ms`] → [`super::ReplayWindow::long_position_ms`]) and read from the
@@ -162,19 +124,6 @@ pub fn set_long_position_min(minutes: u32) {
     if LONG_POSITION_MIN.swap(minutes, Ordering::Relaxed) != minutes {
         crate::market::tape_recorder::catchup::window_changed();
     }
-}
-
-/// Whether the terminal runs the trade-tape cleanup on its own once the cores are up —
-/// `[trade_replay] cleanup_at_startup`.
-pub fn cleanup_at_startup() -> bool {
-    init();
-    CLEANUP_AT_STARTUP.load(Ordering::Relaxed)
-}
-
-/// Move the live startup-cleanup switch; the Storage tab writes the file beside this.
-pub fn set_cleanup_at_startup(on: bool) {
-    init();
-    CLEANUP_AT_STARTUP.store(on, Ordering::Relaxed);
 }
 
 #[cfg(test)]

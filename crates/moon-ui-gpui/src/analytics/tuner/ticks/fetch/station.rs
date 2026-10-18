@@ -25,7 +25,7 @@ static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 /// Station refusals survive unrelated filings, but not changes to their admission inputs.
 #[derive(Default)]
 struct Unfillable {
-    generation: (u64, u32, (bool, bool), (i64, i64)),
+    generation: (u64, u32, (i64, i64)),
     revision: u64,
     uids: HashMap<i64, (String, String)>,
     snapshot_revision: u64,
@@ -42,8 +42,8 @@ impl Unfillable {
         (self.revision, Arc::clone(&self.snapshot))
     }
 
-    /// A changed window, floor, source policy or station finalisation permits another attempt.
-    fn refresh(&mut self, generation: (u64, u32, (bool, bool), (i64, i64))) {
+    /// A changed window, floor or station finalisation permits another attempt.
+    fn refresh(&mut self, generation: (u64, u32, (i64, i64))) {
         if self.generation != generation {
             self.generation = generation;
             if !self.uids.is_empty() {
@@ -85,7 +85,6 @@ fn unfillable() -> MutexGuard<'static, Unfillable> {
     rows.refresh((
         crate::backend::station::tail_final_cached(),
         super::super::tail::effective_s(),
-        super::super::tail::switches(),
         (
             margin_ms(),
             moon_core::market::trade_replay::long_position_ms(),
@@ -247,7 +246,6 @@ pub(super) fn prefill_counted(
                 row.window.close_ms,
                 trail,
                 moon_core::util::time::now_unix_ms_i64(),
-                super::super::tail::switches(),
             )
     };
     let (rows, held, from_station, filled) =
@@ -349,10 +347,7 @@ pub(super) fn prefill_then_enqueue(
         .name("tape-station-prefill".into())
         .spawn(move || {
             let _busy = busy;
-            let stop = || {
-                super::autoload::generation() != generation
-                    || !moon_core::market::trade_replay::tape_autoload()
-            };
+            let stop = || super::autoload::generation() != generation;
             let (mut rows, _, _) = prefill(rows, target.as_ref(), stop);
             if crate::backend::station::known_cached() {
                 let _ = tx.send(());
@@ -440,7 +435,7 @@ pub(super) struct Filled {
 ///     rows: The rows the file does not fully hold.
 ///     place: A row's `(exchange key, market, window)`.
 ///     target: The station's server.
-///     stop: Asked before every request: a Stop, or the switches going off, ends the fill there.
+///     stop: Asked before every request: a Stop or superseding pass ends the fill there.
 pub(super) fn fill<T>(
     rows: &[T],
     place: impl Fn(&T) -> (String, String, ReplayWindow),
@@ -448,7 +443,7 @@ pub(super) fn fill<T>(
     stop: impl Fn() -> bool,
 ) -> Filled {
     let mut filled = Filled::default();
-    // Tape persistence switched off: nowhere to file what the station holds.
+    // A worker spawn failure leaves nowhere to file the station's tape.
     let Some(cache) = trade_cache::handle() else {
         return filled;
     };
