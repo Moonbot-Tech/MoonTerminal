@@ -378,7 +378,7 @@ fn station_tape_russian_copy_is_the_approved_wording() {
     assert_eq!(text("telegram.server.keep_title"), "Что хранить");
     assert_eq!(
         text("telegram.server.keep_note_forever"),
-        "Ничего не удаляется. Докачка в любом случае берёт не старше года: старше биржи и архивы не отдают."
+        "Ничего не удаляется. У докачки нет ограничения по возрасту; глубина зависит от доступной истории бирж."
     );
     assert_eq!(
         text("telegram.server.keep_bar_lengthen"),
@@ -394,7 +394,7 @@ fn station_tape_russian_copy_is_the_approved_wording() {
     );
     assert_eq!(
         super::keep::keep_note(1825),
-        "Лента сделок старше 5 лет удаляется, и дальше по мере старения. Докачка берёт не старше года."
+        "Лента сделок старше 5 лет удаляется, и дальше по мере старения. Докачка охватывает тот же срок, насколько позволяет история бирж."
     );
     assert_eq!(
         text("telegram.server.tape_hint"),
@@ -452,6 +452,32 @@ fn station_tape_russian_copy_is_the_approved_wording() {
         text("telegram.server.catchup_nodata"),
         "Эта станция не сообщает о докачке: она старой версии. Обновите станцию кнопкой выше."
     );
+}
+
+/// Restoring a fixed catch-up cap would misstate multi-year and unlimited retention.
+#[test]
+fn retention_note_follows_the_chosen_horizon() {
+    let _locale = crate::test_locale::force("en");
+    for (days, expected) in [
+        (
+            30,
+            "Tape older than 30 days is deleted, and continues to expire as it ages. Catch-up covers the same period, limited by the exchanges' available history.",
+        ),
+        (
+            1825,
+            "Tape older than 5 years is deleted, and continues to expire as it ages. Catch-up covers the same period, limited by the exchanges' available history.",
+        ),
+        (
+            3650,
+            "Tape older than 3650 days is deleted, and continues to expire as it ages. Catch-up covers the same period, limited by the exchanges' available history.",
+        ),
+        (
+            0,
+            "Nothing is deleted. Catch-up has no age limit; how far back it can fetch depends on the exchanges' available history.",
+        ),
+    ] {
+        assert_eq!(super::keep::keep_note(days), expected, "retention {days}");
+    }
 }
 
 /// A synthetic catch-up report; every count distinct so a swapped tile shows.
