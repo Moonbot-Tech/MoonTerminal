@@ -1069,6 +1069,18 @@ fn real_data_reproduction() {
     let latency_base = std::env::var("MOON_TICKS_LATENCY_BASE_MS")
         .ok()
         .and_then(|v| v.parse::<f64>().ok());
+    let fast_price = std::env::var("MOON_TICKS_FAST_PRICE")
+        .ok()
+        .map(|v| parse_fast_price_override(&v));
+    if let Some(rule) = fast_price {
+        eprintln!("fast price override: {rule:?}");
+    }
+    let stop_fill = std::env::var("MOON_TICKS_STOP_FILL")
+        .ok()
+        .map(|v| parse_stop_fill_override(&v));
+    if let Some(rule) = stop_fill {
+        eprintln!("stop fill override: {rule:?}");
+    }
     eprintln!("replace round trip per core: {round_trips:?} · base {latency_base:?}");
     // The live deltas' history bars (`deltas::track_for`), off this data root's kline cache —
     // opened on a COPY of the data root: opening prunes past the retention, as the app does.
@@ -1218,6 +1230,12 @@ fn real_data_reproduction() {
             },
         );
         let mut exit = exit_params(&sv, ModelSettings::default());
+        if let Some(rule) = fast_price {
+            exit.model.fast_price = rule;
+        }
+        if let Some(rule) = stop_fill {
+            exit.model.stop_fill = rule;
+        }
         if std::env::var_os("MOON_TICKS_LATENCY_EXIT").is_some() {
             exit.model.latency_ms = core_latency;
         }
@@ -1564,7 +1582,13 @@ fn real_data_reproduction() {
             };
             let v_entry =
                 super::params::entry_params_for(&deal.kind, &lsv, ModelSettings::default());
-            let v_exit = exit_params(&lsv, ModelSettings::default());
+            let mut v_exit = exit_params(&lsv, ModelSettings::default());
+            if let Some(rule) = fast_price {
+                v_exit.model.fast_price = rule;
+            }
+            if let Some(rule) = stop_fill {
+                v_exit.model.stop_fill = rule;
+            }
             let out = simulate(&deal, &ticks, &v_entry, &v_exit, entry_line.as_deref());
             eprintln!(
                 "    variant fill {:?} · exit {:?} · {:?}",
@@ -1827,4 +1851,48 @@ fn real_data_reproduction() {
     stop_diag.print();
     stop_logs.print();
     late_diag.print();
+}
+/// Parse the owner's one bench-wide estimator override, rejecting unknown grammar loudly.
+fn parse_fast_price_override(value: &str) -> super::super::settings::FastPrice {
+    use super::super::settings::FastPrice;
+    let rule = if value == "last" {
+        Some(FastPrice::LastOfTick)
+    } else if let Some(n) = value.strip_prefix("vwap") {
+        n.parse::<u8>().ok().map(FastPrice::VwapLastTrades)
+    } else {
+        value
+            .strip_prefix("emaq")
+            .map(|s| (s, true))
+            .or_else(|| value.strip_prefix("ema").map(|s| (s, false)))
+            .and_then(|(s, qty_weighted)| {
+                s.parse::<f64>().ok().map(|alpha| FastPrice::TradeEma {
+                    alpha,
+                    qty_weighted,
+                })
+            })
+    }
+    .unwrap_or_else(|| {
+        panic!("MOON_TICKS_FAST_PRICE: expected last | vwap<N> | ema<alpha> | emaq<alpha>")
+    });
+    let sanitized = ModelSettings {
+        fast_price: rule,
+        ..ModelSettings::default()
+    }
+    .sanitized()
+    .fast_price;
+    assert_eq!(
+        sanitized, rule,
+        "MOON_TICKS_FAST_PRICE: expected last | vwap<1..16> | ema<0 < alpha <= 1> | emaq<0 < alpha <= 1>"
+    );
+    rule
+}
+
+/// Parse the bench-wide panic-sell fill rule without accepting an unknown spelling.
+fn parse_stop_fill_override(value: &str) -> super::super::settings::StopFill {
+    use super::super::settings::StopFill;
+    match value {
+        "check" => StopFill::AtCheck,
+        "market" => StopFill::MarketAfterLatency,
+        _ => panic!("MOON_TICKS_STOP_FILL: expected check | market"),
+    }
 }

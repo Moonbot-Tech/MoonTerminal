@@ -61,9 +61,10 @@ pub struct TapeGap {
 pub struct GapStop {
     /// The deepest level the fact's stop could stand at inside the hole: the first stop's, or a
     /// ladder rung's deeper still — every price the fact's trigger read in the hole stayed on the
-    /// position's side of it (for a fast stop, the last price of each series tick).
+    /// position's side of it (for a fast stop, the per-tick LAST price, LastOfTick only).
+    /// A weighted fast rule needs missing trades and is refused across a hole.
     pub level: f64,
-    /// `FastStopLoss` of the fact: its stop checked the last price of each series tick.
+    /// `FastStopLoss` of the fact: the hole proof covers LastOfTick only.
     pub fast: bool,
     /// `StopLossEMA` of the fact: the average a book-watching stop compares.
     pub ema: f64,

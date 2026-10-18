@@ -227,7 +227,9 @@ pub fn verify(
     let model = &exit.model;
     let closed = match walked.exit.kind {
         ExitKind::Stop
-            if walked.exit.t_ms <= deal.close_ms + model.point_time_ms || fact_stopped =>
+            if walked.stop_fired_ms.unwrap_or(walked.exit.t_ms)
+                <= deal.close_ms + model.point_time_ms
+                || fact_stopped =>
         {
             walked.exit
         }
@@ -336,7 +338,10 @@ pub fn verify(
             deal,
             &fact_exit,
             &walked.points,
-            closed,
+            Exit {
+                t_ms: walked.stop_fired_ms.unwrap_or(closed.t_ms),
+                ..closed
+            },
             walked.stop_level,
             exit_points,
         );
@@ -898,3 +903,6 @@ pub fn share(verdicts: impl IntoIterator<Item = Option<bool>>) -> (usize, usize)
         (hits + usize::from(ok == Some(true)), n + 1)
     })
 }
+
+#[cfg(test)]
+mod tests;

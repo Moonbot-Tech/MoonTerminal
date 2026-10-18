@@ -236,6 +236,48 @@ fn two_ends() -> Vec<Tick> {
     ]
 }
 
+/// A missing middle leaves a weighted estimator unknown, even with a fixed proven level.
+#[test]
+fn weighted_fast_stop_is_unjudged_across_a_hole() {
+    let mut p = sell();
+    p.fast_stop_loss = true;
+    p.stop_loss_pct = -1.0;
+    p.model.fast_price = super::super::settings::FastPrice::VwapLastTrades(5);
+    let d = holed(
+        Some(&[(0, 101.0)]),
+        Some(GapStop {
+            level: 99.0,
+            fast: true,
+            ema: p.stop_loss_ema,
+        }),
+    );
+    assert_eq!(
+        walk(&d, &two_ends(), fill(), 101.0, &p).exit.kind,
+        ExitKind::InGap
+    );
+}
+
+/// The existing last-price proof must keep judging the same unanchored tape.
+#[test]
+fn last_of_tick_fast_stop_crosses_a_hole_as_before() {
+    let mut p = sell();
+    p.fast_stop_loss = true;
+    p.stop_loss_pct = -1.0;
+    let d = holed(
+        Some(&[(0, 101.0)]),
+        Some(GapStop {
+            level: 99.0,
+            fast: true,
+            ema: p.stop_loss_ema,
+        }),
+    );
+    let w = walk(&d, &two_ends(), fill(), 101.0, &p);
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Take, 2 * HOUR - 10_000)
+    );
+}
+
 fn fill() -> Fill {
     Fill {
         t_ms: 0,

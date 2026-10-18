@@ -6,6 +6,96 @@ use std::path::PathBuf;
 
 use super::*;
 
+/// Reading the previous label as the current price would conceal stale weighted readings.
+#[test]
+fn parses_weighted_readings() {
+    let line = format!("{STOP_LINE} WeightedPricePrev: 0.9850 WeightedPrice: 0.9840");
+    let fire = parse_stop_fire(1000, "CORE_A", &line).unwrap();
+    assert_eq!(
+        (fire.weighted, fire.weighted_prev),
+        (Some(0.984), Some(0.985))
+    );
+    let only_prev = parse_stop_fire(
+        1000,
+        "CORE_A",
+        &format!("{STOP_LINE} WeightedPricePrev: 0.9850"),
+    )
+    .unwrap();
+    assert_eq!(
+        (only_prev.weighted, only_prev.weighted_prev),
+        (None, Some(0.985))
+    );
+}
+
+/// Older cores must remain parseable without inventing weighted observations.
+#[test]
+fn fire_without_weighted_readings() {
+    let fire = parse_stop_fire(1000, "CORE_A", STOP_LINE).unwrap();
+    assert_eq!((fire.weighted, fire.weighted_prev), (None, None));
+}
+
+/// Marker or sign regressions would misattribute modifier and ladder level defects.
+#[test]
+fn parses_stop_level_events() {
+    for (body, kind, level, pct) in [
+        (
+            "StopLoss applied (buyPrice 1.0000 stop -1.50% => 0.98500)",
+            LevelKind::Applied,
+            0.985,
+            Some(-1.5),
+        ),
+        (
+            "StopLoss applied (buyPrice 1.0000 stop +0.50% => 0.99500)",
+            LevelKind::Applied,
+            0.995,
+            Some(0.5),
+        ),
+        (
+            "Strategy (strategy <STRAT_A>) Second stop applied. Level: 0.99800000 (SecondStopLoss=-0.2000) LastAsk: 1.0100 BuyPrice:1.0000",
+            LevelKind::Second,
+            0.998,
+            None,
+        ),
+        (
+            "Strategy (strategy <STRAT_A>) StopLoss3 applied. Level: 1.0050",
+            LevelKind::Third,
+            1.005,
+            None,
+        ),
+        (
+            "Strategy (strategy <STRAT_A>) StopAboveLiq Level changed: 1.0300",
+            LevelKind::AboveLiq,
+            1.03,
+            None,
+        ),
+    ] {
+        let event = parse_stop_level(
+            1000,
+            "CORE_A",
+            &format!("10:00:00 COIN_A<Short> : [3] (345) {body}"),
+        )
+        .unwrap();
+        assert_eq!((event.kind, event.level, event.pct), (kind, level, pct));
+        assert_eq!(event.task, Some(345));
+        assert_eq!(event.coin.as_deref(), Some("COIN_A"));
+        let events = vec![CoreEvent::Level(event)];
+        let key = DealKey {
+            strategy: None,
+            coin: "COIN_A",
+            task: Some(345),
+            buy_ms: 1000,
+            close_ms: 2000,
+        };
+        assert_eq!(match_levels(&key, &events).len(), 1);
+    }
+}
+
+/// Activation fields cannot masquerade as a placement.
+#[test]
+fn autoactivated_is_not_a_level_event() {
+    assert!(parse_stop_level(1000, "CORE_A", STOP_LINE).is_none());
+}
+
 /// Stop activation the parser tests read. Dropping `BidEMA:` must not move the other prices.
 const STOP_LINE: &str = concat!(
     "10:00:01  COIN_A: [7] (345) StopLoss AutoActivated on price drop: ",
@@ -387,14 +477,18 @@ fn read_core_logs_skips_app_and_sorts_events() {
             assert_eq!(fire.task, Some(345));
             assert_eq!(fire.t_ms, DAY_MS + 36_001_000);
         }
-        CoreEvent::Sell(_) => panic!("stop was written second and must sort first"),
+        CoreEvent::Sell(_) | CoreEvent::Level(_) => {
+            panic!("stop was written second and must sort first")
+        }
     }
     match &label[1] {
         CoreEvent::Sell(sell) => {
             assert_eq!(sell.core_label, "CORE_A");
             assert_eq!(sell.t_ms, DAY_MS + 36_002_000);
         }
-        CoreEvent::Stop(_) => panic!("sell must follow the stop after sorting"),
+        CoreEvent::Stop(_) | CoreEvent::Level(_) => {
+            panic!("sell must follow the stop after sorting")
+        }
     }
     assert!(
         read_core_logs(&tmp.0, DAY_MS + 86_400_000, DAY_MS + 86_400_000)

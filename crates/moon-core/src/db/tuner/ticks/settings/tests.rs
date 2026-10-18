@@ -61,3 +61,55 @@ fn sanitizing_caps_what_would_overflow_a_timestamp() {
     };
     assert_eq!(raw.latency_whole_ms(), MAX_SETTING_MS);
 }
+/// Clamping must keep unsafe estimator inputs out of the production walk.
+#[test]
+fn fast_price_sanitized_clamps() {
+    for (rule, expected) in [
+        (FastPrice::VwapLastTrades(0), FastPrice::VwapLastTrades(1)),
+        (FastPrice::VwapLastTrades(40), FastPrice::VwapLastTrades(16)),
+        (
+            FastPrice::TradeEma {
+                alpha: f64::NAN,
+                qty_weighted: true,
+            },
+            FastPrice::LastOfTick,
+        ),
+        (
+            FastPrice::TradeEma {
+                alpha: 1.5,
+                qty_weighted: false,
+            },
+            FastPrice::TradeEma {
+                alpha: 1.0,
+                qty_weighted: false,
+            },
+        ),
+    ] {
+        assert_eq!(
+            ModelSettings {
+                fast_price: rule,
+                ..ModelSettings::default()
+            }
+            .sanitized()
+            .fast_price,
+            expected
+        );
+    }
+}
+
+/// Saved layouts must never freeze the code-level fast-price choice.
+#[test]
+fn fast_price_is_not_persisted() {
+    let settings = ModelSettings {
+        fast_price: FastPrice::VwapLastTrades(5),
+        ..ModelSettings::default()
+    };
+    let value = serde_json::to_value(settings).unwrap();
+    assert!(value.get("fast_price").is_none());
+    assert_eq!(
+        serde_json::from_str::<ModelSettings>("{}")
+            .unwrap()
+            .fast_price,
+        FastPrice::LastOfTick
+    );
+}

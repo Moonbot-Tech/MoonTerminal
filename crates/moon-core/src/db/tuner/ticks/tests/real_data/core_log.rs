@@ -1,6 +1,6 @@
 //! Read the cores' own log files without writing them.
 //!
-//! Two line shapes are kept: a stop fire and a sell placement. The TSV event
+//! Stop fires, stop-level events and sell placements are kept. The TSV event
 //! clock is the fire time. The leading clock in the message is the core's
 //! whole-second clock, kept only as a cross-check.
 
@@ -144,6 +144,10 @@ pub(super) struct StopFire {
     pub(super) bid_ema: Option<f64>,
     /// `LastPrice =`.
     pub(super) last: f64,
+    /// Logged weighted comparison price, when supplied by the core.
+    pub(super) weighted: Option<f64>,
+    /// Previous weighted comparison price, when supplied by the core.
+    pub(super) weighted_prev: Option<f64>,
     /// `BuyPrice =`.
     pub(super) buy: Option<f64>,
     /// Signed `AllowedDrop: BUY` percent.
@@ -188,6 +192,8 @@ pub(super) fn parse_stop_fire(t_ms: i64, core_label: &str, msg: &str) -> Option<
         return None;
     }
     Some(StopFire {
+        weighted: num_after(msg, "WeightedPrice:"),
+        weighted_prev: num_after(msg, "WeightedPricePrev:"),
         t_ms,
         core_label: core_label.to_string(),
         task: task_of(msg),
@@ -207,6 +213,75 @@ pub(super) fn parse_stop_fire(t_ms: i64, core_label: &str, msg: &str) -> Option<
         fixed: num_after(msg, "StopLoss fixed:"),
         msg_clock_s: msg_clock_s(msg),
     })
+}
+
+/// Source of a core stop-level placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LevelKind {
+    Applied,
+    Second,
+    Third,
+    AboveLiq,
+}
+
+/// A logged stop level, independent of the later activation.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct StopLevelEvent {
+    pub(super) t_ms: i64,
+    pub(super) core_label: String,
+    pub(super) task: Option<i64>,
+    pub(super) coin: Option<String>,
+    pub(super) kind: LevelKind,
+    pub(super) level: f64,
+    pub(super) pct: Option<f64>,
+}
+
+/// Parse placement markers only; activation readings never imply a level event.
+pub(super) fn parse_stop_level(t_ms: i64, core_label: &str, msg: &str) -> Option<StopLevelEvent> {
+    let (kind, label) = if msg.contains("StopLoss applied (") {
+        (LevelKind::Applied, "=>")
+    } else if msg.contains("Second stop applied. Level:") {
+        (LevelKind::Second, "Second stop applied. Level:")
+    } else if msg.contains("StopLoss3 applied. Level:") {
+        (LevelKind::Third, "StopLoss3 applied. Level:")
+    } else if msg.contains("StopAboveLiq Level changed:") {
+        (LevelKind::AboveLiq, "StopAboveLiq Level changed:")
+    } else {
+        return None;
+    };
+    Some(StopLevelEvent {
+        t_ms,
+        core_label: core_label.into(),
+        task: task_of(msg),
+        coin: coin_of(msg).map(str::to_owned),
+        kind,
+        level: num_after(msg, label)?,
+        pct: (kind == LevelKind::Applied)
+            .then(|| num_after(msg, "stop "))
+            .flatten(),
+    })
+}
+
+/// Attach every same-task level in the deal reuse window, in chronological order.
+pub(super) fn match_levels<'a>(
+    key: &DealKey<'_>,
+    events: &'a [CoreEvent],
+) -> Vec<&'a StopLevelEvent> {
+    let mut levels: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            CoreEvent::Level(level)
+                if key.task.is_some()
+                    && level.task == key.task
+                    && in_task_window(level.t_ms, key) =>
+            {
+                Some(level)
+            }
+            _ => None,
+        })
+        .collect();
+    levels.sort_by_key(|level| level.t_ms);
+    levels
 }
 
 /// One logged sell placement.
@@ -312,21 +387,23 @@ pub(super) fn branch_of(
     }
 }
 
-/// A stop fire or a sell placement, in event order once a file has been read.
+/// A stop fire, level event or sell placement, sorted after reading a file.
 #[derive(Debug, Clone)]
 pub(super) enum CoreEvent {
+    /// Stop level placement or replacement.
+    Level(StopLevelEvent),
     /// Stop activation.
     Stop(StopFire),
     /// Sell placement.
     Sell(SellPlaced),
 }
 
-/// Read stop fires and sell placements from `YYYY-MM-DD_<label>.log` files.
+/// Read stop fires, level events and sell placements from dated core log files.
 ///
 /// `*_app.log` and any other name are skipped. Days outside `from_day_ms..=to_day_ms`
 /// are skipped. Lines are read as bytes and decoded lossily, so a byte that is not
-/// UTF-8 does not stop the file. Only messages that contain `AutoActivated` or
-/// `SELL price:` are parsed. Each label's events are sorted by event time.
+/// UTF-8 does not stop the file. Stop markers and `SELL price:` select candidate
+/// lines; each label's parsed events are sorted by event time.
 ///
 /// Args:
 ///     logs_dir: Directory of rotated log files. This function only reads it.
@@ -369,9 +446,11 @@ pub(super) fn read_core_logs(
             if reader.read_until(b'\n', &mut buf)? == 0 {
                 break;
             }
-            if !buf
-                .windows(b"AutoActivated".len())
-                .any(|w| w == b"AutoActivated")
+            if !buf.windows(b"stop".len()).any(|w| w == b"stop")
+                && !buf.windows(b"Stop".len()).any(|w| w == b"Stop")
+                && !buf
+                    .windows(b"AutoActivated".len())
+                    .any(|w| w == b"AutoActivated")
                 && !buf
                     .windows(b"SELL price:".len())
                     .any(|w| w == b"SELL price:")
@@ -382,9 +461,6 @@ pub(super) fn read_core_logs(
             let Some((ms_of_day, msg)) = split_tsv(&line) else {
                 continue;
             };
-            if !msg.contains("AutoActivated") && !msg.contains("SELL price:") {
-                continue;
-            }
             let t_ms = day_ms + ms_of_day;
             if let Some(stop) = parse_stop_fire(t_ms, &label, msg) {
                 out.entry(label.clone())
@@ -394,6 +470,10 @@ pub(super) fn read_core_logs(
                 out.entry(label.clone())
                     .or_default()
                     .push(CoreEvent::Sell(sell));
+            } else if let Some(level) = parse_stop_level(t_ms, &label, msg) {
+                out.entry(label.clone())
+                    .or_default()
+                    .push(CoreEvent::Level(level));
             }
         }
     }
@@ -703,9 +783,10 @@ pub(super) fn within_pct(sell: f64, other: f64, tol_pct: f64) -> bool {
     (sell - other).abs() * 100.0 <= tol_pct * sell.abs()
 }
 
-/// Event time of either event kind.
+/// Event time of any collected event kind.
 fn event_ms(event: &CoreEvent) -> i64 {
     match event {
+        CoreEvent::Level(level) => level.t_ms,
         CoreEvent::Stop(stop) => stop.t_ms,
         CoreEvent::Sell(sell) => sell.t_ms,
     }
@@ -715,7 +796,7 @@ fn event_ms(event: &CoreEvent) -> i64 {
 fn as_stop(event: &CoreEvent) -> Option<&StopFire> {
     match event {
         CoreEvent::Stop(stop) => Some(stop),
-        CoreEvent::Sell(_) => None,
+        CoreEvent::Sell(_) | CoreEvent::Level(_) => None,
     }
 }
 
@@ -723,7 +804,7 @@ fn as_stop(event: &CoreEvent) -> Option<&StopFire> {
 fn as_sell(event: &CoreEvent) -> Option<&SellPlaced> {
     match event {
         CoreEvent::Sell(sell) => Some(sell),
-        CoreEvent::Stop(_) => None,
+        CoreEvent::Stop(_) | CoreEvent::Level(_) => None,
     }
 }
 

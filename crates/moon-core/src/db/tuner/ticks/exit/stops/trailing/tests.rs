@@ -52,13 +52,15 @@ fn far_take() -> f64 {
 /// arrival, into the bid: the middle crossed, but the market sale fills at the bid proxy 100.9.
 #[test]
 fn the_line_follows_the_peak_of_the_middle_and_sells_into_the_bid() {
+    let mut p = trailing();
+    p.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
     let ticks = tape(&[
         (100, 100.0, 100.2),
         (3_000, 102.0, 102.2),
         (5_000, 100.9, 101.1),
         (9_000, 100.0, 100.2),
     ]);
-    let w = walk(&deal(false), &ticks, fill(), far_take(), &trailing());
+    let w = walk(&deal(false), &ticks, fill(), far_take(), &p);
     assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 6_450), "{w:?}");
     assert!(
         (w.exit.price - 100.9).abs() < 1e-4,
@@ -88,10 +90,11 @@ fn the_trailing_ema_moves_the_peak_a_share_of_the_way() {
 /// stands no lower than 102 and sells only while the middle is still above 102.
 #[test]
 fn the_take_profit_holds_the_line_back_and_floors_the_sale() {
-    let tp = ExitParams {
+    let mut tp = ExitParams {
         trailing_take_profit_pct: Some(2.0),
         ..trailing()
     };
+    tp.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
     // Up to 102.5 and back to 100: the line never appeared.
     let short_of_it = tape(&[
         (100, 102.4, 102.6),
@@ -143,13 +146,15 @@ fn the_peak_restarts_where_the_delay_ends() {
 /// fills at the ask proxy 99.1 — the price an anchored stop would be held against.
 #[test]
 fn a_short_trailing_sells_into_the_ask() {
+    let mut p = trailing();
+    p.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
     let ticks = tape(&[
         (100, 99.8, 100.0),
         (3_000, 97.8, 98.0),
         (5_000, 98.9, 99.1),
         (9_000, 98.9, 99.1),
     ]);
-    let w = walk(&deal(true), &ticks, fill(), 50.0, &trailing());
+    let w = walk(&deal(true), &ticks, fill(), 50.0, &p);
     assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 6_450), "{w:?}");
     assert!(
         (w.exit.price - 99.1).abs() < 1e-4,
@@ -220,12 +225,13 @@ fn verify_cuts_a_trailing_fact_at_its_panic_sell() {
 /// the stop's, at the bid the book stop reads, not the trailing's middle.
 #[test]
 fn the_stop_goes_first_on_the_same_arrival() {
-    let both = ExitParams {
+    let mut both = ExitParams {
         stop_loss_pct: -1.0,
         fast_stop_loss: false,
         stop_loss_ema: 7.0,
         ..trailing()
     };
+    both.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
     let ticks = tape(&[
         (100, 100.0, 100.2),
         (3_000, 98.0, 98.4),
