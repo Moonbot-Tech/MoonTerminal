@@ -418,7 +418,11 @@ fn entry_fields(values: &[(String, String)]) -> Vec<&(String, String)> {
 
 /// The axis' automatic grids for one strategy: the live strategies of `kind` on this machine, the
 /// strategy's own values as the selection, `MOON_TICKS_STEPS` steps per field.
-fn auto_grids(kind: &str, own: &HashMap<String, String>, defaults: &HashMap<String, f64>) -> Grids {
+pub(super) fn auto_grids(
+    kind: &str,
+    own: &HashMap<String, String>,
+    defaults: &HashMap<String, f64>,
+) -> Grids {
     let deps = crate::feed::strategy_deps::FieldDeps::bundled();
     let numbers: Vec<&'static str> = TICK_PARAMS
         .iter()

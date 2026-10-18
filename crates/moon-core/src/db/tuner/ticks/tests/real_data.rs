@@ -39,6 +39,7 @@ use crate::market::kline_cache::KlineCache;
 use crate::market::trade_replay::{Coverage, TickQuery, long_position_ms, query_held};
 use crate::symbol::{coin_match_key, coin_of_market};
 
+mod accuracy;
 mod core_log;
 mod drops;
 mod money;
