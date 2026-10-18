@@ -46,6 +46,7 @@
 use super::exit::ExitModel;
 use super::exit::level_off_buy;
 use super::exit::line::LinePoint;
+use super::exit::sell_order::{take_is_recorded, take_model_for};
 use super::exit::stops::stop_pct;
 use super::exit::stops::trailing::trailing_level;
 use super::mshot::MshotParams;
@@ -277,8 +278,26 @@ pub fn verify(
     // Where a variant could not place this trade's take, the line under it is not the model's
     // answer but its guess — see the module doc. Asked with the trade's OWN parameters as a
     // variant runs them (`exit`, not `fact_exit`): the fact's replay starts at the recorded
-    // take, a variant does not.
-    let take_known = ExitModel::new(exit).take_known(deal);
+    // take, a variant does not and must be able to rebuild that archived start.
+    let mut take_known = ExitModel::new(exit).take_known(deal);
+    if take_known && !take_model_for(&deal.kind) && !take_is_recorded(&deal.kind) {
+        if let Some(archived_take) = deal.archived_take.filter(|t| t.is_finite() && *t > 0.0) {
+            let formula = ExitParams {
+                take_from_archive: false,
+                ..fact_exit.clone()
+            };
+            let take = ExitModel::new(&formula).take_level(deal, ticks, fact_fill);
+            // Check the formula against the archived take, allowing its grid rounding. With
+            // uncapped sell modifiers the residual is calibrated from this same take, so this
+            // checks formula consistency rather than independently proving the take model.
+            let tolerance = (archived_take * model.price_pct / 100.0).max(
+                deal.tick
+                    .filter(|step| step.is_finite() && *step > 0.0)
+                    .map_or(0.0, |step| step * 0.49),
+            );
+            take_known = (take - archived_take).abs() <= tolerance;
+        }
+    }
     // A stop the core fired and the model, holding a stop of its own, never did — the book
     // proxy of a non-fast stop can stay short of the level to the tape's end — is a miss of
     // the stop, whatever the line was doing: not a question about another rule.

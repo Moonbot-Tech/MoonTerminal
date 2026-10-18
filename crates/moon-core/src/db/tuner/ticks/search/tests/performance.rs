@@ -9,7 +9,7 @@ use std::time::Instant;
 fn repeated_point_search_preserves_the_answer() {
     let deals: Vec<_> = (1..=80)
         .map(|uid| {
-            let mut d = prepared(uid, 101.0);
+            let mut d = prepared(uid * 60, 101.0);
             d.deal.coin = "SYNTHETIC".into();
             let t0 = d.deal.buy_ms;
             d.ticks = (0..2_000)

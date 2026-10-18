@@ -2446,6 +2446,205 @@ fn strike_fill(price: f64) -> Fill {
     }
 }
 
+/// Accepting only the archived line would admit strikes whose variant formula cannot replay it.
+#[test]
+fn archived_strike_take_must_match_the_variant_formula() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        price_down_timer_s: 1.0,
+        price_down_delay_s: 30.0,
+        price_down_pct: 0.5,
+        price_down_relative: false,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    // The span formula gives 102; the archive is either exact or 1% above it.
+    for (take, expected) in [(102.0, Some(true)), (103.02, None)] {
+        let d = Deal {
+            coin: "XALPHA".into(),
+            core_name: "CORE_A".into(),
+            archived_take: Some(take),
+            sell_price: take - 0.5,
+            sell_reason: "Auto Price Down".into(),
+            ..strike_deal(false)
+        };
+        let ticks = tape(&[(10_000, 100.0), (11_001, 100.0), (20_000, take - 0.5)]);
+        let line = [(10_000, take), (11_000, take - 0.5)];
+        let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, Some(&line));
+        assert_eq!(
+            v.exit, expected,
+            "archived take {take}: {:?}",
+            v.exit_finding
+        );
+        if expected.is_none() {
+            assert_eq!(
+                v.exit_finding,
+                verify::ExitFinding::Unjudged(verify::Unjudged::TakeUnknown)
+            );
+            assert!(!record::fit_for_search(&v));
+        } else {
+            assert!(record::fit_for_search(&v));
+        }
+    }
+}
+
+/// Omitting the short strike check would admit an archived take its variants cannot reproduce.
+#[test]
+fn archived_short_strike_take_must_match_the_variant_formula() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    // Half the span from 100 to 96 gives 98 for a short; 97.02 is 1% below it.
+    for (take, expected) in [(98.0, Some(true)), (97.02, None)] {
+        let d = Deal {
+            archived_take: Some(take),
+            sell_price: take,
+            sell_reason: "Sell Price".into(),
+            ..strike_deal(true)
+        };
+        let ticks = tape(&[(10_000, 100.0), (20_000, take)]);
+        let line = [(10_000, take)];
+        let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, Some(&line));
+        assert_eq!(
+            v.exit, expected,
+            "archived take {take}: {:?}",
+            v.exit_finding
+        );
+        if expected.is_none() {
+            assert_eq!(
+                v.exit_finding,
+                verify::ExitFinding::Unjudged(verify::Unjudged::TakeUnknown)
+            );
+            assert!(!record::fit_for_search(&v));
+        } else {
+            assert!(record::fit_for_search(&v));
+        }
+    }
+}
+
+/// Omitting the hook formula check would admit an archived take its variants cannot rebuild.
+#[test]
+fn archived_hook_take_must_match_the_variant_formula() {
+    let p = ExitParams {
+        hook_sell_level_pct: 50.0,
+        price_down_timer_s: 1.0,
+        price_down_delay_s: 30.0,
+        price_down_pct: 0.5,
+        price_down_relative: false,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    // Half the 4% detect depth gives 102, not the archived 103.02.
+    let d = Deal {
+        archived_take: Some(103.02),
+        sell_price: 102.52,
+        sell_reason: "Auto Price Down".into(),
+        ..hook_deal()
+    };
+    let ticks = tape(&[(10_000, 100.0), (11_001, 100.0), (20_000, 102.52)]);
+    let line = [(10_000, 103.02), (11_000, 102.52)];
+    let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, Some(&line));
+    assert_eq!(v.exit, None, "{:?}", v.exit_finding);
+    assert_eq!(
+        v.exit_finding,
+        verify::ExitFinding::Unjudged(verify::Unjudged::TakeUnknown)
+    );
+    assert!(!record::fit_for_search(&v));
+}
+
+/// Applying the archive consistency check to MoonShot would discard its independent take model.
+#[test]
+fn archived_moonshot_take_does_not_override_its_own_model() {
+    let p = ExitParams {
+        sell_price_pct: 2.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        buy_price: 100.0,
+        archived_take: Some(103.02),
+        sell_price: 102.0,
+        sell_reason: "Sell Price".into(),
+        ..deal()
+    };
+    let ticks = tape(&[(10_000, 100.0), (20_000, 102.0)]);
+    let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, None);
+    assert_eq!(v.exit, Some(true), "{:?}", v.exit_finding);
+}
+
+/// Requiring a formula for Spread would discard the recorded level that defines its take.
+#[test]
+fn archived_spread_take_remains_the_recorded_level() {
+    let p = ExitParams {
+        sell_price_pct: 2.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        kind: "Spread".into(),
+        archived_take: Some(103.02),
+        sell_price: 103.02,
+        sell_reason: "Sell Price".into(),
+        ..deal()
+    };
+    let ticks = tape(&[(10_000, 100.0), (20_000, 103.02)]);
+    let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, None);
+    assert_eq!(v.exit, Some(true), "{:?}", v.exit_finding);
+}
+
+/// Rejecting price-grid rounding would remove reproducible low-priced strikes from the sample.
+#[test]
+fn archived_strike_take_allows_half_a_price_step() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        core_name: "CORE_A".into(),
+        coin: "XALPHA".into(),
+        buy_price: 0.01,
+        sell_price: 0.01,
+        archived_take: Some(0.01),
+        tick: Some(0.001),
+        strike_detect: Some(strike::StrikeDetect {
+            trade_price: 0.01,
+            depth_pct: 4.0,
+        }),
+        ..strike_deal(false)
+    };
+    let ticks = tape(&[(10_000, 0.01), (20_000, 0.01)]);
+    let v = verify(
+        &d,
+        &ticks,
+        &EntryParams::Fact,
+        &p,
+        None,
+        Some(&[(10_000, 0.01)]),
+    );
+    assert_eq!(v.exit, Some(true), "rounded strike: {:?}", v.exit_finding);
+}
+
 #[test]
 fn strike_take_level_long_end_to_end() {
     let p = ExitParams {

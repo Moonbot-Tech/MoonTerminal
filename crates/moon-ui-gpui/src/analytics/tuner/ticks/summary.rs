@@ -354,7 +354,16 @@ impl SummaryModel {
         };
         let train = result.map(|r| ProfitRow {
             label: t!("analytics.ticks.sum.train").to_string(),
-            sub: t!("analytics.ticks.sum.train_sub", n = r.fact_train.n).to_string(),
+            sub: if r.purged > 0 {
+                t!(
+                    "analytics.ticks.sum.train_sub_purged",
+                    n = r.fact_train.n,
+                    p = r.purged
+                )
+                .to_string()
+            } else {
+                t!("analytics.ticks.sum.train_sub", n = r.fact_train.n).to_string()
+            },
             n: r.fact_train.n,
             fact: r.fact_train.profit,
             variant: r.train.profit,

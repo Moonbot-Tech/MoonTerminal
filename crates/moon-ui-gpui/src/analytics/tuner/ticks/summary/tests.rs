@@ -50,6 +50,7 @@ fn result() -> SearchResult {
         searched: Vec::new(),
         train: tally(23, 17.0),
         fact_train: tally(23, 11.0),
+        purged: 0,
         holdout: Some(tally(9, 8.0)),
         fact_holdout: Some(tally(9, 3.0)),
         holdout_open: 0,
@@ -58,6 +59,28 @@ fn result() -> SearchResult {
         seed: 43,
         stats: Default::default(),
     }
+}
+
+/// Omitting the embargo caption would hide why the chronological training sample shrank.
+#[test]
+fn summary_states_purged_training_deals() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = TicksState::default();
+    state.last_result = Some(result());
+    state.last_result.as_mut().unwrap().purged = 2;
+    let model = SummaryModel::from_state(&state, String::new(), false);
+    assert_eq!(
+        model.train.unwrap().sub,
+        "Trades: 23 (2 left out: their tape reaches the held-back period)"
+    );
+    state.last_result.as_mut().unwrap().purged = 0;
+    assert_eq!(
+        SummaryModel::from_state(&state, String::new(), false)
+            .train
+            .unwrap()
+            .sub,
+        "Trades: 23"
+    );
 }
 
 /// Sample losses caused by held edits must refuse advice even when both scored slices improve.

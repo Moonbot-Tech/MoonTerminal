@@ -75,7 +75,7 @@ use descent::*;
 /// scoring items for tick searches.
 mod scoring;
 use scoring::*;
-pub use scoring::{CorridorCheck, VariantScore, check_corridors, train_len};
+pub use scoring::{CorridorCheck, VariantScore, check_corridors, purged_train, train_len};
 
 /// tally items for tick searches.
 mod tally;
@@ -143,7 +143,7 @@ pub fn suggest_with_candidate(
 }
 
 /// The search itself; `candidate_out` takes the point beside the answer ([`Suggested`]).
-/// Folded replays are shared across its restarts without caching any per-request decisions.
+/// Training replays are purged against the holdout; folded replays share no per-request decisions.
 fn search(
     deals: &[PreparedDeal],
     params: &SearchParams<'_>,
@@ -184,10 +184,12 @@ fn search(
     }
     let closes: Vec<i64> = deals.iter().map(|d| d.deal.close_ms).collect();
     let train_n = train_len(&closes, params.train_frac);
-    let train = &deals[..train_n];
+    let train_indices = purged_train(deals, train_n);
+    let purged = train_n - train_indices.len();
+    let train: Vec<PreparedDeal> = train_indices.iter().map(|&i| deals[i].clone()).collect();
     let min_n = params
         .min_n
-        .unwrap_or_else(|| default_min_n(train_n))
+        .unwrap_or_else(|| default_min_n(train.len()))
         .max(1);
     let seed = params.seed.unwrap_or_else(|| {
         std::time::SystemTime::now()
@@ -203,7 +205,7 @@ fn search(
         owns: whole.owns,
         of_deal: of_kept,
     };
-    let train_of = &bases.of_deal[..train_n];
+    let train_of: Vec<usize> = train_indices.iter().map(|&i| bases.of_deal[i]).collect();
     // A searched field some strategy holds off its grid starts every restart on the grid
     // (`pinned`): the value the range leaves out is never an answer by standing still.
     let pinned = pinned::off_grid(&fields, params.grids, &start, &bases.owns, params.defaults);
@@ -271,9 +273,9 @@ fn search(
         }
         // Keep the fills cache's access and statistics on every request, as before. Only the
         // folded replay is memoized: refusals and tracker offers still run for every caller.
-        let fills = replays::PROFILE.timed_fills(|| fill_cache.fills(train, train_of, &per_base));
+        let fills = replays::PROFILE.timed_fills(|| fill_cache.fills(&train, &train_of, &per_base));
         Some(replay_cache.replay(&per_base, || {
-            closing::replay(train, train_of, &per_base, &fills)
+            closing::replay(&train, &train_of, &per_base, &fills)
         }))
     };
     // A point the search may answer: one that closes every deal it bought (`closing`).
@@ -291,7 +293,7 @@ fn search(
     // The fact on the same slice — the "Fact" column the KPI matrix compares a variant with, and
     // always there, where a replayed base may be refused — is what the risk limits hold a point
     // to (`risk`).
-    let fact_train = fact_tally(train);
+    let fact_train = fact_tally(&train);
     let risky = std::sync::atomic::AtomicUsize::new(0);
     let within_risk = |tally: &Tally| {
         let allowed = params.risk.allows(tally, &fact_train);
@@ -541,10 +543,11 @@ fn search(
     });
     log::info!(
         target: crate::diagnostics::TICKS_AXIS_TARGET,
-        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}, by the risk limits {}; points scored on entry fills read before {} of {}",
+        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} purged, {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}, by the risk limits {}; points scored on entry fills read before {} of {}",
         brief(&base_score),
         brief(&score),
-        train_n,
+        train.len(),
+        purged,
         left_open.len(),
         base_why,
         cornered_n,
@@ -584,7 +587,7 @@ fn search(
             values: spelled(&met.point).1,
             train: met.score,
             open: met.open,
-            deals: train_n,
+            deals: train.len(),
         });
     if let Some(c) = candidate_out.as_ref() {
         log::info!(
@@ -634,6 +637,7 @@ fn search(
         holdout_open,
         holdout_open_profit,
         fact_train,
+        purged,
         fact_holdout,
         holdout_loses,
         seed,

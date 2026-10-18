@@ -538,6 +538,7 @@ fn model(face: usize) -> SummaryModel {
         2 => Verdict::Apply,
         3 => Verdict::DontApply(Why::HoldoutOpen { k: 7 }),
         4 => Verdict::Unchecked(Unchecked::Whole),
+        6 => Verdict::Apply,
         _ => Verdict::Cannot(t!("analytics.ticks.sum.too_few", n = 3, min = 20).to_string()),
     };
     let active = face >= 2;
@@ -552,10 +553,13 @@ fn model(face: usize) -> SummaryModel {
         sub: t!(
             if hold {
                 "analytics.ticks.sum.hold_sub"
+            } else if face == 6 {
+                "analytics.ticks.sum.train_sub_purged"
             } else {
                 "analytics.ticks.sum.train_sub"
             },
-            n = 31
+            n = 31,
+            p = 7
         )
         .to_string(),
         n: 31,
@@ -569,8 +573,8 @@ fn model(face: usize) -> SummaryModel {
         tag: tag(&verdict),
         sentence: sentence(&verdict, 31, 13, 19),
         verdict,
-        train: (face == 2 || face == 3 || face == 4).then(|| row(false)),
-        holdout: (face == 2 || face == 3).then(|| row(true)),
+        train: (face == 2 || face == 3 || face == 4 || face == 6).then(|| row(false)),
+        holdout: (face == 2 || face == 3 || face == 6).then(|| row(true)),
         changed_header: t!("analytics.ticks.sum.changed", n = 2).to_string(),
         changes: if active {
             fields()
@@ -829,7 +833,7 @@ fn every_ticks_language_has_the_same_keys_and_no_raw_card_text() {
     for language in Language::ALL {
         assert_eq!(keys(language.code()), en, "{}", language.code());
         let _locale = crate::test_locale::force(language.code());
-        for face in 0..6 {
+        for face in 0..7 {
             let m = model(face);
             let mut text = vec![
                 m.title,
@@ -886,7 +890,7 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
             let _locale = crate::test_locale::force(language.code());
             for zoom in [1.0, 1.25] {
                 for width in [520.0, 400.0] {
-                    for face in 0..6 {
+                    for face in 0..7 {
                         let window = cx.open_window(
                             gpui::size(px(width * zoom), px(540.0 * zoom)),
                             |window, cx| {

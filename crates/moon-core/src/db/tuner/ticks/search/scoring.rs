@@ -335,3 +335,30 @@ pub(super) fn next_random(state: &mut u64) -> u64 {
 pub fn train_len(closes: &[i64], train_frac: f64) -> usize {
     train_split(closes, train_frac)
 }
+
+/// Training indices retained by the purged walk-forward embargo: no replay reads holdout prices.
+/// Without a holdout every chronological training deal stays; equality at the embargo is safe.
+pub fn purged_train(deals: &[PreparedDeal], train_n: usize) -> Vec<usize> {
+    let embargo = deals[train_n..].iter().map(holdout_start).min();
+    (0..train_n)
+        .filter(|&i| embargo.is_none_or(|start| window_end(&deals[i]) <= start))
+        .collect()
+}
+
+/// The furthest a training replay can read, including quiet held coverage past its close.
+fn window_end(deal: &PreparedDeal) -> i64 {
+    deal.deal.close_ms.saturating_add(deal.trail_ms.max(0)).max(
+        deal.ticks
+            .last()
+            .map_or(i64::MIN, |tick| tick.time_ms.ceil() as i64),
+    )
+}
+
+/// The earliest a holdout replay can trade or decide: its first print or delta evaluation start.
+/// Earlier look-back history (SellLevel bars) is deliberately not purged: it was known at decision time.
+fn holdout_start(deal: &PreparedDeal) -> i64 {
+    deal.ticks
+        .first()
+        .map_or(i64::MAX, |tick| tick.time_ms.floor() as i64)
+        .min(super::super::deltas::eval_span(&deal.deal).0)
+}

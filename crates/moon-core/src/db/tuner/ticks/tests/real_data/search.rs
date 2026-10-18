@@ -78,7 +78,7 @@ pub(super) fn run(deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<Strin
     }
 }
 
-/// Run the search and print what it found, how long it took and how it went.
+/// Run the search and print its answer, timing and purged chronological training counts.
 fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, f64>) {
     if deals.is_empty() {
         eprintln!("search {kind}: no fit deal with a tape");
@@ -155,23 +155,31 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
         whole(&[])
     );
     match answer {
-        Ok(found) => eprintln!(
-            "  found {:?}\n  whole sample {:?} · train n {} profit {:.3} · holdout {:?} · fact train n {} profit {:.3} · fact holdout {:?} · holdout loses {} · {:?}",
-            found.values,
-            whole(&found.values),
-            found.train.n,
-            found.train.profit,
-            found
-                .holdout
-                .map(|t| (t.n, (t.profit * 1000.0).round() / 1000.0)),
-            found.fact_train.n,
-            found.fact_train.profit,
-            found
-                .fact_holdout
-                .map(|t| (t.n, (t.profit * 1000.0).round() / 1000.0)),
-            found.holdout_loses,
-            found.stats
-        ),
+        Ok(found) => {
+            eprintln!(
+                "search {kind}: purged {} of train {}, fact_train.n {}",
+                found.purged,
+                found.fact_train.n as usize + found.purged,
+                found.fact_train.n
+            );
+            eprintln!(
+                "  found {:?}\n  whole sample {:?} · train n {} profit {:.3} · holdout {:?} · fact train n {} profit {:.3} · fact holdout {:?} · holdout loses {} · {:?}",
+                found.values,
+                whole(&found.values),
+                found.train.n,
+                found.train.profit,
+                found
+                    .holdout
+                    .map(|t| (t.n, (t.profit * 1000.0).round() / 1000.0)),
+                found.fact_train.n,
+                found.fact_train.profit,
+                found
+                    .fact_holdout
+                    .map(|t| (t.n, (t.profit * 1000.0).round() / 1000.0)),
+                found.holdout_loses,
+                found.stats
+            );
+        }
         Err(miss) => eprintln!("  no answer: {miss:?}"),
     }
 }

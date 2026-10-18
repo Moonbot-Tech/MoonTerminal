@@ -174,6 +174,8 @@ pub struct SearchResult {
     pub holdout_open_profit: f64,
     /// The fact over the deals the search was fitted on ([`fact_tally`]).
     pub fact_train: Tally,
+    /// Chronological training deals excluded because their replay windows reach the holdout.
+    pub purged: usize,
     /// The fact over the deals held back, when any were — the slice `holdout` is scored on.
     pub fact_holdout: Option<Tally>,
     /// Whether the answer loses to the fact on the holdout: it leaves a held-back deal open, or
