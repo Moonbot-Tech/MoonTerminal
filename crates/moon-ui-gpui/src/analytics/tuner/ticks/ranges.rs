@@ -39,7 +39,11 @@ const RANGE_INPUT_PREFIX: &str = "r:";
 /// The reset's icon: the undo arrow of the embedded MoonUI set — "back to what it was".
 const RESET_ICON: &str = "icons/undo-2.svg";
 
-/// Resolve automatic search grids from live population, defaults and the strategy's own values.
+/// Resolve automatic search grids from live population, defaults and one strategy's values.
+///
+/// The card search uses the typed ranges on the view. This helper remains for the readiness
+/// bench and the range-cell test, which score a strategy from its saved values alone.
+#[cfg(test)]
 pub(in crate::analytics::tuner) fn auto_grids_for(
     kind: &str,
     own: &std::collections::HashMap<String, String>,

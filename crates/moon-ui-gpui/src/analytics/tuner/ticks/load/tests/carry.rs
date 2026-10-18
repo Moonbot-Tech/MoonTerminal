@@ -240,7 +240,6 @@ fn fillable_miss_is_replayed_once_its_window_passes() {
         None,
         gone,
         None,
-        None,
     );
     assert_eq!(rows[0].tape, TapeStatus::Covered);
     assert_eq!(rows[0].held, Some((30_000, 0)));

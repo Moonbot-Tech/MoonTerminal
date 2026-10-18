@@ -8,36 +8,6 @@ use super::{
 };
 use crate::analytics::tuner::shared::{SaveAuthority, SaveTarget};
 
-/// Auto Overview visibility must never authorize a batch target outside the focused group.
-#[test]
-fn best_authority_refuses_an_outside_core() {
-    assert!(super::best_targets_in_scope(
-        &[target(101, 11)],
-        Some(&[11])
-    ));
-    assert!(!super::best_targets_in_scope(
-        &[target(101, 11), target(202, 22)],
-        Some(&[11])
-    ));
-    assert!(!super::best_targets_in_scope(&[target(101, 11)], Some(&[])));
-}
-
-/// A stale or unread current value must refuse consent instead of displaying the captured value.
-#[test]
-fn fresh_read_must_equal_captured_now() {
-    use super::super::ticks::state::NowValue;
-    let captured = HashMap::from([("SellPrice".into(), NowValue::Same("1".into()))]);
-    assert!(super::captured_values_match(
-        &captured,
-        &HashMap::from([("SellPrice".into(), "1".into())])
-    ));
-    assert!(!super::captured_values_match(
-        &captured,
-        &HashMap::from([("SellPrice".into(), "2".into())])
-    ));
-    assert!(!super::captured_values_match(&captured, &HashMap::new()));
-}
-
 /// Build one concrete Save target without involving Analytics UI state.
 fn target(sid: i64, core: u64) -> SaveTarget {
     SaveTarget {
@@ -45,53 +15,6 @@ fn target(sid: i64, core: u64) -> SaveTarget {
         core: Some(core),
         name: format!("strategy-{sid}"),
     }
-}
-
-/// Batch confirmation authority is independent of table selection but never of run or checked targets.
-#[test]
-fn best_authority_accepts_empty_selection_and_rejects_rerun_checkbox_and_scope_drift() {
-    use super::{SaveProducer, producer_targets};
-    let targets = vec![target(101, 11), target(202, 22)];
-    let mut auth = authority(3, 7, vec![11, 22], &targets);
-    auth.producer = SaveProducer::BestRun { seq: 9 };
-    let current = producer_targets(&auth.producer, vec![], Some((9, targets.clone()))).unwrap();
-    assert!(save_authority_matches(
-        &auth,
-        3,
-        Some(7),
-        Some(&[11, 22]),
-        &current
-    ));
-    assert!(
-        producer_targets(&auth.producer, targets.clone(), Some((10, targets.clone()))).is_none()
-    );
-    let unchecked = producer_targets(
-        &auth.producer,
-        targets.clone(),
-        Some((9, vec![target(101, 11)])),
-    )
-    .unwrap();
-    assert!(!save_authority_matches(
-        &auth,
-        3,
-        Some(7),
-        Some(&[11, 22]),
-        &unchecked
-    ));
-    assert!(!save_authority_matches(
-        &auth,
-        3,
-        Some(8),
-        Some(&[11]),
-        &current
-    ));
-    assert!(!save_authority_matches(
-        &auth,
-        4,
-        Some(7),
-        Some(&[11, 22]),
-        &current
-    ));
 }
 
 /// Build the Auto authority for an ordered target set and concrete workspace.

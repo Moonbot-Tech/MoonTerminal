@@ -87,6 +87,7 @@ pub(super) use strat_columns::{STRAT_COLS_ALL, STRAT_COLS_DEFAULT, STRAT_COLS_DE
 use super::AnalyticsView;
 use super::refresh::RefreshUrgency;
 use crate::design;
+use crate::design::moon;
 use moon_core::config::layout::StratColsByMode;
 
 /// Parse a strategy-list row key `"strategyid@core_uid"` (the list is split PER CORE)
@@ -320,9 +321,9 @@ impl AnalyticsView {
         // The coin lists were edited against the PREVIOUS strategy; carried over they would
         // read as "this strategy's coins". `invalidate` retires them along with the numbers.
         self.coins.invalidate();
-        self.ticks.invalidate_selection();
+        self.ticks.invalidate();
         self.coin_lists.invalidate();
-        self.reload_selection_axis(cx);
+        self.reload_axis(self.strat_mode, cx);
         cx.notify();
     }
 
@@ -555,23 +556,14 @@ impl AnalyticsView {
         // adding or removing a strategy retires both — including any unsaved tick, whose
         // baseline (the union of the selected strategies' saved lists) just changed.
         self.coins.invalidate();
-        self.ticks.invalidate_selection();
+        self.ticks.invalidate();
         self.coin_lists.invalidate();
         // The write banner speaks about an edit that was kept for a retry. `invalidate` has
         // just thrown that edit away with the scope it belonged to, so the banner would go on
         // promising something recoverable that no longer exists.
         self.write_error = None;
-        self.reload_selection_axis(cx);
+        self.reload_axis(self.strat_mode, cx);
         cx.notify();
-    }
-
-    /// Selection already retired the card search; the independent batch keeps its own scope.
-    fn reload_selection_axis(&mut self, cx: &mut Context<Self>) {
-        if self.strat_mode == StratMode::Ticks {
-            self.reload_ticks_for_selection(cx);
-        } else {
-            self.reload_axis(self.strat_mode, cx);
-        }
     }
 
     /// Plain click: single-select this row (clear the multi-set). Clicking the current anchor
@@ -702,7 +694,6 @@ impl AnalyticsView {
             return;
         }
         self.strat_mode = mode;
-        self.close_best_run(cx);
         self.backend.update(cx, |backend, _| {
             backend.ui_session.analytics.strat_mode = mode;
         });
@@ -819,16 +810,32 @@ impl AnalyticsView {
             StratMode::Ticks if !side_collapsed => {
                 // The matrix on top, the parameter grid with its search row below — the same
                 // right column as the filter axis; without a strategy, the column's note alone.
-                let side = if self.ticks.best.is_some() {
-                    self.best_pane_el(p, cx)
-                } else if side_empty {
-                    ticks::best::empty_pane_el(
-                        self.strategy_data
-                            .data()
-                            .is_some_and(|d| d.strategies.is_empty()),
-                        p,
-                        cx,
-                    )
+                let side = if side_empty {
+                    div()
+                        .size_full()
+                        .rounded(design::ui_px(cx, 8.0))
+                        .bg(moon(p.panel))
+                        .border_1()
+                        .border_color(moon(p.border))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        // Full width so the sentence wraps inside the column, centred per line;
+                        // an intrinsic-width child overflows the 470 px column.
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .text_center()
+                                .font_family(design::ui_font())
+                                .child(crate::load_state::muted(
+                                    t!("analytics.ticks.side_pick_strategy").to_string(),
+                                    10.0,
+                                    p,
+                                    cx,
+                                )),
+                        )
+                        .into_any_element()
                 } else {
                     self.ticks_side(p, window, cx)
                 };

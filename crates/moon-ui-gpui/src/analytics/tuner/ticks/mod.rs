@@ -44,8 +44,6 @@ pub(in crate::analytics::tuner) use summary::readiness_refusal;
 pub(in crate::analytics::tuner) use tape::{PackedTape, PendingDeal, prepare_sample};
 
 mod accuracy;
-/// Sequential searches and checked bulk consent for the strategy list's best picks.
-pub(in crate::analytics::tuner) mod best;
 mod cfg;
 pub(in crate::analytics::tuner) mod columns;
 mod delta_summary;

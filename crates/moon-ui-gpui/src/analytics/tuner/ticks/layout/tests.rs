@@ -860,7 +860,7 @@ fn every_ticks_language_has_the_same_keys_and_no_raw_card_text() {
                 || key.starts_with("analytics.ticks.legend.")
                 || key.starts_with("analytics.ticks.col_tip.")
                 || key.starts_with("analytics.ticks.chip.")
-                || key.starts_with("analytics.ticks.best.")
+                || *key == "analytics.ticks.side_pick_strategy"
         }) {
             assert!(!t!(key.as_str()).contains("analytics."), "raw key: {key}");
         }

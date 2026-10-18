@@ -505,14 +505,6 @@ impl Drop for TicksState {
 
 /// State of the "Entry/Exit" mode.
 pub(in crate::analytics) struct TicksState {
-    /// Session-only maximum number of strategies selected for a batch search.
-    pub(in crate::analytics::tuner) best_top: u8,
-    /// Monotonic identity of the batch producer, including cancelled runs.
-    pub(in crate::analytics::tuner) best_seq: u64,
-    /// Ordered batch results and the single active search handle.
-    pub(in crate::analytics::tuner) best: Option<super::best::BestRun>,
-    /// Whether the batch runner currently owns the search controls.
-    pub(in crate::analytics::tuner) best_running: bool,
     pub(in crate::analytics::tuner) data: LoadState<TicksData>,
     /// The period `data`'s rows were read under, `(from, to)` in UTC seconds as the query holds
     /// them — set with the rows they describe, so a report names the rows' period and not one a
@@ -730,13 +722,9 @@ impl TicksState {
 }
 
 impl Default for TicksState {
-    /// Start with the top five strategies and no active batch search.
+    /// Start with an idle search and no scored variant.
     fn default() -> Self {
         Self {
-            best_top: 5,
-            best_seq: 0,
-            best: None,
-            best_running: false,
             data: LoadState::default(),
             loaded_period: None,
             variant: HashMap::new(),
@@ -926,15 +914,17 @@ impl TicksState {
         self.dirty = true;
     }
 
+    /// The card search may start only while no search already owns the lane.
+    ///
+    /// Returns:
+    ///     `false` while a suggestion run is in flight.
+    pub(super) fn search_available(&self) -> bool {
+        !matches!(self.sugg, SuggState::Running { .. })
+    }
+
     /// The scope changed: every row belongs to the previous scope. The fetch batch is the
     /// process's, not the scope's, and runs on; its answers land on rows by id where present.
     pub(in crate::analytics) fn invalidate(&mut self) {
-        self.cancel_best();
-        self.invalidate_selection();
-    }
-
-    /// Retire card state after a selection click without retiring the independent batch.
-    pub(in crate::analytics) fn invalidate_selection(&mut self) {
         self.write_confirm = None;
         self.retire_rows();
         // A running search and its last answer describe the previous scope's deals.

@@ -124,7 +124,6 @@ fn unlisted_load_reach_is_core_aware() {
         None,
         500_000_000,
         None,
-        None,
     );
     assert_eq!(short_rows[0].tape, TapeStatus::Covered);
     assert_eq!(short_rows[0].held, Some((30_000, 0)));
@@ -157,7 +156,6 @@ fn unlisted_load_reach_is_core_aware() {
         None,
         500_000_000,
         None,
-        None,
     );
     assert_ne!(
         gapped_rows[0].tape,
@@ -185,7 +183,6 @@ fn unlisted_load_reach_is_core_aware() {
         Default::default(),
         None,
         3_710_000,
-        None,
         None,
     );
     assert_eq!(rows[0].tape, TapeStatus::Covered);

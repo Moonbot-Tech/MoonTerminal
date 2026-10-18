@@ -46,33 +46,14 @@ pub(super) fn unmodelled_map<'a>(
         .collect()
 }
 
-/// Render the same watched exit fields for a strategy read independently by the batch.
-pub(super) fn strategy_warns(
-    name: &str,
-    own: &HashMap<String, String>,
-    defaults: &HashMap<String, f64>,
-    deps: &FieldDeps,
-    human: bool,
-) -> Vec<String> {
-    let fields = unmodelled_fields(own, defaults, deps);
-    if fields.is_empty() {
-        return Vec::new();
-    }
-    let fields = fields
-        .iter()
-        .map(|f| {
-            (
-                f.key.to_string(),
-                f.value.clone(),
-                crate::strategies::sections::section_display_title(f.section.schema_title(), human),
-                f.rule.is_some(),
-            )
-        })
-        .collect();
-    warn_lines(vec![(name.to_string(), fields)], Vec::new())
-}
-
-/// Format single-card and batch warnings identically before write consent.
+/// Format the unmodelled-exit lines a write confirmation shows.
+///
+/// Args:
+///     rows: One entry per strategy that switches an unmodelled exit field on.
+///     unread: Display names of targets the axis has not read.
+///
+/// Returns:
+///     The warning lines, empty when both inputs are empty.
 fn warn_lines(rows: Vec<WarnRow>, unread: Vec<String>) -> Vec<String> {
     let mut warns = Vec::new();
     if !rows.is_empty() {
