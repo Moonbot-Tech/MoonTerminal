@@ -337,6 +337,8 @@ fn search(
         };
         if within {
             tracker.offer(point, &replayed, restart, min_n);
+            #[cfg(test)]
+            handle.answered(|| tracker.answer().is_some());
         }
         match steer {
             Steer::Answer => replayed.closed_all().cloned(),
@@ -469,7 +471,8 @@ fn search(
     }
     let distinct = ends.len();
     let restarts_done = runs.len();
-    if runs.is_empty() {
+    let answer = tracker.answer();
+    if runs.is_empty() && (answer.is_none() || !handle.keeps()) {
         return Err(SearchMiss::Nothing);
     }
     // What the descents refused, read before the counts below and the trim add to it.
@@ -483,13 +486,11 @@ fn search(
         .count();
     // The answer is the best point that closes every deal, met anywhere in any restart — a
     // descent steered by the deals closed need not stand on it at its end.
-    let answer = tracker.answer();
-    let (best_restart, passes, converged) = answer
+    let best_restart = answer.as_ref().map_or(0, |met| met.restart);
+    let (passes, converged) = answer
         .as_ref()
         .and_then(|met| runs.iter().find(|run| run.restart == met.restart))
-        .map_or((0, 0, false), |run| {
-            (run.restart, run.passes, run.converged)
-        });
+        .map_or((0, false), |run| (run.passes, run.converged));
     let (point, score) = match answer {
         Some(met) => drop_passengers(
             met.point,
@@ -497,12 +498,14 @@ fn search(
             &pinned,
             &evaluate,
             min_n,
-            &|| handle.is_cancelled(),
+            &|| handle.aborts_trim(),
         ),
         None => (Point::new(), None),
     };
     // Every point scored, the trim's trials included.
     let stats = SearchStats {
+        requested: restarts,
+        stopped: handle.abandoned(),
         restarts: restarts_done,
         best_restart,
         passes,
@@ -543,7 +546,7 @@ fn search(
     });
     log::info!(
         target: crate::diagnostics::TICKS_AXIS_TARGET,
-        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} purged, {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}, by the risk limits {}; points scored on entry fills read before {} of {}",
+        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} purged, {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}, by the risk limits {}; points scored on entry fills read before {} of {}; stopped {}/{} ({})",
         brief(&base_score),
         brief(&score),
         train.len(),
@@ -554,7 +557,10 @@ fn search(
         unclosed_n,
         risky_n,
         stats.fills_reused,
-        stats.evaluations
+        stats.evaluations,
+        stats.restarts,
+        stats.requested,
+        stats.stopped
     );
     // A point as scored — every field it switched on at a value — less what is in effect on no
     // strategy, and the fields of it that moved: a field every deal's base already spells so is

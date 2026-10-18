@@ -534,14 +534,23 @@ fn model(face: usize) -> SummaryModel {
             total: 11,
             left: Some(std::time::Duration::from_secs(43)),
             points: 107,
+            stopping: false,
         },
         2 => Verdict::Apply,
         3 => Verdict::DontApply(Why::HoldoutOpen { k: 7 }),
         4 => Verdict::Unchecked(Unchecked::Whole),
         6 => Verdict::Apply,
+        7 => Verdict::Running {
+            done: 3,
+            total: 11,
+            left: None,
+            points: 107,
+            stopping: true,
+        },
+        8 => Verdict::Cannot(t!("analytics.ticks.sum.stopped_empty").to_string()),
         _ => Verdict::Cannot(t!("analytics.ticks.sum.too_few", n = 3, min = 20).to_string()),
     };
-    let active = face >= 2;
+    let active = (2..=6).contains(&face);
     let open = t!("analytics.ticks.sum.open_line", n = 7, profit = "+6.19").to_string();
     let row = |hold: bool| ProfitRow {
         label: t!(if hold {
@@ -589,7 +598,14 @@ fn model(face: usize) -> SummaryModel {
         } else {
             Vec::new()
         },
-        warnings: if active {
+        warnings: if face == 6 {
+            vec![
+                t!("analytics.ticks.sum.stopped_after", n = 123, m = 1000).to_string(),
+                t!("analytics.ticks.sum.stopped_after", n = 0, m = 1).to_string(),
+                open.clone(),
+                t!("analytics.ticks.assumptions").to_string(),
+            ]
+        } else if active {
             vec![open.clone(), t!("analytics.ticks.assumptions").to_string()]
         } else {
             Vec::new()
@@ -604,7 +620,7 @@ fn model(face: usize) -> SummaryModel {
             .into_iter()
             .collect(),
         details_open: active,
-        write_enabled: face != 5,
+        write_enabled: !matches!(face, 5 | 8),
         copy_visible: active,
         can_reset: active,
         confirm: (face == 3).then(|| ConfirmModel {
@@ -833,7 +849,7 @@ fn every_ticks_language_has_the_same_keys_and_no_raw_card_text() {
     for language in Language::ALL {
         assert_eq!(keys(language.code()), en, "{}", language.code());
         let _locale = crate::test_locale::force(language.code());
-        for face in 0..7 {
+        for face in 0..9 {
             let m = model(face);
             let mut text = vec![
                 m.title,
@@ -890,7 +906,7 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
             let _locale = crate::test_locale::force(language.code());
             for zoom in [1.0, 1.25] {
                 for width in [520.0, 400.0] {
-                    for face in 0..7 {
+                    for face in 0..9 {
                         let window = cx.open_window(
                             gpui::size(px(width * zoom), px(540.0 * zoom)),
                             |window, cx| {
@@ -1016,17 +1032,21 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                         let mut prose = vec![m.sentence];
                         // Short labels sit beside a sibling in a wrapping row; they must wrap the row, never their glyphs.
                         let mut labels = Vec::new();
-                        if face == 1 {
+                        if face == 1 || face == 7 {
                             labels.push(super::super::summary::progress_text(3, 11, 107));
-                            labels.push(
-                                t!(
-                                    "analytics.ticks.sum.left",
-                                    time = super::super::estimate::duration_text(
-                                        std::time::Duration::from_secs(43)
+                            if face == 7 {
+                                prose.push(t!("analytics.ticks.sum.stopping").to_string());
+                            } else {
+                                labels.push(
+                                    t!(
+                                        "analytics.ticks.sum.left",
+                                        time = super::super::estimate::duration_text(
+                                            std::time::Duration::from_secs(43)
+                                        )
                                     )
-                                )
-                                .to_string(),
-                            );
+                                    .to_string(),
+                                );
+                            }
                         } else {
                             if m.train.is_some() || m.holdout.is_some() {
                                 let unit = crate::analytics::pnl_unit_label();
@@ -1163,9 +1183,9 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                                 ));
                             }
                         }
-                        let actions = if face == 1 {
+                        let actions = if face == 1 || face == 7 {
                             vec![("stop", "stop")]
-                        } else if face >= 2 {
+                        } else if (2..=6).contains(&face) {
                             let mut out =
                                 vec![("write", "write"), ("copy", "copy"), ("reset", "reset")];
                             if face == 3 {

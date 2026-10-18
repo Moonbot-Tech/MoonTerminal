@@ -8,6 +8,7 @@ use crate::db::tuner::ticks::Deltas;
 use crate::feed::types::Side;
 
 mod performance;
+mod stopped;
 
 /// Search only the take on a chronological half sample, exposing embargo selection regressions.
 fn embargo_search(deals: &[PreparedDeal]) -> SearchResult {

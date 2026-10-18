@@ -22,7 +22,7 @@ use gpui::*;
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
-use super::state::{CutCache, CutKey, SuggState};
+use super::state::{CutCache, CutKey, StopOutcome, SuggState, stopped_note};
 use super::tape::{PendingDeal, prepare_sample};
 use crate::analytics::bg::ReadLane;
 use moon_core::db::tuner::VarStats;
@@ -566,9 +566,13 @@ impl AnalyticsView {
         let estimate = self
             .ticks_search_size(only)
             .and_then(|size| self.ticks_search_time(&size));
+        let cost_key = self
+            .ticks_search_size(only)
+            .and_then(|size| self.ticks_cost_key(&size, restarts));
         self.ticks.start_search(
             handle.clone(),
             restarts,
+            cost_key.map_or_else(|| super::estimate::side_by_side(restarts), |k| k.parallel),
             started,
             estimate,
             (train_n, pending.len().saturating_sub(train_n)),
@@ -590,9 +594,6 @@ impl AnalyticsView {
             self.ticks.steps_per_param()
         );
         probe::watch(handle.clone(), restarts, seq);
-        let cost_key = self
-            .ticks_search_size(only)
-            .and_then(|size| self.ticks_cost_key(&size, restarts));
         self.poll_ticks_search(handle.clone(), seq, cost_key, started, cx);
         let timing_handle = handle.clone();
         self.spawn_latest_db(
@@ -656,7 +657,13 @@ impl AnalyticsView {
                 if this.ticks.sugg_seq != seq {
                     return;
                 }
-                super::estimate::take_search_cost(cost_key, timing_handle.completed(), started.elapsed());
+                // A Stop that cut restarts short (`finish_search`): the answer lands as a finished
+                // run's, and says how much of the run it stands on. Its poller already published
+                // the restarts it measured; the cut run's wall time would skew them.
+                let stopped = timing_handle.abandoned();
+                if !stopped {
+                    super::estimate::take_search_cost(cost_key, timing_handle.completed(), restarts, started.elapsed());
+                }
                 this.ticks.sugg = SuggState::Idle;
                 // В1 as the search found it: a candidate is laid over this, never over the
                 // answer, whose completed values (a `TakeProfit` its `UseTakeProfit` brought) sit
@@ -672,6 +679,16 @@ impl AnalyticsView {
                         this.ticks.result_variant = super::state::changes_of(&answered);
                         this.ticks.variant = answered;
                         this.ticks.last_seed = Some(result.seed);
+                        let (note, _) = stopped_note(
+                            stopped,
+                            StopOutcome::Found {
+                                restarts: result.stats.restarts,
+                                requested: result.stats.requested,
+                            },
+                            candidate.is_some(),
+                            this.ticks.sugg_note.take(),
+                        );
+                        this.ticks.sugg_note = note;
                         this.ticks.last_result = Some(result);
                         this.ticks.last_search_elapsed = Some(started.elapsed());
                     }
@@ -683,8 +700,19 @@ impl AnalyticsView {
                         this.ticks.last_result = None;
                         this.ticks.last_search_elapsed = None;
                         let floor = min_n.unwrap_or_else(|| default_min_n(train_n));
-                        this.ticks.sugg_note = Some(miss_note(miss, floor));
-                        this.ticks.sugg_refusal = this.ticks.sugg_note.clone();
+                        let (note, refusal) = stopped_note(
+                            stopped,
+                            StopOutcome::Missed {
+                                too_few: matches!(miss, SearchMiss::TooFew { .. }),
+                                note: miss_note(miss, floor),
+                                completed: timing_handle.completed(),
+                                launched: restarts,
+                            },
+                            candidate.is_some(),
+                            this.ticks.sugg_note.take(),
+                        );
+                        this.ticks.sugg_note = note;
+                        this.ticks.sugg_refusal = refusal;
                     }
                 }
                 // The point that earns more on the deals it closed but leaves some open goes
@@ -732,7 +760,14 @@ impl AnalyticsView {
                         // A search of both groups moves its entry points long before a restart.
                         let done = (handle.completed(), handle.points());
                         if running && shown != Some(done) {
-                            super::estimate::take_search_cost(cost_key, done.0, started.elapsed());
+                            if let SuggState::Running { total, .. } = &this.ticks.sugg {
+                                super::estimate::take_search_cost(
+                                    cost_key,
+                                    done.0,
+                                    *total,
+                                    started.elapsed(),
+                                );
+                            }
                             shown = Some(done);
                             cx.notify();
                         }
@@ -751,9 +786,9 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// Stop a running search; what it found so far is dropped.
+    /// Stop a running search; what it found so far is kept and lands as its result.
     pub(in crate::analytics::tuner) fn ticks_stop_suggest(&mut self, cx: &mut Context<Self>) {
-        self.ticks.stop_search("Stop");
+        self.ticks.finish_search();
         cx.notify();
     }
 

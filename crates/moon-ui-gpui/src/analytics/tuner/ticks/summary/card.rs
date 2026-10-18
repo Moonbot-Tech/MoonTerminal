@@ -311,6 +311,7 @@ pub(in crate::analytics::tuner) fn summary_card_el(
         total,
         left,
         points,
+        stopping,
     } = &m.verdict
     {
         let pct = if *total == 0 {
@@ -343,11 +344,19 @@ pub(in crate::analytics::tuner) fn summary_card_el(
                         )
                     })),
             )
+            // A sentence, not a short label: it wraps instead of pushing past a narrow card.
+            .children((*stopping).then(|| {
+                prose(
+                    t!("analytics.ticks.sum.stopping").to_string(),
+                    p.text_muted,
+                    cx,
+                )
+            }))
             .child(h_flex().child(button(
                 "an-ticks-sum-stop",
                 "analytics.ticks.sum.stop",
                 MoonButtonVariant::Soft,
-                true,
+                !*stopping,
                 acts.stop.clone(),
                 cx,
             )));

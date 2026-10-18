@@ -26,6 +26,7 @@ pub struct SearchHandle(Arc<Signals>);
 #[derive(Default)]
 struct Signals {
     cancelled: AtomicBool,
+    keep: AtomicBool,
     completed: AtomicUsize,
     /// Set once any unit of work is dropped unfinished. See [`SearchHandle::abandoned`].
     abandoned: AtomicBool,
@@ -33,6 +34,12 @@ struct Signals {
     stage: AtomicU64,
     /// Outer points scored by a whole inner search. See [`SearchHandle::points`].
     points: AtomicUsize,
+    /// Test seam: finish at the first answer. See [`SearchHandle::finish_on_answer`].
+    #[cfg(test)]
+    finish_on_answer: AtomicBool,
+    /// Test seam: turn the armed finish into a hard cancel at the first answer.
+    #[cfg(test)]
+    cancel_on_answer: AtomicBool,
 }
 
 /// Bits reserved for `done` and `total` in the packed stage word; `step` takes what is left.
@@ -66,16 +73,39 @@ impl SearchHandle {
     ///
     /// One-way: a cancelled handle stays cancelled. Restarts already abandoned cannot be revived,
     /// so a handle that could be un-cancelled would report a count nothing is still producing.
+    ///
+    /// A hard cancel also withdraws an earlier [`Self::finish`]: whoever drops the run after a
+    /// Stop no longer wants its answer, so the trim aborts again instead of finishing for nobody.
     pub fn cancel(&self) {
-        self.0.cancelled.store(true, Ordering::Relaxed);
+        self.0.keep.store(false, Ordering::Relaxed);
+        // Release publishes the dropped keep to whoever observes the cancel with Acquire.
+        self.0.cancelled.store(true, Ordering::Release);
+    }
+
+    /// Stop the search while keeping its best answer for final scoring and trimming.
+    ///
+    /// A later [`Self::cancel`] still wins and drops the answer.
+    pub fn finish(&self) {
+        // Relaxed is enough: the Release store of `cancelled` below publishes it.
+        self.0.keep.store(true, Ordering::Relaxed);
+        self.0.cancelled.store(true, Ordering::Release);
+    }
+
+    /// Whether a stop should keep and finalize the best answer met so far.
+    pub fn keeps(&self) -> bool {
+        self.0.keep.load(Ordering::Acquire)
+    }
+
+    /// Abort trimming only when the caller discards the answer rather than keeping a Stop.
+    pub fn aborts_trim(&self) -> bool {
+        self.is_cancelled() && !self.keeps()
     }
 
     /// Whether a stop was requested.
     ///
-    /// Relaxed ordering is deliberate: the flag carries no data of its own, and the search's
-    /// results travel back through the thread pool's own synchronization.
+    /// Acquire pairs with `finish` so observing cancellation also observes its keep decision.
     pub fn is_cancelled(&self) -> bool {
-        self.0.cancelled.load(Ordering::Relaxed)
+        self.0.cancelled.load(Ordering::Acquire)
     }
 
     /// Whether both handles control the SAME run.
@@ -190,3 +220,6 @@ impl SearchHandle {
         Some((step as usize, field(STAGE_FIELD_BITS), field(0)))
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -49,6 +49,9 @@ pub(super) enum Verdict {
         total: usize,
         left: Option<Duration>,
         points: usize,
+        /// Stop was pressed and the run is winding down to its best so far: no time left to
+        /// show, and no second Stop to press.
+        stopping: bool,
     },
     Cannot(String),
     Apply,
@@ -81,18 +84,19 @@ pub(super) enum Unchecked {
 
 /// Apply requires strict gains, a closed sufficient holdout, and no sample loss from held edits.
 pub(super) fn verdict_of(
-    running: Option<(usize, usize, Option<Duration>, usize)>,
+    running: Option<(usize, usize, Option<Duration>, usize, bool)>,
     too_few: Option<usize>,
     refusal: Option<&str>,
     result: Option<&SearchResult>,
     has_changes: bool,
 ) -> Verdict {
-    if let Some((done, total, left, points)) = running {
+    if let Some((done, total, left, points, stopping)) = running {
         return Verdict::Running {
             done,
             total,
             left,
             points,
+            stopping,
         };
     }
     if let Some(n) = too_few.filter(|_| result.is_none()) {
@@ -330,12 +334,25 @@ impl SummaryModel {
                 total,
                 started,
                 estimate,
+                parallel,
+                stopping,
                 ..
             } => Some((
                 handle.completed(),
                 *total,
-                remaining_time(handle.completed(), *total, started.elapsed(), *estimate),
+                (!*stopping)
+                    .then(|| {
+                        remaining_time(
+                            handle.completed(),
+                            *total,
+                            started.elapsed(),
+                            *estimate,
+                            *parallel,
+                        )
+                    })
+                    .flatten(),
                 handle.points(),
+                *stopping,
             )),
         };
         let result = state.current_result();

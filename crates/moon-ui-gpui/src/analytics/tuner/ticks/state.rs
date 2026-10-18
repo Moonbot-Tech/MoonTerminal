@@ -486,12 +486,16 @@ pub(in crate::analytics::tuner) enum SuggState {
     Running {
         handle: SearchHandle,
         total: usize,
+        /// Restarts launched side by side, used to measure first-wave throughput.
+        parallel: usize,
         /// Wall-clock start of the launched run, including its queue wait.
         started: Instant,
         /// Measured estimate for the scope launched by this run.
         estimate: Option<Duration>,
         /// Train and holdout counts of the launched sample, independent of the editable dropdown.
         sample: (usize, usize),
+        /// Stop was pressed: the search is winding down to the best variant it found so far.
+        stopping: bool,
     },
 }
 
@@ -987,11 +991,35 @@ impl TicksState {
         self.sugg_seq = self.sugg_seq.wrapping_add(1);
     }
 
+    /// Ask a running search to stop and KEEP what it found so far: its completion still lands,
+    /// as a finished run's would, so the generation is left alone.
+    pub(in crate::analytics::tuner) fn finish_search(&mut self) {
+        if let SuggState::Running {
+            handle,
+            total,
+            stopping,
+            ..
+        } = &mut self.sugg
+        {
+            if *stopping {
+                return;
+            }
+            log::info!(
+                target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+                "[x] ticks search: stopped by Stop at {}/{total} restart(s), keeping the best so far",
+                handle.completed()
+            );
+            handle.finish();
+            *stopping = true;
+        }
+    }
+
     /// Publish a launched search while retiring consent and refusal for the previous point.
     pub(in crate::analytics::tuner) fn start_search(
         &mut self,
         handle: SearchHandle,
         total: usize,
+        parallel: usize,
         started: Instant,
         estimate: Option<Duration>,
         sample: (usize, usize),
@@ -1001,9 +1029,11 @@ impl TicksState {
         self.sugg = SuggState::Running {
             handle,
             total,
+            parallel,
             started,
             estimate,
             sample,
+            stopping: false,
         };
     }
 
@@ -1287,5 +1317,64 @@ impl TicksData {
                 .filter(|r| r.tape == TapeStatus::Covered)
                 .map(|r| r.verdict.as_ref()),
         );
+    }
+}
+
+/// How a search ended, as far as its note cares.
+pub(in crate::analytics::tuner) enum StopOutcome {
+    /// An answer: `restarts` of the `requested` ones stand behind it.
+    Found { restarts: usize, requested: usize },
+    /// No answer: `note` says why; `completed` of the `launched` restarts ran.
+    Missed {
+        too_few: bool,
+        note: String,
+        completed: usize,
+        launched: usize,
+    },
+}
+
+/// The search note and refusal once a run lands, from whether a Stop cut it short, how it
+/// ended, whether a candidate is laid over В1, and the note the launch already set
+/// (`existing`). A refusal of `None` beside an answer leaves the current refusal as it is.
+///
+/// A stopped answer keeps the launch's note and adds how much of the run it stands on; a
+/// stopped miss with a candidate shown says the same of the candidate's restarts and refuses
+/// with the miss; without one, the Stop itself is the refusal. A sample too small to search
+/// keeps its own reason, stopped or not.
+pub(in crate::analytics::tuner) fn stopped_note(
+    stopped: bool,
+    outcome: StopOutcome,
+    candidate_shown: bool,
+    existing: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let after = |n: usize, m: usize| {
+        rust_i18n::t!("analytics.ticks.sum.stopped_after", n = n, m = m).to_string()
+    };
+    match outcome {
+        StopOutcome::Found { .. } if !stopped => (existing, None),
+        StopOutcome::Found {
+            restarts,
+            requested,
+        } => {
+            let after = after(restarts, requested);
+            let note = match existing {
+                Some(existing) => format!("{existing} {after}"),
+                None => after,
+            };
+            (Some(note), None)
+        }
+        StopOutcome::Missed { too_few, note, .. } if !stopped || too_few => {
+            (Some(note.clone()), Some(note))
+        }
+        StopOutcome::Missed {
+            note,
+            completed,
+            launched,
+            ..
+        } if candidate_shown => (Some(after(completed, launched)), Some(note)),
+        StopOutcome::Missed { .. } => {
+            let empty = rust_i18n::t!("analytics.ticks.sum.stopped_empty").to_string();
+            (Some(empty.clone()), Some(empty))
+        }
     }
 }

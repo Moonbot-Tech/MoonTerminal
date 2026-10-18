@@ -2,6 +2,63 @@ use std::time::Duration;
 
 use super::{count_text, duration_text, pick_all_label, side_by_side, side_by_side_on};
 
+/// Dividing the first completion by one would inflate a twelve-thread run's ETA twelvefold.
+#[test]
+fn first_wave_eta_tracks_pool_throughput() {
+    use super::{observed_start_cost, remaining_time};
+    let elapsed = Duration::from_secs_f64(12.86);
+    let truth = 1071.829 - elapsed.as_secs_f64();
+    let eta = remaining_time(1, 1000, elapsed, Some(Duration::from_secs(1100)), 12)
+        .unwrap()
+        .as_secs_f64();
+    assert!((truth / 2.0..=truth * 2.0).contains(&eta));
+    // The old arithmetic, one restart at a time, overshoots the truth more than fivefold.
+    assert!(
+        remaining_time(1, 1000, elapsed, None, 1)
+            .unwrap()
+            .as_secs_f64()
+            > truth * 5.0
+    );
+    let measured = remaining_time(1, 1000, elapsed, None, 12).unwrap();
+    assert!((truth / 2.0..=truth * 2.0).contains(&measured.as_secs_f64()));
+    assert!((measured.as_secs_f64() - truth).abs() < truth * 0.02);
+    assert_eq!(
+        remaining_time(1, 1000, elapsed, Some(Duration::from_secs(2400)), 12),
+        Some(Duration::from_secs_f64(2387.14))
+    );
+    let steady = remaining_time(500, 1000, Duration::from_secs_f64(535.9), None, 12).unwrap();
+    assert!((steady.as_secs_f64() - 535.9).abs() < 0.001);
+    assert_eq!(observed_start_cost(1, elapsed, 1), Some(elapsed));
+    assert_eq!(remaining_time(1, 10, elapsed, None, 1), Some(elapsed * 9));
+    assert!(
+        remaining_time(1, 1000, elapsed, Some(Duration::from_secs(1)), 12).unwrap()
+            > Duration::ZERO
+    );
+}
+
+/// Publishing a partial first wave would poison the next search button's prediction.
+#[test]
+fn throughput_is_published_only_after_a_wave_or_completion() {
+    use super::{CostKey, publishes};
+    assert!(!publishes(1, 1000, 12));
+    assert!(publishes(12, 1000, 12));
+    assert!(publishes(3, 3, 12));
+    assert!(publishes(1, 1000, 0));
+    let key = CostKey {
+        work: 1.0,
+        fallback: 1.0,
+        model: Default::default(),
+        parallel: 12,
+    };
+    let wave = Duration::from_secs_f64(12.861948);
+    assert_eq!(
+        super::observed_start_cost(12, wave, 12),
+        Some(wave.div_f64(12.0))
+    );
+    let observed = Some((key, wave.div_f64(12.0)));
+    assert!((key.estimate(1000, observed).as_secs_f64() - 1071.829).abs() < 107.1829);
+}
+
 /// An estimate that assumed every CPU runs restarts would promise a 32-CPU box finishes ~28%
 /// sooner than its 23-thread search pool can: side by side is bounded by the pool, not the box.
 #[test]
@@ -29,15 +86,15 @@ fn observed_button_and_zero_progress_eta_share_restart_cost() {
     };
     let key = CostKey::new(293, 70, 500, &size, ModelSettings::default());
     let elapsed = Duration::from_secs(156);
-    let observed = observed_start_cost(100, elapsed).unwrap();
+    let observed = observed_start_cost(100, elapsed, 1).unwrap();
     let button = key.estimate(500, Some((key, observed)));
     assert_eq!(button, Duration::from_secs(780));
     assert_eq!(
-        remaining_time(0, 500, Duration::ZERO, Some(button)),
+        remaining_time(0, 500, Duration::ZERO, Some(button), 1),
         Some(button)
     );
     assert_eq!(
-        remaining_time(100, 500, elapsed, None),
+        remaining_time(100, 500, elapsed, None, 1),
         Some(Duration::from_secs(624))
     );
     let larger = CostKey::new(586, 70, 500, &size, ModelSettings::default());
@@ -91,8 +148,8 @@ fn unobserved_reference_is_conservative_and_zero_progress_cannot_calibrate() {
     let key = CostKey::new(293, 70, 500, &size, ModelSettings::default());
     let reference = Duration::from_secs(780);
     assert!(key.estimate(500, None).as_secs_f64() / reference.as_secs_f64() >= 1.0);
-    assert_eq!(observed_start_cost(0, reference), None);
-    assert_eq!(observed_start_cost(500, Duration::ZERO), None);
+    assert_eq!(observed_start_cost(0, reference, 1), None);
+    assert_eq!(observed_start_cost(500, Duration::ZERO, 1), None);
 }
 
 /// A missing sample omits the estimate; an available prediction appears once.

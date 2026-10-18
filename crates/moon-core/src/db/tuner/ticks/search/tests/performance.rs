@@ -84,6 +84,8 @@ fn repeated_point_search_preserves_the_answer() {
     assert_eq!(
         found.stats,
         SearchStats {
+            requested: 500,
+            stopped: false,
             restarts: 500,
             best_restart: 0,
             passes: 2,

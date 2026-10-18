@@ -759,9 +759,11 @@ fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits(
     state.sugg = super::super::state::SuggState::Running {
         handle: handle.clone(),
         total: 3,
+        parallel: 1,
         started: std::time::Instant::now(),
         estimate: None,
         sample: (23, 9),
+        stopping: false,
     };
     state.last_result = Some(moon_core::db::tuner::ticks::SearchResult {
         values: Vec::new(),
