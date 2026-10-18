@@ -92,13 +92,14 @@ telegram.report_prev: "Previous"
 telegram.report_next: "Next"
 
 telegram.report_unvalued: "Unavailable"
+telegram.report_quote_unknown: "unknown currency"
 
 telegram.report_empty: "No closed trades in this period"
 
 telegram.report_scope: "Selected group in terminal history · closed real trades · rates at trade time. Local history; offline bots do not update."
 telegram.report_scope_station: "Selected group in the station's history · closed real trades · rates at trade time. The station copies the cores' history around the clock; offline bots do not update."
 
-telegram.report_missing_rates: "If any trades lack valuation, the complete USDT total is unavailable. Details retain known currency subtotals; unknown currencies are excluded."
+telegram.report_missing_rates: "If some trades have no USDT rate, the total splits into lines: \"Total USDT\" over the fully valued currencies and one line per remaining currency in that currency, such as \"Total RUB\". Amounts in different currencies are never added; trades of an unknown currency are shown as a count only."
 
 telegram.report_busy: "The previous report is still being calculated. Please try again shortly."
 

@@ -18,6 +18,9 @@ use rusqlite::types::Value;
 use crate::util::fmt::{self, DeltaSign};
 
 pub(in crate::db) mod coin_m;
+mod split;
+
+pub use split::{SourceGroups, ValuationPart};
 
 /// Decode a SQLite report value into an integral persisted currency ordinal.
 ///
@@ -991,6 +994,11 @@ pub struct QuoteBreakdown {
     /// contributing-core count would be a different number. Zero is also what Analytics and any
     /// hand-built breakdown carry. It is never rendered as a count of zero cores.
     pub counted_cores: u64,
+    /// The per-source, per-quote groups this breakdown was folded from, so
+    /// [`Self::valuation_split`] can rebuild any subset of its currencies. Only the Report totals
+    /// read records them; everywhere else they stay empty. Boxed: the four group lists would
+    /// otherwise add 96 bytes to a type that enums such as `ProfitScope` carry by value.
+    pub source_groups: Box<SourceGroups>,
 }
 
 impl QuoteBreakdown {

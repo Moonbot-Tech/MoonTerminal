@@ -93,13 +93,14 @@ telegram.report_prev: "Anterior"
 telegram.report_next: "Próxima"
 
 telegram.report_unvalued: "Indisponível"
+telegram.report_quote_unknown: "moeda desconhecida"
 
 telegram.report_empty: "Não há operações fechadas neste período"
 
 telegram.report_scope: "Grupo selecionado no histórico do terminal · operações reais fechadas · cotações no momento da operação. Histórico local; bots offline não atualizam."
 telegram.report_scope_station: "Grupo selecionado no histórico da estação · operações reais fechadas · cotações no momento da operação. A estação copia o histórico dos núcleos o tempo todo; bots offline não atualizam."
 
-telegram.report_missing_rates: "Se alguma operação não tiver avaliação, o total completo em USDT fica indisponível. Os detalhes guardam os subtotais das moedas conhecidas; moedas desconhecidas ficam de fora."
+telegram.report_missing_rates: "Se algumas operações não tiverem cotação em USDT, o total se divide em linhas: «Total USDT» com as moedas avaliadas por completo e uma linha para cada moeda restante nessa moeda, como «Total RUB». Valores em moedas diferentes nunca são somados; operações em moeda desconhecida aparecem só pela contagem."
 
 telegram.report_busy: "O relatório anterior ainda está sendo calculado. Tente de novo em instantes."
 
