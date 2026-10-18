@@ -1379,12 +1379,13 @@ fn station_reports_and_help_limit_navigation_to_the_owner() {
     }
 }
 
-/// Missing valuation must never display a native BTC subtotal as USDT or invent a zero.
+/// Missing valuation must never display a native BTC subtotal as USDT or invent a zero: an
+/// unvalued currency is stated in its own ticker, and unknown money stays unvalued.
 #[test]
 fn unvalued_and_unknown_money_is_not_a_usdt_total() {
     let _locale = crate::test_locale::force("en");
     let total = QuoteBreakdown::from_groups([(Some(0), 2.0, 1)]);
-    assert_eq!(profit(&total), rust_i18n::t!("telegram.report_unvalued"));
+    assert_eq!(profit(&total), "+2.00000000\u{a0}BTC");
     let total = QuoteBreakdown::from_groups([(None, 2.0, 1)]).with_valuation(ValuationCoverage {
         eligible_orders: 0,
         valued_orders: 0,
@@ -2252,9 +2253,10 @@ fn cores_are_listed_under_their_groups() {
     };
     assert!(html.contains("<tr><th align=\"right\">main</th>"), "{html}");
     let table = &html[..html.find("</table>").unwrap()];
+    // The fixture's BTC has no USDT valuation, so its total band is labelled with its currency.
     assert!(
         table[table.rfind("<tr>").unwrap()..]
-            .starts_with("<tr><th align=\"left\"><b>Total</b></th>"),
+            .starts_with("<tr><th align=\"left\"><b>Total BTC</b></th>"),
         "{html}"
     );
     assert!(html.contains("<tr><td>A</td>"), "{html}");

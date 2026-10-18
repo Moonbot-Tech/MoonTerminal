@@ -171,6 +171,7 @@ fn found(n: i64) -> Option<UndatedCloses> {
             traded_volume: Default::default(),
             entry_spend: Default::default(),
             counted_cores: 0,
+            source_groups: Default::default(),
         },
     })
 }

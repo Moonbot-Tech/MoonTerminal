@@ -6,13 +6,16 @@ use moon_core::{
         GroupRowStyle, ReportColumn, ReportLayout, TotalPlace, TotalSeparation,
         telegram_menu::ReportBasis,
     },
-    db::QuoteBreakdown,
+    db::{QuoteBreakdown, ValuationPart},
     telegram::{
         api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup},
         report::{ReportRequest, ReportScope},
         runtime::Response,
     },
-    util::{display_time, fmt},
+    util::{
+        display_time,
+        fmt::{self, DeltaSign},
+    },
 };
 
 use super::{Page, Row};
@@ -28,15 +31,154 @@ const RICH_MESSAGE_BLOCK_LIMIT: usize = 500;
 /// Escape all external text before inserting it into Telegram's restricted rich HTML.
 pub(crate) use crate::html::escape;
 
-/// Render complete USDT only; missing or unknown valuation never masquerades as zero.
+/// Render the result as complete USDT, or, when some trades have no USDT value, as its parts.
+///
+/// Missing or unknown valuation never masquerades as zero; a trade without a rate no longer hides
+/// what the rest made either — see [`profit_cell`]. Only the tests read the text alone.
+#[cfg(test)]
 pub(super) fn profit(total: &QuoteBreakdown) -> String {
+    profit_cell(total).0
+}
+
+/// The result text and the sign that colours it.
+///
+/// A complete USDT total reads `+19.32$`. Otherwise every part of
+/// [`QuoteBreakdown::valuation_split`] is stated on its own — the fully valued currencies as one
+/// dollar figure, each other currency in its own money (`+200.00 RUB`), unknown currencies as
+/// unvalued — joined by `; `. They are never added: there is no rate to add them with. Only a
+/// single part has a sign to colour by.
+fn profit_cell(total: &QuoteBreakdown) -> (String, Option<DeltaSign>) {
     if total.orders == 0 {
-        return "0.00$".into();
+        return ("0.00$".into(), None);
     }
+    if let Some((text, sign)) = usdt_text(total) {
+        return (text, Some(sign));
+    }
+    let parts: Vec<_> = total
+        .valuation_split()
+        .iter()
+        .map(|part| match part {
+            ValuationPart::Usdt(part) => usdt_text(part),
+            ValuationPart::Native(currency, part) => part.totals.first().and_then(|bucket| {
+                fmt::signed_fixed(bucket.profit, currency.display_decimals())
+                    .map(|(amount, sign)| (format!("{amount}\u{a0}{}", currency.ticker()), sign))
+            }),
+            ValuationPart::Unknown(_) => None,
+        })
+        .collect();
+    let sign = match parts.as_slice() {
+        [Some((_, sign))] => Some(*sign),
+        _ => None,
+    };
+    let text = parts
+        .into_iter()
+        .map(|part| part.map_or_else(|| t!("telegram.report_unvalued").to_string(), |p| p.0))
+        .collect::<Vec<_>>()
+        .join("; ");
+    (text, sign)
+}
+
+/// A complete USDT result as `+19.32$` with its sign, or `None` when it is incomplete.
+fn usdt_text(total: &QuoteBreakdown) -> Option<(String, DeltaSign)> {
     total
         .unified_usdt()
-        .and_then(|amount| fmt::signed_fixed(amount.profit, 2).map(|value| format!("{}$", value.0)))
-        .unwrap_or_else(|| t!("telegram.report_unvalued").to_string())
+        .and_then(|amount| fmt::signed_fixed(amount.profit, 2))
+        .map(|(amount, sign)| (format!("{amount}$"), sign))
+}
+
+/// The lines a total band takes: one when the total converts to USDT whole, otherwise one per
+/// part of [`QuoteBreakdown::valuation_split`] — `Total USDT`, `Total RUB`, … — so every column of
+/// each line describes one comparable scope instead of the whole band reading "unvalued".
+///
+/// Args:
+///     total: The band's money.
+///     label: The band's localized label, `Total` or `Exchange total`.
+///
+/// Returns:
+///     `(label, money)` per line, in the split's order.
+fn total_lines(total: &QuoteBreakdown, label: &str) -> Vec<(String, QuoteBreakdown)> {
+    if total.orders == 0 || total.unified_usdt().is_some() {
+        return vec![(label.to_string(), total.clone())];
+    }
+    total
+        .valuation_split()
+        .into_iter()
+        .map(|part| match part {
+            ValuationPart::Usdt(part) => (format!("{label} USDT"), part),
+            ValuationPart::Native(currency, part) => {
+                (format!("{label} {}", currency.ticker()), part)
+            }
+            ValuationPart::Unknown(orders) => (
+                format!("{label} · {}", t!("telegram.report_quote_unknown")),
+                QuoteBreakdown {
+                    unknown_orders: orders,
+                    orders,
+                    ..QuoteBreakdown::default()
+                },
+            ),
+        })
+        .collect()
+}
+
+/// State one column per part, the way [`profit_cell`] states the result.
+///
+/// A row that does not convert to USDT whole — a core trading USDT and RUB — would otherwise put
+/// a split result beside an "unvalued" average and volume. Each part's cell is computed over that
+/// part alone and the texts are joined by `; `; several parts have no single sign to colour by.
+/// A total band never reaches the join: [`total_lines`] already hands it one part per line.
+///
+/// Args:
+///     total: The row's money.
+///     cell: The column's renderer for one comparable scope.
+fn per_part(
+    total: &QuoteBreakdown,
+    cell: fn(&QuoteBreakdown) -> (String, Option<DeltaSign>),
+) -> (String, Option<DeltaSign>) {
+    let parts = total_lines(total, "");
+    if parts.len() < 2 {
+        return cell(total);
+    }
+    let text = parts
+        .iter()
+        .map(|(_, part)| cell(part).0)
+        .collect::<Vec<_>>()
+        .join("; ");
+    (text, None)
+}
+
+/// Average-order return as a signed percent, or unvalued.
+fn average_cell(total: &QuoteBreakdown) -> (String, Option<DeltaSign>) {
+    let value = total
+        .average_order_return()
+        .and_then(|value| fmt::signed_pct(value.pct, 1));
+    (
+        value.as_ref().map_or_else(
+            || t!("telegram.report_unvalued").to_string(),
+            |(text, _)| text.clone(),
+        ),
+        value.map(|(_, sign)| sign),
+    )
+}
+
+/// Traded volume in whole dollars, or in its one native currency when the scope is complete.
+fn volume_cell(total: &QuoteBreakdown) -> (String, Option<DeltaSign>) {
+    (
+        crate::notify::render::whole_dollar_volume(total.traded_volume.usdt)
+            .or_else(|| match total.traded_volume.totals.as_slice() {
+                [bucket]
+                    if total.traded_volume.usdt.is_none()
+                        && total.traded_volume.unknown_orders == 0
+                        && total.traded_volume.reconstructed_orders
+                            == total.traded_volume.eligible_orders
+                        && total.traded_volume.eligible_orders > 0 =>
+                {
+                    crate::notify::render::native_volume_text(bucket.currency, bucket.amount)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| t!("telegram.report_unvalued").to_string()),
+        None,
+    )
 }
 
 /// Native currency subtotals preserve useful evidence even when conversion is incomplete.
@@ -333,13 +475,18 @@ fn total_html(total: &QuoteBreakdown, layout: &ReportLayout) -> String {
     named_total_html(total, layout, "telegram.report_total")
 }
 
-/// Render a total band with a scope-specific localized label.
+/// Render a total band with a scope-specific localized label, one row per [`total_lines`] line.
 pub(super) fn named_total_html(total: &QuoteBreakdown, layout: &ReportLayout, key: &str) -> String {
-    format!(
-        "<tr><th align=\"left\"><b>{}</b></th>{}</tr>",
-        escape(&t!(key)),
-        value_cells(total, layout, "th", true, true)
-    )
+    total_lines(total, &t!(key))
+        .iter()
+        .map(|(label, total)| {
+            format!(
+                "<tr><th align=\"left\"><b>{}</b></th>{}</tr>",
+                escape(label),
+                value_cells(total, layout, "th", true, true)
+            )
+        })
+        .collect()
 }
 
 /// Emit shared typed column values as escaped HTML in their saved order.
@@ -374,46 +521,10 @@ fn column_values(
         .drawable_columns()
         .filter_map(|column| {
             let (text, sign) = match column {
-                ReportColumn::Profit => (
-                    profit(total),
-                    total
-                        .unified_usdt()
-                        .and_then(|value| fmt::signed_fixed(value.profit, 2))
-                        .map(|(_, sign)| sign),
-                ),
+                ReportColumn::Profit => profit_cell(total),
                 ReportColumn::Trades => (total.orders.to_string(), None),
-                ReportColumn::Average => {
-                    let value = total
-                        .average_order_return()
-                        .and_then(|value| fmt::signed_pct(value.pct, 1));
-                    (
-                        value.as_ref().map_or_else(
-                            || t!("telegram.report_unvalued").to_string(),
-                            |(text, _)| text.clone(),
-                        ),
-                        value.map(|(_, sign)| sign),
-                    )
-                }
-                ReportColumn::Volume => (
-                    crate::notify::render::whole_dollar_volume(total.traded_volume.usdt)
-                        .or_else(|| match total.traded_volume.totals.as_slice() {
-                            [bucket]
-                                if total.traded_volume.usdt.is_none()
-                                    && total.traded_volume.unknown_orders == 0
-                                    && total.traded_volume.reconstructed_orders
-                                        == total.traded_volume.eligible_orders
-                                    && total.traded_volume.eligible_orders > 0 =>
-                            {
-                                crate::notify::render::native_volume_text(
-                                    bucket.currency,
-                                    bucket.amount,
-                                )
-                            }
-                            _ => None,
-                        })
-                        .unwrap_or_else(|| t!("telegram.report_unvalued").to_string()),
-                    None,
-                ),
+                ReportColumn::Average => per_part(total, average_cell),
+                ReportColumn::Volume => per_part(total, volume_cell),
                 ReportColumn::Native if total_row => (String::new(), None),
                 // One currency colours by its sign; a mixed row lists its sums uncoloured.
                 // A row with no trades reads 0 rather than a blank; trades of an unknown
@@ -531,58 +642,54 @@ pub(super) fn preview_table(page: &Page) -> crate::preview::PreviewTable {
     }];
     header.extend(column_headers(&page.layout));
     let by_core = !page.request.by_exchange && !page.request.by_group && !page.request.daily;
+    let preview_row = |kind: PreviewRowKind,
+                       name: String,
+                       total: &QuoteBreakdown,
+                       band: bool,
+                       first_right: bool,
+                       bold: bool| {
+        let mut cells = vec![Span::plain(name)];
+        cells.extend(column_values(
+            total,
+            &page.layout,
+            kind == PreviewRowKind::Total,
+        ));
+        for cell in &mut cells {
+            cell.bold = bold;
+        }
+        PreviewRow {
+            kind,
+            cells,
+            band,
+            first_right,
+        }
+    };
     let rows = ordered_rows(page)
         .into_iter()
-        .map(|row| {
-            let (kind, name, total, band, first_right, bold) = match row {
-                OrderedRow::Spacer => {
-                    return PreviewRow {
-                        kind: PreviewRowKind::Spacer,
-                        cells: vec![],
-                        band: false,
-                        first_right: false,
-                    };
-                }
-                OrderedRow::Total => (
-                    PreviewRowKind::Total,
-                    t!("telegram.report_total").to_string(),
-                    &page.total,
-                    true,
-                    false,
-                    true,
-                ),
-                OrderedRow::Data(row) => {
-                    let (name, total) = row_label(row, by_core);
-                    let group = matches!(row, Row::Group(..));
-                    let band = group && page.layout.group_row == GroupRowStyle::Band;
-                    (
-                        if group {
-                            PreviewRowKind::Group
-                        } else {
-                            PreviewRowKind::Data
-                        },
-                        name,
-                        total,
-                        band,
-                        band,
-                        group,
-                    )
-                }
-            };
-            let mut cells = vec![Span::plain(name)];
-            cells.extend(column_values(
-                total,
-                &page.layout,
-                kind == PreviewRowKind::Total,
-            ));
-            for cell in &mut cells {
-                cell.bold = bold;
-            }
-            PreviewRow {
-                kind,
-                cells,
-                band,
-                first_right,
+        .flat_map(|row| match row {
+            OrderedRow::Spacer => vec![PreviewRow {
+                kind: PreviewRowKind::Spacer,
+                cells: vec![],
+                band: false,
+                first_right: false,
+            }],
+            // The same lines the sent report draws for its total band.
+            OrderedRow::Total => total_lines(&page.total, &t!("telegram.report_total"))
+                .into_iter()
+                .map(|(label, total)| {
+                    preview_row(PreviewRowKind::Total, label, &total, true, false, true)
+                })
+                .collect(),
+            OrderedRow::Data(row) => {
+                let (name, total) = row_label(row, by_core);
+                let group = matches!(row, Row::Group(..));
+                let band = group && page.layout.group_row == GroupRowStyle::Band;
+                let kind = if group {
+                    PreviewRowKind::Group
+                } else {
+                    PreviewRowKind::Data
+                };
+                vec![preview_row(kind, name, total, band, band, group)]
             }
         })
         .collect();
@@ -849,3 +956,6 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
     }
     ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(rows))
 }
+
+#[cfg(test)]
+mod tests;

@@ -214,6 +214,9 @@ pub(super) struct TotalsSink {
     volume_groups: Vec<(Option<i64>, i64, i64, f64, i64, f64)>,
     spend_groups: Vec<(Option<i64>, i64, f64, f64, i64, f64, f64)>,
     coverage: super::super::valuation::CoverageAggregate,
+    /// The same coverage sums kept per group, so the finished breakdown can tell which of its
+    /// currencies are completely valued; [`Self::coverage`] alone only knows the whole.
+    coverage_groups: Vec<(Option<i64>, i64, i64, i64, f64, f64, i64)>,
 }
 
 impl TotalsSink {
@@ -227,7 +230,8 @@ impl TotalsSink {
         self.groups
             .push((ordinal, get(values, 1)?, get(values, 2)?));
         if valued {
-            self.coverage.add(
+            let group = (
+                ordinal,
                 get(values, 3)?,
                 get(values, 4)?,
                 get(values, 5)?,
@@ -235,6 +239,9 @@ impl TotalsSink {
                 get(values, 7)?,
                 get(values, 8)?,
             );
+            self.coverage
+                .add(group.1, group.2, group.3, group.4, group.5, group.6);
+            self.coverage_groups.push(group);
         }
         let volume = 3 + usize::from(valued) * 6;
         let spend = counted_group_index(valued);
@@ -272,10 +279,20 @@ impl TotalsSink {
         open_groups: Vec<(Option<i64>, f64, i64)>,
         counted_cores: u64,
     ) -> ReportTotals {
-        let mut quotes = QuoteBreakdown::from_groups(self.groups)
-            .with_traded_volume(super::super::TradedVolume::from_groups(self.volume_groups))
-            .with_entry_spend(super::super::EntrySpend::from_groups(self.spend_groups));
+        let mut quotes = QuoteBreakdown::from_groups(self.groups.iter().copied())
+            .with_traded_volume(super::super::TradedVolume::from_groups(
+                self.volume_groups.iter().copied(),
+            ))
+            .with_entry_spend(super::super::EntrySpend::from_groups(
+                self.spend_groups.iter().copied(),
+            ));
         quotes.counted_cores = counted_cores;
+        quotes.source_groups = Box::new(super::super::SourceGroups {
+            profit: self.groups,
+            coverage: self.coverage_groups,
+            volume: self.volume_groups,
+            spend: self.spend_groups,
+        });
         // Publish coverage whenever the selected mode can build a projection: always for current
         // rates, and only with an attached cache for historical rates.
         ReportTotals {

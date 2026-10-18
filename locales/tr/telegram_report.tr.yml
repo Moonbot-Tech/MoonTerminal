@@ -92,13 +92,14 @@ telegram.report_prev: "Önceki"
 telegram.report_next: "Sonraki"
 
 telegram.report_unvalued: "Değer yok"
+telegram.report_quote_unknown: "bilinmeyen para birimi"
 
 telegram.report_empty: "Bu dönemde kapanmış işlem yok"
 
 telegram.report_scope: "Terminal geçmişinde seçilen grup · kapanmış gerçek işlemler · işlem anındaki kur. Yerel geçmiş; çevrimdışı botlar güncellenmez."
 telegram.report_scope_station: "İstasyon geçmişinde seçilen grup · kapanmış gerçek işlemler · işlem anındaki kur. İstasyon çekirdek geçmişini gün boyu kopyalar; çevrimdışı botlar güncellenmez."
 
-telegram.report_missing_rates: "Herhangi bir işlemin değeri yoksa tam USDT toplamı kullanılamaz. Ayrıntı, bilinen para birimi alt toplamlarını tutar; bilinmeyen para birimleri dışarıdadır."
+telegram.report_missing_rates: "Bazı işlemlerin USDT kuru yoksa toplam satırlara bölünür: tamamen değerlenen para birimleri için «Toplam USDT» ve kalan her para birimi için kendi cinsinden bir satır, örneğin «Toplam RUB». Farklı para birimlerindeki tutarlar asla toplanmaz; bilinmeyen para birimindeki işlemler yalnızca sayı olarak gösterilir."
 
 telegram.report_busy: "Önceki rapor hâlâ hesaplanıyor. Kısa süre sonra yeniden deneyin."
 

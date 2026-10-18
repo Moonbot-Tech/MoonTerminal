@@ -47,8 +47,8 @@ pub use core_names::CoreNames;
 pub use dates::{fmt_unix, fmt_unix_date, fmt_unix_secs, parse_ymd};
 pub use quote::{
     AverageOrderReturn, EntrySpend, OpenPositions, ProfitScope, ProfitUnit, QuoteBreakdown,
-    QuoteCurrency, QuoteScope, QuoteSpend, QuoteTotal, QuoteVolume, TradedVolume, UsdtTotal,
-    ValuationCoverage,
+    QuoteCurrency, QuoteScope, QuoteSpend, QuoteTotal, QuoteVolume, SourceGroups, TradedVolume,
+    UsdtTotal, ValuationCoverage, ValuationPart,
 };
 pub use read_cancel::{
     ReadCancellation, current_is_cancelled, current_read_cancellation, with_read_cancellation,

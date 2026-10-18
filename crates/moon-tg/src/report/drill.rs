@@ -296,8 +296,22 @@ pub(super) fn html(page: &Page) -> String {
     html
 }
 
-/// Convert only the counted entry-spend scope, excluding Funding and invalid entries.
+/// The exchange's average order in USDT; when some of its currencies have no USDT rate, the
+/// average over the trades that do, matching the `Total USDT` line drawn above the summary.
 fn average_order_usdt(total: &db::QuoteBreakdown) -> Option<f64> {
+    whole_average_usdt(total).or_else(|| {
+        total
+            .valuation_split()
+            .into_iter()
+            .find_map(|part| match part {
+                db::ValuationPart::Usdt(part) => whole_average_usdt(&part),
+                db::ValuationPart::Native(..) | db::ValuationPart::Unknown(_) => None,
+            })
+    })
+}
+
+/// Convert only the counted entry-spend scope, excluding Funding and invalid entries.
+fn whole_average_usdt(total: &db::QuoteBreakdown) -> Option<f64> {
     total
         .entry_spend
         .unified()
