@@ -590,7 +590,58 @@ fn station_catchup_state_priority() {
     assert_eq!(state(|c| c.auto = None), CatchupState::Done);
 }
 
-/// "Failed" replaces "No source" only while the last pass failed; off and unreported show none.
+/// Permanent refusals must not alarm users or promise another download; mixed reports must
+/// count only retryable jobs in both the error sentence and the failed tile.
+#[test]
+fn station_catchup_permanent_and_mixed_failures() {
+    let _locale = crate::test_locale::force("en");
+    let mut c = TapeCatchup {
+        failed: 90,
+        failed_by: vec![
+            (CatchupFailReason::ArchiveMissing, 89),
+            (CatchupFailReason::RequestFault, 1),
+        ],
+        ..catchup()
+    };
+    assert_eq!(catchup_state(Some(&c)), CatchupState::Done);
+    assert_eq!(
+        catchup_tiles(CatchupState::Done, &c)[3].label,
+        "telegram.server.catchup_tile_no_route"
+    );
+    let note = catchup_breakdown(&c).expect("permanent reasons");
+    assert!(note.contains("the exchange has no archive — 89"), "{note}");
+    assert!(
+        note.contains("90 trades skipped for good; nothing to do."),
+        "{note}"
+    );
+    assert!(!catchup_sentence(CatchupState::Done, Some(&c), Tz::UTC).contains("retry"));
+    c.pending = 3;
+    assert_eq!(catchup_state(Some(&c)), CatchupState::Waiting);
+    c.running = true;
+    assert_eq!(catchup_state(Some(&c)), CatchupState::Running);
+    c.running = false;
+    c.failed = 92;
+    c.failed_by.push((CatchupFailReason::Network, 2));
+    assert_eq!(catchup_state(Some(&c)), CatchupState::Errors);
+    assert_eq!(
+        catchup_sentence(CatchupState::Errors, Some(&c), Tz::UTC),
+        "2 trades did not download in the last pass. The station will retry them automatically; nothing to do."
+    );
+    assert_eq!(
+        catchup_tiles(CatchupState::Errors, &c)[3].value,
+        TileValue::Count(2)
+    );
+    c.failed = 2;
+    c.failed_by = vec![(CatchupFailReason::Network, 2)];
+    assert_eq!(catchup_state(Some(&c)), CatchupState::Errors);
+    assert!(
+        !catchup_breakdown(&c)
+            .expect("network reason")
+            .contains("skipped")
+    );
+}
+
+/// "Failed" replaces "No source" only for recoverable failures; off and unreported show none.
 #[test]
 fn station_catchup_tiles_swap_failed_for_no_route() {
     let c = catchup();
@@ -633,7 +684,7 @@ fn station_catchup_next_check_is_last_pass_plus_an_hour() {
     let errors = catchup_sentence(CatchupState::Errors, Some(&failed), zone);
     assert_eq!(
         errors,
-        "Не скачались 2 сделки за последний проход — что можно повторить, станция повторит сама, ничего делать не нужно."
+        "Не скачались 2 сделки за последний проход. Станция повторит их сама — ничего делать не нужно."
     );
     let never = TapeCatchup {
         last_pass_ms: None,
@@ -817,7 +868,7 @@ fn leak(s: String) -> &'static str {
 #[gpui::test]
 fn the_tape_catchup_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestAppContext) {
     cx.update(moon_ui::init);
-    let states: [Option<TapeCatchup>; 6] = [
+    let states: [Option<TapeCatchup>; 7] = [
         None,
         Some(TapeCatchup {
             auto: Some(false),
@@ -830,8 +881,13 @@ fn the_tape_catchup_block_fits_every_language_width_and_zoom(cx: &mut gpui::Test
             ..catchup()
         }),
         Some(TapeCatchup {
-            failed: 12,
+            failed: 12_484,
             failed_by: every_reason(),
+            ..catchup()
+        }),
+        Some(TapeCatchup {
+            failed: 90,
+            failed_by: vec![(CatchupFailReason::ArchiveMissing, 90)],
             ..catchup()
         }),
         Some(TapeCatchup {
