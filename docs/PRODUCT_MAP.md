@@ -12,7 +12,8 @@ feature — a row in the map, a new user word — a row in the dictionary.
    Found a string — the key is next to it, and the code is grepped by that key. Files by area:
    shell, interface, settings, hotkeys, orders, report, analytics,
    strategies, screener, news, connections, core_status, core_run,
-   core_settings, dialogs, crowd.
+   core_expert (the Core settings window; its shared `core_settings.*` keys sit in shell),
+   dialogs, crowd, assets, trade_window, station, telegram and telegram_*.
 2. The dictionary below — users' words that are not in the labels.
 3. `docs/ARCHITECTURE.md` — chapters on the mechanics (Rendering, Data Path, manual
    trading, Core order, Classic/Auto, venue directory, editing strategies,
@@ -96,7 +97,8 @@ plot (Moonbot's HVol), bought/sold volume by the chart,
 volume measure around the cursor, liquidation count, news marks (gems by
 tags, Ctrl-hover card), own-trade markers, chart stacks/columns,
 detach into separate windows, chart screenshot to the clipboard (with the header baked in), favourite
-coins and a temporary coin ban (as in MB), coin search with tabs.
+coins and a temporary coin ban (as in MB), coin search with tabs, where a coin is blacklisted
+(coin menu: every core's global, temporary and strategy blacklists, each lifted in one click).
 
 **Detects**: cards with configurable badges (own colours — a shared HEX history,
 see Other), the fired strategy's name, per-tab feed limit,
@@ -145,9 +147,11 @@ servers.enc bound to the machine, moved with a password.
 
 **Other**: Screener (deltas in Moonbot ranges), the news panel
 (per-core feed, tag filters, jump to a coin), Log (core lines, addresses
-redacted), Assets (wallets by exchange, PnL, spot Market Sell), Crowd
+redacted), Assets (wallets by exchange, PnL, spot Market Sell, a Binance spot core's dust
+to BNB), Crowd
 (crowd stats on empty Main, a “loud coin” as a detect), its own
-Telegram bot (reports to chat, navigation, per-core rights, Mini App), hotkeys
+Telegram bot (reports to chat by exchanges, cores or core groups, navigation, per-core rights,
+Mini App with a live chart of any coin and tick charts of a closed trade or open position), hotkeys
 (keyboard + mouse on every action, conflicts highlighted), themes
 (Light/Dark/Graphite + editor), a single colour picker (one palette
 everywhere — cores, strategies, lines, figures, badges, news tags; a custom HEX
