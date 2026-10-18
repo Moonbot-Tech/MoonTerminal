@@ -1,16 +1,13 @@
-//! The station as the first source of the autoload (STATION.md §4.9): the station records the live
-//! stream around every trade while the terminal is off, so what the terminal lacks of a closed
-//! trade's tape is asked of it before a core's archive or a venue — those only get what it did
-//! not hold.
+//! Configured-station tape and shared coverage checks for background and tuner callers.
+//! A configured station is the terminal's sole remote tape source; answered misses are retained
+//! separately from transport failures so automatic retries remain both bounded and honest.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
-use moon_core::db::tuner::ticks::tail::{
-    floor_ms, focus_with_tail, record_tail_ms, required_with_floor,
-};
+use moon_core::db::tuner::ticks::tail::{floor_ms, focus_with_tail, record_tail_ms};
 use moon_core::market::trade_replay::margin_ms;
 use moon_core::market::trade_replay::{Coverage, ReplayWindow, trade_cache};
 use moon_core::station_api::TapeWant;
@@ -24,13 +21,11 @@ const FILE_SYNC: Duration = Duration::from_secs(10);
 static FILED: AtomicU64 = AtomicU64::new(0);
 /// In-progress station work remains stoppable before a venue batch exists.
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
-/// Stop serializes against the final enqueue without tying user rows to autoload switches.
-static CONTROL: Mutex<u64> = Mutex::new(0);
 
 /// Station refusals survive unrelated filings, but not changes to their admission inputs.
 #[derive(Default)]
 struct Unfillable {
-    generation: (u64, u32, (bool, bool)),
+    generation: (u64, u32, (bool, bool), (i64, i64)),
     revision: u64,
     uids: HashMap<i64, (String, String)>,
     snapshot_revision: u64,
@@ -47,8 +42,8 @@ impl Unfillable {
         (self.revision, Arc::clone(&self.snapshot))
     }
 
-    /// A changed floor, source policy or station finalisation permits another attempt.
-    fn refresh(&mut self, generation: (u64, u32, (bool, bool))) {
+    /// A changed window, floor, source policy or station finalisation permits another attempt.
+    fn refresh(&mut self, generation: (u64, u32, (bool, bool), (i64, i64))) {
         if self.generation != generation {
             self.generation = generation;
             if !self.uids.is_empty() {
@@ -91,6 +86,10 @@ fn unfillable() -> MutexGuard<'static, Unfillable> {
         crate::backend::station::tail_final_cached(),
         super::super::tail::effective_s(),
         super::super::tail::switches(),
+        (
+            margin_ms(),
+            moon_core::market::trade_replay::long_position_ms(),
+        ),
     ));
     rows
 }
@@ -116,18 +115,6 @@ fn note_filed(filled: Filled) {
         FILED.fetch_add(1, Ordering::Release);
         super::job::station_filled();
     }
-}
-
-/// Lock the station prefill cancellation epoch.
-fn control() -> MutexGuard<'static, u64> {
-    CONTROL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Cancel station work before stopping the venue queue.
-pub(super) fn cancel() {
-    *control() += 1;
 }
 
 /// Keep station prefill visible until its background hand-over finishes.
@@ -181,11 +168,10 @@ fn drop_held_at<T>(
     allow_short: impl Fn(&T, &Coverage) -> bool,
 ) -> (Vec<T>, usize) {
     let min_s = moon_core::db::tuner::ticks::tail::clamp_min_tail_s(min_s);
-    let floor = floor_ms(min_s);
     let mut by_market: HashMap<(String, String), Vec<(T, Coverage, ReplayWindow)>> = HashMap::new();
     for row in rows {
         let (exchange, market, window) = place(&row);
-        let need = required_with_floor(&window, floor);
+        let need = focus_with_tail(&window, record_tail_ms(min_s, window.margin_ms));
         by_market
             .entry((exchange, market))
             .or_default()
@@ -203,11 +189,13 @@ fn drop_held_at<T>(
             .map(Coverage::from_spans);
         for (row, need, window) in group {
             if stored.as_ref().is_some_and(|stored| {
-                let focus = focus_with_tail(&window, record_tail_ms(min_s, margin_ms()));
+                let focus = focus_with_tail(&window, record_tail_ms(min_s, window.margin_ms));
                 !need.is_empty()
                     && (stored.covers(&need)
                         || (allow_short(&row, &stored.clip(&focus))
-                            && stored.covers(&super::super::tail::through_close(&window))))
+                            && stored.covers(
+                                &need.clip(&Coverage::one((window.from_ms, window.close_ms))),
+                            )))
             }) {
                 held += 1;
             } else {
@@ -223,6 +211,16 @@ pub(super) fn prefill(
     rows: Vec<super::job::QueuedRow>,
     target: Option<&Target>,
     stop: impl Fn() -> bool,
+) -> (Vec<super::job::QueuedRow>, usize, usize) {
+    prefill_counted(rows, target, stop, |_| {})
+}
+
+/// Report missing rows before blocking transport so held deals leave the loading count.
+pub(super) fn prefill_counted(
+    rows: Vec<super::job::QueuedRow>,
+    target: Option<&Target>,
+    stop: impl Fn() -> bool,
+    missing: impl Fn(usize),
 ) -> (Vec<super::job::QueuedRow>, usize, usize) {
     let _busy = Busy::new();
     let place = |row: &super::job::QueuedRow| {
@@ -254,24 +252,23 @@ pub(super) fn prefill(
     };
     let (rows, held, from_station, filled) =
         prefill_rows(rows, place, held_spans, allow_short, |rows| {
+            missing(rows.len());
             let Some(target) = target.filter(|_| !stop()) else {
                 return Filled::default();
             };
             let candidates: Vec<_> = rows
                 .iter()
-                .filter(|row| {
-                    row.origin == super::job::RowOrigin::User || candidate(row.deal.report_uid)
-                })
+                .filter(|row| candidate(row.deal.report_uid))
                 .collect();
             let filled = fill(&candidates, |row| place(row), target, &stop);
-            super::autoload::station_answered(filled.unreachable);
+            super::autoload::station_answered(filled.unreachable || filled.failed);
             stopped = stop();
             filled
         });
     commit_station_answer(&rows, filled, stopped);
     let rows = rows
         .into_iter()
-        .filter(|row| row.origin == super::job::RowOrigin::User || candidate(row.deal.report_uid))
+        .filter(|row| candidate(row.deal.report_uid))
         .collect();
     (rows, held, from_station)
 }
@@ -289,14 +286,21 @@ pub(super) fn prefill(
 ///     Nothing.
 fn commit_station_answer(rows: &[super::job::QueuedRow], filled: Filled, stopped: bool) {
     note_filed(filled);
-    if filled.markets == 0 || filled.unreachable || stopped {
+    if filled.markets == 0 || filled.unreachable || filled.failed || stopped {
         return;
     }
     let now = moon_core::util::time::now_unix_ms_i64();
     let refused: Vec<_> = rows
         .iter()
-        .filter(|row| !row.fetchable_after_station(now))
+        .filter(|row| crate::backend::station::known_cached() || !row.fetchable_after_station(now))
         .collect();
+    if filled.pieces > 0 && !refused.is_empty() {
+        log::info!(
+            target: moon_core::diagnostics::TICKS_AXIS_TARGET,
+            "[x] ticks autoload: station filed {} piece(s), but {} row(s) remain uncovered; no repeat in this generation (partial coverage or cache eviction)",
+            filled.pieces, refused.len()
+        );
+    }
     let mut refusals = unfillable();
     let before = refusals.revision;
     for row in refused {
@@ -314,7 +318,7 @@ fn commit_station_answer(rows: &[super::job::QueuedRow], filled: Filled, stopped
 }
 
 /// Preserve disk-before/station/disk-after ordering with the same coverage rule on both sides.
-fn prefill_rows<T>(
+pub(super) fn prefill_rows<T>(
     rows: Vec<T>,
     place: impl Fn(&T) -> (String, String, ReplayWindow),
     held_spans: impl Fn(&str, &str, i64, i64) -> Option<Vec<(i64, i64)>>,
@@ -336,11 +340,9 @@ fn prefill_rows<T>(
 pub(super) fn prefill_then_enqueue(
     rows: Vec<super::job::QueuedRow>,
     defaults: HashMap<String, f64>,
-    origin: super::job::RowOrigin,
 ) -> std::sync::mpsc::Receiver<()> {
     let (tx, rx) = std::sync::mpsc::channel();
     let generation = super::autoload::generation();
-    let epoch = *control();
     let target = super::autoload::station_target();
     let busy = Busy::new();
     let spawned = std::thread::Builder::new()
@@ -348,24 +350,18 @@ pub(super) fn prefill_then_enqueue(
         .spawn(move || {
             let _busy = busy;
             let stop = || {
-                *control() != epoch
-                    || (origin == super::job::RowOrigin::Autoload
-                        && (super::autoload::generation() != generation
-                            || !moon_core::market::trade_replay::tape_autoload()))
+                super::autoload::generation() != generation
+                    || !moon_core::market::trade_replay::tape_autoload()
             };
             let (mut rows, _, _) = prefill(rows, target.as_ref(), stop);
+            if crate::backend::station::known_cached() {
+                let _ = tx.send(());
+                return;
+            }
             let now = moon_core::util::time::now_unix_ms_i64();
             rows.retain(|row| row.fetchable_after_station(now));
             rows.sort_by_key(|row| std::cmp::Reverse(row.deal.close_ms));
-            let current = control();
-            if *current == epoch {
-                if origin == super::job::RowOrigin::User {
-                    super::job::enqueue(rows, defaults);
-                } else {
-                    super::autoload::enqueue_if_current(generation, rows, defaults);
-                }
-            }
-            drop(current);
+            super::autoload::enqueue_if_current(generation, rows, defaults);
             let _ = tx.send(());
         });
     if let Err(error) = spawned {
@@ -383,7 +379,7 @@ pub(super) fn prefill_then_enqueue(
 ///     place: A row's `(exchange key, market, window)`.
 ///     held_spans: `(exchange, market, from_ms, to_ms)` → the filed spans' bounds; `None` when the
 ///         read did not happen, and then the whole window is asked.
-fn lacking<T>(
+pub(super) fn lacking<T>(
     rows: &[T],
     place: impl Fn(&T) -> (String, String, ReplayWindow),
     held_spans: impl Fn(&str, &str, i64, i64) -> Option<Vec<(i64, i64)>>,
@@ -396,7 +392,7 @@ fn lacking<T>(
             .or_insert_with(Coverage::none);
         for &span in focus_with_tail(
             &window,
-            record_tail_ms(super::super::tail::current_s(), margin_ms()),
+            record_tail_ms(super::super::tail::current_s(), window.margin_ms),
         )
         .spans()
         {
@@ -433,6 +429,8 @@ pub(super) struct Filled {
     /// The station could not be reached at all: the next passes leave it out for a while rather
     /// than wait for it again on every retry.
     pub unreachable: bool,
+    /// A partial pull or persistence failure is not an answered absence of tape.
+    pub failed: bool,
 }
 
 /// Ask the station for every stretch of `rows`' windows the file does not hold, and file what it
@@ -481,6 +479,7 @@ pub(super) fn fill<T>(
     // Whatever came before an error or a stop is filed too: the pass judges the rows by the file
     // right after this.
     if filled.pieces > 0 && !cache.sync(FILE_SYNC) {
+        filled.failed = true;
         log::warn!(
             target: moon_core::diagnostics::TICKS_AXIS_TARGET,
             "[x] ticks autoload: the station's tape did not reach the file in time; the rest is judged without it"
@@ -496,11 +495,14 @@ pub(super) fn fill<T>(
             count.requests,
             if count.stopped { ", stopped" } else { "" }
         ),
-        Err(e) => log::warn!(
+        Err(e) => {
+            filled.failed = true;
+            log::warn!(
             target: moon_core::diagnostics::TICKS_AXIS_TARGET,
             "[x] ticks autoload: the station's tape pull broke off after {} stretch(es): {e:#}",
             filled.pieces
-        ),
+            );
+        }
     }
     filled
 }

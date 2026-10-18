@@ -78,6 +78,18 @@ impl DealChip {
     }
 }
 
+/// Sentence shown where the tuner used to name the manual fetch button.
+///
+/// Returns:
+///     The counted background-loading line while `pending_rows` is `Some`. The same
+///     sentence with no number while the autoload is idle (`None`).
+pub(in crate::analytics::tuner) fn background_loading_line() -> String {
+    match super::fetch::autoload::pending_rows() {
+        Some(n) => t!("analytics.ticks.why.loading_background", n = n).to_string(),
+        None => t!("analytics.ticks.why.loading_background_idle").to_string(),
+    }
+}
+
 /// Semantic colours, resolved against the active palette by the table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::analytics::tuner) enum Tone {
@@ -115,6 +127,7 @@ pub(in crate::analytics::tuner) enum DealWhy {
     Fit,
     AcceptedShortTail,
     NoTape { fetchable: bool },
+    StationMissing,
     NoAddress,
     Fetching,
     Refused(TickStatus),
@@ -133,6 +146,12 @@ impl DealWhy {
         row: &DealRow,
         admission: &super::tail::Admission,
     ) -> Self {
+        if matches!(row.tape, TapeStatus::Missing | TapeStatus::Refused(_))
+            && crate::backend::station::known_cached()
+            && !admission.candidate(row.deal.report_uid)
+        {
+            return Self::StationMissing;
+        }
         match row.tape {
             TapeStatus::Missing => {
                 return Self::NoTape {
@@ -225,9 +244,11 @@ impl DealWhy {
         match self {
             Self::Fit => DealChip::Fit,
             Self::AcceptedShortTail => DealChip::AcceptedShortTail,
-            Self::NoTape { .. } | Self::NoAddress | Self::Fetching | Self::Refused(_) => {
-                DealChip::NoTape
-            }
+            Self::NoTape { .. }
+            | Self::StationMissing
+            | Self::NoAddress
+            | Self::Fetching
+            | Self::Refused(_) => DealChip::NoTape,
             Self::EntryMissed(_) | Self::ExitMissed(_) => DealChip::ModelMiss,
             Self::Unjudged(_) | Self::NoVerdict | Self::LostTape => DealChip::Unjudged,
             Self::ShortTail { .. } => DealChip::ShortTail,
@@ -242,6 +263,7 @@ impl DealWhy {
             Self::AcceptedShortTail => "accepted_short_tail",
             Self::NoTape { fetchable: true } => "missing_fetchable",
             Self::NoTape { fetchable: false } => "missing",
+            Self::StationMissing => "station_missing",
             Self::NoAddress => "no_address",
             Self::Fetching => "fetching",
             Self::Refused(status) => match status {
@@ -270,6 +292,9 @@ impl DealWhy {
 
     /// Localize a reason with its measured durations and retry metadata.
     fn translated(self, suffix: &str) -> String {
+        if self == Self::StationMissing {
+            return t!("analytics.ticks.why.station_missing").to_string();
+        }
         let key = format!("analytics.ticks.why.{}{}", self.key(), suffix);
         let (trail_ms, min_s, len_ms, retry_at_ms, retention_ms, retry_in_s) = match self {
             Self::ShortTail { trail_ms, min_s } => (trail_ms, min_s, 0, 0, 0, 0),
@@ -284,6 +309,7 @@ impl DealWhy {
             Self::Fit
             | Self::AcceptedShortTail
             | Self::NoTape { .. }
+            | Self::StationMissing
             | Self::NoAddress
             | Self::Fetching
             | Self::Refused(
@@ -326,13 +352,18 @@ impl DealWhy {
     /// Only actions that can improve this deal are offered.
     fn todo(self) -> Option<String> {
         match self {
-            Self::NoTape { fetchable: true } => Some(t!("analytics.ticks.why.fetch").to_string()),
+            Self::NoTape { fetchable: true } => Some(background_loading_line()),
             Self::NoAddress => Some(t!("analytics.ticks.why.connect").to_string()),
-            Self::ShortTail { .. } => Some(t!("analytics.ticks.why.extend_tail").to_string()),
+            Self::ShortTail { .. } => Some(format!(
+                "{} {}",
+                background_loading_line(),
+                t!("analytics.ticks.why.extend_tail")
+            )),
             Self::Refused(TickStatus::ArchivePending { .. }) => Some(self.translated(".todo")),
             Self::Fit
             | Self::AcceptedShortTail
             | Self::NoTape { fetchable: false }
+            | Self::StationMissing
             | Self::Fetching
             | Self::Refused(
                 TickStatus::Pending
@@ -418,9 +449,9 @@ impl DealWhy {
             | Self::Unjudged(_)
             | Self::NoVerdict
             | Self::LostTape => ("●", Tone::Good),
-            Self::NoTape { .. } | Self::Refused(TickStatus::ArchivePending { .. }) => {
-                ("○", Tone::Muted)
-            }
+            Self::NoTape { .. }
+            | Self::StationMissing
+            | Self::Refused(TickStatus::ArchivePending { .. }) => ("○", Tone::Muted),
             Self::Fetching => ("…", Tone::Warning),
             Self::NoAddress => ("·", Tone::Muted),
             Self::Refused(

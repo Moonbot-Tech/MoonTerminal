@@ -80,6 +80,7 @@ fn short_tail_reach_respects_venue_and_core_switches() {
 /// A station-held minute must fit a thirty-second replay window, clearing the short-tail count.
 #[test]
 fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     use super::super::state::{DealRow, RowAddress, TapeStatus};
     use moon_core::db::tuner::ticks::verify::{EntryFinding, ExitFinding, RuleFlags, StopFacts};
     use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};

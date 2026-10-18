@@ -58,9 +58,6 @@ pub struct TradeReplayStoreCfg {
     /// Whether the prints a trade window fetched are kept on disk for the next window and the
     /// next launch. Off, they live in memory for the session only and the file is not touched.
     pub persist_trades: bool,
-    /// Ceiling on the packed prints the file may hold, in megabytes; past it the spans written
-    /// longest ago go first. `0` keeps everything, with no age limit.
-    pub max_mb: u32,
     /// Seconds of prints kept around a trade, per end: a short position gets this much before
     /// its entry and after its exit; a long one (held past [`Self::long_position_min`]) gets
     /// this much on both sides of each end, with bars between. It sizes what a trade window
@@ -90,18 +87,13 @@ pub struct TradeReplayStoreCfg {
     pub cleanup_at_startup: bool,
 }
 
-/// Default minutes of [`TradeReplayStoreCfg::long_position_min`]: the five minutes the
-/// threshold was as a constant.
-pub const DEFAULT_LONG_POSITION_MIN: u32 = 5;
+/// Default minutes before a position is recorded as two ends with bars between.
+pub const DEFAULT_LONG_POSITION_MIN: u32 = 30;
 
 /// What [`TradeReplayStoreCfg::long_position_min`] may be, inclusive: one minute — below it
 /// every trade is "long" and no window shows its middle — to two hours, the margin's own
 /// ceiling.
 pub const LONG_POSITION_MIN_RANGE: std::ops::RangeInclusive<u32> = 1..=120;
-
-/// Default ceiling on `trades.sqlite`, megabytes: a day of busy replays is tens of megabytes,
-/// so this is months of them for the reader who never touches the setting.
-pub const DEFAULT_TRADES_MAX_MB: u32 = 256;
 
 /// The values [`TradeReplayStoreCfg::margin_s`] may take, ascending: the Storage page and the
 /// station tape offer exactly this list as a pick rather than a fixed increment, so the short end is fine-grained and the
@@ -113,19 +105,18 @@ pub const DEFAULT_TRADES_MAX_MB: u32 = 256;
 /// hours at least, and prints past the bars would have nowhere to draw.
 pub const TRADE_MARGIN_STEPS_S: &[u32] = &[30, 60, 180, 300, 600, 900, 1800, 3600, 7200];
 
-/// Default seconds of prints around a trade, per end. 30 s, which is also the floor of
-/// [`TRADE_MARGIN_STEPS_S`] (the user's call, 2026-09-26, back from 65 s the same day; 30 s
-/// from 2026-09-23, 5 s from 2026-09-21, 15 minutes before that). A file with no margin key
-/// at all takes this default. A file that still stores the retired 65 s default is rewritten
-/// to 30 on load — see [`RETIRED_TRADE_MARGIN_S`].
-pub const DEFAULT_TRADE_MARGIN_S: u32 = 30;
+/// Default seconds of prints around each end of a trade when no saved value exists.
+pub const DEFAULT_TRADE_MARGIN_S: u32 = 600;
 
 /// The margin a settings file stored while 65 s was the default, for part of 2026-09-26.
 ///
 /// It is not a step any more. The nearest remaining step is 60 s, and loading it that way
 /// would keep a wider tape than the default that replaced it, so [`sanitize`] rewrites this
-/// one value to [`DEFAULT_TRADE_MARGIN_S`] before the snap.
+/// one value to 30 seconds before the snap, preserving its original migration.
 const RETIRED_TRADE_MARGIN_S: u32 = 65;
+
+/// Preserve the retired default's migration independently of the current default.
+const RETIRED_TRADE_MARGIN_REPLACEMENT_S: u32 = 30;
 
 /// Ceiling on [`TradeReplayStoreCfg::margin_s`] — the last of [`TRADE_MARGIN_STEPS_S`].
 pub const MAX_TRADE_MARGIN_S: u32 = 7200;
@@ -134,7 +125,6 @@ impl Default for TradeReplayStoreCfg {
     fn default() -> Self {
         Self {
             persist_trades: true,
-            max_mb: DEFAULT_TRADES_MAX_MB,
             margin_s: DEFAULT_TRADE_MARGIN_S,
             autoload_missing: false,
             autoload_cores: true,
@@ -151,7 +141,6 @@ impl Default for TradeReplayStoreCfg {
 #[serde(default)]
 struct TradeReplayStoreRaw {
     persist_trades: bool,
-    max_mb: u32,
     margin_s: Option<u32>,
     margin_min: Option<u32>,
     autoload_missing: bool,
@@ -165,7 +154,6 @@ impl Default for TradeReplayStoreRaw {
         let d = TradeReplayStoreCfg::default();
         Self {
             persist_trades: d.persist_trades,
-            max_mb: d.max_mb,
             margin_s: None,
             margin_min: None,
             autoload_missing: d.autoload_missing,
@@ -184,7 +172,6 @@ impl From<TradeReplayStoreRaw> for TradeReplayStoreCfg {
             .unwrap_or(DEFAULT_TRADE_MARGIN_S);
         Self {
             persist_trades: raw.persist_trades,
-            max_mb: raw.max_mb,
             margin_s,
             autoload_missing: raw.autoload_missing,
             autoload_cores: raw.autoload_cores,
@@ -249,24 +236,28 @@ impl Default for StrategiesStoreCfg {
 /// Reads `storage.toml`; if absent, writes defaults so system keys are visible. A corrupt file
 /// is logged and defaults are used without overwriting it.
 pub fn load() -> StorageCfg {
-    let path = paths::storage_path();
+    load_at(&paths::storage_path())
+}
+
+/// Read and normalize storage settings at the supplied config path.
+fn load_at(path: &std::path::Path) -> StorageCfg {
     if !path.exists() {
         let cfg = StorageCfg::default();
-        if let Err(e) = toml_io::save(&path, &cfg, "storage.toml") {
+        if let Err(e) = toml_io::save(path, &cfg, "storage.toml") {
             log::warn!("storage.toml: не удалось записать дефолт: {e:#}");
         }
         return cfg;
     }
-    sanitize(toml_io::load_or_default(&path, "storage.toml", |_| {}))
+    sanitize(toml_io::load_or_default(path, "storage.toml", |_| {}))
 }
 
 /// Bound what a hand-edited file may carry: the long-position threshold is clamped to
 /// [`LONG_POSITION_MIN_RANGE`], and the margin is snapped onto [`TRADE_MARGIN_STEPS_S`],
 /// which also caps it at [`MAX_TRADE_MARGIN_S`]. The retired 65 s default is rewritten to
-/// [`DEFAULT_TRADE_MARGIN_S`] first, so the snap cannot land it on 60 s.
+/// 30 seconds first, so the snap cannot land it on 60 s.
 fn sanitize(mut cfg: StorageCfg) -> StorageCfg {
     if cfg.trade_replay.margin_s == RETIRED_TRADE_MARGIN_S {
-        cfg.trade_replay.margin_s = DEFAULT_TRADE_MARGIN_S;
+        cfg.trade_replay.margin_s = RETIRED_TRADE_MARGIN_REPLACEMENT_S;
     }
     cfg.trade_replay.margin_s = snap_trade_margin_s(cfg.trade_replay.margin_s);
     cfg.trade_replay.long_position_min =
@@ -276,7 +267,24 @@ fn sanitize(mut cfg: StorageCfg) -> StorageCfg {
 
 /// Saves storage settings from the Storage tab.
 pub fn save(cfg: &StorageCfg) {
-    if let Err(e) = toml_io::save(&paths::storage_path(), cfg, "storage.toml") {
+    save_at(&paths::storage_path(), cfg);
+}
+
+/// Change the latest stored settings without replacing unrelated sections with a cached copy.
+pub fn update(f: impl FnOnce(&mut StorageCfg)) {
+    update_at(&paths::storage_path(), f);
+}
+
+/// Apply a normalized load-modify-save at a supplied path for isolated config round trips.
+fn update_at(path: &std::path::Path, f: impl FnOnce(&mut StorageCfg)) {
+    let mut cfg = load_at(path);
+    f(&mut cfg);
+    save_at(path, &sanitize(cfg));
+}
+
+/// Save storage settings through the same TOML writer as the Storage tab.
+fn save_at(path: &std::path::Path, cfg: &StorageCfg) {
+    if let Err(e) = toml_io::save(path, cfg, "storage.toml") {
         log::warn!("storage.toml: сохранение не удалось: {e:#}");
     }
 }

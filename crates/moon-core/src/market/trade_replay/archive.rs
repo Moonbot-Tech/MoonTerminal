@@ -17,11 +17,93 @@ use super::venue_caps::{ArchiveFormat, ArchiveRoute};
 use crate::feed::types::Tick;
 use chrono::NaiveDate;
 
-/// Maximum compressed size of a single daily download.
-pub const MAX_DAY_BYTES: u64 = 256 * 1024 * 1024;
 // Reserve room for tape filing after the compressed day has been extracted.
 const EXTRACT_HEADROOM: u64 = 4;
-static DISK_GUARD: Mutex<Option<fn(u64) -> bool>> = Mutex::new(None);
+static DISK_GUARD: Mutex<Option<fn() -> Option<u64>>> = Mutex::new(None);
+
+/// Retry conditions for paid body failures and definitive missing daily files.
+enum DayLatch {
+    Missing,
+    Disk { available: u64 },
+    Transfer { error: ArchiveError, until: Instant },
+}
+
+/// Failed bodies share a per-day allowance until their transfer cooldown expires.
+#[derive(Default)]
+struct DayFailures {
+    attempts: u8,
+    latched: Option<DayLatch>,
+}
+
+static DAY_FAILURES: OnceLock<Mutex<HashMap<PathBuf, DayFailures>>> = OnceLock::new();
+
+/// Retry failed bodies after a cooldown or after the disk budget has grown.
+fn day_refusal(
+    path: &std::path::Path,
+    guard: &impl Fn() -> Option<u64>,
+    now: Instant,
+) -> Option<ArchiveError> {
+    let mut days = DAY_FAILURES
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let day = days.get_mut(path)?;
+    let (error, retry, reset_attempts) = match day.latched.as_ref()? {
+        DayLatch::Missing => return Some(ArchiveError::UnknownSymbol),
+        DayLatch::Disk { available } => (
+            ArchiveError::NoRoom,
+            guard().is_some_and(|room| room > *available),
+            false,
+        ),
+        DayLatch::Transfer { error, until } => (error.clone(), now >= *until, true),
+    };
+    if !retry {
+        return Some(error);
+    }
+    day.latched = None;
+    if reset_attempts {
+        day.attempts = 0;
+    }
+    None
+}
+
+/// Cache definitive 404s; suppress only failures that actually received body bytes.
+fn note_day_result(
+    path: PathBuf,
+    result: &Result<Coverage, ArchiveError>,
+    received: u64,
+    available: Option<u64>,
+    now: Instant,
+) {
+    let mut days = DAY_FAILURES
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Err(error) = result else {
+        return;
+    };
+    match error {
+        ArchiveError::UnknownSymbol => {
+            days.entry(path).or_default().latched = Some(DayLatch::Missing);
+        }
+        ArchiveError::NoRoom if received > 0 => {
+            if let Some(available) = available {
+                days.entry(path).or_default().latched = Some(DayLatch::Disk { available });
+            }
+        }
+        ArchiveError::Transient(_) | ArchiveError::Corrupt(_) if received > 0 => {
+            let day = days.entry(path).or_default();
+            day.attempts = day.attempts.saturating_add(1);
+            if day.attempts >= 3 {
+                day.latched = Some(DayLatch::Transfer {
+                    error: error.clone(),
+                    until: now + Duration::from_secs(24 * 60 * 60),
+                });
+            }
+        }
+        _ => {}
+    }
+}
 
 thread_local! { static PACING: std::cell::Cell<Option<fn()>> = const { std::cell::Cell::new(None) }; }
 
@@ -50,8 +132,6 @@ pub(super) fn pace() {
 /// Host locks remain reusable across fills and do not serialize distinct archive services.
 type DownloadLocks = Mutex<HashMap<&'static str, Arc<Mutex<()>>>>;
 static DOWNLOAD: OnceLock<DownloadLocks> = OnceLock::new();
-/// Oversized daily files stay skipped for the process lifetime rather than being fetched hourly.
-static TOO_LARGE: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
 
 /// Completed days survive later refusals; stopping errors take precedence over skipped days.
 #[derive(Clone, Debug)]
@@ -72,8 +152,8 @@ fn download_lock(host: &'static str) -> Arc<Mutex<()>> {
         .clone()
 }
 
-/// Install the host's reserve check without coupling the archive reader to station storage.
-pub fn set_disk_guard(guard: fn(u64) -> bool) {
+/// Install a spendable-byte snapshot probe; None means the host cannot preserve its reserve.
+pub fn set_disk_guard(guard: fn() -> Option<u64>) {
     *DISK_GUARD.lock().unwrap_or_else(|error| error.into_inner()) = Some(guard);
 }
 
@@ -84,8 +164,81 @@ pub fn day_dir() -> PathBuf {
 
 /// Ask the installed reserve check for extraction and subsequent tape filing headroom.
 pub(crate) fn room_for(bytes: u64) -> bool {
+    disk_budget().is_some_and(|available| bytes.saturating_mul(EXTRACT_HEADROOM) <= available)
+}
+
+/// Snapshot spendable bytes once; an unavailable installed measurement fails closed.
+fn disk_budget() -> Option<u64> {
     let guard = *DISK_GUARD.lock().unwrap_or_else(|error| error.into_inner());
-    guard.is_none_or(|guard| guard(bytes.saturating_mul(EXTRACT_HEADROOM)))
+    guard.map_or(Some(u64::MAX), |guard| guard())
+}
+
+/// Preserve the same reserve as the station on the terminal's configured data filesystem.
+pub fn data_disk_budget() -> Option<u64> {
+    let root = crate::config::paths::data_dir();
+    let path = root.ancestors().find(|path| path.is_dir())?;
+    let (free, total) = disk_space(path)?;
+    reserve_budget(free, total)
+}
+
+/// Bytes spendable above the larger of 2 GiB and ten percent of the filesystem.
+pub fn reserve_budget(free: u64, total: u64) -> Option<u64> {
+    if total == 0 {
+        Some(u64::MAX)
+    } else {
+        free.checked_sub((2 * 1024 * 1024 * 1024).max(total / 10))
+    }
+}
+
+/// Query caller-available bytes without pulling a new filesystem dependency into the terminal.
+#[cfg(windows)]
+fn disk_space(path: &std::path::Path) -> Option<(u64, u64)> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        /// Return caller-available and total byte counts for the directory's volume.
+        fn GetDiskFreeSpaceExW(
+            path: *const u16,
+            free: *mut u64,
+            total: *mut u64,
+            all_free: *mut u64,
+        ) -> i32;
+    }
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let (mut free, mut total) = (0, 0);
+    // SAFETY: the path is NUL terminated and both output pointers refer to live u64 values.
+    let ok =
+        unsafe { GetDiskFreeSpaceExW(path.as_ptr(), &mut free, &mut total, std::ptr::null_mut()) };
+    (ok != 0).then_some((free, total))
+}
+
+/// Use the same Unix filesystem counters as the station's host sampler.
+#[cfg(unix)]
+fn disk_space(path: &std::path::Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: the path is NUL terminated and stat points to writable storage for one statvfs.
+    let stat = unsafe {
+        if libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) != 0 {
+            return None;
+        }
+        stat.assume_init()
+    };
+    let block = match stat.f_frsize as u64 {
+        0 => stat.f_bsize as u64,
+        size => size,
+    };
+    Some((
+        (stat.f_bavail as u64).saturating_mul(block),
+        (stat.f_blocks as u64).saturating_mul(block),
+    ))
+}
+
+/// Unsupported hosts cannot prove that an archive fits above the reserve.
+#[cfg(not(any(windows, unix)))]
+fn disk_space(_path: &std::path::Path) -> Option<(u64, u64)> {
+    None
 }
 
 /// Streaming response boundary; tests provide readers instead of making HTTP requests.
@@ -158,7 +311,7 @@ pub(crate) fn fill_counted(
             &day_dir(),
             utc_days_at(spans, now_ms, route.publish_lag_ms()),
         ),
-        (room_for, budget),
+        (disk_budget, budget),
         |url| {
             let mut response = fetch_day(url)?;
             response.reader = Box::new(CountedRead {
@@ -236,7 +389,28 @@ fn fill_with(
     spans: &Coverage,
     gate: &ReplayGate,
     storage: (&std::path::Path, Vec<NaiveDate>),
-    limits: (impl Fn(u64) -> bool, u64),
+    limits: (impl Fn() -> Option<u64>, u64),
+    fetch: impl Fn(&str) -> Result<DayResponse, ArchiveError>,
+) -> Result<ArchiveFill, ArchiveError> {
+    fill_at(
+        route,
+        market,
+        spans,
+        gate,
+        (storage.0, storage.1, Instant::now),
+        limits,
+        fetch,
+    )
+}
+
+/// Inject the pass clock so failure expiry can be checked without sleeping.
+fn fill_at(
+    route: ArchiveRoute,
+    market: &str,
+    spans: &Coverage,
+    gate: &ReplayGate,
+    storage: (&std::path::Path, Vec<NaiveDate>, impl Fn() -> Instant),
+    limits: (impl Fn() -> Option<u64>, u64),
     fetch: impl Fn(&str) -> Result<DayResponse, ArchiveError>,
 ) -> Result<ArchiveFill, ArchiveError> {
     let mut covered = Coverage::none();
@@ -245,28 +419,27 @@ fn fill_with(
     let requested = storage.1.len();
     let mut unknown = 0;
     let (guard, mut budget) = limits;
-    let (root, days) = storage;
+    let (root, days, now) = storage;
     day_cache::sweep_once(root).map_err(transient)?;
     for day in days {
         let before = ticks.len();
+        let mut latched = false;
+        let mut available = None;
+        let day_bytes = Arc::new(AtomicU64::new(0));
+        let paths = day_cache::paths(root, route, market, day)?;
+        let day_path = paths.file.clone();
+        let key = day_cache::in_flight(&day_path);
+        let _key = key.lock().unwrap_or_else(|error| error.into_inner());
         let result = (|| {
-            let paths = day_cache::paths(root, route, market, day)?;
-            let key = day_cache::in_flight(&paths.file);
-            let _key = key.lock().unwrap_or_else(|error| error.into_inner());
-            if TOO_LARGE
-                .get_or_init(Mutex::default)
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .contains(&paths.file)
-            {
-                return Err(ArchiveError::TooLarge);
+            if let Some(error) = day_refusal(&paths.file, &guard, now()) {
+                latched = true;
+                return Err(error);
             }
-            let key_path = paths.file.clone();
             let cleanup = day_cache::Cleanup::new(paths);
-            // Check before HTTP even when the response length is unavailable.
-            if !guard(MAX_DAY_BYTES) {
-                return Err(ArchiveError::NoRoom);
-            }
+            // Preserve the host reserve before HTTP without guessing the day's size.
+            let snapshot = guard().ok_or(ArchiveError::NoRoom)?;
+            available = Some(snapshot);
+            let fits = |bytes: u64| bytes.saturating_mul(EXTRACT_HEADROOM) <= snapshot;
             pace();
             {
                 let download = download_lock(route.host());
@@ -304,19 +477,13 @@ fn fill_with(
                         return Err(ArchiveError::Http(status));
                     }
                 }
-                let length = response.content_length.unwrap_or(MAX_DAY_BYTES);
-                if length > MAX_DAY_BYTES {
-                    TOO_LARGE
-                        .get_or_init(Mutex::default)
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .insert(key_path);
-                    return Err(ArchiveError::TooLarge);
-                }
-                if length > budget {
+                if response
+                    .content_length
+                    .is_some_and(|length| length > budget)
+                {
                     return Err(ArchiveError::BudgetDeferred);
                 }
-                if !guard(length) {
+                if response.content_length.is_some_and(|length| !fits(length)) {
                     return Err(ArchiveError::NoRoom);
                 }
                 std::fs::create_dir_all(cleanup.file().parent().expect("route directory"))
@@ -327,7 +494,6 @@ fn fill_with(
                     .open(cleanup.part())
                     .map_err(transient)?;
                 let expected = response.content_length;
-                let day_bytes = Arc::new(AtomicU64::new(0));
                 let copied = copy_bounded(
                     CountedRead {
                         reader: response.reader,
@@ -336,18 +502,12 @@ fn fill_with(
                     &mut file,
                     budget,
                     expected,
+                    fits,
                 );
                 budget = budget.saturating_sub(day_bytes.load(Ordering::Relaxed));
                 let received = match copied {
                     Ok(received) => received,
-                    Err(ArchiveError::TooLarge) => {
-                        TOO_LARGE
-                            .get_or_init(Mutex::default)
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner())
-                            .insert(key_path);
-                        return Err(ArchiveError::TooLarge);
-                    }
+                    Err(ArchiveError::NoRoom) => return Err(ArchiveError::NoRoom),
                     Err(error) => {
                         gate.refuse(route.host(), Instant::now());
                         return Err(error);
@@ -374,6 +534,15 @@ fn fill_with(
             )?;
             Ok(inside)
         })();
+        if !latched {
+            note_day_result(
+                day_path,
+                &result,
+                day_bytes.load(Ordering::Relaxed),
+                available,
+                now(),
+            );
+        }
         match result {
             Ok(inside) => {
                 for &span in inside.spans() {
@@ -382,13 +551,13 @@ fn fill_with(
             }
             Err(error) => {
                 ticks.truncate(before);
-                let skip = matches!(
-                    error,
-                    ArchiveError::NotPublished
-                        | ArchiveError::UnknownSymbol
-                        | ArchiveError::Corrupt(_)
-                        | ArchiveError::TooLarge
-                );
+                let skip = latched
+                    || matches!(
+                        error,
+                        ArchiveError::NotPublished
+                            | ArchiveError::UnknownSymbol
+                            | ArchiveError::Corrupt(_)
+                    );
                 if error == ArchiveError::UnknownSymbol {
                     unknown += 1;
                 }
@@ -418,7 +587,7 @@ fn fill_with(
     })
 }
 
-/// A missing old daily file is a stable symbol refusal; recent publication gaps remain retryable.
+/// Classify a daily 404 by publication age before caching it for this process.
 fn missing_day(route: ArchiveRoute, day: NaiveDate, now_ms: i64) -> ArchiveError {
     let end = day
         .and_hms_opt(0, 0, 0)
@@ -433,31 +602,46 @@ fn missing_day(route: ArchiveRoute, day: NaiveDate, now_ms: i64) -> ArchiveError
     }
 }
 
-/// Bound transport reads as well as writes; an unknown-length body at the hard ceiling cannot
-/// prove its EOF without overspending, so it stays skipped as oversized.
+/// Check the captured headroom every 64 MiB and at EOF without probing free space per chunk.
 fn copy_bounded(
     mut reader: impl Read,
     writer: &mut impl std::io::Write,
     budget: u64,
     expected: Option<u64>,
+    guard: impl Fn(u64) -> bool,
 ) -> Result<u64, ArchiveError> {
     let mut total = 0_u64;
-    let limit = MAX_DAY_BYTES.min(budget);
+    let limit = budget;
     let mut buffer = [0_u8; 64 * 1024];
+    const CHECK_EVERY: u64 = 64 * 1024 * 1024;
+    let mut next_check = CHECK_EVERY;
+    if !guard(0) {
+        return Err(ArchiveError::NoRoom);
+    }
     loop {
         if total == limit {
             return if expected == Some(total) {
                 Ok(total)
             } else {
-                Err(ArchiveError::TooLarge)
+                Err(ArchiveError::BudgetDeferred)
             };
         }
         let available = (limit - total).min(buffer.len() as u64) as usize;
         let count = reader.read(&mut buffer[..available]).map_err(transient)?;
         if count == 0 {
-            return Ok(total);
+            return if guard(total) {
+                Ok(total)
+            } else {
+                Err(ArchiveError::NoRoom)
+            };
         }
         total += count as u64;
+        if total >= next_check {
+            if !guard(total) {
+                return Err(ArchiveError::NoRoom);
+            }
+            next_check = total.saturating_add(CHECK_EVERY);
+        }
         writer.write_all(&buffer[..count]).map_err(transient)?;
     }
 }
@@ -584,10 +768,8 @@ pub enum ArchiveError {
     UnknownSymbol,
     /// The host refused requests until its header wait or shared backoff expires.
     Throttled { retry_after_s: Option<u32> },
-    /// Downloading or filing the archive would cross the station's disk reserve.
+    /// Downloading or filing the archive would cross the host's disk reserve.
     NoRoom,
-    /// This daily file exceeds the supported compressed size and stays skipped.
-    TooLarge,
     /// The current pass cannot admit this response body; replay callers have no pass budget.
     BudgetDeferred,
     /// The archive host answered with this unexpected HTTP status; retried like a transport

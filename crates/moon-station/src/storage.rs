@@ -45,12 +45,20 @@ pub fn fits(disk: Disk, bytes: u64) -> bool {
             .is_some_and(|free| free >= reserve(disk.total_bytes))
 }
 
-/// Measure the initialized data filesystem before spending archive or tape-write bytes.
-/// An unavailable measurement cannot prove sufficient room, so the download waits.
-pub fn room_for(bytes: u64) -> bool {
+/// Snapshot spendable space once for a daily download; unavailable measurements fail closed.
+pub fn archive_budget() -> Option<u64> {
     ROOT.get()
         .and_then(|root| crate::host::disk_space(root))
-        .is_some_and(|disk| fits(disk, bytes))
+        .and_then(|disk| {
+            fits(disk, 0)
+                .then(|| {
+                    moon_core::market::trade_replay::archive::reserve_budget(
+                        disk.free_bytes,
+                        disk.total_bytes,
+                    )
+                })
+                .flatten()
+        })
 }
 
 /// The free space the station keeps on a filesystem of `total_bytes`.

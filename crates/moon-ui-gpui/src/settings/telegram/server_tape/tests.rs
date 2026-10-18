@@ -19,6 +19,62 @@ use super::{
 };
 use crate::design;
 
+/// Station acknowledgements must not overwrite shared picks or dirty the policy write bar.
+#[test]
+fn shared_window_sync_keeps_bar_clean_and_warning_until_acknowledged() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let _locale = crate::test_locale::force("en");
+    let seen = moon_core::station_api::TapeWindow {
+        margin_s: 180,
+        long_position_min: 5,
+    };
+    let mut ed = TapeEd::default();
+    moon_core::market::trade_replay::set_margin_s(600);
+    moon_core::market::trade_replay::set_long_position_min(10);
+    ed.take_window(Some(seen), moon_core::market::trade_replay::window());
+    assert_eq!(ed.draft.unwrap().margin_s, 600);
+    assert_eq!(ed.draft.unwrap().long_position_min, 10);
+    assert_eq!(moon_core::market::trade_replay::margin_ms(), 600_000);
+    assert!(!ed.policy_changed());
+    assert!(
+        super::keep::widen_warning(ed.seen.unwrap(), ed.draft.unwrap(), None, None, false)
+            .is_some()
+    );
+    assert!(super::keep::bar_message(&ed, None, false).1);
+    let shared = moon_core::market::trade_replay::window();
+    ed.take_window(Some(shared), shared);
+    assert!(
+        super::keep::widen_warning(ed.seen.unwrap(), ed.draft.unwrap(), None, None, false)
+            .is_none()
+    );
+    // A lower pick after reconciliation must remain lower even while the report is old.
+    moon_core::market::trade_replay::set_margin_s(180);
+    ed.take_window(Some(shared), moon_core::market::trade_replay::window());
+    assert_eq!(ed.draft.unwrap().margin_s, 180);
+    assert!(!ed.policy_changed());
+    assert_eq!(
+        super::keep::bar_message(&ed, None, false),
+        (
+            rust_i18n::t!("telegram.server.tape_clean").to_string(),
+            false
+        )
+    );
+    let job = ed
+        .prepare_write(
+            moon_remote::ssh::Target {
+                host: "synthetic.invalid".into(),
+                port: 22,
+            },
+            false,
+            None,
+            moon_core::market::trade_replay::window(),
+        )
+        .expect("policy job");
+    assert!(
+        matches!(job, crate::backend::station::job::Job::Tape { tape, .. } if tape.margin_s == 180 && tape.long_position_min == 10)
+    );
+}
+
 /// Startup seeding must preserve a saved five-minute floor in a save before Analytics opens.
 ///
 /// Emptying `seed_tuner_floor` leaves the process floor at its 60 s default, so a station that
@@ -1114,7 +1170,7 @@ fn lengthening_writes_without_confirmation() {
         };
         let Some(Job::Tape {
             keep: Some(keep), ..
-        }) = ed.prepare_write(target.clone(), false, None)
+        }) = ed.prepare_write(target.clone(), false, None, ed.draft.unwrap())
         else {
             panic!("lengthening must write");
         };
@@ -1287,6 +1343,7 @@ impl Render for FullTapeProbe {
                         },
                         true,
                         this.c.purge,
+                        this.ed.draft.unwrap(),
                     ) {
                         this.sent.push(job);
                     }
@@ -1348,9 +1405,7 @@ impl Render for FullTapeProbe {
             actions,
             cx,
         );
-        let changed = self.ed.draft != self.ed.seen
-            || self.ed.draft_keep != self.ed.seen_keep
-            || self.ed.draft_switches != self.ed.seen_switches;
+        let changed = self.ed.policy_changed();
         let (msg, warning) = super::keep::bar_message(&self.ed, Some(&self.c), false);
         let bar = save_bar(
             SaveBar::Remote(RemoteBar {
@@ -1366,6 +1421,7 @@ impl Render for FullTapeProbe {
                             },
                             false,
                             this.c.purge,
+                            this.ed.draft.unwrap(),
                         ) {
                             this.sent.push(job);
                         }
@@ -1932,13 +1988,15 @@ fn tuner_only_confirms_on_writes_off_and_skips_older_stations() {
     assert!(
         probe
             .ed
-            .prepare_write(target.clone(), false, None)
+            .prepare_write(target.clone(), false, None, probe.ed.draft.unwrap())
             .is_none()
     );
     assert!(probe.ed.confirm, "switching on asks first");
     let Some(Job::Tape {
         keep: Some(keep), ..
-    }) = probe.ed.prepare_write(target.clone(), true, None)
+    }) = probe
+        .ed
+        .prepare_write(target.clone(), true, None, probe.ed.draft.unwrap())
     else {
         panic!("a confirmed switch must write");
     };
@@ -1958,7 +2016,7 @@ fn tuner_only_confirms_on_writes_off_and_skips_older_stations() {
     };
     let Some(Job::Tape {
         keep: Some(keep), ..
-    }) = ed.prepare_write(target.clone(), false, None)
+    }) = ed.prepare_write(target.clone(), false, None, ed.draft.unwrap())
     else {
         panic!("switching off must write without asking");
     };

@@ -60,16 +60,6 @@ const MAX_CONTINUATIONS: u8 = 12;
 /// rule, this is the guard against a fleet on many small venues fanning into many threads.
 const MAX_IN_FLIGHT: usize = 8;
 
-/// Who asked for a row. The autoload switch drops only [`RowOrigin::Autoload`] rows; a row the
-/// user queued with "Fetch trades" stays in the same batch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::analytics::tuner) enum RowOrigin {
-    /// The startup autoload, or a table load while the switch is on.
-    Autoload,
-    /// The axis' "Fetch trades" button.
-    User,
-}
-
 /// One deal as the job asks for it: everything the request needs, resolved by the view while it
 /// still had the live source for the exchange identity and the contract terms.
 pub(in crate::analytics::tuner) struct QueuedRow {
@@ -78,8 +68,6 @@ pub(in crate::analytics::tuner) struct QueuedRow {
     pub(in crate::analytics::tuner) replay_address: ReplayAddress,
     pub(in crate::analytics::tuner) tick_value: TickValue,
     pub(in crate::analytics::tuner) window: ReplayWindow,
-    /// Who queued the row. A later user ask adopts an autoload row ([`adopt_origin`]).
-    pub(super) origin: RowOrigin,
     /// Whether the venue itself already refused this row once; the second refusal is final.
     retried: bool,
     /// How many walks were continued for this row's tape, and how much of the request's focus
@@ -120,13 +108,13 @@ impl QueuedRow {
         )
     }
 
+    /// Capture an automatic row's window and continuation state before admission.
     pub(in crate::analytics::tuner) fn new(
         deal: Deal,
         address: Arc<RowAddress>,
         replay_address: ReplayAddress,
         tick_value: TickValue,
         window: ReplayWindow,
-        origin: RowOrigin,
     ) -> Self {
         Self {
             deal,
@@ -134,7 +122,6 @@ impl QueuedRow {
             replay_address,
             tick_value,
             window,
-            origin,
             retried: false,
             continued: 0,
             covered_ms: 0,
@@ -175,8 +162,7 @@ pub(in crate::analytics::tuner) enum JobEvent {
     /// Progress moved without a row answer — a deferral, a resume, the end of the batch.
     Progress,
     /// The autoload switch dropped this in-flight row, so the fetching mark comes off now.
-    /// A walk that already covered the row may still deliver that answer. An uncovered row
-    /// is not asked for again.
+    /// The cancelled walk cannot start another continuation.
     Released(i64),
 }
 
@@ -216,14 +202,9 @@ struct InFlight {
     /// walk's return cannot take that flight off the books.
     id: u64,
     uids: Vec<i64>,
-    /// Parallel to [`Self::uids`]: who queued each row of the walk.
-    origins: Vec<RowOrigin>,
-    /// Parallel to [`Self::uids`]. An autoload cancel dropped this row. The walk stays
-    /// out for the flight's user rows; a dropped row is not requeued, deferred, or continued.
-    dropped: Vec<bool>,
     market: String,
     exchange_key: String,
-    /// Raised by a stop so the walk ends at once.
+    /// Raised when this automatic walk is cancelled.
     cancel: Arc<AtomicBool>,
 }
 
@@ -237,8 +218,6 @@ struct State {
     total: usize,
     /// The strategy-field defaults the model runs with, captured when the batch started.
     defaults: HashMap<String, f64>,
-    /// Raised by a stop; the thread empties the queue and idles.
-    stop: bool,
     /// The window listening, if any; a dead receiver is the window gone, and is dropped.
     listener: Option<mpsc::Sender<JobEvent>>,
     /// When each row of the running batch was answered, for a reload that read the row before
@@ -288,6 +267,9 @@ impl State {
 
     /// The next row that may go out — see [`pick_dispatchable`].
     fn dispatchable(&self) -> Option<usize> {
+        if crate::backend::station::known_cached() {
+            return None;
+        }
         let busy: HashSet<&str> = self
             .in_flight
             .iter()
@@ -302,31 +284,6 @@ impl State {
         )
     }
 
-    /// A user ask for a row the autoload already holds makes that row the user's, queued,
-    /// waiting or out, so switching the autoload off leaves it.
-    fn adopt_user(&mut self, uid: i64) {
-        for row in self
-            .pending
-            .iter_mut()
-            .chain(self.deferred.iter_mut().map(|d| &mut d.row))
-        {
-            if row.deal.report_uid == uid {
-                row.origin = adopt_origin(row.origin, RowOrigin::User);
-            }
-        }
-        let mut revived = false;
-        for flight in &mut self.in_flight {
-            if adopt_booked_row(&flight.uids, &mut flight.origins, &mut flight.dropped, uid) {
-                revived = true;
-            }
-        }
-        // The drop subtracted this id from the batch. The user's ask puts it back,
-        // unless the walk already filed it.
-        if revived && !self.finished.iter().any(|(id, _)| *id == uid) {
-            self.total = self.total.saturating_add(1);
-        }
-    }
-
     /// Remove the flight `id` names.
     ///
     /// Returns:
@@ -338,102 +295,30 @@ impl State {
         still
     }
 
-    /// Take `uid` off the flight `id` names. The walk has already decided not to
-    /// continue it, so a later user ask must be able to queue the row again.
-    ///
-    /// Returns:
-    ///     Whether the id was on that flight.
-    fn release_flight_uid(&mut self, id: u64, uid: i64) -> bool {
-        let Some(flight) = self.in_flight.iter_mut().find(|flight| flight.id == id) else {
-            return false;
-        };
-        release_booked_uid(
-            &mut flight.uids,
-            &mut flight.origins,
-            &mut flight.dropped,
-            uid,
-        )
-    }
-
-    /// Drop every autoload row still queued or waiting. Cancel an in-flight walk only when
-    /// every row it serves is autoload. A mixed walk stays out, and its autoload rows are
-    /// marked dropped so the return does not spend another walk on them.
-    ///
-    /// Returns:
-    ///     Report ids whose fetching mark must come off: cancelled autoload-only walks, and
-    ///     autoload rows dropped from a mixed walk. Empty when nothing of the autoload was
-    ///     still in the batch — pending and deferred drops are not fetching.
+    /// Cancel automatic work and return in-flight ids whose fetching mark must clear.
     fn drop_autoload(&mut self) -> Vec<i64> {
-        let pending: Vec<TaggedRow> = self.pending.iter().map(TaggedRow::of).collect();
-        let deferred: Vec<TaggedRow> = self
-            .deferred
-            .iter()
-            .map(|d| TaggedRow::of(&d.row))
-            .collect();
-        let flights: Vec<FlightSnap> = self
+        let unmark: Vec<_> = self
             .in_flight
             .iter()
-            .map(|flight| FlightSnap {
-                id: flight.id,
-                rows: rows_still_dropping(&flight_rows(flight), &flight.dropped),
-            })
+            .flat_map(|flight| flight.uids.iter().copied())
             .collect();
-        let plan = cancel_autoload_rows(&pending, &deferred, &flights);
-        if plan.removed == 0 {
-            return Vec::new();
-        }
-        let keep_pending: HashSet<i64> = plan.pending.iter().map(|row| row.uid).collect();
-        self.pending
-            .retain(|row| keep_pending.contains(&row.deal.report_uid));
-        let keep_deferred: HashSet<i64> = plan.deferred.iter().map(|row| row.uid).collect();
-        self.deferred
-            .retain(|deferred| keep_deferred.contains(&deferred.row.deal.report_uid));
-        let keep_flights: HashMap<u64, Vec<i64>> = plan
-            .in_flight
+        let dropped: Vec<_> = self
+            .pending
             .iter()
-            .map(|flight| (flight.id, flight.dropped.clone()))
+            .map(|row| row.deal.report_uid)
+            .chain(self.deferred.iter().map(|entry| entry.row.deal.report_uid))
+            .chain(unmark.iter().copied())
             .collect();
-        for flight in &mut self.in_flight {
-            if let Some(dropped) = keep_flights.get(&flight.id) {
-                let dropped: HashSet<i64> = dropped.iter().copied().collect();
-                for (uid, mark) in flight.uids.iter().zip(flight.dropped.iter_mut()) {
-                    if dropped.contains(uid) {
-                        *mark = true;
-                    }
-                }
-            }
+        self.pending.clear();
+        self.deferred.clear();
+        for flight in self.in_flight.drain(..) {
+            flight.cancel.store(true, Ordering::Relaxed);
         }
-        self.in_flight.retain(|flight| {
-            if keep_flights.contains_key(&flight.id) {
-                true
-            } else {
-                flight.cancel.store(true, Ordering::Relaxed);
-                false
-            }
-        });
-        // A uid is in one place, except a walk that has already filed a row of its cluster:
-        // that id is in `finished` and still on the flight until the last row. Subtract it
-        // once, and not again for the done count. Union the three lists so a duplicated id
-        // cannot leave the total twice.
-        let mut dropped: Vec<i64> = pending
-            .iter()
-            .filter(|row| !keep_pending.contains(&row.uid))
-            .map(|row| row.uid)
-            .chain(
-                deferred
-                    .iter()
-                    .filter(|row| !keep_deferred.contains(&row.uid))
-                    .map(|row| row.uid),
-            )
-            .chain(plan.unmark.iter().copied())
-            .collect();
-        dropped.sort_unstable();
-        dropped.dedup();
-        let already_done: HashSet<i64> = self.finished.iter().map(|(uid, _)| *uid).collect();
+        let already_done = self.finished.iter().map(|(uid, _)| *uid).collect();
         self.total = self
             .total
             .saturating_sub(rows_leaving_total(&dropped, &already_done));
-        plan.unmark
+        unmark
     }
 
     /// Every id the batch already knows — queued, waiting, out, or answered — so a row is
@@ -483,7 +368,7 @@ fn ensure_thread() {
 
 /// Add rows to the batch — the running one, or a fresh one when none runs. Rows the batch
 /// already knows (queued, waiting, out, or answered since it started) are dropped, so the
-/// startup autoload and a "Fetch trades" press cannot ask for the same trade twice. `rows` is
+/// startup autoload and a table load cannot ask for the same trade twice. `rows` is
 /// newest-first: the job pops from the end, so the oldest — nearest the venues' retention edge
 /// — goes first. `defaults` are taken only when they open a fresh batch.
 ///
@@ -505,12 +390,6 @@ pub(in crate::analytics::tuner) fn enqueue(
         st.deferred.clear();
         st.finished.clear();
         st.defaults = defaults;
-        st.stop = false;
-    }
-    for row in &rows {
-        if row.origin == RowOrigin::User {
-            st.adopt_user(row.deal.report_uid);
-        }
     }
     let known = st.known();
     let fresh: Vec<QueuedRow> = rows
@@ -522,7 +401,7 @@ pub(in crate::analytics::tuner) fn enqueue(
         return 0;
     }
     // In FRONT of what is queued: `pending` pops from the end, and the rows already there —
-    // the user's own press, or an earlier autoload pass — keep their turn.
+    // an earlier autoload pass — keep their turn.
     let mut pending = fresh;
     pending.append(&mut st.pending);
     st.pending = pending;
@@ -536,8 +415,7 @@ pub(in crate::analytics::tuner) fn enqueue(
 /// Mark the rows among `uids` as the ones the user is looking at: the dispatcher takes a
 /// marked row of a free venue before the venue's other rows, oldest marked row first. The
 /// autoload queues a month of trades oldest-first, so the freshest rows, the ones at the top
-/// of a table, would otherwise be the last of hundreds; a press of "Fetch trades" and every
-/// load of the axis mark theirs. A mark rather than a move: a venue's backoff sweeps rows out
+/// of a table, would otherwise be the last of hundreds; each axis load marks its visible rows. A mark rather than a move: a venue's backoff sweeps rows out
 /// of the queue and back, and a continuation re-queues a row — a position would not survive
 /// either, the mark does. Rows out, answered or unknown are left alone.
 ///
@@ -569,38 +447,13 @@ pub(in crate::analytics::tuner) fn prioritize(uids: &HashSet<i64>) -> usize {
     marked
 }
 
-/// Drop every row the autoload queued and cancel a walk that serves only those rows.
-///
-/// A row the user queued in the same batch stays, and so does a walk that already took one of
-/// the user's rows — cancelling that walk would drop the user's ask. The autoload rows on
-/// that walk are dropped: they are reported as [`JobEvent::Released`] so the fetching mark
-/// comes off, and the walk's return does not requeue, defer, or continue them. A row the
-/// walk already covered may still be filed.
-///
-/// Returns:
-///     Nothing. The queue, the totals and the listener are updated in place.
+/// Drop every queued automatic row and cancel all of its in-flight walks.
 pub(crate) fn stop_autoload() {
     let job = job();
     let mut st = lock(job);
     let unmark = st.drop_autoload();
     for uid in unmark {
         st.notify(JobEvent::Released(uid));
-    }
-    st.notify(JobEvent::Progress);
-    drop(st);
-    job.wake.notify_all();
-}
-
-/// Abandon the batch: the queue empties, every request in flight is cancelled and its answer
-/// is dropped.
-pub(in crate::analytics::tuner) fn stop() {
-    let job = job();
-    let mut st = lock(job);
-    st.stop = true;
-    st.pending.clear();
-    st.deferred.clear();
-    for out in &st.in_flight {
-        out.cancel.store(true, Ordering::Relaxed);
     }
     st.notify(JobEvent::Progress);
     drop(st);
@@ -649,16 +502,7 @@ pub(in crate::analytics::tuner) fn progress() -> Progress {
     let in_flight: Vec<(Vec<i64>, String)> = st
         .in_flight
         .iter()
-        .map(|flight| {
-            let uids = flight
-                .uids
-                .iter()
-                .zip(flight.dropped.iter())
-                .filter(|(_, dropped)| !**dropped)
-                .map(|(uid, _)| *uid)
-                .collect();
-            (uids, flight.market.clone())
-        })
+        .map(|flight| (flight.uids.clone(), flight.market.clone()))
         .collect();
     // One deadline per deferred row. Rows of one host share the deadline `defer` wrote, so
     // the minimum is the soonest host — the same instant `run` waits for.
@@ -685,293 +529,6 @@ pub(in crate::analytics::tuner) fn finished_after(since: Instant) -> Vec<i64> {
         .filter(|(_, at)| *at >= since)
         .map(|(uid, _)| *uid)
         .collect()
-}
-
-/// One row as the autoload-cancel rule sees it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct TaggedRow {
-    pub(super) uid: i64,
-    pub(super) origin: RowOrigin,
-}
-
-impl TaggedRow {
-    fn of(row: &QueuedRow) -> Self {
-        Self {
-            uid: row.deal.report_uid,
-            origin: row.origin,
-        }
-    }
-}
-
-/// What cancelling the autoload's rows leaves of one batch.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct AutoloadCancel {
-    /// Pending rows that stay, in their original order.
-    pub(super) pending: Vec<TaggedRow>,
-    /// Deferred rows that stay, in their original order.
-    pub(super) deferred: Vec<TaggedRow>,
-    /// Walks that stay. A walk whose every row is autoload is absent. A mixed walk lists
-    /// its autoload rows in [`KeptFlight::dropped`].
-    pub(super) in_flight: Vec<KeptFlight>,
-    /// Report ids of cancelled autoload-only walks.
-    pub(super) unmark: Vec<i64>,
-    /// Rows removed from the batch: pending, deferred, and cancelled walks.
-    pub(super) removed: usize,
-}
-
-/// The origin a row keeps when `incoming` asks for an id the batch already has.
-///
-/// A user ask adopts an autoload row. An autoload ask never takes a user row back.
-///
-/// Args:
-///     current: Origin already stored on the row.
-///     incoming: Origin of the ask that names the same id.
-///
-/// Returns:
-///     The origin the row keeps.
-pub(super) fn adopt_origin(current: RowOrigin, incoming: RowOrigin) -> RowOrigin {
-    match (current, incoming) {
-        (RowOrigin::Autoload, RowOrigin::User) => RowOrigin::User,
-        (current, _) => current,
-    }
-}
-
-/// Origin a deferred or continued row keeps.
-///
-/// The walk carries the origin from dispatch. A user ask that lands while the walk is out
-/// adopts the in-flight record; the requeued row must keep that adoption, or the next
-/// switch-off treats the user's row as autoload again.
-///
-/// Args:
-///     carried: Origin on the row the walk took out.
-///     adopted: Origin on the in-flight record now, if the walk is still booked.
-///
-/// Returns:
-///     The origin to store when the row goes back on the queue.
-pub(super) fn requeued_origin(carried: RowOrigin, adopted: Option<RowOrigin>) -> RowOrigin {
-    adopted.unwrap_or(carried)
-}
-
-/// One walk as the autoload-cancel rule sees it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct FlightSnap {
-    /// Identity of the live flight. The rule keeps or cancels that flight, not its row ids.
-    pub(super) id: u64,
-    pub(super) rows: Vec<TaggedRow>,
-}
-
-/// A walk the autoload cancel leaves running.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct KeptFlight {
-    pub(super) id: u64,
-    /// Every row the walk took, user and autoload.
-    pub(super) rows: Vec<TaggedRow>,
-    /// Autoload rows of a walk that also serves a user row. The walk stays out for the user
-    /// rows; these are not requeued, deferred, or continued.
-    pub(super) dropped: Vec<i64>,
-}
-
-/// Drop every autoload row that is still queued or waiting, and cancel an in-flight walk only
-/// when it serves no user row.
-///
-/// A walk that also serves a user row keeps walking — cancelling it would drop the user's
-/// ask — but its autoload rows are dropped. Pending and deferred user rows stay in order.
-///
-/// Args:
-///     pending: Queued rows, newest-first, as the job stores them.
-///     deferred: Rows waiting out a venue backoff, in the order they were set aside.
-///     in_flight: Walks out now, each with the id the return will match.
-///
-/// Returns:
-///     The rows that remain, the ids whose fetching mark must come off, and how many rows left
-///     the batch. Dropped rows of a mixed walk are in `unmark` and in that walk's `dropped`.
-pub(super) fn cancel_autoload_rows(
-    pending: &[TaggedRow],
-    deferred: &[TaggedRow],
-    in_flight: &[FlightSnap],
-) -> AutoloadCancel {
-    let keep = |row: &TaggedRow| row.origin != RowOrigin::Autoload;
-    let pending_kept: Vec<TaggedRow> = pending.iter().copied().filter(keep).collect();
-    let deferred_kept: Vec<TaggedRow> = deferred.iter().copied().filter(keep).collect();
-    let mut flights_kept = Vec::new();
-    let mut unmark = Vec::new();
-    for flight in in_flight {
-        let user = flight.rows.iter().any(|row| row.origin == RowOrigin::User);
-        if user || flight.rows.is_empty() {
-            let dropped: Vec<i64> = flight
-                .rows
-                .iter()
-                .filter(|row| row.origin == RowOrigin::Autoload)
-                .map(|row| row.uid)
-                .collect();
-            unmark.extend(dropped.iter().copied());
-            flights_kept.push(KeptFlight {
-                id: flight.id,
-                rows: flight.rows.clone(),
-                dropped,
-            });
-        } else {
-            unmark.extend(flight.rows.iter().map(|row| row.uid));
-        }
-    }
-    let removed = (pending.len() - pending_kept.len())
-        + (deferred.len() - deferred_kept.len())
-        + unmark.len();
-    AutoloadCancel {
-        pending: pending_kept,
-        deferred: deferred_kept,
-        in_flight: flights_kept,
-        unmark,
-        removed,
-    }
-}
-
-/// What a walk's return does with one of its rows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ReturnedRow {
-    /// The venue asked for a wait. Put the row back when it is out.
-    Defer,
-    /// The walk stopped short. Put the row back for another stretch.
-    Continue,
-    /// The walk's answer is the row's final word. Count it done.
-    File,
-    /// The autoload cancel dropped the row. Do not spend another walk on it.
-    /// `file` is set when this walk already covered the row, so that answer is still delivered.
-    Dropped { file: bool },
-}
-
-/// Decide what the walk's return does with one row.
-///
-/// A dropped autoload row is never deferred or continued. It is filed only when this walk's
-/// answer is already final. A stop files a user row instead of putting it back; it does not
-/// revive a dropped autoload row.
-///
-/// Args:
-///     dropped: The autoload cancel marked this row while the walk was out.
-///     waiting: The venue named a wait and the row is still uncovered.
-///     continue_walk: The walk stopped short and another stretch would gain tape.
-///     stop: The batch was stopped.
-///
-/// Returns:
-///     The disposition of this row. The caller counts a [`ReturnedRow::File`] toward the batch
-///     and only delivers a dropped row when `file` is set.
-pub(super) fn returned_row(
-    dropped: bool,
-    waiting: bool,
-    continue_walk: bool,
-    stop: bool,
-) -> ReturnedRow {
-    if dropped {
-        return ReturnedRow::Dropped {
-            file: !waiting && !continue_walk,
-        };
-    }
-    if stop {
-        return ReturnedRow::File;
-    }
-    if waiting {
-        return ReturnedRow::Defer;
-    }
-    if continue_walk {
-        return ReturnedRow::Continue;
-    }
-    ReturnedRow::File
-}
-
-/// A user ask for `uid` adopts that booked row and clears an autoload drop.
-///
-/// The walk's return then treats the row as the user's: a drop would otherwise discard the
-/// continuation the user just asked for, and the id is still on this flight so a second
-/// flight is not started.
-///
-/// Args:
-///     uids: Report ids on the flight, in walk order.
-///     origins: Who queued each id. Updated in place. Same length as `uids`.
-///     dropped: Which ids the autoload cancel dropped. Updated in place. Same length as `uids`.
-///     uid: The id the user just asked for.
-///
-/// Returns:
-///     Whether a dropped row was revived and must rejoin the batch total.
-pub(super) fn adopt_booked_row(
-    uids: &[i64],
-    origins: &mut [RowOrigin],
-    dropped: &mut [bool],
-    uid: i64,
-) -> bool {
-    let mut revived = false;
-    for (i, booked) in uids.iter().enumerate() {
-        if *booked != uid {
-            continue;
-        }
-        let (Some(origin), Some(mark)) = (origins.get_mut(i), dropped.get_mut(i)) else {
-            continue;
-        };
-        *origin = adopt_origin(*origin, RowOrigin::User);
-        if *mark {
-            *mark = false;
-            revived = true;
-        }
-    }
-    revived
-}
-
-/// The rows a cancel should see. An id already dropped by an earlier switch-off is
-/// omitted, so a second press does not subtract it from the batch total again.
-///
-/// Args:
-///     rows: The flight's rows, parallel to `dropped`.
-///     dropped: Which of those rows an earlier cancel already dropped.
-///
-/// Returns:
-///     The rows still eligible to drop. Already-dropped ids are absent.
-pub(super) fn rows_still_dropping(rows: &[TaggedRow], dropped: &[bool]) -> Vec<TaggedRow> {
-    rows.iter()
-        .enumerate()
-        .filter(|(index, _)| dropped.get(*index).copied() != Some(true))
-        .map(|(_, row)| *row)
-        .collect()
-}
-
-fn flight_rows(flight: &InFlight) -> Vec<TaggedRow> {
-    flight
-        .uids
-        .iter()
-        .zip(flight.origins.iter())
-        .map(|(&uid, &origin)| TaggedRow { uid, origin })
-        .collect()
-}
-
-/// Remove `uid` from a flight's parallel row lists.
-///
-/// The walk has already refused to continue this dropped row. Leaving the id booked
-/// makes a later user ask adopt it and then discard the ask, because the loop will
-/// not visit the row again.
-///
-/// Args:
-///     uids: Report ids still on the flight. Updated in place.
-///     origins: Who queued each id. Updated in place.
-///     dropped: Which ids are dropped. Updated in place.
-///     uid: The id that will not be continued.
-///
-/// Returns:
-///     Whether `uid` was on the flight.
-pub(super) fn release_booked_uid(
-    uids: &mut Vec<i64>,
-    origins: &mut Vec<RowOrigin>,
-    dropped: &mut Vec<bool>,
-    uid: i64,
-) -> bool {
-    let Some(index) = uids.iter().position(|booked| *booked == uid) else {
-        return false;
-    };
-    uids.remove(index);
-    if index < origins.len() {
-        origins.remove(index);
-    }
-    if index < dropped.len() {
-        dropped.remove(index);
-    }
-    true
 }
 
 /// Drop `id` from the flights still booked.
@@ -1172,11 +729,6 @@ fn final_tape(
 fn run(job: &'static Job) {
     loop {
         let mut st = lock(job);
-        if st.stop {
-            st.stop = false;
-            st.pending.clear();
-            st.deferred.clear();
-        }
         let now = Instant::now();
         if st.resume_due(now) {
             st.notify(JobEvent::Progress);
@@ -1206,14 +758,11 @@ fn run(job: &'static Job) {
             let defaults = st.defaults.clone();
             let cancel = Arc::new(AtomicBool::new(false));
             let uids: Vec<i64> = rows.iter().map(|r| r.deal.report_uid).collect();
-            let origins: Vec<RowOrigin> = rows.iter().map(|r| r.origin).collect();
             let flight_id = next_flight_id();
             let first = &rows[0];
             st.in_flight.push(InFlight {
                 id: flight_id,
                 uids: uids.clone(),
-                origins,
-                dropped: vec![false; uids.len()],
                 market: match rows.len() {
                     1 => first.address.market.clone(),
                     n => format!("{}×{n}", first.address.market),
@@ -1282,6 +831,14 @@ fn serve_cluster(
     defaults: &HashMap<String, f64>,
     flight_id: u64,
 ) {
+    if cancel.load(Ordering::Relaxed) || crate::backend::station::known_cached() {
+        let mut st = lock(job);
+        st.detach_flight(flight_id);
+        st.notify(JobEvent::Progress);
+        drop(st);
+        job.wake.notify_all();
+        return;
+    }
     let uids: Vec<i64> = rows.iter().map(|r| r.deal.report_uid).collect();
     let first = &rows[0];
     // The hull: the first window's open (an entry order's creation, else a buy) to the last
@@ -1356,7 +913,7 @@ fn serve_cluster(
     let answered = started.elapsed();
     if cancel.load(Ordering::Relaxed) {
         // Stopped mid-walk: nothing to file. An autoload cancel has already taken this flight
-        // off the books and unmarked its rows; a full stop still finds it here. Matching the
+        // off the books and unmarked its rows. Matching the
         // flight id leaves a newer flight for the same rows alone.
         let mut st = lock(job);
         let still = st.detach_flight(flight_id);
@@ -1443,7 +1000,7 @@ fn serve_cluster(
             wait.is_some() || continue_walk,
         );
         let replayed_ms = replayed_at.elapsed().as_millis();
-        let mut outcome_text = match (wait, continue_walk) {
+        let outcome_text = match (wait, continue_walk) {
             (Some(wait), _) => format!("retry in {} s", wait.as_secs()),
             (None, true) => format!(
                 "continue {}/{MAX_CONTINUATIONS}, {covered_ms} ms of the focus covered",
@@ -1452,70 +1009,17 @@ fn serve_cluster(
             (None, false) => format!("{:?}", answer.tape),
         };
         let mut st = lock(job);
-        // An autoload cancel of a walk that served only autoload rows removes that flight
-        // and its share of the total before the walk returns. A late answer still lands
-        // below — the walk already paid — but the row is not put back on the queue and is
-        // not counted a second time. A mixed walk stays booked under its own id; its dropped
-        // autoload rows are not requeued, and a row this walk already covered is still filed.
-        // Read the adopted origin before the last row drops the flight: a user ask during the
-        // walk updates that record, and a deferral or a continuation must not put the row back
-        // as autoload.
-        let adopted = st
-            .in_flight
-            .iter()
-            .find(|flight| flight.id == flight_id)
-            .and_then(|flight| {
-                flight
-                    .uids
-                    .iter()
-                    .zip(flight.origins.iter())
-                    .find(|(id, _)| **id == uid)
-                    .map(|(_, origin)| *origin)
-            });
-        let dropped = st
-            .in_flight
-            .iter()
-            .find(|flight| flight.id == flight_id)
-            .and_then(|flight| {
-                flight
-                    .uids
-                    .iter()
-                    .zip(flight.dropped.iter())
-                    .find(|(id, _)| **id == uid)
-                    .map(|(_, dropped)| *dropped)
-            })
-            .unwrap_or(false);
-        row.origin = requeued_origin(row.origin, adopted);
+        // Cancellation removes this flight before any subsequent continuation can be queued.
         let still = st.in_flight.iter().any(|flight| flight.id == flight_id);
-        let mut deliver = true;
         if still {
-            match returned_row(dropped, wait.is_some(), continue_walk, st.stop) {
-                ReturnedRow::Defer => {
-                    if let Some(wait) = wait {
-                        st.defer(row, wait);
-                    }
-                }
-                // The FRONT of the queue is the last to go: the venue's other rows first.
-                ReturnedRow::Continue => st.pending.insert(0, row),
-                ReturnedRow::File => {
-                    st.done += 1;
-                    st.finished.push((uid, Instant::now()));
-                }
-                ReturnedRow::Dropped { file } => {
-                    deliver = file;
-                    if file {
-                        // Already subtracted from the batch total when the row was dropped.
-                        st.finished.push((uid, Instant::now()));
-                        outcome_text = format!("dropped, filed {outcome_text}");
-                    } else {
-                        // The loop will not visit this row again. Leave it on the flight and a
-                        // Fetch trades press adopts it, then has nothing left to run.
-                        st.release_flight_uid(flight_id, uid);
-                        outcome_text = "dropped".to_string();
-                    }
-                }
+            if let Some(wait) = wait {
+                st.defer(row, wait);
+            } else if continue_walk {
+                st.pending.insert(0, row);
+            } else {
+                st.done += 1;
+                st.finished.push((uid, Instant::now()));
             }
-            // The request is out until its last row is filed; the key stays busy meanwhile.
             if position + 1 == cluster {
                 st.detach_flight(flight_id);
             }
@@ -1533,7 +1037,7 @@ fn serve_cluster(
             position + 1,
             answered.as_millis(),
         );
-        if deliver {
+        if still {
             st.notify(JobEvent::Row(Box::new(answer)));
         }
         drop(st);

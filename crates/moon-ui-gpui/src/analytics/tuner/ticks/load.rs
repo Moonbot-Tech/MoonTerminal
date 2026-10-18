@@ -40,9 +40,7 @@ use moon_core::feed::report_traces::ArchivedLineKind;
 use moon_core::feed::strategy_deps::FieldDeps;
 use moon_core::feed::types::Tick;
 use moon_core::market::kline_cache::KlineCache;
-use moon_core::market::trade_replay::venue_caps::{
-    ARCHIVE_DEPTH_MS, Fetchable, fetchable, trade_route,
-};
+use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable, trade_route};
 use moon_core::market::trade_replay::{
     Coverage, ReplayWindow, TickQuery, TickStatus, long_position_ms, margin_ms, query_held,
 };
@@ -710,7 +708,7 @@ impl AnalyticsView {
                 // which the startup pass already walks for every core, and what closes after it
                 // the close-time capture files.
                 if moon_core::market::trade_replay::tape_autoload() {
-                    this.ticks_fetch_missing(super::fetch::job::RowOrigin::Autoload, cx);
+                    this.ticks_fetch_missing(cx);
                 }
                 // The replayable set may have changed under the variant columns: rescore them.
                 this.arm_ticks_variants(cx);
@@ -1316,7 +1314,7 @@ fn unservable_status(address: &RowAddress, deal: &Deal, now_ms: i64) -> Option<T
                 .venue
                 .and_then(trade_route)
                 .and_then(|route| route.retention_ms())
-                .unwrap_or(ARCHIVE_DEPTH_MS),
+                .unwrap_or(i64::MAX),
         })),
     }
 }

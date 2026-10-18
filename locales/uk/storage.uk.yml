@@ -17,7 +17,6 @@ storage.strategies_enabled_hint: "Історія версій реальних �
 storage.strategies_rows: "Стратегій: %{live} (видалених: %{deleted}) · Версій: %{versions}"
 storage.version_limit: "Ліміт версій на стратегію"
 storage.version_limit_off: "без ліміту"
-storage.unit_mb: "МБ"
 storage.unit_min: "хв"
 storage.version_limit_hint: "0 — зберігати всі версії (рекомендовано: історію не відновити). Ліміт обрізає старі, коли пишуться нові."
 storage.strategies_hint: "Єдина копія історії — повторна синхронізація її не відновить. Щоб не втратити, натисніть Резервна копія."
@@ -26,8 +25,6 @@ storage.klines_hint: "Відновлюваний кеш історії свіч�
 
 storage.trades_enabled: "Зберігати принти угод"
 storage.trades_enabled_hint: "Завантажені принти лишаються на диску і вдруге не качаються. Вимкнено — лише в пам'яті, доки термінал не закриється."
-storage.trades_max_mb: "Ліміт файлу"
-storage.trades_max_mb_hint: "Понад ліміт першими йдуть найстаріші записи; 0 — без ліміту."
 storage.trades_margin: "Принти навколо угоди"
 storage.trades_sec: "%{s} с"
 storage.trades_min: "%{min} хв"

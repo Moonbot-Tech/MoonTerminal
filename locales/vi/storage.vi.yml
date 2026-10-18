@@ -17,7 +17,6 @@ storage.strategies_enabled_hint: "Lịch sử phiên bản theo các lần sửa
 storage.strategies_rows: "Chiến lược: %{live} (đã xóa: %{deleted}) · Phiên bản: %{versions}"
 storage.version_limit: "Giới hạn phiên bản mỗi chiến lược"
 storage.version_limit_off: "không giới hạn"
-storage.unit_mb: "MB"
 storage.unit_min: "phút"
 storage.version_limit_hint: "0 — giữ mọi phiên bản (nên dùng: lịch sử không khôi phục được). Giới hạn sẽ cắt bản cũ khi ghi bản mới."
 storage.strategies_hint: "Bản duy nhất của lịch sử — đồng bộ lại không khôi phục được. Dùng Sao lưu để giữ an toàn."
@@ -26,8 +25,6 @@ storage.klines_hint: "Bộ nhớ đệm lịch sử nến, khôi phục được
 
 storage.trades_enabled: "Giữ print giao dịch"
 storage.trades_enabled_hint: "Print đã tải ở lại trên đĩa và không tải lần hai. Tắt — chỉ trong bộ nhớ, đến khi đóng terminal."
-storage.trades_max_mb: "Giới hạn file"
-storage.trades_max_mb_hint: "Vượt giới hạn thì bản ghi cũ nhất bị xóa trước; 0 — không giới hạn."
 storage.trades_margin: "Print quanh giao dịch"
 storage.trades_sec: "%{s} giây"
 storage.trades_min: "%{min} phút"

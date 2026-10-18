@@ -627,7 +627,7 @@ impl RecorderCatchup {
             self.archive_bytes = 0;
         }
         // Plan order is soonest expiry first; untaken jobs stay pending and unlatched.
-        let jobs = admissible(batch.jobs, self.archive_bytes, now_ms);
+        let jobs = admissible(batch.jobs);
         if jobs.is_empty() {
             return;
         }
@@ -885,20 +885,9 @@ fn ascii(text: &str) -> String {
         .collect()
 }
 
-/// Take the next pass's jobs in plan order. Once the hour's archive budget is spent, a job that
-/// needs an archive stays pending and unlatched instead of being carried into a pass that can only
-/// skip it, so passes keep draining REST-able jobs and none starts for archive work alone until
-/// the next UTC hour resets the budget.
-pub(super) fn admissible(
-    jobs: Vec<CatchupJob>,
-    archive_bytes: u64,
-    now_ms: i64,
-) -> Vec<CatchupJob> {
-    let spent = archive_bytes >= executor::ARCHIVE_BYTES_PER_PASS;
-    jobs.into_iter()
-        .filter(|job| !spent || !executor::needs_archive(job, now_ms))
-        .take(PASS_JOBS)
-        .collect()
+/// Take at most one pass of jobs in plan order, independent of downloaded byte telemetry.
+pub(super) fn admissible(jobs: Vec<CatchupJob>) -> Vec<CatchupJob> {
+    jobs.into_iter().take(PASS_JOBS).collect()
 }
 
 /// Anchor recoverable retries to the next UTC hour rather than to each failure's elapsed delay.

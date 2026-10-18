@@ -47,6 +47,8 @@ mod startup;
 mod strategies;
 #[cfg(test)]
 mod test_locale;
+#[cfg(test)]
+mod test_support;
 mod trade_window;
 mod ui_session;
 // The UI-control atlas, kept OUT of this repository: a crawl that is not published, plus the

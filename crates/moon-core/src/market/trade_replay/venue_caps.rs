@@ -525,9 +525,6 @@ pub const fn trade_route(venue: Venue) -> Option<TradeRoute> {
     }
 }
 
-/// Maximum age of tape eligible for archive catch-up.
-pub const ARCHIVE_DEPTH_MS: i64 = 365 * 86_400_000;
-
 /// Available source for a focus beginning at the supplied UTC timestamp.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fetchable {
@@ -541,7 +538,7 @@ pub enum Fetchable {
     OutOfRetention,
 }
 
-/// Choose REST first, then a daily archive within the bounded catch-up depth; unlisted venues have no route.
+/// Choose REST first, then a daily archive without imposing an artificial archive age limit.
 pub fn fetchable(venue: Option<Venue>, market: &str, from_ms: i64, now_ms: i64) -> Fetchable {
     fetchable_with(venue, market, from_ms, now_ms, true)
 }
@@ -568,7 +565,7 @@ pub fn fetchable_with(
         })
     }) {
         Fetchable::Rest
-    } else if archive.is_some() && from_ms >= now_ms.saturating_sub(ARCHIVE_DEPTH_MS) {
+    } else if archive.is_some() {
         Fetchable::Archive
     } else if rest.is_some() || archive.is_some() {
         Fetchable::OutOfRetention

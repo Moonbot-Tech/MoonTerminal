@@ -980,6 +980,12 @@ pub(in crate::analytics) fn cell_tip(ready: &Readiness) -> String {
         let key = super::plural_key("analytics.ticks.why.fetchable", ready.fetchable);
         lines.push(t!(key.as_str(), n = ready.fetchable).to_string());
     }
+    // The count of deals still loading is the autoload's, not the yield above. Idle
+    // autoload (`None`) keeps the sentence and drops the number; a strategy with nothing
+    // left to fetch stays on the breakdown alone.
+    if ready.fetchable > 0 || super::ticks::fetch::autoload::pending_rows().is_some() {
+        lines.push(super::ticks::why::background_loading_line());
+    }
     lines.join("\n")
 }
 

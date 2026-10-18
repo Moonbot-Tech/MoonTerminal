@@ -86,6 +86,9 @@ pub(super) struct BootInput {
 
 /// Build sessions and windows, gating local Telegram before constructing any saved transport.
 pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
+    moon_core::market::trade_replay::archive::set_disk_guard(
+        moon_core::market::trade_replay::archive::data_disk_budget,
+    );
     let BootInput {
         layout,
         chart_specs: saved_chart_specs,
@@ -775,6 +778,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                             valuation.wake();
                         }
                     b.tick_telegram(cx);
+                    b.station_reconnect_tick(moon_core::util::time::now_unix_ms_i64(), cx);
                     // The startup cleanup of the trade tape, then the tape autoload of the
                     // tuner's Entry/Exit axis — in that order, the autoload waits for the
                     // cleanup: a switch read and a clock compare each on every tick, a

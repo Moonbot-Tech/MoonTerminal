@@ -625,6 +625,7 @@ fn an_open_whose_exit_never_came_is_forgotten() {
     );
     task.give_up();
     assert!(!task.is_done(), "an open trade keeps the key");
-    task.drop_stale_opens(T0 + 1);
+    assert_eq!(task.drop_stale_opens(T0 + 1), 1);
+    assert_eq!(task.drop_stale_opens(T0 + 1), 0);
     assert!(task.is_done());
 }

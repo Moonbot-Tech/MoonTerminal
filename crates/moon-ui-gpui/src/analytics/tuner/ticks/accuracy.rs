@@ -99,6 +99,7 @@ impl UncheckedWhy {
                 DealWhy::Fit
                 | DealWhy::AcceptedShortTail
                 | DealWhy::NoTape { .. }
+                | DealWhy::StationMissing
                 | DealWhy::NoAddress
                 | DealWhy::Fetching
                 | DealWhy::Refused(_)

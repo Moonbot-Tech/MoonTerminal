@@ -17,7 +17,6 @@ storage.strategies_enabled_hint: "Histórico de versões das edições reais de 
 storage.strategies_rows: "Estratégias: %{live} (excluídas: %{deleted}) · Versões: %{versions}"
 storage.version_limit: "Limite de versões por estratégia"
 storage.version_limit_off: "sem limite"
-storage.unit_mb: "MB"
 storage.unit_min: "min"
 storage.version_limit_hint: "0 — guardar todas as versões (recomendado: o histórico não se recupera). Um limite corta as antigas quando as novas são gravadas."
 storage.strategies_hint: "A única cópia do histórico — uma nova sincronização não restaura. Use Backup para guardá-la."
@@ -26,8 +25,6 @@ storage.klines_hint: "Cache recuperável do histórico de candles: o arquivo pod
 
 storage.trades_enabled: "Guardar prints de operações"
 storage.trades_enabled_hint: "Os prints baixados ficam no disco e não são baixados de novo. Desligado — só na memória, até o terminal fechar."
-storage.trades_max_mb: "Limite do arquivo"
-storage.trades_max_mb_hint: "Passado o limite, os registros mais antigos saem primeiro; 0 — sem limite."
 storage.trades_margin: "Prints em volta da operação"
 storage.trades_sec: "%{s} s"
 storage.trades_min: "%{min} min"

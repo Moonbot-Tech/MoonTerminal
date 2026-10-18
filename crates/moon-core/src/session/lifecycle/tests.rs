@@ -58,24 +58,26 @@ fn sync_edge_and_hourly_boundary_are_due() {
     ));
 }
 
-/// Open rows and rows past the 365-day boundary must never reach the tape planner.
+/// Listing must admit 400-day closes, while open rows and expired closes remain excluded.
 #[test]
 fn mapping_excludes_open_and_old_rows() {
     let _guard = crate::market::tape_recorder::catchup::tests::SWITCH_LOCK
         .lock()
         .unwrap();
-    let now = 40_000_000_000;
+    let _restore = crate::market::tape_recorder::catchup::tests::RestoreKeep::new();
+    crate::market::tape_recorder::catchup::set_keep(1825, true);
+    let now = 4000 * 86_400_000;
     let axis = ReportAxis::identity_core_local();
     let mut row = CatchupRow {
         rec_id: 4,
         coin: "SYN".into(),
         buy: ReportStamp::Seconds(1),
-        close: ReportStamp::Millis(now - 364 * 86_400_000),
+        close: ReportStamp::Millis(now - 400 * 86_400_000),
         closedate: 1,
         emulator: false,
     };
     assert!(catchup_stamps(&row, &axis, 1, now).is_some());
-    row.close = ReportStamp::Millis(now - 366 * 86_400_000);
+    row.close = ReportStamp::Millis(now - 1826 * 86_400_000);
     assert!(catchup_stamps(&row, &axis, 1, now).is_none());
     row.closedate = 0;
     row.close = ReportStamp::Millis(now);
@@ -144,8 +146,10 @@ fn depth_bound_and_millisecond_stamps_follow_measured_axis() {
     let _guard = crate::market::tape_recorder::catchup::tests::SWITCH_LOCK
         .lock()
         .unwrap();
-    let now = 40_000_000_000;
-    let cutoff = now - crate::market::trade_replay::venue_caps::ARCHIVE_DEPTH_MS;
+    let _restore = crate::market::tape_recorder::catchup::tests::RestoreKeep::new();
+    crate::market::tape_recorder::catchup::set_keep(1825, true);
+    let now = 4000 * 86_400_000;
+    let cutoff = crate::market::tape_recorder::catchup::edge_ms(now);
     let axis = ReportAxis::from_measured(
         HashMap::from([(
             1,

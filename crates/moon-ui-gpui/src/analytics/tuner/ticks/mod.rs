@@ -105,21 +105,13 @@ impl AnalyticsView {
             .data()
             .map(|d| (d.without_ms, d.service, d.untunable))
             .unwrap_or_default();
-        let summary = self.ticks.data.view(|d| d.rows.is_empty()).map(|d| {
-            (
-                d.rows.len(),
-                if fetch::station_available() {
-                    d.rows
-                        .iter()
-                        .filter(|row| fetch::station_load_candidate(row, &admission))
-                        .count()
-                } else {
-                    d.fetchable_at(now_ms, min_tail_s).count()
-                },
-            )
-        });
-        let (body, fetchable) = match summary {
-            Err(crate::load_state::Note::Empty) if left_out != (0, 0, 0) => (
+        let summary = self
+            .ticks
+            .data
+            .view(|d| d.rows.is_empty())
+            .map(|d| d.rows.len());
+        let body = match summary {
+            Err(crate::load_state::Note::Empty) if left_out != (0, 0, 0) => {
                 crate::load_state::muted(
                     t!(
                         "analytics.ticks.empty_left_out",
@@ -131,17 +123,13 @@ impl AnalyticsView {
                     10.0,
                     p,
                     cx,
-                ),
-                0usize,
-            ),
-            Err(note) => (
-                super::super::note_el("an-ticks-note", note, 10.0, p, cx),
-                0usize,
-            ),
+                )
+            }
+            Err(note) => super::super::note_el("an-ticks-note", note, 10.0, p, cx),
             // Rows loaded, none shown: the switch hid every one. Said in words, with the
             // count, rather than drawn as a blank list — while the tape stage still reads,
             // no row is covered yet and the note says that instead.
-            Ok((total, fetchable)) if drawn == 0 => (
+            Ok(total) if drawn == 0 => {
                 if self.ticks.chip.is_some() {
                     filtered_empty_el(chip_action(cx.entity().downgrade()), p, cx)
                 } else {
@@ -155,46 +143,42 @@ impl AnalyticsView {
                         p,
                         cx,
                     )
-                },
-                fetchable,
-            ),
-            Ok((_, fetchable)) => {
+                }
+            }
+            Ok(_) => {
                 let weak = cx.entity().downgrade();
                 let row_h = deal_row_h(cx);
-                let list =
-                    MoonVirtualList::new("an-ticks-rows", drawn, row_h, move |ix, _w, app| {
-                        weak.upgrade()
-                            .and_then(|e| {
-                                let view = e.read(app);
-                                // Order and rows are read from the view in ONE go, so an
-                                // index is never applied to a row set it was not built
-                                // against.
-                                let order = view.ticks.order.as_ref()?;
-                                let row =
-                                    view.ticks.data.data()?.rows.get(*order.order.get(ix)?)?;
-                                let selected = view.ticks.trade.open
-                                    && view.ticks.trade.uid == Some(row.deal.report_uid);
-                                let plan = PlanCell::of(&view.ticks, row.deal.report_uid);
-                                Some(deal_row(
-                                    row,
-                                    selected,
-                                    plan,
-                                    deal_action(weak.clone()),
-                                    p,
-                                    scale,
-                                    row_h,
-                                    &admission,
-                                    app,
-                                ))
-                            })
-                            .unwrap_or_else(|| div().into_any_element())
-                    })
-                    .surface(false)
-                    .border(false)
-                    .radius(0.0)
-                    .scrollbar_visibility(MoonScrollbarVisibility::Hover)
-                    .into_any_element();
-                (list, fetchable)
+                MoonVirtualList::new("an-ticks-rows", drawn, row_h, move |ix, _w, app| {
+                    weak.upgrade()
+                        .and_then(|e| {
+                            let view = e.read(app);
+                            // Order and rows are read from the view in ONE go, so an
+                            // index is never applied to a row set it was not built
+                            // against.
+                            let order = view.ticks.order.as_ref()?;
+                            let row = view.ticks.data.data()?.rows.get(*order.order.get(ix)?)?;
+                            let selected = view.ticks.trade.open
+                                && view.ticks.trade.uid == Some(row.deal.report_uid);
+                            let plan = PlanCell::of(&view.ticks, row.deal.report_uid);
+                            Some(deal_row(
+                                row,
+                                selected,
+                                plan,
+                                deal_action(weak.clone()),
+                                p,
+                                scale,
+                                row_h,
+                                &admission,
+                                app,
+                            ))
+                        })
+                        .unwrap_or_else(|| div().into_any_element())
+                })
+                .surface(false)
+                .border(false)
+                .radius(0.0)
+                .scrollbar_visibility(MoonScrollbarVisibility::Hover)
+                .into_any_element()
             }
         };
         // The batch is the process's (`fetch::job`), not this window's: the caption reads its
@@ -207,14 +191,12 @@ impl AnalyticsView {
         let fetch_active = progress.active || fetch::station_active();
         // A batch this window did not start — the startup autoload, or one left by a previous
         // window — is listened to from the first paint that finds it running, so its answers
-        // land in the table and the button keeps counting. Idempotent: one listener per view
-        // while a batch runs.
+        // land in the table. Idempotent: one listener per view while a batch runs.
         if fetch_active {
             self.attach_fetch_listener(cx);
         }
-        // The button is only the switch — "fetch" or "stop"; what the batch is doing goes into
-        // the caption beside it, and ONLY that: the sample's coverage sits in the status line
-        // under the table, so the head says nothing when nothing runs.
+        // What the batch is doing goes into the caption, and only that: the sample's coverage
+        // sits in the status line under the table, so the head says nothing when nothing runs.
         let caption = if fetch_active && !progress.in_flight.is_empty() {
             // Every market a request is out for, in the order they went out: the walks run in
             // parallel across venues, and one name would read as one request.
@@ -301,11 +283,6 @@ impl AnalyticsView {
                         }
                     }),
             );
-        let fetch_label = if fetch_active {
-            t!("analytics.ticks.fetch_stop").to_string()
-        } else {
-            t!("analytics.ticks.fetch_btn").to_string()
-        };
         let model_settings = self.ticks_model_settings(p, window, cx);
         let report = self.ticks_report_button(cx);
         v_flex()
@@ -352,35 +329,6 @@ impl AnalyticsView {
                                 .text_size(design::t_caption(cx))
                                 .text_color(moon(p.text_muted))
                                 .child(caption),
-                        )
-                    })
-                    .when(fetchable > 0 || fetch_active, |el| {
-                        el.child(
-                            div().font_family(design::ui_font()).child(
-                                MoonButton::new("an-ticks-fetch")
-                                    .variant(if fetch_active {
-                                        MoonButtonVariant::Amber
-                                    } else {
-                                        MoonButtonVariant::Soft
-                                    })
-                                    .label(fetch_label)
-                                    // While the tape stage reads, a press would queue rows the
-                                    // tiles already hold (`ticks_fetch_missing` waits for the
-                                    // fold), so the switch waits too.
-                                    .disabled(!fetch_active && self.ticks.tape_reading)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if fetch_active {
-                                            this.ticks_fetch_stop(cx);
-                                        } else {
-                                            this.ticks_fetch_missing(
-                                                fetch::job::RowOrigin::User,
-                                                cx,
-                                            );
-                                        }
-                                        cx.notify();
-                                    }))
-                                    .render(),
-                            ),
                         )
                     })
                     .when_some(report, |el, report| {

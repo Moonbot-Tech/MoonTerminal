@@ -17,7 +17,6 @@ storage.strategies_enabled_hint: "Historial de versiones de cambios reales de pa
 storage.strategies_rows: "Estrategias: %{live} (eliminadas: %{deleted}) · Versiones: %{versions}"
 storage.version_limit: "Límite de versiones por estrategia"
 storage.version_limit_off: "sin límite"
-storage.unit_mb: "MB"
 storage.unit_min: "min"
 storage.version_limit_hint: "0 — conservar todas las versiones (recomendado: el historial es irrecuperable). Un límite recorta las antiguas al escribir nuevas."
 storage.strategies_hint: "La única copia del historial — una resincronización no lo restaura. Usa «Copia» para conservarlo."
@@ -26,8 +25,6 @@ storage.klines_hint: "Caché recuperable del historial de velas: el archivo pued
 
 storage.trades_enabled: "Guardar las operaciones"
 storage.trades_enabled_hint: "Las operaciones descargadas quedan en disco y no se descargan dos veces. Apagado — solo en memoria hasta cerrar el terminal."
-storage.trades_max_mb: "Límite del archivo"
-storage.trades_max_mb_hint: "Superado el límite se borran primero los registros más antiguos; 0 — sin límite."
 storage.trades_margin: "Operaciones alrededor de una posición"
 storage.trades_sec: "%{s} s"
 storage.trades_min: "%{min} min"

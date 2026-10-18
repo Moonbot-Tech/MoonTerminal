@@ -17,7 +17,6 @@ storage.strategies_enabled_hint: "История версий по реальн�
 storage.strategies_rows: "Стратегий: %{live} (удалённых: %{deleted}) · Версий: %{versions}"
 storage.version_limit: "Лимит версий на стратегию"
 storage.version_limit_off: "без лимита"
-storage.unit_mb: "МБ"
 storage.unit_min: "мин"
 storage.version_limit_hint: "0 — хранить все версии (рекомендуется: история невосстановима). Лимит обрезает старые при записи новых."
 storage.strategies_hint: "Единственный экземпляр истории — пересинхроном не восстанавливается. Для сохранности — «Бэкап»."
@@ -26,8 +25,6 @@ storage.klines_hint: "Восстановимый кэш истории свеч�
 
 storage.trades_enabled: "Сохранять трейды сделок"
 storage.trades_enabled_hint: "Скачанные трейды остаются на диске и второй раз не качаются. Выключено — только в памяти до закрытия терминала."
-storage.trades_max_mb: "Лимит файла"
-storage.trades_max_mb_hint: "Сверх лимита удаляются самые старые записи; 0 — без лимита."
 storage.trades_margin: "Трейды вокруг сделки"
 storage.trades_sec: "%{s} с"
 storage.trades_min: "%{min} мин"

@@ -17,6 +17,97 @@ use super::{
     StorageCtx, StorageInfo, StorageView, figure_chunks, stat_items, storage_body_el, usage_parts,
 };
 
+/// Saving an unrelated choice from an old page must retain the reconciled shared window.
+#[test]
+fn cached_storage_save_retains_reconciled_window() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let mut ed = super::StorageEd {
+        cfg: moon_core::config::storage::StorageCfg::default(),
+        info: None,
+        inflight: false,
+        busy: false,
+        cleanup: None,
+        cleanup_inflight: false,
+        cleanup_dirty: false,
+        core_data: super::core_data::CoreDataEd::default(),
+    };
+    ed.cfg.trade_replay.margin_s = 180;
+    ed.cfg.trade_replay.long_position_min = 5;
+    moon_core::market::trade_replay::set_margin_s(600);
+    moon_core::market::trade_replay::set_long_position_min(10);
+    ed.sync_shared_window();
+    ed.cfg.strategies.version_limit = 17;
+    let saved = serde_json::to_value(&ed.cfg).expect("serialize cached config");
+    assert_eq!(saved["trade_replay"]["margin_s"], 600);
+    assert_eq!(saved["trade_replay"]["long_position_min"], 10);
+    assert_eq!(saved["strategies"]["version_limit"], 17);
+    assert_eq!(moon_core::market::trade_replay::margin_ms(), 600_000);
+}
+
+/// Observe the same input Change guard used by the Storage subscription.
+struct InputProbe {
+    ui: super::StorageUi,
+    edits: usize,
+}
+
+/// An adopted threshold must update the seeded input without writing its Change back.
+#[gpui::test]
+fn adopted_long_threshold_updates_input_without_an_edit(cx: &mut gpui::TestAppContext) {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let (mut visual, _) = draw_page(cx, (860.0, 900.0), [100, 5]);
+    let probe = visual.update(|window, cx| {
+        let mut cfg = moon_core::config::storage::StorageCfg::default();
+        cfg.trade_replay.long_position_min = 5;
+        gpui::AppContext::new(cx, |cx| {
+            let ui = super::StorageUi::init(&cfg, window, cx);
+            cx.subscribe(
+                &ui.long_min,
+                |this: &mut InputProbe, state, event: &moon_ui::MoonInputEvent, cx| {
+                    if matches!(event, moon_ui::MoonInputEvent::Change)
+                        && let Some(value) = moon_ui::MoonNumberInput::read_value(&state, cx)
+                        && this.ui.long_edit(value.round().max(0.0) as u32)
+                    {
+                        this.edits += 1;
+                    }
+                },
+            )
+            .detach();
+            InputProbe { ui, edits: 0 }
+        })
+    });
+    moon_core::market::trade_replay::set_long_position_min(10);
+    visual.update(|window, cx| {
+        probe.update(cx, |this, cx| {
+            let value = moon_core::market::trade_replay::window().long_position_min;
+            this.ui.sync_long_input(value, window, cx);
+            // The pinned input suppresses programmatic events; inject one to prove the guard.
+            this.ui
+                .long_min
+                .update(cx, |_, cx| cx.emit(moon_ui::MoonInputEvent::Change));
+        })
+    });
+    visual.run_until_parked();
+    visual.update(|_, cx| {
+        assert_eq!(
+            probe.read(cx).ui.long_min.read(cx).value().to_string(),
+            "10"
+        );
+        assert_eq!(probe.read(cx).edits, 0);
+    });
+    visual.update(|window, cx| {
+        probe.update(cx, |this, cx| {
+            this.ui.long_min.update(cx, |state, cx| {
+                state.set_value("11", window, cx);
+                cx.emit(moon_ui::MoonInputEvent::Change);
+            });
+        })
+    });
+    visual.run_until_parked();
+    visual.update(|_, cx| assert_eq!(probe.read(cx).edits, 1));
+}
+
 /// A probe host drawing whatever `build` returns inside the body box.
 struct Host {
     width: f32,
@@ -83,7 +174,7 @@ fn usage_shares_sum_to_the_total() {
 
 /// The production Storage page from synthetic data: two connected cores, one archived and one
 /// syncing in the core table, two help lines open, a counted cleanup.
-fn page(fields: &[gpui::Entity<moon_ui::MoonInputState>; 3], cx: &App) -> AnyElement {
+fn page(fields: &[gpui::Entity<moon_ui::MoonInputState>; 2], cx: &App) -> AnyElement {
     let open: HashSet<&'static str> = ["storage-trades-margin", "storage-core-hint"].into();
     let ctx = StorageCtx {
         weak: gpui::WeakEntity::new_invalid(),
@@ -147,11 +238,10 @@ fn page(fields: &[gpui::Entity<moon_ui::MoonInputState>; 3], cx: &App) -> AnyEle
         strat_deleted: 7,
         strat_versions: 4_321,
     };
-    let [version_limit, max_mb, long_min] = fields.clone();
-    // No version limit (the field says so in place of a unit) and a 256 MB file ceiling.
+    let [version_limit, long_min] = fields.clone();
+    // No version limit: the field says so in place of a unit.
     let mut cfg = moon_core::config::storage::StorageCfg::default();
     cfg.strategies.version_limit = 0;
-    cfg.trade_replay.max_mb = 256;
     storage_body_el(
         StorageView {
             info,
@@ -160,7 +250,6 @@ fn page(fields: &[gpui::Entity<moon_ui::MoonInputState>; 3], cx: &App) -> AnyEle
                 .into(),
             cfg,
             version_limit,
-            max_mb,
             long_min,
             cleanup: None,
             core,
@@ -170,18 +259,18 @@ fn page(fields: &[gpui::Entity<moon_ui::MoonInputState>; 3], cx: &App) -> AnyEle
     )
 }
 
-/// Open the production Storage page ([`page`]) in a window of `size`, its three number fields
+/// Open the production Storage page ([`page`]) in a window of `size`, its two number fields
 /// seeded with `seeds`, and draw it until the layout settles.
 ///
 /// Returns:
-///     The drawn window and the three field states.
+///     The drawn window and the two field states.
 fn draw_page(
     cx: &mut gpui::TestAppContext,
     size: (f32, f32),
-    seeds: [u32; 3],
+    seeds: [u32; 2],
 ) -> (
     gpui::VisualTestContext,
-    [gpui::Entity<moon_ui::MoonInputState>; 3],
+    [gpui::Entity<moon_ui::MoonInputState>; 2],
 ) {
     let mut states = None;
     let window = cx.open_window(gpui::size(px(size.0), px(size.1)), |window, cx| {
@@ -254,7 +343,6 @@ fn storage_cards_align_to_the_grid(cx: &mut gpui::TestAppContext) {
         "storage-version-limit",
         "storage-trades-enabled",
         "storage-trades-margin",
-        "storage-trades-max",
         "storage-trades-long",
         "storage-trades-autoload",
         "storage-trades-cleanup",
@@ -263,7 +351,7 @@ fn storage_cards_align_to_the_grid(cx: &mut gpui::TestAppContext) {
         let _locale = crate::test_locale::force(language.code());
         for size in SIZES.into_iter().chain([(1940.0, 1180.0)]) {
             let at = format!("{} at {}x{}", language.code(), size.0, size.1);
-            let (mut visual, _states) = draw_page(cx, size, [100, 256, 5]);
+            let (mut visual, _states) = draw_page(cx, size, [100, 30]);
             let (line, gap) = visual.update(|_, cx| {
                 (
                     f32::from(crate::design::line_px(cx, 14.0)),
@@ -351,19 +439,14 @@ fn storage_number_fields_show_their_digits(cx: &mut gpui::TestAppContext) {
     // The unit each field must show beside its digits; a bare count has none.
     let fields = [
         ("storage-version-limit-n", 100u32, "10000", ""),
-        ("storage-trades-max-n", 256, "100000", "storage.unit_mb"),
         ("storage-trades-long-n", 5, "120", "storage.unit_min"),
     ];
-    let cards = [
-        "storage-card-strategies",
-        "storage-card-trades",
-        "storage-card-trades",
-    ];
+    let cards = ["storage-card-strategies", "storage-card-trades"];
     for language in moon_core::config::Language::ALL {
         let _locale = crate::test_locale::force(language.code());
         // The swept sizes plus a wide window, where the card columns sit side by side.
         for size in SIZES.into_iter().chain([(1940.0, 1180.0)]) {
-            let (mut visual, states) = draw_page(cx, size, [fields[0].1, fields[1].1, fields[2].1]);
+            let (mut visual, states) = draw_page(cx, size, [fields[0].1, fields[1].1]);
             for (((sel, seeded, widest, unit_key), state), card) in
                 fields.iter().zip(states.iter()).zip(cards)
             {
@@ -455,7 +538,6 @@ fn storage_page_fits_the_body(cx: &mut gpui::TestAppContext) {
         |window, cx: &mut Context<Host>, (width, height)| {
             let fields = [
                 super::super::common::number_state(100u32, window, cx),
-                super::super::common::number_state(256u32, window, cx),
                 super::super::common::number_state(5u32, window, cx),
             ];
             Host {
@@ -516,7 +598,6 @@ fn storage_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
     let make = |window: &mut Window, cx: &mut Context<Host>, (width, height): (f32, f32)| {
         let fields = [
             super::super::common::number_state(100u32, window, cx),
-            super::super::common::number_state(256u32, window, cx),
             super::super::common::number_state(5u32, window, cx),
         ];
         Host {
@@ -531,7 +612,6 @@ fn storage_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
         ("storage-version-limit", "storage.version_limit"),
         ("storage-trades-enabled", "storage.trades_enabled"),
         ("storage-trades-margin", "storage.trades_margin"),
-        ("storage-trades-max", "storage.trades_max_mb"),
         ("storage-trades-long", "storage.trades_long_position"),
         (
             "storage-trades-autoload-cores",

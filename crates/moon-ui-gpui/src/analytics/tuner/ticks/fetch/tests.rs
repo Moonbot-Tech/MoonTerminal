@@ -3,6 +3,7 @@ use super::schema_default;
 /// A resolved unlisted market must keep the core address and unknown valuation in its job.
 #[test]
 fn unlisted_resolved_row_can_be_queued_without_a_directory_venue() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     let source = moon_core::fixture::unlisted::source(1);
     let resolver = super::FetchResolver {
         source,
@@ -55,9 +56,7 @@ fn unlisted_resolved_row_can_be_queued_without_a_directory_venue() {
         entry_placed: None,
         gap: None,
     };
-    let row = resolver
-        .queued_row(deal, address, super::job::RowOrigin::User)
-        .unwrap();
+    let row = resolver.queued_row(deal, address).unwrap();
     assert_eq!(row.replay_address.exchange_key, "200:00000000");
     assert_eq!(row.replay_address.venue, None);
     assert_eq!(
@@ -122,7 +121,8 @@ fn resolve_in_matches_the_per_deal_loop() {
     assert_eq!(resolved.len(), 2);
 }
 
-fn synthetic_deal() -> moon_core::db::tuner::ticks::Deal {
+/// Build a synthetic report row shared by resolver and background autoload checks.
+pub(super) fn synthetic_deal() -> moon_core::db::tuner::ticks::Deal {
     moon_core::db::tuner::ticks::Deal {
         report_uid: 1,
         core_uid: 1,

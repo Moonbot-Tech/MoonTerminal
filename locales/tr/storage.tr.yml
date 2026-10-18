@@ -17,7 +17,6 @@ storage.strategies_enabled_hint: "Gerçek parametre düzenlemelerinin sürüm ge
 storage.strategies_rows: "Strateji: %{live} (silinen: %{deleted}) · Sürüm: %{versions}"
 storage.version_limit: "Strateji başına sürüm sınırı"
 storage.version_limit_off: "sınırsız"
-storage.unit_mb: "MB"
 storage.unit_min: "dk"
 storage.version_limit_hint: "0 — tüm sürümleri tut (önerilir: geçmiş kurtarılamaz). Sınır, yeniler yazılınca eskileri keser."
 storage.strategies_hint: "Geçmişin tek kopyası — yeniden eşitleme onu geri getirmez. Saklamak için Yedekle'yi kullanın."
@@ -26,8 +25,6 @@ storage.klines_hint: "Kurtarılabilir mum geçmişi önbelleği: terminal kapal�
 
 storage.trades_enabled: "İşlemlerin piyasa işlemlerini tut"
 storage.trades_enabled_hint: "İndirilen piyasa işlemleri diskte kalır ve ikinci kez indirilmez. Kapalı — yalnızca bellekte, terminal kapanana kadar."
-storage.trades_max_mb: "Dosya sınırı"
-storage.trades_max_mb_hint: "Sınırı aşınca en eski kayıtlar önce gider; 0 — sınır yok."
 storage.trades_margin: "İşlem çevresindeki piyasa işlemleri"
 storage.trades_sec: "%{s} sn"
 storage.trades_min: "%{min} dk"

@@ -79,7 +79,7 @@ fn retention_edge(
     now_ms: i64,
 ) -> Option<i64> {
     use moon_core::market::trade_replay::venue_caps::{
-        ARCHIVE_DEPTH_MS, RETENTION_SAFETY_MS, archive_route, trade_route,
+        RETENTION_SAFETY_MS, archive_route, trade_route,
     };
     let retentions: Vec<i64> = [
         Some(moon_core::market::CORE_ARCHIVE_RETENTION_MS),
@@ -91,7 +91,7 @@ fn retention_edge(
         address
             .venue
             .and_then(|venue| archive_route(venue, &address.market))
-            .map(|_| ARCHIVE_DEPTH_MS),
+            .map(|_| i64::MAX),
     ]
     .into_iter()
     .flatten()

@@ -161,18 +161,13 @@ fn reach_table_matches_fetchable_at_retention_edges() {
 
 /// Removing archive fallback would refuse supported old trades in the tuner pre-filters.
 #[test]
-fn fetchable_uses_archive_beyond_rest_and_bounds_archive_depth() {
+fn fetchable_uses_archive_beyond_rest_without_an_age_ceiling() {
     let now = 500 * 86_400_000;
     for (brand, kind, age, expected) in [
         (Brand::Bybit, MarketKind::Futures, 5, Fetchable::Archive),
         (Brand::Binance, MarketKind::Futures, 1, Fetchable::Rest),
         (Brand::Binance, MarketKind::Futures, 5, Fetchable::Archive),
-        (
-            Brand::Binance,
-            MarketKind::Futures,
-            400,
-            Fetchable::OutOfRetention,
-        ),
+        (Brand::Binance, MarketKind::Futures, 400, Fetchable::Archive),
         (Brand::Gate, MarketKind::Spot, 40, Fetchable::OutOfRetention),
         (Brand::Htx, MarketKind::Spot, 1, Fetchable::NoRoute),
     ] {

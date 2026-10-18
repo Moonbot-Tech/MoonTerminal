@@ -5,6 +5,7 @@ const ENTRY_S: i64 = 1_700_000_000;
 const MINUTE_MS: i64 = 60_000;
 
 fn replay_bounds(duration_ms: i64) -> (i64, i64, i64, i64) {
+    let _window = crate::test_support::SharedWindowGuard::take();
     let exit_s = ENTRY_S + duration_ms / 1_000;
     let data =
         replay_window_ms(ENTRY_S * 1_000, exit_s * 1_000, 5 * 60_000).expect("valid replay window");

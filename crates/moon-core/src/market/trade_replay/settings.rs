@@ -5,8 +5,35 @@
 //! tuner's fetch job, the coordination tick — and none of them may open the file: a setting
 //! the tab just flipped must be what the next request is built with.
 
+use crate::station_api::TapeWindow;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+/// Return the live tape window in the station API's seconds and minutes.
+pub fn window() -> TapeWindow {
+    init();
+    TapeWindow {
+        margin_s: MARGIN_S.load(Ordering::Relaxed),
+        long_position_min: LONG_POSITION_MIN.load(Ordering::Relaxed),
+    }
+}
+
+/// Reconcile each setting independently, then enforce the local picker bounds.
+pub fn adopt_larger(local: TapeWindow, station: TapeWindow) -> TapeWindow {
+    normalize(TapeWindow {
+        margin_s: local.margin_s.max(station.margin_s),
+        long_position_min: local.long_position_min.max(station.long_position_min),
+    })
+}
+
+/// Apply the picker bounds to every shared-window writer and reconciliation.
+pub fn normalize(window: TapeWindow) -> TapeWindow {
+    use crate::config::storage::{clamp_long_position_min, snap_trade_margin_s};
+    TapeWindow {
+        margin_s: snap_trade_margin_s(window.margin_s),
+        long_position_min: clamp_long_position_min(window.long_position_min),
+    }
+}
 
 /// Live value of `[trade_replay] margin_s` — how many seconds of prints a window asks for
 /// around a trade, per end ([`super::ReplayWindow::margin_ms`]).
@@ -149,3 +176,6 @@ pub fn set_cleanup_at_startup(on: bool) {
     init();
     CLEANUP_AT_STARTUP.store(on, Ordering::Relaxed);
 }
+
+#[cfg(test)]
+mod tests;

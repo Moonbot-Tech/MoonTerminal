@@ -19,13 +19,12 @@
 //!
 //! # What is kept, and for how long
 //!
-//! Everything, until the reader's ceiling says otherwise: there is no age limit. The prints a
+//! Everything, until the built-in ceiling says otherwise: there is no age limit. The prints a
 //! close copied out of a core's ring are the only copy there will ever be for a venue whose
 //! trade route reaches back hours (Binance futures) or does not exist (Bybit, Hyperliquid), so
-//! the file is an archive, not a cache. `[trade_replay] max_mb` is the one rule that runs on
-//! its own — past it the spans written longest ago go first (by `updated_ms`, which only a
-//! write sets — a replay that reads a span does not renew it) — and `0` keeps everything for
-//! ever. The reader's own cut is the Storage tab's cleanup ([`trim`]) — by the button, or at
+//! the file is an archive, not a cache. The built-in byte cap runs on its own: past it the spans
+//! written longest ago go first (by `updated_ms`, which only a write sets; a replay read does
+//! not renew it). The reader's own cut is the Storage tab's cleanup ([`trim`]) — by the button, or at
 //! startup behind `[trade_replay] cleanup_at_startup`: down to the margin now in force around
 //! the trades the tuner can be run on; deleting the file itself stays a call made with the
 //! terminal closed.
@@ -69,7 +68,7 @@ mod remote;
 mod trim;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
@@ -166,16 +165,12 @@ const READ_TIMEOUT: Duration = Duration::from_millis(250);
 /// caller reports that rather than a number.
 const MAINTENANCE_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Ceiling on the packed bytes the file may hold, from `[trade_replay] max_mb` — checked at
-/// open and again after every insert; past it the spans written longest ago go first. Live,
-/// like the switch: the Storage tab moves it without a restart. `None` when the reader set it
-/// to zero and keeps everything, for ever.
+/// Built-in packed-print ceiling in megabytes for the terminal replay store.
+pub const TRADES_MAX_MB: u32 = 131_072;
+
+/// Enforce the built-in ceiling at open and after each insert, evicting oldest writes first.
 fn max_bytes() -> Option<i64> {
-    ensure_enabled_loaded();
-    match MAX_MB.load(Ordering::Relaxed) {
-        0 => None,
-        mb => Some(i64::from(mb) * 1024 * 1024),
-    }
+    Some(i64::from(TRADES_MAX_MB) * 1024 * 1024)
 }
 
 /// The file layout this build writes and reads. A file whose `user_version` differs is a file in
@@ -297,8 +292,7 @@ impl TradeCache {
         Self::open_with_ceiling(path, max_bytes)
     }
 
-    /// [`Self::open`] for a file other than `trades.sqlite`, whose byte ceiling is not the Storage
-    /// tab's `[trade_replay] max_mb`: `ceiling` is asked at open and after every insert, and
+    /// [`Self::open`] for a file with a custom byte ceiling: `ceiling` is asked at open and after every insert, and
     /// `None` keeps everything.
     pub fn open_with_ceiling(path: PathBuf, ceiling: fn() -> Option<i64>) -> Option<Self> {
         Self::start(path, ceiling, false)
@@ -542,23 +536,13 @@ impl TradeCache {
 static CACHE: OnceLock<Option<TradeCache>> = OnceLock::new();
 /// Live value of `[trade_replay] persist_trades`; the Storage tab flips it.
 static ENABLED: AtomicBool = AtomicBool::new(true);
-/// Live value of `[trade_replay] max_mb`; the Storage tab moves it.
-static MAX_MB: AtomicU32 = AtomicU32::new(crate::config::storage::DEFAULT_TRADES_MAX_MB);
 static ENABLED_INIT: OnceLock<()> = OnceLock::new();
 
 fn ensure_enabled_loaded() {
     ENABLED_INIT.get_or_init(|| {
         let cfg = crate::config::storage::load();
         ENABLED.store(cfg.trade_replay.persist_trades, Ordering::Relaxed);
-        MAX_MB.store(cfg.trade_replay.max_mb, Ordering::Relaxed);
     });
-}
-
-/// Move the live ceiling; the Storage tab writes `storage.toml` beside this. Takes effect on
-/// the next insert — a file already past a lowered ceiling is trimmed then, not at once.
-pub fn set_max_mb(mb: u32) {
-    ensure_enabled_loaded();
-    MAX_MB.store(mb, Ordering::Relaxed);
 }
 
 /// Whether prints are persisted, for the Storage tab.

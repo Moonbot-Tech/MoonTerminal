@@ -11,9 +11,7 @@ pub(super) fn bar_message(
     c: Option<&TapeCatchup>,
     busy: bool,
 ) -> (String, bool) {
-    let changed = ed.draft != ed.seen
-        || ed.draft_switches != ed.seen_switches
-        || ed.draft_keep != ed.seen_keep;
+    let changed = ed.policy_changed();
     let warning = ed.seen.zip(ed.draft).and_then(|(s, d)| {
         widen_warning(
             s,
@@ -41,7 +39,7 @@ pub(super) fn bar_message(
     if line == super::TapeStatus::Busy {
         return (t!("telegram.server.keep_bar_busy").to_string(), false);
     }
-    if line == super::TapeStatus::Clean {
+    if line == super::TapeStatus::Clean && warning.is_none() {
         return (t!("telegram.server.tape_clean").to_string(), false);
     }
     if let Some((seen, draft)) = ed.seen_keep.zip(ed.draft_keep)

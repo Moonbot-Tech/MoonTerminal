@@ -17,7 +17,6 @@ storage.strategies_enabled_hint: "Version history of real parameter edits (cosme
 storage.strategies_rows: "Strategies: %{live} (deleted: %{deleted}) · Versions: %{versions}"
 storage.version_limit: "Version limit per strategy"
 storage.version_limit_off: "unlimited"
-storage.unit_mb: "MB"
 storage.unit_min: "min"
 storage.version_limit_hint: "0 — keep all versions (recommended: the history is unrecoverable). A limit trims old ones as new are written."
 storage.strategies_hint: "The only copy of the history — a re-sync cannot restore it. Use Backup to keep it safe."
@@ -26,8 +25,6 @@ storage.klines_hint: "Recoverable kline history cache: the file can be deleted w
 
 storage.trades_enabled: "Keep trade prints"
 storage.trades_enabled_hint: "Fetched prints stay on disk and are not fetched twice. Off — in memory only, until the terminal closes."
-storage.trades_max_mb: "File limit"
-storage.trades_max_mb_hint: "Past the limit the oldest records go first; 0 — no limit."
 storage.trades_margin: "Prints around a trade"
 storage.trades_sec: "%{s} s"
 storage.trades_min: "%{min} min"

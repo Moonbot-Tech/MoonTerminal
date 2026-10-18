@@ -300,6 +300,7 @@ fn the_reach_is_the_margin_and_the_orders_wait_in_whole_seconds() {
 #[test]
 #[ignore]
 fn probe_a_copied_data_dir() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     let Ok(dir) = std::env::var("MOON_TRADES_CLEANUP_COPY") else {
         eprintln!("MOON_TRADES_CLEANUP_COPY not set; nothing probed");
         return;

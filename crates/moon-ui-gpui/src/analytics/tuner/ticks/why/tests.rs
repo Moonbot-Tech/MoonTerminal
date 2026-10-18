@@ -456,6 +456,48 @@ fn unfillable_short_tail_is_in_the_sample_but_fresh_tape_waits() {
     );
 }
 
+/// Putting the fetch button back into a missing-tape explanation would tell the user to press
+/// a control the tuner no longer draws. The readiness tooltip for a strategy that still has
+/// rows without tape must use that same background-loading sentence.
+#[test]
+fn missing_tape_says_the_tape_loads_in_the_background() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let _locale = crate::test_locale::force("en");
+    let idle = "Tape is still loading in the background.";
+    let counted = rust_i18n::t!("analytics.ticks.why.loading_background", n = 4).to_string();
+    assert!(
+        counted.contains('4') && !counted.to_ascii_lowercase().contains("fetch trades"),
+        "{counted}"
+    );
+    assert!(super::super::fetch::autoload::pending_rows().is_none());
+    let missing = DealWhy::NoTape { fetchable: true };
+    let todo = missing
+        .tape_tip()
+        .todo
+        .expect("a fetchable missing tape still explains itself");
+    assert_eq!(todo, idle);
+    let text = missing.tape_tip().text();
+    assert!(!text.to_ascii_lowercase().contains("fetch trades"));
+    assert!(!text.to_ascii_lowercase().contains("button"));
+    let short = DealWhy::ShortTail {
+        trail_ms: 30_000,
+        min_s: 60,
+    };
+    let short_todo = short
+        .tape_tip()
+        .todo
+        .expect("a short tail still explains itself");
+    assert!(short_todo.starts_with(idle), "{short_todo}");
+    assert!(!short_todo.to_ascii_lowercase().contains("fetch trades"));
+    let ready = super::super::readiness::Readiness {
+        fetchable: 3,
+        ..super::super::readiness::Readiness::default()
+    };
+    let tip = crate::analytics::tuner::ready::cell_tip(&ready);
+    assert!(tip.contains(idle), "{tip}");
+    assert!(!tip.to_ascii_lowercase().contains("fetch trades"));
+}
+
 /// Deleting the ten-minute join would round a 10 min 50 s tape up to "11 min" and hide the
 /// leftover seconds a measured length keeps. Under ten minutes the estimate already keeps
 /// those seconds, so the tape must not assemble that phrase a second time.

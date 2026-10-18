@@ -66,6 +66,15 @@ pub(super) struct StorageEd {
     pub core_data: core_data::CoreDataEd,
 }
 
+impl StorageEd {
+    /// Preserve externally reconciled window fields when a cached configuration is saved.
+    fn sync_shared_window(&mut self) {
+        let window = moon_core::market::trade_replay::window();
+        self.cfg.trade_replay.margin_s = window.margin_s;
+        self.cfg.trade_replay.long_position_min = window.long_position_min;
+    }
+}
+
 /// One database in the usage bar, in bar order: reports, strategies, trades, klines.
 ///
 /// The four `bytes` sum to the total the header prints. A missing file contributes zero,
@@ -237,6 +246,7 @@ impl SettingsView {
 
     /// Sets the version limit, already clamped to `0..=10000`, and writes storage.toml.
     fn set_version_limit(&mut self, v: u32, cx: &mut Context<Self>) {
+        self.sync_shared_window();
         if self.storage.cfg.strategies.version_limit != v {
             self.storage.cfg.strategies.version_limit = v;
             moon_core::strat_db::set_version_limit(v);
@@ -245,24 +255,21 @@ impl SettingsView {
         }
     }
 
-    /// Sets the `trades.sqlite` ceiling in megabytes. Zero is no ceiling.
-    fn set_trades_max_mb(&mut self, v: u32, cx: &mut Context<Self>) {
-        if self.storage.cfg.trade_replay.max_mb != v {
-            self.storage.cfg.trade_replay.max_mb = v;
-            moon_core::market::trade_replay::trade_cache::set_max_mb(v);
-            storage_cfg::save(&self.storage.cfg);
-            cx.notify();
-        }
-    }
-
     /// Sets the prints kept around a trade, snapped onto `TRADE_MARGIN_STEPS_S`, and writes
     /// storage.toml. The cleanup count is measured against the margin, so it is taken again.
-    fn set_trades_margin_s(&mut self, secs: u32, cx: &mut Context<Self>) {
-        let v = storage_cfg::snap_trade_margin_s(secs);
-        if self.storage.cfg.trade_replay.margin_s != v {
-            self.storage.cfg.trade_replay.margin_s = v;
-            moon_core::market::trade_replay::set_margin_s(v);
-            storage_cfg::save(&self.storage.cfg);
+    pub(in crate::settings) fn set_trades_margin_s(&mut self, secs: u32, cx: &mut Context<Self>) {
+        let old = moon_core::market::trade_replay::window();
+        self.backend.update(cx, |backend, cx| {
+            backend.tape_window_set(
+                moon_core::station_api::TapeWindow {
+                    margin_s: secs,
+                    ..old
+                },
+                cx,
+            );
+        });
+        self.sync_shared_window();
+        if moon_core::market::trade_replay::window() != old {
             self.storage_cleanup_refresh(cx);
             cx.notify();
         }
@@ -270,15 +277,45 @@ impl SettingsView {
 
     /// Sets the minutes a position must be held to count as long, clamped to
     /// `LONG_POSITION_MIN_RANGE`. The cleanup's count moves with it.
-    fn set_long_position_min(&mut self, minutes: u32, cx: &mut Context<Self>) {
-        let v = storage_cfg::clamp_long_position_min(minutes);
-        if self.storage.cfg.trade_replay.long_position_min != v {
-            self.storage.cfg.trade_replay.long_position_min = v;
-            moon_core::market::trade_replay::set_long_position_min(v);
-            storage_cfg::save(&self.storage.cfg);
+    pub(in crate::settings) fn set_long_position_min(
+        &mut self,
+        minutes: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let old = moon_core::market::trade_replay::window();
+        self.backend.update(cx, |backend, cx| {
+            backend.tape_window_set(
+                moon_core::station_api::TapeWindow {
+                    long_position_min: minutes,
+                    ..old
+                },
+                cx,
+            );
+        });
+        self.sync_shared_window();
+        if moon_core::market::trade_replay::window() != old {
             self.storage_cleanup_refresh(cx);
             cx.notify();
         }
+    }
+
+    /// Refresh cached window fields before rendering or saving unrelated storage choices.
+    fn sync_shared_window(&mut self) {
+        self.storage.sync_shared_window();
+    }
+
+    /// Refresh the once-seeded input before either settings page renders.
+    pub(in crate::settings) fn storage_input_sync(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_shared_window();
+        self.storage_ui.sync_long_input(
+            self.storage.cfg.trade_replay.long_position_min,
+            window,
+            cx,
+        );
     }
 
     /// Subscribe the number fields once. Each edit saves storage.toml immediately.
@@ -301,19 +338,6 @@ impl SettingsView {
         )
         .detach();
         cx.subscribe(
-            &self.storage_ui.max_mb,
-            |this, state, ev: &MoonInputEvent, cx| {
-                if !matches!(ev, MoonInputEvent::Change) {
-                    return;
-                }
-                let Some(v) = MoonNumberInput::read_value(&state, cx) else {
-                    return;
-                };
-                this.set_trades_max_mb(v.round().clamp(0.0, 100_000.0) as u32, cx);
-            },
-        )
-        .detach();
-        cx.subscribe(
             &self.storage_ui.long_min,
             |this, state, ev: &MoonInputEvent, cx| {
                 if !matches!(ev, MoonInputEvent::Change) {
@@ -323,6 +347,9 @@ impl SettingsView {
                     return;
                 };
                 let minutes = v.round().max(0.0) as u32;
+                if !this.storage_ui.long_edit(minutes) {
+                    return;
+                }
                 this.set_long_position_min(minutes, cx);
             },
         )
@@ -340,7 +367,9 @@ impl SettingsView {
         }
     }
 
+    /// Save strategy recording without reverting a reconciled tape window.
     fn set_strategies_enabled(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.sync_shared_window();
         if self.storage.cfg.strategies.enabled != on {
             self.storage.cfg.strategies.enabled = on;
             moon_core::strat_db::set_enabled(on);
@@ -349,7 +378,9 @@ impl SettingsView {
         }
     }
 
+    /// Save tape recording without reverting a reconciled tape window.
     fn set_persist_trades(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.sync_shared_window();
         if self.storage.cfg.trade_replay.persist_trades != on {
             self.storage.cfg.trade_replay.persist_trades = on;
             moon_core::market::trade_replay::trade_cache::set_enabled(on);
@@ -358,7 +389,9 @@ impl SettingsView {
         }
     }
 
+    /// Apply archive autoload and preserve the shared window on save.
     fn set_autoload_cores(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.sync_shared_window();
         if self.storage.cfg.trade_replay.autoload_cores != on {
             self.storage.cfg.trade_replay.autoload_cores = on;
             moon_core::market::trade_replay::set_tape_autoload_cores(on);
@@ -372,7 +405,9 @@ impl SettingsView {
         }
     }
 
+    /// Apply venue autoload and preserve the shared window on save.
     fn set_autoload_missing(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.sync_shared_window();
         if self.storage.cfg.trade_replay.autoload_missing != on {
             self.storage.cfg.trade_replay.autoload_missing = on;
             moon_core::market::trade_replay::set_tape_autoload(on);
@@ -386,7 +421,9 @@ impl SettingsView {
         }
     }
 
+    /// Save startup cleanup without reverting a reconciled tape window.
     fn set_cleanup_at_startup(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.sync_shared_window();
         if self.storage.cfg.trade_replay.cleanup_at_startup != on {
             self.storage.cfg.trade_replay.cleanup_at_startup = on;
             moon_core::market::trade_replay::set_cleanup_at_startup(on);
@@ -400,6 +437,7 @@ impl SettingsView {
     /// The Storage tab: refreshes what is missing and gathers the page; the layout is
     /// [`storage_body_el`]'s.
     pub(super) fn storage_tab(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        self.sync_shared_window();
         if self.storage.info.is_none() && !self.storage.inflight {
             self.storage_refresh(cx);
         }
@@ -411,7 +449,6 @@ impl SettingsView {
             path: paths::db_dir().display().to_string(),
             cfg: self.storage.cfg.clone(),
             version_limit: self.storage_ui.version_limit.clone(),
-            max_mb: self.storage_ui.max_mb.clone(),
             long_min: self.storage_ui.long_min.clone(),
             cleanup: self.storage.cleanup.clone(),
             core,
@@ -454,7 +491,6 @@ pub(super) struct StorageView {
     pub(super) path: String,
     pub(super) cfg: storage_cfg::StorageCfg,
     pub(super) version_limit: Entity<moon_ui::MoonInputState>,
-    pub(super) max_mb: Entity<moon_ui::MoonInputState>,
     pub(super) long_min: Entity<moon_ui::MoonInputState>,
     /// The trade-tape cleanup's count; `None` while pending.
     pub(super) cleanup: Option<Result<CleanupPreview, String>>,
@@ -471,7 +507,6 @@ pub(super) fn storage_body_el(view: StorageView, s: &StorageCtx, cx: &App) -> An
         path,
         cfg,
         version_limit,
-        max_mb,
         long_min,
         cleanup,
         core,
@@ -513,9 +548,7 @@ pub(super) fn storage_body_el(view: StorageView, s: &StorageCtx, cx: &App) -> An
                         .debug_selector(|| "storage-col-trades".into())
                         .flex_1()
                         .min_w(design::ui_px(cx, CARD_MIN_W))
-                        .child(trades_card(
-                            s, &info, &cfg, &max_mb, &long_min, cleanup, busy, cx,
-                        )),
+                        .child(trades_card(s, &info, &cfg, &long_min, cleanup, busy, cx)),
                 ),
         )
         .child(core)
@@ -714,30 +747,17 @@ fn strategies_card(
     )
 }
 
-#[allow(clippy::too_many_arguments)] // one card's inputs, all from `StorageView`
+/// Build the trade card with immediate shared-window controls and explicit maintenance actions.
 fn trades_card(
     s: &StorageCtx,
     info: &StorageInfo,
     cfg: &storage_cfg::StorageCfg,
-    max_mb_state: &Entity<moon_ui::MoonInputState>,
     long_min_state: &Entity<moon_ui::MoonInputState>,
     cleanup: Option<Result<CleanupPreview, String>>,
     busy: bool,
     cx: &App,
 ) -> AnyElement {
     let cfg = &cfg.trade_replay;
-    let max_field = no_limit_note(
-        "storage-trades-max-off",
-        num_input(
-            "storage-trades-max-n",
-            max_mb_state,
-            0.0..=100_000.0,
-            1.0,
-            Some(t!("storage.unit_mb").to_string()),
-        ),
-        cfg.max_mb == 0,
-        cx,
-    );
     let long_field = num_input(
         "storage-trades-long-n",
         long_min_state,
@@ -750,7 +770,6 @@ fn trades_card(
         &[
             t!("storage.trades_enabled"),
             t!("storage.trades_margin"),
-            t!("storage.trades_max_mb"),
             t!("storage.trades_long_position"),
             t!("storage.trades_autoload_cores"),
             t!("storage.trades_autoload"),
@@ -779,16 +798,6 @@ fn trades_card(
             None,
             t!("storage.trades_margin_hint").to_string(),
             margin_picker(s, cfg.margin_s, cx).into_any_element(),
-            cx,
-        ))
-        .child(setting_row(
-            s,
-            col,
-            "storage-trades-max",
-            t!("storage.trades_max_mb").to_string(),
-            None,
-            t!("storage.trades_max_mb_hint").to_string(),
-            max_field,
             cx,
         ))
         .child(setting_row(
@@ -1201,21 +1210,40 @@ fn settings_card(
 pub(super) struct StorageUi {
     /// Number field for `strategies.version_limit`. Zero means unlimited.
     pub(super) version_limit: Entity<moon_ui::MoonInputState>,
-    /// Number field for `trade_replay.max_mb`. Zero means no ceiling.
-    pub(super) max_mb: Entity<moon_ui::MoonInputState>,
     /// Number field for `trade_replay.long_position_min`, in minutes.
     pub(super) long_min: Entity<moon_ui::MoonInputState>,
+    /// Last displayed threshold; programmatic Change events must not save it back.
+    long_shown: Option<u32>,
     /// The number-field subscriptions are installed on the first render.
     wired: bool,
 }
 
 impl StorageUi {
+    /// Reject Change emitted by a programmatic refresh, retaining clamping writeback for typing.
+    fn long_edit(&mut self, typed: u32) -> bool {
+        if self.long_shown == Some(typed) {
+            return false;
+        }
+        self.long_shown = (typed == storage_cfg::clamp_long_position_min(typed)).then_some(typed);
+        true
+    }
+
+    /// Show an external threshold before its queued Change event can be observed.
+    fn sync_long_input(&mut self, value: u32, window: &mut Window, cx: &mut App) {
+        if self.long_shown != Some(value) {
+            self.long_shown = Some(value);
+            self.long_min.update(cx, |state, cx| {
+                state.set_value(value.to_string(), window, cx)
+            });
+        }
+    }
+
     /// Fields seeded from the loaded storage config.
     pub(super) fn init(cfg: &storage_cfg::StorageCfg, window: &mut Window, cx: &mut App) -> Self {
         Self {
             version_limit: super::common::number_state(cfg.strategies.version_limit, window, cx),
-            max_mb: super::common::number_state(cfg.trade_replay.max_mb, window, cx),
             long_min: super::common::number_state(cfg.trade_replay.long_position_min, window, cx),
+            long_shown: Some(cfg.trade_replay.long_position_min),
             wired: false,
         }
     }

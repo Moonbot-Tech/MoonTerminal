@@ -20,6 +20,7 @@ fn trade_window_settlement_prices_match_axis_after_zoom() {
 
 /// Exercise actual replay frame preparation, wheel navigation and fixed-percent scaling.
 fn replay_price_transform() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     use gpui::{Bounds, GpuFrameInfo, point, px, size};
     use moon_core::config::ChartTheme;
     use moon_core::market::trade_replay::{
@@ -275,6 +276,7 @@ fn a_quiet_replay_retries_missing_readers_at_the_same_archive_revision() {
 
 /// Drive both pull guards and the actual replay read on a quiet, provider-less chart.
 fn quiet_replay_retry() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     use gpui::{Bounds, GpuFrameInfo, point, px, size};
     use moon_core::config::ChartTheme;
     use moon_core::market::trade_replay::{

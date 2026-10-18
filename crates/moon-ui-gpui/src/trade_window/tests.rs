@@ -15,6 +15,7 @@ fn unlisted_no_route_caption_names_the_exchange() {
 /// New tick groups must replace a streaming snapshot without reframing or reverting to candles.
 #[test]
 fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     use super::{TradeWindowState, fold_outcome};
     use moon_core::market::trade_replay::{
         TickStatus, TickThinning, TradeReplayOutcome, TradeReplaySeries, TradeReplaySource,

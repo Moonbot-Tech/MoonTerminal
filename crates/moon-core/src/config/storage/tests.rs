@@ -1,5 +1,76 @@
 use super::*;
 
+/// Remove isolated config files even when an assertion unwinds.
+struct TempConfigDir(std::path::PathBuf);
+
+/// New installations get the full window, while saved supported choices keep their values.
+#[test]
+fn absent_window_uses_new_defaults_without_rewriting_saved_choices() {
+    let absent: StorageCfg = toml::from_str("[trade_replay]\nmax_mb = 256\n").expect("old config");
+    assert_eq!(absent.trade_replay.margin_s, 600);
+    assert_eq!(absent.trade_replay.long_position_min, 30);
+    assert!(LONG_POSITION_MIN_RANGE.contains(&absent.trade_replay.long_position_min));
+    for (margin, long) in [(30, 5), (180, 10), (600, 30)] {
+        let saved: StorageCfg = toml::from_str(&format!(
+            "[trade_replay]\nmargin_s = {margin}\nlong_position_min = {long}\nmax_mb = 64\n"
+        ))
+        .expect("saved config");
+        let loaded = sanitize(saved);
+        assert_eq!(
+            (
+                loaded.trade_replay.margin_s,
+                loaded.trade_replay.long_position_min
+            ),
+            (margin, long)
+        );
+        assert!(
+            !toml::to_string(&loaded)
+                .expect("saved again")
+                .contains("max_mb")
+        );
+    }
+}
+
+impl Drop for TempConfigDir {
+    /// Clean only the directory created by this test.
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A window update must preserve unrelated saved choices and normalize before writing.
+#[test]
+fn update_preserves_other_storage_values() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "moon-storage-update-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("temporary config directory");
+    let _cleanup = TempConfigDir(dir.clone());
+    let path = dir.join("storage.toml");
+    let mut cfg = StorageCfg::default();
+    cfg.strategies.enabled = false;
+    cfg.strategies.version_limit = 17;
+    cfg.strategies.ignore_fields = vec!["SyntheticField".into()];
+    cfg.trade_replay.persist_trades = false;
+    cfg.trade_replay.margin_s = 180;
+    cfg.trade_replay.long_position_min = 11;
+    cfg.trade_replay.autoload_missing = true;
+    cfg.trade_replay.autoload_cores = false;
+    cfg.trade_replay.cleanup_at_startup = true;
+    save_at(&path, &cfg);
+    update_at(&path, |cfg| cfg.trade_replay.margin_s = 601);
+    let text = std::fs::read_to_string(&path).expect("updated file");
+    let actual: toml::Value = toml::from_str(&text).expect("persisted config");
+    let mut expected = toml::Value::try_from(&cfg).expect("original config");
+    expected["trade_replay"]["margin_s"] = toml::Value::Integer(600);
+    assert_eq!(actual, expected);
+}
+
 /// A `storage.toml` written before the margin existed at all — the shape the oldest installed
 /// terminals have on disk — loads with the default margin, and the other fields keep their values.
 #[test]
@@ -14,15 +85,18 @@ max_mb = 512
 ";
     let cfg: StorageCfg = toml::from_str(text).expect("old file parses");
     assert_eq!(cfg.trade_replay.margin_s, DEFAULT_TRADE_MARGIN_S);
-    assert_eq!(cfg.trade_replay.max_mb, 512);
+    assert!(
+        !toml::to_string(&cfg)
+            .expect("save old config")
+            .contains("max_mb")
+    );
     assert!(cfg.trade_replay.persist_trades);
     // The autoload switch came after the margin and reads as OFF from a file without it: it
     // spends the venues' budget, and may not switch itself on.
     assert!(!cfg.trade_replay.autoload_missing);
     // The core-archive autoload came last and reads as ON: it costs the cores' traffic only.
     assert!(cfg.trade_replay.autoload_cores);
-    // The long-position threshold came later still and reads as the five minutes it was as a
-    // constant; the startup cleanup, like the autoload, may not switch itself on.
+    // An absent threshold takes the shared default; cleanup may not switch itself on.
     assert_eq!(
         cfg.trade_replay.long_position_min,
         DEFAULT_LONG_POSITION_MIN
@@ -74,7 +148,11 @@ autoload_missing = true
     let cfg: StorageCfg = toml::from_str(text).expect("old file parses");
     assert_eq!(cfg.trade_replay.margin_s, 900);
     assert!(!cfg.trade_replay.persist_trades);
-    assert_eq!(cfg.trade_replay.max_mb, 64);
+    assert!(
+        !toml::to_string(&cfg)
+            .expect("save old config")
+            .contains("max_mb")
+    );
     assert!(cfg.trade_replay.autoload_missing);
     // A migrated value off the list lands on the nearest step where `load` snaps it — the
     // lower one on a tie, so 45 minutes becomes 30, not 60.
@@ -124,11 +202,7 @@ fn a_stored_65s_margin_loads_as_30_not_the_nearest_step() {
         60,
         "the generic snap is the wrong landing"
     );
-    assert_eq!(
-        sanitize(stored).trade_replay.margin_s,
-        DEFAULT_TRADE_MARGIN_S
-    );
-    assert_eq!(DEFAULT_TRADE_MARGIN_S, 30);
+    assert_eq!(sanitize(stored).trade_replay.margin_s, 30);
 }
 
 /// A file written while the steps started at 5 s — the default of 2026-09-21 is on disk in

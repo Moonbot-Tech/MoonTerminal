@@ -1,12 +1,5 @@
-//! The station's window around a trade, in its section: what the station records with now, read
-//! from its status, and "Write to the station" to change it (STATION.md §1 п. 14). Beside it, the
-//! station's catch-up of missed tape: what it is doing, its counts, its two switches and how far
-//! back each exchange still serves trades.
-//!
-//! The station's window is its own. The terminal never sends it behind the user's back — neither
-//! at start nor when Settings -> Storage changes the terminal's window: a terminal on old values
-//! would silently rewrite the station's, and several terminals may share one station. Only a new
-//! station starts with the installing terminal's window.
+//! Shared trade-window controls and station catch-up policy. Window edits apply locally and
+//! synchronize through the backend; switches and retention remain explicit station drafts.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -63,7 +56,7 @@ pub(in crate::settings) struct TapeEd {
     days_shown: Option<u16>,
     /// The station's window as last read.
     seen: Option<TapeWindow>,
-    /// The window as edited; follows `seen` while untouched.
+    /// The current shared terminal window, refreshed on every sync.
     draft: Option<TapeWindow>,
     /// The station's catch-up switches as last read; `None` from a station predating them.
     seen_switches: Option<CatchupSwitches>,
@@ -108,6 +101,17 @@ pub(super) fn long_shown_after(typed: u32, kept: u32) -> Option<u32> {
 }
 
 impl TapeEd {
+    /// Refresh the shared window while keeping the station's acknowledgement separate.
+    fn take_window(&mut self, read: Option<TapeWindow>, shared: TapeWindow) {
+        self.seen = read;
+        self.draft = Some(shared);
+    }
+
+    /// Only explicitly saved policy drafts make the station bar dirty.
+    fn policy_changed(&self) -> bool {
+        self.draft_switches != self.seen_switches || self.seen_keep != self.draft_keep
+    }
+
     /// Rewrite only externally changed days; typed preset prefixes remain intact mid-entry.
     fn days_writeback(&mut self) -> Option<String> {
         let days = self.draft_keep.map(|keep| keep.max_age_days);
@@ -128,8 +132,8 @@ impl TapeEd {
         target: Target,
         confirmed: bool,
         purge: Option<TapePurge>,
+        tape: moon_core::station_api::TapeWindow,
     ) -> Option<Job> {
-        let tape = self.draft?;
         let destructive = self
             .seen_keep
             .zip(self.draft_keep)
@@ -1042,6 +1046,7 @@ impl SettingsView {
             target,
             confirmed,
             reported_catchup(self.backend.read(cx).station.bot.as_ref()).and_then(|c| c.purge),
+            moon_core::market::trade_replay::window(),
         ) else {
             cx.notify();
             return;
@@ -1080,7 +1085,7 @@ impl SettingsView {
                 .awaiting_finished
                 .is_some_and(|sent| sent != station.finished);
         let ed = &mut self.telegram.server.tape;
-        follow(&mut ed.seen, &mut ed.draft, read);
+        ed.take_window(read, moon_core::market::trade_replay::window());
         ed.take_switches(switches);
         ed.take_keep(keep);
         if failed_write
@@ -1106,19 +1111,18 @@ impl SettingsView {
 
     /// Snap edits to the station window's shared margin steps.
     fn server_tape_margin(&mut self, secs: u32, cx: &mut Context<Self>) {
-        if let Some(draft) = self.telegram.server.tape.draft.as_mut() {
-            draft.margin_s = storage_cfg::snap_trade_margin_s(secs);
-            cx.notify();
-        }
+        self.set_trades_margin_s(secs, cx);
+        self.server_tape_sync(cx);
     }
 
     /// Keep the long-position field and the draft in step: made once, subscribed once, and
-    /// rewritten only when a station read moved the draft.
+    /// rewritten only when the shared window moves.
     pub(in crate::settings) fn server_tape_input_sync(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.storage_input_sync(window, cx);
         self.server_tape_days_sync(window, cx);
         let draft = self.telegram.server.tape.draft.map(|d| d.long_position_min);
         let input = match self.telegram.server.tape.long_input.clone() {
@@ -1134,15 +1138,17 @@ impl SettingsView {
                         return;
                     };
                     let typed = v.round().max(0.0) as u32;
-                    let v = storage_cfg::clamp_long_position_min(typed);
-                    let ed = &mut this.telegram.server.tape;
-                    if let Some(draft) = ed.draft.as_mut() {
-                        draft.long_position_min = v;
-                        // An out-of-range number is shown clamped: forgetting what the field
-                        // shows makes the next render write the draft's value back into it.
-                        ed.long_shown = long_shown_after(typed, v);
-                        cx.notify();
+                    if this.telegram.server.tape.long_shown == Some(typed) {
+                        return;
                     }
+                    let v = storage_cfg::clamp_long_position_min(typed);
+                    this.set_long_position_min(v, cx);
+                    this.server_tape_sync(cx);
+                    let ed = &mut this.telegram.server.tape;
+                    // An out-of-range number is shown clamped: forgetting what the field
+                    // shows makes the next render write the draft's value back into it.
+                    ed.long_shown = long_shown_after(typed, v);
+                    cx.notify();
                 })
                 .detach();
                 self.telegram.server.tape.long_input = Some(input.clone());
@@ -1212,26 +1218,17 @@ impl SettingsView {
         }
     }
 
-    /// The station's trade window and its catch-up of missed tape: the state and its counts,
-    /// the two steppers, the two switches, how long exchanges keep trades, and whether the draft
-    /// has been written. "Write to the station" stays live only while the draft differs from
-    /// what the station reported.
-    ///
-    /// `width` is the settings column's width, which decides the venue table's shape.
-    /// The Trade tape page's one write bar: the draft's window and catch-up switches go to the
-    /// station together, only while they differ from what it last reported and no job runs.
+    /// Write or revert station switches and retention; the window synchronizes independently.
     pub(in crate::settings) fn station_tape_bar(&self, cx: &Context<Self>) -> SaveBar {
         let Some(target) = self.telegram.server.known().cloned() else {
             return SaveBar::None;
         };
         let ed = &self.telegram.server.tape;
-        let Some(draft) = ed.draft else {
+        if ed.seen.is_none() {
             return SaveBar::None;
-        };
+        }
         let busy = self.backend.read(cx).station.busy();
-        let changed = ed.seen != Some(draft)
-            || ed.draft_switches != ed.seen_switches
-            || ed.seen_keep != ed.draft_keep;
+        let changed = ed.policy_changed();
         let catchup = reported_catchup(self.backend.read(cx).station.bot.as_ref());
         let purging =
             matches!(keep_state(catchup), KeepState::Purging { .. }) || ed.awaiting_keep.is_some();
@@ -1250,7 +1247,6 @@ impl SettingsView {
             revert: Some(Rc::new(move |_, app| {
                 let _ = revert_view.update(app, |this, cx| {
                     let ed = &mut this.telegram.server.tape;
-                    ed.draft = ed.seen;
                     ed.draft_switches = ed.seen_switches;
                     ed.draft_keep = ed.seen_keep;
                     ed.confirm = false;

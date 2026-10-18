@@ -108,7 +108,7 @@ const SHUN: Duration = Duration::from_secs(300);
 /// A donor with nothing selected for this long disconnects.
 const DONOR_IDLE: Duration = Duration::from_secs(600);
 /// An open trade whose exit never arrived is forgotten after this long.
-const OPEN_HORIZON_MS: i64 = 48 * 3_600_000;
+const OPEN_HORIZON_MS: i64 = 24 * 3_600_000;
 /// An open older than this when it reaches the recorder is not an entry happening now: after a
 /// (re)connect the core resends every open row (the open-row check), and the feed's tracker,
 /// rebuilt with the connection, sees them for the first time.
@@ -539,8 +539,8 @@ impl Recorder {
     /// Open the recorder's own tape store and initialize catch-up without starting its fetcher.
     fn start() -> Option<Self> {
         let path = crate::config::paths::tape_recorder_db_path();
-        // No ceiling — not the Storage tab's `max_mb`, which is for `trades.sqlite` and would
-        // evict spans before they are compared: kept whole until a station runs short of disk
+        // No size ceiling here: eviction would remove spans before they are compared.
+        // Keep them whole until a station runs short of disk
         // ([`free_disk`]), then shrunk by what it must give back.
         let Some(cache) = TradeCache::open_evictable(path.clone()) else {
             line("not started: the database thread could not be spawned");
@@ -798,7 +798,14 @@ impl Recorder {
         self.reconcile(now, now_ms);
         let compares = !crate::feed::station::enabled();
         for (key, task) in &mut self.tasks {
-            task.drop_stale_opens(now_ms - OPEN_HORIZON_MS);
+            let forgotten = task.drop_stale_opens(now_ms - OPEN_HORIZON_MS);
+            if forgotten > 0 {
+                log::info!(
+                    "tape recorder: forgot {forgotten} open trade(s) past the 24 h horizon on {} {}",
+                    key.0,
+                    key.1
+                );
+            }
             if task.overdue(now_ms) {
                 let lost = task.give_up();
                 note_lost(&mut self.stats, key, &lost, "gave up");

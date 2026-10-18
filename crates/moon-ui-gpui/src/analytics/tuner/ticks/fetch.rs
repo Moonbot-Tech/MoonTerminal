@@ -31,11 +31,6 @@ pub(super) fn station_active() -> bool {
     station::active()
 }
 
-/// Whether station-first candidates can be offered before the venue's reach is checked.
-pub(super) fn station_available() -> bool {
-    crate::backend::station::known_cached()
-}
-
 /// Count recoverable rows and station candidates not already refused in this generation.
 pub(super) fn station_load_candidate(
     row: &super::state::DealRow,
@@ -164,7 +159,6 @@ impl FetchResolver {
         &self,
         deal: Deal,
         address: Arc<RowAddress>,
-        origin: job::RowOrigin,
     ) -> Option<job::QueuedRow> {
         let window = model_window(&deal, margin_ms(), long_position_ms())?;
         let replay_address = self.source.replay_address(address.core_uid).ok()?;
@@ -177,7 +171,6 @@ impl FetchResolver {
             replay_address,
             tick_value,
             window,
-            origin,
         ))
     }
 }
@@ -266,23 +259,14 @@ impl AnalyticsView {
     /// Queue every fetchable row of the table with the job, oldest first: a fresh batch when
     /// none runs, or added to the running one — the startup autoload's, or a previous window's
     /// — which already knows some of them and takes the rest.
-    /// Automatic asks honor publication deadlines; an explicit fetch can requeue a waiting row.
-    ///
-    /// Args:
-    ///     origin: Who is asking. The button passes [`job::RowOrigin::User`]; a table load while
-    ///         the autoload switch is on passes [`job::RowOrigin::Autoload`], so unticking the
-    ///         switch drops those rows and leaves a button's rows in the same batch.
-    pub(in crate::analytics::tuner) fn ticks_fetch_missing(
-        &mut self,
-        origin: job::RowOrigin,
-        cx: &mut Context<Self>,
-    ) {
+    /// Automatic asks honor publication deadlines and stop when autoload is disabled.
+    pub(in crate::analytics::tuner) fn ticks_fetch_missing(&mut self, cx: &mut Context<Self>) {
         // Until the tape stage has folded, every row reads "missing": queuing them would ask the
         // venue for tape the tiles already hold.
         if self.ticks.tape_reading {
             return;
         }
-        if origin == job::RowOrigin::Autoload && station::active() {
+        if station::active() {
             return;
         }
         let Some(data) = self.ticks.data.data() else {
@@ -292,21 +276,20 @@ impl AnalyticsView {
         let resolver = FetchResolver::of(backend);
         let now_ms = moon_core::util::time::now_unix_ms_i64();
         let admission = super::tail::Admission::at(super::tail::effective_s(), now_ms);
-        let station_first = autoload::station_target().is_some();
+        let station_first = crate::backend::station::known_target().is_some();
         let mut rows: Vec<job::QueuedRow> = data
             .rows
             .iter()
             .filter(|row| {
                 if station_first {
                     row.station_candidate_with(&admission)
-                        && (origin == job::RowOrigin::User
-                            || station_load_candidate(row, &admission))
+                        && station_load_candidate(row, &admission)
                 } else {
                     row.fetchable_with(&admission)
                 }
             })
-            .filter(|row| origin == job::RowOrigin::User || row.autoload_ready_at(now_ms))
-            .filter_map(|row| resolver.queued_row(row.deal.clone(), row.address.clone()?, origin))
+            .filter(|row| row.autoload_ready_at(now_ms))
+            .filter_map(|row| resolver.queued_row(row.deal.clone(), row.address.clone()?))
             .collect();
         // Oldest first, so the ones nearest the venues' retention edge go before it moves; the
         // job pops from the end.
@@ -317,7 +300,7 @@ impl AnalyticsView {
         let wanted: HashSet<i64> = rows.iter().map(|r| r.deal.report_uid).collect();
         let defaults = strategy_field_defaults(backend);
         if station_first {
-            let rx = station::prefill_then_enqueue(rows, defaults, origin);
+            let rx = station::prefill_then_enqueue(rows, defaults);
             self.attach_fetch_listener(cx);
             cx.spawn(async move |this, cx| {
                 let executor = cx.update(|cx| cx.background_executor().clone());
@@ -379,24 +362,6 @@ impl AnalyticsView {
                 "[x] ticks fetch: {moved} row(s) of the open table marked to go first"
             );
         }
-    }
-
-    /// Abandon the batch; every request in flight is cancelled by the job, and the startup
-    /// autoload, if it still has rows to add, adds none.
-    pub(in crate::analytics::tuner) fn ticks_fetch_stop(&mut self, cx: &mut Context<Self>) {
-        // Read before the stop: the job clears its in-flight rows on their own threads the
-        // moment the cancelled walks return, and no row event follows a cancellation.
-        let in_flight = job::progress().in_flight;
-        station::cancel();
-        job::stop();
-        autoload::cancel();
-        self.ticks.edit_rows(
-            in_flight
-                .into_iter()
-                .flat_map(|(uids, _)| uids)
-                .map(|uid| (uid, RowEdit::UnmarkFetching)),
-        );
-        cx.notify();
     }
 
     /// Listen to the job from this view, once per batch: what lands is folded into the table by
