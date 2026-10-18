@@ -2,8 +2,8 @@
 
 use super::*;
 
-/// Raw archived fallback levels would give a deeper variant the fact's shallower fill.
-fn assert_fallback_uses_variant_levels(line: &[(i64, f64)]) {
+/// Repricing archived fallback levels would miss fills observed with a deeper variant bound.
+fn assert_fallback_keeps_archived_levels(line: &[(i64, f64)]) {
     let own = MshotParams {
         price_pct: 1.0,
         price_min_pct: 0.5,
@@ -45,24 +45,77 @@ fn assert_fallback_uses_variant_levels(line: &[(i64, f64)]) {
     );
     assert_eq!(
         MshotEntry::new(&variant).run(&d, &ticks, Some(line)),
-        None,
-        "the spike never reaches the variant's level at 98"
+        Some(Fill {
+            t_ms: 10_000,
+            price: 99.0
+        }),
+        "the variant's far bound does not move an archived level"
     );
 }
 
-/// Keeping the fact's raw start price would fill a deeper variant on a shallow spike.
+/// Repricing the archived start would miss the fill that a deeper variant made there.
 #[test]
-fn fallback_start_is_repriced_for_the_variant() {
-    assert_fallback_uses_variant_levels(&[(0, 99.0)]);
+fn fallback_start_stays_archived_for_the_variant() {
+    assert_fallback_keeps_archived_levels(&[(0, 99.0)]);
 }
 
-/// Keeping a blind-window hint raw would undo the variant's correctly shifted start level.
+/// Repricing a blind-window hint would miss the fill that a deeper variant made there.
 #[test]
-fn fallback_blind_hint_is_repriced_for_the_variant() {
-    assert_fallback_uses_variant_levels(&[(0, 98.5), (5_000, 99.0)]);
+fn fallback_blind_hint_stays_archived_for_the_variant() {
+    assert_fallback_keeps_archived_levels(&[(0, 98.5), (5_000, 99.0)]);
 }
 
-/// Equal far bounds must still apply a changed two-tick minimum to both anchor paths.
+/// Reapplying the two-tick minimum to archived fallback levels would lose their recorded fill.
+#[test]
+fn fallback_keeps_archived_levels_when_only_minus_satoshi_changes() {
+    let own = MshotParams {
+        price_pct: 0.5,
+        price_min_pct: 0.25,
+        minus_satoshi: false,
+        replace_delay_s: 30.0,
+        raise_wait_s: 30.0,
+        ..MshotParams::default()
+    };
+    let variant = MshotParams {
+        minus_satoshi: true,
+        ..own.clone()
+    };
+    let mut d = super::super::tests::deal();
+    d.coin = "XALPHA".into();
+    d.core_name = "CORE_A".into();
+    d.buy_set_ms = Some(-700_000);
+    d.entry_placed = Some(99.0);
+    d.tick = Some(1.0);
+    d.own_entry = Some(EntryParams::MoonShot(own.clone()));
+    assert_eq!(
+        d.order_open_ms(),
+        None,
+        "creation is older than ten minutes"
+    );
+    let ticks: Vec<Tick> = [(0, 100.0), (4_000, 100.0), (10_000, 99.0), (11_000, 100.0)]
+        .into_iter()
+        .map(|(t, p)| Tick {
+            time_ms: t as f64,
+            price: p,
+            qty: 1.0,
+            side: Side::Buy,
+        })
+        .collect();
+    for line in [&[(0, 99.0)][..], &[(0, 98.0), (5_000, 99.0)][..]] {
+        for params in [&own, &variant] {
+            assert_eq!(
+                MshotEntry::new(params).run(&d, &ticks, Some(line)),
+                Some(Fill {
+                    t_ms: 10_000,
+                    price: 99.0
+                }),
+                "the two-tick minimum does not move an archived start or blind-window hint"
+            );
+        }
+    }
+}
+
+/// Equal far bounds still apply a changed two-tick minimum to creation placement and Shift entry.
 #[test]
 fn minus_satoshi_change_reprices_equal_far_bounds() {
     let own = MshotParams {

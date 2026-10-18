@@ -51,8 +51,11 @@
 //! cannot tell where an order placed minutes earlier was), and the core's first moves inside
 //! the model's BLIND WINDOW — the first `MShotRaiseWait` / `MShotReplaceDelay` seconds of the
 //! tape, where a wait the core started before the tape began expires at a moment the tape
-//! gives no way to compute. For the fact, a move in that window keeps its archived moment and
-//! level; a variant maps the level through its own placement rule. The archived level captures
+//! gives no way to compute. The archived start and blind-window levels apply as archived for
+//! the fact and every variant, including the two-tick minimum (`MShotMinusSatoshi`): only the
+//! creation placement and the Shift entry apply that minimum to the archived level. Mapping
+//! archived fallback levels through a variant's far bound missed fills in
+//! 11 of 164 paired variants that filled at the archived level. The archived level captures
 //! the core's own reference, and on a coarse grid the model's
 //! reference off the prints lands a step away often enough to turn the fill into a miss
 //! (2026-09-21, 458 deals: 4 entries lost to a modelled level, none gained by it). Seen on
@@ -600,8 +603,7 @@ impl<'a> MshotEntry<'a> {
     ///     deal: The report row.
     ///     ticks: The window's prints, ascending.
     ///     line: The archived points of the trade's own entry line, in the archive's order,
-    ///         when the archive holds it. Fallback levels are anchored to this variant's bounds
-    ///         and two-step minimum before replay.
+    ///         when the archive holds it. Fallback levels apply as archived.
     pub(super) fn run(
         &self,
         deal: &Deal,
@@ -654,8 +656,7 @@ impl<'a> MshotEntry<'a> {
     }
 
     /// Args (beyond [`Self::run`]'s):
-    ///     moves: Where to record every move, when asked. Archived fallback prices are mapped
-    ///         through the variant's placement rule; an unprovable anchor gives no fill.
+    ///     moves: Where to record every move, when asked.
     fn run_traced(
         &self,
         deal: &Deal,
@@ -719,7 +720,7 @@ impl<'a> MshotEntry<'a> {
                     .filter(|l| !l.is_empty())
                     .map(archived_replacements)
                     .unwrap_or_default();
-                let mut start: Option<(i64, f64)> = moves
+                let start: Option<(i64, f64)> = moves
                     .iter()
                     .filter(|(t, _)| *t <= first_print_ms)
                     .max_by_key(|(t, _)| *t)
@@ -727,7 +728,9 @@ impl<'a> MshotEntry<'a> {
                     .copied();
                 // The blind window keeps the core's move times because each wait began before
                 // the tape did. Only moves after the start and before the fill count; their
-                // levels are mapped to the variant below.
+                // levels apply as archived for the fact and every variant, including the
+                // two-tick minimum (MShotMinusSatoshi). Only the creation placement and the
+                // Shift entry apply that minimum to the archived level.
                 let blind_until_ms = first_print_ms + raise_wait_ms.max(replace_delay_ms) as i64;
                 hints = moves
                     .iter()
@@ -740,15 +743,6 @@ impl<'a> MshotEntry<'a> {
                     })
                     .copied()
                     .collect();
-                // The archive supplies the reference's history, not this variant's prices.
-                if let Some(EntryParams::MoonShot(own)) = deal.own_entry.as_ref() {
-                    if let Some((t, price)) = start.as_mut() {
-                        *price = self.anchored_level(deal, own, (*t, *price))?;
-                    }
-                    for (t, price) in &mut hints {
-                        *price = self.anchored_level(deal, own, (*t, *price))?;
-                    }
-                }
                 // The archive files a move as the old level's end and the new one's start, a
                 // few milliseconds apart and not always in that order; the hints are walked in
                 // time.
