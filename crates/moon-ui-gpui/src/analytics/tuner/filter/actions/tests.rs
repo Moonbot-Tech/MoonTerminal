@@ -2,6 +2,31 @@
 // attribute and recursively expands `#[test]`.
 use super::analyzer_stamp;
 
+/// A hidden Detect bound must neither serialize an unscored threshold nor keep Save amber.
+#[test]
+fn seam_scope_expansion_omits_detect_from_the_actual_save_payload() {
+    let mut state = super::super::state::TunerState::load(None, None, None, None, None, false);
+    let detect = moon_core::db::tuner::FIELDS
+        .iter()
+        .position(|s| s.col == "xpricedelta")
+        .expect("Detect");
+    state.bounds[0][detect] = ("3".into(), String::new());
+    assert!(state.save_dirty(true));
+    assert_eq!(
+        state.build_strategy_changes(false, true).0,
+        vec![("DropsPriceDelta".into(), "3".into())]
+    );
+    state.invalidate();
+    assert!(state.build_strategy_changes(true, false).0.is_empty());
+    assert!(!state.save_dirty(false));
+    state.invalidate();
+    assert!(state.save_dirty(true));
+    assert_eq!(
+        state.build_strategy_changes(false, true).0,
+        vec![("DropsPriceDelta".into(), "3".into())]
+    );
+}
+
 /// Replacing `actions.rs:analyzer_stamp` with the former UTC formatter makes saved and copied
 /// strategy comments disagree with the selected Warsaw display zone.
 #[test]

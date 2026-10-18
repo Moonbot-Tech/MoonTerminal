@@ -460,38 +460,9 @@ impl AnalyticsView {
     }
 
     /// Is there anything to write: staged "ignore" toggles OR v1 thresholds that
-    /// differ from the strategy's current parameters (the "Save" button lights amber).
+    /// differ from the strategy's current parameters within the active scope.
     pub(in crate::analytics::tuner) fn save_dirty(&self) -> bool {
-        if staged_dirty(&self.tuner.strat, &self.tuner.staged_ignore) {
-            return true;
-        }
-        let near = |a: Option<f64>, b: Option<f64>| match (a, b) {
-            (None, None) => true,
-            (Some(a), Some(b)) => (a - b).abs() <= a.abs().max(b.abs()).max(1.0) * 1e-9,
-            _ => false,
-        };
-        let f = &self.tuner.strat;
-        for (fi, spec) in FIELDS.iter().enumerate() {
-            let (from, to) = &self.tuner.bounds[0][fi];
-            let (lo, hi) = (parse_num(from), parse_num(to));
-            if lo.is_none() && hi.is_none() {
-                continue;
-            }
-            // Unmapped fields are never written to the strategy — they don't count.
-            if !spec.mapped() {
-                continue;
-            }
-            let cur = if spec.class == FieldClass::DeltaSlot {
-                f.slot_of(spec.col).map(|(_, l, h)| (l, h))
-            } else {
-                f.bounds.get(spec.col).copied()
-            };
-            match cur {
-                Some((cl, ch)) if near(lo, cl) && near(hi, ch) => {}
-                _ => return true,
-            }
-        }
-        false
+        self.tuner.save_dirty(self.scope_is_drops_only())
     }
 
     /// Minimum trades a suggestion must retain: the number typed into the box, or `None` for the
@@ -517,10 +488,11 @@ impl AnalyticsView {
         if targets.is_empty() {
             return;
         }
-        // Multi-select is a blind fan-out (no per-target preview), so force the enabling
-        // Ignore flags on so the thresholds actually take effect on every target.
+        // Force enabling flags for shared bulk edits: targets can have different current flags.
         let bulk = targets.len() > 1;
-        let (mut changes, warns) = self.build_strategy_changes(bulk);
+        let (mut changes, warns) = self
+            .tuner
+            .build_strategy_changes(bulk, self.scope_is_drops_only());
         if changes.is_empty() {
             log::info!("analytics: 'Save' — neither mapped thresholds nor changed ignore flags");
             return;
@@ -552,7 +524,9 @@ impl AnalyticsView {
         let Some(target) = self.selected_targets().into_iter().next() else {
             return;
         };
-        let (mut changes, warns) = self.build_strategy_changes(false);
+        let (mut changes, warns) = self
+            .tuner
+            .build_strategy_changes(false, self.scope_is_drops_only());
         changes.push(self.analyzer_comment());
         let (changes, _) = self.changes_for_targets(std::slice::from_ref(&target), &changes);
         self.open_copy_with(target, changes, warns, window, cx);
@@ -614,6 +588,47 @@ impl AnalyticsView {
         self.tuner.inputs.insert("copy-name".to_string(), state);
         self.open_change_dialog(vec![target], changes, None, Vec::new(), warns, true, cx);
     }
+}
+
+impl super::state::TunerState {
+    /// Whether offered thresholds or staged toggles would change the current strategy.
+    ///
+    /// Hidden Detect bounds stay remembered, but cannot light Save while their serializer skips them.
+    fn save_dirty(&self, drops_only: bool) -> bool {
+        if staged_dirty(&self.strat, &self.staged_ignore) {
+            return true;
+        }
+        let near = |a: Option<f64>, b: Option<f64>| match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => (a - b).abs() <= a.abs().max(b.abs()).max(1.0) * 1e-9,
+            _ => false,
+        };
+        let f = &self.strat;
+        for (fi, spec) in FIELDS.iter().enumerate() {
+            if !super::offer_field(spec.class, drops_only) {
+                continue;
+            }
+            let (from, to) = &self.bounds[0][fi];
+            let (lo, hi) = (parse_num(from), parse_num(to));
+            if lo.is_none() && hi.is_none() {
+                continue;
+            }
+            // Unmapped fields are never written to the strategy, so they cannot light Save.
+            if !spec.mapped() {
+                continue;
+            }
+            let cur = if spec.class == FieldClass::DeltaSlot {
+                f.slot_of(spec.col).map(|(_, l, h)| (l, h))
+            } else {
+                f.bounds.get(spec.col).copied()
+            };
+            match cur {
+                Some((cl, ch)) if near(lo, cl) && near(hi, ch) => {}
+                _ => return true,
+            }
+        }
+        false
+    }
 
     /// Build the changes from v1 + the staged "ignore" toggles (without the Comment stamp):
     /// mapped thresholds, Delta2/3 slots (+warnings), and the Ignore flags.
@@ -621,7 +636,12 @@ impl AnalyticsView {
     /// `force_enable` (bulk / multi-select): emit the enabling Ignore flags for every
     /// touched class unconditionally, not only when the anchor currently ignores it — so
     /// the thresholds take effect on targets whose current flags differ from the anchor's.
-    fn build_strategy_changes(&self, force_enable: bool) -> (Vec<(String, String)>, Vec<String>) {
+    /// Retained Detect bounds are inert while the read scope is not exclusively Drops.
+    fn build_strategy_changes(
+        &self,
+        force_enable: bool,
+        drops_only: bool,
+    ) -> (Vec<(String, String)>, Vec<String>) {
         let mut changes: Vec<(String, String)> = Vec::new();
         let mut warns: Vec<String> = Vec::new();
         let (mut delta_touched, mut volume_touched, mut bvsv_touched, mut ping_touched) =
@@ -632,7 +652,10 @@ impl AnalyticsView {
         // Slot fields with v1 thresholds — candidates for Delta2/Delta3.
         let mut slot_wanted: Vec<(&'static str, Option<f64>, Option<f64>)> = Vec::new();
         for (fi, spec) in FIELDS.iter().enumerate() {
-            let (from, to) = &self.tuner.bounds[0][fi];
+            if !super::offer_field(spec.class, drops_only) {
+                continue;
+            }
+            let (from, to) = &self.bounds[0][fi];
             let class = &spec.class;
             if *class == FieldClass::DeltaSlot {
                 let (lo, hi) = (parse_num(from), parse_num(to));
@@ -662,20 +685,18 @@ impl AnalyticsView {
         // overwritten LAST and with a warn. Only two fit — the rest go to the log.
         if !slot_wanted.is_empty() {
             let cur2 = self
-                .tuner
                 .strat
                 .slots
                 .iter()
                 .find(|(n, ..)| *n == 2)
                 .map(|(_, f, ..)| *f);
             let cur3 = self
-                .tuner
                 .strat
                 .slots
                 .iter()
                 .find(|(n, ..)| *n == 3)
                 .map(|(_, f, ..)| *f);
-            let foreign = self.tuner.strat.foreign_slots.clone();
+            let foreign = self.strat.foreign_slots.clone();
             let mut used = [false, false]; // [Delta2, Delta3]
             for (n, _) in &foreign {
                 used[(*n - 2) as usize] = true;
@@ -761,7 +782,7 @@ impl AnalyticsView {
         // caller would never trip.
         let has_params = !changes.is_empty();
         let force = force_enable && has_params;
-        let f = self.tuner.strat.clone();
+        let f = self.strat.clone();
         let mut flags: Vec<(&'static str, bool)> = Vec::new(); // (flag, ignore)
         // A detect threshold is live under IgnoreFilters, so writing it alone clears nothing.
         if filter_touched && (force || f.ignore_filters) {
@@ -784,7 +805,7 @@ impl AnalyticsView {
         if base_touched && (force || f.ignore_base) {
             flags.push(("IgnoreBase", false));
         }
-        for (flag, want) in self.tuner.staged_ignore.clone() {
+        for (flag, want) in self.staged_ignore.clone() {
             flags.retain(|(fl, _)| *fl != flag);
             let cur = match flag {
                 "IgnoreFilters" => f.ignore_filters,
@@ -812,7 +833,9 @@ impl AnalyticsView {
         }
         (changes, warns)
     }
+}
 
+impl AnalyticsView {
     /// Build the analyzer Comment stamp in the selected display zone.
     ///
     /// The user's own description is preserved and only the previous analyzer stamp is replaced;

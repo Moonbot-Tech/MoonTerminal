@@ -960,7 +960,8 @@ pub(super) fn round_pair_outward(from: f64, to: f64, lo: f64, hi: f64) -> (f64, 
 ///     round: Whether accepted bounds are rounded outward.
 ///
 /// Returns:
-///     Best improving range, no suggestion, or a classified read failure.
+///     Best improving range, including always-passing NULL Detect rows in its count and score,
+///     no suggestion, or a classified read failure.
 pub fn suggest_field(
     q: &Query,
     field: &str,
@@ -972,18 +973,45 @@ pub fn suggest_field(
         // Programmer error (unknown field), not a read failure.
         return Ok(None);
     }
-    let mut vals = read_tuner_rows(q, |conn, q, src| {
-        scan_field_pairs(conn, q, src, field, "tuner: suggest_field")
-    })?;
+    read_tuner_rows(q, |conn, q, src| {
+        suggest_field_from_source(conn, q, src, field, min_n, edges, round)
+    })
+}
+
+/// Suggest on one pinned source so valued and always-passing Detect rows share a snapshot.
+fn suggest_field_from_source(
+    conn: &Connection,
+    q: &Query,
+    src: &str,
+    field: &str,
+    min_n: i64,
+    edges: usize,
+    round: bool,
+) -> ReadResult<Option<Suggestion>> {
+    let mut vals = scan_field_pairs(conn, q, src, field, "tuner: suggest_field")?;
+    let spec = FIELDS.iter().find(|spec| spec.col == field);
+    let passing = if spec.is_some_and(|spec| spec.class == FieldClass::Detect) {
+        conn.query_row(
+            &format!(
+                "SELECT COUNT(*), COALESCE(SUM(o.pnl),0) FROM {src} WHERE o.\"{field}\" IS NULL"
+            ),
+            rusqlite::params![q.from, q.to],
+            |row| Ok((row.get::<_, i64>(0)? as usize, row.get::<_, f64>(1)?)),
+        )
+        .map_err(|e| read_fail_on(conn, "tuner: suggest_field", e))?
+    } else {
+        (0, 0.0)
+    };
     // The outer result reports read status; the inner option reports whether a
     // threshold improves on the baseline.
-    let open_top = FIELDS.iter().any(|s| s.col == field && s.min_only());
-    Ok(best_range_bounded(
+    let open_top = spec.is_some_and(|spec| spec.min_only());
+    Ok(best_range_with_passing(
         &mut vals,
         min_n.max(1) as usize,
         edges,
         round,
         open_top,
+        passing,
     ))
 }
 
@@ -1006,7 +1034,20 @@ fn best_range_bounded(
     round: bool,
     open_top: bool,
 ) -> Option<Suggestion> {
-    if vals.len() < min_n.max(1) {
+    best_range_with_passing(vals, min_n, edges, round, open_top, (0, 0.0))
+}
+
+/// Pick a valued range while adding rows that pass every candidate to its count and score.
+fn best_range_with_passing(
+    vals: &mut [(f64, f64)],
+    min_n: usize,
+    edges: usize,
+    round: bool,
+    open_top: bool,
+    passing: (usize, f64),
+) -> Option<Suggestion> {
+    let (passing_n, passing_profit) = passing;
+    if vals.is_empty() || vals.len() + passing_n < min_n.max(1) {
         return None;
     }
     vals.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1032,8 +1073,9 @@ fn best_range_bounded(
     // Suggest a range only when it REALLY improves profit over no filter by more than
     // floating-point summation noise. Otherwise a range excluding only zero-profit trades
     // can appear to "win" by about 1e-12.
-    let floor = total + improvement_margin(total);
-    range_pick::best_pair(&profit_at, &pos, min_n, len, floor, open_top).map(|(i, j)| {
+    let floor = total + improvement_margin(total + passing_profit);
+    let valued_min = min_n.saturating_sub(passing_n).max(1);
+    range_pick::best_pair(&profit_at, &pos, valued_min, len, floor, open_top).map(|(i, j)| {
         let (a, b) = (pos[i], pos[j]);
         // Always return both bounds; distribution edges use the observed
         // minimum or maximum rather than an open interval.
@@ -1044,8 +1086,8 @@ fn best_range_bounded(
         Suggestion {
             from: Some(from),
             to: Some(to),
-            profit: pre[b] - pre[a],
-            n: (b - a) as i64,
+            profit: pre[b] - pre[a] + passing_profit,
+            n: (b - a + passing_n) as i64,
         }
     })
 }

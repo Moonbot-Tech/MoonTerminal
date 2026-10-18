@@ -6,7 +6,63 @@ use super::{
     InlineWriteDecision, inline_write_decision, resolve_complete_target_cores,
     save_authority_matches,
 };
-use crate::analytics::tuner::shared::{SaveAuthority, SaveTarget};
+use crate::analytics::tuner::shared::{SaveAuthority, SaveDialog, SaveTarget};
+
+/// Restoring shared-only rendering hides edits on a mixed save while confirmation sends them.
+#[test]
+fn seam_mixed_save_preview_lists_every_targets_exact_rows() {
+    let targets = vec![target(101, 11), target(202, 22)];
+    let dlg = SaveDialog {
+        authority: authority(3, 7, vec![11, 22], &targets),
+        targets,
+        changes: Vec::new(),
+        olds: Vec::new(),
+        per_target: Some(vec![
+            vec![
+                ("DropsPriceDelta".into(), "3".into()),
+                ("MinVolume".into(), "20".into()),
+            ],
+            vec![("MinVolume".into(), "20".into())],
+        ]),
+        per_target_olds: vec![vec![Some("2".into()), None], vec![Some("10".into())]],
+        notes: Vec::new(),
+        warns: Vec::new(),
+        copy: false,
+    };
+    let groups = super::save_preview_groups(&dlg).expect("aligned payload");
+    let rows: Vec<_> = groups
+        .iter()
+        .flat_map(|group| {
+            group
+                .changes
+                .iter()
+                .enumerate()
+                .map(move |(i, (key, value))| {
+                    (
+                        group.name,
+                        key.as_str(),
+                        group.olds.get(i).and_then(Option::as_deref),
+                        value.as_str(),
+                    )
+                })
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (Some("strategy-101"), "DropsPriceDelta", Some("2"), "3"),
+            (Some("strategy-101"), "MinVolume", None, "20"),
+            (Some("strategy-202"), "MinVolume", Some("10"), "20"),
+        ]
+    );
+    let mut malformed = dlg;
+    malformed
+        .per_target
+        .as_mut()
+        .expect("individual edits")
+        .pop();
+    assert!(super::save_preview_groups(&malformed).is_none());
+}
 
 /// Build one concrete Save target without involving Analytics UI state.
 fn target(sid: i64, core: u64) -> SaveTarget {

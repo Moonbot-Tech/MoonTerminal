@@ -15,6 +15,23 @@ use moon_core::db::tuner::threshold_search::{
     EDGES_MAX, EDGES_MAX_LIGHT, EDGES_MIN, RESTARTS_MIN, SearchHandle, restarts_max,
 };
 
+/// Removing scope filtering would reapply a hidden Detect Min after expanding the selection.
+#[test]
+fn seam_scope_expansion_makes_retained_detect_bounds_inert_until_drops_returns() {
+    let mut state = TunerState::load(None, None, None, None, None, false);
+    let detect = FIELDS
+        .iter()
+        .position(|spec| spec.col == "xpricedelta")
+        .expect("Detect");
+    state.bounds[0][detect] = ("3".into(), String::new());
+    assert_eq!(state.variants(true)[1].bounds[0].from, Some(3.0));
+    state.invalidate();
+    assert!(state.variants(false).iter().all(|v| v.bounds.is_empty()));
+    assert_eq!(state.bounds[0][detect].0, "3");
+    state.invalidate();
+    assert_eq!(state.variants(true)[1].bounds[0].from, Some(3.0));
+}
+
 /// The master checkbox counts a Detect field only while the scope is offering it.
 ///
 /// The oracle is the default mask, which ticks every mapped field, with that one Detect bit
@@ -181,7 +198,7 @@ fn report_staleness_preserves_filter_drafts_and_the_running_search() {
         "the search's own result must still be publishable when it lands"
     );
     assert!(
-        !state.variants()[1].is_empty(),
+        !state.variants(true)[1].is_empty(),
         "the KPI consumer must still receive the staged bound"
     );
     assert!(
@@ -962,6 +979,7 @@ fn prepared_axis_state(job: SuggestJob) -> TunerState {
 fn parked_save_dialog() -> Arc<super::super::super::shared::SaveDialog> {
     use super::super::super::shared::{SaveAuthority, SaveDialog, SaveTarget};
     Arc::new(SaveDialog {
+        per_target_olds: Vec::new(),
         authority: SaveAuthority {
             producer: crate::analytics::tuner::save::SaveProducer::Selection,
             dialog_seq: 1,

@@ -696,14 +696,17 @@ impl TunerState {
         self.stats.data().is_none() || self.dirty || self.hist_dirty
     }
 
-    /// Variants for the query: [the empty "Fact", v1..vN].
-    pub(in crate::analytics::tuner) fn variants(&self) -> Vec<Variant> {
+    /// Variants for the query: [the empty "Fact", v1..vN], limited to the offered scope.
+    pub(in crate::analytics::tuner) fn variants(&self, drops_only: bool) -> Vec<Variant> {
         let mut out = vec![Variant::default()];
         for v in &self.bounds {
             let bounds = v
                 .iter()
                 .enumerate()
                 .filter_map(|(fi, (from, to))| {
+                    if !super::offer_field(FIELDS[fi].class, drops_only) {
+                        return None;
+                    }
                     let from = parse_num(from);
                     let to = parse_num(to);
                     (from.is_some() || to.is_some()).then(|| Bound {

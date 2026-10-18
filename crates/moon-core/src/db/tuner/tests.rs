@@ -6,6 +6,68 @@ use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
 use super::*;
 
+/// Dropping NULL Detect samples rejects an improving Min despite enough always-passing trades.
+#[test]
+fn seam_detect_suggestion_counts_and_scores_null_rows() {
+    let conn = Connection::open_in_memory().expect("memory db");
+    conn.execute_batch(
+        "CREATE TABLE samples(xpricedelta REAL, pnl REAL, ts INTEGER);
+         WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<20)
+         INSERT INTO samples SELECT NULL, 2, 100 FROM n;
+         INSERT INTO samples VALUES(1,-10,100),(2,-10,100),(3,10,100),(4,10,100);",
+    )
+    .expect("Detect fixture");
+    let q = Query {
+        from: 0,
+        to: 200,
+        ..Default::default()
+    };
+    let source = "(SELECT * FROM samples WHERE ts>=?1 AND ts<=?2) o";
+    for round in [false, true] {
+        let suggestion = suggest_field_from_source(&conn, &q, source, "xpricedelta", 10, 16, round)
+            .expect("scan")
+            .expect("twenty NULL rows make Min 3 admissible");
+        assert_eq!(suggestion.from, Some(3.0));
+        assert_eq!(suggestion.n, 22);
+        assert_eq!(suggestion.profit, 60.0);
+        let predicate = Variant {
+            bounds: vec![Bound {
+                field: "xpricedelta".into(),
+                from: suggestion.from,
+                to: suggestion.to,
+            }],
+            ..Default::default()
+        }
+        .where_sql();
+        let actual: (i64, f64) = conn
+            .query_row(
+                &format!("SELECT COUNT(*), SUM(pnl) FROM samples o WHERE 1=1{predicate}"),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("independent what-if");
+        assert_eq!((suggestion.n, suggestion.profit), actual);
+    }
+    let boundary = suggest_field_from_source(&conn, &q, source, "xpricedelta", 23, 16, false)
+        .expect("scan")
+        .expect("Min 2 keeps twenty-three trades");
+    assert_eq!(
+        (boundary.from, boundary.n, boundary.profit),
+        (Some(2.0), 23, 50.0)
+    );
+    assert!(
+        suggest_field_from_source(&conn, &q, source, "xpricedelta", 24, 16, false)
+            .expect("scan")
+            .is_none()
+    );
+    conn.execute("UPDATE samples SET pnl=-3 WHERE xpricedelta IS NULL", [])
+        .expect("losses");
+    let suggestion = suggest_field_from_source(&conn, &q, source, "xpricedelta", 10, 16, false)
+        .expect("scan")
+        .expect("still improves baseline");
+    assert_eq!((suggestion.n, suggestion.profit), (22, -40.0));
+}
+
 /// Sharing a money preflight must preserve both sources, split errors and measured-clock rows.
 /// Reusing the active Percent source as USDT would change the second projection in this matrix.
 #[test]

@@ -192,7 +192,7 @@ impl AnalyticsView {
             .and_then(|(k, _)| super::parse_strat_key(k));
         let sid = anchor.map(|(s, _)| s);
         let core = anchor.and_then(|(_, c)| c);
-        let variants = self.tuner.variants();
+        let variants = self.tuner.variants(self.scope_is_drops_only());
         let field = FIELDS[self.tuner.sel_field].col.to_string();
         self.tuner.hist_seq = self.tuner.hist_seq.wrapping_add(1);
         self.tuner.hist_dirty = false;
@@ -294,7 +294,7 @@ impl AnalyticsView {
         let req = self.tuner.seq;
         let report_req = self.current_report_generation();
         let query = self.tuner_query();
-        let variants = self.tuner.variants();
+        let variants = self.tuner.variants(self.scope_is_drops_only());
         let anchor = self
             .sel_strategy
             .as_ref()
@@ -1363,7 +1363,8 @@ fn is_detect_param(key: &str) -> bool {
 /// Change list to write onto a strategy of `kind`.
 ///
 /// A Drops strategy keeps every parameter. Any other kind, including an unknown one, loses
-/// Detect parameters. The rest of the list is unchanged.
+/// Detect parameters. The caller already excludes retained Detect bounds on a mixed read scope;
+/// this target check also protects stale or unknown write targets. The rest is unchanged.
 ///
 /// Args:
 ///     changes: Shared parameter edits, including a Comment stamp when one was added.
@@ -1386,8 +1387,8 @@ fn changes_for_kind(changes: &[(String, String)], kind: Option<&str>) -> Vec<(St
 ///
 /// When every target receives the same list, that list is the shared payload and the second
 /// value is `None`. A mixed selection has no shared list: the confirmation dialog draws the
-/// shared list as written to every target, and draws one group per target only when the shared
-/// list is empty. Returning the anchor's list there would show `DropsPriceDelta` on a MoonShot
+/// shared list as written to every target, and draws one group per target whenever individual
+/// payloads are present. Returning the anchor's list there would show `DropsPriceDelta` on a MoonShot
 /// target the write does not touch.
 ///
 /// Args:

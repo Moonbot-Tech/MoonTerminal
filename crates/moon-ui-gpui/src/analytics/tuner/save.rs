@@ -133,6 +133,40 @@ fn resolve_complete_target_cores(
         .collect()
 }
 
+/// One visible group of the exact payload that confirmation will dispatch.
+struct SavePreviewGroup<'a> {
+    /// Target label for individual payloads; shared edits use the dialog's target header.
+    name: Option<&'a str>,
+    /// Edits in dispatch order, including explicit empty values.
+    changes: &'a [(String, String)],
+    /// Known current values aligned with the edits.
+    olds: &'a [Option<String>],
+}
+
+/// Project the dispatch payload into visible groups, refusing misaligned target lists.
+fn save_preview_groups(dlg: &SaveDialog) -> Option<Vec<SavePreviewGroup<'_>>> {
+    match &dlg.per_target {
+        Some(all) if all.len() == dlg.targets.len() && !dlg.copy => Some(
+            dlg.targets
+                .iter()
+                .zip(all)
+                .enumerate()
+                .map(|(i, (target, changes))| SavePreviewGroup {
+                    name: Some(&target.name),
+                    changes,
+                    olds: dlg.per_target_olds.get(i).map(Vec::as_slice).unwrap_or(&[]),
+                })
+                .collect(),
+        ),
+        Some(_) => None,
+        None => Some(vec![SavePreviewGroup {
+            name: None,
+            changes: &dlg.changes,
+            olds: &dlg.olds,
+        }]),
+    }
+}
+
 impl AnalyticsView {
     /// Capture authority when the user opens the inline confirmation, before final consent.
     pub(in crate::analytics::tuner) fn begin_inline_write(
@@ -264,16 +298,16 @@ impl AnalyticsView {
         copy: bool,
         cx: &mut Context<Self>,
     ) {
-        // The "now → next" preview is the anchor's (first target); the rest write blind. Read
-        // its current values from the anchor's OWN core (rows are per-core).
+        // Shared edits preview the anchor; individual payloads read each target's own values.
         let Some((sid, core)) = targets.first().map(|t| (t.sid, t.core)) else {
             return;
         };
         let authority = self.capture_save_authority(&targets, SaveProducer::Selection, cx);
         // A row that carries a NOTE never draws the "now" side, so reading it would be a
         // round trip whose result is discarded. The coins axis annotates every row.
-        let needs_olds =
-            notes.len() < changes.len() || notes.iter().any(std::option::Option::is_none);
+        let needs_olds = per_target.is_some()
+            || notes.len() < changes.len()
+            || notes.iter().any(std::option::Option::is_none);
         if !needs_olds {
             let olds = vec![None; changes.len()];
             self.tuner.save_dialog = Some(Arc::new(SaveDialog {
@@ -281,6 +315,7 @@ impl AnalyticsView {
                 targets,
                 changes,
                 per_target,
+                per_target_olds: Vec::new(),
                 olds,
                 notes,
                 warns,
@@ -295,11 +330,36 @@ impl AnalyticsView {
         // this separate guard, a live report refresh dropped valid Save clicks; using no guard
         // instead resurrected dialogs for selections the panel had already discarded.
         let req = authority.clone();
+        let individual = per_target.as_ref().map(|all| {
+            targets
+                .iter()
+                .zip(all)
+                .map(|(target, edits)| {
+                    (
+                        target.sid,
+                        target.core,
+                        edits.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
         self.spawn_db(
             true,
             cx,
-            move || moon_core::db::tuner::strategy_current_values(sid, core, &keys),
-            move |this, olds_map, cx| {
+            move || {
+                let olds = moon_core::db::tuner::strategy_current_values(sid, core, &keys);
+                let individual_olds = individual
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(sid, core, keys)| {
+                        let values =
+                            moon_core::db::tuner::strategy_current_values(sid, core, &keys);
+                        keys.iter().map(|key| values.get(key).cloned()).collect()
+                    })
+                    .collect();
+                (olds, individual_olds)
+            },
+            move |this, (olds_map, per_target_olds), cx| {
                 if !this.save_authority_is_current(&req, &targets, cx) {
                     log::info!("analytics: the confirmation's scope changed, dialog dropped");
                     return;
@@ -313,6 +373,7 @@ impl AnalyticsView {
                     targets,
                     changes,
                     per_target,
+                    per_target_olds,
                     olds,
                     notes,
                     warns,
@@ -344,6 +405,12 @@ impl AnalyticsView {
         self.write_error = None;
         if !self.save_authority_is_current(&dlg.authority, &dlg.targets, cx) {
             log::info!("analytics: stale Save/Copy confirmation refused before dispatch");
+            return;
+        }
+        if save_preview_groups(&dlg)
+            .is_none_or(|groups| !dlg.copy && groups.iter().all(|group| group.changes.is_empty()))
+        {
+            log::warn!("analytics: Save payload has no valid visible edit groups; nothing sent");
             return;
         }
         if dlg.copy {
@@ -876,6 +943,7 @@ impl AnalyticsView {
         cx: &Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         let dlg = self.tuner.save_dialog.clone()?;
+        let groups = save_preview_groups(&dlg)?;
         // The header/preview use the anchor (first target); bulk shows a count instead of a
         // name and drops the "now" column — each target has its own current values.
         let bulk = dlg.targets.len() > 1;
@@ -922,7 +990,7 @@ impl AnalyticsView {
         }
         // Bulk: name the strategies that will be written — some may be filtered out of the list,
         // and the count-only title would otherwise let a hidden target be written unseen.
-        if bulk && !dlg.copy {
+        if bulk && !dlg.copy && dlg.per_target.is_none() {
             let names: Vec<String> = dlg
                 .targets
                 .iter()
@@ -938,83 +1006,99 @@ impl AnalyticsView {
                     .child(names.join(", ")),
             );
         }
-        for (i, (k, v)) in dlg.changes.iter().enumerate() {
-            // Single: "now → next" (current muted, new amber). Bulk: the "now" differs per
-            // target, so show only the value written to all of them (no misleading anchor "now").
-            // An EMPTY value is a real edit — "erase this field" — and it used to render as a
-            // blank cell, which reads as "nothing happens here". A coin list wiped by an
-            // accidental untick-all went out looking like a no-op.
-            let blank = |s: &str| s.trim().is_empty();
-            let note = dlg.notes.get(i).cloned().flatten();
-            let old = dlg
-                .olds
-                .get(i)
-                .cloned()
-                .flatten()
-                .filter(|s| !blank(s))
-                .unwrap_or_else(|| "—".to_string());
-            let mut row = h_flex()
-                // MIN height, not fixed: a long value (a blacklist runs to hundreds of
-                // coins) wraps over several lines, and a fixed height would clip it.
-                .min_h(design::fit_h_px(cx, 22.0, 13.0, 4.5))
-                .w_full()
-                .px(design::ui_px(cx, 10.0))
-                .py(design::ui_px(cx, 3.0))
-                .gap(design::ui_px(cx, 6.0))
-                .items_start()
-                .border_t_1()
-                .border_color(moon_alpha(p.border, 0.5))
-                .child(
+        for group in groups {
+            if let Some(name) = group.name {
+                list = list.child(
                     div()
-                        .flex_none()
-                        .max_w(design::font_w_px(cx, 110.0))
-                        .truncate()
-                        .child(k.clone()),
-                );
-            if let Some(note) = note {
-                // A field the axis can describe in words: print WHAT changed and nothing
-                // else. For a SET this is the only readable form — two 376-entry lists that
-                // differ by one coin wrap differently on every line, so putting them side by
-                // side showed that something changed while hiding what.
-                row = row.child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .font_family(design::ui_font())
-                        .text_color(moon(p.amber))
-                        .child(note),
-                );
-            } else {
-                if !bulk {
-                    row = row
-                        .child(
-                            // Wraps like the new value beside it. Truncating only one side
-                            // let a long value be confirmed against a 90px stub of the one it
-                            // replaces — the comparison the dialog exists to make.
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_color(moon(p.text_muted))
-                                .child(old),
-                        )
-                        .child(div().flex_none().text_color(moon(p.text_muted)).child("→"));
-                }
-                row = row.child(
-                    // Wraps instead of truncating: this is the value about to be written, and
-                    // a 120px prefix of it confirms nothing. The dialog scrolls.
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .when(blank(v), |el| el.text_color(moon(p.orange)))
-                        .when(!blank(v), |el| el.text_color(moon(p.amber)))
-                        .child(if blank(v) {
-                            t!("analytics.tuner.save_clears").to_string()
-                        } else {
-                            v.clone()
-                        }),
+                        .w_full()
+                        .px(design::ui_px(cx, 10.0))
+                        .py(design::ui_px(cx, 5.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(super::super::summary::strat_display(name)),
                 );
             }
-            list = list.child(row);
+            for (i, (k, v)) in group.changes.iter().enumerate() {
+                // Single: "now → next" (current muted, new amber). Bulk: the "now" differs per
+                // target, so show only the value written to all of them (no misleading anchor "now").
+                // An EMPTY value is a real edit — "erase this field" — and it used to render as a
+                // blank cell, which reads as "nothing happens here". A coin list wiped by an
+                // accidental untick-all went out looking like a no-op.
+                let blank = |s: &str| s.trim().is_empty();
+                let note = if group.name.is_none() {
+                    dlg.notes.get(i).cloned().flatten()
+                } else {
+                    None
+                };
+                let old = group
+                    .olds
+                    .get(i)
+                    .cloned()
+                    .flatten()
+                    .filter(|s| !blank(s))
+                    .unwrap_or_else(|| "—".to_string());
+                let mut row = h_flex()
+                    // MIN height, not fixed: a long value (a blacklist runs to hundreds of
+                    // coins) wraps over several lines, and a fixed height would clip it.
+                    .min_h(design::fit_h_px(cx, 22.0, 13.0, 4.5))
+                    .w_full()
+                    .px(design::ui_px(cx, 10.0))
+                    .py(design::ui_px(cx, 3.0))
+                    .gap(design::ui_px(cx, 6.0))
+                    .items_start()
+                    .border_t_1()
+                    .border_color(moon_alpha(p.border, 0.5))
+                    .child(
+                        div()
+                            .flex_none()
+                            .max_w(design::font_w_px(cx, 110.0))
+                            .truncate()
+                            .child(k.clone()),
+                    );
+                if let Some(note) = note {
+                    // A field the axis can describe in words: print WHAT changed and nothing
+                    // else. For a SET this is the only readable form — two 376-entry lists that
+                    // differ by one coin wrap differently on every line, so putting them side by
+                    // side showed that something changed while hiding what.
+                    row = row.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .font_family(design::ui_font())
+                            .text_color(moon(p.amber))
+                            .child(note),
+                    );
+                } else {
+                    if !bulk || group.name.is_some() {
+                        row = row
+                            .child(
+                                // Wraps like the new value beside it. Truncating only one side
+                                // let a long value be confirmed against a 90px stub of the one it
+                                // replaces — the comparison the dialog exists to make.
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_color(moon(p.text_muted))
+                                    .child(old),
+                            )
+                            .child(div().flex_none().text_color(moon(p.text_muted)).child("→"));
+                    }
+                    row = row.child(
+                        // Wraps instead of truncating: this is the value about to be written, and
+                        // a 120px prefix of it confirms nothing. The dialog scrolls.
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .when(blank(v), |el| el.text_color(moon(p.orange)))
+                            .when(!blank(v), |el| el.text_color(moon(p.amber)))
+                            .child(if blank(v) {
+                                t!("analytics.tuner.save_clears").to_string()
+                            } else {
+                                v.clone()
+                            }),
+                    );
+                }
+                list = list.child(row);
+            }
         }
         // Warnings (overwriting a foreign slot type and the like) — in orange,
         // with line wrapping (not truncated).
