@@ -227,10 +227,29 @@ impl DropsParams {
     }
 }
 
+/// Share causal limit-fill semantics between production tracing and measurement probes.
+fn fill_from(ticks: &[Tick], order_ms: i64, level: f64) -> Option<Fill> {
+    let marketable = last_price(ticks, order_ms, None).is_some_and(|price| level >= price);
+    let begin = ticks.partition_point(|tick| tick.time_ms < order_ms as f64);
+    ticks[begin..]
+        .iter()
+        .filter(|tick| tick.price.is_finite() && tick.price > 0.0)
+        .find(|tick| reaches(f64::from(tick.price), level, true))
+        .map(|tick| Fill {
+            t_ms: tick.time_ms as i64,
+            price: if marketable {
+                level.min(f64::from(tick.price))
+            } else {
+                level
+            },
+        })
+}
+
 /// Trace separates missing history, impossible zones, and covered non-crossing or no fill.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DropsTrace {
     pub detect_ms: Option<i64>,
+    pub order_ms: Option<i64>,
     pub reading: Option<DropReading>,
     pub limit: Option<f64>,
     pub fill: Option<Fill>,
@@ -267,26 +286,29 @@ impl DropsEntry<'_> {
         trace.limit = self
             .0
             .buy_price(reading, ticks, t_ms, deal.tick.unwrap_or(0.0));
-        trace.fill = trace.limit.and_then(|level| {
-            let marketable = last_price(ticks, t_ms, None).is_some_and(|price| level >= price);
-            ticks
-                .iter()
-                .filter(|tick| {
-                    tick.time_ms >= t_ms as f64 && tick.price.is_finite() && tick.price > 0.0
-                })
-                .find(|tick| reaches(f64::from(tick.price), level, true))
-                .map(|tick| Fill {
-                    t_ms: tick.time_ms as i64,
-                    price: if marketable {
-                        level.min(f64::from(tick.price))
-                    } else {
-                        level
-                    },
-                })
-        });
+        trace.order_ms = Some(t_ms);
+        trace.fill = trace.limit.and_then(|level| fill_from(ticks, t_ms, level));
         trace
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) mod probe;
+
+#[cfg(test)]
+pub(crate) mod units;
+
+#[cfg(test)]
+pub(crate) mod variant;
+
+#[cfg(test)]
+pub(crate) use variant::{DropsCadence, DropsVariant};
+
+/// Share the production print lookup with offline measurements.
+#[cfg(test)]
+pub(crate) fn measurement_last_price(ticks: &[Tick], t_ms: i64) -> Option<f64> {
+    last_price(ticks, t_ms, None)
+}

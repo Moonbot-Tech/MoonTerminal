@@ -1,5 +1,6 @@
 //! Synthetic detector contracts; no live data or exchange state participates.
 
+use super::probe::{Probe, ticker_tape};
 use super::*;
 use crate::db::tuner::ticks::{EntryModel, tests::deal};
 
@@ -280,4 +281,459 @@ fn parse_comment_reads_xpricedelta_and_pricelow() {
 fn parse_comment_rejects_other_kinds() {
     assert!(parse_comment("PumpsDetection: PriceIsLow: false xPriceDelta: 3.0").is_none());
     assert!(parse_comment("DropsDetection: PriceIsLow: false xPriceDelta: NaN").is_none());
+}
+
+/// A live wall slot replaces earlier prints and cannot borrow a later print.
+#[test]
+fn wall_slots_last_wins_without_lookahead() {
+    let ticks = tape(&[
+        (0, 100.0),
+        (2100, 90.0),
+        (2900, 80.0),
+        (3100, 70.0),
+        (4100, 60.0),
+    ]);
+    let v = DropsVariant {
+        wall_slots: true,
+        ..Default::default()
+    };
+    assert_eq!(v.samples(&ticks, 0, 3000), vec![(0, 100.0), (2000, 80.0)]);
+    assert_eq!(v.samples(&ticks, 0, 3200), vec![(0, 100.0), (2000, 70.0)]);
+}
+
+/// Including the live slot changes the average immediately, independently of the grid.
+#[test]
+fn current_average_includes_live_slot() {
+    let ticks = tape(&[(-10000, 100.0), (8000, 80.0), (10000, 60.0)]);
+    let p = DropsParams {
+        last_price_ma: 2,
+        ..params()
+    };
+    for wall_slots in [false, true] {
+        let v = DropsVariant {
+            wall_slots,
+            include_current: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            p.drop_at_variant(&ticks, 10000, v).unwrap().last_price,
+            70.0
+        );
+        assert_eq!(
+            p.drop_at_variant(
+                &ticks,
+                10000,
+                DropsVariant {
+                    include_current: false,
+                    ..v
+                }
+            )
+            .unwrap()
+            .last_price,
+            90.0
+        );
+    }
+}
+
+/// Consecutive-sample smoothing reproduces the independent reference FAQ arithmetic.
+#[test]
+fn rolling_high_matches_reference_faq() {
+    let points: Vec<_> = (-20..50)
+        .map(|i| {
+            (
+                i * 2000,
+                if i < 10 {
+                    102.0
+                } else if i < 40 {
+                    101.0
+                } else {
+                    100.0
+                },
+            )
+        })
+        .collect();
+    let p = DropsParams {
+        max_time_s: 100,
+        price_ma_s: 20,
+        last_price_ma: 2,
+        ..params()
+    };
+    let r = p
+        .drop_at_variant(&tape(&points), 98000, DropsVariant::ASTER)
+        .unwrap();
+    assert_eq!((r.high_zone_avg, r.last_price), (102.0, 100.0));
+    assert!((r.drop_pct - 2.0).abs() < 1e-9);
+}
+
+/// A threshold between passes distinguishes second, slot-boundary and print schedules.
+#[test]
+fn decision_cadences_are_independent() {
+    let ticks = tape(&[(-10000, 100.0), (7100, 90.0)]);
+    for (cadence, expected) in [
+        (DropsCadence::Second, 7500),
+        (DropsCadence::Slot, 8000),
+        (DropsCadence::Print, 7100),
+    ] {
+        let v = DropsVariant {
+            cadence,
+            ..Default::default()
+        };
+        assert_eq!(
+            params().detect_variant(&ticks, 6500, 10000, v).unwrap().0,
+            expected
+        );
+    }
+}
+
+/// Delaying placement must not claim the print that crossed before the order existed.
+#[test]
+fn order_delay_skips_preplacement_fill() {
+    let mut d = deal();
+    d.buy_ms = 70000;
+    d.buy_set_ms = Some(70000);
+    let ticks = tape(&[
+        (0, 100.0),
+        (70000, 90.0),
+        (71000, 80.0),
+        (72000, 90.0),
+        (73000, 79.0),
+    ]);
+    let p = DropsParams {
+        buy_price_pct: -1.0,
+        ..params()
+    };
+    let entry = DropsEntry(&p);
+    let old = entry.trace(&d, &ticks);
+    let delayed = entry.trace_variant(
+        &d,
+        &ticks,
+        DropsVariant {
+            delay_slot: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(old.detect_ms, delayed.detect_ms);
+    assert_eq!(old.order_ms, Some(70000));
+    assert_eq!(delayed.order_ms, Some(72000));
+    assert_eq!(old.fill.unwrap().t_ms, 71000);
+    assert_eq!(delayed.fill.unwrap().t_ms, 73000);
+}
+
+/// Explicit default replay must preserve the old independently known detector and limit values.
+#[test]
+fn default_variant_preserves_legacy_outputs() {
+    let ticks = tape(&[(-10000, 100.0), (8000, 80.0), (10000, 60.0)]);
+    let p = DropsParams {
+        last_price_ma: 2,
+        use_last_price: true,
+        buy_price_pct: -1.0,
+        ..params()
+    };
+    let r = p
+        .drop_at_variant(&ticks, 10000, DropsVariant::default())
+        .unwrap();
+    assert_eq!(r, p.drop_at(&ticks, 10000).unwrap());
+    assert_eq!((r.high_zone_avg, r.last_price), (100.0, 90.0));
+    assert!((p.buy_price(r, &ticks, 10000, 0.1).unwrap() - 89.1).abs() < 1e-9);
+}
+
+/// Lag changes placement and fill visibility while preserving the original signal time.
+#[test]
+fn probe_fixed_lags_place_after_signal() {
+    let mut d = deal();
+    d.buy_ms = 70000;
+    d.buy_set_ms = Some(70000);
+    let ticks = tape(&[(0, 100.0), (70000, 90.0), (80000, 89.0)]);
+    for lag_s in [1, 2, 3, 5, 10] {
+        let trace = Probe {
+            lag_s,
+            ..Default::default()
+        }
+        .trace(&params(), &d, &ticks, &ticks, None);
+        assert_eq!(trace.detect_ms, Some(70000));
+        assert_eq!(trace.order_ms, Some(70000 + i64::from(lag_s) * 1000));
+        assert_eq!(trace.fill.unwrap().t_ms, 80000);
+    }
+}
+
+/// A rebound between two drops resets the pass run, rather than accumulating old successes.
+#[test]
+fn probe_hold_requires_consecutive_seconds() {
+    let ticks = tape(&[(-30000, 100.0), (7000, 90.0), (8000, 100.0), (9000, 90.0)]);
+    let p = DropsParams {
+        max_time_s: 20,
+        ..params()
+    };
+    for hold in [2, 3, 5] {
+        assert_eq!(
+            Probe {
+                hold,
+                ..Default::default()
+            }
+            .detect(&p, &ticks, 7000, 15000, None)
+            .unwrap()
+            .0,
+            9000 + i64::from(hold - 1) * 1000
+        );
+    }
+}
+
+/// A recovered current price must still expose the earlier minimum only in this probe.
+#[test]
+fn probe_high_to_min_retains_recovered_low() {
+    let ticks = tape(&[(0, 100.0), (8000, 80.0), (10000, 100.0)]);
+    assert_eq!(
+        Probe::default()
+            .reading(&params(), &ticks, 10000)
+            .unwrap()
+            .drop_pct,
+        0.0
+    );
+    assert_eq!(
+        Probe {
+            high_to_min: true,
+            ..Default::default()
+        }
+        .reading(&params(), &ticks, 10000)
+        .unwrap()
+        .drop_pct,
+        25.0
+    );
+}
+
+/// Future slot prints stay invisible until close plus one second, and both sides form a mid.
+#[test]
+fn probe_ticker_waits_for_slot_and_uses_side_mid() {
+    let mut ticks = tape(&[(100, 100.0), (900, 110.0), (1500, 90.0), (2100, 80.0)]);
+    ticks[2].side = Side::Sell;
+    let input = ticker_tape(&ticks);
+    assert_eq!(last_price(&input, 2999, None), None);
+    assert_eq!(last_price(&input, 3000, None), Some(100.0));
+    assert_eq!(last_price(&input, 4999, None), Some(100.0));
+    assert_eq!(last_price(&input, 5000, None), Some(80.0));
+}
+
+/// The strategy switch gates both horizons and missing hourly history remains unknown.
+#[test]
+fn probe_low_horizons_require_coverage_and_new_low() {
+    let ticks = tape(&[
+        (0, 80.0),
+        (3540000, 90.0),
+        (3599000, 100.0),
+        (3600000, 90.0),
+        (3601000, 70.0),
+    ]);
+    let p = DropsParams {
+        price_is_low: true,
+        ..params()
+    };
+    assert_eq!(
+        Probe {
+            low_s: 60,
+            ..Default::default()
+        }
+        .low_pass(&p, &ticks, 3600000),
+        Some(true)
+    );
+    assert_eq!(
+        Probe {
+            low_s: 3600,
+            ..Default::default()
+        }
+        .low_pass(&p, &ticks, 3600000),
+        Some(false)
+    );
+    assert_eq!(
+        Probe {
+            low_s: 3600,
+            ..Default::default()
+        }
+        .low_pass(&p, &ticks, 3601000),
+        Some(true)
+    );
+    assert_eq!(
+        Probe {
+            low_s: 3600,
+            ..Default::default()
+        }
+        .low_pass(&p, &ticks[1..], 3600000),
+        None
+    );
+    assert_eq!(
+        Probe {
+            low_s: 3600,
+            ..Default::default()
+        }
+        .low_pass(&params(), &ticks[1..], 3600000),
+        Some(true)
+    );
+}
+
+/// A previous factual detect blocks checks strictly before the expiry and not at equality.
+#[test]
+fn probe_previous_deal_penalty_expires_at_boundary() {
+    let ticks = tape(&[(-30000, 100.0), (7000, 90.0)]);
+    let p = DropsParams {
+        max_time_s: 20,
+        ..params()
+    };
+    let probe = Probe {
+        suppress: true,
+        ..Default::default()
+    };
+    assert!(
+        probe
+            .detect(&p, &ticks, 7000, 9000, Some((5000, 10000)))
+            .is_none()
+    );
+    assert_eq!(
+        probe
+            .detect(&p, &ticks, 7000, 11000, Some((5000, 10000)))
+            .unwrap()
+            .0,
+        10000
+    );
+    assert_eq!(
+        probe
+            .detect(&p, &ticks, 7000, 9000, Some((8000, 10000)))
+            .unwrap()
+            .0,
+        7000
+    );
+}
+
+/// Combining a hold and a lag must apply both clocks rather than replacing either one.
+#[test]
+fn probe_combined_hold_and_lag_keep_distinct_clocks() {
+    let mut d = deal();
+    d.buy_ms = 70000;
+    d.buy_set_ms = Some(70000);
+    let ticks = tape(&[(0, 100.0), (70000, 90.0), (80000, 89.0)]);
+    let trace = Probe {
+        hold: 3,
+        lag_s: 2,
+        ..Default::default()
+    }
+    .trace(&params(), &d, &ticks, &ticks, None);
+    assert_eq!(trace.detect_ms, Some(72000));
+    assert_eq!(trace.order_ms, Some(74000));
+    assert_eq!(trace.fill.unwrap().t_ms, 80000);
+}
+
+/// Doubling the window and flooring it retain an older high excluded by seconds.
+#[test]
+fn unit_window_scaling_and_floor_retain_old_high() {
+    let ticks = tape(&[(0, 100.0), (24000, 140.0), (28000, 90.0)]);
+    let p = params();
+    let u = units::Units::default();
+    assert_eq!(u.reading(&p, &ticks, 32000).unwrap().high_zone_avg, 90.0);
+    for window in [1, 2] {
+        assert_eq!(
+            units::Units { window, ..u }
+                .reading(&p, &ticks, 32000)
+                .unwrap()
+                .high_zone_avg,
+            140.0
+        );
+    }
+}
+
+/// Seconds, sample counts and one-second zones give different means on a transient peak.
+#[test]
+fn unit_high_ma_interpretations_average_distinct_endpoints() {
+    let ticks = tape(&[(0, 100.0), (25000, 140.0), (27000, 80.0), (29000, 60.0)]);
+    let p = DropsParams {
+        max_time_s: 8,
+        price_ma_s: 2,
+        ..params()
+    };
+    let u = units::Units::default();
+    assert_eq!(u.reading(&p, &ticks, 30000).unwrap().high_zone_avg, 140.0);
+    assert_eq!(
+        units::Units { high: 1, ..u }
+            .reading(&p, &ticks, 30000)
+            .unwrap()
+            .high_zone_avg,
+        120.0
+    );
+    assert_eq!(
+        units::Units { high: 2, ..u }
+            .reading(&p, &ticks, 30000)
+            .unwrap()
+            .high_zone_avg,
+        140.0
+    );
+    let p = DropsParams { price_ma_s: 3, ..p };
+    assert!(
+        (units::Units { high: 2, ..u }
+            .reading(&p, &ticks, 30000)
+            .unwrap()
+            .high_zone_avg
+            - 380.0 / 3.0)
+            .abs()
+            < 1e-9
+    );
+}
+
+/// A last MA expressed in seconds uses one two-second endpoint instead of two.
+#[test]
+fn unit_last_ma_seconds_preserve_recent_low() {
+    let ticks = tape(&[(0, 100.0), (30000, 60.0)]);
+    let p = DropsParams {
+        last_price_ma: 2,
+        ..params()
+    };
+    let u = units::Units::default();
+    assert_eq!(u.reading(&p, &ticks, 30000).unwrap().last_price, 80.0);
+    assert_eq!(
+        units::Units {
+            last_seconds: true,
+            ..u
+        }
+        .reading(&p, &ticks, 30000)
+        .unwrap()
+        .last_price,
+        60.0
+    );
+}
+
+/// Extending zone starts admits an older high but still refuses unavailable warm-up.
+#[test]
+fn unit_extended_zones_need_pre_window_history() {
+    let ticks = tape(&[(0, 100.0), (24000, 160.0), (28000, 80.0)]);
+    let p = DropsParams {
+        price_ma_s: 4,
+        ..params()
+    };
+    let u = units::Units::default();
+    assert_eq!(u.reading(&p, &ticks, 32000).unwrap().high_zone_avg, 80.0);
+    assert_eq!(
+        units::Units { extend: true, ..u }
+            .reading(&p, &ticks, 32000)
+            .unwrap()
+            .high_zone_avg,
+        120.0
+    );
+    assert!(
+        units::Units { extend: true, ..u }
+            .reading(&p, &ticks[1..], 28000)
+            .is_none()
+    );
+}
+
+/// Odd window lengths must retain decision-aligned samples instead of shifting their phase.
+#[test]
+fn unit_odd_window_keeps_decision_sample_phase() {
+    let ticks = tape(&[(0, 100.0), (25000, 150.0), (26000, 80.0), (29000, 60.0)]);
+    let p = DropsParams {
+        max_time_s: 7,
+        ..params()
+    };
+    assert_eq!(
+        units::Units::default()
+            .reading(&p, &ticks, 30000)
+            .unwrap()
+            .high_zone_avg,
+        100.0
+    );
 }
