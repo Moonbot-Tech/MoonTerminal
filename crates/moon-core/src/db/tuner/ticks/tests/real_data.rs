@@ -243,27 +243,31 @@ fn core_venues() -> HashMap<u64, String> {
         let Ok(text) = std::fs::read_to_string(entry.path()) else {
             continue;
         };
-        for line in text
-            .lines()
-            .filter(|l| l.contains("identity: exchange_code="))
-        {
-            let core = line
-                .split_once("core ")
-                .and_then(|(_, rest)| rest.split_whitespace().next())
-                .and_then(|n| n.parse::<u64>().ok());
-            let id = line
-                .split_once("ExchangeId { code: ")
-                .and_then(|(_, rest)| {
-                    let (code, rest) = rest.split_once(", dex: ")?;
-                    let dex = rest.split_once(' ')?.0;
-                    Some((code.parse::<u8>().ok()?, dex.parse::<u32>().ok()?))
-                });
-            if let (Some(core), Some((code, dex))) = (core, id) {
-                out.insert(core, format!("{code}:{dex:08x}"));
-            }
+        for (core, _, venue) in identity_lines(&text) {
+            out.insert(core, venue);
         }
     }
     out
+}
+
+/// Share the core UID, unsanitized name and venue from application identity announcements.
+fn identity_lines(text: &str) -> impl Iterator<Item = (u64, Option<String>, String)> + '_ {
+    text.lines().filter_map(|line| {
+        if !line.contains("identity: exchange_code=") {
+            return None;
+        }
+        let rest = line.split_once("core ")?.1;
+        let uid = rest.split_whitespace().next()?.parse().ok()?;
+        let name = rest
+            .split_once('\u{ab}')
+            .and_then(|(_, s)| s.split_once('\u{bb}'))
+            .map(|(name, _)| name.to_string());
+        let rest = line.split_once("ExchangeId { code: ")?.1;
+        let (code, rest) = rest.split_once(", dex: ")?;
+        let code = code.parse::<u8>().ok()?;
+        let dex = rest.split_once(' ')?.0.parse::<u32>().ok()?;
+        Some((uid, name, format!("{code}:{dex:08x}")))
+    })
 }
 
 /// Each core's PriceDown step lag off its own archived Exit lines, the way the axis calibrates

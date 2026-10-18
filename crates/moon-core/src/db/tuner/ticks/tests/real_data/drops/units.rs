@@ -13,20 +13,29 @@ pub(super) struct Cached {
 impl Cached {
     /// Sample each endpoint once, then extend each high maximum backwards through the window.
     pub(super) fn new(row: &Replay, ticks: &[Tick]) -> Self {
-        let t = row.deal.buy_set_ms.expect("placement");
-        let v: Vec<_> = (0..=140)
+        Self::at(
+            ticks,
+            row.deal.buy_set_ms.expect("placement"),
+            row.deal.drops_detect.expect("comment").x_price_delta_pct,
+            2000,
+        )
+    }
+
+    /// Cache either sampling cadence at any detect anchor, retaining the legacy sample-count index.
+    pub(super) fn at(ticks: &[Tick], t: i64, target: f64, step_ms: i64) -> Self {
+        let v: Vec<_> = (0..=330)
             .map(|i| {
-                let time = t - (140 - i) * 2000;
+                let time = t - (330 - i) * step_ms;
                 crate::db::tuner::ticks::drops::measurement_last_price(ticks, time)
             })
             .collect();
-        let mut high = vec![vec![None; 120]; 20];
-        for k in 1..=20 {
+        let mut high = vec![vec![None; 300]; 30];
+        for k in 1..=30 {
             let mut best: Option<f64> = None;
             let mut missing = false;
-            for n in 1..=120 {
+            for n in 1..=300 {
                 if n >= k {
-                    let zone = &v[141 - n..141 - n + k];
+                    let zone = &v[331 - n..331 - n + k];
                     if let Some(sum) = zone.iter().copied().sum::<Option<f64>>() {
                         let mean = sum / k as f64;
                         best = Some(best.map_or(mean, |x| x.max(mean)));
@@ -34,7 +43,7 @@ impl Cached {
                         missing = true;
                     }
                 }
-                high[k - 1][n - 1] = if missing || v[140 - n].is_none() {
+                high[k - 1][n - 1] = if missing || v[330 - n].is_none() {
                     None
                 } else {
                     best
@@ -44,26 +53,30 @@ impl Cached {
         let last = (0..=6)
             .map(|j| {
                 if j == 0 {
-                    v[140]
+                    v[330]
                 } else {
-                    v[141 - j..]
-                        .iter()
-                        .copied()
+                    (0..j)
+                        .map(|i| {
+                            crate::db::tuner::ticks::drops::measurement_last_price(
+                                ticks,
+                                t - i as i64 * step_ms,
+                            )
+                        })
                         .sum::<Option<f64>>()
                         .map(|s| s / j as f64)
                 }
             })
             .collect();
-        Self {
-            high,
-            last,
-            target: row.deal.drops_detect.expect("comment").x_price_delta_pct,
-        }
+        Self { high, last, target }
     }
     /// Missing readings receive infinite loss so no grid point improves by dropping hard deals.
     pub(super) fn error(&self, w: usize, k: usize, j: usize) -> f64 {
-        self.high[k - 1][w - 1]
-            .zip(self.last[j])
+        self.high
+            .get(k.wrapping_sub(1))
+            .and_then(|v| v.get(w.wrapping_sub(1)))
+            .copied()
+            .flatten()
+            .zip(self.last.get(j).copied().flatten())
             .map_or(f64::INFINITY, |(h, l)| {
                 ((h / l - 1.0) * 100.0 - self.target).abs()
             })
@@ -129,6 +142,7 @@ pub(super) fn batch(pool: &Pool<'_>, ex: (usize, usize, usize)) {
                         last_seconds,
                         extend,
                         explicit: None,
+                        ..Default::default()
                     };
                     let name = format!(
                         "units_w{window}_h{high}_l{}_e{}",
@@ -223,7 +237,7 @@ pub(super) fn batch(pool: &Pool<'_>, ex: (usize, usize, usize)) {
                 .map(|(_, point)| *point);
             fallback += usize::from(point.is_none());
             let units = point.map_or(selected.1, |point| Units {
-                explicit: Some(point),
+                explicit: Some((point.0, point.1, point.2, 2000)),
                 ..Default::default()
             });
             let probe = Probe {
@@ -292,7 +306,7 @@ fn price_diagnostics(pool: &Pool<'_>, units: Units, fits: &[BucketFit]) {
             .find(|(key, _)| *key == (p.max_time_s, p.price_ma_s, p.last_price_ma))
             .map(|(_, point)| *point);
         let fitted = point.map_or(units, |point| Units {
-            explicit: Some(point),
+            explicit: Some((point.0, point.1, point.2, 2000)),
             ..Default::default()
         });
         let best = Probe {

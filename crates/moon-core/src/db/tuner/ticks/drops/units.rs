@@ -1,6 +1,32 @@
 //! Measurement-only unit interpretations; production never compiles these knobs.
 use super::*;
 
+/// Interpret the current price independently of the high-zone smoothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Current {
+    /// The last valid trade at the decision time.
+    Print,
+    /// The mean of preceding endpoints, excluding the decision endpoint.
+    MeanJ,
+    /// Include the decision endpoint; implicit units keep the legacy two-second cadence.
+    #[default]
+    MeanIncludingSlot,
+    /// The last buyer-initiated print, used only as an order-book proxy.
+    AskProxy,
+}
+
+impl Current {
+    /// Share the dense diagnostic array index across cached readers and reports.
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::Print => 0,
+            Self::MeanJ => 1,
+            Self::MeanIncludingSlot => 2,
+            Self::AskProxy => 3,
+        }
+    }
+}
+
 /// Alternative units plus an optional explicit diagnostic grid point.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Units {
@@ -8,14 +34,15 @@ pub(crate) struct Units {
     pub high: u8,
     pub last_seconds: bool,
     pub extend: bool,
-    pub explicit: Option<(u32, usize, usize)>,
+    pub explicit: Option<(u32, usize, usize, i64)>,
+    pub current: Current,
 }
 
 impl Units {
     /// Resolve units without changing the strategy values loaded from the dump.
     pub(crate) fn dimensions(self, p: &DropsParams) -> (u32, usize, usize, i64) {
-        if let Some((w, k, j)) = self.explicit {
-            return (w, k, j, 2000);
+        if let Some(point) = self.explicit {
+            return point;
         }
         let w = match self.window {
             1 => p.max_time_s.saturating_mul(2),
@@ -40,6 +67,9 @@ impl Units {
     /// Require actual warm-up for both zone history and the current mean.
     pub(crate) fn covers(self, p: &DropsParams, ticks: &[Tick], t: i64) -> bool {
         let (w, k, j, step) = self.dimensions(p);
+        if k == 0 || step <= 0 {
+            return false;
+        }
         let history = (i64::from(w)
             + if self.extend {
                 k as i64 * step / 1000
@@ -47,12 +77,13 @@ impl Units {
                 0
             })
             * 1000;
-        last_price(
-            ticks,
-            t - history.max(j.saturating_sub(1) as i64 * 2000),
-            None,
-        )
-        .is_some()
+        let current_step = if self.explicit.is_some() { step } else { 2000 };
+        let oldest = if self.current == Current::MeanJ {
+            j
+        } else {
+            j.saturating_sub(1)
+        };
+        last_price(ticks, t - history.max(oldest as i64 * current_step), None).is_some()
     }
 
     /// Average complete zones; extended zones may begin before the high-search window.
@@ -81,15 +112,24 @@ impl Units {
             })
             .map(|(_, v)| v.iter().sum::<f64>() / k as f64)
             .reduce(f64::max)?;
-        let last = if j == 0 {
-            last_price(ticks, t, None)?
-        } else {
-            (0..j)
-                .map(|i| last_price(ticks, t - i as i64 * 2000, None))
-                .collect::<Option<Vec<_>>>()?
-                .iter()
-                .sum::<f64>()
-                / j as f64
+        let last = match self.current {
+            Current::AskProxy => last_price(ticks, t, Some(Side::Buy))?,
+            Current::Print => last_price(ticks, t, None)?,
+            Current::MeanJ | Current::MeanIncludingSlot if j == 0 => last_price(ticks, t, None)?,
+            Current::MeanJ | Current::MeanIncludingSlot => {
+                let current_step = if self.explicit.is_some() { step } else { 2000 };
+                let end = t - if self.current == Current::MeanJ {
+                    current_step
+                } else {
+                    0
+                };
+                (0..j)
+                    .map(|i| last_price(ticks, end - i as i64 * current_step, None))
+                    .collect::<Option<Vec<_>>>()?
+                    .iter()
+                    .sum::<f64>()
+                    / j as f64
+            }
         };
         Some(DropReading {
             high_zone_avg: high,

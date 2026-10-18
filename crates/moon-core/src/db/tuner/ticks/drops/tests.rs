@@ -27,6 +27,111 @@ fn params() -> DropsParams {
     }
 }
 
+/// A one-second cadence must include the intermediate peak in a complete three-print zone.
+#[test]
+fn explicit_units_step_1000_matches_hand_computed_zone() {
+    let ticks = tape(&[(0, 100.0), (7000, 140.0), (8000, 80.0), (9000, 60.0)]);
+    let u = units::Units {
+        explicit: Some((4, 3, 0, 1000)),
+        ..Default::default()
+    };
+    let reading = u.reading(&params(), &ticks, 10000).unwrap();
+    assert!((reading.high_zone_avg - (140.0 + 80.0 + 60.0) / 3.0).abs() < 1e-9);
+    assert_eq!(reading.last_price, 60.0);
+}
+
+/// A later sell must not replace the last buyer-initiated print used as the ASK proxy.
+#[test]
+fn current_ask_proxy_reads_last_buy_side_print() {
+    let mut ticks = tape(&[(0, 100.0), (9000, 95.0), (10000, 90.0)]);
+    ticks[2].side = Side::Sell;
+    let u = units::Units {
+        explicit: Some((4, 1, 0, 2000)),
+        current: units::Current::AskProxy,
+        ..Default::default()
+    };
+    assert_eq!(
+        u.reading(&params(), &ticks, 10000).unwrap().last_price,
+        95.0
+    );
+    assert_eq!(
+        units::Units {
+            current: units::Current::Print,
+            ..u
+        }
+        .reading(&params(), &ticks, 10000)
+        .unwrap()
+        .last_price,
+        90.0
+    );
+}
+
+/// Explicit legacy cadence must retain the independently computed C2 endpoint means.
+#[test]
+fn explicit_default_step_preserves_c2_outputs() {
+    let ticks = tape(&[(0, 100.0), (6000, 140.0), (8000, 80.0), (10000, 60.0)]);
+    let u = units::Units {
+        explicit: Some((6, 2, 2, 2000)),
+        ..Default::default()
+    };
+    let r = u.reading(&params(), &ticks, 10000).unwrap();
+    assert_eq!(r.high_zone_avg, 110.0);
+    assert_eq!(r.last_price, 70.0);
+    assert!((r.drop_pct - (110.0 / 70.0 - 1.0) * 100.0).abs() < 1e-9);
+    let p = DropsParams {
+        max_time_s: 6,
+        price_ma_s: 2,
+        last_price_ma: 2,
+        ..params()
+    };
+    for high in [0, 1, 2] {
+        assert_eq!(
+            units::Units {
+                high,
+                ..Default::default()
+            }
+            .reading(&p, &ticks, 10000)
+            .unwrap()
+            .last_price,
+            70.0
+        );
+    }
+    assert_eq!(
+        units::Units {
+            current: units::Current::MeanJ,
+            ..u
+        }
+        .reading(&p, &ticks, 10000)
+        .unwrap()
+        .last_price,
+        110.0
+    );
+    assert_eq!(
+        units::Units {
+            current: units::Current::MeanJ,
+            explicit: Some((6, 2, 2, 1000)),
+            ..u
+        }
+        .reading(&p, &ticks, 10000)
+        .unwrap()
+        .last_price,
+        80.0
+    );
+    for current in [units::Current::MeanJ, units::Current::MeanIncludingSlot] {
+        assert_eq!(
+            units::Units {
+                current,
+                explicit: Some((6, 2, 0, 1000)),
+                ..u
+            }
+            .reading(&p, &ticks, 10000)
+            .unwrap()
+            .last_price,
+            60.0
+        );
+    }
+}
+
 /// Carrying the last price across a hole must not drop samples or invent zero prices.
 #[test]
 fn samples_carry_forward_empty_slots() {

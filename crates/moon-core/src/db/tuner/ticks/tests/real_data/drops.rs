@@ -1,6 +1,6 @@
 //! Aggregate-only calibration of independent Drops hypotheses on identical held tapes.
 //! Process-global cache readers, recovery lease and data-root override cannot be reset.
-//! On Windows cleanup must use the receipt path after process exit releases those handles.
+//! A parent process owns snapshot cleanup after the child releases all static readers.
 
 use super::*;
 use crate::db::tuner::ticks::drops::probe::{BEST, Probe, ticker_tape};
@@ -10,26 +10,43 @@ use crate::db::tuner::ticks::drops::{
 };
 use crate::db::tuner::ticks::params::drops_params;
 
+mod fit;
+mod heldout;
+mod logs;
+
 #[cfg(test)]
 mod tests;
 
-/// Own the isolated snapshot until database readers and recovery leases have dropped.
+/// Own the isolated snapshot in the parent until its reader child has exited.
 #[derive(Debug)]
-struct ScratchDir(PathBuf);
+struct ScratchDir(PathBuf, SnapshotMode);
+
+/// Keep aggregate bench output anonymous while retaining the legacy diagnostic receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SnapshotMode {
+    Diagnostic,
+    Inventory,
+    Heldout,
+}
+
+impl SnapshotMode {
+    /// Return only fixed output labels, never data-derived text.
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Diagnostic => "DIAG",
+            Self::Inventory => "INV",
+            Self::Heldout => "HO",
+        }
+    }
+}
 
 impl Drop for ScratchDir {
     /// Report cleanup failures rather than silently accumulating multi-gigabyte snapshots.
     fn drop(&mut self) {
         if std::fs::remove_dir_all(&self.0).is_err() {
-            let deferred = std::env::var_os("MOON_DROPS_CLEANUP_RECEIPT").is_some_and(|receipt| {
-                std::fs::write(receipt, self.0.to_string_lossy().as_bytes()).is_ok()
-            });
-            eprintln!(
-                "DIAG snapshot cleanup=false deferred_after_exit={deferred} residual_path={}",
-                self.0.display()
-            );
+            eprintln!("{} SNAPSHOT cleanup=0", self.1.prefix());
         } else {
-            eprintln!("DIAG snapshot cleanup=true");
+            eprintln!("{} SNAPSHOT cleanup=1", self.1.prefix());
         }
     }
 }
@@ -42,7 +59,7 @@ fn scratch_root() -> std::io::Result<ScratchDir> {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("drops-timing-{}-{stamp}", std::process::id()));
     std::fs::create_dir_all(&path)?;
-    Ok(ScratchDir(path))
+    Ok(ScratchDir(path, SnapshotMode::Diagnostic))
 }
 
 /// Copy companions in one traversal; a changing live source may still yield a torn diagnostic copy.
@@ -76,19 +93,79 @@ fn copy_snapshot_tree(
 }
 
 /// Install only the isolated copy, before any recovery lease or database reader can write.
+#[cfg(test)]
 fn snapshot_root(
     source: &std::path::Path,
     install: impl FnOnce(PathBuf) -> bool,
 ) -> std::io::Result<ScratchDir> {
-    let target = scratch_root()?;
+    snapshot_root_named(source, install, SnapshotMode::Diagnostic)
+}
+
+/// Share snapshot isolation while keeping the inventory's entire output anonymous and prefixed.
+fn snapshot_root_named(
+    source: &std::path::Path,
+    install: impl FnOnce(PathBuf) -> bool,
+    mode: SnapshotMode,
+) -> std::io::Result<ScratchDir> {
+    let mut target = scratch_root()?;
+    target.1 = mode;
     copy_snapshot_tree(source, &target.0, false)?;
     if !install(target.0.clone()) {
         return Err(std::io::Error::other("override unavailable"));
     }
-    eprintln!(
-        "DIAG snapshot isolated=true sqlite_companions=one_pass source_refresh=false live_atomic=false"
-    );
+    if mode != SnapshotMode::Diagnostic {
+        eprintln!(
+            "{} SNAPSHOT isolated=1 sqlite_companions_one_pass=1 source_refresh=0 live_atomic=0",
+            mode.prefix()
+        );
+    } else {
+        eprintln!(
+            "DIAG snapshot isolated=true sqlite_companions=one_pass source_refresh=false live_atomic=false"
+        );
+    }
     Ok(target)
+}
+
+/// Run readers in a fresh process so Windows releases every static handle before removal.
+fn snapshot_bench(name: &str, mode: SnapshotMode, body: impl FnOnce()) {
+    if std::env::var_os("MOON_DROPS_CHILD").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        let root = std::env::var_os("MOON_DROPS_SNAPSHOT").expect("child snapshot root");
+        assert!(
+            paths::set_data_dir_override(PathBuf::from(root)),
+            "child override unavailable"
+        );
+        body();
+        return;
+    }
+    let source = std::env::var_os("MOON_TICKS_DATA_DIR").expect("snapshot source root");
+    let snapshot =
+        snapshot_root_named(&PathBuf::from(source), |_| true, mode).expect("snapshot copy");
+    run_snapshot_child(snapshot, name, true);
+}
+
+/// Inherit both output streams and delete only the parent-owned snapshot after child exit.
+fn run_snapshot_child(snapshot: ScratchDir, name: &str, ignored: bool) {
+    // libtest names omit the crate component included by module_path!().
+    let name = name
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .unwrap_or(name);
+    let path = snapshot.0.clone();
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test executable"));
+    command.args(["--exact", name]);
+    if ignored {
+        command.arg("--ignored");
+    }
+    let status = command
+        .args(["--nocapture", "--test-threads=1"])
+        .env("MOON_DROPS_CHILD", "1")
+        .env("MOON_DROPS_SNAPSHOT", &path)
+        .status();
+    drop(snapshot);
+    assert!(!path.exists(), "snapshot cleanup failed");
+    assert!(
+        status.expect("child process launch").success(),
+        "snapshot child failed"
+    );
 }
 
 /// A loaded deal keeps strategy defaults separate while sharing one immutable tape.
@@ -349,50 +426,89 @@ fn tape_for(
     pairs: &[(String, String)],
     spans: &Coverage,
 ) -> Option<(Vec<Tick>, Coverage)> {
+    let selected = tape_pairs_for_deal(deal, venue, pairs);
+    tape_for_deal_with(venue, &deal.coin, &selected, spans, held_ticks)
+}
+
+/// Preserve C2's empty-market fallback while sharing clipping and venue selection.
+fn tape_for_deal_with(
+    venue: &str,
+    coin: &str,
+    pairs: &[(String, String)],
+    spans: &Coverage,
+    mut read: impl FnMut(&str, &str, &Coverage) -> (Vec<Tick>, Coverage),
+) -> Option<(Vec<Tick>, Coverage)> {
+    logs::tape_for_coin_with(venue, coin, pairs, spans, |e, m, s| {
+        let (ticks, covered) = read(e, m, s);
+        if ticks.is_empty() {
+            (ticks, Coverage::none())
+        } else {
+            (ticks, covered)
+        }
+    })
+}
+
+/// Keep the original deal cohort's market admission while log parsing accepts quote-first names.
+fn tape_pairs_for_deal(
+    deal: &Deal,
+    venue: &str,
+    pairs: &[(String, String)],
+) -> Vec<(String, String)> {
+    // Preserve the deal cohort's catalog-only selection before accepting log spellings.
     let coin = coin_match_key(&deal.coin);
     pairs
         .iter()
         .filter(|(e, m)| e == venue && coin_match_key(coin_of_market(m)) == coin)
-        .find_map(|(exchange, market)| {
-            let (mut ticks, covered) = held_ticks(exchange, market, spans);
-            if ticks.is_empty() {
-                return None;
-            }
-            ticks.retain(|tick| {
-                spans
-                    .spans()
-                    .iter()
-                    .any(|&(from, to)| tick.time_ms >= from as f64 && tick.time_ms <= to as f64)
-            });
-            ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
-            (!ticks.is_empty()).then_some((ticks, covered))
-        })
+        .cloned()
+        .collect()
 }
 
 /// Load each eligible deal once, compare all hypotheses, then vary current MA under the winner.
 #[test]
 #[ignore = "needs a live data root in MOON_TICKS_DATA_DIR"]
 fn real_data_drops_calibration() {
-    calibration(false);
+    snapshot_bench(
+        &format!("{}::real_data_drops_calibration", module_path!()),
+        SnapshotMode::Diagnostic,
+        || calibration(false),
+    );
 }
 
 /// Batch two reuses the frozen loader but runs only paired UI-cohort input/timing probes.
 #[test]
 #[ignore = "needs the frozen snapshot in MOON_TICKS_DATA_DIR"]
 fn real_data_drops_timing() {
-    calibration(true);
+    snapshot_bench(
+        &format!("{}::real_data_drops_timing", module_path!()),
+        SnapshotMode::Diagnostic,
+        || calibration(true),
+    );
+}
+
+/// Inventory logged detects on an isolated snapshot without scoring or opening the gate.
+#[test]
+#[ignore = "needs a live data root in MOON_TICKS_DATA_DIR"]
+fn real_data_drops_logs_inventory() {
+    snapshot_bench(
+        &format!("{}::real_data_drops_logs_inventory", module_path!()),
+        SnapshotMode::Inventory,
+        logs::inventory,
+    );
+}
+
+/// Fit on earlier UTC dates and report a frozen rule on later dates without changing replay.
+#[test]
+#[ignore = "needs a live data root in MOON_TICKS_DATA_DIR"]
+fn real_data_drops_logs_heldout() {
+    snapshot_bench(
+        &format!("{}::real_data_drops_logs_heldout", module_path!()),
+        SnapshotMode::Heldout,
+        heldout::bench,
+    );
 }
 
 /// Keep both batches on precisely the same snapshot loader and eligibility rules.
 fn calibration(batch2: bool) {
-    let Some(root) = std::env::var_os("MOON_TICKS_DATA_DIR") else {
-        eprintln!("MOON_TICKS_DATA_DIR is not set; GATE: FAIL (no eligible)");
-        return;
-    };
-    let Ok(_snapshot) = snapshot_root(&PathBuf::from(root), paths::set_data_dir_override) else {
-        eprintln!("snapshot copy or override unavailable; GATE: FAIL (no eligible)");
-        return;
-    };
     let Some(_permit) = crate::db::report_recovery::prepare() else {
         eprintln!("reports replica lease unavailable; GATE: FAIL (no eligible)");
         return;

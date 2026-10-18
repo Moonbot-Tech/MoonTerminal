@@ -2,8 +2,32 @@
 
 use super::{scratch_root, snapshot_root};
 
+/// A leaked file handle in the child must be released by exit before parent cleanup on Windows.
+#[test]
+fn snapshot_removed_after_child_exits() {
+    if std::env::var_os("MOON_DROPS_CHILD").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        let root = std::path::PathBuf::from(std::env::var_os("MOON_DROPS_SNAPSHOT").unwrap());
+        let file = std::fs::File::open(root.join("held.sqlite")).unwrap();
+        std::mem::forget(file);
+        std::process::exit(17);
+    }
+    let snapshot = scratch_root().unwrap();
+    let path = snapshot.0.clone();
+    std::fs::write(path.join("held.sqlite"), "fixture").unwrap();
+    let result = std::panic::catch_unwind(|| {
+        super::run_snapshot_child(
+            snapshot,
+            &format!("{}::snapshot_removed_after_child_exits", module_path!()),
+            false,
+        )
+    });
+    // A zero-test child would succeed and fail this assertion instead of faking cleanup proof.
+    assert!(result.is_err(), "nonzero child exit was not propagated");
+    assert!(!path.exists());
+}
+
 /// Neutral deal input isolates timestamp scoring from tape and parameter selection.
-fn row() -> super::Replay {
+pub(super) fn row() -> super::Replay {
     let mut deal = crate::db::tuner::ticks::tests::deal();
     deal.buy_ms = 70000;
     deal.buy_set_ms = Some(70000);
@@ -145,7 +169,7 @@ fn unit_grid_cache_matches_direct_complete_zone_readings() {
             for k in [1, 2, 20] {
                 for j in [0, 1, 6] {
                     let u = Units {
-                        explicit: Some((w as u32 * 2, k, j)),
+                        explicit: Some((w as u32 * 2, k, j, 2000)),
                         ..Default::default()
                     };
                     let direct = u

@@ -41,7 +41,12 @@ impl DropsVariant {
 }
 
 /// Jump over complete slots with binary searches so print-driven probes do not rescan every trade.
-fn wall_samples(ticks: &[Tick], from_ms: i64, to_ms: i64, limit: usize) -> Vec<(i64, f64)> {
+pub(crate) fn wall_samples(
+    ticks: &[Tick],
+    from_ms: i64,
+    to_ms: i64,
+    limit: usize,
+) -> Vec<(i64, f64)> {
     let lower = from_ms.div_euclid(SAMPLE_MS) * SAMPLE_MS;
     let begin = ticks.partition_point(|tick| tick.time_ms < lower as f64);
     let mut end = ticks.partition_point(|tick| tick.time_ms <= to_ms as f64);
