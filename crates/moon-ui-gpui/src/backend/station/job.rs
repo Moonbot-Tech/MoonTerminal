@@ -682,6 +682,7 @@ fn run(
             } else {
                 None
             };
+            return_listing_proven(restore, fresh.as_deref(), retained_token.as_ref())?;
             let mut cores = Vec::new();
             let mut retain = |returned: bot::ReturnedBot| {
                 cores = return_core_listing(
@@ -768,6 +769,10 @@ fn run(
                 .and_then(|status| status.cores.as_deref());
             let (groups, missing) =
                 super::groups_sync::translated_groups(&groups, here, listing.unwrap_or_default());
+            // Automatic sends defer on the unmapped count below; a manual send is refused.
+            if !automatic_groups {
+                translation_proven(listing, missing)?;
+            }
             unmapped(missing);
             if automatic_groups && (groups.is_empty() || missing > 0) {
                 // Identity can change after queue admission; manual partial sends remain explicit.
@@ -837,6 +842,33 @@ fn run(
             })
         }
     }
+}
+
+/// Only the station's own listing translates grants and memberships to its uids. Without one (an
+/// unread station, or one older than the listing) a payload that had uids to translate is refused
+/// the way a core push refuses it, instead of being sent with every list emptied.
+fn translation_proven(
+    listing: Option<&[moon_core::station_api::ListedCore]>,
+    unmapped: usize,
+) -> Result<(), CoresChanged> {
+    if listing.is_none() && unmapped > 0 {
+        return Err(CoresChanged);
+    }
+    Ok(())
+}
+
+/// A first return with no fresh listing and none retained has nothing to translate viewer grants
+/// through, and would save them emptied after the bot has already left the station: refuse
+/// before anything is removed. A removal retry keeps the listing it retained.
+fn return_listing_proven(
+    restore: bool,
+    fresh: Option<&[moon_core::station_api::ListedCore]>,
+    retained_token: Option<&Secret>,
+) -> Result<(), CoresChanged> {
+    if restore && fresh.is_none() && retained_token.is_none() {
+        return Err(CoresChanged);
+    }
+    Ok(())
 }
 
 /// Prefer an authoritative fresh listing, including an empty one. A missing API on retry may
@@ -911,6 +943,7 @@ fn set_bot(
                 translation.groups_to_station(groups);
             }
             translation.access(&mut pairing, false);
+            translation_proven(listing, translation.unmapped())?;
             unmapped(translation.unmapped());
             let state = bot::transfer_bot(target, &token, &pairing, &change, say)?;
             Ok((true, Some(state)))

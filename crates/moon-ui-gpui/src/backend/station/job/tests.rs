@@ -1,7 +1,8 @@
 //! Validation failures retain kinds until the presentation boundary.
 
 use super::{
-    core_keys, first_access, picked_core_key, saved_local_cores, show_journal, show_status,
+    core_keys, first_access, picked_core_key, return_listing_proven, saved_local_cores,
+    show_journal, show_status, translation_proven,
 };
 use crate::backend::station::cores_sync;
 use moon_core::config::{CoreKeyEntry, Secret};
@@ -69,6 +70,46 @@ fn issue_891_stopped_return_retry_preserves_only_the_same_bots_proven_namespace(
     translation.access(&mut pairing, true);
     assert!(pairing.chat_access[0].core_uids.is_empty());
     assert_eq!(translation.unmapped(), 1);
+}
+
+/// Issue #1026: a station that answers but predates the core listing, or one not read at all,
+/// used to take a bot hand-over and a manual groups send translated through an empty mapping, so
+/// every viewer grant and group membership arrived empty. A payload with uids to translate is
+/// refused instead; one with none still goes, and a read listing keeps its explicit partial send.
+#[test]
+fn issue_1026_translation_without_a_station_listing_refuses_what_it_would_empty() {
+    use crate::backend::station::groups_sync::translated_groups;
+    use moon_core::config::CoreGroup;
+
+    let here = [cores_sync::LocalCore {
+        uid: 1,
+        name: "XALPHA".into(),
+        address: Some("xalpha.example.invalid:4510".into()),
+        key_address: Some("xalpha.example.invalid:4510".into()),
+        endpoint_override: String::new(),
+        key_fp: "UNIT_01".into(),
+    }];
+    let group = |cores: Vec<u64>| CoreGroup {
+        name: "Group A".into(),
+        cores,
+    };
+    let (_, missing) = translated_groups(&[group(vec![1])], &here, &[]);
+    assert!(translation_proven(None, missing).is_err());
+    assert!(translation_proven(Some(&[]), missing).is_ok());
+    let (_, missing) = translated_groups(&[group(Vec::new())], &here, &[]);
+    assert!(translation_proven(None, missing).is_ok());
+}
+
+/// Issue #1027: a first return whose station listing cannot be read used to remove the bot and
+/// save every viewer grant emptied. It must stop before the removal; a retry keeps its retained
+/// listing, a fresh empty listing is authoritative, and a removal without return needs none.
+#[test]
+fn issue_1027_first_return_without_a_listing_refuses_before_removal() {
+    let token = Secret::new("synthetic-original");
+    assert!(return_listing_proven(true, None, None).is_err());
+    assert!(return_listing_proven(true, None, Some(&token)).is_ok());
+    assert!(return_listing_proven(true, Some(&[]), None).is_ok());
+    assert!(return_listing_proven(false, None, None).is_ok());
 }
 
 /// Create saved credentials without reading the vault or contacting a server.
