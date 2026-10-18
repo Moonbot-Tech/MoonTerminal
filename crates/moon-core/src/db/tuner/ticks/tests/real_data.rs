@@ -39,9 +39,11 @@ use crate::market::kline_cache::KlineCache;
 use crate::market::trade_replay::{Coverage, TickQuery, long_position_ms, query_held};
 use crate::symbol::{coin_match_key, coin_of_market};
 
+mod core_log;
 mod drops;
 mod money;
 mod search;
+mod stop_logs;
 
 /// One trade's d1m and d5m errors at the report's stamp (`StampCheck::error`).
 type ShortErrors = (Option<f64>, Option<f64>);
@@ -1116,6 +1118,7 @@ fn real_data_reproduction() {
     let mut short_tail: Vec<bool> = Vec::new();
     let mut take_diag = TakeFillDiag::default();
     let mut stop_diag = StopSlipDiag::default();
+    let mut stop_logs = stop_logs::StopLogDiag::from_env();
     let mut late_diag = LateBookedDiag::default();
     let (mut own_sum, mut fact_sum) = (0.0f64, 0.0f64);
     let search_kind = std::env::var("MOON_TICKS_SEARCH").ok();
@@ -1622,6 +1625,7 @@ fn real_data_reproduction() {
         short_tail.push(!long_tail);
         take_diag.add(&deal, &ticks, &exit, exit_points.as_deref());
         stop_diag.add(&deal, &ticks, &exit, exit_points.as_deref());
+        stop_logs.add(&deal, &ticks, &exit, exit_points.as_deref());
         late_diag.add(&deal, &exit, exit_points.as_deref(), fit);
         // Counted as the axis counts it (`load.rs::replay_row_with` passes both archived lines
         // whenever it has them): the entry off its archived line when there is one — without it
@@ -1816,5 +1820,6 @@ fn real_data_reproduction() {
     );
     take_diag.print();
     stop_diag.print();
+    stop_logs.print();
     late_diag.print();
 }
