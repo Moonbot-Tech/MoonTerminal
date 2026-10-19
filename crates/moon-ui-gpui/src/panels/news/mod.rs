@@ -344,11 +344,9 @@ impl NewsView {
                         map.insert(item.id.clone(), item.clone());
                     }
                     // Across cores the same news can be original on one and translated on another;
-                    // keep the translated copy.
+                    // keep the translated copy (the rule lives on `NewsItem`, shared with the chart).
                     Some(existing) => {
-                        if existing.is_original && !item.is_original {
-                            *existing = item.clone();
-                        }
+                        existing.merge_core_copy(item);
                     }
                 }
             }

@@ -9,7 +9,8 @@
 //! Schema note: the news JSON is service-owned and can grow, so we deserialize into `serde_json::Value`
 //! and read only the fields the terminal uses, ignoring unknown fields (forward-compatible). Field
 //! set confirmed against the MoonBot core: `meta.{id,timeMs,time,recvTime,sendTime,isOriginal,source,
-//! author,coinsAuto,coinsSelf}`, `news.{en,ru,es}`, `tags.entity[*].text`.
+//! author,coinsAuto,coinsSelf}`, `news.{en,ru,es}`, `tags.entity[*].text`; plus NewsService's
+//! `meta.noTranslate` (since 2026-10-19), sent only when true.
 
 use serde_json::Value;
 
@@ -48,9 +49,15 @@ pub struct NewsItem {
     /// Tags attached to this item (`tags.entity[*].text`), without a leading `#`, deduped case-
     /// insensitively. Colours are assigned locally (`NewsTagSettings`), not taken from the wire.
     pub tags: Vec<String>,
-    /// Whether this row is still an original (`meta.isOriginal`); once a translation frame merges in,
-    /// it becomes `false` and later original frames for the same id are ignored.
+    /// Whether this row is still an original (`meta.isOriginal`); once a translation frame with
+    /// `isOriginal: false` merges in, it becomes `false` and later original frames for the same id
+    /// are ignored. NewsService sends `isOriginal: true` on every frame, so on its feed this stays
+    /// `true` and every later frame of the id merges.
     pub is_original: bool,
+    /// `meta.noTranslate`: the service will send no translation for this id, so `en` is final.
+    /// Sticky once seen — the key rides only frames where it is true, and a later frame (or another
+    /// core's copy) without it must not bring the "translation pending" wait back.
+    pub no_translate: bool,
 }
 
 /// A moonproto-free per-core news snapshot: the logical news items plus the service tag catalog.
@@ -84,10 +91,38 @@ impl NewsItem {
         if text.is_empty() { &self.en } else { text }
     }
 
+    /// Whether the Russian translation is still expected: `ru` is empty and the service has not
+    /// said it will send none. Without `no_translate` an item the service never translates (an
+    /// exchange API signal, a failed or rate-limited translation) would wait forever.
+    pub fn awaits_translation(&self) -> bool {
+        self.ru.is_empty() && !self.no_translate
+    }
+
+    /// Fold another core's copy of the same logical news (same `meta.id`) into this one, for the
+    /// views that merge several cores. Returns whether `other` replaced this copy.
+    ///
+    /// A copy carrying a Russian body wins; between two copies equal on that, a translated copy
+    /// (`is_original == false`) wins over an original, the MoonBot core's own rule. NewsService
+    /// marks every frame `isOriginal: true`, so on its feed only the `ru` test picks the
+    /// translation. `no_translate` is a union: once any core learned that no translation is coming,
+    /// the merged row must not wait for one.
+    pub fn merge_core_copy(&mut self, other: &NewsItem) -> bool {
+        let no_translate = self.no_translate || other.no_translate;
+        let gains_ru = self.ru.is_empty() && !other.ru.is_empty();
+        let same_ru = self.ru.is_empty() == other.ru.is_empty();
+        let take = gains_ru || (same_ru && self.is_original && !other.is_original);
+        if take {
+            *self = other.clone();
+        }
+        self.no_translate = no_translate;
+        take
+    }
+
     /// Merge a later frame with the same `meta.id` into this original row: replace the translated
     /// texts, combined ticker list, and tags; keep identity, times, source, and author from the first
-    /// accepted frame. Sets `is_original` from the incoming frame so an accepted translation locks out
-    /// a late original (doc rule 4).
+    /// accepted frame. Sets `is_original` from the incoming frame so an accepted translation
+    /// (`isOriginal: false`) locks out a late original (doc rule 4); NewsService never sends
+    /// `false`, so on its feed every later frame merges.
     fn merge_from(&mut self, other: NewsItem) {
         if !other.en.is_empty() {
             self.en = other.en;
@@ -104,6 +139,8 @@ impl NewsItem {
         if !other.tags.is_empty() {
             self.tags = other.tags;
         }
+        // Sticky: a later frame without the key (a late ring copy) must not clear it.
+        self.no_translate |= other.no_translate;
         self.is_original = other.is_original;
     }
 }
@@ -111,8 +148,9 @@ impl NewsItem {
 /// Build the logical news list from moonproto's flat frame strings (oldest to newest).
 ///
 /// One row per first-seen `meta.id`. A later frame for an id whose row is still original merges its
-/// translation/clarification; a later frame for an id whose row is already a translation is ignored.
-/// Invalid frames (bad JSON, missing `meta`/`id`) are skipped. Order is first-seen.
+/// translation/clarification; a later frame for an id whose row is already a translation is ignored,
+/// except for its `noTranslate` flag, which is independent of `isOriginal`. Invalid frames (bad
+/// JSON, missing `meta`/`id`) are skipped. Order is first-seen.
 pub fn reduce<'a>(frames: impl Iterator<Item = &'a str>) -> Vec<NewsItem> {
     // The ring is capped at 50 frames, so a linear id lookup keeps this in one Vec with no parallel
     // order/map bookkeeping and no measurable cost.
@@ -125,7 +163,9 @@ pub fn reduce<'a>(frames: impl Iterator<Item = &'a str>) -> Vec<NewsItem> {
             None => out.push(item),
             // Only an original row accepts a merge; an already-accepted translation is kept.
             Some(existing) if existing.is_original => existing.merge_from(item),
-            Some(_) => {}
+            // The texts stay locked, but "no translation is coming" still applies: a translated
+            // row without `ru` would otherwise wait for one forever.
+            Some(existing) => existing.no_translate |= item.no_translate,
         }
     }
     out
@@ -202,6 +242,11 @@ pub fn parse_frame(json: &str) -> Option<NewsItem> {
             .get("isOriginal")
             .and_then(Value::as_bool)
             .unwrap_or(true),
+        // The key is sent only when true; absent means a translation may still come.
+        no_translate: meta
+            .get("noTranslate")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }
 

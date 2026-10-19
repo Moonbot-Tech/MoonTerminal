@@ -138,3 +138,123 @@ fn uk_body_falls_back_to_english() {
     assert_eq!(item.body(crate::config::Language::Pt), "BTC up");
     assert_eq!(item.body(crate::config::Language::Vi), "BTC up");
 }
+
+/// Catches reading the wrong key or a wrong default: the key is sent only when true, so an absent
+/// key must leave the item waiting for a translation.
+#[test]
+fn parse_frame_reads_no_translate_only_when_present() {
+    let flagged =
+        parse_frame(r#"{"meta":{"id":"k","noTranslate":true},"news":{"en":["x"]}}"#).unwrap();
+    assert!(flagged.no_translate);
+    let plain = parse_frame(r#"{"meta":{"id":"k"},"news":{"en":["x"]}}"#).unwrap();
+    assert!(!plain.no_translate);
+}
+
+/// Catches `merge_from` dropping the flag: the "no translation" verdict for a failed translation
+/// arrives as a second frame of the same id, after the first frame already made the row.
+#[test]
+fn reduce_takes_no_translate_from_a_later_frame() {
+    let frames = [
+        r#"{"meta":{"id":"n","isOriginal":true},"news":{"en":["Kucoin API closed withdrawals"]}}"#,
+        r#"{"meta":{"id":"n","isOriginal":true,"noTranslate":true},"news":{"en":["Kucoin API closed withdrawals"]}}"#,
+    ];
+    let items = reduce(frames.iter().copied());
+    assert_eq!(items.len(), 1);
+    assert!(items[0].no_translate);
+    assert_eq!(items[0].en, "Kucoin API closed withdrawals");
+}
+
+/// Catches assigning the flag instead of OR-ing it: a late ring copy without the key would bring
+/// the "translation pending" badge back.
+#[test]
+fn reduce_keeps_no_translate_after_a_later_frame_without_it() {
+    let frames = [
+        r#"{"meta":{"id":"n","isOriginal":true,"noTranslate":true},"news":{"en":["x"]}}"#,
+        r#"{"meta":{"id":"n","isOriginal":true},"news":{"en":["x"]}}"#,
+    ];
+    let items = reduce(frames.iter().copied());
+    assert!(items[0].no_translate);
+}
+
+/// Catches the badge predicate ignoring the flag (the forever-pending badge) or ignoring `ru`.
+#[test]
+fn awaits_translation_until_ru_arrives_or_the_service_says_none() {
+    let waiting = NewsItem {
+        en: "x".to_string(),
+        ..NewsItem::default()
+    };
+    assert!(waiting.awaits_translation());
+    let final_en = NewsItem {
+        no_translate: true,
+        ..waiting.clone()
+    };
+    assert!(!final_en.awaits_translation());
+    let translated = NewsItem {
+        ru: "перевод".to_string(),
+        ..waiting
+    };
+    assert!(!translated.awaits_translation());
+}
+
+/// Catches a cross-core merge that keeps the first core's copy: NewsService marks every frame
+/// `isOriginal: true`, so the old "prefer `is_original == false`" rule never picked the `ru` copy.
+#[test]
+fn merge_core_copy_prefers_ru_when_both_copies_claim_original() {
+    let mut first = NewsItem {
+        id: "n".to_string(),
+        en: "x".to_string(),
+        is_original: true,
+        ..NewsItem::default()
+    };
+    let translated = NewsItem {
+        ru: "перевод".to_string(),
+        ..first.clone()
+    };
+    assert!(first.merge_core_copy(&translated));
+    assert_eq!(first.ru, "перевод");
+    // The reverse must not drop the translation for a copy without one.
+    let bare = NewsItem {
+        ru: String::new(),
+        ..first.clone()
+    };
+    assert!(!first.merge_core_copy(&bare));
+    assert_eq!(first.ru, "перевод");
+}
+
+/// Catches a merge that keeps the first core's copy whole: core A saw only the first frame, core B
+/// also saw the `noTranslate` frame, and the row must stop waiting either way round.
+#[test]
+fn merge_core_copy_unions_no_translate() {
+    let plain = NewsItem {
+        id: "n".to_string(),
+        en: "x".to_string(),
+        is_original: true,
+        ..NewsItem::default()
+    };
+    let flagged = NewsItem {
+        no_translate: true,
+        ..plain.clone()
+    };
+    let mut a = plain.clone();
+    a.merge_core_copy(&flagged);
+    assert!(a.no_translate);
+    let mut b = flagged;
+    b.merge_core_copy(&plain);
+    assert!(b.no_translate);
+}
+
+/// Catches the reducer's translation lock swallowing the flag: once a row is an accepted
+/// translation (`isOriginal: false`) its texts are locked, but a `noTranslate` frame for it must
+/// still stop the wait when that translation carried no `ru`.
+#[test]
+fn reduce_takes_no_translate_into_a_locked_translation_row() {
+    let frames = [
+        r#"{"meta":{"id":"n","isOriginal":true},"news":{"en":["x"]}}"#,
+        r#"{"meta":{"id":"n","isOriginal":false},"news":{"en":["x"],"es":["x es"]}}"#,
+        r#"{"meta":{"id":"n","isOriginal":true,"noTranslate":true},"news":{"en":["late"]}}"#,
+    ];
+    let items = reduce(frames.iter().copied());
+    assert!(items[0].no_translate);
+    // The lock still holds for the texts.
+    assert_eq!(items[0].en, "x");
+}

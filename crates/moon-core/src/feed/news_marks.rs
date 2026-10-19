@@ -144,10 +144,11 @@ pub fn collect(
             };
             match seen.get(&item.id) {
                 // Across cores the same news can be original on one and translated on another; keep
-                // the translated copy, matching the News panel's merge.
+                // the translated copy, by the same rule as the News panel's merge. The delivery
+                // time follows whichever copy was kept.
                 Some(&ix) => {
-                    if out[ix].0.is_original && !item.is_original {
-                        out[ix] = (item.clone(), time_ms);
+                    if out[ix].0.merge_core_copy(item) {
+                        out[ix].1 = time_ms;
                     }
                 }
                 None => {

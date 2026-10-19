@@ -246,3 +246,28 @@ fn a_skewed_send_stamp_falls_through_to_the_next_one() {
     assert_eq!(marks.len(), 1);
     assert_eq!(marks[0].1, 5_006);
 }
+
+/// Catches the chart's merge drifting from the panel's: on NewsService's feed both cores' copies
+/// say `isOriginal: true`, and the hover card must still show the core that has the translation and
+/// stop waiting once any core has the `noTranslate` frame.
+#[test]
+fn merges_cores_by_ru_and_no_translate_when_both_copies_claim_original() {
+    let mut translated = item("dup", 1_000, &["BTC"], &[]);
+    translated.ru = "перевод".to_string();
+    let mut flagged = item("flag", 1_000, &["BTC"], &[]);
+    flagged.no_translate = true;
+    let store = store_with(&[
+        (
+            1,
+            vec![
+                item("dup", 1_000, &["BTC"], &[]),
+                item("flag", 1_000, &["BTC"], &[]),
+            ],
+        ),
+        (2, vec![translated, flagged]),
+    ]);
+    let marks = collect(&store, "BTCUSDT", &NewsTagSettings::default(), NOW);
+    let by_id = |id: &str| &marks.iter().find(|m| m.0.id == id).expect("mark").0;
+    assert_eq!(by_id("dup").ru, "перевод");
+    assert!(by_id("flag").no_translate);
+}
