@@ -352,7 +352,7 @@ follows when ANY of its cores has it on; a core whose settings have not arrived 
 
 The raise is Windows-only: GPUI's one cross-platform way to bring a window forward,
 `activate_window`, also steals focus from the main window, so macOS and Linux leave the charts as
-they are. `ChartTabs::gather_windows` is a different action — it MOVES the charts into a cascade.
+they are. `ChartTabs::gather_windows` is a different action â€” it MOVES the charts into a cascade.
 Trade windows and Profit Monitor do not follow the checkbox.
 
 Final taskbar policy:
