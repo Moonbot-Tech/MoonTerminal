@@ -225,6 +225,41 @@ fn refusal_snapshots_share_an_arc_until_membership_changes() {
     );
 }
 
+/// A reader recounts only the markets whose refusal membership changed after its revision —
+/// a refusal, a filing that lifts one, and a generation change clearing every refused market.
+#[test]
+fn refusals_since_names_only_the_markets_that_changed() {
+    let mut rows = Unfillable::default();
+    let start = rows.since(0).0;
+    rows.refuse(91, "EX-XX", "XALPHAUSDT");
+    let (after_alpha, changed) = rows.since(start);
+    assert_eq!(
+        changed,
+        [("EX-XX".to_string(), "XALPHAUSDT".to_string())].into()
+    );
+    rows.refuse(91, "EX-XX", "XALPHAUSDT");
+    rows.filed("EX-XX", "XBETAUSDT");
+    assert!(rows.since(after_alpha).1.is_empty(), "no membership change");
+    rows.refuse(92, "EX-XX", "XBETAUSDT");
+    let (after_beta, changed) = rows.since(after_alpha);
+    assert_eq!(
+        changed,
+        [("EX-XX".to_string(), "XBETAUSDT".to_string())].into()
+    );
+    rows.filed("EX-XX", "XALPHAUSDT");
+    assert_eq!(
+        rows.since(after_beta).1,
+        [("EX-XX".to_string(), "XALPHAUSDT".to_string())].into()
+    );
+    let before_refresh = rows.since(0).0;
+    rows.refresh((1, 0, (0, 0)));
+    assert_eq!(
+        rows.since(before_refresh).1,
+        [("EX-XX".to_string(), "XBETAUSDT".to_string())].into(),
+        "a wholesale clear names the markets it cleared"
+    );
+}
+
 /// A refusal must refresh chips and counts, and unrelated filings must keep the tail admitted.
 #[test]
 fn refusal_refreshes_cached_classification_until_its_market_is_filed() {
