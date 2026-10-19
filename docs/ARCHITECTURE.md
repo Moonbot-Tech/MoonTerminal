@@ -870,11 +870,14 @@ returns `None` before a channel, thread, path, listener, or helper process.**
   days. `moon-tg/src/report/` reads on the host's background worker, a pinned SQLite snapshot,
   `ReportAxis::load`, `query_totals`, and historical valuation; read failures never become zero.
   Core groups use `CoreOrder`; the view by core lists its cores under the saved core groups with a
-  caption and a subtotal each, by the Profit Monitor's rules (`report/sections.rs`). Every view lists all active groups in one message while it fits the
+  caption and a subtotal each, by the Profit Monitor's rules (`report/sections.rs`). Three views: by exchange (the default), by core, and by group, one summary row per saved core group with overlapping membership kept. A view picked under a report is saved for that chat in the `NotifyStore` file and also shapes its scheduled reports; the bot-wide `report_view` is only the fallback, and a failed save refuses the switch (`report/mod.rs:chat_request`). Every view lists all active groups in one message while it fits the
   rich-message caps; an oversized one pages with the largest fitting rung of a fixed ladder
   (`report/paging.rs`), with the complete-scope total on every page.
   Exchange groups use canonical venue identity and support scoped drill-down; empty scoped membership
-  uses the no-match sentinel. Groups without trades are removed before paging; zero-profit trades stay.
+  uses the no-match sentinel. An exchange drill-down opens a summary (cores, active cores, win rate, up to three
+  best and three worst cores, a subtotal per saved group) whose core pages list active cores
+  only; a core without a comparable profit (USDT, or one native currency shared by
+  every active core) is listed but never ranked (`report/drill.rs`). Groups without trades are removed before paging; zero-profit trades stay.
   Native subtotals remain available when USDT conversion is incomplete. Rich HTML reports use
   `sendRichMessage`; private sender-matched callbacks edit the originating message and recheck
   saved authorization. Paging/view changes retain UTC bounds; a new reply-keyboard request resolves its preset again.
