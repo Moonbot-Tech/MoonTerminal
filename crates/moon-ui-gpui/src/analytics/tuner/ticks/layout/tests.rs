@@ -196,6 +196,7 @@ impl Render for NarrowDealProbe {
                     .debug_selector(|| "minimum-footer".into())
                     .child(super::super::chips_el(
                         counts,
+                        false,
                         Some(super::super::why::DealChip::ShortTail),
                         (0, 0, 0),
                         Rc::new(|_, _, _| {}),
@@ -302,6 +303,7 @@ impl Render for DealProbe {
         }
         body.child(chips_el(
             counts,
+            false,
             self.active.then_some(DealChip::Hole),
             (23, 9, 14),
             pick.clone(),
@@ -794,7 +796,7 @@ impl Render for Probe {
                         KpiOpts {
                             title: Some((
                                 t!("analytics.ticks.kpi.title").to_string(),
-                                super::super::sample::caption(73, 405),
+                                super::super::sample::caption(73, 405, self.face == 8),
                             )),
                             sample_note: sample_bias(),
                             rows: KpiRows::Plain,

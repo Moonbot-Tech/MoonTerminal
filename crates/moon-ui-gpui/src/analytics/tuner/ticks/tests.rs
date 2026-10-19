@@ -2,6 +2,95 @@ use std::time::Duration;
 
 use super::fetch_wait_text;
 
+/// Removing the read gate would turn pending coverage into settled zero or missing counts.
+#[test]
+fn coverage_chips_wait_for_the_shown_scope_including_all_strategies() {
+    let _locale = crate::test_locale::force("en");
+    use super::why::DealChip;
+    for total in [462, 8469] {
+        let counts = super::rows::ChipCounts {
+            rows_rev: 1,
+            min_tail_s: 60,
+            counts: [0, total, 0, 0, 0, 0, 0, 0],
+        };
+        for chip in DealChip::ALL {
+            assert!(super::chip_label(counts, chip, true).ends_with(": …"));
+        }
+        assert_eq!(
+            super::chip_label(counts, DealChip::WithTape, false),
+            "with tape: 0"
+        );
+        assert_eq!(
+            super::chip_label(counts, DealChip::NoTape, false),
+            format!("without tape: {total}")
+        );
+        assert_eq!(super::chip_label(counts, DealChip::Fit, false), "usable: 0");
+        let answered = super::rows::ChipCounts {
+            counts: [400, total - 400, 357, 0, 0, 0, 0, 0],
+            ..counts
+        };
+        assert_eq!(
+            super::chip_label(answered, DealChip::Fit, false),
+            "usable: 357"
+        );
+        assert_eq!(
+            super::chip_label(answered, DealChip::Fit, true),
+            "usable: …"
+        );
+    }
+}
+
+/// A pending read must not claim no tape, even when a reload carries old reproduction shares.
+#[gpui::test]
+fn reproduction_note_waits_then_restores_the_settled_explanation(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    use super::state::{TicksData, TicksState};
+    use moon_core::db::tuner::ticks::params::ParamGroup;
+    cx.update(|app| {
+        let p = moon_ui::MoonPalette::active(app);
+        let mut state = TicksState::default();
+        let mut data = TicksData {
+            kinds: vec!["MoonShot".into()],
+            ..Default::default()
+        };
+        for group in [ParamGroup::Entry, ParamGroup::Exit] {
+            let name = if group == ParamGroup::Entry {
+                "Entry"
+            } else {
+                "Exit"
+            };
+            state.tape_reading = true;
+            assert_eq!(
+                super::grid::group_note(&state, group, &data, p),
+                Some((format!("{name}: reading the tape…"), p.text_muted))
+            );
+            state.tape_reading = false;
+            assert_eq!(
+                super::grid::group_note(&state, group, &data, p),
+                Some((
+                    format!(
+                        "{name}: The reproduction share is not known yet — no trades with tape"
+                    ),
+                    p.text_muted
+                ))
+            );
+        }
+        data.exit_share = (0, 400);
+        state.tape_reading = true;
+        assert_eq!(
+            super::grid::group_note(&state, ParamGroup::Exit, &data, p),
+            Some(("Exit: reading the tape…".into(), p.text_muted))
+        );
+        state.tape_reading = false;
+        assert!(
+            super::grid::group_note(&state, ParamGroup::Exit, &data, p)
+                .unwrap()
+                .0
+                .starts_with("Exit: No trade is fit for the search")
+        );
+    });
+}
+
 /// A station handover with no queued venue rows must not advertise a stuck 0/0 fetch.
 #[test]
 fn empty_fetch_jobs_leave_only_the_local_read_caption() {
@@ -91,9 +180,12 @@ fn unpublished_tape_caption_names_the_expected_utc_time_in_every_language() {
 fn usable_trade_caption_names_all_closed_deals() {
     for language in moon_core::config::Language::ALL {
         let _locale = crate::test_locale::force(language.code());
-        let caption = super::sample::caption(155, 405);
+        let caption = super::sample::caption(155, 405, false);
         assert!(caption.contains("155") && caption.contains("405"));
         assert!(!caption.contains("analytics."));
+        let reading = super::sample::caption(155, 405, true);
+        assert!(!reading.contains("155") && !reading.contains("405"));
+        assert!(!reading.contains("analytics."));
     }
 }
 

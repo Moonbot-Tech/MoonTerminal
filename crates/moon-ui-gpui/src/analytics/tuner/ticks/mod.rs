@@ -210,6 +210,7 @@ impl AnalyticsView {
         // shares (`ticks_kpi`), not a size.
         let chips = chips_el(
             counts,
+            self.ticks.tape_reading,
             self.ticks.chip,
             left_out,
             chip_action(cx.entity().downgrade()),
@@ -567,7 +568,11 @@ impl AnalyticsView {
             KpiOpts {
                 title: Some((
                     t!("analytics.ticks.kpi.title").to_string(),
-                    sample::caption(set_n, self.ticks.data.data().map_or(0, |d| d.all.n)),
+                    sample::caption(
+                        set_n,
+                        self.ticks.data.data().map_or(0, |d| d.all.n),
+                        self.ticks.tape_reading,
+                    ),
                 )),
                 sample_note: self.ticks.data.data().and_then(|d| {
                     baseline
@@ -876,6 +881,7 @@ fn chip_action(view: WeakEntity<AnalyticsView>) -> ChipAction {
 /// Whole-population counters wrap as intact controls, with static exclusions kept noninteractive.
 fn chips_el(
     counts: rows::ChipCounts,
+    reading: bool,
     active: Option<why::DealChip>,
     left_out: (usize, usize, usize),
     pick: ChipAction,
@@ -894,7 +900,7 @@ fn chips_el(
         .text_size(design::t_caption(cx));
     for chip in why::DealChip::ALL {
         let key = chip.key();
-        let label = format!("{}: {}", chip.label(counts.min_tail_s), counts.get(chip));
+        let label = chip_label(counts, chip, reading);
         let tip_key = format!("analytics.ticks.chip.{key}_tip");
         let pick = pick.clone();
         el = el.child(
@@ -989,6 +995,16 @@ fn chips_el(
         );
     }
     el.into_any_element()
+}
+
+/// Tape-dependent counts stay unknown while reading, including carried rows during a reload.
+fn chip_label(counts: rows::ChipCounts, chip: why::DealChip, reading: bool) -> String {
+    let value = if reading {
+        "…".to_string()
+    } else {
+        counts.get(chip).to_string()
+    };
+    format!("{}: {value}", chip.label(counts.min_tail_s))
 }
 
 /// A filter that hides the population has an immediate escape in the table body.

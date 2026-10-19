@@ -521,7 +521,7 @@ impl AnalyticsView {
         if let Some(data) = self.ticks.data.data() {
             for group in [ParamGroup::Entry, ParamGroup::Exit] {
                 model.warnings.extend(
-                    self.ticks_group_note(group, data, MoonPalette::active(cx))
+                    super::grid::group_note(&self.ticks, group, data, MoonPalette::active(cx))
                         .map(|(note, _)| note),
                 );
             }

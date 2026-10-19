@@ -493,66 +493,75 @@ impl AnalyticsView {
             });
         head.into_any_element()
     }
+}
 
-    /// What a search group's heading warns of, when it does — the kinds whose entry is taken from
-    /// the fact (not searched), or a share of reproduced trades under the gate (searched, but its
-    /// answer speaks for fewer trades) — with the colour to say it in.
-    pub(super) fn ticks_group_note(
-        &self,
-        group: ParamGroup,
-        d: &TicksData,
-        p: MoonPalette,
-    ) -> Option<(String, u32)> {
-        if group == ParamGroup::Entry && !d.entry_modelled() {
-            return Some((
-                t!(
-                    "analytics.ticks.entry_from_fact",
-                    kinds = d.unmodelled_kinds().join(", ")
-                )
-                .to_string(),
-                p.text_muted,
-            ));
-        }
-        let gate = self.ticks.gate();
-        let (hits, n) = d.share_of(group);
-        let name = match group {
-            ParamGroup::Entry => t!("analytics.ticks.group_entry"),
-            ParamGroup::Exit => t!("analytics.ticks.group_exit"),
-        };
-        // Answered, but no trade fit for the search — whatever the share and the gate: the search
-        // has nothing to learn on and refuses the group (`TicksData::group_searchable`).
-        if n > 0 && !d.group_searchable(group) {
-            // An exit nobody could check is named for why, not left to read as every trade missed.
-            let why = (group == ParamGroup::Exit)
-                .then(|| d.accuracy.none_checked_note())
-                .flatten()
-                .map_or_else(String::new, |note| format!(" — {note}"));
-            return Some((
-                format!("{name}: {}{why}", t!("analytics.ticks.vary_none")),
-                p.orange,
-            ));
-        }
-        match d.group_passes(group, gate) {
-            Some(false) => Some((
-                format!(
-                    "{name}: {}",
-                    t!(
-                        "analytics.ticks.vary_gated",
-                        hits = hits,
-                        n = n,
-                        gate = (gate * 100.0).round() as i64
-                    )
-                ),
-                p.orange,
-            )),
-            None => Some((
-                format!("{name}: {}", t!("analytics.ticks.vary_unknown")),
-                p.text_muted,
-            )),
-            Some(true) => None,
-        }
+/// What a search group's heading warns of, when it does — the kinds whose entry is taken from
+/// the fact (not searched), or a share of reproduced trades under the gate (searched, but its
+/// answer speaks for fewer trades) — with the colour to say it in. An unanswered tape read
+/// stays neutral instead of reporting the temporary sample's reproduction share.
+pub(super) fn group_note(
+    state: &super::state::TicksState,
+    group: ParamGroup,
+    d: &TicksData,
+    p: MoonPalette,
+) -> Option<(String, u32)> {
+    if group == ParamGroup::Entry && !d.entry_modelled() {
+        return Some((
+            t!(
+                "analytics.ticks.entry_from_fact",
+                kinds = d.unmodelled_kinds().join(", ")
+            )
+            .to_string(),
+            p.text_muted,
+        ));
     }
+    let gate = state.gate();
+    let (hits, n) = d.share_of(group);
+    let name = match group {
+        ParamGroup::Entry => t!("analytics.ticks.group_entry"),
+        ParamGroup::Exit => t!("analytics.ticks.group_exit"),
+    };
+    if state.tape_reading {
+        return Some((
+            format!("{name}: {}", t!("analytics.ticks.fetch_reading")),
+            p.text_muted,
+        ));
+    }
+    // Answered, but no trade fit for the search — whatever the share and the gate: the search
+    // has nothing to learn on and refuses the group (`TicksData::group_searchable`).
+    if n > 0 && !d.group_searchable(group) {
+        // An exit nobody could check is named for why, not left to read as every trade missed.
+        let why = (group == ParamGroup::Exit)
+            .then(|| d.accuracy.none_checked_note())
+            .flatten()
+            .map_or_else(String::new, |note| format!(" — {note}"));
+        return Some((
+            format!("{name}: {}{why}", t!("analytics.ticks.vary_none")),
+            p.orange,
+        ));
+    }
+    match d.group_passes(group, gate) {
+        Some(false) => Some((
+            format!(
+                "{name}: {}",
+                t!(
+                    "analytics.ticks.vary_gated",
+                    hits = hits,
+                    n = n,
+                    gate = (gate * 100.0).round() as i64
+                )
+            ),
+            p.orange,
+        )),
+        None => Some((
+            format!("{name}: {}", t!("analytics.ticks.vary_unknown")),
+            p.text_muted,
+        )),
+        Some(true) => None,
+    }
+}
 
+impl AnalyticsView {
     /// A section's heading: the tick admitting all its live knobs, its name as the Strategies
     /// window titles it (the human gloss under that window's own preference), and the notes of
     /// the search groups first met in it (`noted` carries the groups an earlier heading already
@@ -605,7 +614,7 @@ impl AnalyticsView {
                 for group in [ParamGroup::Entry, ParamGroup::Exit] {
                     if section.knobs().any(|k| k.group == group) && !noted.contains(&group) {
                         noted.push(group);
-                        notes.extend(self.ticks_group_note(group, d, p));
+                        notes.extend(group_note(&self.ticks, group, d, p));
                     }
                 }
             }
