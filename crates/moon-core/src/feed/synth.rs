@@ -333,5 +333,6 @@ fn synth_news_item(seq: &mut u64, markets: &[String], time_ms: i64) -> NewsItem 
         es: String::new(),
         tags: vec!["synth".to_string()],
         is_original: true,
+        no_translate: false,
     }
 }

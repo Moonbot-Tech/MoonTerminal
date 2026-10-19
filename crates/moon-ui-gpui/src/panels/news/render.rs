@@ -62,10 +62,10 @@ pub(super) fn body_text(item: &NewsItem, translate: bool) -> &str {
     })
 }
 
-/// Whether a translation is being waited on: requested but the Russian text is still absent, so the
-/// English original is shown meanwhile.
+/// Whether a translation is being waited on: requested, the Russian text is still absent, and the
+/// service has not said it will send none — so the English original is shown meanwhile.
 fn pending(item: &NewsItem, translate: bool) -> bool {
-    translate && item.ru.is_empty()
+    translate && item.awaits_translation()
 }
 
 /// Build one news card for `item`. `translate` selects translated vs original body; `expanded`
