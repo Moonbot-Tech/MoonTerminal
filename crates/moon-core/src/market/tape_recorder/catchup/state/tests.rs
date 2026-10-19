@@ -2,8 +2,16 @@
 
 use super::*;
 use crate::market::tape_recorder::catchup::{self, tests::SWITCH_LOCK};
+use crate::market::tape_recorder::retention;
 use crate::venue::{Brand, MarketKind, Venue};
 use std::sync::Arc;
+
+mod recount;
+
+/// The (exchange, market) key a trade's tape is filed under.
+fn market(trade: &CatchupTrade) -> (String, String) {
+    (trade.exchange.clone(), trade.market.clone())
+}
 
 /// A source-policy generation change must release an old depth refusal exactly once.
 #[test]
@@ -173,8 +181,7 @@ fn review_only_transient_compaction_failures_retry() {
     ] {
         let mut state = RecorderCatchup::default();
         state.retention.phase = Phase::Recount {
-            reads: vec![],
-            complete: HashSet::new(),
+            recount: Default::default(),
             failure: Some(failure),
             freed: 0,
         };
@@ -328,8 +335,10 @@ fn review_purge_requests_survive_every_busy_phase() {
                 progress: Arc::default(),
             },
             _ => Phase::Recount {
-                reads: vec![(row(), read_rx)],
-                complete: HashSet::new(),
+                recount: retention::Recount {
+                    reads: HashMap::from([(market(&row()), read_rx)]),
+                    ..Default::default()
+                },
                 failure: None,
                 freed: 0,
             },
@@ -406,8 +415,7 @@ fn review_queued_purge_runs_after_the_current_pass() {
     let mut state = RecorderCatchup::default();
     state.submit(vec![trade.clone()]);
     state.retention.phase = Phase::Recount {
-        reads: vec![],
-        complete: HashSet::new(),
+        recount: Default::default(),
         failure: None,
         freed: 0,
     };
@@ -984,12 +992,12 @@ fn done_is_published_after_the_queue_recount() {
     unsupported.id.rec_id = 999;
     state.known.insert(unsupported.id, unsupported.clone());
     state.latched.insert(unsupported.id, Latch::Permanent);
-    let (unsupported_tx, unsupported_rx) = std::sync::mpsc::channel();
-    unsupported_tx.send(Ok(Vec::new())).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     state.retention.phase = Phase::Recount {
-        reads: vec![(trade.clone(), rx), (unsupported, unsupported_rx)],
-        complete: HashSet::new(),
+        recount: retention::Recount {
+            reads: HashMap::from([(market(&trade), rx)]),
+            ..Default::default()
+        },
         failure: None,
         freed: 123,
     };

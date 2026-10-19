@@ -101,11 +101,18 @@ pub(super) fn keep_map(
         .collect()
 }
 
-/// One outstanding coverage read used by the post-delete recount.
-pub(super) type Recount = Vec<(
-    catchup::CatchupTrade,
-    Receiver<rusqlite::Result<Vec<(i64, i64)>>>,
-)>;
+/// The post-delete recount: one coverage read per market, every known trade judged from it.
+#[derive(Default)]
+pub(super) struct Recount {
+    /// Reads still unanswered, one per market.
+    pub reads: HashMap<Key, Receiver<rusqlite::Result<Vec<(i64, i64)>>>>,
+    /// Answered markets; `None` marks a failed read, whose trades stay unsettled.
+    pub held: HashMap<Key, Option<Coverage>>,
+    /// Markets touched again while their read was in flight; read once more after it answers.
+    pub rerun: HashSet<Key>,
+    /// Markets already granted their one re-read this recount.
+    pub reread: HashSet<Key>,
+}
 
 /// Maintenance phases are polled; no recorder tick waits for the cache thread.
 pub(super) enum Phase {
@@ -124,8 +131,7 @@ pub(super) enum Phase {
         progress: Arc<TrimProgress>,
     },
     Recount {
-        reads: Recount,
-        complete: HashSet<super::TradeId>,
+        recount: Recount,
         failure: Option<CompactFail>,
         freed: u64,
     },
@@ -137,7 +143,10 @@ pub(super) struct Retention {
     pub hour: Option<i64>,
     pub retry_at: Option<i64>,
     pub summary_minute: Option<i64>,
-    pub recount_dirty: bool,
+    /// Markets a protect landed on during maintenance; the recount re-reads only these.
+    pub recount_stale: HashSet<Key>,
+    /// An eviction during maintenance can shrink any market, so every market is read again.
+    pub recount_all: bool,
     /// Resume a conservatively withheld emulator or untunable purge once protecting reports
     /// arrive.
     pub attributed_deferred: bool,
@@ -151,7 +160,8 @@ impl Default for Retention {
             hour: None,
             retry_at: None,
             summary_minute: None,
-            recount_dirty: false,
+            recount_stale: HashSet::new(),
+            recount_all: false,
             attributed_deferred: false,
         }
     }
