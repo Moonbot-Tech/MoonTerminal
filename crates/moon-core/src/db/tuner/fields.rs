@@ -1,3 +1,5 @@
+use super::comment_field;
+
 /// Field class indicating which strategy Ignore flag disables its filter.
 /// `IgnoreFilters` disables ALL classes; `IgnoreDelta` and `IgnoreVolume` disable their own.
 /// `DeltaSlot` covers deltas without dedicated strategy parameters: they use Delta2/Delta3
@@ -16,12 +18,16 @@ pub enum FieldClass {
     Delta,
     DeltaSlot,
     Volume,
+    /// A detect's own trigger threshold (e.g. `DropsPriceDelta`), read from the report comment
+    /// rather than a column. It is the signal itself, not a filter, so no Ignore flag gates it.
+    Detect,
 }
 
 /// Description of one tuner field. This is the ONLY place to edit for a new report column or
 /// strategy parameter: one row in `FIELDS`; everything else (the UNION SQL projection, UI grid,
 /// chips, automatic search, and strategy persistence) is derived from this table. Columns in
-/// reports.sqlite are extended automatically from the core schema (db/rep.rs).
+/// reports.sqlite are extended automatically from the core schema (db/rep.rs); a value parsed out
+/// of the report comment instead is projected by `comment_field`.
 pub struct FieldSpec {
     /// Report-replica column (lowercase).
     pub col: &'static str,
@@ -61,6 +67,12 @@ impl FieldSpec {
     /// suggestions by default.
     pub fn mapped(&self) -> bool {
         self.p_min.is_some() || self.p_max.is_some() || self.slot_type.is_some()
+    }
+
+    /// Whether the strategy can hold only a lower bound for this field: its upper bound is never
+    /// saved, so the what-if ignores one and the searches never suggest one.
+    pub fn min_only(&self) -> bool {
+        self.p_min.is_some() && self.p_max.is_none() && self.slot_type.is_none()
     }
 }
 
@@ -248,6 +260,17 @@ pub const FIELDS: &[FieldSpec] = &[
         None,
         None,
         Some("Dump1h"),
+    ),
+    // DropsDetection: the drop the detect measured at fire time, parsed from the comment by
+    // `comment_field`. The strategy fires once it reaches `DropsPriceDelta`, so raising that
+    // parameter to X drops exactly the deals below X; there is no Max parameter.
+    field(
+        comment_field::DROPS_PRICE_DELTA,
+        "xPriceDelta",
+        FieldClass::Detect,
+        Some("DropsPriceDelta"),
+        None,
+        None,
     ),
 ];
 

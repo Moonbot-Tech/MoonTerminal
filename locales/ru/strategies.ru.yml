@@ -133,7 +133,7 @@ strat.note_move_one_core: "Перемещение работает в преде
 strat.note_pasted: "Вставлено стратегий: %{strategies}, ядер: %{cores}"
 strat.note_nothing_to_paste: "Нечего вставлять"
 strat.note_forgotten: "Забыто навсегда: стратегий %{n}, версий %{versions}"
-strat.note_forget_disabled: "Хранилище стратегий выключено: Настройки → Общие → Хранилище"
+strat.note_forget_disabled: "БД стратегий недоступна — история версий сейчас не пишется. Подробности в логе."
 strat.note_forget_pending: "Хранилище ещё занято — результат появится сам"
 strat.note_forget_failed: "Не удалось забыть"
 

@@ -5,6 +5,29 @@ use rusqlite::Connection;
 use super::*;
 use crate::db::tuner::tuner_source_on;
 
+/// The raw comment is scanned before kinds resolve; only the matching kind keeps its detect.
+#[test]
+fn drops_detect_kept_on_drops_only() {
+    let conn = replica();
+    conn.execute_batch("ALTER TABLE orders_rep ADD COLUMN comment TEXT;
+        UPDATE orders_rep SET comment = ' DropsDetection: CORE_A USDT-XALPHA PriceIsLow: true xPriceDelta: 3.0';").unwrap();
+    let (q, src) = tuner_source_on(&conn, &scope()).unwrap();
+    let mut read = read_on(&conn, &q, &src).unwrap();
+    overlay_hook_detect(&conn, &q, &mut read.deals).unwrap();
+    assert!(read.deals.iter().all(|d| d.drops_detect.is_some()));
+    read.deals[0].kind = super::super::drops::KIND_DROPS.into();
+    read.deals[1].kind = KIND_MOONSTRIKE.into();
+    keep_drops_detect_on_drops(&mut read.deals);
+    assert_eq!(
+        read.deals[0].drops_detect,
+        Some(super::super::drops::DropsDetect {
+            x_price_delta_pct: 3.0,
+            price_is_low: true,
+        })
+    );
+    assert_eq!(read.deals[1].drops_detect, None);
+}
+
 fn replica() -> Connection {
     let conn = Connection::open_in_memory().expect("in-memory database");
     conn.execute_batch(

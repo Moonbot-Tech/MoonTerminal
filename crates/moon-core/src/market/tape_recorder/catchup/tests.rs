@@ -686,10 +686,10 @@ fn upgrade_with_absent_key_never_flags_a_purge() {
 pub(crate) static SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Restore retention settings and the outstanding request when a global-state test exits.
-struct RestoreKeep(u16, bool, bool, bool);
+pub(crate) struct RestoreKeep(u16, bool, bool, bool);
 impl RestoreKeep {
     /// Capture settings after the caller takes the shared test lock.
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(
             max_age_days(),
             record_emulator(),
@@ -737,18 +737,18 @@ fn set_keep_flags_a_purge_only_when_narrowing() {
     assert!(!take_purge_wanted());
 }
 
-/// A larger configured limit must never expand tape retention beyond archive reach.
+/// Catch-up must honor the whole configured retention, including unlimited history.
 #[test]
-fn edge_ms_is_capped_by_archive_depth() {
+fn edge_ms_follows_the_whole_retention() {
     let _guard = SWITCH_LOCK.lock().unwrap();
     let _restore = RestoreKeep::new();
     set_keep(30, true);
     assert_eq!(edge_ms(NOW), NOW - 30 * DAY);
     set_keep(4000, true);
     assert_eq!(max_age_days(), 3650);
-    assert_eq!(edge_ms(NOW), NOW - venue_caps::ARCHIVE_DEPTH_MS);
+    assert_eq!(edge_ms(NOW), NOW - 3650 * DAY);
     set_keep(0, true);
-    assert_eq!(edge_ms(NOW), NOW - venue_caps::ARCHIVE_DEPTH_MS);
+    assert_eq!(edge_ms(NOW), i64::MIN);
     set_keep(0, true);
     take_purge_wanted();
 }
@@ -773,15 +773,15 @@ fn forever_never_flags_a_purge() {
     set_keep(0, true);
 }
 
-/// Five years may retain old tape but must not ask archives for a two-year-old trade.
+/// Five-year retention must admit a two-year-old trade to its daily archive.
 #[test]
-fn five_years_keeps_catchup_within_archive_depth() {
+fn five_years_catches_up_over_the_whole_retention() {
     let _guard = SWITCH_LOCK.lock().unwrap();
     let _restore = RestoreKeep::new();
     set_keep(1825, true);
     assert_eq!(retention_edge_ms(NOW), Some(NOW - 1825 * DAY));
     assert!(retention_edge_ms(NOW).unwrap() < NOW - 730 * DAY);
-    assert_eq!(edge_ms(NOW), NOW - 365 * DAY);
+    assert_eq!(edge_ms(NOW), NOW - 1825 * DAY);
     let result = plan(
         &[trade(1, Brand::Bybit, MarketKind::Futures, 730 * DAY)],
         |_| Coverage::none(),
@@ -793,8 +793,8 @@ fn five_years_keeps_catchup_within_archive_depth() {
             tail_ms: 0,
         },
     );
-    assert_eq!(result.out_of_reach, 1);
-    assert!(result.jobs.is_empty());
+    assert_eq!(result.out_of_reach, 0);
+    assert_eq!(result.jobs.len(), 1);
     set_keep(0, true);
     take_purge_wanted();
 }
@@ -1215,13 +1215,15 @@ fn live_tail_waits_without_a_permanent_refusal() {
     );
 }
 
-/// The 365-day close bound must exclude old rows even when their venue has an archive.
+/// The retention bound must admit 400-day archive rows and exclude older expired rows.
 #[test]
-fn depth_excludes_366_days_but_keeps_364_day_archives() {
+fn retention_excludes_expired_rows_but_keeps_400_day_archives() {
     let _guard = SWITCH_LOCK.lock().unwrap();
+    let _restore = RestoreKeep::new();
+    set_keep(1825, true);
     let rows = [
-        trade(1, Brand::Bybit, MarketKind::Futures, 366 * DAY),
-        trade(2, Brand::Bybit, MarketKind::Futures, 364 * DAY),
+        trade(1, Brand::Bybit, MarketKind::Futures, 1826 * DAY),
+        trade(2, Brand::Bybit, MarketKind::Futures, 400 * DAY),
     ];
     let planned = plan(
         &rows,
@@ -1339,10 +1341,12 @@ fn clipped_away_missing_window_is_out_of_reach_and_latched() {
     );
 }
 
-/// Complete and permanently refused IDs must stop repeated disk reads but age out after 365 days.
+/// Complete and permanently refused IDs must stop repeated disk reads until retention expires.
 #[test]
 fn complete_ids_skip_resubmission_and_old_settlements_are_pruned() {
     let _guard = SWITCH_LOCK.lock().unwrap();
+    let _restore = RestoreKeep::new();
+    set_keep(365, true);
     let row = trade(1, Brand::Gate, MarketKind::Spot, DAY);
     let mut state = state::RecorderCatchup::default();
     state.submit(vec![row.clone()]);
@@ -1459,7 +1463,7 @@ fn complete_ids_skip_resubmission_and_old_settlements_are_pruned() {
 
 use crate::feed::{Side, Tick};
 use crate::market::trade_replay::{archive, gate, rest};
-use executor::{ARCHIVE_BYTES_PER_PASS, Failure};
+use executor::Failure;
 use std::sync::{
     Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -1870,16 +1874,14 @@ fn holed_trade_sends_no_request_for_held_slices() {
 }
 
 static BUDGET_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Simulate a small compressed download that spends the last available kilobyte of a pass.
+/// Simulate a full-size permitted day without allocating its compressed bytes.
 fn budget_archive(
     _: ArchiveRoute,
     _: &str,
     spans: &Coverage,
     budget: u64,
 ) -> (Result<archive::ArchiveFill, archive::ArchiveError>, u64) {
-    if budget < 1024 {
-        return (Err(archive::ArchiveError::BudgetDeferred), 0);
-    }
+    assert_eq!(budget, u64::MAX, "station passes impose no byte budget");
     BUDGET_CALLS.fetch_add(1, Ordering::Relaxed);
     (
         Ok(archive::ArchiveFill {
@@ -1887,31 +1889,31 @@ fn budget_archive(
             ticks: vec![tick(spans.hull().unwrap().0)],
             deferred: None,
         }),
-        1024,
+        256 * 1024 * 1024,
     )
 }
 
-/// The compressed-byte cap defers later archive days but must keep a following REST job runnable.
+/// Reintroducing a 2 GiB pass cap would strand the ninth permitted archive day.
 #[test]
-fn spent_archive_budget_defers_archives_and_continues_rest() {
+fn archives_over_two_gib_continue_with_rest() {
     let _guard = SWITCH_LOCK.lock().unwrap();
     BUDGET_CALLS.store(0, Ordering::Relaxed);
-    let first = job(1, Brand::Bybit, MarketKind::Futures);
-    let mut second = job(2, Brand::Bybit, MarketKind::Futures);
-    // Keep this job two days away: a midnight endpoint one day away shares a cached file,
-    // whose paid-for coverage is correctly reusable even after the download budget is spent.
-    second.missing = Coverage::one((
-        second.trade.open_ms - 2 * DAY,
-        second.trade.close_ms - 2 * DAY,
-    ));
-    let rest = job(3, Brand::Gate, MarketKind::Spot);
+    let mut jobs: Vec<_> = (1..=9)
+        .map(|id| {
+            let mut job = job(id, Brand::Bybit, MarketKind::Futures);
+            job.trade.market = format!("SYNTH{id}USDT");
+            job.missing = Coverage::one((NOW - 3 * DAY + 1000, NOW - 3 * DAY + 1999));
+            job
+        })
+        .collect();
+    jobs.push(job(10, Brand::Gate, MarketKind::Spot));
     let mut filed = Vec::new();
     let result = executor::run_pass_with(
-        vec![first, second, rest],
+        jobs,
         || NOW,
         &gate::ReplayGate::new(),
         (good_rest, budget_archive),
-        ARCHIVE_BYTES_PER_PASS - 1024,
+        0,
         executor::run_job_at,
         |job, outcome| {
             if !outcome.file.is_empty() {
@@ -1919,19 +1921,14 @@ fn spent_archive_budget_defers_archives_and_continues_rest() {
             }
         },
     );
-    assert_eq!(BUDGET_CALLS.load(Ordering::Relaxed), 1);
-    assert_eq!(result.archive_bytes, ARCHIVE_BYTES_PER_PASS);
-    assert_eq!(result.finished[1].failure, Some(Failure::Retry));
-    assert!(
-        !result.finished[1].attempted,
-        "budget-deferred job must not count as failed"
-    );
-    assert_eq!(result.finished[2].failure, None);
-    assert_eq!(filed, vec![3, 1]);
+    assert_eq!(BUDGET_CALLS.load(Ordering::Relaxed), 9);
+    assert_eq!(result.archive_bytes, 9 * 256 * 1024 * 1024);
+    assert!(result.finished.iter().all(|job| job.failure.is_none()));
+    assert_eq!(filed, vec![10, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 }
 
 static DEFERRED_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Answer every day as too large for the remaining budget, as a nearly spent hour does.
+/// Simulate a transport budget refusal without imposing a station-wide byte gate.
 fn deferring_archive(
     _: ArchiveRoute,
     _: &str,
@@ -1942,10 +1939,9 @@ fn deferring_archive(
     (Err(archive::ArchiveError::BudgetDeferred), 0)
 }
 
-/// A day that no longer fits spends the hour: later days send no request and the next tick
-/// admits only REST jobs until the hourly reset.
+/// Transport admission refusal stays retryable without fabricating downloaded bytes or a cap.
 #[test]
-fn budget_deferred_day_saturates_the_hour_budget() {
+fn deferred_day_does_not_spend_an_hourly_budget() {
     let _guard = SWITCH_LOCK.lock().unwrap();
     DEFERRED_CALLS.store(0, Ordering::Relaxed);
     let first = job(1, Brand::Bybit, MarketKind::Futures);
@@ -1961,24 +1957,56 @@ fn budget_deferred_day_saturates_the_hour_budget() {
         executor::run_job_at,
         |_, _| {},
     );
-    assert_eq!(DEFERRED_CALLS.load(Ordering::Relaxed), 1);
-    assert!(result.archive_bytes >= ARCHIVE_BYTES_PER_PASS);
+    // Each market's inclusive range crosses midnight and therefore needs two daily files.
+    assert_eq!(DEFERRED_CALLS.load(Ordering::Relaxed), 4);
+    assert_eq!(result.archive_bytes, 0);
     assert!(!result.finished[0].attempted);
     assert!(!result.finished[1].attempted);
     assert_eq!(result.finished[1].failure, Some(Failure::Retry));
     assert_eq!(result.finished[2].failure, None);
     let jobs = vec![first, rest];
-    let next = state::admissible(jobs.clone(), result.archive_bytes, NOW);
+    let next = state::admissible(jobs);
     assert_eq!(
         next.iter()
             .map(|job| job.trade.id.rec_id)
             .collect::<Vec<_>>(),
-        vec![3]
+        vec![1, 3]
     );
-    assert_eq!(state::admissible(jobs, 0, NOW).len(), 2);
 }
 
 static FAILED_ARCHIVE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+/// Model the archive transport's disk reserve refusal even when byte admission is unlimited.
+fn no_room_archive(
+    _: ArchiveRoute,
+    _: &str,
+    _: &Coverage,
+    budget: u64,
+) -> (Result<archive::ArchiveFill, archive::ArchiveError>, u64) {
+    assert_eq!(budget, u64::MAX);
+    (Err(archive::ArchiveError::NoRoom), 0)
+}
+
+/// Removing hourly bytes must not turn the disk guard's refusal into filed tape.
+#[test]
+fn disk_reserve_still_refuses_archives_after_two_gib() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
+    let result = executor::run_pass_with(
+        vec![job(1, Brand::Bybit, MarketKind::Futures)],
+        || NOW,
+        &gate::ReplayGate::new(),
+        (no_rest, no_room_archive),
+        3 * 1024 * 1024 * 1024,
+        executor::run_job_at,
+        |_, outcome| assert!(outcome.file.is_empty()),
+    );
+    assert_eq!(result.archive_bytes, 3 * 1024 * 1024 * 1024);
+    assert_eq!(result.finished[0].failure, Some(Failure::Retry));
+    assert_eq!(
+        result.finished[0].fault.as_ref().unwrap().reason,
+        crate::station_api::CatchupFailReason::NoRoom
+    );
+}
 
 /// Report compressed bytes received before a synthetic transport disconnect.
 fn failed_archive(
@@ -1999,9 +2027,9 @@ fn failed_archive(
     )
 }
 
-/// Failed bodies spend this pass's local budget and defer another day without recording failure.
+/// Failed bodies remain byte telemetry and must not block another day's transport attempt.
 #[test]
-fn failed_archive_bytes_spend_only_the_fetchers_budget() {
+fn failed_archive_bytes_do_not_cap_following_downloads() {
     let _guard = SWITCH_LOCK.lock().unwrap();
     FAILED_ARCHIVE_CALLS.store(0, Ordering::Relaxed);
     let first = job(1, Brand::Bybit, MarketKind::Futures);
@@ -2012,18 +2040,19 @@ fn failed_archive_bytes_spend_only_the_fetchers_budget() {
         || NOW,
         &gate::ReplayGate::new(),
         (no_rest, failed_archive),
-        ARCHIVE_BYTES_PER_PASS - 128,
+        2 * 1024 * 1024 * 1024 - 128,
         executor::run_job_at,
         |_, outcome| assert!(outcome.file.is_empty()),
     );
-    assert_eq!(FAILED_ARCHIVE_CALLS.load(Ordering::Relaxed), 1);
-    assert_eq!(result.archive_bytes, ARCHIVE_BYTES_PER_PASS);
+    // Two markets spanning midnight each attempt two independent daily files.
+    assert_eq!(FAILED_ARCHIVE_CALLS.load(Ordering::Relaxed), 4);
+    assert_eq!(result.archive_bytes, 2 * 1024 * 1024 * 1024 + 384);
     assert!(result.finished[0].attempted);
-    assert!(!result.finished[1].attempted);
+    assert!(result.finished[1].attempted);
     assert_eq!(result.finished[1].failure, Some(Failure::Retry));
 }
 
-/// A successful REST portion followed by an archive budget skip is still deferred, not failed.
+/// Successful REST tape survives a later archive admission refusal without counting as failed.
 #[test]
 fn mixed_job_budget_deferral_does_not_count_successful_rest_as_failed() {
     let _guard = SWITCH_LOCK.lock().unwrap();
@@ -2036,8 +2065,8 @@ fn mixed_job_budget_deferral_does_not_count_successful_rest_as_failed() {
         vec![job],
         || NOW,
         &gate::ReplayGate::new(),
-        (good_rest, no_archive),
-        ARCHIVE_BYTES_PER_PASS,
+        (good_rest, deferring_archive),
+        2 * 1024 * 1024 * 1024,
         executor::run_job_at,
         |_, outcome| assert_eq!(outcome.file, Coverage::one((NOW - DAY, NOW - DAY + 1000))),
     );
@@ -2046,6 +2075,53 @@ fn mixed_job_budget_deferral_does_not_count_successful_rest_as_failed() {
 }
 
 static GROUP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+static B6_ARCHIVE_POINTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Preserve the allocation identity so a full decoded-vector clone is observable at filing.
+fn b6_owned_archive(
+    _: ArchiveRoute,
+    _: &str,
+    spans: &Coverage,
+    _: u64,
+) -> (Result<archive::ArchiveFill, archive::ArchiveError>, u64) {
+    let ticks = vec![tick(spans.hull().unwrap().0)];
+    B6_ARCHIVE_POINTER.store(ticks.as_ptr() as usize, Ordering::Relaxed);
+    (
+        Ok(archive::ArchiveFill {
+            covered: spans.clone(),
+            ticks,
+            deferred: None,
+        }),
+        0,
+    )
+}
+
+/// A group's last consumer must take its decoded allocation instead of cloning the entire day.
+#[test]
+fn barrier_b6_last_archive_consumer_takes_the_decoded_allocation() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
+    let mut one = job(1, Brand::Bybit, MarketKind::Futures);
+    one.missing = Coverage::one((1000, 2000));
+    one.source = Source::Archive(ArchiveRoute::BybitTradingDaily);
+    let mut filed = 0;
+    executor::run_pass_with_core(
+        vec![one],
+        || NOW,
+        &gate::ReplayGate::new(),
+        (no_rest, b6_owned_archive, None),
+        0,
+        executor::run_job_at,
+        |_, result| {
+            assert_eq!(
+                result.ticks.as_ptr() as usize,
+                B6_ARCHIVE_POINTER.load(Ordering::Relaxed)
+            );
+            filed += 1;
+        },
+    );
+    assert_eq!(filed, 1);
+}
 /// One synthetic day returns every requested trade's endpoints from the union passed to it.
 fn grouped_archive(
     _: ArchiveRoute,
@@ -2581,7 +2657,6 @@ fn failure_reasons_follow_the_errors_already_returned() {
         (E::Corrupt("bad gzip".into()), R::Corrupt),
         (E::UnknownSymbol, R::ArchiveMissing),
         (E::NoRoom, R::NoRoom),
-        (E::TooLarge, R::Other),
     ] {
         assert_eq!(archive_fault(&error).reason, reason, "{error:?}");
     }

@@ -395,15 +395,9 @@ pub fn take_purge_wanted() -> bool {
     PURGE_WANTED.swap(false, Ordering::Relaxed)
 }
 
-/// Earliest catch-up timestamp; forever still cannot reach beyond archive availability.
+/// Earliest catch-up timestamp allowed by retention; forever leaves venue availability to fetching.
 pub fn edge_ms(now_ms: i64) -> i64 {
-    let days = max_age_days();
-    let depth = if days == 0 {
-        venue_caps::ARCHIVE_DEPTH_MS
-    } else {
-        (i64::from(days) * 86_400_000).min(venue_caps::ARCHIVE_DEPTH_MS)
-    };
-    now_ms.saturating_sub(depth)
+    retention_edge_ms(now_ms).unwrap_or(i64::MIN)
 }
 
 /// Earliest retained timestamp for deletion, with no age deletion under keep forever.

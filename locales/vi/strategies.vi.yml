@@ -133,7 +133,7 @@ strat.note_move_one_core: "Chuyển chỉ trong một core — giữa các core 
 strat.note_pasted: "Đã dán %{strategies} chiến lược vào %{cores} core"
 strat.note_nothing_to_paste: "Không có gì để dán"
 strat.note_forgotten: "Đã quên vĩnh viễn: %{n} chiến lược, %{versions} phiên bản"
-strat.note_forget_disabled: "Kho chiến lược đang tắt: Cài đặt → Chung → Lưu trữ"
+strat.note_forget_disabled: "DB chiến lược không khả dụng — lịch sử phiên bản hiện không được ghi. Xem log."
 strat.note_forget_pending: "Kho vẫn đang bận — kết quả sẽ tự hiện"
 strat.note_forget_failed: "Không quên được"
 

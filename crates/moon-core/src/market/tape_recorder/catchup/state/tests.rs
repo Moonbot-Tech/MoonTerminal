@@ -2,8 +2,163 @@
 
 use super::*;
 use crate::market::tape_recorder::catchup::{self, tests::SWITCH_LOCK};
+use crate::market::tape_recorder::retention;
 use crate::venue::{Brand, MarketKind, Venue};
 use std::sync::Arc;
+
+mod recount;
+
+/// The (exchange, market) key a trade's tape is filed under.
+fn market(trade: &CatchupTrade) -> (String, String) {
+    (trade.exchange.clone(), trade.market.clone())
+}
+
+/// A source-policy generation change must release an old depth refusal exactly once.
+#[test]
+fn old_depth_refusal_requeues_once_and_fetches_400_day_trade() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(1825, true);
+    let mut trade = row();
+    trade.close_ms = NOW - 400 * DAY;
+    trade.open_ms = trade.close_ms - 60_000;
+    let shape = catchup::Shape {
+        margin_ms: 0,
+        long_ms: DAY,
+        tail_ms: 0,
+    };
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    // Reproduce the process-local settlement made by the former archive-depth policy.
+    state.pending.clear();
+    state.latched.insert(trade.id, Latch::Permanent);
+    state.submit(vec![trade.clone()]);
+    assert!(state.pending.is_empty());
+    catchup::window_changed();
+    state.sync_switches();
+    assert_eq!(state.pending.len(), 1);
+    assert!(!state.latched.contains_key(&trade.id));
+    let batch = state.prepare(|_| Coverage::none(), NOW, &shape, true);
+    assert_eq!(batch.jobs.len(), 1);
+    let result = executor::run_pass_with(
+        batch.jobs,
+        || NOW,
+        &gate::ReplayGate::new(),
+        (
+            |_, _, _, _, _| panic!("old trade must use the daily archive"),
+            |_, _, spans, _| {
+                (
+                    Ok(crate::market::trade_replay::archive::ArchiveFill {
+                        covered: spans.clone(),
+                        ticks: vec![],
+                        deferred: None,
+                    }),
+                    1,
+                )
+            },
+        ),
+        0,
+        executor::run_job_at,
+        |_, _| {},
+    );
+    assert_eq!(result.finished.len(), 1);
+    assert_eq!(
+        result.finished[0].filed,
+        Coverage::one((trade.open_ms, trade.close_ms))
+    );
+    state.prepare(
+        |_| Coverage::one((trade.open_ms, trade.close_ms)),
+        NOW,
+        &shape,
+        true,
+    );
+    state.sync_switches();
+    state.submit(vec![trade]);
+    assert!(
+        state
+            .prepare(
+                |_| panic!("settled trade requeued twice"),
+                NOW,
+                &shape,
+                true
+            )
+            .jobs
+            .is_empty()
+    );
+}
+
+/// Losing the generation reset would leave settled short and long trades at the old margin.
+#[test]
+fn widened_margin_replans_settled_ends_without_relisting() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let _settings = RetentionSettings::new();
+    catchup::set_keep(1825, true);
+    for age in [DAY, 300 * DAY] {
+        for duration in [60_000, 3_600_000] {
+            let mut trade = row();
+            trade.close_ms = NOW - age;
+            trade.open_ms = trade.close_ms - duration;
+            let narrow = catchup::Shape {
+                margin_ms: 180_000,
+                long_ms: 1_800_000,
+                tail_ms: 180_000,
+            };
+            let wide = catchup::Shape {
+                margin_ms: 600_000,
+                tail_ms: 600_000,
+                ..narrow
+            };
+            let held = if duration < narrow.long_ms {
+                Coverage::one((trade.open_ms - 180_000, trade.close_ms + 180_000))
+            } else {
+                Coverage::from_spans([
+                    (trade.open_ms - 180_000, trade.open_ms + 180_000),
+                    (trade.close_ms - 180_000, trade.close_ms + 180_000),
+                ])
+            };
+            let mut state = RecorderCatchup::default();
+            state.submit(vec![trade.clone()]);
+            assert_eq!(
+                state.prepare(|_| held.clone(), NOW, &narrow, true).complete,
+                1
+            );
+            catchup::window_changed();
+            state.sync_switches();
+            let batch = state.prepare(|_| held.clone(), NOW, &wide, true);
+            assert_eq!(batch.jobs.len(), 1);
+            let expected = if duration < narrow.long_ms {
+                Coverage::from_spans([
+                    (trade.open_ms - 600_000, trade.open_ms - 180_001),
+                    (trade.close_ms + 180_001, trade.close_ms + 600_000),
+                ])
+            } else {
+                Coverage::from_spans([
+                    (trade.open_ms - 600_000, trade.open_ms - 180_001),
+                    (trade.open_ms + 180_001, trade.open_ms + 600_000),
+                    (trade.close_ms - 600_000, trade.close_ms - 180_001),
+                    (trade.close_ms + 180_001, trade.close_ms + 600_000),
+                ])
+            };
+            assert_eq!(batch.jobs[0].missing, expected);
+            if age > DAY {
+                assert!(super::super::executor::needs_archive(&batch.jobs[0], NOW));
+            }
+            let filled = Coverage::from_spans(held.spans().iter().chain(expected.spans()).copied());
+            assert_eq!(
+                state.prepare(|_| filled.clone(), NOW, &wide, true).complete,
+                1
+            );
+            assert!(
+                state
+                    .prepare(|_| panic!("settled fill read again"), NOW, &wide, true)
+                    .jobs
+                    .is_empty()
+            );
+        }
+    }
+}
 
 /// Retrying NotShrinkable every minute would rewrite tape forever without changing its file mode.
 #[test]
@@ -26,8 +181,7 @@ fn review_only_transient_compaction_failures_retry() {
     ] {
         let mut state = RecorderCatchup::default();
         state.retention.phase = Phase::Recount {
-            reads: vec![],
-            complete: HashSet::new(),
+            recount: Default::default(),
             failure: Some(failure),
             freed: 0,
         };
@@ -181,8 +335,10 @@ fn review_purge_requests_survive_every_busy_phase() {
                 progress: Arc::default(),
             },
             _ => Phase::Recount {
-                reads: vec![(row(), read_rx)],
-                complete: HashSet::new(),
+                recount: retention::Recount {
+                    reads: HashMap::from([(market(&row()), read_rx)]),
+                    ..Default::default()
+                },
                 failure: None,
                 freed: 0,
             },
@@ -259,8 +415,7 @@ fn review_queued_purge_runs_after_the_current_pass() {
     let mut state = RecorderCatchup::default();
     state.submit(vec![trade.clone()]);
     state.retention.phase = Phase::Recount {
-        reads: vec![],
-        complete: HashSet::new(),
+        recount: Default::default(),
         failure: None,
         freed: 0,
     };
@@ -837,12 +992,12 @@ fn done_is_published_after_the_queue_recount() {
     unsupported.id.rec_id = 999;
     state.known.insert(unsupported.id, unsupported.clone());
     state.latched.insert(unsupported.id, Latch::Permanent);
-    let (unsupported_tx, unsupported_rx) = std::sync::mpsc::channel();
-    unsupported_tx.send(Ok(Vec::new())).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     state.retention.phase = Phase::Recount {
-        reads: vec![(trade.clone(), rx), (unsupported, unsupported_rx)],
-        complete: HashSet::new(),
+        recount: retention::Recount {
+            reads: HashMap::from([(market(&trade), rx)]),
+            ..Default::default()
+        },
         failure: None,
         freed: 123,
     };
@@ -2299,10 +2454,9 @@ fn backlog_drains_in_bounded_passes_that_each_move_the_status() {
     );
 }
 
-/// A spent hourly archive budget keeps archive jobs out of passes until the hour rolls, while
-/// REST-able jobs still go out and nothing spins on work no pass could do.
+/// Downloaded byte telemetry must not hold archive work; actual failures still wait an hour.
 #[test]
-fn spent_archive_budget_holds_archive_jobs_until_the_hour_rolls() {
+fn archive_bytes_do_not_hold_jobs_but_failures_wait_until_the_hour_rolls() {
     let _lock = SWITCH_LOCK.lock().unwrap();
     let _restore = Restore::new();
     catchup::set_switches(true, true);
@@ -2312,7 +2466,7 @@ fn spent_archive_budget_holds_archive_jobs_until_the_hour_rolls() {
     let mut state = RecorderCatchup {
         worker: Some(sender),
         hour: Some(NOW.div_euclid(HOUR_MS)),
-        archive_bytes: executor::ARCHIVE_BYTES_PER_PASS,
+        archive_bytes: 3 * 1024 * 1024 * 1024,
         ..RecorderCatchup::default()
     };
     let archive_row = row();
@@ -2333,10 +2487,11 @@ fn spent_archive_budget_holds_archive_jobs_until_the_hour_rolls() {
             tail_ms: 0,
         },
     );
-    let pass = receiver.try_recv().expect("REST work still starts a pass");
-    let ids: Vec<_> = pass.jobs.iter().map(|job| job.trade.id).collect();
-    assert_eq!(ids, vec![rest_row.id], "archive job left out of the pass");
-    assert!(!state.latched.contains_key(&archive_row.id));
+    let pass = receiver
+        .try_recv()
+        .expect("archive and REST work start a pass");
+    let ids: HashSet<_> = pass.jobs.iter().map(|job| job.trade.id).collect();
+    assert_eq!(ids, HashSet::from([archive_row.id, rest_row.id]));
     state.finish(
         &cache,
         PassResult {
@@ -2351,7 +2506,7 @@ fn spent_archive_budget_holds_archive_jobs_until_the_hour_rolls() {
                     filed: Coverage::none(),
                 })
                 .collect(),
-            archive_bytes: executor::ARCHIVE_BYTES_PER_PASS,
+            archive_bytes: 3 * 1024 * 1024 * 1024,
         },
         NOW,
     );
@@ -2367,12 +2522,12 @@ fn spent_archive_budget_holds_archive_jobs_until_the_hour_rolls() {
     );
     assert!(
         receiver.try_recv().is_err(),
-        "no pass starts for archive work alone while the budget is spent"
+        "failed work waits for its hourly retry"
     );
     assert!(state.pending.contains_key(&archive_row.id));
     assert!(
-        !state.latched.contains_key(&archive_row.id),
-        "a held job is not failed"
+        state.latched.contains_key(&archive_row.id),
+        "an attempted archive failure is latched for retry"
     );
     assert!(!state.active);
 
@@ -2388,14 +2543,14 @@ fn spent_archive_budget_holds_archive_jobs_until_the_hour_rolls() {
     );
     let pass = receiver
         .try_recv()
-        .expect("the hour roll re-admits archive jobs");
+        .expect("the hour roll retries failed archive jobs");
     assert!(pass.jobs.iter().any(|job| job.trade.id == archive_row.id));
     assert_eq!(state.archive_bytes, 0);
 }
 
-/// Selection keeps plan order and the pass size, filtering archive work only when spent.
+/// Removing byte admission must preserve plan order and the 200-job pass bound.
 #[test]
-fn admissible_filters_archive_jobs_only_once_the_budget_is_spent() {
+fn admissible_keeps_archive_jobs_in_plan_order_and_bounds_the_pass() {
     let _lock = SWITCH_LOCK.lock().unwrap();
     let _restore = Restore::new();
     let rows: Vec<_> = (0..PASS_JOBS + 5)
@@ -2417,6 +2572,11 @@ fn admissible_filters_archive_jobs_only_once_the_budget_is_spent() {
         },
     )
     .jobs;
-    assert_eq!(admissible(jobs.clone(), 0, NOW).len(), PASS_JOBS);
-    assert!(admissible(jobs, executor::ARCHIVE_BYTES_PER_PASS, NOW).is_empty());
+    let expected: Vec<_> = jobs.iter().take(200).map(|job| job.trade.id).collect();
+    let selected = admissible(jobs);
+    assert_eq!(selected.len(), 200);
+    assert_eq!(
+        selected.iter().map(|job| job.trade.id).collect::<Vec<_>>(),
+        expected
+    );
 }

@@ -34,12 +34,12 @@ fn effective_seconds_are_the_core_floor() {
     assert_eq!(i64::from(effective_s()) * 1_000, floor_ms(current_s()));
 }
 
-/// Ignoring either source switch would admit a fillable tail or keep unavailable tape waiting.
+/// Both venue archives and recent core history keep recoverable short tails waiting.
 #[test]
-fn short_tail_reach_respects_venue_and_core_switches() {
+fn short_tail_reach_uses_both_source_legs() {
     use super::super::state::RowAddress;
     use moon_core::venue::{Brand, MarketKind, Venue};
-    let address = RowAddress {
+    let mut address = RowAddress {
         core_uid: 1,
         venue: Some(Venue {
             brand: Brand::Binance,
@@ -51,35 +51,22 @@ fn short_tail_reach_respects_venue_and_core_switches() {
     };
     let now = 100 * 86_400_000;
     let old = now - 49 * 3_600_000;
+    assert!(super::fillable_at(&address, 1, old, 30_000, now));
+    address.venue = None;
+    assert!(!super::fillable_at(&address, 1, old, 30_000, now));
     assert!(super::fillable_at(
-        &address,
-        1,
-        old,
-        30_000,
-        now,
-        (true, false)
-    ));
-    assert!(!super::fillable_at(
-        &address,
-        1,
-        old,
-        30_000,
-        now,
-        (false, true)
-    ));
-    assert!(!super::fillable_at(
         &address,
         1,
         now - 3_600_000,
         30_000,
-        now,
-        (false, false)
+        now
     ));
 }
 
 /// A station-held minute must fit a thirty-second replay window, clearing the short-tail count.
 #[test]
 fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     use super::super::state::{DealRow, RowAddress, TapeStatus};
     use moon_core::db::tuner::ticks::verify::{EntryFinding, ExitFinding, RuleFlags, StopFacts};
     use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
@@ -110,6 +97,7 @@ fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
         archived_take: None,
         fact_modifier: None,
         hook_depth_pct: None,
+        drops_detect: None,
         hook_stated_take_pct: None,
         strike_detect: None,
         step_lag_ms: 0.0,

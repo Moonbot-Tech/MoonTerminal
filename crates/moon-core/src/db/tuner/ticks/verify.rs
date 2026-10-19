@@ -46,6 +46,7 @@
 use super::exit::ExitModel;
 use super::exit::level_off_buy;
 use super::exit::line::LinePoint;
+use super::exit::sell_order::{take_is_recorded, take_model_for};
 use super::exit::stops::stop_pct;
 use super::exit::stops::trailing::trailing_level;
 use super::mshot::MshotParams;
@@ -165,7 +166,16 @@ pub fn verify(
     let outcome = simulate(deal, ticks, entry, exit, entry_line);
     let (entry_finding, entry_dev) = match (entry, outcome.fill) {
         (EntryParams::Fact, _) => (EntryFinding::Fact, None),
-        (EntryParams::MoonShot(_), None) => (EntryFinding::Unfilled, None),
+        (EntryParams::MoonShot(_) | EntryParams::Drops(_), None) => (EntryFinding::Unfilled, None),
+        (EntryParams::Drops(_), Some(fill)) => {
+            let dev = deviation_pct(fill.price, deal.buy_price);
+            let finding = if dev.is_some_and(|d| d.abs() <= super::drops::PRICE_TOLERANCE_PCT) {
+                EntryFinding::Hit
+            } else {
+                EntryFinding::Off
+            };
+            (finding, dev)
+        }
         (EntryParams::MoonShot(params), Some(fill)) => {
             let dev = deviation_pct(fill.price, deal.buy_price);
             let ok = dev.is_some_and(|d| d.abs() <= entry_tolerance_pct(params, deal));
@@ -217,7 +227,9 @@ pub fn verify(
     let model = &exit.model;
     let closed = match walked.exit.kind {
         ExitKind::Stop
-            if walked.exit.t_ms <= deal.close_ms + model.point_time_ms || fact_stopped =>
+            if walked.stop_fired_ms.unwrap_or(walked.exit.t_ms)
+                <= deal.close_ms + model.point_time_ms
+                || fact_stopped =>
         {
             walked.exit
         }
@@ -268,8 +280,26 @@ pub fn verify(
     // Where a variant could not place this trade's take, the line under it is not the model's
     // answer but its guess — see the module doc. Asked with the trade's OWN parameters as a
     // variant runs them (`exit`, not `fact_exit`): the fact's replay starts at the recorded
-    // take, a variant does not.
-    let take_known = ExitModel::new(exit).take_known(deal);
+    // take, a variant does not and must be able to rebuild that archived start.
+    let mut take_known = ExitModel::new(exit).take_known(deal);
+    if take_known && !take_model_for(&deal.kind) && !take_is_recorded(&deal.kind) {
+        if let Some(archived_take) = deal.archived_take.filter(|t| t.is_finite() && *t > 0.0) {
+            let formula = ExitParams {
+                take_from_archive: false,
+                ..fact_exit.clone()
+            };
+            let take = ExitModel::new(&formula).take_level(deal, ticks, fact_fill);
+            // Check the formula against the archived take, allowing its grid rounding. With
+            // uncapped sell modifiers the residual is calibrated from this same take, so this
+            // checks formula consistency rather than independently proving the take model.
+            let tolerance = (archived_take * model.price_pct / 100.0).max(
+                deal.tick
+                    .filter(|step| step.is_finite() && *step > 0.0)
+                    .map_or(0.0, |step| step * 0.49),
+            );
+            take_known = (take - archived_take).abs() <= tolerance;
+        }
+    }
     // A stop the core fired and the model, holding a stop of its own, never did — the book
     // proxy of a non-fast stop can stay short of the level to the tape's end — is a miss of
     // the stop, whatever the line was doing: not a question about another rule.
@@ -308,7 +338,10 @@ pub fn verify(
             deal,
             &fact_exit,
             &walked.points,
-            closed,
+            Exit {
+                t_ms: walked.stop_fired_ms.unwrap_or(closed.t_ms),
+                ..closed
+            },
             walked.stop_level,
             exit_points,
         );
@@ -600,12 +633,12 @@ fn verify_stop(
     let level = stop_level.unwrap_or_else(|| {
         level_off_buy(
             deal.buy_price,
-            stop_pct(exit, deal, deal.buy_ms),
+            stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms),
             deal.is_long(),
         )
     });
     let stated = stated_stop_level(&deal.sell_reason);
-    let panic_at = stop_jump_level(deal, exit);
+    let panic_at = stop_jump_level(deal, exit, exit_points);
     let mut activation: Option<i64> = None;
     let mut first_unmatched: Option<usize> = None;
     let points = exit_points.filter(|p| !p.is_empty()).map(|archived| {
@@ -657,7 +690,12 @@ fn verify_stop(
 /// `None` leaves the moment to the close. A `StopLoss Market Sell` can still be a trailing stop the
 /// core rewrote (the core's answer of 2026-09-24): read against the stop's level, its market sale
 /// stands short of it, no jump is found, and the moment is the close's as well.
-pub(super) fn stop_jump_level(deal: &Deal, exit: &ExitParams) -> Option<f64> {
+/// The fallback stop reads its modifier at sell booking, recovered from `exit_points`.
+pub(super) fn stop_jump_level(
+    deal: &Deal,
+    exit: &ExitParams,
+    exit_points: Option<&[(i64, f64)]>,
+) -> Option<f64> {
     let reason = deal.sell_reason.trim();
     if reason_starts_with(reason, REASON_TRAILING) {
         return (exit.trailing_pct != 0.0)
@@ -665,7 +703,7 @@ pub(super) fn stop_jump_level(deal: &Deal, exit: &ExitParams) -> Option<f64> {
             .flatten()
             .map(|peak| trailing_level(peak, deal.buy_price, exit, deal.is_long()));
     }
-    let pct = stop_pct(exit, deal, deal.buy_ms);
+    let pct = stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms);
     (reason_starts_with(reason, REASON_STOP) && pct != 0.0).then(|| {
         stated_stop_level(reason)
             .unwrap_or_else(|| level_off_buy(deal.buy_price, pct, deal.is_long()))
@@ -865,3 +903,6 @@ pub fn share(verdicts: impl IntoIterator<Item = Option<bool>>) -> (usize, usize)
         (hits + usize::from(ok == Some(true)), n + 1)
     })
 }
+
+#[cfg(test)]
+mod tests;

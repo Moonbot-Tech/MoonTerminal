@@ -18,15 +18,18 @@ impl BenchDir {
 }
 
 impl Drop for BenchDir {
-    /// Removes only this fixture after the worker's asynchronous connection shutdown.
+    /// Retries transient file locks briefly, leaving leftovers rather than panicking in Drop.
     fn drop(&mut self) {
-        for _ in 0..50 {
-            if std::fs::remove_dir_all(&self.0).is_ok() {
-                return;
+        for attempt in 0..50 {
+            match std::fs::remove_dir_all(&self.0) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) if attempt < 49 => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(_) => return,
             }
-            std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        panic!("fixture cleanup failed: {}", self.0.display());
     }
 }
 

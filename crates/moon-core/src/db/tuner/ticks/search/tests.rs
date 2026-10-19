@@ -8,6 +8,157 @@ use crate::db::tuner::ticks::Deltas;
 use crate::feed::types::Side;
 
 mod performance;
+mod stopped;
+
+/// Search only the take on a chronological half sample, exposing embargo selection regressions.
+fn embargo_search(deals: &[PreparedDeal]) -> SearchResult {
+    let held = HashMap::new();
+    let defaults = HashMap::new();
+    let mut locked: HashSet<String> = TICK_PARAMS.iter().map(|f| f.key.to_string()).collect();
+    locked.remove("SellPrice");
+    suggest(
+        deals,
+        &SearchParams {
+            held: &held,
+            defaults: &defaults,
+            kind: "PumpsDetection",
+            vary_entry: false,
+            vary_exit: true,
+            locked: &locked,
+            grids: test_grids::legacy(),
+            restarts: 1,
+            min_n: Some(1),
+            seed: Some(1),
+            train_frac: 0.5,
+            max_passes: DEFAULT_MAX_PASSES,
+            keep_corridor: false,
+            risk: Default::default(),
+            screen_entry: false,
+            model: ModelSettings {
+                latency_ms: 0.0,
+                ..Default::default()
+            },
+        },
+        &SearchHandle::new(),
+    )
+    .expect("an embargo search answer")
+}
+
+/// Keeping a training replay's held tail would leak holdout prices into the fact baseline.
+#[test]
+fn search_purges_training_deal_whose_tape_reaches_holdout() {
+    let mut deals: Vec<_> = [10, 99, 110, 120]
+        .into_iter()
+        .map(|uid| prepared(uid, 101.0))
+        .collect();
+    deals[1].deal.close_ms = 100_000;
+    deals[1].trail_ms = 60_000;
+    let found = embargo_search(&deals);
+    assert_eq!(
+        found.fact_train.n, 1,
+        "two chronological training deals minus one overlapping tail"
+    );
+    assert_eq!(found.purged, 1);
+    assert_eq!(found.fact_holdout.unwrap().n, 2);
+}
+
+/// A large overlapping winner must not choose a take that loses on the unseen-safe training deal.
+#[test]
+fn search_purge_changes_the_take_chosen_by_a_leaked_winner() {
+    let mut deals: Vec<_> = [10, 99, 110, 120]
+        .into_iter()
+        .map(|uid| prepared(uid, 101.0))
+        .collect();
+    let t0 = deals[0].deal.buy_ms;
+    deals[0].ticks = Arc::from(vec![
+        tick(t0 - 500, 100.0),
+        tick(t0, 100.0),
+        tick(t0 + 300, 100.4),
+        tick(t0 + 900, 99.0),
+        tick(t0 + 5_000, 99.0),
+    ]);
+    deals[0].deal.close_ms = t0 + 5_000;
+    deals[0].own = Arc::new(
+        [
+            ("SellPrice".into(), "0.2".into()),
+            ("StopLoss".into(), "-0.5".into()),
+        ]
+        .into(),
+    );
+    deals[1].deal.close_ms = 100_000;
+    deals[1].trail_ms = 60_000;
+    deals[1].deal.spent = 100_000.0;
+    let found = embargo_search(&deals);
+    assert_eq!(found.values, vec![("SellPrice".into(), "0.4".into())]);
+}
+
+/// A strict comparison would discard a safe boundary, while ignoring run-up leaks MoonShot prices.
+#[test]
+fn purge_keeps_deals_ending_before_holdout_entry() {
+    let mut deals: Vec<_> = [10, 99, 110]
+        .into_iter()
+        .map(|uid| prepared(uid, 101.0))
+        .collect();
+    let embargo = deals[2].deal.buy_ms - super::super::RUN_UP_MS;
+    deals[0].deal.close_ms = embargo;
+    deals[1].deal.close_ms = embargo + 1;
+    deals[1].ticks = Arc::from([]);
+    deals[2].deal.kind = "MoonShot".into();
+    deals[2].ticks = Arc::from(vec![tick(embargo, 100.0)]);
+    assert_eq!(purged_train(&deals, 2), vec![0]);
+    assert_eq!(
+        purged_train(&deals, 3),
+        vec![0, 1, 2],
+        "no holdout means no embargo"
+    );
+}
+
+/// Ignoring the run-up before order creation would admit training tape used by holdout decisions.
+#[test]
+fn purge_starts_at_holdout_order_delta_evaluation() {
+    let mut deals = vec![prepared(10, 101.0), prepared(110, 101.0)];
+    deals[1].deal.buy_set_ms = Some(100_000);
+    deals[1].ticks = Arc::from(vec![tick(110_000, 100.0)]);
+    deals[0].deal.close_ms = 105_000 - super::super::RUN_UP_MS;
+    deals[0].ticks = Arc::from([]);
+    assert!(purged_train(&deals, 1).is_empty());
+}
+
+/// Truncating fractional prints would admit overlapping training and holdout tape.
+#[test]
+fn purge_rounds_fractional_tape_bounds_outward() {
+    let mut deals = vec![prepared(10, 101.0), prepared(110, 101.0)];
+    deals[0].deal.close_ms = 1_000;
+    let mut last = tick(1_000, 100.0);
+    last.time_ms = 1_000.7;
+    deals[0].ticks = Arc::from(vec![last]);
+    let mut first = tick(1_000, 100.0);
+    first.time_ms = 1_000.3;
+    deals[1].ticks = Arc::from(vec![first]);
+    assert!(purged_train(&deals, 1).is_empty());
+}
+
+/// The earliest holdout tape or delta evaluation must embargo every training replay source.
+#[test]
+fn purge_uses_all_holdout_starts_and_training_window_ends() {
+    let mut deals: Vec<_> = [10, 20, 110, 120]
+        .into_iter()
+        .map(|uid| prepared(uid, 101.0))
+        .collect();
+    deals[0].trail_ms = 19_000;
+    deals[1].ticks = Arc::from(vec![tick(60_001, 100.0)]);
+    deals[3].deal.buy_set_ms = Some(60_000);
+    assert_eq!(purged_train(&deals, 2), vec![0]);
+    deals[2].ticks = Arc::from(vec![tick(20_000, 100.0)]);
+    assert!(purged_train(&deals, 2).is_empty());
+    deals[2].ticks = Arc::from([]);
+    deals[3].deal.buy_set_ms = Some(130_000);
+    assert_eq!(
+        purged_train(&deals, 2),
+        vec![0, 1],
+        "invalid order creation falls back to buy"
+    );
+}
 
 pub(super) fn tick(t_ms: i64, price: f64) -> Tick {
     Tick {
@@ -45,6 +196,7 @@ pub(super) fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         archived_take: None,
         fact_modifier: None,
         hook_depth_pct: None,
+        drops_detect: None,
         hook_stated_take_pct: None,
         strike_detect: None,
         step_lag_ms: 0.0,
@@ -238,8 +390,8 @@ fn the_holdout_is_scored_but_never_fitted_on() {
     // The first six deals peak at 101, the last two at 100.5: fitted on the first 75 %, the
     // search picks 1 %, which the holdout then fails to reach.
     let deals: Vec<PreparedDeal> = (1..=6)
-        .map(|uid| prepared(uid, 101.0))
-        .chain((7..=8).map(|uid| prepared(uid, 100.5)))
+        .map(|uid| prepared(uid * 60, 101.0))
+        .chain((7..=8).map(|uid| prepared(uid * 60, 100.5)))
         .collect();
     let held = HashMap::new();
     let defaults = HashMap::new();

@@ -980,6 +980,12 @@ pub(in crate::analytics) fn cell_tip(ready: &Readiness) -> String {
         let key = super::plural_key("analytics.ticks.why.fetchable", ready.fetchable);
         lines.push(t!(key.as_str(), n = ready.fetchable).to_string());
     }
+    // The count of deals still loading is the autoload's, not the yield above. Idle
+    // autoload (`None`) keeps the sentence and drops the number; a strategy with nothing
+    // left to fetch stays on the breakdown alone.
+    if ready.fetchable > 0 || super::ticks::fetch::autoload::pending_rows().is_some() {
+        lines.push(super::ticks::why::background_loading_line());
+    }
     lines.join("\n")
 }
 
@@ -1339,7 +1345,7 @@ impl AnalyticsView {
     /// Arm a pass when the list is loaded on "Entry/Exit" and its inputs moved since the last
     /// launch. Called on every render of the strategy list; cheap when nothing moved.
     pub(in crate::analytics::tuner) fn ensure_ready_pass(&mut self, cx: &mut Context<Self>) {
-        if !self.strat_mode.shows_ready() || self.ticks.best_running {
+        if !self.strat_mode.shows_ready() {
             return;
         }
         let loaded = self.strategy_data.data().is_some()
@@ -1377,10 +1383,6 @@ impl AnalyticsView {
                 let _ = this.update(cx, |this, cx| {
                     // A later change re-armed the timer with its own key; this one is retired.
                     if this.ready.launched != Some(key) {
-                        return;
-                    }
-                    if this.ticks.best_running {
-                        this.ready.launched = None;
                         return;
                     }
                     // A report or tape change does not cut a running pass short — on a busy
@@ -1513,7 +1515,6 @@ impl AnalyticsView {
                             klines.as_ref(),
                             now_ms,
                             Some(&reads),
-                            None,
                         )
                     },
                     &progress,

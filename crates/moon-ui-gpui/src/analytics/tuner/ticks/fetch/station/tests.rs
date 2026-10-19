@@ -7,6 +7,190 @@ use super::{Filled, ReplayWindow, Unfillable, lacking, note_filed, prefill_rows}
 /// Serializes tests that read or write the process-wide unfillable set.
 static UNFILLABLE_TEST: Mutex<()> = Mutex::new(());
 
+/// Keeping a refusal after a window edit permanently skips the newly requested margins.
+#[test]
+fn window_growth_invalidates_station_refusals() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let _refusals = UNFILLABLE_TEST.lock().unwrap_or_else(|p| p.into_inner());
+    moon_core::market::trade_replay::set_margin_s(180);
+    super::unfillable().refuse(-94_001, "synthetic", "XALPHA");
+    moon_core::market::trade_replay::set_margin_s(600);
+    let retry = super::candidate(-94_001);
+    forget(-94_001);
+    assert!(retry, "the wider window must get a fresh station attempt");
+}
+
+/// The request must use the captured row margin, not a newer process-wide setting.
+#[test]
+fn station_requests_keep_the_rows_captured_tail_and_exact_front_gap() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    moon_core::market::trade_replay::set_margin_s(600);
+    let row = trade("XALPHA", 1_000_000, 1_010_000);
+    let wants = lacking(
+        &[row],
+        |row| row.clone(),
+        |_, _, _, _| Some(vec![(990_000, 1_070_000)]),
+    );
+    assert_eq!(wants.len(), 1);
+    assert_eq!(wants[0].spans, vec![(970_000, 989_999)]);
+}
+
+/// A short-tail exception cannot hide a missing pre-entry margin.
+#[test]
+fn allowing_short_tails_never_drops_a_missing_front_margin() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let row = trade("XALPHA", 1_000_000, 1_010_000);
+    let (rows, held) = super::drop_held_at(
+        60,
+        vec![row],
+        |row| row.clone(),
+        |_, _, _, _| Some(vec![(990_000, 1_010_000)]),
+        |_, _| true,
+    );
+    assert_eq!(held, 0);
+    assert_eq!(rows.len(), 1);
+}
+
+/// Model pads alone cannot classify a 180-second pack as a held 600-second window.
+#[test]
+fn widened_margin_is_not_held_even_when_model_pads_are_complete() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let mut row = trade("XALPHA", 1_000_000, 1_010_000);
+    row.2.margin_ms = 600_000;
+    row.2.from_ms = 400_000;
+    row.2.to_ms = 1_610_000;
+    for allow_short in [false, true] {
+        let (rows, held) = super::drop_held_at(
+            60,
+            vec![row.clone()],
+            |row| row.clone(),
+            |_, _, _, _| Some(vec![(820_000, 1_190_000)]),
+            |_, _| allow_short,
+        );
+        assert_eq!(held, 0);
+        assert_eq!(rows.len(), 1);
+    }
+}
+
+/// Long positions request both endpoint margins while skipping their idle middle.
+#[test]
+fn long_positions_request_both_ends_and_short_close_tails() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    moon_core::market::trade_replay::set_margin_s(600);
+    let mut row = trade("XALPHA", 1_000_000, 4_600_000);
+    row.2.margin_ms = 600_000;
+    row.2.long_position_ms = 300_000;
+    row.2.from_ms = 400_000;
+    row.2.to_ms = 5_200_000;
+    let wants = lacking(
+        &[row],
+        |row| row.clone(),
+        |_, _, _, _| Some(vec![(820_000, 1_180_000), (4_420_000, 4_780_000)]),
+    );
+    assert_eq!(
+        wants[0].spans,
+        vec![
+            (400_000, 819_999),
+            (1_180_001, 1_600_000),
+            (4_000_000, 4_419_999),
+            (4_780_001, 5_200_000)
+        ]
+    );
+}
+
+/// A ceiling-evicted fill must become final for this generation rather than re-fetch forever.
+#[test]
+fn a_fill_evicted_by_the_injected_cap_is_not_requested_again() {
+    use moon_core::feed::types::{Side, Tick};
+    use moon_core::market::trade_replay::trade_cache::TradeCache;
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let _refusals = UNFILLABLE_TEST.lock().unwrap_or_else(|p| p.into_inner());
+    let cache = TradeCache::open_with_ceiling(":memory:".into(), || Some(0)).unwrap();
+    let uid = -94_002;
+    forget(uid);
+    let place = |row: &super::super::job::QueuedRow| {
+        (
+            row.address.exchange_key.clone(),
+            row.address.market.clone(),
+            row.window,
+        )
+    };
+    let held =
+        |exchange: &str, market: &str, from, to| cache.held_spans(exchange, market, from, to);
+    let (rows, _, _, filled) = prefill_rows(
+        vec![queued_unservable(uid)],
+        place,
+        held,
+        |_, _| false,
+        |rows| {
+            let wants = lacking(rows, place, held);
+            assert_eq!(wants.len(), 1);
+            for want in wants {
+                for (from, to) in want.spans {
+                    cache.insert_from_station(
+                        &want.exchange,
+                        &want.market,
+                        from,
+                        to,
+                        vec![Tick {
+                            time_ms: from as f64,
+                            price: 1.0,
+                            qty: 1.0,
+                            side: Side::Buy,
+                        }],
+                    );
+                }
+            }
+            assert!(cache.sync(std::time::Duration::from_secs(5)));
+            Filled {
+                markets: 1,
+                pieces: 1,
+                ..Default::default()
+            }
+        },
+    );
+    assert_eq!(
+        rows.len(),
+        1,
+        "zero ceiling evicts the freshly inserted print"
+    );
+    assert!(
+        held("synthetic", "XALPHAUSDT", 0, 1_000_000)
+            .unwrap()
+            .is_empty()
+    );
+    super::commit_station_answer(&rows, filled, false);
+    assert!(!super::candidate(uid));
+    let next_requests = rows
+        .iter()
+        .filter(|row| super::candidate(row.deal.report_uid))
+        .count();
+    forget(uid);
+    assert_eq!(next_requests, 0);
+}
+
+/// A broken multi-market pull must not turn unvisited rows into permanent station misses.
+#[test]
+fn partial_pull_failure_does_not_latch_unanswered_rows() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let _refusals = UNFILLABLE_TEST.lock().unwrap_or_else(|p| p.into_inner());
+    let uid = -94_003;
+    forget(uid);
+    super::commit_station_answer(
+        &[queued_unservable(uid)],
+        Filled {
+            markets: 2,
+            pieces: 1,
+            failed: true,
+            ..Default::default()
+        },
+        false,
+    );
+    let retry = super::candidate(uid);
+    forget(uid);
+    assert!(retry, "transport/persistence failures must stay retryable");
+}
+
 /// Drop a fixture refusal while preserving the store's snapshot invalidation invariant.
 fn forget(uid: i64) {
     let mut rows = super::unfillable();
@@ -44,6 +228,7 @@ fn refusal_snapshots_share_an_arc_until_membership_changes() {
 /// A refusal must refresh chips and counts, and unrelated filings must keep the tail admitted.
 #[test]
 fn refusal_refreshes_cached_classification_until_its_market_is_filed() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     use super::super::super::state::{DealRow, TapeStatus, TicksData, TicksState};
     use super::super::super::{rows, tail, why::DealChip};
     use moon_core::db::tuner::ticks::Verdict;
@@ -135,6 +320,7 @@ fn refusal_refreshes_cached_classification_until_its_market_is_filed() {
 /// A latched final row stops waiting even if its timestamps still lie inside core retention.
 #[test]
 fn station_final_tail_no_longer_waits_for_a_source() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     let _guard = UNFILLABLE_TEST
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -146,8 +332,7 @@ fn station_final_tail_no_longer_waits_for_a_source() {
         row.deal.report_uid,
         row.window.close_ms,
         30_000,
-        now,
-        (false, true)
+        now
     ));
     super::unfillable().refuse(row.deal.report_uid, "synthetic", "XALPHAUSDT");
     let fillable = super::super::super::tail::fillable_at(
@@ -156,7 +341,6 @@ fn station_final_tail_no_longer_waits_for_a_source() {
         row.window.close_ms,
         30_000,
         now,
-        (false, true),
     );
     forget(row.deal.report_uid);
     assert!(!fillable);
@@ -165,6 +349,7 @@ fn station_final_tail_no_longer_waits_for_a_source() {
 /// A disk-held row must not invalidate the view when the station filed no new pieces.
 #[test]
 fn already_held_rows_do_not_bump_the_station_filing_generation() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     let before = super::filed_generation();
     let (_, held, _, filled) = prefill_rows(
         vec![trade("HELD", 100_000, 110_000)],
@@ -182,7 +367,7 @@ fn already_held_rows_do_not_bump_the_station_filing_generation() {
 #[test]
 fn station_misses_survive_unrelated_filings() {
     let mut refused = Unfillable::default();
-    refused.refresh((7, 60, (true, true)));
+    refused.refresh((7, 60, (180_000, 300_000)));
     refused.refuse(91, "synthetic", "XALPHA");
     let revision = refused.revision;
     refused.filed("synthetic", "XBETA");
@@ -193,9 +378,10 @@ fn station_misses_survive_unrelated_filings() {
     assert!(refused.uids.is_empty());
     assert_ne!(refused.revision, revision);
     for generation in [
-        (8, 60, (true, true)),
-        (8, 120, (true, true)),
-        (8, 120, (false, true)),
+        (8, 60, (180_000, 300_000)),
+        (8, 120, (180_000, 300_000)),
+        (8, 120, (600_000, 300_000)),
+        (8, 120, (600_000, 1_800_000)),
     ] {
         refused.refuse(91, "synthetic", "XALPHA");
         let revision = refused.revision;
@@ -208,6 +394,7 @@ fn station_misses_survive_unrelated_filings() {
 /// A refused station-only row drops out of the footer and the next automatic prefill.
 #[test]
 fn an_unservable_row_is_not_offered_or_counted_again() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     let _guard = UNFILLABLE_TEST
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -241,6 +428,7 @@ fn an_unservable_row_is_not_offered_or_counted_again() {
             archived_take: None,
             fact_modifier: None,
             hook_depth_pct: None,
+            drops_detect: None,
             hook_stated_take_pct: None,
             strike_detect: None,
             step_lag_ms: 0.0,
@@ -292,7 +480,6 @@ fn an_unservable_row_is_not_offered_or_counted_again() {
         source.replay_address(1).unwrap(),
         moon_core::market::trade_replay::venue_caps::TickValue::Base,
         window,
-        super::super::job::RowOrigin::Autoload,
     );
     let (remaining, _, _) = super::prefill(vec![queued], None, || false);
     assert!(
@@ -308,6 +495,7 @@ fn an_unservable_row_is_not_offered_or_counted_again() {
 /// autoload asks the station for that row again.
 #[test]
 fn empty_station_answer_is_remembered_when_nothing_else_can_fetch() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     let _guard = UNFILLABLE_TEST
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -375,6 +563,7 @@ fn queued_unservable(report_uid: i64) -> super::super::job::QueuedRow {
             archived_take: None,
             fact_modifier: None,
             hook_depth_pct: None,
+            drops_detect: None,
             hook_stated_take_pct: None,
             strike_detect: None,
             step_lag_ms: 0.0,
@@ -416,13 +605,13 @@ fn queued_unservable(report_uid: i64) -> super::super::job::QueuedRow {
         source.replay_address(1).unwrap(),
         moon_core::market::trade_replay::venue_caps::TickValue::Base,
         window,
-        super::super::job::RowOrigin::Autoload,
     )
 }
 
 /// Dropping by the replay pad would skip the station and leave thirty-second rows short forever.
 #[test]
 fn station_fills_short_tail_before_the_remaining_rows_are_queued() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     use std::cell::Cell;
     let end = Cell::new(140_000);
     let offered = Cell::new(0);
@@ -483,6 +672,7 @@ fn trade(market: &str, open_ms: i64, close_ms: i64) -> (String, String, ReplayWi
 /// happen is asked whole.
 #[test]
 fn the_station_is_asked_only_for_what_the_file_lacks() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     let rows = vec![
         trade("A", 100_000, 110_000),
         trade("A", 105_000, 150_000),

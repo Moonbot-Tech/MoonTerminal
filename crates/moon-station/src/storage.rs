@@ -18,10 +18,6 @@ use std::time::{Duration, Instant};
 
 use moon_core::station_api::Disk;
 
-/// The free space always kept, at the least: 2 GiB.
-const MIN_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-/// The free space always kept, as a share of the filesystem: a tenth.
-const MIN_FREE_SHARE: u64 = 10;
 /// How often a lasting shortfall is warned about in the journal.
 const WARN_EVERY: Duration = Duration::from_secs(30 * 60);
 /// How long after asking for room the keeper looks again: long enough for the eviction and the
@@ -45,17 +41,20 @@ pub fn fits(disk: Disk, bytes: u64) -> bool {
             .is_some_and(|free| free >= reserve(disk.total_bytes))
 }
 
-/// Measure the initialized data filesystem before spending archive or tape-write bytes.
-/// An unavailable measurement cannot prove sufficient room, so the download waits.
-pub fn room_for(bytes: u64) -> bool {
+/// Snapshot spendable space once for a daily download; unavailable measurements fail closed.
+pub fn archive_budget() -> Option<u64> {
     ROOT.get()
         .and_then(|root| crate::host::disk_space(root))
-        .is_some_and(|disk| fits(disk, bytes))
+        .and_then(|disk| {
+            fits(disk, 0)
+                .then(|| moon_core::disk_reserve::spendable(disk.free_bytes, disk.total_bytes))
+                .flatten()
+        })
 }
 
 /// The free space the station keeps on a filesystem of `total_bytes`.
 pub fn reserve(total_bytes: u64) -> u64 {
-    MIN_FREE_BYTES.max(total_bytes / MIN_FREE_SHARE)
+    moon_core::disk_reserve::reserve(total_bytes)
 }
 
 /// How many bytes the disk is short of its reserve; `None` while it has enough, or where the

@@ -6,6 +6,68 @@ use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
 use super::*;
 
+/// Dropping NULL Detect samples rejects an improving Min despite enough always-passing trades.
+#[test]
+fn seam_detect_suggestion_counts_and_scores_null_rows() {
+    let conn = Connection::open_in_memory().expect("memory db");
+    conn.execute_batch(
+        "CREATE TABLE samples(xpricedelta REAL, pnl REAL, ts INTEGER);
+         WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<20)
+         INSERT INTO samples SELECT NULL, 2, 100 FROM n;
+         INSERT INTO samples VALUES(1,-10,100),(2,-10,100),(3,10,100),(4,10,100);",
+    )
+    .expect("Detect fixture");
+    let q = Query {
+        from: 0,
+        to: 200,
+        ..Default::default()
+    };
+    let source = "(SELECT * FROM samples WHERE ts>=?1 AND ts<=?2) o";
+    for round in [false, true] {
+        let suggestion = suggest_field_from_source(&conn, &q, source, "xpricedelta", 10, 16, round)
+            .expect("scan")
+            .expect("twenty NULL rows make Min 3 admissible");
+        assert_eq!(suggestion.from, Some(3.0));
+        assert_eq!(suggestion.n, 22);
+        assert_eq!(suggestion.profit, 60.0);
+        let predicate = Variant {
+            bounds: vec![Bound {
+                field: "xpricedelta".into(),
+                from: suggestion.from,
+                to: suggestion.to,
+            }],
+            ..Default::default()
+        }
+        .where_sql();
+        let actual: (i64, f64) = conn
+            .query_row(
+                &format!("SELECT COUNT(*), SUM(pnl) FROM samples o WHERE 1=1{predicate}"),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("independent what-if");
+        assert_eq!((suggestion.n, suggestion.profit), actual);
+    }
+    let boundary = suggest_field_from_source(&conn, &q, source, "xpricedelta", 23, 16, false)
+        .expect("scan")
+        .expect("Min 2 keeps twenty-three trades");
+    assert_eq!(
+        (boundary.from, boundary.n, boundary.profit),
+        (Some(2.0), 23, 50.0)
+    );
+    assert!(
+        suggest_field_from_source(&conn, &q, source, "xpricedelta", 24, 16, false)
+            .expect("scan")
+            .is_none()
+    );
+    conn.execute("UPDATE samples SET pnl=-3 WHERE xpricedelta IS NULL", [])
+        .expect("losses");
+    let suggestion = suggest_field_from_source(&conn, &q, source, "xpricedelta", 10, 16, false)
+        .expect("scan")
+        .expect("still improves baseline");
+    assert_eq!((suggestion.n, suggestion.profit), (22, -40.0));
+}
+
 /// Sharing a money preflight must preserve both sources, split errors and measured-clock rows.
 /// Reusing the active Percent source as USDT would change the second projection in this matrix.
 #[test]
@@ -898,4 +960,54 @@ fn round_bound_keeps_a_value_already_on_its_grid() {
         assert!(round_bound(v, true) >= v, "upper bound {v}");
         assert!(round_bound(v, false) <= v, "lower bound {v}");
     }
+}
+
+/// A Min-only field (the Drops `xPriceDelta`) is never suggested or scored with an upper bound,
+/// because Save writes only its Min: (2.9, -10), (3.0, +20), (3.1, -3), (3.2, +1) must not pick [3.0, 3.0].
+#[test]
+fn a_min_only_field_cuts_from_below_only() {
+    let mut vals = vec![(2.9, -10.0), (3.0, 20.0), (3.1, -3.0), (3.2, 1.0)];
+    let s = best_range_bounded(&mut vals, 1, 4, false, true).expect("cutting 2.9 improves");
+    assert_eq!((s.from, s.to), (Some(3.0), Some(3.2)));
+    assert_eq!(s.profit, 18.0);
+    let v = Variant {
+        bounds: vec![Bound {
+            field: "xpricedelta".into(),
+            from: Some(3.0),
+            to: Some(3.0),
+        }],
+        ..Variant::default()
+    };
+    let sql = v.where_sql();
+    assert!(sql.contains(">= 3"), "{sql}");
+    assert!(
+        !sql.contains("<="),
+        "the unsaved Max must not filter: {sql}"
+    );
+}
+
+/// A deal of another detect has no `xPriceDelta`; a DropsPriceDelta Min must leave it in.
+#[test]
+fn a_detect_min_keeps_rows_without_the_value() {
+    let v = Variant {
+        bounds: vec![Bound {
+            field: "xpricedelta".into(),
+            from: Some(3.0),
+            to: None,
+        }],
+        ..Variant::default()
+    };
+    let conn = Connection::open_in_memory().expect("memory db");
+    let kept: i64 = conn
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM (SELECT NULL AS xpricedelta UNION ALL SELECT 2.9 \
+                 UNION ALL SELECT 3.0) o WHERE 1=1{}",
+                v.where_sql()
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .expect("count");
+    assert_eq!(kept, 2);
 }

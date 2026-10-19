@@ -114,7 +114,7 @@ pub fn has_delta_terms(mods: &Modifiers) -> bool {
 /// Magnitudes, so coefficients of both signs never cancel into a scale of nothing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FactModifier {
-    /// The core's sum less the model's own at the fill, both under the fact's coefficients.
+    /// The core's sum less the model's own at sell booking, under the fact's coefficients.
     residual: f64,
     /// [`weight`] of the fact's terms; above zero by construction ([`FactModifier::of`]).
     weight: f64,
@@ -163,7 +163,9 @@ impl FactModifier {
             (Some(take), Some(stop)) => take.overlap(stop).unwrap_or(take),
             (take, stop) => take.or(stop)?,
         };
-        let raw = model_sum(&params.sell_mods, deal, deal.buy_ms);
+        let at_ms =
+            crate::db::tuner::ticks::verify::fact_sell_start(deal, params, exit_points).t_ms;
+        let raw = model_sum(&params.sell_mods, deal, at_ms);
         let cap = params.max_modifier;
         let capped = if cap > 0.0 { raw.min(cap) } else { raw };
         let kept = reading.nearest(capped);

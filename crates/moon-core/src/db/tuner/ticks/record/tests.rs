@@ -8,6 +8,53 @@ use crate::db::tuner::ticks::{Deltas, ExitKind, ModelSettings, simulate, verify}
 use crate::feed::types::{Side, Tick};
 use crate::market::trade_replay::Coverage;
 
+/// SellDelay only changes ladder timing; a plain stop keeps its factual anchor.
+#[test]
+fn plain_stop_anchor_keeps_a_different_sell_delay() {
+    let d = stopped();
+    let p = book();
+    let anchor = StopAnchor::of(&d, &p, None);
+    let delayed = ExitParams {
+        sell_delay_ms: 10_000.0,
+        ..p
+    };
+    assert!(
+        anchor.holds(&d, fact_fill(), &delayed),
+        "plain stop ignores SellDelay"
+    );
+}
+
+/// Changing SellDelay shifts the ladder's eligibility and must discard the fact's stop.
+#[test]
+fn ladder_stop_anchor_rejects_a_different_sell_delay() {
+    let mut d = stopped();
+    d.core_name = "CORE_A".into();
+    d.coin = "XALPHA".into();
+    let p = ExitParams {
+        stop_loss_pct: -5.0,
+        second_stop: Some(StopStep {
+            after_s: 5.0,
+            switch_pct: -2.0,
+            level_pct: 0.0,
+        }),
+        ..ExitParams::default()
+    };
+    let anchor = StopAnchor::of(&d, &p, None);
+    let fill = Fill {
+        t_ms: 0,
+        price: 100.0,
+    };
+    assert!(anchor.holds(&d, fill, &p));
+    let delayed = ExitParams {
+        sell_delay_ms: 10_000.0,
+        ..p
+    };
+    assert!(
+        !anchor.holds(&d, fill, &delayed),
+        "a delayed ladder cannot inherit the fact's stop"
+    );
+}
+
 fn tick(t_ms: i64, price: f64) -> Tick {
     Tick {
         time_ms: t_ms as f64,
@@ -54,6 +101,7 @@ fn stopped() -> Deal {
         archived_take: None,
         fact_modifier: None,
         hook_depth_pct: None,
+        drops_detect: None,
         hook_stated_take_pct: None,
         strike_detect: None,
         step_lag_ms: 0.0,
@@ -390,6 +438,8 @@ fn a_different_trailing_does_not_inherit_the_facts_exit() {
 /// fact's own trailing stays quiet to the close.
 #[test]
 fn the_stop_and_the_trailing_are_quiet_each_under_its_own_settings() {
+    let mut p = trailing();
+    p.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
     let mut d = stopped();
     d.sell_reason = "Auto Price Down".into();
     d.close_ms = 60_000;
@@ -399,7 +449,7 @@ fn the_stop_and_the_trailing_are_quiet_each_under_its_own_settings() {
     };
     d.stop_anchor = Some(StopAnchor::of(&d, &fact, None));
     let ticks = peak_and_fall();
-    let w = walk(&d, &ticks, fact_fill(), 150.0, &trailing());
+    let w = walk(&d, &ticks, fact_fill(), 150.0, &p);
     assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 6_450), "{w:?}");
     assert!((w.exit.price - 100.9).abs() < 1e-4, "{w:?}");
     // The fact's own trailing is the one the close proves quiet.
@@ -469,4 +519,31 @@ fn a_late_booked_facts_sell_timers_run_from_the_booked_take() {
     let outcome = simulate(&d, &ticks, &EntryParams::Fact, &p, None);
     let exit = outcome.exit.expect("an exit");
     assert_eq!((exit.kind, exit.t_ms), (ExitKind::Line, 4_500), "{exit:?}");
+}
+/// A code-level trigger estimator must not override a fact-proven fire.
+#[test]
+fn anchored_fast_stop_ignores_fast_price() {
+    let mut d = stopped();
+    let mut p = ExitParams {
+        fast_stop_loss: true,
+        ..book()
+    };
+    d.stop_anchor = Some(StopAnchor::of(&d, &p, None));
+    for rule in [
+        crate::db::tuner::ticks::settings::FastPrice::LastOfTick,
+        crate::db::tuner::ticks::settings::FastPrice::VwapLastTrades(5),
+    ] {
+        p.model.fast_price = rule;
+        let w = walk(
+            &d,
+            &[tick(1000, 100.0), tick(d.close_ms + 1000, 100.0)],
+            fact_fill(),
+            110.0,
+            &p,
+        );
+        assert_eq!(
+            (w.exit.kind, w.exit.t_ms, w.exit.price),
+            (ExitKind::Stop, d.close_ms, d.sell_price)
+        );
+    }
 }

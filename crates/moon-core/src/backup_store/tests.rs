@@ -68,28 +68,6 @@ fn staging_names_require_numeric_process_and_sequence_components() {
     assert!(!is_staging_name(".incoming-123-"));
 }
 
-/// Reusing an occupied base name would overwrite a same-second config/manual recovery point.
-#[test]
-fn distinct_publication_uses_a_collision_suffix() {
-    let root = temp_root("distinct");
-    let backups = root.join("backups");
-    let store = SnapshotStore::new(&backups, &["data"], true);
-    let first = store.create_staging().unwrap();
-    std::fs::write(first.join("data"), b"one").unwrap();
-    let second = store.create_staging().unwrap();
-    std::fs::write(second.join("data"), b"two").unwrap();
-
-    assert_eq!(
-        store.publish_distinct(&first, "20260804-120000").unwrap(),
-        backups.join("20260804-120000")
-    );
-    assert_eq!(
-        store.publish_distinct(&second, "20260804-120000").unwrap(),
-        backups.join("20260804-120000-01")
-    );
-    let _ = std::fs::remove_dir_all(root);
-}
-
 /// Accepting an exact-name winner without its domain validator would let a foreign lookalike
 /// suppress a scheduled strategy snapshot.
 #[test]

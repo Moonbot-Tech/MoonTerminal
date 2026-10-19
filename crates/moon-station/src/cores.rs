@@ -14,13 +14,13 @@
 //! endpoint_override = "core.example.net:5020" # optional; empty follows the key
 //! ```
 //!
-//! `[tape]` is the station's window around a trade — its own, set from the terminal's Settings by
-//! hand (a new station starts with the installing terminal's `[trade_replay]` window):
+//! `[tape]` carries the terminal's shared window and the station's recovery policy.
+//! Absent window fields use the same defaults as the terminal's `[trade_replay]`:
 //!
 //! ```toml
 //! [tape]
-//! margin_s = 180
-//! long_position_min = 10
+//! margin_s = 600
+//! long_position_min = 30
 //! auto_catchup = true    # on when absent
 //! archive_catchup = true # on when absent
 //! max_age_days = 1825    # five years when absent; 0 keeps forever; finite limits 1..3650
@@ -97,8 +97,8 @@ struct UpdateSection {
     auto: Option<bool>,
 }
 
-/// `[tape]`: the recording window and recovery choices. Absent window fields keep storage
-/// values; absent recovery switches enable full catch-up and retention defaults to five years
+/// `[tape]`: the recording window and recovery choices. Absent window fields use shared storage
+/// defaults; absent recovery switches enable full catch-up and retention defaults to five years
 /// including emulator trades.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]

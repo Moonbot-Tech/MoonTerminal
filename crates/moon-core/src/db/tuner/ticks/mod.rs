@@ -29,6 +29,7 @@ pub mod calibrate;
 pub mod deals;
 pub mod deltas;
 pub mod diag;
+pub mod drops;
 pub mod entry;
 pub mod exit;
 pub mod gap;
@@ -278,6 +279,8 @@ pub struct Deal {
     /// the comment states that take ([`record::placed_hook_depth`]). `None` for every other kind,
     /// and for a hook row whose comment the scan could not read.
     pub hook_depth_pct: Option<f64>,
+    /// Factual drop detect parsed from this trade's comment, kept only on DropsDetection.
+    pub drops_detect: Option<drops::DropsDetect>,
     /// The take the core actually placed on a hook trade, per cent from the buy before the delta
     /// modifiers, as the same comment states it. It does not stand in for the formula — a
     /// variant asks about a level the core never used — but it fixes the depth the formula runs
@@ -601,6 +604,8 @@ pub enum EntryParams {
     /// whose "Entry" group is not being varied.
     Fact,
     MoonShot(MshotParams),
+    /// A long drop detect and its buy limit, pending real-data calibration.
+    Drops(drops::DropsParams),
 }
 
 /// The tape must reach this far back before the window's open — the entry order's creation, or
@@ -704,6 +709,10 @@ pub fn entry_fill(
             Some(fact_fill)
         }
         EntryParams::MoonShot(params) => MshotEntry::new(params).fill(deal, ticks, entry_line),
+        EntryParams::Drops(params) if matches!(deal.own_entry.as_ref(), Some(EntryParams::Drops(own)) if own.same_strategy(params)) => {
+            Some(fact_fill)
+        }
+        EntryParams::Drops(params) => drops::DropsEntry(params).fill(deal, ticks, entry_line),
     }
 }
 

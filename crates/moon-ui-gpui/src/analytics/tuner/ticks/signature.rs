@@ -58,13 +58,11 @@ pub(in crate::analytics::tuner) fn signature_of<'a>(
 }
 
 /// The settings a row's held read and its "missing" verdict were made under, beside the model's:
-/// the shortest tail (the asked tail and the short-tail floor), the automatic sources (whether
-/// a short tail can still be filled), the model's margin and the long-position split (the
-/// window asked for).
+/// the shortest tail (the asked tail and the short-tail floor), the model's margin and the
+/// long-position split (the window asked for).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::analytics) struct SamplePolicy {
     pub(in crate::analytics::tuner) min_tail_s: u32,
-    pub(in crate::analytics::tuner) switches: (bool, bool),
     pub(in crate::analytics::tuner) margin_ms: i64,
     pub(in crate::analytics::tuner) long_position_ms: i64,
 }
@@ -74,7 +72,6 @@ impl SamplePolicy {
     pub(in crate::analytics::tuner) fn current() -> Self {
         Self {
             min_tail_s: super::tail::effective_s(),
-            switches: super::tail::switches(),
             margin_ms: moon_core::market::trade_replay::margin_ms(),
             long_position_ms: moon_core::market::trade_replay::long_position_ms(),
         }

@@ -13,22 +13,18 @@
 //! # Why a separate file
 //!
 //! Not a table in `klines.sqlite`: prints are a different volume (a busy perpetual is a megabyte
-//! per ten minutes where its bars are a kilobyte), keep their own ceiling, and are the one thing
-//! the reader may want to switch off or delete without touching the bars. The Storage tab shows
-//! this file on its own line with its own switch.
+//! per ten minutes where its bars are a kilobyte) and keep their own ceiling. The Storage tab
+//! shows this file separately from the candle cache.
 //!
 //! # What is kept, and for how long
 //!
-//! Everything, until the reader's ceiling says otherwise: there is no age limit. The prints a
+//! Everything, until the built-in ceiling says otherwise: there is no age limit. The prints a
 //! close copied out of a core's ring are the only copy there will ever be for a venue whose
 //! trade route reaches back hours (Binance futures) or does not exist (Bybit, Hyperliquid), so
-//! the file is an archive, not a cache. `[trade_replay] max_mb` is the one rule that runs on
-//! its own — past it the spans written longest ago go first (by `updated_ms`, which only a
-//! write sets — a replay that reads a span does not renew it) — and `0` keeps everything for
-//! ever. The reader's own cut is the Storage tab's cleanup ([`trim`]) — by the button, or at
-//! startup behind `[trade_replay] cleanup_at_startup`: down to the margin now in force around
-//! the trades the tuner can be run on; deleting the file itself stays a call made with the
-//! terminal closed.
+//! the file is an archive, not a cache. The built-in byte cap runs on its own: past it the spans
+//! written longest ago go first (by `updated_ms`, which only a write sets; a replay read does
+//! not renew it). Startup cleanup ([`trim`]) retains the current margin around tunable trades
+//! before autoload fills their missing tape.
 //!
 //! # Threading
 //!
@@ -36,17 +32,6 @@
 //! thread owns it and every call is a queued op. Writes are nonblocking; a read waits at most
 //! [`READ_TIMEOUT`] and answers `None` for a timeout, which the caller treats as "nothing known"
 //! — a fetch it could have avoided, never a wrong answer.
-//!
-//! # The switch
-//!
-//! `storage.toml` → `[trade_replay] persist_trades` (default on). Off, nothing is read from the
-//! file and nothing is written to it by the replay path, and the tile store lives in memory
-//! alone; a file this session already opened while the switch was on stays open, idle, until
-//! the process exits — the handle is a `OnceLock`, and closing it under a queued write is not
-//! worth a second state. The live value is an atomic the Storage tab flips without a restart,
-//! initialised from the file on first use. The tab's own maintenance — the cleanup and its
-//! preview — opens the file whatever the switch says ([`maintenance_handle`]): a file the
-//! reader switched off is still a file the reader may want smaller.
 //!
 //! # Layout: two tables
 //!
@@ -68,8 +53,7 @@ mod filed;
 mod remote;
 mod trim;
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
@@ -166,15 +150,74 @@ const READ_TIMEOUT: Duration = Duration::from_millis(250);
 /// caller reports that rather than a number.
 const MAINTENANCE_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Ceiling on the packed bytes the file may hold, from `[trade_replay] max_mb` — checked at
-/// open and again after every insert; past it the spans written longest ago go first. Live,
-/// like the switch: the Storage tab moves it without a restart. `None` when the reader set it
-/// to zero and keeps everything, for ever.
+/// Built-in packed-print cap; the terminal also preserves the shared filesystem reserve.
+pub const TRADES_MAX_MB: u32 = 131_072;
+
+/// Supply the built-in cap, independently of the worker's cached disk clamp.
 fn max_bytes() -> Option<i64> {
-    ensure_enabled_loaded();
-    match MAX_MB.load(Ordering::Relaxed) {
-        0 => None,
-        mb => Some(i64::from(mb) * 1024 * 1024),
+    Some(i64::from(TRADES_MAX_MB) * 1024 * 1024)
+}
+
+/// Filesystem measurement injected into the production worker, absent for custom ceilings.
+type DiskProbe = fn(&Path) -> Option<(u64, u64)>;
+
+/// Probe-time packed limit stays fixed between samples so inserts consume headroom once.
+struct DiskCeiling {
+    path: PathBuf,
+    probe: DiskProbe,
+    sampled: Option<(Instant, Option<u64>, bool)>,
+    interval: Duration,
+}
+
+impl DiskCeiling {
+    /// Bind a probe to the database whose main and WAL bytes determine packing density.
+    fn new(path: PathBuf, probe: DiskProbe) -> Self {
+        Self {
+            path,
+            probe,
+            sampled: None,
+            interval: Duration::from_secs(60),
+        }
+    }
+
+    /// Clamp each snapshot, carrying a replacement floor only across consecutive low-disk probes.
+    fn limit(&mut self, held: i64, cap: Option<i64>) -> Option<i64> {
+        let cap = cap?;
+        if self
+            .sampled
+            .is_none_or(|(at, _, _)| at.elapsed() >= self.interval)
+        {
+            let mut below_reserve = false;
+            let limit =
+                self.path
+                    .parent()
+                    .and_then(|dir| (self.probe)(dir))
+                    .map(|(free, total)| {
+                        let (main, wal) = crate::db::maint::db_sizes(&self.path);
+                        let held = held.max(0) as u64;
+                        below_reserve = total != 0 && free <= crate::disk_reserve::reserve(total);
+                        // Evicting a larger victim must not lower the next reserve-bound sample.
+                        let held = if below_reserve {
+                            self.sampled
+                                .filter(|(_, _, below)| *below)
+                                .and_then(|(_, limit, _)| limit)
+                                .unwrap_or(0)
+                                .max(held)
+                        } else {
+                            held
+                        };
+                        crate::disk_reserve::tape_ceiling(
+                            held,
+                            main.saturating_add(wal),
+                            free,
+                            total,
+                            cap.max(0) as u64,
+                        )
+                    });
+            self.sampled = Some((Instant::now(), limit, below_reserve));
+        }
+        let limit = self.sampled.and_then(|(_, limit, _)| limit);
+        Some(limit.map_or(cap, |limit| i64::try_from(limit).unwrap_or(i64::MAX)))
     }
 }
 
@@ -250,10 +293,9 @@ enum Op {
     Inventory {
         reply: mpsc::Sender<rusqlite::Result<Inventory>>,
     },
-    /// Preview clipping without modifying the file.
-    PreviewTrim {
-        keep: Arc<KeepMap>,
-        reply: mpsc::Sender<rusqlite::Result<TrimReport>>,
+    /// Serialize daily full compaction with live inserts and retention.
+    CompactFull {
+        reply: mpsc::Sender<Result<(), CompactFail>>,
     },
     /// Commit a trim and report compaction separately from deletion.
     TrimStart {
@@ -294,25 +336,34 @@ impl TradeCache {
     /// logs once and lets the thread exit, after which every op fails the same way a closed
     /// channel does: reads answer `None`, writes are dropped.
     pub fn open(path: PathBuf) -> Option<Self> {
-        Self::open_with_ceiling(path, max_bytes)
+        Self::start(
+            path,
+            max_bytes,
+            false,
+            Some(crate::disk_reserve::disk_space),
+        )
     }
 
-    /// [`Self::open`] for a file other than `trades.sqlite`, whose byte ceiling is not the Storage
-    /// tab's `[trade_replay] max_mb`: `ceiling` is asked at open and after every insert, and
+    /// [`Self::open`] for a file with a custom byte ceiling: `ceiling` is asked at open and after every insert, and
     /// `None` keeps everything.
     pub fn open_with_ceiling(path: PathBuf, ceiling: fn() -> Option<i64>) -> Option<Self> {
-        Self::start(path, ceiling, false)
+        Self::start(path, ceiling, false, None)
     }
 
     /// [`Self::open`] for a file without a byte ceiling that gives room back to the disk on
     /// request ([`Self::evict_oldest`]): the station's tape, kept while the server has space.
     pub fn open_evictable(path: PathBuf) -> Option<Self> {
-        Self::start(path, || None, true)
+        Self::start(path, || None, true, None)
     }
 
     /// The worker behind every constructor; `shrinkable` keeps the file in the mode an eviction
-    /// can shrink it in ([`evict::make_shrinkable`]).
-    fn start(path: PathBuf, ceiling: fn() -> Option<i64>, shrinkable: bool) -> Option<Self> {
+    /// can shrink it in ([`evict::make_shrinkable`]); `disk` enables the terminal's reserve clamp.
+    fn start(
+        path: PathBuf,
+        ceiling: fn() -> Option<i64>,
+        shrinkable: bool,
+        disk: Option<DiskProbe>,
+    ) -> Option<Self> {
         let (tx, rx) = mpsc::channel::<Op>();
         std::thread::Builder::new()
             .name("trade-cache".into())
@@ -333,7 +384,16 @@ impl TradeCache {
                         log::warn!("trade cache {} cannot shrink: {e}", path.display());
                     }
                 }
-                let held = match prune(&conn, ceiling()) {
+                let mut disk = disk.map(|probe| DiskCeiling::new(path.clone(), probe));
+                let count = disk.as_ref().and_then(|_| match held_bytes(&conn) {
+                    Ok(held) => Some(held),
+                    Err(e) => {
+                        log::warn!("trade cache disk count failed {}: {e}", path.display());
+                        None
+                    }
+                });
+                let limit = resolved_ceiling(&mut disk, count, ceiling);
+                let held = match prune(&conn, limit) {
                     Ok(held) => held,
                     Err(e) => {
                         // The ceiling still needs a true count to work from: a zero here would
@@ -344,7 +404,7 @@ impl TradeCache {
                 };
                 crate::db::trace::install_on(&conn);
                 log::info!("trade cache открыт: {}", path.display());
-                run(conn, rx, held, ceiling);
+                run(conn, rx, held, ceiling, disk);
             })
             .ok()?;
         Some(Self { tx })
@@ -486,27 +546,37 @@ impl TradeCache {
         rx
     }
 
-    /// Clip every span to `keep` — see [`trim`]. With `apply`, the file is rewritten in one
-    /// transaction and then compacted (`VACUUM`), so the bytes leave the disk, not only the
-    /// table. Waits like [`Self::inventory`].
-    pub fn trim(&self, keep: Arc<KeepMap>, apply: bool) -> Option<rusqlite::Result<TrimReport>> {
-        if apply {
-            return self
-                .trim_start(keep, Compact::Full, None)
-                .recv_timeout(MAINTENANCE_TIMEOUT)
-                .ok()
-                .map(|r| {
-                    r.map(|outcome| {
-                        if let Err(failure) = outcome.compacted {
-                            log::warn!("trade cache compaction after trim failed: {failure:?}");
-                        }
-                        outcome.report
-                    })
-                });
-        }
+    /// Compact on the writer's connection, preserving every queued live write.
+    /// A timeout leaves the queued operation running; disconnection means the worker is gone.
+    pub fn compact_full(&self) -> Result<Result<(), CompactFail>, mpsc::RecvTimeoutError> {
+        self.compact_full_with_timeout(MAINTENANCE_TIMEOUT)
+    }
+
+    /// Wait for queued compaction with an explicit deadline, including short test deadlines.
+    fn compact_full_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<Result<(), CompactFail>, mpsc::RecvTimeoutError> {
         let (reply, rx) = mpsc::channel();
-        self.tx.send(Op::PreviewTrim { keep, reply }).ok()?;
-        rx.recv_timeout(MAINTENANCE_TIMEOUT).ok()
+        self.tx
+            .send(Op::CompactFull { reply })
+            .map_err(|_| mpsc::RecvTimeoutError::Disconnected)?;
+        rx.recv_timeout(timeout)
+    }
+
+    /// Clip spans atomically and compact the committed cut, waiting for the worker.
+    pub fn trim(&self, keep: Arc<KeepMap>) -> Option<rusqlite::Result<TrimReport>> {
+        self.trim_start(keep, Compact::Full, None)
+            .recv_timeout(MAINTENANCE_TIMEOUT)
+            .ok()
+            .map(|r| {
+                r.map(|outcome| {
+                    if let Err(failure) = outcome.compacted {
+                        log::warn!("trade cache compaction after trim failed: {failure:?}");
+                    }
+                    outcome.report
+                })
+            })
     }
 
     /// Wait until every write queued before this call is on disk, at most `timeout` — for a
@@ -535,65 +605,16 @@ impl TradeCache {
     }
 }
 
-/// The one process-wide cache, started on the first use that finds the switch on. `None` only
+/// The one process-wide cache, started on first use. `None` only
 /// when its thread could not be spawned; a file that fails to open leaves the handle in place
 /// with a dead channel behind it (see [`TradeCache::open`]), and the process does not retry —
 /// it would only repeat the warning on every tick stage.
 static CACHE: OnceLock<Option<TradeCache>> = OnceLock::new();
-/// Live value of `[trade_replay] persist_trades`; the Storage tab flips it.
-static ENABLED: AtomicBool = AtomicBool::new(true);
-/// Live value of `[trade_replay] max_mb`; the Storage tab moves it.
-static MAX_MB: AtomicU32 = AtomicU32::new(crate::config::storage::DEFAULT_TRADES_MAX_MB);
-static ENABLED_INIT: OnceLock<()> = OnceLock::new();
-
-fn ensure_enabled_loaded() {
-    ENABLED_INIT.get_or_init(|| {
-        let cfg = crate::config::storage::load();
-        ENABLED.store(cfg.trade_replay.persist_trades, Ordering::Relaxed);
-        MAX_MB.store(cfg.trade_replay.max_mb, Ordering::Relaxed);
-    });
-}
-
-/// Move the live ceiling; the Storage tab writes `storage.toml` beside this. Takes effect on
-/// the next insert — a file already past a lowered ceiling is trimmed then, not at once.
-pub fn set_max_mb(mb: u32) {
-    ensure_enabled_loaded();
-    MAX_MB.store(mb, Ordering::Relaxed);
-}
-
-/// Whether prints are persisted, for the Storage tab.
-pub fn is_enabled() -> bool {
-    ensure_enabled_loaded();
-    ENABLED.load(Ordering::Relaxed)
-}
-
-/// Flip the live switch; the Storage tab writes `storage.toml` beside this.
-pub fn set_enabled(on: bool) {
-    ensure_enabled_loaded();
-    ENABLED.store(on, Ordering::Relaxed);
-}
-
-/// The cache to read and write through, or `None` while the switch is off or the worker could
-/// not be started. Starts it on the first call that finds the switch on; the file itself opens
-/// on the worker's thread, and a file that will not open answers every read `None` from then on.
+/// The cache shared by replay and maintenance; starts its worker on first use.
 pub fn handle() -> Option<TradeCache> {
-    if !is_enabled() {
-        return None;
-    }
-    maintenance_handle()
-}
-
-/// The cache for the Storage tab's own maintenance — the cleanup and its preview —
-/// whatever the switch says: it starts the worker if the switch kept [`handle`] from doing so.
-/// It never CREATES the file, though: with the switch off and no file on disk there is nothing
-/// to maintain, and opening the tab must not leave behind the very file the reader switched
-/// off. `None` then, and when the worker could not be started.
-pub fn maintenance_handle() -> Option<TradeCache> {
-    let path = crate::config::paths::trades_db_path();
-    if !is_enabled() && CACHE.get().is_none() && !path.exists() {
-        return None;
-    }
-    CACHE.get_or_init(|| TradeCache::open(path)).clone()
+    CACHE
+        .get_or_init(|| TradeCache::open(crate::config::paths::trades_db_path()))
+        .clone()
 }
 
 /// Open both archive layouts and add range-read indexes without changing the archive version.
@@ -787,8 +808,8 @@ fn trim_in_chunks(
 /// "Written", not "used": `updated_ms` is set by [`insert_span`] alone, a read leaves it as it
 /// was, so the order is the order the prints were filed in — the oldest trades' prints go first.
 ///
-/// The ceiling is a parameter, not read here: the worker resolves the live setting
-/// ([`max_bytes`]) at each call, and a test hands in a number of its own.
+/// The worker supplies the cap clamped by its cached probe-time disk budget; custom callers
+/// supply their own packed limit without probing the filesystem.
 /// This function never opens a transaction: standalone callers and eviction each own theirs.
 /// Cached statements are dropped before returning so their caller can commit.
 ///
@@ -865,6 +886,18 @@ impl PendingCompact {
     }
 }
 
+/// Resolve the packed cap once for opening and both queue-serving paths.
+fn resolved_ceiling(
+    disk: &mut Option<DiskCeiling>,
+    held: Option<i64>,
+    ceiling: fn() -> Option<i64>,
+) -> Option<i64> {
+    match (disk.as_mut(), held) {
+        (Some(disk), Some(held)) => disk.limit(held, ceiling()),
+        _ => ceiling(),
+    }
+}
+
 /// Ordinary operations finish immediately; incremental compaction resumes between queue items.
 struct Served(Option<PendingCompact>);
 
@@ -874,6 +907,7 @@ fn run(
     rx: mpsc::Receiver<Op>,
     mut held: i64,
     ceiling: fn() -> Option<i64>,
+    mut disk: Option<DiskCeiling>,
 ) {
     let mut compacting: Option<PendingCompact> = None;
     let mut deferred = std::collections::VecDeque::new();
@@ -889,11 +923,14 @@ fn run(
         if let Some(pending) = compacting.take() {
             // One queued live op interleaves with every bounded vacuum step.
             match rx.try_recv() {
-                Ok(op @ Op::TrimStart { .. }) => {
+                Ok(op @ (Op::TrimStart { .. } | Op::CompactFull { .. })) => {
                     deferred.push_back(op);
                 }
                 Ok(op) => {
-                    serve(&conn, op, &mut held, ceiling);
+                    let snapshot = held;
+                    serve(&conn, op, &mut held, || {
+                        resolved_ceiling(&mut disk, Some(snapshot), ceiling)
+                    });
                 }
                 Err(mpsc::TryRecvError::Disconnected) => return,
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -920,16 +957,20 @@ fn run(
                 Err(_) => return,
             }
         };
-        compacting = serve(&conn, op, &mut held, ceiling).0;
+        let snapshot = held;
+        compacting = serve(&conn, op, &mut held, || {
+            resolved_ceiling(&mut disk, Some(snapshot), ceiling)
+        })
+        .0;
     }
 }
 
-/// Serves one queued op, committing standalone post-insert ceiling deletes in bounded chunks.
+/// Serve an op with its cap resolver, committing post-insert ceiling deletes in bounded chunks.
 fn serve(
     conn: &rusqlite::Connection,
     op: Op,
     held: &mut i64,
-    ceiling: fn() -> Option<i64>,
+    mut ceiling: impl FnMut() -> Option<i64>,
 ) -> Served {
     match op {
         Op::Insert {
@@ -940,6 +981,7 @@ fn serve(
             ticks,
             source,
         } => {
+            let limit = ceiling();
             let now = crate::util::time::now_unix_ms_i64();
             let res = conn.unchecked_transaction().and_then(|tx| {
                 let wrote =
@@ -955,7 +997,7 @@ fn serve(
                         filed::note(&exchange, &market);
                     }
                     *held += wrote;
-                    match trim_in_chunks(conn, *held, ceiling()) {
+                    match trim_in_chunks(conn, *held, limit) {
                         Ok(now_held) => *held = now_held,
                         Err(e) => {
                             // The failed chunk rolled back; re-count as a guard rather than
@@ -1015,7 +1057,7 @@ fn serve(
         } => {
             let before = trim::disk_bytes(conn);
             if matches!(compact, Compact::Incremental) {
-                match trim::trim_progress(conn, &keep, true, progress.as_deref()) {
+                match trim::trim_progress(conn, &keep, progress.as_deref()) {
                     Ok(report) => {
                         *held = held_bytes(conn).unwrap_or(*held);
                         log::info!(
@@ -1037,21 +1079,24 @@ fn serve(
                 }
                 return Served(None);
             }
-            let result =
-                trim::trim_progress(conn, &keep, true, progress.as_deref()).map(|report| {
-                    *held = held_bytes(conn).unwrap_or(*held);
-                    log::info!(
-                        "trade cache trimmed: {} span(s)",
-                        report.spans_dropped + report.spans_cut
-                    );
-                    let compacted = trim::compact(conn, compact);
-                    TrimOutcome {
-                        report,
-                        compacted,
-                        bytes_before: before,
-                        bytes_after: trim::disk_bytes(conn),
-                    }
-                });
+            let result = trim::trim_progress(conn, &keep, progress.as_deref()).map(|report| {
+                *held = held_bytes(conn).unwrap_or(*held);
+                log::info!(
+                    "trade cache trimmed: {} span(s)",
+                    report.spans_dropped + report.spans_cut
+                );
+                let compacted = if report.is_empty() {
+                    Ok(())
+                } else {
+                    trim::compact(conn, compact)
+                };
+                TrimOutcome {
+                    report,
+                    compacted,
+                    bytes_before: before,
+                    bytes_after: trim::disk_bytes(conn),
+                }
+            });
             let _ = reply.send(result);
         }
         Op::Sync { reply, reservation } => {
@@ -1083,8 +1128,8 @@ fn serve(
                 *held = held_bytes(conn).unwrap_or(*held);
             }
         },
-        Op::PreviewTrim { keep, reply } => {
-            let _ = reply.send(trim::trim(conn, &keep, false));
+        Op::CompactFull { reply } => {
+            let _ = reply.send(trim::compact(conn, Compact::Full));
         }
     }
     Served(None)

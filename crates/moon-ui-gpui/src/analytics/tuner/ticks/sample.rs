@@ -6,9 +6,13 @@ use rust_i18n::t;
 #[cfg(test)]
 mod tests;
 
-/// Show how many usable deals the comparison describes out of the full report scope.
-pub(super) fn caption(n: usize, total: i64) -> String {
-    t!("analytics.ticks.kpi.sample", n = n, total = total).to_string()
+/// Keep the sample neutral until the shown scope's tape read answers.
+pub(super) fn caption(n: usize, total: i64, reading: bool) -> String {
+    if reading {
+        t!("analytics.ticks.fetch_reading").to_string()
+    } else {
+        t!("analytics.ticks.kpi.sample", n = n, total = total).to_string()
+    }
 }
 
 /// Warn in either direction when displayed PFs differ by at least 0.20 absolute points.

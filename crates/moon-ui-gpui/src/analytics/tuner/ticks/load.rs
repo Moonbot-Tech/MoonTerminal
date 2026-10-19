@@ -32,17 +32,15 @@ use moon_core::db::order_traces::{TraceEntry, read_many};
 use moon_core::db::tuner::ticks::params::range::{FieldSpan, Population, field_span};
 use moon_core::db::tuner::ticks::unmodelled::watched_keys;
 use moon_core::db::tuner::ticks::{
-    Deal, DealsRead, EntryParams, ModelSettings, OwnLines, ParamKind, TICK_PARAMS, deltas,
-    entry_model_for, infer_tick, model_window, params, prepare_deal, required_spans, verify,
+    Deal, DealsRead, ModelSettings, OwnLines, ParamKind, TICK_PARAMS, deltas, infer_tick,
+    model_window, params, prepare_deal, required_spans, verify,
 };
 use moon_core::db::tuner::{StrategyValuesReader, strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
 use moon_core::feed::strategy_deps::FieldDeps;
 use moon_core::feed::types::Tick;
 use moon_core::market::kline_cache::KlineCache;
-use moon_core::market::trade_replay::venue_caps::{
-    ARCHIVE_DEPTH_MS, Fetchable, fetchable, trade_route,
-};
+use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable, trade_route};
 use moon_core::market::trade_replay::{
     Coverage, ReplayWindow, TickQuery, TickStatus, long_position_ms, margin_ms, query_held,
 };
@@ -84,15 +82,7 @@ struct ScopeView {
 impl AnalyticsView {
     /// Recompute the axis for the current scope.
     pub(in crate::analytics) fn reload_ticks(&mut self, cx: &mut Context<Self>) {
-        self.reload_ticks_inner(false, true, false, cx);
-    }
-
-    /// Replace card rows for a new selection while preserving the independently scoped batch.
-    pub(in crate::analytics::tuner) fn reload_ticks_for_selection(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        self.reload_ticks_inner(false, true, true, cx);
+        self.reload_ticks_inner(false, true, cx);
     }
 
     /// Recompute report-stale data through the writer-driven catch-up path.
@@ -101,15 +91,14 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
-        self.reload_ticks_inner(true, show_overlay, false, cx);
+        self.reload_ticks_inner(true, show_overlay, cx);
     }
 
-    /// Reload card data with independent report catch-up and batch-lifetime policies.
+    /// Reload card data, stopping a search the user left and keeping one a report refresh joins.
     fn reload_ticks_inner(
         &mut self,
         after_report: bool,
         show_overlay: bool,
-        keep_best: bool,
         cx: &mut Context<Self>,
     ) {
         if !after_report {
@@ -137,9 +126,6 @@ impl AnalyticsView {
         // finished at all, and said nothing.
         if !after_report {
             self.latest_reads.cancel(&[ReadLane::TicksSearch]);
-            if !keep_best {
-                self.ticks.cancel_best();
-            }
             self.ticks.stop_search("manual reload");
         }
         let req = self.ticks.seq;
@@ -539,7 +525,6 @@ impl AnalyticsView {
     /// new settings when it gets there and is left alone: cancelling its lane would drop the
     /// rows it is about to publish.
     pub(in crate::analytics::tuner) fn ticks_replay_again(&mut self, cx: &mut Context<Self>) {
-        self.close_best_run(cx);
         if !matches!(self.ticks.data, crate::load_state::LoadState::Ready(_)) {
             return;
         }
@@ -715,16 +700,9 @@ impl AnalyticsView {
                 // The rows still missing are what the user is looking at: a running batch
                 // takes them next.
                 this.ticks_prioritize_visible();
-                // With the venue autoload on, the rows of THIS table the venue can still serve
-                // go to the fetch without a press: the switch is the consent to spend the
-                // budget, and the startup pass covers only its own horizon (30 days, every
-                // core) — a wider period on the table would otherwise sit behind a button. The
-                // core autoload has no such gap: its reach is the cores' archives, two days,
-                // which the startup pass already walks for every core, and what closes after it
-                // the close-time capture files.
-                if moon_core::market::trade_replay::tape_autoload() {
-                    this.ticks_fetch_missing(super::fetch::job::RowOrigin::Autoload, cx);
-                }
+                // Fill this table's missing tape even beyond the startup pass's thirty-day scope.
+                this.ticks_fetch_missing(cx);
+
                 // The replayable set may have changed under the variant columns: rescore them.
                 this.arm_ticks_variants(cx);
                 cx.notify();
@@ -797,7 +775,6 @@ fn replay_chunked(
             klines,
             now_ms,
             reads,
-            None,
             &mut |row, short_allowed| {
                 if row.tape == TapeStatus::Missing
                     && settled.contains(&row.deal.report_uid)
@@ -989,11 +966,9 @@ pub(in crate::analytics::tuner) fn calibrate_lags(
 ///     klines: The kline cache the live deltas read, when the market source has one.
 ///     now_ms: One clock for the batch's "cannot be fetched" verdicts.
 ///     reads: A pass's shared reads; `None` reads every row afresh.
-///     handle: A batch search's cancellation; checked before starting each row.
 ///
 /// Returns:
-///     Rows in fetch order, possibly only partly replayed when cancelled. The batch caller
-///     discards them on cancellation rather than publishing partial results.
+///     Rows in fetch order.
 pub(in crate::analytics::tuner) fn replay_fetched(
     fetched: Fetched,
     defaults: &HashMap<String, f64>,
@@ -1001,7 +976,6 @@ pub(in crate::analytics::tuner) fn replay_fetched(
     klines: Option<&KlineCache>,
     now_ms: i64,
     reads: Option<&PassReads>,
-    handle: Option<&moon_core::db::tuner::threshold_search::SearchHandle>,
 ) -> Vec<DealRow> {
     replay_fetched_with(
         fetched,
@@ -1010,7 +984,6 @@ pub(in crate::analytics::tuner) fn replay_fetched(
         klines,
         now_ms,
         reads,
-        handle,
         &mut |_, _| {},
     )
 }
@@ -1025,7 +998,6 @@ fn replay_fetched_with(
     klines: Option<&KlineCache>,
     now_ms: i64,
     reads: Option<&PassReads>,
-    handle: Option<&moon_core::db::tuner::threshold_search::SearchHandle>,
     on_row: &mut dyn FnMut(&DealRow, Option<bool>),
 ) -> Vec<DealRow> {
     let Fetched {
@@ -1035,9 +1007,6 @@ fn replay_fetched_with(
         settled: _,
     } = fetched;
     for row in &mut rows {
-        if handle.is_some_and(|handle| handle.is_cancelled()) {
-            break;
-        }
         let lines = traces.remove(&row.deal.report_uid).unwrap_or_default();
         let tape = tapes.remove(&row.deal.report_uid);
         let answered = tape.is_some();
@@ -1338,7 +1307,7 @@ fn unservable_status(address: &RowAddress, deal: &Deal, now_ms: i64) -> Option<T
                 .venue
                 .and_then(trade_route)
                 .and_then(|route| route.retention_ms())
-                .unwrap_or(ARCHIVE_DEPTH_MS),
+                .unwrap_or(i64::MAX),
         })),
     }
 }
@@ -1420,7 +1389,6 @@ pub(super) fn replay_row_with(
         row.held,
         super::tail::current_s(),
         chrono::Utc::now().timestamp_millis(),
-        super::tail::switches(),
     );
     let required = if short_allowed {
         super::tail::through_close(&window)
@@ -1455,11 +1423,7 @@ pub(super) fn replay_row_with(
         values: &values,
         defaults,
     };
-    let entry = if entry_model_for(&row.deal.kind) {
-        EntryParams::MoonShot(params::mshot_params(&sv, model))
-    } else {
-        EntryParams::Fact
-    };
+    let entry = params::entry_params_for(&row.deal.kind, &sv, model);
     let exit = params::exit_params(&sv, model);
     // The deltas along the window, before the record's inputs: the stop anchor reads the stop
     // through them. The bars they were read off go with the deal for SellLevel's look-back.
@@ -1517,7 +1481,6 @@ fn short_allowed(
     held: Option<(i64, i64)>,
     min_tail_s: u32,
     now_ms: i64,
-    switches: (bool, bool),
 ) -> bool {
     held.is_some_and(|(_, trail)| trail < moon_core::db::tuner::ticks::tail::floor_ms(min_tail_s))
         && !super::tail::fillable_at(
@@ -1526,7 +1489,6 @@ fn short_allowed(
             close_ms,
             held.map_or(0, |(_, trail)| trail),
             now_ms,
-            switches,
         )
 }
 
@@ -1563,7 +1525,6 @@ pub(super) fn miss_holds(
             miss.held,
             miss.sample.min_tail_s,
             admission.now_ms,
-            admission.switches,
         ) == miss.short_allowed
 }
 

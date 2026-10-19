@@ -73,16 +73,28 @@ impl CostKey {
     }
 }
 
-/// Shared restart-throughput measurement used both by startup prediction and running ETA.
-pub(super) fn observed_start_cost(done: usize, elapsed: Duration) -> Option<Duration> {
-    (done > 0 && !elapsed.is_zero()).then(|| elapsed.div_f64(done as f64))
+/// Pool throughput: wall time per restart across the pool, including its first partial wave.
+pub(super) fn observed_start_cost(
+    done: usize,
+    elapsed: Duration,
+    parallel: usize,
+) -> Option<Duration> {
+    (done > 0 && !elapsed.is_zero()).then(|| elapsed.div_f64(done.max(parallel.max(1)) as f64))
 }
 
-/// Publish only completed restart work, using the same elapsed clock as the running ETA.
-pub(super) fn take_search_cost(key: Option<CostKey>, done: usize, elapsed: Duration) {
-    if let (Some(key), Some(cost)) = (key, observed_start_cost(done, elapsed)) {
+/// Publish pool throughput after a full wave or completion; `CostKey::estimate` rescales pools.
+pub(super) fn take_search_cost(key: Option<CostKey>, done: usize, total: usize, elapsed: Duration) {
+    if let Some(key) = key
+        && publishes(done, total, key.parallel)
+        && let Some(cost) = observed_start_cost(done, elapsed, key.parallel)
+    {
         *LAST_THROUGHPUT.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, cost));
     }
+}
+
+/// Whether `done` restarts of `total` measure the pool: a full wave, or the whole run.
+fn publishes(done: usize, total: usize, parallel: usize) -> bool {
+    done >= parallel.max(1) || done == total
 }
 
 /// Update remaining time using the same measured restart cost as the search button.
@@ -91,10 +103,16 @@ pub(super) fn remaining_time(
     total: usize,
     elapsed: Duration,
     estimate: Option<Duration>,
+    parallel: usize,
 ) -> Option<Duration> {
     let remaining = total.checked_sub(done).filter(|&n| n > 0)?;
-    if let Some(cost) = observed_start_cost(done, elapsed) {
-        Some(cost.mul_f64(remaining as f64))
+    if let Some(cost) = observed_start_cost(done, elapsed, parallel) {
+        let measured = cost.mul_f64(remaining as f64);
+        Some(if done < parallel.max(1) {
+            estimate.map_or(measured, |d| d.saturating_sub(elapsed).max(measured))
+        } else {
+            measured
+        })
     } else {
         estimate
             .and_then(|d| d.checked_sub(elapsed))
@@ -104,7 +122,7 @@ pub(super) fn remaining_time(
 
 /// How many of a search's restarts run side by side: the search pool's threads bound them,
 /// not every CPU of the machine.
-fn side_by_side(restarts: usize) -> usize {
+pub(super) fn side_by_side(restarts: usize) -> usize {
     side_by_side_on(
         restarts,
         moon_core::db::tuner::threshold_search::search_threads(),
@@ -357,12 +375,35 @@ fn count_text(value: f64) -> String {
     out
 }
 
-/// A duration as a person reads it: seconds under a minute, minutes under an hour, else hours
-/// and minutes.
+/// A duration as a person reads it on the search button, the running card and the estimate tip.
+///
+/// Under a minute the figure is whole seconds, and a fraction of a second still reads as one
+/// second. From one minute up to (not including) ten, leftover seconds stay (`1 min 20 s`); an
+/// exact minute drops the zero seconds instead of printing `0 s`. Ten minutes up to an hour
+/// still rounds up to whole minutes. An hour and beyond is hours plus the leftover minutes,
+/// truncated.
+///
+/// An exact minute stays on the minutes-only phrase. A caller that joins this figure with a
+/// separate seconds figure depends on the zero seconds staying off the string.
+///
+/// Args:
+///     duration: Span to print. The sub-second part is dropped, except the one-second floor
+///         under a minute.
+///
+/// Returns:
+///     Localized text for the active locale.
 pub(in crate::analytics::tuner) fn duration_text(duration: Duration) -> String {
     let secs = duration.as_secs();
     if secs < 60 {
         t!("analytics.ticks.dur_s", s = secs.max(1)).to_string()
+    } else if secs < 10 * 60 {
+        let minutes = secs / 60;
+        let leftover = secs % 60;
+        if leftover == 0 {
+            t!("analytics.ticks.dur_m", m = minutes).to_string()
+        } else {
+            t!("analytics.ticks.dur_ms", m = minutes, s = leftover).to_string()
+        }
     } else if secs < 3600 {
         t!("analytics.ticks.dur_m", m = secs.div_ceil(60)).to_string()
     } else {

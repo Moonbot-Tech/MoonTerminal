@@ -163,6 +163,15 @@ static SETTINGS_JOB_ACTIVE: AtomicBool = AtomicBool::new(false);
 static STRATEGY_JOB_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Prevent overlapping order-trace jobs while one archive copy is still running.
 static ORDER_TRACES_JOB_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Prevent overlapping daily compaction attempts.
+static COMPACTION_JOB_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Exclude strategy snapshot assembly from database compaction in either launch order.
+pub(crate) static STRATEGY_MAINTENANCE: Mutex<()> = Mutex::new(());
+
+/// Return whether a strategy backup job currently owns its retry lifecycle.
+pub(crate) fn strategy_job_active() -> bool {
+    STRATEGY_JOB_ACTIVE.load(Ordering::Acquire)
+}
 
 /// Return the most recent 12:00 UTC slot at or before `now_ms`.
 pub(crate) fn due_slot_ms(now_ms: i64) -> i64 {
@@ -244,11 +253,7 @@ pub(crate) fn with_current_strategy_topology<T>(
 /// Run wall-clock deadlines and readiness wakes without performing domain I/O under the mutex.
 fn schedule_loop() {
     loop {
-        launch_settings_job();
-        launch_order_traces_job();
-        if let Some(generation) = COORDINATOR.strategy_claim() {
-            launch_strategy_job(generation);
-        }
+        launch_due_jobs();
 
         let mut state = COORDINATOR.lock();
         let observed = state.wake_revision;
@@ -264,6 +269,46 @@ fn schedule_loop() {
             }
         }
     }
+}
+
+/// Launch every daily domain from the existing wall-clock wake.
+fn launch_due_jobs() {
+    launch_due_jobs_with(COORDINATOR.strategy_claim(), |domain| match domain {
+        DailyDomain::Settings => launch_settings_job(),
+        DailyDomain::OrderTraces => launch_order_traces_job(),
+        DailyDomain::Strategy(generation) => launch_strategy_job(generation),
+        DailyDomain::Compaction => launch_compaction_job(),
+    });
+}
+
+/// A daily launch request, including the readiness generation required by strategies.
+#[derive(Debug, PartialEq, Eq)]
+enum DailyDomain {
+    Settings,
+    OrderTraces,
+    Strategy(u64),
+    Compaction,
+}
+
+/// Drive the same per-wake launch sequence with production or fixture launchers.
+fn launch_due_jobs_with(generation: Option<u64>, mut launch: impl FnMut(DailyDomain)) {
+    launch(DailyDomain::Settings);
+    launch(DailyDomain::OrderTraces);
+    if let Some(generation) = generation {
+        launch(DailyDomain::Strategy(generation));
+    }
+    launch(DailyDomain::Compaction);
+}
+
+/// Reuse the domain retry lifecycle for daily database compaction.
+fn launch_compaction_job() {
+    launch_domain_job(
+        "db-compaction",
+        "compaction",
+        &COMPACTION_JOB_ACTIVE,
+        false,
+        crate::db::maint::compact_due_at,
+    );
 }
 
 /// Launch one settings job unless another deadline is still servicing that domain.
@@ -295,7 +340,12 @@ fn launch_strategy_job(generation: u64) {
         "strategy",
         &STRATEGY_JOB_ACTIVE,
         true,
-        move |now_ms| crate::strat_db::backup::backup_due_at(now_ms, generation),
+        move |now_ms| {
+            let _guard = STRATEGY_MAINTENANCE
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            crate::strat_db::backup::backup_due_at(now_ms, generation)
+        },
     );
 }
 
@@ -322,7 +372,7 @@ fn launch_domain_job(
             loop {
                 match operation(attempt_ms) {
                     Ok(DueOutcome::Created(path)) => {
-                        log::info!("{domain} backup created: {}", path.display());
+                        log::info!("{domain} done: {}", path.display());
                         break;
                     }
                     Ok(DueOutcome::Current(_)) => break,
@@ -332,7 +382,7 @@ fn launch_domain_job(
                     }
                     Ok(DueOutcome::SourceMissing) => std::thread::sleep(RETRY_DELAY),
                     Err(error) => {
-                        log::warn!("scheduled {domain} backup failed: {error:#}");
+                        log::warn!("scheduled {domain} failed: {error:#}");
                         std::thread::sleep(RETRY_DELAY);
                     }
                 }
@@ -348,7 +398,7 @@ fn launch_domain_job(
         });
     if let Err(error) = spawned {
         active.store(false, Ordering::Release);
-        log::error!("failed to start {domain} backup job: {error}");
+        log::error!("failed to start {domain} job: {error}");
     }
 }
 

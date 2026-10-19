@@ -167,6 +167,24 @@ pub(crate) enum Job {
 }
 
 impl Job {
+    /// Rebuild a queued tape write from the current shared window, preserving policy edits.
+    pub(super) fn with_current_tape_window(self) -> Self {
+        match self {
+            Self::Tape {
+                target,
+                catchup,
+                keep,
+                ..
+            } => Self::Tape {
+                target,
+                tape: moon_core::market::trade_replay::window(),
+                catchup,
+                keep,
+            },
+            other => other,
+        }
+    }
+
     /// These actions change the destination used to recover bot ownership or credentials.
     pub(super) fn changes_access(&self) -> bool {
         matches!(

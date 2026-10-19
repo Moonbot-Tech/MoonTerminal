@@ -5,6 +5,43 @@ use crate::db::tuner::ticks::ExitKind;
 use crate::db::tuner::ticks::exit::line::walk;
 use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape};
 
+/// A later spike must use its own pre-spike tape price instead of the fact's archived ask.
+#[test]
+fn barrier_r14_later_fill_uses_its_own_pre_spike_ask() {
+    let mut d = deal(false);
+    d.coin = "XALPHA".into();
+    d.core_name = "CORE_A".into();
+    d.pre_spike_ask = Some(100.0);
+    let p = ExitParams {
+        sell_price_pct: 1.0,
+        sell_at_last_price: true,
+        sell_price_adjust_pct: 0.0,
+        ..params()
+    };
+    let ticks = tape(&[(-4_000, 95.0), (56_000, 85.0), (60_000, 80.0)]);
+    let model = ExitModel::new(&p);
+    assert_eq!(
+        model.take_level(
+            &d,
+            &ticks,
+            Fill {
+                t_ms: 0,
+                price: 80.0
+            }
+        ),
+        100.0
+    );
+    let take = model.take_level(
+        &d,
+        &ticks,
+        Fill {
+            t_ms: 60_000,
+            price: 80.0,
+        },
+    );
+    assert!((take - 85.0).abs() < 1e-9, "later spike take: {take}");
+}
+
 // ---- the take off the archive ----------------------------------------------------------------
 
 /// `MShotSellAtLastPrice` reads the book's ask, which the tape has not; the archive's first

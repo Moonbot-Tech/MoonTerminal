@@ -1,6 +1,369 @@
 use super::*;
 use std::io::{Cursor, Write};
 
+/// A successful retry cannot renew a day's allowance before the failure cooldown expires.
+#[test]
+fn barrier_b6_success_does_not_reset_failed_day_attempts() {
+    /// A body that disconnects after its prefix has been received.
+    struct Broken;
+    impl Read for Broken {
+        /// Model a transport read failure after the cursor prefix has reached disk.
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "synthetic disconnect",
+            ))
+        }
+    }
+    let root = root();
+    let route = ArchiveRoute::BinanceUmDaily;
+    let calls = std::cell::Cell::new(0);
+    for pass in 0..5 {
+        let result = fill_with(
+            route,
+            "SYNINTERMITTENT",
+            &Coverage::one((1000, 2000)),
+            &ReplayGate::new(),
+            (root.path(), vec![day()]),
+            (|| Some(u64::MAX), u64::MAX),
+            |_| {
+                let attempt = calls.get();
+                calls.set(attempt + 1);
+                if attempt == 1 {
+                    return Ok(response(body(route)));
+                }
+                Ok(DayResponse {
+                    status: 200,
+                    retry_after_s: None,
+                    content_length: None,
+                    reader: Box::new(Cursor::new(vec![0; 16]).chain(Broken)),
+                })
+            },
+        );
+        if pass == 1 {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(ArchiveError::Transient(_))));
+        }
+    }
+    assert_eq!(
+        calls.get(),
+        4,
+        "three failed bodies plus one success, then no further transport"
+    );
+}
+
+/// The terminal's reserve callback must reject a small disk before archive transport starts.
+#[test]
+fn barrier_b6_terminal_reserve_returns_no_room() {
+    let root = root();
+    let result = fill_with(
+        ArchiveRoute::BinanceUmDaily,
+        "SYNTERMINAL",
+        &Coverage::one((1000, 2000)),
+        &ReplayGate::new(),
+        (root.path(), vec![day()]),
+        (
+            || crate::disk_reserve::spendable(1024 * 1024 * 1024, 10 * 1024 * 1024 * 1024),
+            u64::MAX,
+        ),
+        |_| panic!("terminal disk reserve must precede HTTP"),
+    );
+    assert_eq!(result.unwrap_err(), ArchiveError::NoRoom);
+}
+
+/// Body writes must charge extraction headroom against one baseline, without repeated probes.
+#[test]
+fn barrier_b6_download_snapshots_free_space_once() {
+    let root = root();
+    let route = ArchiveRoute::BinanceUmDaily;
+    let bytes = body(route);
+    let probes = std::cell::Cell::new(0);
+    let length = bytes.len() as u64;
+    let result = fill_with(
+        route,
+        "SYNSNAPSHOT",
+        &Coverage::one((1000, 2000)),
+        &ReplayGate::new(),
+        (root.path(), vec![day()]),
+        (
+            || {
+                probes.set(probes.get() + 1);
+                Some(length * 4)
+            },
+            u64::MAX,
+        ),
+        |_| Ok(response(bytes.clone())),
+    )
+    .unwrap();
+    assert_eq!(result.ticks.len(), 2);
+    assert_eq!(probes.get(), 1);
+}
+
+/// Per-chunk reserve probes multiply syscall cost by 1024 for each 64 MiB checkpoint.
+#[test]
+fn barrier_b6_stream_guard_is_not_polled_per_chunk() {
+    let probes = std::cell::Cell::new(0);
+    let copied = copy_bounded(
+        std::io::repeat(0).take(2 * 1024 * 1024),
+        &mut std::io::sink(),
+        u64::MAX,
+        None,
+        |_| {
+            probes.set(probes.get() + 1);
+            true
+        },
+    )
+    .unwrap();
+    assert_eq!(copied, 2 * 1024 * 1024);
+    assert!(
+        probes.get() <= 2,
+        "reserve syscalls per chunk: {}",
+        probes.get()
+    );
+}
+
+/// Failed large days must stop consuming transport after three failures in one process.
+#[test]
+fn barrier_b6_three_corrupt_attempts_latch_a_day() {
+    let root = root();
+    let calls = std::cell::Cell::new(0);
+    for _ in 0..4 {
+        let result = fill_with(
+            ArchiveRoute::BinanceUmDaily,
+            "SYNFAIL",
+            &Coverage::one((0, 2000)),
+            &ReplayGate::new(),
+            (root.path(), vec![day()]),
+            (|| Some(u64::MAX), u64::MAX),
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(response(b"broken zip".to_vec()))
+            },
+        );
+        assert!(matches!(result, Err(ArchiveError::Corrupt(_))));
+    }
+    assert_eq!(calls.get(), 3);
+}
+
+/// A missing day in a mixed window must not be downloaded again on every retry.
+#[test]
+fn barrier_b6_mixed_window_remembers_missing_daily_files() {
+    let root = root();
+    let missing_calls = std::cell::Cell::new(0);
+    let route = ArchiveRoute::BinanceUmDaily;
+    for _ in 0..2 {
+        let answer = fill_with(
+            route,
+            "SYNMIX",
+            &Coverage::one((0, 2 * 86_400_000 - 1)),
+            &ReplayGate::new(),
+            (root.path(), vec![day(), day().succ_opt().unwrap()]),
+            (|| Some(u64::MAX), u64::MAX),
+            |url| {
+                if url.contains("1970-01-01") {
+                    missing_calls.set(missing_calls.get() + 1);
+                    let mut answer = response(Vec::new());
+                    answer.status = 404;
+                    Ok(answer)
+                } else {
+                    Ok(response(body(route)))
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            answer.covered,
+            Coverage::one((86_400_000, 2 * 86_400_000 - 1))
+        );
+    }
+    assert_eq!(missing_calls.get(), 1);
+}
+
+/// A pre-HTTP reserve refusal must recover when the caller frees disk space.
+#[test]
+fn barrier_b7_pre_http_no_room_recovers() {
+    let root = root();
+    let route = ArchiveRoute::BinanceUmDaily;
+    let spans = Coverage::one((1000, 1500));
+    assert_eq!(
+        fill_with(
+            route,
+            "SYNNOROOM",
+            &spans,
+            &ReplayGate::new(),
+            (root.path(), vec![day()]),
+            (|| None, u64::MAX),
+            |_| panic!("reserve before HTTP")
+        )
+        .unwrap_err(),
+        ArchiveError::NoRoom
+    );
+    let calls = std::cell::Cell::new(0);
+    let again = fill_with(
+        route,
+        "SYNNOROOM",
+        &spans,
+        &ReplayGate::new(),
+        (root.path(), vec![day()]),
+        (|| Some(u64::MAX), u64::MAX),
+        |_| {
+            calls.set(calls.get() + 1);
+            Ok(response(body(route)))
+        },
+    );
+    assert_eq!(calls.get(), 1, "free space must permit retry");
+    assert!(again.is_ok());
+}
+
+/// Recent publication delays must not turn a daily 404 into a permanent negative cache.
+#[test]
+fn barrier_b7_recent_404_is_requested_again() {
+    let root = root();
+    let recent = chrono::DateTime::from_timestamp_millis(crate::util::time::now_unix_ms_i64())
+        .unwrap()
+        .date_naive()
+        .pred_opt()
+        .unwrap();
+    let calls = std::cell::Cell::new(0);
+    for _ in 0..2 {
+        let result = fill_with(
+            ArchiveRoute::BinanceUmDaily,
+            "SYNRECENT",
+            &Coverage::one((0, 2000)),
+            &ReplayGate::new(),
+            (root.path(), vec![recent]),
+            (|| Some(u64::MAX), u64::MAX),
+            |_| {
+                calls.set(calls.get() + 1);
+                let mut answer = response(Vec::new());
+                answer.status = 404;
+                Ok(answer)
+            },
+        );
+        assert_eq!(result.unwrap_err(), ArchiveError::NotPublished);
+    }
+    assert_eq!(calls.get(), 2);
+}
+
+/// A CDN outage before a body starts must not spend the failed-transfer allowance.
+#[test]
+fn barrier_b7_connection_and_http_failures_recover() {
+    for http in [false, true] {
+        let root = root();
+        let route = ArchiveRoute::BinanceUmDaily;
+        let calls = std::cell::Cell::new(0);
+        for pass in 0..4 {
+            let result = fill_with(
+                route,
+                "SYNCONNECT",
+                &Coverage::one((0, 2000)),
+                &ReplayGate::new(),
+                (root.path(), vec![day()]),
+                (|| Some(u64::MAX), u64::MAX),
+                |_| {
+                    calls.set(calls.get() + 1);
+                    if pass == 3 {
+                        return Ok(response(body(route)));
+                    }
+                    if http {
+                        let mut answer = response(Vec::new());
+                        answer.status = 503;
+                        Ok(answer)
+                    } else {
+                        Err(ArchiveError::Transient(
+                            "synthetic connection failure".into(),
+                        ))
+                    }
+                },
+            );
+            if pass == 3 {
+                assert!(result.is_ok(), "host recovered: {result:?}");
+            } else {
+                assert!(result.is_err());
+            }
+        }
+        assert_eq!(calls.get(), 4);
+    }
+}
+
+/// A failed streamed day stays quiet for 24 hours and becomes fetchable at the boundary.
+#[test]
+fn barrier_b7_mid_body_latch_expires_after_24_hours() {
+    let root = root();
+    let route = ArchiveRoute::BinanceUmDaily;
+    let now = Instant::now();
+    let calls = std::cell::Cell::new(0);
+    for (offset, success) in [
+        (0, false),
+        (0, false),
+        (0, false),
+        (86_399, false),
+        (86_400, true),
+    ] {
+        let result = fill_at(
+            route,
+            "SYNTTL",
+            &Coverage::one((0, 2000)),
+            &ReplayGate::new(),
+            (root.path(), vec![day()], || {
+                now + Duration::from_secs(offset)
+            }),
+            (|| Some(u64::MAX), u64::MAX),
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(response(if success {
+                    body(route)
+                } else {
+                    b"broken zip".to_vec()
+                }))
+            },
+        );
+        if success {
+            assert!(result.is_ok(), "latch expired: {result:?}");
+        } else {
+            assert!(matches!(result, Err(ArchiveError::Corrupt(_))));
+        }
+        if offset == 86_399 {
+            assert_eq!(calls.get(), 3);
+        }
+    }
+    assert_eq!(calls.get(), 4);
+}
+
+/// A streamed disk refusal must skip repeated downloads until the measured budget increases.
+#[test]
+fn barrier_b7_mid_body_no_room_recovers_only_with_more_room() {
+    let root = root();
+    let route = ArchiveRoute::BinanceUmDaily;
+    let calls = std::cell::Cell::new(0);
+    for pass in 0..3 {
+        let result = fill_with(
+            route,
+            "SYNROOM",
+            &Coverage::one((0, 2000)),
+            &ReplayGate::new(),
+            (root.path(), vec![day()]),
+            (|| Some(if pass == 2 { u64::MAX } else { 16 }), u64::MAX),
+            |_| {
+                calls.set(calls.get() + 1);
+                let mut answer = response(if pass == 2 { body(route) } else { vec![0; 32] });
+                answer.content_length = None;
+                Ok(answer)
+            },
+        );
+        if pass == 2 {
+            assert!(result.is_ok(), "disk recovered: {result:?}");
+        } else {
+            assert_eq!(result.unwrap_err(), ArchiveError::NoRoom);
+        }
+        if pass == 1 {
+            assert_eq!(calls.get(), 1);
+        }
+    }
+    assert_eq!(calls.get(), 2);
+}
+
 thread_local! { static PACES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 /// Any pacing callback under the shared host lock would delay terminal-side archive users.
@@ -31,7 +394,7 @@ fn catchup_pacing_never_waits_under_the_host_lock() {
             &Coverage::one((0, 3000)),
             &ReplayGate::default(),
             (root.path(), vec![day()]),
-            (|_| true, u64::MAX),
+            (|| Some(u64::MAX), u64::MAX),
             |_| Ok(response(bytes.clone())),
         )
     })
@@ -161,7 +524,7 @@ fn zip_and_gzip_fill_only_requested_span_and_delete_files() {
             &spans,
             &ReplayGate::new(),
             (root.path(), vec![day()]),
-            (|_| true, u64::MAX),
+            (|| Some(u64::MAX), u64::MAX),
             |_| Ok(response(body(route))),
         )
         .unwrap();
@@ -190,7 +553,7 @@ fn guard_refusal_precedes_transport() {
         &Coverage::one((1000, 1500)),
         &ReplayGate::new(),
         (root.path(), vec![day()]),
-        (|_| false, u64::MAX),
+        (|| None, u64::MAX),
         |_| panic!("transport before guard"),
     );
     assert!(matches!(result, Err(ArchiveError::NoRoom)));
@@ -209,7 +572,7 @@ fn startup_sweeps_leftover_part() {
         &Coverage::one((1000, 1500)),
         &ReplayGate::new(),
         (root.path(), vec![day()]),
-        (|_| false, u64::MAX),
+        (|| None, u64::MAX),
         |_| panic!("no transport"),
     );
     assert!(!partial.exists());
@@ -258,7 +621,7 @@ fn same_key_fills_serialize() {
                     &Coverage::one((1000, 1500)),
                     &gate,
                     (root.path(), vec![day()]),
-                    (|_| true, u64::MAX),
+                    (|| Some(u64::MAX), u64::MAX),
                     |_| {
                         assert_eq!(active.fetch_add(1, Ordering::SeqCst), 0);
                         calls.fetch_add(1, Ordering::SeqCst);
@@ -274,9 +637,9 @@ fn same_key_fills_serialize() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
-/// Enforce the cap on received bytes even when Content-Length is absent or dishonest.
+/// Unknown-length downloads must stop at the disk reserve and remove their partial file.
 #[test]
-fn oversize_stream_is_skipped_and_removes_partial_file() {
+fn disk_guard_stops_stream_and_removes_partial_file() {
     let root = root();
     let received = Arc::new(AtomicU64::new(0));
     let result = fill_with(
@@ -285,21 +648,21 @@ fn oversize_stream_is_skipped_and_removes_partial_file() {
         &Coverage::one((1000, 1500)),
         &ReplayGate::new(),
         (root.path(), vec![day()]),
-        (|_| true, MAX_DAY_BYTES),
+        (|| Some(65_536 * EXTRACT_HEADROOM), u64::MAX),
         |_| {
             Ok(DayResponse {
                 status: 200,
                 retry_after_s: None,
                 content_length: None,
                 reader: Box::new(CountedRead {
-                    reader: Box::new(std::io::repeat(0).take(MAX_DAY_BYTES + 1)),
+                    reader: Box::new(std::io::repeat(0).take(131_072)),
                     bytes: received.clone(),
                 }),
             })
         },
     );
-    assert!(matches!(result, Err(ArchiveError::TooLarge)));
-    assert_eq!(received.load(Ordering::Relaxed), MAX_DAY_BYTES);
+    assert!(matches!(result, Err(ArchiveError::NoRoom)));
+    assert_eq!(received.load(Ordering::Relaxed), 131_072);
     let paths = day_cache::Cleanup::new(
         day_cache::paths(root.path(), ArchiveRoute::BinanceUmDaily, "SYNUSDT", day()).unwrap(),
     );
@@ -324,7 +687,7 @@ fn later_failure_preserves_earlier_day() {
         &Coverage::one((1000, 86_401_000)),
         &ReplayGate::new(),
         (root.path(), vec![day(), day().succ_opt().unwrap()]),
-        (|_| true, u64::MAX),
+        (|| Some(u64::MAX), u64::MAX),
         |_| {
             let n = calls.get();
             calls.set(n + 1);
@@ -357,7 +720,7 @@ fn server_and_transport_failures_refuse_host() {
             &Coverage::one((1000, 1500)),
             &gate,
             (root.path(), vec![day()]),
-            (|_| true, u64::MAX),
+            (|| Some(u64::MAX), u64::MAX),
             |_| {
                 if transport {
                     Err(ArchiveError::Transient("synthetic timeout".into()))
@@ -451,7 +814,7 @@ fn throttle_keeps_progress_and_stops_later_days() {
                 day().succ_opt().unwrap().succ_opt().unwrap(),
             ],
         ),
-        (|_| true, u64::MAX),
+        (|| Some(u64::MAX), u64::MAX),
         |_| {
             let n = calls.get();
             calls.set(n + 1);
@@ -489,7 +852,7 @@ fn missing_day_is_skipped_before_later_success() {
         &Coverage::one((0, 2 * 86_400_000 - 1)),
         &ReplayGate::new(),
         (root.path(), vec![day(), day().succ_opt().unwrap()]),
-        (|_| true, u64::MAX),
+        (|| Some(u64::MAX), u64::MAX),
         |_| {
             let n = calls.get();
             calls.set(n + 1);
@@ -522,7 +885,7 @@ fn missing_then_throttled_preserves_stopping_error() {
         &Coverage::one((0, 2 * 86_400_000 - 1)),
         &ReplayGate::new(),
         (root.path(), vec![day(), day().succ_opt().unwrap()]),
-        (|_| true, u64::MAX),
+        (|| Some(u64::MAX), u64::MAX),
         |_| {
             let mut answer = response(Vec::new());
             answer.status = if calls.get() == 0 { 404 } else { 429 };
@@ -550,7 +913,7 @@ fn all_old_missing_days_refuse_symbol() {
         &Coverage::one((0, 2 * 86_400_000 - 1)),
         &ReplayGate::new(),
         (root.path(), vec![day(), day().succ_opt().unwrap()]),
-        (|_| true, u64::MAX),
+        (|| Some(u64::MAX), u64::MAX),
         |_| {
             let mut answer = response(Vec::new());
             answer.status = 404;
@@ -572,7 +935,7 @@ fn corrupt_day_is_skipped_before_later_success() {
         &Coverage::one((0, 2 * 86_400_000 - 1)),
         &ReplayGate::new(),
         (root.path(), vec![day(), day().succ_opt().unwrap()]),
-        (|_| true, u64::MAX),
+        (|| Some(u64::MAX), u64::MAX),
         |_| {
             let n = calls.get();
             calls.set(n + 1);
@@ -592,52 +955,51 @@ fn corrupt_day_is_skipped_before_later_success() {
     assert!(matches!(fill.deferred, Some(ArchiveError::Corrupt(_))));
 }
 
-/// Oversized days must not stop later dates or be downloaded again on the next hourly pass.
+/// Removing the old ceiling must allow a large day through download, extraction and coverage.
 #[test]
-fn oversized_day_is_remembered_and_next_day_fetched() {
+fn day_above_old_ceiling_is_downloaded_and_filed() {
+    use std::io::Read;
+    let source = root();
+    let path = source.path().join("synthetic.zip");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("trades.csv", options).unwrap();
+    zip.write_all(b"1,10,2,1,1,1000,true\n").unwrap();
+    zip.start_file("padding", options).unwrap();
+    std::io::copy(&mut std::io::repeat(0).take(256 * 1024 * 1024), &mut zip).unwrap();
+    zip.finish().unwrap();
+    let length = std::fs::metadata(&path).unwrap().len();
+    assert!(length > 256 * 1024 * 1024);
     let root = root();
-    let calls = std::cell::Cell::new(0);
     let route = ArchiveRoute::BinanceUmDaily;
-    let spans = Coverage::one((0, 2 * 86_400_000 - 1));
+    let spans = Coverage::one((1000, 1500));
     let fill = fill_with(
         route,
         "SYNUSDT",
         &spans,
         &ReplayGate::new(),
-        (root.path(), vec![day(), day().succ_opt().unwrap()]),
-        (|_| true, u64::MAX),
+        (root.path(), vec![day()]),
+        (|| Some(u64::MAX), u64::MAX),
         |_| {
-            let n = calls.get();
-            calls.set(n + 1);
-            let mut answer = response(body(route));
-            if n == 0 {
-                answer.content_length = Some(MAX_DAY_BYTES + 1);
-            }
-            Ok(answer)
+            Ok(DayResponse {
+                status: 200,
+                retry_after_s: None,
+                content_length: Some(length),
+                reader: Box::new(std::fs::File::open(&path).unwrap()),
+            })
         },
     )
     .unwrap();
-    assert_eq!(calls.get(), 2);
-    assert_eq!(
-        fill.covered,
-        Coverage::one((86_400_000, 2 * 86_400_000 - 1))
-    );
-    assert_eq!(fill.deferred, Some(ArchiveError::TooLarge));
-    let again = fill_with(
-        route,
-        "SYNUSDT",
-        &spans,
-        &ReplayGate::new(),
-        (root.path(), vec![day()]),
-        (|_| true, u64::MAX),
-        |_| panic!("oversized day downloaded again"),
-    );
-    assert_eq!(again.unwrap_err(), ArchiveError::TooLarge);
+    assert_eq!(fill.covered, spans);
+    assert_eq!(fill.ticks.len(), 1);
+    assert_eq!(fill.ticks[0].time_ms, 1000.0);
+    assert_eq!(fill.deferred, None);
 }
 
 /// Admission must use response headers before any body bytes spend an insufficient pass budget.
 #[test]
-fn body_budget_admission_uses_known_and_unknown_lengths() {
+fn body_budget_admission_uses_known_lengths() {
     /// Synthetic body proving admission happens before a transport read.
     struct Unread;
     impl Read for Unread {
@@ -646,7 +1008,7 @@ fn body_budget_admission_uses_known_and_unknown_lengths() {
             panic!("budget-deferred body read")
         }
     }
-    for length in [Some(1024), None] {
+    {
         let root = root();
         let result = fill_with(
             ArchiveRoute::BinanceUmDaily,
@@ -654,12 +1016,12 @@ fn body_budget_admission_uses_known_and_unknown_lengths() {
             &Coverage::one((1000, 1500)),
             &ReplayGate::new(),
             (root.path(), vec![day()]),
-            (|_| true, 1023),
+            (|| Some(u64::MAX), 1023),
             |_| {
                 Ok(DayResponse {
                     status: 200,
                     retry_after_s: None,
-                    content_length: length,
+                    content_length: Some(1024),
                     reader: Box::new(Unread),
                 })
             },
@@ -676,16 +1038,16 @@ fn body_budget_admission_uses_known_and_unknown_lengths() {
             &Coverage::one((1000, 1500)),
             &ReplayGate::new(),
             (root.path(), vec![day()]),
-            (|_| true, bytes.len() as u64),
+            (|| Some(u64::MAX), bytes.len() as u64),
             |_| Ok(response(bytes.clone()))
         )
         .is_ok()
     );
 }
 
-/// An unknown-length response needs the full supported day allowance before HTTP and extraction.
+/// Unknown-length responses use one reserve snapshot instead of guessing a day size.
 #[test]
-fn unknown_length_reserves_maximum_supported_day() {
+fn unknown_length_snapshots_disk_budget() {
     let root = root();
     let checks = std::cell::RefCell::new(Vec::new());
     let route = ArchiveRoute::BinanceUmDaily;
@@ -696,9 +1058,9 @@ fn unknown_length_reserves_maximum_supported_day() {
         &ReplayGate::new(),
         (root.path(), vec![day()]),
         (
-            |bytes| {
-                checks.borrow_mut().push(bytes);
-                true
+            || {
+                checks.borrow_mut().push(());
+                Some(u64::MAX)
             },
             u64::MAX,
         ),
@@ -709,5 +1071,5 @@ fn unknown_length_reserves_maximum_supported_day() {
         },
     )
     .unwrap();
-    assert_eq!(*checks.borrow(), vec![MAX_DAY_BYTES, MAX_DAY_BYTES]);
+    assert_eq!(checks.borrow().len(), 1);
 }

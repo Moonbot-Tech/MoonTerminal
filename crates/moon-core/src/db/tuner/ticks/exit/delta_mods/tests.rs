@@ -6,6 +6,48 @@ use crate::db::tuner::ticks::exit::tests::deal;
 use crate::db::tuner::ticks::hook::KIND_MOONHOOK;
 use crate::db::tuner::ticks::mshot::{MarketSign, Modifiers};
 
+/// Calibrating at the buy would spend the delta growth twice at a later sell booking.
+#[test]
+fn modifier_residual_uses_the_sell_booking_clock() {
+    use crate::db::tuner::ticks::deltas::{DeltaTrack, TrackInputs};
+    use crate::db::tuner::ticks::exit::tests::tape;
+    let (mut d, mut p) = hook_long();
+    d.coin = "XALPHA".into();
+    d.core_name = "CORE_A".into();
+    d.hook_depth_pct = Some(4.0);
+    d.hook_stated_take_pct = Some(2.0);
+    p.sell_modifier = 1.0;
+    p.sell_mods = Modifiers {
+        add_1m: 1.0,
+        ..Modifiers::default()
+    };
+    p.stop_loss_pct = -1.0;
+    p.stop_loss_modifier = 0.2;
+    let ticks = tape(&[(-1_000, 100.0), (-1, 101.0), (4_999, 103.0)]);
+    d.delta_track = Some(std::sync::Arc::new(
+        DeltaTrack::build(TrackInputs {
+            coin_bars: &[],
+            ticks: &ticks,
+            covered: &[(-60_000, 6_000)],
+            btc_bars: &[],
+            eval: (0, 6_000),
+            anchor: None,
+        })
+        .expect("live delta track"),
+    ));
+    assert!((model_sum(&p.sell_mods, &d, 0) - 1.0).abs() < 1e-9);
+    assert!((model_sum(&p.sell_mods, &d, 6_000) - 3.0).abs() < 1e-9);
+    for booked_at in [0, 6_000] {
+        let line = [(booked_at, 102.0 * 1.03)];
+        d.fact_modifier = None;
+        d.fact_modifier = FactModifier::of(&d, &p, Some(&line));
+        let sum = modifier_sum(&p, &d, booked_at);
+        assert!((sum - 3.0).abs() < 1e-3, "sell booking sum: {sum}");
+        let stop = 100.0 * (1.0 + super::super::stops::stop_pct(&p, &d, booked_at) / 100.0);
+        assert!((stop - 98.4).abs() < 1e-3, "stop trigger: {stop}");
+    }
+}
+
 /// The market and the BTC deltas are read as magnitudes in the sell family; the corridor family
 /// keeps their sign.
 #[test]
@@ -162,6 +204,7 @@ fn no_reading_without_terms_or_a_rule_take() {
     assert_eq!(FactModifier::of(&d, &bare, None), None);
     let no_depth = Deal {
         hook_depth_pct: None,
+        drops_detect: None,
         ..d
     };
     assert_eq!(FactModifier::of(&no_depth, &p, None), None);

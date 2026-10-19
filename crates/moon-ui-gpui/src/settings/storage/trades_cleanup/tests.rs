@@ -7,14 +7,48 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{
-    ClaimStamps, Inventory, KeepMap, Margins, OWNER_SLACK_S, ReportAxis, ReportStamp, TapeOwner,
-    build_keep, read_tape_owners, stamps, trade_cache,
+    ClaimStamps, Coverage, Inventory, KeepMap, Margins, OWNER_SLACK_S, ReportAxis, ReportStamp,
+    TapeCount, TapeOwner, build_keep, count_with_tape, read_tape_owners, stamps, trade_cache,
 };
 
 const MARGINS: Margins = Margins {
     margin_ms: 60_000,
     long_position_ms: 5 * 60_000,
 };
+
+/// A strategy-kind read failure must leave the archive untouched; complete empty owners may trim.
+#[test]
+fn failed_owner_metadata_never_applies_a_keep_map() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let cache = trade_cache::TradeCache::open_with_ceiling(":memory:".into(), || None).unwrap();
+    cache.insert(
+        "x",
+        "M",
+        1,
+        10,
+        vec![],
+        moon_core::market::trade_replay::TileSource::Venue,
+    );
+    assert!(cache.sync(std::time::Duration::from_secs(5)));
+    let context = super::CleanupContext {
+        source: moon_core::market::MarketDataSource::new(moon_core::market::MarketStore::shared(
+            0.0,
+        )),
+        quotes: HashMap::new(),
+        axis: ReportAxis::default(),
+    };
+    assert!(
+        context
+            .run_with(&cache, |_, _, _| anyhow::bail!(
+                "strategy kinds read failed"
+            ))
+            .is_err()
+    );
+    assert_eq!(cache.held_spans("x", "M", 0, 20).unwrap(), vec![(1, 10)]);
+    let result = context.run_with(&cache, |_, _, _| Ok(vec![])).unwrap();
+    assert_eq!(result.report.spans_dropped, 1);
+    assert!(cache.held_spans("x", "M", 0, 20).unwrap().is_empty());
+}
 
 fn owner(core_uid: u64, coin: &str, buy_ms: i64, close_ms: i64, kind: &str) -> TapeOwner {
     TapeOwner {
@@ -286,11 +320,172 @@ fn the_reach_is_the_margin_and_the_orders_wait_in_whole_seconds() {
     );
 }
 
+/// Count the deals of `rows` with tape, the file holding `held` on every market; also answers how
+/// many held reads were made.
+fn count(
+    inv: &Inventory,
+    rows: &[&TapeOwner],
+    axis: &ReportAxis,
+    live: impl FnMut(&TapeOwner) -> Option<(String, String)>,
+    held: &[(i64, i64)],
+) -> (TapeCount, usize) {
+    let mut reads = 0;
+    let counted = count_with_tape(inv, rows, axis, &quotes(), MARGINS, live, |_| {
+        reads += 1;
+        Ok(Some(Coverage::from_spans(held.iter().copied())))
+    })
+    .expect("counted");
+    (counted, reads)
+}
+
+/// A missing market reply must mark both counts as lower bounds and be read only once.
+#[test]
+fn timed_out_markets_make_tape_counts_lower_bounds() {
+    let inv = inventory(&[("4:0", "ACEUSDT"), ("9:0", "ACE_USDT")]);
+    let first = owner(2, "ACE", 1_000_000, 4_600_000, "MoonShot");
+    let second = owner(2, "ACE", 5_000_000, 5_010_000, "MoonShot");
+    let mut reads = 0;
+    let got = count_with_tape(
+        &inv,
+        &[&first, &second],
+        &ReportAxis::default(),
+        &quotes(),
+        MARGINS,
+        |_| None,
+        |key| {
+            reads += 1;
+            Ok((key.0 == "4:0").then(|| Coverage::from_spans([(0, 10_000_000)])))
+        },
+    )
+    .unwrap();
+    assert_eq!(got.with_tape, 2);
+    assert_eq!(got.long, 1);
+    assert_eq!(got.incomplete_markets, 1);
+    assert_eq!(reads, 2);
+}
+
+/// Tape inside a deal's margin only — before its entry, after its exit — makes it a deal with
+/// tape; tape past the margin does not.
+#[test]
+fn tape_in_the_margin_alone_counts_the_deal() {
+    let inv = inventory(&[("4:0", "ACEUSDT")]);
+    let ace = owner(1, "ACE", 1_000_000, 1_010_000, "MoonShot");
+    let live = |_: &TapeOwner| Some(key("4:0", "ACEUSDT"));
+    let axis = ReportAxis::default();
+    for (held, counted) in [
+        ((1_000_000 - 60_000, 1_000_000 - 55_000), 1),
+        ((1_010_000 + 59_000, 1_010_000 + 60_000), 1),
+        ((1_010_000 + 60_001, 1_200_000), 0),
+        ((800_000, 1_000_000 - 60_001), 0),
+    ] {
+        let (got, _) = count(&inv, &[&ace], &axis, live, &[held]);
+        assert_eq!(got.with_tape, counted, "held {held:?}");
+        assert_eq!(got.long, 0);
+    }
+}
+
+/// With the core's clock offset, tape the lifted claim alone reaches counts the deal, and a deal
+/// both clocks reach is still one deal.
+#[test]
+fn an_offset_clock_counts_a_deal_once() {
+    let inv = inventory(&[("4:0", "ACEUSDT")]);
+    let ace = owner(1, "ACE", 1_000_000, 1_010_000, "MoonShot");
+    let axis = ReportAxis::from_measured(
+        HashMap::from([(
+            1,
+            vec![moon_core::db::OffsetSegment {
+                from_utc: 0,
+                offset_secs: 3,
+            }],
+        )]),
+        chrono_tz::UTC,
+    );
+    let (buy, close) = axis.stamp_pair_to_utc_ms(ace.buy, ace.close, 1);
+    let lifted_only = if buy < 1_000_000 {
+        (buy - 60_000, buy - 60_000)
+    } else {
+        (close + 60_000, close + 60_000)
+    };
+    let live = |_: &TapeOwner| Some(key("4:0", "ACEUSDT"));
+    assert_eq!(
+        count(&inv, &[&ace], &axis, live, &[lifted_only])
+            .0
+            .with_tape,
+        1
+    );
+    assert_eq!(
+        count(&inv, &[&ace], &ReportAxis::default(), live, &[lifted_only])
+            .0
+            .with_tape,
+        0,
+        "without the offset nothing reaches that print"
+    );
+    assert_eq!(
+        count(&inv, &[&ace], &axis, live, &[(0, 10_000_000)]).0,
+        TapeCount {
+            with_tape: 1,
+            long: 0,
+            incomplete_markets: 0
+        }
+    );
+}
+
+/// A long position's claim is its two ends: tape in its middle does not count it, tape at an end
+/// counts it as long.
+#[test]
+fn a_long_split_window_counts_only_at_its_ends() {
+    let inv = inventory(&[("4:0", "ACEUSDT")]);
+    let long = owner(1, "ACE", 1_000_000, 1_000_000 + 3_600_000, "MoonShot");
+    let live = |_: &TapeOwner| Some(key("4:0", "ACEUSDT"));
+    let axis = ReportAxis::default();
+    assert_eq!(
+        count(&inv, &[&long], &axis, live, &[(2_000_000, 3_000_000)]).0,
+        TapeCount::default()
+    );
+    assert_eq!(
+        count(&inv, &[&long], &axis, live, &[(4_600_500, 4_600_600)]).0,
+        TapeCount {
+            with_tape: 1,
+            long: 1,
+            incomplete_markets: 0
+        }
+    );
+}
+
+/// An offline core's coin matching several markets of the file is one deal, and each market is
+/// read once however many deals ask for it.
+#[test]
+fn a_deal_on_duplicate_markets_counts_once_and_reads_each_market_once() {
+    let inv = inventory(&[
+        ("4:0", "ACEUSDT"),
+        ("9:0", "ACE_USDT"),
+        ("15:0", "ACE-USDT-SWAP"),
+    ]);
+    let first = owner(2, "ACE", 1_000_000, 1_010_000, "");
+    let second = owner(2, "ACE", 2_000_000, 2_010_000, "");
+    let (got, reads) = count(
+        &inv,
+        &[&first, &second],
+        &ReportAxis::default(),
+        |_| None,
+        &[(0, 10_000_000)],
+    );
+    assert_eq!(
+        got,
+        TapeCount {
+            with_tape: 2,
+            long: 0,
+            incomplete_markets: 0
+        }
+    );
+    assert_eq!(reads, 3);
+}
+
 /// The observation channel for the whole pass short of the live catalog: point
 /// `MOON_TRADES_CLEANUP_COPY` at a directory holding a COPY of a `data/` folder
 /// (`reports.sqlite`, `strategies.sqlite`, `trades.sqlite`, with their WAL files), and this
-/// runs the count and then the apply against that copy, printing what each found —
-/// the numbers the tab would show, off a real replica and a real file. Every core resolves by
+/// applies retention against that copy, printing what the pass removed from the archive.
+/// Every core resolves by
 /// name (no session here), so the by-name count equals the claimants. Ignored: it needs the
 /// copy, and it installs the process-wide data-dir override, so it runs alone:
 /// `cargo test -p moon-ui-gpui --target x86_64-pc-windows-msvc -- --ignored --nocapture
@@ -300,6 +495,7 @@ fn the_reach_is_the_margin_and_the_orders_wait_in_whole_seconds() {
 #[test]
 #[ignore]
 fn probe_a_copied_data_dir() {
+    let _window = crate::test_support::SharedWindowGuard::take();
     let Ok(dir) = std::env::var("MOON_TRADES_CLEANUP_COPY") else {
         eprintln!("MOON_TRADES_CLEANUP_COPY not set; nothing probed");
         return;
@@ -320,7 +516,7 @@ fn probe_a_copied_data_dir() {
         println!("[probe] {what}: trades.sqlite is {bytes} bytes");
     };
     size("before");
-    let cache = trade_cache::maintenance_handle().expect("cache worker");
+    let cache = trade_cache::handle().expect("cache worker");
     let inventory = cache.inventory().expect("answered").expect("inventory");
     let (from_ms, to_ms) = inventory.range_ms.expect("a non-empty file");
     println!(
@@ -350,7 +546,7 @@ fn probe_a_copied_data_dir() {
         margins.margin_ms,
         moon_core::market::trade_replay::long_position_ms()
     );
-    for apply in [false, true] {
+    {
         let claimants: Vec<&TapeOwner> = owners.iter().filter(|o| o.is_tunable()).collect();
         let started = std::time::Instant::now();
         let (keep, preview) = build_keep(
@@ -361,12 +557,9 @@ fn probe_a_copied_data_dir() {
             margins,
             |_| None,
         );
-        let report = cache
-            .trim(Arc::new(keep), apply)
-            .expect("answered")
-            .expect("trim");
+        let report = cache.trim(Arc::new(keep)).expect("answered").expect("trim");
         println!(
-            "[probe] apply={apply}: claimants {} (by name {}, unresolved {}); spans {} total / {} dropped / {} cut; prints dropped {}; bytes {} of {}; {} ms",
+            "[probe] applied: claimants {} (by name {}, unresolved {}); spans {} total / {} dropped / {} cut; prints dropped {}; bytes {} of {}; {} ms",
             preview.claimants,
             preview.by_name,
             preview.unresolved,
@@ -378,16 +571,6 @@ fn probe_a_copied_data_dir() {
             report.bytes_total,
             started.elapsed().as_millis()
         );
-        if apply {
-            size("after apply + vacuum");
-            let again = cache
-                .trim(Arc::new(KeepMap::new()), false)
-                .expect("answered")
-                .expect("recount");
-            println!(
-                "[probe] file now holds {} span(s), {} bytes",
-                again.spans_total, again.bytes_total
-            );
-        }
+        size("after apply + vacuum");
     }
 }

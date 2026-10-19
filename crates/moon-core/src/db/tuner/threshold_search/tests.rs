@@ -300,3 +300,55 @@ fn a_declined_set_names_its_columns_from_its_own_mask() {
         "the CHOSEN set stays keyed to the applied ranges, which is what makes the two differ"
     );
 }
+
+/// A scan stores a missing Detect number as NaN and a missing other field as 0.
+///
+/// The oracle is the same two comments the comment-field projection already parses: the
+/// Drops row carries 2.9, the MoonShot row carries no number. `lev` has no column in this
+/// table, so both of its cells are NULL and must stay 0 — the fold every non-Detect field
+/// still uses.
+///
+/// Breakage this pins: `scan_on` folding every NULL through `unwrap_or(0.0)`. A later Min
+/// search would then treat the MoonShot deal as an xPriceDelta of 0 and score it as removed.
+#[test]
+fn a_scan_stores_a_missing_detect_value_as_nan_and_other_nulls_as_zero() {
+    use rusqlite::Connection;
+
+    use crate::db::analytics::{Query, unified_from};
+    use crate::db::tuner::comment_field::DROPS_PRICE_DELTA;
+
+    let conn = Connection::open_in_memory().expect("memory db");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, coin TEXT,
+             isshort INTEGER, buydate INTEGER, closedate INTEGER, profitbtc REAL,
+             strategyid INTEGER, emulator INTEGER, spentbtc REAL, basecurrency INTEGER,
+             comment TEXT);
+         INSERT INTO orders_rep VALUES
+             (1, 'CORE_A', 'XALPHA', 0, 900, 1000, 1.0, 7, 0, 10.0, 1,
+              ' DropsDetection: <UNIT_01> USDT-XALPHA  DailyVol: 27m PriceIsLow: false xPriceDelta: 2.9 \r\nBTC'),
+             (1, 'CORE_A', 'XALPHA', 0, 900, 1001, 2.0, 8, 0, 10.0, 1, ' MoonShot: <UNIT_01>');",
+    )
+    .expect("schema");
+    let q = Query {
+        to: i64::MAX,
+        ..Query::default()
+    };
+    let src = unified_from(&conn, &q)
+        .expect("source")
+        .expect("the replica exists");
+    let (_profits, vals, _closes) = super::scan_on(&conn, &q, &src, &super::SearchHandle::new())
+        .expect("scan")
+        .expect("not cancelled");
+    let xfi = FIELDS
+        .iter()
+        .position(|spec| spec.col == DROPS_PRICE_DELTA)
+        .expect("xpricedelta");
+    let lev = FIELDS
+        .iter()
+        .position(|spec| spec.col == "lev")
+        .expect("lev");
+    assert_eq!(vals[xfi][0], 2.9);
+    assert!(vals[xfi][1].is_nan(), "a MoonShot row has no xPriceDelta");
+    assert_eq!(vals[lev][0], 0.0);
+    assert_eq!(vals[lev][1], 0.0);
+}

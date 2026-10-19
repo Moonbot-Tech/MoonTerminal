@@ -44,8 +44,6 @@ pub(in crate::analytics::tuner) use summary::readiness_refusal;
 pub(in crate::analytics::tuner) use tape::{PackedTape, PendingDeal, prepare_sample};
 
 mod accuracy;
-/// Sequential searches and checked bulk consent for the strategy list's best picks.
-pub(in crate::analytics::tuner) mod best;
 mod cfg;
 pub(in crate::analytics::tuner) mod columns;
 mod delta_summary;
@@ -107,21 +105,13 @@ impl AnalyticsView {
             .data()
             .map(|d| (d.without_ms, d.service, d.untunable))
             .unwrap_or_default();
-        let summary = self.ticks.data.view(|d| d.rows.is_empty()).map(|d| {
-            (
-                d.rows.len(),
-                if fetch::station_available() {
-                    d.rows
-                        .iter()
-                        .filter(|row| fetch::station_load_candidate(row, &admission))
-                        .count()
-                } else {
-                    d.fetchable_at(now_ms, min_tail_s).count()
-                },
-            )
-        });
-        let (body, fetchable) = match summary {
-            Err(crate::load_state::Note::Empty) if left_out != (0, 0, 0) => (
+        let summary = self
+            .ticks
+            .data
+            .view(|d| d.rows.is_empty())
+            .map(|d| d.rows.len());
+        let body = match summary {
+            Err(crate::load_state::Note::Empty) if left_out != (0, 0, 0) => {
                 crate::load_state::muted(
                     t!(
                         "analytics.ticks.empty_left_out",
@@ -133,17 +123,13 @@ impl AnalyticsView {
                     10.0,
                     p,
                     cx,
-                ),
-                0usize,
-            ),
-            Err(note) => (
-                super::super::note_el("an-ticks-note", note, 10.0, p, cx),
-                0usize,
-            ),
+                )
+            }
+            Err(note) => super::super::note_el("an-ticks-note", note, 10.0, p, cx),
             // Rows loaded, none shown: the switch hid every one. Said in words, with the
             // count, rather than drawn as a blank list — while the tape stage still reads,
             // no row is covered yet and the note says that instead.
-            Ok((total, fetchable)) if drawn == 0 => (
+            Ok(total) if drawn == 0 => {
                 if self.ticks.chip.is_some() {
                     filtered_empty_el(chip_action(cx.entity().downgrade()), p, cx)
                 } else {
@@ -157,46 +143,43 @@ impl AnalyticsView {
                         p,
                         cx,
                     )
-                },
-                fetchable,
-            ),
-            Ok((_, fetchable)) => {
+                }
+            }
+            Ok(_) => {
                 let weak = cx.entity().downgrade();
                 let row_h = deal_row_h(cx);
-                let list =
-                    MoonVirtualList::new("an-ticks-rows", drawn, row_h, move |ix, _w, app| {
-                        weak.upgrade()
-                            .and_then(|e| {
-                                let view = e.read(app);
-                                // Order and rows are read from the view in ONE go, so an
-                                // index is never applied to a row set it was not built
-                                // against.
-                                let order = view.ticks.order.as_ref()?;
-                                let row =
-                                    view.ticks.data.data()?.rows.get(*order.order.get(ix)?)?;
-                                let selected = view.ticks.trade.open
-                                    && view.ticks.trade.uid == Some(row.deal.report_uid);
-                                let plan = PlanCell::of(&view.ticks, row.deal.report_uid);
-                                Some(deal_row(
-                                    row,
-                                    selected,
-                                    plan,
-                                    deal_action(weak.clone()),
-                                    p,
-                                    scale,
-                                    row_h,
-                                    &admission,
-                                    app,
-                                ))
-                            })
-                            .unwrap_or_else(|| div().into_any_element())
-                    })
-                    .surface(false)
-                    .border(false)
-                    .radius(0.0)
-                    .scrollbar_visibility(MoonScrollbarVisibility::Hover)
-                    .into_any_element();
-                (list, fetchable)
+                MoonVirtualList::new("an-ticks-rows", drawn, row_h, move |ix, _w, app| {
+                    weak.upgrade()
+                        .and_then(|e| {
+                            let view = e.read(app);
+                            // Order and rows are read from the view in ONE go, so an
+                            // index is never applied to a row set it was not built
+                            // against.
+                            let order = view.ticks.order.as_ref()?;
+                            let row = view.ticks.data.data()?.rows.get(*order.order.get(ix)?)?;
+                            let selected = view.ticks.trade.open
+                                && view.ticks.trade.uid == Some(row.deal.report_uid);
+                            let plan = PlanCell::of(&view.ticks, row.deal.report_uid);
+                            Some(deal_row(
+                                row,
+                                selected,
+                                plan,
+                                deal_action(weak.clone()),
+                                view.ticks.tape_reading,
+                                p,
+                                scale,
+                                row_h,
+                                &admission,
+                                app,
+                            ))
+                        })
+                        .unwrap_or_else(|| div().into_any_element())
+                })
+                .surface(false)
+                .border(false)
+                .radius(0.0)
+                .scrollbar_visibility(MoonScrollbarVisibility::Hover)
+                .into_any_element()
             }
         };
         // The batch is the process's (`fetch::job`), not this window's: the caption reads its
@@ -209,58 +192,25 @@ impl AnalyticsView {
         let fetch_active = progress.active || fetch::station_active();
         // A batch this window did not start — the startup autoload, or one left by a previous
         // window — is listened to from the first paint that finds it running, so its answers
-        // land in the table and the button keeps counting. Idempotent: one listener per view
-        // while a batch runs.
+        // land in the table. Idempotent: one listener per view while a batch runs.
         if fetch_active {
             self.attach_fetch_listener(cx);
         }
-        // The button is only the switch — "fetch" or "stop"; what the batch is doing goes into
-        // the caption beside it, and ONLY that: the sample's coverage sits in the status line
-        // under the table, so the head says nothing when nothing runs.
-        let caption = if fetch_active && !progress.in_flight.is_empty() {
-            // Every market a request is out for, in the order they went out: the walks run in
-            // parallel across venues, and one name would read as one request.
-            let markets: Vec<&str> = progress
-                .in_flight
-                .iter()
-                .map(|(_, market)| market.as_str())
-                .collect();
-            t!(
-                "analytics.ticks.fetch_progress_at",
-                done = progress.done,
-                total = progress.total,
-                market = markets.join(" · ")
-            )
-            .to_string()
-        } else if fetch_active {
-            match progress.venue_wait {
-                // The venue asked for this pause. The figure is the same deadline the next
-                // try will honour, the soonest host when several are waiting.
-                Some(wait) => t!(
-                    "analytics.ticks.fetch_venue_wait",
-                    done = progress.done,
-                    total = progress.total,
-                    left = fetch_wait_text(wait)
-                )
-                .to_string(),
-                None => t!(
-                    "analytics.ticks.fetch_waiting",
-                    done = progress.done,
-                    total = progress.total
-                )
-                .to_string(),
-            }
-        } else if self.ticks.tape_reading {
-            t!("analytics.ticks.fetch_reading").to_string()
-        } else {
-            String::new()
-        };
+        // What the batch is doing goes into the caption, and only that: the sample's coverage
+        // sits in the status line under the table, so the head says nothing when nothing runs.
+        let caption = fetch_caption(
+            &progress,
+            fetch_active,
+            crate::backend::station::known_cached(),
+            self.ticks.tape_reading,
+        );
         // The status line: the honest size of the sample — how many rows have their tape,
         // out of how many — with what the scope holds beyond the table, and the switch that
         // hides the rest. How well the MODEL does on that sample is the KPI caption's ✓
         // shares (`ticks_kpi`), not a size.
         let chips = chips_el(
             counts,
+            self.ticks.tape_reading,
             self.ticks.chip,
             left_out,
             chip_action(cx.entity().downgrade()),
@@ -303,11 +253,6 @@ impl AnalyticsView {
                         }
                     }),
             );
-        let fetch_label = if fetch_active {
-            t!("analytics.ticks.fetch_stop").to_string()
-        } else {
-            t!("analytics.ticks.fetch_btn").to_string()
-        };
         let model_settings = self.ticks_model_settings(p, window, cx);
         let report = self.ticks_report_button(cx);
         v_flex()
@@ -354,35 +299,6 @@ impl AnalyticsView {
                                 .text_size(design::t_caption(cx))
                                 .text_color(moon(p.text_muted))
                                 .child(caption),
-                        )
-                    })
-                    .when(fetchable > 0 || fetch_active, |el| {
-                        el.child(
-                            div().font_family(design::ui_font()).child(
-                                MoonButton::new("an-ticks-fetch")
-                                    .variant(if fetch_active {
-                                        MoonButtonVariant::Amber
-                                    } else {
-                                        MoonButtonVariant::Soft
-                                    })
-                                    .label(fetch_label)
-                                    // While the tape stage reads, a press would queue rows the
-                                    // tiles already hold (`ticks_fetch_missing` waits for the
-                                    // fold), so the switch waits too.
-                                    .disabled(!fetch_active && self.ticks.tape_reading)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if fetch_active {
-                                            this.ticks_fetch_stop(cx);
-                                        } else {
-                                            this.ticks_fetch_missing(
-                                                fetch::job::RowOrigin::User,
-                                                cx,
-                                            );
-                                        }
-                                        cx.notify();
-                                    }))
-                                    .render(),
-                            ),
                         )
                     })
                     .when_some(report, |el, report| {
@@ -652,7 +568,11 @@ impl AnalyticsView {
             KpiOpts {
                 title: Some((
                     t!("analytics.ticks.kpi.title").to_string(),
-                    sample::caption(set_n, self.ticks.data.data().map_or(0, |d| d.all.n)),
+                    sample::caption(
+                        set_n,
+                        self.ticks.data.data().map_or(0, |d| d.all.n),
+                        self.ticks.tape_reading,
+                    ),
                 )),
                 sample_note: self.ticks.data.data().and_then(|d| {
                     baseline
@@ -740,9 +660,10 @@ fn deal_row_h(cx: &App) -> f32 {
 /// The remaining venue pause as the fetch caption prints it.
 ///
 /// Short waits stay in seconds through 90s, so a 30s backoff still counts in seconds. Past
-/// that the figure is the search estimate's ([`estimate::duration_text`]): minutes, then
-/// hours and minutes. A fraction of a second rounds up, so the caption does not claim the
-/// try is due before the deadline the dispatcher will honour.
+/// that the figure is the search estimate's ([`estimate::duration_text`]): minutes and seconds
+/// under ten minutes, whole minutes up to an hour, then hours and minutes. A fraction of a
+/// second rounds up, so the caption does not claim the try is due before the deadline the
+/// dispatcher will honour.
 ///
 /// Args:
 ///     wait: Time until the soonest waiting host's deadline.
@@ -960,6 +881,7 @@ fn chip_action(view: WeakEntity<AnalyticsView>) -> ChipAction {
 /// Whole-population counters wrap as intact controls, with static exclusions kept noninteractive.
 fn chips_el(
     counts: rows::ChipCounts,
+    reading: bool,
     active: Option<why::DealChip>,
     left_out: (usize, usize, usize),
     pick: ChipAction,
@@ -978,7 +900,7 @@ fn chips_el(
         .text_size(design::t_caption(cx));
     for chip in why::DealChip::ALL {
         let key = chip.key();
-        let label = format!("{}: {}", chip.label(counts.min_tail_s), counts.get(chip));
+        let label = chip_label(counts, chip, reading);
         let tip_key = format!("analytics.ticks.chip.{key}_tip");
         let pick = pick.clone();
         el = el.child(
@@ -1075,6 +997,16 @@ fn chips_el(
     el.into_any_element()
 }
 
+/// Tape-dependent counts stay unknown while reading, including carried rows during a reload.
+fn chip_label(counts: rows::ChipCounts, chip: why::DealChip, reading: bool) -> String {
+    let value = if reading {
+        "…".to_string()
+    } else {
+        counts.get(chip).to_string()
+    };
+    format!("{}: {value}", chip.label(counts.min_tail_s))
+}
+
 /// A filter that hides the population has an immediate escape in the table body.
 fn filtered_empty_el(pick: ChipAction, p: MoonPalette, cx: &App) -> AnyElement {
     v_flex()
@@ -1101,6 +1033,60 @@ fn filtered_empty_el(pick: ChipAction, p: MoonPalette, cx: &App) -> AnyElement {
                 .render(),
         )
         .into_any_element()
+}
+
+/// Describe only nonempty fetch jobs, naming the configured source while waiting.
+/// Empty station handovers still allow the selected strategy's local read to be shown.
+fn fetch_caption(
+    progress: &fetch::job::Progress,
+    active: bool,
+    station: bool,
+    reading: bool,
+) -> String {
+    if active && progress.total > 0 {
+        if station {
+            return t!(
+                "analytics.ticks.fetch_station_waiting",
+                done = progress.done,
+                total = progress.total
+            )
+            .to_string();
+        }
+        if !progress.in_flight.is_empty() {
+            let markets: Vec<&str> = progress
+                .in_flight
+                .iter()
+                .map(|(_, market)| market.as_str())
+                .collect();
+            return t!(
+                "analytics.ticks.fetch_progress_at",
+                done = progress.done,
+                total = progress.total,
+                market = markets.join(" · ")
+            )
+            .to_string();
+        }
+        return match progress.venue_wait {
+            Some(wait) => t!(
+                "analytics.ticks.fetch_venue_wait",
+                done = progress.done,
+                total = progress.total,
+                left = fetch_wait_text(wait)
+            )
+            .to_string(),
+            None => t!(
+                "analytics.ticks.fetch_waiting",
+                done = progress.done,
+                total = progress.total
+            )
+            .to_string(),
+        };
+    }
+    if reading {
+        t!("analytics.ticks.fetch_reading").to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// One glyph per model group without allocating hover text on every repaint.
@@ -1130,13 +1116,14 @@ fn deal_action(view: WeakEntity<AnalyticsView>) -> DealAction {
     })
 }
 
-/// Draw only a visible row, with lazy hover explanations and shared classification inputs.
+/// Draw a visible row without claiming missing tape while its local read is unanswered.
 #[allow(clippy::too_many_arguments)]
 fn deal_row(
     row: &DealRow,
     selected: bool,
     plan: PlanCell,
     action: DealAction,
+    reading: bool,
     p: MoonPalette,
     scale: f32,
     row_h: f32,
@@ -1144,7 +1131,7 @@ fn deal_row(
     cx: &App,
 ) -> AnyElement {
     let d = &row.deal;
-    let why = why::DealWhy::of_with(row, admission);
+    let why = why::DealWhy::display_of_with(row, admission, reading);
     let tape_why = if row.tape == state::TapeStatus::Covered {
         why::DealWhy::tape_of_with(row, admission)
     } else {

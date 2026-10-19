@@ -373,19 +373,15 @@ pub(super) fn apply_full_set(
                     changed_json,
                 ],
             )?;
-            // The live atomic is consulted on version insertion, so a changed limit is applied to
-            // this strategy on its next version insertion.
-            let limit = super::version_limit();
-            if limit > 0 {
-                tx.execute(
-                    "DELETE FROM strategy_versions
+            // Bound each strategy independently while retaining its newest history.
+            tx.execute(
+                "DELETE FROM strategy_versions
                      WHERE core_uid=?1 AND strategy_id=?2 AND id NOT IN (
                         SELECT id FROM strategy_versions
                         WHERE core_uid=?1 AND strategy_id=?2
                         ORDER BY valid_from DESC LIMIT ?3)",
-                    rusqlite::params![uid, d.strategy_id, limit as i64],
-                )?;
-            }
+                rusqlite::params![uid, d.strategy_id, super::MAX_VERSIONS_PER_STRATEGY],
+            )?;
             log::info!(
                 "стратегии(db): {core_name} «{}» → версия ({kind}, изменено {n_changed})",
                 d.name

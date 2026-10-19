@@ -14,6 +14,131 @@ use crate::feed::types::Side;
 mod real_data;
 mod required;
 
+/// Explicit values override defaults, while omitted values retain the schema's defaults.
+#[test]
+fn drops_params_read_all_fields_and_defaults() {
+    let values = HashMap::from([
+        ("DropsMaxTime".into(), "100".into()),
+        ("DropsPriceMA".into(), "20".into()),
+        ("DropsLastPriceMA".into(), "2".into()),
+        ("DropsPriceDelta".into(), "3.5".into()),
+        ("DropsPriceIsLow".into(), "YES".into()),
+        ("DropsUseLastPrice".into(), "YES".into()),
+        ("buyPrice".into(), "-0.5".into()),
+        ("buyPriceLastTrade".into(), "YES".into()),
+        ("Use30SecOldASK".into(), "NO".into()),
+    ]);
+    let defaults = HashMap::from([("buyprice".into(), -2.0), ("use30secoldask".into(), 1.0)]);
+    let p = params::drops_params(&StrategyValues {
+        values: &values,
+        defaults: &defaults,
+    });
+    assert_eq!(
+        p,
+        drops::DropsParams {
+            max_time_s: 100,
+            price_ma_s: 20,
+            last_price_ma: 2,
+            price_delta_pct: 3.5,
+            price_is_low: true,
+            use_last_price: true,
+            buy_price_pct: -0.5,
+            buy_price_last_trade: true,
+            use_30s_old_ask: false,
+        }
+    );
+    let fallback = params::drops_params(&StrategyValues {
+        values: &HashMap::new(),
+        defaults: &defaults,
+    });
+    assert_eq!(fallback.buy_price_pct, -2.0);
+    assert!(fallback.use_30s_old_ask);
+    assert_eq!(fallback.max_time_s, 0);
+}
+
+/// Leaving calibration keys out of the requested snapshot would silently replace strategy inputs.
+#[test]
+fn param_keys_include_drops_fields() {
+    let keys = param_keys();
+    for key in [
+        "DropsMaxTime",
+        "DropsPriceMA",
+        "DropsLastPriceMA",
+        "DropsPriceDelta",
+        "DropsPriceIsLow",
+        "DropsUseLastPrice",
+        "buyPrice",
+        "buyPriceLastTrade",
+        "Use30SecOldASK",
+    ] {
+        assert!(keys.iter().any(|k| k == key), "missing {key}");
+    }
+}
+
+/// Classifying gated inputs as fixed model fields would hide their Outside grid status.
+#[test]
+fn drops_inputs_fetched_but_not_model_only() {
+    let keys = param_keys();
+    for key in [
+        "DropsMaxTime",
+        "DropsPriceMA",
+        "DropsLastPriceMA",
+        "DropsPriceDelta",
+        "DropsPriceIsLow",
+        "DropsUseLastPrice",
+        "buyPrice",
+        "buyPriceLastTrade",
+        "Use30SecOldASK",
+    ] {
+        assert!(!params::is_model_only(key), "model-only {key}");
+        assert!(keys.iter().any(|k| k == key), "missing {key}");
+    }
+}
+
+/// The own strategy must keep its factual entry even when there is no detector history.
+#[test]
+fn entry_fill_drops_own_strategy_is_fact() {
+    let own = drops::DropsParams {
+        price_delta_pct: 3.0,
+        ..Default::default()
+    };
+    let mut d = deal();
+    d.kind = drops::KIND_DROPS.into();
+    d.own_entry = Some(EntryParams::Drops(own.clone()));
+    assert_eq!(
+        entry_fill(&d, &[], &EntryParams::Drops(own.clone()), None),
+        Some(fact_fill(&d))
+    );
+    let changed = drops::DropsParams {
+        price_delta_pct: 4.0,
+        ..own
+    };
+    assert_eq!(
+        entry_fill(&d, &[], &EntryParams::Drops(changed), None),
+        None
+    );
+}
+
+/// Dispatch must not activate DropsDetection ahead of real-data calibration.
+#[test]
+fn entry_params_for_drops_is_fact_while_gated() {
+    let values = HashMap::new();
+    let defaults = HashMap::new();
+    let sv = StrategyValues {
+        values: &values,
+        defaults: &defaults,
+    };
+    assert!(!entry_model_for(drops::KIND_DROPS));
+    assert_eq!(
+        params::entry_params_for(drops::KIND_DROPS, &sv, ModelSettings::default()),
+        EntryParams::Fact
+    );
+    assert!(matches!(
+        params::entry_params_for(entry::KIND_MOONSHOT, &sv, ModelSettings::default()),
+        EntryParams::MoonShot(_)
+    ));
+}
+
 fn tick(t_ms: i64, price: f64, side: Side) -> Tick {
     Tick {
         time_ms: t_ms as f64,
@@ -53,6 +178,7 @@ pub(super) fn deal() -> Deal {
         archived_take: None,
         fact_modifier: None,
         hook_depth_pct: None,
+        drops_detect: None,
         hook_stated_take_pct: None,
         strike_detect: None,
         step_lag_ms: 0.0,
@@ -1806,6 +1932,7 @@ fn a_hook_without_its_depth_is_not_a_known_take() {
     assert!(model.take_known(&hook_deal()));
     let no_depth = Deal {
         hook_depth_pct: None,
+        drops_detect: None,
         ..hook_deal()
     };
     assert!(!model.take_known(&no_depth));
@@ -1969,6 +2096,7 @@ fn an_unknown_take_leaves_the_exit_unanswered() {
     );
     let blind = Deal {
         hook_depth_pct: None,
+        drops_detect: None,
         ..hook_deal()
     };
     let v = verify(&blind, &ticks, &EntryParams::Fact, &params, None, None);
@@ -2316,6 +2444,205 @@ fn strike_fill(price: f64) -> Fill {
         t_ms: 10_000,
         price,
     }
+}
+
+/// Accepting only the archived line would admit strikes whose variant formula cannot replay it.
+#[test]
+fn archived_strike_take_must_match_the_variant_formula() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        price_down_timer_s: 1.0,
+        price_down_delay_s: 30.0,
+        price_down_pct: 0.5,
+        price_down_relative: false,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    // The span formula gives 102; the archive is either exact or 1% above it.
+    for (take, expected) in [(102.0, Some(true)), (103.02, None)] {
+        let d = Deal {
+            coin: "XALPHA".into(),
+            core_name: "CORE_A".into(),
+            archived_take: Some(take),
+            sell_price: take - 0.5,
+            sell_reason: "Auto Price Down".into(),
+            ..strike_deal(false)
+        };
+        let ticks = tape(&[(10_000, 100.0), (11_001, 100.0), (20_000, take - 0.5)]);
+        let line = [(10_000, take), (11_000, take - 0.5)];
+        let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, Some(&line));
+        assert_eq!(
+            v.exit, expected,
+            "archived take {take}: {:?}",
+            v.exit_finding
+        );
+        if expected.is_none() {
+            assert_eq!(
+                v.exit_finding,
+                verify::ExitFinding::Unjudged(verify::Unjudged::TakeUnknown)
+            );
+            assert!(!record::fit_for_search(&v));
+        } else {
+            assert!(record::fit_for_search(&v));
+        }
+    }
+}
+
+/// Omitting the short strike check would admit an archived take its variants cannot reproduce.
+#[test]
+fn archived_short_strike_take_must_match_the_variant_formula() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    // Half the span from 100 to 96 gives 98 for a short; 97.02 is 1% below it.
+    for (take, expected) in [(98.0, Some(true)), (97.02, None)] {
+        let d = Deal {
+            archived_take: Some(take),
+            sell_price: take,
+            sell_reason: "Sell Price".into(),
+            ..strike_deal(true)
+        };
+        let ticks = tape(&[(10_000, 100.0), (20_000, take)]);
+        let line = [(10_000, take)];
+        let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, Some(&line));
+        assert_eq!(
+            v.exit, expected,
+            "archived take {take}: {:?}",
+            v.exit_finding
+        );
+        if expected.is_none() {
+            assert_eq!(
+                v.exit_finding,
+                verify::ExitFinding::Unjudged(verify::Unjudged::TakeUnknown)
+            );
+            assert!(!record::fit_for_search(&v));
+        } else {
+            assert!(record::fit_for_search(&v));
+        }
+    }
+}
+
+/// Omitting the hook formula check would admit an archived take its variants cannot rebuild.
+#[test]
+fn archived_hook_take_must_match_the_variant_formula() {
+    let p = ExitParams {
+        hook_sell_level_pct: 50.0,
+        price_down_timer_s: 1.0,
+        price_down_delay_s: 30.0,
+        price_down_pct: 0.5,
+        price_down_relative: false,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    // Half the 4% detect depth gives 102, not the archived 103.02.
+    let d = Deal {
+        archived_take: Some(103.02),
+        sell_price: 102.52,
+        sell_reason: "Auto Price Down".into(),
+        ..hook_deal()
+    };
+    let ticks = tape(&[(10_000, 100.0), (11_001, 100.0), (20_000, 102.52)]);
+    let line = [(10_000, 103.02), (11_000, 102.52)];
+    let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, Some(&line));
+    assert_eq!(v.exit, None, "{:?}", v.exit_finding);
+    assert_eq!(
+        v.exit_finding,
+        verify::ExitFinding::Unjudged(verify::Unjudged::TakeUnknown)
+    );
+    assert!(!record::fit_for_search(&v));
+}
+
+/// Applying the archive consistency check to MoonShot would discard its independent take model.
+#[test]
+fn archived_moonshot_take_does_not_override_its_own_model() {
+    let p = ExitParams {
+        sell_price_pct: 2.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        buy_price: 100.0,
+        archived_take: Some(103.02),
+        sell_price: 102.0,
+        sell_reason: "Sell Price".into(),
+        ..deal()
+    };
+    let ticks = tape(&[(10_000, 100.0), (20_000, 102.0)]);
+    let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, None);
+    assert_eq!(v.exit, Some(true), "{:?}", v.exit_finding);
+}
+
+/// Requiring a formula for Spread would discard the recorded level that defines its take.
+#[test]
+fn archived_spread_take_remains_the_recorded_level() {
+    let p = ExitParams {
+        sell_price_pct: 2.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        kind: "Spread".into(),
+        archived_take: Some(103.02),
+        sell_price: 103.02,
+        sell_reason: "Sell Price".into(),
+        ..deal()
+    };
+    let ticks = tape(&[(10_000, 100.0), (20_000, 103.02)]);
+    let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, None);
+    assert_eq!(v.exit, Some(true), "{:?}", v.exit_finding);
+}
+
+/// Rejecting price-grid rounding would remove reproducible low-priced strikes from the sample.
+#[test]
+fn archived_strike_take_allows_half_a_price_step() {
+    let p = ExitParams {
+        strike_sell_level_pct: 50.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+        ..ExitParams::default()
+    };
+    let d = Deal {
+        core_name: "CORE_A".into(),
+        coin: "XALPHA".into(),
+        buy_price: 0.01,
+        sell_price: 0.01,
+        archived_take: Some(0.01),
+        tick: Some(0.001),
+        strike_detect: Some(strike::StrikeDetect {
+            trade_price: 0.01,
+            depth_pct: 4.0,
+        }),
+        ..strike_deal(false)
+    };
+    let ticks = tape(&[(10_000, 0.01), (20_000, 0.01)]);
+    let v = verify(
+        &d,
+        &ticks,
+        &EntryParams::Fact,
+        &p,
+        None,
+        Some(&[(10_000, 0.01)]),
+    );
+    assert_eq!(v.exit, Some(true), "rounded strike: {:?}", v.exit_finding);
 }
 
 #[test]

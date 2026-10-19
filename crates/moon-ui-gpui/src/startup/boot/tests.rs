@@ -4,6 +4,14 @@ use std::time::{Duration, Instant};
 
 use super::{SAVE_INTERVAL, SaveGate};
 
+/// Omitting the startup registration lets terminal-only archive downloads bypass the reserve.
+#[test]
+fn barrier_b6_terminal_registers_the_archive_disk_guard() {
+    let source = include_str!("../boot.rs");
+    assert!(source.contains("archive::set_disk_guard("));
+    assert!(source.contains("archive::data_disk_budget,"));
+}
+
 /// Moving a dirty clear outside admission loses trailing edits before either saver can write.
 #[test]
 fn persistence_clears_dirty_flags_only_after_admission() {

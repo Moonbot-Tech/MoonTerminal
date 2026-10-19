@@ -26,6 +26,21 @@ use crate::config::ServerConfig;
 /// How long the transport handshake may take.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Double Compact's retained trade depth so donor seeds can carry 10,000 rows per market.
+const DONOR_HISTORY_PERCENT: u16 = 200;
+
+/// Keep donor history deep enough for pre-entry seeds without periodic market refreshes.
+fn donor_config(config: ClientConfig) -> ClientConfig {
+    config
+        .with_market_history(MarketHistorySizing::compact_with_budget_percent(
+            DONOR_HISTORY_PERCENT,
+        ))
+        .with_refresh(RefreshConfig {
+            update_markets_every: None,
+            check_tags_every: None,
+        })
+}
+
 /// The core's host is a name its own feed has not resolved yet: not a failure of the core, so
 /// the tape recorder waits for `FeedMsg::Endpoint` instead of shunning it.
 #[derive(Debug)]
@@ -78,13 +93,10 @@ impl StationLink {
                 .map(|endpoint| endpoint.address.to_string())
                 .ok_or(NotResolvedYet)?,
         };
-        let cfg = ClientConfig::new(host, target.port, info.keys.master_key, info.keys.mac_key)
-            .with_transport_mode(transport)
-            .with_market_history(MarketHistorySizing::Compact)
-            .with_refresh(RefreshConfig {
-                update_markets_every: None,
-                check_tags_every: None,
-            });
+        let cfg = donor_config(
+            ClientConfig::new(host, target.port, info.keys.master_key, info.keys.mac_key)
+                .with_transport_mode(transport),
+        );
         // No subscriptions at Init; the strategies list is required or Init never completes.
         let init = InitConfig {
             initial_strategies: Some(InitialStrategies::new(0, Vec::new())),
@@ -142,3 +154,6 @@ impl StationLink {
         self.client.drain_lifecycle_events_into(out);
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -21,20 +21,18 @@ use super::{
 };
 use crate::design;
 
-/// Production batch controls and readiness progress at the card's actual available width.
-struct BestLayoutProbe {
-    top: u8,
-    running: bool,
+/// The strategy-list header and readiness progress at the card's actual available width.
+struct HeaderLayoutProbe {
     text: String,
 }
 
-impl Render for BestLayoutProbe {
-    /// Draw the real controls and a naturally wrapping reference caption to detect truncation.
+impl Render for HeaderLayoutProbe {
+    /// Draw the header controls and a naturally wrapping reference caption to detect truncation.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         v_flex()
             .w_full()
-            .debug_selector(|| "best-list".into())
+            .debug_selector(|| "header-list".into())
             .child(
                 h_flex()
                     .w_full()
@@ -43,43 +41,35 @@ impl Render for BestLayoutProbe {
                     .gap(design::ui_px(cx, 6.0))
                     .child(
                         div()
-                            .debug_selector(|| "best-search".into())
+                            .debug_selector(|| "header-search".into())
                             .flex_1()
                             .min_w(design::ui_px(cx, 120.0))
                             .h(design::ui_px(cx, 22.0)),
                     )
                     .child(
                         div()
-                            .debug_selector(|| "best-type".into())
+                            .debug_selector(|| "header-type".into())
                             .flex_none()
                             .w(design::ui_px(cx, 116.0))
                             .h(design::ui_px(cx, 22.0)),
                     )
                     .child(
                         div()
-                            .debug_selector(|| "best-lists".into())
+                            .debug_selector(|| "header-lists".into())
                             .flex_none()
                             .w(design::ui_px(cx, 96.0))
                             .h(design::ui_px(cx, 22.0)),
                     )
                     .child(ready_filter_el(ReadyFilter::Can, Rc::new(|_, _| {}), cx))
-                    .child(super::super::best_controls_el(
-                        self.top,
-                        5,
-                        self.running,
-                        Rc::new(|_, _| {}),
-                        Rc::new(|_| {}),
-                        cx,
-                    ))
                     .child(
-                        div().debug_selector(|| "best-active".into()).child(
-                            MoonCheckbox::new("best-active-box")
+                        div().debug_selector(|| "header-active".into()).child(
+                            MoonCheckbox::new("header-active-box")
                                 .label(t!("analytics.strat.active_only").to_string()),
                         ),
                     )
                     .child(
                         div()
-                            .debug_selector(|| "best-cols".into())
+                            .debug_selector(|| "header-cols".into())
                             .flex_none()
                             .w(design::ui_px(cx, 30.0))
                             .h(design::ui_px(cx, 22.0)),
@@ -101,7 +91,7 @@ impl Render for BestLayoutProbe {
                     .child(div().flex_none().w(design::ui_px(cx, 56.0)))
                     .child(
                         div()
-                            .debug_selector(|| "best-reference".into())
+                            .debug_selector(|| "header-reference".into())
                             .flex_1()
                             .min_w_0()
                             .font_family(design::ui_font())
@@ -112,11 +102,12 @@ impl Render for BestLayoutProbe {
     }
 }
 
-/// A long translation must wrap rather than clip either batch control or the ETA caption.
+/// A long translation must wrap rather than clip the list header or the ETA caption.
+///
+/// Dropping the pick-best button and its top-N menu must not be what makes this fit: the
+/// remaining controls and the readiness line still have to stay inside the card.
 #[gpui::test]
-fn best_controls_and_eta_fit_every_language_theme_zoom_and_list_width(
-    cx: &mut gpui::TestAppContext,
-) {
+fn header_and_eta_fit_every_language_theme_zoom_and_list_width(cx: &mut gpui::TestAppContext) {
     for mode in [UiThemeMode::Light, UiThemeMode::Dark] {
         cx.update(|cx| {
             MoonTheme::install_config(
@@ -128,82 +119,52 @@ fn best_controls_and_eta_fit_every_language_theme_zoom_and_list_width(
             let _locale = crate::test_locale::force(language.code());
             for zoom in [1.0, 1.25] {
                 for width in [LIST_W, CARD_WIDTHS[0], CARD_WIDTHS[1], CARD_WIDTHS[2]] {
-                    for top in [3, 5, 10] {
-                        for running in [false, true] {
-                            let text = t!(
-                                "analytics.ready.progress_eta",
-                                k = 123,
-                                m = 641,
-                                eta = super::super::super::ticks::estimate::duration_text(
-                                    std::time::Duration::from_secs(7200)
-                                )
-                            )
-                            .to_string();
-                            let window = cx
-                                .open_window(gpui::size(px(width * zoom), px(400.0)), |_, _| {
-                                    BestLayoutProbe { top, running, text }
-                                });
-                            let mut visual =
-                                gpui::VisualTestContext::from_window(window.into(), cx);
-                            visual.update(|window, cx| window.set_content_zoom(zoom, cx));
-                            for _ in 0..3 {
-                                visual.update(|window, cx| {
-                                    let _ = window.draw(cx);
-                                });
-                            }
-                            let list = visual.debug_bounds("best-list").expect("list");
-                            for sel in [
-                                "best-search",
-                                "best-type",
-                                "best-lists",
-                                "best-active",
-                                "best-cols",
-                                "an-best-controls",
-                                "an-best-button",
-                                "an-best-picker",
-                                "an-strat-ready-tip",
-                                "an-ready-progress-txt",
-                            ] {
-                                let b = visual.debug_bounds(sel).expect(sel);
-                                assert!(
-                                    b.left() >= list.left() - px(0.5)
-                                        && b.right() <= list.right() + px(0.5),
-                                    "{sel} escaped: {} {mode:?} {zoom} {width}",
-                                    language.code()
-                                );
-                            }
-                            let caption = visual
-                                .debug_bounds("an-ready-progress-txt")
-                                .expect("caption");
-                            let reference =
-                                visual.debug_bounds("best-reference").expect("reference");
-                            assert!(
-                                caption.size.height + px(0.5) >= reference.size.height,
-                                "ETA truncated: {} {mode:?} {zoom} {width}",
-                                language.code()
-                            );
-                            for (sel, label) in [
-                                (
-                                    "an-best-button",
-                                    format!("{} · 5", t!("analytics.ready.best")),
-                                ),
-                                (
-                                    "an-best-picker",
-                                    t!("analytics.ready.best_top", n = top).to_string(),
-                                ),
-                            ] {
-                                let need = visual
-                                    .update(|_, cx| design::ui_body_text_width(cx, &label, 400.0));
-                                assert!(
-                                    f32::from(visual.debug_bounds(sel).expect(sel).size.width)
-                                        + 0.5
-                                        >= need,
-                                    "{sel} label clipped: {} {zoom}",
-                                    language.code()
-                                );
-                            }
-                        }
+                    let text = t!(
+                        "analytics.ready.progress_eta",
+                        k = 123,
+                        m = 641,
+                        eta = super::super::super::ticks::estimate::duration_text(
+                            std::time::Duration::from_secs(7200)
+                        )
+                    )
+                    .to_string();
+                    let window = cx.open_window(gpui::size(px(width * zoom), px(400.0)), |_, _| {
+                        HeaderLayoutProbe { text }
+                    });
+                    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                    visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                    for _ in 0..3 {
+                        visual.update(|window, cx| {
+                            let _ = window.draw(cx);
+                        });
                     }
+                    let list = visual.debug_bounds("header-list").expect("list");
+                    for sel in [
+                        "header-search",
+                        "header-type",
+                        "header-lists",
+                        "header-active",
+                        "header-cols",
+                        "an-strat-ready-tip",
+                        "an-ready-progress-txt",
+                    ] {
+                        let b = visual.debug_bounds(sel).expect(sel);
+                        assert!(
+                            b.left() >= list.left() - px(0.5)
+                                && b.right() <= list.right() + px(0.5),
+                            "{sel} escaped: {} {mode:?} {zoom} {width}",
+                            language.code()
+                        );
+                    }
+                    let caption = visual
+                        .debug_bounds("an-ready-progress-txt")
+                        .expect("caption");
+                    let reference = visual.debug_bounds("header-reference").expect("reference");
+                    assert!(
+                        caption.size.height + px(0.5) >= reference.size.height,
+                        "ETA truncated: {} {mode:?} {zoom} {width}",
+                        language.code()
+                    );
                 }
             }
         }

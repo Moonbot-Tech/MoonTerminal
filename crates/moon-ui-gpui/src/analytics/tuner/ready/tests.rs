@@ -76,6 +76,7 @@ fn deal(uid: i64, strategy_id: i64, core_uid: u64) -> Deal {
         archived_take: None,
         fact_modifier: None,
         hook_depth_pct: None,
+        drops_detect: None,
         hook_stated_take_pct: None,
         strike_detect: None,
         step_lag_ms: 0.0,
@@ -99,7 +100,6 @@ fn key(scope_gen: u64, report_gen: u64) -> ReadyKey {
         model: ModelSettings::default(),
         sample: SamplePolicy {
             min_tail_s: 30,
-            switches: (true, true),
             margin_ms: 0,
             long_position_ms: 0,
         },
@@ -398,17 +398,17 @@ fn a_real_input_change_recounts_everything() {
         None,
         "refusals moved"
     );
-    let sources = ReadyKey {
+    let window = ReadyKey {
         sample: SamplePolicy {
-            switches: (false, true),
+            margin_ms: 180_000,
             ..key(1, 1).sample
         },
         ..key(1, 1)
     };
     assert_eq!(
-        pass.stale_strategies(&sources, &none, 0),
+        pass.stale_strategies(&window, &none, 0),
         None,
-        "sources moved"
+        "window moved"
     );
     assert_eq!(
         pass.stale_strategies(&key(2, 1), &none, 0),

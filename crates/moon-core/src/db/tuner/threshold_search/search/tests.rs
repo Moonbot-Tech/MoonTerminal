@@ -61,12 +61,17 @@ fn best_pair_reference(
     min_n: usize,
     tot_c: usize,
     floor: f64,
+    open_top: bool,
 ) -> Option<(usize, usize)> {
     let ne = pre_profit.len() - 1;
     let mut best: Option<(usize, usize)> = None;
     let mut best_p = floor;
     for i in 0..ne {
         for j in (i + 1)..=ne {
+            // A Min-only field's slice always runs to the top edge.
+            if open_top && j != ne {
+                continue;
+            }
             let c = pre_count[j] - pre_count[i];
             if c < min_n {
                 continue;
@@ -273,6 +278,7 @@ fn best_for_field_reference(
         s.min_n,
         tot_c,
         tot_p + improvement_margin(tot_p),
+        FIELDS[fi].min_only(),
     )
 }
 
@@ -349,7 +355,7 @@ fn from_snapshot() -> Option<(Vec<f64>, Vec<Vec<f64>>)> {
     let nf = FIELDS.len();
     let cols = FIELDS
         .iter()
-        .map(|s| format!("\"{}\"", s.col))
+        .map(|s| crate::db::tuner::comment_field::raw_column_sql(s.col))
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
@@ -366,7 +372,7 @@ fn from_snapshot() -> Option<(Vec<f64>, Vec<Vec<f64>>)> {
         closes.push(r.get::<_, i64>(nf + 1).ok()?);
         for (fi, col) in vals.iter_mut().enumerate() {
             let v = r.get::<_, Option<f64>>(fi).ok()?;
-            col.push(v.filter(|v| v.is_finite()).unwrap_or(0.0));
+            col.push(super::super::effective_field_value(FIELDS[fi].class, v));
         }
     }
     let order = super::super::chronological_order(&closes, &profits, &vals);
@@ -1224,4 +1230,107 @@ fn par_map_job_keeps_order_and_carries_the_token_into_every_task() {
         crate::db::current_is_cancelled() || i == usize::MAX
     });
     assert!(plain.iter().all(|cancelled| !cancelled));
+}
+
+/// Index of the Detect field the By-filter grid calls xPriceDelta.
+fn detect_index() -> usize {
+    FIELDS
+        .iter()
+        .position(|spec| spec.class == FieldClass::Detect)
+        .expect("a Detect field")
+}
+
+/// One column per field, with `detect` installed on the Detect field and zeros elsewhere.
+fn columns_with_detect(detect: &[f64]) -> Vec<Vec<f64>> {
+    let mut vals = vec![vec![0.0; detect.len()]; FIELDS.len()];
+    vals[detect_index()] = detect.to_vec();
+    vals
+}
+
+/// A locked Min of 3 keeps a missing Detect value and drops 2.9.
+///
+/// The oracle is the three rows by hand: NaN has no number, so the Min does not apply;
+/// 2.9 is below 3; 3.0 meets it. Profit 7 + 5 = 12 over two trades. Folding the missing
+/// value to 0 would keep only the 5.
+///
+/// Breakage this pins: the locked-filter loop in `search.rs` comparing `v >= min` on a NaN.
+/// A deal of another detect would then fail a Drops Min and drop out of every fixed-filter
+/// tally, which is the same mistake the what-if SQL was written not to make.
+#[test]
+fn a_detect_min_keeps_a_row_whose_number_is_missing() {
+    let xfi = detect_index();
+    let profits = vec![7.0, -4.0, 5.0];
+    let vals = columns_with_detect(&[f64::NAN, 2.9, 3.0]);
+    let mut locked = vec![Some((None, None)); FIELDS.len()];
+    locked[xfi] = Some((Some(3.0), None));
+    let search = build(profits, &vals, &locked, 1, 4);
+    let tally = search.tally(&[], 0..3);
+    assert_eq!(tally.n, 2);
+    assert_eq!(tally.profit, 12.0);
+
+    // The same predicate when the Min arrives as an applied range rather than a locked filter.
+    let open = build(
+        vec![7.0, -4.0, 5.0],
+        &vals,
+        &vec![Some((None, None)); FIELDS.len()],
+        1,
+        4,
+    );
+    let applied = open.tally(&[(xfi, 3.0, 3.0)], 0..3);
+    assert_eq!(applied.n, 2);
+    assert_eq!(applied.profit, 12.0);
+}
+
+/// A Detect value that really is 0 still faces the Min. Only a missing number is exempt.
+///
+/// Breakage this pins: treating every non-positive Detect cell as "no number". A deal whose
+/// comment carried `xPriceDelta: 0` would then survive a Min of 3.
+#[test]
+fn a_real_zero_detect_value_still_faces_the_min() {
+    let xfi = detect_index();
+    let profits = vec![4.0, 9.0];
+    let vals = columns_with_detect(&[0.0, f64::NAN]);
+    let mut locked = vec![Some((None, None)); FIELDS.len()];
+    locked[xfi] = Some((Some(3.0), None));
+    let search = build(profits, &vals, &locked, 1, 4);
+    let tally = search.tally(&[], 0..2);
+    assert_eq!(tally.n, 1);
+    assert_eq!(tally.profit, 9.0);
+}
+
+/// The all-fields search must keep missing Detect rows under the Min it suggests.
+///
+/// Hand totals, with the NaN rows always kept: baseline is -260. Cutting the two losses at
+/// 1 and 2 leaves the two +30s and the three missing rows, which is -240 over 5 trades.
+/// Folding those missing rows to 0 would drop the three -100s as well and answer +60.
+///
+/// Breakage this pins: binning a NaN Detect value into the bottom bin, or scoring the
+/// suggested Min with `v >= from` and no missing-value pass. Either one reports a profit
+/// the what-if KPI will not reproduce once the Min is applied.
+#[test]
+fn a_detect_min_search_keeps_rows_that_never_carried_the_number() {
+    let xfi = detect_index();
+    let profits = vec![-10.0, -10.0, 30.0, 30.0, -100.0, -100.0, -100.0];
+    let vals = columns_with_detect(&[1.0, 2.0, 10.0, 10.0, f64::NAN, f64::NAN, f64::NAN]);
+    let mut locked = vec![Some((None, None)); FIELDS.len()];
+    locked[xfi] = None;
+    let search = build(profits, &vals, &locked, 1, 4);
+    let outcome = search
+        .run(1, 1, &uncancelled())
+        .expect("a Min beats the baseline");
+    assert_eq!(outcome.profit, -240.0);
+    let applied = search.applied_ranges(&outcome.sel, false);
+    let (fi, from, to) = applied
+        .iter()
+        .find(|(fi, _, _)| *fi == xfi)
+        .expect("the search suggests a Detect Min");
+    assert!(
+        from.is_finite() && *from > 2.0,
+        "from {from} must sit above the two losses"
+    );
+    assert!(to.is_finite(), "a saved bound must not be NaN");
+    let tally = search.tally(&applied, 0..7);
+    assert_eq!(tally.n, 5);
+    assert_eq!(tally.profit, -240.0);
+    assert_eq!(*fi, xfi);
 }

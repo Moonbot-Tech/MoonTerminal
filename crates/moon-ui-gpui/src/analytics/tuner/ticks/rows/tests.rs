@@ -116,7 +116,7 @@ fn unpublished_rows_are_offered_by_reload_and_marked_fetching() {
     );
 }
 
-/// Enabled archives still extend short tails; disabled venues admit old tape instead of waiting.
+/// Reachable archives keep short tails waiting; irrecoverable tails remain usable.
 #[test]
 fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     use super::super::state::RowAddress;
@@ -145,16 +145,13 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
             row.deal.report_uid,
             row.deal.close_ms,
             30_000,
-            now,
-            (true, false),
+            now
         ),
-        "daily archive beyond REST retention remains reachable when enabled"
+        "daily archive beyond REST retention remains reachable while retained"
     );
-    let venues_on = moon_core::market::trade_replay::tape_autoload();
-    assert_eq!(
+    assert!(
         row.fetchable_with(&Admission::at(60, now)),
-        venues_on,
-        "old short tails wait only for enabled archives"
+        "old short tails wait for reachable archives"
     );
     let data = TicksData {
         rows: vec![row.clone()],
@@ -162,7 +159,7 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     };
     assert_eq!(
         data.fetchable_at(now, 60).count(),
-        usize::from(venues_on),
+        1,
         "an admitted short tail is not counted again as waiting for tape"
     );
     row.held = Some((30_000, 60_000));
@@ -173,8 +170,8 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
     row.held = Some((30_000, 30_000));
     row.deal.close_ms = now - 400 * day;
     assert!(
-        !row.fetchable_with(&Admission::at(60, now)),
-        "outside archive catch-up depth"
+        row.fetchable_with(&Admission::at(60, now)),
+        "always-on daily archives have no artificial age cutoff"
     );
     row.deal.close_ms = now - 21 * day;
     Arc::make_mut(row.address.as_mut().unwrap()).venue =
@@ -280,6 +277,7 @@ fn deal(uid: i64, buy_ms: i64, buy: f64, sell: f64, short: bool) -> Deal {
         archived_take: None,
         fact_modifier: None,
         hook_depth_pct: None,
+        drops_detect: None,
         hook_stated_take_pct: None,
         strike_detect: None,
         step_lag_ms: 0.0,
@@ -443,50 +441,6 @@ fn short_tail_cache_expires_at_the_core_retention_edge() {
         1
     );
     assert_eq!(order_for(&mut state, 60, edge + 1), [0]);
-}
-
-/// A prior switch snapshot must invalidate both footer counts and fit-only order without new rows.
-#[test]
-fn source_switch_changes_retire_all_derived_chip_caches() {
-    use super::super::state::RowAddress;
-    use super::super::why::DealChip;
-    use std::sync::Arc;
-    let mut state = replayable_state(1);
-    let row = &mut state.data.data_mut().unwrap().rows[0];
-    row.deal.coin = "XALPHA".into();
-    row.address = Some(Arc::new(RowAddress {
-        core_uid: 1,
-        venue: None,
-        exchange_key: "EX-XX".into(),
-        market: "XALPHA".into(),
-        btc_market: None,
-    }));
-    row.held = Some((30_000, 30_000));
-    let now = row.deal.close_ms + 3_600_000;
-    let live = super::super::tail::switches();
-    state.only_fit = true;
-    super::counts_at(&mut state, 60, now);
-    order_for(&mut state, 60, now);
-    // Model a coherent prior frame under the opposite core switch, without racing global settings.
-    let previous = if live.1 {
-        DealChip::AcceptedShortTail
-    } else {
-        DealChip::ShortTail
-    };
-    let classified = state.classified.as_mut().unwrap();
-    classified.source_switches = (live.0, !live.1);
-    classified.chips = vec![previous];
-    let counts = state.chip_counts.as_mut().unwrap();
-    counts.counts = [0; DealChip::ALL.len()];
-    counts.counts[previous as usize] = 1;
-    state.order.as_mut().unwrap().order = if live.1 { vec![0] } else { vec![] };
-    let counts = super::counts_at(&mut state, 60, now);
-    assert_eq!(counts.get(DealChip::ShortTail), usize::from(live.1));
-    assert_eq!(
-        counts.get(DealChip::AcceptedShortTail),
-        usize::from(!live.1)
-    );
-    assert_eq!(order_for(&mut state, 60, now).len(), usize::from(!live.1));
 }
 
 /// Grouping by reason must keep the fit sample first and preserve chronological ties.
@@ -758,9 +712,11 @@ fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits(
     state.sugg = super::super::state::SuggState::Running {
         handle: handle.clone(),
         total: 3,
+        parallel: 1,
         started: std::time::Instant::now(),
         estimate: None,
         sample: (23, 9),
+        stopping: false,
     };
     state.last_result = Some(moon_core::db::tuner::ticks::SearchResult {
         values: Vec::new(),
@@ -770,6 +726,7 @@ fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits(
         holdout_open: 0,
         holdout_open_profit: 0.0,
         fact_train: Default::default(),
+        purged: 0,
         fact_holdout: None,
         holdout_loses: false,
         seed: 1,
@@ -1082,6 +1039,7 @@ fn a_variant_scored_on_too_few_deals_does_not_light_save() {
         searched: Vec::new(),
         train: tally(23, 17.0),
         fact_train: tally(23, 11.0),
+        purged: 0,
         holdout: Some(tally(9, 8.0)),
         fact_holdout: Some(tally(9, 3.0)),
         holdout_open: 0,

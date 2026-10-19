@@ -4,6 +4,28 @@ use std::collections::HashMap;
 
 use super::land_answer;
 
+/// Search hover text must wait with the card rather than claim a finished zero-fit sample.
+#[test]
+fn search_tooltips_wait_for_the_selected_tape_read() {
+    use super::super::state::{TicksData, TicksState};
+    let mut state = TicksState::default();
+    state.data.apply(Ok(TicksData::default()));
+    state.tape_reading = true;
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        assert_eq!(
+            super::search_status_tip(&state).unwrap(),
+            rust_i18n::t!("analytics.ticks.fetch_reading")
+        );
+    }
+    let _locale = crate::test_locale::force("en");
+    state.tape_reading = false;
+    assert_eq!(
+        super::search_status_tip(&state).unwrap(),
+        "Too few fit deals: 0 of 20 — the search does not run"
+    );
+}
+
 fn cells(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     pairs
         .iter()

@@ -92,8 +92,10 @@ pub struct StratFilters {
 impl StratFilters {
     /// Whether the current strategy flags ignore the field class.
     pub fn class_ignored(&self, class: FieldClass) -> bool {
-        self.ignore_filters
+        // A detect threshold is the signal itself: IgnoreFilters leaves it live.
+        (class != FieldClass::Detect && self.ignore_filters)
             || match class {
+                FieldClass::Detect => false,
                 FieldClass::Filter => false,
                 // BV/SV is a Filters/Volume subgroup gated by BOTH IgnoreVolume and its own
                 // UseBV_SV_Filter switch.
@@ -347,45 +349,39 @@ fn load_raw_json_at(
 /// then shows every deal as "kind unknown" (no entry model), which is visible, rather than
 /// failing the whole read for a file the axis only annotates from.
 pub fn strategy_kinds(pairs: &[(i64, u64)]) -> std::collections::HashMap<(i64, u64), String> {
+    strategy_kinds_checked(pairs)
+        .map_err(|error| log::warn!("[x] tuner: strategy kinds unresolved: {error:#}"))
+        .unwrap_or_default()
+}
+
+/// Read retention metadata completely; an absent file has no versions to protect.
+/// Any open or query failure of an existing file must abort tape deletion.
+pub fn strategy_kinds_checked(
+    pairs: &[(i64, u64)],
+) -> anyhow::Result<std::collections::HashMap<(i64, u64), String>> {
     let mut out = std::collections::HashMap::new();
-    if pairs.is_empty() {
-        return out;
+    if pairs.is_empty() || !crate::config::paths::strategies_db_path().exists() {
+        return Ok(out);
     }
-    let Some(conn) = open_strategies_ro() else {
-        log::warn!("[x] tuner: strategies.sqlite unavailable, strategy kinds unresolved");
-        return out;
-    };
-    let mut stmt = match conn.prepare(
+    let conn = open_strategies_ro()
+        .ok_or_else(|| anyhow::anyhow!("strategy kinds: strategies.sqlite unavailable"))?;
+    let mut stmt = conn.prepare(
         "SELECT json_extract(v.raw_json, '$.SignalType') FROM strategy_versions v
-             WHERE v.strategy_id = ?1 AND v.core_uid = ?2
-             ORDER BY v.valid_to IS NULL DESC, v.valid_from DESC LIMIT 1",
-    ) {
-        Ok(stmt) => stmt,
-        Err(error) => {
-            log::warn!("[x] tuner: strategy kinds query failed to prepare: {error}");
-            return out;
-        }
-    };
-    let mut failed = 0usize;
+         WHERE v.strategy_id = ?1 AND v.core_uid = ?2
+         ORDER BY v.valid_to IS NULL DESC, v.valid_from DESC LIMIT 1",
+    )?;
     for &(strategy_id, core_uid) in pairs {
-        match stmt.query_row(rusqlite::params![strategy_id, core_uid as i64], |r| {
-            r.get::<_, Option<String>>(0)
+        match stmt.query_row(rusqlite::params![strategy_id, core_uid as i64], |row| {
+            row.get::<_, Option<String>>(0)
         }) {
             Ok(Some(kind)) => {
                 out.insert((strategy_id, core_uid), kind);
             }
-            // No version at all, or a version without the field: genuinely unknown.
             Ok(None) | Err(rusqlite::Error::QueryReturnedNoRows) => {}
-            Err(_) => failed += 1,
+            Err(error) => return Err(error.into()),
         }
     }
-    if failed > 0 {
-        log::warn!(
-            "[x] tuner: strategy kinds unresolved for {failed} of {} strategies (query errors)",
-            pairs.len()
-        );
-    }
-    out
+    Ok(out)
 }
 
 /// `keys` out of one version's `raw_json`, in strategy format — see

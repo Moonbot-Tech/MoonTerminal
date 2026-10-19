@@ -1,33 +1,432 @@
 //! Bot ownership, Settings draft preservation and station access lifecycle decisions.
 use super::{StationJobs, can_restore_bot, job, restore_bot, save_returned_bot};
+use crate::test_support::SharedWindowGuard as RestoreWindow;
 use moon_core::config::AppConfig;
 use moon_core::config::telegram_access::TelegramChatAccess;
 use moon_core::config::{Secret, TelegramConfig};
+use moon_core::market::trade_replay;
 use moon_core::station_api::Access;
+use moon_core::station_api::TapeWindow;
 use moon_remote::hosts::Host;
 use moon_remote::ssh::Target;
 use moon_remote::station::access::AddressChange;
 use moon_remote::station::bot::ReturnedBot;
 
-/// Failed automatic pushes must retry until acknowledged, without changing the user's outcome.
+/// Supply an isolated destination without contacting the station or reading saved hosts.
+fn window_target() -> Target {
+    Target {
+        host: "synthetic.invalid".into(),
+        port: 22,
+    }
+}
+
+/// Build the real tape job used by the production admission helper.
+fn window_job(tape: TapeWindow) -> job::Job {
+    job::Job::Tape {
+        target: window_target(),
+        tape,
+        catchup: None,
+        keep: None,
+    }
+}
+
+/// Supply a bot response with an explicit capability report, including an unsupported station.
+fn window_answer(tape: Option<TapeWindow>) -> job::Done {
+    let job::Done::Ok {
+        bot: Some(mut bot), ..
+    } = synthetic_station_answer()
+    else {
+        unreachable!();
+    };
+    bot.tape = tape;
+    job::Done::Ok {
+        transferred: false,
+        bot: Some(bot),
+        bot_off: false,
+    }
+}
+
+/// A successful Tape job reports no bot, so the completion must schedule verification.
+fn window_ok() -> job::Done {
+    job::Done::Ok {
+        transferred: false,
+        bot: None,
+        bot_off: false,
+    }
+}
+
+/// A failed window write is latched rather than retried immediately from its own end.
+fn window_failed() -> job::Done {
+    job::Done::Failed {
+        reason: "synthetic timeout".into(),
+        station_may_poll: false,
+    }
+}
+
+/// Automatic zone failures must not refill the failed window write's attempt budget.
+#[test]
+fn barrier_b6_zone_and_window_failures_stop_alternating() {
+    let local = TapeWindow {
+        margin_s: 600,
+        long_position_min: 30,
+    };
+    let old = TapeWindow {
+        margin_s: 180,
+        long_position_min: 5,
+    };
+    let mut jobs = StationJobs {
+        window_reconciled: true,
+        ..StationJobs::default()
+    };
+    jobs.apply_quiet(window_answer(Some(old)));
+    let mut writes = 0;
+    for _ in 0..8 {
+        if jobs.window_step(local).push.is_none() {
+            break;
+        }
+        writes += 1;
+        jobs.begin_job(super::Kind::Window, &window_job(local));
+        jobs.apply_window(window_failed());
+        jobs.begin_job(
+            super::Kind::Zone,
+            &job::Job::BotState {
+                target: window_target(),
+            },
+        );
+        jobs.apply_quiet(window_failed());
+    }
+    assert!(writes <= 2, "automatic jobs looped {writes} times");
+    assert!(jobs.window_step(local).push.is_none());
+}
+
+/// An answered old station must disarm reconnect instead of being read every fifteen minutes.
+#[test]
+fn unsupported_station_disarms_reconnect_after_a_failed_read() {
+    let mut jobs = StationJobs {
+        known: true,
+        ..StationJobs::default()
+    };
+    jobs.apply_quiet(window_failed());
+    assert!(jobs.reconnect_at.is_some());
+    jobs.apply_quiet(window_answer(None));
+    assert!(jobs.reconnect_at.is_none());
+    assert!(!jobs.reconnect_due(i64::MAX));
+    jobs.apply_quiet(window_failed());
+    assert!(
+        jobs.reconnect_at.is_none(),
+        "unsupported remains final until the station is forgotten"
+    );
+}
+
+/// Unrelated completions may retry a write without repeating an unchanged failure in the UI.
+#[test]
+fn repeated_window_failure_is_logged_once_per_payload() {
+    let mut jobs = StationJobs::default();
+    let tape = TapeWindow {
+        margin_s: 600,
+        long_position_min: 30,
+    };
+    for _ in 0..3 {
+        jobs.begin_job(super::Kind::Window, &window_job(tape));
+        jobs.apply_window(window_failed());
+        jobs.begin_job(super::Kind::Quiet, &window_job(tape));
+        jobs.apply_quiet(window_answer(Some(tape)));
+    }
+    assert_eq!(jobs.lines, ["synthetic timeout"]);
+}
+
+/// Losing the component-wise maximum or releasing a latch on its own completion shrinks tape
+/// or retries forever; unrelated reads and user work release a failed attempt.
+#[test]
+fn shared_window_reconciles_once_and_retries_only_after_unrelated_work() {
+    use super::Kind;
+    let local = TapeWindow {
+        margin_s: 180,
+        long_position_min: 5,
+    };
+    let larger = TapeWindow {
+        margin_s: 600,
+        long_position_min: 10,
+    };
+    let mixed = TapeWindow {
+        margin_s: 600,
+        long_position_min: 3,
+    };
+    let effective = TapeWindow {
+        margin_s: 600,
+        long_position_min: 5,
+    };
+    let mut jobs = StationJobs::default();
+    jobs.apply_quiet(window_answer(Some(larger)));
+    let step = jobs.window_step(local);
+    assert_eq!(step.adopt, Some(larger));
+    assert_eq!(step.push, None);
+    assert!(step.reconciled);
+
+    for unrelated in [Kind::Quiet, Kind::User] {
+        let mut jobs = StationJobs::default();
+        jobs.apply_quiet(window_answer(Some(mixed)));
+        let step = jobs.window_step(local);
+        assert_eq!(step.adopt, Some(effective));
+        assert_eq!(step.push, Some(effective));
+        jobs.begin_job(Kind::Window, &window_job(step.push.unwrap()));
+        assert!(!jobs.busy(), "automatic writes must allow queued user work");
+        jobs.apply_window(window_failed());
+        assert_eq!(jobs.lines, ["synthetic timeout"]);
+        assert!(!jobs.pending_refresh);
+        assert_eq!(jobs.window_step(effective).push, None);
+        let read = job::Job::BotState {
+            target: window_target(),
+        };
+        jobs.begin_job(unrelated, &read);
+        jobs.apply_quiet(window_answer(Some(mixed)));
+        jobs.running = false;
+        assert_eq!(jobs.window_step(effective).push, Some(effective));
+        let lower = TapeWindow {
+            margin_s: 120,
+            long_position_min: 5,
+        };
+        let step = jobs.window_step(lower);
+        assert_eq!(step.adopt, None);
+        assert_eq!(step.push, Some(lower));
+        jobs.begin_job(Kind::Window, &window_job(lower));
+        jobs.apply_window(window_failed());
+        let changed = TapeWindow {
+            margin_s: 180,
+            long_position_min: 5,
+        };
+        assert_eq!(jobs.window_step(changed).push, Some(changed));
+    }
+    let mut unsupported = StationJobs::default();
+    unsupported.apply_quiet(window_answer(None));
+    let step = unsupported.window_step(local);
+    assert!(step.adopt.is_none() && step.push.is_none() && !step.reconciled);
+}
+
+/// Reusing the one-shot prefetch latch or retrying before the deadline loses offline startup
+/// recovery; continued failures double the delay and a tape report stops reconnecting.
+#[test]
+fn shared_window_reconnect_obeys_deadlines_backoff_and_reconciliation() {
+    use super::Kind;
+    let mut jobs = StationJobs {
+        known: true,
+        ..StationJobs::default()
+    };
+    let (read, kind) = jobs.prefetch_read(Some(window_target())).unwrap();
+    jobs.begin_job(kind, &read);
+    jobs.running = false;
+    jobs.apply_quiet(window_failed());
+    let first = jobs.reconnect_at.unwrap();
+    assert_eq!(jobs.reconnect_delay_ms, 60_000);
+    assert!(
+        jobs.reconnect_read(first - 1, Some(window_target()))
+            .is_none()
+    );
+    let (read, kind) = jobs.reconnect_read(first, Some(window_target())).unwrap();
+    assert!(kind == Kind::Quiet);
+    assert!(jobs.reconnect_read(first, Some(window_target())).is_none());
+    jobs.begin_job(kind, &read);
+    jobs.running = false;
+    jobs.apply_quiet(window_failed());
+    assert_eq!(jobs.reconnect_delay_ms, 120_000);
+    let second = jobs.reconnect_at.unwrap();
+    let (read, kind) = jobs.reconnect_read(second, Some(window_target())).unwrap();
+    jobs.begin_job(kind, &read);
+    let tape = TapeWindow {
+        margin_s: 600,
+        long_position_min: 10,
+    };
+    jobs.apply_quiet(window_answer(Some(tape)));
+    jobs.running = false;
+    assert_eq!(jobs.window_step(tape).push, None);
+    assert!(jobs.window_reconciled);
+    assert_eq!(jobs.reconnect_at, None);
+    assert!(
+        jobs.reconnect_read(i64::MAX, Some(window_target()))
+            .is_none()
+    );
+    jobs.clear_known(Ok("synthetic forgotten".into()));
+    assert!(!jobs.window_reconciled);
+    assert_eq!(jobs.window_attempt, None);
+    assert_eq!(jobs.reconnect_at, None);
+    assert_eq!(jobs.reconnect_delay_ms, 0);
+
+    let mut unsupported = StationJobs {
+        known: true,
+        ..StationJobs::default()
+    };
+    for _ in 0..8 {
+        unsupported.apply_quiet(window_answer(None));
+    }
+    assert_eq!(unsupported.reconnect_delay_ms, 0);
+    assert!(unsupported.reconnect_at.is_none());
+}
+
+/// A stale successful write must not create an endless push/read cycle, while a real
+/// acknowledgement updates the shown tape and unrelated work permits a new bounded cycle.
+#[test]
+fn shared_window_success_verifies_and_bounds_stale_report_retries() {
+    use super::Kind;
+    let local = TapeWindow {
+        margin_s: 600,
+        long_position_min: 5,
+    };
+    let old = TapeWindow {
+        margin_s: 180,
+        long_position_min: 5,
+    };
+    for acknowledged in [true, false] {
+        let mut jobs = StationJobs {
+            window_reconciled: true,
+            ..StationJobs::default()
+        };
+        jobs.apply_quiet(window_answer(Some(old)));
+        jobs.outcome = Some(Ok("synthetic user outcome".into()));
+        let mut sequence = Vec::new();
+        for _ in 0..4 {
+            let Some(tape) = jobs.window_step(local).push else {
+                break;
+            };
+            sequence.push("Window");
+            jobs.begin_job(Kind::Window, &window_job(tape));
+            jobs.apply_window(window_ok());
+            assert!(jobs.pending_refresh);
+            let (read, kind) = jobs.bot_read(Some(window_target())).unwrap();
+            sequence.push("Quiet");
+            jobs.begin_job(kind, &read);
+            jobs.apply_quiet(window_answer(Some(if acknowledged { local } else { old })));
+        }
+        assert_eq!(
+            jobs.bot.as_ref().unwrap().tape,
+            Some(if acknowledged { local } else { old })
+        );
+        assert_eq!(jobs.outcome, Some(Ok("synthetic user outcome".into())));
+        assert!(!jobs.pending_refresh);
+        assert_eq!(jobs.window_step(local).push, None);
+        if acknowledged {
+            assert_eq!(sequence, ["Window", "Quiet"]);
+        } else {
+            assert_eq!(sequence, ["Window", "Quiet", "Window", "Quiet"]);
+            jobs.begin_job(
+                Kind::Zone,
+                &job::Job::Zone {
+                    target: window_target(),
+                    zone: "UTC".into(),
+                },
+            );
+            jobs.finish_job();
+            assert_eq!(jobs.window_step(local).push, None);
+            jobs.begin_job(
+                Kind::User,
+                &job::Job::BotState {
+                    target: window_target(),
+                },
+            );
+            jobs.finish_job();
+            assert_eq!(jobs.window_step(local).push, Some(local));
+            let mut retried = Vec::new();
+            for _ in 0..4 {
+                let Some(tape) = jobs.window_step(local).push else {
+                    break;
+                };
+                retried.push("Window");
+                jobs.begin_job(Kind::Window, &window_job(tape));
+                jobs.apply_window(window_ok());
+                let (read, kind) = jobs.bot_read(Some(window_target())).unwrap();
+                retried.push("Quiet");
+                jobs.begin_job(kind, &read);
+                jobs.apply_quiet(window_answer(Some(old)));
+            }
+            assert_eq!(retried, ["Window", "Quiet", "Window", "Quiet"]);
+            let lowered = TapeWindow {
+                margin_s: 120,
+                long_position_min: 5,
+            };
+            let step = jobs.window_step(lowered);
+            assert_eq!(step.adopt, None);
+            assert_eq!(step.push, Some(lowered));
+        }
+    }
+}
+
+/// Starting the original queued payload would overwrite a newer picker value when a background
+/// job ends; execution-time rebuilding must preserve the queued catchup and keep edits.
+#[test]
+fn queued_tape_rebuild_uses_current_shared_window_without_losing_policy() {
+    use super::Kind;
+    let _restore = RestoreWindow::take();
+    let initial = TapeWindow {
+        margin_s: 180,
+        long_position_min: 5,
+    };
+    let current = TapeWindow {
+        margin_s: 600,
+        long_position_min: 10,
+    };
+    let keep = moon_core::station_api::TapeKeep {
+        max_age_days: 90,
+        record_emulator: false,
+        tuner_only: Some(true),
+        min_tail_s: Some(120),
+    };
+    let catchup = moon_core::station_api::CatchupSwitches {
+        auto: true,
+        archives: false,
+    };
+    let mut jobs = StationJobs::default();
+    jobs.begin_job(Kind::Window, &window_job(initial));
+    jobs.waiting = Some((
+        job::Job::Tape {
+            target: window_target(),
+            tape: initial,
+            catchup: Some(catchup),
+            keep: Some(keep),
+        },
+        false,
+    ));
+    trade_replay::set_margin_s(current.margin_s);
+    trade_replay::set_long_position_min(current.long_position_min);
+    jobs.apply_window(window_failed());
+    let (queued, _) = jobs.waiting.take().unwrap();
+    let started = queued.with_current_tape_window();
+    jobs.begin_job(Kind::User, &started);
+    let job::Job::Tape {
+        tape,
+        catchup: sent_catchup,
+        keep: sent_keep,
+        ..
+    } = started
+    else {
+        panic!("queued tape job lost")
+    };
+    assert_eq!(tape, current);
+    assert_eq!(sent_catchup, Some(catchup));
+    assert_eq!(sent_keep, Some(keep));
+}
+
+/// A tail push sends the shared window, preserves keep choices and retains the retry latch.
 #[test]
 fn tape_min_tail_job_changes_only_the_supported_floor() {
     use moon_core::station_api::{TapeCatchup, TapeWindow};
+    let window = TapeWindow {
+        margin_s: 180,
+        long_position_min: 5,
+    };
     let min_tail_job = |bot: Option<&moon_remote::station::bot::BotState>, target, secs| {
         StationJobs {
             bot: bot.cloned(),
             min_tail_pending: Some(secs),
             ..StationJobs::default()
         }
-        .take_min_tail_job(Some(target))
+        .take_min_tail_job(Some(target), window)
     };
     let target = Target {
         host: "synthetic.invalid".into(),
         port: 22,
     };
     let tape = TapeWindow {
-        margin_s: 30,
-        long_position_min: 123,
+        margin_s: 600,
+        long_position_min: 10,
     };
     let mut bot = moon_remote::station::bot::BotState {
         has_token: false,
@@ -67,7 +466,13 @@ fn tape_min_tail_job_changes_only_the_supported_floor() {
         panic!("capable station must receive the new floor");
     };
     assert_eq!(sent.addr(), target.addr());
-    assert_eq!(window, tape);
+    assert_eq!(
+        window,
+        TapeWindow {
+            margin_s: 180,
+            long_position_min: 5
+        }
+    );
     assert_eq!(catchup, None);
     assert_eq!(
         (
@@ -79,19 +484,30 @@ fn tape_min_tail_job_changes_only_the_supported_floor() {
         (90, false, Some(true), Some(120))
     );
     assert!(min_tail_job(Some(&bot), target.clone(), 60).is_none());
+    let mut no_tape = bot.clone();
+    no_tape.tape = None;
+    assert!(min_tail_job(Some(&no_tape), target.clone(), 120).is_none());
     let mut queued = StationJobs {
         running: true,
         bot: Some(bot.clone()),
         min_tail_pending: Some(120),
         ..StationJobs::default()
     };
-    assert!(queued.take_min_tail_job(Some(target.clone())).is_none());
+    assert!(
+        queued
+            .take_min_tail_job(Some(target.clone()), window)
+            .is_none()
+    );
     queued.min_tail_pending = Some(180);
-    assert!(queued.take_min_tail_job(Some(target.clone())).is_none());
+    assert!(
+        queued
+            .take_min_tail_job(Some(target.clone()), window)
+            .is_none()
+    );
     queued.running = false;
     let Some(job::Job::Tape {
         keep: Some(latest), ..
-    }) = queued.take_min_tail_job(Some(target.clone()))
+    }) = queued.take_min_tail_job(Some(target.clone()), window)
     else {
         panic!("idle station must take the latest queued floor");
     };
@@ -113,8 +529,10 @@ fn tape_min_tail_job_changes_only_the_supported_floor() {
         queued.min_tail_retry_due(),
         "an unrelated read permits another attempt"
     );
-    assert!(matches!(queued.take_min_tail_job(Some(target.clone())),
-        Some(job::Job::Tape { keep: Some(keep), .. }) if keep.min_tail_s == Some(180)));
+    assert!(
+        matches!(queued.take_min_tail_job(Some(target.clone()), window),
+        Some(job::Job::Tape { keep: Some(keep), .. }) if keep.min_tail_s == Some(180))
+    );
     queued
         .bot
         .as_mut()
@@ -126,7 +544,11 @@ fn tape_min_tail_job_changes_only_the_supported_floor() {
         .as_mut()
         .unwrap()
         .min_tail_s = Some(180);
-    assert!(queued.take_min_tail_job(Some(target.clone())).is_none());
+    assert!(
+        queued
+            .take_min_tail_job(Some(target.clone()), window)
+            .is_none()
+    );
     assert_eq!(queued.min_tail_pending, None);
     bot.station
         .as_mut()

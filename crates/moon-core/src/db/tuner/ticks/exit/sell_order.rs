@@ -47,7 +47,7 @@ impl ExitModel<'_> {
     /// The take-profit level for a fill: the kind's take off the fill, a MoonShot's lifted to the
     /// pre-spike ask (the archive's, else the tape's last taker buy, [`pre_spike_price`]) less the
     /// adjustment when `MShotSellAtLastPrice` is on ([`lifts_take_to_ask`]). Long above, short
-    /// below.
+    /// below. An archived ask belongs only to fills inside the fact's shift window.
     pub fn take_level(&self, deal: &Deal, ticks: &[Tick], fill: Fill) -> f64 {
         // A kind whose take rule the model does not have starts where the core's line did —
         // when the fact is being judged; a variant computes the take from the rules for every
@@ -72,6 +72,10 @@ impl ExitModel<'_> {
         if lifts_take_to_ask(self.params, &deal.kind) {
             let pre = deal
                 .pre_spike_ask
+                .filter(|_| {
+                    fill.t_ms.abs_diff(deal.buy_ms)
+                        <= self.params.model.shift_window_ms.max(0) as u64
+                })
                 .filter(|p| p.is_finite() && *p > 0.0)
                 .or_else(|| {
                     pre_spike_price(ticks, fill.t_ms, self.params.model.pre_spike_lookback_ms)
@@ -122,7 +126,7 @@ impl ExitModel<'_> {
 
     /// A MoonStrike's take price before the modifiers — `MStrikeSellLevel` of the strike's span
     /// ([`strike_take_level`]) — or `None` for every other kind and for a strike whose level or
-    /// detect is unknown.
+    /// detect is unknown. Non-positive levels have no defined strike take.
     fn strike_take(&self, deal: &Deal, fill_price: f64) -> Option<f64> {
         if deal.kind != KIND_MOONSTRIKE || !(self.params.strike_sell_level_pct > 0.0) {
             return None;
@@ -231,7 +235,7 @@ pub fn take_is_recorded(kind: &str) -> bool {
 /// MoonStrike (whose own rules [`ExitModel::take_known`] checks), and a
 /// Spread trade without an archived line is judged by it perfectly well.
 pub fn take_model_for(kind: &str) -> bool {
-    crate::db::tuner::ticks::entry::entry_model_for(kind)
+    kind == crate::db::tuner::ticks::entry::KIND_MOONSHOT
 }
 
 /// Whether `MShotSellAtLastPrice` lifts this trade's take to the pre-spike ask: the field is

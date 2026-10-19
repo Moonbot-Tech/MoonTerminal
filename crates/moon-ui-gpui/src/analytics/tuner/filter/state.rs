@@ -600,16 +600,21 @@ impl TunerState {
             .map(|(_, support)| (*support, set.folds))
     }
 
-    /// Whether every MAPPED field takes part in the automatic search.
+    /// Whether every field the grid is offering takes part in the automatic search.
     ///
     /// Unmapped fields have no strategy parameter to write, so "all enabled" has never meant all
-    /// of them. One definition, because the master checkbox's tick and its caption's click both
-    /// ask this question and must not answer it differently.
-    pub(in crate::analytics::tuner) fn all_mapped_enabled(&self) -> bool {
+    /// of them. A Detect field the current scope is not showing is not part of the question
+    /// either: counting it would leave the master unchecked while every visible box is on.
+    /// One definition, because the master checkbox's tick and its caption's click both ask this
+    /// question and must not answer it differently.
+    ///
+    /// Args:
+    ///     drops_only: Whether the scope offers Detect fields.
+    pub(in crate::analytics::tuner) fn all_mapped_enabled(&self, drops_only: bool) -> bool {
         FIELDS
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.mapped())
+            .filter(|(_, spec)| spec.mapped() && super::offer_field(spec.class, drops_only))
             .all(|(fi, _)| self.enabled[fi])
     }
 
@@ -691,14 +696,17 @@ impl TunerState {
         self.stats.data().is_none() || self.dirty || self.hist_dirty
     }
 
-    /// Variants for the query: [the empty "Fact", v1..vN].
-    pub(in crate::analytics::tuner) fn variants(&self) -> Vec<Variant> {
+    /// Variants for the query: [the empty "Fact", v1..vN], limited to the offered scope.
+    pub(in crate::analytics::tuner) fn variants(&self, drops_only: bool) -> Vec<Variant> {
         let mut out = vec![Variant::default()];
         for v in &self.bounds {
             let bounds = v
                 .iter()
                 .enumerate()
                 .filter_map(|(fi, (from, to))| {
+                    if !super::offer_field(FIELDS[fi].class, drops_only) {
+                        return None;
+                    }
                     let from = parse_num(from);
                     let to = parse_num(to);
                     (from.is_some() || to.is_some()).then(|| Bound {
@@ -825,15 +833,17 @@ pub(in crate::analytics::tuner) fn staged_dirty(
 pub(in crate::analytics::tuner) fn flag_of(
     class: FieldClass,
     f: &StratFilters,
-) -> (&'static str, bool) {
-    match class {
+) -> Option<(&'static str, bool)> {
+    Some(match class {
         FieldClass::Filter => ("IgnoreFilters", f.ignore_filters),
         FieldClass::Ping => ("IgnorePing", f.ignore_ping),
         FieldClass::Base => ("IgnoreBase", f.ignore_base),
         FieldClass::BvSv => ("UseBV_SV_Filter", !f.use_bvsv),
         FieldClass::Delta | FieldClass::DeltaSlot => ("IgnoreDelta", f.ignore_delta),
         FieldClass::Volume => ("IgnoreVolume", f.ignore_volume),
-    }
+        // A detect threshold has no Ignore flag of its own.
+        FieldClass::Detect => return None,
+    })
 }
 
 // The sibling uses explicit imports because the parent's `gpui::*` re-export shadows `#[test]`.

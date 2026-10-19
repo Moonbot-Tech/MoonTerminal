@@ -3,8 +3,9 @@
 //!
 //! **StopLoss** — `StopLoss` per cent from the buy (negative: a loss), adjusted by
 //! `StopLossModifier` ([`stop_pct`]), armed `StopLossDelay` seconds after the buy; `UseStopLoss`
-//! off zeroes it (`params::exit_params`). With `FastStopLoss` the last price of each
-//! [`SERIES_TICK_MS`] tick is checked as the tick closes, a market exit at that price
+//! off zeroes it (`params::exit_params`). With `FastStopLoss`, `ModelSettings::fast_price`
+//! (default: the last price) is checked as each [`SERIES_TICK_MS`] tick closes, a market exit
+//! at the tick's last print
 //! ([`FastStop`]). Without it — the core's default — the core watches the
 //! REST ticker's BID (a short's ASK), a long's averaged over `StopLossEMA` of the ticker's
 //! arrivals, and the walk reads a proxy of that: the last print on that side of the book (a
@@ -24,9 +25,121 @@ use self::ladder::Ladder;
 use self::trailing::Trailing;
 use super::delta_mods::modifier_sum;
 use super::{ExitParams, Side};
+use crate::db::tuner::ticks::settings::FastPrice;
 use crate::db::tuner::ticks::verify::{StopGroup, stop_group};
 use crate::db::tuner::ticks::{Deal, Exit, ExitKind, Fill, reaches};
 use crate::feed::types::Tick;
+
+/// The estimator's bounded trade history, shared with settings sanitization.
+pub(crate) const FAST_TRADES_MAX: usize = 16;
+
+/// A tentative trade combines consecutive prints at one time and side.
+#[derive(Clone, Copy)]
+struct OpenTrade {
+    t_ms: f64,
+    side: crate::feed::types::Side,
+    pq: f64,
+    q: f64,
+}
+
+/// A bounded estimator over consecutive same-time, same-side groups of prints.
+/// The open group is tentative so splitting a trade never adds EMA steps.
+pub(crate) struct FastPriceState {
+    rule: FastPrice,
+    open: Option<OpenTrade>,
+    closed: [(f64, f64); FAST_TRADES_MAX],
+    len: usize,
+    head: usize,
+    ema: Option<f64>,
+    /// Closed-trade mean quantity; `step` tentatively includes the open group.
+    qbar: f64,
+    count: u64,
+}
+
+impl FastPriceState {
+    /// Start empty; callers sanitize the code-level rule with their model settings.
+    pub(crate) fn new(rule: FastPrice) -> Self {
+        Self {
+            rule,
+            open: None,
+            closed: [(0.0, 0.0); FAST_TRADES_MAX],
+            len: 0,
+            head: 0,
+            ema: None,
+            qbar: 0.0,
+            count: 0,
+        }
+    }
+
+    /// Tentatively step the open trade using the cumulative mean including that trade.
+    fn step(&self, price: f64, qty: f64) -> f64 {
+        let FastPrice::TradeEma {
+            alpha,
+            qty_weighted,
+        } = self.rule
+        else {
+            return price;
+        };
+        let mean = self.qbar + (qty - self.qbar) / (self.count + 1) as f64;
+        let weight = if qty_weighted {
+            (alpha * qty / mean).min(1.0)
+        } else {
+            alpha
+        };
+        self.ema.map_or(price, |ema| ema + weight * (price - ema))
+    }
+
+    /// Feed a valid print, committing the previous trade only when its group ends.
+    pub(crate) fn see(&mut self, tick: &Tick) {
+        let price = f64::from(tick.price);
+        let qty = f64::from(tick.qty);
+        if !price.is_finite() || price <= 0.0 || !qty.is_finite() || qty <= 0.0 {
+            return;
+        }
+        if let Some(OpenTrade { t_ms, side, pq, q }) = self.open {
+            if t_ms == tick.time_ms && side == tick.side {
+                self.open = Some(OpenTrade {
+                    t_ms,
+                    side,
+                    pq: pq + price * qty,
+                    q: q + qty,
+                });
+                return;
+            }
+            self.ema = Some(self.step(pq / q, q));
+            self.count += 1;
+            self.qbar += (q - self.qbar) / self.count as f64;
+            self.closed[self.head] = (pq / q, q);
+            self.head = (self.head + 1) % FAST_TRADES_MAX;
+            self.len = (self.len + 1).min(FAST_TRADES_MAX);
+        }
+        self.open = Some(OpenTrade {
+            t_ms: tick.time_ms,
+            side: tick.side,
+            pq: price * qty,
+            q: qty,
+        });
+    }
+
+    /// Evaluate closed trades plus the current open trade, without committing it.
+    pub(crate) fn value(&self) -> Option<f64> {
+        let OpenTrade { pq, q, .. } = self.open?;
+        match self.rule {
+            FastPrice::LastOfTick => None,
+            FastPrice::TradeEma { .. } => Some(self.step(pq / q, q)),
+            FastPrice::VwapLastTrades(n) => {
+                let (mut sum_pq, mut sum_q) = (pq, q);
+                for back in 0..self.len.min(usize::from(n.saturating_sub(1))) {
+                    let (p, q) =
+                        self.closed[(self.head + FAST_TRADES_MAX - 1 - back) % FAST_TRADES_MAX];
+                    sum_pq += p * q;
+                    sum_q += q;
+                }
+                Some(sum_pq / sum_q)
+            }
+        }
+    }
+}
 
 /// How often the core's REST ticker brings the BID (a short's ASK) the non-fast stop watches,
 /// and so how often the walk samples its proxy. The core developer (2026-09-23): the stop reads
@@ -42,7 +155,8 @@ pub const TICKER_PERIOD_MS: i64 = 2_150;
 /// closest to the previous point (`docs-internal/STRATEGY_FORMULAS/deltas.md` §7). A stop at
 /// `StopLossEMA` 0 fires on that series as well as on the ticker's price (the core developer,
 /// 2026-09-23) — a lone print in its tick is a point, a spike among prints near the last
-/// point is not. The fast stop reads the same tick, by its LAST price ([`FastStop`]).
+/// point is not. The fast stop compares `ModelSettings::fast_price` at the same tick end,
+/// defaulting to its last price ([`FastStop`]).
 pub const SERIES_TICK_MS: i64 = 250;
 
 /// Which rule of the walk fired its stop — what the diagnostic report counts per segment, so a
@@ -53,7 +167,7 @@ pub enum StopTrigger {
     Ticker,
     /// The core's 250 ms price series, at `StopLossEMA` 0 ([`SERIES_TICK_MS`]).
     Series,
-    /// `FastStopLoss`: the last price of a series tick.
+    /// `FastStopLoss`: `ModelSettings::fast_price`, defaulting to the tick's last price.
     FastTick,
     /// `UseTrailing`'s line.
     Trailing,
@@ -132,6 +246,12 @@ struct BookStop {
     series: Option<SeriesPoint>,
 }
 
+/// Which book event is due; their print-boundary rules differ even at the same timestamp.
+enum BookEvent {
+    Ticker,
+    Series,
+}
+
 /// The core's price series as the stop reads it (see [`SERIES_TICK_MS`]).
 struct SeriesPoint {
     /// The series' last point.
@@ -174,19 +294,18 @@ fn next_series_tick(t_ms: i64, tick_ms: i64) -> i64 {
     (t_ms.div_euclid(tick_ms) + 1) * tick_ms
 }
 
-/// The fast stop (`FastStopLoss`): the core checks it on a timer against the LAST price, not on
-/// every print — the price a tick of [`SERIES_TICK_MS`] closes on is what is held against the
-/// level, at the tick's end. A sweep that prints through the level and comes back inside one tick
-/// does not fire it.
+/// The fast stop compares `ModelSettings::fast_price` at each [`SERIES_TICK_MS`] tick end,
+/// defaulting to the last price. Its market exit price remains the tick's last print.
 ///
-/// Measured on the frozen bench (938 fast-stop trades, 2026-10-01) against the moment the core's
-/// own line jumped into its market sale: the first print through the level fired on time on 174
-/// of 219 stopped trades, 38 early — the core sat through prints 0.3–2.4 % past the level for up
-/// to minutes — and fired 14 trades the core never stopped. The last price of 150–300 ms ticks
-/// fired on time on 192–197, early on 6–14, falsely on 2–4; 250 ms, the core's own series tick,
-/// 194 / 11 / 3. The "closest to the previous point" pick of the delta series ([`SeriesPoint`])
-/// landed late instead (176 on time, 29 late).
+/// Core logs print `WeightedPrice`/`WeightedPricePrev` only on fast-stop fires; there the
+/// weighted reading, rather than BID/LastPrice, crosses the logged level. A VWAP of the last
+/// few trades approximates that reading without reproducing it exactly.
+///
+/// Checking every print can fire before the core; the tick's last price better approximates
+/// its timing. The delta series' closest-to-previous-point selection can instead fire late.
 struct FastStop {
+    price_rule: FastPrice,
+    state: FastPriceState,
     long: bool,
     level: f64,
     /// The end of `StopLossDelay`.
@@ -207,23 +326,30 @@ impl FastStop {
         (self.last.is_some() && self.tick_end <= until).then_some(self.tick_end)
     }
 
-    /// The tick the pending prints fall in, when it closes by `until`: the stop, at the tick's end
-    /// and its last price, when that price is past the level. The check is at the tick's end, so
-    /// that is the moment the fact's quiet span is read against.
+    /// Compare the selected estimate at tick end, exiting at the tick's last print.
+    /// The fact's quiet span is read against that same tick end.
     fn before(&mut self, until: i64) -> Option<Exit> {
         if self.tick_end > until {
             return None;
         }
         let at = self.tick_end;
         let price = self.last.take()?;
-        (at >= self.from && at > self.quiet_until && reaches(price, self.level, self.long))
+        let compared = match self.price_rule {
+            FastPrice::LastOfTick => price,
+            // No trade seen yet: use the tick's last price.
+            _ => self.state.value().unwrap_or(price),
+        };
+        (at >= self.from && at > self.quiet_until && reaches(compared, self.level, self.long))
             .then(|| stop_exit(at, price))
     }
 
     /// Read a print into the open tick, opening the one it falls in.
-    fn see(&mut self, t_ms: i64, price: f64) {
+    fn see(&mut self, tick: &Tick, t_ms: i64, price: f64) {
         self.tick_end = next_series_tick(t_ms, self.tick_ms);
         self.last = Some(price);
+        if self.price_rule != FastPrice::LastOfTick {
+            self.state.see(tick);
+        }
     }
 }
 
@@ -275,50 +401,65 @@ impl BookStop {
     /// the series ticks closing at or before it — and the earliest that put the stop past its
     /// level: the stop, at that moment and that price, and which of the two fired it.
     fn before(&mut self, until: i64) -> Option<(Exit, StopTrigger)> {
-        let by_ticker = self
-            .samples_before(until)
-            .map(|exit| (exit, StopTrigger::Ticker));
-        let by_series = self
-            .series_before(until)
-            .map(|exit| (exit, StopTrigger::Series));
-        match (by_ticker, by_series) {
-            (Some(t), Some(s)) => Some(if s.0.t_ms < t.0.t_ms { s } else { t }),
-            (t, s) => t.or(s),
-        }
+        self.before_with(until, |_| None)
     }
 
-    /// The ticker's arrivals strictly before `until` — the prints before it are all the proxy
-    /// has seen — and the first whose price (averaged, when the core averages) is past the
-    /// level.
-    fn samples_before(&mut self, until: i64) -> Option<Exit> {
-        while self.next_sample < until {
-            let at = self.next_sample;
-            self.next_sample += self.period_ms;
-            let Some(bid) = self.proxy else {
-                continue;
-            };
-            let avg = match (self.weight, self.avg) {
-                (Some(w), Some(avg)) => w * bid + (1.0 - w) * avg,
-                _ => bid,
-            };
-            self.avg = Some(avg);
-            if self.may_fire(at) && reaches(avg, self.level, self.long) {
-                return Some(stop_exit(at, bid));
+    /// Evaluate events in order, optionally updating the level immediately before each one.
+    fn before_with(
+        &mut self,
+        until: i64,
+        mut level_before: impl FnMut(i64) -> Option<f64>,
+    ) -> Option<(Exit, StopTrigger)> {
+        while let Some((at, event)) = self.next_event(until) {
+            if let Some(level) = level_before(at) {
+                self.level = level;
+            }
+            if let Some(exit) = self.evaluate_event(event) {
+                return Some(exit);
             }
         }
         None
     }
 
-    /// The series tick the pending prints fall in, when it closes by `until`: its point, and
-    /// the stop when that point is strictly past the level. The ticks after it up to `until`
-    /// brought no print and add no point.
-    fn series_before(&mut self, until: i64) -> Option<Exit> {
-        let series = self.series.as_mut()?;
-        if series.tick_end > until {
-            return None;
+    /// The earliest pending ticker arrival strictly before `until` or populated series tick
+    /// closing by it. Empty series ticks carry no price and need no evaluation.
+    fn next_event(&self, until: i64) -> Option<(i64, BookEvent)> {
+        let ticker = (self.next_sample < until).then_some((self.next_sample, BookEvent::Ticker));
+        let series = self.series.as_ref().and_then(|series| {
+            (series.candidate.is_some() && series.tick_end <= until)
+                .then_some((series.tick_end, BookEvent::Series))
+        });
+        match (ticker, series) {
+            (Some(t), Some(s)) => Some(if s.0 < t.0 { s } else { t }),
+            (t, s) => t.or(s),
         }
+    }
+
+    /// Evaluate one pending event after the ladder has reached its moment; ticker wins a tie.
+    fn evaluate_event(&mut self, event: BookEvent) -> Option<(Exit, StopTrigger)> {
+        match event {
+            BookEvent::Ticker => self.sample().map(|exit| (exit, StopTrigger::Ticker)),
+            BookEvent::Series => self.series_sample().map(|exit| (exit, StopTrigger::Series)),
+        }
+    }
+
+    /// Consume one ticker arrival, updating its average even when the stop cannot fire.
+    fn sample(&mut self) -> Option<Exit> {
+        let at = self.next_sample;
+        self.next_sample += self.period_ms;
+        let bid = self.proxy?;
+        let avg = match (self.weight, self.avg) {
+            (Some(w), Some(avg)) => w * bid + (1.0 - w) * avg,
+            _ => bid,
+        };
+        self.avg = Some(avg);
+        (self.may_fire(at) && reaches(avg, self.level, self.long)).then(|| stop_exit(at, bid))
+    }
+
+    /// Consume the populated series tick and fire only when its point is strictly past the level.
+    fn series_sample(&mut self) -> Option<Exit> {
+        let series = self.series.as_mut()?;
         let at = series.tick_end;
-        series.tick_end = next_series_tick(until, series.tick_ms);
         let point = series.candidate.take()?;
         series.point = Some(point);
         let past = if self.long {
@@ -335,16 +476,21 @@ impl BookStop {
     fn see(&mut self, tick: &Tick) {
         let price = f64::from(tick.price);
         if let Some(series) = self.series.as_mut() {
+            series.tick_end = next_series_tick(tick.time_ms as i64, series.tick_ms);
             series.see(price);
         }
-        let stop_side = if self.long {
-            crate::feed::types::Side::Sell
-        } else {
-            crate::feed::types::Side::Buy
-        };
-        if tick.side == stop_side {
+        if tick.side == stop_side(self.long) {
             self.proxy = Some(price);
         }
+    }
+}
+
+/// The aggressor side observing a long's bid or a short's ask.
+pub(crate) fn stop_side(long: bool) -> crate::feed::types::Side {
+    if long {
+        crate::feed::types::Side::Sell
+    } else {
+        crate::feed::types::Side::Buy
     }
 }
 
@@ -353,14 +499,15 @@ enum Trigger {
     /// No stop: `StopLoss` 0, `UseStopLoss` off, or an adjustment that pulled it through the
     /// entry ([`stop_pct`]).
     Off,
-    /// `FastStopLoss`: the last price of a series tick past the level, a market order the core
-    /// fires as the tick closes.
-    Fast(FastStop),
+    /// Compare `ModelSettings::fast_price` (default: last of tick) at tick end.
+    /// Boxing once per walk keeps the inline trade ring from expanding every trigger variant.
+    Fast(Box<FastStop>),
     /// The book-watching stop on its ticker proxy.
     Book(BookStop),
 }
 
-/// The stop as the walk runs it: the fast one on the last price of each series tick, the
+/// The stop as the walk runs it: the fast one on `ModelSettings::fast_price` at each tick end,
+/// defaulting to the last print; the
 /// book-watching one on its ticker proxy, or the fact's own when the walk replays the trade's own stop — and the trailing
 /// stop beside it.
 pub(super) struct Stops {
@@ -456,7 +603,16 @@ impl Stops {
         let trigger = if !stop_on {
             Trigger::Off
         } else if params.fast_stop_loss {
-            Trigger::Fast(FastStop {
+            let price_rule = params.model.fast_price;
+            let mut state = FastPriceState::new(price_rule);
+            if price_rule != FastPrice::LastOfTick {
+                for tick in before_fill() {
+                    state.see(tick);
+                }
+            }
+            Trigger::Fast(Box::new(FastStop {
+                price_rule,
+                state,
                 long: side.long,
                 level,
                 from: stop_from,
@@ -464,7 +620,7 @@ impl Stops {
                 last: None,
                 tick_end: i64::MIN,
                 tick_ms: params.model.series_tick_ms.max(1),
-            })
+            }))
         } else {
             // The non-fast stop's ticker proxy: the last print on the stop's side of the book,
             // sampled on the ticker's clock, averaged as the core averages (see `BookStop`) —
@@ -540,16 +696,17 @@ impl Stops {
         }
     }
 
-    /// Whether a rule of the stop moves with the price — the trailing stop, or a ladder rung
-    /// still to take: where it stands after a stretch of time is a function of the prints in it.
+    /// Whether trailing, a pending rung, or a weighted fast estimate needs missing prints.
     pub(super) fn follows_price(&self) -> bool {
-        self.trailing.is_some() || self.ladder.as_ref().is_some_and(Ladder::pending)
+        self.trailing.is_some()
+            || self.ladder.as_ref().is_some_and(Ladder::pending)
+            || (self.fired.is_none()
+                && matches!(&self.trigger, Trigger::Fast(fast) if fast.price_rule != FastPrice::LastOfTick))
     }
 
-    /// The ladder's steps due before `until`, moving the stop's level when one is taken. The step
-    /// is read on the ticker's arrivals before the print, and the stop's own arrivals up to it
-    /// then read the new level — within one gap between prints, the order of the two is not
-    /// kept.
+    /// The ladder's steps strictly before `until`, moving the stop's level when one is taken.
+    /// Book events advance this clock through their own moment before checking the price, so a
+    /// rung applies from its qualifying cycle without changing earlier decisions.
     fn climb(&mut self, until: i64) {
         let Some(level) = self.ladder.as_mut().and_then(|ladder| ladder.before(until)) else {
             return;
@@ -559,6 +716,22 @@ impl Stops {
             Trigger::Fast(fast) => fast.level = level,
             Trigger::Book(book) => book.level = level,
         }
+    }
+
+    /// Merge ticker and series events with ladder cycles, stopping at the first firing event.
+    /// The ladder includes a cycle at the event's own time, then reaches `until` only if quiet.
+    fn book_before(&mut self, until: i64) -> Option<(Exit, StopTrigger)> {
+        let ladder = &mut self.ladder;
+        let exit = match &mut self.trigger {
+            Trigger::Book(book) => book.before_with(until, |at| {
+                ladder.as_mut().and_then(|ladder| ladder.before(at + 1))
+            }),
+            Trigger::Off | Trigger::Fast(_) => None,
+        };
+        if exit.is_none() {
+            self.climb(until);
+        }
+        exit
     }
 
     /// The fact's own stop, when it fired by the print at `t_ms`.
@@ -575,7 +748,7 @@ impl Stops {
     /// arrivals due BEFORE it — every sample reads the proxy the earlier prints left, every series
     /// tick closing by it the points they left, and the earliest past its level fires at its own
     /// moment, the stop first on the same moment (the core checks it first) — or the fast stop's
-    /// tick closing by it, on the last price the prints before it left.
+    /// tick closing by it, comparing the selected fast-price estimate.
     pub(super) fn on_print(&mut self, tick: &Tick, t_ms: i64, price: f64) -> Option<Exit> {
         // The fast stop's tick is judged against the level as it stood when the tick closed,
         // before the ladder's steps up to this print move it — and a tick that fires leaves the
@@ -591,11 +764,11 @@ impl Stops {
                 Trigger::Off | Trigger::Book(_) => None,
             }
         });
-        if by_fast.is_none() {
+        if by_fast.is_none() && !matches!(self.trigger, Trigger::Book(_)) {
             self.climb(t_ms);
         }
         let by_book = match &mut self.trigger {
-            Trigger::Book(book) => book.before(t_ms),
+            Trigger::Book(_) => self.book_before(t_ms),
             Trigger::Fast(_) => by_fast.map(|exit| (exit, StopTrigger::FastTick)),
             Trigger::Off => None,
         };
@@ -610,7 +783,7 @@ impl Stops {
         }
         match &mut self.trigger {
             Trigger::Book(book) => book.see(tick),
-            Trigger::Fast(fast) => fast.see(t_ms, price),
+            Trigger::Fast(fast) => fast.see(tick, t_ms, price),
             Trigger::Off => {}
         }
         if let Some(trailing) = self.trailing.as_mut() {
@@ -640,9 +813,11 @@ impl Stops {
             Trigger::Fast(fast) => fast.due(i64::MAX),
             Trigger::Off | Trigger::Book(_) => None,
         };
-        self.climb(fast_closes_at.map_or(tail, |at| at.max(tail)) + 1);
+        if !matches!(self.trigger, Trigger::Book(_)) {
+            self.climb(fast_closes_at.map_or(tail, |at| at.max(tail)) + 1);
+        }
         let by_book = match &mut self.trigger {
-            Trigger::Book(book) => book.before(tail + 1),
+            Trigger::Book(_) => self.book_before(tail + 1),
             Trigger::Fast(fast) => fast
                 .before(i64::MAX)
                 .map(|exit| (exit, StopTrigger::FastTick)),

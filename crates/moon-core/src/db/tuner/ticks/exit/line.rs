@@ -17,7 +17,7 @@
 
 use super::pump_move::PumpMove;
 use super::sell_order::{PriceDown, SellLevel, armed_at, take_model_for};
-use super::stops::{StopTrigger, Stops};
+use super::stops::{StopTrigger, Stops, stop_side};
 use super::{ExitParams, Side};
 use crate::db::tuner::ticks::ModelSettings;
 use crate::db::tuner::ticks::gap::{
@@ -25,8 +25,10 @@ use crate::db::tuner::ticks::gap::{
     stop_not_nearer, trigger_not_quicker,
 };
 use crate::db::tuner::ticks::mshot::MSHOT_TAKE_LATENCY_MS;
+use crate::db::tuner::ticks::settings::StopFill;
 use crate::db::tuner::ticks::{Deal, Exit, ExitKind, Fill, reaches, round_to_step};
 use crate::feed::types::Tick;
+use std::collections::VecDeque;
 
 /// MoonShot's first take reaches the book `MSHOT_TAKE_LATENCY_MS` after arming, never sooner
 /// than a re-place (the model latency floor). Other kinds keep the replacement latency.
@@ -59,6 +61,8 @@ pub struct LineWalk {
     /// Which rule fired the stop the walk closed on; `None` when it closed otherwise — or on a
     /// stop judged across a hole of the tape, which no single rule fired.
     pub stop_trigger: Option<StopTrigger>,
+    /// The trigger's fire moment, before the panic sell's optional order latency.
+    pub stop_fired_ms: Option<i64>,
     /// The first print once the take was live, when it was already through the untouched take:
     /// the take fills at the market there, not at its level. What the verdict prices the take at,
     /// while no move had landed by the moment it judges ([`Self::moved_at`]).
@@ -143,8 +147,12 @@ pub(super) struct Line {
     /// The last level sent to the book, pending or not: what a new level must differ from to
     /// be a move at all.
     last_sent: f64,
-    /// A move the exchange has not seen yet: when it lands, and at what level.
-    pending: Option<(i64, f64)>,
+    /// Moves the exchange has not seen yet, in arrival order: when each lands and its level.
+    pending: VecDeque<(i64, f64)>,
+    /// The last observed print and position direction, before the next replacement lands.
+    last_print: Option<(f64, bool)>,
+    /// Whether the market was already through the exchange's current replacement on arrival.
+    marketable_move: bool,
     /// The first print once the take was live: `None` until one came, `Some(None)` when it did
     /// not reach the untouched take, `Some(Some((t_ms, price)))` when it was through it — a take
     /// placed through the market fills at that print, as the core's does. Only a take the
@@ -179,7 +187,9 @@ impl Line {
             moved_at: None,
             core: take_placed,
             last_sent: take_placed,
-            pending: None,
+            pending: VecDeque::new(),
+            last_print: None,
+            marketable_move: false,
             first_live: None,
             prevailing: None,
             points: vec![LinePoint {
@@ -204,7 +214,7 @@ impl Line {
         if !advance(&mut self.core, &mut self.last_sent, level, order) {
             return false;
         }
-        self.pending = Some((t_ms + self.latency_ms, order));
+        self.pending.push_back((t_ms + self.latency_ms, order));
         self.points.push(LinePoint {
             t_ms: t_ms + self.latency_ms,
             price: order,
@@ -212,13 +222,15 @@ impl Line {
         true
     }
 
-    /// The move on its way lands on the exchange, when it is due by `t_ms`.
+    /// Apply every replacement due by `t_ms` in arrival order, retaining the first move's time.
     fn land(&mut self, t_ms: i64) {
-        if let Some((apply_at, level)) = self.pending.filter(|(apply_at, _)| t_ms >= *apply_at) {
+        while let Some((apply_at, level)) = self.pending.pop_front_if(|(at, _)| *at <= t_ms) {
             self.exch = level;
+            self.marketable_move = self
+                .last_print
+                .is_some_and(|(price, long)| reaches(price, level, !long));
             self.exch_moved = true;
             self.moved_at.get_or_insert(apply_at);
-            self.pending = None;
         }
     }
 
@@ -230,12 +242,13 @@ impl Line {
         }
     }
 
-    /// Remember the first print once the take is live, and whether the take was marketable:
+    /// Remember the latest print, and the first live print's marketability:
     /// the market ALREADY through the untouched take when it went live (`prevailing`), and
     /// that print through it too. A take crossed only later rests and fills at its level.
     /// Invariant: "through" is judged against the untouched take (`take`), never `exch` — a move
     /// landed by then already rules the marketable fill out (see [`Self::marketable_until`]).
     fn see_live(&mut self, t_ms: i64, price: f64, side: Side) {
+        self.last_print = Some((price, side.long));
         // A print at exactly `armed_at` is prevailing, never the first live one (as `fill_on`).
         if self.first_live.is_none() && t_ms > self.armed_at && t_ms >= self.live_at {
             let through = |p: f64| reaches(p, self.take, !side.long);
@@ -254,7 +267,8 @@ impl Line {
     }
 
     /// Fill at `t_ms`, `price` once either the take or an earlier replacement is on the book.
-    /// The take's own arrival still governs marketable-take tracking.
+    /// A replacement already through the prevailing market fills at the print; a resting
+    /// replacement fills at its limit. The take's own arrival governs marketable-take tracking.
     fn fill_on(&self, t_ms: i64, price: f64, side: Side) -> Option<Exit> {
         let book_live_at = self
             .moved_at
@@ -263,10 +277,13 @@ impl Line {
             .then_some(Exit {
                 t_ms,
                 // A take already through the market at its first live print fills at that print.
-                price: self
-                    .marketable_until(t_ms)
-                    .filter(|(at, _)| *at == t_ms)
-                    .map_or(self.exch, |(_, p)| p),
+                price: if self.marketable_move {
+                    price
+                } else {
+                    self.marketable_until(t_ms)
+                        .filter(|(at, _)| *at == t_ms)
+                        .map_or(self.exch, |(_, p)| p)
+                },
                 // What the print met: the take as placed, or a level a rule moved it to.
                 kind: if !self.exch_moved {
                     ExitKind::Take
@@ -295,6 +312,7 @@ impl Line {
             points: self.points,
             stop_level: None,
             stop_trigger: None,
+            stop_fired_ms: None,
         }
     }
 }
@@ -346,6 +364,7 @@ pub fn walk_held(
     // A long position's hole, while the walk has yet to cross it.
     let mut hole = deal.gap.as_ref().filter(|gap| gap.to_ms > fill.t_ms);
     let mut last_t = fill.t_ms;
+    let post_fill = ticks.partition_point(|tick| tick.time_ms as i64 <= fill.t_ms);
     for (index, tick) in ticks.iter().enumerate() {
         let t_ms = tick.time_ms as i64;
         let price = f64::from(tick.price);
@@ -354,6 +373,7 @@ pub fn walk_held(
         }
         line.see_before_live(t_ms, price);
         if t_ms <= fill.t_ms {
+            line.last_print = Some((price, side.long));
             continue;
         }
         last_t = t_ms;
@@ -407,7 +427,19 @@ pub fn walk_held(
         line.land(t_ms);
         // The stops come before the print-driven rule below moves anything.
         if let Some(exit) = stops.on_print(tick, t_ms, price) {
-            return finish(line, exit, &stops);
+            return finish_stop(
+                line,
+                exit,
+                &stops,
+                ticks,
+                post_fill,
+                index,
+                StopFillContext {
+                    deal,
+                    model: &params.model,
+                    hold_until_ms,
+                },
+            );
         }
         // A print AT the level fills the sell — the optimistic reading the spec states (§7:
         // the queue standing at the level is not modelled; COOL 2026-09-21 printed 31
@@ -431,7 +463,19 @@ pub fn walk_held(
     let tail = ticks.last().map(|t| t.time_ms as i64).unwrap_or(last_t);
     // The fact's own stop past the last print, or the book stop's samples up to the tape's end.
     if let Some(exit) = stops.after_tape(tail) {
-        return finish(line, exit, &stops);
+        return finish_stop(
+            line,
+            exit,
+            &stops,
+            ticks,
+            post_fill,
+            ticks.len(),
+            StopFillContext {
+                deal,
+                model: &params.model,
+                hold_until_ms,
+            },
+        );
     }
     // Nothing closed it inside the tape. Not the report's own exit: a variant that never
     // closes is not a trade, whatever the core's rules did, and the caption counts it.
@@ -571,6 +615,116 @@ fn finish(line: Line, exit: Exit, stops: &Stops) -> LineWalk {
     walked.stop_trigger = stops
         .fired_trigger()
         .filter(|_| exit.kind == ExitKind::Stop);
+    walked.stop_fired_ms = (exit.kind == ExitKind::Stop).then_some(exit.t_ms);
+    walked
+}
+
+/// Inputs shared by the resting sell and its panic replacement.
+struct StopFillContext<'a> {
+    deal: &'a Deal,
+    model: &'a ModelSettings,
+    hold_until_ms: Option<i64>,
+}
+
+/// Resolve a modelled panic sell separately so the trigger diagnostics retain its fire time.
+/// Without an arrival print, carry the last consumed post-fill stop-side price, else fire price.
+/// Only prints at or past `post_fill` can price the replacement.
+fn finish_stop(
+    mut line: Line,
+    fire: Exit,
+    stops: &Stops,
+    ticks: &[Tick],
+    post_fill: usize,
+    index: usize,
+    context: StopFillContext<'_>,
+) -> LineWalk {
+    let StopFillContext {
+        deal,
+        model,
+        hold_until_ms,
+    } = context;
+    let index = index.max(post_fill);
+    if model.stop_fill == StopFill::MarketAfterLatency
+        && stops.fired_trigger() != Some(StopTrigger::Fact)
+    {
+        let arrival = fire.t_ms.saturating_add(model.latency_whole_ms());
+        let side = Side {
+            long: deal.is_long(),
+        };
+        for tick in &ticks[index..] {
+            let t_ms = tick.time_ms as i64;
+            if t_ms >= arrival {
+                break;
+            }
+            if let Some(gap) = deal
+                .gap
+                .as_ref()
+                .filter(|gap| fire.t_ms < gap.to_ms && t_ms > gap.from_ms)
+            {
+                return finish(
+                    line,
+                    Exit {
+                        t_ms: fire.t_ms.max(gap.from_ms),
+                        price: f64::NAN,
+                        kind: ExitKind::InGap,
+                    },
+                    stops,
+                );
+            }
+            let price = f64::from(tick.price);
+            if !price.is_finite() || price <= 0.0 {
+                continue;
+            }
+            line.see_live(t_ms, price, side);
+            if !hold_until_ms.is_some_and(|until| t_ms <= until) {
+                if let Some(exit) = line.fill_on(t_ms, price, side) {
+                    return finish(line, exit, stops);
+                }
+            }
+        }
+    }
+    let mut walked = finish(line, fire, stops);
+    if model.stop_fill == StopFill::MarketAfterLatency
+        && walked.stop_trigger != Some(StopTrigger::Fact)
+    {
+        let arrival = fire.t_ms.saturating_add(model.latency_whole_ms());
+        let stop_side = stop_side(deal.is_long());
+        let valid =
+            |tick: &&Tick| tick.side == stop_side && tick.price.is_finite() && tick.price > 0.0;
+        let next_print = ticks[index..]
+            .iter()
+            .filter(valid)
+            .find(|tick| tick.time_ms as i64 >= arrival);
+        // A fallback searched to the tape end, even when the carried quote precedes a hole.
+        let searched_until = next_print.map_or_else(
+            || {
+                ticks
+                    .last()
+                    .map_or(arrival, |tick| arrival.max(tick.time_ms as i64))
+            },
+            |tick| tick.time_ms as i64,
+        );
+        let print = next_print.or_else(|| ticks[post_fill..index].iter().rfind(valid));
+        // A short tape still dates the order at arrival; the last bid/ask supplies its price.
+        walked.exit.t_ms = arrival;
+        if let Some(print) = print {
+            walked.exit.t_ms = arrival.max(print.time_ms as i64);
+            walked.exit.price = f64::from(print.price);
+        }
+        if let Some(gap) = deal
+            .gap
+            .as_ref()
+            .filter(|gap| fire.t_ms < gap.to_ms && searched_until > gap.from_ms)
+        {
+            walked.exit = Exit {
+                t_ms: fire.t_ms.max(gap.from_ms),
+                price: f64::NAN,
+                kind: ExitKind::InGap,
+            };
+            walked.stop_trigger = None;
+            walked.stop_fired_ms = None;
+        }
+    }
     walked
 }
 

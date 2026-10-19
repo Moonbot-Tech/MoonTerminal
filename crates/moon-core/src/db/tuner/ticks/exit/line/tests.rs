@@ -6,6 +6,130 @@ use crate::db::tuner::ticks::exit::ExitModel;
 use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape};
 use crate::db::tuner::ticks::{EntryParams, ModelSettings, verify};
 
+/// Moving a sell limit into the prevailing market must not underprice its market fill.
+#[test]
+fn replacement_marketable_at_arrival_fills_at_the_print() {
+    let p = ExitParams {
+        sell_level_delay_s: -1.0,
+        sell_level_time_s: 1.0,
+        sell_level_count: 1,
+        sell_level_adjust_pct: -10.0,
+        sell_level_allowed_drop_pct: -40.0,
+        model: ModelSettings {
+            latency_ms: 100.0,
+            ..ModelSettings::default()
+        },
+        ..params()
+    };
+    let ticks = tape(&[(0, 100.0), (300, 100.0), (500, 100.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms, w.exit.price),
+        (ExitKind::Line, 500, 100.0)
+    );
+}
+
+/// Treating every crossed replacement as marketable would overprice a resting sell limit.
+#[test]
+fn replacement_resting_at_arrival_fills_at_its_limit() {
+    let p = ExitParams {
+        sell_level_delay_s: -1.0,
+        sell_level_time_s: 1.0,
+        sell_level_count: 1,
+        sell_level_adjust_pct: 3.0,
+        model: ModelSettings {
+            latency_ms: 100.0,
+            ..ModelSettings::default()
+        },
+        ..params()
+    };
+    let ticks = tape(&[(0, 100.0), (300, 100.0), (500, 100.0), (700, 104.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms, w.exit.price),
+        (ExitKind::Line, 700, 103.0)
+    );
+}
+
+/// Overwriting queued timer moves must not leave the original take live on a sparse tape.
+#[test]
+fn queued_timer_moves_land_before_the_next_print() {
+    let p = ExitParams {
+        price_down_timer_s: 0.33,
+        price_down_delay_s: 0.33,
+        price_down_pct: 50.0,
+        price_down_relative: true,
+        model: ModelSettings {
+            latency_ms: 100.0,
+            ..ModelSettings::default()
+        },
+        ..params()
+    };
+    let ticks = tape(&[(0, 100.0), (1_000, 104.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!((w.exit.kind, w.exit.price), (ExitKind::Line, 102.5));
+    assert_eq!(w.moved_at, Some(430));
+}
+
+/// A later replacement still in flight must not erase an earlier executable replacement.
+#[test]
+fn queued_moves_survive_latency_longer_than_the_interval() {
+    let mut line = Line::new(None, 110.0, 0, 0, 500);
+    line.place(330, 105.0);
+    line.place(660, 102.5);
+    line.land(1_000);
+    assert_eq!(
+        line.fill_on(1_000, 105.0, Side { long: true })
+            .unwrap()
+            .price,
+        105.0
+    );
+    assert_eq!(line.moved_at, Some(830));
+    line.land(1_160);
+    assert_eq!(line.exch, 102.5);
+}
+
+/// Equal arrival times retain placement order while recording the first arrived move.
+#[test]
+fn queued_moves_at_the_same_time_keep_placement_order() {
+    let p = ExitParams {
+        price_down_timer_s: 0.33,
+        price_down_delay_s: 10.0,
+        price_down_pct: 50.0,
+        price_down_relative: true,
+        sell_level_delay_s: 0.33,
+        sell_level_time_s: 1.0,
+        sell_level_count: 1,
+        sell_level_adjust_pct: 3.0,
+        ..params()
+    };
+    let mut d = deal(false);
+    d.coin = "XALPHA".into();
+    d.core_name = "CORE_A".into();
+    let side = Side { long: true };
+    let fill = fill();
+    let mut pump_move = PumpMove::new(&p, fill, side, 0);
+    let mut price_down = PriceDown::new(&p, &d, fill, side);
+    let mut sell_level = SellLevel::new(&p, &d, fill, side);
+    let mut line = Line::new(None, 110.0, 0, 0, 100);
+    Rules {
+        pump_move: &mut pump_move,
+        price_down: &mut price_down,
+        sell_level: &mut sell_level,
+    }
+    .step_through(330, &tape(&[(0, 100.0)]), &mut line);
+    line.land(430);
+    assert_eq!(line.exch, 103.0);
+    assert_eq!(line.moved_at, Some(430));
+    assert_eq!(
+        line.points
+            .iter()
+            .map(|p| (p.t_ms, p.price))
+            .collect::<Vec<_>>(),
+        vec![(0, 110.0), (430, 105.0), (430, 103.0)]
+    );
+}
+
 #[test]
 fn the_placed_level_is_rounded_to_the_step() {
     // ARX, 2026-09-21, step 0.0001: take 0.197802 goes to the book as 0.1978; the 20 %

@@ -133,7 +133,7 @@ strat.note_move_one_core: "Mover funciona dentro de um núcleo — entre núcleo
 strat.note_pasted: "Coladas: estratégias: %{strategies}, núcleos: %{cores}"
 strat.note_nothing_to_paste: "Nada para colar"
 strat.note_forgotten: "Esquecidas para sempre: estratégias: %{n}, versões: %{versions}"
-strat.note_forget_disabled: "O armazenamento de estratégias está desligado: Configurações -> Geral -> Armazenamento"
+strat.note_forget_disabled: "O banco de estratégias está indisponível — o histórico de versões não está sendo gravado. Veja o log."
 strat.note_forget_pending: "O armazenamento ainda está ocupado — o resultado aparece sozinho"
 strat.note_forget_failed: "Falha ao esquecer"
 

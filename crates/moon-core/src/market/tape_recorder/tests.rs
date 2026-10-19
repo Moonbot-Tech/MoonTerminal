@@ -405,11 +405,11 @@ fn only_a_station_resumes_an_old_open_it_does_not_know() {
     assert_eq!(open_verdict(true, old, false), OpenVerdict::Resume);
     assert_eq!(open_verdict(true, old, true), OpenVerdict::Skip);
     assert_eq!(
-        open_verdict(true, OPEN_HORIZON_MS, false),
+        open_verdict(true, 24 * 3_600_000, false),
         OpenVerdict::Resume
     );
     assert_eq!(
-        open_verdict(true, OPEN_HORIZON_MS + 1, false),
+        open_verdict(true, 24 * 3_600_000 + 1, false),
         OpenVerdict::Skip
     );
 }

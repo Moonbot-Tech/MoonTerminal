@@ -64,6 +64,7 @@ fn deal_rows() -> Vec<super::super::state::DealRow> {
             archived_take: None,
             fact_modifier: None,
             hook_depth_pct: None,
+            drops_detect: None,
             hook_stated_take_pct: None,
             strike_detect: None,
             step_lag_ms: 0.0,
@@ -181,6 +182,7 @@ impl Render for NarrowDealProbe {
                         false,
                         super::super::PlanCell(None),
                         Rc::new(|_, _, _, _| {}),
+                        false,
                         p,
                         design::font_scale(cx),
                         super::super::deal_row_h(cx),
@@ -194,6 +196,7 @@ impl Render for NarrowDealProbe {
                     .debug_selector(|| "minimum-footer".into())
                     .child(super::super::chips_el(
                         counts,
+                        false,
                         Some(super::super::why::DealChip::ShortTail),
                         (0, 0, 0),
                         Rc::new(|_, _, _| {}),
@@ -289,6 +292,7 @@ impl Render for DealProbe {
                         false,
                         PlanCell(None),
                         action.clone(),
+                        self.active,
                         p,
                         design::font_scale(cx),
                         super::super::deal_row_h(cx),
@@ -299,6 +303,7 @@ impl Render for DealProbe {
         }
         body.child(chips_el(
             counts,
+            false,
             self.active.then_some(DealChip::Hole),
             (23, 9, 14),
             pick.clone(),
@@ -533,13 +538,24 @@ fn model(face: usize) -> SummaryModel {
             total: 11,
             left: Some(std::time::Duration::from_secs(43)),
             points: 107,
+            stopping: false,
         },
         2 => Verdict::Apply,
         3 => Verdict::DontApply(Why::HoldoutOpen { k: 7 }),
         4 => Verdict::Unchecked(Unchecked::Whole),
+        6 => Verdict::Apply,
+        7 => Verdict::Running {
+            done: 3,
+            total: 11,
+            left: None,
+            points: 107,
+            stopping: true,
+        },
+        8 => Verdict::Cannot(t!("analytics.ticks.sum.stopped_empty").to_string()),
+        9 => Verdict::Loading,
         _ => Verdict::Cannot(t!("analytics.ticks.sum.too_few", n = 3, min = 20).to_string()),
     };
-    let active = face >= 2;
+    let active = (2..=6).contains(&face);
     let open = t!("analytics.ticks.sum.open_line", n = 7, profit = "+6.19").to_string();
     let row = |hold: bool| ProfitRow {
         label: t!(if hold {
@@ -551,10 +567,13 @@ fn model(face: usize) -> SummaryModel {
         sub: t!(
             if hold {
                 "analytics.ticks.sum.hold_sub"
+            } else if face == 6 {
+                "analytics.ticks.sum.train_sub_purged"
             } else {
                 "analytics.ticks.sum.train_sub"
             },
-            n = 31
+            n = 31,
+            p = 7
         )
         .to_string(),
         n: 31,
@@ -568,8 +587,8 @@ fn model(face: usize) -> SummaryModel {
         tag: tag(&verdict),
         sentence: sentence(&verdict, 31, 13, 19),
         verdict,
-        train: (face == 2 || face == 3 || face == 4).then(|| row(false)),
-        holdout: (face == 2 || face == 3).then(|| row(true)),
+        train: (face == 2 || face == 3 || face == 4 || face == 6).then(|| row(false)),
+        holdout: (face == 2 || face == 3 || face == 6).then(|| row(true)),
         changed_header: t!("analytics.ticks.sum.changed", n = 2).to_string(),
         changes: if active {
             fields()
@@ -577,14 +596,21 @@ fn model(face: usize) -> SummaryModel {
                 .map(|key| ChangeRow {
                     key: key.to_string(),
                     section: t!("analytics.ticks.group_exit").to_string(),
-                    old: "1.31".to_string(),
+                    old: if face == 6 { "—" } else { "1.31" }.to_string(),
                     new: "2.47".to_string(),
                 })
                 .collect()
         } else {
             Vec::new()
         },
-        warnings: if active {
+        warnings: if face == 6 {
+            vec![
+                t!("analytics.ticks.sum.stopped_after", n = 123, m = 1000).to_string(),
+                t!("analytics.ticks.sum.stopped_after", n = 0, m = 1).to_string(),
+                open.clone(),
+                t!("analytics.ticks.assumptions").to_string(),
+            ]
+        } else if active {
             vec![open.clone(), t!("analytics.ticks.assumptions").to_string()]
         } else {
             Vec::new()
@@ -599,7 +625,7 @@ fn model(face: usize) -> SummaryModel {
             .into_iter()
             .collect(),
         details_open: active,
-        write_enabled: face != 5,
+        write_enabled: !matches!(face, 5 | 8),
         copy_visible: active,
         can_reset: active,
         confirm: (face == 3).then(|| ConfirmModel {
@@ -770,7 +796,7 @@ impl Render for Probe {
                         KpiOpts {
                             title: Some((
                                 t!("analytics.ticks.kpi.title").to_string(),
-                                super::super::sample::caption(73, 405),
+                                super::super::sample::caption(73, 405, self.face == 8),
                             )),
                             sample_note: sample_bias(),
                             rows: KpiRows::Plain,
@@ -828,7 +854,7 @@ fn every_ticks_language_has_the_same_keys_and_no_raw_card_text() {
     for language in Language::ALL {
         assert_eq!(keys(language.code()), en, "{}", language.code());
         let _locale = crate::test_locale::force(language.code());
-        for face in 0..6 {
+        for face in 0..10 {
             let m = model(face);
             let mut text = vec![
                 m.title,
@@ -859,7 +885,7 @@ fn every_ticks_language_has_the_same_keys_and_no_raw_card_text() {
                 || key.starts_with("analytics.ticks.legend.")
                 || key.starts_with("analytics.ticks.col_tip.")
                 || key.starts_with("analytics.ticks.chip.")
-                || key.starts_with("analytics.ticks.best.")
+                || *key == "analytics.ticks.side_pick_strategy"
         }) {
             assert!(!t!(key.as_str()).contains("analytics."), "raw key: {key}");
         }
@@ -885,7 +911,7 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
             let _locale = crate::test_locale::force(language.code());
             for zoom in [1.0, 1.25] {
                 for width in [520.0, 400.0] {
-                    for face in 0..6 {
+                    for face in 0..10 {
                         let window = cx.open_window(
                             gpui::size(px(width * zoom), px(540.0 * zoom)),
                             |window, cx| {
@@ -964,6 +990,20 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                             );
                         }
                         let m = model(face);
+                        // Unset old values remain a visible full glyph before the arrow.
+                        for row in &m.changes {
+                            let old = visual
+                                .debug_bounds(selector(format!("an-ticks-change-old-{}", row.key)))
+                                .expect("old field value");
+                            inside(old, "old field value");
+                            let need = visual
+                                .update(|_, cx| design::mono_body_text_width(cx, &row.old, 400.0));
+                            assert!(
+                                f32::from(old.size.width) + 0.5 >= need,
+                                "old value clipped ({at}): {}",
+                                row.old
+                            );
+                        }
                         // Each profit head must sit over its own figures, not float as one group.
                         let rows: Vec<&str> = [
                             m.train.as_ref().map(|_| "an-ticks-sum-train-count"),
@@ -1011,17 +1051,21 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                         let mut prose = vec![m.sentence];
                         // Short labels sit beside a sibling in a wrapping row; they must wrap the row, never their glyphs.
                         let mut labels = Vec::new();
-                        if face == 1 {
+                        if face == 1 || face == 7 {
                             labels.push(super::super::summary::progress_text(3, 11, 107));
-                            labels.push(
-                                t!(
-                                    "analytics.ticks.sum.left",
-                                    time = super::super::estimate::duration_text(
-                                        std::time::Duration::from_secs(43)
+                            if face == 7 {
+                                prose.push(t!("analytics.ticks.sum.stopping").to_string());
+                            } else {
+                                labels.push(
+                                    t!(
+                                        "analytics.ticks.sum.left",
+                                        time = super::super::estimate::duration_text(
+                                            std::time::Duration::from_secs(43)
+                                        )
                                     )
-                                )
-                                .to_string(),
-                            );
+                                    .to_string(),
+                                );
+                            }
                         } else {
                             if m.train.is_some() || m.holdout.is_some() {
                                 let unit = crate::analytics::pnl_unit_label();
@@ -1158,9 +1202,9 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                                 ));
                             }
                         }
-                        let actions = if face == 1 {
+                        let actions = if face == 1 || face == 7 {
                             vec![("stop", "stop")]
-                        } else if face >= 2 {
+                        } else if (2..=6).contains(&face) {
                             let mut out =
                                 vec![("write", "write"), ("copy", "copy"), ("reset", "reset")];
                             if face == 3 {

@@ -15,8 +15,6 @@ use crate::market::trade_replay::{
 };
 use crate::station_api::CatchupFailReason;
 
-/// Compressed archive traffic admitted during one hourly pass.
-pub(crate) const ARCHIVE_BYTES_PER_PASS: u64 = 2 * 1024 * 1024 * 1024;
 /// Forty core asks at the five-second archive deadline bound a pass's core wait to 200 seconds.
 pub(super) const CORE_ASKS_PER_PASS: usize = 40;
 const DAY_MS: i64 = 86_400_000;
@@ -143,11 +141,9 @@ pub(crate) fn archive_fault(error: &archive::ArchiveError) -> Fault {
             CatchupFailReason::NoRoom,
             "disk reserve refused the archive",
         ),
-        E::TooLarge => Fault::new(
-            CatchupFailReason::Other,
-            "archive day over the size ceiling",
-        ),
-        E::BudgetDeferred => Fault::new(CatchupFailReason::Other, "pass archive budget spent"),
+        E::BudgetDeferred => {
+            Fault::new(CatchupFailReason::Other, "archive response budget deferred")
+        }
         E::Http(status) => Fault::new(CatchupFailReason::Http, format!("archive HTTP {status}")),
         E::Transient(text) => Fault::new(CatchupFailReason::Network, text.clone()),
         E::Corrupt(text) => Fault::new(CatchupFailReason::Corrupt, text.clone()),
@@ -170,8 +166,6 @@ pub(crate) struct JobOutcome {
     archive_unknown: bool,
     /// Unpublished days and budget admission waits are not failed download attempts.
     waiting: bool,
-    /// A day file no longer fit the pass's remaining archive budget.
-    budget_spent: bool,
 }
 
 /// Pace and stop catch-up pages against the same process-wide host budgets as terminal replay.
@@ -384,14 +378,6 @@ fn run_archive(
     budget: u64,
 ) -> JobOutcome {
     let (result, bytes) = fetch(route, &job.trade.market, &job.missing, budget);
-    let budget_spent = matches!(
-        &result,
-        Err(archive::ArchiveError::BudgetDeferred)
-            | Ok(archive::ArchiveFill {
-                deferred: Some(archive::ArchiveError::BudgetDeferred),
-                ..
-            })
-    );
     let mut outcome = match result {
         Ok(fill) => JobOutcome {
             waiting: (fill.covered.is_empty()
@@ -408,7 +394,6 @@ fn run_archive(
             fault: fill.deferred.as_ref().map(archive_fault),
             failure: fill.deferred.map(archive_failure),
             archive_bytes: bytes,
-            budget_spent,
             ..JobOutcome::default()
         },
         Err(error) => JobOutcome {
@@ -420,7 +405,6 @@ fn run_archive(
             fault: Some(archive_fault(&error)),
             failure: Some(archive_failure(error)),
             archive_bytes: bytes,
-            budget_spent,
             ..JobOutcome::default()
         },
     };
@@ -435,7 +419,6 @@ fn archive_failure(error: archive::ArchiveError) -> Failure {
         archive::ArchiveError::Throttled { .. } => Failure::Throttled,
         archive::ArchiveError::NotPublished
         | archive::ArchiveError::Corrupt(_)
-        | archive::ArchiveError::TooLarge
         | archive::ArchiveError::BudgetDeferred
         | archive::ArchiveError::NoRoom
         | archive::ArchiveError::Http(_)
@@ -468,12 +451,6 @@ fn portions(
             (Some(rest), recent, Some(archive), old)
         }
     }
-}
-
-/// Whether part of the job's missing tape can only come from a daily archive at `now_ms`.
-pub(super) fn needs_archive(job: &CatchupJob, now_ms: i64) -> bool {
-    let (_, _, archive, old) = portions(job, now_ms);
-    archive.is_some() && !old.is_empty()
 }
 
 /// Execute one job at an injected clock and gate, preserving paid-for REST tape on archive errors.
@@ -586,7 +563,7 @@ pub(super) fn run_pass_with_core(
 ) -> PassResult {
     let (fetch_rest, fetch_archive, core_fetch) = transports;
     let mut downloaded = already_downloaded;
-    let mut groups = HashMap::<DayKey, Coverage>::new();
+    let mut groups = HashMap::<DayKey, (Coverage, usize)>::new();
     let mut fetched = HashMap::<DayKey, (JobOutcome, bool)>::new();
     let mut stopped_hosts = HashSet::new();
     let mut stopped_cores = HashSet::new();
@@ -628,10 +605,12 @@ pub(super) fn run_pass_with_core(
                 merge(&mut outcome, answer);
             }
         }
-        if let Some(route) = archive {
+        if let Some(route) = archive.filter(|_| outcome.failure != Some(Failure::Permanent)) {
             for (key, spans) in day_parts(route, &job.trade.market, &old) {
                 for &span in spans.spans() {
-                    groups.entry(key.clone()).or_default().add(span);
+                    let group = groups.entry(key.clone()).or_default();
+                    group.0.add(span);
+                    group.1 = prepared.len();
                 }
             }
         }
@@ -649,50 +628,35 @@ pub(super) fn run_pass_with_core(
             failed_fetch,
         ));
     }
-    for (job, archive, old, mut outcome, mut attempted, mut deferred, mut failed_fetch) in prepared
+    for (
+        consumer,
+        (job, archive, old, mut outcome, mut attempted, mut deferred, mut failed_fetch),
+    ) in prepared.into_iter().enumerate()
     {
         let mut all_unknown = !old.is_empty();
         if !matches!(outcome.failure, Some(Failure::Permanent)) {
             if let Some(route) = archive {
                 for (key, spans) in day_parts(route, &job.trade.market, &old) {
                     if !fetched.contains_key(&key) {
-                        let skipped = downloaded >= ARCHIVE_BYTES_PER_PASS
-                            || stopped_hosts.contains(route.host());
+                        let skipped = stopped_hosts.contains(route.host());
                         let answer = if skipped {
                             JobOutcome {
                                 failure: Some(Failure::Retry),
-                                fault: Some(if stopped_hosts.contains(route.host()) {
-                                    Fault::new(
-                                        CatchupFailReason::Throttled,
-                                        "archive host stopped earlier this pass",
-                                    )
-                                } else {
-                                    Fault::new(
-                                        CatchupFailReason::Other,
-                                        "pass archive budget spent",
-                                    )
-                                }),
+                                fault: Some(Fault::new(
+                                    CatchupFailReason::Throttled,
+                                    "archive host stopped earlier this pass",
+                                )),
                                 ..JobOutcome::default()
                             }
                         } else {
                             let group = CatchupJob {
-                                missing: groups[&key].clone(),
+                                missing: groups[&key].0.clone(),
                                 source: Source::Archive(route),
                                 ..job.clone()
                             };
-                            let answer = run_archive(
-                                &group,
-                                route,
-                                fetch_archive,
-                                ARCHIVE_BYTES_PER_PASS.saturating_sub(downloaded),
-                            );
+                            let answer = run_archive(&group, route, fetch_archive, u64::MAX);
                             attempted |= !answer.waiting;
                             downloaded = downloaded.saturating_add(answer.archive_bytes);
-                            // A day that no longer fits ends archive work until the hour rolls;
-                            // smaller days would only open venue requests to be deferred again.
-                            if answer.budget_spent {
-                                downloaded = downloaded.max(ARCHIVE_BYTES_PER_PASS);
-                            }
                             if answer.failure == Some(Failure::Throttled) {
                                 stopped_hosts.insert(route.host());
                             }
@@ -700,7 +664,12 @@ pub(super) fn run_pass_with_core(
                         };
                         fetched.insert(key.clone(), (answer, skipped));
                     }
-                    let (mut answer, skipped) = fetched[&key].clone();
+                    let (mut answer, skipped) = if groups[&key].1 == consumer {
+                        fetched.remove(&key).expect("last archive consumer")
+                    } else {
+                        let (answer, skipped) = &fetched[&key];
+                        (clipped_answer(answer, &spans), *skipped)
+                    };
                     // Grouped days may serve both ordinary gaps and tail-only jobs.
                     if !skipped && answer.failure.is_none() && answer.file.is_empty() {
                         answer.waiting = !super::state::tail_only(&job.missing, job.tail_start_ms);
@@ -828,6 +797,9 @@ pub(super) fn run_pass_with_core(
             attempted: attempted && (!deferred || failed_fetch),
             filed: outcome.file,
         });
+        // A permanent REST refusal or stopped host can skip this job's archive walk entirely.
+        // It must still release decoded days whose final consumer has just passed.
+        fetched.retain(|key, _| groups[key].1 > consumer);
     }
     PassResult {
         finished,
@@ -835,13 +807,23 @@ pub(super) fn run_pass_with_core(
     }
 }
 
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+pub(super) use tests::needs_archive;
+
 /// Merge disjoint source portions without widening coverage across unwalked ground.
 fn merge(into: &mut JobOutcome, mut part: JobOutcome) {
     into.archive_bytes = into.archive_bytes.saturating_add(part.archive_bytes);
     for &span in part.file.spans() {
         into.file.add(span);
     }
-    into.ticks.append(&mut part.ticks);
+    if into.ticks.is_empty() {
+        into.ticks = part.ticks;
+    } else {
+        into.ticks.append(&mut part.ticks);
+    }
     // The reason follows the failure that wins below; the first one named keeps a tie.
     if part.fault.is_some() && (into.fault.is_none() || rank(part.failure) > rank(into.failure)) {
         into.fault = part.fault;
@@ -852,6 +834,27 @@ fn merge(into: &mut JobOutcome, mut part: JobOutcome) {
         (Some(Failure::Retry), _) | (_, Some(Failure::Retry)) => Some(Failure::Retry),
         (None, None) => None,
     };
+}
+
+/// Copy only this consumer's prints while preserving a grouped day for later consumers.
+fn clipped_answer(answer: &JobOutcome, spans: &Coverage) -> JobOutcome {
+    let file = answer.file.clip(spans);
+    let ticks = answer
+        .ticks
+        .iter()
+        .filter(|tick| tick.time_ms.is_finite() && file.contains_ms(tick.time_ms as i64))
+        .cloned()
+        .collect();
+    JobOutcome {
+        file,
+        ticks,
+        failure: answer.failure,
+        fault: answer.fault.clone(),
+        archive_bytes: answer.archive_bytes,
+        out_of_retention: answer.out_of_retention,
+        archive_unknown: answer.archive_unknown,
+        waiting: answer.waiting,
+    }
 }
 
 /// Precedence of a failure when two source portions disagree, matching [`merge`].

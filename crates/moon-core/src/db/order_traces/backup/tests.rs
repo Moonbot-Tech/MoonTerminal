@@ -80,9 +80,11 @@ fn a_snapshot_under_a_live_writer_holds_exactly_the_committed_rows() {
         .execute("INSERT INTO trace_answers VALUES (3, 1)", [])
         .unwrap();
 
-    let published = backup_manual_at(&src, &backups, 20_000 * DAY_MS + NOON_MS)
-        .unwrap()
-        .expect("an existing archive must produce a snapshot");
+    let DueOutcome::Created(published) =
+        backup_due_into(&src, &backups, 20_000 * DAY_MS + NOON_MS).unwrap()
+    else {
+        panic!("an existing archive must produce a snapshot");
+    };
 
     assert_eq!(snapshot_uids(&published), vec![1, 2]);
     writer.execute_batch("COMMIT").unwrap();
@@ -101,14 +103,20 @@ fn publication_renames_one_marked_directory_and_leaves_no_staging() {
     drop(open_writer(&src));
     let now = 20_000 * DAY_MS + NOON_MS + 60_000;
 
-    let first = backup_manual_at(&src, &backups, now).unwrap().unwrap();
-    let second = backup_manual_at(&src, &backups, now).unwrap().unwrap();
+    let DueOutcome::Created(first) = backup_due_into(&src, &backups, now).unwrap() else {
+        panic!("the due slot must be published");
+    };
+    let second = backup_due_into(&src, &backups, now).unwrap();
 
     assert_eq!(
         std::fs::read(first.join(COMPLETION_NAME)).unwrap(),
         COMPLETION_CONTENT
     );
-    assert_ne!(first, second, "a second click in one second keeps both");
+    assert_eq!(
+        second,
+        DueOutcome::Current(first.clone()),
+        "one slot, one directory"
+    );
     let leftovers: Vec<_> = std::fs::read_dir(&backups)
         .unwrap()
         .filter_map(Result::ok)
@@ -186,20 +194,5 @@ fn catch_up_publishes_the_missed_noon_slot_once_and_waits_for_the_file() {
     assert_eq!(first, DueOutcome::Created(due.clone()));
     assert_eq!(second, DueOutcome::Current(due.clone()));
     assert_eq!(snapshot_uids(&due), vec![1]);
-    let _ = std::fs::remove_dir_all(root);
-}
-
-/// Without the manual-path presence check, a click before any trace was archived would surface a
-/// "file not found" error instead of quietly skipping a domain that has nothing to save yet.
-#[test]
-fn a_manual_backup_without_an_archive_is_a_no_op() {
-    let root = temp_root("manual-missing");
-    let backups = root.join("backups");
-
-    assert_eq!(
-        backup_manual_at(&root.join(DATABASE_NAME), &backups, 20_000 * DAY_MS).unwrap(),
-        None
-    );
-    assert!(!backups.exists());
     let _ = std::fs::remove_dir_all(root);
 }

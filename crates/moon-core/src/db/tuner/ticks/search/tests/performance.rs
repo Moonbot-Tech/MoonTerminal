@@ -9,7 +9,7 @@ use std::time::Instant;
 fn repeated_point_search_preserves_the_answer() {
     let deals: Vec<_> = (1..=80)
         .map(|uid| {
-            let mut d = prepared(uid, 101.0);
+            let mut d = prepared(uid * 60, 101.0);
             d.deal.coin = "SYNTHETIC".into();
             let t0 = d.deal.buy_ms;
             d.ticks = (0..2_000)
@@ -84,6 +84,8 @@ fn repeated_point_search_preserves_the_answer() {
     assert_eq!(
         found.stats,
         SearchStats {
+            requested: 500,
+            stopped: false,
             restarts: 500,
             best_restart: 0,
             passes: 2,
@@ -92,6 +94,7 @@ fn repeated_point_search_preserves_the_answer() {
             evaluations: 52_210,
             refused: 0,
             left_open: 0,
+            left_open_by_held: 0,
             entry_points: 0,
             fills_reused: 52_209,
         }

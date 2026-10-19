@@ -95,7 +95,7 @@ pub struct SearchParams<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchMiss {
     /// Nothing to search — no deals, no field to vary — or the run was stopped before its
-    /// first restart finished.
+    /// first point was scored.
     Nothing,
     /// No point the search visited kept `min_n` trades.
     Floor,
@@ -121,15 +121,20 @@ pub enum SearchMiss {
 /// How a search went — what shows whether its restarts and passes changed anything.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SearchStats {
+    /// Restarts requested, with a minimum of one.
+    pub requested: usize,
+    /// Whether any restart was abandoned by user Stop or hard cancel; the UI tells them apart.
+    pub stopped: bool,
     /// Restarts that ran to the end (a stop leaves the rest out).
     pub restarts: usize,
     /// The restart the answer came from: 0 starts from the strategy itself, but for the fields
     /// pinned on their grids ([`pinned`]).
+    /// An unfinished winning restart retains its own index.
     pub best_restart: usize,
-    /// Passes of coordinate descent the winning restart took.
+    /// Passes of coordinate descent the winning restart took; zero if it never finished.
     pub passes: usize,
     /// Whether the winning restart stopped because a pass changed nothing — `false` means it
-    /// was still improving when the pass limit cut it.
+    /// was still improving when the pass limit cut it, or the restart never finished.
     pub converged: bool,
     /// Distinct end points among the restarts: 1 means every restart ended at the same point.
     pub distinct: usize,
@@ -142,6 +147,8 @@ pub struct SearchStats {
     /// Deals the strategies as they stand leave open inside the tape, taken out of the sample
     /// before the search (`closing::closable_at_base`).
     pub left_open: usize,
+    /// Deals left open by held edits that close as-is, making the scored sample smaller.
+    pub left_open_by_held: usize,
     /// Entry points scored by a whole search of the exit under them — a search of both groups
     /// ([`nested`]); zero for a search of one.
     pub entry_points: usize,
@@ -172,6 +179,8 @@ pub struct SearchResult {
     pub holdout_open_profit: f64,
     /// The fact over the deals the search was fitted on ([`fact_tally`]).
     pub fact_train: Tally,
+    /// Chronological training deals excluded because their replay windows reach the holdout.
+    pub purged: usize,
     /// The fact over the deals held back, when any were — the slice `holdout` is scored on.
     pub fact_holdout: Option<Tally>,
     /// Whether the answer loses to the fact on the holdout: it leaves a held-back deal open, or

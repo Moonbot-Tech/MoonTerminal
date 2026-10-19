@@ -25,7 +25,7 @@ use std::sync::Arc;
 use super::exit::ExitParams;
 use super::exit::level_off_buy;
 use super::exit::stops::stop_pct;
-use super::verify::POINT_TIME_TOLERANCE_MS;
+use super::verify::{POINT_TIME_TOLERANCE_MS, fact_sell_start};
 use super::{Deal, PRICE_EPS, PRICE_TOLERANCE};
 use crate::market::trade_replay::Coverage;
 
@@ -61,9 +61,10 @@ pub struct TapeGap {
 pub struct GapStop {
     /// The deepest level the fact's stop could stand at inside the hole: the first stop's, or a
     /// ladder rung's deeper still — every price the fact's trigger read in the hole stayed on the
-    /// position's side of it (for a fast stop, the last price of each series tick).
+    /// position's side of it (for a fast stop, the per-tick LAST price, LastOfTick only).
+    /// A weighted fast rule needs missing trades and is refused across a hole.
     pub level: f64,
-    /// `FastStopLoss` of the fact: its stop checked the last price of each series tick.
+    /// `FastStopLoss` of the fact: the hole proof covers LastOfTick only.
     pub fast: bool,
     /// `StopLossEMA` of the fact: the average a book-watching stop compares.
     pub ema: f64,
@@ -101,7 +102,7 @@ impl TapeGap {
             from_ms,
             to_ms,
             fact_line: exit_points.filter(|p| !p.is_empty()).map(Arc::from),
-            fact_stop: fact_stop(deal, exit, to_ms),
+            fact_stop: fact_stop(deal, exit, to_ms, exit_points),
         })
     }
 
@@ -115,9 +116,14 @@ impl TapeGap {
 /// The fact's stop as it bounds the hole's prices, `None` when it bounds nothing: no stop, or one
 /// the fact proves quiet only up to a moment before the hole ends (`StopAnchor::quiet_until_ms`,
 /// its activation on a stopped trade) — a stop that may have fired inside the hole proves nothing
-/// about the prices there.
-fn fact_stop(deal: &Deal, exit: &ExitParams, hole_end_ms: i64) -> Option<GapStop> {
-    let pct = stop_pct(exit, deal, deal.buy_ms);
+/// about the prices there. Its modifier sum is read when the fact booked the sell.
+fn fact_stop(
+    deal: &Deal,
+    exit: &ExitParams,
+    hole_end_ms: i64,
+    exit_points: Option<&[(i64, f64)]>,
+) -> Option<GapStop> {
+    let pct = stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms);
     if pct == 0.0 {
         return None;
     }

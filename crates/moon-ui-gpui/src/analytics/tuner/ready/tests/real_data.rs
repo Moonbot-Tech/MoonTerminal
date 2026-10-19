@@ -457,7 +457,6 @@ fn ready_real_data_bench() {
                     klines.as_ref(),
                     now_ms,
                     Some(&reads),
-                    None,
                 );
                 record(&rows);
                 rows
@@ -558,7 +557,6 @@ fn ready_real_data_bench() {
                 klines.as_ref(),
                 now_ms,
                 Some(&reads),
-                None,
             );
             replay_t += t.elapsed();
             let mut data = TicksData {

@@ -51,8 +51,12 @@
 //! cannot tell where an order placed minutes earlier was), and the core's first moves inside
 //! the model's BLIND WINDOW — the first `MShotRaiseWait` / `MShotReplaceDelay` seconds of the
 //! tape, where a wait the core started before the tape began expires at a moment the tape
-//! gives no way to compute. A move archived in that window is taken as archived, moment and
-//! level both: the level is the core's own reference at work, and on a coarse grid the model's
+//! gives no way to compute. The archived start and blind-window levels apply as archived for
+//! the fact and every variant, including the two-tick minimum (`MShotMinusSatoshi`): only the
+//! creation placement and the Shift entry apply that minimum to the archived level. Mapping
+//! archived fallback levels through a variant's far bound missed fills in
+//! 11 of 164 paired variants that filled at the archived level. The archived level captures
+//! the core's own reference, and on a coarse grid the model's
 //! reference off the prints lands a step away often enough to turn the fill into a miss
 //! (2026-09-21, 458 deals: 4 entries lost to a modelled level, none gained by it). Seen on
 //! ARX the same day: the core re-placed 0.3 s into the tape after a wait of 30 s, and the model
@@ -462,7 +466,8 @@ impl<'a> MshotEntry<'a> {
     /// The fact's own level is the record's ([`Deal::entry_placed`]). A VARIANT's is the level
     /// its own far bound places off the same reference: the fact's level stands the fact's far
     /// bound off it, so the reference is read back from the level and this variant's bound
-    /// applied instead, through the same placement rule ([`Self::place`]).
+    /// applied instead, through the same placement rule ([`Self::place`]). Reuse of the fact's
+    /// level also requires the same two-step minimum flag.
     ///
     /// Whose parameters are the fact's is [`Deal::own_entry`]. A variant is always replayed on a
     /// prepared deal (`record::prepare_deal` fills it), and the one caller without it — the
@@ -483,7 +488,7 @@ impl<'a> MshotEntry<'a> {
             return Some(fact_level);
         };
         let (_, fact_far_pct) = own.bounds_pct(&deal.deltas_at(created_ms));
-        if fact_far_pct == far_pct {
+        if fact_far_pct == far_pct && own.minus_satoshi == self.params.minus_satoshi {
             return Some(fact_level);
         }
         Self::reference_of(fact_level, fact_far_pct, deal).map(|r| self.place(r, far_pct, deal))
@@ -531,7 +536,7 @@ impl<'a> MshotEntry<'a> {
     /// same reference, this variant's far bound — both far bounds read off the deltas as they
     /// stood when the fact's order was placed there, the moment its far bound was computed (the
     /// report's snapshot where the deal has no live track). The fact's own far bound gives the
-    /// level back.
+    /// level back when its two-step minimum flag is also unchanged.
     ///
     /// Args:
     ///     deal: The trade.
@@ -546,7 +551,7 @@ impl<'a> MshotEntry<'a> {
         let deltas = deal.deltas_at(placed_ms);
         let (_, fact_far) = own.bounds_pct(&deltas);
         let (_, far) = self.params.bounds_pct(&deltas);
-        if fact_far == far {
+        if fact_far == far && own.minus_satoshi == self.params.minus_satoshi {
             return Some(level);
         }
         Self::reference_of(level, fact_far, deal).map(|r| self.place(r, far, deal))
@@ -598,7 +603,7 @@ impl<'a> MshotEntry<'a> {
     ///     deal: The report row.
     ///     ticks: The window's prints, ascending.
     ///     line: The archived points of the trade's own entry line, in the archive's order,
-    ///         when the archive holds it.
+    ///         when the archive holds it. Fallback levels apply as archived.
     pub(super) fn run(
         &self,
         deal: &Deal,
@@ -721,9 +726,11 @@ impl<'a> MshotEntry<'a> {
                     .max_by_key(|(t, _)| *t)
                     .or(moves.first())
                     .copied();
-                // The blind window: the core's moves archived inside it are applied as
-                // archived, because the wait behind each began before the tape did. Only moves
-                // after the start and before the fill count.
+                // The blind window keeps the core's move times because each wait began before
+                // the tape did. Only moves after the start and before the fill count; their
+                // levels apply as archived for the fact and every variant, including the
+                // two-tick minimum (MShotMinusSatoshi). Only the creation placement and the
+                // Shift entry apply that minimum to the archived level.
                 let blind_until_ms = first_print_ms + raise_wait_ms.max(replace_delay_ms) as i64;
                 hints = moves
                     .iter()

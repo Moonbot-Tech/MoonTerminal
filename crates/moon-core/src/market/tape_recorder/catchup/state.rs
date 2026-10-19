@@ -1,5 +1,6 @@
 //! Recorder-owned planning, latches and settlements; the fetch thread never owns a tape cache.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Sender};
 
@@ -26,6 +27,22 @@ pub(super) const WARN_PER_REASON: usize = 5;
 /// one settles. Under the shared venue gate (100 ms per request, a few pages per job) a pass of
 /// this size settles in minutes, so the station's counters and log move while a backlog drains.
 pub(super) const PASS_JOBS: usize = 200;
+
+#[cfg(test)]
+thread_local! {
+    /// Recount span reads issued on this thread, so tests can count them.
+    pub(super) static SPAN_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Start the recount's read of every span one market holds.
+fn read_spans(
+    cache: &TradeCache,
+    (exchange, market): &(String, String),
+) -> mpsc::Receiver<rusqlite::Result<Vec<(i64, i64)>>> {
+    #[cfg(test)]
+    SPAN_READS.with(|reads| reads.set(reads.get() + 1));
+    cache.held_spans_start(exchange, market, i64::MIN, i64::MAX)
+}
 
 /// Pending rows and refusals are owned by the recorder, alongside its sole cache handle.
 #[derive(Default)]
@@ -75,12 +92,24 @@ impl RecorderCatchup {
 
     /// Merge protecting listings and live closes independently of the fetch queue.
     pub(crate) fn protect(&mut self, trades: Vec<CatchupTrade>) {
-        self.known
-            .extend(trades.into_iter().map(|trade| (trade.id, trade)));
-        if self.maintenance_busy() {
-            self.retention.recount_dirty = true;
+        let busy = self.maintenance_busy();
+        for trade in trades {
+            if busy {
+                self.retention
+                    .recount_stale
+                    .insert((trade.exchange.clone(), trade.market.clone()));
+            }
+            self.known.insert(trade.id, trade);
         }
     }
+    /// Each distinct market of the known trades, once.
+    fn known_markets(&self) -> HashSet<(String, String)> {
+        self.known
+            .values()
+            .map(|t| (t.exchange.clone(), t.market.clone()))
+            .collect()
+    }
+
     /// Whether cache maintenance can currently delay synchronous readers.
     pub(crate) fn maintenance_busy(&self) -> bool {
         use super::super::retention::Phase;
@@ -236,19 +265,16 @@ impl RecorderCatchup {
                     self.sync_switches();
                     self.complete.clear();
                     self.tape_complete.clear();
-                    let reads = self
-                        .known
-                        .values()
-                        .cloned()
-                        .map(|t| {
-                            let rx =
-                                cache.held_spans_start(&t.exchange, &t.market, i64::MIN, i64::MAX);
-                            (t, rx)
-                        })
-                        .collect();
+                    // Reads issued now already see every protect that landed during the trim.
+                    self.retention.recount_stale.clear();
+                    self.retention.recount_all = false;
+                    let mut recount = retention::Recount::default();
+                    for key in self.known_markets() {
+                        let rx = read_spans(cache, &key);
+                        recount.reads.insert(key, rx);
+                    }
                     Phase::Recount {
-                        reads,
-                        complete: HashSet::new(),
+                        recount,
                         failure: outcome.compacted.err(),
                         freed: outcome.bytes_before.saturating_sub(outcome.bytes_after),
                     }
@@ -266,56 +292,90 @@ impl RecorderCatchup {
                 }
             },
             Phase::Recount {
-                reads,
-                mut complete,
+                mut recount,
                 mut failure,
                 freed,
             } => {
-                let mut pending_reads = Vec::new();
-                for (trade, rx) in reads {
-                    match rx.try_recv() {
-                        Ok(Ok(spans)) => {
-                            let focus = super::needed(&trade, shape);
-                            if Coverage::from_spans(spans).covers(&focus) {
-                                complete.insert(trade.id);
-                            }
+                // Only the markets a protect or an eviction touched are read again; the rest keep
+                // their answers, so the phase converges however often live trades close.
+                let mut stale = std::mem::take(&mut self.retention.recount_stale);
+                if std::mem::take(&mut self.retention.recount_all) {
+                    stale.extend(self.known_markets());
+                }
+                for key in stale {
+                    if !recount.reread.insert(key.clone()) {
+                        // One re-read per market per recount bounds the phase under any close
+                        // rate; a later close is judged from that answer and at worst stays
+                        // pending, which the next catch-up pass checks against the cache again.
+                        continue;
+                    }
+                    match recount.reads.entry(key) {
+                        // One read per market at a time: a close faster than a read answers
+                        // queues the re-read instead of discarding the one in flight.
+                        Entry::Occupied(open) => {
+                            recount.rerun.insert(open.key().clone());
                         }
-                        Err(TryRecvError::Empty) => pending_reads.push((trade, rx)),
-                        _ => {
-                            failure = Some(CompactFail::Other);
+                        Entry::Vacant(slot) => {
+                            let rx = read_spans(cache, slot.key());
+                            slot.insert(rx);
                         }
                     }
                 }
-                if self.retention.recount_dirty {
-                    self.retention.recount_dirty = false;
-                    let reads = self
-                        .known
-                        .values()
-                        .cloned()
-                        .map(|trade| {
-                            let rx = cache.held_spans_start(
-                                &trade.exchange,
-                                &trade.market,
-                                i64::MIN,
-                                i64::MAX,
-                            );
-                            (trade, rx)
-                        })
-                        .collect();
-                    Phase::Recount {
-                        reads,
-                        complete: HashSet::new(),
-                        failure,
-                        freed,
+                recount.reads.retain(|key, rx| match rx.try_recv() {
+                    Ok(Ok(spans)) => {
+                        recount
+                            .held
+                            .insert(key.clone(), Some(Coverage::from_spans(spans)));
+                        false
                     }
-                } else if !pending_reads.is_empty() {
+                    Err(TryRecvError::Empty) => true,
+                    _ => {
+                        failure = Some(CompactFail::Other);
+                        recount.held.insert(key.clone(), None);
+                        false
+                    }
+                });
+                let due: Vec<_> = recount
+                    .rerun
+                    .iter()
+                    .filter(|key| !recount.reads.contains_key(*key))
+                    .cloned()
+                    .collect();
+                for key in due {
+                    recount.rerun.remove(&key);
+                    let rx = read_spans(cache, &key);
+                    recount.reads.insert(key, rx);
+                }
+                if !recount.reads.is_empty() {
+                    // A re-read market keeps its earlier answer here, so the bar never moves back.
+                    let done = recount.held.len() as u64;
+                    let unread = recount
+                        .reads
+                        .keys()
+                        .filter(|key| !recount.held.contains_key(*key))
+                        .count() as u64;
+                    status = Some(TapePurge::Running {
+                        done,
+                        total: done + unread,
+                    });
                     Phase::Recount {
-                        reads: pending_reads,
-                        complete,
+                        recount,
                         failure,
                         freed,
                     }
                 } else {
+                    let complete: HashSet<TradeId> = self
+                        .known
+                        .values()
+                        .filter(|t| {
+                            recount
+                                .held
+                                .get(&(t.exchange.clone(), t.market.clone()))
+                                .and_then(Option::as_ref)
+                                .is_some_and(|held| held.covers(&super::needed(t, shape)))
+                        })
+                        .map(|t| t.id)
+                        .collect();
                     self.tape_complete = complete.clone();
                     self.complete = complete;
                     self.pending = self
@@ -507,7 +567,7 @@ impl RecorderCatchup {
         self.complete.clear();
         self.tape_complete.clear();
         if self.maintenance_busy() {
-            self.retention.recount_dirty = true;
+            self.retention.recount_all = true;
         }
     }
 
@@ -627,7 +687,7 @@ impl RecorderCatchup {
             self.archive_bytes = 0;
         }
         // Plan order is soonest expiry first; untaken jobs stay pending and unlatched.
-        let jobs = admissible(batch.jobs, self.archive_bytes, now_ms);
+        let jobs = admissible(batch.jobs);
         if jobs.is_empty() {
             return;
         }
@@ -885,20 +945,9 @@ fn ascii(text: &str) -> String {
         .collect()
 }
 
-/// Take the next pass's jobs in plan order. Once the hour's archive budget is spent, a job that
-/// needs an archive stays pending and unlatched instead of being carried into a pass that can only
-/// skip it, so passes keep draining REST-able jobs and none starts for archive work alone until
-/// the next UTC hour resets the budget.
-pub(super) fn admissible(
-    jobs: Vec<CatchupJob>,
-    archive_bytes: u64,
-    now_ms: i64,
-) -> Vec<CatchupJob> {
-    let spent = archive_bytes >= executor::ARCHIVE_BYTES_PER_PASS;
-    jobs.into_iter()
-        .filter(|job| !spent || !executor::needs_archive(job, now_ms))
-        .take(PASS_JOBS)
-        .collect()
+/// Take at most one pass of jobs in plan order, independent of downloaded byte telemetry.
+pub(super) fn admissible(jobs: Vec<CatchupJob>) -> Vec<CatchupJob> {
+    jobs.into_iter().take(PASS_JOBS).collect()
 }
 
 /// Anchor recoverable retries to the next UTC hour rather than to each failure's elapsed delay.

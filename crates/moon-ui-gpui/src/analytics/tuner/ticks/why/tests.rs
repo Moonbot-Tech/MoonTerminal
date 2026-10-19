@@ -15,6 +15,45 @@ use moon_core::db::tuner::ticks::verify::{
 use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
 use moon_core::market::trade_replay::TickStatus;
 
+/// Stage-B placeholders must say reading until the local replay answers, then expose its result.
+#[test]
+fn unanswered_tape_rows_are_neutral_without_hiding_known_coverage() {
+    let admission = Admission::at(60, 0);
+    let mut row = row();
+    row.tape = TapeStatus::Missing;
+    let pending = DealWhy::display_of_with(&row, &admission, true);
+    assert_eq!(pending, DealWhy::Reading);
+    assert_eq!(pending.tape_glyph(), ("…", Tone::Muted));
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        assert_eq!(
+            pending.short(),
+            rust_i18n::t!("analytics.ticks.fetch_reading")
+        );
+        assert!(pending.tape_tip().todo.is_none());
+    }
+    assert_ne!(
+        DealWhy::display_of_with(&row, &admission, false),
+        DealWhy::Reading
+    );
+    // Stage B carries an answered refusal while stage C reads other rows.
+    row.tape = TapeStatus::Refused(TickStatus::NoTrades);
+    assert_eq!(
+        DealWhy::display_of_with(&row, &admission, true),
+        DealWhy::Refused(TickStatus::NoTrades)
+    );
+    row.tape = TapeStatus::Covered;
+    assert_eq!(
+        DealWhy::display_of_with(&row, &admission, true),
+        DealWhy::Fit
+    );
+    row.tape = TapeStatus::NoAddress;
+    assert_eq!(
+        DealWhy::display_of_with(&row, &admission, true),
+        DealWhy::NoAddress
+    );
+}
+
 /// Build a coherent finding/verdict pair, rather than testing contradictory synthetic records.
 fn verdict(entry_finding: EntryFinding, exit_finding: ExitFinding) -> Verdict {
     Verdict {
@@ -60,6 +99,7 @@ fn row() -> DealRow {
             archived_take: None,
             fact_modifier: None,
             hook_depth_pct: None,
+            drops_detect: None,
             hook_stated_take_pct: None,
             strike_detect: None,
             step_lag_ms: 0.0,
@@ -415,16 +455,14 @@ fn unfillable_short_tail_is_in_the_sample_but_fresh_tape_waits() {
         1,
         row.deal.close_ms,
         30_000,
-        old_now,
-        (false, true)
+        old_now
     ));
     assert!(fillable_at(
         row.address.as_ref().unwrap(),
         1,
         row.deal.close_ms,
         30_000,
-        fresh_now,
-        (false, true)
+        fresh_now
     ));
     assert_eq!(
         DealWhy::of_with(&row, &Admission::at(60, old_now)),
@@ -453,4 +491,59 @@ fn unfillable_short_tail_is_in_the_sample_but_fresh_tape_waits() {
         !row.fit_with(&Admission::current()),
         "a tail exception cannot create missing tape"
     );
+}
+
+/// Putting the fetch button back into a missing-tape explanation would tell the user to press
+/// a control the tuner no longer draws. The readiness tooltip for a strategy that still has
+/// rows without tape must use that same background-loading sentence.
+#[test]
+fn missing_tape_says_the_tape_loads_in_the_background() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let _locale = crate::test_locale::force("en");
+    let idle = "Tape is still loading in the background.";
+    let counted = rust_i18n::t!("analytics.ticks.why.loading_background", n = 4).to_string();
+    assert!(
+        counted.contains('4') && !counted.to_ascii_lowercase().contains("fetch trades"),
+        "{counted}"
+    );
+    assert!(super::super::fetch::autoload::pending_rows().is_none());
+    let missing = DealWhy::NoTape { fetchable: true };
+    let todo = missing
+        .tape_tip()
+        .todo
+        .expect("a fetchable missing tape still explains itself");
+    assert_eq!(todo, idle);
+    let text = missing.tape_tip().text();
+    assert!(!text.to_ascii_lowercase().contains("fetch trades"));
+    assert!(!text.to_ascii_lowercase().contains("button"));
+    let short = DealWhy::ShortTail {
+        trail_ms: 30_000,
+        min_s: 60,
+    };
+    let short_todo = short
+        .tape_tip()
+        .todo
+        .expect("a short tail still explains itself");
+    assert!(short_todo.starts_with(idle), "{short_todo}");
+    assert!(!short_todo.to_ascii_lowercase().contains("fetch trades"));
+    let ready = super::super::readiness::Readiness {
+        fetchable: 3,
+        ..super::super::readiness::Readiness::default()
+    };
+    let tip = crate::analytics::tuner::ready::cell_tip(&ready);
+    assert!(tip.contains(idle), "{tip}");
+    assert!(!tip.to_ascii_lowercase().contains("fetch trades"));
+}
+
+/// Deleting the ten-minute join would round a 10 min 50 s tape up to "11 min" and hide the
+/// leftover seconds a measured length keeps. Under ten minutes the estimate already keeps
+/// those seconds, so the tape must not assemble that phrase a second time.
+#[test]
+fn a_tape_length_keeps_seconds_the_estimate_would_round_away() {
+    let _locale = crate::test_locale::force("en");
+    assert_eq!(super::duration(80_000), "1 min 20 s");
+    assert_eq!(super::duration(80_900), "1 min 20 s");
+    assert_eq!(super::duration(600_000), "10 min");
+    assert_eq!(super::duration(650_000), "10 min 50 s");
+    assert_eq!(super::duration(3_600_000), "1 h 0 min");
 }

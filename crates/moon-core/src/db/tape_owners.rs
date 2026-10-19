@@ -64,7 +64,15 @@ pub fn read_tape_owners(closed_from_s: i64, opened_to_s: i64) -> ReadResult<Vec<
         .collect();
     pairs.sort_unstable();
     pairs.dedup();
-    let kinds = super::tuner::strategy_kinds(&pairs);
+    let kinds = super::tuner::strategy_kinds_checked(&pairs).map_err(|error| {
+        super::ReadFail::failed(
+            super::FailKind::Other,
+            format!("{error:#}"),
+            crate::config::paths::strategies_db_path(),
+            "tape owners: strategy kinds",
+            super::FailCode::None,
+        )
+    })?;
     for owner in &mut owners {
         if let Some(kind) = kinds.get(&(owner.strategy_id, owner.core_uid)) {
             owner.kind = kind.clone();

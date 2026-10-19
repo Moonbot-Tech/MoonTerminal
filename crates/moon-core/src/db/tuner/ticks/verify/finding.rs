@@ -166,7 +166,7 @@ impl RuleFlags {
         // MoonShot's corridor modifiers; no other kind has an entry model to carry them.
         let corridor = match entry {
             EntryParams::MoonShot(params) => Some(&params.modifiers),
-            EntryParams::Fact => None,
+            EntryParams::Fact | EntryParams::Drops(_) => None,
         };
         Self {
             stop,

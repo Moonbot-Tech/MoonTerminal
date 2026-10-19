@@ -9,17 +9,36 @@ use crate::analytics::tuner::shared::{InlineWrite, SaveAuthority, SaveTarget};
 use moon_core::db::metrics::Tally;
 use moon_core::db::tuner::ticks::search::{MIN_HOLDOUT, SearchResult};
 
+/// Publishing stage-B rows must not turn an unanswered tape read into a zero-sample refusal.
+#[test]
+fn selected_strategy_waits_for_tape_before_refusing_the_sample() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = TicksState::default();
+    state.data.apply(Ok(TicksData::default()));
+    state.tape_reading = true;
+    state.sugg_refusal = Some("previous refusal".into());
+    let loading = SummaryModel::from_state(&state, "fixture".into(), false);
+    assert_eq!(loading.verdict, Verdict::Loading);
+    assert_eq!(loading.tag, "Loading…");
+    assert_eq!(loading.sentence, "reading the tape…");
+    state.tape_reading = false;
+    assert!(matches!(
+        SummaryModel::from_state(&state, "fixture".into(), false).verdict,
+        Verdict::Cannot(_)
+    ));
+}
+
 /// An expired startup forecast must not pin hundreds of remaining restarts to one second.
 #[test]
 fn remaining_time_tracks_observed_progress_after_the_startup_estimate_expires() {
     use super::remaining_time;
     let elapsed = Duration::from_secs(229);
     assert_eq!(
-        remaining_time(229, 500, elapsed, Some(Duration::from_secs(120))),
+        remaining_time(229, 500, elapsed, Some(Duration::from_secs(120)), 1),
         Some(Duration::from_secs(271))
     );
     assert_eq!(
-        remaining_time(0, 500, elapsed, Some(Duration::from_secs(120))),
+        remaining_time(0, 500, elapsed, Some(Duration::from_secs(120)), 1),
         None
     );
     assert_eq!(
@@ -27,12 +46,13 @@ fn remaining_time_tracks_observed_progress_after_the_startup_estimate_expires() 
             0,
             500,
             Duration::from_secs(20),
-            Some(Duration::from_secs(120))
+            Some(Duration::from_secs(120)),
+            1,
         ),
         Some(Duration::from_secs(100))
     );
-    assert_eq!(remaining_time(500, 500, elapsed, None), None);
-    assert_eq!(remaining_time(501, 500, elapsed, None), None);
+    assert_eq!(remaining_time(500, 500, elapsed, None, 1), None);
+    assert_eq!(remaining_time(501, 500, elapsed, None, 1), None);
 }
 
 /// Set synthetic slice figures without reaching the core tally's private cumulative peak.
@@ -50,6 +70,7 @@ fn result() -> SearchResult {
         searched: Vec::new(),
         train: tally(23, 17.0),
         fact_train: tally(23, 11.0),
+        purged: 0,
         holdout: Some(tally(9, 8.0)),
         fact_holdout: Some(tally(9, 3.0)),
         holdout_open: 0,
@@ -58,6 +79,39 @@ fn result() -> SearchResult {
         seed: 43,
         stats: Default::default(),
     }
+}
+
+/// Omitting the embargo caption would hide why the chronological training sample shrank.
+#[test]
+fn summary_states_purged_training_deals() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = TicksState::default();
+    state.last_result = Some(result());
+    state.last_result.as_mut().unwrap().purged = 2;
+    let model = SummaryModel::from_state(&state, String::new(), false);
+    assert_eq!(
+        model.train.unwrap().sub,
+        "Trades: 23 (2 left out: their tape reaches the held-back period)"
+    );
+    state.last_result.as_mut().unwrap().purged = 0;
+    assert_eq!(
+        SummaryModel::from_state(&state, String::new(), false)
+            .train
+            .unwrap()
+            .sub,
+        "Trades: 23"
+    );
+}
+
+/// Sample losses caused by held edits must refuse advice even when both scored slices improve.
+#[test]
+fn held_open_sample_mismatch_refuses_apply() {
+    let mut r = result();
+    r.stats.left_open_by_held = 3;
+    assert_eq!(
+        verdict_of(None, None, None, Some(&r), true),
+        Verdict::DontApply(Why::HeldOpen { n: 3 })
+    );
 }
 
 /// Weakening strict gains, ignoring open trades, or checking holdout before train changes advice.
@@ -110,7 +164,7 @@ fn verdicts_agree_with_both_slices_and_require_strict_gains() {
 /// Fatal refusal must not override a running search or a current successful result.
 #[test]
 fn running_refusal_and_hand_edit_precedence_is_explicit() {
-    let running = (4, 13, Some(Duration::from_secs(6)), 107);
+    let running = (4, 13, Some(Duration::from_secs(6)), 107, false);
     assert_eq!(
         verdict_of(Some(running), Some(2), Some("refused"), None, true),
         Verdict::Running {
@@ -118,6 +172,7 @@ fn running_refusal_and_hand_edit_precedence_is_explicit() {
             total: 13,
             left: running.2,
             points: 107,
+            stopping: false,
         }
     );
     assert_eq!(
@@ -169,9 +224,11 @@ fn running_time_left_is_unknown_when_the_unmeasured_forecast_expires() {
     state.sugg = super::super::state::SuggState::Running {
         handle: moon_core::db::tuner::threshold_search::SearchHandle::new(),
         total: 13,
+        parallel: 1,
         started,
         estimate: Some(Duration::from_secs(6)),
         sample: (23, 9),
+        stopping: false,
     };
     let model = SummaryModel::from_state(&state, String::new(), false);
     assert_eq!(
@@ -181,6 +238,7 @@ fn running_time_left_is_unknown_when_the_unmeasured_forecast_expires() {
             total: 13,
             left: None,
             points: 0,
+            stopping: false,
         }
     );
 }
@@ -193,6 +251,7 @@ fn running_sentence_uses_the_launched_sample_after_dropdown_changes() {
     state.start_search(
         moon_core::db::tuner::threshold_search::SearchHandle::new(),
         11,
+        1,
         std::time::Instant::now(),
         None,
         (23, 9),
@@ -303,6 +362,32 @@ fn changed_header_counts_only_differing_fields_and_localizes_varies() {
     assert_eq!(model.changed_header, "Что поменялось · полей: 2");
 }
 
+/// A blank stored field must remain an explicit muted absence before the change arrow.
+#[test]
+fn changed_fields_show_absence_for_missing_empty_and_whitespace_old_values() {
+    for old in [None, Some(""), Some("  \t")] {
+        let mut state = TicksState::default();
+        state.set_variant("PriceToSwitch2Stop", "-2".into());
+        let mut data = TicksData::default();
+        if let Some(old) = old {
+            data.now
+                .insert("PriceToSwitch2Stop".into(), NowValue::Same(old.into()));
+        }
+        state.data.apply(Ok(data));
+        let model = SummaryModel::from_state(&state, "fixture".into(), false);
+        assert_eq!(model.changes.len(), 1);
+        assert_eq!(model.changes[0].old, "—");
+        assert_eq!(model.changes[0].new, "-2");
+    }
+    let changes = vec![("PriceToSwitch2Stop".into(), "-2".into())];
+    for old in ["0", "-1"] {
+        let now = HashMap::from([("PriceToSwitch2Stop".into(), NowValue::Same(old.into()))]);
+        assert_eq!(super::change_rows(&changes, &now, &[], false)[0].old, old);
+    }
+    let now = HashMap::from([("PriceToSwitch2Stop".into(), NowValue::Same("-2".into()))]);
+    assert!(super::change_rows(&changes, &now, &[], false).is_empty());
+}
+
 /// Capture a synthetic consent for the state tests without connecting to a real core.
 fn consent(state: &TicksState) -> WriteConfirm {
     WriteConfirm {
@@ -374,6 +459,7 @@ fn a_search_start_retires_inline_consent_before_publishing_running() {
     state.start_search(
         moon_core::db::tuner::threshold_search::SearchHandle::new(),
         13,
+        1,
         std::time::Instant::now(),
         Some(Duration::from_secs(6)),
         (23, 9),
@@ -387,5 +473,142 @@ fn a_search_start_retires_inline_consent_before_publishing_running() {
     assert_eq!(
         state.variant_changes(),
         vec![("StopLoss".to_string(), "1.7".to_string())]
+    );
+}
+
+/// Stop keeps the run's generation, so its answer still lands; a later hard stop drops it.
+#[test]
+fn finish_search_keeps_the_generation_until_a_hard_stop() {
+    let mut state = TicksState::default();
+    let handle = moon_core::db::tuner::threshold_search::SearchHandle::new();
+    state.start_search(
+        handle.clone(),
+        13,
+        1,
+        std::time::Instant::now(),
+        None,
+        (23, 9),
+    );
+    let seq = state.sugg_seq;
+    state.finish_search();
+    // A second press while the run winds down changes nothing.
+    state.finish_search();
+    assert_eq!(state.sugg_seq, seq);
+    assert!(matches!(
+        state.sugg,
+        super::super::state::SuggState::Running { stopping: true, .. }
+    ));
+    assert!(handle.is_cancelled() && handle.keeps());
+    // The card disables Stop from the verdict's `stopping`.
+    let model = SummaryModel::from_state(&state, String::new(), false);
+    assert!(matches!(
+        model.verdict,
+        Verdict::Running { stopping: true, .. }
+    ));
+    state.stop_search("scope change");
+    assert_ne!(state.sugg_seq, seq);
+    assert!(matches!(state.sugg, super::super::state::SuggState::Idle));
+    assert!(handle.is_cancelled() && !handle.keeps());
+}
+
+/// A stopped run shows its answer as a finished one, with the Stop said among the warnings.
+#[test]
+fn a_stopped_result_reads_as_finished_with_its_note() {
+    let mut state = TicksState::default();
+    let mut found = result();
+    found.stats.stopped = true;
+    state.last_result = Some(found);
+    state.sugg_note = Some("stopped note".into());
+    let model = SummaryModel::from_state(&state, String::new(), false);
+    assert!(!matches!(
+        model.verdict,
+        Verdict::Running { .. } | Verdict::Cannot(_) | Verdict::Idle
+    ));
+    assert!(model.warnings.iter().any(|w| w == "stopped note"));
+}
+
+/// Stopped before any variant: the empty state carries the Stop's own reason.
+#[test]
+fn a_stop_before_any_variant_is_the_cannot_state() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = TicksState::default();
+    let empty = rust_i18n::t!("analytics.ticks.sum.stopped_empty").to_string();
+    state.sugg_note = Some(empty.clone());
+    state.sugg_refusal = Some(empty.clone());
+    let model = SummaryModel::from_state(&state, String::new(), false);
+    assert_eq!(model.verdict, Verdict::Cannot(empty));
+}
+
+/// While the run winds down there is no time left to promise.
+#[test]
+fn a_stopping_run_shows_no_time_left() {
+    let mut state = TicksState::default();
+    state.sugg = super::super::state::SuggState::Running {
+        handle: moon_core::db::tuner::threshold_search::SearchHandle::new(),
+        total: 13,
+        parallel: 1,
+        started: std::time::Instant::now(),
+        estimate: Some(Duration::from_secs(600)),
+        sample: (23, 9),
+        stopping: true,
+    };
+    let model = SummaryModel::from_state(&state, String::new(), false);
+    assert!(matches!(
+        model.verdict,
+        Verdict::Running {
+            left: None,
+            stopping: true,
+            ..
+        }
+    ));
+}
+
+/// The note a landing run leaves, for every way it can end.
+#[test]
+fn a_landing_run_picks_its_note() {
+    use super::super::state::{StopOutcome, stopped_note};
+    let _locale = crate::test_locale::force("en");
+    let after = |n: usize, m: usize| {
+        rust_i18n::t!("analytics.ticks.sum.stopped_after", n = n, m = m).to_string()
+    };
+    let empty = rust_i18n::t!("analytics.ticks.sum.stopped_empty").to_string();
+    let found = || StopOutcome::Found {
+        restarts: 4,
+        requested: 13,
+    };
+    let missed = |too_few| StopOutcome::Missed {
+        too_few,
+        note: "miss".into(),
+        completed: 2,
+        launched: 13,
+    };
+    let launch = || Some("set aside".to_string());
+    // Not stopped: an answer keeps the launch's note, a miss replaces it.
+    assert_eq!(
+        stopped_note(false, found(), false, launch()),
+        (launch(), None)
+    );
+    let miss = (Some("miss".to_string()), Some("miss".to_string()));
+    assert_eq!(stopped_note(false, missed(false), true, launch()), miss);
+    // Stopped answer: the launch's note first, then how much of the run stands behind it.
+    assert_eq!(
+        stopped_note(true, found(), false, launch()),
+        (Some(format!("set aside {}", after(4, 13))), None)
+    );
+    assert_eq!(
+        stopped_note(true, found(), false, None),
+        (Some(after(4, 13)), None)
+    );
+    // A sample too small to search keeps its own reason.
+    assert_eq!(stopped_note(true, missed(true), true, launch()), miss);
+    // Stopped miss with a candidate in В1: never "no variants".
+    assert_eq!(
+        stopped_note(true, missed(false), true, launch()),
+        (Some(after(2, 13)), Some("miss".to_string()))
+    );
+    // Stopped before anything: the Stop is the refusal.
+    assert_eq!(
+        stopped_note(true, missed(false), false, launch()),
+        (Some(empty.clone()), Some(empty))
     );
 }

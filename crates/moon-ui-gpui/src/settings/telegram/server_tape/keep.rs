@@ -11,9 +11,7 @@ pub(super) fn bar_message(
     c: Option<&TapeCatchup>,
     busy: bool,
 ) -> (String, bool) {
-    let changed = ed.draft != ed.seen
-        || ed.draft_switches != ed.seen_switches
-        || ed.draft_keep != ed.seen_keep;
+    let changed = ed.policy_changed();
     let warning = ed.seen.zip(ed.draft).and_then(|(s, d)| {
         widen_warning(
             s,
@@ -41,7 +39,7 @@ pub(super) fn bar_message(
     if line == super::TapeStatus::Busy {
         return (t!("telegram.server.keep_bar_busy").to_string(), false);
     }
-    if line == super::TapeStatus::Clean {
+    if line == super::TapeStatus::Clean && warning.is_none() {
         return (t!("telegram.server.tape_clean").to_string(), false);
     }
     if let Some((seen, draft)) = ed.seen_keep.zip(ed.draft_keep)
@@ -188,22 +186,12 @@ pub(super) fn period(days: u16) -> String {
     }
 }
 
-/// Retention may exceed one year; the note never promises an older catch-up source.
+/// Catch-up follows retention; exchange history determines how much tape is available.
 pub(super) fn keep_note(days: u16) -> String {
     if days == 0 {
         return t!("telegram.server.keep_note_forever").to_string();
     }
-    let reach = if days < 365 {
-        period(days)
-    } else {
-        t!("telegram.server.keep_reach_year").to_string()
-    };
-    t!(
-        "telegram.server.keep_note_finite",
-        period = period(days),
-        reach = reach
-    )
-    .to_string()
+    t!("telegram.server.keep_note_finite", period = period(days)).to_string()
 }
 
 /// The draft bar names only settings that actually narrow the acknowledged policy.

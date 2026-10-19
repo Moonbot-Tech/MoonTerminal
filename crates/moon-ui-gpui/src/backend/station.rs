@@ -24,6 +24,8 @@ use std::time::Duration;
 
 use gpui::{Context, Task};
 use moon_core::config::AppConfig;
+use moon_core::market::trade_replay;
+use moon_core::station_api::TapeWindow;
 use moon_remote::station::bot::BotState;
 use rust_i18n::t;
 
@@ -66,6 +68,8 @@ enum Kind {
     Quiet,
     /// An automatic tail-floor write must not retry directly from its own completion.
     Tail,
+    /// Automatic shared-window writes preserve user outcomes and latch their payload.
+    Window,
     /// The header clock's zone pushed to the station: appends its line, keeps the outcome, and
     /// like a quiet read does not hold the buttons.
     Zone,
@@ -143,6 +147,24 @@ pub(crate) struct StationJobs {
     /// The zone the last zone push carried: after it ends the zone is pushed again only when the
     /// header clock moved meanwhile, so a station that refuses it is not asked again at once.
     zone_pushed: Option<String>,
+    /// First-contact reconciliation is performed once per configured destination.
+    window_reconciled: bool,
+    /// Payload and job epoch of the most recent automatic window attempt.
+    window_attempt: Option<(TapeWindow, u64)>,
+    /// Initial write plus at most one retry caused by its verification reads.
+    window_attempts: u8,
+    /// Suppress an unchanged automatic failure until its payload or reason changes.
+    window_failure: Option<(TapeWindow, String)>,
+    /// The next pending quiet refresh was scheduled by a successful window write.
+    window_refresh_pending: bool,
+    /// The running quiet read verifies a window write rather than unrelated work.
+    window_verification: bool,
+    /// Advances for every started job, distinguishing a push from unrelated work.
+    job_epoch: u64,
+    /// Earliest UTC millisecond for another unreconciled station read.
+    reconnect_at: Option<i64>,
+    /// Last reconnect delay, doubled after failures up to fifteen minutes.
+    reconnect_delay_ms: i64,
     /// Destination-scoped automatic group attempts, retained even after failed writes.
     groups_sync: groups_sync::GroupsSync,
     /// Latest tuner tail waiting for an idle station and a capability report.
@@ -158,18 +180,160 @@ impl Kind {
     /// Work the user did not ask for and need not wait on: a user's job pressed meanwhile starts
     /// right after it.
     fn is_background(self) -> bool {
-        matches!(self, Self::Quiet | Self::Tail | Self::Zone | Self::Groups)
+        matches!(
+            self,
+            Self::Quiet | Self::Tail | Self::Window | Self::Zone | Self::Groups
+        )
     }
 }
 
 impl StationJobs {
+    /// Reconcile a reported window and retain admission state across completions.
+    fn window_step(&mut self, local: TapeWindow) -> WindowStep {
+        let mut step = window_admit(
+            local,
+            self.bot.as_ref().and_then(|bot| bot.tape),
+            self.window_reconciled,
+            self.window_attempt,
+            self.job_epoch,
+            self.kind,
+        );
+        let effective = step.adopt.unwrap_or(local);
+        if self
+            .window_attempt
+            .is_some_and(|(payload, _)| payload != effective)
+        {
+            self.window_attempts = 0;
+        }
+        if self.window_attempts >= 2 {
+            step.push = None;
+        }
+        self.window_reconciled = step.reconciled;
+        if step.reconciled {
+            self.reconnect_at = None;
+            self.reconnect_delay_ms = 0;
+        }
+        step
+    }
+
+    /// Record the actual start so only unrelated work releases the same-payload latch.
+    fn begin_job(&mut self, kind: Kind, job: &job::Job) {
+        self.job_epoch = self.job_epoch.wrapping_add(1);
+        self.kind = kind;
+        self.running = true;
+        self.window_verification =
+            kind == Kind::Quiet && std::mem::take(&mut self.window_refresh_pending);
+        if kind == Kind::Quiet {
+            self.pending_refresh = false;
+        }
+        if kind == Kind::Window
+            && let job::Job::Tape { tape, .. } = job
+        {
+            if self
+                .window_attempt
+                .is_none_or(|(payload, _)| payload != *tape)
+            {
+                self.window_attempts = 0;
+            }
+            self.window_attempts += 1;
+            self.window_attempt = Some((*tape, self.job_epoch));
+        }
+    }
+
+    /// Only non-automatic completions release the window verification budget.
+    fn finish_job(&mut self) {
+        self.running = false;
+        if !matches!(
+            self.kind,
+            Kind::Window | Kind::Zone | Kind::Tail | Kind::Groups
+        ) && !self.window_verification
+        {
+            self.window_attempts = 0;
+        }
+        self.window_verification = false;
+    }
+
+    /// Refresh a successful window write without replacing the user's last outcome.
+    fn apply_window(&mut self, done: job::Done) {
+        self.finish_job();
+        match done {
+            job::Done::Ok { bot, .. } | job::Done::Installed { bot, .. } => {
+                self.pending_refresh = true;
+                self.window_refresh_pending = true;
+                if let Some(bot) = bot {
+                    self.observe_bot(bot);
+                    self.bot_error = None;
+                }
+            }
+            job::Done::NeedsAdminPassword => {
+                self.needs_old_admin = true;
+                self.push_line(t!("telegram.server.needs_old_admin").to_string());
+            }
+            job::Done::Failed { reason, .. } => {
+                if let Some((payload, _)) = self.window_attempt {
+                    let failure = (payload, reason.clone());
+                    if self.window_failure.as_ref() != Some(&failure) {
+                        self.push_line(reason);
+                    }
+                    self.window_failure = Some(failure);
+                }
+            }
+            job::Done::BotOff { .. }
+            | job::Done::AddressProbed(_)
+            | job::Done::InstallProbed(_)
+            | job::Done::AddressChanged
+            | job::Done::Removed { .. } => {}
+        }
+    }
+
+    /// Back off failed reads, keeping answered unsupported stations disarmed until forgotten.
+    fn reconnect_after_read(&mut self, now_ms: i64, answered: bool) {
+        if self.window_reconciled
+            || !self.known
+            || (answered && self.bot_error.is_none())
+            || self.bot.as_ref().is_some_and(|bot| bot.tape.is_none())
+        {
+            self.reconnect_at = None;
+            self.reconnect_delay_ms = 0;
+        } else {
+            self.reconnect_delay_ms = (self.reconnect_delay_ms * 2).clamp(60_000, 900_000);
+            self.reconnect_at = Some(now_ms.saturating_add(self.reconnect_delay_ms));
+        }
+    }
+
+    /// Admit one fresh read at its deadline without reusing the startup prefetch latch.
+    fn reconnect_read(
+        &mut self,
+        now_ms: i64,
+        target: Option<moon_remote::ssh::Target>,
+    ) -> Option<(job::Job, Kind)> {
+        if !self.reconnect_due(now_ms) {
+            return None;
+        }
+        let read = self.bot_read(target)?;
+        self.reconnect_at = None;
+        Some(read)
+    }
+
+    /// Keep host-file reads off ordinary coordination ticks until a reconnect is due.
+    fn reconnect_due(&self, now_ms: i64) -> bool {
+        !self.running
+            && self.known
+            && !self.window_reconciled
+            && self.reconnect_at.is_some_and(|deadline| now_ms >= deadline)
+    }
+
     /// Retry after unrelated work, or when the requested floor changed during the last push.
     fn min_tail_retry_due(&self) -> bool {
         self.kind != Kind::Tail || self.min_tail_pending != self.min_tail_pushed
     }
 
     /// Retain the latest tail until a status acknowledges it, retrying when idle and supported.
-    fn take_min_tail_job(&mut self, target: Option<moon_remote::ssh::Target>) -> Option<job::Job> {
+    fn take_min_tail_job(
+        &mut self,
+        target: Option<moon_remote::ssh::Target>,
+        window: TapeWindow,
+    ) -> Option<job::Job> {
         if self.running {
             return None;
         }
@@ -180,7 +344,7 @@ impl StationJobs {
             self.min_tail_pending = None;
             return None;
         }
-        min_tail_job(bot, catchup, target?, secs)
+        min_tail_job(bot, catchup, target?, secs, window)
     }
 
     /// Keep the retry action available while removal or the local save still needs recovery.
@@ -241,7 +405,7 @@ impl StationJobs {
         }
     }
 
-    /// Retain a listing through a restart gap; an answering old station reports unsupported.
+    /// Retain a listing through restart gaps; station_next syncs the newly observed window.
     fn observe_bot(&mut self, bot: BotState) {
         TAIL_FINAL.store(
             bot.station
@@ -303,8 +467,13 @@ impl StationJobs {
     }
 
     /// Apply a quiet read's end: bot state and core identities, or the reason the read failed,
-    /// while the user's outcome stays untouched.
+    /// while the user's outcome stays untouched; failed capability reads arm reconnect.
     fn apply_quiet(&mut self, done: job::Done) {
+        self.finish_job();
+        let answered = matches!(
+            &done,
+            job::Done::Ok { bot: Some(_), .. } | job::Done::Installed { bot: Some(_), .. }
+        );
         match done {
             job::Done::Ok { bot: Some(bot), .. } | job::Done::Installed { bot: Some(bot), .. } => {
                 self.observe_bot(bot);
@@ -325,6 +494,7 @@ impl StationJobs {
                 self.bot_error = Some(reason);
             }
         }
+        self.reconnect_after_read(moon_core::util::time::now_unix_ms_i64(), answered);
     }
 
     /// The server was forgotten: nothing learnt about it applies to the next one.
@@ -342,6 +512,15 @@ impl StationJobs {
         st.needs_old_admin = false;
         st.pending_refresh = false;
         st.zone_pushed = None;
+        st.window_reconciled = false;
+        st.window_attempt = None;
+        st.window_attempts = 0;
+        st.window_failure = None;
+        st.window_refresh_pending = false;
+        st.window_verification = false;
+        st.job_epoch = 0;
+        st.reconnect_at = None;
+        st.reconnect_delay_ms = 0;
         st.groups_sync = groups_sync::GroupsSync::default();
         st.applying = false;
         st.applied = None;
@@ -353,16 +532,55 @@ impl StationJobs {
     }
 }
 
-/// Build a tail-only policy update from the capable station's already-resolved report.
+/// A first-contact adoption and independently admitted station write.
+struct WindowStep {
+    adopt: Option<TapeWindow>,
+    push: Option<TapeWindow>,
+    reconciled: bool,
+}
+
+/// Adopt the larger first report, then allow lower user values without immediate self-retry.
+fn window_admit(
+    local: TapeWindow,
+    reported: Option<TapeWindow>,
+    reconciled: bool,
+    attempt: Option<(TapeWindow, u64)>,
+    epoch_now: u64,
+    last_kind: Kind,
+) -> WindowStep {
+    let Some(reported) = reported else {
+        return WindowStep {
+            adopt: None,
+            push: None,
+            reconciled,
+        };
+    };
+    let effective = if reconciled {
+        local
+    } else {
+        trade_replay::adopt_larger(local, reported)
+    };
+    let same_push_end = attempt == Some((effective, epoch_now)) && last_kind == Kind::Window;
+    WindowStep {
+        adopt: (effective != local).then_some(effective),
+        push: (reported != effective && !same_push_end).then_some(effective),
+        reconciled: true,
+    }
+}
+
+/// Build a tail policy update using the local window without reverting it to the station's report.
 fn min_tail_job(
     bot: &BotState,
     catchup: &moon_core::station_api::TapeCatchup,
     target: moon_remote::ssh::Target,
     secs: u32,
+    window: TapeWindow,
 ) -> Option<job::Job> {
+    // A window report is the capability gate; the payload always uses the shared window.
+    bot.tape.as_ref()?;
     Some(job::Job::Tape {
         target,
-        tape: bot.tape?,
+        tape: window,
         catchup: None,
         keep: Some(moon_core::station_api::TapeKeep {
             max_age_days: catchup.max_age_days?,
@@ -392,6 +610,75 @@ fn read_known_target() -> Option<moon_remote::ssh::Target> {
 }
 
 impl Backend {
+    /// Persist and apply the shared window before station work or autoload reads it.
+    pub(crate) fn tape_window_set(&mut self, window: TapeWindow, cx: &mut Context<Self>) {
+        self.tape_window_apply(window, cx);
+        self.station_window_sync(cx);
+    }
+
+    /// Apply an adoption before queued jobs without admitting an automatic station write.
+    fn tape_window_apply(&mut self, window: TapeWindow, cx: &mut Context<Self>) {
+        let old = trade_replay::window();
+        let new = trade_replay::normalize(window);
+        if old != new {
+            moon_core::config::storage::update(|cfg| {
+                cfg.trade_replay.margin_s = new.margin_s;
+                cfg.trade_replay.long_position_min = new.long_position_min;
+            });
+            trade_replay::set_margin_s(new.margin_s);
+            trade_replay::set_long_position_min(new.long_position_min);
+            self.station.revision = self.station.revision.wrapping_add(1);
+            crate::analytics::tape_autoload::window_grown(old, new);
+            cx.notify();
+        }
+    }
+
+    /// Reconcile the first report before rebuilding user work, without starting a write.
+    fn station_window_adopt(&mut self, cx: &mut Context<Self>) {
+        if !self.station.window_reconciled {
+            let step = self.station.window_step(trade_replay::window());
+            if let Some(adopt) = step.adopt {
+                self.tape_window_apply(adopt, cx);
+            }
+        }
+    }
+
+    /// Reconcile once and push idle station differences through the existing tape job.
+    pub(crate) fn station_window_sync(&mut self, cx: &mut Context<Self>) {
+        let step = self.station.window_step(trade_replay::window());
+        if let Some(adopt) = step.adopt {
+            self.tape_window_apply(adopt, cx);
+        }
+        if self.station.running || self.station.waiting.is_some() || self.station.pending_refresh {
+            return;
+        }
+        if let Some(tape) = step.push
+            && let Some(target) = known_target()
+        {
+            self.station_begin(
+                job::Job::Tape {
+                    target,
+                    tape,
+                    catchup: None,
+                    keep: None,
+                },
+                false,
+                Kind::Window,
+                cx,
+            );
+        }
+    }
+
+    /// Retry an unreconciled station at its bounded reconnect deadline on the coordination tick.
+    pub(crate) fn station_reconnect_tick(&mut self, now_ms: i64, cx: &mut Context<Self>) {
+        if !self.station.reconnect_due(now_ms) {
+            return;
+        }
+        if let Some((job, kind)) = self.station.reconnect_read(now_ms, known_target()) {
+            self.station_begin(job, false, kind, cx);
+        }
+    }
+
     /// Send changed local groups after a read or edit; running jobs defer admission until idle.
     pub(crate) fn station_groups_sync(&mut self, cx: &mut Context<Self>) {
         let here = cores_sync::trace_cores(&self.config);
@@ -422,7 +709,10 @@ impl Backend {
 
     /// Push only after a capability report, preserving the station's acknowledged policy.
     fn station_push_min_tail(&mut self, cx: &mut Context<Self>) {
-        let Some(job) = self.station.take_min_tail_job(known_target()) else {
+        let Some(job) = self
+            .station
+            .take_min_tail_job(known_target(), trade_replay::window())
+        else {
             return;
         };
         self.station.min_tail_pushed = self.station.min_tail_pending;
@@ -524,7 +814,7 @@ impl Backend {
         Ok(())
     }
 
-    /// Start remote work only after publishing any hand-over ownership synchronously.
+    /// Rebuild queued tape values and publish hand-over ownership before starting remote work.
     fn station_begin(
         &mut self,
         job: job::Job,
@@ -541,7 +831,7 @@ impl Backend {
             cx.notify();
             return;
         }
-        let job = match job {
+        let job = match job.with_current_tape_window() {
             job::Job::BotOff { target, .. } => {
                 // A queued job decides from the current saved and draft state when it starts.
                 let restore = can_restore_bot(
@@ -585,7 +875,7 @@ impl Backend {
         let has_token = self.station.bot.as_ref().is_some_and(|bot| bot.has_token);
         let running_label = job::JobButton::of(&job, has_token);
         let st = &mut self.station;
-        st.running = true;
+        st.begin_job(kind, &job);
         st.running_label = Some(running_label);
         st.applying = applying;
         st.cores_job = matches!(job, job::Job::Cores { .. } | job::Job::CoresRemove { .. });
@@ -595,7 +885,6 @@ impl Backend {
         if applying {
             st.applied = None;
         }
-        st.kind = kind;
         st.handing_over = hand_over;
         match kind {
             Kind::User => {
@@ -606,7 +895,12 @@ impl Backend {
                 st.lines.clear();
                 st.status = None;
             }
-            Kind::Quiet | Kind::Tail | Kind::Zone | Kind::Groups | Kind::Recovery => {}
+            Kind::Quiet
+            | Kind::Tail
+            | Kind::Window
+            | Kind::Zone
+            | Kind::Groups
+            | Kind::Recovery => {}
         }
         st.revision = st.revision.wrapping_add(1);
         let rx = if kind == Kind::Groups {
@@ -659,14 +953,18 @@ impl Backend {
         cx.notify();
     }
 
-    /// After a job: start queued user work, then refresh when the last job gave no bot state.
+    /// After a job, drain user work and refreshes before reconciling the observed shared window.
     fn station_next(&mut self, cx: &mut Context<Self>) {
+        // Adopt the first report before rebuilding queued tape work; user work and refreshes
+        // still take priority over automatic pushes.
+        self.station_window_adopt(cx);
         if let Some((job, hand_over)) = self.station.waiting.take() {
             self.station_begin(job, hand_over, Kind::User, cx);
         }
         if !self.station.running && std::mem::take(&mut self.station.pending_refresh) {
             self.station_refresh_bot(cx);
         }
+        self.station_window_sync(cx);
         if self.station.min_tail_retry_due() {
             self.station_push_min_tail(cx);
         }
@@ -715,11 +1013,23 @@ impl Backend {
         self.gate_terminal_telegram();
         let handing_over = std::mem::take(&mut self.station.handing_over);
         let kind = self.station.kind;
-        self.station.running = false;
+        if !matches!(kind, Kind::Quiet | Kind::Tail | Kind::Window) {
+            self.station.finish_job();
+        }
         self.station.running_label = None;
         self.station.cores_job = false;
         if kind == Kind::Recovery {
+            let answered = matches!(
+                &done,
+                job::Done::Ok { bot: Some(_), .. } | job::Done::Installed { bot: Some(_), .. }
+            );
             self.station_apply_recovery(done);
+            self.station
+                .reconnect_after_read(moon_core::util::time::now_unix_ms_i64(), answered);
+            return true;
+        }
+        if kind == Kind::Window {
+            self.station.apply_window(done);
             return true;
         }
         if kind == Kind::Zone || kind == Kind::Groups {

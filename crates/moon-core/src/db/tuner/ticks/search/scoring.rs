@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// One replay result, retaining its simulated close for chronological risk aggregation.
+pub(super) struct ReplayedDeal {
+    /// Closed result in the scope's metric and the entry spend.
+    pub(super) result: Option<(f64, f64)>,
+    /// Whether the position remains open at the tape's end.
+    pub(super) left_open: bool,
+    /// Estimated result of an open position at the tape's end.
+    pub(super) at_tape_end: Option<f64>,
+    /// Simulated exit time; stable sorting preserves input order for equal times.
+    pub(super) exit_ms: Option<i64>,
+}
+
 /// Every deal's result under one point, in order — `(result, spent)`, the result in the scope's
 /// metric as the "Fact" column holds it ([`crate::db::tuner::ticks::Outcome::profit_metric`]), `None` where the
 /// point makes no trade of the deal — whether it bought the deal and left it open, and what
@@ -18,7 +30,7 @@ pub(super) fn results(
     of_deal: &[usize],
     params: &[(EntryParams, ExitParams)],
     fills: Option<&[Option<Fill>]>,
-) -> Vec<(Option<(f64, f64)>, bool, Option<f64>)> {
+) -> Vec<ReplayedDeal> {
     deals
         .par_iter()
         .enumerate()
@@ -33,7 +45,12 @@ pub(super) fn results(
                 .profit_metric(&d.deal)
                 .map(|value| (value, d.deal.spent));
             let at_tape_end = outcome.open_metric_at_tape_end(&d.deal, &d.ticks);
-            (result, outcome.left_open(), at_tape_end)
+            ReplayedDeal {
+                result,
+                left_open: outcome.left_open(),
+                at_tape_end,
+                exit_ms: outcome.exit.map(|exit| exit.t_ms),
+            }
         })
         .collect()
 }
@@ -83,16 +100,26 @@ impl VariantScore {
     }
 }
 
-/// The score of a point over `deals`, in order; arguments as for [`results`].
+/// The score of a point in simulated close order; arguments as for [`results`].
 pub(super) fn score(
     deals: &[PreparedDeal],
     of_deal: &[usize],
     params: &[(EntryParams, ExitParams)],
 ) -> VariantScore {
-    // The replay of every deal is independent; the score is folded in order afterwards.
+    // Only the fold changes order: per-deal callers retain their input indices.
     let mut score = VariantScore::default();
-    for (result, left_open, at_tape_end) in results(deals, of_deal, params, None) {
-        score.push(result, left_open, at_tape_end);
+    let mut replayed = results(deals, of_deal, params, None);
+    replayed.retain(|deal| {
+        if deal.result.is_some() {
+            true
+        } else {
+            score.push(None, deal.left_open, deal.at_tape_end);
+            false
+        }
+    });
+    replayed.sort_by_key(|deal| deal.exit_ms);
+    for deal in replayed {
+        score.push(deal.result, deal.left_open, deal.at_tape_end);
     }
     score
 }
@@ -142,7 +169,7 @@ pub(super) fn keeps_corridor(entry: &EntryParams, own: &MshotParams, deltas: &[D
             let near_too = variant.model.entry_method != EntryMethod::Shift;
             variant.never_closer_than(own, deltas, near_too)
         }
-        EntryParams::Fact => true,
+        EntryParams::Fact | EntryParams::Drops(_) => true,
     }
 }
 
@@ -151,7 +178,7 @@ pub(super) fn keeps_corridor(entry: &EntryParams, own: &MshotParams, deltas: &[D
 pub(super) fn ordered(entry: &EntryParams) -> bool {
     match entry {
         EntryParams::MoonShot(params) => params.is_ordered(),
-        EntryParams::Fact => true,
+        EntryParams::Fact | EntryParams::Drops(_) => true,
     }
 }
 
@@ -307,4 +334,31 @@ pub(super) fn next_random(state: &mut u64) -> u64 {
 ///     train_frac: [`SearchParams::train_frac`].
 pub fn train_len(closes: &[i64], train_frac: f64) -> usize {
     train_split(closes, train_frac)
+}
+
+/// Training indices retained by the purged walk-forward embargo: no replay reads holdout prices.
+/// Without a holdout every chronological training deal stays; equality at the embargo is safe.
+pub fn purged_train(deals: &[PreparedDeal], train_n: usize) -> Vec<usize> {
+    let embargo = deals[train_n..].iter().map(holdout_start).min();
+    (0..train_n)
+        .filter(|&i| embargo.is_none_or(|start| window_end(&deals[i]) <= start))
+        .collect()
+}
+
+/// The furthest a training replay can read, including quiet held coverage past its close.
+fn window_end(deal: &PreparedDeal) -> i64 {
+    deal.deal.close_ms.saturating_add(deal.trail_ms.max(0)).max(
+        deal.ticks
+            .last()
+            .map_or(i64::MIN, |tick| tick.time_ms.ceil() as i64),
+    )
+}
+
+/// The earliest a holdout replay can trade or decide: its first print or delta evaluation start.
+/// Earlier look-back history (SellLevel bars) is deliberately not purged: it was known at decision time.
+fn holdout_start(deal: &PreparedDeal) -> i64 {
+    deal.ticks
+        .first()
+        .map_or(i64::MAX, |tick| tick.time_ms.floor() as i64)
+        .min(super::super::deltas::eval_span(&deal.deal).0)
 }

@@ -74,8 +74,10 @@ pub(super) fn quote_facts(
     if !reason_starts_with(reason, REASON_STOP) {
         return StopFacts::default();
     }
-    let (Some(level), Some((bid, ask))) = (stop_jump_level(deal, exit), reason_quote(reason))
-    else {
+    let (Some(level), Some((bid, ask))) = (
+        stop_jump_level(deal, exit, exit_points),
+        reason_quote(reason),
+    ) else {
         return StopFacts::default();
     };
     let long = deal.is_long();

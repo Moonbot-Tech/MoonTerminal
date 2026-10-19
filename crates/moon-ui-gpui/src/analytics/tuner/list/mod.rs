@@ -10,15 +10,14 @@ mod menu;
 mod select;
 /// The list card, its rows and the sortable header row.
 mod table;
-pub(in crate::analytics::tuner) use table::progress_row;
 
 #[cfg(test)]
 mod tests;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
-    MoonInputEvent, MoonInputState, MoonMenuItem, MoonPalette, h_flex,
+    MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput, MoonInputEvent,
+    MoonInputState, MoonMenuItem, MoonPalette, h_flex,
 };
 use rust_i18n::t;
 use std::cmp::Ordering;
@@ -29,9 +28,7 @@ pub(in crate::analytics::tuner) use select::{
 
 use super::super::AnalyticsView;
 use super::auto_picks::{AutoFilter, AutoView};
-use super::ready::ReadyClass;
-use super::ready::{ReadyFilter, ReadyPass, ReadyView};
-use super::ticks::readiness::Readiness;
+use super::ready::{ReadyFilter, ReadyView};
 use super::{
     COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, COL_BIT_READY, METRIC_COLS,
     SORT_AUTO, SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, SORT_READY, STRAT_COLS_ALL,
@@ -87,48 +84,6 @@ impl StratListFilter {
 /// Show at most this many groups (the replica can hold thousands of names; the tail beyond
 /// the top by |profit| carries little information, and the DOM is not infinitely stretchy).
 pub(in crate::analytics::tuner) const MAX_ROWS: usize = 500;
-
-/// Admit only concrete strategy identities within the focused action authority.
-pub(in crate::analytics::tuner) fn best_key_in_scope(key: &str, cores: Option<&[u64]>) -> bool {
-    let Some((sid, core)) = key.split_once('@') else {
-        return false;
-    };
-    sid.parse::<i64>().is_ok()
-        && core
-            .parse::<u64>()
-            .is_ok_and(|c| cores.is_none_or(|ids| ids.contains(&c)))
-}
-
-/// Select tunable strategy-list keys by descending sample size, with stable key tie-breaking.
-pub(in crate::analytics::tuner) fn pick_best(
-    rows: impl Iterator<Item = (String, ReadyClass, Readiness)>,
-    top: usize,
-) -> Vec<String> {
-    let mut rows: Vec<_> = rows
-        .filter(|(_, class, _)| matches!(class, ReadyClass::Can { .. }))
-        .collect();
-    rows.sort_by(|(a, _, ar), (b, _, br)| br.fit.cmp(&ar.fit).then_with(|| a.cmp(b)));
-    rows.into_iter().take(top).map(|(key, _, _)| key).collect()
-}
-
-/// Resolve one scoped, ranked batch from visible keys for both the label and its action.
-fn best_keys<'a>(
-    keys: impl Iterator<Item = &'a str>,
-    ready: &ReadyPass,
-    cores: Option<&[u64]>,
-    top: usize,
-) -> Vec<String> {
-    pick_best(
-        keys.filter(|key| best_key_in_scope(key, cores))
-            .filter_map(|key| {
-                ready
-                    .counts
-                    .get(key)
-                    .map(|r| (key.to_string(), ready.class(key), *r))
-            }),
-        top,
-    )
-}
 
 /// Restore a saved strategy-list sort only when its stable key still names a real column.
 ///
@@ -602,7 +557,6 @@ impl AnalyticsView {
             .child(self.strat_lists_menu(cx))
             .children(self.strat_auto_menu(cx))
             .children(self.strat_ready_menu(cx))
-            .children(self.strat_best_controls(cx))
             .child(
                 div()
                     .id("an-strat-active-tip")
@@ -758,52 +712,6 @@ impl AnalyticsView {
         self.ready.filter(self.strat_mode.shows_ready())
     }
 
-    /// The exact batch the label counts and the click starts, resolved against current state.
-    fn strat_best_keys(&self) -> Vec<String> {
-        self.strategy_data.data().map_or_else(Vec::new, |data| {
-            best_keys(
-                self.visible_indices()
-                    .iter()
-                    .map(|&i| data.strategies[i].key.as_str()),
-                &self.ready,
-                self.action_core_ids(),
-                usize::from(self.ticks.best_top),
-            )
-        })
-    }
-
-    /// Count and run the shared selection over the current list scope and readiness counts.
-    fn strat_best_controls(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        if !self.strat_mode.shows_ready() {
-            return None;
-        }
-        let n = self.strat_best_keys().len();
-        let readiness_running = matches!(self.ready.run, super::ready::ReadyRun::Running { .. });
-        let view = cx.entity();
-        let run_view = view.clone();
-        Some(best_controls_el(
-            self.ticks.best_top,
-            n,
-            self.ticks.best_running || readiness_running,
-            std::rc::Rc::new(move |top, app| {
-                view.update(app, |this, cx| {
-                    this.ticks.best_top = top;
-                    cx.notify();
-                })
-            }),
-            std::rc::Rc::new(move |app| {
-                run_view.update(app, |this, cx| {
-                    if matches!(this.ready.run, super::ready::ReadyRun::Running { .. }) {
-                        return;
-                    }
-                    let keys = this.strat_best_keys();
-                    this.start_best_run(keys, cx);
-                })
-            }),
-            cx,
-        ))
-    }
-
     /// Visible-column selector ([`design::COLUMN_SELECTOR_ICON`]); each item toggles a column bit,
     /// "All" toggles all.
     /// The menu stays open across clicks; the name column is always shown, so hiding every
@@ -881,65 +789,6 @@ impl AnalyticsView {
             ))
             .child(menu)
     }
-}
-
-/// The batch selection button and top picker; wrapping keeps both readable in narrow docks.
-pub(in crate::analytics::tuner) fn best_controls_el(
-    top: u8,
-    n: usize,
-    running: bool,
-    pick: std::rc::Rc<dyn Fn(u8, &mut App)>,
-    run: std::rc::Rc<dyn Fn(&mut App)>,
-    cx: &App,
-) -> AnyElement {
-    let mut menu = MoonDropdown::new("an-best-top")
-        .label(t!("analytics.ready.best_top", n = top).to_string())
-        .trigger_caret(true)
-        .trigger_size(MoonButtonSize::density(cx))
-        .fit_trigger_width(72.0, 240.0)
-        .fit_menu_width(100.0, 320.0);
-    for value in [3_u8, 5, 10] {
-        let pick = pick.clone();
-        menu = menu.item(
-            MoonMenuItem::with_key(
-                format!("best-top-{value}"),
-                t!("analytics.ready.best_top", n = value).to_string(),
-            )
-            .checked(top == value)
-            .on_click(move |_, _, app| pick(value, app)),
-        );
-    }
-    h_flex()
-        .debug_selector(|| "an-best-controls".into())
-        .flex_wrap()
-        .gap(design::ui_px(cx, 6.0))
-        .child(
-            div()
-                .id("an-best-button-tip")
-                .debug_selector(|| "an-best-button".into())
-                .flex_none()
-                .tooltip(crate::panels::common::text_tooltip(if running {
-                    t!("analytics.ready.best_wait").to_string()
-                } else {
-                    t!("analytics.ready.best_tip").to_string()
-                }))
-                .child(
-                    MoonButton::new("an-best-run")
-                        .size(MoonButtonSize::density(cx))
-                        .variant(MoonButtonVariant::Amber)
-                        .label(format!("{} · {n}", t!("analytics.ready.best")))
-                        .disabled(n == 0 || running)
-                        .on_click(move |_, _, app| run(app))
-                        .render(),
-                ),
-        )
-        .child(
-            div()
-                .debug_selector(|| "an-best-picker".into())
-                .flex_none()
-                .child(menu),
-        )
-        .into_any_element()
 }
 
 /// The toolbar's "Auto-pick" filter on one axis: drawn on "By coin" only, absent elsewhere.

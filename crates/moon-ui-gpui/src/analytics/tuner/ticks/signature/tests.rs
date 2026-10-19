@@ -27,6 +27,7 @@ fn deal(core_uid: u64, report_uid: i64) -> Deal {
         archived_take: None,
         fact_modifier: None,
         hook_depth_pct: None,
+        drops_detect: None,
         hook_stated_take_pct: None,
         strike_detect: None,
         step_lag_ms: 0.0,
@@ -49,7 +50,6 @@ fn key(tape_rev: u64, refusal_revision: u64) -> ReloadKey {
         model: Default::default(),
         sample: SamplePolicy {
             min_tail_s: 60,
-            switches: (true, false),
             margin_ms: 30_000,
             long_position_ms: 3_600_000,
         },

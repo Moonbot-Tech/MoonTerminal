@@ -17,7 +17,7 @@
 //! that kind's fit deals, the Delta Modifiers section alone, and prints what it found); the
 //! application never moves its data root on a variable.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -39,8 +39,12 @@ use crate::market::kline_cache::KlineCache;
 use crate::market::trade_replay::{Coverage, TickQuery, long_position_ms, query_held};
 use crate::symbol::{coin_match_key, coin_of_market};
 
+mod accuracy;
+mod core_log;
+mod drops;
 mod money;
 mod search;
+mod stop_logs;
 
 /// One trade's d1m and d5m errors at the report's stamp (`StampCheck::error`).
 type ShortErrors = (Option<f64>, Option<f64>);
@@ -110,7 +114,7 @@ fn dump_deal(
     let stop = super::super::exit::stops::stop_pct(exit, deal, deal.buy_ms);
     let level = super::super::exit::level_off_buy(deal.buy_price, stop, deal.is_long());
     let stated = verify::stated_stop_level(&deal.sell_reason);
-    let activation = verify::stop_jump_level(deal, exit)
+    let activation = verify::stop_jump_level(deal, exit, exit_points)
         .and_then(|jump_at| verify::archived_stop_jump(deal, jump_at, exit_points));
     let dir = PathBuf::from(dir);
     let _ = std::fs::create_dir_all(dir.join("ticks"));
@@ -240,27 +244,31 @@ fn core_venues() -> HashMap<u64, String> {
         let Ok(text) = std::fs::read_to_string(entry.path()) else {
             continue;
         };
-        for line in text
-            .lines()
-            .filter(|l| l.contains("identity: exchange_code="))
-        {
-            let core = line
-                .split_once("core ")
-                .and_then(|(_, rest)| rest.split_whitespace().next())
-                .and_then(|n| n.parse::<u64>().ok());
-            let id = line
-                .split_once("ExchangeId { code: ")
-                .and_then(|(_, rest)| {
-                    let (code, rest) = rest.split_once(", dex: ")?;
-                    let dex = rest.split_once(' ')?.0;
-                    Some((code.parse::<u8>().ok()?, dex.parse::<u32>().ok()?))
-                });
-            if let (Some(core), Some((code, dex))) = (core, id) {
-                out.insert(core, format!("{code}:{dex:08x}"));
-            }
+        for (core, _, venue) in identity_lines(&text) {
+            out.insert(core, venue);
         }
     }
     out
+}
+
+/// Share the core UID, unsanitized name and venue from application identity announcements.
+fn identity_lines(text: &str) -> impl Iterator<Item = (u64, Option<String>, String)> + '_ {
+    text.lines().filter_map(|line| {
+        if !line.contains("identity: exchange_code=") {
+            return None;
+        }
+        let rest = line.split_once("core ")?.1;
+        let uid = rest.split_whitespace().next()?.parse().ok()?;
+        let name = rest
+            .split_once('\u{ab}')
+            .and_then(|(_, s)| s.split_once('\u{bb}'))
+            .map(|(name, _)| name.to_string());
+        let rest = line.split_once("ExchangeId { code: ")?.1;
+        let (code, rest) = rest.split_once(", dex: ")?;
+        let code = code.parse::<u8>().ok()?;
+        let dex = rest.split_once(' ')?.0.parse::<u32>().ok()?;
+        Some((uid, name, format!("{code}:{dex:08x}")))
+    })
 }
 
 /// Each core's PriceDown step lag off its own archived Exit lines, the way the axis calibrates
@@ -502,7 +510,14 @@ struct StopSlipDiag {
 }
 
 impl StopSlipDiag {
-    fn add(&mut self, deal: &Deal, ticks: &[Tick], exit: &ExitParams) {
+    /// Compare the stopped fact's quote with its trigger at the archived sell booking.
+    fn add(
+        &mut self,
+        deal: &Deal,
+        ticks: &[Tick],
+        exit: &ExitParams,
+        exit_points: Option<&[(i64, f64)]>,
+    ) {
         if !verify::is_stop_reason(&deal.sell_reason) {
             return;
         }
@@ -510,7 +525,7 @@ impl StopSlipDiag {
             return;
         };
         let Some(trigger) = verify::stated_stop_level(&deal.sell_reason)
-            .or_else(|| verify::stop_jump_level(deal, exit))
+            .or_else(|| verify::stop_jump_level(deal, exit, exit_points))
             .filter(|l| l.is_finite() && *l > 0.0)
         else {
             return;
@@ -691,7 +706,7 @@ fn partners_of(
 ) -> Vec<Partner> {
     deals
         .iter()
-        .filter(|d| entry_model_for(&d.kind))
+        .filter(|d| d.kind == super::entry::KIND_MOONSHOT)
         .filter_map(|d| {
             let venue = venues.get(&d.core_uid)?.clone();
             let values = strategy_values_at(d.strategy_id, Some(d.core_uid), d.buy_ms, keys)?;
@@ -725,7 +740,10 @@ fn partners_of(
 /// (`calibrate::replace_round_trip_samples`, the median per core).
 fn core_round_trips(deals: &[Deal]) -> HashMap<u64, f64> {
     let mut samples: HashMap<u64, Vec<i64>> = HashMap::new();
-    for deal in deals.iter().filter(|d| entry_model_for(&d.kind)) {
+    for deal in deals
+        .iter()
+        .filter(|d| d.kind == super::entry::KIND_MOONSHOT)
+    {
         let (Some(points), _, _) = archived_lines(deal) else {
             continue;
         };
@@ -978,6 +996,7 @@ fn print_delta_quality(tracks: &[std::sync::Arc<deltas::DeltaTrack>], no_track: 
     }
 }
 
+/// Report reproduction and search eligibility globally and by strategy kind.
 #[test]
 #[ignore = "needs a live data root in MOON_TICKS_DATA_DIR"]
 fn real_data_reproduction() {
@@ -1050,6 +1069,18 @@ fn real_data_reproduction() {
     let latency_base = std::env::var("MOON_TICKS_LATENCY_BASE_MS")
         .ok()
         .and_then(|v| v.parse::<f64>().ok());
+    let fast_price = std::env::var("MOON_TICKS_FAST_PRICE")
+        .ok()
+        .map(|v| parse_fast_price_override(&v));
+    if let Some(rule) = fast_price {
+        eprintln!("fast price override: {rule:?}");
+    }
+    let stop_fill = std::env::var("MOON_TICKS_STOP_FILL")
+        .ok()
+        .map(|v| parse_stop_fill_override(&v));
+    if let Some(rule) = stop_fill {
+        eprintln!("stop fill override: {rule:?}");
+    }
     eprintln!("replace round trip per core: {round_trips:?} · base {latency_base:?}");
     // The live deltas' history bars (`deltas::track_for`), off this data root's kline cache —
     // opened on a COPY of the data root: opening prunes past the retention, as the app does.
@@ -1104,6 +1135,7 @@ fn real_data_reproduction() {
     let mut short_tail: Vec<bool> = Vec::new();
     let mut take_diag = TakeFillDiag::default();
     let mut stop_diag = StopSlipDiag::default();
+    let mut stop_logs = stop_logs::StopLogDiag::from_env();
     let mut late_diag = LateBookedDiag::default();
     let (mut own_sum, mut fact_sum) = (0.0f64, 0.0f64);
     let search_kind = std::env::var("MOON_TICKS_SEARCH").ok();
@@ -1189,18 +1221,21 @@ fn real_data_reproduction() {
             (Some(base), Some(rt)) => base + rt,
             _ => latency,
         };
-        let entry = if entry_model_for(&deal.kind) {
-            EntryParams::MoonShot(mshot_params(
-                &sv,
-                ModelSettings {
-                    latency_ms: core_latency,
-                    ..ModelSettings::default()
-                },
-            ))
-        } else {
-            EntryParams::Fact
-        };
+        let entry = super::params::entry_params_for(
+            &deal.kind,
+            &sv,
+            ModelSettings {
+                latency_ms: core_latency,
+                ..ModelSettings::default()
+            },
+        );
         let mut exit = exit_params(&sv, ModelSettings::default());
+        if let Some(rule) = fast_price {
+            exit.model.fast_price = rule;
+        }
+        if let Some(rule) = stop_fill {
+            exit.model.stop_fill = rule;
+        }
         if std::env::var_os("MOON_TICKS_LATENCY_EXIT").is_some() {
             exit.model.latency_ms = core_latency;
         }
@@ -1545,12 +1580,15 @@ fn real_data_reproduction() {
                 values: &laid,
                 defaults: &defaults,
             };
-            let v_entry = if entry_model_for(&deal.kind) {
-                EntryParams::MoonShot(mshot_params(&lsv, ModelSettings::default()))
-            } else {
-                EntryParams::Fact
-            };
-            let v_exit = exit_params(&lsv, ModelSettings::default());
+            let v_entry =
+                super::params::entry_params_for(&deal.kind, &lsv, ModelSettings::default());
+            let mut v_exit = exit_params(&lsv, ModelSettings::default());
+            if let Some(rule) = fast_price {
+                v_exit.model.fast_price = rule;
+            }
+            if let Some(rule) = stop_fill {
+                v_exit.model.stop_fill = rule;
+            }
             let out = simulate(&deal, &ticks, &v_entry, &v_exit, entry_line.as_deref());
             eprintln!(
                 "    variant fill {:?} · exit {:?} · {:?}",
@@ -1615,7 +1653,8 @@ fn real_data_reproduction() {
             .is_some_and(|(_, to)| to.saturating_sub(deal.close_ms).max(0) >= SHORT_TAIL_MS);
         short_tail.push(!long_tail);
         take_diag.add(&deal, &ticks, &exit, exit_points.as_deref());
-        stop_diag.add(&deal, &ticks, &exit);
+        stop_diag.add(&deal, &ticks, &exit, exit_points.as_deref());
+        stop_logs.add(&deal, &ticks, &exit, exit_points.as_deref());
         late_diag.add(&deal, &exit, exit_points.as_deref(), fit);
         // Counted as the axis counts it (`load.rs::replay_row_with` passes both archived lines
         // whenever it has them): the entry off its archived line when there is one — without it
@@ -1651,6 +1690,24 @@ fn real_data_reproduction() {
         search::run(searched, kind, &defaults);
     }
     print_report(&report_items, read.without_ms);
+    let mut kinds: BTreeMap<_, _> = kinds_seen
+        .iter()
+        .map(|(kind, rows)| (kind.as_str(), (*rows, 0usize, 0usize, 0usize, 0usize)))
+        .collect();
+    for (deal, verdict, _) in &report_items {
+        let (_, covered, exit_ok, exit_judged, fit) = kinds.entry(deal.kind.as_str()).or_default();
+        *covered += 1;
+        if let Some(ok) = verdict.exit {
+            *exit_judged += 1;
+            *exit_ok += usize::from(ok);
+        }
+        *fit += usize::from(fit_for_search(verdict));
+    }
+    for (kind, (rows, covered, exit_ok, exit_judged, fit)) in kinds {
+        eprintln!(
+            "kind {kind}: rows {rows}, covered {covered}, exit ok {exit_ok}/{exit_judged}, fit {fit}"
+        );
+    }
     print_reason_table(&report_items, &short_tail);
     eprintln!("kinds: {kinds_seen:?}");
     eprintln!(
@@ -1792,5 +1849,50 @@ fn real_data_reproduction() {
     );
     take_diag.print();
     stop_diag.print();
+    stop_logs.print();
     late_diag.print();
+}
+/// Parse the owner's one bench-wide estimator override, rejecting unknown grammar loudly.
+fn parse_fast_price_override(value: &str) -> super::super::settings::FastPrice {
+    use super::super::settings::FastPrice;
+    let rule = if value == "last" {
+        Some(FastPrice::LastOfTick)
+    } else if let Some(n) = value.strip_prefix("vwap") {
+        n.parse::<u8>().ok().map(FastPrice::VwapLastTrades)
+    } else {
+        value
+            .strip_prefix("emaq")
+            .map(|s| (s, true))
+            .or_else(|| value.strip_prefix("ema").map(|s| (s, false)))
+            .and_then(|(s, qty_weighted)| {
+                s.parse::<f64>().ok().map(|alpha| FastPrice::TradeEma {
+                    alpha,
+                    qty_weighted,
+                })
+            })
+    }
+    .unwrap_or_else(|| {
+        panic!("MOON_TICKS_FAST_PRICE: expected last | vwap<N> | ema<alpha> | emaq<alpha>")
+    });
+    let sanitized = ModelSettings {
+        fast_price: rule,
+        ..ModelSettings::default()
+    }
+    .sanitized()
+    .fast_price;
+    assert_eq!(
+        sanitized, rule,
+        "MOON_TICKS_FAST_PRICE: expected last | vwap<1..16> | ema<0 < alpha <= 1> | emaq<0 < alpha <= 1>"
+    );
+    rule
+}
+
+/// Parse the bench-wide panic-sell fill rule without accepting an unknown spelling.
+fn parse_stop_fill_override(value: &str) -> super::super::settings::StopFill {
+    use super::super::settings::StopFill;
+    match value {
+        "check" => StopFill::AtCheck,
+        "market" => StopFill::MarketAfterLatency,
+        _ => panic!("MOON_TICKS_STOP_FILL: expected check | market"),
+    }
 }

@@ -44,11 +44,16 @@ pub(super) struct ConfirmModel {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Verdict {
     Idle,
+    /// The selected strategy's tape has not answered yet; no sample verdict is available.
+    Loading,
     Running {
         done: usize,
         total: usize,
         left: Option<Duration>,
         points: usize,
+        /// Stop was pressed and the run is winding down to its best so far: no time left to
+        /// show, and no second Stop to press.
+        stopping: bool,
     },
     Cannot(String),
     Apply,
@@ -61,7 +66,13 @@ pub(super) enum Verdict {
 pub(super) enum Why {
     Train,
     HoldoutWorse,
-    HoldoutOpen { k: usize },
+    HoldoutOpen {
+        k: usize,
+    },
+    /// Held edits excluded deals that close under the current strategy settings.
+    HeldOpen {
+        n: usize,
+    },
     NoGain,
 }
 
@@ -73,20 +84,21 @@ pub(super) enum Unchecked {
     HandEdited,
 }
 
-/// Apply requires a strict gain on both slices and a closed, sufficient holdout.
+/// Apply requires strict gains, a closed sufficient holdout, and no sample loss from held edits.
 pub(super) fn verdict_of(
-    running: Option<(usize, usize, Option<Duration>, usize)>,
+    running: Option<(usize, usize, Option<Duration>, usize, bool)>,
     too_few: Option<usize>,
     refusal: Option<&str>,
     result: Option<&SearchResult>,
     has_changes: bool,
 ) -> Verdict {
-    if let Some((done, total, left, points)) = running {
+    if let Some((done, total, left, points, stopping)) = running {
         return Verdict::Running {
             done,
             total,
             left,
             points,
+            stopping,
         };
     }
     if let Some(n) = too_few.filter(|_| result.is_none()) {
@@ -101,6 +113,11 @@ pub(super) fn verdict_of(
             None => Verdict::Idle,
         };
     };
+    if r.stats.left_open_by_held > 0 {
+        return Verdict::DontApply(Why::HeldOpen {
+            n: r.stats.left_open_by_held,
+        });
+    }
     if r.train.profit < r.fact_train.profit {
         return Verdict::DontApply(Why::Train);
     }
@@ -139,6 +156,7 @@ pub(super) fn sample_verdict(verdict: Verdict, too_few: Option<usize>) -> Verdic
 pub(super) fn tag(verdict: &Verdict) -> String {
     t!(match verdict {
         Verdict::Idle => "analytics.ticks.sum.tag_idle",
+        Verdict::Loading => "common.loading",
         Verdict::Running { .. } => "analytics.ticks.sum.tag_running",
         Verdict::Cannot(_) => "analytics.ticks.sum.tag_cannot",
         Verdict::Apply => "analytics.ticks.sum.tag_apply",
@@ -170,6 +188,7 @@ pub(super) fn sentence(
 ) -> String {
     match verdict {
         Verdict::Idle => t!("analytics.ticks.sum.idle").to_string(),
+        Verdict::Loading => t!("analytics.ticks.fetch_reading").to_string(),
         Verdict::Running { .. } if hold_n == 0 => {
             t!("analytics.ticks.sum.running_whole", n = train_n).to_string()
         }
@@ -185,6 +204,9 @@ pub(super) fn sentence(
         Verdict::DontApply(Why::HoldoutWorse) => t!("analytics.ticks.sum.dont_holdout").to_string(),
         Verdict::DontApply(Why::HoldoutOpen { k }) => {
             t!("analytics.ticks.sum.dont_open", n = k).to_string()
+        }
+        Verdict::DontApply(Why::HeldOpen { n }) => {
+            t!("analytics.ticks.sum.dont_held_open", n = n).to_string()
         }
         Verdict::DontApply(Why::NoGain) => t!("analytics.ticks.sum.no_gain").to_string(),
         Verdict::Unchecked(Unchecked::Whole) => t!("analytics.ticks.sum.whole").to_string(),
@@ -264,7 +286,8 @@ fn open_line(n: usize, profit: f64) -> Option<String> {
     })
 }
 
-/// Remove no-op edits and resolve section labels from descriptors or the loaded schema grid.
+/// Remove no-op edits and show an explicit absence for unset or blank strategy values.
+/// Section labels come from descriptors or the loaded schema grid.
 pub(super) fn change_rows(
     changes: &[(String, String)],
     now: &HashMap<String, NowValue>,
@@ -276,6 +299,7 @@ pub(super) fn change_rows(
         .filter_map(|(key, value)| {
             let old = match now.get(key) {
                 Some(NowValue::Same(old)) if old == value => return None,
+                Some(NowValue::Same(old)) if old.trim().is_empty() => String::from("—"),
                 Some(NowValue::Same(old)) => old.clone(),
                 Some(NowValue::Differs) => t!("analytics.ticks.sum.varies").to_string(),
                 None => String::from("—"),
@@ -307,7 +331,7 @@ pub(super) fn change_rows(
 }
 
 impl SummaryModel {
-    /// Build numerical rows and localised explanations exclusively from the displayed point.
+    /// Build advice from the displayed point, deferring sample refusal until its tape answers.
     pub(super) fn from_state(state: &TicksState, scope_label: String, human_labels: bool) -> Self {
         let running = match &state.sugg {
             SuggState::Idle => None,
@@ -316,22 +340,39 @@ impl SummaryModel {
                 total,
                 started,
                 estimate,
+                parallel,
+                stopping,
                 ..
             } => Some((
                 handle.completed(),
                 *total,
-                remaining_time(handle.completed(), *total, started.elapsed(), *estimate),
+                (!*stopping)
+                    .then(|| {
+                        remaining_time(
+                            handle.completed(),
+                            *total,
+                            started.elapsed(),
+                            *estimate,
+                            *parallel,
+                        )
+                    })
+                    .flatten(),
                 handle.points(),
+                *stopping,
             )),
         };
         let result = state.current_result();
-        let verdict = verdict_of(
-            running,
-            state.search_too_few(),
-            state.sugg_refusal.as_deref(),
-            result,
-            state.has_changes(),
-        );
+        let verdict = if state.tape_reading && running.is_none() {
+            Verdict::Loading
+        } else {
+            verdict_of(
+                running,
+                state.search_too_few(),
+                state.sugg_refusal.as_deref(),
+                result,
+                state.has_changes(),
+            )
+        };
         let verdict = sample_verdict(verdict, state.variant_too_few());
         let data = state.data.data();
         let (fit, hold) = match state.sugg {
@@ -340,7 +381,16 @@ impl SummaryModel {
         };
         let train = result.map(|r| ProfitRow {
             label: t!("analytics.ticks.sum.train").to_string(),
-            sub: t!("analytics.ticks.sum.train_sub", n = r.fact_train.n).to_string(),
+            sub: if r.purged > 0 {
+                t!(
+                    "analytics.ticks.sum.train_sub_purged",
+                    n = r.fact_train.n,
+                    p = r.purged
+                )
+                .to_string()
+            } else {
+                t!("analytics.ticks.sum.train_sub", n = r.fact_train.n).to_string()
+            },
             n: r.fact_train.n,
             fact: r.fact_train.profit,
             variant: r.train.profit,
@@ -471,7 +521,7 @@ impl AnalyticsView {
         if let Some(data) = self.ticks.data.data() {
             for group in [ParamGroup::Entry, ParamGroup::Exit] {
                 model.warnings.extend(
-                    self.ticks_group_note(group, data, MoonPalette::active(cx))
+                    super::grid::group_note(&self.ticks, group, data, MoonPalette::active(cx))
                         .map(|(note, _)| note),
                 );
             }

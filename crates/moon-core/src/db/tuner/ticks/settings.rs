@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::exit::pump_move::{PUMP_MOVE_LAG_MS, PUMP_PEAK_LOOKBACK_MS};
 use super::exit::sell_order::STEP_FLOOR_MS;
-use super::exit::stops::{SERIES_TICK_MS, TICKER_PERIOD_MS};
+use super::exit::stops::{FAST_TRADES_MAX, SERIES_TICK_MS, TICKER_PERIOD_MS};
 use super::mshot::{
     DEFAULT_LATENCY_MS, EntryMethod, FAST_ALGO_WINDOW_MS, PRE_SPIKE_LOOKBACK_MS, SHIFT_WINDOW_MS,
 };
@@ -19,10 +19,43 @@ use super::verify::{
     STOP_PRICE_TOLERANCE,
 };
 
+/// The code-level price estimate compared by a fast stop at the series tick's end.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum FastPrice {
+    /// The tick's last print, preserving the current model.
+    #[default]
+    LastOfTick,
+    /// Quantity-weighted price of the last N trades, grouping same-time, same-side prints.
+    VwapLastTrades(u8),
+    /// One EMA step per grouped trade, initialized by the first trade's price.
+    /// The step weight is alpha, or min(1, alpha * qty / cumulative mean qty) when weighted.
+    TradeEma { alpha: f64, qty_weighted: bool },
+}
+
+/// Where a non-factual stop's panic sell fills, without changing its fire moment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StopFill {
+    /// Comparison fill at the trigger's check price (`MOON_TICKS_STOP_FILL=check` on the bench).
+    AtCheck,
+    /// Model the core's marketable Panic Sell after StopLoss AutoActivated and order latency.
+    /// Logs show Panic Sell Replacing; use the bid for longs and the ask for shorts.
+    /// A check-price fill can sell a positive stop at a shot entry's rebound print,
+    /// overstating its return before the panic replacement reaches the book.
+    /// Fall back to the last post-fill stop-side print, else the fire price.
+    #[default]
+    MarketAfterLatency,
+}
+
 /// The model's settings. Times in milliseconds, tolerances in per cent.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelSettings {
+    /// Not persisted; defaults to a marketable panic sell after latency, matching core stops.
+    #[serde(skip)]
+    pub stop_fill: StopFill,
+    /// Not persisted; the code default is the model's answer.
+    #[serde(skip)]
+    pub fast_price: FastPrice,
     /// How a MoonShot variant's entry is replayed.
     pub entry_method: EntryMethod,
     /// How long a replacement — of the sell, and of the entry order on a core with no measured
@@ -37,8 +70,8 @@ pub struct ModelSettings {
     pub pre_spike_lookback_ms: i64,
     /// How often the core's REST ticker brings the price a non-fast stop watches.
     pub ticker_period_ms: i64,
-    /// The core's price-series tick, which a stop at `StopLossEMA` 0 also fires on and whose last
-    /// price the fast stop checks.
+    /// The core's price-series tick, which a stop at `StopLossEMA` 0 also fires on and at whose
+    /// end the fast stop checks `fast_price` (default: the last print).
     pub series_tick_ms: i64,
     /// The floor on a sell-line step delay of zero.
     pub step_floor_ms: i64,
@@ -59,8 +92,11 @@ pub struct ModelSettings {
 }
 
 impl Default for ModelSettings {
+    /// Keep model defaults in one place, including the unpersisted fast trigger rule.
     fn default() -> Self {
         Self {
+            stop_fill: StopFill::default(),
+            fast_price: FastPrice::default(),
             entry_method: EntryMethod::default(),
             latency_ms: DEFAULT_LATENCY_MS,
             replace_window_ms: FAST_ALGO_WINDOW_MS,
@@ -107,6 +143,20 @@ impl ModelSettings {
         };
         let pct = |v: f64, fallback: f64| num(v, fallback, MAX_SETTING_PCT);
         Self {
+            fast_price: match self.fast_price {
+                FastPrice::VwapLastTrades(n) => {
+                    FastPrice::VwapLastTrades(n.clamp(1, FAST_TRADES_MAX as u8))
+                }
+                FastPrice::TradeEma {
+                    alpha,
+                    qty_weighted,
+                } if alpha.is_finite() && alpha > 0.0 => FastPrice::TradeEma {
+                    alpha: alpha.min(1.0),
+                    qty_weighted,
+                },
+                _ => FastPrice::LastOfTick,
+            },
+            stop_fill: self.stop_fill,
             entry_method: self.entry_method,
             latency_ms: num(self.latency_ms, d.latency_ms, MAX_SETTING_MS as f64),
             replace_window_ms: ms(self.replace_window_ms, 0),

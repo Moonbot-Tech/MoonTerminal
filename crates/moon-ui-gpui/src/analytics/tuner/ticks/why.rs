@@ -78,6 +78,18 @@ impl DealChip {
     }
 }
 
+/// Sentence shown where the tuner used to name the manual fetch button.
+///
+/// Returns:
+///     The counted background-loading line while `pending_rows` is `Some`. The same
+///     sentence with no number while the autoload is idle (`None`).
+pub(in crate::analytics::tuner) fn background_loading_line() -> String {
+    match super::fetch::autoload::pending_rows() {
+        Some(n) => t!("analytics.ticks.why.loading_background", n = n).to_string(),
+        None => t!("analytics.ticks.why.loading_background_idle").to_string(),
+    }
+}
+
 /// Semantic colours, resolved against the active palette by the table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::analytics::tuner) enum Tone {
@@ -112,9 +124,14 @@ impl Tip {
 /// The first reason a deal cannot teach the search, in the sample's exclusion order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::analytics::tuner) enum DealWhy {
+    /// Presentation only: a local tape read has not yet established coverage.
+    Reading,
     Fit,
     AcceptedShortTail,
-    NoTape { fetchable: bool },
+    NoTape {
+        fetchable: bool,
+    },
+    StationMissing,
     NoAddress,
     Fetching,
     Refused(TickStatus),
@@ -122,17 +139,42 @@ pub(in crate::analytics::tuner) enum DealWhy {
     ExitMissed(ExitMiss),
     Unjudged(Unjudged),
     NoVerdict,
-    ShortTail { trail_ms: i64, min_s: u32 },
-    Hole { len_ms: i64 },
+    ShortTail {
+        trail_ms: i64,
+        min_s: u32,
+    },
+    Hole {
+        len_ms: i64,
+    },
     LostTape,
 }
 
 impl DealWhy {
+    /// Defer negative tape claims in the table until the selected strategy's read answers.
+    /// Covered rows, settled refusals and known address/fetch states keep their explanations.
+    pub(in crate::analytics::tuner) fn display_of_with(
+        row: &DealRow,
+        admission: &super::tail::Admission,
+        reading: bool,
+    ) -> Self {
+        if reading && row.tape == TapeStatus::Missing {
+            Self::Reading
+        } else {
+            Self::of_with(row, admission)
+        }
+    }
+
     /// Reuse the population's source and refusal snapshot for its primary classification.
     pub(in crate::analytics::tuner) fn of_with(
         row: &DealRow,
         admission: &super::tail::Admission,
     ) -> Self {
+        if matches!(row.tape, TapeStatus::Missing | TapeStatus::Refused(_))
+            && crate::backend::station::known_cached()
+            && !admission.candidate(row.deal.report_uid)
+        {
+            return Self::StationMissing;
+        }
         match row.tape {
             TapeStatus::Missing => {
                 return Self::NoTape {
@@ -225,11 +267,15 @@ impl DealWhy {
         match self {
             Self::Fit => DealChip::Fit,
             Self::AcceptedShortTail => DealChip::AcceptedShortTail,
-            Self::NoTape { .. } | Self::NoAddress | Self::Fetching | Self::Refused(_) => {
-                DealChip::NoTape
-            }
+            Self::NoTape { .. }
+            | Self::StationMissing
+            | Self::NoAddress
+            | Self::Fetching
+            | Self::Refused(_) => DealChip::NoTape,
             Self::EntryMissed(_) | Self::ExitMissed(_) => DealChip::ModelMiss,
-            Self::Unjudged(_) | Self::NoVerdict | Self::LostTape => DealChip::Unjudged,
+            Self::Reading | Self::Unjudged(_) | Self::NoVerdict | Self::LostTape => {
+                DealChip::Unjudged
+            }
             Self::ShortTail { .. } => DealChip::ShortTail,
             Self::Hole { .. } => DealChip::Hole,
         }
@@ -238,10 +284,12 @@ impl DealWhy {
     /// Stable translation identity; every upstream finding is matched explicitly.
     fn key(self) -> &'static str {
         match self {
+            Self::Reading => "reading",
             Self::Fit => "fit",
             Self::AcceptedShortTail => "accepted_short_tail",
             Self::NoTape { fetchable: true } => "missing_fetchable",
             Self::NoTape { fetchable: false } => "missing",
+            Self::StationMissing => "station_missing",
             Self::NoAddress => "no_address",
             Self::Fetching => "fetching",
             Self::Refused(status) => match status {
@@ -270,6 +318,12 @@ impl DealWhy {
 
     /// Localize a reason with its measured durations and retry metadata.
     fn translated(self, suffix: &str) -> String {
+        if self == Self::Reading {
+            return t!("analytics.ticks.fetch_reading").to_string();
+        }
+        if self == Self::StationMissing {
+            return t!("analytics.ticks.why.station_missing").to_string();
+        }
         let key = format!("analytics.ticks.why.{}{}", self.key(), suffix);
         let (trail_ms, min_s, len_ms, retry_at_ms, retention_ms, retry_in_s) = match self {
             Self::ShortTail { trail_ms, min_s } => (trail_ms, min_s, 0, 0, 0, 0),
@@ -281,9 +335,11 @@ impl DealWhy {
                 (0, 0, 0, 0, retention_ms, 0)
             }
             Self::Refused(TickStatus::RateLimited { retry_in_s }) => (0, 0, 0, 0, 0, retry_in_s),
-            Self::Fit
+            Self::Reading
+            | Self::Fit
             | Self::AcceptedShortTail
             | Self::NoTape { .. }
+            | Self::StationMissing
             | Self::NoAddress
             | Self::Fetching
             | Self::Refused(
@@ -326,13 +382,19 @@ impl DealWhy {
     /// Only actions that can improve this deal are offered.
     fn todo(self) -> Option<String> {
         match self {
-            Self::NoTape { fetchable: true } => Some(t!("analytics.ticks.why.fetch").to_string()),
+            Self::NoTape { fetchable: true } => Some(background_loading_line()),
             Self::NoAddress => Some(t!("analytics.ticks.why.connect").to_string()),
-            Self::ShortTail { .. } => Some(t!("analytics.ticks.why.extend_tail").to_string()),
+            Self::ShortTail { .. } => Some(format!(
+                "{} {}",
+                background_loading_line(),
+                t!("analytics.ticks.why.extend_tail")
+            )),
             Self::Refused(TickStatus::ArchivePending { .. }) => Some(self.translated(".todo")),
-            Self::Fit
+            Self::Reading
+            | Self::Fit
             | Self::AcceptedShortTail
             | Self::NoTape { fetchable: false }
+            | Self::StationMissing
             | Self::Fetching
             | Self::Refused(
                 TickStatus::Pending
@@ -370,7 +432,7 @@ impl DealWhy {
             what: self.short(),
             why: self.translated(".why"),
             todo: self.todo(),
-            not_your_fault: !matches!(self, Self::ShortTail { .. }),
+            not_your_fault: !matches!(self, Self::Reading | Self::ShortTail { .. }),
         }
     }
 
@@ -385,7 +447,7 @@ impl DealWhy {
             todo: self.todo(),
             not_your_fault: !matches!(
                 self,
-                Self::Fit | Self::AcceptedShortTail | Self::ShortTail { .. }
+                Self::Reading | Self::Fit | Self::AcceptedShortTail | Self::ShortTail { .. }
             ),
         };
         if let Some(verdict) = verdict {
@@ -410,6 +472,7 @@ impl DealWhy {
     /// Keep incomplete tape amber even when an unfillable tail is admitted to the sample.
     pub(in crate::analytics::tuner) fn tape_glyph(self) -> (&'static str, Tone) {
         match self {
+            Self::Reading => ("…", Tone::Muted),
             Self::ShortTail { .. } | Self::AcceptedShortTail => ("●", Tone::Warning),
             Self::Hole { .. } => ("◐", Tone::Warning),
             Self::Fit
@@ -418,9 +481,9 @@ impl DealWhy {
             | Self::Unjudged(_)
             | Self::NoVerdict
             | Self::LostTape => ("●", Tone::Good),
-            Self::NoTape { .. } | Self::Refused(TickStatus::ArchivePending { .. }) => {
-                ("○", Tone::Muted)
-            }
+            Self::NoTape { .. }
+            | Self::StationMissing
+            | Self::Refused(TickStatus::ArchivePending { .. }) => ("○", Tone::Muted),
             Self::Fetching => ("…", Tone::Warning),
             Self::NoAddress => ("·", Tone::Muted),
             Self::Refused(
@@ -474,12 +537,16 @@ fn unjudged_key(why: Unjudged) -> &'static str {
 }
 
 /// Reuse the tuner's localized duration units for measured tape lengths.
+///
+/// Under ten minutes the search estimate already keeps leftover seconds, so the tape uses
+/// that figure. From ten minutes to an hour the estimate rounds up to a whole minute, and a
+/// length that is not an exact minute joins the minute figure with the leftover seconds.
 fn duration(ms: i64) -> String {
     if ms <= 0 {
         return t!("analytics.ticks.dur_s", s = 0).to_string();
     }
     let secs = (ms as u64) / 1_000;
-    if (60..3_600).contains(&secs) && !secs.is_multiple_of(60) {
+    if ((10 * 60)..3_600).contains(&secs) && !secs.is_multiple_of(60) {
         format!(
             "{} {}",
             super::estimate::duration_text(std::time::Duration::from_secs(secs / 60 * 60)),

@@ -572,10 +572,12 @@ impl KeyTask {
     }
 
     /// Forget trades that opened before `horizon_ms` and never closed — an exit this session
-    /// did not see, which would otherwise keep the key forever.
-    pub(super) fn drop_stale_opens(&mut self, horizon_ms: i64) {
+    /// did not see, which would otherwise keep the key forever; return the forgotten count.
+    pub(super) fn drop_stale_opens(&mut self, horizon_ms: i64) -> usize {
+        let before = self.trades.len();
         self.trades
             .retain(|t| t.close_ms.is_some() || t.open_ms >= horizon_ms);
+        before - self.trades.len()
     }
 }
 

@@ -44,7 +44,7 @@ pub(super) struct SaveTarget {
 /// Immutable authority carried from Save/Copy preparation through final command dispatch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SaveAuthority {
-    /// Selection or immutable batch generation that produced this confirmation.
+    /// Selection that produced this confirmation.
     pub(super) producer: super::save::SaveProducer,
     /// Dialog/draft sequence captured before any asynchronous preview or live-core read.
     pub(super) dialog_seq: u64,
@@ -70,17 +70,15 @@ pub(in crate::analytics::tuner) fn tagged(sel: impl Into<String>, el: impl IntoE
 }
 
 /// A prepared save: target(s) + the list of changes. Single selection = 1 target;
-/// Ctrl- or Shift-built multi-selection = N targets (the same changes for each). Copy = always 1.
+/// Ctrl- or Shift-built multi-selection = N targets with shared or individual edits. Copy = 1.
 pub(super) struct SaveDialog {
-    /// Captured per-strategy old values for a batch preview, aligned with per_target.
-    pub(super) per_target_olds: Option<Vec<Vec<Option<String>>>>,
     /// Producer identity that must still match before any target is dispatched.
     pub(super) authority: SaveAuthority,
     pub(super) targets: Vec<SaveTarget>,
     pub(super) changes: Vec<(String, String)>,
     /// Current parameter values of the FIRST (anchor) target, indexed like `changes`
-    /// (the dialog shows "now → next"); in multi-select the preview reflects the anchor
-    /// and the rest are written blind. None — the parameter is absent from the strategy.
+    /// (the dialog shows "now → next"). Shared bulk edits hide the anchor's old value;
+    /// individual edits use `per_target_olds`. None means the parameter is absent or unknown.
     pub(super) olds: Vec<Option<String>>,
     /// true — the "Make a copy" dialog: confirming creates a NEW strategy with these
     /// fields (name from the input) rather than editing the source.
@@ -88,14 +86,15 @@ pub(super) struct SaveDialog {
     /// Warnings (overwriting a foreign slot type, fields that did not fit) — shown in
     /// the confirmation dialog, not only in the log.
     pub(super) warns: Vec<String>,
-    /// One value set PER TARGET, indexed like `targets`. `None` — every target gets
-    /// `changes`, which is what a threshold write means.
+    /// One value set PER TARGET, indexed like `targets`. `None` — every target gets `changes`.
     ///
-    /// The coin axis needs it because its value is a SET the strategies do not share: the
-    /// edit is applied to each strategy's OWN list, so the string sent to each differs. With
+    /// Mixed-kind threshold saves and the coin axis need distinct payloads. A coin value is a
+    /// SET the strategies do not share: edits apply to each strategy's OWN list. With
     /// one shared value, ticking a single coin on a multi-select copied the whole working
     /// list — itself the union of the selected strategies' lists — onto every one of them.
     pub(super) per_target: Option<Vec<Vec<(String, String)>>>,
+    /// Current values aligned with each per-target edit list; missing values stay unknown.
+    pub(super) per_target_olds: Vec<Vec<Option<String>>>,
     /// What actually changed, in words, indexed like `changes`. `None` — nothing to add
     /// beyond the value itself.
     ///

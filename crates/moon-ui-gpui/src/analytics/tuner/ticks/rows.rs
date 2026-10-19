@@ -10,7 +10,6 @@ use super::why::{DealChip, DealWhy};
 pub(in crate::analytics::tuner) struct Classified {
     rows_rev: u64,
     min_tail_s: u32,
-    source_switches: (bool, bool),
     refusal_revision: u64,
     at_ms: i64,
     valid_until_ms: i64,
@@ -79,7 +78,7 @@ fn retention_edge(
     now_ms: i64,
 ) -> Option<i64> {
     use moon_core::market::trade_replay::venue_caps::{
-        ARCHIVE_DEPTH_MS, RETENTION_SAFETY_MS, archive_route, trade_route,
+        RETENTION_SAFETY_MS, archive_route, trade_route,
     };
     let retentions: Vec<i64> = [
         Some(moon_core::market::CORE_ARCHIVE_RETENTION_MS),
@@ -91,7 +90,7 @@ fn retention_edge(
         address
             .venue
             .and_then(|venue| archive_route(venue, &address.market))
-            .map(|_| ARCHIVE_DEPTH_MS),
+            .map(|_| i64::MAX),
     ]
     .into_iter()
     .flatten()
@@ -107,15 +106,13 @@ fn retention_edge(
         .min()
 }
 
-/// Reuse classification until a refusal, source switch, retention edge, row or floor changes.
+/// Reuse classification until a refusal, retention edge, row or floor changes.
 fn classify(state: &mut TicksState, min_tail_s: u32, now_ms: i64) {
     let admission = super::tail::Admission::at(min_tail_s, now_ms);
-    let source_switches = admission.switches;
     let refusal_revision = admission.refusal_revision;
     if state.classified.as_ref().is_some_and(|c| {
         c.rows_rev == state.rows_rev
             && c.min_tail_s == min_tail_s
-            && c.source_switches == source_switches
             && c.refusal_revision == refusal_revision
             && now_ms >= c.at_ms
             && now_ms < c.valid_until_ms
@@ -147,7 +144,6 @@ fn classify(state: &mut TicksState, min_tail_s: u32, now_ms: i64) {
     state.classified = Some(Classified {
         rows_rev: state.rows_rev,
         min_tail_s,
-        source_switches,
         refusal_revision: admission.refusal_revision,
         at_ms: now_ms,
         valid_until_ms,

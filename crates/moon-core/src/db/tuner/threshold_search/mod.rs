@@ -3,9 +3,12 @@
 //!
 //! This module owns the database side — one scan of the tuner source into column-oriented
 //! memory — and hands the result to the DB-free threshold optimizer in [`search`] and field-set
-//! selector in [`compose`]. Semantics match tuner variants: NULL fields equal 0 (COALESCE), and
-//! bounds are inclusive. The database is scanned once and all later work stays in memory, so call
-//! this ONLY from a background executor.
+//! selector in [`compose`]. Semantics match tuner variants: NULL fields equal 0 (COALESCE) and
+//! bounds are inclusive, except a Detect field. Its number is missing on a deal of another
+//! detect, and folding that NULL to 0 makes a Min look like it removed the deal. The scan stores
+//! NaN there instead, and the optimizer treats that NaN as "the Min does not apply" — the same
+//! rule as the what-if SQL (`IS NULL OR value >= min`). The database is scanned once and all
+//! later work stays in memory, so call this ONLY from a background executor.
 //!
 //! The sample is ordered chronologically here, which is what makes a train/holdout split and a
 //! drawdown figure mean anything at all: both read the sequence, not the set.
@@ -636,8 +639,7 @@ type Sample = (Vec<f64>, Vec<Vec<f64>>, Vec<i64>);
 /// that only takes effect after it would be the slow one.
 const SCAN_CANCEL_EVERY: usize = 4096;
 
-/// Scan profit and effective field values (COALESCE 0) into column-oriented memory, oldest
-/// trade first.
+/// Scan profit and effective field values into column-oriented memory, oldest trade first.
 ///
 /// Args:
 ///     q: Report scope and period.
@@ -646,8 +648,9 @@ const SCAN_CANCEL_EVERY: usize = 4096;
 /// Returns:
 ///     Per-trade profits and one value column per entry in `FIELDS`, `None` when the search was
 ///     stopped mid-scan, or a classified read failure. Every value feeds the optimizer, so an
-///     unreadable cell aborts the calculation; NULL deliberately maps to `0.0`, a read error
-///     does not.
+///     unreadable cell aborts the calculation. NULL maps to `0.0`, except on a Detect field,
+///     where it maps to NaN so a Min does not apply to a deal that never carried the number.
+///     A read error does not become either stand-in.
 fn scan(q: &Query, handle: &SearchHandle) -> ReadResult<Option<Sample>> {
     super::read_tuner_rows(q, |conn, q, src| scan_on(conn, q, src, handle))
 }
@@ -699,13 +702,34 @@ fn scan_on(
             let v = r
                 .get::<_, Option<f64>>(fi)
                 .map_err(|e| read_fail_on(conn, CTX, e))?;
-            col.push(v.filter(|v| v.is_finite()).unwrap_or(0.0));
+            col.push(effective_field_value(FIELDS[fi].class, v));
         }
     }
     let order = chronological_order(&closes, &profits, &vals);
     let sorted_vals = vals.iter().map(|col| gather(col, &order)).collect();
     let sorted_closes = order.iter().map(|t| closes[*t]).collect();
     Ok(Some((gather(&profits, &order), sorted_vals, sorted_closes)))
+}
+
+/// Value the optimizer sees for one scanned cell.
+///
+/// Other fields fold NULL and non-finite numbers to 0, matching the variant SQL's COALESCE.
+/// A Detect cell folds them to NaN: that row is a deal of another detect (or a comment that
+/// did not carry the number), and the Min does not apply to it. Storing 0 would put the row
+/// under every positive Min.
+///
+/// Args:
+///     class: The tuner field's class.
+///     raw: The cell as SQLite returned it. `None` is NULL.
+///
+/// Returns:
+///     A finite value, `0.0` for a missing non-Detect cell, or NaN for a missing Detect cell.
+pub(super) fn effective_field_value(class: FieldClass, raw: Option<f64>) -> f64 {
+    match raw.filter(|v| v.is_finite()) {
+        Some(v) => v,
+        None if class == FieldClass::Detect => f64::NAN,
+        None => 0.0,
+    }
 }
 
 /// Row indices in chronological order, tie-broken to a TOTAL order on the row's content.

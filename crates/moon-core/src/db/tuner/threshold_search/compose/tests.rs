@@ -1267,7 +1267,7 @@ fn snapshot_scopes(want: usize, min_trades: usize) -> Vec<Scope> {
     let nf = FIELDS.len();
     let cols = FIELDS
         .iter()
-        .map(|s| format!("\"{}\"", s.col))
+        .map(|s| crate::db::tuner::comment_field::raw_column_sql(s.col))
         .collect::<Vec<_>>()
         .join(", ");
     // The SAME row predicates as the pick above and as the running window's defaults. Without
@@ -1293,7 +1293,7 @@ fn snapshot_scopes(want: usize, min_trades: usize) -> Vec<Scope> {
                 closes.push(r.get::<_, i64>(nf + 1).expect("closedate"));
                 for (fi, col) in vals.iter_mut().enumerate() {
                     let v = r.get::<_, Option<f64>>(fi).expect("field");
-                    col.push(v.filter(|v| v.is_finite()).unwrap_or(0.0));
+                    col.push(super::super::effective_field_value(FIELDS[fi].class, v));
                 }
             }
             let order = super::super::chronological_order(&closes, &profits, &vals);
@@ -1729,7 +1729,7 @@ fn pinned_scope(strategy_id: i64, core_uid: i64) -> Option<Scope> {
     let nf = FIELDS.len();
     let cols = FIELDS
         .iter()
-        .map(|s| format!("\"{}\"", s.col))
+        .map(|s| crate::db::tuner::comment_field::raw_column_sql(s.col))
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
@@ -1748,7 +1748,7 @@ fn pinned_scope(strategy_id: i64, core_uid: i64) -> Option<Scope> {
         closes.push(r.get::<_, i64>(nf + 1).expect("closedate"));
         for (fi, col) in vals.iter_mut().enumerate() {
             let v = r.get::<_, Option<f64>>(fi).expect("field");
-            col.push(v.filter(|v| v.is_finite()).unwrap_or(0.0));
+            col.push(super::super::effective_field_value(FIELDS[fi].class, v));
         }
     }
     let n = profits.len();

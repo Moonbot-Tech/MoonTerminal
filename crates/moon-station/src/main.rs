@@ -148,7 +148,7 @@ fn main() -> anyhow::Result<()> {
     moon_core::feed::station::enable(profile);
     moon_core::market::tape_recorder::set_always_on();
     storage::init(data_root.clone());
-    moon_core::market::trade_replay::archive::set_disk_guard(storage::room_for);
+    moon_core::market::trade_replay::archive::set_disk_guard(storage::archive_budget);
     moon_core::market::tape_recorder::catchup::enable();
     // The interprocess lease on the replica: a second station, or a terminal, on the same data
     // root is refused here rather than corrupting the file.
@@ -456,11 +456,11 @@ fn apply_tape(tape: &cores::Tape) {
         tape.min_tail_s
             .unwrap_or(moon_core::db::tuner::ticks::tail::DEFAULT_MIN_TAIL_S),
     );
-    if let Some(secs) = tape.margin_s {
-        moon_core::market::trade_replay::set_margin_s(secs);
+    if let Some(margin_s) = tape.margin_s {
+        moon_core::market::trade_replay::set_margin_s(margin_s);
     }
-    if let Some(minutes) = tape.long_position_min {
-        moon_core::market::trade_replay::set_long_position_min(minutes);
+    if let Some(long_position_min) = tape.long_position_min {
+        moon_core::market::trade_replay::set_long_position_min(long_position_min);
     }
     log::info!(
         "tape window: margin {} s, long position from {} min, max age {} days, record emulator {}, tuner-usable trades only {}, minimum tail {} s",
