@@ -243,15 +243,18 @@ fn schema_default(type_name: &str, default: Option<&str>) -> Option<f64> {
 
 impl AnalyticsView {
     /// Re-read tape after filing or refusal changes so newly admitted tails regain their tape.
+    /// A refusal change alone keeps the judged rows: the reload asks again only about the
+    /// missing rows on the markets whose refusals changed (`station::refusals_since`).
     pub(super) fn refresh_station_tape(&mut self, cx: &mut Context<Self>) {
         let generation = station::filed_generation();
         let refusal_revision = station::refusal_revision();
-        if generation != self.ticks.station_generation
-            || refusal_revision != self.ticks.station_refusal_revision
-        {
+        let filed = generation != self.ticks.station_generation;
+        if filed || refusal_revision != self.ticks.station_refusal_revision {
             self.ticks.station_generation = generation;
             self.ticks.station_refusal_revision = refusal_revision;
-            self.ticks.judged_under = None;
+            if filed {
+                self.ticks.judged_under = None;
+            }
             self.reload_ticks(cx);
         }
     }

@@ -12,8 +12,8 @@
 //!
 //! It reruns when the list's scope is reloaded by hand or the model settings change (at once),
 //! and when the report moved — at most once per [`RERUN_GAP`], and never on top of a pass still
-//! running. A tape filing recounts only the strategies with a tapeless row on a filed market,
-//! and none at all when it touched none of them: leaving the tab and coming back, or picking a
+//! running. A tape filing, or a station refusal set or lifted, recounts only the strategies with
+//! a tapeless row on that market, and none at all when it touched none of them: leaving the tab and coming back, or picking a
 //! row (the card's own replay files its markets), keeps the finished counts.
 
 use std::collections::{HashMap, HashSet};
@@ -192,7 +192,9 @@ pub(in crate::analytics) struct ReadyKey {
     /// sources, the model's margin and the long-position split — the card's own
     /// ([`SamplePolicy`]).
     pub(in crate::analytics) sample: SamplePolicy,
-    /// The station's refusal revision: a refused or admitted row changes its verdict.
+    /// The station's refusal revision: a refused or admitted row changes its verdict. Only the
+    /// strategies with a tapeless row on a market whose refusals changed go stale
+    /// ([`ReadyPass::stale_strategies`]).
     pub(in crate::analytics) refusal_revision: u64,
     /// The cores' catalogs: an address resolving where it did not (a core connecting, its
     /// catalog arriving) changes the groups' signatures, so the deals are read again.
@@ -204,13 +206,10 @@ pub(in crate::analytics) struct ReadyKey {
 
 impl ReadyKey {
     /// Whether moving from `self` to `next` makes every count wrong at once (another scope,
-    /// model, sample policy or station refusal set), rather than a few strategies' counts stale
-    /// (a report, tape, address or calibration change).
+    /// model or sample policy), rather than a few strategies' counts stale (a report, tape,
+    /// station refusal, address or calibration change).
     pub(in crate::analytics) fn restarts(&self, next: &ReadyKey) -> bool {
-        self.scope_gen != next.scope_gen
-            || self.model != next.model
-            || self.sample != next.sample
-            || self.refusal_revision != next.refusal_revision
+        self.scope_gen != next.scope_gen || self.model != next.model || self.sample != next.sample
     }
 
     /// Whether moving to `next` must read the deals again to know which strategies changed.
@@ -238,9 +237,10 @@ pub(in crate::analytics) struct ReadyProgress {
     #[cfg(test)]
     chunks: Mutex<Vec<usize>>,
     partial: Mutex<Vec<(String, Readiness)>>,
-    /// `(strategy, (exchange key, market))` of each replayed row left without tape: the only
-    /// rows a later filing can change.
-    waiting: Mutex<Vec<(String, (String, String))>>,
+    /// `(strategy, (exchange key, market), tapeless)` of each replayed row: a tapeless one is
+    /// the only kind a later filing can change; any can change with the station's refusals (a
+    /// short tail admitted or not).
+    waiting: Mutex<Vec<(String, (String, String), bool)>>,
     /// Per counted strategy, the earliest moment the clock alone changes one of its rows'
     /// verdicts ([`verdict_deadline`]), and whether every held read behind it answered settled.
     deadlines: Mutex<Vec<(String, Option<i64>, bool)>>,
@@ -294,8 +294,8 @@ impl ReadyProgress {
         )
     }
 
-    /// Take the tapeless markets noted since the last call.
-    fn drain_waiting(&self) -> Vec<(String, (String, String))> {
+    /// Take the markets noted since the last call.
+    fn drain_waiting(&self) -> Vec<(String, (String, String), bool)> {
         std::mem::take(
             &mut *self
                 .waiting
@@ -306,10 +306,19 @@ impl ReadyProgress {
 
     /// Note that a replayed row of `key` on `market` was left without tape.
     pub(in crate::analytics) fn wait_on(&self, key: &str, market: (String, String)) {
+        self.note(key, market, true);
+    }
+
+    /// Note that a replayed row of `key` on `market` holds its tape.
+    pub(in crate::analytics) fn trades_on(&self, key: &str, market: (String, String)) {
+        self.note(key, market, false);
+    }
+
+    fn note(&self, key: &str, market: (String, String), tapeless: bool) {
         self.waiting
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((key.to_string(), market));
+            .push((key.to_string(), market, tapeless));
     }
 
     /// The most tape bytes the pass held at once.
@@ -417,6 +426,9 @@ pub(in crate::analytics) struct ReadyPass {
     /// Which strategies trade on each `(exchange key, market)`, as the passes replayed them —
     /// a tape filing elsewhere leaves every count standing.
     markets: HashMap<(String, String), HashSet<String>>,
+    /// Which strategies have any replayed row on each `(exchange key, market)`, covered or not:
+    /// a station refusal set or lifted there recounts them ([`Self::trading_on`]).
+    traded: HashMap<(String, String), HashSet<String>>,
     /// The running pass recounts only some strategies and merges into `counts`.
     partial: bool,
     /// Each counted strategy's deals and addresses, folded ([`group_signature`]): a report
@@ -454,6 +466,7 @@ impl Default for ReadyPass {
             run: ReadyRun::Idle,
             counts: HashMap::new(),
             markets: HashMap::new(),
+            traded: HashMap::new(),
             partial: false,
             signatures: HashMap::new(),
             pending: HashMap::new(),
@@ -601,13 +614,15 @@ impl ReadyPass {
         self.partial = only.is_some();
         self.pending.clear();
         self.due.clear();
-        match only {
-            None => self.markets.clear(),
-            // The recount files its strategies' tapeless rows afresh.
-            Some(only) => self.markets.retain(|_, keys| {
-                keys.retain(|k| !only.contains(k));
-                !keys.is_empty()
-            }),
+        for index in [&mut self.markets, &mut self.traded] {
+            match only {
+                None => index.clear(),
+                // The recount files its strategies' rows afresh.
+                Some(only) => index.retain(|_, keys| {
+                    keys.retain(|k| !only.contains(k));
+                    !keys.is_empty()
+                }),
+            }
         }
         let kept = only.map_or(0, |only| {
             self.counts.keys().filter(|k| !only.contains(*k)).count()
@@ -724,13 +739,14 @@ impl ReadyPass {
     /// Args:
     ///     key: The inputs now.
     ///     refiled: The markets filed since the finished pass's tape revision, as
-    ///         `trade_cache::filed_since` names them.
+    ///         `trade_cache::filed_since` names them. A station refusal change adds the
+    ///         strategies [`Self::trading_on`] names.
     ///
     ///     now_ms: The clock, against the strategies' verdict deadlines.
     ///
     /// Returns:
     ///     `None` when only a whole pass answers it: no finished pass, another scope, model,
-    ///     tail floor, refusal set or source switch. Otherwise the strategies trading on a
+    ///     tail floor or source switch. Otherwise the strategies trading on a
     ///     refiled market or past a verdict deadline — empty when the move touched none of them
     ///     (a tab switch, a selection, a print filed for another list). A report move adds the
     ///     strategies whose deals changed once the pass has read them ([`Self::recount_set`]).
@@ -839,10 +855,12 @@ impl ReadyPass {
         self.counts.retain(|k, _| signatures.contains_key(k));
         self.signatures.retain(|k, _| signatures.contains_key(k));
         self.deadlines.retain(|k, _| signatures.contains_key(k));
-        self.markets.retain(|_, keys| {
-            keys.retain(|k| signatures.contains_key(k) && !recount.contains(k));
-            !keys.is_empty()
-        });
+        for index in [&mut self.markets, &mut self.traded] {
+            index.retain(|_, keys| {
+                keys.retain(|k| signatures.contains_key(k) && !recount.contains(k));
+                !keys.is_empty()
+            });
+        }
         if self.counts.len() != before {
             self.reclassify();
         }
@@ -862,10 +880,31 @@ impl ReadyPass {
         self.ran = Some(key);
     }
 
-    /// File tapeless rows under their market, for [`Self::stale_strategies`].
-    fn wait(&mut self, waiting: Vec<(String, (String, String))>) {
-        for (key, market) in waiting {
-            self.markets.entry(market).or_default().insert(key);
+    /// The strategies with any replayed row on one of `markets`: the ones whose station
+    /// refusals changed (`station::refusals_since`).
+    pub(in crate::analytics::tuner) fn trading_on(
+        &self,
+        markets: &HashSet<(String, String)>,
+    ) -> HashSet<String> {
+        markets
+            .iter()
+            .filter_map(|m| self.traded.get(m))
+            .flatten()
+            .cloned()
+            .collect()
+    }
+
+    /// File replayed rows under their market: tapeless ones for [`Self::stale_strategies`],
+    /// every one for [`Self::trading_on`].
+    fn wait(&mut self, waiting: Vec<(String, (String, String), bool)>) {
+        for (key, market, tapeless) in waiting {
+            if tapeless {
+                self.markets
+                    .entry(market.clone())
+                    .or_default()
+                    .insert(key.clone());
+            }
+            self.traded.entry(market).or_default().insert(key);
         }
     }
 
@@ -1273,12 +1312,16 @@ pub(in crate::analytics::tuner) fn count_strategies(
                         .all(|row| fetched.settled.contains(&row.deal.report_uid))
                 });
                 let replayed = fetched.map(&replay).unwrap_or_default();
-                for address in replayed
-                    .iter()
-                    .filter(|row| row.tape != TapeStatus::Covered)
-                    .filter_map(|row| row.address.as_ref())
-                {
-                    progress.wait_on(&key, (address.exchange_key.clone(), address.market.clone()));
+                for row in &replayed {
+                    let Some(address) = row.address.as_ref() else {
+                        continue;
+                    };
+                    let market = (address.exchange_key.clone(), address.market.clone());
+                    if row.tape == TapeStatus::Covered {
+                        progress.trades_on(&key, market);
+                    } else {
+                        progress.wait_on(&key, market);
+                    }
                 }
                 // The card's memory cap on its tape, so a fit row the card would let go of is
                 // not counted here either.
@@ -1405,11 +1448,15 @@ impl AnalyticsView {
     }
 
     /// The strategies a pass for `key` must recount ([`ReadyPass::stale_strategies`]), with
-    /// the markets filed since the finished pass read off the tape store now.
+    /// the markets filed and the markets whose station refusals changed since the finished pass,
+    /// read off the tape store and the refusal set now.
     fn ready_stale(&self, key: &ReadyKey, now_ms: i64) -> Option<HashSet<String>> {
-        let since = self.ready.ran?.tape_rev;
-        let (_, refiled) = moon_core::market::trade_replay::trade_cache::filed_since(since);
-        self.ready.stale_strategies(key, &refiled, now_ms)
+        let ran = self.ready.ran?;
+        let (_, refiled) = moon_core::market::trade_replay::trade_cache::filed_since(ran.tape_rev);
+        let (_, refused) = super::ticks::fetch::station::refusals_since(ran.refusal_revision);
+        let mut stale = self.ready.stale_strategies(key, &refiled, now_ms)?;
+        stale.extend(self.ready.trading_on(&refused));
+        Some(stale)
     }
 
     /// Run the pass now: the scope's deals off the database and their addresses resolved

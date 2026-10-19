@@ -377,7 +377,64 @@ fn a_filing_recounts_only_the_strategies_waiting_on_it() {
     );
 }
 
-/// A report, scope or model move asks for a whole pass; so does anything before one finished.
+/// A station refusal change is per market: it never restarts the pass, and only the strategy
+/// with a tapeless row on the market whose refusals changed is recounted — the other keeps its
+/// count and class on screen through the recount.
+#[test]
+fn a_refusal_change_recounts_only_the_strategies_on_its_market() {
+    let mut pass = finished();
+    let moved = ReadyKey {
+        refusal_revision: 3,
+        ..key(1, 1)
+    };
+    assert!(
+        !key(1, 1).restarts(&moved),
+        "a refusal change is no restart"
+    );
+    let mut stale = pass
+        .stale_strategies(&moved, &HashSet::new(), 0)
+        .expect("a refusal change is a partial recount");
+    assert!(stale.is_empty());
+    assert!(
+        pass.trading_on(&HashSet::from([market("XBETA")]))
+            .is_empty(),
+        "another market"
+    );
+    stale.extend(pass.trading_on(&HashSet::from([market("XALPHA")])));
+    assert_eq!(stale, HashSet::from(["1@1".to_string()]));
+    let (seq, _) = pass.begin_partial(moved, Instant::now(), &stale);
+    assert_eq!(pass.counts.len(), 2, "no clear");
+    assert_eq!(pass.class("2@1"), ReadyClass::of(&ready(40, 40)));
+    assert_eq!(
+        pass.class("1@1"),
+        ReadyClass::of(&ready(3, 3)),
+        "old class until recounted"
+    );
+    let counts = HashMap::from([("1@1".to_string(), ready(30, 30))]);
+    assert_eq!(pass.land(seq, Ok(Some(counts))), (true, false));
+    assert_eq!(pass.counts["1@1"].fit, 30);
+    assert_eq!(pass.counts["2@1"].fit, 40, "kept");
+}
+
+/// A covered row's short tail is admitted or not by the station's refusals, so a refusal change
+/// on its market recounts it, while a filing there leaves it standing.
+#[test]
+fn a_refusal_change_recounts_a_covered_strategy_on_its_market() {
+    let mut pass = ReadyPass::default();
+    let (seq, progress) = pass.begin(key(1, 1), Instant::now());
+    progress.trades_on("2@1", market("XGAMMA"));
+    let counts = HashMap::from([("2@1".to_string(), ready(40, 40))]);
+    assert_eq!(pass.land(seq, Ok(Some(counts))), (true, false));
+    let gamma = HashSet::from([market("XGAMMA")]);
+    assert_eq!(
+        pass.stale_strategies(&key(1, 1), &gamma, 0),
+        Some(HashSet::new()),
+        "a filing cannot change a covered row"
+    );
+    assert_eq!(pass.trading_on(&gamma), HashSet::from(["2@1".to_string()]));
+}
+
+/// A scope, model or sample move asks for a whole pass; so does anything before one finished.
 #[test]
 fn a_real_input_change_recounts_everything() {
     let pass = finished();
@@ -389,15 +446,6 @@ fn a_real_input_change_recounts_everything() {
         "a report move reads before it decides"
     );
     assert!(!pass.stands(&key(1, 2), report.as_ref()), "report moved");
-    let refusals = ReadyKey {
-        refusal_revision: 3,
-        ..key(1, 1)
-    };
-    assert_eq!(
-        pass.stale_strategies(&refusals, &none, 0),
-        None,
-        "refusals moved"
-    );
     let window = ReadyKey {
         sample: SamplePolicy {
             margin_ms: 180_000,

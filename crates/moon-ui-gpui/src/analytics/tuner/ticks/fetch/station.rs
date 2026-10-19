@@ -28,6 +28,8 @@ struct Unfillable {
     generation: (u64, u32, (i64, i64)),
     revision: u64,
     uids: HashMap<i64, (String, String)>,
+    /// Each market's revision of its last membership change, for [`refusals_since`].
+    changed: HashMap<(String, String), u64>,
     snapshot_revision: u64,
     snapshot: Arc<HashSet<i64>>,
 }
@@ -47,8 +49,11 @@ impl Unfillable {
         if self.generation != generation {
             self.generation = generation;
             if !self.uids.is_empty() {
-                self.uids.clear();
                 self.revision += 1;
+                let revision = self.revision;
+                for (_, market) in self.uids.drain() {
+                    self.changed.insert(market, revision);
+                }
             }
         }
     }
@@ -60,7 +65,7 @@ impl Unfillable {
             .insert(uid, (exchange.into(), market.into()))
             .is_none()
         {
-            self.revision += 1;
+            self.mark(exchange, market);
         }
     }
 
@@ -70,8 +75,26 @@ impl Unfillable {
         self.uids
             .retain(|_, key| key.0 != exchange || key.1 != market);
         if self.uids.len() != before {
-            self.revision += 1;
+            self.mark(exchange, market);
         }
+    }
+
+    /// Bump the revision for a membership change on one market.
+    fn mark(&mut self, exchange: &str, market: &str) {
+        self.revision += 1;
+        self.changed
+            .insert((exchange.into(), market.into()), self.revision);
+    }
+
+    /// The revision now and every market whose membership changed after `since`.
+    fn since(&self, since: u64) -> (u64, HashSet<(String, String)>) {
+        let markets = self
+            .changed
+            .iter()
+            .filter(|&(_, &rev)| rev > since)
+            .map(|(market, _)| market.clone())
+            .collect();
+        (self.revision, markets)
     }
 }
 
@@ -106,6 +129,12 @@ pub(in crate::analytics::tuner) fn refusal_snapshot() -> (u64, Arc<HashSet<i64>>
 /// Refresh admission caches even when no tape row changed.
 pub(in crate::analytics::tuner) fn refusal_revision() -> u64 {
     unfillable().revision
+}
+
+/// The refusal revision now and the `(exchange, market)` pairs whose refusal membership changed
+/// after `since` — like `trade_cache::filed_since`, so a reader recounts only those markets.
+pub(in crate::analytics::tuner) fn refusals_since(since: u64) -> (u64, HashSet<(String, String)>) {
+    unfillable().since(since)
 }
 
 /// Only actual station filing invalidates held-row queries.

@@ -396,7 +396,9 @@ impl AnalyticsView {
         let misses: HashMap<i64, (DealRow, SettledMiss)> = if self.ticks.judged_under == Some(model)
         {
             let sample = SamplePolicy::current();
-            let refusal_revision = super::fetch::station::refusal_revision();
+            // Each revision a miss was judged under, with the markets whose refusals changed
+            // since — a refusal elsewhere leaves the miss standing.
+            let mut refusals: HashMap<u64, HashSet<(String, String)>> = HashMap::new();
             self.ticks
                 .data
                 .data()
@@ -406,9 +408,14 @@ impl AnalyticsView {
                         .filter(|r| r.tape == TapeStatus::Missing)
                         .filter_map(|r| {
                             let miss = self.ticks.settled.get(&r.deal.report_uid)?;
+                            let refused =
+                                refusals.entry(miss.refusal_revision).or_insert_with(|| {
+                                    super::fetch::station::refusals_since(miss.refusal_revision).1
+                                });
                             let fresh = miss.model == model
                                 && miss.sample == sample
-                                && miss.refusal_revision == refusal_revision
+                                && !refused
+                                    .contains(&(miss.market.0.clone(), miss.market.1.clone()))
                                 && miss.held == r.held
                                 && !refiled
                                     .contains(&(miss.market.0.clone(), miss.market.1.clone()));
