@@ -8,6 +8,164 @@ use crate::analytics::set_pnl_unit;
 use moon_core::db::ProfitUnit;
 use moon_core::db::tuner::VarStats;
 
+/// Compare actual laid-out text against the larger body band, without a raw pixel oracle.
+struct TypographyProbe;
+
+/// Exercise the localized supplemental metric at actual narrow dock widths.
+struct NarrowUnclosedProbe;
+
+impl gpui::Render for NarrowUnclosedProbe {
+    /// The production matrix receives an unclosed row and a synthetic two-column result.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        super::kpi_matrix_body_with(
+            &crate::load_state::LoadState::Ready(std::sync::Arc::new(vec![
+                VarStats {
+                    n: 125,
+                    ..Default::default()
+                };
+                2
+            ])),
+            String::new(),
+            &VarLabel::new("Fact".into()),
+            &[VarLabel::new("v1".into())],
+            false,
+            std::rc::Rc::new(|_, _| {}),
+            moon_ui::MoonPalette::active(cx),
+            cx,
+            super::KpiOpts {
+                rows: super::KpiRows::Plain,
+                unclosed: Some((6, 8.25)),
+                ..Default::default()
+            },
+        )
+    }
+}
+
+/// Enlarging the body band must not let the unclosed label overpaint Fact or V1 in a narrow dock.
+#[gpui::test]
+fn livefix_unclosed_body_label_fits_without_overpainting_values(cx: &mut gpui::TestAppContext) {
+    use gpui::px;
+    for theme in [
+        moon_core::config::UiThemeMode::Light,
+        moon_core::config::UiThemeMode::Dark,
+        moon_core::config::UiThemeMode::Graphite,
+    ] {
+        cx.update(|cx| {
+            moon_ui::MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+                cx,
+            )
+        });
+        for language in moon_core::config::Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for width in [320.0, 400.0, 687.0] {
+                let window =
+                    cx.open_window(gpui::size(px(width), px(700.0)), |_, _| NarrowUnclosedProbe);
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let label = visual.debug_bounds("kpi-unclosed-label").unwrap();
+                let need = visual.update(|_, cx| {
+                    crate::design::ui_body_text_width(
+                        cx,
+                        &rust_i18n::t!("analytics.ticks.kpi.unclosed"),
+                        400.0,
+                    )
+                });
+                assert!(
+                    label.size.width + px(0.5) >= px(need),
+                    "unclosed body label clipped in {} at {width}",
+                    language.code()
+                );
+                for selector in ["kpi-unclosed-0", "kpi-unclosed-1"] {
+                    let value = visual.debug_bounds(selector).unwrap();
+                    assert!(
+                        label.right() <= value.left() || label.bottom() <= value.top(),
+                        "unclosed label overpaints a value"
+                    );
+                }
+            }
+        }
+    }
+}
+
+impl gpui::Render for TypographyProbe {
+    /// Render a body reference next to the production KPI matrix and Parameters header.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{InteractiveElement, IntoElement, ParentElement, Styled};
+        let p = moon_ui::MoonPalette::active(cx);
+        moon_ui::v_flex()
+            .w_full()
+            .child(
+                gpui::div()
+                    .debug_selector(|| "body-reference".into())
+                    .text_size(crate::design::t_body(cx))
+                    .child("125"),
+            )
+            .child(
+                super::kpi_matrix_body(
+                    &crate::load_state::LoadState::Ready(std::sync::Arc::new(vec![
+                        VarStats {
+                            n: 125,
+                            ..Default::default()
+                        };
+                        3
+                    ])),
+                    String::new(),
+                    &VarLabel::new("Fact".into()),
+                    &[],
+                    false,
+                    std::rc::Rc::new(|_, _| {}),
+                    p,
+                    cx,
+                )
+                .into_any_element(),
+            )
+    }
+}
+
+/// Reverting KPI labels or values to caption text visibly shrinks them relative to body text.
+#[gpui::test]
+fn livefix_kpi_uses_body_band(cx: &mut gpui::TestAppContext) {
+    use gpui::px;
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(
+                moon_core::config::UiThemeMode::Light,
+                1.0,
+            ),
+            cx,
+        )
+    });
+    let _locale = crate::test_locale::force("en");
+    let window = cx.open_window(gpui::size(px(620.0), px(900.0)), |_, _| TypographyProbe);
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    for _ in 0..3 {
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    }
+    let reference = visual.debug_bounds("body-reference").unwrap();
+    for selector in ["kpi-metric-0", "kpi-value-0-0"] {
+        let actual = visual.debug_bounds(selector).unwrap();
+        assert_eq!(
+            actual.size.height, reference.size.height,
+            "KPI typography must use the shared body band"
+        );
+    }
+}
+
 /// Changing `kpi.rs:format_kpi_cell` to return the exact formatter for every finite magnitude must
 /// fail the large-value assertions; otherwise All-period Fact/v1/v2 values wrap or overpaint
 /// adjacent cells and rows. Removing the active percent suffix from its compact profit branch must

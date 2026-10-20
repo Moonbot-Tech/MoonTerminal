@@ -621,29 +621,30 @@ pub(super) fn kpi_matrix_body_with(
         .collect();
     // A second line only when some heading still carries one. A short title plus a tooltip
     // stays on one line, so a narrow pane does not wrap "2 of 2 with tape…" onto an ellipsis.
-    let widths: Vec<Pixels> = (0..columns)
-        .map(|i| {
-            let mut width = f32::from(design::font_w_px(cx, 60.0))
-                .max(design::ui_caption_text_width(cx, &headings[i].title, 400.0));
-            for (_, kind) in &rows {
-                if let Some(s) = stats.get(i) {
-                    width = width.max(design::mono_caption_text_width(
+    let widths: Vec<Pixels> =
+        (0..columns)
+            .map(|i| {
+                let mut width = f32::from(design::font_w_px(cx, 60.0))
+                    .max(design::ui_body_text_width(cx, &headings[i].title, 400.0));
+                for (_, kind) in &rows {
+                    if let Some(s) = stats.get(i) {
+                        width = width.max(design::mono_body_text_width(
+                            cx,
+                            &figure_of(*kind, s).text.display,
+                            400.0,
+                        ));
+                    }
+                }
+                if let Some((n, profit)) = opts.unclosed {
+                    width = width.max(design::mono_body_text_width(
                         cx,
-                        &figure_of(*kind, s).text.display,
+                        &unclosed_cell(i, n, profit).display,
                         400.0,
                     ));
                 }
-            }
-            if let Some((n, profit)) = opts.unclosed {
-                width = width.max(design::mono_caption_text_width(
-                    cx,
-                    &unclosed_cell(i, n, profit).display,
-                    400.0,
-                ));
-            }
-            px(width)
-        })
-        .collect();
+                px(width)
+            })
+            .collect();
     let gap = if matches!(opts.rows, KpiRows::Plain) {
         6.0
     } else {
@@ -668,14 +669,14 @@ pub(super) fn kpi_matrix_body_with(
         .justify_end()
         .items_center()
         .gap(design::ui_px(cx, gap))
-        .text_size(design::t_caption(cx))
+        .text_size(design::t_body(cx))
         .font_family(design::ui_font())
         .text_color(moon(p.text_soft))
         .bg(moon(p.table_head))
         .child(
             div()
                 .flex_1()
-                .min_w(px(design::ui_caption_text_width(
+                .min_w(px(design::ui_body_text_width(
                     cx,
                     &t!("analytics.tuner.metric"),
                     400.0,
@@ -693,7 +694,7 @@ pub(super) fn kpi_matrix_body_with(
             .child(div().truncate().child(label.title))
             .children(label.sub.map(|s| {
                 div()
-                    .text_size(design::t_caption(cx))
+                    .text_size(design::t_body(cx))
                     .text_color(moon(if label.sub_warn {
                         p.amber
                     } else {
@@ -730,7 +731,7 @@ pub(super) fn kpi_matrix_body_with(
                 .px(design::ui_px(cx, inset))
                 .pb(design::ui_px(cx, 6.0))
                 .font_family(design::ui_font())
-                .text_size(design::t_caption(cx))
+                .text_size(design::t_body(cx))
                 .text_color(moon(p.amber))
                 .child(
                     div()
@@ -741,11 +742,7 @@ pub(super) fn kpi_matrix_body_with(
     }
     body = body.child(head);
     for (row_index, (label, kind)) in rows.into_iter().take(shown).enumerate() {
-        let label_width = if matches!(opts.rows, KpiRows::Plain) {
-            design::ui_caption_text_width(cx, &label, 400.0)
-        } else {
-            design::ui_body_text_width(cx, &label, 400.0)
-        };
+        let label_width = design::ui_body_text_width(cx, &label, 400.0);
         let mut row = h_flex()
             .debug_selector(move || format!("kpi-row-{row_index}"))
             .w_full()
@@ -762,13 +759,14 @@ pub(super) fn kpi_matrix_body_with(
                     .flex_1()
                     .min_w(px(label_width))
                     .whitespace_nowrap()
-                    .text_size(design::t_caption(cx))
+                    .text_size(design::t_body(cx))
                     .font_family(design::ui_font())
                     .text_color(moon(p.text_soft))
                     .debug_selector(move || format!("kpi-metric-{row_index}"))
                     .child(label),
             );
         // Keep Fact and V1 together when a localized money label needs its own line.
+        // Keep the numeric columns together when the larger localized label needs its own line.
         let mut figures = h_flex().flex_none().gap(design::ui_px(cx, gap));
         for (i, width) in widths.iter().enumerate() {
             let figure = match stats.get(i) {
@@ -797,7 +795,7 @@ pub(super) fn kpi_matrix_body_with(
                 .min_w_0()
                 .flex_none()
                 .whitespace_nowrap()
-                .text_size(design::t_caption(cx))
+                .text_size(design::t_body(cx))
                 .text_right()
                 .font_family(design::mono())
                 .text_color(moon(color))
@@ -811,11 +809,15 @@ pub(super) fn kpi_matrix_body_with(
         body = body.child(row);
     }
     if let Some((n, profit)) = opts.unclosed {
-        let mut row = h_flex()
+        let label = t!("analytics.ticks.kpi.unclosed").to_string();
+        let label_width = design::ui_body_text_width(cx, &label, 400.0);
+        let row = h_flex()
             .debug_selector(|| "kpi-unclosed".to_string())
             .w_full()
             .px(design::ui_px(cx, inset))
-            .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+            .min_h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+            .flex_wrap()
+            .justify_end()
             .items_center()
             .gap(design::ui_px(cx, gap))
             .border_t_1()
@@ -823,14 +825,15 @@ pub(super) fn kpi_matrix_body_with(
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(px(label_width))
                     .debug_selector(|| "kpi-unclosed-label".to_string())
                     .whitespace_nowrap()
-                    .text_size(design::t_caption(cx))
+                    .text_size(design::t_body(cx))
                     .font_family(design::ui_font())
                     .text_color(moon(p.text_soft))
-                    .child(t!("analytics.ticks.kpi.unclosed").to_string()),
+                    .child(label),
             );
+        let mut figures = h_flex().flex_none().gap(design::ui_px(cx, gap));
         for (i, width) in widths.iter().enumerate() {
             let text = unclosed_cell(i, n, profit);
             let mut cell = div()
@@ -841,16 +844,16 @@ pub(super) fn kpi_matrix_body_with(
                 .min_w_0()
                 .text_right()
                 .whitespace_nowrap()
-                .text_size(design::t_caption(cx))
+                .text_size(design::t_body(cx))
                 .font_family(design::mono())
                 .text_color(moon(p.text_muted))
                 .child(text.display);
             if let Some(tip) = text.tooltip {
                 cell = cell.tooltip(crate::panels::common::text_tooltip(tip));
             }
-            row = row.child(cell);
+            figures = figures.child(cell);
         }
-        body = body.child(row);
+        body = body.child(row.child(figures));
     }
     card_el(title, caption, body.into_any_element(), Some(caret), p, cx)
 }

@@ -227,7 +227,7 @@ fn config_row_frame(cx: &App) -> Div {
         .items_center()
         .flex_wrap()
         .gap(design::ui_px(cx, 6.0))
-        .text_size(design::t_caption(cx))
+        .text_size(design::t_body(cx))
         .font_family(design::ui_font())
 }
 

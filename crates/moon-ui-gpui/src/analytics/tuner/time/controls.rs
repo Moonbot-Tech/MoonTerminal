@@ -28,7 +28,7 @@ pub(in crate::analytics::tuner) fn config_row(
         .pb(design::ui_px(cx, 6.0))
         .gap(design::ui_px(cx, 6.0))
         .font_family(design::ui_font())
-        .text_size(design::t_caption(cx))
+        .text_size(design::t_body(cx))
         .child(label(t!("analytics.tuner.min_trades").to_string()))
         .child(
             div()
