@@ -41,9 +41,16 @@ pub(in crate::analytics) struct TimeTunerState {
     pub(in crate::analytics::tuner) inputs: HashMap<String, Entity<MoonInputState>>,
     /// Minimum trade count as raw input text; empty selects the automatic threshold.
     ///
-    /// The only search setting this axis exposes: the sweep fixes its own quantile depth and
-    /// takes no restarts, so it has no counterpart to the filter tuner's other boxes.
+    /// The sweep searches exact minute boundaries and takes no restarts.
     pub(in crate::analytics::tuner) min_trades: String,
+    /// Persisted train share, independent of the filter mode.
+    pub(in crate::analytics) train_pct: usize,
+    /// Validation belongs to the unedited suggestion; later reports mark its snapshot stale.
+    pub(in crate::analytics::tuner) evaluation: Option<moon_core::db::tuner::TimeEvaluation>,
+    /// New reports arrived after this completed validation snapshot.
+    pub(in crate::analytics::tuner) evaluation_stale: bool,
+    /// Scoped baseline used to suppress insignificant report-append warnings.
+    pub(in crate::analytics::tuner) sample_snapshot: super::super::freshness::SampleSnapshot,
     /// Whether suggested bounds are rounded outward.
     pub(in crate::analytics::tuner) round_results: bool,
     /// Whether an auto-suggestion is in flight.
@@ -86,6 +93,10 @@ impl TimeTunerState {
             ignore_staged: None,
             inputs: HashMap::new(),
             min_trades: String::new(),
+            train_pct: 100,
+            evaluation: None,
+            evaluation_stale: false,
+            sample_snapshot: Default::default(),
             round_results: true,
             sugg_busy: false,
             sugg_seq: 0,
@@ -105,6 +116,15 @@ impl TimeTunerState {
         self.profiles.data().is_none() || self.dirty
     }
 
+    /// Commit settings text only when it changes: delayed Blur must not erase a completed fit.
+    pub(in crate::analytics::tuner) fn set_min_trades(&mut self, value: String) {
+        if self.min_trades == value {
+            return;
+        }
+        self.min_trades = value;
+        self.invalidate_suggest();
+    }
+
     /// The query (period/filters) changed: the loaded data is stale AND an in-flight
     /// auto-suggestion belongs to the old scope — retire both, as the sibling axes'
     /// `invalidate` methods do. The grid values themselves are deliberately kept
@@ -117,16 +137,19 @@ impl TimeTunerState {
         self.dirty = true;
     }
 
-    /// Mark report-derived results stale and retire an in-flight automatic suggestion.
+    /// Mark profiles and a completed validation snapshot stale, retiring only an in-flight fit.
     ///
     /// A report commit does not change the selected strategy or the user's schedule draft. It does
-    /// change the optimizer input, so a pinned suggestion must not publish into saveable v1 fields;
-    /// `dirty` schedules the replacement profile after catch-up.
+    /// change the optimizer input, so a pinned request must not publish into saveable v1 fields.
+    /// A completed result remains useful as a historical snapshot beside those retained bounds;
+    /// its explicit stale note distinguishes it from the refreshed KPI and profiles.
     ///
     /// The method has no return value.
     pub(in crate::analytics) fn mark_report_stale(&mut self) {
         self.dirty = true;
-        self.invalidate_suggest();
+        self.evaluation_stale = self.evaluation.is_some();
+        self.sugg_seq = self.sugg_seq.wrapping_add(1);
+        self.sugg_busy = false;
     }
 
     /// Apply raw strategy schedule fields while distinguishing a failed read from empty values.
@@ -328,14 +351,15 @@ impl TimeTunerState {
         self.current_raw = Default::default();
         self.ignore_staged = None;
         self.inputs.clear();
-        self.sugg_seq = self.sugg_seq.wrapping_add(1);
-        self.sugg_busy = false;
+        self.invalidate_suggest();
     }
 
     /// Discard an IN-FLIGHT auto-suggestion when the QUERY changes (period/filter) — just like the
     /// filter's `TunerState::invalidate`: bump the generation and clear busy WITHOUT touching
     /// v1. Otherwise a stale result from the old query would land in v1 (and become Saveable).
     pub(in crate::analytics) fn invalidate_suggest(&mut self) {
+        self.evaluation = None;
+        self.evaluation_stale = false;
         self.sugg_seq = self.sugg_seq.wrapping_add(1);
         self.sugg_busy = false;
     }

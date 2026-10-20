@@ -191,6 +191,7 @@ impl AnalyticsView {
         let saved_tuner_edges = backend.read(cx).layout.analytics_tuner_edges;
         let saved_tuner_seed = backend.read(cx).layout.analytics_tuner_seed.clone();
         let saved_tuner_train = backend.read(cx).layout.analytics_tuner_train;
+        let saved_time_train = backend.read(cx).layout.analytics_time_train.unwrap_or(100) as usize;
         let saved_tuner_fields = backend.read(cx).layout.analytics_tuner_fields.clone();
         let saved_tuner_compose = backend.read(cx).layout.analytics_tuner_compose;
         // The "Entry/Exit" axis' settings. The model's are process-wide — every replay path
@@ -415,6 +416,8 @@ impl AnalyticsView {
             kpi_collapsed: saved_kpi_collapsed,
             hist_collapsed: saved_hist_collapsed,
             side_collapsed: saved_side_collapsed,
+            tuner_host_width: 0.0,
+            tuner_bottom_collapsed: [false; 3],
             clear_shell: None,
             tuner: tuner::TunerState::load(
                 saved_tuner_iters,
@@ -427,7 +430,16 @@ impl AnalyticsView {
             coins: tuner::CoinsState::load(saved_coin_sort, saved_coins.as_ref()),
             ticks,
             coin_lists: tuner::CoinListsState::default(),
-            time_tuner: tuner::TimeTunerState::load(),
+            time_tuner: {
+                let mut state = tuner::TimeTunerState::load();
+                let saved = saved_time_train;
+                state.train_pct = if [100, 90, 80, 70, 60, 50].contains(&saved) {
+                    saved
+                } else {
+                    100
+                };
+                state
+            },
             cal_from,
             cal_to,
             range_dirty: false,

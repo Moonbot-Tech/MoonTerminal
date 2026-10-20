@@ -398,7 +398,7 @@ fn invalidate_drops_a_running_pick() {
     );
 }
 
-/// `coins/state.rs:CoinsState::mark_report_stale` must let an in-flight pick land stale.
+/// A material report append must let an in-flight pick land and retain its original baseline.
 ///
 /// Mutation: `drop_pick` while the pick is `Running`. The report commits every few
 /// seconds, so a pick slower than that interval would never land and the card would
@@ -417,6 +417,11 @@ fn a_report_refresh_lets_an_in_flight_pick_land_stale() {
         "the reply must still be allowed to land"
     );
     assert!(s.land_pick(seq, lists_rev, report_gen, 30, Ok(pick_of(&["XAAA"]))));
+    s.sample_snapshot = super::super::super::freshness::SampleSnapshot::from_count(100, 0);
+    s.kpi.apply(Ok(vec![VarStats {
+        n: 105,
+        ..Default::default()
+    }]));
     assert!(s.pick_stale(), "the reply scored the previous report");
     assert_eq!(s.adopt_suggestion(true), 1);
     assert!(s.work.black.contains("XAAA"));
@@ -559,6 +564,53 @@ fn pick_of(black: &[&str]) -> CoinPick {
     }
 }
 
+/// Startup and absent baselines never warn; an adopted batch warns only after material growth.
+#[test]
+fn startup_and_batch_picks_use_a_real_sample_baseline() {
+    let mut s = CoinsState {
+        report_end: 100,
+        ..Default::default()
+    };
+    s.kpi.apply(Ok(vec![VarStats {
+        n: 100,
+        ..Default::default()
+    }]));
+    s.mark_report_stale();
+    assert_eq!(s.pick_stale_cause(), None, "startup has no pick");
+
+    s.adopt_batch_pick(std::sync::Arc::new(pick_of(&[])), 30);
+    s.mark_report_stale();
+    assert_eq!(
+        s.pick_stale_cause(),
+        None,
+        "adoption must establish the 100-trade baseline"
+    );
+    s.kpi.apply(Ok(vec![VarStats {
+        n: 101,
+        ..Default::default()
+    }]));
+    assert_eq!(s.pick_stale_cause(), None, "one new trade is immaterial");
+    s.kpi.apply(Ok(vec![VarStats {
+        n: 105,
+        ..Default::default()
+    }]));
+    assert_eq!(s.pick_stale_cause(), Some(PickStaleCause::Report));
+
+    s.drop_pick();
+    assert_eq!(s.pick_stale_cause(), None);
+    s.pick = PickState::Done {
+        pick: std::sync::Arc::new(pick_of(&[])),
+        lists_rev: s.lists_rev,
+        report_gen: 0,
+        holdout_pct: 30,
+    };
+    assert_eq!(
+        s.pick_stale_cause(),
+        None,
+        "an absent baseline is not evidence of new trades"
+    );
+}
+
 /// No pick: Fact and Manual only. A finished pick adds the Auto column, scored on the
 /// working blacklist plus the suggested one.
 #[test]
@@ -629,7 +681,7 @@ fn a_list_edit_during_the_pick_marks_it_stale() {
     );
 }
 
-/// `coins/state.rs:CoinsState::mark_report_stale` must keep a finished pick and mark it stale.
+/// A material report append must keep a finished pick and mark it stale against its baseline.
 ///
 /// Mutation: call `drop_pick` for `PickState::Done`. The next report commit would clear the
 /// verdict, the Suggested view and the table Auto column while the KPI Auto column kept that
@@ -641,11 +693,12 @@ fn a_report_refresh_keeps_a_finished_pick_and_marks_it_stale() {
     let seq = s.begin_pick();
     let rev = s.lists_rev;
     assert!(s.land_pick(seq, rev, s.report_gen, 30, Ok(pick_of(&["XAAA"]))));
+    s.sample_snapshot = super::super::super::freshness::SampleSnapshot::from_count(100, 0);
     let pick_rev = s.pick_rev;
     s.filter = CoinFilter::Suggested;
     s.kpi.apply(Ok(vec![
         VarStats {
-            n: 3,
+            n: 105,
             ..VarStats::default()
         };
         3
@@ -714,6 +767,11 @@ fn pick_stale_cause_names_the_input_that_moved() {
         let mut s = CoinsState::default();
         let seq = s.begin_pick();
         assert!(s.land_pick(seq, s.lists_rev, s.report_gen, 30, Ok(pick_of(&["XAAA"]))));
+        s.sample_snapshot = super::super::super::freshness::SampleSnapshot::from_count(100, 0);
+        s.kpi.apply(Ok(vec![VarStats {
+            n: 105,
+            ..Default::default()
+        }]));
         s
     };
 

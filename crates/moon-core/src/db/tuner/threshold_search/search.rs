@@ -794,6 +794,16 @@ impl Search {
         out
     }
 
+    /// Tally Fact on the same ordered rows without either searched or caller-fixed ranges.
+    /// This presentation baseline reads the existing scan and never participates in optimization.
+    pub(super) fn fact_tally(&self, rows: Range<usize>) -> Tally {
+        let mut out = Tally::default();
+        for row in rows {
+            out.push(self.cols.profits[row]);
+        }
+        out
+    }
+
     /// Number of fields in the sample.
     fn field_count(&self) -> usize {
         self.edges.len()

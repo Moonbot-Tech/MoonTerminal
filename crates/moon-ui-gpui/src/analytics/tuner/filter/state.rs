@@ -290,10 +290,19 @@ pub(in crate::analytics::tuner) struct SearchSplit {
     pub(in crate::analytics::tuner) train: Tally,
     /// Over the trades held back from the search; `None` when the whole period was fitted on.
     pub(in crate::analytics::tuner) holdout: Option<Tally>,
+    /// Fact on the same held-out rows; boxed to keep the enclosing suggestion state compact.
+    pub(in crate::analytics::tuner) fact_holdout: Option<Box<Tally>>,
     /// The field set composition chose, when it ran.
     pub(in crate::analytics::tuner) composed: Option<ComposedSet>,
     /// Why composition did not run, when it was asked for.
     pub(in crate::analytics::tuner) compose_skipped: Option<ComposeSkip>,
+}
+
+impl SearchSplit {
+    /// Keep the default full-history result visible when its material-change note is needed.
+    pub(super) fn should_show_summary(&self, stale: bool) -> bool {
+        stale || self.holdout.is_some() || self.composed.is_some() || self.compose_skipped.is_some()
+    }
 }
 
 /// The searches this axis can run, which differ in what the user can do while they run.
@@ -375,6 +384,8 @@ pub(in crate::analytics) struct TunerState {
     pub(in crate::analytics::tuner) sel_field: usize,
     /// KPI matrix load state; `dirty` separately marks retained data for recomputation.
     pub(in crate::analytics::tuner) stats: LoadState<Vec<VarStats>>,
+    /// Scoped baseline from the first fresh KPI response after the latest completed suggestion.
+    pub(in crate::analytics::tuner) sample_snapshot: super::super::freshness::SampleSnapshot,
     /// Selected-field histogram read state.
     pub(in crate::analytics::tuner) hist: LoadState<Vec<HistBucket>>,
     /// Filter card of the selected strategy (Ignore flags + thresholds).
@@ -465,6 +476,7 @@ impl TunerState {
             inputs: HashMap::new(),
             sel_field: 0,
             stats: LoadState::default(),
+            sample_snapshot: Default::default(),
             hist: LoadState::default(),
             strat: Arc::new(StratFilters::default()),
             sugg: SuggestState::Idle,

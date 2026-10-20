@@ -156,6 +156,7 @@ fn card_header_layout(
         .child(
             div()
                 .flex_none()
+                .font_family(design::ui_font())
                 .text_size(design::t_title(cx))
                 .font_weight(FontWeight::SEMIBOLD)
                 .debug_selector(|| "an-tuner-card-title".to_string())
@@ -164,7 +165,9 @@ fn card_header_layout(
     if !sub.is_empty() {
         text = text.child(
             div()
-                .flex_none()
+                .min_w_0()
+                .font_family(design::mono())
+                .when(!wrap, |caption| caption.truncate())
                 .when(wrap, |caption| caption.min_w_0().max_w_full())
                 .text_size(design::t_caption(cx))
                 .text_color(moon(p.text_muted))
@@ -260,6 +263,59 @@ pub(super) fn collapse_caret(
 }
 
 impl AnalyticsView {
+    /// Read the display-only detail fold for an axis without changing any tuning input.
+    pub(super) fn bottom_collapsed(&self, mode: super::StratMode) -> bool {
+        match mode {
+            super::StratMode::Filters => self.hist_collapsed,
+            super::StratMode::Time => self.tuner_bottom_collapsed[0],
+            super::StratMode::Coins => self.tuner_bottom_collapsed[1],
+            super::StratMode::Ticks => self.tuner_bottom_collapsed[2],
+        }
+    }
+
+    /// Build the common detail-card caret; folding affects presentation only.
+    pub(super) fn bottom_caret(
+        &self,
+        mode: super::StratMode,
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        collapse_caret(
+            "tuner-detail-collapse",
+            self.bottom_collapsed(mode),
+            t!("analytics.tuner.hist_collapse").to_string(),
+            t!("analytics.tuner.hist_expand").to_string(),
+            p,
+            cx.listener(move |this, _, _, cx| {
+                match mode {
+                    super::StratMode::Filters => this.toggle_hist_collapsed(cx),
+                    super::StratMode::Time => this.tuner_bottom_collapsed[0] ^= true,
+                    super::StratMode::Coins => this.tuner_bottom_collapsed[1] ^= true,
+                    super::StratMode::Ticks => this.tuner_bottom_collapsed[2] ^= true,
+                }
+                cx.notify();
+            }),
+        )
+    }
+
+    /// Retain the detail heading, strategy subtitle and caret while its body is folded.
+    pub(super) fn folded_bottom(
+        &self,
+        mode: super::StratMode,
+        title: String,
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        card(
+            title,
+            self.scope_label(),
+            div().into_any_element(),
+            Some(self.bottom_caret(mode, p, cx)),
+            p,
+            cx,
+        )
+    }
+
     /// The narrow full-height rail between a tuning axis' left area and its right-hand column,
     /// carrying the one caret that folds that column away.
     ///

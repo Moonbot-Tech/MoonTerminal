@@ -27,10 +27,101 @@ use super::super::ranges::range_cells_el;
 use super::super::state::NowValue;
 use super::super::summary::{
     ChangeRow, ConfirmModel, ProfitRow, SummaryActs, SummaryModel, Unchecked, Verdict, Why,
-    sentence, summary_card_el, tag,
+    parameters_header, sentence, summary_card_el, tag,
 };
 use crate::design;
 use crate::load_state::LoadState;
+
+/// Compare real editable and read-only row geometry with the same trailing range slots.
+struct FixedAlignmentProbe;
+
+impl Render for FixedAlignmentProbe {
+    /// Keep the production cells, spacing and range-width decision without Analytics state.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let ranges = ranges_fit(window.viewport_size().width, cx);
+        let range = || {
+            ranges.then(|| {
+                div()
+                    .w(super::super::ranges::block_w(cx))
+                    .flex_none()
+                    .into_any_element()
+            })
+        };
+        v_flex()
+            .w_full()
+            .child(field_row_el(
+                "Editable",
+                false,
+                FieldRowParts {
+                    checkbox: MoonCheckbox::new("review-editable-check")
+                        .size(design::CONTROL_TIER)
+                        .into_any_element(),
+                    name: field_name_el("Editable", false, true, None, p).into_any_element(),
+                    current: current_cell_el(
+                        "Editable",
+                        true,
+                        Some(&NowValue::Same("1.31".into())),
+                        p,
+                        cx,
+                    )
+                    .into_any_element(),
+                    variant: div().into_any_element(),
+                    clear: div()
+                        .w(design::ui_px(cx, 12.0))
+                        .flex_none()
+                        .into_any_element(),
+                },
+                range(),
+                p,
+                cx,
+            ))
+            .child(super::super::grid::fixed_row_el(
+                "ReadOnly",
+                field_name_el("ReadOnly", false, false, None, p).into_any_element(),
+                "1.31".into(),
+                range(),
+                p,
+                cx,
+            ))
+    }
+}
+
+/// Restoring either old fixed-row gap or inset must move the numeric edge and fail this check.
+#[gpui::test]
+fn livefix_read_only_current_values_align_with_editable_rows(cx: &mut gpui::TestAppContext) {
+    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+                cx,
+            )
+        });
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for width in [400.0, 687.0] {
+                let window =
+                    cx.open_window(gpui::size(px(width), px(150.0)), |_, _| FixedAlignmentProbe);
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let editable = visual
+                    .debug_bounds("an-ticks-current-cell-Editable")
+                    .unwrap();
+                let fixed = visual.debug_bounds("an-ticks-fixed-current").unwrap();
+                assert!(
+                    (f32::from(editable.right()) - f32::from(fixed.right())).abs() < 0.5,
+                    "read-only current value misaligned at {width} in {}: {editable:?}/{fixed:?}",
+                    language.code()
+                );
+                visual.update(|window, _| window.remove_window());
+            }
+        }
+    }
+}
 
 /// Synthetic deals exercise every primary-reason family without touching a live report.
 fn deal_rows() -> Vec<super::super::state::DealRow> {
@@ -582,6 +673,11 @@ fn model(face: usize) -> SummaryModel {
         open_line: (hold && face == 3).then(|| open.clone()),
     };
     SummaryModel {
+        fact_holdout: matches!(face, 2 | 3 | 6).then(|| {
+            let mut fact = moon_core::db::metrics::Tally::default();
+            fact.push(13.71);
+            fact
+        }),
         title: t!("analytics.ticks.sum.title").to_string(),
         scope_label: "fixture".to_string(),
         tag: tag(&verdict),
@@ -777,6 +873,7 @@ impl Render for Probe {
                     .flex_none()
                     .min_w_0()
                     .gap(design::ui_px(cx, 8.0))
+                    .child(parameters_header(&model(self.face), &acts, cx))
                     .child(summary_card_el(
                         &model(self.face),
                         &acts,
@@ -795,7 +892,7 @@ impl Render for Probe {
                         cx,
                         KpiOpts {
                             title: Some((
-                                t!("analytics.ticks.kpi.title").to_string(),
+                                t!("analytics.tuner.kpi_title").to_string(),
                                 super::super::sample::caption(73, 405, self.face == 8),
                             )),
                             sample_note: sample_bias(),
@@ -885,7 +982,6 @@ fn every_ticks_language_has_the_same_keys_and_no_raw_card_text() {
                 || key.starts_with("analytics.ticks.legend.")
                 || key.starts_with("analytics.ticks.col_tip.")
                 || key.starts_with("analytics.ticks.chip.")
-                || *key == "analytics.ticks.side_pick_strategy"
         }) {
             assert!(!t!(key.as_str()).contains("analytics."), "raw key: {key}");
         }
@@ -909,8 +1005,10 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
         });
         for language in Language::ALL {
             let _locale = crate::test_locale::force(language.code());
+            let normal_width = cx
+                .update(|cx| f32::from(design::font_w_px(cx, super::super::super::layout::SIDE_W)));
             for zoom in [1.0, 1.25] {
-                for width in [520.0, 400.0] {
+                for width in [normal_width, 520.0, 400.0] {
                     for face in 0..10 {
                         let window = cx.open_window(
                             gpui::size(px(width * zoom), px(540.0 * zoom)),
@@ -932,15 +1030,19 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                         );
                         let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
                         visual.update(|window, cx| window.set_content_zoom(zoom, cx));
-                        visual.update(|window, cx| {
-                            assert_eq!(
-                                ranges_fit(
-                                    window.viewport_size().width - design::ui_px(cx, 2.0),
-                                    cx
-                                ),
-                                width == 520.0,
-                                "pure range decision at zoom {zoom}, width {width}"
-                            )
+                        let expect_ranges = visual.update(|window, cx| {
+                            let fit = ranges_fit(
+                                window.viewport_size().width - design::ui_px(cx, 2.0),
+                                cx,
+                            );
+                            if width != 520.0 {
+                                assert_eq!(
+                                    fit,
+                                    width == normal_width,
+                                    "pure range decision at zoom {zoom}, width {width}"
+                                );
+                            }
+                            fit
                         });
                         for _ in 0..3 {
                             visual.update(|window, cx| {
@@ -1167,19 +1269,21 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                             ("kpi-unclosed-1".into(), "1.23M · ≈ +988K".to_string(), true),
                         ];
                         for (row, key) in [
-                            "trades", "profit", "avg", "winrate", "pf", "avg_win", "avg_loss",
-                            "maxdd",
+                            "analytics.kpi.trades",
+                            "analytics.kpi.profit",
+                            "analytics.kpi.avg_short",
+                            "analytics.kpi.winrate",
+                            "analytics.col.pf",
+                            "analytics.tuner.avg_win",
+                            "analytics.tuner.avg_loss",
+                            "analytics.kpi.maxdd",
                         ]
                         .into_iter()
                         .enumerate()
                         {
                             needs.push((
                                 format!("kpi-metric-{row}"),
-                                t!(
-                                    format!("analytics.ticks.kpi.row.{key}"),
-                                    unit = crate::analytics::pnl_unit_label()
-                                )
-                                .to_string(),
+                                t!(key, unit = crate::analytics::pnl_unit_label()).to_string(),
                                 false,
                             ));
                         }
@@ -1202,11 +1306,22 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                                 ));
                             }
                         }
+                        needs.push((
+                            "tun-save-x".into(),
+                            t!("analytics.tuner.save_btn").to_string(),
+                            false,
+                        ));
+                        if model(face).copy_visible {
+                            needs.push((
+                                "tun-copy-x".into(),
+                                t!("analytics.tuner.copy_btn").to_string(),
+                                false,
+                            ));
+                        }
                         let actions = if face == 1 || face == 7 {
                             vec![("stop", "stop")]
                         } else if (2..=6).contains(&face) {
-                            let mut out =
-                                vec![("write", "write"), ("copy", "copy"), ("reset", "reset")];
+                            let mut out = vec![("reset", "reset")];
                             if face == 3 {
                                 out.extend([
                                     ("confirm-yes", "confirm_yes"),
@@ -1237,7 +1352,7 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                             }
                             let range =
                                 visual.debug_bounds(selector(format!("an-ticks-range-{key}")));
-                            assert_eq!(range.is_some(), width == 520.0, "range visibility ({at})");
+                            assert_eq!(range.is_some(), expect_ranges, "range visibility ({at})");
                             if let Some(range) = range {
                                 inside(range, "production range");
                                 for (slot, text) in

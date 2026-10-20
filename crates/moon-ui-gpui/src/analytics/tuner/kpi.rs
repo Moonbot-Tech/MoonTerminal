@@ -6,7 +6,6 @@
 
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
@@ -75,7 +74,7 @@ fn blank_figure() -> Figure {
     }
 }
 
-/// Row labels remain shared unless an axis requests plain-language captions.
+/// Row geometry is compact by default; tape comparisons preserve full values with wrapping.
 #[derive(Clone, Copy, Default)]
 pub(super) enum KpiRows {
     #[default]
@@ -204,6 +203,22 @@ fn figure_of(kind: MetricKind, stats: &VarStats) -> Figure {
             }
         }
     }
+}
+
+/// Format split ratios and loss magnitudes through the same rules as matrix cells.
+pub(super) fn split_metrics(tally: &moon_core::db::metrics::Tally) -> (String, String) {
+    let stats = VarStats {
+        n: tally.n,
+        wins: tally.wins,
+        pf: tally.profit_factor(),
+        avg_loss: tally.avg_loss(),
+        max_dd: tally.max_dd,
+        ..Default::default()
+    };
+    (
+        figure_of(MetricKind::ProfitFactor, &stats).text.display,
+        figure_of(MetricKind::MaxDrawdown, &stats).text.display,
+    )
 }
 
 /// Whether the profit-factor cell has nothing to show.
@@ -577,7 +592,7 @@ pub(super) fn kpi_matrix_body_with(
     // exactly these via `COLLAPSED_ROWS`. Keep them first if this vec is ever reordered.
     // Colour is the sign of the painted figure in every column — see [`figure_of`].
     const COLLAPSED_ROWS: usize = 2;
-    let mut rows: Vec<(String, MetricKind)> = vec![
+    let rows: Vec<(String, MetricKind)> = vec![
         (t!("analytics.kpi.trades").to_string(), MetricKind::Trades),
         (
             t!(
@@ -607,21 +622,6 @@ pub(super) fn kpi_matrix_body_with(
             MetricKind::MaxDrawdown,
         ),
     ];
-    if matches!(opts.rows, KpiRows::Plain) {
-        for (label, kind) in &mut rows {
-            let key = match kind {
-                MetricKind::Trades => "analytics.ticks.kpi.row.trades",
-                MetricKind::Profit => "analytics.ticks.kpi.row.profit",
-                MetricKind::Average => "analytics.ticks.kpi.row.avg",
-                MetricKind::Winrate => "analytics.ticks.kpi.row.winrate",
-                MetricKind::ProfitFactor => "analytics.ticks.kpi.row.pf",
-                MetricKind::AvgWin => "analytics.ticks.kpi.row.avg_win",
-                MetricKind::AvgLoss => "analytics.ticks.kpi.row.avg_loss",
-                MetricKind::MaxDrawdown => "analytics.ticks.kpi.row.maxdd",
-            };
-            *label = t!(key, unit = crate::analytics::pnl_unit_label()).to_string();
-        }
-    }
     let columns = kpi_columns(stats.len(), var_labels);
     let headings: Vec<VarLabel> = (0..columns)
         .map(|i| {
@@ -635,33 +635,35 @@ pub(super) fn kpi_matrix_body_with(
             }
         })
         .collect();
-    // A second line only when some heading still carries one. A short title plus a tooltip
-    // stays on one line, so a narrow pane does not wrap "2 of 2 with tape…" onto an ellipsis.
-    let widths: Vec<Pixels> = (0..columns)
-        .map(|i| {
-            let mut width = f32::from(design::font_w_px(cx, 92.0));
-            if matches!(opts.rows, KpiRows::Shared) {
-                return px(width);
-            }
-            for (_, kind) in &rows {
-                if let Some(s) = stats.get(i) {
-                    width = width.max(design::mono_caption_text_width(
+    // Titles and figures determine one shared width. Statuses yield to that width instead of
+    // making the promised Auto column taller than the columns that already have figures.
+    let natural_widths: Vec<Pixels> =
+        (0..columns)
+            .map(|i| {
+                let mut width = f32::from(design::font_w_px(cx, 60.0))
+                    .max(design::ui_body_text_width(cx, &headings[i].title, 400.0));
+                for (_, kind) in &rows {
+                    if let Some(s) = stats.get(i) {
+                        width = width.max(design::mono_body_text_width(
+                            cx,
+                            &figure_of(*kind, s).text.display,
+                            400.0,
+                        ));
+                    }
+                }
+                if let Some((n, profit)) = opts.unclosed {
+                    width = width.max(design::mono_body_text_width(
                         cx,
-                        &figure_of(*kind, s).text.display,
+                        &unclosed_cell(i, n, profit).display,
                         400.0,
                     ));
                 }
-            }
-            if let Some((n, profit)) = opts.unclosed {
-                width = width.max(design::mono_caption_text_width(
-                    cx,
-                    &unclosed_cell(i, n, profit).display,
-                    400.0,
-                ));
-            }
-            px(width)
-        })
-        .collect();
+                // Font advances omit kerning; leave a pixel at each edge for rounded glyphs.
+                px(width.ceil() + 2.0)
+            })
+            .collect();
+    let column_width = natural_widths.into_iter().fold(px(0.0), Pixels::max);
+    let widths = vec![column_width; columns];
     let gap = if matches!(opts.rows, KpiRows::Plain) {
         6.0
     } else {
@@ -672,44 +674,73 @@ pub(super) fn kpi_matrix_body_with(
     } else {
         8.0
     };
+    // In a narrow dock the group yields as a whole. Titles may wrap there, while figures and
+    // statuses share equal shrinking columns instead of pushing the last column off the card.
+    let values_width =
+        column_width * columns as f32 + design::ui_px(cx, gap) * columns.saturating_sub(1) as f32;
     let muted: Vec<bool> = headings.iter().map(|label| label.muted).collect();
-    let head_h = if headings.iter().any(|label| label.sub.is_some()) {
-        34.0
-    } else {
-        22.0
-    };
+    let heading_line_height = design::line_px(cx, 16.0);
     let mut head = h_flex()
+        .debug_selector(|| "kpi-header".into())
         .w_full()
         .px(design::ui_px(cx, inset))
-        .h(design::fit_h_px(cx, head_h, 12.0, 5.0))
+        .min_h(heading_line_height * 2.0 + design::ui_px(cx, 4.0))
+        .flex_wrap()
+        .justify_end()
         .items_center()
         .gap(design::ui_px(cx, gap))
-        .text_size(design::t_caption(cx))
+        .text_size(design::t_body(cx))
+        .line_height(heading_line_height)
         .font_family(design::ui_font())
         .text_color(moon(p.text_soft))
         .bg(moon(p.table_head))
         .child(
             div()
                 .flex_1()
+                .min_w(px(design::ui_body_text_width(
+                    cx,
+                    &t!("analytics.tuner.metric"),
+                    400.0,
+                )))
                 .child(t!("analytics.tuner.metric").to_string()),
         );
+    let mut head_values = h_flex()
+        .w(values_width)
+        .max_w_full()
+        .flex_none()
+        .gap(design::ui_px(cx, gap));
     for (i, label) in headings.into_iter().enumerate() {
         let tip = label.tip.clone();
         let column = v_flex()
             .debug_selector(move || format!("kpi-head-{i}"))
             .w(widths[i])
-            .flex_none()
+            .flex_1()
+            .min_w_0()
             .items_end()
-            .child(div().truncate().child(label.title))
+            .child(
+                div()
+                    .debug_selector(move || format!("kpi-title-{i}"))
+                    .w_full()
+                    .min_w_0()
+                    .text_right()
+                    .whitespace_normal()
+                    .child(label.title),
+            )
             .children(label.sub.map(|s| {
                 div()
-                    .text_size(design::t_caption(cx))
+                    .id(SharedString::from(format!("an-tuner-kpi-sub-{i}")))
+                    .debug_selector(move || format!("kpi-sub-{i}"))
+                    .w_full()
+                    .min_w_0()
+                    .text_right()
+                    .text_size(design::t_body(cx))
                     .text_color(moon(if label.sub_warn {
                         p.amber
                     } else {
                         p.text_muted
                     }))
                     .truncate()
+                    .tooltip(crate::panels::common::text_tooltip(s.clone()))
                     .child(s)
             }));
         let column = match tip {
@@ -719,8 +750,9 @@ pub(super) fn kpi_matrix_body_with(
                 .into_any_element(),
             None => column.into_any_element(),
         };
-        head = head.child(column);
+        head_values = head_values.child(column);
     }
+    head = head.child(head_values);
 
     // Collapsed keeps only the headline rows; the column headings stay, so the Fact-vs-variant
     // comparison is still readable, just short enough for the grid below.
@@ -739,7 +771,7 @@ pub(super) fn kpi_matrix_body_with(
                 .px(design::ui_px(cx, inset))
                 .pb(design::ui_px(cx, 6.0))
                 .font_family(design::ui_font())
-                .text_size(design::t_caption(cx))
+                .text_size(design::t_body(cx))
                 .text_color(moon(p.amber))
                 .child(
                     div()
@@ -750,18 +782,14 @@ pub(super) fn kpi_matrix_body_with(
     }
     body = body.child(head);
     for (row_index, (label, kind)) in rows.into_iter().take(shown).enumerate() {
-        let plain = matches!(opts.rows, KpiRows::Plain);
-        let label_width = design::ui_caption_text_width(cx, &label, 400.0);
+        let label_width = design::ui_body_text_width(cx, &label, 400.0);
         let mut row = h_flex()
             .debug_selector(move || format!("kpi-row-{row_index}"))
             .w_full()
             .px(design::ui_px(cx, inset))
-            .when(plain, |row| {
-                row.flex_wrap()
-                    .justify_end()
-                    .min_h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
-            })
-            .when(!plain, |row| row.h(design::fit_h_px(cx, 24.0, 14.0, 5.0)))
+            .flex_wrap()
+            .justify_end()
+            .min_h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
             .items_center()
             .gap(design::ui_px(cx, gap))
             .border_t_1()
@@ -769,19 +797,21 @@ pub(super) fn kpi_matrix_body_with(
             .child(
                 div()
                     .flex_1()
-                    .when(matches!(opts.rows, KpiRows::Plain), |label| {
-                        label
-                            .min_w(px(label_width))
-                            .whitespace_nowrap()
-                            .text_size(design::t_caption(cx))
-                    })
+                    .min_w(px(label_width))
+                    .whitespace_nowrap()
+                    .text_size(design::t_body(cx))
                     .font_family(design::ui_font())
                     .text_color(moon(p.text_soft))
                     .debug_selector(move || format!("kpi-metric-{row_index}"))
                     .child(label),
             );
         // Keep Fact and V1 together when a localized money label needs its own line.
-        let mut figures = h_flex().flex_none().gap(design::ui_px(cx, gap));
+        // Keep the numeric columns together when the larger localized label needs its own line.
+        let mut figures = h_flex()
+            .w(values_width)
+            .max_w_full()
+            .flex_none()
+            .gap(design::ui_px(cx, gap));
         for (i, width) in widths.iter().enumerate() {
             let figure = match stats.get(i) {
                 // A promised column without stats: every cell is the blank dash.
@@ -807,13 +837,9 @@ pub(super) fn kpi_matrix_body_with(
                 .aria_label(accessibility_label)
                 .w(*width)
                 .min_w_0()
-                .flex_none()
-                .when(matches!(opts.rows, KpiRows::Plain), |value| {
-                    value.whitespace_nowrap().text_size(design::t_caption(cx))
-                })
-                .when(matches!(opts.rows, KpiRows::Shared), |value| {
-                    value.truncate()
-                })
+                .flex_1()
+                .whitespace_nowrap()
+                .text_size(design::t_body(cx))
                 .text_right()
                 .font_family(design::mono())
                 .text_color(moon(color))
@@ -821,23 +847,21 @@ pub(super) fn kpi_matrix_body_with(
             if let Some(tooltip) = figure.text.tooltip {
                 value = value.tooltip(crate::panels::common::text_tooltip(tooltip));
             }
-            if plain {
-                figures = figures.child(value);
-            } else {
-                row = row.child(value);
-            }
+            figures = figures.child(value);
         }
-        if plain {
-            row = row.child(figures);
-        }
+        row = row.child(figures);
         body = body.child(row);
     }
     if let Some((n, profit)) = opts.unclosed {
-        let mut row = h_flex()
+        let label = t!("analytics.ticks.kpi.unclosed").to_string();
+        let label_width = design::ui_body_text_width(cx, &label, 400.0);
+        let row = h_flex()
             .debug_selector(|| "kpi-unclosed".to_string())
             .w_full()
             .px(design::ui_px(cx, inset))
-            .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+            .min_h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+            .flex_wrap()
+            .justify_end()
             .items_center()
             .gap(design::ui_px(cx, gap))
             .border_t_1()
@@ -845,34 +869,39 @@ pub(super) fn kpi_matrix_body_with(
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(px(label_width))
                     .debug_selector(|| "kpi-unclosed-label".to_string())
                     .whitespace_nowrap()
-                    .text_size(design::t_caption(cx))
+                    .text_size(design::t_body(cx))
                     .font_family(design::ui_font())
                     .text_color(moon(p.text_soft))
-                    .child(t!("analytics.ticks.kpi.unclosed").to_string()),
+                    .child(label),
             );
+        let mut figures = h_flex()
+            .w(values_width)
+            .max_w_full()
+            .flex_none()
+            .gap(design::ui_px(cx, gap));
         for (i, width) in widths.iter().enumerate() {
             let text = unclosed_cell(i, n, profit);
             let mut cell = div()
                 .id(("an-tuner-kpi-unclosed", i))
                 .debug_selector(move || format!("kpi-unclosed-{i}"))
                 .w(*width)
-                .flex_none()
+                .flex_1()
                 .min_w_0()
                 .text_right()
                 .whitespace_nowrap()
-                .text_size(design::t_caption(cx))
+                .text_size(design::t_body(cx))
                 .font_family(design::mono())
                 .text_color(moon(p.text_muted))
                 .child(text.display);
             if let Some(tip) = text.tooltip {
                 cell = cell.tooltip(crate::panels::common::text_tooltip(tip));
             }
-            row = row.child(cell);
+            figures = figures.child(cell);
         }
-        body = body.child(row);
+        body = body.child(row.child(figures));
     }
     card_el(title, caption, body.into_any_element(), Some(caret), p, cx)
 }

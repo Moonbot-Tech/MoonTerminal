@@ -9,7 +9,7 @@
 //!
 //! The value lives in the ROW's fields (the source of truth): the full range = 'no
 //! restriction' = empty. Dragging reads the captured `slider_track` bounds (via `canvas`)
-//! and writes the fields; mouse movement is caught by an overlay in `strat_time` so the
+//! and writes the fields; mouse movement is caught by an overlay in the shared tuner page so the
 //! cursor is not lost once it leaves the track.
 
 use gpui::*;
@@ -18,11 +18,64 @@ use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
 use super::super::super::calendar::split_i18n;
-use super::grid::NAME_COL;
+use super::super::bounds::time_name_width;
 use super::state::{WEEK_MIN, fmt_min, fmt_week_ep, parse_moh, parse_time};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::SliderProfiles;
+
+/// Split an inclusive circular selection into the visible linear pieces of its track.
+fn selected_bands(from: u16, to: u16, max: u16) -> Vec<(u16, u16)> {
+    if from <= to {
+        vec![(from, to)]
+    } else {
+        vec![(from, max), (0, to)]
+    }
+}
+
+/// Project excluded portions of a finer circular window onto every repeated track cycle.
+fn excluded_bands(from: u16, to: u16, period: u16, total: u16) -> Vec<(u16, u16)> {
+    let mut bands = Vec::new();
+    for cycle in 0..total / period {
+        let base = cycle * period;
+        if from > to {
+            if to + 1 < from {
+                bands.push((base + to + 1, base + from - 1));
+            }
+        } else {
+            if from > 0 {
+                bands.push((base, base + from - 1));
+            }
+            if to + 1 < period {
+                bands.push((base + to + 1, base + period - 1));
+            }
+        }
+    }
+    bands
+}
+
+/// Move one endpoint without constraining it against the other circular endpoint.
+fn dragged_range(range: (u16, u16), is_from: bool, value: u16, max: u16) -> (u16, u16) {
+    if is_from {
+        (value.min(max), range.1)
+    } else {
+        (range.0, value.min(max))
+    }
+}
+
+/// Format the independently bounded slider endpoints, preserving wraps through persistence.
+fn slider_bound_values(field: usize, from: u16, to: u16) -> Option<(String, String)> {
+    let max = AnalyticsView::slider_max(field);
+    let (from, to) = (from.min(max), to.min(max));
+    if from == 0 && to == max {
+        return None;
+    }
+    Some(match field {
+        0 => (fmt_week_ep(from, false), fmt_week_ep(to, true)),
+        1 => (fmt_min(from), fmt_min(to)),
+        _ => (from.to_string(), to.to_string()),
+    })
+}
 
 /// Cell color from the average profit `v` and the maximum `cmax` (🟢 plus / 🟠 minus).
 fn cell_color(v: f32, cmax: f32, p: MoonPalette) -> Hsla {
@@ -181,7 +234,8 @@ impl AnalyticsView {
         (frac * Self::slider_max(field) as f32).round() as u16
     }
 
-    /// Write the slider's range into the row's fields. A full range clears the restriction.
+    /// Write circular slider endpoints into the row fields without reordering them.
+    /// A full linear range clears the restriction.
     ///
     /// The WorkingTime rows are mutually exclusive. KPI recomputation remains deferred until
     /// slider release so drag motion cannot create a query storm.
@@ -192,18 +246,12 @@ impl AnalyticsView {
     ///     to: Second slider endpoint in field-specific units.
     ///     cx: GPUI context used to retire a pending Save preview and repaint the range.
     fn set_slider_range(&mut self, field: usize, from: u16, to: u16, cx: &mut Context<Self>) {
-        let max = Self::slider_max(field);
-        let (from, to) = (from.min(to), from.max(to));
-        let full = from == 0 && to == max;
-        if full {
-            self.clear_field(0, field);
-        } else {
-            let (a, b) = match field {
-                0 => (fmt_week_ep(from, false), fmt_week_ep(to, true)),
-                1 => (fmt_min(from), fmt_min(to)),
-                _ => (from.to_string(), to.to_string()),
-            };
+        let bounds = slider_bound_values(field, from, to);
+        let full = bounds.is_none();
+        if let Some((a, b)) = bounds {
             self.set_v1_cell(field, a, b);
+        } else {
+            self.clear_field(0, field);
         }
         // 'Day'↔'In hour' share the single WorkingTime field: the active row clears the
         // other. Only on a real (non-full) window — a full range means "no restriction",
@@ -228,7 +276,7 @@ impl AnalyticsView {
         }
     }
 
-    /// Move the dragged edge (`is_from`) of slider `field` to `value`.
+    /// Move one circular endpoint, allowing either handle to cross the other.
     pub(in crate::analytics::tuner) fn slider_drag_to(
         &mut self,
         field: usize,
@@ -236,12 +284,12 @@ impl AnalyticsView {
         value: u16,
         cx: &mut Context<Self>,
     ) {
-        let (mut from, mut to) = self.slider_range(field);
-        if is_from {
-            from = value.min(to);
-        } else {
-            to = value.max(from);
-        }
+        let (from, to) = dragged_range(
+            self.slider_range(field),
+            is_from,
+            value,
+            Self::slider_max(field),
+        );
         self.set_slider_range(field, from, to, cx);
     }
 
@@ -298,9 +346,7 @@ impl AnalyticsView {
         let max = Self::slider_max(field) as f32;
         let (from, to) = self.slider_range(field);
         let (ff, tf) = (from as f32 / max, to as f32 / max);
-        // Region without inversion (a wrapping span from>to is entered by hand — we don't
-        // overlap-draw it).
-        let (rl, rr) = (ff.min(tf), ff.max(tf));
+        let selection = selected_bands(from, to, Self::slider_max(field));
         // Shade a strip that is not in effect: either its field holds no window (it
         // restricts nothing) or it is the unused half of the Day/Hour pair, which shares
         // one WorkingTime field.
@@ -315,31 +361,11 @@ impl AnalyticsView {
         let dark_bands: Vec<(u16, u16)> = match active {
             Some(2) if field != 2 => {
                 let (hf, ht) = self.slider_range(2);
-                let mut v = Vec::new();
-                for h in 0..(total / 60) as u16 {
-                    let base = h * 60;
-                    if hf > 0 {
-                        v.push((base, base + hf - 1)); // before the hour window
-                    }
-                    if ht < 59 {
-                        v.push((base + ht + 1, base + 59)); // after the hour window
-                    }
-                }
-                v
+                excluded_bands(hf, ht, 60, total as u16)
             }
             Some(1) if field == 0 => {
                 let (df, dt) = self.slider_range(1);
-                let mut v = Vec::new();
-                for d in 0..7u16 {
-                    let base = d * 1440;
-                    if df > 0 {
-                        v.push((base, base + df - 1)); // before the day window
-                    }
-                    if dt < 1439 {
-                        v.push((base + dt + 1, base + 1439)); // after the day window
-                    }
-                }
-                v
+                excluded_bands(df, dt, 1440, total as u16)
             }
             _ => vec![],
         };
@@ -399,16 +425,16 @@ impl AnalyticsView {
             track = track
                 // This row's own selection (week span / window) — ON TOP of the shading,
                 // border only.
-                .child(
+                .children(selection.into_iter().map(|(a, b)| {
                     div()
                         .absolute()
                         .top_0()
                         .bottom_0()
-                        .left(relative(rl))
-                        .right(relative(1.0 - rr))
+                        .left(relative(a as f32 / max))
+                        .right(relative(1.0 - b as f32 / max))
                         .border_2()
-                        .border_color(moon(p.accent)),
-                )
+                        .border_color(moon(p.accent))
+                }))
                 // The two handles (from/to).
                 .child(handle_bar(ff, p, cx))
                 .child(handle_bar(tf, p, cx));
@@ -453,7 +479,7 @@ impl AnalyticsView {
             .child(
                 // Matches the grid's field-name column so the slider labels line up under it.
                 div()
-                    .w(design::font_w_px(cx, NAME_COL))
+                    .w(time_name_width(cx))
                     .flex_none()
                     .truncate()
                     .pb(design::ui_px(cx, 3.0))
@@ -509,3 +535,6 @@ impl AnalyticsView {
         )
     }
 }
+
+#[cfg(test)]
+mod tests;

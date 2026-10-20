@@ -162,21 +162,22 @@ fn profit_head(head: String, cols: ProfitCols, p: MoonPalette, cx: &App) -> Div 
     )
 }
 
-/// Figures remain separate mono cells from the human label and its slice description.
+/// Keep separate mono figures; the unseen variant uses danger when it underperforms Fact.
 fn profit_row(
     row: &ProfitRow,
     id: &'static str,
     cols: ProfitCols,
+    holdout: bool,
     p: MoonPalette,
     cx: &App,
 ) -> Div {
-    let figure = |value: f64, sel: String| {
+    let figure = |value: f64, sel: String, color: u32| {
         div()
             .debug_selector(move || sel.clone())
             .font_family(design::mono())
             .text_size(design::t_body(cx))
             .whitespace_nowrap()
-            .text_color(moon(sign_color(p, value)))
+            .text_color(moon(color))
             .child(fmt_signed(value))
     };
     v_flex()
@@ -194,13 +195,25 @@ fn profit_row(
                             .tooltip(crate::panels::common::text_tooltip(row.n.to_string())),
                     ),
                 [
-                    figure(row.fact, format!("{id}-fact")),
+                    figure(row.fact, format!("{id}-fact"), sign_color(p, row.fact)),
                     div()
                         .font_family(design::mono())
                         .text_size(design::t_body(cx))
                         .text_color(moon(p.text_muted))
                         .child("→"),
-                    figure(row.variant, format!("{id}-v1")),
+                    figure(
+                        row.variant,
+                        format!("{id}-v1"),
+                        if holdout {
+                            crate::analytics::tuner::split::holdout_color(
+                                row.variant,
+                                Some(row.fact),
+                                p,
+                            )
+                        } else {
+                            sign_color(p, row.variant)
+                        },
+                    ),
                 ],
                 cx,
             ),
@@ -372,10 +385,27 @@ pub(in crate::analytics::tuner) fn summary_card_el(
             let cols = ProfitCols::measure(&rows, arrow, cx);
             body = body.child(profit_head(head, cols, p, cx));
             if let Some(row) = &m.train {
-                body = body.child(profit_row(row, "an-ticks-sum-train-count", cols, p, cx));
+                body = body.child(profit_row(
+                    row,
+                    "an-ticks-sum-train-count",
+                    cols,
+                    false,
+                    p,
+                    cx,
+                ));
             }
             if let Some(row) = &m.holdout {
-                body = body.child(profit_row(row, "an-ticks-sum-hold-count", cols, p, cx));
+                body = body.child(profit_row(
+                    row,
+                    "an-ticks-sum-hold-count",
+                    cols,
+                    true,
+                    p,
+                    cx,
+                ));
+            }
+            if let Some(fact) = &m.fact_holdout {
+                body = body.child(crate::analytics::tuner::split::fact_line(fact, p, cx));
             }
         }
         if !m.changes.is_empty() {
@@ -447,33 +477,8 @@ pub(in crate::analytics::tuner) fn summary_card_el(
             body = body.child(warns);
         }
         if m.can_reset {
-            let mut actions = h_flex()
-                .w_full()
-                .flex_wrap()
-                .gap(design::ui_px(cx, 6.0))
-                .child(button(
-                    "an-ticks-sum-write",
-                    "analytics.ticks.sum.write",
-                    if m.verdict == Verdict::Apply {
-                        MoonButtonVariant::Blue
-                    } else {
-                        MoonButtonVariant::Soft
-                    },
-                    m.write_enabled,
-                    acts.write.clone(),
-                    cx,
-                ));
-            if m.copy_visible {
-                actions = actions.child(button(
-                    "an-ticks-sum-copy",
-                    "analytics.ticks.sum.copy",
-                    MoonButtonVariant::Soft,
-                    m.write_enabled,
-                    acts.copy.clone(),
-                    cx,
-                ));
-            }
-            actions = actions.child(button(
+            let actions = h_flex().w_full().flex_wrap().gap(design::ui_px(cx, 6.0));
+            let actions = actions.child(button(
                 "an-ticks-sum-reset",
                 "analytics.ticks.sum.reset",
                 MoonButtonVariant::Ghost,
@@ -548,38 +553,42 @@ pub(in crate::analytics::tuner) fn summary_card_el(
         .w_full()
         .flex_none()
         .min_w_0()
-        .rounded(design::r_container(cx))
-        .bg(moon(p.panel))
-        .border_1()
-        .border_color(moon(p.border))
         .font_family(design::ui_font())
         .text_size(design::t_body(cx))
         .text_color(moon(p.text))
-        .child(
-            h_flex()
-                .w_full()
-                .flex_wrap()
-                .items_start()
-                .gap(design::ui_px(cx, 6.0))
-                .px(design::ui_px(cx, 12.0))
-                .pt(design::ui_px(cx, 10.0))
-                .child(
-                    div()
-                        .font_family(design::ui_font())
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_size(design::t_title(cx))
-                        .child(m.title.clone()),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .font_family(design::mono())
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text_muted))
-                        .child(m.scope_label.clone()),
-                ),
-        )
         .child(body)
+        .into_any_element()
+}
+
+/// Put Copy and Save in the shared header without changing their guarded consent callbacks.
+pub(in crate::analytics::tuner) fn parameters_header(
+    m: &SummaryModel,
+    acts: &SummaryActs,
+    cx: &App,
+) -> AnyElement {
+    let handlers = crate::analytics::tuner::shell::ToolbarActs {
+        on_copy: acts.copy.clone(),
+        on_save: acts.write.clone(),
+    };
+    let write = crate::analytics::tuner::shell::ToolbarWrite {
+        enabled: m.write_enabled
+            && m.can_reset
+            && !matches!(m.verdict, Verdict::Running { .. } | Verdict::Loading),
+        copy: m.copy_visible,
+        dirty: m.can_reset,
+    };
+    div()
+        .id("tuner-ticks-parameters-header")
+        .tooltip(crate::panels::common::text_tooltip(format!(
+            "{} · {}",
+            m.title, m.scope_label
+        )))
+        .child(crate::analytics::tuner::shell::toolbar_el(
+            crate::analytics::tuner::shared::TunerKind::Ticks,
+            t!("analytics.tuner.fields_title").to_string(),
+            Some(&write),
+            &handlers,
+            cx,
+        ))
         .into_any_element()
 }

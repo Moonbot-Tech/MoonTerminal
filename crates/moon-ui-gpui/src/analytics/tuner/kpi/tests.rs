@@ -8,6 +8,302 @@ use crate::analytics::set_pnl_unit;
 use moon_core::db::ProfitUnit;
 use moon_core::db::tuner::VarStats;
 
+/// Reintroducing signed PF or positive drawdown would mislabel both schedule and filter splits.
+#[test]
+fn polish_split_metrics_share_matrix_signs() {
+    set_pnl_unit(None);
+    let mut tally = moon_core::db::metrics::Tally::default();
+    tally.push(162.0);
+    tally.push(-100.0);
+    assert_eq!(super::split_metrics(&tally), ("1.62".into(), "-100".into()));
+}
+
+/// Compare actual laid-out text against the larger body band, without a raw pixel oracle.
+struct TypographyProbe;
+
+/// Exercise both reported subheading families in the real matrix.
+struct HeadingProbe {
+    mode: usize,
+}
+
+impl gpui::Render for HeadingProbe {
+    /// Include the By-coin small-sample warning and Entry/Exit Fact explanation.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        let fact = if self.mode == 3 {
+            VarLabel::with_sub(
+                rust_i18n::t!("analytics.tuner.fact").to_string(),
+                rust_i18n::t!("analytics.ticks.kpi.fact_sub").to_string(),
+            )
+        } else {
+            VarLabel::new(rust_i18n::t!("analytics.tuner.fact").to_string())
+        };
+        let labels = if self.mode == 2 {
+            vec![
+                VarLabel::with_sub(
+                    rust_i18n::t!("analytics.coins.manual").to_string(),
+                    rust_i18n::t!("analytics.coins.v1_lists", bl = 1, wl = 0).to_string(),
+                ),
+                VarLabel::with_sub(
+                    rust_i18n::t!("analytics.coins.auto_col").to_string(),
+                    rust_i18n::t!("analytics.coins.auto_sub_few").to_string(),
+                ),
+            ]
+        } else {
+            vec![VarLabel::new("v1".into()), VarLabel::new("v2".into())]
+        };
+        super::kpi_matrix_body(
+            &crate::load_state::LoadState::Ready(std::sync::Arc::new(vec![
+                VarStats {
+                    n: 15,
+                    ..Default::default()
+                };
+                3
+            ])),
+            String::new(),
+            &fact,
+            &labels,
+            false,
+            std::rc::Rc::new(|_, _| {}),
+            moon_ui::MoonPalette::active(cx),
+            cx,
+        )
+    }
+}
+
+/// Unequal widths or wrapping statuses must not inflate the coin header above the other modes.
+#[gpui::test]
+fn polish_subheadings_fit_every_locale(cx: &mut gpui::TestAppContext) {
+    use gpui::px;
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(
+                moon_core::config::UiThemeMode::Light,
+                1.0,
+            ),
+            cx,
+        )
+    });
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for width in [320.0, super::super::layout::SIDE_W] {
+            let mut header_height = None;
+            for mode in 0..4 {
+                let window = cx.open_window(gpui::size(px(width), px(600.0)), |_, _| {
+                    HeadingProbe { mode }
+                });
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let header = visual.debug_bounds("kpi-header").unwrap();
+                if width == super::super::layout::SIDE_W {
+                    let expected = *header_height.get_or_insert(header.size.height);
+                    assert!(
+                        (header.size.height - expected).abs() <= px(0.5),
+                        "{} mode {mode}: header height differs",
+                        language.code()
+                    );
+                }
+                let first = visual.debug_bounds("kpi-head-0").unwrap();
+                for (head, title) in [
+                    ("kpi-head-0", "kpi-title-0"),
+                    ("kpi-head-1", "kpi-title-1"),
+                    ("kpi-head-2", "kpi-title-2"),
+                ] {
+                    let column = visual.debug_bounds(head).unwrap();
+                    assert!((column.size.width - first.size.width).abs() <= px(0.5));
+                    let title = visual.debug_bounds(title).unwrap();
+                    assert!(
+                        title.size.width <= column.size.width + px(0.5),
+                        "{} {width} mode {mode} {head}: title {:?} exceeds column {:?}",
+                        language.code(),
+                        title.size,
+                        column.size
+                    );
+                }
+                for selector in match mode {
+                    2 => vec!["kpi-sub-1", "kpi-sub-2"],
+                    3 => vec!["kpi-sub-0"],
+                    _ => Vec::new(),
+                } {
+                    let bounds = visual.debug_bounds(selector).unwrap();
+                    let line_height = visual.debug_bounds("kpi-value-0-0").unwrap().size.height;
+                    assert!(
+                        bounds.size.height <= line_height + px(0.5),
+                        "{} {selector} wrapped",
+                        language.code()
+                    );
+                    assert!(
+                        bounds.right() <= px(width + 0.5),
+                        "subheading outside shared pane"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Exercise the localized supplemental metric at actual narrow dock widths.
+struct NarrowUnclosedProbe;
+
+impl gpui::Render for NarrowUnclosedProbe {
+    /// The production matrix receives an unclosed row and a synthetic two-column result.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        super::kpi_matrix_body_with(
+            &crate::load_state::LoadState::Ready(std::sync::Arc::new(vec![
+                VarStats {
+                    n: 125,
+                    ..Default::default()
+                };
+                2
+            ])),
+            String::new(),
+            &VarLabel::new("Fact".into()),
+            &[VarLabel::new("v1".into())],
+            false,
+            std::rc::Rc::new(|_, _| {}),
+            moon_ui::MoonPalette::active(cx),
+            cx,
+            super::KpiOpts {
+                rows: super::KpiRows::Plain,
+                unclosed: Some((6, 8.25)),
+                ..Default::default()
+            },
+        )
+    }
+}
+
+/// Enlarging the body band must not let the unclosed label overpaint Fact or V1 in a narrow dock.
+#[gpui::test]
+fn livefix_unclosed_body_label_fits_without_overpainting_values(cx: &mut gpui::TestAppContext) {
+    use gpui::px;
+    for theme in [
+        moon_core::config::UiThemeMode::Light,
+        moon_core::config::UiThemeMode::Dark,
+        moon_core::config::UiThemeMode::Graphite,
+    ] {
+        cx.update(|cx| {
+            moon_ui::MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+                cx,
+            )
+        });
+        for language in moon_core::config::Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for width in [320.0, 400.0, 687.0] {
+                let window =
+                    cx.open_window(gpui::size(px(width), px(700.0)), |_, _| NarrowUnclosedProbe);
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let label = visual.debug_bounds("kpi-unclosed-label").unwrap();
+                let need = visual.update(|_, cx| {
+                    crate::design::ui_body_text_width(
+                        cx,
+                        &rust_i18n::t!("analytics.ticks.kpi.unclosed"),
+                        400.0,
+                    )
+                });
+                assert!(
+                    label.size.width + px(0.5) >= px(need),
+                    "unclosed body label clipped in {} at {width}",
+                    language.code()
+                );
+                for selector in ["kpi-unclosed-0", "kpi-unclosed-1"] {
+                    let value = visual.debug_bounds(selector).unwrap();
+                    assert!(
+                        label.right() <= value.left() || label.bottom() <= value.top(),
+                        "unclosed label overpaints a value"
+                    );
+                }
+            }
+        }
+    }
+}
+
+impl gpui::Render for TypographyProbe {
+    /// Render a body reference next to the production KPI matrix and Parameters header.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{InteractiveElement, IntoElement, ParentElement, Styled};
+        let p = moon_ui::MoonPalette::active(cx);
+        moon_ui::v_flex()
+            .w_full()
+            .child(
+                gpui::div()
+                    .debug_selector(|| "body-reference".into())
+                    .text_size(crate::design::t_body(cx))
+                    .child("125"),
+            )
+            .child(
+                super::kpi_matrix_body(
+                    &crate::load_state::LoadState::Ready(std::sync::Arc::new(vec![
+                        VarStats {
+                            n: 125,
+                            ..Default::default()
+                        };
+                        3
+                    ])),
+                    String::new(),
+                    &VarLabel::new("Fact".into()),
+                    &[],
+                    false,
+                    std::rc::Rc::new(|_, _| {}),
+                    p,
+                    cx,
+                )
+                .into_any_element(),
+            )
+    }
+}
+
+/// Reverting KPI labels or values to caption text visibly shrinks them relative to body text.
+#[gpui::test]
+fn livefix_kpi_uses_body_band(cx: &mut gpui::TestAppContext) {
+    use gpui::px;
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(
+                moon_core::config::UiThemeMode::Light,
+                1.0,
+            ),
+            cx,
+        )
+    });
+    let _locale = crate::test_locale::force("en");
+    let window = cx.open_window(gpui::size(px(620.0), px(900.0)), |_, _| TypographyProbe);
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    for _ in 0..3 {
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    }
+    let reference = visual.debug_bounds("body-reference").unwrap();
+    for selector in ["kpi-metric-0", "kpi-value-0-0"] {
+        let actual = visual.debug_bounds(selector).unwrap();
+        assert_eq!(
+            actual.size.height, reference.size.height,
+            "KPI typography must use the shared body band"
+        );
+    }
+}
+
 /// Changing `kpi.rs:format_kpi_cell` to return the exact formatter for every finite magnitude must
 /// fail the large-value assertions; otherwise All-period Fact/v1/v2 values wrap or overpaint
 /// adjacent cells and rows. Removing the active percent suffix from its compact profit branch must

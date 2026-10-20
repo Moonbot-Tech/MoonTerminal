@@ -9,6 +9,27 @@ use super::{
 use moon_core::db::analytics::GroupStat;
 use moon_core::db::tuner::FieldClass;
 
+/// Restoring the old no-holdout early return would hide material growth in the default mode.
+#[test]
+fn polish_default_full_history_summary_shows_material_staleness() {
+    let split = super::state::SearchSplit {
+        train: Default::default(),
+        holdout: None,
+        fact_holdout: None,
+        composed: None,
+        compose_skipped: None,
+    };
+    let stats = |n| {
+        vec![moon_core::db::tuner::VarStats {
+            n,
+            ..Default::default()
+        }]
+    };
+    let baseline = super::super::freshness::SampleSnapshot::from_count(100, 100);
+    assert!(!split.should_show_summary(baseline.materially_changed(Some(&stats(101)), 100)));
+    assert!(split.should_show_summary(baseline.materially_changed(Some(&stats(105)), 100)));
+}
+
 fn row(key: &str, kind: &str) -> GroupStat {
     GroupStat {
         key: key.to_string(),
@@ -163,12 +184,12 @@ fn the_master_switch_leaves_a_hidden_detect_field_unticked() {
 fn the_fields_grid_skips_a_field_the_scope_does_not_offer() {
     let source = include_str!("mod.rs").replace("\r\n", "\n");
     let body = source
-        .split_once("fn fields_grid(")
-        .expect("fields_grid")
+        .split_once("fn filter_table(")
+        .expect("filter_table")
         .1
         .split("\n    fn ")
         .next()
-        .expect("fields_grid body");
+        .expect("filter_table body");
     assert!(
         body.contains("if !offer_field(field.class, drops_only)"),
         "the row loop must skip a field the scope does not offer"

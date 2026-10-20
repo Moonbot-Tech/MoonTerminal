@@ -19,7 +19,7 @@ use crate::analytics::AnalyticsView;
 use crate::analytics::summary::fmt_signed_unit;
 
 mod card;
-pub(super) use card::{SummaryActs, summary_card_el};
+pub(super) use card::{SummaryActs, parameters_header, summary_card_el};
 
 /// Immutable inline consent, captured before the user presses the final write button.
 pub(in crate::analytics::tuner) struct WriteConfirm {
@@ -262,6 +262,8 @@ pub(super) struct SummaryModel {
     pub sentence: String,
     pub train: Option<ProfitRow>,
     pub holdout: Option<ProfitRow>,
+    /// Full Fact tally on the identical holdout, kept for the shared muted baseline line.
+    pub fact_holdout: Option<moon_core::db::metrics::Tally>,
     pub changed_header: String,
     pub changes: Vec<ChangeRow>,
     pub warnings: Vec<String>,
@@ -469,6 +471,7 @@ impl SummaryModel {
             verdict,
             train,
             holdout,
+            fact_holdout: result.and_then(|r| r.fact_holdout.clone()),
             changed_header: t!("analytics.ticks.sum.changed", n = changes.len()).to_string(),
             changes,
             warnings,
@@ -536,12 +539,12 @@ impl AnalyticsView {
     }
 
     /// Bind the view-free card to updates without reading this entity inside its own update.
-    pub(super) fn ticks_summary_card(
+    pub(super) fn ticks_parameters_parts(
         &self,
         host_w: gpui::Pixels,
         p: MoonPalette,
         cx: &Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> (gpui::AnyElement, gpui::AnyElement) {
         let model = self.ticks_summary_model(cx);
         let status = match &model.verdict {
             Verdict::Running {
@@ -582,7 +585,8 @@ impl AnalyticsView {
             }),
         };
         let arrow = super::grid::ranges_fit(host_w - crate::design::ui_px(cx, 2.0), cx);
-        summary_card_el(&model, &acts, arrow, p, cx)
+        let header = parameters_header(&model, &acts, cx);
+        (header, summary_card_el(&model, &acts, arrow, p, cx))
     }
 
     /// Prepare inline consent and warning checks once, without opening another dialog.

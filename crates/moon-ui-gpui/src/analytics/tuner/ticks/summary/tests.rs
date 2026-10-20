@@ -292,7 +292,7 @@ fn invalidation_retires_search_timing_and_refusal_with_the_result() {
     assert!(state.sugg_refusal.is_none());
 }
 
-/// Counting open profit into the row would contradict the separately displayed closed profit.
+/// Counting open profit or dropping the baseline would prevent checking the closed holdout verdict.
 #[test]
 fn holdout_row_preserves_closed_profits_and_explains_its_open_trades() {
     let _locale = crate::test_locale::force("en");
@@ -303,6 +303,11 @@ fn holdout_row_preserves_closed_profits_and_explains_its_open_trades() {
     found.holdout_loses = true;
     state.last_result = Some(found);
     let model = SummaryModel::from_state(&state, String::new(), false);
+    let fact = model
+        .fact_holdout
+        .as_ref()
+        .expect("shared Fact baseline line");
+    assert_eq!((fact.n, fact.profit), (9, 3.0));
     let row = model.holdout.unwrap();
     assert_eq!((row.n, row.fact, row.variant), (9, 3.0, 8.0));
     let line = row.open_line.unwrap();

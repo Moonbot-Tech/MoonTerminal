@@ -218,6 +218,8 @@ pub struct SearchResult {
     /// back, i.e. the whole period was fitted on. This is the only figure here that was not
     /// chosen for, so it is the one that says whether the ranges found a pattern or the noise.
     pub holdout: Option<Tally>,
+    /// Unfiltered Fact on the identical chronological holdout, including caller-fixed fields.
+    pub fact_holdout: Option<Tally>,
     /// Base seed the restarts were derived from, so a result can be reproduced exactly.
     ///
     /// For a single all-fields search, the caller-owned [`SearchHandle`] carries the
@@ -394,6 +396,7 @@ pub fn suggest(
         fields,
         train: search.tally(&applied, 0..train_n),
         holdout: (train_n < total).then(|| search.tally(&applied, train_n..total)),
+        fact_holdout: (train_n < total).then(|| search.fact_tally(train_n..total)),
         seed,
         composed: match composed {
             Some(Ok(Some(out))) => Some(composed_set(&out, &applied)),

@@ -30,7 +30,6 @@ use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
 use super::super::shared::{TunerKind, collapse_caret, glyph_btn};
-use super::super::shell::{ToolbarActs, toolbar_el};
 use super::sections::{GridSection, RowRole, layout};
 use super::state::{NowValue, TicksData};
 use crate::design;
@@ -39,16 +38,37 @@ use moon_core::db::tuner::ticks::params::{ParamGroup, ParamKind, ParamSection, T
 
 /// Width of the strategy and variant cells, font-scaled px.
 const CELL_W: f32 = 60.0;
+
+/// The localized current-value heading must fit the same slot as the strategy values below it.
+fn current_column_width(cx: &App) -> Pixels {
+    px(f32::from(design::font_w_px(cx, CELL_W)).max(
+        design::ui_body_text_width(cx, &t!("analytics.ticks.pick.col_now"), 400.0).ceil() + 2.0,
+    ))
+}
+
+/// Paint the current-value heading with the same font used to reserve its column width.
+fn current_heading(cx: &App) -> AnyElement {
+    div()
+        .debug_selector(|| "ticks-current-heading".into())
+        .w(current_column_width(cx))
+        .flex_none()
+        .text_center()
+        .font_family(design::ui_font())
+        .text_size(design::t_body(cx))
+        .whitespace_nowrap()
+        .child(t!("analytics.ticks.pick.col_now").to_string())
+        .into_any_element()
+}
 /// Left inset of a field row, ui px: its tick sits under its section's tick, past the caret,
 /// so the row reads as inside the section.
-const ROW_INDENT: f32 = 30.0;
+const ROW_INDENT: f32 = 26.0;
 /// Preserve six caption-sized characters of the tooltip-backed field name beside ranges.
 const NAME_MIN_W: f32 = 48.0;
 /// The shipped row's clear control and trailing inset, in UI design pixels.
 const CLEAR_W: f32 = 12.0;
-const ROW_RIGHT: f32 = 8.0;
+const ROW_RIGHT: f32 = 4.0;
 /// Five gaps separate the six cells of a row with editable ranges.
-const ROW_GAP: f32 = 6.0;
+const ROW_GAP: f32 = 3.0;
 
 /// Render-time range visibility and the active palette travel together through the grid rows.
 #[derive(Clone, Copy)]
@@ -122,15 +142,15 @@ pub(super) fn current_cell_el(
         _ => ("—".to_string(), true),
     };
     let measured = if mono {
-        design::mono_caption_text_width(cx, &text, 400.0)
+        design::mono_body_text_width(cx, &text, 400.0)
     } else {
-        design::ui_caption_text_width(cx, &text, 400.0)
+        design::ui_body_text_width(cx, &text, 400.0)
     };
     let selector = format!("an-ticks-current-cell-{key}");
     div()
         .id(SharedString::from(format!("an-ticks-chip-{key}")))
         .debug_selector(move || selector.clone())
-        .w(px(f32::from(design::font_w_px(cx, CELL_W)).max(measured)))
+        .w(px(f32::from(current_column_width(cx)).max(measured)))
         .flex_none()
         .whitespace_nowrap()
         .text_right()
@@ -139,7 +159,7 @@ pub(super) fn current_cell_el(
         } else {
             design::ui_font()
         })
-        .text_size(design::t_caption(cx))
+        .text_size(design::t_body(cx))
         .text_color(moon(if clickable { p.amber } else { p.text_muted }))
         .when(clickable, |el| {
             el.cursor_pointer()
@@ -157,7 +177,7 @@ pub(super) fn variant_cell_el(key: &str, input: &Entity<MoonInputState>, cx: &Ap
         .child(
             MoonInput::new(SharedString::from(format!("an-ticks-in-v-{key}")))
                 .state(input)
-                .size(design::dense_input_size(cx)),
+                .size(design::INPUT_SIZE),
         )
 }
 
@@ -191,7 +211,7 @@ pub(super) fn field_row_el(
         .gap(design::ui_px(cx, ROW_GAP))
         .border_t_1()
         .border_color(moon_alpha(p.border, 0.5))
-        .text_size(design::t_caption(cx))
+        .text_size(design::t_body(cx))
         .when(selected, |row| row.bg(moon_alpha(p.amber, 0.08)))
         .child(parts.checkbox)
         .child(parts.name)
@@ -200,6 +220,51 @@ pub(super) fn field_row_el(
         .child(parts.clear)
         .children(range)
         .into_any_element()
+}
+
+/// Render a read-only field with the same trailing slots as editable rows.
+pub(super) fn fixed_row_el(
+    key: &str,
+    name: AnyElement,
+    value: String,
+    range: Option<AnyElement>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let mut row = h_flex()
+        .w_full()
+        .px(design::ui_px(cx, ROW_RIGHT))
+        .pl(design::ui_px(cx, ROW_INDENT))
+        .py(design::ui_px(cx, 2.0))
+        .items_center()
+        .gap(design::ui_px(cx, ROW_GAP))
+        .border_t_1()
+        .border_color(moon_alpha(p.border, 0.5))
+        .text_size(design::t_caption(cx))
+        .child(
+            div().flex_none().child(
+                MoonCheckbox::new(SharedString::from(format!("an-ticks-fx-en-{key}")))
+                    .checked(false)
+                    .disabled(true)
+                    .size(design::CONTROL_TIER),
+            ),
+        )
+        .child(name)
+        .child(
+            div()
+                .debug_selector(|| "an-ticks-fixed-current".into())
+                .w(design::font_w_px(cx, CELL_W))
+                .flex_none()
+                .truncate()
+                .text_right()
+                .text_color(moon_alpha(p.text_muted, 0.8))
+                .child(value),
+        );
+    row = row
+        .child(div().w(design::font_w_px(cx, CELL_W)).flex_none())
+        .child(div().w(design::ui_px(cx, 12.0)).flex_none())
+        .children(range);
+    row.into_any_element()
 }
 
 /// Minimum grid width preserving the same field slots before offering editable ranges.
@@ -211,7 +276,8 @@ pub(super) fn grid_range_min_width(cx: &App) -> Pixels {
             .line_height(20.0)
             .min(tokens.ui(16.0) + tokens.scale.font_delta.max(0.0)),
     ));
-    design::font_w_px(cx, CELL_W * 2.0 + NAME_MIN_W)
+    design::font_w_px(cx, CELL_W + NAME_MIN_W)
+        + current_column_width(cx)
         + design::ui_px(cx, ROW_INDENT + ROW_RIGHT + ROW_GAP * 5.0 + CLEAR_W)
         + checkbox
         + super::ranges::block_w(cx)
@@ -269,19 +335,7 @@ impl AnalyticsView {
             ranges_visible,
             palette: p,
         };
-        let acts = ToolbarActs {
-            on_round: std::rc::Rc::new(|_, _, _| {}),
-            on_copy: std::rc::Rc::new(|_, _| {}),
-            on_save: std::rc::Rc::new(|_, _| {}),
-        };
-        let header = toolbar_el(
-            TunerKind::Ticks,
-            t!("analytics.ticks.pick.title").to_string(),
-            None,
-            None,
-            &acts,
-            cx,
-        );
+        let (header, summary) = self.ticks_parameters_parts(host_w, p, cx);
         let cfg_row = self.shell_config_row(TunerKind::Ticks, p, window, cx);
         let data = self.ticks.data.data().cloned();
         let schema_sig = super::sections::schema_signature(self.backend.read(cx).session.store());
@@ -372,8 +426,9 @@ impl AnalyticsView {
             .overflow_hidden()
             .child(header)
             .child(cfg_row)
-            .child(grid)
             .children(accuracy)
+            .child(summary)
+            .child(grid)
             .into_any_element()
     }
 
@@ -422,9 +477,9 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (all_on, some_on) = self.ticks_tick_state(&keys);
-        let cell = |text: String| {
+        let cell = |text: String, width: Pixels| {
             div()
-                .w(design::font_w_px(cx, CELL_W))
+                .w(width)
                 .flex_none()
                 .text_center()
                 .truncate()
@@ -432,11 +487,11 @@ impl AnalyticsView {
         };
         let mut head = h_flex()
             .w_full()
-            .px(design::ui_px(cx, 8.0))
-            .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
+            .px(design::ui_px(cx, ROW_RIGHT))
+            .h(design::fit_h_px(cx, 26.0, 14.0, 5.0))
             .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .text_size(design::t_caption(cx))
+            .gap(design::ui_px(cx, ROW_GAP))
+            .text_size(design::t_body(cx))
             .text_color(moon(p.text_soft))
             .bg(moon(p.table_head))
             .child(
@@ -474,9 +529,12 @@ impl AnalyticsView {
                             }))
                     }),
             )
-            .child(cell(t!("analytics.ticks.pick.col_now").to_string()));
+            .child(current_heading(cx));
         head = head
-            .child(cell(t!("analytics.ticks.pick.col_v1").to_string()))
+            .child(cell(
+                t!("analytics.ticks.pick.col_v1").to_string(),
+                design::font_w_px(cx, CELL_W),
+            ))
             .child(
                 glyph_btn(
                     "an-ticks-clr-col",
@@ -767,50 +825,24 @@ impl AnalyticsView {
             Some(NowValue::Differs) => t!("analytics.time.cur_varies").to_string(),
             _ => "—".to_string(),
         };
-        let mut row = h_flex()
-            .w_full()
-            .px(design::ui_px(cx, 8.0))
-            .pl(design::ui_px(cx, ROW_INDENT))
-            .py(design::ui_px(cx, 2.0))
-            .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .border_t_1()
-            .border_color(moon_alpha(p.border, 0.5))
-            .text_size(design::t_caption(cx))
-            .child(
-                div().flex_none().child(
-                    MoonCheckbox::new(SharedString::from(format!("an-ticks-fx-en-{key}")))
-                        .checked(false)
-                        .disabled(true)
-                        .size(design::CONTROL_TIER),
-                ),
-            )
-            .child(
-                div()
-                    .id(SharedString::from(format!("an-ticks-fx-{key}")))
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(moon(name_color))
-                    .tooltip(crate::panels::common::text_tooltip(format!(
-                        "{key}\n\n{tip}"
-                    )))
-                    .child(key.to_string()),
-            )
-            .child(
-                div()
-                    .w(design::font_w_px(cx, CELL_W))
-                    .flex_none()
-                    .truncate()
-                    .text_right()
-                    .text_color(moon_alpha(p.text_muted, 0.8))
-                    .child(value),
-            );
-        row = row
-            .child(div().w(design::font_w_px(cx, CELL_W)).flex_none())
-            .child(div().w(design::ui_px(cx, 12.0)).flex_none())
-            .when(ranges_visible, |row| row.child(self.ticks_range_blank(cx)));
-        row.into_any_element()
+        fixed_row_el(
+            key,
+            div()
+                .id(SharedString::from(format!("an-ticks-fx-{key}")))
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(moon(name_color))
+                .tooltip(crate::panels::common::text_tooltip(format!(
+                    "{key}\n\n{tip}"
+                )))
+                .child(key.to_string())
+                .into_any_element(),
+            value,
+            ranges_visible.then(|| self.ticks_range_blank(cx)),
+            p,
+            cx,
+        )
     }
 
     /// One field: its tick, its name, the strategies' value, the variant's input with its clear
@@ -970,3 +1002,6 @@ fn knob_live(knob: &TickParam, entry_on: bool) -> bool {
 pub(super) fn knob_ticks(knob: &TickParam, entry_on: bool) -> bool {
     knob_live(knob, entry_on) && super::model_cfg::current().entry_method.reads(knob.key)
 }
+
+#[cfg(test)]
+mod tests;

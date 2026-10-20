@@ -345,6 +345,10 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let mode = super::StratMode::Coins;
+        if self.bottom_collapsed(mode) {
+            return self.folded_bottom(mode, t!("analytics.tab.coins").to_string(), p, cx);
+        }
         let scale = design::font_scale(cx);
         let scope = self.scope_label();
         let search = self.coin_search_state(window, cx);
@@ -489,6 +493,7 @@ impl AnalyticsView {
                             .truncate()
                             .text_size(design::t_caption(cx))
                             .text_color(moon(p.text_muted))
+                            .font_family(design::mono())
                             .child(scope),
                     )
                     .when(total > shown, |el| {
@@ -503,7 +508,8 @@ impl AnalyticsView {
                                         .to_string(),
                                 ),
                         )
-                    }),
+                    })
+                    .child(self.bottom_caret(mode, p, cx)),
             )
             .child(self.coin_filter_bar(&search, &min_trades, counts, p, cx))
             .child(self.coin_header(p, cx))

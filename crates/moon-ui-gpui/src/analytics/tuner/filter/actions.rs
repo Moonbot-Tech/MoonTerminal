@@ -57,6 +57,7 @@ impl AnalyticsView {
         // unpublishable, and letting it run to the end holds every worker for nothing.
         self.tuner.stop_suggest();
         let q = self.tuner_query();
+        let sample_end = q.to;
         let restarts = iters_of(&self.tuner.iters);
         let min_n = self.suggest_min_n();
         let edges = self.suggest_edges();
@@ -174,6 +175,7 @@ impl AnalyticsView {
                     split: found.as_ref().map(|res| SearchSplit {
                         train: res.train.clone(),
                         holdout: res.holdout.clone(),
+                        fact_holdout: res.fact_holdout.clone().map(Box::new),
                         composed: res.composed.clone(),
                         compose_skipped: res.compose_skipped,
                     }),
@@ -248,6 +250,8 @@ impl AnalyticsView {
                         this.tuner.inputs.remove(&format!("tv0f{fi}a"));
                         this.tuner.inputs.remove(&format!("tv0f{fi}b"));
                     }
+                    this.tuner.sample_snapshot =
+                        super::super::freshness::SampleSnapshot::after_run(sample_end);
                     this.reload_tuner(cx);
                 }
                 cx.notify();

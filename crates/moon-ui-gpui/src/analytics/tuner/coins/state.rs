@@ -340,6 +340,9 @@ pub(in crate::analytics) struct CoinsState {
     /// Bumped on every report publication. A finished pick stores the value it was
     /// published under; `pick_stale` is true when they differ. Same binding as `lists_rev`.
     pub(in crate::analytics::tuner) report_gen: u64,
+    /// The pick's returned scoped sample count and the latest queried period end.
+    pub(in crate::analytics::tuner) sample_snapshot: super::super::freshness::SampleSnapshot,
+    pub(in crate::analytics::tuner) report_end: i64,
     pub(in crate::analytics::tuner) seq: u64,
     pub(in crate::analytics::tuner) kpi_seq: u64,
     /// The pending debounced KPI rescan. Held so the next edit REPLACES it — dropping a
@@ -362,6 +365,8 @@ impl Default for CoinsState {
             work: CoinLists::default(),
             lists_rev: 0,
             report_gen: 0,
+            sample_snapshot: Default::default(),
+            report_end: 0,
             search: String::new(),
             search_input: None,
             min_trades: 0,
@@ -490,6 +495,7 @@ impl CoinsState {
     pub(in crate::analytics::tuner) fn drop_pick(&mut self) {
         self.pick_seq = self.pick_seq.wrapping_add(1);
         self.pick = PickState::Idle;
+        self.sample_snapshot = Default::default();
         if self.suggestion.take().is_some() {
             self.pick_rev = self.pick_rev.wrapping_add(1);
         }
@@ -507,6 +513,24 @@ impl CoinsState {
         self.drop_pick();
         self.pick = PickState::Running { seq: self.pick_seq };
         self.pick_seq
+    }
+
+    /// Adopt a completed in-process batch pick with the same scoped baseline as a manual pick.
+    pub(in crate::analytics::tuner) fn adopt_batch_pick(
+        &mut self,
+        pick: Arc<CoinPick>,
+        holdout_pct: u32,
+    ) {
+        self.sample_snapshot = super::super::freshness::SampleSnapshot::from_count(
+            (pick.train_n + pick.holdout_n) as i64,
+            self.report_end,
+        );
+        self.pick = PickState::Done {
+            pick,
+            lists_rev: self.lists_rev,
+            report_gen: self.report_gen,
+            holdout_pct,
+        };
     }
 
     /// Publish a pick reply.
@@ -578,7 +602,10 @@ impl CoinsState {
                 ..
             } => {
                 let lists = *lists_rev != self.lists_rev;
-                let report = *report_gen != self.report_gen;
+                let report = *report_gen != self.report_gen
+                    && self
+                        .sample_snapshot
+                        .materially_changed(self.kpi.data().map(|s| s.as_ref()), self.report_end);
                 if lists {
                     Some(PickStaleCause::Lists)
                 } else if report {

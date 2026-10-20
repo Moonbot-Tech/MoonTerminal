@@ -28,7 +28,7 @@ use rust_i18n::t;
 
 use super::super::refresh::CatchUpOutcome;
 use super::super::{AnalyticsView, LoadState};
-pub(in crate::analytics::tuner) use super::shared::{N_VAR, TunerKind, card, glyph_btn};
+pub(in crate::analytics::tuner) use super::shared::{TunerKind, card, glyph_btn};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::GroupStat;
@@ -250,6 +250,7 @@ impl AnalyticsView {
                 // under a changed period label must belong to it, but a settled snapshot with a
                 // scheduled correction must not blink through the intermediate result.
                 let keep_stats = this.keep_on_catch_up(after_report, stats_outcome, report_req);
+                this.tuner.sample_snapshot.observe(stats.as_ref().ok());
                 this.tuner.stats.apply_or_keep(stats, keep_stats);
                 // `strategy_filters` is intentionally lossy and reports an unreadable row as
                 // `found=false`. An automatic report refresh must not turn that ambiguity into
@@ -321,6 +322,7 @@ impl AnalyticsView {
                 let stats_outcome = CatchUpOutcome::of_read(&stats);
                 let error = stats.as_ref().err().cloned();
                 let keep_stats = this.keep_on_catch_up(after_report, stats_outcome, report_req);
+                this.tuner.sample_snapshot.observe(stats.as_ref().ok());
                 this.tuner.stats.apply_or_keep(stats, keep_stats);
                 this.tuner.apply_strategy_read(filters, after_report);
                 this.tuner.dirty = super::super::refresh::report_result_is_stale(
@@ -496,113 +498,128 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let in_w = 60.0;
-        let drops_only = self.scope_is_drops_only();
-        let mut head = h_flex()
-            .w_full()
-            .px(design::ui_px(cx, 8.0))
-            .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
-            .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .text_size(design::t_caption(cx))
-            .text_color(moon(p.text_soft))
-            .bg(moon(p.table_head))
-            .child(
-                div().flex_none().child(
-                    MoonCheckbox::new("tun-en-all")
-                        // The master checkbox ignores unmapped fields (no matching
-                        // strategy parameter): 'all enabled' = all MAPPED ones.
-                        .checked(self.tuner.all_mapped_enabled(drops_only))
-                        .size(design::CONTROL_TIER)
-                        .on_change({
-                            let view = cx.entity();
-                            move |ch: &bool, _w, app| {
-                                let on = *ch;
-                                view.update(app, |this, cx| this.set_all_fields_enabled(on, cx));
-                            }
-                        }),
-                ),
-            )
-            // The column caption doubles as the master checkbox's label, by being a click target
-            // rather than by becoming one. `MoonCheckbox::label` renders at CONTENT width, so
-            // moving the text onto the checkbox would widen it by however long the word is in the
-            // active language and shift every heading after it out of line with its own column —
-            // worst in ru/es, where this header is already the widest. Clicking here routes
-            // through `set_all_fields_enabled` like the checkbox itself, so the mask keeps its two
-            // writers.
-            .child(
-                div()
-                    .id("tun-en-all-lbl")
-                    .w(design::font_w_px(cx, 58.0))
-                    .flex_none()
-                    .truncate()
-                    .cursor_pointer()
-                    .child(t!("analytics.tuner.field").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        let all_on = this.tuner.all_mapped_enabled(this.scope_is_drops_only());
-                        this.set_all_fields_enabled(!all_on, cx);
-                    })),
-            )
-            // Chip column: the selected strategy's thresholds (click sends them to v1).
-            .child(
-                div()
-                    .flex_1()
-                    .child(t!("analytics.tuner.strat_chip").to_string()),
-            );
-        for vi in 0..N_VAR {
-            head = head
-                .child(
-                    div()
-                        .w(design::font_w_px(cx, in_w))
-                        .flex_none()
-                        .text_center()
-                        .child(format!("v{} {}", vi + 1, t!("analytics.tuner.from"))),
-                )
-                // The only two copy buttons, both "copy the WHOLE column", each between its
-                // variant's "from" and "to": → carries v1→v2, ← carries v2→v1. Rows have none —
-                // they keep a matching spacer so the columns stay aligned.
-                .child(if vi == 0 {
-                    glyph_btn(
-                        "tun-cp-col",
-                        "→",
-                        t!("analytics.time.tip_to_v2").to_string(),
-                        p.amber,
-                        p,
-                        cx,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.copy_v1_to_v2(None, cx)))
-                } else {
-                    glyph_btn(
-                        "tun-cpb-col",
-                        "←",
-                        t!("analytics.time.tip_to_v1").to_string(),
-                        p.amber,
-                        p,
-                        cx,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.copy_v2_to_v1(None, cx)))
-                })
-                .child(
-                    div()
-                        .w(design::font_w_px(cx, in_w))
-                        .flex_none()
-                        .text_center()
-                        .child(t!("analytics.tuner.to").to_string()),
-                )
-                // Clear the WHOLE variant column — above the per-row crosses.
-                .child(
-                    glyph_btn(
-                        SharedString::from(format!("tun-clr-col-{vi}")),
-                        "✕",
-                        t!("analytics.time.tip_clear_all").to_string(),
-                        p.orange,
-                        p,
-                        cx,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| this.clear_variant(vi, cx))),
-                );
+        let layout = super::bounds::GridLayout::new(
+            super::layout::side_width(self.tuner_host_width, cx),
+            false,
+            cx,
+        );
+        let mut grid = v_flex().w_full();
+        for variants in layout.sections() {
+            grid = grid.child(self.filter_table(layout, &variants, p, window, cx));
         }
+        // The suggestion row and the toolbar come from the SHARED shell (tuner_shell), axis
+        // 'By filter': one code path for every tuner, actions dispatched by axis.
+        let cfg_row = self.shell_config_row(TunerKind::Filter, p, window, cx);
+        let header = self.shell_toolbar(
+            TunerKind::Filter,
+            t!("analytics.tuner.fields_title").to_string(),
+            cx,
+        );
+        v_flex()
+            .w_full()
+            // The shared right column owns scrolling for both cards.
+            .flex_none()
+            .rounded(design::ui_px(cx, 8.0))
+            .bg(moon(p.panel))
+            .border_1()
+            .border_color(moon(p.border))
+            .overflow_hidden()
+            .child(header)
+            .child(cfg_row)
+            .children(self.split_summary(p, cx))
+            .child(
+                div()
+                    .id("an-fields-scroll")
+                    .w_full()
+                    .flex_none()
+                    .child(grid),
+            )
+            .into_any_element()
+    }
 
+    /// Render one variant section with the same slots in its header and field rows.
+    fn filter_table(
+        &mut self,
+        layout: super::bounds::GridLayout,
+        variants: &[usize],
+        p: MoonPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use super::bounds::{VariantHead, header};
+        let drops_only = self.scope_is_drops_only();
+        let check = div()
+            .flex_none()
+            .child(
+                MoonCheckbox::new("tun-en-all")
+                    .checked(self.tuner.all_mapped_enabled(drops_only))
+                    .size(design::CONTROL_TIER)
+                    .on_change({
+                        let view = cx.entity();
+                        move |on: &bool, _, app| {
+                            let on = *on;
+                            view.update(app, |this, cx| this.set_all_fields_enabled(on, cx));
+                        }
+                    }),
+            )
+            .into_any_element();
+        let name = layout
+            .name_cell()
+            .id("tun-en-all-lbl")
+            .truncate()
+            .cursor_pointer()
+            .child(t!("analytics.tuner.field").to_string())
+            .on_click(cx.listener(|this, _, _, cx| {
+                let all_on = this.tuner.all_mapped_enabled(this.scope_is_drops_only());
+                this.set_all_fields_enabled(!all_on, cx);
+            }))
+            .into_any_element();
+        let heads = variants
+            .iter()
+            .map(|&vi| VariantHead {
+                index: vi,
+                copy: glyph_btn(
+                    if vi == 0 { "tun-cp-col" } else { "tun-cpb-col" },
+                    if vi == 0 { "→" } else { "←" },
+                    t!(if vi == 0 {
+                        "analytics.time.tip_to_v2"
+                    } else {
+                        "analytics.time.tip_to_v1"
+                    })
+                    .to_string(),
+                    p.amber,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if vi == 0 {
+                        this.copy_v1_to_v2(None, cx);
+                    } else {
+                        this.copy_v2_to_v1(None, cx);
+                    }
+                }))
+                .into_any_element(),
+                clear: glyph_btn(
+                    format!("tun-clr-col-{vi}"),
+                    "✕",
+                    t!("analytics.time.tip_clear_all").to_string(),
+                    p.orange,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.clear_variant(vi, cx)))
+                .into_any_element(),
+            })
+            .collect();
+        let head = header(
+            layout,
+            format!("filter-grid-head-{}", variants[0]),
+            check,
+            name,
+            heads,
+            p,
+            cx,
+        );
         // The per-field "in strategy" chips and the group ignore=YES/NO labels are the ANCHOR's
         // only; in multi-select each selected strategy differs, so `current_if_single` yields
         // None and we render from an empty card (found=false hides both). Display-only — the
@@ -610,7 +627,11 @@ impl AnalyticsView {
         let strat = self
             .current_if_single(self.tuner.strat.clone())
             .unwrap_or_else(|| Arc::new(StratFilters::default()));
-        let mut grid = v_flex().w_full().child(head);
+        let mut grid = v_flex()
+            .id(("filter-grid-section", variants[0]))
+            .w_full()
+            .flex_none()
+            .child(head);
         let mut last_class: Option<FieldClass> = None;
         for (fi, field) in FIELDS.iter().enumerate() {
             // Skipping the row also skips its header: the header is emitted from this loop,
@@ -631,14 +652,14 @@ impl AnalyticsView {
             }
             let selected = self.tuner.sel_field == fi;
             let unmapped = !FIELDS[fi].mapped();
-            let mut row = h_flex()
+            let mut row = layout
+                .row(cx)
                 .id(SharedString::from(format!("tun-field-{fi}")))
                 .w_full()
                 .px(design::ui_px(cx, 8.0))
-                .when(sub, |el| el.pl(design::ui_px(cx, 22.0)))
+                .when(sub && !layout.compact, |el| el.pl(design::ui_px(cx, 22.0)))
                 .py(design::ui_px(cx, 2.0))
                 .items_center()
-                .gap(design::ui_px(cx, 6.0))
                 .border_t_1()
                 .border_color(moon_alpha(p.border, 0.5))
                 .child(
@@ -656,9 +677,13 @@ impl AnalyticsView {
                     ),
                 )
                 .child(
-                    div()
-                        .w(design::font_w_px(cx, 58.0))
-                        .flex_none()
+                    layout
+                        .name_cell()
+                        .font_family(design::mono())
+                        .id(SharedString::from(format!("tun-name-{fi}")))
+                        .tooltip(crate::panels::common::text_tooltip(
+                            FIELDS[fi].label.to_string(),
+                        ))
                         .truncate()
                         .cursor_pointer()
                         .text_color(if selected {
@@ -722,7 +747,8 @@ impl AnalyticsView {
                 } else {
                     None
                 };
-            row = row.child(match chip {
+            let show_current = chip.is_some() || unmapped;
+            let current = match chip {
                 Some((slot, lo, hi)) => {
                     // Compact range: '(from…to)'; an open side stays empty.
                     let range = (lo.is_some() || hi.is_some()).then(|| {
@@ -750,7 +776,7 @@ impl AnalyticsView {
                         .min_w_0()
                         .truncate()
                         .cursor_pointer()
-                        .text_size(design::t_caption(cx))
+                        .text_size(design::t_body(cx))
                         .text_color(moon(p.amber))
                         .hover(move |st| st.text_color(moon(p.text)))
                         .child(text)
@@ -768,13 +794,19 @@ impl AnalyticsView {
                     .min_w_0()
                     .truncate()
                     .font_family(design::ui_font())
-                    .text_size(design::t_caption(cx))
+                    .text_size(design::t_body(cx))
                     .text_color(moon_alpha(p.text_muted, 0.7))
                     .child(t!("analytics.tuner.no_param").to_string())
                     .into_any_element(),
                 None => div().flex_1().into_any_element(),
-            });
-            for vi in 0..N_VAR {
+            };
+            let compact_current = if layout.compact {
+                show_current.then_some(current)
+            } else {
+                row = row.child(current);
+                None
+            };
+            for &vi in variants {
                 for is_to in [false, true] {
                     // Spacer under the header's copy arrow (it sits between "from" and "to"), so
                     // the row columns stay aligned with the header.
@@ -783,11 +815,16 @@ impl AnalyticsView {
                     }
                     let input = self.bound_input(vi, fi, is_to, window, cx);
                     row = row.child(
-                        div().w(design::font_w_px(cx, in_w)).flex_none().child(
-                            MoonInput::new(SharedString::from(format!("tun-in-{vi}-{fi}-{is_to}")))
+                        div()
+                            .w(design::font_w_px(cx, layout.input))
+                            .flex_none()
+                            .child(
+                                MoonInput::new(SharedString::from(format!(
+                                    "tun-in-{vi}-{fi}-{is_to}"
+                                )))
                                 .state(&input)
                                 .size(design::INPUT_SIZE),
-                        ),
+                            ),
                     );
                 }
                 // Clear both bounds of this variant in this row.
@@ -806,47 +843,33 @@ impl AnalyticsView {
                 );
             }
             grid = grid.child(row);
+            if let Some(current) = compact_current {
+                grid = grid.child(
+                    h_flex()
+                        .w_full()
+                        .px(design::ui_px(cx, 12.0))
+                        .pb(design::ui_px(cx, 3.0))
+                        .gap(design::ui_px(cx, 6.0))
+                        .text_size(design::t_caption(cx))
+                        .child(
+                            div()
+                                .flex_none()
+                                .font_family(design::ui_font())
+                                .text_color(moon(p.text_muted))
+                                .child(t!("analytics.time.cur").to_string()),
+                        )
+                        .child(current),
+                );
+            }
         }
-        // The suggestion row and the toolbar come from the SHARED shell (tuner_shell), axis
-        // 'By filter': one code path for every tuner, actions dispatched by axis.
-        let cfg_row = self.shell_config_row(TunerKind::Filter, p, window, cx);
-        let header = self.shell_toolbar(
-            TunerKind::Filter,
-            t!("analytics.tuner.fields_title").to_string(),
-            cx,
-        );
-        v_flex()
-            .w_full()
-            // Fill the column and scroll the field rows internally (toolbar/config pinned), so
-            // the parameters never spill off the bottom of a short panel.
-            .flex_1()
-            .min_h_0()
-            .rounded(design::ui_px(cx, 8.0))
-            .bg(moon(p.panel))
-            .border_1()
-            .border_color(moon(p.border))
-            .overflow_hidden()
-            .child(header)
-            .child(cfg_row)
-            .child(
-                div()
-                    .id("an-fields-scroll")
-                    .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(grid),
-            )
-            .children(self.split_summary(p, cx))
-            .into_any_element()
+        grid.into_any_element()
     }
 
     /// What the last suggestion's ranges achieved, split in two by whether the search was allowed
     /// to see the trades being measured.
     ///
-    /// Pinned BELOW the scrolling rows rather than placed inside them: the fitted profit is the
-    /// number the search maximized and always looks good, so the held-back one has to be visible
-    /// at the same moment, not somewhere the user has to scroll to. Nothing is drawn until a
+    /// Shown directly below the result band and above the grid: fitted profit and independent
+    /// holdout must be visible together. Nothing is drawn until a
     /// search has produced an answer — an untouched grid has nothing to report — and editing any
     /// bound retires the suggestion, taking this with it.
     ///
@@ -868,46 +891,13 @@ impl AnalyticsView {
         // case — it is a claim about which fields matter, and silence about it would be the one
         // reading it must not get: that no set was chosen.
         let holdout = split.holdout.as_ref();
-        if holdout.is_none() && split.composed.is_none() && split.compose_skipped.is_none() {
+        let stale = self.tuner.sample_snapshot.materially_changed(
+            self.tuner.stats.data().map(|s| s.as_ref()),
+            self.tuner_query().to,
+        );
+        if !split.should_show_summary(stale) {
             return None;
         }
-        let line = |caption: String, tally: &moon_core::db::metrics::Tally, color: u32| {
-            h_flex()
-                .w_full()
-                .gap(design::ui_px(cx, 6.0))
-                .child(
-                    div()
-                        .w(design::font_w_px(cx, 74.0))
-                        .flex_none()
-                        .truncate()
-                        .font_family(design::ui_font())
-                        .text_color(moon(p.text_muted))
-                        .child(caption),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(moon(color))
-                        // The same formatters the KPI matrix above uses for the same figures:
-                        // winrate to one decimal as the strategy table shows it, profit factor
-                        // and drawdown through the shared dimensionless one. Only the headline
-                        // profit carries the unit — the line has to survive truncation on a
-                        // narrow dock, and repeating the quote ticker inside it spends that width twice.
-                        .child(
-                            t!(
-                                "analytics.tuner.split_stats",
-                                profit = super::super::summary::fmt_signed(tally.profit),
-                                n = tally.n,
-                                wr = format!("{:.1}", tally.winrate()),
-                                pf = super::super::summary::fmt_signed_plain(tally.profit_factor()),
-                                dd = super::super::summary::fmt_signed_plain(tally.max_dd)
-                            )
-                            .to_string(),
-                        ),
-                )
-        };
         Some(
             v_flex()
                 .w_full()
@@ -1124,24 +1114,56 @@ impl AnalyticsView {
                             .child(text.to_string()),
                     )
                 })
-                .child(line(
+                .child(super::split::line(
                     t!("analytics.tuner.split_train").to_string(),
                     &split.train,
                     p.text_soft,
+                    p,
+                    cx,
                 ))
                 // A losing holdout is the whole point of the exercise: the ranges fitted the past
                 // and did not survive contact with the rest of it. It is coloured as the failure
                 // it is rather than left to be read off a sign.
                 .when_some(holdout, |el, holdout| {
-                    el.child(line(
+                    el.child(super::split::line(
                         t!("analytics.tuner.split_holdout").to_string(),
                         holdout,
-                        if holdout.profit > 0.0 {
-                            design::positive_color(p)
-                        } else {
-                            design::danger_color(p)
-                        },
+                        super::split::holdout_color(
+                            holdout.profit,
+                            split.fact_holdout.as_ref().map(|fact| fact.profit),
+                            p,
+                        ),
+                        p,
+                        cx,
                     ))
+                })
+                .when_some(split.fact_holdout.as_ref(), |el, fact| {
+                    el.child(super::split::fact_line(fact, p, cx))
+                })
+                .when(
+                    holdout
+                        .zip(split.fact_holdout.as_ref())
+                        .is_some_and(|(fit, fact)| fit.profit < fact.profit),
+                    |el| {
+                        el.child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .font_family(design::ui_font())
+                                .text_color(moon(p.orange))
+                                .child(t!("analytics.tuner.split_below_fact").to_string()),
+                        )
+                    },
+                )
+                .when(stale, |el| {
+                    el.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .font_family(design::ui_font())
+                            .text_color(moon(p.orange))
+                            .child(t!("analytics.coins.stale_note_report").to_string()),
+                    )
                 })
                 // A composed set with nothing held back is a set chosen with no way to check it.
                 // The warning belongs beside the set, where it is read, not only in the popover

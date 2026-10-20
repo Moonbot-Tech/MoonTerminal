@@ -339,7 +339,14 @@ fn strat_list_frame(
         .border_color(moon(p.border))
         .overflow_hidden()
         .child(toolbar)
-        .children(progress)
+        .child(
+            div()
+                .w_full()
+                .flex_none()
+                .min_h(design::fit_h_px(cx, 18.0, 12.0, 4.0))
+                .debug_selector(|| "tuner-list-status".into())
+                .children(progress),
+        )
         .child(filter_bar)
         .child(header)
         .child(div().w_full().flex_1().min_h_0().child(list))

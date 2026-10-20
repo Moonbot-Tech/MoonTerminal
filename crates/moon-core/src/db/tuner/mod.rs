@@ -37,8 +37,8 @@ pub use strategy_read::{
     strategy_kinds_checked, strategy_values_at,
 };
 pub use time::{
-    SliderProfiles, TimeAxes, TimeSuggest, TimeWindow, format_week_span, format_working_time,
-    slider_profiles, suggest_time,
+    SliderProfiles, TimeAxes, TimeEvaluation, TimeSuggest, TimeWindow, format_week_span,
+    format_working_time, slider_profiles, suggest_time, suggest_time_checked,
 };
 
 /// Range for one field; `None` means the bound is unset.
@@ -573,12 +573,23 @@ fn visit_time_rows(
     ctx: &'static str,
     mut visit: impl FnMut(i64, i64, f64),
 ) -> ReadResult<()> {
+    visit_time_rows_with_close(conn, q, src, ctx, |wd, mn, p, _| visit(wd, mn, p))
+}
+
+/// Stream core-clock schedule coordinates with UTC close timestamps for chronological validation.
+fn visit_time_rows_with_close(
+    conn: &Connection,
+    q: &Query,
+    src: &str,
+    ctx: &'static str,
+    mut visit: impl FnMut(i64, i64, f64, i64),
+) -> ReadResult<()> {
     let axis = q.resolved_axis(conn)?;
     super::analytics::time_zone::install(conn, &axis).map_err(|e| read_fail_on(conn, ctx, e))?;
     let sql = format!(
         "SELECT mt_core_minute_of_week({OPEN_TS}) / 1440 AS wd,
                 mt_core_minute_of_day({OPEN_TS}) AS mn,
-                COALESCE(o.pnl, 0)
+                COALESCE(o.pnl, 0), mt_to_utc(o.closedate, o.core_uid)
          FROM {src}"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, ctx, e))?;
@@ -588,12 +599,13 @@ fn visit_time_rows(
                 r.get::<_, i64>(0)?,
                 r.get::<_, i64>(1)?,
                 r.get::<_, f64>(2)?,
+                r.get::<_, i64>(3)?,
             ))
         })
         .map_err(|e| read_fail_on(conn, ctx, e))?;
     for row in rows {
-        let (weekday, minute, profit) = row.map_err(|e| read_fail_on(conn, ctx, e))?;
-        visit(weekday, minute, profit);
+        let (weekday, minute, profit, close) = row.map_err(|e| read_fail_on(conn, ctx, e))?;
+        visit(weekday, minute, profit, close);
     }
     Ok(())
 }
@@ -684,7 +696,7 @@ fn variant_stats_from_source(
 ///     variants: Ordered baseline and counterfactual definitions.
 ///
 /// Returns:
-///     SQL with one source scan and a Boolean match column per variant.
+///     SQL with one source scan, true-UTC close ordering, and a match column per variant.
 fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
     let needs_week = variants.iter().any(|variant| variant.week_span.is_some());
     let needs_day = variants.iter().any(|variant| variant.tod.is_some());
@@ -701,7 +713,7 @@ fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
         // Only the columns the statement below reads are copied into the temp table: the
         // unified source projects every report and tuner field, and `o.*` materialized all of
         // them for every row of the period.
-        let mut columns = ["closedate", "pnl", "spentbtc"]
+        let mut columns = ["closedate", "core_uid", "pnl", "spentbtc"]
             .iter()
             .map(|column| format!("o.\"{column}\""))
             .collect::<Vec<_>>();
@@ -744,7 +756,8 @@ fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
     format!(
         "{prefix}SELECT COALESCE(o.pnl,0), COALESCE(o.spentbtc,0), {matches}
          FROM {source}
-         ORDER BY o.closedate, COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)"
+         ORDER BY mt_to_utc(o.closedate, o.core_uid), o.closedate,
+                  COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)"
     )
 }
 
@@ -933,7 +946,7 @@ pub fn round_bound(v: f64, up: bool) -> f64 {
 
 /// Round `(from, to)` outward to three significant digits, but keep the RAW pair when doing so
 /// would push both bounds past the observed range `[lo, hi]` and turn the pair into a no-op
-/// filter. Shared by `best_range` and `threshold_search::suggest`.
+/// filter. Shared by single-field and joint threshold suggestions.
 pub(super) fn round_pair_outward(from: f64, to: f64, lo: f64, hi: f64) -> (f64, f64) {
     let (rf, rt) = (round_bound(from, false), round_bound(to, true));
     if rf > lo || rt < hi {
@@ -1015,29 +1028,7 @@ fn suggest_field_from_source(
     ))
 }
 
-/// Best range for one field over `(value, profit)` samples.
-fn best_range(
-    vals: &mut [(f64, f64)],
-    min_n: usize,
-    edges: usize,
-    round: bool,
-) -> Option<Suggestion> {
-    best_range_bounded(vals, min_n, edges, round, false)
-}
-
-/// [`best_range`], with `open_top` keeping the slice's upper end at the largest sample (a field
-/// whose strategy parameter is a Min alone).
-fn best_range_bounded(
-    vals: &mut [(f64, f64)],
-    min_n: usize,
-    edges: usize,
-    round: bool,
-    open_top: bool,
-) -> Option<Suggestion> {
-    best_range_with_passing(vals, min_n, edges, round, open_top, (0, 0.0))
-}
-
-/// Pick a valued range while adding rows that pass every candidate to its count and score.
+/// Pick a valued range without splitting equal field values, including always-passing rows.
 fn best_range_with_passing(
     vals: &mut [(f64, f64)],
     min_n: usize,
@@ -1052,12 +1043,7 @@ fn best_range_with_passing(
     }
     vals.sort_by(|a, b| a.0.total_cmp(&b.0));
     let len = vals.len();
-    // Use no more buckets than data points because extra ones are redundant. The upper cap
-    // was raised from 128 to 512 for the time axis: with few trades per day, this gives one
-    // slice per trade and maximum window precision. `min(len)` does not affect the filter
-    // RESULT: when edges >= len, positions `k*len/edges` cover exactly {0..len}, the same set
-    // of distinct boundaries as edges=len, without duplicate iterations. Filter datasets
-    // usually contain thousands of rows, so this branch rarely applies there.
+    // Numeric fields retain their bounded quantile resolution; time uses its own exact path.
     let edges = edges.clamp(4, 512).min(len.max(4));
     // Profit prefix sums plus quantile-edge positions.
     let mut pre = Vec::with_capacity(len + 1);
@@ -1065,7 +1051,23 @@ fn best_range_with_passing(
     for (_, p) in vals.iter() {
         pre.push(pre.last().unwrap() + p);
     }
-    let pos: Vec<usize> = (0..=edges).map(|k| k * len / edges).collect();
+    // A saved inclusive bound admits EVERY trade at that value. A quantile that splits
+    // equal values can score an impossible subset and discard the better realizable range.
+    // Keep BOTH sides of an intersected group. Keeping only its end loses feasible lower
+    // bounds the old inclusive range could admit, especially for heavily repeated leverage.
+    let mut pos = Vec::with_capacity(2 * edges + 2);
+    for k in 0..=edges {
+        let boundary = k * len / edges;
+        if boundary > 0 && boundary < len && vals[boundary - 1].0 == vals[boundary].0 {
+            let value = vals[boundary].0;
+            pos.push(vals.partition_point(|r| r.0 < value));
+            pos.push(vals.partition_point(|r| r.0 <= value));
+        } else {
+            pos.push(boundary);
+        }
+    }
+    pos.sort_unstable();
+    pos.dedup();
     // Cumulative profit AT each edge, which is what the shared picker slices. Full data
     // coverage (min..max) is a no-op filter, and the picker rejects it by exact count.
     let profit_at: Vec<f64> = pos.iter().map(|&p| pre[p]).collect();
@@ -1075,14 +1077,14 @@ fn best_range_with_passing(
     // can appear to "win" by about 1e-12.
     let floor = total + improvement_margin(total + passing_profit);
     let valued_min = min_n.saturating_sub(passing_n).max(1);
+    if round {
+        return best_rounded_range(vals, &pre, &pos, valued_min, open_top, passing, floor);
+    }
     range_pick::best_pair(&profit_at, &pos, valued_min, len, floor, open_top).map(|(i, j)| {
         let (a, b) = (pos[i], pos[j]);
         // Always return both bounds; distribution edges use the observed
         // minimum or maximum rather than an open interval.
-        let (mut from, mut to) = (vals[a].0, vals[b - 1].0);
-        if round {
-            (from, to) = round_pair_outward(from, to, vals[0].0, vals[len - 1].0);
-        }
+        let (from, to) = (vals[a].0, vals[b - 1].0);
         Suggestion {
             from: Some(from),
             to: Some(to),
@@ -1090,6 +1092,45 @@ fn best_range_with_passing(
             n: (b - a + passing_n) as i64,
         }
     })
+}
+
+/// Choose among rounded quantile candidates by the rows their inclusive saved bounds admit.
+/// At most 1025 group edges are considered, and Min-only fields visit only one upper edge.
+fn best_rounded_range(
+    vals: &[(f64, f64)],
+    pre: &[f64],
+    pos: &[usize],
+    min_n: usize,
+    open_top: bool,
+    passing: (usize, f64),
+    floor: f64,
+) -> Option<Suggestion> {
+    let len = vals.len();
+    let mut best = None;
+    let mut best_profit = floor;
+    for (i, &a) in pos.iter().enumerate().take(pos.len() - 1) {
+        for &b in &pos[i + 1..] {
+            if open_top && b != len {
+                continue;
+            }
+            let (from, to) =
+                round_pair_outward(vals[a].0, vals[b - 1].0, vals[0].0, vals[len - 1].0);
+            let lo = vals.partition_point(|r| r.0 < from);
+            let hi = vals.partition_point(|r| r.0 <= to);
+            let n = hi - lo;
+            let profit = pre[hi] - pre[lo];
+            if n >= min_n && n < len && profit > best_profit {
+                best_profit = profit;
+                best = Some(Suggestion {
+                    from: Some(from),
+                    to: Some(to),
+                    profit: profit + passing.1,
+                    n: (n + passing.0) as i64,
+                });
+            }
+        }
+    }
+    best
 }
 
 #[cfg(test)]

@@ -231,9 +231,10 @@ pub(in crate::analytics::tuner) fn auto_card_el(
         .text_size(design::t_body(cx))
         .when_some(m.hint.clone(), |el, hint| {
             el.child(caption(hint, p.text_muted))
-        });
+        })
+        .child(settings_el(m, inputs, acts, cx));
     body = match &m.view {
-        AutoView::Settings => body.child(settings_el(m, inputs, acts, cx)),
+        AutoView::Settings => body,
         AutoView::Running { line } => body
             .child(caption(line.clone(), p.text_soft))
             .child(
@@ -254,31 +255,15 @@ pub(in crate::analytics::tuner) fn auto_card_el(
                 acts.on_reset.clone(),
             ))),
         AutoView::Result(r) => body.child(result_el(r, m.stale, acts, p, cx)),
-        AutoView::Failed(note) => body
-            .child(crate::load_state::note_el(
-                "an-pick-note",
-                note_of(note),
-                4.0,
-                p,
-                cx,
-            ))
-            .child(h_flex().justify_end().child(btn(
-                "an-pick-reset",
-                t!("analytics.coins.reset_btn").to_string(),
-                t!("analytics.coins.tip_reset").to_string(),
-                MoonButtonVariant::Soft,
-                true,
-                acts.on_reset.clone(),
-            ))),
+        AutoView::Failed(note) => body.child(crate::load_state::note_el(
+            "an-pick-note",
+            note_of(note),
+            4.0,
+            p,
+            cx,
+        )),
     };
-    super::super::shared::card(
-        t!("analytics.coins.auto_title").to_string(),
-        t!("analytics.coins.auto_sub").to_string(),
-        body.into_any_element(),
-        None,
-        p,
-        cx,
-    )
+    body.into_any_element()
 }
 
 /// The placeholder a failed pick read shows.
@@ -296,6 +281,7 @@ fn settings_el(
     acts: &AutoCardActs,
     cx: &App,
 ) -> AnyElement {
+    let enabled = m.enabled && !matches!(m.view, AutoView::Running { .. });
     let field = |id: &'static str,
                  lead: String,
                  unit: String,
@@ -317,7 +303,7 @@ fn settings_el(
                         MoonInput::new(SharedString::from(format!("{id}-in")))
                             .state(input)
                             .size(design::INPUT_SIZE)
-                            .disabled(!m.enabled),
+                            .disabled(!enabled),
                     ),
                     None => el.font_family(design::mono()).child(value.to_string()),
                 }
@@ -338,7 +324,7 @@ fn settings_el(
                 MoonCheckbox::new(id)
                     .label(label)
                     .checked(on)
-                    .disabled(!m.enabled)
+                    .disabled(!enabled)
                     .on_change(move |v: &bool, window, app| act(*v, window, app)),
             )
     };
@@ -371,13 +357,8 @@ fn settings_el(
                     t!("analytics.coins.tip_pick_hold").to_string(),
                     hold_in,
                     m.cfg.holdout_pct,
-                )),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .flex_wrap()
-                .gap(design::ui_px(cx, 12.0))
+                ))
+                .child(div().flex_1())
                 .child(check(
                     "an-pick-bl",
                     t!("analytics.coins.pick_bl").to_string(),
@@ -393,14 +374,30 @@ fn settings_el(
                     acts.on_white.clone(),
                 )),
         )
-        .child(h_flex().w_full().child(btn(
-            "an-pick-run",
-            t!("analytics.coins.pick_btn").to_string(),
-            t!("analytics.coins.tip_pick_btn").to_string(),
-            MoonButtonVariant::Amber,
-            m.can_pick(),
-            acts.on_pick.clone(),
-        )))
+        .child(
+            h_flex()
+                .w_full()
+                .flex_wrap()
+                .justify_end()
+                .debug_selector(|| "tuner-run-c".into())
+                .gap(design::ui_px(cx, 6.0))
+                .child(btn(
+                    "an-pick-reset",
+                    t!("analytics.coins.reset_btn").to_string(),
+                    t!("analytics.coins.tip_reset").to_string(),
+                    MoonButtonVariant::Soft,
+                    !matches!(m.view, AutoView::Settings),
+                    acts.on_reset.clone(),
+                ))
+                .child(btn(
+                    "an-pick-run",
+                    t!("analytics.coins.pick_btn").to_string(),
+                    t!("analytics.coins.tip_pick_btn").to_string(),
+                    MoonButtonVariant::Blue,
+                    m.can_pick() && enabled,
+                    acts.on_pick.clone(),
+                )),
+        )
         .into_any_element()
 }
 
@@ -507,14 +504,6 @@ fn result_el(
             }),
         ));
     }
-    actions = actions.child(div().flex_1()).child(btn(
-        "an-pick-reset",
-        t!("analytics.coins.reset_btn").to_string(),
-        t!("analytics.coins.tip_reset").to_string(),
-        MoonButtonVariant::Soft,
-        true,
-        acts.on_reset.clone(),
-    ));
     v_flex()
         .w_full()
         .gap(design::ui_px(cx, 8.0))

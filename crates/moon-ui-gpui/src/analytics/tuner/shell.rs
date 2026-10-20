@@ -1,14 +1,8 @@
-//! The tuner shell: the toolbar (rounding / Make a copy / Save), shared by every axis and
-//! dispatched by `TunerKind`, plus the suggestion row, which is NOT.
+//! Shared Parameters write header and per-axis settings, run and result bands.
 //!
-//! The row is written per axis on purpose. "By filter" runs either a stoppable joint search or
-//! field-set composition with live progress, a seed and a depth; "By time" runs one fixed sweep
-//! with a single setting. Rendering both from one parametrized row is how the time sweep would
-//! acquire a Stop button that stops nothing. On the filter row only the restart count stays
-//! inline, because the card is laid out at a fixed narrow width and a row that cannot wrap has to
-//! spend its space on the controls used every run — the rest sit behind the ⚙ settings popover.
-//! Live search status sits on its own band above those controls so the progress line can stay
-//! readable without shrinking them.
+//! Each axis keeps its own search operations and settings; only their presentation is aligned.
+//! Rounding belongs beside the fitting budget. Copy and Save retain their original guarded
+//! callbacks in the common header, while status and validation sit below the run controls.
 
 use std::rc::Rc;
 
@@ -24,8 +18,7 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::filter::state::{
-    SuggestJob, SuggestState, SuggestWork, TRAIN_OPTIONS, canonical_iters, edge_options, iters_of,
-    persist_seed,
+    SuggestJob, SuggestState, SuggestWork, canonical_iters, edge_options, iters_of, persist_seed,
 };
 use super::shared::TunerKind;
 use crate::design;
@@ -114,7 +107,6 @@ pub(super) struct ToolbarWrite {
 
 /// The shared toolbar's handlers.
 pub(super) struct ToolbarActs {
-    pub(super) on_round: Rc<dyn Fn(bool, &mut Window, &mut App)>,
     pub(super) on_copy: Rc<dyn Fn(&mut Window, &mut App)>,
     pub(super) on_save: Rc<dyn Fn(&mut Window, &mut App)>,
 }
@@ -124,7 +116,6 @@ pub(super) struct ToolbarActs {
 /// Args:
 ///     kind: The axis; it suffixes the element ids.
 ///     title: Card title.
-///     round: The "round results" switch, `None` on an axis with nothing to round.
 ///     write: Make a copy / Save, `None` without a selected strategy.
 ///     acts: Handlers.
 ///     cx: App, for scale and text.
@@ -134,7 +125,6 @@ pub(super) struct ToolbarActs {
 pub(super) fn toolbar_el(
     kind: TunerKind,
     title: String,
-    round: Option<bool>,
     write: Option<&ToolbarWrite>,
     acts: &ToolbarActs,
     cx: &App,
@@ -152,6 +142,7 @@ pub(super) fn toolbar_el(
         .px(design::ui_px(cx, 12.0))
         .py(design::ui_px(cx, 8.0))
         .items_center()
+        .flex_wrap()
         .gap(design::ui_px(cx, 6.0))
         // Title, round-label and the copy/save buttons are all prose; this toolbar carries
         // no data value of its own.
@@ -168,19 +159,6 @@ pub(super) fn toolbar_el(
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
         );
-    // Rounding the result affects the SUGGESTION — always shown (the suggestion is
-    // available without a selected strategy too, over the current scope).
-    if let Some(round) = round {
-        let on_round = acts.on_round.clone();
-        header = header.child(
-            div().flex_none().child(
-                MoonCheckbox::new(SharedString::from(format!("tun-round-{k}")))
-                    .label(t!("analytics.tuner.round_lbl").to_string())
-                    .checked(round)
-                    .on_change(move |ch: &bool, window, app| on_round(*ch, window, app)),
-            ),
-        );
-    }
     if let Some(write) = write {
         if write.copy {
             let on_copy = acts.on_copy.clone();
@@ -220,22 +198,134 @@ pub(super) fn toolbar_el(
     header.into_any_element()
 }
 
+/// Search state needed to paint the production filter controls without a view.
+pub(super) struct FilterControlModel {
+    pub(super) running: bool,
+    pub(super) stopping: Option<bool>,
+    pub(super) compose: bool,
+}
+
+/// Existing per-axis operations supplied by the host, also usable by layout probes.
+pub(super) struct FilterControlActs {
+    pub(super) one: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub(super) run: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub(super) stop: Rc<dyn Fn(&mut Window, &mut App)>,
+}
+
+/// The frame every suggestion row shares: pinned above the scrollable rows, caption-sized.
+///
+/// The caption, status text and buttons it hosts are prose, so the frame carries
+/// `ui_font()` for the whole row; the restart/min-trades input boxes are parameter values
+/// and force `mono()` back on themselves individually.
+fn config_row_frame(cx: &App) -> Div {
+    h_flex()
+        .w_full()
+        // Pinned above the scrollable rows — must not shrink.
+        .flex_none()
+        .px(design::ui_px(cx, 12.0))
+        .pb(design::ui_px(cx, 6.0))
+        .items_center()
+        .flex_wrap()
+        .gap(design::ui_px(cx, 6.0))
+        .text_size(design::t_body(cx))
+        .font_family(design::ui_font())
+}
+
+/// Paint the real filter settings and run row; the host owns all search behavior.
+pub(super) fn filter_controls_el(
+    input: &Entity<MoonInputState>,
+    settings: AnyElement,
+    round: AnyElement,
+    model: &FilterControlModel,
+    acts: &FilterControlActs,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let running = model.running;
+    let stopping = model.stopping;
+    let one = acts.one.clone();
+    let run = acts.run.clone();
+    let stop = acts.stop.clone();
+    let settings_row = config_row_frame(cx)
+        .child(cfg_label(t!("analytics.tuner.iters").to_string(), p))
+        .child(
+            div()
+                .w(design::font_w_px(cx, 46.0))
+                .flex_none()
+                .font_family(design::mono())
+                .child(
+                    MoonInput::new(SharedString::from("tun-cfg-it-f"))
+                        .state(input)
+                        .size(design::INPUT_SIZE),
+                ),
+        )
+        .child(settings)
+        .child(div().flex_1())
+        .child(round);
+    let controls = config_row_frame(cx)
+        .debug_selector(|| "tuner-run-f".into())
+        .justify_end()
+        .when_some(stopping, |el, stopping| {
+            el.child(
+                div().flex_none().child(
+                    MoonButton::new(SharedString::from("tun-suggest-stop-f"))
+                        .variant(MoonButtonVariant::Soft)
+                        .label(if stopping {
+                            t!("analytics.tuner.stopping").to_string()
+                        } else {
+                            t!("analytics.tuner.stop").to_string()
+                        })
+                        .disabled(stopping)
+                        .on_click(move |_, window, app| stop(window, app))
+                        .render(),
+                ),
+            )
+        })
+        // Search controls share one run band; write authority remains in the toolbar.
+        .child(
+            div().flex_none().child(
+                MoonButton::new(SharedString::from("tun-suggest-one-f"))
+                    .variant(MoonButtonVariant::Soft)
+                    .label(t!("analytics.tuner.suggest_one").to_string())
+                    .disabled(running)
+                    .on_click(move |_, window, app| one(window, app))
+                    .render(),
+            ),
+        )
+        .child(
+            div().flex_none().child(
+                MoonButton::new(SharedString::from("tun-suggest-run-f"))
+                    .variant(MoonButtonVariant::Blue)
+                    // The label carries the mode, because the two searches answer different
+                    // questions and take very different amounts of time. One button whose
+                    // meaning is silently switched by a checkbox two clicks away is how a user
+                    // ends up waiting minutes for what usually took half a second.
+                    .label(if model.compose {
+                        t!("analytics.tuner.compose_run").to_string()
+                    } else {
+                        t!("analytics.tuner.suggest_run").to_string()
+                    })
+                    .disabled(running)
+                    .on_click(move |_, window, app| run(window, app))
+                    .render(),
+            ),
+        );
+    v_flex()
+        .w_full()
+        .flex_none()
+        .child(settings_row)
+        .child(controls)
+        .into_any_element()
+}
+
 impl AnalyticsView {
-    /// The shared toolbar of the tuner card: the title + (when a strategy is selected)
-    /// "round results" + "Make a copy" + "Save". The actions are per-axis.
+    /// The Parameters title and Copy/Save controls, bound to each axis' existing actions.
     pub(super) fn shell_toolbar(
         &self,
         kind: TunerKind,
         title: String,
         cx: &Context<Self>,
     ) -> AnyElement {
-        // `None` — the axis has nothing to round. The coin list is text; a rounding control
-        // beside it would be a switch that does nothing.
-        let round = match kind {
-            TunerKind::Filter => Some(self.tuner.round_results),
-            TunerKind::Time => Some(self.time_tuner.round_results),
-            TunerKind::Coins | TunerKind::Ticks => None,
-        };
         // Render write controls for a retained anchor, but enable them only when the action
         // authority admits at least one selected target.
         let write = self.sel_strategy.is_some().then(|| ToolbarWrite {
@@ -252,32 +342,12 @@ impl AnalyticsView {
                 // The list differs from what the strategies hold — the same condition
                 // the coin table's "changed" badge and its Revert button read.
                 TunerKind::Coins => self.coins.has_changes(),
-                // Entry/Exit actions live exclusively in the summary card.
+                // Entry/Exit supplies its guarded callbacks through parameters_header.
                 TunerKind::Ticks => false,
             },
         });
         let view = cx.entity();
         let acts = ToolbarActs {
-            on_round: Rc::new({
-                let view = view.clone();
-                move |on: bool, _: &mut Window, app: &mut App| {
-                    view.update(app, |this, cx| {
-                        match kind {
-                            TunerKind::Filter => {
-                                this.tuner.round_results = on;
-                                this.tuner.invalidate_suggest();
-                            }
-                            TunerKind::Time => {
-                                this.time_tuner.round_results = on;
-                                this.time_tuner.invalidate_suggest();
-                            }
-                            // No rounding on this axis — the control is hidden.
-                            TunerKind::Coins | TunerKind::Ticks => {}
-                        }
-                        cx.notify();
-                    });
-                }
-            }),
             on_copy: Rc::new({
                 let view = view.clone();
                 move |window: &mut Window, app: &mut App| {
@@ -287,7 +357,7 @@ impl AnalyticsView {
                             TunerKind::Filter => this.open_copy_dialog(window, cx),
                             TunerKind::Time => this.time_open_copy_dialog(window, cx),
                             TunerKind::Coins => this.coins_open_copy_dialog(window, cx),
-                            TunerKind::Ticks => {} // Entry/Exit uses its summary card.
+                            TunerKind::Ticks => {} // Entry/Exit supplies its own inline-consent callbacks.
                         }
                         cx.notify();
                     });
@@ -299,13 +369,47 @@ impl AnalyticsView {
                         TunerKind::Filter => this.open_save_dialog(cx),
                         TunerKind::Time => this.time_open_save_dialog(cx),
                         TunerKind::Coins => this.coins_open_save_dialog(cx),
-                        TunerKind::Ticks => {} // Entry/Exit uses inline summary consent.
+                        TunerKind::Ticks => {} // Entry/Exit supplies its own inline-consent callbacks.
                     }
                     cx.notify();
                 });
             }),
         };
-        toolbar_el(kind, title, round, write.as_ref(), &acts, cx)
+        toolbar_el(kind, title, write.as_ref(), &acts, cx)
+    }
+
+    /// Bind the mode option to the original draft invalidation, outside the write header.
+    fn shell_round_option(&self, kind: TunerKind, cx: &Context<Self>) -> AnyElement {
+        let (id, checked) = match kind {
+            TunerKind::Filter => ("tun-round-f", self.tuner.round_results),
+            TunerKind::Time => ("tun-round-t", self.time_tuner.round_results),
+            TunerKind::Coins | TunerKind::Ticks => return div().into_any_element(),
+        };
+        let view = cx.entity();
+        div()
+            .flex_none()
+            .child(
+                MoonCheckbox::new(id)
+                    .label(t!("analytics.tuner.round_lbl").to_string())
+                    .checked(checked)
+                    .on_change(move |on: &bool, _, app| {
+                        view.update(app, |this, cx| {
+                            match kind {
+                                TunerKind::Filter => {
+                                    this.tuner.round_results = *on;
+                                    this.tuner.invalidate_suggest();
+                                }
+                                TunerKind::Time => {
+                                    this.time_tuner.round_results = *on;
+                                    this.time_tuner.invalidate_suggest();
+                                }
+                                TunerKind::Coins | TunerKind::Ticks => {}
+                            }
+                            cx.notify();
+                        });
+                    }),
+            )
+            .into_any_element()
     }
 
     /// The suggestion row of the tuner card, branched per axis.
@@ -331,22 +435,32 @@ impl AnalyticsView {
         }
     }
 
-    /// The frame every suggestion row shares: pinned above the scrollable rows, caption-sized.
-    ///
-    /// The caption, status text and buttons it hosts are prose, so the frame carries
-    /// `ui_font()` for the whole row; the restart/min-trades input boxes are parameter values
-    /// and force `mono()` back on themselves individually.
-    fn config_row_frame(&self, cx: &Context<Self>) -> Div {
-        h_flex()
-            .w_full()
-            // Pinned above the scrollable rows — must not shrink.
-            .flex_none()
-            .px(design::ui_px(cx, 12.0))
-            .pb(design::ui_px(cx, 6.0))
-            .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .text_size(design::t_caption(cx))
-            .font_family(design::ui_font())
+    /// Build the same persisted training-share selector for either fitting mode.
+    fn train_dropdown(&self, kind: TunerKind, cx: &Context<Self>) -> AnyElement {
+        let train_pct = match kind {
+            TunerKind::Time => self.time_tuner.train_pct,
+            _ => self.tuner.train_pct,
+        };
+        let tr_view = cx.entity();
+        super::split::train_dropdown_el(
+            kind,
+            train_pct,
+            move |app, n| {
+                tr_view.update(app, |this, cx| {
+                    if kind == TunerKind::Time {
+                        this.time_tuner.train_pct = n;
+                        this.time_tuner.invalidate_suggest();
+                        this.persist_setting(cx, |l| &mut l.analytics_time_train, Some(n as u32));
+                    } else {
+                        this.tuner.train_pct = n;
+                        this.tuner.invalidate_suggest();
+                        this.persist_tuner_train(cx);
+                    }
+                    cx.notify();
+                });
+            },
+            cx,
+        )
     }
 
     /// The "By filter" suggestion row: restarts, the settings gear, Stop, Search, and the
@@ -376,86 +490,41 @@ impl AnalyticsView {
         // repaints several times a second for the whole of a running search. Closed, the gear is
         // all there is to draw.
         let settings = self.filter_search_settings(p, window, cx);
-        let controls = self
-            .config_row_frame(cx)
-            .child(cfg_label(t!("analytics.tuner.iters").to_string(), p))
-            .child(
-                div()
-                    .w(design::font_w_px(cx, 46.0))
-                    .flex_none()
-                    .font_family(design::mono())
-                    .child(
-                        MoonInput::new(SharedString::from("tun-cfg-it-f"))
-                            .state(&it_input)
-                            .size(design::INPUT_SIZE),
-                    ),
-            )
-            .child(settings)
-            // Yields so the controls keep their intrinsic width. Status lives on its own band
-            // above this row; a flex spacer here only keeps Stop / Search pinned right.
-            .child(div().flex_1())
-            .when_some(stopping, |el, stopping| {
-                el.child(
-                    div().flex_none().child(
-                        MoonButton::new(SharedString::from("tun-suggest-stop-f"))
-                            .variant(MoonButtonVariant::Soft)
-                            .label(if stopping {
-                                t!("analytics.tuner.stopping").to_string()
-                            } else {
-                                t!("analytics.tuner.stop").to_string()
-                            })
-                            .disabled(stopping)
-                            .on_click(cx.listener(|this, _, _, cx| this.stop_suggest_into_v1(cx)))
-                            .render(),
-                    ),
-                )
-            })
-            // The suggestion buttons are ALWAYS visible — a suggestion can be run over the
-            // current scope (no selected strategy = over everything shown). The result can only
-            // be written into a selected strategy (that gate sits on Copy/Save in the toolbar).
-            .child(
-                div().flex_none().child(
-                    MoonButton::new(SharedString::from("tun-suggest-one-f"))
-                        .variant(MoonButtonVariant::Soft)
-                        .label(t!("analytics.tuner.suggest_one").to_string())
-                        .disabled(running)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if !this.tuner.sugg.is_running() {
-                                this.suggest_one_into_v1(cx);
-                                cx.notify();
-                            }
-                        }))
-                        .render(),
-                ),
-            )
-            .child(
-                div().flex_none().child(
-                    MoonButton::new(SharedString::from("tun-suggest-run-f"))
-                        .variant(MoonButtonVariant::Blue)
-                        // The label carries the mode, because the two searches answer different
-                        // questions and take very different amounts of time. One button whose
-                        // meaning is silently switched by a checkbox two clicks away is how a user
-                        // ends up waiting minutes for what usually took half a second.
-                        .label(if self.tuner.compose {
-                            t!("analytics.tuner.compose_run").to_string()
-                        } else {
-                            t!("analytics.tuner.suggest_run").to_string()
-                        })
-                        .disabled(running)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if !this.tuner.sugg.is_running() {
-                                this.suggest_into_v1(cx);
-                                cx.notify();
-                            }
-                        }))
-                        .render(),
-                ),
-            );
+        let round = self.shell_round_option(TunerKind::Filter, cx);
+        let view = cx.entity();
+        let one = view.clone();
+        let run = view.clone();
+        let acts = FilterControlActs {
+            one: Rc::new(move |_, app| {
+                one.update(app, |this, cx| {
+                    if !this.tuner.sugg.is_running() {
+                        this.suggest_one_into_v1(cx);
+                        cx.notify();
+                    }
+                })
+            }),
+            run: Rc::new(move |_, app| {
+                run.update(app, |this, cx| {
+                    if !this.tuner.sugg.is_running() {
+                        this.suggest_into_v1(cx);
+                        cx.notify();
+                    }
+                })
+            }),
+            stop: Rc::new(move |_, app| view.update(app, |this, cx| this.stop_suggest_into_v1(cx))),
+        };
+        let model = FilterControlModel {
+            running,
+            stopping,
+            compose: self.tuner.compose,
+        };
         v_flex()
             .w_full()
             .flex_none()
+            .child(filter_controls_el(
+                &it_input, settings, round, &model, &acts, p, cx,
+            ))
             .children(status)
-            .child(controls)
             .into_any_element()
     }
 
@@ -600,34 +669,7 @@ impl AnalyticsView {
             window,
             cx,
         );
-        let train_pct = self.tuner.train_pct;
-        let tr_view = cx.entity();
-        let tr_items = crate::panels::radio_items(
-            TRAIN_OPTIONS.map(|n| {
-                (
-                    n,
-                    SharedString::from(format!("tun-tr-{n}")),
-                    SharedString::from(train_label(n)),
-                )
-            }),
-            train_pct,
-            crate::panels::RadioMark::Highlight,
-            move |app, n| {
-                tr_view.update(app, |this, cx| {
-                    this.tuner.train_pct = n;
-                    this.tuner.invalidate_suggest();
-                    this.persist_tuner_train(cx);
-                    cx.notify();
-                });
-            },
-        );
-        let tr_combo = MoonDropdown::new(SharedString::from("tun-cfg-tr-f"))
-            .label(train_label(train_pct))
-            .trigger_caret(true)
-            .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::density(cx))
-            .fit_menu_width(96.0, 560.0)
-            .items(tr_items);
+        let tr_combo = self.train_dropdown(TunerKind::Filter, cx);
         let edges = self.tuner.edges;
         let ed_view = cx.entity();
         let ed_items = crate::panels::radio_items(
@@ -879,37 +921,19 @@ impl AnalyticsView {
             window,
             cx,
         );
-        let busy = self.time_tuner.sugg_busy;
-        self.config_row_frame(cx)
-            .child(cfg_label(t!("analytics.tuner.min_trades").to_string(), p))
-            .child(
-                div()
-                    .w(design::font_w_px(cx, 52.0))
-                    .flex_none()
-                    .font_family(design::mono())
-                    .child(
-                        MoonInput::new(SharedString::from("tun-cfg-mn-t"))
-                            .state(&mn_input)
-                            .size(design::INPUT_SIZE),
-                    ),
-            )
-            .child(div().flex_1())
-            .child(
-                MoonButton::new(SharedString::from("tun-suggest-run-t"))
-                    .variant(MoonButtonVariant::Blue)
-                    .label(if busy {
-                        "…".to_string()
-                    } else {
-                        t!("analytics.tuner.suggest_run").to_string()
-                    })
-                    // `time_suggest` gates on its own `sugg_busy` itself.
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.time_suggest(cx);
-                        cx.notify();
-                    }))
-                    .render(),
-            )
-            .into_any_element()
+        let train = self.train_dropdown(TunerKind::Time, cx);
+        super::time::controls::config_row(
+            &mn_input,
+            train,
+            self.time_tuner.sugg_busy,
+            self.shell_round_option(TunerKind::Time, cx),
+            cx.listener(|this, _, _, cx| {
+                this.time_suggest(cx);
+                cx.notify();
+            }),
+            p,
+            cx,
+        )
     }
 
     /// A suggestion settings box for the `kind` axis, with a lazy cache in that axis's state.
@@ -992,8 +1016,7 @@ impl AnalyticsView {
                             this.persist_tuner_iters(cx);
                         }
                         (TunerKind::Time, CfgInput::MinTrades) => {
-                            this.time_tuner.min_trades = value;
-                            this.time_tuner.invalidate_suggest();
+                            this.time_tuner.set_min_trades(value);
                         }
                         (TunerKind::Ticks, CfgInput::Restarts) => {
                             this.ticks.iters = value;

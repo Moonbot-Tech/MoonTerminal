@@ -1,9 +1,13 @@
 //! Time-window parsing, profiling, and automatic schedule suggestions.
 
+mod evaluation;
+mod search;
+pub use evaluation::{TimeEvaluation, suggest_time_checked};
+
 use rusqlite::Connection;
 
 use super::{
-    HourStat, Query, ReadResult, best_range, improvement_margin, read_tuner_rows, scan_time_rows,
+    HourStat, Query, ReadResult, improvement_margin, read_tuner_rows, scan_time_rows,
     tuner_source_on, visit_time_rows,
 };
 
@@ -43,7 +47,7 @@ pub fn format_working_time(tw: TimeWindow) -> String {
     }
 }
 
-/// Automatic-suggestion result for the "By time" axis: two independent strategy fields.
+/// Automatic-suggestion result for the "By time" axis: two jointly chosen strategy fields.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TimeSuggest {
     /// WorkingWeekTime: best continuous span over the week minute (0..10079).
@@ -95,15 +99,14 @@ impl TimeAxes {
 /// and one time window (`WorkingTime`). What to search is dictated by `axes` (the row
 /// checkboxes); with both `WorkingTime` formats checked the sweep tries each and keeps the
 /// better one, and a row that is unchecked but already holds a value pins the sweep inside
-/// it. The two fields are independent; each is `None` when the best candidate does not improve on
-/// the unrestricted sample. Weekday and minute are projected from `OPEN_TS` through the query's
-/// selected IANA zone, so recommendations use the same civil schedule that saved KPI predicates
-/// evaluate.
+/// it. Circular windows are exact on each axis; bounded multi-start refinement chooses their
+/// joint application. Weekday and minute are read from `OPEN_TS` on the core's own clock,
+/// independent of the display zone, matching the saved schedule and KPI predicates.
 ///
 /// Args:
 ///     q: Report scope and profit metric.
 ///     min_n: Minimum trades retained by a schedule candidate.
-///     edges: Search resolution for continuous time windows.
+///     edges: Legacy caller resolution; time boundaries are now always exact.
 ///     round: Whether accepted boundaries are rounded outward.
 ///     axes: Enabled and pinned schedule axes.
 ///
@@ -127,145 +130,131 @@ pub fn suggest_time(
     Ok(time_suggest_from_rows(&trades, min_n, edges, round, axes))
 }
 
-/// Core of `suggest_time` over ready rows `(weekday, minute, profit)` — the entry point
-/// for unit tests (no DB). Only the axes opened by `axes` are searched; rows cut off by
-/// the pinned windows (`fixed_*`) are dropped BEFORE the sweep, so the free axis is
-/// optimized inside them. The week and time axes are searched INDEPENDENTLY (each the
-/// best window of its own projection) but applied with AND. Their intersection can yield
-/// LESS profit than the baseline (each drops different winning trades), so we score every
-/// combination on the real rows and take the maximum — the baseline is a candidate too,
-/// which is why the result is NEVER worse than it.
-///
-/// NB: with a `fixed_*` window the baseline is the PINNED subset, not the whole sample —
-/// the pin is a constraint the sweep may not lift, so "never worse" is measured against
-/// what the user fixed. Without pins the baseline is the full sample, i.e. the "Fact"
-/// column the UI shows.
+/// Fit exact circular axes inside pinned bounds, then refine both fields jointly.
+/// Each coordinate step is exact; bounded multi-start refinement also retains every
+/// independent candidate, so joint fitting cannot make that earlier answer worse.
 fn time_suggest_from_rows(
     rows: &[(i64, i64, f64)],
     min_n: i64,
-    edges: usize,
+    _edges: usize,
     round: bool,
     axes: TimeAxes,
 ) -> TimeSuggest {
     if axes.is_empty() {
         return TimeSuggest::default();
     }
+    let rows: Vec<_> = rows
+        .iter()
+        .copied()
+        .filter(|&(wd, mn, _)| {
+            (0..7).contains(&wd)
+                && (0..1440).contains(&mn)
+                && accepts(wd, mn, axes.fixed_week, axes.fixed_tod)
+        })
+        .collect();
     let min_n = min_n.max(1) as usize;
-    // Is a trade inside the mask (bounds inclusive; `from > to` = wraps past the edge).
-    let span_ok = |v: i64, f: i64, t: i64| {
-        if f <= t {
-            f <= v && v <= t
-        } else {
-            v <= t || v >= f
-        }
-    };
-    let in_tod = |mn: i64, tw: TimeWindow| match tw {
-        TimeWindow::Day(f, t) => span_ok(mn, f as i64, t as i64),
-        TimeWindow::Hour(f, t) => span_ok(mn % 60, f as i64, t as i64),
-    };
-    // An unchecked row with a value pins the sweep: drop everything outside it, so both the
-    // candidates and the baseline below are measured on the subset the user fixed. Nothing
-    // pinned → work on the original slice (no copy).
-    let pinned: Option<Vec<(i64, i64, f64)>> =
-        (axes.fixed_week.is_some() || axes.fixed_tod.is_some()).then(|| {
-            rows.iter()
-                .copied()
-                .filter(|&(wd, mn, _)| {
-                    axes.fixed_week
-                        .is_none_or(|(f, t)| span_ok(wd * 1440 + mn, f as i64, t as i64))
-                        && axes.fixed_tod.is_none_or(|tw| in_tod(mn, tw))
-                })
-                .collect()
-        });
-    let rows: &[(i64, i64, f64)] = pinned.as_deref().unwrap_or(rows);
-    // Candidates for the opened axes (best window of the projection; None = unrestricted).
-    let week = axes
-        .week
-        .then(|| best_week_span(rows, min_n, edges, round))
-        .flatten();
-    // The two WorkingTime formats are separate CANDIDATES for one field: each checked row
-    // contributes one, and the comparison below keeps whichever earns more. Unchecked → no
-    // candidate, so that format can never come out of the sweep.
-    let day_w = axes
-        .day
-        .then(|| {
-            let mut vals: Vec<(f64, f64)> =
-                rows.iter().map(|&(_w, mn, p)| (mn as f64, p)).collect();
-            best_range(&mut vals, min_n, edges, round).map(|s| {
-                TimeWindow::Day(
-                    s.from.unwrap_or(0.0).clamp(0.0, 1439.0) as u16,
-                    s.to.unwrap_or(1439.0).clamp(0.0, 1439.0) as u16,
-                )
-            })
-        })
-        .flatten();
-    let hour_w = axes
-        .hour
-        .then(|| {
-            let mut vals: Vec<(f64, f64)> = rows
-                .iter()
-                .map(|&(_w, mn, p)| ((mn % 60) as f64, p))
-                .collect();
-            best_range(&mut vals, min_n, edges, round).map(|s| {
-                TimeWindow::Hour(
-                    s.from.unwrap_or(0.0).clamp(0.0, 59.0) as u8,
-                    s.to.unwrap_or(59.0).clamp(0.0, 59.0) as u8,
-                )
-            })
-        })
-        .flatten();
-    let prof = |wk: Option<(u16, u16)>, td: Option<TimeWindow>| -> f64 {
-        rows.iter()
-            .filter(|&&(wd, mn, _)| {
-                wk.is_none_or(|(f, t)| span_ok(wd * 1440 + mn, f as i64, t as i64))
-                    && td.is_none_or(|tw| in_tod(mn, tw))
-            })
-            .map(|r| r.2)
-            .sum()
-    };
-    // The baseline (no window of our own, but already inside any pin) is the starting
-    // candidate; every other one has to BEAT it.
     let base: f64 = rows.iter().map(|r| r.2).sum();
     let margin = improvement_margin(base);
-    let mut best: (Option<(u16, u16)>, Option<TimeWindow>, f64) = (None, None, base);
-    for wk in [None, week] {
-        for td in [None, day_w, hour_w] {
-            if wk.is_none() && td.is_none() {
-                continue;
+    let mut best = TimeSuggest::default();
+    let mut best_profit = base;
+    let week = |td| {
+        search::best_span(
+            rows.iter()
+                .filter(|&&(_, mn, _)| accepts(0, mn, None, td))
+                .map(|&(wd, mn, p)| ((wd * 1440 + mn) as usize, p)),
+            10080,
+            min_n,
+            round,
+        )
+    };
+    let tod = |wk, hour| {
+        let period = if hour { 60 } else { 1440 };
+        search::best_span(
+            rows.iter()
+                .filter(|&&(wd, mn, _)| accepts(wd, mn, wk, None))
+                .map(|&(_, mn, p)| (mn as usize % period, p)),
+            period,
+            min_n,
+            round,
+        )
+        .map(|(f, t)| {
+            if hour {
+                TimeWindow::Hour(f as u8, t as u8)
+            } else {
+                TimeWindow::Day(f, t)
             }
-            let pr = prof(wk, td);
-            if pr > best.2 + margin {
-                best = (wk, td, pr);
+        })
+    };
+    let wk = axes.week.then(|| week(None)).flatten();
+    let day = axes.day.then(|| tod(None, false)).flatten();
+    let hour = axes.hour.then(|| tod(None, true)).flatten();
+    for start_week in [None, wk] {
+        for start_tod in [None, day, hour] {
+            let mut candidate = TimeSuggest {
+                week_span: start_week,
+                tod: start_tod,
+            };
+            for step in 0..4 {
+                let kept: Vec<_> = rows
+                    .iter()
+                    .filter(|&&(wd, mn, _)| accepts(wd, mn, candidate.week_span, candidate.tod))
+                    .collect();
+                let profit: f64 = kept.iter().map(|r| r.2).sum();
+                if kept.len() >= min_n && profit > best_profit + margin {
+                    best_profit = profit;
+                    best = candidate;
+                }
+                if step == 3 {
+                    break;
+                }
+                if axes.week {
+                    candidate.week_span = week(candidate.tod);
+                }
+                let mut choices = vec![candidate];
+                if axes.day {
+                    choices.push(TimeSuggest {
+                        tod: tod(candidate.week_span, false),
+                        ..candidate
+                    });
+                }
+                if axes.hour {
+                    choices.push(TimeSuggest {
+                        tod: tod(candidate.week_span, true),
+                        ..candidate
+                    });
+                }
+                candidate = choices
+                    .into_iter()
+                    .max_by(|a, b| {
+                        let score = |s: &TimeSuggest| {
+                            rows.iter()
+                                .filter(|&&(wd, mn, _)| accepts(wd, mn, s.week_span, s.tod))
+                                .map(|r| r.2)
+                                .sum::<f64>()
+                        };
+                        score(a).total_cmp(&score(b))
+                    })
+                    .unwrap_or_default();
             }
         }
     }
-    TimeSuggest {
-        week_span: best.0,
-        tod: best.1,
-    }
+    best
 }
 
-/// Best CONTINUOUS profit window over the week minute
-/// (0..10079 = day*1440 + minute_of_day), found through quantile-based `best_range`.
-/// Returns `None` when the best window does not improve on the full week. The linear search
-/// (`from <= to`) does not suggest a window wrapping PAST Sunday, though the manual slider can.
-fn best_week_span(
-    rows: &[(i64, i64, f64)],
-    min_n: usize,
-    edges: usize,
-    round: bool,
-) -> Option<(u16, u16)> {
-    let mut vals: Vec<(f64, f64)> = rows
-        .iter()
-        .filter(|(wd, ..)| (0..7).contains(wd))
-        .map(|&(wd, mn, p)| ((wd * 1440 + mn) as f64, p))
-        .collect();
-    best_range(&mut vals, min_n, edges, round).map(|s| {
-        (
-            s.from.unwrap_or(0.0).clamp(0.0, 10079.0) as u16,
-            s.to.unwrap_or(10079.0).clamp(0.0, 10079.0) as u16,
-        )
-    })
+/// Inclusive schedule predicate shared by fitting and chronological validation.
+fn accepts(wd: i64, mn: i64, week: Option<(u16, u16)>, tod: Option<TimeWindow>) -> bool {
+    let span = |v: i64, f: u16, t: u16| {
+        if f <= t {
+            f as i64 <= v && v <= t as i64
+        } else {
+            v >= f as i64 || v <= t as i64
+        }
+    };
+    week.is_none_or(|(f, t)| span(wd * 1440 + mn, f, t))
+        && tod.is_none_or(|tw| match tw {
+            TimeWindow::Day(f, t) => span(mn, f, t),
+            TimeWindow::Hour(f, t) => span(mn % 60, f as u16, t as u16),
+        })
 }
 
 /// Average-profit profiles for coloring the three "By time" sliders:
