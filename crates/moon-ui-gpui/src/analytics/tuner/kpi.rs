@@ -205,6 +205,22 @@ fn figure_of(kind: MetricKind, stats: &VarStats) -> Figure {
     }
 }
 
+/// Format split ratios and loss magnitudes through the same rules as matrix cells.
+pub(super) fn split_metrics(tally: &moon_core::db::metrics::Tally) -> (String, String) {
+    let stats = VarStats {
+        n: tally.n,
+        wins: tally.wins,
+        pf: tally.profit_factor(),
+        avg_loss: tally.avg_loss(),
+        max_dd: tally.max_dd,
+        ..Default::default()
+    };
+    (
+        figure_of(MetricKind::ProfitFactor, &stats).text.display,
+        figure_of(MetricKind::MaxDrawdown, &stats).text.display,
+    )
+}
+
 /// Whether the profit-factor cell has nothing to show.
 ///
 /// Empty samples and non-finite values are undefined. So is a non-empty sample whose win

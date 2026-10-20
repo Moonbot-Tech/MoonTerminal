@@ -8,6 +8,16 @@ use crate::analytics::set_pnl_unit;
 use moon_core::db::ProfitUnit;
 use moon_core::db::tuner::VarStats;
 
+/// Reintroducing signed PF or positive drawdown would mislabel both schedule and filter splits.
+#[test]
+fn polish_split_metrics_share_matrix_signs() {
+    set_pnl_unit(None);
+    let mut tally = moon_core::db::metrics::Tally::default();
+    tally.push(162.0);
+    tally.push(-100.0);
+    assert_eq!(super::split_metrics(&tally), ("1.62".into(), "-100".into()));
+}
+
 /// Compare actual laid-out text against the larger body band, without a raw pixel oracle.
 struct TypographyProbe;
 

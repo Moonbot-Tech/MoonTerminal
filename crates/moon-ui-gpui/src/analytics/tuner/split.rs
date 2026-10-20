@@ -55,6 +55,7 @@ pub(super) fn line(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
+    let (pf, dd) = super::kpi::split_metrics(tally);
     h_flex()
         .w_full()
         .min_w_0()
@@ -81,8 +82,8 @@ pub(super) fn line(
                         profit = super::super::summary::fmt_signed(tally.profit),
                         n = tally.n,
                         wr = format!("{:.1}", tally.winrate()),
-                        pf = super::super::summary::fmt_signed_plain(tally.profit_factor()),
-                        dd = super::super::summary::fmt_signed_plain(tally.max_dd)
+                        pf = pf,
+                        dd = dd
                     )
                     .to_string(),
                 ),
