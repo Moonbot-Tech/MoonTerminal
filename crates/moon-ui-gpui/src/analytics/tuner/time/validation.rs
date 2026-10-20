@@ -51,9 +51,10 @@ fn result_line(result: &TimeEvaluation) -> Option<String> {
     )
 }
 
-/// Show validation only for an unedited completed suggestion; warnings wrap under metric lines.
+/// Keep unedited validation visible across report appends, explicitly marking its snapshot stale.
 pub(super) fn summary(
     result: Option<&TimeEvaluation>,
+    stale: bool,
     p: MoonPalette,
     cx: &App,
 ) -> Option<AnyElement> {
@@ -72,6 +73,7 @@ pub(super) fn summary(
             .text_size(design::t_caption(cx))
             .children(result_line(result).map(|line| {
                 div()
+                    .debug_selector(|| "time-result-line".into())
                     .w_full()
                     .min_w_0()
                     .font_family(design::ui_font())
@@ -79,26 +81,41 @@ pub(super) fn summary(
                     .child(line)
             }))
             .when_some(result.train.as_ref(), |el, train| {
-                el.child(super::super::split::line(
-                    t!("analytics.tuner.split_train").to_string(),
-                    train,
-                    p.text_soft,
-                    p,
-                    cx,
+                el.child(div().debug_selector(|| "time-train-line".into()).child(
+                    super::super::split::line(
+                        t!("analytics.tuner.split_train").to_string(),
+                        train,
+                        p.text_soft,
+                        p,
+                        cx,
+                    ),
                 ))
             })
             .when_some(result.holdout.as_ref(), |el, holdout| {
-                el.child(super::super::split::line(
-                    t!("analytics.tuner.split_holdout").to_string(),
-                    holdout,
-                    if holdout.profit > 0.0 {
-                        design::positive_color(p)
-                    } else {
-                        design::danger_color(p)
-                    },
-                    p,
-                    cx,
+                el.child(div().debug_selector(|| "time-holdout-line".into()).child(
+                    super::super::split::line(
+                        t!("analytics.tuner.split_holdout").to_string(),
+                        holdout,
+                        if holdout.profit > 0.0 {
+                            design::positive_color(p)
+                        } else {
+                            design::danger_color(p)
+                        },
+                        p,
+                        cx,
+                    ),
                 ))
+            })
+            .when(stale, |el| {
+                el.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .debug_selector(|| "time-stale-warning".into())
+                        .font_family(design::ui_font())
+                        .text_color(moon(p.orange))
+                        .child(t!("analytics.coins.stale_note_report").to_string()),
+                )
             })
             .when_some(warning(result), |el, key| {
                 el.child(

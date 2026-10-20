@@ -54,13 +54,23 @@ fn validation_state_decision() {
 struct Probe {
     input: Entity<MoonInputState>,
     face: usize,
+    report_changed: bool,
 }
 
 impl Render for Probe {
     /// Stack the real controls and completed-state block inside the tested dock width.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        let select = train_dropdown_el(TunerKind::Time, 100, |_, _| {}, cx);
+        let mut state = super::super::state::TimeTunerState::load();
+        state.min_trades = "11".into();
+        state.evaluation = result(self.face);
+        state.train_pct = if self.face >= 3 { 70 } else { 100 };
+        if self.report_changed {
+            state.mark_report_stale();
+        }
+        // The production Change/Blur handler receives the same raw value after completion.
+        state.set_min_trades("11".into());
+        let select = train_dropdown_el(TunerKind::Time, state.train_pct, |_, _| {}, cx);
         v_flex()
             .w_full()
             .debug_selector(|| "time-probe".into())
@@ -73,7 +83,12 @@ impl Render for Probe {
                 p,
                 cx,
             ))
-            .children(summary(result(self.face).as_ref(), p, cx))
+            .children(summary(
+                state.evaluation.as_ref(),
+                state.evaluation_stale,
+                p,
+                cx,
+            ))
     }
 }
 
@@ -91,52 +106,120 @@ fn time_validation_layout(cx: &mut gpui::TestAppContext) {
             let _locale = crate::test_locale::force(language.code());
             for width in [320.0, 540.0] {
                 for face in 0..5 {
-                    let window =
-                        cx.open_window(gpui::size(px(width), px(600.0)), |window, cx| Probe {
-                            input: cx.new(|cx| MoonInputState::new(window, cx)),
-                            face,
-                        });
-                    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-                    for _ in 0..3 {
-                        visual.update(|window, cx| {
-                            let _ = window.draw(cx);
-                        });
-                    }
-                    let root = visual.debug_bounds("time-probe").unwrap();
-                    for sel in ["time-config", "time-train-select", "time-run"] {
-                        let b = visual.debug_bounds(sel).unwrap();
+                    for report_changed in [false, true] {
+                        let window =
+                            cx.open_window(gpui::size(px(width), px(600.0)), |window, cx| Probe {
+                                input: cx.new(|cx| MoonInputState::new(window, cx)),
+                                face,
+                                report_changed,
+                            });
+                        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                        for _ in 0..3 {
+                            visual.update(|window, cx| {
+                                let _ = window.draw(cx);
+                            });
+                        }
+                        let root = visual.debug_bounds("time-probe").unwrap();
+                        for sel in ["time-config", "time-train-select", "time-run"] {
+                            let b = visual.debug_bounds(sel).unwrap();
+                            assert!(
+                                b.origin.x >= root.origin.x && b.right() <= root.right() + px(0.5),
+                                "{sel} {} {width}",
+                                language.code()
+                            );
+                        }
+                        let run = visual.debug_bounds("time-run").unwrap();
+                        let inset = visual.update(|_, cx| crate::design::ui_px(cx, 12.0));
                         assert!(
-                            b.origin.x >= root.origin.x && b.right() <= root.right() + px(0.5),
-                            "{sel} {} {width}",
-                            language.code()
+                            (run.right() - (root.right() - inset)).abs() <= px(0.5),
+                            "run must stay right-aligned after wrapping"
                         );
-                    }
-                    let run = visual.debug_bounds("time-run").unwrap();
-                    let inset = visual.update(|_, cx| crate::design::ui_px(cx, 12.0));
-                    assert!(
-                        (run.right() - (root.right() - inset)).abs() <= px(0.5),
-                        "run must stay right-aligned after wrapping"
-                    );
-                    let select = visual.debug_bounds("time-train-select").unwrap();
-                    let need = visual.update(|_, cx| {
-                        crate::design::ui_caption_text_width(
-                            cx,
-                            &crate::analytics::tuner::shell::train_label(100),
-                            400.0,
-                        )
-                    });
-                    assert!(
-                        select.size.width >= px(need),
-                        "selector narrower than its label"
-                    );
-                    assert_eq!(visual.debug_bounds("time-validation").is_some(), face != 0);
-                    if matches!(face, 1 | 2 | 4) {
-                        let warn = visual.debug_bounds("time-warning").unwrap();
-                        assert!(warn.right() <= root.right() + px(0.5));
-                        assert!(warn.size.height >= px(if width == 320.0 { 20.0 } else { 10.0 }));
+                        let select = visual.debug_bounds("time-train-select").unwrap();
+                        let need = visual.update(|_, cx| {
+                            crate::design::ui_caption_text_width(
+                                cx,
+                                &crate::analytics::tuner::shell::train_label(if face >= 3 {
+                                    70
+                                } else {
+                                    100
+                                }),
+                                400.0,
+                            )
+                        });
+                        assert!(
+                            select.size.width >= px(need),
+                            "selector narrower than its label"
+                        );
+                        assert_eq!(visual.debug_bounds("time-validation").is_some(), face != 0);
+                        for selector in ["time-result-line", "time-train-line"] {
+                            assert_eq!(
+                                visual.debug_bounds(selector).is_some(),
+                                face >= 2,
+                                "completed suggestion lost {selector}"
+                            );
+                        }
+                        assert_eq!(
+                            visual.debug_bounds("time-holdout-line").is_some(),
+                            face >= 3
+                        );
+                        assert_eq!(
+                            visual.debug_bounds("time-stale-warning").is_some(),
+                            report_changed && face != 0
+                        );
+                        if matches!(face, 1 | 2 | 4) {
+                            let warn = visual.debug_bounds("time-warning").unwrap();
+                            assert!(warn.right() <= root.right() + px(0.5));
+                            assert!(
+                                warn.size.height >= px(if width == 320.0 { 20.0 } else { 10.0 })
+                            );
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/// An unchanged Blur preserves a fitted summary and request; a real budget edit retires both.
+#[test]
+fn livefix_time_result_survives_an_unchanged_settings_blur() {
+    let mut state = super::super::state::TimeTunerState::load();
+    state.min_trades = "11".into();
+    state.evaluation = result(3);
+    state.sugg_busy = true;
+    let generation = state.sugg_seq;
+    state.set_min_trades("11".into());
+    assert!(state.evaluation.is_some());
+    assert!(state.sugg_busy);
+    assert_eq!(state.sugg_seq, generation);
+    state.set_min_trades("12".into());
+    assert!(state.evaluation.is_none());
+    assert!(!state.sugg_busy);
+    assert_ne!(state.sugg_seq, generation);
+}
+
+/// A report append must retire active requests without deleting the completed validation snapshot.
+#[test]
+fn livefix_completed_time_validation_survives_report_append() {
+    let mut state = super::super::state::TimeTunerState::load();
+    state.min_trades = "11".into();
+    state.evaluation = result(3);
+    state.sugg_busy = true;
+    let generation = state.sugg_seq;
+    state.mark_report_stale();
+    assert!(
+        state.evaluation.is_some(),
+        "a background report append erased the completed validation block"
+    );
+    assert!(!state.sugg_busy);
+    assert!(state.evaluation_stale);
+    assert_ne!(state.sugg_seq, generation);
+    state.set_min_trades("11".into());
+    assert!(state.evaluation.is_some() && state.evaluation_stale);
+    state.set_min_trades("12".into());
+    assert!(
+        state.evaluation.is_none(),
+        "real settings edits must retire the snapshot"
+    );
+    assert!(!state.evaluation_stale);
 }

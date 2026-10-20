@@ -106,6 +106,7 @@ impl AnalyticsView {
         let round = self.time_tuner.round_results;
         let train_frac = self.time_tuner.train_pct as f64 / 100.0;
         self.time_tuner.evaluation = None;
+        self.time_tuner.evaluation_stale = false;
         self.spawn_db(
             true,
             cx,
@@ -362,7 +363,12 @@ impl AnalyticsView {
         }
         // Three heatmap sliders under the rows (Weekly / Day / In hour).
         let sliders = self.time_sliders(p, cx);
-        let validation = super::validation::summary(self.time_tuner.evaluation.as_ref(), p, cx);
+        let validation = super::validation::summary(
+            self.time_tuner.evaluation.as_ref(),
+            self.time_tuner.evaluation_stale,
+            p,
+            cx,
+        );
 
         v_flex()
             .w_full()

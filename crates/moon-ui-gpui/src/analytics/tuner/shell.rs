@@ -1016,8 +1016,7 @@ impl AnalyticsView {
                             this.persist_tuner_iters(cx);
                         }
                         (TunerKind::Time, CfgInput::MinTrades) => {
-                            this.time_tuner.min_trades = value;
-                            this.time_tuner.invalidate_suggest();
+                            this.time_tuner.set_min_trades(value);
                         }
                         (TunerKind::Ticks, CfgInput::Restarts) => {
                             this.ticks.iters = value;
