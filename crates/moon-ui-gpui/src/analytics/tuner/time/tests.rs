@@ -5,6 +5,61 @@ use moon_core::config::{Language, UiThemeMode};
 use moon_core::db::analytics::HourStat;
 use moon_ui::{MoonPalette, MoonTheme};
 
+/// Exact decimals or repeated currency tickers would consume the default hour's entire slot.
+#[test]
+fn polish_hour_money_is_compact() {
+    crate::analytics::set_pnl_unit(None);
+    assert_eq!(super::hour_profit(462.79), "+463");
+    assert_eq!(super::hour_profit(1400.0), "+1.4K");
+    assert_eq!(super::hour_profit(-462.79), "-463");
+}
+
+/// Measure actual production labels so merely retaining a clipped text node does not pass.
+#[gpui::test]
+fn polish_hour_labels_fit_default_width(cx: &mut gpui::TestAppContext) {
+    crate::analytics::set_pnl_unit(None);
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Light, 1.0),
+            cx,
+        )
+    });
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let window = cx.open_window(gpui::size(px(1367.0), px(300.0)), |_, _| HourProbe {
+            side_collapsed: true,
+        });
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        for _ in 0..3 {
+            visual.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        for hour in 0..24 {
+            let bounds = visual
+                .debug_bounds(Box::leak(
+                    format!("tuner-hour-profit-{hour}").into_boxed_str(),
+                ))
+                .unwrap();
+            let text = if hour % 2 == 0 { "+463" } else { "-1.4K" };
+            let needed =
+                visual.update(|_, cx| crate::design::ui_caption_text_width(cx, text, 400.0));
+            assert!(
+                bounds.size.width >= px(needed),
+                "{} hour {hour} clipped",
+                language.code()
+            );
+            assert!(
+                visual
+                    .debug_bounds(Box::leak(
+                        format!("tuner-hour-count-{hour}").into_boxed_str()
+                    ))
+                    .is_some()
+            );
+        }
+    }
+}
+
 /// Synthetic hourly aggregates exercise both profit signs and count degradation.
 struct HourProbe {
     side_collapsed: bool,
@@ -15,7 +70,7 @@ impl Render for HourProbe {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let profile = std::array::from_fn(|hour| HourStat {
             trades: 17,
-            profit: if hour % 2 == 0 { 271.25 } else { -43.75 },
+            profit: if hour % 2 == 0 { 462.79 } else { -1400.0 },
             ..Default::default()
         });
         let bars = super::hour_columns(

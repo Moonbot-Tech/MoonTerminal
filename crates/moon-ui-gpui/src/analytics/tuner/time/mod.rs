@@ -329,6 +329,20 @@ fn hour_card(
 /// Height of a column's bar area (px before font scaling); the bar grows from the center by ≤ half.
 const BAR_H: f32 = 108.0;
 
+/// Keep hourly money labels within one bar slot using the matrix's shared SI formatter.
+fn hour_profit(profit: f64) -> String {
+    if crate::analytics::pnl_is_pct() || !profit.is_finite() {
+        return fmt_signed(profit);
+    }
+    let rounded = profit.round();
+    let compact = moon_core::util::fmt::compact_si(rounded);
+    if rounded > 0.0 {
+        format!("+{compact}")
+    } else {
+        compact
+    }
+}
+
 /// A center-origin hourly bar with visible PnL and a lower-priority trade count.
 /// Bar up = profit (green), down = loss (orange); length ∝ |PnL| / maximum.
 ///
@@ -360,12 +374,7 @@ fn hour_column(
     // Loss = orange (same as sign_color and the "Summary" bars), NOT red.
     let bar_color = if profit > 0.0 { p.green } else { p.orange };
     let value = if has {
-        let formatted = fmt_signed(profit);
-        if crate::analytics::pnl_is_pct() {
-            formatted
-        } else {
-            format!("{} {}", formatted, crate::analytics::pnl_unit_label())
-        }
+        hour_profit(profit)
     } else {
         "—".to_string()
     };
@@ -376,7 +385,10 @@ fn hour_column(
     };
     let r = design::ui_px(cx, 2.0);
     let half = BAR_H / 2.0;
-    let tip = format!("{h:02}: {value} {count}");
+    let tip = format!(
+        "{h:02}: {} {count}",
+        super::super::summary::fmt_signed_unit(profit)
+    );
     v_flex()
         .id(SharedString::from(format!("tuner-hour-{h}")))
         .role(Role::Label)
