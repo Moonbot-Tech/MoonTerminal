@@ -1043,12 +1043,7 @@ fn best_range_with_passing(
     }
     vals.sort_by(|a, b| a.0.total_cmp(&b.0));
     let len = vals.len();
-    // Use no more buckets than data points because extra ones are redundant. The upper cap
-    // was raised from 128 to 512 for the time axis: with few trades per day, this gives one
-    // slice per trade and maximum window precision. `min(len)` does not affect the filter
-    // RESULT: when edges >= len, positions `k*len/edges` cover exactly {0..len}, the same set
-    // of distinct boundaries as edges=len, without duplicate iterations. Filter datasets
-    // usually contain thousands of rows, so this branch rarely applies there.
+    // Numeric fields retain their bounded quantile resolution; time uses its own exact path.
     let edges = edges.clamp(4, 512).min(len.max(4));
     // Profit prefix sums plus quantile-edge positions.
     let mut pre = Vec::with_capacity(len + 1);
@@ -1058,18 +1053,21 @@ fn best_range_with_passing(
     }
     // A saved inclusive bound admits EVERY trade at that value. A quantile that splits
     // equal values can score an impossible subset and discard the better realizable range.
-    // Move each edge to the end of its equal-value run; retain raw positions as trade counts.
-    let mut pos = Vec::with_capacity(edges + 1);
-    let mut boundary = 0;
+    // Keep BOTH sides of an intersected group. Keeping only its end loses feasible lower
+    // bounds the old inclusive range could admit, especially for heavily repeated leverage.
+    let mut pos = Vec::with_capacity(2 * edges + 2);
     for k in 0..=edges {
-        boundary = boundary.max(k * len / edges);
-        while boundary > 0 && boundary < len && vals[boundary - 1].0 == vals[boundary].0 {
-            boundary += 1;
-        }
-        if pos.last() != Some(&boundary) {
+        let boundary = k * len / edges;
+        if boundary > 0 && boundary < len && vals[boundary - 1].0 == vals[boundary].0 {
+            let value = vals[boundary].0;
+            pos.push(vals.partition_point(|r| r.0 < value));
+            pos.push(vals.partition_point(|r| r.0 <= value));
+        } else {
             pos.push(boundary);
         }
     }
+    pos.sort_unstable();
+    pos.dedup();
     // Cumulative profit AT each edge, which is what the shared picker slices. Full data
     // coverage (min..max) is a no-op filter, and the picker rejects it by exact count.
     let profit_at: Vec<f64> = pos.iter().map(|&p| pre[p]).collect();
@@ -1079,14 +1077,14 @@ fn best_range_with_passing(
     // can appear to "win" by about 1e-12.
     let floor = total + improvement_margin(total + passing_profit);
     let valued_min = min_n.saturating_sub(passing_n).max(1);
+    if round {
+        return best_rounded_range(vals, &pre, &pos, valued_min, open_top, passing, floor);
+    }
     range_pick::best_pair(&profit_at, &pos, valued_min, len, floor, open_top).map(|(i, j)| {
         let (a, b) = (pos[i], pos[j]);
         // Always return both bounds; distribution edges use the observed
         // minimum or maximum rather than an open interval.
-        let (mut from, mut to) = (vals[a].0, vals[b - 1].0);
-        if round {
-            (from, to) = round_pair_outward(from, to, vals[0].0, vals[len - 1].0);
-        }
+        let (from, to) = (vals[a].0, vals[b - 1].0);
         Suggestion {
             from: Some(from),
             to: Some(to),
@@ -1094,6 +1092,45 @@ fn best_range_with_passing(
             n: (b - a + passing_n) as i64,
         }
     })
+}
+
+/// Choose among rounded quantile candidates by the rows their inclusive saved bounds admit.
+/// At most 1025 group edges are considered, and Min-only fields visit only one upper edge.
+fn best_rounded_range(
+    vals: &[(f64, f64)],
+    pre: &[f64],
+    pos: &[usize],
+    min_n: usize,
+    open_top: bool,
+    passing: (usize, f64),
+    floor: f64,
+) -> Option<Suggestion> {
+    let len = vals.len();
+    let mut best = None;
+    let mut best_profit = floor;
+    for (i, &a) in pos.iter().enumerate().take(pos.len() - 1) {
+        for &b in &pos[i + 1..] {
+            if open_top && b != len {
+                continue;
+            }
+            let (from, to) =
+                round_pair_outward(vals[a].0, vals[b - 1].0, vals[0].0, vals[len - 1].0);
+            let lo = vals.partition_point(|r| r.0 < from);
+            let hi = vals.partition_point(|r| r.0 <= to);
+            let n = hi - lo;
+            let profit = pre[hi] - pre[lo];
+            if n >= min_n && n < len && profit > best_profit {
+                best_profit = profit;
+                best = Some(Suggestion {
+                    from: Some(from),
+                    to: Some(to),
+                    profit: profit + passing.1,
+                    n: (n + passing.0) as i64,
+                });
+            }
+        }
+    }
+    best
 }
 
 #[cfg(test)]

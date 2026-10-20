@@ -6,6 +6,30 @@ use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
 use super::*;
 
+/// Both group sides are needed to retain an old attainable optimum inside a giant equal run.
+#[test]
+fn single_field_keeps_lower_edge_of_quantile_group() {
+    let mut vals = vec![(1.0, -50.0)];
+    vals.extend(std::iter::repeat_n((2.0, 1.0), 18));
+    vals.push((3.0, -50.0));
+    let s = best_range_with_passing(&mut vals, 1, 4, false, false, (0, 0.0)).unwrap();
+    assert_eq!(
+        (s.from, s.to, s.profit, s.n),
+        (Some(2.0), Some(2.0), 18.0, 18)
+    );
+}
+
+/// A rounded threshold must rank and report the extra losing rows its saved bounds include.
+#[test]
+fn single_field_scores_rounded_bounds() {
+    let mut vals = [(1.231, 20.0), (1.232, -30.0), (2.345, 10.0), (3.0, -50.0)];
+    let s = best_range_with_passing(&mut vals, 1, 4, true, false, (0, 0.0)).unwrap();
+    assert_eq!(
+        (s.from, s.to, s.profit, s.n),
+        (Some(2.34), Some(2.35), 10.0, 1)
+    );
+}
+
 /// Exercise the numeric picker with no always-passing rows.
 fn best_range(
     vals: &mut [(f64, f64)],
