@@ -25,6 +25,8 @@ pub(super) use auto_picks::AutoPicks;
 /// Tuning readiness for every strategy of the list: the "Tuning" column, its filter and progress.
 mod ready;
 pub(super) use ready::ReadyPass;
+/// Shared non-wrapping bound headings and narrow variant sections.
+mod bounds;
 /// Its column descriptors: the metric pool both comparison tables draw from …
 mod columns;
 /// The "Fact vs variants" KPI matrix, rendered by every axis out of plain `VarStats`.

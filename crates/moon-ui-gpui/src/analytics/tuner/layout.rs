@@ -8,14 +8,14 @@ use rust_i18n::t;
 use crate::design::{self, moon};
 
 /// All four axes share this font-scaled preferred column width.
-pub(super) const SIDE_W: f32 = 470.0;
+pub(super) const SIDE_W: f32 = 540.0;
 
 /// Page padding is shared by the renderer and width-sensitive controls.
 const PAGE_PAD: f32 = 10.0;
 
 /// Stack the page in narrow docks, using the measured panel rather than the window width.
 pub(super) fn is_narrow(width: f32, cx: &App) -> bool {
-    width > 0.0 && width < f32::from(design::font_w_px(cx, SIDE_W + 390.0))
+    width > 0.0 && width < f32::from(design::font_w_px(cx, SIDE_W + 240.0))
 }
 
 /// Resolve the width the column actually receives before deciding whether grid ranges fit.

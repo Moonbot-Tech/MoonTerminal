@@ -18,7 +18,7 @@ use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
 use super::super::super::calendar::split_i18n;
-use super::grid::NAME_COL;
+use super::super::bounds::time_name_width;
 use super::state::{WEEK_MIN, fmt_min, fmt_week_ep, parse_moh, parse_time};
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -479,7 +479,7 @@ impl AnalyticsView {
             .child(
                 // Matches the grid's field-name column so the slider labels line up under it.
                 div()
-                    .w(design::font_w_px(cx, NAME_COL))
+                    .w(time_name_width(cx))
                     .flex_none()
                     .truncate()
                     .pb(design::ui_px(cx, 3.0))

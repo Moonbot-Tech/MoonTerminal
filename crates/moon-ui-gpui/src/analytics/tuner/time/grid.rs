@@ -14,6 +14,7 @@
 //! is unreliable) — in amber as "in strategy". v1/v2 are fresh input / auto-suggestion; Save writes
 //! the non-empty changed fields. The shell (toolbar + suggestion row) is SHARED with the filter.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex, v_flex,
@@ -26,9 +27,6 @@ use super::state::{N_FIELD, fmt_min, fmt_week_ep};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::TimeWindow;
-
-/// Field-name column: fits "WorkingWeekTime" on one line next to the checkbox.
-pub(in crate::analytics::tuner) const NAME_COL: f32 = 110.0;
 
 impl AnalyticsView {
     /// Commit a field bound (Blur/Enter): state → WT mutual exclusion → KPIs.
@@ -344,7 +342,6 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let in_w = 60.0; // fits the weekly field's "d.hh:mm" without leaving slack
         let header = self.shell_toolbar(
             TunerKind::Time,
             t!("analytics.tuner.fields_title").to_string(),
@@ -354,115 +351,14 @@ impl AnalyticsView {
         let ignore_row = self.time_ignore_row(p, cx);
         let clock_note = self.core_clock_note(p, cx);
 
-        let head_cell = |label: String| {
-            div()
-                .w(design::font_w_px(cx, in_w))
-                .flex_none()
-                .text_center()
-                .child(label)
-        };
-        let copy_tools = h_flex()
-            .w_full()
-            .justify_end()
-            .px(design::ui_px(cx, 12.0))
-            .gap(design::ui_px(cx, 6.0))
-            .child("v1")
-            .child(
-                glyph_btn(
-                    "tt-cp-col",
-                    "→",
-                    t!("analytics.time.tip_to_v2").to_string(),
-                    p.amber,
-                    p,
-                    cx,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.time_copy_all(cx))),
-            )
-            .child("v2")
-            .child(
-                glyph_btn(
-                    "tt-cpb-col",
-                    "←",
-                    t!("analytics.time.tip_to_v1").to_string(),
-                    p.amber,
-                    p,
-                    cx,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.time_copy_all_back(cx))),
-            );
-        let head = h_flex()
-            .w_full()
-            .flex_none()
-            .px(design::ui_px(cx, 8.0))
-            .min_h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
-            .flex_wrap()
-            .items_center()
-            // Must match the row gap below, or the columns drift apart.
-            .gap(design::ui_px(cx, 4.0))
-            .text_size(design::t_caption(cx))
-            .text_color(moon(p.text_soft))
-            .bg(moon(p.table_head))
-            // Master checkbox over the rows' column — the filter tuner's "all on/off".
-            .child(
-                div().flex_none().child(
-                    MoonCheckbox::new("tt-en-all")
-                        .checked(self.time_tuner.enabled.iter().all(|&e| e))
-                        .size(design::CONTROL_TIER)
-                        .on_change({
-                            let view = cx.entity();
-                            move |ch: &bool, _w, app| {
-                                let on = *ch;
-                                view.update(app, |this, cx| {
-                                    this.time_tuner.enabled = [on; N_FIELD];
-                                    // Values do not move → no KPI recompute; only an
-                                    // in-flight sweep is now stale.
-                                    this.time_tuner.invalidate_suggest();
-                                    cx.notify();
-                                });
-                            }
-                        }),
-                ),
-            )
-            .child(
-                // Matches the row's field-name column width (fits "WorkingWeekTime").
-                div()
-                    .w(design::font_w_px(cx, NAME_COL))
-                    .flex_none()
-                    .child(t!("analytics.tuner.field").to_string()),
-            )
-            .child(div().flex_1().child(t!("analytics.time.cur").to_string()))
-            .child(head_cell(format!("v1 {}", t!("analytics.tuner.from"))))
-            .child(div().w(design::ui_px(cx, 12.0)).flex_none())
-            .child(head_cell(format!("→ {}", t!("analytics.tuner.to"))))
-            .child(
-                glyph_btn(
-                    "tt-clr-col-0",
-                    "✕",
-                    t!("analytics.time.tip_clear_all").to_string(),
-                    p.orange,
-                    p,
-                    cx,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.time_clear_variant(0, cx))),
-            )
-            .child(head_cell(format!("v2 {}", t!("analytics.tuner.from"))))
-            .child(div().w(design::ui_px(cx, 12.0)).flex_none())
-            .child(head_cell(format!("→ {}", t!("analytics.tuner.to"))))
-            .child(
-                glyph_btn(
-                    "tt-clr-col-1",
-                    "✕",
-                    t!("analytics.time.tip_clear_all").to_string(),
-                    p.orange,
-                    p,
-                    cx,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.time_clear_variant(1, cx))),
-            );
-
-        let mut grid = v_flex().w_full().child(head);
-        for field in 0..N_FIELD {
-            grid = grid.child(self.time_row(field, in_w, p, window, cx));
+        let layout = super::super::bounds::GridLayout::new(
+            super::super::layout::side_width(self.tuner_host_width, cx),
+            true,
+            cx,
+        );
+        let mut grid = v_flex().w_full();
+        for variants in layout.sections() {
+            grid = grid.child(self.time_table(layout, &variants, p, window, cx));
         }
         // Three heatmap sliders under the rows (Weekly / Day / In hour).
         let sliders = self.time_sliders(p, cx);
@@ -482,7 +378,6 @@ impl AnalyticsView {
             .children(validation)
             .child(ignore_row)
             .child(clock_note)
-            .child(copy_tools)
             .child(
                 div()
                     .id("tt-params-scroll")
@@ -493,11 +388,103 @@ impl AnalyticsView {
             .into_any_element()
     }
 
+    /// Paint one complete variant section; the narrow form keeps both variants reachable.
+    fn time_table(
+        &mut self,
+        layout: super::super::bounds::GridLayout,
+        variants: &[usize],
+        p: MoonPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use super::super::bounds::{VariantHead, header};
+        let check = div()
+            .flex_none()
+            .child(
+                MoonCheckbox::new("tt-en-all")
+                    .checked(self.time_tuner.enabled.iter().all(|&e| e))
+                    .size(design::CONTROL_TIER)
+                    .on_change({
+                        let view = cx.entity();
+                        move |on: &bool, _, app| {
+                            let on = *on;
+                            view.update(app, |this, cx| {
+                                this.time_tuner.enabled = [on; N_FIELD];
+                                this.time_tuner.invalidate_suggest();
+                                cx.notify();
+                            });
+                        }
+                    }),
+            )
+            .into_any_element();
+        let name = layout
+            .name_cell()
+            .truncate()
+            .child(t!("analytics.tuner.field").to_string())
+            .into_any_element();
+        let heads = variants
+            .iter()
+            .map(|&vi| VariantHead {
+                index: vi,
+                copy: glyph_btn(
+                    if vi == 0 { "tt-cp-col" } else { "tt-cpb-col" },
+                    if vi == 0 { "→" } else { "←" },
+                    t!(if vi == 0 {
+                        "analytics.time.tip_to_v2"
+                    } else {
+                        "analytics.time.tip_to_v1"
+                    })
+                    .to_string(),
+                    p.amber,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if vi == 0 {
+                        this.time_copy_all(cx);
+                    } else {
+                        this.time_copy_all_back(cx);
+                    }
+                }))
+                .into_any_element(),
+                clear: glyph_btn(
+                    format!("tt-clr-col-{vi}"),
+                    "✕",
+                    t!("analytics.time.tip_clear_all").to_string(),
+                    p.orange,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.time_clear_variant(vi, cx)))
+                .into_any_element(),
+            })
+            .collect();
+        let head = header(
+            layout,
+            format!("time-grid-head-{}", variants[0]),
+            check,
+            name,
+            heads,
+            p,
+            cx,
+        );
+        let mut table = v_flex()
+            .id(("time-grid-section", variants[0]))
+            .w_full()
+            .flex_none()
+            .child(head);
+        for field in 0..N_FIELD {
+            table = table.child(self.time_row(field, layout, variants, p, window, cx));
+        }
+        table.into_any_element()
+    }
+
     /// A single field row (0 Weekly · 1 Day · 2 In hour). Placeholder depends on the field.
     fn time_row(
         &mut self,
         field: usize,
-        in_w: f32,
+        layout: super::super::bounds::GridLayout,
+        variants: &[usize],
         p: MoonPalette,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -510,6 +497,11 @@ impl AnalyticsView {
         // `current_if_single` centralizes the rule: the "in strategy" value is the anchor's, so
         // show it only for a lone selection; several selected → None → "varies" (each differs).
         let cur = self.current_if_single(self.time_tuner.current_raw[cur_idx].trim().to_string());
+        let current_tip = match cur.as_deref() {
+            Some(value) if !value.is_empty() => value.to_string(),
+            Some(_) => "—".to_string(),
+            None => t!("analytics.time.cur_varies").to_string(),
+        };
         // Dim whichever of the Day/Hour pair is unused (they are one WorkingTime field).
         let dim = matches!(
             (field, self.time_tuner.active_wt()),
@@ -540,39 +532,46 @@ impl AnalyticsView {
         let mut row = h_flex()
             .flex_1()
             .min_w_0()
-            .flex_wrap()
             .items_center()
             // Must match the header gap, or the columns drift apart.
-            .gap(design::ui_px(cx, 4.0))
+            .gap(design::ui_px(cx, super::super::bounds::GAP))
             .opacity(if dim { 0.45 } else { 1.0 })
             .child(
                 // Field name column — wide enough for the full "WorkingWeekTime" on one line;
                 // truncates as a safety net.
-                div()
-                    .w(design::font_w_px(cx, NAME_COL))
-                    .flex_none()
+                layout
+                    .name_cell()
+                    .id(SharedString::from(format!("tt-name-{field}")))
+                    .tooltip(crate::panels::common::text_tooltip(format!(
+                        "{}: {}",
+                        t!(label_key),
+                        current_tip
+                    )))
                     .truncate()
+                    .font_family(design::mono())
                     .text_color(moon(p.text))
                     .child(t!(label_key).to_string()),
             )
             // "in strategy" — the field's raw current value (in amber); on multi-select — "varies".
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(match &cur {
-                        Some(c) if !c.is_empty() => p.amber,
-                        _ => p.text_muted,
-                    }))
-                    .child(match cur {
-                        Some(c) if !c.is_empty() => c,
-                        Some(_) => "—".to_string(),
-                        None => t!("analytics.time.cur_varies").to_string(),
-                    }),
-            );
-        for vi in [0usize, 1usize] {
+            .when(!layout.compact, |el| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(design::t_body(cx))
+                        .text_color(moon(match &cur {
+                            Some(c) if !c.is_empty() => p.amber,
+                            _ => p.text_muted,
+                        }))
+                        .child(match cur {
+                            Some(c) if !c.is_empty() => c,
+                            Some(_) => "—".to_string(),
+                            None => t!("analytics.time.cur_varies").to_string(),
+                        }),
+                )
+            });
+        for &vi in variants {
             for is_to in [false, true] {
                 // Spacer under the header's copy arrow (it sits between "from" and "to"), so the
                 // row columns stay aligned with the header.
@@ -589,7 +588,7 @@ impl AnalyticsView {
                 };
                 row = row.child(
                     div()
-                        .w(design::font_w_px(cx, in_w))
+                        .w(design::font_w_px(cx, layout.input))
                         .flex_none()
                         .rounded(design::ui_px(cx, 4.0))
                         .border_1()
@@ -620,12 +619,11 @@ impl AnalyticsView {
             );
         }
         // Outer shell carries the row chrome; the checkbox sits before the dimmable content.
-        h_flex()
-            .w_full()
-            .px(design::ui_px(cx, 8.0))
+        layout
+            .row(cx)
             .py(design::ui_px(cx, 3.0))
             .items_center()
-            .gap(design::ui_px(cx, 4.0))
+            .gap(design::ui_px(cx, super::super::bounds::GAP))
             .border_t_1()
             .border_color(moon_alpha(p.border, 0.5))
             .child(check)

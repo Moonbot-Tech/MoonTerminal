@@ -163,12 +163,12 @@ fn the_master_switch_leaves_a_hidden_detect_field_unticked() {
 fn the_fields_grid_skips_a_field_the_scope_does_not_offer() {
     let source = include_str!("mod.rs").replace("\r\n", "\n");
     let body = source
-        .split_once("fn fields_grid(")
-        .expect("fields_grid")
+        .split_once("fn filter_table(")
+        .expect("filter_table")
         .1
         .split("\n    fn ")
         .next()
-        .expect("fields_grid body");
+        .expect("filter_table body");
     assert!(
         body.contains("if !offer_field(field.class, drops_only)"),
         "the row loop must skip a field the scope does not offer"

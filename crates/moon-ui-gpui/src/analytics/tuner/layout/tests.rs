@@ -332,3 +332,41 @@ fn all_axes_share_column_and_write_header_geometry(cx: &mut gpui::TestAppContext
         }
     }
 }
+
+/// The live before-time reference reserves about 690 of 2269 pixels for the right column.
+/// Enlarging the shared width again must fail instead of silently taking space from the list.
+#[gpui::test]
+fn livefix_shared_width_preserves_the_before_time_ratio(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Light, 1.0),
+            cx,
+        )
+    });
+    let _locale = crate::test_locale::force("en");
+    for mode in [
+        TunerKind::Filter,
+        TunerKind::Time,
+        TunerKind::Coins,
+        TunerKind::Ticks,
+    ] {
+        let window = cx.open_window(gpui::size(px(2269.0), px(900.0)), |window, cx| Probe {
+            mode,
+            state: 0,
+            input: cx.new(|cx| MoonInputState::new(window, cx).default_value("11")),
+        });
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        for _ in 0..3 {
+            visual.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        let side = visual.debug_bounds("tuner-side").unwrap();
+        let ratio = f32::from(side.size.width) / 2269.0;
+        let before = 690.0 / 2269.0;
+        assert!(
+            ratio <= before && ratio >= before * 0.99,
+            "shared column ratio {ratio} exceeds or shrinks the approved before-time allocation {before}"
+        );
+    }
+}
