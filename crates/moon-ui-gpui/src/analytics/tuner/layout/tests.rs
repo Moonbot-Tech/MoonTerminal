@@ -20,6 +20,7 @@ struct Probe {
     mode: TunerKind,
     state: usize,
     input: Entity<MoonInputState>,
+    scroll: gpui::ScrollHandle,
 }
 
 impl Probe {
@@ -150,42 +151,51 @@ impl Render for Probe {
                     .map(|i| VarLabel::new(format!("v{i}")))
                     .collect()
             };
-            v_flex()
-                .w_full()
-                .child(kpi_matrix_body_with(
-                    &stats,
-                    "STRATEGY_A".into(),
-                    &VarLabel::new(t!("analytics.tuner.fact").to_string()),
-                    &labels,
-                    false,
-                    Rc::new(|_, _| {}),
-                    p,
-                    cx,
-                    KpiOpts {
-                        rows: if self.mode == TunerKind::Ticks {
-                            KpiRows::Plain
-                        } else {
-                            KpiRows::Shared
-                        },
-                        ..Default::default()
+            let kpi = kpi_matrix_body_with(
+                &stats,
+                "STRATEGY_A".into(),
+                &VarLabel::new(t!("analytics.tuner.fact").to_string()),
+                &labels,
+                false,
+                Rc::new(|_, _| {}),
+                p,
+                cx,
+                KpiOpts {
+                    rows: if self.mode == TunerKind::Ticks {
+                        KpiRows::Plain
+                    } else {
+                        KpiRows::Shared
                     },
-                ))
-                .child(super::parameters(
-                    v_flex()
-                        .w_full()
-                        .child(toolbar_el(
-                            self.mode,
-                            t!("analytics.tuner.fields_title").to_string(),
-                            Some(&writes),
-                            &acts,
-                            cx,
-                        ))
-                        .child(self.controls(p, cx))
-                        .into_any_element(),
-                    p,
-                    cx,
-                ))
-                .into_any_element()
+                    ..Default::default()
+                },
+            );
+            let params = super::parameters_with_scroll(
+                v_flex()
+                    .w_full()
+                    .child(toolbar_el(
+                        self.mode,
+                        t!("analytics.tuner.fields_title").to_string(),
+                        Some(&writes),
+                        &acts,
+                        cx,
+                    ))
+                    .child(self.controls(p, cx))
+                    .into_any_element(),
+                v_flex()
+                    .w_full()
+                    .child(div().h(px(1200.0)).flex_none())
+                    .child(
+                        div()
+                            .debug_selector(|| "last-field".into())
+                            .h(px(24.0))
+                            .flex_none(),
+                    )
+                    .into_any_element(),
+                &self.scroll,
+                p,
+                cx,
+            );
+            super::side(kpi, params, cx)
         };
         let left = v_flex()
             .size_full()
@@ -197,7 +207,14 @@ impl Render for Probe {
                     .h(px(100.0)),
             )
             .into_any_element();
-        super::page(left, div().into_any_element(), Some(side), narrow, cx)
+        super::page(
+            left,
+            div().into_any_element(),
+            Some(side),
+            narrow,
+            window,
+            cx,
+        )
     }
 }
 
@@ -222,12 +239,14 @@ fn all_axes_share_column_and_write_header_geometry(cx: &mut gpui::TestAppContext
                         (TunerKind::Coins, "c"),
                         (TunerKind::Ticks, "x"),
                     ] {
+                        let scroll = gpui::ScrollHandle::new();
                         let window =
                             cx.open_window(gpui::size(px(width), px(900.0)), |window, cx| Probe {
                                 mode,
                                 state,
                                 input: cx
                                     .new(|cx| MoonInputState::new(window, cx).default_value("11")),
+                                scroll: scroll.clone(),
                             });
                         let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
                         for _ in 0..3 {
@@ -252,6 +271,31 @@ fn all_axes_share_column_and_write_header_geometry(cx: &mut gpui::TestAppContext
                         }
                         geometry = Some(key);
                         if state == 0 {
+                            let card = visual.debug_bounds("tuner-parameters").expect("Parameters");
+                            assert!(
+                                (card.bottom() - side.bottom()).abs() < px(0.5),
+                                "Parameters must fill the column in {} at {width}",
+                                language.code()
+                            );
+                            let viewport = visual.debug_bounds("tuner-parameters-scroll").unwrap();
+                            assert!(
+                                viewport.size.height > px(0.0),
+                                "no field viewport: mode {suffix}, {} at {width}; card {card:?}, side {side:?}",
+                                language.code()
+                            );
+                            let last = visual.debug_bounds("last-field").unwrap();
+                            assert!(last.bottom() > viewport.bottom(), "fixture must overflow");
+                            scroll.scroll_to_bottom();
+                            visual.update(|window, cx| {
+                                let _ = window.draw(cx);
+                            });
+                            let last = visual.debug_bounds("last-field").unwrap();
+                            assert!(
+                                last.top() >= viewport.top()
+                                    && last.bottom() <= viewport.bottom() + px(0.5),
+                                "last field unreachable in {} at {width}",
+                                language.code()
+                            );
                             let select = |name: &str| -> &'static str {
                                 Box::leak(format!("tun-{name}-{suffix}").into_boxed_str())
                             };
@@ -279,7 +323,8 @@ fn all_axes_share_column_and_write_header_geometry(cx: &mut gpui::TestAppContext
                             );
                             assert!(
                                 run.left() >= side.left() && run.right() <= side.right() + px(0.5),
-                                "run controls overflow at {width}"
+                                "run controls overflow: mode {suffix}, {} at {width}; run {run:?}, side {side:?}",
+                                language.code()
                             );
                             for (i, key) in [
                                 "analytics.kpi.trades",
@@ -333,6 +378,73 @@ fn all_axes_share_column_and_write_header_geometry(cx: &mut gpui::TestAppContext
     }
 }
 
+/// Clipping the outer column again must not strand Parameters below an expanded KPI in a short dock.
+#[gpui::test]
+fn short_wide_hosts_keep_the_last_field_reachable(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Light, 1.0),
+            cx,
+        )
+    });
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for mode in [
+            TunerKind::Filter,
+            TunerKind::Time,
+            TunerKind::Coins,
+            TunerKind::Ticks,
+        ] {
+            let scroll = gpui::ScrollHandle::new();
+            let window = cx.open_window(gpui::size(px(1200.0), px(200.0)), |window, cx| Probe {
+                mode,
+                state: 0,
+                input: cx.new(|cx| MoonInputState::new(window, cx).default_value("11")),
+                scroll: scroll.clone(),
+            });
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            let host = visual.debug_bounds("tuner-side").unwrap();
+            let content = visual.debug_bounds("tuner-side-content").unwrap();
+            let fields = visual.debug_bounds("tuner-parameters-scroll").unwrap();
+            assert!(
+                content.size.height > host.size.height,
+                "fixture must need outer scrolling"
+            );
+            assert!(
+                fields.size.height > px(0.0),
+                "{}: Parameters lost its field viewport",
+                language.code()
+            );
+            visual.simulate_event(gpui::ScrollWheelEvent {
+                position: host.center(),
+                delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-10000.0))),
+                ..Default::default()
+            });
+            scroll.scroll_to_bottom();
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            let content = visual.debug_bounds("tuner-side-content").unwrap();
+            let card = visual.debug_bounds("tuner-parameters").unwrap();
+            let last = visual.debug_bounds("last-field").unwrap();
+            assert!(content.top() < host.top(), "outer fallback did not scroll");
+            assert!((card.bottom() - content.bottom()).abs() < px(0.5));
+            assert!(
+                last.top() >= host.top() && last.bottom() <= host.bottom() + px(0.5),
+                "{}: last field remains outside the short dock",
+                language.code()
+            );
+        }
+    }
+}
+
 /// The live before-time reference reserves about 690 of 2269 pixels for the right column.
 /// Enlarging the shared width again must fail instead of silently taking space from the list.
 #[gpui::test]
@@ -354,6 +466,7 @@ fn livefix_shared_width_preserves_the_before_time_ratio(cx: &mut gpui::TestAppCo
             mode,
             state: 0,
             input: cx.new(|cx| MoonInputState::new(window, cx).default_value("11")),
+            scroll: gpui::ScrollHandle::new(),
         });
         let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
         for _ in 0..3 {

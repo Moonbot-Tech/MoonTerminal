@@ -68,7 +68,7 @@ pub(in crate::analytics::tuner) struct PickBarActs {
     pub one: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
     pub all: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
 }
-/// Draw wrapping controls from the same model used by the production view and layout probes.
+/// Stack settings above a wrapping run row without wrapping the vertical stack into columns.
 pub(in crate::analytics::tuner) fn pick_bar_el(
     model: &PickBarModel,
     input: Entity<MoonInputState>,
@@ -85,7 +85,6 @@ pub(in crate::analytics::tuner) fn pick_bar_el(
         .w_full()
         .min_w_0()
         .flex_none()
-        .flex_wrap()
         .px(design::ui_px(cx, 12.0))
         .pb(design::ui_px(cx, 6.0))
         .items_start()

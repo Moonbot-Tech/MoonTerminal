@@ -491,7 +491,7 @@ impl AnalyticsView {
         state
     }
 
-    /// Range builder: one row per field, clicking a name shows that field's histogram.
+    /// Keep search/results fixed above the scrollable field ranges and histogram selectors.
     pub(in crate::analytics::tuner) fn fields_grid(
         &mut self,
         p: MoonPalette,
@@ -515,26 +515,13 @@ impl AnalyticsView {
             t!("analytics.tuner.fields_title").to_string(),
             cx,
         );
-        v_flex()
+        let fixed = v_flex()
             .w_full()
-            // The shared right column owns scrolling for both cards.
-            .flex_none()
-            .rounded(design::ui_px(cx, 8.0))
-            .bg(moon(p.panel))
-            .border_1()
-            .border_color(moon(p.border))
-            .overflow_hidden()
             .child(header)
             .child(cfg_row)
             .children(self.split_summary(p, cx))
-            .child(
-                div()
-                    .id("an-fields-scroll")
-                    .w_full()
-                    .flex_none()
-                    .child(grid),
-            )
-            .into_any_element()
+            .into_any_element();
+        super::layout::parameters(fixed, grid.into_any_element(), p, window, cx)
     }
 
     /// Render one variant section with the same slots in its header and field rows.

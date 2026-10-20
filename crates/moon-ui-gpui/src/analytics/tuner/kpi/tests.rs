@@ -74,7 +74,7 @@ impl gpui::Render for HeadingProbe {
     }
 }
 
-/// Unequal widths or wrapping statuses must not inflate the coin header above the other modes.
+/// Numeric-only sizing must not clip the short Fact status, and long coin statuses stay one line.
 #[gpui::test]
 fn polish_subheadings_fit_every_locale(cx: &mut gpui::TestAppContext) {
     use gpui::px;
@@ -110,14 +110,22 @@ fn polish_subheadings_fit_every_locale(cx: &mut gpui::TestAppContext) {
                         language.code()
                     );
                 }
-                let first = visual.debug_bounds("kpi-head-0").unwrap();
-                for (head, title) in [
+                for (index, (head, title)) in [
                     ("kpi-head-0", "kpi-title-0"),
                     ("kpi-head-1", "kpi-title-1"),
                     ("kpi-head-2", "kpi-title-2"),
-                ] {
+                ]
+                .into_iter()
+                .enumerate()
+                {
                     let column = visual.debug_bounds(head).unwrap();
-                    assert!((column.size.width - first.size.width).abs() <= px(0.5));
+                    let value_selector: &'static str =
+                        Box::leak(format!("kpi-value-0-{index}").into_boxed_str());
+                    let value = visual.debug_bounds(value_selector).unwrap();
+                    assert!(
+                        (column.right() - value.right()).abs() <= px(0.5),
+                        "{head}: heading and figures must align"
+                    );
                     let title = visual.debug_bounds(title).unwrap();
                     assert!(
                         title.size.width <= column.size.width + px(0.5),
@@ -133,6 +141,20 @@ fn polish_subheadings_fit_every_locale(cx: &mut gpui::TestAppContext) {
                     _ => Vec::new(),
                 } {
                     let bounds = visual.debug_bounds(selector).unwrap();
+                    if mode == 3 && width == super::super::layout::SIDE_W {
+                        let needed = visual.update(|_, cx| {
+                            crate::design::ui_body_text_width(
+                                cx,
+                                &rust_i18n::t!("analytics.ticks.kpi.fact_sub"),
+                                400.0,
+                            )
+                        });
+                        assert!(
+                            bounds.size.width + px(0.5) >= px(needed),
+                            "{}: short Fact status clipped",
+                            language.code()
+                        );
+                    }
                     let line_height = visual.debug_bounds("kpi-value-0-0").unwrap().size.height;
                     assert!(
                         bounds.size.height <= line_height + px(0.5),

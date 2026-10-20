@@ -321,8 +321,7 @@ pub(super) fn section_body_el(
 }
 
 impl AnalyticsView {
-    /// The grid panel: its title, wrapping search row and expandable sections;
-    /// sections; the side column owns their shared scrolling.
+    /// Keep search and result bands above expandable sections scrolling inside Parameters.
     pub(in crate::analytics::tuner) fn ticks_grid(
         &mut self,
         host_w: Pixels,
@@ -415,21 +414,15 @@ impl AnalyticsView {
         }
         // Coverage is useful before a search too: it explains which trades can teach it.
         let accuracy = self.ticks_accuracy_row(p, cx);
-        v_flex()
+        let fixed = v_flex()
             .id("an-ticks-grid")
             .w_full()
-            .flex_none()
-            .rounded(design::ui_px(cx, 8.0))
-            .bg(moon(p.panel))
-            .border_1()
-            .border_color(moon(p.border))
-            .overflow_hidden()
             .child(header)
             .child(cfg_row)
             .children(accuracy)
             .child(summary)
-            .child(grid)
-            .into_any_element()
+            .into_any_element();
+        super::super::layout::parameters(fixed, grid.into_any_element(), p, window, cx)
     }
 
     /// Tick or untick every field the grid shows — the header's tick. Unticked is held by the

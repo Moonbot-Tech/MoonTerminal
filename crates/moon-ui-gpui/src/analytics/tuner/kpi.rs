@@ -635,13 +635,19 @@ pub(super) fn kpi_matrix_body_with(
             }
         })
         .collect();
-    // Titles and figures determine one shared width. Statuses yield to that width instead of
-    // making the promised Auto column taller than the columns that already have figures.
+    // Reserve a short localized status even when a neighbouring variant has only dashes.
+    // Longer explanations keep their tooltip and yield at this bounded status budget.
+    let status_budget = design::ui_body_text_width(cx, &t!("analytics.ticks.kpi.fact_sub"), 400.0)
+        .max(f32::from(design::font_w_px(cx, 110.0)));
     let natural_widths: Vec<Pixels> =
         (0..columns)
             .map(|i| {
                 let mut width = f32::from(design::font_w_px(cx, 60.0))
                     .max(design::ui_body_text_width(cx, &headings[i].title, 400.0));
+                if let Some(sub) = &headings[i].sub {
+                    width =
+                        width.max(design::ui_body_text_width(cx, sub, 400.0).min(status_budget));
+                }
                 for (_, kind) in &rows {
                     if let Some(s) = stats.get(i) {
                         width = width.max(design::mono_body_text_width(
@@ -662,8 +668,7 @@ pub(super) fn kpi_matrix_body_with(
                 px(width.ceil() + 2.0)
             })
             .collect();
-    let column_width = natural_widths.into_iter().fold(px(0.0), Pixels::max);
-    let widths = vec![column_width; columns];
+    let widths = natural_widths;
     let gap = if matches!(opts.rows, KpiRows::Plain) {
         6.0
     } else {
@@ -675,9 +680,12 @@ pub(super) fn kpi_matrix_body_with(
         8.0
     };
     // In a narrow dock the group yields as a whole. Titles may wrap there, while figures and
-    // statuses share equal shrinking columns instead of pushing the last column off the card.
-    let values_width =
-        column_width * columns as f32 + design::ui_px(cx, gap) * columns.saturating_sub(1) as f32;
+    // statuses share proportionally shrinking slots instead of pushing the last column off-card.
+    let values_width = widths
+        .iter()
+        .copied()
+        .fold(px(0.0), |sum, width| sum + width)
+        + design::ui_px(cx, gap) * columns.saturating_sub(1) as f32;
     let muted: Vec<bool> = headings.iter().map(|label| label.muted).collect();
     let heading_line_height = design::line_px(cx, 16.0);
     let mut head = h_flex()
@@ -714,7 +722,7 @@ pub(super) fn kpi_matrix_body_with(
         let column = v_flex()
             .debug_selector(move || format!("kpi-head-{i}"))
             .w(widths[i])
-            .flex_1()
+            .flex_shrink_1()
             .min_w_0()
             .items_end()
             .child(
@@ -837,7 +845,7 @@ pub(super) fn kpi_matrix_body_with(
                 .aria_label(accessibility_label)
                 .w(*width)
                 .min_w_0()
-                .flex_1()
+                .flex_shrink_1()
                 .whitespace_nowrap()
                 .text_size(design::t_body(cx))
                 .text_right()
@@ -888,7 +896,7 @@ pub(super) fn kpi_matrix_body_with(
                 .id(("an-tuner-kpi-unclosed", i))
                 .debug_selector(move || format!("kpi-unclosed-{i}"))
                 .w(*width)
-                .flex_1()
+                .flex_shrink_1()
                 .min_w_0()
                 .text_right()
                 .whitespace_nowrap()
