@@ -38,16 +38,22 @@ use moon_core::db::tuner::ticks::params::{ParamGroup, ParamKind, ParamSection, T
 
 /// Width of the strategy and variant cells, font-scaled px.
 const CELL_W: f32 = 60.0;
+
+/// The localized current-value heading must fit the same slot as the strategy values below it.
+fn current_column_width(cx: &App) -> Pixels {
+    px(f32::from(design::font_w_px(cx, CELL_W))
+        .max(design::ui_body_text_width(cx, &t!("analytics.ticks.pick.col_now"), 400.0).ceil()))
+}
 /// Left inset of a field row, ui px: its tick sits under its section's tick, past the caret,
 /// so the row reads as inside the section.
-const ROW_INDENT: f32 = 30.0;
+const ROW_INDENT: f32 = 26.0;
 /// Preserve six caption-sized characters of the tooltip-backed field name beside ranges.
 const NAME_MIN_W: f32 = 48.0;
 /// The shipped row's clear control and trailing inset, in UI design pixels.
 const CLEAR_W: f32 = 12.0;
-const ROW_RIGHT: f32 = 8.0;
+const ROW_RIGHT: f32 = 4.0;
 /// Five gaps separate the six cells of a row with editable ranges.
-const ROW_GAP: f32 = 6.0;
+const ROW_GAP: f32 = 3.0;
 
 /// Render-time range visibility and the active palette travel together through the grid rows.
 #[derive(Clone, Copy)]
@@ -121,15 +127,15 @@ pub(super) fn current_cell_el(
         _ => ("—".to_string(), true),
     };
     let measured = if mono {
-        design::mono_caption_text_width(cx, &text, 400.0)
+        design::mono_body_text_width(cx, &text, 400.0)
     } else {
-        design::ui_caption_text_width(cx, &text, 400.0)
+        design::ui_body_text_width(cx, &text, 400.0)
     };
     let selector = format!("an-ticks-current-cell-{key}");
     div()
         .id(SharedString::from(format!("an-ticks-chip-{key}")))
         .debug_selector(move || selector.clone())
-        .w(px(f32::from(design::font_w_px(cx, CELL_W)).max(measured)))
+        .w(px(f32::from(current_column_width(cx)).max(measured)))
         .flex_none()
         .whitespace_nowrap()
         .text_right()
@@ -138,7 +144,7 @@ pub(super) fn current_cell_el(
         } else {
             design::ui_font()
         })
-        .text_size(design::t_caption(cx))
+        .text_size(design::t_body(cx))
         .text_color(moon(if clickable { p.amber } else { p.text_muted }))
         .when(clickable, |el| {
             el.cursor_pointer()
@@ -156,7 +162,7 @@ pub(super) fn variant_cell_el(key: &str, input: &Entity<MoonInputState>, cx: &Ap
         .child(
             MoonInput::new(SharedString::from(format!("an-ticks-in-v-{key}")))
                 .state(input)
-                .size(design::dense_input_size(cx)),
+                .size(design::INPUT_SIZE),
         )
 }
 
@@ -190,7 +196,7 @@ pub(super) fn field_row_el(
         .gap(design::ui_px(cx, ROW_GAP))
         .border_t_1()
         .border_color(moon_alpha(p.border, 0.5))
-        .text_size(design::t_caption(cx))
+        .text_size(design::t_body(cx))
         .when(selected, |row| row.bg(moon_alpha(p.amber, 0.08)))
         .child(parts.checkbox)
         .child(parts.name)
@@ -210,7 +216,8 @@ pub(super) fn grid_range_min_width(cx: &App) -> Pixels {
             .line_height(20.0)
             .min(tokens.ui(16.0) + tokens.scale.font_delta.max(0.0)),
     ));
-    design::font_w_px(cx, CELL_W * 2.0 + NAME_MIN_W)
+    design::font_w_px(cx, CELL_W + NAME_MIN_W)
+        + current_column_width(cx)
         + design::ui_px(cx, ROW_INDENT + ROW_RIGHT + ROW_GAP * 5.0 + CLEAR_W)
         + checkbox
         + super::ranges::block_w(cx)
@@ -410,9 +417,9 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (all_on, some_on) = self.ticks_tick_state(&keys);
-        let cell = |text: String| {
+        let cell = |text: String, width: Pixels| {
             div()
-                .w(design::font_w_px(cx, CELL_W))
+                .w(width)
                 .flex_none()
                 .text_center()
                 .truncate()
@@ -420,11 +427,11 @@ impl AnalyticsView {
         };
         let mut head = h_flex()
             .w_full()
-            .px(design::ui_px(cx, 8.0))
-            .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
+            .px(design::ui_px(cx, ROW_RIGHT))
+            .h(design::fit_h_px(cx, 26.0, 14.0, 5.0))
             .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .text_size(design::t_caption(cx))
+            .gap(design::ui_px(cx, ROW_GAP))
+            .text_size(design::t_body(cx))
             .text_color(moon(p.text_soft))
             .bg(moon(p.table_head))
             .child(
@@ -462,9 +469,15 @@ impl AnalyticsView {
                             }))
                     }),
             )
-            .child(cell(t!("analytics.ticks.pick.col_now").to_string()));
+            .child(cell(
+                t!("analytics.ticks.pick.col_now").to_string(),
+                current_column_width(cx),
+            ));
         head = head
-            .child(cell(t!("analytics.ticks.pick.col_v1").to_string()))
+            .child(cell(
+                t!("analytics.ticks.pick.col_v1").to_string(),
+                design::font_w_px(cx, CELL_W),
+            ))
             .child(
                 glyph_btn(
                     "an-ticks-clr-col",

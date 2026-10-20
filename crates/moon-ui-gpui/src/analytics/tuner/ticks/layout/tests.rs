@@ -909,8 +909,10 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
         });
         for language in Language::ALL {
             let _locale = crate::test_locale::force(language.code());
+            let normal_width = cx
+                .update(|cx| f32::from(design::font_w_px(cx, super::super::super::layout::SIDE_W)));
             for zoom in [1.0, 1.25] {
-                for width in [520.0, 400.0] {
+                for width in [normal_width, 520.0, 400.0] {
                     for face in 0..10 {
                         let window = cx.open_window(
                             gpui::size(px(width * zoom), px(540.0 * zoom)),
@@ -932,15 +934,19 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                         );
                         let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
                         visual.update(|window, cx| window.set_content_zoom(zoom, cx));
-                        visual.update(|window, cx| {
-                            assert_eq!(
-                                ranges_fit(
-                                    window.viewport_size().width - design::ui_px(cx, 2.0),
-                                    cx
-                                ),
-                                width == 520.0,
-                                "pure range decision at zoom {zoom}, width {width}"
-                            )
+                        let expect_ranges = visual.update(|window, cx| {
+                            let fit = ranges_fit(
+                                window.viewport_size().width - design::ui_px(cx, 2.0),
+                                cx,
+                            );
+                            if width != 520.0 {
+                                assert_eq!(
+                                    fit,
+                                    width == normal_width,
+                                    "pure range decision at zoom {zoom}, width {width}"
+                                );
+                            }
+                            fit
                         });
                         for _ in 0..3 {
                             visual.update(|window, cx| {
@@ -1250,7 +1256,7 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                             }
                             let range =
                                 visual.debug_bounds(selector(format!("an-ticks-range-{key}")));
-                            assert_eq!(range.is_some(), width == 520.0, "range visibility ({at})");
+                            assert_eq!(range.is_some(), expect_ranges, "range visibility ({at})");
                             if let Some(range) = range {
                                 inside(range, "production range");
                                 for (slot, text) in

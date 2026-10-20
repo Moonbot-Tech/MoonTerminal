@@ -2,6 +2,19 @@ use std::time::Duration;
 
 use super::fetch_wait_text;
 
+/// Localizing the variant marker or reverting the current heading makes the grid disagree with KPI.
+#[test]
+fn livefix_tick_headings_match_the_shared_vocabulary() {
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        assert_eq!(
+            rust_i18n::t!("analytics.ticks.pick.col_now"),
+            rust_i18n::t!("analytics.time.cur")
+        );
+        assert_eq!(rust_i18n::t!("analytics.ticks.pick.col_v1"), "v1");
+    }
+}
+
 /// Removing the read gate would turn pending coverage into settled zero or missing counts.
 #[test]
 fn coverage_chips_wait_for_the_shown_scope_including_all_strategies() {
