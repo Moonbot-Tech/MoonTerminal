@@ -70,14 +70,8 @@ pub(super) fn train_dropdown_el(
         .into_any_element()
 }
 
-/// Render a muted caption and a mono metric value that yields at narrow widths.
-pub(super) fn line(
-    caption: String,
-    tally: &Tally,
-    color: u32,
-    p: MoonPalette,
-    cx: &App,
-) -> AnyElement {
+/// Render explicit caption typography and a mono value inheriting the row's metric color.
+pub(super) fn line(caption: String, tally: &Tally, color: u32, p: MoonPalette, cx: &App) -> Div {
     let (pf, dd) = super::kpi::split_metrics(tally);
     let caption_width = [
         "analytics.tuner.split_train",
@@ -90,10 +84,13 @@ pub(super) fn line(
     h_flex()
         .w_full()
         .min_w_0()
+        .text_size(design::t_caption(cx))
+        .text_color(moon(color))
         .gap(design::ui_px(cx, 6.0))
         .child(
             div()
                 .id(SharedString::from(format!("split-caption-{caption}")))
+                .debug_selector(|| "split-caption".into())
                 .w(px(caption_width.ceil() + 1.0))
                 .flex_none()
                 .truncate()
@@ -108,7 +105,6 @@ pub(super) fn line(
                 .min_w_0()
                 .truncate()
                 .font_family(design::mono())
-                .text_color(moon(color))
                 .child(
                     t!(
                         "analytics.tuner.split_stats",
@@ -121,7 +117,6 @@ pub(super) fn line(
                     .to_string(),
                 ),
         )
-        .into_any_element()
 }
 
 #[cfg(test)]

@@ -50,6 +50,38 @@ fn validation_state_decision() {
     assert_eq!(warning(&positive), Some("analytics.tuner.time_below_fact"));
 }
 
+/// Reverting the production holdout renderer to profit-sign logic must change its assigned style.
+#[gpui::test]
+fn positive_below_fact_renders_danger(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Light, 1.0),
+            cx,
+        );
+        let p = MoonPalette::active(cx);
+        let mut line = super::holdout_line(&result(5).unwrap(), p, cx).unwrap();
+        assert_eq!(
+            line.style().text.color,
+            Some(crate::design::moon(crate::design::danger_color(p))),
+            "the actual holdout renderer must assign danger, despite its positive profit"
+        );
+    });
+    let window = cx.open_window(gpui::size(px(540.0), px(600.0)), |window, cx| Probe {
+        input: cx.new(|cx| MoonInputState::new(window, cx)),
+        face: 5,
+        report_changed: false,
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(visual.debug_bounds("time-holdout-line").is_some());
+    assert!(visual.debug_bounds("time-train-line").is_some());
+    assert!(visual.debug_bounds("split-fact-holdout-line").is_some());
+    assert!(visual.debug_bounds("time-warning").is_some());
+}
+
 /// A headless view renders the production config and validation components.
 struct Probe {
     input: Entity<MoonInputState>,
@@ -166,21 +198,6 @@ fn time_validation_layout(cx: &mut gpui::TestAppContext) {
                             visual.debug_bounds("split-fact-holdout-line").is_some(),
                             face >= 3
                         );
-                        if face == 5 {
-                            let found = result(face).unwrap();
-                            visual.update(|_, cx| {
-                                let p = MoonPalette::active(cx);
-                                assert_eq!(
-                                    crate::analytics::tuner::split::holdout_color(
-                                        found.holdout.as_ref().unwrap().profit,
-                                        found.fact_holdout.as_ref().map(|fact| fact.profit),
-                                        p
-                                    ),
-                                    crate::design::danger_color(p),
-                                    "positive unseen profit below Fact must render as danger",
-                                );
-                            });
-                        }
                         assert_eq!(
                             visual.debug_bounds("time-stale-warning").is_some(),
                             report_changed && face != 0

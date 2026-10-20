@@ -51,6 +51,25 @@ fn result_line(result: &TimeEvaluation) -> Option<String> {
     )
 }
 
+/// Build the production holdout row so its assigned metric color can be checked independently.
+pub(super) fn holdout_line(result: &TimeEvaluation, p: MoonPalette, cx: &App) -> Option<Div> {
+    let holdout = result.holdout.as_ref()?;
+    Some(
+        super::super::split::line(
+            t!("analytics.tuner.split_holdout").to_string(),
+            holdout,
+            super::super::split::holdout_color(
+                holdout.profit,
+                result.fact_holdout.as_ref().map(|fact| fact.profit),
+                p,
+            ),
+            p,
+            cx,
+        )
+        .debug_selector(|| "time-holdout-line".into()),
+    )
+}
+
 /// Keep unedited validation visible across report appends, explicitly marking its snapshot stale.
 pub(super) fn summary(
     result: Option<&TimeEvaluation>,
@@ -91,21 +110,7 @@ pub(super) fn summary(
                     ),
                 ))
             })
-            .when_some(result.holdout.as_ref(), |el, holdout| {
-                el.child(div().debug_selector(|| "time-holdout-line".into()).child(
-                    super::super::split::line(
-                        t!("analytics.tuner.split_holdout").to_string(),
-                        holdout,
-                        super::super::split::holdout_color(
-                            holdout.profit,
-                            result.fact_holdout.as_ref().map(|fact| fact.profit),
-                            p,
-                        ),
-                        p,
-                        cx,
-                    ),
-                ))
-            })
+            .children(holdout_line(result, p, cx))
             .when_some(result.fact_holdout.as_ref(), |el, fact| {
                 el.child(super::super::split::fact_line(fact, p, cx))
             })
