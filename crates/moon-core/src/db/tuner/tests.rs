@@ -6,6 +6,131 @@ use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
 use super::*;
 
+/// Sorting by raw core clocks hides two consecutive losses and understates schedule drawdown.
+#[test]
+fn by_time_drawdown_orders_closes_in_true_utc() {
+    let conn = Connection::open_in_memory().expect("memory database");
+    conn.execute_batch(
+        "CREATE TABLE trades(closedate INTEGER, buydate INTEGER, pnl REAL,
+            spentbtc REAL, core_uid INTEGER);
+         INSERT INTO trades VALUES
+            (3700, 60, 10, 20, 1),
+            (200, 60, -6, 20, 2),
+            (3900, 60, -6, 20, 1),
+            (400, 60, 10, 20, 2);
+         CREATE TABLE core_time_offset(core_uid INTEGER, from_utc INTEGER,
+            offset_secs INTEGER, observed_at INTEGER, source TEXT);
+         INSERT INTO core_time_offset VALUES (1, 0, 3600, 0, 'fixture');",
+    )
+    .expect("different core clocks");
+    let query = Query {
+        from: 0,
+        to: 5000,
+        axis: crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::Europe::Warsaw),
+        ..Default::default()
+    };
+    let source = "(SELECT * FROM trades WHERE closedate>=?1 AND closedate<?2) o";
+    // Exercise both the direct baseline scan and the materialized schedule projection.
+    for variants in [
+        vec![Variant::default()],
+        vec![
+            Variant::default(),
+            Variant {
+                tod: Some(TimeWindow::Day(1, 1)),
+                ..Default::default()
+            },
+        ],
+    ] {
+        let stats = variant_stats_from_source(&conn, &query, source, &variants).expect("KPIs");
+        for stat in stats {
+            assert_eq!(stat.n, 4);
+            assert_eq!(stat.profit, 8.0);
+            // True-UTC closes produce +10, -6, -6, +10: peak 10, trough -2.
+            assert_eq!(stat.max_dd, 12.0);
+        }
+    }
+}
+
+/// Hour rounding, close-time bucketing, or exclusive ends would change these schedule cohorts.
+#[test]
+fn by_time_minute_windows_match_entry_profiles() {
+    let conn = Connection::open_in_memory().expect("memory database");
+    conn.execute_batch(
+        "CREATE TABLE trades(closedate INTEGER, buydate INTEGER, pnl REAL,
+            spentbtc REAL, core_uid INTEGER);
+         INSERT INTO trades VALUES
+            (1767325601, 1767225600 + 17*60 + 59, -9, 20, 1),
+            (1767325602, 1767225600 + 18*60, 10, 20, 1),
+            (1767325603, 1767225600 + 1046*60 + 59, -4, 20, 1),
+            (1767325604, 1767225600 + 1047*60, -8, 20, 1),
+            (1767325605, 1767225600 + 1439*60, 3, 20, 1),
+            (1767325606, 1767225600, -2, 20, 1),
+            (1767312000 + 18*60, NULL, 2, 20, 1),
+            (1767312000 + 26*60, 0, 1, 20, 1);",
+    )
+    .expect("Thursday entries and Friday fallback closes");
+    let query = Query {
+        from: 1,
+        to: i64::MAX,
+        ..Default::default()
+    };
+    let source = "(SELECT * FROM trades WHERE closedate>=?1 AND closedate<?2) o";
+    let variants = [
+        Variant::default(),
+        Variant {
+            tod: Some(TimeWindow::Day(18, 1046)),
+            ..Default::default()
+        },
+        Variant {
+            tod: Some(TimeWindow::Day(1047, 17)),
+            ..Default::default()
+        },
+        Variant {
+            tod: Some(TimeWindow::Hour(18, 26)),
+            ..Default::default()
+        },
+        Variant {
+            week_span: Some((3 * 1440 + 18, 3 * 1440 + 1046)),
+            ..Default::default()
+        },
+        Variant {
+            week_span: Some((3 * 1440 + 1047, 3 * 1440 + 17)),
+            ..Default::default()
+        },
+    ];
+    let stats = variant_stats_from_source(&conn, &query, source, &variants).expect("KPIs");
+    assert_eq!(
+        stats.iter().map(|s| (s.n, s.profit)).collect::<Vec<_>>(),
+        vec![
+            (8, -7.0),
+            (4, 9.0),
+            (4, -16.0),
+            (4, 9.0),
+            (2, 6.0),
+            (6, -13.0)
+        ]
+    );
+    let profile = time::slider_profiles_from_source(&conn, &query, source).expect("profiles");
+    assert_eq!(
+        (profile.entry_hours[0].trades, profile.entry_hours[0].profit),
+        (5, 2.0)
+    );
+    assert_eq!(
+        (
+            profile.entry_hours[17].trades,
+            profile.entry_hours[17].profit
+        ),
+        (2, -12.0)
+    );
+    assert_eq!(
+        (
+            profile.entry_hours[23].trades,
+            profile.entry_hours[23].profit
+        ),
+        (1, 3.0)
+    );
+}
+
 /// Dropping NULL Detect samples rejects an improving Min despite enough always-passing trades.
 #[test]
 fn seam_detect_suggestion_counts_and_scores_null_rows() {

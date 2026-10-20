@@ -684,7 +684,7 @@ fn variant_stats_from_source(
 ///     variants: Ordered baseline and counterfactual definitions.
 ///
 /// Returns:
-///     SQL with one source scan and a Boolean match column per variant.
+///     SQL with one source scan, true-UTC close ordering, and a match column per variant.
 fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
     let needs_week = variants.iter().any(|variant| variant.week_span.is_some());
     let needs_day = variants.iter().any(|variant| variant.tod.is_some());
@@ -701,7 +701,7 @@ fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
         // Only the columns the statement below reads are copied into the temp table: the
         // unified source projects every report and tuner field, and `o.*` materialized all of
         // them for every row of the period.
-        let mut columns = ["closedate", "pnl", "spentbtc"]
+        let mut columns = ["closedate", "core_uid", "pnl", "spentbtc"]
             .iter()
             .map(|column| format!("o.\"{column}\""))
             .collect::<Vec<_>>();
@@ -744,7 +744,8 @@ fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
     format!(
         "{prefix}SELECT COALESCE(o.pnl,0), COALESCE(o.spentbtc,0), {matches}
          FROM {source}
-         ORDER BY o.closedate, COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)"
+         ORDER BY mt_to_utc(o.closedate, o.core_uid), o.closedate,
+                  COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)"
     )
 }
 
@@ -1037,7 +1038,7 @@ fn best_range_bounded(
     best_range_with_passing(vals, min_n, edges, round, open_top, (0, 0.0))
 }
 
-/// Pick a valued range while adding rows that pass every candidate to its count and score.
+/// Pick a valued range without splitting equal field values, including always-passing rows.
 fn best_range_with_passing(
     vals: &mut [(f64, f64)],
     min_n: usize,
@@ -1065,7 +1066,20 @@ fn best_range_with_passing(
     for (_, p) in vals.iter() {
         pre.push(pre.last().unwrap() + p);
     }
-    let pos: Vec<usize> = (0..=edges).map(|k| k * len / edges).collect();
+    // A saved inclusive bound admits EVERY trade at that value. A quantile that splits
+    // equal values can score an impossible subset and discard the better realizable range.
+    // Move each edge to the end of its equal-value run; retain raw positions as trade counts.
+    let mut pos = Vec::with_capacity(edges + 1);
+    let mut boundary = 0;
+    for k in 0..=edges {
+        boundary = boundary.max(k * len / edges);
+        while boundary > 0 && boundary < len && vals[boundary - 1].0 == vals[boundary].0 {
+            boundary += 1;
+        }
+        if pos.last() != Some(&boundary) {
+            pos.push(boundary);
+        }
+    }
     // Cumulative profit AT each edge, which is what the shared picker slices. Full data
     // coverage (min..max) is a no-op filter, and the picker rejects it by exact count.
     let profit_at: Vec<f64> = pos.iter().map(|&p| pre[p]).collect();

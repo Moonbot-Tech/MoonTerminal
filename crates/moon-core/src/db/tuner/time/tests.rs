@@ -1,5 +1,20 @@
 use super::*;
 
+/// Splitting equal minutes invents an unattainable profit and discards the better real window.
+#[test]
+fn time_suggestion_keeps_all_trades_at_equal_minutes() {
+    let rows = [
+        (0, 1, 6.0),
+        (0, 18, -10.0),
+        (0, 18, 20.0),
+        (0, 100, 5.0),
+        (0, 200, -30.0),
+    ];
+    let suggestion = time_suggest_from_rows(&rows, 1, 512, false, axes_of(false, true, false));
+    // The realizable optimum is 6 - 10 + 20 + 5 = 21. Starting at minute 18 earns only 15.
+    assert_eq!(suggestion.tod, Some(TimeWindow::Day(1, 100)));
+}
+
 #[test]
 fn working_time_format() {
     // Week minute: Mon 00:00 (0) -> Sat 23:59 (8639); shorten day boundaries -> `1-6`.

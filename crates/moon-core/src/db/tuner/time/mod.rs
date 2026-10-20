@@ -96,9 +96,8 @@ impl TimeAxes {
 /// checkboxes); with both `WorkingTime` formats checked the sweep tries each and keeps the
 /// better one, and a row that is unchecked but already holds a value pins the sweep inside
 /// it. The two fields are independent; each is `None` when the best candidate does not improve on
-/// the unrestricted sample. Weekday and minute are projected from `OPEN_TS` through the query's
-/// selected IANA zone, so recommendations use the same civil schedule that saved KPI predicates
-/// evaluate.
+/// the unrestricted sample. Weekday and minute are read from `OPEN_TS` on the core's own clock,
+/// independent of the display zone, matching the saved schedule and KPI predicates.
 ///
 /// Args:
 ///     q: Report scope and profit metric.
