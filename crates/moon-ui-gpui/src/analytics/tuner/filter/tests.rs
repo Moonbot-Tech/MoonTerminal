@@ -9,6 +9,26 @@ use super::{
 use moon_core::db::analytics::GroupStat;
 use moon_core::db::tuner::FieldClass;
 
+/// Restoring the old no-holdout early return would hide material growth in the default mode.
+#[test]
+fn polish_default_full_history_summary_shows_material_staleness() {
+    let split = super::state::SearchSplit {
+        train: Default::default(),
+        holdout: None,
+        composed: None,
+        compose_skipped: None,
+    };
+    let stats = |n| {
+        vec![moon_core::db::tuner::VarStats {
+            n,
+            ..Default::default()
+        }]
+    };
+    let baseline = super::super::freshness::SampleSnapshot::from_count(100, 100);
+    assert!(!split.should_show_summary(baseline.materially_changed(Some(&stats(101)), 100)));
+    assert!(split.should_show_summary(baseline.materially_changed(Some(&stats(105)), 100)));
+}
+
 fn row(key: &str, kind: &str) -> GroupStat {
     GroupStat {
         key: key.to_string(),

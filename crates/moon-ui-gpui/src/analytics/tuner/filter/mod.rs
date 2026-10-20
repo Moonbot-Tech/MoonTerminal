@@ -250,6 +250,7 @@ impl AnalyticsView {
                 // under a changed period label must belong to it, but a settled snapshot with a
                 // scheduled correction must not blink through the intermediate result.
                 let keep_stats = this.keep_on_catch_up(after_report, stats_outcome, report_req);
+                this.tuner.sample_snapshot.observe(stats.as_ref().ok());
                 this.tuner.stats.apply_or_keep(stats, keep_stats);
                 // `strategy_filters` is intentionally lossy and reports an unreadable row as
                 // `found=false`. An automatic report refresh must not turn that ambiguity into
@@ -321,6 +322,7 @@ impl AnalyticsView {
                 let stats_outcome = CatchUpOutcome::of_read(&stats);
                 let error = stats.as_ref().err().cloned();
                 let keep_stats = this.keep_on_catch_up(after_report, stats_outcome, report_req);
+                this.tuner.sample_snapshot.observe(stats.as_ref().ok());
                 this.tuner.stats.apply_or_keep(stats, keep_stats);
                 this.tuner.apply_strategy_read(filters, after_report);
                 this.tuner.dirty = super::super::refresh::report_result_is_stale(
@@ -889,7 +891,11 @@ impl AnalyticsView {
         // case — it is a claim about which fields matter, and silence about it would be the one
         // reading it must not get: that no set was chosen.
         let holdout = split.holdout.as_ref();
-        if holdout.is_none() && split.composed.is_none() && split.compose_skipped.is_none() {
+        let stale = self.tuner.sample_snapshot.materially_changed(
+            self.tuner.stats.data().map(|s| s.as_ref()),
+            self.tuner_query().to,
+        );
+        if !split.should_show_summary(stale) {
             return None;
         }
         Some(
@@ -1131,22 +1137,16 @@ impl AnalyticsView {
                         cx,
                     ))
                 })
-                .when(
-                    self.tuner.sample_snapshot.materially_changed(
-                        self.tuner.stats.data().map(|s| s.as_ref()),
-                        self.tuner_query().to,
-                    ),
-                    |el| {
-                        el.child(
-                            div()
-                                .w_full()
-                                .min_w_0()
-                                .font_family(design::ui_font())
-                                .text_color(moon(p.orange))
-                                .child(t!("analytics.coins.stale_note_report").to_string()),
-                        )
-                    },
-                )
+                .when(stale, |el| {
+                    el.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .font_family(design::ui_font())
+                            .text_color(moon(p.orange))
+                            .child(t!("analytics.coins.stale_note_report").to_string()),
+                    )
+                })
                 // A composed set with nothing held back is a set chosen with no way to check it.
                 // The warning belongs beside the set, where it is read, not only in the popover
                 // where the share was chosen.

@@ -153,6 +153,7 @@ impl AnalyticsView {
                     .profiles
                     .apply_or_keep(profiles, keep_profiles);
                 this.time_tuner.slider.apply_or_keep(slider, keep_slider);
+                this.time_tuner.sample_snapshot.observe(stats.as_ref().ok());
                 this.time_tuner.stats.apply_or_keep(stats, keep_stats);
                 this.time_tuner.apply_current_read(current, after_report);
                 if after_report {
@@ -403,6 +404,8 @@ fn hour_column(
                 .debug_selector(move || format!("tuner-hour-profit-{h}"))
                 .flex_none()
                 .w_full()
+                .flex()
+                .justify_center()
                 .truncate()
                 .text_center()
                 .text_size(design::t_caption(cx))
@@ -411,7 +414,13 @@ fn hour_column(
                 } else {
                     p.text_muted
                 }))
-                .child(value),
+                .child(
+                    div()
+                        .debug_selector(move || format!("tuner-hour-profit-content-{h}"))
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .child(value),
+                ),
         )
         .when(show_counts, |el| {
             el.child(

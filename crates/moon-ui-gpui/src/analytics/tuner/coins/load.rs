@@ -397,10 +397,7 @@ impl AnalyticsView {
         };
         let q = self.tuner_query();
         let seq = self.coins.begin_pick();
-        self.coins.sample_snapshot = super::super::freshness::SampleSnapshot::capture(
-            self.coins.kpi.data().map(|s| s.as_ref()),
-            q.to,
-        );
+        let sample_end = q.to;
         let lists_rev = self.coins.lists_rev;
         let report_gen = self.coins.report_gen;
         self.spawn_latest_db(
@@ -409,9 +406,17 @@ impl AnalyticsView {
             cx,
             move || moon_core::db::tuner::coin_pick::suggest_coins(&q, &params),
             move |this, result, cx| {
+                let sample_count = result
+                    .as_ref()
+                    .ok()
+                    .map(|pick| (pick.train_n + pick.holdout_n) as i64);
                 let landed =
                     this.coins
                         .land_pick(seq, lists_rev, report_gen, cfg.holdout_pct, result);
+                if landed && let Some(n) = sample_count {
+                    this.coins.sample_snapshot =
+                        super::super::freshness::SampleSnapshot::from_count(n, sample_end);
+                }
                 if landed && this.coins.suggested().is_some() {
                     // The suggestion is the Auto column's whole content.
                     this.arm_coin_kpi(cx);

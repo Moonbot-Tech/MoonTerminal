@@ -41,11 +41,13 @@ fn polish_hour_labels_fit_default_width(cx: &mut gpui::TestAppContext) {
                     format!("tuner-hour-profit-{hour}").into_boxed_str(),
                 ))
                 .unwrap();
-            let text = if hour % 2 == 0 { "+463" } else { "-1.4K" };
-            let needed =
-                visual.update(|_, cx| crate::design::ui_caption_text_width(cx, text, 400.0));
+            let text = visual
+                .debug_bounds(Box::leak(
+                    format!("tuner-hour-profit-content-{hour}").into_boxed_str(),
+                ))
+                .unwrap();
             assert!(
-                bounds.size.width >= px(needed),
+                text.left() >= bounds.left() && text.right() <= bounds.right(),
                 "{} hour {hour} clipped",
                 language.code()
             );

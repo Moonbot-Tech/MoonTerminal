@@ -296,6 +296,13 @@ pub(in crate::analytics::tuner) struct SearchSplit {
     pub(in crate::analytics::tuner) compose_skipped: Option<ComposeSkip>,
 }
 
+impl SearchSplit {
+    /// Keep the default full-history result visible when its material-change note is needed.
+    pub(super) fn should_show_summary(&self, stale: bool) -> bool {
+        stale || self.holdout.is_some() || self.composed.is_some() || self.compose_skipped.is_some()
+    }
+}
+
 /// The searches this axis can run, which differ in what the user can do while they run.
 pub(in crate::analytics::tuner) enum SuggestJob {
     /// One field over one scan — it finishes before a stop button would be reachable, so it runs
@@ -375,7 +382,7 @@ pub(in crate::analytics) struct TunerState {
     pub(in crate::analytics::tuner) sel_field: usize,
     /// KPI matrix load state; `dirty` separately marks retained data for recomputation.
     pub(in crate::analytics::tuner) stats: LoadState<Vec<VarStats>>,
-    /// Scoped sample captured before the latest whole-field suggestion.
+    /// Scoped baseline from the first fresh KPI response after the latest completed suggestion.
     pub(in crate::analytics::tuner) sample_snapshot: super::super::freshness::SampleSnapshot,
     /// Selected-field histogram read state.
     pub(in crate::analytics::tuner) hist: LoadState<Vec<HistBucket>>,

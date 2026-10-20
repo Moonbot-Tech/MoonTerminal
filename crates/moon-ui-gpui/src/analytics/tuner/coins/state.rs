@@ -340,7 +340,7 @@ pub(in crate::analytics) struct CoinsState {
     /// Bumped on every report publication. A finished pick stores the value it was
     /// published under; `pick_stale` is true when they differ. Same binding as `lists_rev`.
     pub(in crate::analytics::tuner) report_gen: u64,
-    /// Scoped sample at pick launch and the latest queried period end.
+    /// The pick's returned scoped sample count and the latest queried period end.
     pub(in crate::analytics::tuner) sample_snapshot: super::super::freshness::SampleSnapshot,
     pub(in crate::analytics::tuner) report_end: i64,
     pub(in crate::analytics::tuner) seq: u64,

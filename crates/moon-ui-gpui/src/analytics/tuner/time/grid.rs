@@ -102,10 +102,7 @@ impl AnalyticsView {
         let req = self.time_tuner.sugg_seq;
         self.time_tuner.sugg_busy = true;
         let q = self.tuner_query();
-        self.time_tuner.sample_snapshot = super::super::freshness::SampleSnapshot::capture(
-            self.time_tuner.stats.data().map(|s| s.as_ref()),
-            q.to,
-        );
+        let sample_end = q.to;
         let min_n = self.time_tuner.min_trades.trim().parse::<i64>().ok();
         let round = self.time_tuner.round_results;
         let train_frac = self.time_tuner.train_pct as f64 / 100.0;
@@ -161,6 +158,8 @@ impl AnalyticsView {
                                 }
                             }
                         }
+                        this.time_tuner.sample_snapshot =
+                            super::super::freshness::SampleSnapshot::after_run(sample_end);
                         this.reload_time(cx);
                         this.time_tuner.evaluation = Some(evaluation);
                     }
