@@ -1,7 +1,7 @@
 //! Picking the most profitable contiguous range out of quantile-sliced samples.
 //!
 //! Both tuner searches ask the same question and used to answer it with their own copy of an
-//! O(edges²) double loop: the single-field suggestion in [`super::best_range`] over sample
+//! O(edges²) double loop: the single-field suggestion in [`super::suggest_field`] over sample
 //! positions, and the all-fields threshold search over per-bin prefix sums. The two differ only
 //! in what they slice, so the decision itself lives here once.
 

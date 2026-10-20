@@ -527,6 +527,9 @@ pub struct WindowLayout {
     /// holdout. None or a value absent from the dropdown means the whole period, i.e. no split.
     #[serde(default, deserialize_with = "de_lenient_u32")]
     pub analytics_tuner_train: Option<u32>,
+    /// Independent training share of the By time schedule search.
+    #[serde(default, deserialize_with = "de_lenient_u32")]
+    pub analytics_time_train: Option<u32>,
     /// Base seed of the "By filter" tuner's random restarts, so a chosen seed survives a restart.
     /// None = draw a fresh seed per search, which is what an empty box has always meant.
     ///

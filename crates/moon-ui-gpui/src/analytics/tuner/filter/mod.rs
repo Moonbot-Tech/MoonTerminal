@@ -871,43 +871,6 @@ impl AnalyticsView {
         if holdout.is_none() && split.composed.is_none() && split.compose_skipped.is_none() {
             return None;
         }
-        let line = |caption: String, tally: &moon_core::db::metrics::Tally, color: u32| {
-            h_flex()
-                .w_full()
-                .gap(design::ui_px(cx, 6.0))
-                .child(
-                    div()
-                        .w(design::font_w_px(cx, 74.0))
-                        .flex_none()
-                        .truncate()
-                        .font_family(design::ui_font())
-                        .text_color(moon(p.text_muted))
-                        .child(caption),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(moon(color))
-                        // The same formatters the KPI matrix above uses for the same figures:
-                        // winrate to one decimal as the strategy table shows it, profit factor
-                        // and drawdown through the shared dimensionless one. Only the headline
-                        // profit carries the unit — the line has to survive truncation on a
-                        // narrow dock, and repeating the quote ticker inside it spends that width twice.
-                        .child(
-                            t!(
-                                "analytics.tuner.split_stats",
-                                profit = super::super::summary::fmt_signed(tally.profit),
-                                n = tally.n,
-                                wr = format!("{:.1}", tally.winrate()),
-                                pf = super::super::summary::fmt_signed_plain(tally.profit_factor()),
-                                dd = super::super::summary::fmt_signed_plain(tally.max_dd)
-                            )
-                            .to_string(),
-                        ),
-                )
-        };
         Some(
             v_flex()
                 .w_full()
@@ -1124,16 +1087,18 @@ impl AnalyticsView {
                             .child(text.to_string()),
                     )
                 })
-                .child(line(
+                .child(super::split::line(
                     t!("analytics.tuner.split_train").to_string(),
                     &split.train,
                     p.text_soft,
+                    p,
+                    cx,
                 ))
                 // A losing holdout is the whole point of the exercise: the ranges fitted the past
                 // and did not survive contact with the rest of it. It is coloured as the failure
                 // it is rather than left to be read off a sign.
                 .when_some(holdout, |el, holdout| {
-                    el.child(line(
+                    el.child(super::split::line(
                         t!("analytics.tuner.split_holdout").to_string(),
                         holdout,
                         if holdout.profit > 0.0 {
@@ -1141,6 +1106,8 @@ impl AnalyticsView {
                         } else {
                             design::danger_color(p)
                         },
+                        p,
+                        cx,
                     ))
                 })
                 // A composed set with nothing held back is a set chosen with no way to check it.

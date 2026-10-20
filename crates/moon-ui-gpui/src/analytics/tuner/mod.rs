@@ -37,6 +37,8 @@ mod save;
 mod shared;
 /// The common toolbar and suggestion row, dispatched by `TunerKind`.
 mod shell;
+/// Shared train/holdout metric line.
+mod split;
 /// … and the subset plus visibility bits that belong to the strategy list itself.
 mod strat_columns;
 pub(in crate::analytics) use strat_columns::restore_strat_columns;

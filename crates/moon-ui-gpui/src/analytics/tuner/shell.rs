@@ -3,7 +3,7 @@
 //!
 //! The row is written per axis on purpose. "By filter" runs either a stoppable joint search or
 //! field-set composition with live progress, a seed and a depth; "By time" runs one fixed sweep
-//! with a single setting. Rendering both from one parametrized row is how the time sweep would
+//! with a minimum count and a training share. Rendering both from one parametrized row is how the time sweep would
 //! acquire a Stop button that stops nothing. On the filter row only the restart count stays
 //! inline, because the card is laid out at a fixed narrow width and a row that cannot wrap has to
 //! spend its space on the controls used every run — the rest sit behind the ⚙ settings popover.
@@ -24,8 +24,7 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::filter::state::{
-    SuggestJob, SuggestState, SuggestWork, TRAIN_OPTIONS, canonical_iters, edge_options, iters_of,
-    persist_seed,
+    SuggestJob, SuggestState, SuggestWork, canonical_iters, edge_options, iters_of, persist_seed,
 };
 use super::shared::TunerKind;
 use crate::design;
@@ -331,6 +330,34 @@ impl AnalyticsView {
         }
     }
 
+    /// Build the same persisted training-share selector for either fitting mode.
+    fn train_dropdown(&self, kind: TunerKind, cx: &Context<Self>) -> AnyElement {
+        let train_pct = match kind {
+            TunerKind::Time => self.time_tuner.train_pct,
+            _ => self.tuner.train_pct,
+        };
+        let tr_view = cx.entity();
+        super::split::train_dropdown_el(
+            kind,
+            train_pct,
+            move |app, n| {
+                tr_view.update(app, |this, cx| {
+                    if kind == TunerKind::Time {
+                        this.time_tuner.train_pct = n;
+                        this.time_tuner.invalidate_suggest();
+                        this.persist_setting(cx, |l| &mut l.analytics_time_train, Some(n as u32));
+                    } else {
+                        this.tuner.train_pct = n;
+                        this.tuner.invalidate_suggest();
+                        this.persist_tuner_train(cx);
+                    }
+                    cx.notify();
+                });
+            },
+            cx,
+        )
+    }
+
     /// The frame every suggestion row shares: pinned above the scrollable rows, caption-sized.
     ///
     /// The caption, status text and buttons it hosts are prose, so the frame carries
@@ -600,34 +627,7 @@ impl AnalyticsView {
             window,
             cx,
         );
-        let train_pct = self.tuner.train_pct;
-        let tr_view = cx.entity();
-        let tr_items = crate::panels::radio_items(
-            TRAIN_OPTIONS.map(|n| {
-                (
-                    n,
-                    SharedString::from(format!("tun-tr-{n}")),
-                    SharedString::from(train_label(n)),
-                )
-            }),
-            train_pct,
-            crate::panels::RadioMark::Highlight,
-            move |app, n| {
-                tr_view.update(app, |this, cx| {
-                    this.tuner.train_pct = n;
-                    this.tuner.invalidate_suggest();
-                    this.persist_tuner_train(cx);
-                    cx.notify();
-                });
-            },
-        );
-        let tr_combo = MoonDropdown::new(SharedString::from("tun-cfg-tr-f"))
-            .label(train_label(train_pct))
-            .trigger_caret(true)
-            .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::density(cx))
-            .fit_menu_width(96.0, 560.0)
-            .items(tr_items);
+        let tr_combo = self.train_dropdown(TunerKind::Filter, cx);
         let edges = self.tuner.edges;
         let ed_view = cx.entity();
         let ed_items = crate::panels::radio_items(
@@ -879,37 +879,18 @@ impl AnalyticsView {
             window,
             cx,
         );
-        let busy = self.time_tuner.sugg_busy;
-        self.config_row_frame(cx)
-            .child(cfg_label(t!("analytics.tuner.min_trades").to_string(), p))
-            .child(
-                div()
-                    .w(design::font_w_px(cx, 52.0))
-                    .flex_none()
-                    .font_family(design::mono())
-                    .child(
-                        MoonInput::new(SharedString::from("tun-cfg-mn-t"))
-                            .state(&mn_input)
-                            .size(design::INPUT_SIZE),
-                    ),
-            )
-            .child(div().flex_1())
-            .child(
-                MoonButton::new(SharedString::from("tun-suggest-run-t"))
-                    .variant(MoonButtonVariant::Blue)
-                    .label(if busy {
-                        "…".to_string()
-                    } else {
-                        t!("analytics.tuner.suggest_run").to_string()
-                    })
-                    // `time_suggest` gates on its own `sugg_busy` itself.
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.time_suggest(cx);
-                        cx.notify();
-                    }))
-                    .render(),
-            )
-            .into_any_element()
+        let train = self.train_dropdown(TunerKind::Time, cx);
+        super::time::controls::config_row(
+            &mn_input,
+            train,
+            self.time_tuner.sugg_busy,
+            cx.listener(|this, _, _, cx| {
+                this.time_suggest(cx);
+                cx.notify();
+            }),
+            p,
+            cx,
+        )
     }
 
     /// A suggestion settings box for the `kind` axis, with a lazy cache in that axis's state.

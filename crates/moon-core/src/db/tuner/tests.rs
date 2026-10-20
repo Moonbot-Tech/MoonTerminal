@@ -6,6 +6,53 @@ use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
 use super::*;
 
+/// Exercise the numeric picker with no always-passing rows.
+fn best_range(
+    vals: &mut [(f64, f64)],
+    min_n: usize,
+    edges: usize,
+    round: bool,
+) -> Option<Suggestion> {
+    best_range_with_passing(vals, min_n, edges, round, false, (0, 0.0))
+}
+
+/// Exercise Min-only bounds without leaving a dead production wrapper.
+fn best_range_bounded(
+    vals: &mut [(f64, f64)],
+    min_n: usize,
+    edges: usize,
+    round: bool,
+    open_top: bool,
+) -> Option<Suggestion> {
+    best_range_with_passing(vals, min_n, edges, round, open_top, (0, 0.0))
+}
+
+/// Fitting and held-out drawdown must use true UTC closes while schedule coordinates stay civil.
+#[test]
+fn time_validation_scan_uses_true_utc_closes() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE trades(closedate INTEGER,buydate INTEGER,pnl REAL,core_uid INTEGER);
+        INSERT INTO trades VALUES (3700,60,10,1),(200,60,-6,2),(3900,60,-6,1),(400,60,10,2);
+        CREATE TABLE core_time_offset(core_uid INTEGER,from_utc INTEGER,offset_secs INTEGER,observed_at INTEGER,source TEXT);
+        INSERT INTO core_time_offset VALUES(1,0,3600,0,'fixture');").unwrap();
+    let q = Query {
+        from: 0,
+        to: 5000,
+        axis: crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::Europe::Warsaw),
+        ..Default::default()
+    };
+    let mut closes = Vec::new();
+    visit_time_rows_with_close(
+        &conn,
+        &q,
+        "(SELECT * FROM trades WHERE closedate>=?1 AND closedate<?2) o",
+        "test",
+        |_, _, _, close| closes.push(close),
+    )
+    .unwrap();
+    assert_eq!(closes, vec![100, 200, 300, 400]);
+}
+
 /// Sorting by raw core clocks hides two consecutive losses and understates schedule drawdown.
 #[test]
 fn by_time_drawdown_orders_closes_in_true_utc() {

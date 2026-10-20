@@ -41,9 +41,12 @@ pub(in crate::analytics) struct TimeTunerState {
     pub(in crate::analytics::tuner) inputs: HashMap<String, Entity<MoonInputState>>,
     /// Minimum trade count as raw input text; empty selects the automatic threshold.
     ///
-    /// The only search setting this axis exposes: the sweep fixes its own quantile depth and
-    /// takes no restarts, so it has no counterpart to the filter tuner's other boxes.
+    /// The sweep searches exact minute boundaries and takes no restarts.
     pub(in crate::analytics::tuner) min_trades: String,
+    /// Persisted train share, independent of the filter mode.
+    pub(in crate::analytics) train_pct: usize,
+    /// Validation belongs only to the current unedited suggestion.
+    pub(in crate::analytics::tuner) evaluation: Option<moon_core::db::tuner::TimeEvaluation>,
     /// Whether suggested bounds are rounded outward.
     pub(in crate::analytics::tuner) round_results: bool,
     /// Whether an auto-suggestion is in flight.
@@ -86,6 +89,8 @@ impl TimeTunerState {
             ignore_staged: None,
             inputs: HashMap::new(),
             min_trades: String::new(),
+            train_pct: 100,
+            evaluation: None,
             round_results: true,
             sugg_busy: false,
             sugg_seq: 0,
@@ -324,10 +329,12 @@ impl TimeTunerState {
     /// Reset the grid when the strategy changes (v1/v2 + inputs + current values + the ignore
     /// switch), and discard an in-flight auto-suggestion.
     pub(in crate::analytics::tuner) fn reset_grid(&mut self) {
+        self.evaluation = None;
         self.bounds = vec![std::array::from_fn(|_| (String::new(), String::new())); TIME_N_VAR];
         self.current_raw = Default::default();
         self.ignore_staged = None;
         self.inputs.clear();
+        self.evaluation = None;
         self.sugg_seq = self.sugg_seq.wrapping_add(1);
         self.sugg_busy = false;
     }
@@ -336,6 +343,7 @@ impl TimeTunerState {
     /// filter's `TunerState::invalidate`: bump the generation and clear busy WITHOUT touching
     /// v1. Otherwise a stale result from the old query would land in v1 (and become Saveable).
     pub(in crate::analytics) fn invalidate_suggest(&mut self) {
+        self.evaluation = None;
         self.sugg_seq = self.sugg_seq.wrapping_add(1);
         self.sugg_busy = false;
     }

@@ -104,28 +104,27 @@ impl AnalyticsView {
         let req = self.time_tuner.sugg_seq;
         self.time_tuner.sugg_busy = true;
         let q = self.tuner_query();
-        let min_n = self
-            .time_tuner
-            .min_trades
-            .trim()
-            .parse::<i64>()
-            .unwrap_or(5)
-            .max(1);
-        let edges = 512usize;
-        // Time: exact minutes. round_bound (3-significant-digit rounding) on minutes of the
-        // day/week would cross day/hour boundaries (e.g. 23:59→24:00) — so we do NOT round.
-        let round = false;
+        let min_n = self.time_tuner.min_trades.trim().parse::<i64>().ok();
+        let round = self.time_tuner.round_results;
+        let train_frac = self.time_tuner.train_pct as f64 / 100.0;
+        self.time_tuner.evaluation = None;
         self.spawn_db(
             true,
             cx,
-            move || moon_core::db::tuner::suggest_time(&q, min_n, edges, round, axes),
+            move || moon_core::db::tuner::suggest_time_checked(&q, min_n, round, axes, train_frac),
             move |this, sugg, cx| {
                 if this.time_tuner.sugg_seq != req {
                     return; // stale auto-suggestion (the strategy/scope changed)
                 }
                 this.time_tuner.sugg_busy = false;
                 match sugg {
-                    Ok(s) => {
+                    Ok(evaluation) => {
+                        if evaluation.train.is_none() {
+                            this.time_tuner.evaluation = Some(evaluation);
+                            cx.notify();
+                            return;
+                        }
+                        let s = evaluation.suggestion;
                         // Write ONLY into the FIELDS that were searched. WorkingWeekTime
                         // is its own field: unchecked → untouched, its value pinned the
                         // sweep. WorkingTime is one field behind two rows, so if either
@@ -151,21 +150,16 @@ impl AnalyticsView {
                                     this.set_v1_cell(2, f.to_string(), t.to_string());
                                     this.clear_field(0, 1);
                                 }
-                                // Nothing beat the baseline: clear only the formats the
-                                // sweep was allowed to search. An unchecked row keeps
-                                // the value the user put there — the sweep never judged
-                                // it, so it is not ours to delete.
+                                // The sweep owns WorkingTime whenever either format is enabled.
+                                // Clear both views so the saved predicate matches validation.
                                 None => {
-                                    if axes.day {
-                                        this.clear_field(0, 1);
-                                    }
-                                    if axes.hour {
-                                        this.clear_field(0, 2);
-                                    }
+                                    this.clear_field(0, 1);
+                                    this.clear_field(0, 2);
                                 }
                             }
                         }
                         this.reload_time(cx);
+                        this.time_tuner.evaluation = Some(evaluation);
                     }
                     Err(e) => log::warn!("analytics: time auto-suggestion failed — {e}"),
                 }
@@ -465,6 +459,7 @@ impl AnalyticsView {
         }
         // Three heatmap sliders under the rows (Weekly / Day / In hour).
         let sliders = self.time_sliders(p, cx);
+        let validation = super::validation::summary(self.time_tuner.evaluation.as_ref(), p, cx);
 
         v_flex()
             .w_full()
@@ -488,7 +483,13 @@ impl AnalyticsView {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .child(v_flex().w_full().child(grid).child(sliders)),
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .child(grid)
+                            .children(validation)
+                            .child(sliders),
+                    ),
             )
             .into_any_element()
     }

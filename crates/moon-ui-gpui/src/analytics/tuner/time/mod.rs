@@ -6,6 +6,8 @@
 //! Data comes from one bounded streaming time-profile scan of the selected period.
 
 // Files of this axis.
+/// Production configuration row, shared with the headless layout probe.
+pub(super) mod controls;
 /// Its weekly schedule grid.
 mod grid;
 /// Its Save / Make-a-copy actions (feeding the shared confirmation dialog).
@@ -14,6 +16,8 @@ mod save;
 mod sliders;
 /// Its own state: the schedule values, their parsers and the suggestion settings.
 pub(in crate::analytics::tuner) mod state;
+/// Shared train/holdout presentation and its GPUI-free state decision.
+mod validation;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;

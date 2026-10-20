@@ -37,8 +37,8 @@ pub use strategy_read::{
     strategy_kinds_checked, strategy_values_at,
 };
 pub use time::{
-    SliderProfiles, TimeAxes, TimeSuggest, TimeWindow, format_week_span, format_working_time,
-    slider_profiles, suggest_time,
+    SliderProfiles, TimeAxes, TimeEvaluation, TimeSuggest, TimeWindow, format_week_span,
+    format_working_time, slider_profiles, suggest_time, suggest_time_checked,
 };
 
 /// Range for one field; `None` means the bound is unset.
@@ -573,12 +573,23 @@ fn visit_time_rows(
     ctx: &'static str,
     mut visit: impl FnMut(i64, i64, f64),
 ) -> ReadResult<()> {
+    visit_time_rows_with_close(conn, q, src, ctx, |wd, mn, p, _| visit(wd, mn, p))
+}
+
+/// Stream core-clock schedule coordinates with UTC close timestamps for chronological validation.
+fn visit_time_rows_with_close(
+    conn: &Connection,
+    q: &Query,
+    src: &str,
+    ctx: &'static str,
+    mut visit: impl FnMut(i64, i64, f64, i64),
+) -> ReadResult<()> {
     let axis = q.resolved_axis(conn)?;
     super::analytics::time_zone::install(conn, &axis).map_err(|e| read_fail_on(conn, ctx, e))?;
     let sql = format!(
         "SELECT mt_core_minute_of_week({OPEN_TS}) / 1440 AS wd,
                 mt_core_minute_of_day({OPEN_TS}) AS mn,
-                COALESCE(o.pnl, 0)
+                COALESCE(o.pnl, 0), mt_to_utc(o.closedate, o.core_uid)
          FROM {src}"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, ctx, e))?;
@@ -588,12 +599,13 @@ fn visit_time_rows(
                 r.get::<_, i64>(0)?,
                 r.get::<_, i64>(1)?,
                 r.get::<_, f64>(2)?,
+                r.get::<_, i64>(3)?,
             ))
         })
         .map_err(|e| read_fail_on(conn, ctx, e))?;
     for row in rows {
-        let (weekday, minute, profit) = row.map_err(|e| read_fail_on(conn, ctx, e))?;
-        visit(weekday, minute, profit);
+        let (weekday, minute, profit, close) = row.map_err(|e| read_fail_on(conn, ctx, e))?;
+        visit(weekday, minute, profit, close);
     }
     Ok(())
 }
@@ -934,7 +946,7 @@ pub fn round_bound(v: f64, up: bool) -> f64 {
 
 /// Round `(from, to)` outward to three significant digits, but keep the RAW pair when doing so
 /// would push both bounds past the observed range `[lo, hi]` and turn the pair into a no-op
-/// filter. Shared by `best_range` and `threshold_search::suggest`.
+/// filter. Shared by single-field and joint threshold suggestions.
 pub(super) fn round_pair_outward(from: f64, to: f64, lo: f64, hi: f64) -> (f64, f64) {
     let (rf, rt) = (round_bound(from, false), round_bound(to, true));
     if rf > lo || rt < hi {
@@ -1014,28 +1026,6 @@ fn suggest_field_from_source(
         open_top,
         passing,
     ))
-}
-
-/// Best range for one field over `(value, profit)` samples.
-fn best_range(
-    vals: &mut [(f64, f64)],
-    min_n: usize,
-    edges: usize,
-    round: bool,
-) -> Option<Suggestion> {
-    best_range_bounded(vals, min_n, edges, round, false)
-}
-
-/// [`best_range`], with `open_top` keeping the slice's upper end at the largest sample (a field
-/// whose strategy parameter is a Min alone).
-fn best_range_bounded(
-    vals: &mut [(f64, f64)],
-    min_n: usize,
-    edges: usize,
-    round: bool,
-    open_top: bool,
-) -> Option<Suggestion> {
-    best_range_with_passing(vals, min_n, edges, round, open_top, (0, 0.0))
 }
 
 /// Pick a valued range without splitting equal field values, including always-passing rows.

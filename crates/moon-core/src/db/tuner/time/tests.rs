@@ -1,5 +1,20 @@
 use super::*;
 
+/// Measures the same neutral 5k-row cohort before and after the search changes.
+#[test]
+#[ignore = "manual performance measurement"]
+fn suggest_5k_timing() {
+    let rows: Vec<_> = (0..5000i64)
+        .map(|i| ((i * 17 % 7), i * 137 % 1440, (i * 31 % 23) as f64 - 10.0))
+        .collect();
+    let start = std::time::Instant::now();
+    let result = time_suggest_from_rows(&rows, 5, 512, false, axes_of(true, true, true));
+    eprintln!(
+        "5k suggestion: {:.3} ms, result={result:?}",
+        start.elapsed().as_secs_f64() * 1000.0
+    );
+}
+
 /// Splitting equal minutes invents an unattainable profit and discards the better real window.
 #[test]
 fn time_suggestion_keeps_all_trades_at_equal_minutes() {
@@ -127,12 +142,12 @@ fn suggest_time_pins_unchecked_row() {
         })
         .collect();
 
-    // Unpinned: every day is in the black, so no week window improves on the whole week.
+    // Circular search can now exclude Sunday hour 0 while keeping every other winning hour.
     let free = time_suggest_from_rows(&rows, 1, 64, false, axes_of(true, false, false));
-    assert_eq!(
-        free.week_span, None,
-        "over the full sample no week window beats the baseline"
-    );
+    let (from, to) = free
+        .week_span
+        .expect("circular search excludes the isolated loss");
+    assert!(from > to && from > 6 * 1440 && to < 6 * 1440);
 
     // Pinned to hour 0 — the sweep must work INSIDE it, where Sunday is the loss.
     let pinned = time_suggest_from_rows(
@@ -152,6 +167,26 @@ fn suggest_time_pins_unchecked_row() {
         .week_span
         .expect("inside the pinned hour, cutting Sunday pays");
     assert!(to < 6 * 1440, "the window must end before Sunday, got {to}");
+}
+
+/// Refining the day window inside the selected week beats independently intersected projections.
+#[test]
+fn joint_week_day_beats_independent() {
+    let profits = [-4., -8., 1., -7., 10., 0., -3., 6., -2., 0., -10., 1.];
+    let rows: Vec<_> = profits
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| ((i / 3) as i64, [10, 300, 800][i % 3], p))
+        .collect();
+    let s = time_suggest_from_rows(&rows, 1, 512, false, axes_of(true, true, false));
+    let profit: f64 = rows
+        .iter()
+        .filter(|&&(wd, mn, _)| accepts(wd, mn, s.week_span, s.tod))
+        .map(|r| r.2)
+        .sum();
+    // Independent week [1740,3180] earns 13; independent day [800,800] earns zero.
+    // Refitting day [300,300] within that week retains the two wins, 10 + 6.
+    assert_eq!(profit, 16.0);
 }
 
 #[test]
