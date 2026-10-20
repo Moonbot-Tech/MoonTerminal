@@ -673,6 +673,11 @@ fn model(face: usize) -> SummaryModel {
         open_line: (hold && face == 3).then(|| open.clone()),
     };
     SummaryModel {
+        fact_holdout: matches!(face, 2 | 3 | 6).then(|| {
+            let mut fact = moon_core::db::metrics::Tally::default();
+            fact.push(13.71);
+            fact
+        }),
         title: t!("analytics.ticks.sum.title").to_string(),
         scope_label: "fixture".to_string(),
         tag: tag(&verdict),

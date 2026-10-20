@@ -296,6 +296,8 @@ analytics.tuner.compose_rejected_detail: "%{fields}: uyarlandığı katlarda %{i
 analytics.tuner.train_off: "tüm dönem"
 analytics.tuner.split_train: "örneklem içi"
 analytics.tuner.split_holdout: "örneklem dışı"
+analytics.tuner.split_fact_holdout: "Örneklem dışı gerçek"
+analytics.tuner.split_below_fact: "Örneklem dışı kâr gerçek kârdan düşük. Aralıklar geçmişe aşırı uyarlanmış olabilir."
 analytics.tuner.split_stats: "%{profit} · %{n} işl. · WR %{wr}% · PF %{pf} · DD %{dd}"
 # Stopping a running search, and the state of the last one.
 analytics.tuner.stop: "Durdur"

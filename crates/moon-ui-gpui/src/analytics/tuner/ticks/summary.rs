@@ -262,6 +262,8 @@ pub(super) struct SummaryModel {
     pub sentence: String,
     pub train: Option<ProfitRow>,
     pub holdout: Option<ProfitRow>,
+    /// Full Fact tally on the identical holdout, kept for the shared muted baseline line.
+    pub fact_holdout: Option<moon_core::db::metrics::Tally>,
     pub changed_header: String,
     pub changes: Vec<ChangeRow>,
     pub warnings: Vec<String>,
@@ -469,6 +471,7 @@ impl SummaryModel {
             verdict,
             train,
             holdout,
+            fact_holdout: result.and_then(|r| r.fact_holdout.clone()),
             changed_header: t!("analytics.ticks.sum.changed", n = changes.len()).to_string(),
             changes,
             warnings,

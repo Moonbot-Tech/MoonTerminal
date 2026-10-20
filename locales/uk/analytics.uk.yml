@@ -296,6 +296,8 @@ analytics.tuner.compose_rejected_detail: "%{fields}: %{inner} на зрізах 
 analytics.tuner.train_off: "весь період"
 analytics.tuner.split_train: "у вибірці"
 analytics.tuner.split_holdout: "поза вибіркою"
+analytics.tuner.split_fact_holdout: "факт поза вибіркою"
+analytics.tuner.split_below_fact: "На відкладених угодах прибуток нижчий за факт. Можливо, діапазони підігнані під історію."
 analytics.tuner.split_stats: "%{profit} · %{n} уг. · WR %{wr}% · PF %{pf} · DD %{dd}"
 # Stopping a running search, and the state of the last one.
 analytics.tuner.stop: "Стоп"

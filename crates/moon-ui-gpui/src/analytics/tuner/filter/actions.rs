@@ -175,6 +175,7 @@ impl AnalyticsView {
                     split: found.as_ref().map(|res| SearchSplit {
                         train: res.train.clone(),
                         holdout: res.holdout.clone(),
+                        fact_holdout: res.fact_holdout.clone().map(Box::new),
                         composed: res.composed.clone(),
                         compose_skipped: res.compose_skipped,
                     }),

@@ -15,6 +15,7 @@ fn polish_default_full_history_summary_shows_material_staleness() {
     let split = super::state::SearchSplit {
         train: Default::default(),
         holdout: None,
+        fact_holdout: None,
         composed: None,
         compose_skipped: None,
     };

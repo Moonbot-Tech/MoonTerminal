@@ -296,6 +296,8 @@ analytics.tuner.compose_rejected_detail: "%{fields}: %{inner} on the folds it wa
 analytics.tuner.train_off: "whole period"
 analytics.tuner.split_train: "in sample"
 analytics.tuner.split_holdout: "out of sample"
+analytics.tuner.split_fact_holdout: "Fact out of sample"
+analytics.tuner.split_below_fact: "Out-of-sample profit is below Fact. The ranges may be overfitted."
 analytics.tuner.split_stats: "%{profit} · %{n} tr. · WR %{wr}% · PF %{pf} · DD %{dd}"
 # Stopping a running search, and the state of the last one.
 analytics.tuner.stop: "Stop"

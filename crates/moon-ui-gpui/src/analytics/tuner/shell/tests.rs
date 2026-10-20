@@ -275,6 +275,7 @@ fn done_state(stopped: bool, axis_moved: bool, with_split: bool) -> SuggestState
         split: with_split.then(|| SearchSplit {
             train: Tally::default(),
             holdout: None,
+            fact_holdout: None,
             composed: None,
             compose_skipped: None,
         }),

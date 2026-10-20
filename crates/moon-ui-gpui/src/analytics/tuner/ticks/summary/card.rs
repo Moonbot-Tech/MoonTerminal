@@ -162,21 +162,22 @@ fn profit_head(head: String, cols: ProfitCols, p: MoonPalette, cx: &App) -> Div 
     )
 }
 
-/// Figures remain separate mono cells from the human label and its slice description.
+/// Keep separate mono figures; the unseen variant uses danger when it underperforms Fact.
 fn profit_row(
     row: &ProfitRow,
     id: &'static str,
     cols: ProfitCols,
+    holdout: bool,
     p: MoonPalette,
     cx: &App,
 ) -> Div {
-    let figure = |value: f64, sel: String| {
+    let figure = |value: f64, sel: String, color: u32| {
         div()
             .debug_selector(move || sel.clone())
             .font_family(design::mono())
             .text_size(design::t_body(cx))
             .whitespace_nowrap()
-            .text_color(moon(sign_color(p, value)))
+            .text_color(moon(color))
             .child(fmt_signed(value))
     };
     v_flex()
@@ -194,13 +195,25 @@ fn profit_row(
                             .tooltip(crate::panels::common::text_tooltip(row.n.to_string())),
                     ),
                 [
-                    figure(row.fact, format!("{id}-fact")),
+                    figure(row.fact, format!("{id}-fact"), sign_color(p, row.fact)),
                     div()
                         .font_family(design::mono())
                         .text_size(design::t_body(cx))
                         .text_color(moon(p.text_muted))
                         .child("→"),
-                    figure(row.variant, format!("{id}-v1")),
+                    figure(
+                        row.variant,
+                        format!("{id}-v1"),
+                        if holdout {
+                            crate::analytics::tuner::split::holdout_color(
+                                row.variant,
+                                Some(row.fact),
+                                p,
+                            )
+                        } else {
+                            sign_color(p, row.variant)
+                        },
+                    ),
                 ],
                 cx,
             ),
@@ -372,10 +385,27 @@ pub(in crate::analytics::tuner) fn summary_card_el(
             let cols = ProfitCols::measure(&rows, arrow, cx);
             body = body.child(profit_head(head, cols, p, cx));
             if let Some(row) = &m.train {
-                body = body.child(profit_row(row, "an-ticks-sum-train-count", cols, p, cx));
+                body = body.child(profit_row(
+                    row,
+                    "an-ticks-sum-train-count",
+                    cols,
+                    false,
+                    p,
+                    cx,
+                ));
             }
             if let Some(row) = &m.holdout {
-                body = body.child(profit_row(row, "an-ticks-sum-hold-count", cols, p, cx));
+                body = body.child(profit_row(
+                    row,
+                    "an-ticks-sum-hold-count",
+                    cols,
+                    true,
+                    p,
+                    cx,
+                ));
+            }
+            if let Some(fact) = &m.fact_holdout {
+                body = body.child(crate::analytics::tuner::split::fact_line(fact, p, cx));
             }
         }
         if !m.changes.is_empty() {

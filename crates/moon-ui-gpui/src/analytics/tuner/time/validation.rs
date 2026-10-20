@@ -96,15 +96,18 @@ pub(super) fn summary(
                     super::super::split::line(
                         t!("analytics.tuner.split_holdout").to_string(),
                         holdout,
-                        if holdout.profit > 0.0 {
-                            design::positive_color(p)
-                        } else {
-                            design::danger_color(p)
-                        },
+                        super::super::split::holdout_color(
+                            holdout.profit,
+                            result.fact_holdout.as_ref().map(|fact| fact.profit),
+                            p,
+                        ),
                         p,
                         cx,
                     ),
                 ))
+            })
+            .when_some(result.fact_holdout.as_ref(), |el, fact| {
+                el.child(super::super::split::fact_line(fact, p, cx))
             })
             .when(stale, |el| {
                 el.child(

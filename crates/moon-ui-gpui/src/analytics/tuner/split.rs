@@ -1,10 +1,33 @@
-//! One train/holdout metric renderer for filter and schedule suggestions.
+//! One train/holdout metric renderer and baseline comparison for tuner suggestions.
 
 use crate::design::{self, moon};
 use gpui::*;
 use moon_core::db::metrics::Tally;
 use moon_ui::{MoonPalette, h_flex};
 use rust_i18n::t;
+
+/// Color unseen profit by its comparison with Fact when available, then by its sign.
+pub(super) fn holdout_color(profit: f64, fact: Option<f64>, p: MoonPalette) -> u32 {
+    if fact.map_or(profit > 0.0, |fact| profit >= fact) {
+        design::positive_color(p)
+    } else {
+        design::danger_color(p)
+    }
+}
+
+/// Render the unchanged Fact cohort in a muted third line through the shared metric formatter.
+pub(super) fn fact_line(tally: &Tally, p: MoonPalette, cx: &App) -> AnyElement {
+    div()
+        .debug_selector(|| "split-fact-holdout-line".into())
+        .child(line(
+            t!("analytics.tuner.split_fact_holdout").to_string(),
+            tally,
+            p.text_muted,
+            p,
+            cx,
+        ))
+        .into_any_element()
+}
 
 /// Render the identical MoonUI train-share dropdown for filter and time modes.
 pub(super) fn train_dropdown_el(
@@ -56,17 +79,27 @@ pub(super) fn line(
     cx: &App,
 ) -> AnyElement {
     let (pf, dd) = super::kpi::split_metrics(tally);
+    let caption_width = [
+        "analytics.tuner.split_train",
+        "analytics.tuner.split_holdout",
+        "analytics.tuner.split_fact_holdout",
+    ]
+    .map(|key| design::ui_caption_text_width(cx, &t!(key), 400.0))
+    .into_iter()
+    .fold(f32::from(design::font_w_px(cx, 74.0)), f32::max);
     h_flex()
         .w_full()
         .min_w_0()
         .gap(design::ui_px(cx, 6.0))
         .child(
             div()
-                .w(design::font_w_px(cx, 74.0))
+                .id(SharedString::from(format!("split-caption-{caption}")))
+                .w(px(caption_width.ceil() + 1.0))
                 .flex_none()
                 .truncate()
                 .font_family(design::ui_font())
                 .text_color(moon(p.text_muted))
+                .tooltip(crate::panels::common::text_tooltip(caption.clone()))
                 .child(caption),
         )
         .child(
@@ -90,3 +123,6 @@ pub(super) fn line(
         )
         .into_any_element()
 }
+
+#[cfg(test)]
+mod tests;

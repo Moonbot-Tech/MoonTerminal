@@ -22,6 +22,51 @@ fn uncancelled() -> SearchHandle {
     SearchHandle::new()
 }
 
+/// Adding the display-only Fact baseline must preserve filtered results byte for byte and ignore
+/// even fixed ranges on the held-out cohort, rather than accidentally reusing the filtered tally.
+#[test]
+fn fact_holdout_preserves_filtered_results_and_uses_all_unseen_rows() {
+    let fi = FIELDS.iter().position(|f| f.col == "d1h").unwrap();
+    let profits = vec![10.0, -20.0, 30.0, -40.0, 7.0, -2.0, 10.0, -1.0];
+    let mut vals = vec![vec![0.0; profits.len()]; FIELDS.len()];
+    vals[fi] = vec![1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0];
+    let mut locked = vec![Some((None, None)); FIELDS.len()];
+    locked[fi] = Some((Some(2.0), Some(3.0)));
+    let search = build_split(profits, &vals, &locked, 1, 4, 4);
+    let filtered = || {
+        let outcome = search.run(5, 43, &uncancelled()).unwrap();
+        let applied = search.applied_ranges(&outcome.sel, false);
+        format!(
+            "{:?} {:?} {:?} {:?} {:?}",
+            outcome.sel,
+            outcome.profit.to_bits(),
+            applied,
+            search.tally(&applied, 0..4),
+            search.tally(&applied, 4..8)
+        )
+    };
+    let before = filtered();
+    let fact = search.fact_tally(4..8);
+    assert_eq!(filtered().as_bytes(), before.as_bytes());
+    // Independently summed from the four unseen profits, in their original close order.
+    assert_eq!(
+        (
+            fact.n,
+            fact.wins,
+            fact.profit,
+            fact.wsum,
+            fact.lsum,
+            fact.max_dd
+        ),
+        (4, 2, 14.0, 17.0, 3.0, 2.0)
+    );
+    assert_eq!(
+        search.tally(&[], 4..8).profit,
+        8.0,
+        "fixed fields must make this fixture distinguish Fact from a restricted baseline"
+    );
+}
+
 /// Deterministic value generator, so a fixture is reproducible and comparable across runs.
 ///
 /// Deliberately NOT the search's own PRNG: fixtures must not shift when that stream changes.

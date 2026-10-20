@@ -290,6 +290,8 @@ pub(in crate::analytics::tuner) struct SearchSplit {
     pub(in crate::analytics::tuner) train: Tally,
     /// Over the trades held back from the search; `None` when the whole period was fitted on.
     pub(in crate::analytics::tuner) holdout: Option<Tally>,
+    /// Fact on the same held-out rows; boxed to keep the enclosing suggestion state compact.
+    pub(in crate::analytics::tuner) fact_holdout: Option<Box<Tally>>,
     /// The field set composition chose, when it ran.
     pub(in crate::analytics::tuner) composed: Option<ComposedSet>,
     /// Why composition did not run, when it was asked for.

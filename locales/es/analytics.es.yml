@@ -296,6 +296,8 @@ analytics.tuner.compose_rejected_detail: "%{fields}: %{inner} en los cortes de a
 analytics.tuner.train_off: "todo el periodo"
 analytics.tuner.split_train: "en muestra"
 analytics.tuner.split_holdout: "fuera de muestra"
+analytics.tuner.split_fact_holdout: "Real fuera de muestra"
+analytics.tuner.split_below_fact: "El beneficio fuera de muestra es inferior al real. Los rangos pueden estar sobreajustados."
 analytics.tuner.split_stats: "%{profit} · %{n} op. · WR %{wr}% · PF %{pf} · DD %{dd}"
 # Stopping a running search, and the state of the last one.
 analytics.tuner.stop: "Parar"

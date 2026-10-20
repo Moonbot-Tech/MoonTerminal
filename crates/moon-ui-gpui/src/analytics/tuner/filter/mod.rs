@@ -1128,15 +1128,33 @@ impl AnalyticsView {
                     el.child(super::split::line(
                         t!("analytics.tuner.split_holdout").to_string(),
                         holdout,
-                        if holdout.profit > 0.0 {
-                            design::positive_color(p)
-                        } else {
-                            design::danger_color(p)
-                        },
+                        super::split::holdout_color(
+                            holdout.profit,
+                            split.fact_holdout.as_ref().map(|fact| fact.profit),
+                            p,
+                        ),
                         p,
                         cx,
                     ))
                 })
+                .when_some(split.fact_holdout.as_ref(), |el, fact| {
+                    el.child(super::split::fact_line(fact, p, cx))
+                })
+                .when(
+                    holdout
+                        .zip(split.fact_holdout.as_ref())
+                        .is_some_and(|(fit, fact)| fit.profit < fact.profit),
+                    |el| {
+                        el.child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .font_family(design::ui_font())
+                                .text_color(moon(p.orange))
+                                .child(t!("analytics.tuner.split_below_fact").to_string()),
+                        )
+                    },
+                )
                 .when(stale, |el| {
                     el.child(
                         div()

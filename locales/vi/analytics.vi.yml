@@ -296,6 +296,8 @@ analytics.tuner.compose_rejected_detail: "%{fields}: %{inner} trên các đoạn
 analytics.tuner.train_off: "cả kỳ"
 analytics.tuner.split_train: "trong mẫu"
 analytics.tuner.split_holdout: "ngoài mẫu"
+analytics.tuner.split_fact_holdout: "Thực tế ngoài mẫu"
+analytics.tuner.split_below_fact: "Lợi nhuận ngoài mẫu thấp hơn thực tế. Các khoảng có thể đã khớp quá mức với lịch sử."
 analytics.tuner.split_stats: "%{profit} · %{n} gd · WR %{wr}% · PF %{pf} · DD %{dd}"
 # Stopping a running search, and the state of the last one.
 analytics.tuner.stop: "Dừng"

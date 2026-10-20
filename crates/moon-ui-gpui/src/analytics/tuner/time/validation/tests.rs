@@ -9,7 +9,7 @@ use moon_core::db::metrics::Tally;
 use moon_core::db::tuner::TimeEvaluation;
 use moon_ui::{MoonInputState, MoonPalette, MoonTheme, v_flex};
 
-/// Build the five approved states, including positive profit that is below Fact.
+/// Build idle, refused, unsplit, improved, losing and positive-but-below-Fact states.
 fn result(face: usize) -> Option<TimeEvaluation> {
     let tally = |p| {
         let mut t = Tally::default();
@@ -21,8 +21,8 @@ fn result(face: usize) -> Option<TimeEvaluation> {
         1 => Some(TimeEvaluation::default()),
         _ => Some(TimeEvaluation {
             train: Some(tally(20.0)),
-            holdout: (face != 2).then(|| tally(if face == 3 { 5.0 } else { -2.0 })),
-            fact_holdout: (face != 2).then(|| tally(if face == 3 { 1.0 } else { 3.0 })),
+            holdout: (face != 2).then(|| tally(if matches!(face, 3 | 5) { 5.0 } else { -2.0 })),
+            fact_holdout: (face != 2).then(|| tally(if face == 3 { 1.0 } else { 6.0 })),
             ..Default::default()
         }),
     }
@@ -105,7 +105,7 @@ fn time_validation_layout(cx: &mut gpui::TestAppContext) {
         for language in Language::ALL {
             let _locale = crate::test_locale::force(language.code());
             for width in [320.0, 540.0] {
-                for face in 0..5 {
+                for face in 0..6 {
                     for report_changed in [false, true] {
                         let window =
                             cx.open_window(gpui::size(px(width), px(600.0)), |window, cx| Probe {
@@ -163,10 +163,29 @@ fn time_validation_layout(cx: &mut gpui::TestAppContext) {
                             face >= 3
                         );
                         assert_eq!(
+                            visual.debug_bounds("split-fact-holdout-line").is_some(),
+                            face >= 3
+                        );
+                        if face == 5 {
+                            let found = result(face).unwrap();
+                            visual.update(|_, cx| {
+                                let p = MoonPalette::active(cx);
+                                assert_eq!(
+                                    crate::analytics::tuner::split::holdout_color(
+                                        found.holdout.as_ref().unwrap().profit,
+                                        found.fact_holdout.as_ref().map(|fact| fact.profit),
+                                        p
+                                    ),
+                                    crate::design::danger_color(p),
+                                    "positive unseen profit below Fact must render as danger",
+                                );
+                            });
+                        }
+                        assert_eq!(
                             visual.debug_bounds("time-stale-warning").is_some(),
                             report_changed && face != 0
                         );
-                        if matches!(face, 1 | 2 | 4) {
+                        if matches!(face, 1 | 2 | 4 | 5) {
                             let warn = visual.debug_bounds("time-warning").unwrap();
                             assert!(warn.right() <= root.right() + px(0.5));
                             assert!(
