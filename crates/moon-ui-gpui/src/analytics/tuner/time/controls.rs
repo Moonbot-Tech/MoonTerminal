@@ -2,7 +2,9 @@
 
 use crate::design::{self, moon};
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonVariant, MoonInput, MoonInputState, MoonPalette, h_flex};
+use moon_ui::{
+    MoonButton, MoonButtonVariant, MoonInput, MoonInputState, MoonPalette, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 /// Keep the training control content-sized and let the configuration row wrap in a narrow dock.
@@ -10,12 +12,13 @@ pub(in crate::analytics::tuner) fn config_row(
     min: &Entity<MoonInputState>,
     train: AnyElement,
     busy: bool,
+    option: AnyElement,
     on_run: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
     let label = |text| div().flex_none().text_color(moon(p.text_muted)).child(text);
-    h_flex()
+    let settings = h_flex()
         .w_full()
         .flex_none()
         .flex_wrap()
@@ -40,21 +43,35 @@ pub(in crate::analytics::tuner) fn config_row(
         )
         .child(label(t!("analytics.tuner.train_share").to_string()))
         .child(train)
+        .child(div().flex_1())
+        .child(option);
+    v_flex()
+        .w_full()
+        .flex_none()
+        .child(settings)
         .child(
-            div()
-                .flex_none()
-                .ml_auto()
-                .debug_selector(|| "time-run".into())
+            h_flex()
+                .w_full()
+                .flex_wrap()
+                .justify_end()
+                .debug_selector(|| "tuner-run-t".into())
+                .px(design::ui_px(cx, 12.0))
+                .pb(design::ui_px(cx, 6.0))
                 .child(
-                    MoonButton::new("tun-suggest-run-t")
-                        .variant(MoonButtonVariant::Blue)
-                        .label(if busy {
-                            "…".to_string()
-                        } else {
-                            t!("analytics.tuner.suggest_run").to_string()
-                        })
-                        .on_click(on_run)
-                        .render(),
+                    div()
+                        .flex_none()
+                        .debug_selector(|| "time-run".into())
+                        .child(
+                            MoonButton::new("tun-suggest-run-t")
+                                .variant(MoonButtonVariant::Blue)
+                                .label(if busy {
+                                    "…".to_string()
+                                } else {
+                                    t!("analytics.tuner.suggest_run").to_string()
+                                })
+                                .on_click(on_run)
+                                .render(),
+                        ),
                 ),
         )
         .into_any_element()

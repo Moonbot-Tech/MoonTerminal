@@ -347,7 +347,7 @@ impl AnalyticsView {
         let in_w = 60.0; // fits the weekly field's "d.hh:mm" without leaving slack
         let header = self.shell_toolbar(
             TunerKind::Time,
-            t!("analytics.time.autopick_title").to_string(),
+            t!("analytics.tuner.fields_title").to_string(),
             cx,
         );
         let cfg_row = self.shell_config_row(TunerKind::Time, p, window, cx);
@@ -361,11 +361,41 @@ impl AnalyticsView {
                 .text_center()
                 .child(label)
         };
+        let copy_tools = h_flex()
+            .w_full()
+            .justify_end()
+            .px(design::ui_px(cx, 12.0))
+            .gap(design::ui_px(cx, 6.0))
+            .child("v1")
+            .child(
+                glyph_btn(
+                    "tt-cp-col",
+                    "→",
+                    t!("analytics.time.tip_to_v2").to_string(),
+                    p.amber,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.time_copy_all(cx))),
+            )
+            .child("v2")
+            .child(
+                glyph_btn(
+                    "tt-cpb-col",
+                    "←",
+                    t!("analytics.time.tip_to_v1").to_string(),
+                    p.amber,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.time_copy_all_back(cx))),
+            );
         let head = h_flex()
             .w_full()
             .flex_none()
             .px(design::ui_px(cx, 8.0))
-            .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
+            .min_h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
+            .flex_wrap()
             .items_center()
             // Must match the row gap below, or the columns drift apart.
             .gap(design::ui_px(cx, 4.0))
@@ -398,25 +428,12 @@ impl AnalyticsView {
                 div()
                     .w(design::font_w_px(cx, NAME_COL))
                     .flex_none()
-                    .child(t!("analytics.time.col_field").to_string()),
+                    .child(t!("analytics.tuner.field").to_string()),
             )
             .child(div().flex_1().child(t!("analytics.time.cur").to_string()))
             .child(head_cell(format!("v1 {}", t!("analytics.tuner.from"))))
-            // The ONLY two copy buttons, both "copy the whole column": → inside the v1 pair
-            // carries v1→v2, ← inside the v2 pair carries v2→v1. Rows have no copy buttons —
-            // they keep a matching 12px spacer so the columns stay aligned.
-            .child(
-                glyph_btn(
-                    "tt-cp-col",
-                    "→",
-                    t!("analytics.time.tip_to_v2").to_string(),
-                    p.amber,
-                    p,
-                    cx,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.time_copy_all(cx))),
-            )
-            .child(head_cell(t!("analytics.tuner.to").to_string()))
+            .child(div().w(design::ui_px(cx, 12.0)).flex_none())
+            .child(head_cell(format!("→ {}", t!("analytics.tuner.to"))))
             .child(
                 glyph_btn(
                     "tt-clr-col-0",
@@ -429,18 +446,8 @@ impl AnalyticsView {
                 .on_click(cx.listener(|this, _, _, cx| this.time_clear_variant(0, cx))),
             )
             .child(head_cell(format!("v2 {}", t!("analytics.tuner.from"))))
-            .child(
-                glyph_btn(
-                    "tt-cpb-col",
-                    "←",
-                    t!("analytics.time.tip_to_v1").to_string(),
-                    p.amber,
-                    p,
-                    cx,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.time_copy_all_back(cx))),
-            )
-            .child(head_cell(t!("analytics.tuner.to").to_string()))
+            .child(div().w(design::ui_px(cx, 12.0)).flex_none())
+            .child(head_cell(format!("→ {}", t!("analytics.tuner.to"))))
             .child(
                 glyph_btn(
                     "tt-clr-col-1",
@@ -463,33 +470,25 @@ impl AnalyticsView {
 
         v_flex()
             .w_full()
-            .flex_1()
-            .min_h_0()
+            .flex_none()
             .rounded(design::ui_px(cx, 8.0))
             .bg(moon(p.panel))
             .border_1()
             .border_color(moon(p.border))
             .overflow_hidden()
-            // Toolbar/config/ignore stay pinned; the parameter rows + heatmap sliders scroll so a
-            // short panel can't clip them off the bottom (they used to just disappear past the edge).
+            // One shared column scroll keeps the complete settings, validation and grid reachable.
             .child(header)
             .child(cfg_row)
+            .children(validation)
             .child(ignore_row)
             .child(clock_note)
+            .child(copy_tools)
             .child(
                 div()
                     .id("tt-params-scroll")
                     .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(
-                        v_flex()
-                            .w_full()
-                            .child(grid)
-                            .children(validation)
-                            .child(sliders),
-                    ),
+                    .flex_none()
+                    .child(v_flex().w_full().child(grid).child(sliders)),
             )
             .into_any_element()
     }
@@ -541,6 +540,7 @@ impl AnalyticsView {
         let mut row = h_flex()
             .flex_1()
             .min_w_0()
+            .flex_wrap()
             .items_center()
             // Must match the header gap, or the columns drift apart.
             .gap(design::ui_px(cx, 4.0))

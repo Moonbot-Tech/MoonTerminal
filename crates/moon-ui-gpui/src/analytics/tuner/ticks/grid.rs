@@ -30,7 +30,6 @@ use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
 use super::super::shared::{TunerKind, collapse_caret, glyph_btn};
-use super::super::shell::{ToolbarActs, toolbar_el};
 use super::sections::{GridSection, RowRole, layout};
 use super::state::{NowValue, TicksData};
 use crate::design;
@@ -269,19 +268,7 @@ impl AnalyticsView {
             ranges_visible,
             palette: p,
         };
-        let acts = ToolbarActs {
-            on_round: std::rc::Rc::new(|_, _, _| {}),
-            on_copy: std::rc::Rc::new(|_, _| {}),
-            on_save: std::rc::Rc::new(|_, _| {}),
-        };
-        let header = toolbar_el(
-            TunerKind::Ticks,
-            t!("analytics.ticks.pick.title").to_string(),
-            None,
-            None,
-            &acts,
-            cx,
-        );
+        let (header, summary) = self.ticks_parameters_parts(host_w, p, cx);
         let cfg_row = self.shell_config_row(TunerKind::Ticks, p, window, cx);
         let data = self.ticks.data.data().cloned();
         let schema_sig = super::sections::schema_signature(self.backend.read(cx).session.store());
@@ -372,8 +359,9 @@ impl AnalyticsView {
             .overflow_hidden()
             .child(header)
             .child(cfg_row)
-            .child(grid)
             .children(accuracy)
+            .child(summary)
+            .child(grid)
             .into_any_element()
     }
 

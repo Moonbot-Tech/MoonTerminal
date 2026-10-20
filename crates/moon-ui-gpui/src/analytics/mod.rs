@@ -376,6 +376,10 @@ pub struct AnalyticsView {
     /// user left inside it. Forcing either value here would destroy a choice they made on
     /// purpose and persisted.
     side_collapsed: bool,
+    /// Measured tuner host width; dock layout must not depend on the outer window width.
+    tuner_host_width: f32,
+    /// Display-only folds for time, coin and Entry/Exit detail cards; never persisted.
+    tuner_bottom_collapsed: [bool; 3],
     /// The shell colour the window's clear colour was last set to. The window paints no
     /// background of its own (`MoonBackgroundPolicy::NoFill`) so the chart of the tuner's trade
     /// pane — drawn UNDER the GPUI scene — shows through; the clear colour stands in for the

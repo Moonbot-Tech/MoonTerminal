@@ -215,7 +215,6 @@ impl Render for CoinsLayoutProbe {
         let s = state();
         let base = VarLabel::new(t!("analytics.tuner.fact").to_string());
         let toolbar_acts = ToolbarActs {
-            on_round: Rc::new(|_, _, _| {}),
             on_copy: noop.clone(),
             on_save: noop.clone(),
         };
@@ -253,8 +252,7 @@ impl Render for CoinsLayoutProbe {
             ),
             toolbar_el(
                 TunerKind::Coins,
-                t!("analytics.coins.lists_title").to_string(),
-                None,
+                t!("analytics.tuner.fields_title").to_string(),
                 (face != 0).then_some(&write),
                 &toolbar_acts,
                 cx,

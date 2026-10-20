@@ -79,7 +79,7 @@ pub(super) fn pick_bar_el(
 ) -> AnyElement {
     let one = acts.one.clone();
     let all = acts.all.clone();
-    h_flex()
+    v_flex()
         .id("an-ticks-pick-bar")
         .debug_selector(|| "an-ticks-pick-bar".to_string())
         .w_full()
@@ -116,37 +116,45 @@ pub(super) fn pick_bar_el(
                 .child(settings),
         )
         .child(
-            div()
-                .id("tun-suggest-one-x-box")
-                .debug_selector(|| "tun-suggest-one-x-box".to_string())
-                .flex_none()
-                .tooltip(crate::panels::common::text_tooltip(model.one_tip.clone()))
+            h_flex()
+                .w_full()
+                .flex_wrap()
+                .justify_end()
+                .debug_selector(|| "tuner-run-x".into())
+                .gap(design::ui_px(cx, 6.0))
                 .child(
-                    MoonButton::new("tun-suggest-one-x")
-                        .size(MoonButtonSize::density(cx))
-                        .mono(false)
-                        .variant(MoonButtonVariant::Soft)
-                        .label(t!("analytics.ticks.pick.one").to_string())
-                        .disabled(!model.one_enabled)
-                        .on_click(move |_, window, app| one(window, app))
-                        .render(),
-                ),
-        )
-        .child(
-            div()
-                .id("tun-suggest-run-x-box")
-                .debug_selector(|| "tun-suggest-run-x-box".to_string())
-                .flex_none()
-                .tooltip(crate::panels::common::text_tooltip(model.all_tip.clone()))
+                    div()
+                        .id("tun-suggest-one-x-box")
+                        .debug_selector(|| "tun-suggest-one-x-box".to_string())
+                        .flex_none()
+                        .tooltip(crate::panels::common::text_tooltip(model.one_tip.clone()))
+                        .child(
+                            MoonButton::new("tun-suggest-one-x")
+                                .size(MoonButtonSize::density(cx))
+                                .mono(false)
+                                .variant(MoonButtonVariant::Soft)
+                                .label(t!("analytics.ticks.pick.one").to_string())
+                                .disabled(!model.one_enabled)
+                                .on_click(move |_, window, app| one(window, app))
+                                .render(),
+                        ),
+                )
                 .child(
-                    MoonButton::new("tun-suggest-run-x")
-                        .size(MoonButtonSize::density(cx))
-                        .mono(false)
-                        .variant(MoonButtonVariant::Blue)
-                        .label(model.all_label.clone())
-                        .disabled(!model.all_enabled)
-                        .on_click(move |_, window, app| all(window, app))
-                        .render(),
+                    div()
+                        .id("tun-suggest-run-x-box")
+                        .debug_selector(|| "tun-suggest-run-x-box".to_string())
+                        .flex_none()
+                        .tooltip(crate::panels::common::text_tooltip(model.all_tip.clone()))
+                        .child(
+                            MoonButton::new("tun-suggest-run-x")
+                                .size(MoonButtonSize::density(cx))
+                                .mono(false)
+                                .variant(MoonButtonVariant::Blue)
+                                .label(model.all_label.clone())
+                                .disabled(!model.all_enabled)
+                                .on_click(move |_, window, app| all(window, app))
+                                .render(),
+                        ),
                 ),
         )
         .into_any_element()

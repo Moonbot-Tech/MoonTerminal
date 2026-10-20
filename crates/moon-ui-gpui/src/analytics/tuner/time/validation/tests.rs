@@ -68,6 +68,7 @@ impl Render for Probe {
                 &self.input,
                 select,
                 false,
+                gpui::div().into_any_element(),
                 |_, _, _| {},
                 p,
                 cx,

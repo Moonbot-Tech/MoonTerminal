@@ -1,6 +1,6 @@
 //! "By time" mode of the "Strategy tuning" tab. On the left — the same strategy
 //! list as in "By filter" (a click sets the profile scope); on the right — KPI +
-//! the schedule grid; at the bottom, full width — a SINGLE "by hour of day" chart
+//! the schedule grid; under the list — a SINGLE "by hour of day" chart
 //! for the SELECTED period: 24 hour columns left to right, each with a vertical
 //! PnL bar growing from the center line (green up / orange down) + the value.
 //! Data comes from one bounded streaming time-profile scan of the selected period.
@@ -26,7 +26,7 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::super::refresh::CatchUpOutcome;
-use super::super::summary::{fmt_signed, sign_color};
+use super::super::summary::fmt_signed;
 use super::kpi::kpi_matrix_card;
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -166,86 +166,14 @@ impl AnalyticsView {
         );
     }
 
-    /// Body of the "By time" mode — the layout MIRRORS "By filter": on the left the
-    /// list (top) + the heatmap (bottom, where the histogram sits); on the right a
-    /// full-height column — the "Fact vs variants" KPI (top) + the schedule grid (bottom).
-    pub(in crate::analytics::tuner) fn strat_time(
-        &mut self,
-        p: MoonPalette,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        // Elements built up front: the &self widgets are computed before the &mut grid
-        // (time_grid lazily creates inputs) so the borrows do not overlap.
-        let list = self.strat_list_card(p, window, cx);
-        let heatmap = self.time_heatmap(p, cx);
-        // The right column's fold is the SAME flag every other axis uses, and its rail is built
-        // in both states — collapsed, it is the only control that can bring the column back.
-        // The column's own widgets are built only while it is expanded, so a hidden column costs
-        // no lazy `MoonInputState` creation in `time_grid`.
-        let side_collapsed = self.side_collapsed;
-        let rail = self.side_rail(p, cx);
-        let column = (!side_collapsed).then(|| {
-            let kpi = self.time_kpi(p, cx);
-            let grid = self.time_grid(p, window, cx);
-            (kpi, grid)
-        });
-        // The write-confirmation dialog is SHARED with "By filter" (`save_dialog_overlay`);
-        // we render it here too, because "By time" returns from `strategies_tab` earlier
-        // than the point where that path adds the overlay.
-        let dialog = self.save_dialog_overlay(p, cx);
-        // Mouse-capture overlay for the duration of a slider drag (on top of the whole body).
-        let drag_overlay = self.slider_drag_overlay(cx);
-        let body = v_flex()
-            .size_full()
-            .p(design::ui_px(cx, 10.0))
-            .gap(design::ui_px(cx, 8.0))
-            // Top: the strategy list (left) + KPI/grid/sliders (right, 470).
-            .child(
-                h_flex()
-                    .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(div().flex_1().min_w_0().h_full().min_h_0().child(list))
-                    .child(rail)
-                    // A live slider drag is safe from the caret: `slider_drag_overlay` below
-                    // covers the whole body while `time_tuner.slider_drag` is `Some`, so the
-                    // rail cannot be clicked mid-drag and the flag cannot flip under one.
-                    .children(column.map(|(kpi, grid)| {
-                        // Just wide enough for the "WorkingWeekTime" name column plus the v1/v2
-                        // inputs on one line — no slack for the "in strategy" column to inflate.
-                        v_flex()
-                            .w(design::font_w_px(cx, 540.0))
-                            .flex_none()
-                            .h_full()
-                            .min_h_0()
-                            .gap(design::ui_px(cx, 8.0))
-                            .child(kpi)
-                            .child(grid)
-                    })),
-            )
-            // Bottom: the "By hour" heatmap at FULL width (same height as the filter histogram).
-            .child(
-                div()
-                    .w_full()
-                    .flex_none()
-                    .h(design::ui_px(cx, 210.0))
-                    .child(heatmap),
-            );
-        div()
-            .relative()
-            .size_full()
-            .child(body)
-            .children(dialog)
-            .children(drag_overlay)
-            .into_any_element()
-    }
-
     /// Top of the right column: the UNIVERSAL "Fact vs variants" KPI matrix (Fact /
     /// v1 / v2 over the weekly schedule taken from the grid) for the active period and
     /// the scope of the selected strategy. The same widget as in "By filter".
-    fn time_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+    pub(in crate::analytics::tuner) fn time_kpi(
+        &self,
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         // An empty label list → "v1"/"v2" (as in "By filter").
         kpi_matrix_card(
             &self.time_tuner.stats,
@@ -265,12 +193,26 @@ impl AnalyticsView {
     ///
     /// Returns:
     ///     The chart card or its classified loading/error placeholder.
-    fn time_heatmap(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        // The single profile = the selected period (see `reload_time`).
+    pub(in crate::analytics::tuner) fn time_heatmap(
+        &self,
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let mode = super::StratMode::Time;
+        if self.bottom_collapsed(mode) {
+            return self.folded_bottom(mode, t!("analytics.time.by_hour").to_string(), p, cx);
+        }
         let profiles = match self.time_tuner.profiles.view(|_| false) {
             Ok(profiles) => profiles,
             Err(note) => {
-                return crate::load_state::note_el("an-time-profile-note", note, 8.0, p, cx);
+                return super::shared::card(
+                    t!("analytics.time.by_hour").to_string(),
+                    self.scope_label(),
+                    crate::load_state::note_el("an-time-profile-note", note, 8.0, p, cx),
+                    Some(self.bottom_caret(mode, p, cx)),
+                    p,
+                    cx,
+                );
             }
         };
         let prof = profiles.first().copied();
@@ -305,7 +247,9 @@ impl AnalyticsView {
         };
 
         v_flex()
-            .size_full()
+            .w_full()
+            .h(design::ui_px(cx, 210.0))
+            .flex_none()
             .rounded(design::ui_px(cx, 8.0))
             .bg(moon(p.panel))
             .border_1()
@@ -326,17 +270,19 @@ impl AnalyticsView {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(t!("analytics.time.by_hour").to_string()),
                     )
-                    .child(div().flex_1())
                     .child(
                         // NOT flipped: `scope` (`scope_label()`) is sometimes a raw strategy
                         // name, which stays mono for legibility.
                         div()
+                            .flex_1()
                             .min_w_0()
                             .truncate()
                             .text_size(design::t_caption(cx))
                             .text_color(moon(p.text_muted))
+                            .font_family(design::mono())
                             .child(scope),
-                    ),
+                    )
+                    .child(self.bottom_caret(mode, p, cx)),
             )
             .child(
                 div()
@@ -355,7 +301,7 @@ impl AnalyticsView {
 /// Height of a column's bar area (px before font scaling); the bar grows from the center by ≤ half.
 const BAR_H: f32 = 108.0;
 
-/// A single hour column: exact-unit PnL, trade count, center-origin bar, and hour.
+/// A center-origin hourly bar with exact-unit PnL and trade count available on hover.
 /// Bar up = profit (green), down = loss (orange); length ∝ |PnL| / maximum.
 ///
 /// Args:
@@ -400,37 +346,17 @@ fn hour_column(
     };
     let r = design::ui_px(cx, 2.0);
     let half = BAR_H / 2.0;
+    let tip = format!("{h:02}: {value} {count}");
     v_flex()
+        .id(SharedString::from(format!("tuner-hour-{h}")))
+        .role(Role::Label)
+        .aria_label(tip.clone())
+        .tooltip(crate::panels::common::text_tooltip(tip))
         .flex_1()
         .min_w_0()
         .items_center()
         .gap(design::ui_px(cx, 1.0))
-        // Value (on top).
-        .child(
-            div()
-                .flex_none()
-                .w_full()
-                .truncate()
-                .text_center()
-                .text_size(design::t_caption(cx))
-                .text_color(moon(if has {
-                    sign_color(p, profit)
-                } else {
-                    p.text_muted
-                }))
-                .child(value),
-        )
-        // Trade count (smaller, muted).
-        .child(
-            div()
-                .flex_none()
-                .w_full()
-                .truncate()
-                .text_center()
-                .text_size(design::t_caption(cx))
-                .text_color(moon_alpha(p.text_muted, 0.7))
-                .child(count),
-        )
+        // Exact figures are on hover: the mockup's left-column bars cannot fit 24 money labels.
         // Fixed-height bar area: the center tick + the bar up/down (px, not a relative
         // height — that one is unreliable inside a flex context).
         .child(

@@ -501,7 +501,8 @@ impl AnalyticsView {
         let mut head = h_flex()
             .w_full()
             .px(design::ui_px(cx, 8.0))
-            .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
+            .min_h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
+            .flex_wrap()
             .items_center()
             .gap(design::ui_px(cx, 6.0))
             .text_size(design::t_caption(cx))
@@ -544,23 +545,15 @@ impl AnalyticsView {
                     })),
             )
             // Chip column: the selected strategy's thresholds (click sends them to v1).
-            .child(
-                div()
-                    .flex_1()
-                    .child(t!("analytics.tuner.strat_chip").to_string()),
-            );
+            .child(div().flex_1().child(t!("analytics.time.cur").to_string()));
+        let mut copy_tools = h_flex()
+            .w_full()
+            .justify_end()
+            .px(design::ui_px(cx, 12.0))
+            .gap(design::ui_px(cx, 6.0));
         for vi in 0..N_VAR {
-            head = head
-                .child(
-                    div()
-                        .w(design::font_w_px(cx, in_w))
-                        .flex_none()
-                        .text_center()
-                        .child(format!("v{} {}", vi + 1, t!("analytics.tuner.from"))),
-                )
-                // The only two copy buttons, both "copy the WHOLE column", each between its
-                // variant's "from" and "to": → carries v1→v2, ← carries v2→v1. Rows have none —
-                // they keep a matching spacer so the columns stay aligned.
+            copy_tools = copy_tools
+                .child(div().child(format!("v{}", vi + 1)))
                 .child(if vi == 0 {
                     glyph_btn(
                         "tun-cp-col",
@@ -581,13 +574,22 @@ impl AnalyticsView {
                         cx,
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.copy_v2_to_v1(None, cx)))
-                })
+                });
+            head = head
                 .child(
                     div()
                         .w(design::font_w_px(cx, in_w))
                         .flex_none()
                         .text_center()
-                        .child(t!("analytics.tuner.to").to_string()),
+                        .child(format!("v{} {}", vi + 1, t!("analytics.tuner.from"))),
+                )
+                .child(div().w(design::ui_px(cx, 12.0)).flex_none())
+                .child(
+                    div()
+                        .w(design::font_w_px(cx, in_w))
+                        .flex_none()
+                        .text_center()
+                        .child(format!("→ {}", t!("analytics.tuner.to"))),
                 )
                 // Clear the WHOLE variant column — above the per-row crosses.
                 .child(
@@ -632,6 +634,7 @@ impl AnalyticsView {
             let selected = self.tuner.sel_field == fi;
             let unmapped = !FIELDS[fi].mapped();
             let mut row = h_flex()
+                .flex_wrap()
                 .id(SharedString::from(format!("tun-field-{fi}")))
                 .w_full()
                 .px(design::ui_px(cx, 8.0))
@@ -817,10 +820,8 @@ impl AnalyticsView {
         );
         v_flex()
             .w_full()
-            // Fill the column and scroll the field rows internally (toolbar/config pinned), so
-            // the parameters never spill off the bottom of a short panel.
-            .flex_1()
-            .min_h_0()
+            // The shared right column owns scrolling for both cards.
+            .flex_none()
             .rounded(design::ui_px(cx, 8.0))
             .bg(moon(p.panel))
             .border_1()
@@ -828,25 +829,23 @@ impl AnalyticsView {
             .overflow_hidden()
             .child(header)
             .child(cfg_row)
+            .children(self.split_summary(p, cx))
+            .child(copy_tools)
             .child(
                 div()
                     .id("an-fields-scroll")
                     .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
+                    .flex_none()
                     .child(grid),
             )
-            .children(self.split_summary(p, cx))
             .into_any_element()
     }
 
     /// What the last suggestion's ranges achieved, split in two by whether the search was allowed
     /// to see the trades being measured.
     ///
-    /// Pinned BELOW the scrolling rows rather than placed inside them: the fitted profit is the
-    /// number the search maximized and always looks good, so the held-back one has to be visible
-    /// at the same moment, not somewhere the user has to scroll to. Nothing is drawn until a
+    /// Shown directly below the result band and above the grid: fitted profit and independent
+    /// holdout must be visible together. Nothing is drawn until a
     /// search has produced an answer — an untouched grid has nothing to report — and editing any
     /// bound retires the suggestion, taking this with it.
     ///

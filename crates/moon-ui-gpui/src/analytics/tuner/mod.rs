@@ -29,6 +29,8 @@ pub(super) use ready::ReadyPass;
 mod columns;
 /// The "Fact vs variants" KPI matrix, rendered by every axis out of plain `VarStats`.
 mod kpi;
+/// Shared responsive page and card frames, exercised by headless layout probes.
+mod layout;
 /// The strategy list — it stands beside all three axes, so it is not any one of them.
 mod list;
 /// The write-confirmation dialog (assemble → render → execute).
@@ -72,7 +74,7 @@ pub(in crate::analytics::tuner) use coins::columns::{
 };
 pub(in crate::analytics::tuner) use columns::{metric_cell, sort_arrow_of, toggle_sort_key};
 use gpui::*;
-use moon_ui::{MoonPalette, h_flex, v_flex};
+use moon_ui::{MoonPalette, v_flex};
 use rust_i18n::t;
 pub(in crate::analytics::tuner) use strat_columns::{
     AUTO_MIN_W, AUTO_W, COL_BIT_READY, READY_MIN_W, READY_W, SORT_AUTO, SORT_READY,
@@ -89,7 +91,7 @@ pub(super) use strat_columns::{STRAT_COLS_ALL, STRAT_COLS_DEFAULT, STRAT_COLS_DE
 use super::AnalyticsView;
 use super::refresh::RefreshUrgency;
 use crate::design;
-use crate::design::moon;
+use crate::load_state::LoadState;
 use moon_core::config::layout::StratColsByMode;
 
 /// Parse a strategy-list row key `"strategyid@core_uid"` (the list is split PER CORE)
@@ -703,8 +705,7 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// The tab body: it divides the height itself (the window's outer scroll is off) —
-    /// the bottom bar is always on screen.
+    /// Render every tuner axis through the same measured two-column page.
     pub(super) fn strategies_tab(
         &mut self,
         p: MoonPalette,
@@ -712,154 +713,106 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mode = self.strat_mode;
-        // "By time" has a layout of its own (list + map + KPI + schedule grid).
-        if mode == StratMode::Time {
-            return self.strat_time(p, window, cx);
-        }
-        // Left half: the list, with the axis' own detail pinned below it — the field
-        // histogram in "Filters", the coin table in "Coins". The right column spans the
-        // FULL height of the tab.
-        let list_card = self.strat_list_card(p, window, cx);
-        // "Coins" builds its table before the immutable reads of the right column
-        // (the lazy search input needs &mut self).
-        let coins_card = (mode == StratMode::Coins).then(|| self.coins_card(p, window, cx));
-        // "Entry/Exit" likewise: its table settles the sort cache, which needs &mut self.
-        let ticks_card = (mode == StratMode::Ticks).then(|| self.ticks_card(p, window, cx));
-        // The right column's fold is one flag for every axis, and the rail carrying its caret is
-        // built in BOTH states — collapsed, it is the only control left that can bring the column
-        // back. The column below is then simply not built: `left` is already `.flex_1()`, so it
-        // takes the freed width with no width arithmetic anywhere.
-        let side_collapsed = self.side_collapsed;
-        // "Entry/Exit" draws no grid and no matrix without a selected strategy: its grid would
-        // list every field of every strategy and its matrix would judge variants of nothing. The
-        // column stays, empty, and says what it waits for.
-        let side_empty =
-            mode == StratMode::Ticks && self.visible_target_count(self.read_core_ids()) == 0;
-        let rail = self.side_rail(p, cx);
+        let list = self.strat_list_card(p, window, cx);
+        let bottom = match mode {
+            StratMode::Filters => self.hist_card(p, cx),
+            StratMode::Time => self.time_heatmap(p, cx),
+            StratMode::Coins => self.coins_card(p, window, cx),
+            StratMode::Ticks => self.ticks_card(p, window, cx),
+        };
+        let narrow = layout::is_narrow(self.tuner_host_width, cx);
         let mut left = v_flex()
+            .debug_selector(|| "tuner-left".into())
             .flex_1()
             .min_w_0()
             .h_full()
             .min_h_0()
             .gap(design::ui_px(cx, 8.0))
-            .child(list_card);
-        match mode {
-            StratMode::Filters => left = left.child(self.hist_card(p, cx)),
-            // The coin table sits UNDER the list, where the histogram sits in "Filters":
-            // both are "the detail behind the selected strategy".
-            StratMode::Coins => left = left.children(coins_card),
-            // The deal table, in the same slot: the trades behind the selected strategy — and
-            // under it, behind a rail of its own, the pane drawing the selected deal.
-            StratMode::Ticks => {
-                left = left
-                    .children(ticks_card)
-                    .child(self.ticks_trade_rail(p, cx));
-                if self.ticks.trade.open {
-                    left = left.child(self.ticks_trade_pane(p, cx));
+            .child(list)
+            .child(bottom);
+        if mode == StratMode::Ticks {
+            left = left.child(self.ticks_trade_rail(p, cx));
+            if self.ticks.trade.open {
+                left = left.child(self.ticks_trade_pane(p, cx));
+            }
+        }
+        let rail = self.side_rail(p, cx);
+        let side = (!self.side_collapsed).then(|| {
+            let selected = self.visible_target_count(self.read_core_ids()) > 0;
+            let loading = match mode {
+                StratMode::Filters => {
+                    matches!(self.tuner.stats, LoadState::Loading { stale: None })
                 }
+                StratMode::Time => {
+                    matches!(self.time_tuner.stats, LoadState::Loading { stale: None })
+                }
+                StratMode::Coins => matches!(self.coins.stats, LoadState::Loading { stale: None }),
+                StratMode::Ticks => matches!(self.ticks.data, LoadState::Loading { stale: None }),
+            };
+            if loading || matches!(self.strategy_data, super::ProfitLoadState::Loading) {
+                return self.tuner_empty_side(true, p, cx);
             }
-            StratMode::Time => unreachable!("Time mode returns early above"),
-        }
-
-        let mut main = h_flex()
-            .size_full()
-            .p(design::ui_px(cx, 10.0))
-            .gap(design::ui_px(cx, 8.0))
-            .child(left)
-            .child(rail);
-        match mode {
-            // Every arm builds its right column only while expanded. `fields_grid` and
-            // `coins_lists_card` lazily create input entities, so a hidden column does not need
-            // them.
-            StratMode::Filters if !side_collapsed => {
-                // KPI is pinned at the top; ONLY the thresholds container scrolls.
-                main = main.child(
-                    v_flex()
-                        .w(design::font_w_px(cx, 470.0))
-                        .flex_none()
-                        .h_full()
-                        .min_h_0()
-                        .gap(design::ui_px(cx, 8.0))
-                        .child(self.kpi_matrix(p, cx))
-                        // fields_grid fills the column and scrolls its rows internally.
-                        .child(self.fields_grid(p, window, cx)),
-                );
+            if !selected {
+                return self.tuner_empty_side(false, p, cx);
             }
-            StratMode::Coins if !side_collapsed => {
-                // Same right column as every other axis: the shared "Fact vs variants"
-                // matrix on top, the axis' own tool below it — here the coin lists card. The
-                // column scrolls as a whole; each list's chip well scrolls inside past its cap.
-                let auto = self.coins_auto_card(p, window, cx);
-                let lists = self.coins_lists_card(p, window, cx);
-                main = main.child(
-                    div()
-                        .id("an-coin-side")
-                        .w(design::font_w_px(cx, 470.0))
-                        .flex_none()
-                        .h_full()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .child(
-                            v_flex()
-                                .w_full()
-                                .gap(design::ui_px(cx, 8.0))
-                                .child(self.coins_kpi(p, cx))
-                                .child(auto)
-                                .child(lists),
-                        ),
-                );
-            }
-            StratMode::Ticks if !side_collapsed => {
-                // The matrix on top, the parameter grid with its search row below — the same
-                // right column as the filter axis; without a strategy, the column's note alone.
-                let side = if side_empty {
-                    div()
-                        .size_full()
-                        .rounded(design::ui_px(cx, 8.0))
-                        .bg(moon(p.panel))
-                        .border_1()
-                        .border_color(moon(p.border))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        // Full width so the sentence wraps inside the column, centred per line;
-                        // an intrinsic-width child overflows the 470 px column.
-                        .child(
-                            div()
-                                .w_full()
-                                .min_w_0()
-                                .text_center()
-                                .font_family(design::ui_font())
-                                .child(crate::load_state::muted(
-                                    t!("analytics.ticks.side_pick_strategy").to_string(),
-                                    10.0,
-                                    p,
-                                    cx,
-                                )),
-                        )
-                        .into_any_element()
-                } else {
-                    self.ticks_side(p, window, cx)
-                };
-                main = main.child(
-                    v_flex()
-                        .w(design::font_w_px(cx, 470.0))
-                        .flex_none()
-                        .h_full()
-                        .min_h_0()
-                        .child(side),
-                );
-            }
-            StratMode::Filters | StratMode::Coins | StratMode::Ticks => {}
-            StratMode::Time => unreachable!("Time mode returns early above"),
-        }
-        // The save confirmation window — an overlay on top of the tab.
+            let (kpi, params) = match mode {
+                StratMode::Filters => (self.kpi_matrix(p, cx), self.fields_grid(p, window, cx)),
+                StratMode::Time => (self.time_kpi(p, cx), self.time_grid(p, window, cx)),
+                StratMode::Coins => {
+                    let auto = self.coins_auto_card(p, window, cx);
+                    let lists = self.coins_lists_card(p, window, cx);
+                    let body = v_flex()
+                        .w_full()
+                        .child(self.shell_toolbar(
+                            shared::TunerKind::Coins,
+                            t!("analytics.tuner.fields_title").to_string(),
+                            cx,
+                        ))
+                        .child(auto)
+                        .child(lists)
+                        .into_any_element();
+                    (self.coins_kpi(p, cx), layout::parameters(body, p, cx))
+                }
+                StratMode::Ticks => {
+                    let width = design::font_w_px(cx, layout::SIDE_W);
+                    (self.ticks_kpi(p, cx), self.ticks_grid(width, p, window, cx))
+                }
+            };
+            v_flex()
+                .w_full()
+                .gap(design::ui_px(cx, 8.0))
+                .child(kpi)
+                .child(params)
+                .into_any_element()
+        });
+        let main = layout::page(left.into_any_element(), rail, side, narrow, cx);
+        let view = cx.entity().downgrade();
         let dialog = self.save_dialog_overlay(p, cx);
+        let drag = (mode == StratMode::Time)
+            .then(|| self.slider_drag_overlay(cx))
+            .flatten();
         div()
             .relative()
             .size_full()
+            .child(
+                canvas(
+                    move |bounds, _, app| {
+                        let width = f32::from(bounds.size.width);
+                        let _ = view.update(app, |this, cx| {
+                            if (this.tuner_host_width - width).abs() > 1.0 {
+                                this.tuner_host_width = width;
+                                cx.notify();
+                            }
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(main)
             .children(dialog)
+            .children(drag)
             .into_any_element()
     }
 }

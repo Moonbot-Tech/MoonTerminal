@@ -416,6 +416,8 @@ impl AnalyticsView {
             kpi_collapsed: saved_kpi_collapsed,
             hist_collapsed: saved_hist_collapsed,
             side_collapsed: saved_side_collapsed,
+            tuner_host_width: 0.0,
+            tuner_bottom_collapsed: [false; 3],
             clear_shell: None,
             tuner: tuner::TunerState::load(
                 saved_tuner_iters,

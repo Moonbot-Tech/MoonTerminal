@@ -84,6 +84,7 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let mode = super::StratMode::Ticks;
         self.refresh_station_tape(cx);
         let scale = design::font_scale(cx);
         let scope = self.scope_label();
@@ -255,6 +256,10 @@ impl AnalyticsView {
             );
         let model_settings = self.ticks_model_settings(p, window, cx);
         let report = self.ticks_report_button(cx);
+        // Folding is a display choice: keep refresh/listener attachment on its existing path.
+        if self.bottom_collapsed(mode) {
+            return self.folded_bottom(mode, t!("analytics.ticks.title").to_string(), p, cx);
+        }
         v_flex()
             .w_full()
             .flex_1()
@@ -287,6 +292,7 @@ impl AnalyticsView {
                             .truncate()
                             .text_size(design::t_caption(cx))
                             .text_color(moon(p.text_muted))
+                            .font_family(design::mono())
                             .child(scope),
                     )
                     // While a batch runs: how far it is and which markets it is on; while the
@@ -314,7 +320,8 @@ impl AnalyticsView {
                             .flex_none()
                             .font_family(design::ui_font())
                             .child(model_settings),
-                    ),
+                    )
+                    .child(self.bottom_caret(mode, p, cx)),
             )
             .child(legend_el(p, cx))
             .child(self.deal_header(p, cx))
@@ -417,32 +424,12 @@ impl AnalyticsView {
         )
     }
 
-    /// The right column of the axis: the matrix on top, the grid panel below it.
-    pub(in crate::analytics::tuner) fn ticks_side(
-        &mut self,
-        p: MoonPalette,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let host_w = design::font_w_px(cx, 470.0);
-        let summary = self.ticks_summary_card(host_w, p, cx);
-        let kpi = self.ticks_kpi(p, cx);
-        let grid = self.ticks_grid(host_w, p, window, cx);
-        v_flex()
-            .id("an-ticks-side")
-            .w_full()
-            .h_full()
-            .min_h_0()
-            .overflow_y_scroll()
-            .gap(design::ui_px(cx, 8.0))
-            .child(summary)
-            .child(kpi)
-            .child(grid)
-            .into_any_element()
-    }
-
     /// Compare the displayed V1 with the fit-trade fact, keeping open estimates outside profit.
-    fn ticks_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+    pub(in crate::analytics::tuner) fn ticks_kpi(
+        &self,
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let (fit, covered, entry, exit, replayable, entry_on) = self
             .ticks
             .data
@@ -516,7 +503,7 @@ impl AnalyticsView {
             .clone()
             .or_else(|| self.ticks.kpi.data().and_then(|k| k.first().cloned()));
         let mut stats: Vec<moon_core::db::tuner::VarStats> = baseline.iter().cloned().collect();
-        let title = t!("analytics.ticks.sum.col_v1").to_string();
+        let title = "v1".to_string();
         let label = match &self.ticks.var_stats {
             None => VarLabel::with_sub(title, t!("analytics.ticks.kpi.v1_none").to_string())
                 .with_tip(t!("analytics.ticks.var_untouched").to_string())
@@ -567,17 +554,18 @@ impl AnalyticsView {
             cx,
             KpiOpts {
                 title: Some((
-                    t!("analytics.ticks.kpi.title").to_string(),
-                    sample::caption(
-                        set_n,
-                        self.ticks.data.data().map_or(0, |d| d.all.n),
-                        self.ticks.tape_reading,
-                    ),
+                    t!("analytics.tuner.kpi_title").to_string(),
+                    self.scope_label(),
                 )),
-                sample_note: self.ticks.data.data().and_then(|d| {
-                    baseline
+                sample_note: self.ticks.data.data().map(|d| {
+                    let coverage = sample::caption(set_n, d.all.n, self.ticks.tape_reading);
+                    match baseline
                         .as_ref()
                         .and_then(|fit| sample::bias_note(fit, &d.all))
+                    {
+                        Some(bias) => format!("{coverage} · {bias}"),
+                        None => coverage,
+                    }
                 }),
                 rows: KpiRows::Plain,
                 unclosed: (self.ticks.var_open > 0)

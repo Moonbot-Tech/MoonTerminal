@@ -75,7 +75,7 @@ fn blank_figure() -> Figure {
     }
 }
 
-/// Row labels remain shared unless an axis requests plain-language captions.
+/// Row geometry is compact by default; tape comparisons preserve full values with wrapping.
 #[derive(Clone, Copy, Default)]
 pub(super) enum KpiRows {
     #[default]
@@ -577,7 +577,7 @@ pub(super) fn kpi_matrix_body_with(
     // exactly these via `COLLAPSED_ROWS`. Keep them first if this vec is ever reordered.
     // Colour is the sign of the painted figure in every column — see [`figure_of`].
     const COLLAPSED_ROWS: usize = 2;
-    let mut rows: Vec<(String, MetricKind)> = vec![
+    let rows: Vec<(String, MetricKind)> = vec![
         (t!("analytics.kpi.trades").to_string(), MetricKind::Trades),
         (
             t!(
@@ -607,21 +607,6 @@ pub(super) fn kpi_matrix_body_with(
             MetricKind::MaxDrawdown,
         ),
     ];
-    if matches!(opts.rows, KpiRows::Plain) {
-        for (label, kind) in &mut rows {
-            let key = match kind {
-                MetricKind::Trades => "analytics.ticks.kpi.row.trades",
-                MetricKind::Profit => "analytics.ticks.kpi.row.profit",
-                MetricKind::Average => "analytics.ticks.kpi.row.avg",
-                MetricKind::Winrate => "analytics.ticks.kpi.row.winrate",
-                MetricKind::ProfitFactor => "analytics.ticks.kpi.row.pf",
-                MetricKind::AvgWin => "analytics.ticks.kpi.row.avg_win",
-                MetricKind::AvgLoss => "analytics.ticks.kpi.row.avg_loss",
-                MetricKind::MaxDrawdown => "analytics.ticks.kpi.row.maxdd",
-            };
-            *label = t!(key, unit = crate::analytics::pnl_unit_label()).to_string();
-        }
-    }
     let columns = kpi_columns(stats.len(), var_labels);
     let headings: Vec<VarLabel> = (0..columns)
         .map(|i| {

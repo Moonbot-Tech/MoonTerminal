@@ -53,10 +53,9 @@ impl AnalyticsView {
         // The title carries the field and the scope (strategy name / count / all).
         let scope = self.scope_label();
         let title = format!(
-            "{} — {} — {}",
+            "{} — {}",
             t!("analytics.tuner.hist_title"),
             FIELDS[self.tuner.sel_field].label,
-            scope,
         );
         // Built before the body so it does not blink out while the histogram is loading or
         // after a read error — the caret belongs to the title bar in every state.
@@ -75,14 +74,7 @@ impl AnalyticsView {
         } else {
             self.hist_body(p, cx)
         };
-        card(
-            title,
-            t!("analytics.tuner.hist_sub").to_string(),
-            body,
-            Some(caret),
-            p,
-            cx,
-        )
+        card(title, scope, body, Some(caret), p, cx)
     }
 
     /// Render the distribution body from its current load state.

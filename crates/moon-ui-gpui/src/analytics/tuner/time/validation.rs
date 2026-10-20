@@ -20,6 +20,37 @@ pub(super) fn warning(result: &TimeEvaluation) -> Option<&'static str> {
     }
 }
 
+/// Describe the fitted fields before their train/holdout metrics, without rescoring them.
+fn result_line(result: &TimeEvaluation) -> Option<String> {
+    let train = result.train.as_ref()?;
+    let mut windows = Vec::new();
+    if let Some(span) = result.suggestion.week_span {
+        windows.push(format!(
+            "WorkingWeekTime {}",
+            moon_core::db::tuner::format_week_span(span)
+        ));
+    }
+    if let Some(window) = result.suggestion.tod {
+        windows.push(format!(
+            "WorkingTime {}",
+            moon_core::db::tuner::format_working_time(window)
+        ));
+    }
+    let window = if windows.is_empty() {
+        t!("analytics.tuner.time_all_hours").to_string()
+    } else {
+        windows.join(" · ")
+    };
+    Some(
+        t!(
+            "analytics.tuner.time_window",
+            window = window,
+            n = train.n + result.holdout.as_ref().map_or(0, |part| part.n)
+        )
+        .to_string(),
+    )
+}
+
 /// Show validation only for an unedited completed suggestion; warnings wrap under metric lines.
 pub(super) fn summary(
     result: Option<&TimeEvaluation>,
@@ -39,6 +70,14 @@ pub(super) fn summary(
             .border_t_1()
             .border_color(moon(p.border))
             .text_size(design::t_caption(cx))
+            .children(result_line(result).map(|line| {
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .font_family(design::ui_font())
+                    .text_color(moon(p.text_soft))
+                    .child(line)
+            }))
             .when_some(result.train.as_ref(), |el, train| {
                 el.child(super::super::split::line(
                     t!("analytics.tuner.split_train").to_string(),

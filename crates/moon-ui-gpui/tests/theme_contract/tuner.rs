@@ -3,6 +3,51 @@
 
 use super::support::*;
 
+/// The approved mockup gives every axis one ordered metric vocabulary, including Entry/Exit.
+#[test]
+fn every_axis_uses_the_shared_kpi_vocabulary() {
+    let source = read_src("analytics/tuner/kpi.rs");
+    let matrix = code_only(braced_body(&source, "pub(super) fn kpi_matrix_body_with("));
+    let labels = [
+        "analytics.kpi.trades",
+        "analytics.kpi.profit",
+        "analytics.kpi.avg_short",
+        "analytics.kpi.winrate",
+        "analytics.col.pf",
+        "analytics.tuner.avg_win",
+        "analytics.tuner.avg_loss",
+        "analytics.kpi.maxdd",
+    ];
+    let positions: Vec<_> = labels
+        .iter()
+        .map(|key| matrix.find(key).expect("shared KPI label"))
+        .collect();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "mockup row order"
+    );
+    assert!(
+        !matrix.contains("analytics.ticks.kpi.row."),
+        "Entry/Exit must not replace shared labels"
+    );
+    let ticks = read_src("analytics/tuner/ticks/mod.rs");
+    let ticks = code_only(braced_body(&ticks, "fn ticks_kpi("));
+    assert!(ticks.contains("kpi_matrix_card_with("));
+    assert!(ticks.contains("analytics.tuner.kpi_title"));
+}
+
+/// A detail fold must not prevent attachment to a running tape read or refresh its source.
+#[test]
+fn folded_deal_details_keep_the_existing_read_listener() {
+    let ticks = read_src("analytics/tuner/ticks/mod.rs");
+    let body = code_only(braced_body(&ticks, "fn ticks_card("));
+    let fold = body
+        .find("if self.bottom_collapsed(mode)")
+        .expect("display fold");
+    assert!(body.find("self.refresh_station_tape(cx)").unwrap() < fold);
+    assert!(body.find("self.attach_fetch_listener(cx)").unwrap() < fold);
+}
+
 /// Removing either header's tooltip wiring silently restores unexplained trade extremes.
 #[test]
 fn comparison_headers_explain_single_trade_extremes() {
@@ -1035,42 +1080,23 @@ fn the_tuner_right_column_collapse_is_a_display_lens_only() {
 #[test]
 fn the_tuner_right_column_rail_is_built_before_each_collapse_guard() {
     let tuner = read_src("analytics/tuner/mod.rs");
-    let time = read_src("analytics/tuner/time/mod.rs");
     let shared = read_src("analytics/tuner/shared.rs");
-    let strategies_tab = code_only(braced_body(&tuner, "pub(super) fn strategies_tab("));
-    let strat_time = code_only(braced_body(
-        &time,
-        "pub(in crate::analytics::tuner) fn strat_time(",
-    ));
-
-    for (name, body, guard) in [
-        (
-            "analytics/tuner/mod.rs::strategies_tab",
-            &strategies_tab,
-            "if !side_collapsed",
-        ),
-        (
-            "analytics/tuner/time/mod.rs::strat_time",
-            &strat_time,
-            "(!side_collapsed)",
-        ),
-    ] {
-        let rail = body
-            .find("let rail = self.side_rail(p, cx);")
-            .unwrap_or_else(|| panic!("{name} must bind its always-present side rail"));
-        let collapsed = body
-            .find(guard)
-            .unwrap_or_else(|| panic!("{name} must retain its expanded-only column guard"));
-        assert!(
-            rail < collapsed,
-            "{name} must build the side rail before the collapse guard, or a persisted collapse becomes a one-way door"
-        );
-        assert_eq!(
-            body.matches("self.side_rail(").count(),
-            1,
-            "{name} must have exactly one code-only side-rail call; a comment cannot satisfy this reachability check"
-        );
-    }
+    let body = code_only(braced_body(&tuner, "pub(super) fn strategies_tab("));
+    let rail_at = body
+        .find("let rail = self.side_rail(p, cx);")
+        .expect("always-present rail");
+    let guard = body
+        .find("(!self.side_collapsed)")
+        .expect("expanded-only shared column");
+    assert!(
+        rail_at < guard,
+        "a persisted fold must retain its expand control"
+    );
+    assert_eq!(body.matches("self.side_rail(").count(), 1);
+    assert!(
+        !tuner.contains("self.strat_time("),
+        "time must use the shared page too"
+    );
 
     let rail = code_only(braced_body(&shared, "pub(super) fn side_rail("));
     let caret = chain_between(
@@ -1155,10 +1181,8 @@ fn a_tuner_card_header_clips_its_text_before_its_accessory() {
     );
     assert_eq!(
         card.matches(".flex_none()").count(),
-        4,
-        "exactly four pinned elements: the card root (it must not shrink inside a scrolling \
-         column), the title, the subtitle, and the accessory — the two texts so the box clips \
-         them by order rather than shrinking both, the accessory so it never yields"
+        3,
+        "the root, title and accessory stay pinned while the muted strategy subtitle yields"
     );
     assert!(
         card.contains(".when(!wrap, |text| text.overflow_hidden().whitespace_nowrap())")

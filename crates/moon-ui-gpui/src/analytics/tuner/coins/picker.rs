@@ -26,8 +26,6 @@ use super::super::super::AnalyticsView;
 use super::fields::{ChipKind, FieldChip, ListFieldActs, ListFieldModel};
 use super::state::CoinLists;
 
-use crate::design;
-use crate::design::moon;
 use crate::load_state::LoadState;
 use moon_core::db::coin_lists::{CoinListEntries, CoinListRows};
 
@@ -657,17 +655,6 @@ impl AnalyticsView {
         v_flex()
             .w_full()
             .flex_none()
-            .rounded(design::ui_px(cx, 8.0))
-            .bg(moon(p.panel))
-            .border_1()
-            .border_color(moon(p.border))
-            .overflow_hidden()
-            // The SHARED tuner toolbar, same as the other axes: title, then Copy and Save.
-            .child(self.shell_toolbar(
-                super::super::shared::TunerKind::Coins,
-                t!("analytics.coins.lists_title").to_string(),
-                cx,
-            ))
             .child(body)
             .when_some(band, |el, band| el.child(band))
             .into_any_element()

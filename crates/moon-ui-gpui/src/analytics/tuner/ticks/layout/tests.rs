@@ -27,7 +27,7 @@ use super::super::ranges::range_cells_el;
 use super::super::state::NowValue;
 use super::super::summary::{
     ChangeRow, ConfirmModel, ProfitRow, SummaryActs, SummaryModel, Unchecked, Verdict, Why,
-    sentence, summary_card_el, tag,
+    parameters_header, sentence, summary_card_el, tag,
 };
 use crate::design;
 use crate::load_state::LoadState;
@@ -777,6 +777,7 @@ impl Render for Probe {
                     .flex_none()
                     .min_w_0()
                     .gap(design::ui_px(cx, 8.0))
+                    .child(parameters_header(&model(self.face), &acts, cx))
                     .child(summary_card_el(
                         &model(self.face),
                         &acts,
@@ -795,7 +796,7 @@ impl Render for Probe {
                         cx,
                         KpiOpts {
                             title: Some((
-                                t!("analytics.ticks.kpi.title").to_string(),
+                                t!("analytics.tuner.kpi_title").to_string(),
                                 super::super::sample::caption(73, 405, self.face == 8),
                             )),
                             sample_note: sample_bias(),
@@ -885,7 +886,6 @@ fn every_ticks_language_has_the_same_keys_and_no_raw_card_text() {
                 || key.starts_with("analytics.ticks.legend.")
                 || key.starts_with("analytics.ticks.col_tip.")
                 || key.starts_with("analytics.ticks.chip.")
-                || *key == "analytics.ticks.side_pick_strategy"
         }) {
             assert!(!t!(key.as_str()).contains("analytics."), "raw key: {key}");
         }
@@ -1167,19 +1167,21 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                             ("kpi-unclosed-1".into(), "1.23M · ≈ +988K".to_string(), true),
                         ];
                         for (row, key) in [
-                            "trades", "profit", "avg", "winrate", "pf", "avg_win", "avg_loss",
-                            "maxdd",
+                            "analytics.kpi.trades",
+                            "analytics.kpi.profit",
+                            "analytics.kpi.avg_short",
+                            "analytics.kpi.winrate",
+                            "analytics.col.pf",
+                            "analytics.tuner.avg_win",
+                            "analytics.tuner.avg_loss",
+                            "analytics.kpi.maxdd",
                         ]
                         .into_iter()
                         .enumerate()
                         {
                             needs.push((
                                 format!("kpi-metric-{row}"),
-                                t!(
-                                    format!("analytics.ticks.kpi.row.{key}"),
-                                    unit = crate::analytics::pnl_unit_label()
-                                )
-                                .to_string(),
+                                t!(key, unit = crate::analytics::pnl_unit_label()).to_string(),
                                 false,
                             ));
                         }
@@ -1202,11 +1204,22 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                                 ));
                             }
                         }
+                        needs.push((
+                            "tun-save-x".into(),
+                            t!("analytics.tuner.save_btn").to_string(),
+                            false,
+                        ));
+                        if model(face).copy_visible {
+                            needs.push((
+                                "tun-copy-x".into(),
+                                t!("analytics.tuner.copy_btn").to_string(),
+                                false,
+                            ));
+                        }
                         let actions = if face == 1 || face == 7 {
                             vec![("stop", "stop")]
                         } else if (2..=6).contains(&face) {
-                            let mut out =
-                                vec![("write", "write"), ("copy", "copy"), ("reset", "reset")];
+                            let mut out = vec![("reset", "reset")];
                             if face == 3 {
                                 out.extend([
                                     ("confirm-yes", "confirm_yes"),

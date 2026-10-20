@@ -9,7 +9,7 @@
 //!
 //! The value lives in the ROW's fields (the source of truth): the full range = 'no
 //! restriction' = empty. Dragging reads the captured `slider_track` bounds (via `canvas`)
-//! and writes the fields; mouse movement is caught by an overlay in `strat_time` so the
+//! and writes the fields; mouse movement is caught by an overlay in the shared tuner page so the
 //! cursor is not lost once it leaves the track.
 
 use gpui::*;
