@@ -340,6 +340,9 @@ pub(in crate::analytics) struct CoinsState {
     /// Bumped on every report publication. A finished pick stores the value it was
     /// published under; `pick_stale` is true when they differ. Same binding as `lists_rev`.
     pub(in crate::analytics::tuner) report_gen: u64,
+    /// Scoped sample at pick launch and the latest queried period end.
+    pub(in crate::analytics::tuner) sample_snapshot: super::super::freshness::SampleSnapshot,
+    pub(in crate::analytics::tuner) report_end: i64,
     pub(in crate::analytics::tuner) seq: u64,
     pub(in crate::analytics::tuner) kpi_seq: u64,
     /// The pending debounced KPI rescan. Held so the next edit REPLACES it — dropping a
@@ -362,6 +365,8 @@ impl Default for CoinsState {
             work: CoinLists::default(),
             lists_rev: 0,
             report_gen: 0,
+            sample_snapshot: Default::default(),
+            report_end: 0,
             search: String::new(),
             search_input: None,
             min_trades: 0,
@@ -578,7 +583,10 @@ impl CoinsState {
                 ..
             } => {
                 let lists = *lists_rev != self.lists_rev;
-                let report = *report_gen != self.report_gen;
+                let report = *report_gen != self.report_gen
+                    && self
+                        .sample_snapshot
+                        .materially_changed(self.kpi.data().map(|s| s.as_ref()), self.report_end);
                 if lists {
                     Some(PickStaleCause::Lists)
                 } else if report {

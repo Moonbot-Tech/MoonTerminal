@@ -66,6 +66,7 @@ impl AnalyticsView {
         let kpi_req = self.coins.kpi_seq;
         let report_req = self.current_report_generation();
         let q = self.tuner_query();
+        self.coins.report_end = q.to;
         self.coins.picked_seq = self.coins.picked_seq.wrapping_add(1);
         let picked_req = self.coins.picked_seq;
         let picked_q = self.tuner_query_all();
@@ -396,6 +397,10 @@ impl AnalyticsView {
         };
         let q = self.tuner_query();
         let seq = self.coins.begin_pick();
+        self.coins.sample_snapshot = super::super::freshness::SampleSnapshot::capture(
+            self.coins.kpi.data().map(|s| s.as_ref()),
+            q.to,
+        );
         let lists_rev = self.coins.lists_rev;
         let report_gen = self.coins.report_gen;
         self.spawn_latest_db(

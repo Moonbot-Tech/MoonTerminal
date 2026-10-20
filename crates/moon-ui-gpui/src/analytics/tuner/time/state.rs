@@ -49,6 +49,8 @@ pub(in crate::analytics) struct TimeTunerState {
     pub(in crate::analytics::tuner) evaluation: Option<moon_core::db::tuner::TimeEvaluation>,
     /// New reports arrived after this completed validation snapshot.
     pub(in crate::analytics::tuner) evaluation_stale: bool,
+    /// Scoped baseline used to suppress insignificant report-append warnings.
+    pub(in crate::analytics::tuner) sample_snapshot: super::super::freshness::SampleSnapshot,
     /// Whether suggested bounds are rounded outward.
     pub(in crate::analytics::tuner) round_results: bool,
     /// Whether an auto-suggestion is in flight.
@@ -94,6 +96,7 @@ impl TimeTunerState {
             train_pct: 100,
             evaluation: None,
             evaluation_stale: false,
+            sample_snapshot: Default::default(),
             round_results: true,
             sugg_busy: false,
             sugg_seq: 0,

@@ -375,6 +375,8 @@ pub(in crate::analytics) struct TunerState {
     pub(in crate::analytics::tuner) sel_field: usize,
     /// KPI matrix load state; `dirty` separately marks retained data for recomputation.
     pub(in crate::analytics::tuner) stats: LoadState<Vec<VarStats>>,
+    /// Scoped sample captured before the latest whole-field suggestion.
+    pub(in crate::analytics::tuner) sample_snapshot: super::super::freshness::SampleSnapshot,
     /// Selected-field histogram read state.
     pub(in crate::analytics::tuner) hist: LoadState<Vec<HistBucket>>,
     /// Filter card of the selected strategy (Ignore flags + thresholds).
@@ -465,6 +467,7 @@ impl TunerState {
             inputs: HashMap::new(),
             sel_field: 0,
             stats: LoadState::default(),
+            sample_snapshot: Default::default(),
             hist: LoadState::default(),
             strat: Arc::new(StratFilters::default()),
             sugg: SuggestState::Idle,

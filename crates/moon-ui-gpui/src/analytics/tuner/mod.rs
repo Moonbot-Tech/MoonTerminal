@@ -29,6 +29,8 @@ pub(super) use ready::ReadyPass;
 mod bounds;
 /// Its column descriptors: the metric pool both comparison tables draw from …
 mod columns;
+/// Shared material-change threshold for completed suggestions.
+mod freshness;
 /// The "Fact vs variants" KPI matrix, rendered by every axis out of plain `VarStats`.
 mod kpi;
 /// Shared responsive page and card frames, exercised by headless layout probes.

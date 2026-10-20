@@ -57,6 +57,10 @@ impl AnalyticsView {
         // unpublishable, and letting it run to the end holds every worker for nothing.
         self.tuner.stop_suggest();
         let q = self.tuner_query();
+        self.tuner.sample_snapshot = super::super::freshness::SampleSnapshot::capture(
+            self.tuner.stats.data().map(|s| s.as_ref()),
+            q.to,
+        );
         let restarts = iters_of(&self.tuner.iters);
         let min_n = self.suggest_min_n();
         let edges = self.suggest_edges();

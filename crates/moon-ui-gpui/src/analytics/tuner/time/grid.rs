@@ -102,6 +102,10 @@ impl AnalyticsView {
         let req = self.time_tuner.sugg_seq;
         self.time_tuner.sugg_busy = true;
         let q = self.tuner_query();
+        self.time_tuner.sample_snapshot = super::super::freshness::SampleSnapshot::capture(
+            self.time_tuner.stats.data().map(|s| s.as_ref()),
+            q.to,
+        );
         let min_n = self.time_tuner.min_trades.trim().parse::<i64>().ok();
         let round = self.time_tuner.round_results;
         let train_frac = self.time_tuner.train_pct as f64 / 100.0;
@@ -365,7 +369,11 @@ impl AnalyticsView {
         let sliders = self.time_sliders(p, cx);
         let validation = super::validation::summary(
             self.time_tuner.evaluation.as_ref(),
-            self.time_tuner.evaluation_stale,
+            self.time_tuner.evaluation_stale
+                && self.time_tuner.sample_snapshot.materially_changed(
+                    self.time_tuner.stats.data().map(|s| s.as_ref()),
+                    self.tuner_query().to,
+                ),
             p,
             cx,
         );

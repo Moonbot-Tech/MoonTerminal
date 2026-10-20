@@ -1131,6 +1131,22 @@ impl AnalyticsView {
                         cx,
                     ))
                 })
+                .when(
+                    self.tuner.sample_snapshot.materially_changed(
+                        self.tuner.stats.data().map(|s| s.as_ref()),
+                        self.tuner_query().to,
+                    ),
+                    |el| {
+                        el.child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .font_family(design::ui_font())
+                                .text_color(moon(p.orange))
+                                .child(t!("analytics.coins.stale_note_report").to_string()),
+                        )
+                    },
+                )
                 // A composed set with nothing held back is a set chosen with no way to check it.
                 // The warning belongs beside the set, where it is read, not only in the popover
                 // where the share was chosen.
