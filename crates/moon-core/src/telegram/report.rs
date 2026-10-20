@@ -305,11 +305,16 @@ impl ReportRequest {
         let month = today.with_day(1)?;
         let (from, to) = match self.period {
             Period::Hour => {
+                // In a repeated fall-back hour hh:00 occurs twice; the current hour began at the
+                // latest occurrence that is not after `now`.
                 let local = local.naive_local().with_minute(0)?.with_second(0)?;
-                return Some((
-                    display_time::unix_from_local(local, zone, LocalBoundary::Lower)?,
-                    now,
-                ));
+                let last = display_time::unix_from_local(local, zone, LocalBoundary::Upper)?;
+                let from = if last <= now {
+                    last
+                } else {
+                    display_time::unix_from_local(local, zone, LocalBoundary::Lower)?
+                };
+                return Some((from, now));
             }
             Period::Today => return Some((display_time::day_start(today, zone)?, now)),
             Period::Month => return Some((display_time::day_start(month, zone)?, now)),

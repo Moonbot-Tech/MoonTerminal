@@ -286,3 +286,29 @@ fn group_buttons_and_retired_single_group_scopes() {
     assert!(request.exchanges_open);
     assert_eq!(ReportRequest::parse_callback("r:cq1a2b:t:0"), None);
 }
+
+/// `/hour` is the current calendar hour, also in the hour a fall-back transition repeats.
+///
+/// Warsaw leaves summer time at 2026-10-25 03:00 CEST (01:00 UTC), so the wall clock reads 02:xx
+/// twice: 00:00-00:59 UTC (CEST) and 01:00-01:59 UTC (CET). At 01:30 UTC the clock reads 02:30
+/// CET, whose hour began at 02:00 CET = 01:00 UTC. The first 02:00 (00:00 UTC) belongs to the
+/// hour before.
+#[test]
+fn the_hour_in_a_repeated_fall_back_hour_starts_at_its_own_top() {
+    let utc = |h, m| {
+        Utc.with_ymd_and_hms(2026, 10, 25, h, m, 0)
+            .unwrap()
+            .timestamp()
+    };
+    let request = ReportRequest::new(Period::Hour, false);
+    let zone = chrono_tz::Europe::Warsaw;
+    assert_eq!(
+        request.bounds(utc(1, 30), zone),
+        Some((utc(1, 0), utc(1, 30)))
+    );
+    // The first occurrence of 02:30 (CEST) starts at the first 02:00.
+    assert_eq!(
+        request.bounds(utc(0, 30), zone),
+        Some((utc(0, 0), utc(0, 30)))
+    );
+}
