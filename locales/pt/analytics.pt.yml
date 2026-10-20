@@ -114,8 +114,6 @@ analytics.ticks.sum.hold_sub: "Reservadas: %{n}, não vistas pela busca"
 analytics.ticks.sum.open_line: "Não fechadas na fita: %{n} · ao último preço são mais %{profit}, excluídos do total"
 analytics.ticks.sum.changed: "O que mudou · campos: %{n}"
 analytics.ticks.sum.varies: "diferentes"
-analytics.ticks.sum.write: "Gravar na estratégia…"
-analytics.ticks.sum.copy: "Criar uma cópia com V1"
 analytics.ticks.sum.reset: "Redefinir V1"
 analytics.ticks.sum.write_note: "«Gravar» muda a estratégia no núcleo. «Cópia» cria ao lado uma nova estratégia com esses valores e mantém a original."
 analytics.ticks.sum.confirm: "Gravar em «%{name}» no núcleo %{core}? Valores: %{n}."
@@ -429,8 +427,6 @@ analytics.strat.mode_time: "Por tempo"
 analytics.time.by_hour: "Por hora"
 # Lower-right By Time card: two strategy fields, WorkingWeekTime for the day span and WorkingTime
 # for the time window. Each defines one from-to range, and the two are combined with AND.
-# Field-name column heading in the By Time tuner.
-analytics.time.col_field: "Campo"
 # By Time tuner: two strategy fields with one from-to range each, combined with AND.
 analytics.time.field_week: "WorkingWeekTime"
 analytics.time.field_day: "WorkingTime(d)"

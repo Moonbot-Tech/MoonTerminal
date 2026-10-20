@@ -774,7 +774,7 @@ impl AnalyticsView {
                     (self.coins_kpi(p, cx), layout::parameters(body, p, cx))
                 }
                 StratMode::Ticks => {
-                    let width = design::font_w_px(cx, layout::SIDE_W);
+                    let width = layout::side_width(self.tuner_host_width, cx);
                     (self.ticks_kpi(p, cx), self.ticks_grid(width, p, window, cx))
                 }
             };

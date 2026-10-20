@@ -1456,8 +1456,8 @@ fn right_clicking_a_strategy_row_does_not_move_the_selection() {
 /// The Parameters card is a fixed 470-unit column. Sharing leftover with "Search all" /
 /// "Compose set" is what clipped `step 2 · option…` mid-word at ordinary Analytics width. The
 /// status therefore sits on its own band and degrades like the Report footer: a never-clipped
-/// head, one `overflow_hidden` tail, tooltip from the same facts. The controls row keeps the
-/// buttons `flex_none` and never wraps.
+/// head, one `overflow_hidden` tail, tooltip from the same facts. The extracted controls keep
+/// buttons `flex_none`; their separate run band may wrap in a narrow dock.
 ///
 /// Breakage: putting `.truncate()` back on a single status string beside the buttons, or
 /// wrapping an intermediate `h_flex` around truncated segments, which collapses the whole line
@@ -1510,12 +1510,13 @@ fn the_filter_search_status_degrades_by_priority_on_its_own_band() {
         !band.contains(".truncate()") && !row.contains(".truncate()"),
         "ellipsis-truncate on a single string is what ate the option count"
     );
+    let controls = code_only(braced_body(&shell, "pub(super) fn filter_controls_el("));
     assert!(
-        !row.contains(".flex_wrap()"),
-        "the controls row stays one line so Stop / Search never wrap under the status"
+        controls.contains(".justify_end()") && controls.contains(".child(controls)"),
+        "search buttons must keep their own right-aligned band apart from status"
     );
     assert!(
-        row.contains("div().flex_none().child("),
+        row.contains("filter_controls_el(") && controls.contains("div().flex_none().child("),
         "Stop and Search must not shrink: they are the row's priority"
     );
 }

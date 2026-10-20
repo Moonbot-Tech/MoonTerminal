@@ -44,7 +44,7 @@ pub(in crate::analytics::tuner) use summary::readiness_refusal;
 pub(in crate::analytics::tuner) use tape::{PackedTape, PendingDeal, prepare_sample};
 
 mod accuracy;
-mod cfg;
+pub(super) mod cfg;
 pub(in crate::analytics::tuner) mod columns;
 mod delta_summary;
 pub(in crate::analytics::tuner) mod estimate;

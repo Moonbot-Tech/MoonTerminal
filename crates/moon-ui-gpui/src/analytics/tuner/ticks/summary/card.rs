@@ -541,7 +541,9 @@ pub(in crate::analytics::tuner) fn parameters_header(
         on_save: acts.write.clone(),
     };
     let write = crate::analytics::tuner::shell::ToolbarWrite {
-        enabled: m.write_enabled && m.can_reset,
+        enabled: m.write_enabled
+            && m.can_reset
+            && !matches!(m.verdict, Verdict::Running { .. } | Verdict::Loading),
         copy: m.copy_visible,
         dirty: m.can_reset,
     };

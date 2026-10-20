@@ -6,10 +6,11 @@ use super::super::shell::{ToolbarActs, ToolbarWrite, toolbar_el};
 use crate::design;
 use crate::load_state::LoadState;
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
+    AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Styled,
+    Window, div, px,
 };
 use moon_core::config::{Language, UiThemeMode};
-use moon_ui::{MoonPalette, MoonTheme, v_flex};
+use moon_ui::{MoonButton, MoonCheckbox, MoonInputState, MoonPalette, MoonTheme, v_flex};
 use rust_i18n::t;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -18,6 +19,84 @@ use std::sync::Arc;
 struct Probe {
     mode: TunerKind,
     state: usize,
+    input: Entity<MoonInputState>,
+}
+
+impl Probe {
+    /// Exercise the production budget and run widgets, so wrapping failures cannot hide behind a header-only fixture.
+    fn controls(&self, p: MoonPalette, cx: &gpui::App) -> gpui::AnyElement {
+        use super::super::{coins::auto, shell, ticks::cfg, time::controls};
+        let gear = || {
+            MoonButton::new("probe-settings")
+                .label("⚙")
+                .render()
+                .into_any_element()
+        };
+        let round = || {
+            MoonCheckbox::new("probe-round")
+                .label(t!("analytics.tuner.round_lbl").to_string())
+                .into_any_element()
+        };
+        match self.mode {
+            TunerKind::Filter => shell::filter_controls_el(
+                &self.input,
+                gear(),
+                round(),
+                &shell::FilterControlModel {
+                    running: false,
+                    stopping: None,
+                    compose: true,
+                },
+                &shell::FilterControlActs {
+                    one: Rc::new(|_, _| {}),
+                    run: Rc::new(|_, _| {}),
+                    stop: Rc::new(|_, _| {}),
+                },
+                p,
+                cx,
+            ),
+            TunerKind::Time => controls::config_row(
+                &self.input,
+                super::super::split::train_dropdown_el(TunerKind::Time, 100, |_, _| {}, cx),
+                false,
+                round(),
+                |_, _, _| {},
+                p,
+                cx,
+            ),
+            TunerKind::Coins => auto::auto_card_el(
+                &auto::AutoCardModel::new(&Default::default(), true, false, true),
+                Some((&self.input, &self.input)),
+                &auto::AutoCardActs {
+                    on_pick: Rc::new(|_, _| {}),
+                    on_reset: Rc::new(|_, _| {}),
+                    on_one_by_one: Rc::new(|_, _| {}),
+                    on_add: Rc::new(|_, _, _| {}),
+                    on_black: Rc::new(|_, _, _| {}),
+                    on_white: Rc::new(|_, _, _| {}),
+                },
+                p,
+                cx,
+            ),
+            TunerKind::Ticks => cfg::pick_bar_el(
+                &cfg::PickBarModel {
+                    one_enabled: true,
+                    all_enabled: true,
+                    one_tip: String::new(),
+                    all_tip: String::new(),
+                    all_label: t!("analytics.ticks.pick.all").to_string(),
+                },
+                self.input.clone(),
+                gear(),
+                &cfg::PickBarActs {
+                    one: Rc::new(|_, _| {}),
+                    all: Rc::new(|_, _| {}),
+                },
+                p,
+                cx,
+            ),
+        }
+    }
 }
 
 impl Render for Probe {
@@ -92,13 +171,17 @@ impl Render for Probe {
                     },
                 ))
                 .child(super::parameters(
-                    toolbar_el(
-                        self.mode,
-                        t!("analytics.tuner.fields_title").to_string(),
-                        Some(&writes),
-                        &acts,
-                        cx,
-                    ),
+                    v_flex()
+                        .w_full()
+                        .child(toolbar_el(
+                            self.mode,
+                            t!("analytics.tuner.fields_title").to_string(),
+                            Some(&writes),
+                            &acts,
+                            cx,
+                        ))
+                        .child(self.controls(p, cx))
+                        .into_any_element(),
                     p,
                     cx,
                 ))
@@ -130,7 +213,7 @@ fn all_axes_share_column_and_write_header_geometry(cx: &mut gpui::TestAppContext
         });
         for language in Language::ALL {
             let _locale = crate::test_locale::force(language.code());
-            for width in [1200.0, 470.0] {
+            for width in [1200.0, 470.0, 400.0, 320.0] {
                 for state in 0..3 {
                     let mut geometry = None;
                     for (mode, suffix) in [
@@ -139,9 +222,13 @@ fn all_axes_share_column_and_write_header_geometry(cx: &mut gpui::TestAppContext
                         (TunerKind::Coins, "c"),
                         (TunerKind::Ticks, "x"),
                     ] {
-                        let window = cx.open_window(gpui::size(px(width), px(900.0)), |_, _| {
-                            Probe { mode, state }
-                        });
+                        let window =
+                            cx.open_window(gpui::size(px(width), px(900.0)), |window, cx| Probe {
+                                mode,
+                                state,
+                                input: cx
+                                    .new(|cx| MoonInputState::new(window, cx).default_value("11")),
+                            });
                         let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
                         for _ in 0..3 {
                             visual.update(|window, cx| {
@@ -149,6 +236,11 @@ fn all_axes_share_column_and_write_header_geometry(cx: &mut gpui::TestAppContext
                             });
                         }
                         let side = visual.debug_bounds("tuner-side").expect("right column");
+                        let expected_width = visual.update(|_, cx| super::side_width(width, cx));
+                        assert!(
+                            (f32::from(side.size.width - expected_width)).abs() < 0.5,
+                            "grid width must match its actual host"
+                        );
                         let detail = visual.debug_bounds("detail").expect("left detail");
                         assert!(side.left() >= px(0.0) && side.right() <= px(width + 0.5));
                         if width > 900.0 {
@@ -172,6 +264,23 @@ fn all_axes_share_column_and_write_header_geometry(cx: &mut gpui::TestAppContext
                                 "write actions escaped"
                             );
                             assert!(copy.size.width > px(0.0) && save.size.width > px(0.0));
+                            let run_selector = match mode {
+                                TunerKind::Filter => "tuner-run-f",
+                                TunerKind::Time => "tuner-run-t",
+                                TunerKind::Coins => "tuner-run-c",
+                                TunerKind::Ticks => "tuner-run-x",
+                            };
+                            let run = visual
+                                .debug_bounds(run_selector)
+                                .expect("production run row");
+                            assert!(
+                                run.top() >= header.bottom(),
+                                "run row precedes Parameters header"
+                            );
+                            assert!(
+                                run.left() >= side.left() && run.right() <= side.right() + px(0.5),
+                                "run controls overflow at {width}"
+                            );
                             for (i, key) in [
                                 "analytics.kpi.trades",
                                 "analytics.kpi.profit",
@@ -202,6 +311,19 @@ fn all_axes_share_column_and_write_header_geometry(cx: &mut gpui::TestAppContext
                                     language.code()
                                 );
                                 assert!(metric.right() <= side.right() + px(0.5));
+                                for column in 0..if mode == TunerKind::Ticks { 2 } else { 3 } {
+                                    let selector: &'static str = Box::leak(
+                                        format!("kpi-value-{i}-{column}").into_boxed_str(),
+                                    );
+                                    let cell =
+                                        visual.debug_bounds(selector).expect("numeric KPI cell");
+                                    assert!(
+                                        cell.left() >= side.left()
+                                            && cell.right() <= side.right() + px(0.5),
+                                        "numeric KPI overflow in {} at {width}",
+                                        language.code()
+                                    );
+                                }
                             }
                         }
                     }

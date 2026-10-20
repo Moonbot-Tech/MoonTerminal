@@ -10,9 +10,21 @@ use crate::design::{self, moon};
 /// All four axes share this font-scaled preferred column width.
 pub(super) const SIDE_W: f32 = 470.0;
 
+/// Page padding is shared by the renderer and width-sensitive controls.
+const PAGE_PAD: f32 = 10.0;
+
 /// Stack the page in narrow docks, using the measured panel rather than the window width.
 pub(super) fn is_narrow(width: f32, cx: &App) -> bool {
     width > 0.0 && width < f32::from(design::font_w_px(cx, SIDE_W + 390.0))
+}
+
+/// Resolve the width the column actually receives before deciding whether grid ranges fit.
+pub(super) fn side_width(width: f32, cx: &App) -> Pixels {
+    if is_narrow(width, cx) {
+        px((width - f32::from(design::ui_px(cx, 2.0 * PAGE_PAD))).max(0.0))
+    } else {
+        design::font_w_px(cx, SIDE_W)
+    }
 }
 
 /// Keep list details in the left column and let both right cards share one vertical scroll.
@@ -54,7 +66,7 @@ pub(super) fn page(
                 v_flex()
                     .w_full()
                     .min_w_0()
-                    .p(design::ui_px(cx, 10.0))
+                    .p(design::ui_px(cx, PAGE_PAD))
                     .gap(design::ui_px(cx, 8.0))
                     .child(left)
                     .child(div().h(design::ui_px(cx, 24.0)).child(rail))
@@ -65,7 +77,7 @@ pub(super) fn page(
         h_flex()
             .size_full()
             .min_w_0()
-            .p(design::ui_px(cx, 10.0))
+            .p(design::ui_px(cx, PAGE_PAD))
             .gap(design::ui_px(cx, 8.0))
             .child(left)
             .child(rail)

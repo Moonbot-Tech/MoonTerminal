@@ -6,7 +6,6 @@
 
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
@@ -624,10 +623,8 @@ pub(super) fn kpi_matrix_body_with(
     // stays on one line, so a narrow pane does not wrap "2 of 2 with tape…" onto an ellipsis.
     let widths: Vec<Pixels> = (0..columns)
         .map(|i| {
-            let mut width = f32::from(design::font_w_px(cx, 92.0));
-            if matches!(opts.rows, KpiRows::Shared) {
-                return px(width);
-            }
+            let mut width = f32::from(design::font_w_px(cx, 60.0))
+                .max(design::ui_caption_text_width(cx, &headings[i].title, 400.0));
             for (_, kind) in &rows {
                 if let Some(s) = stats.get(i) {
                     width = width.max(design::mono_caption_text_width(
@@ -666,7 +663,9 @@ pub(super) fn kpi_matrix_body_with(
     let mut head = h_flex()
         .w_full()
         .px(design::ui_px(cx, inset))
-        .h(design::fit_h_px(cx, head_h, 12.0, 5.0))
+        .min_h(design::fit_h_px(cx, head_h, 12.0, 5.0))
+        .flex_wrap()
+        .justify_end()
         .items_center()
         .gap(design::ui_px(cx, gap))
         .text_size(design::t_caption(cx))
@@ -676,8 +675,14 @@ pub(super) fn kpi_matrix_body_with(
         .child(
             div()
                 .flex_1()
+                .min_w(px(design::ui_caption_text_width(
+                    cx,
+                    &t!("analytics.tuner.metric"),
+                    400.0,
+                )))
                 .child(t!("analytics.tuner.metric").to_string()),
         );
+    let mut head_values = h_flex().flex_none().gap(design::ui_px(cx, gap));
     for (i, label) in headings.into_iter().enumerate() {
         let tip = label.tip.clone();
         let column = v_flex()
@@ -704,8 +709,9 @@ pub(super) fn kpi_matrix_body_with(
                 .into_any_element(),
             None => column.into_any_element(),
         };
-        head = head.child(column);
+        head_values = head_values.child(column);
     }
+    head = head.child(head_values);
 
     // Collapsed keeps only the headline rows; the column headings stay, so the Fact-vs-variant
     // comparison is still readable, just short enough for the grid below.
@@ -735,18 +741,18 @@ pub(super) fn kpi_matrix_body_with(
     }
     body = body.child(head);
     for (row_index, (label, kind)) in rows.into_iter().take(shown).enumerate() {
-        let plain = matches!(opts.rows, KpiRows::Plain);
-        let label_width = design::ui_caption_text_width(cx, &label, 400.0);
+        let label_width = if matches!(opts.rows, KpiRows::Plain) {
+            design::ui_caption_text_width(cx, &label, 400.0)
+        } else {
+            design::ui_body_text_width(cx, &label, 400.0)
+        };
         let mut row = h_flex()
             .debug_selector(move || format!("kpi-row-{row_index}"))
             .w_full()
             .px(design::ui_px(cx, inset))
-            .when(plain, |row| {
-                row.flex_wrap()
-                    .justify_end()
-                    .min_h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
-            })
-            .when(!plain, |row| row.h(design::fit_h_px(cx, 24.0, 14.0, 5.0)))
+            .flex_wrap()
+            .justify_end()
+            .min_h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
             .items_center()
             .gap(design::ui_px(cx, gap))
             .border_t_1()
@@ -754,12 +760,9 @@ pub(super) fn kpi_matrix_body_with(
             .child(
                 div()
                     .flex_1()
-                    .when(matches!(opts.rows, KpiRows::Plain), |label| {
-                        label
-                            .min_w(px(label_width))
-                            .whitespace_nowrap()
-                            .text_size(design::t_caption(cx))
-                    })
+                    .min_w(px(label_width))
+                    .whitespace_nowrap()
+                    .text_size(design::t_caption(cx))
                     .font_family(design::ui_font())
                     .text_color(moon(p.text_soft))
                     .debug_selector(move || format!("kpi-metric-{row_index}"))
@@ -793,12 +796,8 @@ pub(super) fn kpi_matrix_body_with(
                 .w(*width)
                 .min_w_0()
                 .flex_none()
-                .when(matches!(opts.rows, KpiRows::Plain), |value| {
-                    value.whitespace_nowrap().text_size(design::t_caption(cx))
-                })
-                .when(matches!(opts.rows, KpiRows::Shared), |value| {
-                    value.truncate()
-                })
+                .whitespace_nowrap()
+                .text_size(design::t_caption(cx))
                 .text_right()
                 .font_family(design::mono())
                 .text_color(moon(color))
@@ -806,15 +805,9 @@ pub(super) fn kpi_matrix_body_with(
             if let Some(tooltip) = figure.text.tooltip {
                 value = value.tooltip(crate::panels::common::text_tooltip(tooltip));
             }
-            if plain {
-                figures = figures.child(value);
-            } else {
-                row = row.child(value);
-            }
+            figures = figures.child(value);
         }
-        if plain {
-            row = row.child(figures);
-        }
+        row = row.child(figures);
         body = body.child(row);
     }
     if let Some((n, profit)) = opts.unclosed {

@@ -357,13 +357,8 @@ fn settings_el(
                     t!("analytics.coins.tip_pick_hold").to_string(),
                     hold_in,
                     m.cfg.holdout_pct,
-                )),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .flex_wrap()
-                .gap(design::ui_px(cx, 12.0))
+                ))
+                .child(div().flex_1())
                 .child(check(
                     "an-pick-bl",
                     t!("analytics.coins.pick_bl").to_string(),

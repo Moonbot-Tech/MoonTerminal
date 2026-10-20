@@ -114,8 +114,6 @@ analytics.ticks.sum.hold_sub: "Відкладено: %{n}, підбір їх н�
 analytics.ticks.sum.open_line: "Не закрилися у стрічці: %{n} · за останньою ціною це ще %{profit}, до підсумку не входять"
 analytics.ticks.sum.changed: "Що змінилось · полів: %{n}"
 analytics.ticks.sum.varies: "різні"
-analytics.ticks.sum.write: "Записати у стратегію…"
-analytics.ticks.sum.copy: "Зробити копію з В1"
 analytics.ticks.sum.reset: "Скинути В1"
 analytics.ticks.sum.write_note: "«Записати» змінює стратегію на ядрі. «Копія» створює поруч нову стратегію з цими значеннями, початкова не змінюється."
 analytics.ticks.sum.confirm: "Записати в «%{name}» на ядрі %{core}? Значень: %{n}."
@@ -429,8 +427,6 @@ analytics.strat.mode_time: "За часом"
 analytics.time.by_hour: "За годинами"
 # Lower-right By Time card: two strategy fields, WorkingWeekTime for the day span and WorkingTime
 # for the time window. Each defines one from-to range, and the two are combined with AND.
-# Field-name column heading in the By Time tuner.
-analytics.time.col_field: "Поле"
 # By Time tuner: two strategy fields with one from-to range each, combined with AND.
 analytics.time.field_week: "WorkingWeekTime"
 analytics.time.field_day: "WorkingTime(d)"

@@ -114,8 +114,6 @@ analytics.ticks.sum.hold_sub: "Ayrılan: %{n}, arama bunları görmedi"
 analytics.ticks.sum.open_line: "Akışta kapanmayan: %{n} · son fiyatla ek %{profit} eder, toplama dahil değildir"
 analytics.ticks.sum.changed: "Değişenler · alan sayısı: %{n}"
 analytics.ticks.sum.varies: "farklı"
-analytics.ticks.sum.write: "Stratejiye yaz…"
-analytics.ticks.sum.copy: "V1 ile kopya oluştur"
 analytics.ticks.sum.reset: "V1’i sıfırla"
 analytics.ticks.sum.write_note: "«Yaz» çekirdekteki stratejiyi değiştirir. «Kopya» bu değerlerle yanında yeni bir strateji oluşturur ve aslını korur."
 analytics.ticks.sum.confirm: "%{core} çekirdeğindeki «%{name}» stratejisine yazılsın mı? Değer sayısı: %{n}."
@@ -429,8 +427,6 @@ analytics.strat.mode_time: "Zamana göre"
 analytics.time.by_hour: "Saate göre"
 # Lower-right By Time card: two strategy fields, WorkingWeekTime for the day span and WorkingTime
 # for the time window. Each defines one from-to range, and the two are combined with AND.
-# Field-name column heading in the By Time tuner.
-analytics.time.col_field: "Alan"
 # By Time tuner: two strategy fields with one from-to range each, combined with AND.
 analytics.time.field_week: "WorkingWeekTime"
 analytics.time.field_day: "WorkingTime(d)"

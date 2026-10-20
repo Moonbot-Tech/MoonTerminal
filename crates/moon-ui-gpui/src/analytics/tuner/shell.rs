@@ -198,6 +198,126 @@ pub(super) fn toolbar_el(
     header.into_any_element()
 }
 
+/// Search state needed to paint the production filter controls without a view.
+pub(super) struct FilterControlModel {
+    pub(super) running: bool,
+    pub(super) stopping: Option<bool>,
+    pub(super) compose: bool,
+}
+
+/// Existing per-axis operations supplied by the host, also usable by layout probes.
+pub(super) struct FilterControlActs {
+    pub(super) one: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub(super) run: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub(super) stop: Rc<dyn Fn(&mut Window, &mut App)>,
+}
+
+/// The frame every suggestion row shares: pinned above the scrollable rows, caption-sized.
+///
+/// The caption, status text and buttons it hosts are prose, so the frame carries
+/// `ui_font()` for the whole row; the restart/min-trades input boxes are parameter values
+/// and force `mono()` back on themselves individually.
+fn config_row_frame(cx: &App) -> Div {
+    h_flex()
+        .w_full()
+        // Pinned above the scrollable rows — must not shrink.
+        .flex_none()
+        .px(design::ui_px(cx, 12.0))
+        .pb(design::ui_px(cx, 6.0))
+        .items_center()
+        .flex_wrap()
+        .gap(design::ui_px(cx, 6.0))
+        .text_size(design::t_caption(cx))
+        .font_family(design::ui_font())
+}
+
+/// Paint the real filter settings and run row; the host owns all search behavior.
+pub(super) fn filter_controls_el(
+    input: &Entity<MoonInputState>,
+    settings: AnyElement,
+    round: AnyElement,
+    model: &FilterControlModel,
+    acts: &FilterControlActs,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let running = model.running;
+    let stopping = model.stopping;
+    let one = acts.one.clone();
+    let run = acts.run.clone();
+    let stop = acts.stop.clone();
+    let settings_row = config_row_frame(cx)
+        .child(cfg_label(t!("analytics.tuner.iters").to_string(), p))
+        .child(
+            div()
+                .w(design::font_w_px(cx, 46.0))
+                .flex_none()
+                .font_family(design::mono())
+                .child(
+                    MoonInput::new(SharedString::from("tun-cfg-it-f"))
+                        .state(input)
+                        .size(design::INPUT_SIZE),
+                ),
+        )
+        .child(settings)
+        .child(div().flex_1())
+        .child(round);
+    let controls = config_row_frame(cx)
+        .debug_selector(|| "tuner-run-f".into())
+        .justify_end()
+        .when_some(stopping, |el, stopping| {
+            el.child(
+                div().flex_none().child(
+                    MoonButton::new(SharedString::from("tun-suggest-stop-f"))
+                        .variant(MoonButtonVariant::Soft)
+                        .label(if stopping {
+                            t!("analytics.tuner.stopping").to_string()
+                        } else {
+                            t!("analytics.tuner.stop").to_string()
+                        })
+                        .disabled(stopping)
+                        .on_click(move |_, window, app| stop(window, app))
+                        .render(),
+                ),
+            )
+        })
+        // Search controls share one run band; write authority remains in the toolbar.
+        .child(
+            div().flex_none().child(
+                MoonButton::new(SharedString::from("tun-suggest-one-f"))
+                    .variant(MoonButtonVariant::Soft)
+                    .label(t!("analytics.tuner.suggest_one").to_string())
+                    .disabled(running)
+                    .on_click(move |_, window, app| one(window, app))
+                    .render(),
+            ),
+        )
+        .child(
+            div().flex_none().child(
+                MoonButton::new(SharedString::from("tun-suggest-run-f"))
+                    .variant(MoonButtonVariant::Blue)
+                    // The label carries the mode, because the two searches answer different
+                    // questions and take very different amounts of time. One button whose
+                    // meaning is silently switched by a checkbox two clicks away is how a user
+                    // ends up waiting minutes for what usually took half a second.
+                    .label(if model.compose {
+                        t!("analytics.tuner.compose_run").to_string()
+                    } else {
+                        t!("analytics.tuner.suggest_run").to_string()
+                    })
+                    .disabled(running)
+                    .on_click(move |_, window, app| run(window, app))
+                    .render(),
+            ),
+        );
+    v_flex()
+        .w_full()
+        .flex_none()
+        .child(settings_row)
+        .child(controls)
+        .into_any_element()
+}
+
 impl AnalyticsView {
     /// The Parameters title and Copy/Save controls, bound to each axis' existing actions.
     pub(super) fn shell_toolbar(
@@ -343,25 +463,6 @@ impl AnalyticsView {
         )
     }
 
-    /// The frame every suggestion row shares: pinned above the scrollable rows, caption-sized.
-    ///
-    /// The caption, status text and buttons it hosts are prose, so the frame carries
-    /// `ui_font()` for the whole row; the restart/min-trades input boxes are parameter values
-    /// and force `mono()` back on themselves individually.
-    fn config_row_frame(&self, cx: &Context<Self>) -> Div {
-        h_flex()
-            .w_full()
-            // Pinned above the scrollable rows — must not shrink.
-            .flex_none()
-            .px(design::ui_px(cx, 12.0))
-            .pb(design::ui_px(cx, 6.0))
-            .items_center()
-            .flex_wrap()
-            .gap(design::ui_px(cx, 6.0))
-            .text_size(design::t_caption(cx))
-            .font_family(design::ui_font())
-    }
-
     /// The "By filter" suggestion row: restarts, the settings gear, Stop, Search, and the
     /// full-width status band above them.
     ///
@@ -389,89 +490,40 @@ impl AnalyticsView {
         // repaints several times a second for the whole of a running search. Closed, the gear is
         // all there is to draw.
         let settings = self.filter_search_settings(p, window, cx);
-        let settings_row = self
-            .config_row_frame(cx)
-            .child(cfg_label(t!("analytics.tuner.iters").to_string(), p))
-            .child(
-                div()
-                    .w(design::font_w_px(cx, 46.0))
-                    .flex_none()
-                    .font_family(design::mono())
-                    .child(
-                        MoonInput::new(SharedString::from("tun-cfg-it-f"))
-                            .state(&it_input)
-                            .size(design::INPUT_SIZE),
-                    ),
-            )
-            .child(settings)
-            .child(div().flex_1())
-            .child(self.shell_round_option(TunerKind::Filter, cx));
-        let controls = self
-            .config_row_frame(cx)
-            .debug_selector(|| "tuner-run-f".into())
-            .justify_end()
-            .when_some(stopping, |el, stopping| {
-                el.child(
-                    div().flex_none().child(
-                        MoonButton::new(SharedString::from("tun-suggest-stop-f"))
-                            .variant(MoonButtonVariant::Soft)
-                            .label(if stopping {
-                                t!("analytics.tuner.stopping").to_string()
-                            } else {
-                                t!("analytics.tuner.stop").to_string()
-                            })
-                            .disabled(stopping)
-                            .on_click(cx.listener(|this, _, _, cx| this.stop_suggest_into_v1(cx)))
-                            .render(),
-                    ),
-                )
-            })
-            // The suggestion buttons are ALWAYS visible — a suggestion can be run over the
-            // current scope (no selected strategy = over everything shown). The result can only
-            // be written into a selected strategy (that gate sits on Copy/Save in the toolbar).
-            .child(
-                div().flex_none().child(
-                    MoonButton::new(SharedString::from("tun-suggest-one-f"))
-                        .variant(MoonButtonVariant::Soft)
-                        .label(t!("analytics.tuner.suggest_one").to_string())
-                        .disabled(running)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if !this.tuner.sugg.is_running() {
-                                this.suggest_one_into_v1(cx);
-                                cx.notify();
-                            }
-                        }))
-                        .render(),
-                ),
-            )
-            .child(
-                div().flex_none().child(
-                    MoonButton::new(SharedString::from("tun-suggest-run-f"))
-                        .variant(MoonButtonVariant::Blue)
-                        // The label carries the mode, because the two searches answer different
-                        // questions and take very different amounts of time. One button whose
-                        // meaning is silently switched by a checkbox two clicks away is how a user
-                        // ends up waiting minutes for what usually took half a second.
-                        .label(if self.tuner.compose {
-                            t!("analytics.tuner.compose_run").to_string()
-                        } else {
-                            t!("analytics.tuner.suggest_run").to_string()
-                        })
-                        .disabled(running)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if !this.tuner.sugg.is_running() {
-                                this.suggest_into_v1(cx);
-                                cx.notify();
-                            }
-                        }))
-                        .render(),
-                ),
-            );
+        let round = self.shell_round_option(TunerKind::Filter, cx);
+        let view = cx.entity();
+        let one = view.clone();
+        let run = view.clone();
+        let acts = FilterControlActs {
+            one: Rc::new(move |_, app| {
+                one.update(app, |this, cx| {
+                    if !this.tuner.sugg.is_running() {
+                        this.suggest_one_into_v1(cx);
+                        cx.notify();
+                    }
+                })
+            }),
+            run: Rc::new(move |_, app| {
+                run.update(app, |this, cx| {
+                    if !this.tuner.sugg.is_running() {
+                        this.suggest_into_v1(cx);
+                        cx.notify();
+                    }
+                })
+            }),
+            stop: Rc::new(move |_, app| view.update(app, |this, cx| this.stop_suggest_into_v1(cx))),
+        };
+        let model = FilterControlModel {
+            running,
+            stopping,
+            compose: self.tuner.compose,
+        };
         v_flex()
             .w_full()
             .flex_none()
-            .child(settings_row)
-            .child(controls)
+            .child(filter_controls_el(
+                &it_input, settings, round, &model, &acts, p, cx,
+            ))
             .children(status)
             .into_any_element()
     }
