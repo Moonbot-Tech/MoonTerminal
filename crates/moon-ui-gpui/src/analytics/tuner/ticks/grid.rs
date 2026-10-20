@@ -41,8 +41,23 @@ const CELL_W: f32 = 60.0;
 
 /// The localized current-value heading must fit the same slot as the strategy values below it.
 fn current_column_width(cx: &App) -> Pixels {
-    px(f32::from(design::font_w_px(cx, CELL_W))
-        .max(design::ui_body_text_width(cx, &t!("analytics.ticks.pick.col_now"), 400.0).ceil()))
+    px(f32::from(design::font_w_px(cx, CELL_W)).max(
+        design::ui_body_text_width(cx, &t!("analytics.ticks.pick.col_now"), 400.0).ceil() + 2.0,
+    ))
+}
+
+/// Paint the current-value heading with the same font used to reserve its column width.
+fn current_heading(cx: &App) -> AnyElement {
+    div()
+        .debug_selector(|| "ticks-current-heading".into())
+        .w(current_column_width(cx))
+        .flex_none()
+        .text_center()
+        .font_family(design::ui_font())
+        .text_size(design::t_body(cx))
+        .whitespace_nowrap()
+        .child(t!("analytics.ticks.pick.col_now").to_string())
+        .into_any_element()
 }
 /// Left inset of a field row, ui px: its tick sits under its section's tick, past the caret,
 /// so the row reads as inside the section.
@@ -514,10 +529,7 @@ impl AnalyticsView {
                             }))
                     }),
             )
-            .child(cell(
-                t!("analytics.ticks.pick.col_now").to_string(),
-                current_column_width(cx),
-            ));
+            .child(current_heading(cx));
         head = head
             .child(cell(
                 t!("analytics.ticks.pick.col_v1").to_string(),
@@ -990,3 +1002,6 @@ fn knob_live(knob: &TickParam, entry_on: bool) -> bool {
 pub(super) fn knob_ticks(knob: &TickParam, entry_on: bool) -> bool {
     knob_live(knob, entry_on) && super::model_cfg::current().entry_method.reads(knob.key)
 }
+
+#[cfg(test)]
+mod tests;

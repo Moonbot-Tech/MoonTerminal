@@ -21,6 +21,91 @@ fn polish_split_metrics_share_matrix_signs() {
 /// Compare actual laid-out text against the larger body band, without a raw pixel oracle.
 struct TypographyProbe;
 
+/// Exercise both reported subheading families in the real matrix.
+struct HeadingProbe;
+
+impl gpui::Render for HeadingProbe {
+    /// Include the By-coin small-sample warning and Entry/Exit Fact explanation.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        super::kpi_matrix_body(
+            &crate::load_state::LoadState::Ready(std::sync::Arc::new(vec![
+                VarStats {
+                    n: 15,
+                    ..Default::default()
+                };
+                3
+            ])),
+            String::new(),
+            &VarLabel::with_sub(
+                "Fact".into(),
+                rust_i18n::t!("analytics.ticks.kpi.fact_sub").to_string(),
+            ),
+            &[
+                VarLabel::new("Manual".into()),
+                VarLabel::with_sub(
+                    "Auto".into(),
+                    rust_i18n::t!("analytics.coins.auto_sub_few").to_string(),
+                ),
+            ],
+            false,
+            std::rc::Rc::new(|_, _| {}),
+            moon_ui::MoonPalette::active(cx),
+            cx,
+        )
+    }
+}
+
+/// Ellipsizing or refusing to wrap would hide part of the warning and Fact explanation.
+#[gpui::test]
+fn polish_subheadings_fit_every_locale(cx: &mut gpui::TestAppContext) {
+    use gpui::px;
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(
+                moon_core::config::UiThemeMode::Light,
+                1.0,
+            ),
+            cx,
+        )
+    });
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for width in [320.0, 687.0] {
+            let window = cx.open_window(gpui::size(px(width), px(600.0)), |_, _| HeadingProbe);
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            for (selector, key) in [
+                ("kpi-sub-0", "analytics.ticks.kpi.fact_sub"),
+                ("kpi-sub-2", "analytics.coins.auto_sub_few"),
+            ] {
+                let bounds = visual.debug_bounds(selector).unwrap();
+                let needed = visual.update(|_, cx| {
+                    crate::design::ui_body_text_width(cx, &rust_i18n::t!(key), 400.0)
+                });
+                let line_height = visual.debug_bounds("kpi-value-0-0").unwrap().size.height;
+                let min_lines = (needed / f32::from(bounds.size.width)).ceil().max(1.0);
+                assert!(
+                    bounds.size.height + px(0.5) >= line_height * min_lines,
+                    "{} {key} clipped",
+                    language.code()
+                );
+                assert!(
+                    bounds.right() <= px(width + 0.5),
+                    "subheading outside shared pane"
+                );
+            }
+        }
+    }
+}
+
 /// Exercise the localized supplemental metric at actual narrow dock widths.
 struct NarrowUnclosedProbe;
 

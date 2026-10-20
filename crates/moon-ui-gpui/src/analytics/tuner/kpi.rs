@@ -710,13 +710,17 @@ pub(super) fn kpi_matrix_body_with(
             .child(div().truncate().child(label.title))
             .children(label.sub.map(|s| {
                 div()
+                    .debug_selector(move || format!("kpi-sub-{i}"))
+                    .w_full()
+                    .min_w_0()
+                    .text_right()
                     .text_size(design::t_body(cx))
                     .text_color(moon(if label.sub_warn {
                         p.amber
                     } else {
                         p.text_muted
                     }))
-                    .truncate()
+                    .whitespace_normal()
                     .child(s)
             }));
         let column = match tip {
