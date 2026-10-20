@@ -607,7 +607,8 @@ by the terminal. Catch-up also plans retained deals whose recorded tails are sho
 venue REST and daily archives first, then the core archive for tail stretches inside its 48-hour
 retention. Two answered, incomplete tail-only passes with successful filing finalise a dead tail;
 deferred or failed reads remain retryable, and status counts finalised tails in `tail_final`.
-The terminal requests station tails before enqueueing the remaining missing tape.
+A configured station is the terminal's only tape source, also while it is unreachable; core
+archives and venue routes fill missing tape only when no station is set.
 
 An exchange absent from the venue directory is keyed by its exchange key (code + dex) and
 market, never its display caption. Its core is the only source of past prints within the
