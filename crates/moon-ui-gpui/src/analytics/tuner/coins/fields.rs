@@ -292,8 +292,8 @@ pub(in crate::analytics::tuner) fn list_field_el(
                 .into_any_element(),
         );
     }
-    // The well grows with its chips up to a cap, then scrolls inside; the column around it
-    // scrolls as a whole.
+    // The well grows with its chips up to a cap, then scrolls inside; the surrounding
+    // Parameters viewport keeps both list fields reachable.
     let well = div()
         .id(SharedString::from(format!("an-coin-{side}-well")))
         .w_full()

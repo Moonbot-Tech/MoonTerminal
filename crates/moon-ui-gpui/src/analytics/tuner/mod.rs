@@ -773,21 +773,18 @@ impl AnalyticsView {
                             cx,
                         ))
                         .child(auto)
-                        .child(lists)
                         .into_any_element();
-                    (self.coins_kpi(p, cx), layout::parameters(body, p, cx))
+                    (
+                        self.coins_kpi(p, cx),
+                        layout::parameters(body, lists, p, window, cx),
+                    )
                 }
                 StratMode::Ticks => {
                     let width = layout::side_width(self.tuner_host_width, cx);
                     (self.ticks_kpi(p, cx), self.ticks_grid(width, p, window, cx))
                 }
             };
-            v_flex()
-                .w_full()
-                .gap(design::ui_px(cx, 8.0))
-                .child(kpi)
-                .child(params)
-                .into_any_element()
+            layout::side(kpi, params, cx)
         });
         let main = layout::page(left.into_any_element(), rail, side, narrow, cx);
         let view = cx.entity().downgrade();

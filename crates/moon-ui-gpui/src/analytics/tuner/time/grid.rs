@@ -338,8 +338,7 @@ impl AnalyticsView {
         state
     }
 
-    /// The bottom-right "By time" card: the SHARED shell (toolbar + suggestion row)
-    /// + 3 field rows. Header: Field | in strategy | v1 from|to|✕ | v2 from|→|to|✕.
+    /// Keep the shared run/result rows above the internally scrolling schedule and sliders.
     pub(in crate::analytics::tuner) fn time_grid(
         &mut self,
         p: MoonPalette,
@@ -377,28 +376,25 @@ impl AnalyticsView {
             cx,
         );
 
-        v_flex()
+        let fixed = v_flex()
             .w_full()
-            .flex_none()
-            .rounded(design::ui_px(cx, 8.0))
-            .bg(moon(p.panel))
-            .border_1()
-            .border_color(moon(p.border))
-            .overflow_hidden()
-            // One shared column scroll keeps the complete settings, validation and grid reachable.
             .child(header)
             .child(cfg_row)
             .children(validation)
             .child(ignore_row)
             .child(clock_note)
-            .child(
-                div()
-                    .id("tt-params-scroll")
-                    .w_full()
-                    .flex_none()
-                    .child(v_flex().w_full().child(grid).child(sliders)),
-            )
-            .into_any_element()
+            .into_any_element();
+        super::super::layout::parameters(
+            fixed,
+            v_flex()
+                .w_full()
+                .child(grid)
+                .child(sliders)
+                .into_any_element(),
+            p,
+            window,
+            cx,
+        )
     }
 
     /// Paint one complete variant section; the narrow form keeps both variants reachable.

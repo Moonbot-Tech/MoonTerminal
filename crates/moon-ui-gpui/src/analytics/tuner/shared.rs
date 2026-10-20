@@ -187,7 +187,7 @@ fn card_header_layout(
     }
     v_flex()
         .w_full()
-        // Inside a scrolling column the cards must not shrink to the viewport height.
+        // Auxiliary and KPI cards keep their content height above flexible Parameters.
         .flex_none()
         .rounded(design::ui_px(cx, 8.0))
         .bg(moon(p.panel))

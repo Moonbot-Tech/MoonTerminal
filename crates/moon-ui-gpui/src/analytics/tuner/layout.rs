@@ -2,7 +2,7 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{MoonPalette, h_flex, v_flex};
+use moon_ui::{MoonPalette, MoonScrollableElement, h_flex, v_flex};
 use rust_i18n::t;
 
 use crate::design::{self, moon};
@@ -27,7 +27,7 @@ pub(super) fn side_width(width: f32, cx: &App) -> Pixels {
     }
 }
 
-/// Keep list details in the left column and let both right cards share one vertical scroll.
+/// Keep list details beside a bounded right column with scrolling inside Parameters.
 pub(super) fn page(
     left: AnyElement,
     rail: AnyElement,
@@ -48,12 +48,14 @@ pub(super) fn page(
             .debug_selector(|| "tuner-side".into())
             .min_w_0()
             .flex_none()
-            .when(narrow, |el| el.w_full())
+            // Stacked docks scroll the page to this bounded workspace. Leave enough height
+            // for the expanded KPI's wrapped rows as well as the Parameters viewport.
+            .when(narrow, |el| el.w_full().h(design::ui_px(cx, 1000.0)))
             .when(!narrow, |el| {
                 el.w(design::font_w_px(cx, SIDE_W))
                     .h_full()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .overflow_hidden()
             })
             .child(side)
     });
@@ -86,17 +88,70 @@ pub(super) fn page(
     }
 }
 
-/// The common Parameters surface; the caller supplies its header and ordered contents.
-pub(super) fn parameters(body: AnyElement, p: MoonPalette, cx: &App) -> AnyElement {
+/// Give Parameters the height left below the content-sized KPI card.
+pub(super) fn side(kpi: AnyElement, params: AnyElement, cx: &App) -> AnyElement {
     v_flex()
+        .size_full()
+        .min_h_0()
+        .gap(design::ui_px(cx, 8.0))
+        .child(kpi)
+        .child(params)
+        .into_any_element()
+}
+
+/// Keep the run/result bands fixed while the field content scrolls within the remaining height.
+pub(super) fn parameters(
+    header: AnyElement,
+    body: AnyElement,
+    p: MoonPalette,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let scroll = window
+        .use_keyed_state("tuner-parameters-scroll", cx, |_, _| ScrollHandle::new())
+        .read(cx)
+        .clone();
+    parameters_with_scroll(header, body, &scroll, p, cx)
+}
+
+/// Share the production card and scrollbar with geometry tests that drive its scroll handle.
+fn parameters_with_scroll(
+    header: AnyElement,
+    body: AnyElement,
+    scroll: &ScrollHandle,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    v_flex()
+        .debug_selector(|| "tuner-parameters".into())
         .w_full()
         .min_w_0()
-        .flex_none()
+        .flex_1()
+        .min_h_0()
         .rounded(design::r_container(cx))
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
-        .child(body)
+        .overflow_hidden()
+        .child(div().w_full().flex_none().child(header))
+        .child(
+            div()
+                .debug_selector(|| "tuner-parameters-viewport".into())
+                .relative()
+                .w_full()
+                .flex_1()
+                .min_h_0()
+                .child(
+                    div()
+                        .id("tuner-parameters-fields")
+                        .debug_selector(|| "tuner-parameters-scroll".into())
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(scroll)
+                        .child(div().w_full().child(body)),
+                )
+                .vertical_scrollbar(scroll),
+        )
         .into_any_element()
 }
 
