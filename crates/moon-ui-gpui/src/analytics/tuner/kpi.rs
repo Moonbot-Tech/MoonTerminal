@@ -635,9 +635,9 @@ pub(super) fn kpi_matrix_body_with(
             }
         })
         .collect();
-    // A second line only when some heading still carries one. A short title plus a tooltip
-    // stays on one line, so a narrow pane does not wrap "2 of 2 with tape…" onto an ellipsis.
-    let widths: Vec<Pixels> =
+    // Titles and figures determine one shared width. Statuses yield to that width instead of
+    // making the promised Auto column taller than the columns that already have figures.
+    let natural_widths: Vec<Pixels> =
         (0..columns)
             .map(|i| {
                 let mut width = f32::from(design::font_w_px(cx, 60.0))
@@ -658,9 +658,12 @@ pub(super) fn kpi_matrix_body_with(
                         400.0,
                     ));
                 }
-                px(width)
+                // Font advances omit kerning; leave a pixel at each edge for rounded glyphs.
+                px(width.ceil() + 2.0)
             })
             .collect();
+    let column_width = natural_widths.into_iter().fold(px(0.0), Pixels::max);
+    let widths = vec![column_width; columns];
     let gap = if matches!(opts.rows, KpiRows::Plain) {
         6.0
     } else {
@@ -671,21 +674,23 @@ pub(super) fn kpi_matrix_body_with(
     } else {
         8.0
     };
+    // In a narrow dock the group yields as a whole. Titles may wrap there, while figures and
+    // statuses share equal shrinking columns instead of pushing the last column off the card.
+    let values_width =
+        column_width * columns as f32 + design::ui_px(cx, gap) * columns.saturating_sub(1) as f32;
     let muted: Vec<bool> = headings.iter().map(|label| label.muted).collect();
-    let head_h = if headings.iter().any(|label| label.sub.is_some()) {
-        34.0
-    } else {
-        22.0
-    };
+    let heading_line_height = design::line_px(cx, 16.0);
     let mut head = h_flex()
+        .debug_selector(|| "kpi-header".into())
         .w_full()
         .px(design::ui_px(cx, inset))
-        .min_h(design::fit_h_px(cx, head_h, 12.0, 5.0))
+        .min_h(heading_line_height * 2.0 + design::ui_px(cx, 4.0))
         .flex_wrap()
         .justify_end()
         .items_center()
         .gap(design::ui_px(cx, gap))
         .text_size(design::t_body(cx))
+        .line_height(heading_line_height)
         .font_family(design::ui_font())
         .text_color(moon(p.text_soft))
         .bg(moon(p.table_head))
@@ -699,17 +704,31 @@ pub(super) fn kpi_matrix_body_with(
                 )))
                 .child(t!("analytics.tuner.metric").to_string()),
         );
-    let mut head_values = h_flex().flex_none().gap(design::ui_px(cx, gap));
+    let mut head_values = h_flex()
+        .w(values_width)
+        .max_w_full()
+        .flex_none()
+        .gap(design::ui_px(cx, gap));
     for (i, label) in headings.into_iter().enumerate() {
         let tip = label.tip.clone();
         let column = v_flex()
             .debug_selector(move || format!("kpi-head-{i}"))
             .w(widths[i])
-            .flex_none()
+            .flex_1()
+            .min_w_0()
             .items_end()
-            .child(div().truncate().child(label.title))
+            .child(
+                div()
+                    .debug_selector(move || format!("kpi-title-{i}"))
+                    .w_full()
+                    .min_w_0()
+                    .text_right()
+                    .whitespace_normal()
+                    .child(label.title),
+            )
             .children(label.sub.map(|s| {
                 div()
+                    .id(SharedString::from(format!("an-tuner-kpi-sub-{i}")))
                     .debug_selector(move || format!("kpi-sub-{i}"))
                     .w_full()
                     .min_w_0()
@@ -720,7 +739,8 @@ pub(super) fn kpi_matrix_body_with(
                     } else {
                         p.text_muted
                     }))
-                    .whitespace_normal()
+                    .truncate()
+                    .tooltip(crate::panels::common::text_tooltip(s.clone()))
                     .child(s)
             }));
         let column = match tip {
@@ -787,7 +807,11 @@ pub(super) fn kpi_matrix_body_with(
             );
         // Keep Fact and V1 together when a localized money label needs its own line.
         // Keep the numeric columns together when the larger localized label needs its own line.
-        let mut figures = h_flex().flex_none().gap(design::ui_px(cx, gap));
+        let mut figures = h_flex()
+            .w(values_width)
+            .max_w_full()
+            .flex_none()
+            .gap(design::ui_px(cx, gap));
         for (i, width) in widths.iter().enumerate() {
             let figure = match stats.get(i) {
                 // A promised column without stats: every cell is the blank dash.
@@ -813,7 +837,7 @@ pub(super) fn kpi_matrix_body_with(
                 .aria_label(accessibility_label)
                 .w(*width)
                 .min_w_0()
-                .flex_none()
+                .flex_1()
                 .whitespace_nowrap()
                 .text_size(design::t_body(cx))
                 .text_right()
@@ -853,14 +877,18 @@ pub(super) fn kpi_matrix_body_with(
                     .text_color(moon(p.text_soft))
                     .child(label),
             );
-        let mut figures = h_flex().flex_none().gap(design::ui_px(cx, gap));
+        let mut figures = h_flex()
+            .w(values_width)
+            .max_w_full()
+            .flex_none()
+            .gap(design::ui_px(cx, gap));
         for (i, width) in widths.iter().enumerate() {
             let text = unclosed_cell(i, n, profit);
             let mut cell = div()
                 .id(("an-tuner-kpi-unclosed", i))
                 .debug_selector(move || format!("kpi-unclosed-{i}"))
                 .w(*width)
-                .flex_none()
+                .flex_1()
                 .min_w_0()
                 .text_right()
                 .whitespace_nowrap()

@@ -22,7 +22,9 @@ fn polish_split_metrics_share_matrix_signs() {
 struct TypographyProbe;
 
 /// Exercise both reported subheading families in the real matrix.
-struct HeadingProbe;
+struct HeadingProbe {
+    mode: usize,
+}
 
 impl gpui::Render for HeadingProbe {
     /// Include the By-coin small-sample warning and Entry/Exit Fact explanation.
@@ -31,6 +33,28 @@ impl gpui::Render for HeadingProbe {
         _: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
+        let fact = if self.mode == 3 {
+            VarLabel::with_sub(
+                rust_i18n::t!("analytics.tuner.fact").to_string(),
+                rust_i18n::t!("analytics.ticks.kpi.fact_sub").to_string(),
+            )
+        } else {
+            VarLabel::new(rust_i18n::t!("analytics.tuner.fact").to_string())
+        };
+        let labels = if self.mode == 2 {
+            vec![
+                VarLabel::with_sub(
+                    rust_i18n::t!("analytics.coins.manual").to_string(),
+                    rust_i18n::t!("analytics.coins.v1_lists", bl = 1, wl = 0).to_string(),
+                ),
+                VarLabel::with_sub(
+                    rust_i18n::t!("analytics.coins.auto_col").to_string(),
+                    rust_i18n::t!("analytics.coins.auto_sub_few").to_string(),
+                ),
+            ]
+        } else {
+            vec![VarLabel::new("v1".into()), VarLabel::new("v2".into())]
+        };
         super::kpi_matrix_body(
             &crate::load_state::LoadState::Ready(std::sync::Arc::new(vec![
                 VarStats {
@@ -40,17 +64,8 @@ impl gpui::Render for HeadingProbe {
                 3
             ])),
             String::new(),
-            &VarLabel::with_sub(
-                "Fact".into(),
-                rust_i18n::t!("analytics.ticks.kpi.fact_sub").to_string(),
-            ),
-            &[
-                VarLabel::new("Manual".into()),
-                VarLabel::with_sub(
-                    "Auto".into(),
-                    rust_i18n::t!("analytics.coins.auto_sub_few").to_string(),
-                ),
-            ],
+            &fact,
+            &labels,
             false,
             std::rc::Rc::new(|_, _| {}),
             moon_ui::MoonPalette::active(cx),
@@ -59,7 +74,7 @@ impl gpui::Render for HeadingProbe {
     }
 }
 
-/// Ellipsizing or refusing to wrap would hide part of the warning and Fact explanation.
+/// Unequal widths or wrapping statuses must not inflate the coin header above the other modes.
 #[gpui::test]
 fn polish_subheadings_fit_every_locale(cx: &mut gpui::TestAppContext) {
     use gpui::px;
@@ -74,33 +89,61 @@ fn polish_subheadings_fit_every_locale(cx: &mut gpui::TestAppContext) {
     });
     for language in moon_core::config::Language::ALL {
         let _locale = crate::test_locale::force(language.code());
-        for width in [320.0, 687.0] {
-            let window = cx.open_window(gpui::size(px(width), px(600.0)), |_, _| HeadingProbe);
-            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-            for _ in 0..3 {
-                visual.update(|window, cx| {
-                    let _ = window.draw(cx);
+        for width in [320.0, super::super::layout::SIDE_W] {
+            let mut header_height = None;
+            for mode in 0..4 {
+                let window = cx.open_window(gpui::size(px(width), px(600.0)), |_, _| {
+                    HeadingProbe { mode }
                 });
-            }
-            for (selector, key) in [
-                ("kpi-sub-0", "analytics.ticks.kpi.fact_sub"),
-                ("kpi-sub-2", "analytics.coins.auto_sub_few"),
-            ] {
-                let bounds = visual.debug_bounds(selector).unwrap();
-                let needed = visual.update(|_, cx| {
-                    crate::design::ui_body_text_width(cx, &rust_i18n::t!(key), 400.0)
-                });
-                let line_height = visual.debug_bounds("kpi-value-0-0").unwrap().size.height;
-                let min_lines = (needed / f32::from(bounds.size.width)).ceil().max(1.0);
-                assert!(
-                    bounds.size.height + px(0.5) >= line_height * min_lines,
-                    "{} {key} clipped",
-                    language.code()
-                );
-                assert!(
-                    bounds.right() <= px(width + 0.5),
-                    "subheading outside shared pane"
-                );
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let header = visual.debug_bounds("kpi-header").unwrap();
+                if width == super::super::layout::SIDE_W {
+                    let expected = *header_height.get_or_insert(header.size.height);
+                    assert!(
+                        (header.size.height - expected).abs() <= px(0.5),
+                        "{} mode {mode}: header height differs",
+                        language.code()
+                    );
+                }
+                let first = visual.debug_bounds("kpi-head-0").unwrap();
+                for (head, title) in [
+                    ("kpi-head-0", "kpi-title-0"),
+                    ("kpi-head-1", "kpi-title-1"),
+                    ("kpi-head-2", "kpi-title-2"),
+                ] {
+                    let column = visual.debug_bounds(head).unwrap();
+                    assert!((column.size.width - first.size.width).abs() <= px(0.5));
+                    let title = visual.debug_bounds(title).unwrap();
+                    assert!(
+                        title.size.width <= column.size.width + px(0.5),
+                        "{} {width} mode {mode} {head}: title {:?} exceeds column {:?}",
+                        language.code(),
+                        title.size,
+                        column.size
+                    );
+                }
+                for selector in match mode {
+                    2 => vec!["kpi-sub-1", "kpi-sub-2"],
+                    3 => vec!["kpi-sub-0"],
+                    _ => Vec::new(),
+                } {
+                    let bounds = visual.debug_bounds(selector).unwrap();
+                    let line_height = visual.debug_bounds("kpi-value-0-0").unwrap().size.height;
+                    assert!(
+                        bounds.size.height <= line_height + px(0.5),
+                        "{} {selector} wrapped",
+                        language.code()
+                    );
+                    assert!(
+                        bounds.right() <= px(width + 0.5),
+                        "subheading outside shared pane"
+                    );
+                }
             }
         }
     }
