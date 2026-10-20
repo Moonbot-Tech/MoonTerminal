@@ -207,6 +207,51 @@ pub(super) fn field_row_el(
         .into_any_element()
 }
 
+/// Render a read-only field with the same trailing slots as editable rows.
+pub(super) fn fixed_row_el(
+    key: &str,
+    name: AnyElement,
+    value: String,
+    range: Option<AnyElement>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let mut row = h_flex()
+        .w_full()
+        .px(design::ui_px(cx, ROW_RIGHT))
+        .pl(design::ui_px(cx, ROW_INDENT))
+        .py(design::ui_px(cx, 2.0))
+        .items_center()
+        .gap(design::ui_px(cx, ROW_GAP))
+        .border_t_1()
+        .border_color(moon_alpha(p.border, 0.5))
+        .text_size(design::t_caption(cx))
+        .child(
+            div().flex_none().child(
+                MoonCheckbox::new(SharedString::from(format!("an-ticks-fx-en-{key}")))
+                    .checked(false)
+                    .disabled(true)
+                    .size(design::CONTROL_TIER),
+            ),
+        )
+        .child(name)
+        .child(
+            div()
+                .debug_selector(|| "an-ticks-fixed-current".into())
+                .w(design::font_w_px(cx, CELL_W))
+                .flex_none()
+                .truncate()
+                .text_right()
+                .text_color(moon_alpha(p.text_muted, 0.8))
+                .child(value),
+        );
+    row = row
+        .child(div().w(design::font_w_px(cx, CELL_W)).flex_none())
+        .child(div().w(design::ui_px(cx, 12.0)).flex_none())
+        .children(range);
+    row.into_any_element()
+}
+
 /// Minimum grid width preserving the same field slots before offering editable ranges.
 pub(super) fn grid_range_min_width(cx: &App) -> Pixels {
     // MoonCheckbox's Sm box follows its 16px base, capped growth to the theme font delta.
@@ -768,50 +813,24 @@ impl AnalyticsView {
             Some(NowValue::Differs) => t!("analytics.time.cur_varies").to_string(),
             _ => "—".to_string(),
         };
-        let mut row = h_flex()
-            .w_full()
-            .px(design::ui_px(cx, 8.0))
-            .pl(design::ui_px(cx, ROW_INDENT))
-            .py(design::ui_px(cx, 2.0))
-            .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .border_t_1()
-            .border_color(moon_alpha(p.border, 0.5))
-            .text_size(design::t_caption(cx))
-            .child(
-                div().flex_none().child(
-                    MoonCheckbox::new(SharedString::from(format!("an-ticks-fx-en-{key}")))
-                        .checked(false)
-                        .disabled(true)
-                        .size(design::CONTROL_TIER),
-                ),
-            )
-            .child(
-                div()
-                    .id(SharedString::from(format!("an-ticks-fx-{key}")))
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(moon(name_color))
-                    .tooltip(crate::panels::common::text_tooltip(format!(
-                        "{key}\n\n{tip}"
-                    )))
-                    .child(key.to_string()),
-            )
-            .child(
-                div()
-                    .w(design::font_w_px(cx, CELL_W))
-                    .flex_none()
-                    .truncate()
-                    .text_right()
-                    .text_color(moon_alpha(p.text_muted, 0.8))
-                    .child(value),
-            );
-        row = row
-            .child(div().w(design::font_w_px(cx, CELL_W)).flex_none())
-            .child(div().w(design::ui_px(cx, 12.0)).flex_none())
-            .when(ranges_visible, |row| row.child(self.ticks_range_blank(cx)));
-        row.into_any_element()
+        fixed_row_el(
+            key,
+            div()
+                .id(SharedString::from(format!("an-ticks-fx-{key}")))
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(moon(name_color))
+                .tooltip(crate::panels::common::text_tooltip(format!(
+                    "{key}\n\n{tip}"
+                )))
+                .child(key.to_string())
+                .into_any_element(),
+            value,
+            ranges_visible.then(|| self.ticks_range_blank(cx)),
+            p,
+            cx,
+        )
     }
 
     /// One field: its tick, its name, the strategies' value, the variant's input with its clear

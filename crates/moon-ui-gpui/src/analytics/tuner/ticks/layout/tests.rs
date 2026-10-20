@@ -32,6 +32,97 @@ use super::super::summary::{
 use crate::design;
 use crate::load_state::LoadState;
 
+/// Compare real editable and read-only row geometry with the same trailing range slots.
+struct FixedAlignmentProbe;
+
+impl Render for FixedAlignmentProbe {
+    /// Keep the production cells, spacing and range-width decision without Analytics state.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let ranges = ranges_fit(window.viewport_size().width, cx);
+        let range = || {
+            ranges.then(|| {
+                div()
+                    .w(super::super::ranges::block_w(cx))
+                    .flex_none()
+                    .into_any_element()
+            })
+        };
+        v_flex()
+            .w_full()
+            .child(field_row_el(
+                "Editable",
+                false,
+                FieldRowParts {
+                    checkbox: MoonCheckbox::new("review-editable-check")
+                        .size(design::CONTROL_TIER)
+                        .into_any_element(),
+                    name: field_name_el("Editable", false, true, None, p).into_any_element(),
+                    current: current_cell_el(
+                        "Editable",
+                        true,
+                        Some(&NowValue::Same("1.31".into())),
+                        p,
+                        cx,
+                    )
+                    .into_any_element(),
+                    variant: div().into_any_element(),
+                    clear: div()
+                        .w(design::ui_px(cx, 12.0))
+                        .flex_none()
+                        .into_any_element(),
+                },
+                range(),
+                p,
+                cx,
+            ))
+            .child(super::super::grid::fixed_row_el(
+                "ReadOnly",
+                field_name_el("ReadOnly", false, false, None, p).into_any_element(),
+                "1.31".into(),
+                range(),
+                p,
+                cx,
+            ))
+    }
+}
+
+/// Restoring either old fixed-row gap or inset must move the numeric edge and fail this check.
+#[gpui::test]
+fn livefix_read_only_current_values_align_with_editable_rows(cx: &mut gpui::TestAppContext) {
+    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+                cx,
+            )
+        });
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for width in [400.0, 687.0] {
+                let window =
+                    cx.open_window(gpui::size(px(width), px(150.0)), |_, _| FixedAlignmentProbe);
+                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                for _ in 0..3 {
+                    visual.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                let editable = visual
+                    .debug_bounds("an-ticks-current-cell-Editable")
+                    .unwrap();
+                let fixed = visual.debug_bounds("an-ticks-fixed-current").unwrap();
+                assert!(
+                    (f32::from(editable.right()) - f32::from(fixed.right())).abs() < 0.5,
+                    "read-only current value misaligned at {width} in {}: {editable:?}/{fixed:?}",
+                    language.code()
+                );
+                visual.update(|window, _| window.remove_window());
+            }
+        }
+    }
+}
+
 /// Synthetic deals exercise every primary-reason family without touching a live report.
 fn deal_rows() -> Vec<super::super::state::DealRow> {
     use super::super::state::{DealRow, TapeStatus};

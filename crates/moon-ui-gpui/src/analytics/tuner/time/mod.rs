@@ -218,10 +218,6 @@ impl AnalyticsView {
         let prof = profiles.first().copied();
         // Scope: the selected strategy's name, their count, or "all strategies".
         let scope = self.scope_label();
-        // Bar scale — max |PnL| across the 24 hours of the selected period.
-        let max = prof.map_or(0.0, |pr| {
-            pr.iter().fold(0.0f64, |m, h| m.max(h.profit.abs()))
-        });
 
         let body: AnyElement = match prof {
             None => h_flex()
@@ -233,28 +229,39 @@ impl AnalyticsView {
                 .text_color(moon(p.text_muted))
                 .child(t!("analytics.time.no_data").to_string())
                 .into_any_element(),
-            Some(pr) => {
-                let host = self.tuner_host_width;
-                let left_width = if super::layout::is_narrow(host, cx) || self.side_collapsed {
-                    host - 20.0
-                } else {
-                    host - f32::from(super::layout::side_width(host, cx)) - 44.0
-                };
-                let show_counts = left_width / 24.0 >= f32::from(design::font_w_px(cx, 30.0));
-                let mut row = h_flex()
-                    .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .gap(design::ui_px(cx, 2.0));
-                for (h, stat) in pr.iter().enumerate() {
-                    row = row.child(hour_column(h, *stat, max, show_counts, p, cx));
-                }
-                row.into_any_element()
-            }
+            Some(pr) => hour_columns(&pr, self.tuner_host_width, self.side_collapsed, p, cx),
         };
 
         hour_card(body, scope, self.bottom_caret(mode, p, cx), p, cx)
     }
+}
+
+/// Render a profile using the production host-width decision for secondary count labels.
+fn hour_columns(
+    profile: &[HourStat; 24],
+    host: f32,
+    side_collapsed: bool,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let max = profile
+        .iter()
+        .fold(0.0_f64, |max, stat| max.max(stat.profit.abs()));
+    let left_width = if super::layout::is_narrow(host, cx) || side_collapsed {
+        host - 20.0
+    } else {
+        host - f32::from(super::layout::side_width(host, cx)) - 44.0
+    };
+    let show_counts = left_width / 24.0 >= f32::from(design::font_w_px(cx, 30.0));
+    let mut row = h_flex()
+        .w_full()
+        .flex_1()
+        .min_h_0()
+        .gap(design::ui_px(cx, 2.0));
+    for (h, stat) in profile.iter().enumerate() {
+        row = row.child(hour_column(h, *stat, max, show_counts, p, cx));
+    }
+    row.into_any_element()
 }
 
 /// The complete production hour-card frame, also usable without Analytics or live report state.
