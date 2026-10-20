@@ -96,3 +96,87 @@ fn two_entries_of_one_coin_count_once() {
     assert_eq!(m.count, Some(1));
     assert_eq!(m.chips.len(), 2, "both entries are still drawn");
 }
+
+/// Exercise intrinsic chip sizing inside the real wrapping list well, rather than a fixed box.
+struct ChipProbe;
+
+impl gpui::Render for ChipProbe {
+    /// Render both list kinds with short, added and removed synthetic names.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{IntoElement, ParentElement, Styled};
+        let acts = super::ListFieldActs {
+            on_remove: std::rc::Rc::new(|_, _, _| {}),
+            on_restore: std::rc::Rc::new(|_, _, _| {}),
+            on_copy: std::rc::Rc::new(|_, _| {}),
+            on_clear: std::rc::Rc::new(|_, _| {}),
+        };
+        moon_ui::v_flex()
+            .w_full()
+            .children([true, false].map(|black| {
+                let mut names = vec![
+                    chip("XALPHA", ChipKind::Saved),
+                    chip("XBETA", ChipKind::Added),
+                    chip("XGAMMA", ChipKind::Removed),
+                ];
+                for name in &mut names {
+                    name.id = format!("chip-{}-{}", black, name.token).into();
+                }
+                super::list_field_el(
+                    &ListFieldModel::new(black, Some(names)),
+                    None,
+                    &acts,
+                    moon_ui::MoonPalette::active(cx),
+                    cx,
+                )
+                .into_any_element()
+            }))
+    }
+}
+
+/// A fixed or shrinking chip width must still cover the measured name inside the wrapping well.
+#[gpui::test]
+fn livefix_coin_names_keep_their_measured_width(cx: &mut gpui::TestAppContext) {
+    use gpui::px;
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for width in [320.0, 470.0, 620.0] {
+            cx.update(|cx| {
+                moon_ui::MoonTheme::install_config(
+                    crate::startup::moon_theme_config_for_presentation(
+                        moon_core::config::UiThemeMode::Light,
+                        1.0,
+                    ),
+                    cx,
+                )
+            });
+            let window = cx.open_window(gpui::size(px(width), px(900.0)), |_, _| ChipProbe);
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            for black in [true, false] {
+                for (token, label) in [
+                    ("XALPHA", "XALPHA"),
+                    ("XBETA", "+XBETA"),
+                    ("XGAMMA", "XGAMMA"),
+                ] {
+                    let selector = Box::leak(format!("chip-{black}-{token}").into_boxed_str());
+                    let bounds = visual.debug_bounds(selector).unwrap();
+                    let need = visual
+                        .update(|_, cx| crate::design::mono_caption_text_width(cx, label, 400.0));
+                    assert!(
+                        bounds.size.width + px(0.5) >= px(need),
+                        "coin label collapsed in {} at {width}",
+                        language.code()
+                    );
+                }
+            }
+        }
+    }
+}

@@ -335,7 +335,7 @@ pub(in crate::analytics::tuner) fn list_field_el(
         .into_any_element()
 }
 
-/// One chip: the entry, coloured by its edit state, its tooltip, and its x / undo button.
+/// One chip with a measured text basis: native ellipsis has no reliable intrinsic flex width.
 fn chip_el(c: &FieldChip, acts: &ListFieldActs, p: MoonPalette, cx: &App) -> AnyElement {
     let (bg, fg) = match c.kind {
         ChipKind::Saved => (moon(p.shell_high), moon_alpha(p.text, c.alpha)),
@@ -379,6 +379,7 @@ fn chip_el(c: &FieldChip, acts: &ListFieldActs, p: MoonPalette, cx: &App) -> Any
         .child({
             let name_el = div()
                 .id(c.id.clone())
+                .w(px(design::mono_caption_text_width(cx, &label, 400.0).ceil()))
                 .min_w_0()
                 .truncate()
                 .debug_selector({
