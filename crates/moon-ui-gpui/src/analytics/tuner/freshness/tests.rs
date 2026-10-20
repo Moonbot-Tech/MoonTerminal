@@ -1,6 +1,18 @@
 use super::SampleSnapshot;
 use moon_core::db::tuner::VarStats;
 
+/// A missing completed-run baseline must never label startup report generations as new trades.
+#[test]
+fn no_baseline_is_never_materially_stale() {
+    let snapshot = SampleSnapshot::default();
+    let stats = vec![VarStats {
+        n: 1000,
+        ..Default::default()
+    }];
+    assert!(!snapshot.materially_changed(None, 86_400));
+    assert!(!snapshot.materially_changed(Some(&stats), 172_800));
+}
+
 /// A delayed pre-fit cache must not count as new trades after a freshly completed run.
 #[test]
 fn polish_post_run_refresh_replaces_the_old_cache_baseline_once() {

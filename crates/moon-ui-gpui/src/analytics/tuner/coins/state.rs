@@ -495,6 +495,7 @@ impl CoinsState {
     pub(in crate::analytics::tuner) fn drop_pick(&mut self) {
         self.pick_seq = self.pick_seq.wrapping_add(1);
         self.pick = PickState::Idle;
+        self.sample_snapshot = Default::default();
         if self.suggestion.take().is_some() {
             self.pick_rev = self.pick_rev.wrapping_add(1);
         }
@@ -512,6 +513,24 @@ impl CoinsState {
         self.drop_pick();
         self.pick = PickState::Running { seq: self.pick_seq };
         self.pick_seq
+    }
+
+    /// Adopt a completed in-process batch pick with the same scoped baseline as a manual pick.
+    pub(in crate::analytics::tuner) fn adopt_batch_pick(
+        &mut self,
+        pick: Arc<CoinPick>,
+        holdout_pct: u32,
+    ) {
+        self.sample_snapshot = super::super::freshness::SampleSnapshot::from_count(
+            (pick.train_n + pick.holdout_n) as i64,
+            self.report_end,
+        );
+        self.pick = PickState::Done {
+            pick,
+            lists_rev: self.lists_rev,
+            report_gen: self.report_gen,
+            holdout_pct,
+        };
     }
 
     /// Publish a pick reply.

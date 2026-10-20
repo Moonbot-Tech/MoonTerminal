@@ -44,13 +44,13 @@ impl SampleSnapshot {
     }
 
     /// Warn after at least five new scoped trades and five percent growth, or a new period day.
-    /// Missing baselines retain the caller's conservative report-generation warning.
+    /// Without a completed run's baseline there is no evidence of a material change.
     pub(super) fn materially_changed(self, stats: Option<&Vec<VarStats>>, end: i64) -> bool {
         if self.pending_end.is_some() {
             return false;
         }
         let Some((sample, previous_end)) = self.sample else {
-            return true;
+            return false;
         };
         let threshold = 5.max(sample.saturating_add(19) / 20);
         end.div_euclid(86_400) > previous_end.div_euclid(86_400)

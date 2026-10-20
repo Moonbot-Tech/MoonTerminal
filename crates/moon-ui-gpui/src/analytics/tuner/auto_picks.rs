@@ -648,12 +648,8 @@ impl AnalyticsView {
             });
             self.coins.pick_rev = self.coins.pick_rev.wrapping_add(1);
         }
-        self.coins.pick = PickState::Done {
-            pick,
-            lists_rev: self.coins.lists_rev,
-            report_gen: self.coins.report_gen,
-            holdout_pct: self.auto_picks.holdout_pct,
-        };
+        self.coins
+            .adopt_batch_pick(pick, self.auto_picks.holdout_pct);
         if has_suggestion {
             self.arm_coin_kpi(cx);
         }
