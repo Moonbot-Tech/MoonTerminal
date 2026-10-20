@@ -26,7 +26,7 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::super::refresh::CatchUpOutcome;
-use super::super::summary::fmt_signed;
+use super::super::summary::{fmt_signed, sign_color};
 use super::kpi::kpi_matrix_card;
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -234,80 +234,102 @@ impl AnalyticsView {
                 .child(t!("analytics.time.no_data").to_string())
                 .into_any_element(),
             Some(pr) => {
+                let host = self.tuner_host_width;
+                let left_width = if super::layout::is_narrow(host, cx) || self.side_collapsed {
+                    host - 20.0
+                } else {
+                    host - f32::from(super::layout::side_width(host, cx)) - 44.0
+                };
+                let show_counts = left_width / 24.0 >= f32::from(design::font_w_px(cx, 30.0));
                 let mut row = h_flex()
                     .w_full()
                     .flex_1()
                     .min_h_0()
                     .gap(design::ui_px(cx, 2.0));
                 for (h, stat) in pr.iter().enumerate() {
-                    row = row.child(hour_column(h, *stat, max, p, cx));
+                    row = row.child(hour_column(h, *stat, max, show_counts, p, cx));
                 }
                 row.into_any_element()
             }
         };
 
-        v_flex()
-            .w_full()
-            .h(design::ui_px(cx, 210.0))
-            .flex_none()
-            .rounded(design::ui_px(cx, 8.0))
-            .bg(moon(p.panel))
-            .border_1()
-            .border_color(moon(p.border))
-            .overflow_hidden()
-            .child(
-                h_flex()
-                    .w_full()
-                    .flex_none()
-                    .px(design::ui_px(cx, 12.0))
-                    .py(design::ui_px(cx, 8.0))
-                    .items_center()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(
-                        div()
-                            .font_family(design::ui_font())
-                            .text_size(design::t_title(cx))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(t!("analytics.time.by_hour").to_string()),
-                    )
-                    .child(
-                        // NOT flipped: `scope` (`scope_label()`) is sometimes a raw strategy
-                        // name, which stays mono for legibility.
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(design::t_caption(cx))
-                            .text_color(moon(p.text_muted))
-                            .font_family(design::mono())
-                            .child(scope),
-                    )
-                    .child(self.bottom_caret(mode, p, cx)),
-            )
-            .child(
-                div()
-                    .id("an-time-body")
-                    .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .px(design::ui_px(cx, 8.0))
-                    .pb(design::ui_px(cx, 8.0))
-                    .child(body),
-            )
-            .into_any_element()
+        hour_card(body, scope, self.bottom_caret(mode, p, cx), p, cx)
     }
+}
+
+/// The complete production hour-card frame, also usable without Analytics or live report state.
+fn hour_card(
+    body: AnyElement,
+    scope: String,
+    caret: AnyElement,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    v_flex()
+        .w_full()
+        .debug_selector(|| "time-hours-card".into())
+        // Restored count/profit captions contribute to the intrinsic height; a fixed frame clips hours.
+        .min_h(design::ui_px(cx, 210.0))
+        .flex_none()
+        .rounded(design::ui_px(cx, 8.0))
+        .bg(moon(p.panel))
+        .border_1()
+        .border_color(moon(p.border))
+        .overflow_hidden()
+        .child(
+            h_flex()
+                .debug_selector(|| "time-hours-header".into())
+                .w_full()
+                .flex_none()
+                .px(design::ui_px(cx, 12.0))
+                .py(design::ui_px(cx, 8.0))
+                .items_center()
+                .gap(design::ui_px(cx, 8.0))
+                .child(
+                    div()
+                        .font_family(design::ui_font())
+                        .text_size(design::t_title(cx))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(t!("analytics.time.by_hour").to_string()),
+                )
+                .child(
+                    // NOT flipped: `scope` (`scope_label()`) is sometimes a raw strategy
+                    // name, which stays mono for legibility.
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(design::t_caption(cx))
+                        .text_color(moon(p.text_muted))
+                        .font_family(design::mono())
+                        .child(scope),
+                )
+                .child(caret),
+        )
+        .child(
+            div()
+                .id("an-time-body")
+                .w_full()
+                .flex_none()
+                .min_h_0()
+                .px(design::ui_px(cx, 8.0))
+                .pb(design::ui_px(cx, 8.0))
+                .child(body),
+        )
+        .into_any_element()
 }
 
 /// Height of a column's bar area (px before font scaling); the bar grows from the center by ≤ half.
 const BAR_H: f32 = 108.0;
 
-/// A center-origin hourly bar with exact-unit PnL and trade count available on hover.
+/// A center-origin hourly bar with visible PnL and a lower-priority trade count.
 /// Bar up = profit (green), down = loss (orange); length ∝ |PnL| / maximum.
 ///
 /// Args:
 ///     h: Selected-zone civil hour index.
 ///     stat: Hour aggregate in the active comparable unit.
 ///     max: Largest absolute profit across the rendered profile.
+///     show_counts: Enough column width remains for the secondary count label.
 ///     p: Active MoonUI palette.
 ///     cx: Analytics view context.
 ///
@@ -317,8 +339,9 @@ fn hour_column(
     h: usize,
     stat: HourStat,
     max: f64,
+    show_counts: bool,
     p: MoonPalette,
-    cx: &Context<AnalyticsView>,
+    cx: &App,
 ) -> impl IntoElement {
     let profit = stat.profit;
     let has = stat.trades > 0;
@@ -356,7 +379,34 @@ fn hour_column(
         .min_w_0()
         .items_center()
         .gap(design::ui_px(cx, 1.0))
-        // Exact figures are on hover: the mockup's left-column bars cannot fit 24 money labels.
+        .child(
+            div()
+                .debug_selector(move || format!("tuner-hour-profit-{h}"))
+                .flex_none()
+                .w_full()
+                .truncate()
+                .text_center()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(if has {
+                    sign_color(p, profit)
+                } else {
+                    p.text_muted
+                }))
+                .child(value),
+        )
+        .when(show_counts, |el| {
+            el.child(
+                div()
+                    .debug_selector(move || format!("tuner-hour-count-{h}"))
+                    .flex_none()
+                    .w_full()
+                    .truncate()
+                    .text_center()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon_alpha(p.text_muted, 0.7))
+                    .child(count),
+            )
+        })
         // Fixed-height bar area: the center tick + the bar up/down (px, not a relative
         // height — that one is unreliable inside a flex context).
         .child(
@@ -402,6 +452,7 @@ fn hour_column(
         // Hour (at the bottom).
         .child(
             div()
+                .debug_selector(move || format!("tuner-hour-label-{h}"))
                 .flex_none()
                 .w_full()
                 .text_center()
@@ -410,3 +461,6 @@ fn hour_column(
                 .child(format!("{h:02}")),
         )
 }
+
+#[cfg(test)]
+mod tests;
