@@ -786,7 +786,7 @@ impl AnalyticsView {
             };
             layout::side(kpi, params, cx)
         });
-        let main = layout::page(left.into_any_element(), rail, side, narrow, cx);
+        let main = layout::page(left.into_any_element(), rail, side, narrow, window, cx);
         let view = cx.entity().downgrade();
         let dialog = self.save_dialog_overlay(p, cx);
         let drag = (mode == StratMode::Time)
