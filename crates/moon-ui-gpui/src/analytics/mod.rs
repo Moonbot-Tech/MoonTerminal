@@ -302,6 +302,8 @@ pub struct AnalyticsView {
     pub(super) strat_active_only: bool,
     /// Show only strategies that name coins in a list (blacklist / whitelist), or all.
     pub(in crate::analytics) strat_lists: tuner::StratListFilter,
+    /// Numeric strategy filters live only until this Analytics window closes.
+    pub(in crate::analytics) strat_conditions: tuner::Conditions,
     /// The batch auto-pick behind the list's "Auto" column and filter.
     pub(in crate::analytics) auto_picks: tuner::AutoPicks,
     /// The tuning-readiness pass behind the list's "Tuning" column and filter (Entry/Exit).

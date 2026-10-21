@@ -100,6 +100,8 @@ fn key_over(base: usize) -> VisibleKey {
         kind: None,
         lists: StratListFilter::All,
         active_only: false,
+        conditions: Vec::new(),
+        percent: false,
         sort: None,
         auto: AutoView::default(),
         ready: ReadyView::default(),
@@ -109,6 +111,101 @@ fn key_over(base: usize) -> VisibleKey {
 /// Build the common memo key for tests that do not vary the group-slice address.
 fn key() -> VisibleKey {
     key_over(1)
+}
+
+/// Numeric filters must share the memoized pipeline and leave the counter denominator stable.
+#[test]
+fn numeric_conditions_filter_visible_rows_and_invalidate_the_memo() {
+    let all = vec![
+        g("STRAT_A", "K", Some(2), 0, 0.0),
+        g("STRAT_B", "K", Some(2), 0, 0.0),
+    ];
+    let mut all = all;
+    all[0].n = 10;
+    all[1].n = 30;
+    let mut key = key();
+    key.conditions.push(super::conditions::Condition {
+        id: 0,
+        column: 0,
+        operator: super::conditions::Operator::Greater,
+        number: "20".into(),
+    });
+    let (idx, available, pool) = filter_sort_indices(&all, &key);
+    assert_eq!(idx, vec![1]);
+    assert!(available);
+    assert_eq!(pool, 2);
+    let cached = VisibleRows {
+        key: key_with(&key),
+        idx,
+        enabled_filter_available: available,
+        pool,
+    };
+    key.conditions[0].number = "-".into();
+    assert!(!memo_is_fresh(Some(&cached), &key));
+    assert_eq!(filter_sort_indices(&all, &key).0, vec![0, 1]);
+}
+
+/// A conditions reset must not replace search-empty or pending classification explanations.
+#[test]
+fn conditions_empty_message_requires_rows_restorable_by_its_reset() {
+    let mut row = g("STRAT_A", "K", Some(2), 0, 0.0);
+    row.n = 10;
+    let all = [row];
+    let numeric = super::conditions::Condition {
+        id: 0,
+        column: 0,
+        operator: super::conditions::Operator::Greater,
+        number: "20".into(),
+    };
+    let mut state = key();
+    state.conditions.push(numeric.clone());
+    assert!(filter_sort_indices(&all, &state).0.is_empty());
+    assert!(super::conditions_clear_restores_rows(&all, state, false));
+
+    for cause in ["search", "auto-pending", "ready-pending"] {
+        let mut state = key();
+        state.conditions.push(numeric.clone());
+        match cause {
+            "search" => state.search_lower = "absent".into(),
+            "auto-pending" => state.auto.filter = AutoFilter::Found,
+            _ => state.ready.filter = ReadyFilter::Can,
+        }
+        assert!(filter_sort_indices(&all, &state).0.is_empty());
+        assert!(
+            !super::conditions_clear_restores_rows(&all, state, false),
+            "resetting conditions cannot resolve {cause}"
+        );
+    }
+}
+
+/// A partial Can result that fails numeric conditions cannot prove the pending rows fail too.
+#[test]
+fn partial_readiness_keeps_computing_before_a_conditions_empty_message() {
+    let mut counted = g("STRAT_A", "K", Some(2), 0, 0.0);
+    counted.n = 100;
+    let mut pending = g("STRAT_B", "K", Some(2), 0, 0.0);
+    pending.n = 300;
+    let all = [counted, pending];
+    let mut state = key();
+    state.conditions.push(super::conditions::Condition {
+        id: 0,
+        column: 0,
+        operator: super::conditions::Operator::Greater,
+        number: "200".into(),
+    });
+    state.ready.filter = ReadyFilter::Can;
+    state.ready.classes = Arc::new(HashMap::from([(
+        all[0].key.clone(),
+        ReadyClass::Can { fit: 100 },
+    )]));
+    assert!(filter_sort_indices(&all, &state).0.is_empty());
+    let mut without_conditions = key_with(&state);
+    without_conditions.conditions.clear();
+    assert_eq!(filter_sort_indices(&all, &without_conditions).0, vec![0]);
+    assert!(
+        !super::conditions_clear_restores_rows(&all, state, true),
+        "the uncounted row may still pass both readiness and numeric conditions"
+    );
 }
 
 /// Unchanged inputs must hit the cache; ANY change must miss it.
@@ -540,6 +637,8 @@ fn key_with(k: &VisibleKey) -> VisibleKey {
         kind: k.kind.clone(),
         lists: k.lists,
         active_only: k.active_only,
+        conditions: k.conditions.clone(),
+        percent: k.percent,
         sort: k.sort.clone(),
         auto: k.auto.clone(),
         ready: k.ready.clone(),

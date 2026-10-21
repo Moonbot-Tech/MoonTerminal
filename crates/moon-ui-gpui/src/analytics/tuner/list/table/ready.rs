@@ -1,6 +1,6 @@
 //! The strategy table's "Tuning" pieces ("Entry/Exit" only): the readiness cell, the progress
 //! line and the filter's empty states. The same widgets as the auto-pick's on "By coin" — the
-//! progress line uses the shared bar with a wrapping readiness caption.
+//! progress uses the shared toolbar bar and a single-line readiness caption.
 
 use gpui::*;
 use moon_ui::{MoonButton, MoonButtonVariant, MoonPalette, h_flex, v_flex};
@@ -16,7 +16,7 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::GroupStat;
 
 impl AnalyticsView {
-    /// The readiness pass's line under the list header: "K of M" with a thin bar while it
+    /// The readiness pass's toolbar status: "K of M" with a thin bar while it
     /// runs, the tunable count when done, an amber warning when the read failed.
     ///
     /// Args:

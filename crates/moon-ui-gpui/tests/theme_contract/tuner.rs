@@ -128,7 +128,7 @@ fn the_tuner_collapse_caret_uses_the_down_up_pose() {
 #[test]
 fn tuning_mode_buttons_keep_their_order_and_baseline() {
     let table = read_src("analytics/tuner/list/table.rs");
-    let header = braced_body(&table, "fn strat_list_card(");
+    let header = braced_body(&table, "fn strat_toolbar(");
     let at = |needle: &str| {
         header
             .find(needle)
@@ -157,14 +157,9 @@ fn tuning_mode_buttons_keep_their_order_and_baseline() {
     );
 }
 
-/// The auto-pick progress line keeps its own row between the card's toolbar and the filter
-/// bar. The layout probe in `list/table/tests.rs` measures that row inside `strat_list_frame`;
-/// this pins WHERE the card draws it.
-///
-/// The plausible edit is tidying it back into the toolbar beside the mode buttons and the
-/// "shown X of Y" counter, where a 1330 px list clipped it to a bare "...".
+/// Progress belongs inside the toolbar; restoring a reserved status slot adds an empty gap.
 #[test]
-fn the_auto_progress_line_sits_under_the_toolbar() {
+fn the_auto_progress_line_sits_inside_the_toolbar() {
     let table = read_src("analytics/tuner/list/table.rs");
     let card = braced_body(&table, "fn strat_list_card(");
     let at = |needle: &str| {
@@ -177,8 +172,8 @@ fn the_auto_progress_line_sits_under_the_toolbar() {
         at("strat_list_frame("),
     );
     assert!(
-        counter < progress && progress < frame,
-        "the progress line must be built after the toolbar counter and handed to the card frame"
+        progress < counter && counter < frame,
+        "progress must be built before the toolbar and rendered before its counter"
     );
     assert_eq!(card.matches("auto_progress_el(").count(), 1);
     assert!(
@@ -196,14 +191,12 @@ fn the_auto_progress_line_sits_under_the_toolbar() {
             .find(needle)
             .unwrap_or_else(|| panic!("{needle} must be rendered in the card frame"))
     };
-    let (toolbar, line, filter_bar) = (
-        at_shell(".child(toolbar)"),
-        at_shell(".children(progress)"),
-        at_shell(".child(filter_bar)"),
-    );
+    let (toolbar, filter_bar) = (at_shell(".child(toolbar)"), at_shell(".child(filter_bar)"));
     assert!(
-        toolbar < line && line < filter_bar,
-        "the progress line must follow the toolbar and precede the filter bar"
+        toolbar < filter_bar
+            && !shell.contains("tuner-list-status")
+            && !shell.contains(".children(progress)"),
+        "the filter bar must immediately follow the toolbar without a reserved status slot"
     );
     let el = braced_body(&table, "fn auto_progress_el(");
     assert!(

@@ -27,7 +27,7 @@ struct HeaderLayoutProbe {
 }
 
 impl Render for HeaderLayoutProbe {
-    /// Draw the header controls and a naturally wrapping reference caption to detect truncation.
+    /// Draw the header controls and a single-line ETA caption inside the available width.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         v_flex()
@@ -83,26 +83,10 @@ impl Render for HeaderLayoutProbe {
                 p,
                 cx,
             ))
-            .child(
-                h_flex()
-                    .w_full()
-                    .px(design::ui_px(cx, 12.0))
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(div().flex_none().w(design::ui_px(cx, 56.0)))
-                    .child(
-                        div()
-                            .debug_selector(|| "header-reference".into())
-                            .flex_1()
-                            .min_w_0()
-                            .font_family(design::ui_font())
-                            .text_size(design::t_caption(cx))
-                            .child(self.text.clone()),
-                    ),
-            )
     }
 }
 
-/// A long translation must wrap rather than clip the list header or the ETA caption.
+/// A long ETA remains one line while filter controls wrap inside the card.
 ///
 /// Dropping the pick-best button and its top-N menu must not be what makes this fit: the
 /// remaining controls and the readiness line still have to stay inside the card.
@@ -159,10 +143,9 @@ fn header_and_eta_fit_every_language_theme_zoom_and_list_width(cx: &mut gpui::Te
                     let caption = visual
                         .debug_bounds("an-ready-progress-txt")
                         .expect("caption");
-                    let reference = visual.debug_bounds("header-reference").expect("reference");
                     assert!(
-                        caption.size.height + px(0.5) >= reference.size.height,
-                        "ETA truncated: {} {mode:?} {zoom} {width}",
+                        caption.size.height <= px(24.0 * zoom),
+                        "ETA wrapped: {} {mode:?} {zoom} {width}",
                         language.code()
                     );
                 }
@@ -498,6 +481,7 @@ const CARD_WIDTHS: [f32; 3] = [900.0, 1330.0, 1800.0];
 /// with a detail pane, and the column is a flex child. A window-sized box around the progress
 /// line alone is what let the previous probe pass.
 struct CardProgressProbe {
+    mode: StratMode,
     text: String,
     warn: bool,
     fraction: Option<f32>,
@@ -506,24 +490,33 @@ struct CardProgressProbe {
 impl Render for CardProgressProbe {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        let toolbar = h_flex()
-            .debug_selector(|| "an-strat-toolbar".into())
-            .w_full()
-            .flex_none()
-            .px(design::ui_px(cx, 12.0))
-            .py(design::ui_px(cx, 8.0))
-            .items_center()
-            .gap(design::ui_px(cx, 8.0))
-            .font_family(design::ui_font())
-            .child(div().flex_none().child("list"))
-            .child(div().flex_none().child("mode"))
-            .child(div().flex_1())
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(design::t_caption(cx))
-                    .child("shown"),
-            );
+        let progress = (self.mode.shows_auto() || self.mode.shows_ready()).then(|| {
+            progress_row(
+                self.text.clone(),
+                self.warn,
+                self.fraction,
+                self.mode.shows_ready(),
+                p,
+                cx,
+            )
+        });
+        let toolbar = super::strat_toolbar(
+            |id, mode, label| {
+                moon_ui::MoonButton::new(id)
+                    .label(label)
+                    .selected(mode == self.mode)
+                    .render()
+                    .into_any_element()
+            },
+            progress,
+            Some((
+                t!("analytics.strat.shown_compact", shown = 9, total = 140).to_string(),
+                t!("analytics.strat.shown", shown = 9, total = 140).to_string(),
+                p.text_muted,
+            )),
+            p,
+            cx,
+        );
         let filter = div()
             .debug_selector(|| "an-strat-filter".into())
             .w_full()
@@ -540,22 +533,7 @@ impl Render for CardProgressProbe {
             .flex_none()
             .h(design::ui_px(cx, 28.0))
             .child("row");
-        let card = strat_list_frame(
-            p,
-            toolbar,
-            Some(progress_row(
-                self.text.clone(),
-                self.warn,
-                self.fraction,
-                false,
-                p,
-                cx,
-            )),
-            filter,
-            header,
-            table_row,
-            cx,
-        );
+        let card = strat_list_frame(p, toolbar, filter, header, table_row, cx);
         div().size_full().child(
             h_flex()
                 .size_full()
@@ -629,6 +607,7 @@ fn the_auto_progress_line_is_one_row_of_the_strategy_card(cx: &mut gpui::TestApp
         for card_w in CARD_WIDTHS {
             for (text, warn, fraction) in &sentences {
                 let probe = CardProgressProbe {
+                    mode: StratMode::Coins,
                     text: text.clone(),
                     warn: *warn,
                     fraction: *fraction,
@@ -676,11 +655,10 @@ fn the_auto_progress_line_is_one_row_of_the_strategy_card(cx: &mut gpui::TestApp
                     h(row),
                     h(line)
                 );
+                let filter = visual.debug_bounds("an-strat-filter").expect("filter");
                 assert!(
-                    w(row) + 1.0 >= w(card) - 2.0,
-                    "progress row width {} does not span card {} ({at})",
-                    w(row),
-                    w(card)
+                    (filter.top() - toolbar.bottom()).abs() <= px(0.5),
+                    "filter must immediately follow toolbar ({at})"
                 );
                 let inside = |b: gpui::Bounds<gpui::Pixels>, what: &str| {
                     assert!(
@@ -695,8 +673,8 @@ fn the_auto_progress_line_is_one_row_of_the_strategy_card(cx: &mut gpui::TestApp
                 inside(toolbar, "toolbar");
                 inside(table, "first strategy row");
                 assert!(
-                    toolbar.bottom() <= row.origin.y + px(0.5),
-                    "progress line must sit under the toolbar ({at})"
+                    row.top() >= toolbar.top() && row.bottom() <= toolbar.bottom(),
+                    "progress line must sit inside the toolbar ({at})"
                 );
                 assert!(
                     table.origin.y + px(0.5) >= row.bottom(),
@@ -707,8 +685,157 @@ fn the_auto_progress_line_is_one_row_of_the_strategy_card(cx: &mut gpui::TestApp
     }
 }
 
+/// Switching modes must never insert a status strip or push the filter bar down.
+#[gpui::test]
+fn toolbar_and_filter_share_an_edge_in_every_mode(cx: &mut gpui::TestAppContext) {
+    for theme in [
+        UiThemeMode::Light,
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::LightExperimental,
+        UiThemeMode::DarkExperimental,
+    ] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+                cx,
+            )
+        });
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for width in [740.0, 900.0, 1330.0] {
+                let mut baseline = None;
+                for mode in STRAT_MODES {
+                    let probe = CardProgressProbe {
+                        mode,
+                        text: t!("analytics.ready.progress_eta", k = 5, m = 595, eta = "2h")
+                            .to_string(),
+                        warn: false,
+                        fraction: Some(0.4),
+                    };
+                    let window =
+                        cx.open_window(gpui::size(px(width + 20.0), px(560.0)), |_, _| probe);
+                    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                    for _ in 0..3 {
+                        visual.update(|window, cx| {
+                            let _ = window.draw(cx);
+                        });
+                    }
+                    let toolbar = visual.debug_bounds("an-strat-toolbar").expect("toolbar");
+                    let filter = visual.debug_bounds("an-strat-filter").expect("filter");
+                    assert!((filter.top() - toolbar.bottom()).abs() <= px(0.5));
+                    if let Some(y) = baseline {
+                        assert!(
+                            (filter.top() - y).abs() <= px(0.5),
+                            "mode switch moved the filter bar"
+                        );
+                    }
+                    baseline = Some(filter.top());
+                    let counter = visual.debug_bounds("an-strat-counter").expect("counter");
+                    assert!(
+                        counter.right() <= toolbar.right() + px(0.5),
+                        "counter overflow {} {width}",
+                        language.code()
+                    );
+                    if mode.shows_auto() || mode.shows_ready() {
+                        let selector = if mode.shows_auto() {
+                            "an-auto-progress-txt"
+                        } else {
+                            "an-ready-progress-txt"
+                        };
+                        let text = visual.debug_bounds(selector).expect("caption");
+                        assert!(
+                            text.right() <= counter.left()
+                                && text.top() >= toolbar.top()
+                                && text.bottom() <= toolbar.bottom(),
+                            "caption overflow {} {width}",
+                            language.code()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Width of the toolbar probe, in font px: the narrowest strategy card ([`CARD_WIDTHS`]).
 const TOOLBAR_W: f32 = CARD_WIDTHS[0];
+
+/// Stretching a short caption leaves its glyphs and progress bar stranded beside the mode tabs.
+#[gpui::test]
+fn short_progress_caption_sits_against_the_counter(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Light, 1.0),
+            cx,
+        )
+    });
+    for mode in [StratMode::Coins, StratMode::Ticks] {
+        let window = cx.open_window(gpui::size(px(1350.0), px(560.0)), |_, _| {
+            CardProgressProbe {
+                mode,
+                text: "12/140".into(),
+                warn: false,
+                fraction: Some(0.4),
+            }
+        });
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        for _ in 0..3 {
+            visual.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        let selector = if mode.shows_auto() {
+            "an-auto-progress-txt"
+        } else {
+            "an-ready-progress-txt"
+        };
+        let caption = visual.debug_bounds(selector).expect("caption");
+        let counter = visual.debug_bounds("an-strat-counter").expect("counter");
+        // GPUI's TextLayout rounds intrinsic widths up to whole layout pixels.
+        let needed =
+            visual.update(|_, cx| design::ui_caption_text_width(cx, "12/140", 400.0).ceil());
+        assert!(
+            f32::from(caption.size.width) <= needed + 0.5,
+            "the caption must retain its intrinsic width on a wide card: {:?}, need {needed}",
+            caption.size.width
+        );
+        assert!(
+            (counter.left() - caption.right() - px(8.0)).abs() <= px(0.5),
+            "short progress must hug the counter across the toolbar gap"
+        );
+    }
+}
+
+/// Omitting the condition marker from sizing hides it when a short numeric column is sorted.
+#[gpui::test]
+fn numeric_headers_fit_filter_markers_and_sort_arrows(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Light, 1.0),
+            cx,
+        )
+    });
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        cx.update(|cx| {
+            let widths = super::metric_col_widths(&[], cx);
+            for (column, width) in super::METRIC_COLS.iter().zip(widths) {
+                for arrow in ["▲", "▼"] {
+                    let heading = format!("{} · {arrow}", t!(column.key));
+                    let needed = design::mono_body_text_width(cx, &heading, 400.0);
+                    assert!(
+                        needed <= width,
+                        "filtered sorted header clipped: {} {}",
+                        language.code(),
+                        column.key
+                    );
+                }
+            }
+        });
+    }
+}
 
 /// The strategy list's filter bar as `strat_filter_bar` lays it out on one axis: the search
 /// box takes the rest, then the type and coin-list pickers, the auto-pick filter on "By coin"

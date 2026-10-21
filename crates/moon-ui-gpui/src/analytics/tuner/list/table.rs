@@ -2,7 +2,6 @@
 //! one row per strategy group, and the sortable column header. The controls it renders
 //! under — filters, sort state, column masks — live in the parent (`list`).
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MOON_SCROLLBAR_TRACK, MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonPalette,
@@ -112,7 +111,17 @@ impl AnalyticsView {
                 let shown = total.min(MAX_ROWS);
                 let empty_face = self.auto_picks.empty_face(self.auto_filter());
                 let ready_face = self.ready.empty_face(self.ready_filter());
-                if shown == 0 && ready_face == Some(AutoEmpty::Computing) {
+                if shown == 0
+                    && self.strat_conditions.applied() > 0
+                    && super::conditions_clear_restores_rows(
+                        &d.strategies,
+                        self.strat_visible_key(&d.strategies),
+                        ready_face == Some(AutoEmpty::Computing)
+                            || empty_face == Some(AutoEmpty::Computing),
+                    )
+                {
+                    (self.conditions_empty(p, cx), 0, 0, pool)
+                } else if shown == 0 && ready_face == Some(AutoEmpty::Computing) {
                     // The readiness pass has not answered yet: "none can be tuned" would be
                     // a guess. The rows appear as the pass counts them.
                     (ready::ready_computing_el(p, cx), 0, 0, pool)
@@ -204,97 +213,39 @@ impl AnalyticsView {
                 .label(label)
                 .on_click(cx.listener(move |this, _, _, cx| this.set_strat_mode(mode, cx)))
                 .render()
+                .into_any_element()
         };
 
-        let toolbar = h_flex()
-            .debug_selector(|| "an-strat-toolbar".to_string())
-            .w_full()
-            .flex_none()
-            .px(design::ui_px(cx, 12.0))
-            .py(design::ui_px(cx, 8.0))
-            .items_center()
-            .gap(design::ui_px(cx, 8.0))
-            // Title, mode buttons and the trailing counter are all prose — no data value
-            // sits in this row.
-            .font_family(design::ui_font())
-            .child(
-                div()
-                    .flex_none()
-                    // Match the mode buttons' box so `items_center` aligns equal heights;
-                    // the explicit line height also contains the title glyph without a
-                    // low visual baseline.
-                    .h(design::micro_control_h(cx))
-                    .flex()
-                    .items_center()
-                    .text_size(design::t_title(cx))
-                    .line_height(design::line_px(cx, 18.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(t!("analytics.strat.title").to_string()),
-            )
-            // Order is deliberate and asserted by `theme_contract`: filter, then time,
-            // then coin, then entry/exit. Each id stays bound to its own mode — the
-            // persisted per-axis column masks are keyed by mode, not by position.
-            .child(mode_btn(
-                "sm-filters",
-                StratMode::Filters,
-                t!("analytics.strat.mode_filter").to_string(),
-            ))
-            .child(mode_btn(
-                "sm-time",
-                StratMode::Time,
-                t!("analytics.strat.mode_time").to_string(),
-            ))
-            .child(mode_btn(
-                "sm-coins",
-                StratMode::Coins,
-                t!("analytics.strat.mode_coin").to_string(),
-            ))
-            .child(mode_btn(
-                "sm-ticks",
-                StratMode::Ticks,
-                t!("analytics.strat.mode_ticks").to_string(),
-            ))
-            .child(div().flex_1())
-            .children({
-                // In multi-select show the count (amber) so the user knows a bulk save
-                // is armed; otherwise retain only the capped shown/total count.
-                let counter = if self.is_multi() {
-                    Some((
-                        t!("analytics.strat.selected_n", n = self.sel_extra.len() + 1).to_string(),
-                        p.amber,
-                    ))
-                } else if total > shown
-                    || self.auto_filter() != AutoFilter::All
-                    || self.ready_filter() != ReadyFilter::All
-                {
-                    // The "of M" is the list after every filter BUT the auto-pick one,
-                    // so turning that filter on changes only the "shown" half.
-                    Some((
-                        t!("analytics.strat.shown", shown = shown, total = pool).to_string(),
-                        p.text_muted,
-                    ))
-                } else {
-                    None
-                };
-                counter.map(|(text, color)| {
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(color))
-                        .child(text)
-                })
-            });
-        // Its own line under the toolbar. M is `pool`, the same population the header's
-        // "of Y" counts: every filter except the auto-pick one. The loaded-list length
-        // counted strategies the header had already filtered out.
-        // At most one of the two lines exists: each is drawn on its own axis only.
         let progress = self.auto_progress_el(p, pool, cx);
         let progress = progress.or_else(|| self.ready_progress_el(p, pool, cx));
+        let counter = if self.is_multi() {
+            let text = t!("analytics.strat.selected_n", n = self.sel_extra.len() + 1).to_string();
+            Some((text.clone(), text, p.amber))
+        } else if total > shown
+            || self.auto_filter() != AutoFilter::All
+            || self.ready_filter() != ReadyFilter::All
+            || self.strat_conditions.applied() > 0
+        {
+            // The "of M" is the list after every filter BUT the auto-pick one,
+            // so turning that filter on changes only the "shown" half.
+            Some((
+                t!("analytics.strat.shown_compact", shown = shown, total = pool).to_string(),
+                t!("analytics.strat.shown", shown = shown, total = pool).to_string(),
+                p.text_muted,
+            ))
+        } else {
+            None
+        };
+        let toolbar = strat_toolbar(mode_btn, progress, counter, p, cx);
         // The header row stays OUTSIDE the virtual list so it cannot scroll away.
         strat_list_frame(
             p,
             toolbar,
-            progress,
-            filter_bar,
+            v_flex()
+                .w_full()
+                .flex_none()
+                .child(filter_bar)
+                .children(self.condition_chips(cx)),
             self.header_row(p, core_w, &metric_widths, cx),
             list,
             cx,
@@ -302,7 +253,93 @@ impl AnalyticsView {
     }
 }
 
-/// The strategy-list card's column: toolbar, the auto-pick line, filter bar, header, list.
+/// Render the shared toolbar geometry used by the live card and its layout probe.
+/// The progress occupies the flexible tail; only its caption yields width to the counter.
+fn strat_toolbar(
+    mode_btn: impl Fn(&'static str, StratMode, String) -> AnyElement,
+    progress: Option<AnyElement>,
+    counter: Option<(String, String, u32)>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let has_progress = progress.is_some();
+    h_flex()
+        .debug_selector(|| "an-strat-toolbar".to_string())
+        .w_full()
+        .flex_none()
+        .px(design::ui_px(cx, 12.0))
+        .py(design::ui_px(cx, 8.0))
+        .items_center()
+        .gap(design::ui_px(cx, 8.0))
+        // Title, mode buttons and the trailing counter are all prose — no data value
+        // sits in this row.
+        .font_family(design::ui_font())
+        .child(
+            div()
+                .flex_shrink_1()
+                .min_w_0()
+                .truncate()
+                // Match the mode buttons' box so `items_center` aligns equal heights;
+                // the explicit line height also contains the title glyph without a
+                // low visual baseline.
+                .h(design::micro_control_h(cx))
+                .flex()
+                .items_center()
+                .text_size(design::t_title(cx))
+                .line_height(design::line_px(cx, 18.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(t!("analytics.strat.title").to_string()),
+        )
+        // Order is deliberate and asserted by `theme_contract`: filter, then time,
+        // then coin, then entry/exit. Each id stays bound to its own mode — the
+        // persisted per-axis column masks are keyed by mode, not by position.
+        .child(mode_btn(
+            "sm-filters",
+            StratMode::Filters,
+            t!("analytics.strat.mode_filter").to_string(),
+        ))
+        .child(mode_btn(
+            "sm-time",
+            StratMode::Time,
+            t!("analytics.strat.mode_time").to_string(),
+        ))
+        .child(mode_btn(
+            "sm-coins",
+            StratMode::Coins,
+            t!("analytics.strat.mode_coin").to_string(),
+        ))
+        .child(mode_btn(
+            "sm-ticks",
+            StratMode::Ticks,
+            t!("analytics.strat.mode_ticks").to_string(),
+        ))
+        .child(
+            div()
+                .flex_1()
+                .min_w(design::ui_px(cx, 72.0))
+                .children(progress),
+        )
+        .children({
+            // In multi-select show the count (amber) so the user knows a bulk save
+            // is armed; otherwise retain only the capped shown/total count.
+            counter.map(|(text, tooltip, color)| {
+                h_flex()
+                    .id("an-strat-counter")
+                    .flex_none()
+                    .gap(design::ui_px(cx, 8.0))
+                    .children(has_progress.then(|| design::vline(cx, 14.0, p.border)))
+                    .debug_selector(|| "an-strat-counter".into())
+                    .whitespace_nowrap()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(color))
+                    .tooltip(crate::panels::common::text_tooltip(tooltip))
+                    .child(text)
+            })
+        })
+        .into_any_element()
+}
+
+/// The strategy-list card's column: toolbar, filter bar, header, list, with no status slot.
 ///
 /// The view and the layout probe both call this. A probe that draws the progress line in a
 /// bare full-width box never sees the zero-width wrap that happens only inside this column.
@@ -310,7 +347,6 @@ impl AnalyticsView {
 /// Args:
 ///     p: Runtime palette for the card chrome.
 ///     toolbar: Title, mode buttons and the shown/total counter.
-///     progress: The auto-pick line, absent before the first batch.
 ///     filter_bar: Search and the list filters.
 ///     header: The sortable column titles, kept outside the scroller.
 ///     list: The virtual rows, or the empty-state note that replaces them.
@@ -321,7 +357,6 @@ impl AnalyticsView {
 fn strat_list_frame(
     p: MoonPalette,
     toolbar: impl IntoElement,
-    progress: Option<AnyElement>,
     filter_bar: impl IntoElement,
     header: impl IntoElement,
     list: impl IntoElement,
@@ -339,14 +374,6 @@ fn strat_list_frame(
         .border_color(moon(p.border))
         .overflow_hidden()
         .child(toolbar)
-        .child(
-            div()
-                .w_full()
-                .flex_none()
-                .min_h(design::fit_h_px(cx, 18.0, 12.0, 4.0))
-                .debug_selector(|| "tuner-list-status".into())
-                .children(progress),
-        )
         .child(filter_bar)
         .child(header)
         .child(div().w_full().flex_1().min_h_0().child(list))
@@ -635,7 +662,14 @@ impl AnalyticsView {
                 } else {
                     moon(p.amber)
                 })
-                .child(format!("{title}{arrow}"))
+                .child(format!(
+                    "{title}{}{arrow}",
+                    if self.strat_conditions.marks(key) {
+                        " ·"
+                    } else {
+                        ""
+                    }
+                ))
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle_sort(key, cx)));
             if right {
                 d = d.text_right();
@@ -751,7 +785,7 @@ impl AnalyticsView {
             )
     }
 
-    /// The batch auto-pick's line under the list header: "K of M" with a thin bar while it
+    /// The toolbar's auto-pick status: "K of M" with a thin bar while it
     /// runs, the finding count when done, an amber warning when the read failed.
     ///
     /// Args:
@@ -798,12 +832,12 @@ impl AnalyticsView {
     }
 }
 
-/// Shared progress bar and caption, with optional wrapping for the readiness estimate.
+/// Shared toolbar progress bar and a single-line caption with the full text on hover.
 pub(in crate::analytics::tuner) fn progress_row(
     text: String,
     warn: bool,
     fraction: Option<f32>,
-    wrap: bool,
+    readiness: bool,
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -823,13 +857,13 @@ pub(in crate::analytics::tuner) fn progress_row(
             )
     });
     h_flex()
-        .id(if wrap {
+        .id(if readiness {
             "an-ready-progress"
         } else {
             "an-auto-progress"
         })
         .debug_selector(move || {
-            if wrap {
+            if readiness {
                 "an-ready-progress"
             } else {
                 "an-auto-progress"
@@ -837,10 +871,10 @@ pub(in crate::analytics::tuner) fn progress_row(
             .to_string()
         })
         .w_full()
-        .self_stretch()
-        .flex_none()
+        .min_w_0()
+        .flex_1()
+        .justify_end()
         .overflow_hidden()
-        .px(design::ui_px(cx, 12.0))
         .gap(design::ui_px(cx, 6.0))
         .items_center()
         .font_family(design::ui_font())
@@ -850,16 +884,22 @@ pub(in crate::analytics::tuner) fn progress_row(
         .child(
             div()
                 .debug_selector(move || {
-                    if wrap {
+                    if readiness {
                         "an-ready-progress-txt"
                     } else {
                         "an-auto-progress-txt"
                     }
                     .to_string()
                 })
-                .flex_1()
+                .flex_shrink_1()
                 .min_w_0()
-                .when(!wrap, |el| el.truncate())
+                .truncate()
+                .id(if readiness {
+                    "an-ready-progress-tip"
+                } else {
+                    "an-auto-progress-tip"
+                })
+                .tooltip(crate::panels::common::text_tooltip(text.clone()))
                 .child(text),
         )
         .into_any_element()
@@ -1108,7 +1148,9 @@ const METRIC_COL_GUTTER: f32 = 12.0;
 /// Fixed pixel widths of the strategy table's numeric columns.
 ///
 /// Each width is the wider of the widest exact string the corresponding body cell currently
-/// renders and the column's own heading with a sort arrow, plus [`METRIC_COL_GUTTER`]. The
+/// renders and the column's own heading with a condition marker and sort arrow, plus
+/// [`METRIC_COL_GUTTER`]. Reserving both decorations keeps an active filter visible without
+/// resizing columns as conditions are edited. The
 /// measurement covers the complete loaded result rather than the filtered slice, so searching or
 /// changing the row cap cannot make the numeric cluster jump.
 fn metric_col_widths(groups: &[GroupStat], cx: &App) -> Vec<f32> {
@@ -1128,8 +1170,8 @@ fn metric_col_widths(groups: &[GroupStat], cx: &App) -> Vec<f32> {
         .zip(METRIC_COLS.iter())
         .map(|((_, text), column)| {
             let value_w = design::mono_body_text_width(cx, &text, FontWeight::NORMAL.0);
-            // The heading is sortable, so it may carry the active-column arrow.
-            let heading = format!("{} \u{25BC}", t!(column.key));
+            // A column may be filtered and sorted at once; neither decoration may be clipped.
+            let heading = format!("{} · \u{25BC}", t!(column.key));
             let heading_w = design::mono_body_text_width(cx, &heading, FontWeight::NORMAL.0);
             (value_w.max(heading_w) + gutter).ceil()
         })

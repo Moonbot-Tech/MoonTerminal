@@ -1107,3 +1107,17 @@ analytics.tuner.pick_strategy: "Selecione uma estratégia na lista para ver os d
 analytics.tuner.no_strategy: "Nenhuma estratégia selecionada"
 analytics.tuner.time_window: "Janela %{window} · operações: %{n}"
 analytics.tuner.time_all_hours: "período completo"
+
+# Window-lifetime numeric strategy-list conditions.
+analytics.conditions.title: "Condições"
+analytics.conditions.all: "As estratégias devem cumprir todas as condições."
+analytics.conditions.add: "Adicionar condição"
+analytics.conditions.remove: "Remover condição"
+analytics.conditions.reset: "Redefinir"
+analytics.conditions.reset_all: "Redefinir tudo"
+analytics.conditions.reset_conditions: "Redefinir condições"
+analytics.conditions.matches: "%{n} de %{m} correspondem"
+analytics.conditions.done: "Concluído"
+analytics.conditions.invalid: "Insira um número; esta condição é ignorada."
+analytics.conditions.empty: "Nenhuma estratégia cumpre as condições"
+analytics.strat.shown_compact: "%{shown}/%{total}"
