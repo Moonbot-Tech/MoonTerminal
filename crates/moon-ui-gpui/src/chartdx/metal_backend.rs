@@ -390,6 +390,9 @@ pub struct MetalLayers {
     hlines: Vec<HLineGpu>,
     segs: Vec<SegGpu>,
     markers: Vec<MarkerGpu>,
+    /// The trade clusters, drawn with the marker pipeline from a buffer of their own.
+    clusters: Vec<MarkerGpu>,
+    clusters_dirty: bool,
     volume_buy_max: f32,
     volume_sell_max: f32,
     bg_uniform: BufferSlot,
@@ -412,6 +415,7 @@ pub struct MetalLayers {
     hline_buffer: BufferSlot,
     seg_buffer: BufferSlot,
     marker_buffer: BufferSlot,
+    cluster_buffer: BufferSlot,
     candle_buffer: BufferSlot,
     candle_style_uniform: BufferSlot,
     path_buffer: BufferSlot,
@@ -467,6 +471,8 @@ impl MetalLayers {
             hlines: Vec::new(),
             segs: Vec::new(),
             markers: Vec::new(),
+            clusters: Vec::new(),
+            clusters_dirty: true,
             volume_buy_max: 1e-6,
             volume_sell_max: 1e-6,
             bg_uniform: BufferSlot::default(),
@@ -487,6 +493,7 @@ impl MetalLayers {
             hline_buffer: BufferSlot::default(),
             seg_buffer: BufferSlot::default(),
             marker_buffer: BufferSlot::default(),
+            cluster_buffer: BufferSlot::default(),
             candle_buffer: BufferSlot::default(),
             candle_style_uniform: BufferSlot::default(),
             path_buffer: BufferSlot::default(),
@@ -867,6 +874,13 @@ impl MetalLayers {
         self.base_cache.valid = false;
     }
 
+    /// Replace the trade clusters; uploaded on their own buffer on the next prepare.
+    pub fn set_clusters(&mut self, clusters: &[MarkerInstance]) {
+        self.clusters = clusters.iter().map(mk_of).collect();
+        self.clusters_dirty = true;
+        self.base_cache.valid = false;
+    }
+
     /// Rewrites markers in place by index and re-uploads only the marker buffer. Markers draw
     /// after the base cache, so unlike `set_userdata` this leaves the cached base valid.
     ///
@@ -919,6 +933,7 @@ impl MetalLayers {
         self.hline_buffer = BufferSlot::default();
         self.seg_buffer = BufferSlot::default();
         self.marker_buffer = BufferSlot::default();
+        self.cluster_buffer = BufferSlot::default();
         self.candle_buffer = BufferSlot::default();
         self.candle_style_uniform = BufferSlot::default();
         self.candles.invalidate_gpu();
@@ -1119,6 +1134,12 @@ impl MetalLayers {
     fn draw_user_layers(&self, encoder: &RenderCommandEncoderRef) {
         let pipelines = self.pipelines.as_ref().unwrap();
         set_uniform(encoder, 0, self.view_uniform.buffer());
+        // The trade clusters go first: over the candles, under every order line and marker.
+        if !self.clusters.is_empty() {
+            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
+            set_storage(encoder, 1, self.cluster_buffer.buffer());
+            draw(encoder, &pipelines.marker, 6, self.clusters.len() as u64);
+        }
         if !self.hlines.is_empty() {
             crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_storage(encoder, 1, self.hline_buffer.buffer());
@@ -1261,6 +1282,7 @@ impl MetalLayers {
                         marker_half: view.marker_half,
                         buy_inv: vol_view.volume_buy_inv,
                         sell_inv: vol_view.volume_sell_inv,
+                        bubbles: self.tick_style.shape[0] >= 0.5,
                     },
                     false,
                 )
@@ -1292,6 +1314,7 @@ impl MetalLayers {
                         marker_half: view.marker_half,
                         buy_inv: cross_view.volume_buy_inv,
                         sell_inv: cross_view.volume_sell_inv,
+                        bubbles: self.tick_style.shape[0] >= 0.5,
                     },
                     true,
                 )
@@ -1869,6 +1892,11 @@ impl MetalLayers {
             self.marker_buffer
                 .write(device, "moon_chart_markers", &self.markers);
             self.marker_buffer_dirty = false;
+        }
+        if self.clusters_dirty || self.cluster_buffer.buffer.is_none() {
+            self.cluster_buffer
+                .write(device, "moon_chart_clusters", &self.clusters);
+            self.clusters_dirty = false;
         }
         if self.candle_buffer.buffer.is_none() {
             self.candles.invalidate_gpu();

@@ -184,6 +184,9 @@ pub fn normalize_chart_graphics(cfg: ChartGraphicsCfg) -> ChartGraphicsCfg {
         hvol_tf_s: crate::hvol::snap_tf_s(cfg.hvol_tf_s),
         hvol_price_frame_pct: crate::hvol::clamp_price_frame_pct(cfg.hvol_price_frame_pct),
         hvol_width: crate::hvol::clamp_width(cfg.hvol_width),
+        // The ladder's highlight snaps onto the list the popup offers, in the module that owns it.
+        ladder_big_pct: crate::ladder::snap_big_pct(cfg.ladder_big_pct),
+
         ..cfg
     }
 }

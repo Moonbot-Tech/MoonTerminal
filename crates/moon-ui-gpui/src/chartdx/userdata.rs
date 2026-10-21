@@ -22,6 +22,7 @@ const INITIAL_ZONE_BUFFER_CAPACITY: u32 = 64;
 const INITIAL_HLINE_BUFFER_CAPACITY: u32 = 256;
 const INITIAL_SEG_BUFFER_CAPACITY: u32 = 512;
 const INITIAL_MARKER_BUFFER_CAPACITY: u32 = 512;
+const INITIAL_CLUSTER_BUFFER_CAPACITY: u32 = 512;
 
 struct UdPipe {
     zone_vs: ID3D11VertexShader,
@@ -46,6 +47,9 @@ struct UdPipe {
     mk_buf: ID3D11Buffer,
     mk_srv: ID3D11ShaderResourceView,
     mk_cap: u32,
+    cl_buf: ID3D11Buffer,
+    cl_srv: ID3D11ShaderResourceView,
+    cl_cap: u32,
 }
 
 #[derive(Default)]
@@ -70,6 +74,13 @@ pub struct UserDataLayer {
     mk_cpu: Vec<MarkerGpu>,
     /// `mk_cpu` was patched after its upload and the marker buffer must be written again.
     mk_dirty: bool,
+    /// The trade clusters: discs the marker pipeline draws from a buffer of their own, so the tape
+    /// moving never re-uploads the order geometry. Kept on the CPU to be written again whenever
+    /// the pipe is rebuilt.
+    cl_cpu: Vec<MarkerGpu>,
+    cl_count: u32,
+    /// `cl_cpu` changed, or the buffer under it was rebuilt, since the last upload.
+    cl_dirty: bool,
     device_generation: u64,
 }
 
@@ -85,8 +96,18 @@ impl UserDataLayer {
             spare: Pending::default(),
             mk_cpu: Vec::new(),
             mk_dirty: false,
+            cl_cpu: Vec::new(),
+            cl_count: 0,
+            cl_dirty: false,
             device_generation: 0,
         }
+    }
+
+    /// Replace the trade clusters; uploaded on the next prepare, on their own buffer.
+    pub fn set_clusters(&mut self, clusters: &[MarkerInstance]) {
+        self.cl_cpu.clear();
+        self.cl_cpu.extend(clusters.iter().map(mk_of));
+        self.cl_dirty = true;
     }
 
     /// Upload all order geometry after an order or view mutation.
@@ -159,8 +180,11 @@ impl UserDataLayer {
             // The GPU copy is gone; a patch has nothing to patch until the next `set`.
             self.mk_cpu.clear();
             self.mk_dirty = false;
+            self.cl_count = 0;
         }
         if self.pipe.is_none() {
+            // A fresh pipe holds empty buffers: the clusters' CPU copy goes up again below.
+            self.cl_dirty = true;
             self.pipe = Some(Self::create_pipe(
                 device,
                 INITIAL_ZONE_BUFFER_CAPACITY,
@@ -182,6 +206,7 @@ impl UserDataLayer {
             });
             if needs_resize {
                 self.pipe = Some(Self::create_pipe(device, zone_cap, hl_cap, seg_cap, mk_cap));
+                self.cl_dirty = true;
             }
             let pipe = self.pipe.as_ref().unwrap();
             self.zone_count = upload_all(context, &pipe.zone_buf, &p.zone);
@@ -198,6 +223,19 @@ impl UserDataLayer {
             // Same length as the last upload, so the buffer already fits it.
             self.mk_count = upload_all(context, &pipe.mk_buf, &self.mk_cpu);
             self.mk_dirty = false;
+        }
+        if self.cl_dirty
+            && let Some(pipe) = self.pipe.as_mut()
+        {
+            let cap = next_buffer_cap(self.cl_cpu.len(), INITIAL_CLUSTER_BUFFER_CAPACITY);
+            if pipe.cl_cap < cap {
+                let buf = create_structured(device, std::mem::size_of::<MarkerGpu>() as u32, cap);
+                pipe.cl_srv = create_srv(device, &buf);
+                pipe.cl_buf = buf;
+                pipe.cl_cap = cap;
+            }
+            self.cl_count = upload_all(context, &pipe.cl_buf, &self.cl_cpu);
+            self.cl_dirty = false;
         }
     }
 
@@ -251,7 +289,7 @@ impl UserDataLayer {
         rtv: &ID3D11RenderTargetView,
         gpu: &RawGpuAccess,
     ) {
-        if self.hl_count == 0 && self.seg_count == 0 && self.mk_count == 0 {
+        if self.hl_count == 0 && self.seg_count == 0 && self.mk_count == 0 && self.cl_count == 0 {
             return;
         }
         let Some(pipe) = self.pipe.as_ref() else {
@@ -265,6 +303,13 @@ impl UserDataLayer {
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             context.VSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
             context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
+            // The trade clusters go first: over the candles, under every order line and marker.
+            if self.cl_count > 0 {
+                context.VSSetShaderResources(1, Some(&[Some(pipe.cl_srv.clone())]));
+                context.VSSetShader(&pipe.mk_vs, None);
+                context.PSSetShader(&pipe.mk_ps, None);
+                context.DrawInstanced(6, self.cl_count, 0, 0);
+            }
             if self.hl_count > 0 {
                 context.VSSetShaderResources(1, Some(&[Some(pipe.hl_srv.clone())]));
                 context.VSSetShader(&pipe.hl_vs, None);
@@ -301,6 +346,8 @@ impl UserDataLayer {
         let zone_buf = create_structured(device, std::mem::size_of::<ZoneGpu>() as u32, zone_cap);
         let seg_buf = create_structured(device, std::mem::size_of::<SegGpu>() as u32, seg_cap);
         let mk_buf = create_structured(device, std::mem::size_of::<MarkerGpu>() as u32, mk_cap);
+        let cl_cap = INITIAL_CLUSTER_BUFFER_CAPACITY;
+        let cl_buf = create_structured(device, std::mem::size_of::<MarkerGpu>() as u32, cl_cap);
         UdPipe {
             zone_vs: make_vs(device, HLSL, "zone_vertex"),
             zone_ps: make_ps(device, HLSL, "zone_fragment"),
@@ -320,10 +367,13 @@ impl UserDataLayer {
             seg_cap,
             mk_srv: create_srv(device, &mk_buf),
             mk_cap,
+            cl_srv: create_srv(device, &cl_buf),
+            cl_cap,
             zone_buf,
             hl_buf,
             seg_buf,
             mk_buf,
+            cl_buf,
         }
     }
 }

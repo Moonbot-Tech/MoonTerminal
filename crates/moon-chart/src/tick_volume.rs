@@ -327,6 +327,10 @@ pub struct BakeColumns {
     /// Volume bar scale exactly as the shader uniform receives it; unused by `reduce_crosses`.
     pub buy_inv: f32,
     pub sell_inv: f32,
+    /// Whether this pane's trade clusters are drawn (`TickStyleGpu::shape.x`): the clusters layer
+    /// draws the trades then and the cross pass culls them, so `reduce_crosses` keeps the
+    /// liquidations alone instead of spending its budget on rows nobody draws.
+    pub bubbles: bool,
 }
 
 /// One input row keyed to its texel; its index in `rows` is its draw order.
@@ -584,7 +588,8 @@ fn partition_kept_by_side(kept: &mut [u32], rows: &[LodRow], scratch: &mut Vec<u
 }
 
 /// Reduce `(slot, time, price, side, qty)` rows to the crosses a bitmap can show: the last row
-/// per texel, then per-side sampling past `LOD_MAX_ROWS` rows a column. Culled rows are dropped.
+/// per texel, then per-side sampling past `LOD_MAX_ROWS` rows a column. Culled rows are dropped —
+/// and under [`BakeColumns::bubbles`] so are the trades, which the shader culls too.
 pub fn reduce_crosses(
     rows: impl IntoIterator<Item = (u32, f32, f32, u32, f32)>,
     g: &BakeColumns,
@@ -593,8 +598,10 @@ pub fn reduce_crosses(
     out.cross.clear();
     let cull = g.marker_half.max(8.0).max(g.marker_half + 1.0);
     let (w, h) = (g.width_px as f32, g.height);
-    let span = key_rows(rows, g, out, |_, col, row, _, _| {
-        col.is_finite()
+    let bubbles = g.bubbles;
+    let span = key_rows(rows, g, out, |_, col, row, side, _| {
+        !(bubbles && side < 2)
+            && col.is_finite()
             && row.is_finite()
             && col >= -cull
             && col <= w + cull

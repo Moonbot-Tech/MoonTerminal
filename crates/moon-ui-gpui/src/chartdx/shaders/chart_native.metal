@@ -674,13 +674,15 @@ fragment float4 candles_fragment(CandleOut in [[stage_in]],
 }
 
 // set_uniform binds index 2 to both stages; do not reuse it in these pipelines.
-struct TickStyle { float4 buy; float4 sell; float4 liq; };
+// shape: x = 1 while this pane's clusters draw the trades, else 0.
+struct TickStyle { float4 buy; float4 sell; float4 liq; float4 shape; };
 
 struct CrossOut { float4 position [[position]]; float2 uv; uint side [[flat]]; };
 
 vertex CrossOut crosses_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                                constant ChartView& cv [[buffer(0)]],
-                               const device Cross* crosses [[buffer(1)]]) {
+                               const device Cross* crosses [[buffer(1)]],
+                               constant TickStyle& ts [[buffer(2)]]) {
     Cross c = crosses[iid];
     // rint ties to even like HLSL round(), the rule the LOD reducers key texels by.
     float sx = rint(cv.bounds.x + (c.time_rel - cv.view_time0) * cv.time_to_px);
@@ -688,6 +690,11 @@ vertex CrossOut crosses_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     float cull_margin = max(8.0, cv.marker_half + 1.0);
     if (sx < cv.bounds.x - cull_margin || sx > cv.bounds.x + cv.bounds.z + cull_margin ||
         sy < cv.bounds.y - cull_margin || sy > cv.bounds.y + cv.bounds.w + cull_margin) {
+        return { float4(2.0, 2.0, 0.0, 1.0), float2(0.0), 0 };
+    }
+    // In bubble mode the trades are summed into the clusters layer, so their crosses step aside;
+    // liquidations keep theirs.
+    if (ts.shape.x >= 0.5 && c.side < 2u) {
         return { float4(2.0, 2.0, 0.0, 1.0), float2(0.0), 0 };
     }
     float2 corner = CORNERS_PM[vid];

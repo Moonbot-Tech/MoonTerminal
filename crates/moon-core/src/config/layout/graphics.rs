@@ -71,6 +71,39 @@ pub enum TradeHistoryStyle {
     MoonbotLines,
 }
 
+/// How a tab draws its live trades.
+///
+/// A display TYPE per tab, like [`BookKind`]: a scalping tab can read the tape as bubbles while
+/// the AddToChart stacks keep the crosses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TradeKind {
+    /// The 7×7 cross per trade — the picture this terminal shipped with.
+    #[default]
+    Crosses,
+    /// Clusters: the tape summed into a time × price grid, up to three consecutive intervals of one
+    /// price merged into one disc — its area the cluster's volume against the biggest on screen,
+    /// its colour the side that traded more. A disc big enough prints that volume inside it. The
+    /// grid always follows the zoom; there is no stored step.
+    Bubbles,
+}
+
+/// How a tab draws the order book in its right-hand zone.
+///
+/// A display TYPE rather than a mode of the whole terminal: each tab picks its own, so a Main tab
+/// can read the book as a ladder while the AddToChart stacks keep Moonbot's glass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BookKind {
+    /// Moonbot's glass: cumulative depth fills with the individual level lines over them — the
+    /// picture this terminal shipped with.
+    #[default]
+    Bars,
+    /// A price ladder: one row per `tick × step`, the row's volume as a bar and as a number, and
+    /// the row's price beside it.
+    Ladder,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HvolSide {
@@ -218,6 +251,10 @@ pub struct ChartGraphicsCfg {
         deserialize_with = "de_trade_volume_alpha"
     )]
     pub trade_volume_alpha: f32,
+    /// Crosses or bubbles for the live trades. ABSENT reads as crosses, the picture every tab had
+    /// before bubbles existed. Liquidations keep their crosses either way.
+    #[serde(default, deserialize_with = "de_trade_kind")]
+    pub trade_kind: TradeKind,
 
     // --- Bottom candle volumes, likewise moved off `ChartTheme`. ---
     /// Display style: `crate::market::candles::VOLUME_STYLE_OFF` or `_HILLS`. Together with
@@ -328,6 +365,17 @@ pub struct ChartGraphicsCfg {
     /// standing captions, for a reader who knows what `Auto` picked and wants the zone bare.
     #[serde(default, deserialize_with = "de_lenient_false")]
     pub hvol_hide_captions: bool,
+
+    // --- Order book: how the right-hand zone draws the book. ---
+    /// Bars or a price ladder. ABSENT reads as bars, the picture every tab had before the ladder
+    /// existed.
+    #[serde(default, deserialize_with = "de_book_kind")]
+    pub book_kind: BookKind,
+    /// Ladder rows whose volume reaches this percentage of the largest visible row print their
+    /// volume in the last-price line's colour, one of `moon_chart::ladder::LADDER_BIG_PCTS`; `0`
+    /// turns the highlight off.
+    #[serde(default = "def_ladder_big_pct", deserialize_with = "de_ladder_big_pct")]
+    pub ladder_big_pct: u8,
 }
 
 /// The `hvol_tf_s` value that means "everything retained" — Moonbot's `Max`.
@@ -354,6 +402,8 @@ impl Default for ChartGraphicsCfg {
             liquidations: true,
             marker_scale: def_marker_scale(),
             trade_volume_alpha: def_trade_volume_alpha(),
+            trade_kind: TradeKind::Crosses,
+
             candle_volume_style: def_candle_volume_style(),
             candle_volume_height: def_candle_volume_height(),
             candle_volume_alpha: def_candle_volume_alpha(),
@@ -371,6 +421,8 @@ impl Default for ChartGraphicsCfg {
             hvol_stacked: false,
             hvol_overlay: false,
             hvol_hide_captions: false,
+            book_kind: BookKind::Bars,
+            ladder_big_pct: def_ladder_big_pct(),
         }
     }
 }

@@ -18,13 +18,13 @@ pub use lines_carry::stamp_carried_lines;
 pub use empty::{EmptyBlock, EmptyPlaces, EmptySlot};
 
 use serde_compat::{
-    de_arrow_scale, de_auto_workspace_rail_width, de_candle_volume_alpha, de_candle_volume_height,
-    de_candle_volume_scale, de_candle_volume_style, de_candle_volume_tf_s, de_clock_zone,
-    de_connector_thickness, de_hvol_price_frame_pct, de_hvol_side, de_hvol_tf_s, de_hvol_width,
-    de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map,
-    de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
-    de_strategies_tree_text_step, de_table_order_map, de_table_sort_map, de_tick_ranges,
-    de_trade_history_style, de_trade_volume_alpha,
+    de_arrow_scale, de_auto_workspace_rail_width, de_book_kind, de_candle_volume_alpha,
+    de_candle_volume_height, de_candle_volume_scale, de_candle_volume_style, de_candle_volume_tf_s,
+    de_clock_zone, de_connector_thickness, de_hvol_price_frame_pct, de_hvol_side, de_hvol_tf_s,
+    de_hvol_width, de_ladder_big_pct, de_lenient_chart_labels, de_lenient_false,
+    de_lenient_graphics, de_lenient_map, de_lenient_seed, de_lenient_true, de_lenient_u32,
+    de_marker_scale, de_strategies_tree_text_step, de_table_order_map, de_table_sort_map,
+    de_tick_ranges, de_trade_history_style, de_trade_kind, de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
 
@@ -114,6 +114,12 @@ fn def_hvol_price_frame_pct() -> f32 {
 /// Default horizontal-volume zone width, as a fraction of the pane width.
 fn def_hvol_width() -> f32 {
     0.2
+}
+
+/// Default ladder highlight threshold, in percent of the largest visible row: a row at half the
+/// biggest wall on screen or more stands out.
+fn def_ladder_big_pct() -> u8 {
+    50
 }
 
 /// Complete window layout.

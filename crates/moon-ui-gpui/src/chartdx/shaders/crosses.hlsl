@@ -39,6 +39,7 @@ cbuffer TickStyle : register(b2) {
     float4 ts_buy;
     float4 ts_sell;
     float4 ts_liq;
+    float4 ts_shape; // x = 1 while this pane's clusters draw the trades, else 0
 };
 
 StructuredBuffer<Cross> crosses : register(t1);
@@ -78,6 +79,14 @@ CrossOut crosses_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
         return o;
     }
 
+    // In bubble mode the trades are summed into the clusters layer, so their crosses step aside;
+    // liquidations keep theirs.
+    if (ts_shape.x >= 0.5 && c.side < 2u) {
+        o.pos = float4(2.0, 2.0, 0.0, 1.0);
+        o.uv = float2(0.0, 0.0);
+        o.side = 0u;
+        return o;
+    }
     float2 corner = CORNERS[vid];
     float2 px = float2(sx, sy) + corner * cv_marker_half;
     float2 ndc = float2(px.x / cv_resolution.x * 2.0 - 1.0,

@@ -292,7 +292,7 @@ pub struct PriceStyleGpu {
 
 /// Trade-tick constants: `TickStyle` at b2 in crosses.hlsl, `@group(0) @binding(2)`
 /// in native_crosses.wgsl, and `[[buffer(2)]]` in chart_native.metal.
-/// Three vec4 members keep offsets 0/16/32 and size 48 identical across shader languages.
+/// Four vec4 members keep offsets 0/16/32/48 and size 64 identical across shader languages.
 /// Explicit alignment preserves the 16-byte uniform contract; alpha remains owned by each pass.
 #[repr(C, align(16))]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -303,6 +303,10 @@ pub struct TickStyleGpu {
     pub sell: [f32; 4],
     /// Liquidation sRGB colour; the fourth channel is unused.
     pub liq: [f32; 4],
+    /// `x` is `1` while this pane's trade clusters are drawn — the clusters layer draws the trades
+    /// then and the cross pass culls them, keeping the liquidations — and `0` otherwise, bubble
+    /// mode included while no cluster grid fits; the rest is padding.
+    pub shape: [f32; 4],
 }
 
 impl Default for TickStyleGpu {
@@ -312,6 +316,7 @@ impl Default for TickStyleGpu {
             buy: rgb4([47, 168, 92]),
             sell: rgb4([255, 142, 90]),
             liq: rgb4([255, 255, 0]),
+            shape: [0.0; 4],
         }
     }
 }

@@ -174,6 +174,7 @@ fn bake_columns(width_px: u32) -> moon_chart::tick_volume::BakeColumns {
         marker_half: 3.0,
         buy_inv: 1.0,
         sell_inv: 1.0,
+        bubbles: false,
     }
 }
 

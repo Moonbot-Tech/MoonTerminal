@@ -86,6 +86,7 @@ pub struct ChartPanel {
     /// Whether this panel shows order books. This per-window/tab setting is applied through the
     /// engine's `set_orderbook_enabled`; it defaults to enabled.
     orderbook_enabled: bool,
+
     /// Per-window/tab candle and trade display settings. `None` follows the global
     /// `layout.candle_view` default; the effective value is applied during rendering.
     candle_view: Option<moon_core::market::CandleViewCfg>,

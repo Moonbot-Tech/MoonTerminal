@@ -137,6 +137,7 @@ impl MainChartStack {
         if let Some(en) = self.orderbook_enabled {
             panel.update(cx, |panel, pcx| panel.set_orderbook_enabled(en, pcx));
         }
+
         if self.candle_view.is_some() {
             let cv = self.candle_view;
             panel.update(cx, |panel, pcx| panel.set_candle_view(cv, pcx));

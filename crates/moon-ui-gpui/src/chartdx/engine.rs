@@ -80,6 +80,7 @@ impl ChartEngine {
             axis_label: hex3(theme.axis_label),
             caption_label: hex3(theme.caption_label),
             readout_label: hex3(theme.readout_label),
+            ladder_big_label: hex3(theme.price_line),
             label_font_delta: theme.label_font_delta,
             line_labels: true,
             cursor_labels: true,

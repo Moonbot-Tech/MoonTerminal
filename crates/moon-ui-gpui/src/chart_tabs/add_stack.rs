@@ -53,6 +53,7 @@ pub(crate) struct AddChartStack {
     layout_height_scroll: Option<u16>,
     /// Whether to show order books on this tab's charts (per window). `None` = enabled by default.
     orderbook_enabled: Option<bool>,
+
     /// Tab candle/trade display settings (`None` = global default).
     candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Tab chart-drawing settings (`None` = the global `layout.chart_graphics` default).
@@ -718,6 +719,7 @@ impl AddChartStack {
         panel.update(cx, |panel, pcx| {
             panel.set_orderbook_enabled(self.effective_orderbook(), pcx)
         });
+
         if let Some(sz) = self.show_zone {
             panel.update(cx, |panel, pcx| panel.set_show_zone(sz, pcx));
         }

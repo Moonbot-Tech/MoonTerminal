@@ -67,6 +67,7 @@ impl Render for DetachedChartHost {
         // Scale belongs to this panel per tab and is edited directly on it.
         let scale = self.panel.read(cx).scale();
         let panel = self.panel.clone();
+
         let close_all_panel = self.panel.clone();
         let title = chart_pane_label(&self.backend, &self.group, self.num, &self.bucket, cx);
         let frame = MoonWindowFrame::detached_chart("detached-chart-window-frame", 0.0)

@@ -40,6 +40,8 @@ struct TickStyle {
     buy: vec4<f32>,
     sell: vec4<f32>,
     liq: vec4<f32>,
+    // x = 1 while this pane's clusters draw the trades, else 0.
+    shape: vec4<f32>,
 };
 @group(0) @binding(2) var<uniform> ts: TickStyle;
 
@@ -60,6 +62,14 @@ fn crosses_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
     let cull_margin = max(8.0, cv.marker_half + 1.0);
     if sx < cv.bounds.x - cull_margin || sx > cv.bounds.x + cv.bounds.z + cull_margin ||
        sy < cv.bounds.y - cull_margin || sy > cv.bounds.y + cv.bounds.w + cull_margin {
+        out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
+        out.uv = vec2<f32>(0.0, 0.0);
+        out.side = 0u;
+        return out;
+    }
+    // In bubble mode the trades are summed into the clusters layer, so their crosses step aside;
+    // liquidations keep theirs.
+    if ts.shape.x >= 0.5 && c.side < 2u {
         out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
         out.uv = vec2<f32>(0.0, 0.0);
         out.side = 0u;

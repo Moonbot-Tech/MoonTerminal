@@ -378,6 +378,7 @@ fn lod_geometry() -> super::BakeColumns {
         marker_half: 3.5,
         buy_inv: 0.01,
         sell_inv: 0.01,
+        bubbles: false,
     }
 }
 
@@ -784,6 +785,7 @@ fn window_bake(time_to_px: f32, alpha: f32, marker_half: f32) -> super::BakeColu
         marker_half,
         buy_inv: 0.02,
         sell_inv: 0.02,
+        bubbles: false,
     }
 }
 
@@ -800,6 +802,7 @@ fn identity_bake(width: u32, alpha: f32, marker_half: f32) -> super::BakeColumns
         marker_half,
         buy_inv: 0.02,
         sell_inv: 0.02,
+        bubbles: false,
     }
 }
 
@@ -1052,4 +1055,22 @@ fn ignored_wheel_bake_reduce_median_ms() {
             "[OK] window {window}s median reduce_crosses {cross:.3} ms reduce_volume {volume:.3} ms"
         );
     }
+}
+
+/// `tick_volume.rs:reduce_crosses` under bubbles: the clusters layer draws the trades and the cross
+/// pass culls them, so only the liquidations survive the reduction.
+#[test]
+fn a_bubble_bake_keeps_only_the_liquidations() {
+    let rows = [
+        (0u32, 5.0f32, 100.0f32, 0u32, 1.0f32),
+        (1, 6.0, 100.0, 1, 1.0),
+        (2, 7.0, 100.0, 2, 1.0),
+    ];
+    let bubbles = super::BakeColumns {
+        bubbles: true,
+        ..lod_geometry()
+    };
+    let mut pick = super::LodPick::default();
+    super::reduce_crosses(rows.iter().copied(), &bubbles, &mut pick);
+    assert_eq!(pick.cross, vec![2]);
 }

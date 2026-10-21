@@ -44,6 +44,7 @@ pub(in crate::chartdx) struct ChartDataState {
     /// order lines are drawn. Like `candle_view` above, a per-tab override or the
     /// `layout.chart_graphics` fallback.
     pub(in crate::chartdx) chart_graphics: moon_core::config::ChartGraphicsCfg,
+
     /// Effective chart caption configuration: which figures print beside the plot, in which corner
     /// and style. A per-tab override or the `layout.chart_labels` fallback, like the two above.
     /// Shared with the render mirror through an `Rc`; see the field there.
@@ -199,6 +200,7 @@ pub(crate) struct TradeLabels {
 // Responsibilities are split without logic changes: state handles lifecycle, signatures, and
 // frames; orders synchronizes orders and line labels; market synchronizes history, order books,
 // and automatic Y scaling.
+mod clusters;
 mod market;
 pub(crate) mod orders;
 mod state;

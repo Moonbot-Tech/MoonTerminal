@@ -205,6 +205,7 @@ impl Render for ChartTabs {
             cx.entity(),
             p_strip,
         );
+
         // One wording wherever the press is made: what it reaches is chosen in the row it opens,
         // not by which tab happened to be active.
         let apply_all_label = t!("chart.apply_all_tabs_windows").to_string();

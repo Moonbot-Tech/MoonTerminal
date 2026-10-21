@@ -360,6 +360,7 @@ struct PreparedBindGroups {
     hline: wgpu::BindGroup,
     seg: wgpu::BindGroup,
     marker: wgpu::BindGroup,
+    cluster: wgpu::BindGroup,
 }
 
 /// Retained chart data, style uniforms, and cached GPU layers.
@@ -396,6 +397,9 @@ pub struct WgpuLayers {
     hlines: Vec<HLineGpu>,
     segs: Vec<SegGpu>,
     markers: Vec<MarkerGpu>,
+    /// The trade clusters, drawn with the marker pipeline from a buffer of their own.
+    clusters: Vec<MarkerGpu>,
+    clusters_dirty: bool,
     volume_buy_max: f32,
     volume_sell_max: f32,
     bg_uniform: BufferSlot,
@@ -420,6 +424,7 @@ pub struct WgpuLayers {
     hline_buffer: BufferSlot,
     seg_buffer: BufferSlot,
     marker_buffer: BufferSlot,
+    cluster_buffer: BufferSlot,
     candle_buffer: BufferSlot,
     candle_style_uniform: BufferSlot,
     path_buffer: BufferSlot,

@@ -11,6 +11,7 @@ pub const PRICE_AXIS_W: f32 = 56.0;
 pub const TIME_AXIS_H: f32 = 16.0;
 
 pub mod axes;
+pub mod clusters;
 pub mod container;
 // `data` / market-source models live in moon-core. Re-export them under the previous path.
 pub use moon_core::data;
@@ -28,6 +29,7 @@ pub mod paint;
 pub mod trade_marks;
 pub use trade_marks::{build_trade_geometry, normalize_chart_graphics};
 pub mod hvol;
+pub mod ladder;
 pub mod live_clock;
 pub mod side_volume;
 pub mod tick_volume;

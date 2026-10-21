@@ -33,6 +33,8 @@ impl WgpuLayers {
             hlines: Vec::new(),
             segs: Vec::new(),
             markers: Vec::new(),
+            clusters: Vec::new(),
+            clusters_dirty: true,
             volume_buy_max: 1e-6,
             volume_sell_max: 1e-6,
             bg_uniform: BufferSlot::default(),
@@ -55,6 +57,7 @@ impl WgpuLayers {
             hline_buffer: BufferSlot::default(),
             seg_buffer: BufferSlot::default(),
             marker_buffer: BufferSlot::default(),
+            cluster_buffer: BufferSlot::default(),
             candle_buffer: BufferSlot::default(),
             candle_style_uniform: BufferSlot::default(),
             path_buffer: BufferSlot::default(),
@@ -298,6 +301,13 @@ impl WgpuLayers {
         self.base_cache.valid = false;
     }
 
+    /// Replace the trade clusters; uploaded on their own buffer on the next prepare.
+    pub fn set_clusters(&mut self, clusters: &[MarkerInstance]) {
+        self.clusters = clusters.iter().map(mk_of).collect();
+        self.clusters_dirty = true;
+        self.base_cache.valid = false;
+    }
+
     pub fn needs_base_cache(&self, gpu: &RawGpuAccess) -> bool {
         self.base_cache.needs_rebuild(gpu)
     }
@@ -324,6 +334,7 @@ impl WgpuLayers {
         self.hline_buffer = BufferSlot::default();
         self.seg_buffer = BufferSlot::default();
         self.marker_buffer = BufferSlot::default();
+        self.cluster_buffer = BufferSlot::default();
         self.candle_buffer = BufferSlot::default();
         self.candle_style_uniform = BufferSlot::default();
         self.path_buffer = BufferSlot::default();

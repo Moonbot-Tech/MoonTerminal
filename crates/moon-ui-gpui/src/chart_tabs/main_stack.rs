@@ -47,6 +47,7 @@ pub(crate) struct MainChartStack {
     layout_height_scroll: Option<u16>,
     /// Per-window order-book visibility for this tab; `None` defaults to enabled.
     orderbook_enabled: Option<bool>,
+
     /// Candle and trade display settings for the tab; `None` uses the global default.
     candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Chart-drawing settings for the tab; `None` uses the global `layout.chart_graphics` default.

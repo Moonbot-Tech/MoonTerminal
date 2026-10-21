@@ -529,6 +529,21 @@ impl PlatformLayers {
         }
     }
 
+    /// Replace the trade clusters, drawn with the marker glyph under the order geometry and
+    /// uploaded on their own so the moving tape never re-uploads the orders.
+    pub fn set_clusters(&mut self, clusters: &[MarkerInstance]) {
+        #[cfg(windows)]
+        self.userdata.set_clusters(clusters);
+        #[cfg(target_os = "linux")]
+        self.wgpu.set_clusters(clusters);
+        #[cfg(target_os = "macos")]
+        self.metal.set_clusters(clusters);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = clusters;
+        }
+    }
+
     pub fn set_userdata(
         &mut self,
         zones: &[ZoneInstance],

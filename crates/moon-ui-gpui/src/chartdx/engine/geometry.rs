@@ -351,6 +351,7 @@ impl ChartEngine {
                 st.axis_label = hex3(theme.axis_label);
                 st.caption_label = hex3(theme.caption_label);
                 st.readout_label = hex3(theme.readout_label);
+                st.ladder_big_label = hex3(theme.price_line);
                 st.label_font_delta = theme.label_font_delta;
             }
             self.theme = theme;

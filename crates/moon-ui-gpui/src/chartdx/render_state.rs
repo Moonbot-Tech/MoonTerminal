@@ -171,6 +171,9 @@ pub(in crate::chartdx) struct RenderState {
     pub(in crate::chartdx) axis_label: u32,
     pub(in crate::chartdx) caption_label: u32,
     pub(in crate::chartdx) readout_label: u32,
+    /// Ladder rows at or past the highlight threshold print their volume in the last-price line's
+    /// colour (`ChartTheme.price_line`), the orange a DOM ladder marks its walls with.
+    pub(in crate::chartdx) ladder_big_label: u32,
     /// Order-line and cursor label font-size adjustment in pixels from `ChartTheme.label_font_delta`.
     /// `text/runs.rs` applies it through label draw/measure helpers used by the line-label column and
     /// cursor readout in `text/prepare.rs`.

@@ -483,6 +483,56 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) orderbook_levels: Vec<moon_core::data::BookDepthPoint>,
     /// Live best `(bid, ask)` book prices defining the three-color order-book zone background.
     pub(in crate::chartdx) book_best: Option<(f32, f32)>,
+    /// What the pane knows about its market's tick — the exchange's, else the book's spacing —
+    /// and when it last asked. The ladder and the trade clusters both bucket by it. Reset with the
+    /// pane on a market change.
+    pub(in crate::chartdx) price_tick: moon_chart::ladder::LadderTick,
+    /// The grid the resident ladder was built on; `None` while the zone draws the glass. A
+    /// different grid — a zoom that moved the step, a tick that arrived — rebuilds the rows at once.
+    pub(in crate::chartdx) ladder_grid: Option<moon_core::data::LadderGrid>,
+    /// Ladder rows over the emitted window, for the row text. Empty while the zone draws the glass.
+    pub(in crate::chartdx) ladder_rows: Vec<moon_core::data::LadderRow>,
+    /// Each row's printed volume and price, formatted when the rows are rebuilt rather than on
+    /// every present; index-aligned with `ladder_rows`.
+    pub(in crate::chartdx) ladder_labels: Vec<(String, String)>,
+    /// The ladder text's own retained runs, two per slot, a row's slot fixed by its grid index: a
+    /// row scrolling into the zone neither shifts the chart's other labels off their cached
+    /// shaping nor makes the rows re-shape each other's strings.
+    pub(in crate::chartdx) ladder_runs: Vec<GpuCanvasTextRun>,
+    /// The grid the resident trade clusters were summed on; `None` while the tab draws crosses or
+    /// no grid fits the zoom.
+    pub(in crate::chartdx) cluster_grid: Option<moon_chart::clusters::ClusterGrid>,
+    /// The summed cells over `cluster_range`, ordered by time then price.
+    pub(in crate::chartdx) cluster_cells: Vec<moon_chart::clusters::ClusterCell>,
+    /// Absolute milliseconds the cells were summed over: the visible window and one window either
+    /// side, so a pan inside it only re-sizes the discs.
+    pub(in crate::chartdx) cluster_range: (f64, f64),
+    /// New trades reached the pane since the cells were last summed.
+    pub(in crate::chartdx) cluster_dirty: bool,
+    /// When the cells were last summed, for the data throttle.
+    pub(in crate::chartdx) cluster_built_at: Option<std::time::Instant>,
+    /// The biggest visible cell's volume and the largest disc's radius the uploaded discs were
+    /// sized by; the labels read the same two.
+    pub(in crate::chartdx) cluster_max: f32,
+    pub(in crate::chartdx) cluster_max_r: f32,
+    /// Disc instances of the last upload, reused across rebuilds.
+    pub(in crate::chartdx) cluster_markers: Vec<moon_chart::layers::MarkerInstance>,
+    /// Whether the layer holds discs, so taking them down uploads once and not every sync.
+    pub(in crate::chartdx) cluster_uploaded: bool,
+    /// The buy and sell colours the uploaded discs carry, so a theme change recolours them.
+    pub(in crate::chartdx) cluster_colors: [[f32; 3]; 2],
+    /// The cluster labels' own retained runs, a label's slot taken from its cell, so the chart's
+    /// other labels keep their cached shaping however many discs a frame labels.
+    pub(in crate::chartdx) cluster_runs: Vec<GpuCanvasTextRun>,
+    /// Cluster-label candidates of the current frame — cell key, logical position and volume —
+    /// reused so a present allocates nothing once warmed up.
+    pub(in crate::chartdx) cluster_found: Vec<(i64, i64, f32, f32, f32)>,
+    /// Rectangles the current frame's cluster labels took, for the overlap check; reused likewise.
+    pub(in crate::chartdx) cluster_placed: Vec<[f32; 4]>,
+    /// The largest visible row notional the bars were scaled to; the highlight reads the same one.
+    pub(in crate::chartdx) ladder_max_notional: f32,
+    /// The tab's ladder highlight threshold, percent of `ladder_max_notional`; `0` is off.
+    pub(in crate::chartdx) ladder_big_pct: u8,
     /// Own-pass X camera: time epoch, right-side future fraction, follow flag, and last QUANTIZED
     /// right-edge pixel position. The callback advances the camera from these fields on every
     /// whole-pixel vblank present, providing live scrolling without a separate timer.
@@ -716,6 +766,26 @@ impl PaneRender {
             label_placed_spare: Vec::new(),
             orderbook_levels: Vec::new(),
             book_best: None,
+            price_tick: moon_chart::ladder::LadderTick::default(),
+            ladder_grid: None,
+            ladder_rows: Vec::new(),
+            ladder_labels: Vec::new(),
+            ladder_runs: Vec::new(),
+            cluster_grid: None,
+            cluster_cells: Vec::new(),
+            cluster_range: (f64::NAN, f64::NAN),
+            cluster_dirty: true,
+            cluster_built_at: None,
+            cluster_max: 0.0,
+            cluster_max_r: 0.0,
+            cluster_markers: Vec::new(),
+            cluster_uploaded: false,
+            cluster_colors: [[0.0; 3]; 2],
+            cluster_runs: Vec::new(),
+            cluster_found: Vec::new(),
+            cluster_placed: Vec::new(),
+            ladder_max_notional: 0.0,
+            ladder_big_pct: 0,
             epoch_ms: 0.0,
             right_margin_frac: 0.10,
             follow: false,
@@ -745,6 +815,11 @@ impl PaneRender {
     /// answering the cursor's percentage, and a stale sell-line volume would keep describing glass
     /// that is no longer drawn. `u64::MAX` also asks the book path to re-measure once one returns.
     pub(in crate::chartdx) fn forget_book_figures(&mut self) {
+        // The ladder's rows are figures of the same book, so they go with it — before the early
+        // return below, which only knows about the glass's own figures.
+        self.ladder_rows.clear();
+        self.ladder_labels.clear();
+        self.ladder_max_notional = 0.0;
         if self.book_best.is_none() && self.last_label_book_rev == u64::MAX {
             return;
         }
