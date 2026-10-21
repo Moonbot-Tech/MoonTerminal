@@ -3,6 +3,9 @@
 //! Explicit imports throughout: the parent re-exports `gpui::*`, whose own `test` shadows the
 //! built-in attribute and makes `#[test]` expand recursively.
 
+use std::collections::HashSet;
+
+use moon_core::config::WorkspaceMode;
 use moon_core::db::valuation::{
     FailureKind, ValuationFault, ValuationMode, ValuationStage, ValuationStatus,
 };
@@ -13,6 +16,7 @@ use moon_core::db::{
 
 use super::{FactTone, FooterFacts, footer_facts, footer_tooltip};
 use crate::panels::report::query::ReportData;
+use crate::workspace::{EffectiveCoreScope, RetainedCoreScope, resolve_group_scope};
 
 /// Wall clock the fixtures fail at, far enough from zero that elapsed time is unambiguous.
 const T0: i64 = 1_700_000_000_000;
@@ -31,6 +35,7 @@ fn data(groups: Vec<(Option<i64>, f64, i64)>, shown_rows: usize) -> ReportData {
         open: Default::default(),
         totals: QuoteBreakdown::from_groups(groups),
         valuation: ValuationMode::Historical,
+        full_summary: false,
     }
 }
 
@@ -60,13 +65,6 @@ fn with_cores(mut snapshot: ReportData, core_uids: Vec<u64>) -> ReportData {
         core_uids,
         ..ReportFilter::default()
     });
-    snapshot
-}
-
-/// Record how many cores contributed a counted order, the figure an empty filter cannot take
-/// from its own list.
-fn with_counted_cores(mut snapshot: ReportData, counted_cores: u64) -> ReportData {
-    snapshot.totals.counted_cores = counted_cores;
     snapshot
 }
 
@@ -1125,53 +1123,312 @@ fn slavic_core_count_agrees_at_eleven_and_twenty_one() {
     );
 }
 
-/// An empty core filter means every core. The fact names how many cores contributed a counted
-/// order. One contributing core still uses the count phrase, not the single-core sentence. A
-/// missing count is not rendered as zero.
+/// The panel's full-summary decision for one resolved scope and its Overview narrowing.
 ///
-/// Breakage: treating `core_uids.is_empty()` as the no-match sentinel, or substituting a
-/// numberless "all cores" phrase. An All selection would hide the percent, or hide how many
-/// order sizes were mixed.
+/// Args:
+///     scope: Report scope, or `None` for a standalone window.
+///     narrow: Overview narrowing. Empty leaves the whole universe.
+///     retained_empty: Standalone selection emptiness. Ignored when `scope` is present.
+///
+/// Returns:
+///     Whether the totals row must omit the average-order fact.
+fn hides_average_order(
+    scope: Option<&EffectiveCoreScope>,
+    narrow: &[u64],
+    retained_empty: bool,
+) -> bool {
+    let narrow: HashSet<u64> = narrow.iter().copied().collect();
+    super::super::omits_average_order_fact(scope, &narrow, retained_empty)
+}
+
+/// A snapshot whose filter lists exactly the ids the Report query would send.
+///
+/// Args:
+///     core_uids: Filter core ids, in the order the query would send them.
+///
+/// Returns:
+///     A snapshot with a computable average-order ratio under that filter.
+fn ratio_for(core_uids: Vec<u64>) -> ReportData {
+    with_cores(
+        with_average_order(data(vec![(Some(1), 10.0, 1)], 1)),
+        core_uids,
+    )
+}
+
+/// A partial ratio: one counted order and one excluded, so the "(partial)" wording exists.
+///
+/// Args:
+///     core_uids: Filter core ids, in the order the query would send them.
+///
+/// Returns:
+///     A snapshot whose average-order ratio is partial under that filter.
+fn partial_ratio_for(core_uids: Vec<u64>) -> ReportData {
+    with_cores(
+        with_average_order(data(vec![(Some(1), 10.0, 2)], 1)),
+        core_uids,
+    )
+}
+
+/// The row must not carry the average-order fact in either valuation wording.
+///
+/// The snapshot's own `full_summary` flag is what hides it. The footer has no other input for
+/// that decision, so a later selection change cannot reveal this snapshot's percent while the
+/// next query is still running.
+///
+/// Args:
+///     snapshot: Report snapshot whose query captured the full summary.
+fn assert_average_order_omitted(snapshot: &ReportData) {
+    assert!(
+        snapshot.full_summary,
+        "the omitted snapshot must carry the full-summary flag captured with its query"
+    );
+    assert!(
+        super::average_order_fact(snapshot, ValuationMode::Historical).is_none(),
+        "the full summary must not state the average-order percent"
+    );
+    assert!(
+        super::average_order_fact(snapshot, ValuationMode::Current).is_none(),
+        "the current-rate wording must not bring the fact back"
+    );
+    let _locale = crate::test_locale::force("en");
+    let facts = footer_facts(Some(snapshot), false, &ValuationStatus::default(), T0, None);
+    assert!(
+        facts
+            .tail
+            .iter()
+            .chain(&facts.essential)
+            .chain(&facts.trailing)
+            .all(|fact| !fact.text.contains("avg order")),
+        "the totals row must not carry the average-order fact"
+    );
+}
+
+/// The same core list must still state the fact when the snapshot is not the full summary.
+///
+/// That is what stops the footer from re-deriving the summary by counting ids.
+///
+/// Args:
+///     snapshot: Report snapshot whose filter lists the full summary's own core ids and whose
+///         captured flag says this is an explicit selection.
+fn assert_same_ids_state_the_fact_without_the_flag(snapshot: &ReportData) {
+    assert!(
+        !snapshot.full_summary,
+        "the same core list states the fact only when the snapshot is not the full summary"
+    );
+    let _locale = crate::test_locale::force("en");
+    let fact = super::average_order_fact(snapshot, ValuationMode::Historical)
+        .expect("clearing the flag must put the fact back on the same core list");
+    assert!(
+        fact.text.contains("avg order"),
+        "the restored fact must be the average-order percent, got {}",
+        fact.text
+    );
+}
+
+/// Auto Overview left on the whole universe omits the percent, even though the query lists
+/// every displayed core.
+///
+/// Breakage: deciding the full summary by an empty `core_uids` list, or by comparing that list's
+/// length to the membership count. "Полная сводка" would show a mixed-size percent again. A
+/// narrowing that covers the whole scope, or one whose cores have left the group, is the same
+/// whole universe.
 #[test]
-fn all_cores_average_order_names_the_contributing_count() {
-    let snapshot = with_counted_cores(with_average_order(data(vec![(Some(1), 10.0, 1)], 1)), 2);
-    let one = with_counted_cores(with_average_order(data(vec![(Some(1), 10.0, 1)], 1)), 1);
-    let missing = with_average_order(data(vec![(Some(1), 10.0, 1)], 1));
+fn overview_not_narrowed_omits_the_average_order_fact() {
+    let cores = [7, 8, 9];
+    let scope = resolve_group_scope(
+        WorkspaceMode::AutoTrading,
+        None,
+        &cores,
+        RetainedCoreScope::All,
+    );
+    // A retained Classic selection must not keep the fact while the trigger still reads Overview.
+    assert!(hides_average_order(Some(&scope), &[], false));
+    assert!(hides_average_order(Some(&scope), &cores, true));
+    assert!(hides_average_order(Some(&scope), &[1, 2], true));
+
+    let mut snapshot = partial_ratio_for(scope.ids().to_vec());
+    assert_eq!(snapshot.filter.core_uids, vec![7, 8, 9]);
+    snapshot.full_summary = true;
+    assert_average_order_omitted(&snapshot);
+
     {
-        let _locale = crate::test_locale::force("en");
-        let (text, spelled) = average_tip(&snapshot, ValuationMode::Historical);
-        assert_eq!(text, "+10.0% of avg order");
-        assert_eq!(
-            spelled.as_deref(),
-            Some(
-                "Profit to average order: +10.0%. Average order: 100 USDT, orders counted: 1, across 2 cores"
-            )
+        // `force` takes the process-wide locale mutex, and the helpers below take it again.
+        // The guard must end before those calls: the mutex is not reentrant.
+        let _locale = crate::test_locale::force("ru");
+        let facts = footer_facts(
+            Some(&snapshot),
+            false,
+            &ValuationStatus::default(),
+            T0,
+            None,
         );
-        let (_, one_tip) = average_tip(&one, ValuationMode::Historical);
-        assert_eq!(
-            one_tip.as_deref(),
-            Some(
-                "Profit to average order: +10.0%. Average order: 100 USDT, orders counted: 1, across 1 core"
-            )
-        );
-        let (_, missing_tip) = average_tip(&missing, ValuationMode::Historical);
-        assert_eq!(
-            missing_tip.as_deref(),
-            Some("Profit to average order: +10.0%. Average order: 100 USDT, orders counted: 1")
+        assert!(
+            facts
+                .tail
+                .iter()
+                .chain(&facts.essential)
+                .chain(&facts.trailing)
+                .all(|fact| !fact.text.contains("ср. ордера")),
+            "the Russian full summary must omit both the plain percent and the partial variant"
         );
     }
-    let _locale = crate::test_locale::force("ru");
-    let (_, spelled) = average_tip(&snapshot, ValuationMode::Historical);
+
+    snapshot.full_summary = false;
+    assert_same_ids_state_the_fact_without_the_flag(&snapshot);
+}
+
+/// An Overview narrowed to some cores keeps the percent and names that count.
+///
+/// Breakage: treating every Overview as the full summary. A user who narrowed "Полная сводка"
+/// to two cores would lose the percent the selection exists to show. An empty Classic retention
+/// must not hide that narrowing.
+#[test]
+fn overview_narrowed_keeps_the_average_order_fact() {
+    let _locale = crate::test_locale::force("en");
+    let scope = resolve_group_scope(
+        WorkspaceMode::AutoTrading,
+        None,
+        &[7, 8, 9],
+        RetainedCoreScope::All,
+    );
+    let narrow = [7, 8];
+    assert!(!hides_average_order(Some(&scope), &narrow, true));
+    let ids = super::super::overview_narrow::narrowed_ids(scope.ids(), &HashSet::from(narrow))
+        .expect("a proper subset is a narrowing");
+    let snapshot = ratio_for(ids);
+    let fact = super::average_order_fact(&snapshot, ValuationMode::Historical)
+        .expect("a narrowed Overview must state the percent");
+    assert_eq!(fact.text, "+10.0% of avg order");
     assert_eq!(
-        spelled.as_deref(),
+        fact.spelled.as_deref(),
         Some(
-            "Прибыль к среднему ордеру: +10.0%. Средний ордер: 100 USDT, ордеров учтено: 1, по 2 ядрам"
+            "Profit to average order: +10.0%. Average order: 100 USDT, orders counted: 1, across 2 cores"
         )
     );
-    let (_, one_tip) = average_tip(&one, ValuationMode::Historical);
+}
+
+/// Classic all-cores, and a standalone Report with no selection, omit the percent.
+///
+/// Breakage: treating Classic all-cores as an explicit list because the query expands it to the
+/// displayed core ids. The all-cores label would then show the mixed-size percent. The same id
+/// list with the flag cleared still states the fact, which is the explicit-selection case.
+#[test]
+fn classic_all_cores_omits_the_average_order_fact() {
+    let cores = [7, 8, 9];
+    let scope = resolve_group_scope(WorkspaceMode::Classic, None, &cores, RetainedCoreScope::All);
+    assert!(hides_average_order(Some(&scope), &[], false));
+    let mut snapshot = partial_ratio_for(scope.ids().to_vec());
+    assert_eq!(snapshot.filter.core_uids, cores.to_vec());
+    snapshot.full_summary = true;
+    assert_average_order_omitted(&snapshot);
+    snapshot.full_summary = false;
+    assert_same_ids_state_the_fact_without_the_flag(&snapshot);
+
+    assert!(hides_average_order(None, &[], true));
+    let mut standalone = partial_ratio_for(Vec::new());
+    assert!(standalone.filter.core_uids.is_empty());
+    standalone.full_summary = true;
+    assert_average_order_omitted(&standalone);
+    standalone.full_summary = false;
+    assert_same_ids_state_the_fact_without_the_flag(&standalone);
+}
+
+/// An explicit selection of every core keeps the percent, in Classic and standalone.
+///
+/// Breakage: omitting whenever the listed ids are the whole universe. Checking every core in
+/// the combo would then hide the percent the same way the full summary does.
+#[test]
+fn explicit_selection_of_every_core_keeps_the_average_order_fact() {
+    let _locale = crate::test_locale::force("en");
+    let cores = [7, 8, 9];
+    let scope = resolve_group_scope(
+        WorkspaceMode::Classic,
+        None,
+        &cores,
+        RetainedCoreScope::Explicit(&cores),
+    );
+    assert!(!hides_average_order(Some(&scope), &[], true));
+    let snapshot = ratio_for(scope.ids().to_vec());
+    assert_eq!(snapshot.filter.core_uids, cores.to_vec());
+    let fact = super::average_order_fact(&snapshot, ValuationMode::Historical)
+        .expect("an explicit selection of every core must state the percent");
+    assert_eq!(fact.text, "+10.0% of avg order");
     assert!(
-        one_tip.unwrap().ends_with("по 1 ядру"),
-        "one contributing core takes the singular dative, not a zero and not the bare sentence"
+        fact.spelled
+            .as_deref()
+            .is_some_and(|tip| tip.ends_with("across 3 cores")),
+        "the tooltip must name the explicit count, got {:?}",
+        fact.spelled
+    );
+
+    assert!(!hides_average_order(None, &[], false));
+    let standalone = ratio_for(cores.to_vec());
+    assert!(
+        super::average_order_fact(&standalone, ValuationMode::Historical).is_some(),
+        "a standalone explicit selection of every core must state the percent"
+    );
+}
+
+/// A selected single core keeps the percent, including an Overview narrowed to one core.
+///
+/// Breakage: hiding the fact for every one-id filter, or letting an empty Classic retention hide
+/// a selected Auto core. One core's orders would then lose the percent.
+#[test]
+fn single_core_keeps_the_average_order_fact() {
+    let _locale = crate::test_locale::force("en");
+    let auto = resolve_group_scope(
+        WorkspaceMode::AutoTrading,
+        Some(7),
+        &[7, 8, 9],
+        RetainedCoreScope::All,
+    );
+    assert!(!hides_average_order(Some(&auto), &[], true));
+    let auto_snapshot = ratio_for(auto.ids().to_vec());
+    let fact = super::average_order_fact(&auto_snapshot, ValuationMode::Historical)
+        .expect("a selected Auto core must state the percent");
+    assert_eq!(fact.text, "+10.0% of avg order");
+    assert!(
+        fact.spelled
+            .as_deref()
+            .is_some_and(|tip| !tip.contains("core")),
+        "one core must keep the verbatim tooltip, got {:?}",
+        fact.spelled
+    );
+
+    let classic = resolve_group_scope(
+        WorkspaceMode::Classic,
+        None,
+        &[7, 8, 9],
+        RetainedCoreScope::Explicit(&[7]),
+    );
+    assert!(!hides_average_order(Some(&classic), &[], false));
+    assert!(
+        super::average_order_fact(
+            &ratio_for(classic.ids().to_vec()),
+            ValuationMode::Historical
+        )
+        .is_some(),
+        "an explicit single Classic core must state the percent"
+    );
+
+    let overview = resolve_group_scope(
+        WorkspaceMode::AutoTrading,
+        None,
+        &[7, 8, 9],
+        RetainedCoreScope::All,
+    );
+    assert!(!hides_average_order(Some(&overview), &[7], true));
+    let ids = super::super::overview_narrow::narrowed_ids(overview.ids(), &HashSet::from([7]))
+        .expect("one core inside the universe is a narrowing");
+    let narrowed = ratio_for(ids);
+    let fact = super::average_order_fact(&narrowed, ValuationMode::Historical)
+        .expect("an Overview narrowed to one core must state the percent");
+    assert!(
+        fact.spelled
+            .as_deref()
+            .is_some_and(|tip| !tip.contains("core")),
+        "a one-core narrowing keeps the verbatim tooltip, got {:?}",
+        fact.spelled
     );
 }
 

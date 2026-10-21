@@ -1294,6 +1294,45 @@ fn report_query_keeps_the_membership_total_sentinel_flag() {
     );
 }
 
+/// The totals row must take the full-summary flag from the snapshot the query captured, not from
+/// a live scope read and not from the query's id list.
+///
+/// Mutation: reading `omits_average_order` again in `render`, or dropping `full_summary` from the
+/// snapshot `run_report_query` publishes. Auto Overview's full summary lists its cores, and a
+/// selection change keeps the previous totals on screen, so either mistake puts the average-order
+/// percent under numbers that belong to a different scope.
+#[test]
+fn the_totals_row_takes_the_full_summary_from_the_panel() {
+    let query = code_only(include_str!("query.rs"));
+    let schedule = braced_body(&query, "pub(super) fn schedule_requery(");
+    assert!(
+        schedule.contains("self.omits_average_order(") && schedule.contains("run_report_query("),
+        "the query must capture the panel's full-summary decision with the filter"
+    );
+    let run = braced_body(&query, "fn run_report_query(");
+    assert!(
+        run.contains("full_summary,"),
+        "the published snapshot must store the captured full-summary flag"
+    );
+
+    let render = code_only(include_str!("render.rs"));
+    let body = braced_body(&render, "fn render(");
+    assert!(
+        !body.contains("omits_average_order("),
+        "render must not re-read the live scope while the previous snapshot is still showing"
+    );
+    assert!(
+        body.contains("totals::footer_facts("),
+        "render must still assemble the row through footer_facts"
+    );
+
+    let totals = code_only(include_str!("totals.rs"));
+    assert!(
+        totals.contains("data.full_summary"),
+        "the footer must read the snapshot's full-summary flag"
+    );
+}
+
 /// `set_period` must persist the picked preset even when it does not change the value displayed —
 /// a menu pick that merely re-confirms an already-shown implicit "all" (from a typed manual date)
 /// is still the user replacing the last stored real pick with this one.
