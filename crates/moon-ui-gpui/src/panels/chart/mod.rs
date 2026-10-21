@@ -86,9 +86,7 @@ pub struct ChartPanel {
     /// Whether this panel shows order books. This per-window/tab setting is applied through the
     /// engine's `set_orderbook_enabled`; it defaults to enabled.
     orderbook_enabled: bool,
-    /// The cluster price step the tab strip picked for this session, `None` to follow the stored
-    /// `chart_graphics.trade_step`. Pushed by the stack like the scale, never persisted.
-    trade_step: Option<u16>,
+
     /// Per-window/tab candle and trade display settings. `None` follows the global
     /// `layout.candle_view` default; the effective value is applied during rendering.
     candle_view: Option<moon_core::market::CandleViewCfg>,

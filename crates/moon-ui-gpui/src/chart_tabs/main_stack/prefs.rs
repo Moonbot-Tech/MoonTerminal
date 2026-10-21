@@ -84,18 +84,6 @@ impl MainChartStack {
         );
     }
 
-    /// The session cluster price step, `None` while the tab follows its stored step.
-    pub(crate) fn trade_step(&self) -> Option<u16> {
-        self.trade_step
-    }
-
-    /// Set the session cluster price step for every chart in this stack; never persisted.
-    pub(crate) fn set_trade_step(&mut self, step: Option<u16>, cx: &mut Context<Self>) {
-        apply_setting(&mut self.trade_step, step, &self.charts, cx, |c, cx| {
-            set_panels_trade_step(c, step, cx)
-        });
-    }
-
     pub(crate) fn candle_view(&self) -> Option<moon_core::market::CandleViewCfg> {
         self.candle_view
     }

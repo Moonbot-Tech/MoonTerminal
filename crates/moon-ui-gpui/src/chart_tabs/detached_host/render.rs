@@ -67,23 +67,7 @@ impl Render for DetachedChartHost {
         // Scale belongs to this panel per tab and is edited directly on it.
         let scale = self.panel.read(cx).scale();
         let panel = self.panel.clone();
-        // The clusters' step list, beside the scale only while this window draws its trades as
-        // bubbles; see `chart_tabs::strip`.
-        let trade_step_dropdown = {
-            let graphics = self.graphics_cfg(cx);
-            (graphics.trade_kind == moon_core::config::TradeKind::Bubbles).then(|| {
-                let stack = self.panel.clone();
-                crate::controls::trade_step_dropdown(
-                    "detached-trade-step",
-                    graphics.trade_step,
-                    self.panel.read(cx).trade_step(),
-                    p,
-                    move |step, app| {
-                        stack.update(app, |st, scx| st.set_trade_step(step, scx));
-                    },
-                )
-            })
-        };
+
         let close_all_panel = self.panel.clone();
         let title = chart_pane_label(&self.backend, &self.group, self.num, &self.bucket, cx);
         let frame = MoonWindowFrame::detached_chart("detached-chart-window-frame", 0.0)
@@ -288,7 +272,6 @@ impl Render for DetachedChartHost {
                                 panel.clone(),
                                 p,
                             ))
-                            .children(trade_step_dropdown)
                             // Both buttons ARE their popovers' triggers, so each popup opens under its
                             // own button on MoonUI's Root layer.
                             .child(candle_popup::candle_popup_host(

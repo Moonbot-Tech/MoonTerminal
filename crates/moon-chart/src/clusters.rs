@@ -1,18 +1,20 @@
 //! Backend-free decisions for the trade clusters: the grid the tape is summed on and how big each
 //! cell's disc is.
 //!
-//! A cluster is one cell of a time × price grid: every trade whose time falls into the cell's
-//! interval and whose price rounds to the cell's row adds its quote notional to it. The cell draws
-//! one disc, its AREA proportional to the cell's volume against the biggest cell on screen, its
-//! colour the side that traded more. The grid follows the zoom on both axes so the largest disc
-//! still fits its cell and no two discs overlap: the time interval from the X scale, the price row
-//! from the market's tick and the reader's step.
+//! A cluster starts as one cell of a time × price grid: every trade whose time falls into the
+//! cell's interval and whose price rounds to the cell's row adds its quote notional to it. Up to
+//! [`MERGE_SPAN`] consecutive intervals that kept trading on one row then merge into ONE cluster,
+//! so a busy price reads as one disc instead of a string of them. A cluster draws one disc, its
+//! AREA proportional to its volume against the biggest cluster on screen, its colour the side that
+//! traded more, placed at the volume-weighted centre of its intervals. The grid follows the zoom
+//! on both axes so the largest disc still fits a cell and no two discs overlap: the time interval
+//! from the X scale, the price row from the market's tick — always automatic, by decision.
 
 use std::collections::BTreeMap;
 
-/// Steps the reader can pick for the price row, in ticks. `0` is Auto. The fixed steps are the
-/// list a DOM offers (`x1 x2 x4 x10`).
-pub const CLUSTER_STEPS: [u16; 5] = [0, 1, 2, 4, 10];
+/// The most consecutive intervals of one row that merge into one cluster. A cap, so a price that
+/// trades all session does not become one disc spanning the screen.
+pub const MERGE_SPAN: i64 = 3;
 
 /// Time intervals a cell can span, in milliseconds, finest first.
 pub const TIME_STEPS_MS: [i64; 16] = [
@@ -32,19 +34,6 @@ pub const CELL_GAP_PX: f32 = 1.0;
 /// The smallest disc a non-empty cell draws, physical pixels — still a visible dot however small
 /// its volume.
 pub const MIN_DISC_PX: f32 = 1.5;
-
-/// Snap a stored step onto [`CLUSTER_STEPS`]: Auto stays Auto, anything else lands on the nearest
-/// fixed step, so a hand-edited value lights one segment instead of none.
-pub fn snap_step(step: u16) -> u16 {
-    if step == 0 {
-        return 0;
-    }
-    CLUSTER_STEPS[1..]
-        .iter()
-        .copied()
-        .min_by_key(|s| s.abs_diff(step))
-        .unwrap_or(1)
-}
 
 /// The grid a tape is summed on.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -84,49 +73,97 @@ pub fn time_step_ms(px_per_ms: f32, min_px: f32) -> Option<i64> {
         .find(|&step| step as f32 * px_per_ms >= min_px)
 }
 
-/// The price step, in ticks: for Auto the smallest of 1, 2, 4, 10 … whose row is at least
-/// `min_px` tall (`crate::ladder::row_step`); a fixed `choice` is a MINIMUM — the row never gets
-/// thinner than Auto's, or the discs of neighbouring rows would overlap at a zoom too far out for
-/// the chosen grid. Where Auto finds no readable row at all, neither does a fixed step: `None`,
-/// and the pane keeps its crosses.
-pub fn price_step(choice: u16, tick: f64, px_per_price: f32, min_px: f32) -> Option<u32> {
-    if !(tick.is_finite() && tick > 0.0) {
-        return None;
-    }
-    let auto = crate::ladder::row_step(tick, px_per_price, min_px);
-    if choice == 0 {
-        return auto;
-    }
-    auto.map(|a| a.max(u32::from(choice)))
-}
-
-/// One cell of the grid: its indices and the quote notional bought and sold in it.
+/// One cluster: one to [`MERGE_SPAN`] consecutive intervals of one row, and the quote notional
+/// bought and sold in them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClusterCell {
-    /// Index of the cell's interval: its start is `time_idx × time_step_ms` in absolute time.
+    /// Index of the cluster's FIRST interval: its start is `time_idx × time_step_ms` in absolute
+    /// time. Stable while the cluster grows, so it keys the cluster's label slot.
     pub time_idx: i64,
-    /// Index of the cell's row: its centre price is `price_idx × row_height`.
+    /// Index of the cluster's row: its centre price is `price_idx × row_height`.
     pub price_idx: i64,
     pub buy: f32,
     pub sell: f32,
+    /// Where the disc sits, absolute milliseconds: the centres of the merged intervals weighted by
+    /// their volume. Never outside the first and last interval's centres, so a disc no bigger than
+    /// a cell stays inside its own intervals and clear of the next cluster on the row.
+    pub center_ms: f64,
 }
 
 impl ClusterCell {
-    /// Everything traded in the cell.
+    /// Everything traded in the cluster.
     pub fn total(&self) -> f32 {
         self.buy + self.sell
     }
 }
 
-/// Sum a tape into the grid's cells.
+/// A stretch of consecutive intervals on one row while [`aggregate`] merges it.
+struct Run {
+    /// The cluster so far; `center_ms` is filled by [`Run::finish`].
+    cell: ClusterCell,
+    /// The last interval merged.
+    last: i64,
+    /// Σ interval volume × that interval's offset from the first, for the weighted centre.
+    weighted: f64,
+}
+
+impl Run {
+    /// Open a run on one cell.
+    fn start(price_idx: i64, time_idx: i64, buy: f32, sell: f32) -> Self {
+        Self {
+            cell: ClusterCell {
+                time_idx,
+                price_idx,
+                buy,
+                sell,
+                center_ms: 0.0,
+            },
+            last: time_idx,
+            weighted: 0.0,
+        }
+    }
+
+    /// Whether the cell at `(price_idx, time_idx)` continues this run: same row, the very next
+    /// interval, and room left under [`MERGE_SPAN`].
+    fn takes(&self, price_idx: i64, time_idx: i64) -> bool {
+        price_idx == self.cell.price_idx
+            && time_idx == self.last + 1
+            && time_idx - self.cell.time_idx < MERGE_SPAN
+    }
+
+    /// Merge the next interval's volume into the run.
+    fn add(&mut self, time_idx: i64, buy: f32, sell: f32) {
+        self.cell.buy += buy;
+        self.cell.sell += sell;
+        self.weighted +=
+            (f64::from(buy) + f64::from(sell)) * (time_idx - self.cell.time_idx) as f64;
+        self.last = time_idx;
+    }
+
+    /// Close the run into a cluster, placing its disc at the volume-weighted centre.
+    fn finish(mut self, step_ms: f64) -> ClusterCell {
+        let total = f64::from(self.cell.buy) + f64::from(self.cell.sell);
+        let offset = if total.is_finite() && total > 0.0 {
+            self.weighted / total
+        } else {
+            0.0
+        };
+        self.cell.center_ms = (self.cell.time_idx as f64 + 0.5 + offset) * step_ms;
+        self.cell
+    }
+}
+
+/// Sum a tape into clusters.
 ///
 /// A trade's row is its price rounded to the tick first and then to the nearest row, so an `f32`
-/// price never lands a row off; its interval is its absolute time floored to the step.
+/// price never lands a row off; its interval is its absolute time floored to the step. Non-empty
+/// intervals that follow each other on one row then merge, at most [`MERGE_SPAN`] to a cluster,
+/// counted from the first interval of the stretch — an empty interval breaks it.
 ///
 /// Args:
 ///     trades: `(absolute time ms, price, quantity, is_buy)` per trade, any order.
 ///     grid: The grid to sum on.
-///     out: Cleared, then filled with the non-empty cells ordered by time, then price.
+///     out: Cleared, then filled with the clusters ordered by row, then time.
 pub fn aggregate(
     trades: impl IntoIterator<Item = (f64, f32, f32, bool)>,
     grid: ClusterGrid,
@@ -138,6 +175,7 @@ pub fn aggregate(
         return;
     }
     let step = i64::from(grid.price_step);
+    // Keyed row first: each row's intervals come out in time order, ready to merge.
     let mut cells: BTreeMap<(i64, i64), (f32, f32)> = BTreeMap::new();
     for (time_ms, price, qty, is_buy) in trades {
         let notional = price * qty;
@@ -152,23 +190,29 @@ pub fn aggregate(
         // Nearest row: half a row either side of the row's centre.
         let price_idx = (ticks + step.div_euclid(2)).div_euclid(step);
         let time_idx = (time_ms as i64).div_euclid(grid.time_step_ms);
-        let cell = cells.entry((time_idx, price_idx)).or_insert((0.0, 0.0));
+        let cell = cells.entry((price_idx, time_idx)).or_insert((0.0, 0.0));
         if is_buy {
             cell.0 += notional;
         } else {
             cell.1 += notional;
         }
     }
-    out.extend(
-        cells
-            .into_iter()
-            .map(|((time_idx, price_idx), (buy, sell))| ClusterCell {
-                time_idx,
-                price_idx,
-                buy,
-                sell,
-            }),
-    );
+    let step_ms = grid.time_step_ms as f64;
+    let mut open: Option<Run> = None;
+    for ((price_idx, time_idx), (buy, sell)) in cells {
+        match &mut open {
+            Some(run) if run.takes(price_idx, time_idx) => run.add(time_idx, buy, sell),
+            _ => {
+                if let Some(run) = open.take() {
+                    out.push(run.finish(step_ms));
+                }
+                open = Some(Run::start(price_idx, time_idx, buy, sell));
+            }
+        }
+    }
+    if let Some(run) = open {
+        out.push(run.finish(step_ms));
+    }
 }
 
 /// The largest disc's radius for cells of `cell_w × cell_h` physical pixels: half the narrower

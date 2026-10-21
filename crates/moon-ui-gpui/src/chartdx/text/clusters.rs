@@ -64,14 +64,13 @@ impl RenderState {
         let glyph_w = fp * MONO_ADVANCE;
         let (left, top) = (view.bounds[0], view.bounds[1]);
         let (right, bottom) = (left + view.bounds[2], top + view.bounds[3]);
-        let step_ms = grid.time_step_ms as f64;
         let row_h = grid.row_height();
         let ink = color(self.readout_label);
         let pr = &mut self.panes[idx];
         let mut found = std::mem::take(&mut pr.cluster_found);
         found.clear();
         for c in &pr.cluster_cells {
-            let t_rel = ((c.time_idx as f64 + 0.5) * step_ms - epoch_ms) as f32;
+            let t_rel = (c.center_ms - epoch_ms) as f32;
             let price = (c.price_idx as f64 * row_h) as f32;
             // The marker shader's own placement: whole physical pixels from the plot's edges.
             let x = (left + (t_rel - view.view_time0) * view.time_to_px).round();

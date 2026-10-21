@@ -1985,9 +1985,6 @@ impl ChartDataState {
                 let sell = rgb4(self.theme.tick_sell);
                 super::clusters::ClusterInputs {
                     enabled: bubbles,
-                    step_choice: self
-                        .trade_step_override
-                        .unwrap_or(self.chart_graphics.trade_step),
                     tick: pr.price_tick.tick(),
                     view: pr.view,
                     epoch_ms: pane.view.epoch_ms,

@@ -261,15 +261,6 @@ where
     Ok(de_lenient::<D, TradeKind>(d)?.unwrap_or_default())
 }
 
-/// Read the stored cluster step leniently; an unusable value reads as Auto. Snapping onto the step
-/// list is the normaliser's job (`moon_chart::normalize_chart_graphics`), not the reader's.
-pub(super) fn de_trade_step<'de, D>(d: D) -> Result<u16, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(de_lenient::<D, u16>(d)?.unwrap_or(0))
-}
-
 /// Read the ladder highlight threshold leniently, defaulting an unusable value.
 pub(super) fn de_ladder_big_pct<'de, D>(d: D) -> Result<u8, D::Error>
 where

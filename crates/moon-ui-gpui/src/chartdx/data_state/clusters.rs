@@ -4,10 +4,10 @@
 //! The arithmetic is `moon_chart::clusters`; this module owns only the invalidation. Cells are summed
 //! from the backend's resident trade mirror over the visible window plus one window either side, so a
 //! pan within that reach re-sizes the discs without re-summing. Re-summing follows a new grid (a
-//! zoom moved the time interval or the price row, the tick arrived, the step changed), a view that
-//! left the summed reach, and new trades — those at most once per [`CLUSTER_DATA_THROTTLE`], like the
-//! order book's own bake throttle. The discs follow the biggest VISIBLE cell, so a pan that changes
-//! it re-sizes and re-uploads them.
+//! zoom moved the time interval or the price row, the tick arrived), a view that left the summed
+//! reach, and new trades — those at most once per [`CLUSTER_DATA_THROTTLE`], like the order book's
+//! own bake throttle. The discs follow the biggest VISIBLE cluster, so a pan that changes it
+//! re-sizes and re-uploads them.
 
 use std::time::{Duration, Instant};
 
@@ -27,8 +27,6 @@ const DISC_ALPHA: f32 = 0.85;
 pub(in crate::chartdx) struct ClusterInputs {
     /// Whether the tab draws its trades as bubbles at all.
     pub enabled: bool,
-    /// The session or stored price step, `0` for Auto.
-    pub step_choice: u16,
     /// The market's tick, `None` while unknown.
     pub tick: Option<f64>,
     /// The plot's own transform, physical pixels.
@@ -72,7 +70,7 @@ pub(in crate::chartdx) fn sync_clusters(
         .and_then(|tick| {
             let time_step_ms = clusters::time_step_ms(view.time_to_px, input.min_cell_px)?;
             let price_step =
-                clusters::price_step(input.step_choice, tick, view.price_to_px, input.min_cell_px)?;
+                moon_chart::ladder::row_step(tick, view.price_to_px, input.min_cell_px)?;
             Some(ClusterGrid {
                 time_step_ms,
                 tick,
@@ -97,7 +95,15 @@ pub(in crate::chartdx) fn sync_clusters(
             .is_none_or(|at| now.duration_since(at) >= CLUSTER_DATA_THROTTLE);
     let mut resummed = false;
     if left_reach || data_due {
-        let range = (visible.0 - reach, visible.1 + reach);
+        // The start lands on a whole number of merge spans: while the range keeps cutting the same
+        // stretch, every re-sum merges it from the same intervals, so a follow or a small pan does
+        // not make its discs hop. Once the stretch's real start enters the range it is merged from
+        // that start instead — one re-chunk, accepted with chunking from a stretch's first interval.
+        let span_ms = grid.time_step_ms as f64 * clusters::MERGE_SPAN as f64;
+        let range = (
+            ((visible.0 - reach) / span_ms).floor() * span_ms,
+            visible.1 + reach,
+        );
         let epoch = input.epoch_ms;
         let samples = pr
             .layers
@@ -111,25 +117,32 @@ pub(in crate::chartdx) fn sync_clusters(
         pr.cluster_built_at = Some(now);
         resummed = true;
     }
-    // The discs scale against the biggest cell on screen.
+    // The discs scale against the biggest cluster on screen — any whose disc can still show, so a
+    // centre just past the edge counts too, or its disc would draw at full size against a smaller
+    // visible maximum.
     let row_h = grid.row_height();
     let step_ms = grid.time_step_ms as f64;
-    let price_lo = f64::from(view.view_price0);
-    let price_hi = price_lo + f64::from(view.bounds[3] / view.price_to_px);
-    let max_total = pr
-        .cluster_cells
-        .iter()
-        .filter(|c| {
-            let t = (c.time_idx as f64 + 0.5) * step_ms;
-            let p = c.price_idx as f64 * row_h;
-            t >= visible.0 && t <= visible.1 && p >= price_lo && p <= price_hi
-        })
-        .map(|c| c.total())
-        .fold(0.0_f32, f32::max);
     let max_r = clusters::max_radius(
         (step_ms * time_to_px) as f32,
         (row_h * f64::from(view.price_to_px)) as f32,
     );
+    let r_ms = f64::from(max_r) / time_to_px;
+    let r_price = f64::from(max_r / view.price_to_px);
+    let price_lo = f64::from(view.view_price0) - r_price;
+    let price_hi =
+        f64::from(view.view_price0) + f64::from(view.bounds[3] / view.price_to_px) + r_price;
+    let max_total = pr
+        .cluster_cells
+        .iter()
+        .filter(|c| {
+            let p = c.price_idx as f64 * row_h;
+            c.center_ms >= visible.0 - r_ms
+                && c.center_ms <= visible.1 + r_ms
+                && p >= price_lo
+                && p <= price_hi
+        })
+        .map(|c| c.total())
+        .fold(0.0_f32, f32::max);
     let colors = [input.buy, input.sell];
     if !resummed
         && pr.cluster_max == max_total
@@ -146,7 +159,7 @@ pub(in crate::chartdx) fn sync_clusters(
     pr.cluster_markers.clear();
     pr.cluster_markers.extend(pr.cluster_cells.iter().map(|c| {
         MarkerInstance::at_price(
-            ((c.time_idx as f64 + 0.5) * step_ms - input.epoch_ms) as f32,
+            (c.center_ms - input.epoch_ms) as f32,
             (c.price_idx as f64 * row_h) as f32,
             clusters::disc_radius(c.total(), max_total, max_r),
             0.0,

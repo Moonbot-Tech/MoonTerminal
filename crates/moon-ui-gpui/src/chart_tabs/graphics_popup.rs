@@ -261,39 +261,6 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         )
     };
 
-    let bubbles = cfg.trade_kind == TradeKind::Bubbles;
-    let trade_step_row = bubbles.then(|| {
-        let entity = entity.clone();
-        let steps = moon_chart::clusters::CLUSTER_STEPS;
-        seg_row(
-            format!("{id}-trade-step"),
-            t!("chart.graphics.trade_step").to_string(),
-            steps
-                .iter()
-                .map(|s| (crate::controls::trade_step_label(*s), *s == cfg.trade_step))
-                .collect(),
-            ROW_W / steps.len() as f32,
-            p,
-            cx,
-            move |ix, app| {
-                if let Some(step) = steps.get(ix) {
-                    let step = *step;
-                    write_cfg(&entity, app, |c| c.trade_step = step);
-                    // A new stored step is what the reader asked to see: it ends the session
-                    // step the strip's list set, or the edit would look ignored.
-                    entity.update(app, |this, cx| this.end_trade_step_session(cx));
-                }
-            },
-        )
-    });
-    // Says where the step changes on the fly, and that only this row's value is remembered.
-    let trade_step_hint = bubbles.then(|| {
-        div()
-            .text_size(design::t_caption(cx))
-            .text_color(rgb(p.text_muted))
-            .child(t!("chart.graphics.trade_step_hint").to_string())
-    });
-
     // --- Trade marks: the live trade crosses, their per-trade volume bars, and the liquidation
     // crosses appended to the same ring. ---
     let marker_scale_row = {
@@ -462,8 +429,6 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                     .w(px(ROW_W))
                     .gap(design::ui_px(cx, 6.0))
                     .child(trade_kind_row)
-                    .children(trade_step_row)
-                    .children(trade_step_hint)
                     // Kept in bubble mode too: the liquidations stay crosses, and a pane with no
                     // cluster grid yet draws its trades as crosses.
                     .child(marker_scale_row)
@@ -514,12 +479,6 @@ pub(super) trait GraphicsPopupHost: LayoutPopupHost {
     fn apply_graphics(&mut self, cfg: ChartGraphicsCfg, cx: &mut Context<Self>) {
         self.apply_tab_setting(StackSetting::Graphics(cfg), cx);
     }
-
-    /// End the target's session cluster step, so it draws its stored step again.
-    ///
-    /// Called by the popup's step row only — not by every graphics write: an unrelated edit
-    /// (a line switch, the volumes) must leave a step the strip's list picked alone.
-    fn end_trade_step_session(&mut self, cx: &mut Context<Self>);
 
     /// Close the popup.
     ///

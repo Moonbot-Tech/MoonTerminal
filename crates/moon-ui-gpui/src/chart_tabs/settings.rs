@@ -201,29 +201,6 @@ impl ChartTabs {
         }
     }
 
-    /// Return the active tab's session cluster price step, `None` while it follows its stored one.
-    pub(super) fn active_trade_step(&self, cx: &App) -> Option<u16> {
-        match &self.active {
-            Tab::Main => self.main.read(cx).trade_step(),
-            Tab::Add(n, b) | Tab::Custom(n, b) => {
-                self.add_stack(*n, b).and_then(|p| p.read(cx).trade_step())
-            }
-        }
-    }
-
-    /// Apply the strip's cluster step pick to the active tab only, for this session.
-    pub(crate) fn pick_active_trade_step(&mut self, step: Option<u16>, cx: &mut Context<Self>) {
-        match &self.active {
-            Tab::Main => self.main.update(cx, |p, pcx| p.set_trade_step(step, pcx)),
-            Tab::Add(n, bucket) | Tab::Custom(n, bucket) => {
-                if let Some(stack) = self.add_stack(*n, bucket) {
-                    stack.update(cx, |p, pcx| p.set_trade_step(step, pcx));
-                }
-            }
-        }
-        cx.notify();
-    }
-
     /// Return the active tab's price scale, with `None` meaning Auto.
     pub(super) fn active_scale_value(&self, cx: &App) -> Option<f32> {
         match &self.active {
@@ -334,10 +311,6 @@ impl super::graphics_popup::GraphicsPopupHost for ChartTabs {
                 .add_stack(*n, b)
                 .and_then(|p| p.read(cx).chart_graphics()),
         }
-    }
-
-    fn end_trade_step_session(&mut self, cx: &mut Context<Self>) {
-        self.pick_active_trade_step(None, cx);
     }
 }
 

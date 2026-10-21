@@ -52,7 +52,7 @@ impl ChartDataState {
             compare_lock_shown: false,
             candle_view: moon_core::market::CandleViewCfg::default(),
             chart_graphics: moon_core::config::ChartGraphicsCfg::default(),
-            trade_step_override: None,
+
             chart_labels: std::rc::Rc::new(moon_core::config::ChartLabelsCfg::default()),
             trade_labels: None,
             historical: false,

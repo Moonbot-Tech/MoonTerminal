@@ -36,7 +36,6 @@ impl MainChartStack {
             layout_height_fit: None,
             layout_height_scroll: None,
             orderbook_enabled: None,
-            trade_step: None,
             candle_view: None,
             chart_graphics: None,
             chart_labels: None,
@@ -138,10 +137,7 @@ impl MainChartStack {
         if let Some(en) = self.orderbook_enabled {
             panel.update(cx, |panel, pcx| panel.set_orderbook_enabled(en, pcx));
         }
-        if self.trade_step.is_some() {
-            let step = self.trade_step;
-            panel.update(cx, |panel, pcx| panel.set_trade_step(step, pcx));
-        }
+
         if self.candle_view.is_some() {
             let cv = self.candle_view;
             panel.update(cx, |panel, pcx| panel.set_candle_view(cv, pcx));

@@ -59,7 +59,7 @@ pub(crate) mod row_selection;
 mod scale;
 mod strips;
 pub(crate) mod toolbar;
-mod trade_step;
+
 mod venue_label;
 pub(crate) mod wrap_fit;
 
@@ -85,7 +85,7 @@ pub(crate) use scale::{
 };
 pub(crate) use toolbar::core_config_rejection_caption;
 pub use toolbar::toolbar;
-pub(crate) use trade_step::{trade_step_dropdown, trade_step_label};
+
 pub(crate) use venue_label::{venue_id_label, venue_label, venue_section_label};
 
 /// The glyph that stands for "strategies" wherever a control sheds that word.

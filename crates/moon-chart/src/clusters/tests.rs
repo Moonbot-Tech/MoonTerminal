@@ -22,48 +22,66 @@ fn the_time_step_is_the_finest_that_keeps_a_cell_wide_enough() {
 }
 
 #[test]
-fn a_fixed_price_step_is_a_minimum_and_auto_follows_the_zoom() {
-    // At 1000 px per unit a tick is 10 px: Auto would take 2, so x4 stands.
-    assert_eq!(price_step(4, 0.01, 1000.0, 14.0), Some(4));
-    // At 1 px per unit x4 rows would be a fraction of a pixel: the row grows to Auto's 2000.
-    assert_eq!(price_step(4, 0.01, 1.0, 14.0), Some(2000));
-    // One tick is 1 px at 100 px per unit: 14 px needs 20 ticks.
-    assert_eq!(price_step(0, 0.01, 100.0, 14.0), Some(20));
-    assert_eq!(price_step(2, 0.0, 100.0, 14.0), None);
-    // No readable row even for Auto: a fixed step does not draw one either.
-    assert_eq!(price_step(2, 1e-8, 1.0, 14.0), None);
-}
-
-#[test]
 fn trades_sum_into_their_cell_by_side() {
     let mut out = Vec::new();
     aggregate(
         [
             (1_000.0, 100.0, 1.0, true),
             (1_500.0, 99.99, 2.0, false),
-            (2_100.0, 100.0, 1.0, true),
+            (2_100.0, 100.04, 1.0, true),
         ],
         grid(1_000, 0.01, 2),
         &mut out,
     );
-    // Two ticks a row: 99.99 and 100.00 share the row centred on 100.00, the nearest.
+    // Two ticks a row: 99.99 and 100.00 share the row centred on 100.00, the nearest; 100.04 is
+    // two rows up, so nothing merges.
     assert_eq!(out.len(), 2);
     assert_eq!((out[0].time_idx, out[0].price_idx), (1, 5_000));
     assert_eq!(out[0].buy, 100.0);
     assert!((out[0].sell - 199.98).abs() < 1e-3);
-    assert_eq!((out[1].time_idx, out[1].buy), (2, 100.0));
+    assert_eq!(out[0].center_ms, 1_500.0);
+    assert_eq!((out[1].time_idx, out[1].price_idx), (2, 5_002));
+    assert!((out[1].buy - 100.04).abs() < 1e-3);
 }
 
 #[test]
 fn intervals_are_aligned_to_absolute_time() {
     let mut out = Vec::new();
     aggregate(
-        [(59_999.0, 10.0, 1.0, true), (60_000.0, 10.0, 1.0, true)],
+        [(59_999.0, 10.0, 1.0, true), (60_000.0, 12.0, 1.0, true)],
         grid(60_000, 1.0, 1),
         &mut out,
     );
-    let idx: Vec<i64> = out.iter().map(|c| c.time_idx).collect();
-    assert_eq!(idx, vec![0, 1]);
+    let idx: Vec<(i64, i64)> = out.iter().map(|c| (c.price_idx, c.time_idx)).collect();
+    assert_eq!(idx, vec![(10, 0), (12, 1)]);
+}
+
+#[test]
+fn consecutive_intervals_on_a_row_merge_up_to_the_span() {
+    let mut out = Vec::new();
+    aggregate(
+        [
+            // Row 10: intervals 0, 1, 2 merge; 3 starts the next cluster (the span is full);
+            // 5 stands alone after the empty 4.
+            (100.0, 10.0, 1.0, true),
+            (1_100.0, 10.0, 1.0, false),
+            (2_100.0, 10.0, 4.0, true),
+            (3_100.0, 10.0, 1.0, true),
+            (5_100.0, 10.0, 1.0, true),
+            // Row 11, interval 1: a neighbouring row never joins row 10's cluster.
+            (1_200.0, 11.0, 1.0, true),
+        ],
+        grid(1_000, 1.0, 1),
+        &mut out,
+    );
+    let shape: Vec<(i64, i64)> = out.iter().map(|c| (c.price_idx, c.time_idx)).collect();
+    assert_eq!(shape, vec![(10, 0), (10, 3), (10, 5), (11, 1)]);
+    let first = out[0];
+    assert_eq!((first.buy, first.sell), (50.0, 10.0));
+    // Volumes 10, 10, 40 at offsets 0, 1, 2: the centre sits 1.5 intervals past the first one's.
+    assert_eq!(first.center_ms, 2_000.0);
+    assert_eq!(out[1].center_ms, 3_500.0);
+    assert_eq!(out[2].center_ms, 5_500.0);
 }
 
 #[test]
@@ -109,11 +127,4 @@ fn a_volume_prints_with_at_most_three_digits() {
     assert_eq!(short_volume(0.97), "1");
     assert_eq!(short_volume(999.7), "1K");
     assert_eq!(short_volume(f32::NAN), "");
-}
-
-#[test]
-fn a_stored_step_snaps_onto_the_list() {
-    assert_eq!(snap_step(0), 0);
-    assert_eq!(snap_step(3), 2);
-    assert_eq!(snap_step(500), 10);
 }

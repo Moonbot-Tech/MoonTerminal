@@ -335,17 +335,6 @@ pub(super) fn set_panels_orderbook_enabled<S: 'static>(
     }
 }
 
-/// Apply the session cluster price step to every panel in the stack.
-pub(super) fn set_panels_trade_step<S: 'static>(
-    entries: &[ChartStackEntry],
-    step: Option<u16>,
-    cx: &mut Context<S>,
-) {
-    for e in entries {
-        e.panel.update(cx, |p, pcx| p.set_trade_step(step, pcx));
-    }
-}
-
 /// Apply the control-zone fill toggle to every panel in the stack.
 pub(super) fn set_panels_show_zone<S: 'static>(
     entries: &[ChartStackEntry],
