@@ -106,8 +106,8 @@ impl RenderState {
             if orderbook_enabled {
                 self.draw_ladder_text(ctx, idx, sf)?;
             }
-            // Bubble labels likewise sit under every label laid out after them.
-            self.draw_bubble_labels(ctx, idx, sf)?;
+            // Cluster labels likewise sit under every label laid out after them.
+            self.draw_cluster_labels(ctx, idx, sf)?;
             // Bottom-volume scale readout: the visible maximum against the band's top
             // reference line and the visible average against its own. Without them the two lines
             // say "some scale" rather than a quantity, and the band cannot be compared across

@@ -205,6 +205,24 @@ impl Render for ChartTabs {
             cx.entity(),
             p_strip,
         );
+        // The clusters' step list rides beside the scale only while the active tab draws its
+        // trades as bubbles: the step means nothing to the crosses.
+        let trade_step_dropdown = {
+            use super::graphics_popup::GraphicsPopupHost as _;
+            let graphics = self.graphics_cfg(cx);
+            (graphics.trade_kind == moon_core::config::TradeKind::Bubbles).then(|| {
+                let tabs = cx.entity();
+                crate::controls::trade_step_dropdown(
+                    "tabs-trade-step",
+                    graphics.trade_step,
+                    self.active_trade_step(cx),
+                    p_strip,
+                    move |step, app| {
+                        tabs.update(app, |t, tcx| t.pick_active_trade_step(step, tcx));
+                    },
+                )
+            })
+        };
         // One wording wherever the press is made: what it reaches is chosen in the row it opens,
         // not by which tab happened to be active.
         let apply_all_label = t!("chart.apply_all_tabs_windows").to_string();
@@ -511,6 +529,7 @@ impl Render for ChartTabs {
                 design::chrome_section(cx)
                     .when_some(ends_search, |this, end| this.capture_any_mouse_down(end))
                     .child(scale_dropdown)
+                    .children(trade_step_dropdown)
                     .children(gather_btn)
                     .child(candle_btn)
                     .child(graphics_btn)

@@ -1057,33 +1057,14 @@ fn ignored_wheel_bake_reduce_median_ms() {
     }
 }
 
-/// `tick_volume.rs:reduce_crosses` for bubbles: a texel keeps its largest row, where crosses keep
-/// the last one drawn — the small disc on top would otherwise erase the big trade under it.
+/// `tick_volume.rs:reduce_crosses` under bubbles: the clusters layer draws the trades and the cross
+/// pass culls them, so only the liquidations survive the reduction.
 #[test]
-fn a_bubble_texel_keeps_its_largest_trade() {
+fn a_bubble_bake_keeps_only_the_liquidations() {
     let rows = [
-        (0u32, 5.0f32, 100.0f32, 0u32, 50.0f32),
-        (1, 5.0, 100.0, 0, 1.0),
-    ];
-    let mut pick = super::LodPick::default();
-    super::reduce_crosses(rows.iter().copied(), &lod_geometry(), &mut pick);
-    assert_eq!(pick.cross, vec![1]);
-    let bubbles = super::BakeColumns {
-        bubbles: true,
-        ..lod_geometry()
-    };
-    super::reduce_crosses(rows.iter().copied(), &bubbles, &mut pick);
-    assert_eq!(pick.cross, vec![0]);
-}
-
-/// A bubble texel keeps its liquidation cross beside its largest trade: the two are different
-/// glyphs, and ranking one against the other by size would erase whichever is smaller.
-#[test]
-fn a_bubble_texel_keeps_its_liquidation_beside_its_largest_trade() {
-    let rows = [
-        (0u32, 5.0f32, 100.0f32, 2u32, 1.0f32),
-        (1, 5.0, 100.0, 0, 50.0),
-        (2, 5.0, 100.0, 1, 5.0),
+        (0u32, 5.0f32, 100.0f32, 0u32, 1.0f32),
+        (1, 6.0, 100.0, 1, 1.0),
+        (2, 7.0, 100.0, 2, 1.0),
     ];
     let bubbles = super::BakeColumns {
         bubbles: true,
@@ -1091,40 +1072,5 @@ fn a_bubble_texel_keeps_its_liquidation_beside_its_largest_trade() {
     };
     let mut pick = super::LodPick::default();
     super::reduce_crosses(rows.iter().copied(), &bubbles, &mut pick);
-    assert_eq!(pick.cross, vec![0, 1]);
-}
-
-/// A crowded bubble column ranks by NOTIONAL: a small quantity at a high price outranks a larger
-/// quantity at a low one, because the disc is sized by `price × qty`.
-#[test]
-fn a_crowded_bubble_column_ranks_by_notional() {
-    let n = super::LOD_MAX_ROWS as u32 + 1;
-    // Every row is 10 units at its own price, so the cheapest row has the smallest notional
-    // although no row's quantity is smaller than another's.
-    let rows: Vec<(u32, f32, f32, u32, f32)> = (0..n)
-        .map(|i| (i, 5.0, 100.0 + i as f32, 0, 10.0))
-        .collect();
-    let bubbles = super::BakeColumns {
-        bubbles: true,
-        ..lod_geometry()
-    };
-    let mut pick = super::LodPick::default();
-    super::reduce_crosses(rows.iter().copied(), &bubbles, &mut pick);
-    assert_eq!(pick.cross, (1..n).collect::<Vec<u32>>());
-}
-
-/// A crowded bubble column keeps the `LOD_MAX_ROWS` largest rows of a side, not a stride sample.
-#[test]
-fn a_crowded_bubble_column_keeps_its_largest_trades() {
-    let n = super::LOD_MAX_ROWS as u32 + 8;
-    let rows: Vec<(u32, f32, f32, u32, f32)> = (0..n)
-        .map(|i| (i, 5.0, 100.0 + i as f32, 0, i as f32 + 1.0))
-        .collect();
-    let bubbles = super::BakeColumns {
-        bubbles: true,
-        ..lod_geometry()
-    };
-    let mut pick = super::LodPick::default();
-    super::reduce_crosses(rows.iter().copied(), &bubbles, &mut pick);
-    assert_eq!(pick.cross, (8..n).collect::<Vec<u32>>());
+    assert_eq!(pick.cross, vec![2]);
 }

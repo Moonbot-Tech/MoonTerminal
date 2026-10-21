@@ -196,6 +196,16 @@ impl WgpuLayers {
             );
             self.userdata_buffers_dirty = false;
         }
+        if self.clusters_dirty || self.cluster_buffer.buffer.is_none() {
+            binds_dirty |= self.cluster_buffer.write(
+                device,
+                queue,
+                "moon_chart_clusters",
+                wgpu::BufferUsages::STORAGE,
+                &self.clusters,
+            );
+            self.clusters_dirty = false;
+        }
         if self.candle_buffers_dirty
             || self.candle_buffer.buffer.is_none()
             || self.candle_style_uniform.buffer.is_none()
@@ -609,6 +619,12 @@ impl WgpuLayers {
             &self.view_uniform,
             &self.marker_buffer,
         );
+        let cluster_bind = self.bind_view_storage(
+            device,
+            &pipelines.view_storage_layout,
+            &self.view_uniform,
+            &self.cluster_buffer,
+        );
         self.prepared_binds = Some(PreparedBindGroups {
             bg: bg_bind,
             grid: grid_bind,
@@ -626,6 +642,7 @@ impl WgpuLayers {
             hline: hline_bind,
             seg: seg_bind,
             marker: marker_bind,
+            cluster: cluster_bind,
         });
     }
 }

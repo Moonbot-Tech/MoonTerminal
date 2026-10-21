@@ -24,7 +24,7 @@ use serde_compat::{
     de_hvol_width, de_ladder_big_pct, de_lenient_chart_labels, de_lenient_false,
     de_lenient_graphics, de_lenient_map, de_lenient_seed, de_lenient_true, de_lenient_u32,
     de_marker_scale, de_strategies_tree_text_step, de_table_order_map, de_table_sort_map,
-    de_tick_ranges, de_trade_history_style, de_trade_kind, de_trade_volume_alpha,
+    de_tick_ranges, de_trade_history_style, de_trade_kind, de_trade_step, de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
 

@@ -39,21 +39,8 @@ cbuffer TickStyle : register(b2) {
     float4 ts_buy;
     float4 ts_sell;
     float4 ts_liq;
-    float4 ts_shape;  // x = kind (0 crosses, 1 bubbles); y = cross half as a share of cv_marker_half
-    float4 ts_bubble; // x = smallest disc / largest; y, z = log10 notional of the smallest/largest
+    float4 ts_shape; // x = 1 while this pane's clusters draw the trades, else 0
 };
-
-// Set on `side` for a trade drawn as a disc; the low byte keeps the side itself.
-static const uint BUBBLE_FLAG = 0x100u;
-
-// A disc's radius as a share of the largest (`cv_marker_half` in bubble mode), from the trade's
-// quote notional on a log scale. Mirrors `moon_chart::bubbles::radius_frac`, which the text pass
-// sizes its labels by.
-float bubble_frac(Cross c) {
-    float n = c.price * c.qty;
-    float t = (n > 0.0) ? saturate((log10(n) - ts_bubble.y) / (ts_bubble.z - ts_bubble.y)) : 0.0;
-    return ts_bubble.x + (1.0 - ts_bubble.x) * t;
-}
 
 StructuredBuffer<Cross> crosses : register(t1);
 
@@ -92,31 +79,25 @@ CrossOut crosses_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
         return o;
     }
 
-    // Liquidations keep their cross in bubble mode; `ts_shape.y` shrinks it back from the largest
-    // disc's extent to the cross's own.
-    bool bubble = ts_shape.x >= 0.5 && c.side < 2u;
-    float half_px = cv_marker_half * (bubble ? bubble_frac(c) : ts_shape.y);
+    // In bubble mode the trades are summed into the clusters layer, so their crosses step aside;
+    // liquidations keep theirs.
+    if (ts_shape.x >= 0.5 && c.side < 2u) {
+        o.pos = float4(2.0, 2.0, 0.0, 1.0);
+        o.uv = float2(0.0, 0.0);
+        o.side = 0u;
+        return o;
+    }
     float2 corner = CORNERS[vid];
-    float2 px = float2(sx, sy) + corner * half_px;
+    float2 px = float2(sx, sy) + corner * cv_marker_half;
     float2 ndc = float2(px.x / cv_resolution.x * 2.0 - 1.0,
                         1.0 - px.y / cv_resolution.y * 2.0);
     o.pos = float4(ndc, 0.0, 1.0);
     o.uv = corner;
-    o.side = c.side | (bubble ? BUBBLE_FLAG : 0u);
+    o.side = c.side;
     return o;
 }
 
 float4 crosses_fragment(CrossOut i) : SV_Target {
-    uint side = i.side & 0xFFu;
-    float3 rgb = (side == 0u) ? ts_buy.rgb : ((side == 1u) ? ts_sell.rgb : ts_liq.rgb);
-    if ((i.side & BUBBLE_FLAG) != 0u) {
-        float d2 = dot(i.uv, i.uv);
-        if (d2 > 1.0) {
-            discard;
-        }
-        // A darker rim keeps overlapping discs apart.
-        return float4(d2 > 0.72 ? rgb * 0.6 : rgb, 1.0);
-    }
     // Map UV in [-1,1] to cell 0..6 of the 7×7 matrix.
     int col = clamp((int)floor((i.uv.x * 0.5 + 0.5) * 7.0), 0, 6);
     int row = clamp((int)floor((i.uv.y * 0.5 + 0.5) * 7.0), 0, 6);
@@ -133,6 +114,7 @@ float4 crosses_fragment(CrossOut i) : SV_Target {
         discard;
     }
     // Theme colours preserve the historical palette defaults. Direct sRGB (UNORM target).
+    float3 rgb = (i.side == 0u) ? ts_buy.rgb : ((i.side == 1u) ? ts_sell.rgb : ts_liq.rgb);
     return float4(rgb, 1.0);
 }
 

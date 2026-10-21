@@ -674,20 +674,8 @@ fragment float4 candles_fragment(CandleOut in [[stage_in]],
 }
 
 // set_uniform binds index 2 to both stages; do not reuse it in these pipelines.
-// shape: x = kind (0 crosses, 1 bubbles), y = cross half as a share of cv.marker_half.
-// bubble: x = smallest disc / largest, y/z = log10 notional of the smallest/largest disc.
-struct TickStyle { float4 buy; float4 sell; float4 liq; float4 shape; float4 bubble; };
-
-// Set on `side` for a trade drawn as a disc; the low byte keeps the side itself.
-constant uint BUBBLE_FLAG = 0x100u;
-
-// A disc's radius as a share of the largest, from the trade's quote notional on a log scale.
-// Mirrors `moon_chart::bubbles::radius_frac`, which the text pass sizes its labels by.
-static float bubble_frac(Cross c, constant TickStyle& ts) {
-    float n = c.price * c.qty;
-    float t = (n > 0.0) ? saturate((log10(n) - ts.bubble.y) / (ts.bubble.z - ts.bubble.y)) : 0.0;
-    return ts.bubble.x + (1.0 - ts.bubble.x) * t;
-}
+// shape: x = 1 while this pane's clusters draw the trades, else 0.
+struct TickStyle { float4 buy; float4 sell; float4 liq; float4 shape; };
 
 struct CrossOut { float4 position [[position]]; float2 uv; uint side [[flat]]; };
 
@@ -704,29 +692,22 @@ vertex CrossOut crosses_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
         sy < cv.bounds.y - cull_margin || sy > cv.bounds.y + cv.bounds.w + cull_margin) {
         return { float4(2.0, 2.0, 0.0, 1.0), float2(0.0), 0 };
     }
-    // Liquidations keep their cross in bubble mode; `ts.shape.y` shrinks it back from the largest
-    // disc's extent to the cross's own.
-    bool bubble = ts.shape.x >= 0.5 && c.side < 2u;
-    float half_px = cv.marker_half * (bubble ? bubble_frac(c, ts) : ts.shape.y);
+    // In bubble mode the trades are summed into the clusters layer, so their crosses step aside;
+    // liquidations keep theirs.
+    if (ts.shape.x >= 0.5 && c.side < 2u) {
+        return { float4(2.0, 2.0, 0.0, 1.0), float2(0.0), 0 };
+    }
     float2 corner = CORNERS_PM[vid];
-    float2 px = float2(sx, sy) + corner * half_px;
-    return { to_clip(px, cv.resolution), corner, c.side | (bubble ? BUBBLE_FLAG : 0u) };
+    float2 px = float2(sx, sy) + corner * cv.marker_half;
+    return { to_clip(px, cv.resolution), corner, c.side };
 }
 
 fragment float4 crosses_fragment(CrossOut in [[stage_in]], constant TickStyle& ts [[buffer(2)]]) {
-    uint side = in.side & 0xFFu;
-    float3 rgb = side == 0 ? ts.buy.rgb : (side == 1 ? ts.sell.rgb : ts.liq.rgb);
-    if ((in.side & BUBBLE_FLAG) != 0u) {
-        float d2 = dot(in.uv, in.uv);
-        if (d2 > 1.0) discard_fragment();
-        // A darker rim keeps overlapping discs apart.
-        return float4(d2 > 0.72 ? rgb * 0.6 : rgb, 1.0);
-    }
     int col = clamp((int)floor((in.uv.x * 0.5 + 0.5) * 7.0), 0, 6);
     int row = clamp((int)floor((in.uv.y * 0.5 + 0.5) * 7.0), 0, 6);
     uint mask = (row == 0 || row == 6) ? 0x77u : ((row == 1 || row == 5) ? 0x7Fu : 0x3Eu);
     if (((mask >> (uint)col) & 1u) == 0u) discard_fragment();
-    return float4(rgb, 1.0);
+    return float4(in.side == 0 ? ts.buy.rgb : (in.side == 1 ? ts.sell.rgb : ts.liq.rgb), 1.0);
 }
 
 struct VolumeOut { float4 position [[position]]; uint side [[flat]]; };

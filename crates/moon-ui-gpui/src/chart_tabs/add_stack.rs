@@ -24,7 +24,7 @@ use super::stack::{
     set_panels_candle_view, set_panels_chart_graphics, set_panels_chart_labels,
     set_panels_cursor_labels, set_panels_line_labels, set_panels_orderbook_enabled,
     set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
-    set_panels_time_axis_visible, sync_compare, tile_gutter,
+    set_panels_time_axis_visible, set_panels_trade_step, sync_compare, tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
@@ -53,6 +53,10 @@ pub(crate) struct AddChartStack {
     layout_height_scroll: Option<u16>,
     /// Whether to show order books on this tab's charts (per window). `None` = enabled by default.
     orderbook_enabled: Option<bool>,
+    /// The cluster price step the tab strip picked for this session, over the stored one; `None`
+    /// follows the tab's `chart_graphics.trade_step`. Deliberately NOT in `ChartTabSpec`: the
+    /// stored step is the graphics popup's, and this list only tries a step out until restart.
+    trade_step: Option<u16>,
     /// Tab candle/trade display settings (`None` = global default).
     candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Tab chart-drawing settings (`None` = the global `layout.chart_graphics` default).
@@ -190,6 +194,7 @@ impl AddChartStack {
             layout_height_fit: None,
             layout_height_scroll: None,
             orderbook_enabled: None,
+            trade_step: None,
             candle_view: None,
             chart_graphics: None,
             chart_labels: None,
@@ -718,6 +723,10 @@ impl AddChartStack {
         panel.update(cx, |panel, pcx| {
             panel.set_orderbook_enabled(self.effective_orderbook(), pcx)
         });
+        if self.trade_step.is_some() {
+            let step = self.trade_step;
+            panel.update(cx, |panel, pcx| panel.set_trade_step(step, pcx));
+        }
         if let Some(sz) = self.show_zone {
             panel.update(cx, |panel, pcx| panel.set_show_zone(sz, pcx));
         }
@@ -867,6 +876,18 @@ impl AddChartStack {
         self.orderbook_enabled = enabled;
         set_panels_orderbook_enabled(&self.charts, self.effective_orderbook(), cx);
         cx.notify();
+    }
+
+    /// The session cluster price step, `None` while the tab follows its stored step.
+    pub(crate) fn trade_step(&self) -> Option<u16> {
+        self.trade_step
+    }
+
+    /// Set the session cluster price step for every chart in this stack; never persisted.
+    pub(crate) fn set_trade_step(&mut self, step: Option<u16>, cx: &mut Context<Self>) {
+        apply_setting(&mut self.trade_step, step, &self.charts, cx, |c, cx| {
+            set_panels_trade_step(c, step, cx)
+        });
     }
 
     /// Suspend or resume order-book subscriptions according to tab focus. Custom tabs unsubscribe

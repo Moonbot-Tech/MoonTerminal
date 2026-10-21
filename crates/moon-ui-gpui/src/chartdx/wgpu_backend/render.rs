@@ -173,6 +173,17 @@ impl WgpuLayers {
     fn draw_user_layers(&self, pass: &mut wgpu::RenderPass<'_>) {
         let pipelines = self.pipelines.as_ref().unwrap();
         let binds = self.prepared_binds.as_ref().unwrap();
+        // The trade clusters go first: over the candles, under every order line and marker.
+        if !self.clusters.is_empty() {
+            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
+            draw_pipeline(
+                pass,
+                &pipelines.marker,
+                &binds.cluster,
+                6,
+                self.clusters.len() as u32,
+            );
+        }
         if !self.hlines.is_empty() {
             crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(

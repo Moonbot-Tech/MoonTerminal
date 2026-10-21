@@ -11,7 +11,7 @@ pub const PRICE_AXIS_W: f32 = 56.0;
 pub const TIME_AXIS_H: f32 = 16.0;
 
 pub mod axes;
-pub mod bubbles;
+pub mod clusters;
 pub mod container;
 // `data` / market-source models live in moon-core. Re-export them under the previous path.
 pub use moon_core::data;

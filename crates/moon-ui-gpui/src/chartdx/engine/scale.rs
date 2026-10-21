@@ -136,6 +136,21 @@ impl ChartEngine {
         true
     }
 
+    /// Set the session cluster price step from the tab strip, `None` to follow the stored one.
+    ///
+    /// Returns:
+    ///     `true` when the step changed; the next sync re-sums the clusters on the new grid.
+    pub fn set_trade_step(&mut self, step: Option<u16>) -> bool {
+        let step = step.map(moon_chart::clusters::snap_step);
+        let mut data = self.data.borrow_mut();
+        if data.trade_step_override == step {
+            return false;
+        }
+        data.trade_step_override = step;
+        data.mark_view_dirty();
+        true
+    }
+
     /// Apply the report axis that corrects this engine's closed-trade stamps on every pane.
     ///
     /// Args:

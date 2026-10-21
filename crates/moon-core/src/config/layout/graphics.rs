@@ -81,8 +81,9 @@ pub enum TradeKind {
     /// The 7×7 cross per trade — the picture this terminal shipped with.
     #[default]
     Crosses,
-    /// A disc per trade, its size growing with the trade's quote notional; a disc big enough
-    /// prints that notional inside it.
+    /// Clusters: the tape summed into a time × price grid, one disc per cell — its area the cell's
+    /// volume against the biggest cell on screen, its colour the side that traded more. A disc big
+    /// enough prints that volume inside it.
     Bubbles,
 }
 
@@ -253,6 +254,12 @@ pub struct ChartGraphicsCfg {
     /// before bubbles existed. Liquidations keep their crosses either way.
     #[serde(default, deserialize_with = "de_trade_kind")]
     pub trade_kind: TradeKind,
+    /// The price row the bubbles sum trades into, in ticks, one of
+    /// `moon_chart::clusters::CLUSTER_STEPS`; `0` is Auto, the smallest row a disc still reads in
+    /// at the current zoom. This is the tab's STORED step: the step list beside the tab strip's
+    /// scale overrides it for the running session only and never writes it back.
+    #[serde(default, deserialize_with = "de_trade_step")]
+    pub trade_step: u16,
 
     // --- Bottom candle volumes, likewise moved off `ChartTheme`. ---
     /// Display style: `crate::market::candles::VOLUME_STYLE_OFF` or `_HILLS`. Together with
@@ -401,6 +408,7 @@ impl Default for ChartGraphicsCfg {
             marker_scale: def_marker_scale(),
             trade_volume_alpha: def_trade_volume_alpha(),
             trade_kind: TradeKind::Crosses,
+            trade_step: 0,
             candle_volume_style: def_candle_volume_style(),
             candle_volume_height: def_candle_volume_height(),
             candle_volume_alpha: def_candle_volume_alpha(),

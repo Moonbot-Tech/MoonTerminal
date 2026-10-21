@@ -484,8 +484,9 @@ pub(in crate::chartdx) struct PaneRender {
     /// Live best `(bid, ask)` book prices defining the three-color order-book zone background.
     pub(in crate::chartdx) book_best: Option<(f32, f32)>,
     /// What the pane knows about its market's tick — the exchange's, else the book's spacing —
-    /// and when it last asked. Reset with the pane on a market change.
-    pub(in crate::chartdx) ladder_tick: moon_chart::ladder::LadderTick,
+    /// and when it last asked. The ladder and the trade clusters both bucket by it. Reset with the
+    /// pane on a market change.
+    pub(in crate::chartdx) price_tick: moon_chart::ladder::LadderTick,
     /// The grid the resident ladder was built on; `None` while the zone draws the glass. A
     /// different grid — a zoom that moved the step, a tick that arrived — rebuilds the rows at once.
     pub(in crate::chartdx) ladder_grid: Option<moon_core::data::LadderGrid>,
@@ -498,14 +499,36 @@ pub(in crate::chartdx) struct PaneRender {
     /// row scrolling into the zone neither shifts the chart's other labels off their cached
     /// shaping nor makes the rows re-shape each other's strings.
     pub(in crate::chartdx) ladder_runs: Vec<GpuCanvasTextRun>,
-    /// The bubble labels' own retained runs, a label's slot taken from its screen position, so the
-    /// chart's other labels keep their cached shaping however many discs a frame labels.
-    pub(in crate::chartdx) bubble_runs: Vec<GpuCanvasTextRun>,
-    /// Bubble-label candidates of the current frame — logical position and notional — reused so a
-    /// present allocates nothing once warmed up.
-    pub(in crate::chartdx) bubble_found: Vec<(f32, f32, f32)>,
-    /// Rectangles the current frame's bubble labels took, for the overlap check; reused likewise.
-    pub(in crate::chartdx) bubble_placed: Vec<[f32; 4]>,
+    /// The grid the resident trade clusters were summed on; `None` while the tab draws crosses or
+    /// no grid fits the zoom.
+    pub(in crate::chartdx) cluster_grid: Option<moon_chart::clusters::ClusterGrid>,
+    /// The summed cells over `cluster_range`, ordered by time then price.
+    pub(in crate::chartdx) cluster_cells: Vec<moon_chart::clusters::ClusterCell>,
+    /// Absolute milliseconds the cells were summed over: the visible window and one window either
+    /// side, so a pan inside it only re-sizes the discs.
+    pub(in crate::chartdx) cluster_range: (f64, f64),
+    /// New trades reached the pane since the cells were last summed.
+    pub(in crate::chartdx) cluster_dirty: bool,
+    /// When the cells were last summed, for the data throttle.
+    pub(in crate::chartdx) cluster_built_at: Option<std::time::Instant>,
+    /// The biggest visible cell's volume and the largest disc's radius the uploaded discs were
+    /// sized by; the labels read the same two.
+    pub(in crate::chartdx) cluster_max: f32,
+    pub(in crate::chartdx) cluster_max_r: f32,
+    /// Disc instances of the last upload, reused across rebuilds.
+    pub(in crate::chartdx) cluster_markers: Vec<moon_chart::layers::MarkerInstance>,
+    /// Whether the layer holds discs, so taking them down uploads once and not every sync.
+    pub(in crate::chartdx) cluster_uploaded: bool,
+    /// The buy and sell colours the uploaded discs carry, so a theme change recolours them.
+    pub(in crate::chartdx) cluster_colors: [[f32; 3]; 2],
+    /// The cluster labels' own retained runs, a label's slot taken from its cell, so the chart's
+    /// other labels keep their cached shaping however many discs a frame labels.
+    pub(in crate::chartdx) cluster_runs: Vec<GpuCanvasTextRun>,
+    /// Cluster-label candidates of the current frame — cell key, logical position and volume —
+    /// reused so a present allocates nothing once warmed up.
+    pub(in crate::chartdx) cluster_found: Vec<(i64, i64, f32, f32, f32)>,
+    /// Rectangles the current frame's cluster labels took, for the overlap check; reused likewise.
+    pub(in crate::chartdx) cluster_placed: Vec<[f32; 4]>,
     /// The largest visible row notional the bars were scaled to; the highlight reads the same one.
     pub(in crate::chartdx) ladder_max_notional: f32,
     /// The tab's ladder highlight threshold, percent of `ladder_max_notional`; `0` is off.
@@ -743,14 +766,24 @@ impl PaneRender {
             label_placed_spare: Vec::new(),
             orderbook_levels: Vec::new(),
             book_best: None,
-            ladder_tick: moon_chart::ladder::LadderTick::default(),
+            price_tick: moon_chart::ladder::LadderTick::default(),
             ladder_grid: None,
             ladder_rows: Vec::new(),
             ladder_labels: Vec::new(),
             ladder_runs: Vec::new(),
-            bubble_runs: Vec::new(),
-            bubble_found: Vec::new(),
-            bubble_placed: Vec::new(),
+            cluster_grid: None,
+            cluster_cells: Vec::new(),
+            cluster_range: (f64::NAN, f64::NAN),
+            cluster_dirty: true,
+            cluster_built_at: None,
+            cluster_max: 0.0,
+            cluster_max_r: 0.0,
+            cluster_markers: Vec::new(),
+            cluster_uploaded: false,
+            cluster_colors: [[0.0; 3]; 2],
+            cluster_runs: Vec::new(),
+            cluster_found: Vec::new(),
+            cluster_placed: Vec::new(),
             ladder_max_notional: 0.0,
             ladder_big_pct: 0,
             epoch_ms: 0.0,

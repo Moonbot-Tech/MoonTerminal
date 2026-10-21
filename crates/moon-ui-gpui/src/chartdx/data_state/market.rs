@@ -52,10 +52,7 @@ impl ChartDataState {
         // marker scale the shader will use, or trades disappear a frame before their glyph reaches
         // the edge. They come from `chart_graphics` rather than the theme because they are per chart
         // TAB; `set_chart_graphics` has already normalized them.
-        //
-        // In bubble mode the marker extent is the LARGEST disc, so the shader's cull, the bake spans
-        // and the history prefetch margin below all cover it without a figure of their own.
-        let marker_scale = moon_chart::bubbles::marker_extent_scale(&self.chart_graphics);
+        let marker_scale = self.chart_graphics.marker_scale;
         // Likewise per-tab-only: the band's style id is clamped once, not per pane. The band's
         // remaining fields stay in the loop because they fold in per-pane statistics. The clamp
         // stays even though `set_chart_graphics` normalizes on store: this is the drawing path's
@@ -97,22 +94,12 @@ impl ChartDataState {
                 0.0,
             ],
         };
-        let bubbles = self.chart_graphics.trade_kind == moon_core::config::TradeKind::Bubbles;
+        // `shape` is per PANE — whether its clusters are drawn — and is set beside them below.
         let next_tick_style = TickStyleGpu {
             buy: rgb4(self.theme.tick_buy),
             sell: rgb4(self.theme.tick_sell),
             liq: rgb4(self.theme.tick_liq),
-            shape: [
-                if bubbles { 1.0 } else { 0.0 },
-                if bubbles {
-                    1.0 / moon_chart::bubbles::BUBBLE_MAX_MULT
-                } else {
-                    1.0
-                },
-                0.0,
-                0.0,
-            ],
-            ..TickStyleGpu::default()
+            shape: [0.0; 4],
         };
         #[cfg(windows)]
         {
@@ -778,6 +765,7 @@ impl ChartDataState {
                         pr.cross_upload.len() as u64,
                     );
                     pr.layers.reset_combo(std::mem::take(&mut pr.cross_upload));
+                    pr.cluster_dirty = true;
                     // A full range read covers the requested left edge even when the first
                     // real trade is newer than that edge. Using the first tick as the resident
                     // left boundary makes a fresh live chart reset every frame while the
@@ -808,6 +796,7 @@ impl ChartDataState {
                     );
                     let damage = pr.layers.combo_append_touches_cached_span(&pr.cross_upload);
                     pr.layers.append_combo(&pr.cross_upload);
+                    pr.cluster_dirty = true;
                     // The first crosses this pane ever received may arrive through the live drain
                     // rather than a full read: a chart opened on a market whose ring the core has
                     // not streamed yet resets on nothing, and only later batches carry rows. The
@@ -1123,6 +1112,7 @@ impl ChartDataState {
             } else if read_history {
                 if pr.resident_left_rel.is_finite() {
                     pr.layers.reset_combo(Vec::new());
+                    pr.cluster_dirty = true;
                     pr.last_line_rows.clear();
                     pr.mark_line_rows.clear();
                     pr.layers.set_price_lines(&[], &[]);
@@ -1627,12 +1617,6 @@ impl ChartDataState {
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }
-            if pr.tick_style != next_tick_style {
-                pr.tick_style = next_tick_style;
-                pr.layers.set_tick_style(next_tick_style);
-                pr.gpu_prepare_dirty = true;
-                pixels_changed = true;
-            }
             // Bottom volume band. The window is the VISIBLE one, not the prefetched
             // `history_from`/`history_to`: those reach past both edges, and a max taken over them
             // would scale the band against candles the user cannot see.
@@ -1770,22 +1754,24 @@ impl ChartDataState {
             // The ladder's grid for this sync: the tab's book kind, the market's tick, and the step
             // the zoom allows. `None` draws Moonbot's glass — the kind is bars, the tick is not
             // known yet, or no readable step exists at this zoom.
-            let ladder_grid = if orderbook_on
-                && self.chart_graphics.book_kind == moon_core::config::BookKind::Ladder
-            {
-                // The exchange's tick is asked for until it arrives, at most once a retry period,
-                // with the book's own spacing standing in meanwhile; `LadderTick` holds the rules.
-                if pr.ladder_tick.due(now as i64) {
-                    let exact = source.price_tick(pane.core, &pane.market);
-                    pr.ladder_tick.record(now as i64, exact, || {
-                        source.with_orderbook_view(pane.core, &pane.market, |data| {
-                            data.and_then(|(book, _)| book.infer_tick())
-                        })
-                    });
-                }
+            let ladder_wanted = orderbook_on
+                && self.chart_graphics.book_kind == moon_core::config::BookKind::Ladder;
+            let bubbles = self.chart_graphics.trade_kind == moon_core::config::TradeKind::Bubbles;
+            // The exchange's tick is asked for until it arrives, at most once a retry period, with
+            // the book's own spacing standing in meanwhile; `LadderTick` holds the rules. The ladder
+            // and the trade clusters both bucket by it, so either one asks.
+            if (ladder_wanted || bubbles) && pr.price_tick.due(now as i64) {
+                let exact = source.price_tick(pane.core, &pane.market);
+                pr.price_tick.record(now as i64, exact, || {
+                    source.with_orderbook_view(pane.core, &pane.market, |data| {
+                        data.and_then(|(book, _)| book.infer_tick())
+                    })
+                });
+            }
+            let ladder_grid = if ladder_wanted {
                 let min_row_px = crate::chartdx::text::label_line_px(self.theme.label_font_delta)
                     * self.last_ppp;
-                pr.ladder_tick.tick().and_then(|tick| {
+                pr.price_tick.tick().and_then(|tick| {
                     moon_chart::ladder::row_step(tick, pr.orderbook_view.price_to_px, min_row_px)
                         .map(|step| moon_core::data::LadderGrid { tick, step })
                 })
@@ -1992,6 +1978,47 @@ impl ChartDataState {
                 pr.book_style = next_book_style;
                 pr.gpu_prepare_dirty = true;
                 book_changed = true;
+            }
+            // Trade clusters, sized from the plot's own transform now that it is current.
+            let cluster_input = {
+                let buy = rgb4(self.theme.tick_buy);
+                let sell = rgb4(self.theme.tick_sell);
+                super::clusters::ClusterInputs {
+                    enabled: bubbles,
+                    step_choice: self
+                        .trade_step_override
+                        .unwrap_or(self.chart_graphics.trade_step),
+                    tick: pr.price_tick.tick(),
+                    view: pr.view,
+                    epoch_ms: pane.view.epoch_ms,
+                    min_cell_px: moon_chart::clusters::MIN_CELL_PX * self.last_ppp,
+                    buy: [buy[0], buy[1], buy[2]],
+                    sell: [sell[0], sell[1], sell[2]],
+                }
+            };
+            // The userdata layer draws over the base, so new discs ask for a present and no rebake
+            // (wgpu and Metal, which keep the layer in their base cache, invalidate it themselves).
+            if super::clusters::sync_clusters(pr, &cluster_input, retry_now) {
+                pr.gpu_prepare_dirty = true;
+                text_changed = true;
+            }
+            // The trades step aside for the clusters only while the clusters are drawn: a pane with
+            // no grid yet — the tick unknown, a zoom too far out — keeps its crosses rather than
+            // showing an empty tape.
+            let tick_style = TickStyleGpu {
+                shape: [
+                    if pr.cluster_grid.is_some() { 1.0 } else { 0.0 },
+                    0.0,
+                    0.0,
+                    0.0,
+                ],
+                ..next_tick_style
+            };
+            if pr.tick_style != tick_style {
+                pr.tick_style = tick_style;
+                pr.layers.set_tick_style(tick_style);
+                pr.gpu_prepare_dirty = true;
+                pixels_changed = true;
             }
             pr.last_device_gen = device_gen;
             pr.active = true;

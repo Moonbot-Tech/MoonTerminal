@@ -842,6 +842,11 @@ impl super::graphics_popup::GraphicsPopupHost for DetachedChartHost {
     fn graphics_override(&self, cx: &App) -> Option<moon_core::config::ChartGraphicsCfg> {
         self.panel.read(cx).chart_graphics()
     }
+
+    fn end_trade_step_session(&mut self, cx: &mut Context<Self>) {
+        self.panel
+            .update(cx, |stack, scx| stack.set_trade_step(None, scx));
+    }
 }
 
 /// Host for the "Chart labels" popup targeting THIS window's panel.

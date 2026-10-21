@@ -52,6 +52,7 @@ impl ChartDataState {
             compare_lock_shown: false,
             candle_view: moon_core::market::CandleViewCfg::default(),
             chart_graphics: moon_core::config::ChartGraphicsCfg::default(),
+            trade_step_override: None,
             chart_labels: std::rc::Rc::new(moon_core::config::ChartLabelsCfg::default()),
             trade_labels: None,
             historical: false,
@@ -604,13 +605,13 @@ impl ChartDataState {
             return false;
         };
         let source_sig = self.source_market_signature(&source);
-        let retry_due = self.trade_replay.is_some() && {
-            let now = Instant::now();
-            self.render.borrow().panes.iter().any(|pane| {
-                pane.active
-                    && super::market::replay_price_retry_due(pane.replay_prices_retry_at, now)
-            })
-        };
+        let now = Instant::now();
+        let retry_due = self.render.borrow().panes.iter().any(|pane| {
+            pane.active
+                && ((self.trade_replay.is_some()
+                    && super::market::replay_price_retry_due(pane.replay_prices_retry_at, now))
+                    || super::clusters::resum_due(pane, now))
+        });
         if !self.view_dirty && source_sig == self.last_source_market_sig && !retry_due {
             return false;
         }

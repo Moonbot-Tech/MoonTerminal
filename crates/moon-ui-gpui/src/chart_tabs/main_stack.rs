@@ -17,7 +17,7 @@ use super::stack::{
     set_panels_candle_view, set_panels_chart_graphics, set_panels_chart_labels,
     set_panels_cursor_labels, set_panels_line_labels, set_panels_orderbook_enabled,
     set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
-    set_panels_time_axis_visible, sync_compare, tile_gutter,
+    set_panels_time_axis_visible, set_panels_trade_step, sync_compare, tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
@@ -47,6 +47,10 @@ pub(crate) struct MainChartStack {
     layout_height_scroll: Option<u16>,
     /// Per-window order-book visibility for this tab; `None` defaults to enabled.
     orderbook_enabled: Option<bool>,
+    /// The cluster price step the tab strip picked for this session, over the stored one; `None`
+    /// follows the tab's `chart_graphics.trade_step`. Deliberately NOT in `ChartTabSpec`: the
+    /// stored step is the graphics popup's, and this list only tries a step out until restart.
+    trade_step: Option<u16>,
     /// Candle and trade display settings for the tab; `None` uses the global default.
     candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Chart-drawing settings for the tab; `None` uses the global `layout.chart_graphics` default.

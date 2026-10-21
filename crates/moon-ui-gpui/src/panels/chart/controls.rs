@@ -112,6 +112,16 @@ impl ChartPanel {
         }
     }
 
+    /// Set the cluster price step the tab strip picked for this session, `None` to follow the
+    /// stored one.
+    pub fn set_trade_step(&mut self, step: Option<u16>, cx: &mut Context<Self>) {
+        if self.trade_step != step {
+            self.trade_step = step;
+            self.view_dirty = true;
+            cx.notify();
+        }
+    }
+
     /// The candle settings this panel actually draws with right now.
     ///
     /// `candle_view` is an OVERRIDE: `None` means "follow the global default for my kind of tab".
