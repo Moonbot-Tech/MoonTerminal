@@ -16,7 +16,18 @@ pub struct PathBar {
     pub rising: bool,
 }
 
+/// The shortest width a placed bar is given, in milliseconds. A candle row's `tf_rel` of `0` reads
+/// as "the series timeframe" in the candle shaders, so a bar squeezed to nothing would come back
+/// five seconds wide.
+const MIN_BAR_MS: f64 = 1.0;
+
 /// Places mini-candles left of the raw dots, independently of the hide setting.
+///
+/// A mini-candle spans from its own open to the next one's, at most [`PATH_MINI_MS`]: MoonProto
+/// folds evicted prints in batches and every batch re-anchors its first mini, so on a busy market
+/// minis open one or two seconds apart. Five seconds each, they would stack several deep once the
+/// chart is stretched. The last mini of `minis` keeps the full width; an append that brings its
+/// successor trims it with [`fit_before`].
 ///
 /// Args:
 ///     minis: Mini-candles, oldest first.
@@ -42,14 +53,22 @@ pub fn place_path(
     if !start_ms.is_finite() || dots_left_ms.is_nan() {
         return prev;
     }
-    for mini in minis {
+    for (i, mini) in minis.iter().enumerate() {
         if mini.t_open_ms < start_ms || mini.t_open_ms + PATH_MINI_MS > dots_left_ms {
+            continue;
+        }
+        let width = minis.get(i + 1).map_or(PATH_MINI_MS, |next| {
+            (next.t_open_ms - mini.t_open_ms).min(PATH_MINI_MS)
+        });
+        // A successor at or before this open: MoonProto only appends strictly newer minis, so
+        // this guards malformed input rather than a case the core produces.
+        if !(width >= MIN_BAR_MS) {
             continue;
         }
         let mid = (mini.low + mini.high) * 0.5;
         out.push(PathBar {
             t_open_rel: (mini.t_open_ms - epoch_ms) as f32,
-            duration_ms: PATH_MINI_MS as f32,
+            duration_ms: width as f32,
             low: mini.low,
             high: mini.high,
             rising: prev.is_none_or(|p| mid >= p),
@@ -57,6 +76,17 @@ pub fn place_path(
         prev = Some(mid);
     }
     prev
+}
+
+/// The width a placed bar keeps once the next bar opens at `next_open_rel`: never past it, never
+/// wider than it was, and never under [`MIN_BAR_MS`] (see there). All in the same relative
+/// milliseconds as [`PathBar`].
+pub fn fit_before(t_open_rel: f32, duration_ms: f32, next_open_rel: f32) -> f32 {
+    let gap = next_open_rel - t_open_rel;
+    if !gap.is_finite() {
+        return duration_ms;
+    }
+    gap.min(duration_ms).max(MIN_BAR_MS as f32)
 }
 
 /// Places cached ranges up to the first mini-candle or raw dot. One-minute data wins every
