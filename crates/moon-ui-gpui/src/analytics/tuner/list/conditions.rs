@@ -61,6 +61,13 @@ pub(in crate::analytics) struct Condition {
     pub(super) number: String,
 }
 
+impl Condition {
+    /// Empty drafts stay neutral; only a non-empty malformed number needs correction.
+    fn invalid(&self) -> bool {
+        !self.number.trim().is_empty() && number(&self.number).is_none()
+    }
+}
+
 /// Parse a decimal with either separator; partial edits and non-finite numbers are invalid.
 pub(super) fn number(text: &str) -> Option<f64> {
     let text = text.trim();
@@ -126,17 +133,17 @@ impl Conditions {
 
     /// Count only conditions that currently affect filtering.
     pub(super) fn applied(&self) -> usize {
-        self.rows
-            .iter()
-            .filter(|row| number(&row.number).is_some())
-            .count()
+        self.active().count()
+    }
+
+    /// Applied captions and the count share the same valid-number set as filtering.
+    fn active(&self) -> impl Iterator<Item = &Condition> {
+        self.rows.iter().filter(|row| number(&row.number).is_some())
     }
 
     /// A valid condition marks its own metric header even when another row is invalid.
     pub(super) fn marks(&self, key: &str) -> bool {
-        self.rows
-            .iter()
-            .any(|row| METRIC_COLS[row.column].key == key && number(&row.number).is_some())
+        self.active().any(|row| METRIC_COLS[row.column].key == key)
     }
 }
 
@@ -280,13 +287,13 @@ impl AnalyticsView {
         )
     }
 
-    /// Condition chips exist only while there are editable rows; removal never opens the popup.
+    /// Only applied conditions make chips; drafts remain available in the editor.
     pub(super) fn condition_chips(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        if self.strat_conditions.rows.is_empty() {
+        if self.strat_conditions.applied() == 0 {
             return None;
         }
         let mut chips = Vec::new();
-        for row in &self.strat_conditions.rows {
+        for row in self.strat_conditions.active() {
             let id = row.id;
             chips.push(condition_chip(
                 id,
@@ -320,8 +327,7 @@ impl AnalyticsView {
     pub(super) fn conditions_empty(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         let text = self
             .strat_conditions
-            .rows
-            .iter()
+            .active()
             .map(|r| self.condition_caption(r))
             .collect::<Vec<_>>()
             .join(" · ");
@@ -390,9 +396,7 @@ impl AnalyticsView {
                             .label(t!("analytics.conditions.title").to_string())
                             .render(),
                     )
-                    .children((!self.strat_conditions.rows.is_empty()).then(|| {
-                        MoonBadge::new(self.strat_conditions.rows.len().to_string()).render()
-                    })),
+                    .children((applied > 0).then(|| MoonBadge::new(applied.to_string()).render())),
             );
         if open {
             popup = popup.content(self.conditions_content(p, window, cx));
@@ -488,7 +492,7 @@ impl AnalyticsView {
                         })),
                 );
             }
-            let invalid = number(&row.number).is_none();
+            let invalid = row.invalid();
             rows = rows.child(condition_row(
                 columns,
                 operators,

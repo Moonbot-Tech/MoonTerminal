@@ -1,6 +1,6 @@
 //! Regression coverage for editable conditions and the strategy-cell precision contract.
 
-use super::{Condition, Operator, keeps, number};
+use super::{Condition, Conditions, Operator, keeps, number};
 use moon_core::db::analytics::GroupStat;
 
 /// Build one condition without tying the oracle to the implementation's metric getter.
@@ -69,6 +69,53 @@ fn decimal_input_accepts_both_separators_and_rejects_partial_edits() {
     for text in ["", "-", ".", "1,2.3", "NaN", "inf", "12x", "--1", "1 000"] {
         assert_eq!(number(text), None, "{text}");
     }
+}
+
+/// Counting drafts or flagging a new empty input would misrepresent the applied filter.
+#[test]
+fn drafts_stay_neutral_until_invalid_and_only_numbers_are_active() {
+    let group = GroupStat {
+        n: 20,
+        ..Default::default()
+    };
+    for (text, invalid, applied, kept) in [
+        ("", false, 0, true),
+        ("   ", false, 0, true),
+        ("bad", true, 0, true),
+        ("-", true, 0, true),
+        ("25", false, 1, false),
+        ("19,5", false, 1, true),
+    ] {
+        let mut conditions = Conditions::default();
+        conditions.rows.push(condition(0, Operator::Greater, text));
+        assert_eq!(conditions.rows[0].invalid(), invalid, "{text:?}");
+        assert_eq!(conditions.applied(), applied, "{text:?}");
+        assert_eq!(conditions.active().count(), applied, "{text:?}");
+        assert_eq!(
+            conditions.marks(super::METRIC_COLS[0].key),
+            applied > 0,
+            "{text:?}"
+        );
+        assert_eq!(keeps(&group, &conditions.rows), kept, "{text:?}");
+    }
+    let conditions = Conditions {
+        rows: vec![
+            condition(0, Operator::Greater, ""),
+            condition(0, Operator::Greater, "bad"),
+            condition(6, Operator::Greater, "1.25"),
+        ],
+        ..Default::default()
+    };
+    assert_eq!(conditions.applied(), 1);
+    assert_eq!(
+        conditions
+            .active()
+            .map(|row| row.column)
+            .collect::<Vec<_>>(),
+        vec![6]
+    );
+    assert!(!conditions.marks(super::METRIC_COLS[0].key));
+    assert!(conditions.marks(super::METRIC_COLS[6].key));
 }
 
 /// Reading raw PF instead of the cell's rounding would reject equality with the visible 1.23.

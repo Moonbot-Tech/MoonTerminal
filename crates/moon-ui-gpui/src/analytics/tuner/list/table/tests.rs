@@ -21,6 +21,154 @@ use super::{
 };
 use crate::design;
 
+/// Exercise the production fixed-column cluster and date inset for both text alignments.
+struct ColumnSpacingProbe {
+    mode: StratMode,
+}
+
+impl Render for ColumnSpacingProbe {
+    /// Render the mode's visible numeric columns at their measured widths, then LastEdit.
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let group = moon_core::db::analytics::GroupStat {
+            pf: 0.63,
+            lastedit: "2026-10-08 23:27".into(),
+            ..Default::default()
+        };
+        let widths = super::metric_col_widths(std::slice::from_ref(&group), cx);
+        let mask = self.mode.drawn_cols(self.mode.default_cols());
+        let p = MoonPalette::active(cx);
+        v_flex()
+            .w_full()
+            .font_family(design::mono())
+            .children([true, false].map(|header| {
+                let prefix = if header {
+                    "spacing-header"
+                } else {
+                    "spacing-row"
+                };
+                h_flex().w_full().child(div().flex_1().min_w_0()).child(
+                    super::fixed_columns(cx)
+                        .children(
+                            super::METRIC_COLS
+                                .iter()
+                                .enumerate()
+                                .filter(|(i, _)| mask & super::metric_bit(*i) != 0)
+                                .map(|(i, column)| {
+                                    let selector = format!("{prefix}-metric-{i}");
+                                    let cell = div()
+                                        .debug_selector(move || selector)
+                                        .w(px(widths[i]))
+                                        .min_w(px(widths[i]))
+                                        .flex_none()
+                                        .text_right();
+                                    if header {
+                                        cell.child(t!(column.key).to_string()).into_any_element()
+                                    } else {
+                                        cell.child(super::fixed_metric_cell(
+                                            column, &group, p, widths[i],
+                                        ))
+                                        .into_any_element()
+                                    }
+                                }),
+                        )
+                        .child(
+                            super::lastedit_spacing(div(), cx)
+                                .debug_selector(move || format!("{prefix}-date"))
+                                .w(design::font_w_px(cx, super::LASTEDIT_W))
+                                .min_w(design::font_w_px(cx, super::LASTEDIT_MIN_W))
+                                .flex_shrink_1()
+                                .truncate()
+                                .child(if header {
+                                    t!("analytics.col.lastedit").to_string()
+                                } else {
+                                    group.lastedit.clone()
+                                }),
+                        ),
+                )
+            }))
+    }
+}
+
+/// The date must retain the same minimum whitespace as measured right-aligned numeric cells.
+#[gpui::test]
+fn pf_and_lastedit_have_visible_separation_in_every_mode(cx: &mut gpui::TestAppContext) {
+    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+                cx,
+            )
+        });
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for zoom in [1.0, 1.25] {
+                for width in [740.0, 2269.0] {
+                    for mode in STRAT_MODES {
+                        let window = cx
+                            .open_window(gpui::size(px(width * zoom), px(150.0)), |_, _| {
+                                ColumnSpacingProbe { mode }
+                            });
+                        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                        visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                        for _ in 0..3 {
+                            visual.update(|window, cx| {
+                                let _ = window.draw(cx);
+                            });
+                        }
+                        let header_pf = visual
+                            .debug_bounds("spacing-header-metric-6")
+                            .expect("header PF");
+                        let header_date = visual
+                            .debug_bounds("spacing-header-date")
+                            .expect("header date");
+                        let row_pf = visual.debug_bounds("spacing-row-metric-6").expect("row PF");
+                        let row_date = visual.debug_bounds("spacing-row-date").expect("row date");
+                        // Derive the minimum numeric whitespace from its independent width
+                        // consumer, rather than copying the date inset's gutter formula.
+                        let numeric_gap = visual.update(|_, cx| {
+                            let group = moon_core::db::analytics::GroupStat {
+                                pf: 0.63,
+                                ..Default::default()
+                            };
+                            let column = &super::METRIC_COLS[6];
+                            let heading = format!("{} · \u{25BC}", t!(column.key));
+                            let content =
+                                design::mono_body_text_width(cx, &(column.text)(&group), 400.0)
+                                    .max(design::mono_body_text_width(cx, &heading, 400.0));
+                            super::metric_col_widths(std::slice::from_ref(&group), cx)[6] - content
+                                + 8.0
+                        });
+                        let next_metric = (7..super::METRIC_COLS.len()).find(|i| {
+                            mode.drawn_cols(mode.default_cols()) & super::metric_bit(*i) != 0
+                        });
+                        if let Some(i) = next_metric {
+                            for (prefix, pf) in
+                                [("spacing-header", header_pf), ("spacing-row", row_pf)]
+                            {
+                                let next = visual
+                                    .debug_bounds(leak(format!("{prefix}-metric-{i}")))
+                                    .expect("next metric");
+                                assert!(next.left() - pf.right() >= px(7.5));
+                            }
+                        }
+                        for (pf, date) in [(header_pf, header_date), (row_pf, row_date)] {
+                            assert!(
+                                // Bounds use content pixels; the width consumer above rounds
+                                // its measured columns up by at most one layout pixel.
+                                date.left() - pf.right() >= px(numeric_gap - 1.0),
+                                "PF/date gap lost: {} {theme:?} zoom {zoom} width {width}: {pf:?} {date:?}",
+                                language.code()
+                            );
+                        }
+                        assert!((header_pf.right() - row_pf.right()).abs() <= px(0.5));
+                        assert!((header_date.left() - row_date.left()).abs() <= px(0.5));
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The strategy-list header and readiness progress at the card's actual available width.
 struct HeaderLayoutProbe {
     text: String,

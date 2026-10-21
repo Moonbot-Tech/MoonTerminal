@@ -41,6 +41,24 @@ fn strat_row_h(cx: &App) -> f32 {
     design::fit_h_value(cx, 25.0, 14.0, 5.5)
 }
 
+/// Standard spacing between the strategy list's fixed columns, in base UI pixels.
+const COLUMN_GAP: f32 = 8.0;
+
+/// Share the fixed-column spacing between the header, rows and rendered geometry probe.
+fn fixed_columns(cx: &App) -> Div {
+    h_flex()
+        .flex_shrink_1()
+        .min_w_0()
+        .gap(design::ui_px(cx, COLUMN_GAP))
+        .items_center()
+}
+
+/// Give the left-aligned date the same font-scaled gutter as numeric neighbours.
+/// Right-aligned numeric cells already reserve this space inside their measured widths.
+fn lastedit_spacing<T: Styled>(column: T, cx: &App) -> T {
+    column.ml(design::font_w_px(cx, METRIC_COL_GUTTER))
+}
+
 impl AnalyticsView {
     /// The list card: header (title + modes + counter), filter bar, its own scroll.
     ///
@@ -502,14 +520,10 @@ fn strategy_row(
                 }),
         )
         .child(
-            h_flex()
+            fixed_columns(cx)
                 // Shrinkable, not rigid: the columns inside carry their own floors, so the
                 // row squeezes them evenly and only overflows once every one is at its
                 // floor — instead of sliding off the edge at full width.
-                .flex_shrink_1()
-                .min_w_0()
-                .gap(design::ui_px(cx, 8.0))
-                .items_center()
                 // Each identity/metric column renders only when its visibility bit is set
                 // (column selector); the name column on the left is always shown.
                 .children(view.col_shown(COL_BIT_KIND).then(|| {
@@ -539,7 +553,7 @@ fn strategy_row(
                         .map(|(i, c)| fixed_metric_cell(c, g, p, metric_widths[i])),
                 )
                 .children(view.col_shown(COL_BIT_LASTEDIT).then(|| {
-                    div()
+                    lastedit_spacing(div(), cx)
                         .w(design::font_w_px(cx, LASTEDIT_W))
                         .min_w(design::font_w_px(cx, LASTEDIT_MIN_W))
                         .flex_shrink_1()
@@ -674,6 +688,9 @@ impl AnalyticsView {
             if right {
                 d = d.text_right();
             }
+            if key == SORT_LASTEDIT {
+                d = lastedit_spacing(d, cx);
+            }
             if let Some(tooltip) = tooltip {
                 d = d.tooltip(crate::panels::common::text_tooltip(tooltip));
             }
@@ -709,11 +726,7 @@ impl AnalyticsView {
             ))
             // Cluster of fixed columns — mirrors the rows (justify_between).
             .child(
-                h_flex()
-                    .flex_shrink_1()
-                    .min_w_0()
-                    .gap(design::ui_px(cx, 8.0))
-                    .items_center()
+                fixed_columns(cx)
                     .children(self.col_shown(COL_BIT_KIND).then(|| {
                         sortable(
                             "an-hdr-kind".into(),
