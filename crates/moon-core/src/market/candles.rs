@@ -363,7 +363,8 @@ pub struct PathMini {
     pub high: f32,
 }
 
-/// Width of one core mini-candle, in milliseconds.
+/// The span a core mini-candle covers at most, in milliseconds: the fold closes one on the first
+/// trade more than this past its anchor. A drawn mini is narrower when the next one opens sooner.
 pub const PATH_MINI_MS: f64 = 5_000.0;
 
 /// Whether five wire-derived values are all finite and non-negative.

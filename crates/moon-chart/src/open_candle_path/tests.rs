@@ -227,3 +227,42 @@ fn unavailable_and_authoritative_empty_minute_reads_use_fallback() {
         assert!(out.is_empty());
     }
 }
+
+/// MoonProto folds evicted prints in batches and every batch re-anchors its first mini-candle, so
+/// on a busy market minis sit one or two seconds apart. Drawn five seconds wide each, they stacked
+/// three to five deep when the chart was stretched.
+#[test]
+fn minis_closer_than_five_seconds_meet_edge_to_edge() {
+    let minis = [
+        mini(DAY, 1.0, 2.0),
+        mini(DAY + 1_000.0, 2.0, 3.0),
+        mini(DAY + 2_500.0, 1.5, 2.5),
+        mini(DAY + 9_000.0, 3.0, 4.0),
+    ];
+    let mut out = Vec::new();
+    place_path(&minis, DAY, DAY + 20_000.0, DAY, None, &mut out);
+    assert_eq!(
+        out.iter()
+            .map(|b| (b.t_open_rel, b.duration_ms))
+            .collect::<Vec<_>>(),
+        // A gap wider than five seconds keeps the five-second width: a quiet stretch stays blank.
+        [
+            (0.0, 1_000.0),
+            (1_000.0, 1_500.0),
+            (2_500.0, 5_000.0),
+            (9_000.0, 5_000.0)
+        ]
+    );
+}
+
+/// An append brings the successor of the last bar already drawn: that bar is cut at its open.
+#[test]
+fn an_appended_mini_trims_the_bar_before_it() {
+    // The successor opens 1.2 s later: the drawn bar shrinks to that.
+    assert_eq!(fit_before(10_000.0, 5_000.0, 11_200.0), 1_200.0);
+    // A successor past the bar's end leaves it alone.
+    assert_eq!(fit_before(10_000.0, 5_000.0, 17_000.0), 5_000.0);
+    // Never down to zero, which the shader reads as a full-width candle.
+    assert_eq!(fit_before(10_000.0, 5_000.0, 10_000.0), 1.0);
+    assert_eq!(fit_before(10_000.0, 5_000.0, f32::NAN), 5_000.0);
+}

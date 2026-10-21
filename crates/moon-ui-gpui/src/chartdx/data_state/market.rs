@@ -979,13 +979,30 @@ impl ChartDataState {
                         }
                         pr.path_last_mid = previous;
                     }
+                    // An append's first bar is the successor the last uploaded bar was drawn
+                    // without: cut that bar at its open, or the two overlap (`place_path`).
+                    let mut patch_from = from;
+                    if !replace
+                        && let Some(first) = pr.path_bars.first()
+                        && let Some(last) = pr.path_rows.last_mut()
+                    {
+                        let fitted = moon_chart::open_candle_path::fit_before(
+                            last.t_open_rel,
+                            last.tf_rel,
+                            first.t_open_rel,
+                        );
+                        if fitted != last.tf_rel {
+                            last.tf_rel = fitted;
+                            patch_from = from - 1;
+                        }
+                    }
                     pr.path_rows.extend(pr.path_bars.iter().map(path_bar_gpu));
                     if replace {
                         pr.layers.set_path_candles(&pr.path_rows);
-                    } else if pr.path_rows.len() > from {
-                        pr.layers.patch_path_candles(from, &pr.path_rows);
+                    } else if pr.path_rows.len() > patch_from {
+                        pr.layers.patch_path_candles(patch_from, &pr.path_rows);
                     }
-                    if replace || pr.path_rows.len() > from {
+                    if replace || pr.path_rows.len() > patch_from {
                         pr.gpu_prepare_dirty = true;
                         pixels_changed = true;
                     }
