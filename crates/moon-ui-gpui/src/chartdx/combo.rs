@@ -539,6 +539,7 @@ impl ComboLayer {
                 marker_half: view.marker_half,
                 buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
                 sell_inv: 1.0 / self.volume_sell_max.max(1e-6),
+                bubbles: self.tick_style.shape[0] >= 0.5,
             };
             let lod = self.upload_lod(device, context, vol_runs, &cols, false);
             let pipe = self.pipe.as_ref().unwrap();
@@ -593,6 +594,7 @@ impl ComboLayer {
                 marker_half: view.marker_half,
                 buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
                 sell_inv: 1.0 / self.volume_sell_max.max(1e-6),
+                bubbles: self.tick_style.shape[0] >= 0.5,
             };
             let lod = self.upload_lod(device, context, cross_runs, &cols, true);
             let pipe = self.pipe.as_ref().unwrap();

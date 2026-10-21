@@ -698,6 +698,7 @@ mod captions;
 mod column_scroll;
 mod labels;
 pub(in crate::chartdx) use labels::hours_and_minutes;
+mod bubbles;
 mod ladder;
 pub(in crate::chartdx) use ladder::format_ladder_labels;
 mod prepare;

@@ -52,7 +52,10 @@ impl ChartDataState {
         // marker scale the shader will use, or trades disappear a frame before their glyph reaches
         // the edge. They come from `chart_graphics` rather than the theme because they are per chart
         // TAB; `set_chart_graphics` has already normalized them.
-        let marker_scale = self.chart_graphics.marker_scale;
+        //
+        // In bubble mode the marker extent is the LARGEST disc, so the shader's cull, the bake spans
+        // and the history prefetch margin below all cover it without a figure of their own.
+        let marker_scale = moon_chart::bubbles::marker_extent_scale(&self.chart_graphics);
         // Likewise per-tab-only: the band's style id is clamped once, not per pane. The band's
         // remaining fields stay in the loop because they fold in per-pane statistics. The clamp
         // stays even though `set_chart_graphics` normalizes on store: this is the drawing path's
@@ -94,10 +97,22 @@ impl ChartDataState {
                 0.0,
             ],
         };
+        let bubbles = self.chart_graphics.trade_kind == moon_core::config::TradeKind::Bubbles;
         let next_tick_style = TickStyleGpu {
             buy: rgb4(self.theme.tick_buy),
             sell: rgb4(self.theme.tick_sell),
             liq: rgb4(self.theme.tick_liq),
+            shape: [
+                if bubbles { 1.0 } else { 0.0 },
+                if bubbles {
+                    1.0 / moon_chart::bubbles::BUBBLE_MAX_MULT
+                } else {
+                    1.0
+                },
+                0.0,
+                0.0,
+            ],
+            ..TickStyleGpu::default()
         };
         #[cfg(windows)]
         {

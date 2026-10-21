@@ -40,8 +40,26 @@ struct TickStyle {
     buy: vec4<f32>,
     sell: vec4<f32>,
     liq: vec4<f32>,
+    // x = kind (0 crosses, 1 bubbles); y = cross half as a share of cv.marker_half.
+    shape: vec4<f32>,
+    // x = smallest disc / largest; y, z = log10 notional of the smallest / largest disc.
+    bubble: vec4<f32>,
 };
 @group(0) @binding(2) var<uniform> ts: TickStyle;
+
+// Set on `side` for a trade drawn as a disc; the low byte keeps the side itself.
+const BUBBLE_FLAG: u32 = 0x100u;
+
+// A disc's radius as a share of the largest, from the trade's quote notional on a log scale.
+// Mirrors `moon_chart::bubbles::radius_frac`; WGSL has no log10, so log2 scaled by log10(2).
+fn bubble_frac(c: Cross) -> f32 {
+    let n = c.price * c.qty;
+    var t = 0.0;
+    if n > 0.0 {
+        t = clamp((log2(n) * 0.30102999566 - ts.bubble.y) / (ts.bubble.z - ts.bubble.y), 0.0, 1.0);
+    }
+    return ts.bubble.x + (1.0 - ts.bubble.x) * t;
+}
 
 struct CrossOut {
     @builtin(position) pos: vec4<f32>,
@@ -65,16 +83,40 @@ fn crosses_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
         out.side = 0u;
         return out;
     }
+    // Liquidations keep their cross in bubble mode; `ts.shape.y` shrinks it back from the largest
+    // disc's extent to the cross's own.
+    let bubble = ts.shape.x >= 0.5 && c.side < 2u;
+    var half_px = cv.marker_half * ts.shape.y;
+    if bubble {
+        half_px = cv.marker_half * bubble_frac(c);
+    }
     let corner = CORNERS_PM[vid];
-    let px = vec2<f32>(sx, sy) + corner * cv.marker_half;
+    let px = vec2<f32>(sx, sy) + corner * half_px;
     out.pos = to_clip(px, cv.resolution);
     out.uv = corner;
-    out.side = c.side;
+    out.side = c.side | select(0u, BUBBLE_FLAG, bubble);
     return out;
 }
 
 @fragment
 fn crosses_fragment(in: CrossOut) -> @location(0) vec4<f32> {
+    let side = in.side & 0xFFu;
+    var rgb: vec3<f32>;
+    if side == 0u {
+        rgb = ts.buy.rgb;
+    } else if side == 1u {
+        rgb = ts.sell.rgb;
+    } else {
+        rgb = ts.liq.rgb;
+    }
+    if (in.side & BUBBLE_FLAG) != 0u {
+        let d2 = dot(in.uv, in.uv);
+        if d2 > 1.0 {
+            discard;
+        }
+        // A darker rim keeps overlapping discs apart.
+        return vec4<f32>(select(rgb, rgb * 0.6, d2 > 0.72), 1.0);
+    }
     let col = clamp(i32(floor((in.uv.x * 0.5 + 0.5) * 7.0)), 0, 6);
     let row = clamp(i32(floor((in.uv.y * 0.5 + 0.5) * 7.0)), 0, 6);
     var mask: u32;
@@ -87,14 +129,6 @@ fn crosses_fragment(in: CrossOut) -> @location(0) vec4<f32> {
     }
     if ((mask >> u32(col)) & 1u) == 0u {
         discard;
-    }
-    var rgb: vec3<f32>;
-    if in.side == 0u {
-        rgb = ts.buy.rgb;
-    } else if in.side == 1u {
-        rgb = ts.sell.rgb;
-    } else {
-        rgb = ts.liq.rgb;
     }
     return vec4<f32>(rgb, 1.0);
 }

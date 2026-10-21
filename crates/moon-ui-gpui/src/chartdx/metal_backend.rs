@@ -1261,6 +1261,7 @@ impl MetalLayers {
                         marker_half: view.marker_half,
                         buy_inv: vol_view.volume_buy_inv,
                         sell_inv: vol_view.volume_sell_inv,
+                        bubbles: self.tick_style.shape[0] >= 0.5,
                     },
                     false,
                 )
@@ -1292,6 +1293,7 @@ impl MetalLayers {
                         marker_half: view.marker_half,
                         buy_inv: cross_view.volume_buy_inv,
                         sell_inv: cross_view.volume_sell_inv,
+                        bubbles: self.tick_style.shape[0] >= 0.5,
                     },
                     true,
                 )

@@ -71,6 +71,21 @@ pub enum TradeHistoryStyle {
     MoonbotLines,
 }
 
+/// How a tab draws its live trades.
+///
+/// A display TYPE per tab, like [`BookKind`]: a scalping tab can read the tape as bubbles while
+/// the AddToChart stacks keep the crosses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TradeKind {
+    /// The 7×7 cross per trade — the picture this terminal shipped with.
+    #[default]
+    Crosses,
+    /// A disc per trade, its size growing with the trade's quote notional; a disc big enough
+    /// prints that notional inside it.
+    Bubbles,
+}
+
 /// How a tab draws the order book in its right-hand zone.
 ///
 /// A display TYPE rather than a mode of the whole terminal: each tab picks its own, so a Main tab
@@ -234,6 +249,10 @@ pub struct ChartGraphicsCfg {
         deserialize_with = "de_trade_volume_alpha"
     )]
     pub trade_volume_alpha: f32,
+    /// Crosses or bubbles for the live trades. ABSENT reads as crosses, the picture every tab had
+    /// before bubbles existed. Liquidations keep their crosses either way.
+    #[serde(default, deserialize_with = "de_trade_kind")]
+    pub trade_kind: TradeKind,
 
     // --- Bottom candle volumes, likewise moved off `ChartTheme`. ---
     /// Display style: `crate::market::candles::VOLUME_STYLE_OFF` or `_HILLS`. Together with
@@ -381,6 +400,7 @@ impl Default for ChartGraphicsCfg {
             liquidations: true,
             marker_scale: def_marker_scale(),
             trade_volume_alpha: def_trade_volume_alpha(),
+            trade_kind: TradeKind::Crosses,
             candle_volume_style: def_candle_volume_style(),
             candle_volume_height: def_candle_volume_height(),
             candle_volume_alpha: def_candle_volume_alpha(),

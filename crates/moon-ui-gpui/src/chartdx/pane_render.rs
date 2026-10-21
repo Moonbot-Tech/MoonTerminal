@@ -498,6 +498,14 @@ pub(in crate::chartdx) struct PaneRender {
     /// row scrolling into the zone neither shifts the chart's other labels off their cached
     /// shaping nor makes the rows re-shape each other's strings.
     pub(in crate::chartdx) ladder_runs: Vec<GpuCanvasTextRun>,
+    /// The bubble labels' own retained runs, a label's slot taken from its screen position, so the
+    /// chart's other labels keep their cached shaping however many discs a frame labels.
+    pub(in crate::chartdx) bubble_runs: Vec<GpuCanvasTextRun>,
+    /// Bubble-label candidates of the current frame — logical position and notional — reused so a
+    /// present allocates nothing once warmed up.
+    pub(in crate::chartdx) bubble_found: Vec<(f32, f32, f32)>,
+    /// Rectangles the current frame's bubble labels took, for the overlap check; reused likewise.
+    pub(in crate::chartdx) bubble_placed: Vec<[f32; 4]>,
     /// The largest visible row notional the bars were scaled to; the highlight reads the same one.
     pub(in crate::chartdx) ladder_max_notional: f32,
     /// The tab's ladder highlight threshold, percent of `ladder_max_notional`; `0` is off.
@@ -740,6 +748,9 @@ impl PaneRender {
             ladder_rows: Vec::new(),
             ladder_labels: Vec::new(),
             ladder_runs: Vec::new(),
+            bubble_runs: Vec::new(),
+            bubble_found: Vec::new(),
+            bubble_placed: Vec::new(),
             ladder_max_notional: 0.0,
             ladder_big_pct: 0,
             epoch_ms: 0.0,

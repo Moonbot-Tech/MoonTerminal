@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use super::super::chart_labels::ChartLabelsCfg;
 use super::{
-    BookKind, ChartGraphicsCfg, HvolSide, TableSortPreference, TradeHistoryStyle,
+    BookKind, ChartGraphicsCfg, HvolSide, TableSortPreference, TradeHistoryStyle, TradeKind,
     clamp_auto_workspace_rail_width, clamp_strategies_tree_text_step, def_candle_volume_alpha,
     def_candle_volume_height, def_candle_volume_scale, def_candle_volume_style,
     def_connector_thickness_px, def_hvol_price_frame_pct, def_hvol_width, def_ladder_big_pct,
@@ -250,6 +250,15 @@ where
     D: serde::Deserializer<'de>,
 {
     Ok(de_lenient::<D, BookKind>(d)?.unwrap_or_default())
+}
+
+/// Read the trade kind leniently: a spelling the enum does not know reads as crosses rather than
+/// failing the whole file.
+pub(super) fn de_trade_kind<'de, D>(d: D) -> Result<TradeKind, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, TradeKind>(d)?.unwrap_or_default())
 }
 
 /// Read the ladder highlight threshold leniently, defaulting an unusable value.

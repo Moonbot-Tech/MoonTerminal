@@ -111,7 +111,7 @@ pub use layout::{
     ALERT_REPEAT_MAX, AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT, AUTO_WORKSPACE_RAIL_WIDTH_MAX,
     AUTO_WORKSPACE_RAIL_WIDTH_MIN, BookKind, ChartGraphicsCfg, CoinsAxisLayout, DetachedLayout,
     GeomRect, GroupLayout, HVOL_TF_MAX_S, HvolSide, ReportFilterPrefs, TableSortPreference,
-    TicksAxisLayout, TradeHistoryStyle, WindowLayout, WorkspaceMode,
+    TicksAxisLayout, TradeHistoryStyle, TradeKind, WindowLayout, WorkspaceMode,
     clamp_auto_workspace_rail_width, resolve_alert_duration_s, resolve_alert_repeat,
 };
 pub use news_tags::NewsTagSettings;

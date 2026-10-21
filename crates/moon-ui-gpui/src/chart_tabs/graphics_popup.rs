@@ -26,7 +26,7 @@
 //! from the config, so the sizes are offered as steps.
 
 use gpui::*;
-use moon_core::config::{BookKind, ChartGraphicsCfg};
+use moon_core::config::{BookKind, ChartGraphicsCfg, TradeKind};
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonPopover,
     MoonPopoverPlacement, MoonSize, h_flex, v_flex,
@@ -56,6 +56,12 @@ const TRADE_VOLUME_ALPHAS: [f32; 6] = [0.0, 0.15, 0.34, 0.5, 0.75, 1.0];
 /// the localized ES strings are the longest of the three.
 pub(crate) const ROW_W: f32 = 7.0 * 42.0;
 const SEG_W6: f32 = ROW_W / 6.0;
+
+/// The trade kinds the popup offers, in display order, with their locale keys.
+const TRADE_KINDS: [(TradeKind, &str); 2] = [
+    (TradeKind::Crosses, "chart.graphics.trade_kind_crosses"),
+    (TradeKind::Bubbles, "chart.graphics.trade_kind_bubbles"),
+];
 
 /// The book kinds the popup offers, in display order, with their locale keys.
 const BOOK_KINDS: [(BookKind, &str); 2] = [
@@ -233,6 +239,28 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         |c, v| c.moonshot_zone = v,
     );
 
+    // --- Trade kind: crosses, or bubbles sized by notional. ---
+    let trade_kind_row = {
+        let entity = entity.clone();
+        seg_row(
+            format!("{id}-trade-kind"),
+            t!("chart.graphics.trade_kind").to_string(),
+            TRADE_KINDS
+                .iter()
+                .map(|(kind, key)| (t!(*key).to_string(), *kind == cfg.trade_kind))
+                .collect(),
+            ROW_W / TRADE_KINDS.len() as f32,
+            p,
+            cx,
+            move |ix, app| {
+                if let Some((kind, _)) = TRADE_KINDS.get(ix) {
+                    let kind = *kind;
+                    write_cfg(&entity, app, |c| c.trade_kind = kind);
+                }
+            },
+        )
+    };
+
     // --- Trade marks: the live trade crosses, their per-trade volume bars, and the liquidation
     // crosses appended to the same ring. ---
     let marker_scale_row = {
@@ -400,6 +428,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 v_flex()
                     .w(px(ROW_W))
                     .gap(design::ui_px(cx, 6.0))
+                    .child(trade_kind_row)
                     .child(marker_scale_row)
                     .child(trade_volume_alpha_row)
                     .child(trade_volume_alpha_hint)

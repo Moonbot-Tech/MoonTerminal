@@ -327,6 +327,10 @@ pub struct BakeColumns {
     /// Volume bar scale exactly as the shader uniform receives it; unused by `reduce_crosses`.
     pub buy_inv: f32,
     pub sell_inv: f32,
+    /// Whether the cross pass draws bubbles (`moon_core::config::TradeKind::Bubbles`). Discs differ
+    /// in size, so the last row of a texel no longer hides the others: `reduce_crosses` keeps the
+    /// LARGEST, and samples a crowded column by size rather than by stride.
+    pub bubbles: bool,
 }
 
 /// One input row keyed to its texel; its index in `rows` is its draw order.
@@ -356,6 +360,8 @@ pub struct LodPick {
     counts: Vec<u32>,
     /// Scatter buffer paired with `order` / `kept`. Swapped, never copied, and retained.
     scratch: Vec<u32>,
+    /// One side class of one crowded column, ranked by size when the bake draws bubbles.
+    ranked: Vec<u32>,
     /// Whole-pixel volume-bar height of each keyed row, reused across `reduce_volume` calls.
     heights: Vec<u8>,
 }
@@ -585,6 +591,12 @@ fn partition_kept_by_side(kept: &mut [u32], rows: &[LodRow], scratch: &mut Vec<u
 
 /// Reduce `(slot, time, price, side, qty)` rows to the crosses a bitmap can show: the last row
 /// per texel, then per-side sampling past `LOD_MAX_ROWS` rows a column. Culled rows are dropped.
+///
+/// For bubbles ([`BakeColumns::bubbles`]) rows rank by quote notional (`price × qty`, the figure a
+/// disc is sized by): a texel keeps its LARGEST trade instead of its last — a later small disc
+/// covers only the middle of an earlier big one, and the big trade is the one worth seeing — plus
+/// its last liquidation, which stays a cross and is a different glyph; a crowded side class keeps
+/// its `LOD_MAX_ROWS` largest rows.
 pub fn reduce_crosses(
     rows: impl IntoIterator<Item = (u32, f32, f32, u32, f32)>,
     g: &BakeColumns,
@@ -593,6 +605,11 @@ pub fn reduce_crosses(
     out.cross.clear();
     let cull = g.marker_half.max(8.0).max(g.marker_half + 1.0);
     let (w, h) = (g.width_px as f32, g.height);
+    // Crosses never read the figure; bubbles rank by what sizes the disc.
+    let bubbles = g.bubbles;
+    let rows = rows.into_iter().map(move |(slot, t, p, side, qty)| {
+        (slot, t, p, side, if bubbles { p * qty } else { qty })
+    });
     let span = key_rows(rows, g, out, |_, col, row, _, _| {
         col.is_finite()
             && row.is_finite()
@@ -612,6 +629,7 @@ pub fn reduce_crosses(
         keep,
         counts,
         scratch,
+        ranked,
         ..
     } = out;
     let n = rows.len();
@@ -636,15 +654,41 @@ pub fn reduce_crosses(
         sort_crosses_tier_a(order, rows);
     }
     kept.clear();
-    for (i, &k) in order.iter().enumerate() {
-        let r = &rows[k as usize];
-        let last_of_texel = order.get(i + 1).is_none_or(|&next| {
-            let q = &rows[next as usize];
-            (q.col, q.row) != (r.col, r.row)
-        });
-        if last_of_texel {
-            kept.push(k);
+    let mut group_start = 0;
+    while group_start < order.len() {
+        let first = &rows[order[group_start] as usize];
+        let group_end = group_start
+            + order[group_start..]
+                .iter()
+                .take_while(|&&k| {
+                    let q = &rows[k as usize];
+                    (q.col, q.row) == (first.col, first.row)
+                })
+                .count();
+        // `order` is (col, row, k), so a texel's group runs in draw order: its last row is the one
+        // drawn on top. Bubbles keep the largest trade instead, the later row winning a tie, and
+        // the last liquidation beside it — pushed in draw order, which tier B's partition expects.
+        let group = &order[group_start..group_end];
+        if g.bubbles {
+            let trade = group
+                .iter()
+                .copied()
+                .filter(|&k| rows[k as usize].side < 2)
+                .max_by(|&a, &b| {
+                    rows[a as usize]
+                        .qty
+                        .total_cmp(&rows[b as usize].qty)
+                        .then(a.cmp(&b))
+                });
+            let liquidation = group.iter().copied().rfind(|&k| rows[k as usize].side >= 2);
+            match (trade, liquidation) {
+                (Some(a), Some(b)) => kept.extend([a.min(b), a.max(b)]),
+                (a, b) => kept.extend(a.or(b)),
+            }
+        } else {
+            kept.extend(group.last().copied());
         }
+        group_start = group_end;
     }
 
     // Tier B: columns still holding too many distinct rows are sampled per side class.
@@ -676,13 +720,29 @@ pub fn reduce_crosses(
                         .take_while(|&&k| rows[k as usize].side.min(2) == class)
                         .count();
                 let side_rows = &kept[side_start..side_end];
-                let stride = side_rows.len().div_ceil(LOD_MAX_ROWS).max(1);
-                for (pos, &k) in side_rows.iter().enumerate() {
-                    if pos % stride == 0 {
+                if g.bubbles {
+                    // The COLUMN is crowded, not necessarily this side of it: a short class keeps
+                    // every row, and only a long one is cut to its largest.
+                    ranked.clear();
+                    ranked.extend_from_slice(side_rows);
+                    if ranked.len() > LOD_MAX_ROWS {
+                        ranked.select_nth_unstable_by(LOD_MAX_ROWS - 1, |&a, &b| {
+                            rows[b as usize].qty.total_cmp(&rows[a as usize].qty)
+                        });
+                        ranked.truncate(LOD_MAX_ROWS);
+                    }
+                    for &k in ranked.iter() {
                         keep[k as usize] = true;
                     }
+                } else {
+                    let stride = side_rows.len().div_ceil(LOD_MAX_ROWS).max(1);
+                    for (pos, &k) in side_rows.iter().enumerate() {
+                        if pos % stride == 0 {
+                            keep[k as usize] = true;
+                        }
+                    }
+                    keep[side_rows[side_rows.len() - 1] as usize] = true;
                 }
-                keep[side_rows[side_rows.len() - 1] as usize] = true;
                 side_start = side_end;
             }
         }
