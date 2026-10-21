@@ -95,6 +95,23 @@ fn a_disc_s_area_follows_its_volume_against_the_biggest() {
 }
 
 #[test]
+fn a_volume_prints_with_at_most_three_digits() {
+    assert_eq!(short_volume(10_800.0), "11K");
+    assert_eq!(short_volume(2_340_000.0), "2.3M");
+    assert_eq!(short_volume(2_000_000.0), "2M");
+    assert_eq!(short_volume(906.0), "906");
+    assert_eq!(short_volume(15_000_000.0), "15M");
+    // Rounding into the next unit prints that unit, not "1000K".
+    assert_eq!(short_volume(999_700.0), "1M");
+    assert_eq!(short_volume(0.4), "0.4");
+    // Below one: no "0.0" that reads as an empty cell, no "1.0" beside a plain "1".
+    assert_eq!(short_volume(0.04), "<0.1");
+    assert_eq!(short_volume(0.97), "1");
+    assert_eq!(short_volume(999.7), "1K");
+    assert_eq!(short_volume(f32::NAN), "");
+}
+
+#[test]
 fn a_stored_step_snaps_onto_the_list() {
     assert_eq!(snap_step(0), 0);
     assert_eq!(snap_step(3), 2);

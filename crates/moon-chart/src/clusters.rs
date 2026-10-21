@@ -20,8 +20,10 @@ pub const TIME_STEPS_MS: [i64; 16] = [
     1_800_000, 3_600_000, 7_200_000, 14_400_000, 86_400_000,
 ];
 
-/// The smallest cell, in logical pixels on either axis: below it a disc stops reading as one.
-pub const MIN_CELL_PX: f32 = 14.0;
+/// The smallest cell, in logical pixels on either axis. Sized for the LABEL, not the dot: at the
+/// default label size the biggest disc of a cell this size holds a four-glyph volume (`2.3M`), and
+/// a disc at about half its cell's volume still holds three (`11K`).
+pub const MIN_CELL_PX: f32 = 32.0;
 
 /// Gap kept between the largest disc and its cell's edge, physical pixels, so neighbours never
 /// touch.
@@ -182,6 +184,47 @@ pub fn disc_radius(total: f32, max_total: f32, max_r: f32) -> f32 {
         return MIN_DISC_PX;
     }
     (max_r * (total / max_total).min(1.0).sqrt()).max(MIN_DISC_PX)
+}
+
+/// A cell's volume printed short enough to sit inside its disc: at most three digits and an SI
+/// suffix — one decimal below ten of a unit (`2.3M`), whole above it (`11K`, `906`) — where the
+/// chart's usual format (`10.8K`) costs the glyph that decides whether the label fits. Below one
+/// it keeps a decimal, and a volume that rounds to nothing prints `<0.1` rather than a `0.0` that
+/// reads as an empty cell.
+pub fn short_volume(v: f32) -> String {
+    if !v.is_finite() {
+        return String::new();
+    }
+    const UNITS: [(f32, &str); 5] = [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K"), (1.0, "")];
+    let a = v.abs();
+    let sign = if v < 0.0 { "-" } else { "" };
+    if a < 1.0 {
+        let one = format!("{a:.1}");
+        let body = match one.as_str() {
+            "0.0" => "<0.1",
+            "1.0" => "1",
+            s => s,
+        };
+        return format!("{sign}{body}");
+    }
+    for (i, &(scale, suffix)) in UNITS.iter().enumerate() {
+        if a < scale {
+            continue;
+        }
+        let n = a / scale;
+        // Rounding can carry into the next unit (999.7K is 1000K): print that unit instead.
+        if n.round() >= 1000.0 && i > 0 {
+            return format!("{sign}1{}", UNITS[i - 1].1);
+        }
+        let digits = if n >= 10.0 {
+            format!("{:.0}", n)
+        } else {
+            let one = format!("{:.1}", n);
+            one.strip_suffix(".0").map(str::to_string).unwrap_or(one)
+        };
+        return format!("{sign}{digits}{suffix}");
+    }
+    format!("{v:.0}")
 }
 
 /// Whether a label `text_w` wide and `text_h` tall fits inside a disc of `radius`, all in the same

@@ -9,7 +9,7 @@ use super::*;
 
 /// How much smaller than the order-label font a cluster label prints, logical pixels: it has to
 /// fit inside a disc.
-const CLUSTER_LABEL_SHRINK: f32 = 3.0;
+const CLUSTER_LABEL_SHRINK: f32 = 4.0;
 
 /// The smallest size a cluster label prints at, however small the label slider is set.
 const CLUSTER_LABEL_MIN_FONT: f32 = 7.0;
@@ -91,7 +91,7 @@ impl RenderState {
                 break;
             }
             let r = moon_chart::clusters::disc_radius(total, max_total, max_r) / sf;
-            let text = fmt_amount(total);
+            let text = moon_chart::clusters::short_volume(total);
             let w = text.chars().count() as f32 * glyph_w;
             if !moon_chart::clusters::label_fits(r, w, line_h) {
                 continue;
