@@ -322,6 +322,12 @@ chart.graphics.last_price_line: "Đường giá cuối"
 chart.graphics.mark_price_line: "Đường Mark price"
 chart.graphics.moonshot_zone: "Hành lang MoonShot"
 chart.graphics.liquidations: "Thanh lý"
+chart.graphics.frame_book: "Sổ lệnh"
+chart.graphics.book_kind: "Kiểu sổ lệnh"
+chart.graphics.book_kind_bars: "Thanh"
+chart.graphics.book_kind_ladder: "Bậc thang"
+chart.graphics.ladder_big: "Tô sáng mức lớn, % của mức lớn nhất trên màn hình"
+chart.graphics.ladder_big_off: "Tắt"
 # The "Trade history" popup (the book button): how the closed trades are drawn. Its rows keep
 # their `chart.graphics.*` keys from the popup they came out of.
 chart.history.title: "Lịch sử giao dịch"

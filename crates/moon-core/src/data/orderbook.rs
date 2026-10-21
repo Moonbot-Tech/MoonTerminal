@@ -11,6 +11,10 @@
 
 use crate::feed::OrderBook;
 
+mod ladder;
+
+pub use ladder::{LadderGrid, LadderRow, ladder_instances};
+
 /// An order book rectangle instance whose layout matches the native book shaders.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

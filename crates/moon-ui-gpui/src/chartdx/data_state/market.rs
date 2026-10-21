@@ -1752,6 +1752,47 @@ impl ChartDataState {
             pr.prospective_usd = self.prospective_usd;
             let orderbook_on = self.orderbook_enabled || self.orderbook_only;
             pr.orderbook_enabled = orderbook_on;
+            // The ladder's grid for this sync: the tab's book kind, the market's tick, and the step
+            // the zoom allows. `None` draws Moonbot's glass — the kind is bars, the tick is not
+            // known yet, or no readable step exists at this zoom.
+            let ladder_grid = if orderbook_on
+                && self.chart_graphics.book_kind == moon_core::config::BookKind::Ladder
+            {
+                // The exchange's tick is asked for until it arrives, at most once a retry period,
+                // with the book's own spacing standing in meanwhile; `LadderTick` holds the rules.
+                if pr.ladder_tick.due(now as i64) {
+                    let exact = source.price_tick(pane.core, &pane.market);
+                    pr.ladder_tick.record(now as i64, exact, || {
+                        source.with_orderbook_view(pane.core, &pane.market, |data| {
+                            data.and_then(|(book, _)| book.infer_tick())
+                        })
+                    });
+                }
+                let min_row_px = crate::chartdx::text::label_line_px(self.theme.label_font_delta)
+                    * self.last_ppp;
+                pr.ladder_tick.tick().and_then(|tick| {
+                    moon_chart::ladder::row_step(tick, pr.orderbook_view.price_to_px, min_row_px)
+                        .map(|step| moon_core::data::LadderGrid { tick, step })
+                })
+            } else {
+                None
+            };
+            // The highlight lives in the text layer only, so a changed threshold asks for a present
+            // and nothing else.
+            if pr.ladder_big_pct != self.chart_graphics.ladder_big_pct {
+                pr.ladder_big_pct = self.chart_graphics.ladder_big_pct;
+                text_changed = true;
+            }
+            // A new grid is a new picture: rebuild and bake now rather than on the next revision.
+            let ladder_grid_changed = pr.ladder_grid != ladder_grid;
+            // The rebuild rides on the flag, not on resetting `last_book_rev`: the clean-up paths
+            // below read `u64::MAX` as "nothing uploaded" and would leave the old rows in the layer.
+            if ladder_grid_changed {
+                pr.ladder_grid = ladder_grid;
+                pr.ladder_rows.clear();
+                pr.ladder_labels.clear();
+                pr.ladder_max_notional = 0.0;
+            }
             // When the order book is disabled for this window, neither build nor upload levels and
             // clear any that already exist.
             if !orderbook_on {
@@ -1787,25 +1828,47 @@ impl ChartDataState {
                         } else {
                             0.0
                         };
-                        if book_instances_stale(
-                            pr.last_book_rev,
-                            pr.last_book_emit,
-                            pr.last_book_range,
-                            (pr.last_book_lo, pr.last_book_hi),
-                            book_rev,
-                            pane.view.render_range,
-                            lo,
-                            hi,
-                            margin_price,
-                        ) {
+                        if ladder_grid_changed
+                            || book_instances_stale(
+                                pr.last_book_rev,
+                                pr.last_book_emit,
+                                pr.last_book_range,
+                                (pr.last_book_lo, pr.last_book_hi),
+                                book_rev,
+                                pane.view.render_range,
+                                lo,
+                                hi,
+                                margin_price,
+                            )
+                        {
                             crate::diag::bump(&crate::diag::CHART_BOOK_LEVEL_BUILD);
                             let emit = (lo - margin_price, hi + margin_price);
                             // A move out of the emitted window or a zoom must show at once; a
                             // revision alone stays behind the book bitmap's data throttle.
-                            let window_rebuilt = !(lo >= pr.last_book_emit.0)
+                            let window_rebuilt = ladder_grid_changed
+                                || !(lo >= pr.last_book_emit.0)
                                 || !(hi <= pr.last_book_emit.1)
                                 || pr.last_book_range.to_bits() != pane.view.render_range.to_bits();
-                            book.build_instances_normalized((lo, hi), emit, &mut pr.book_scratch);
+                            if let Some(grid) = ladder_grid {
+                                book.build_ladder(grid, emit.0, emit.1, &mut pr.ladder_rows);
+                                pr.ladder_max_notional = moon_core::data::ladder_instances(
+                                    &pr.ladder_rows,
+                                    lo,
+                                    hi,
+                                    &mut pr.book_scratch,
+                                );
+                                crate::chartdx::text::format_ladder_labels(
+                                    &pr.ladder_rows,
+                                    grid.tick,
+                                    &mut pr.ladder_labels,
+                                );
+                            } else {
+                                book.build_instances_normalized(
+                                    (lo, hi),
+                                    emit,
+                                    &mut pr.book_scratch,
+                                );
+                            }
                             diag_levels_len = Some(pr.book_scratch.len());
                             pr.layers.set_orderbook(&pr.book_scratch, window_rebuilt);
                             pr.last_book_rev = book_rev;
@@ -1882,6 +1945,15 @@ impl ChartDataState {
             // No `orderbook_on` filter: `forget_book_figures` clears `book_best` when the book
             // goes away, so the field never outlives the book it came from.
             let book_edges = pr.book_best;
+            // A ladder's rows are level lines as tall as a row, one pixel short so adjacent rows
+            // stay apart; every row shares the height, which is what lets one uniform carry it.
+            let level_height = match pr.ladder_grid {
+                Some(grid) => {
+                    ((grid.row_height() * f64::from(pr.orderbook_view.price_to_px)) as f32 - 1.0)
+                        .max(1.0)
+                }
+                None => self.theme.book_level_width.max(0.0),
+            };
             let next_book_style = BookStyle {
                 book_bg: rgb4(self.theme.book_bg),
                 bid: rgb4(self.theme.book_bid),
@@ -1890,7 +1962,7 @@ impl ChartDataState {
                 level_ask: self.theme.resolved_book_level(false),
                 level: [
                     self.theme.book_level_alpha.clamp(0.0, 1.0),
-                    self.theme.book_level_width.max(0.0),
+                    level_height,
                     0.0,
                     0.0,
                 ],

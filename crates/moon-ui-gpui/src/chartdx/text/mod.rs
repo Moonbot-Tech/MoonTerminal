@@ -299,6 +299,12 @@ fn label_font_px(label_font_delta: f32) -> f32 {
     (FONT_SIZE + label_font_delta).clamp(6.0, 40.0)
 }
 
+/// Line height of a label at [`label_font_px`], logical pixels: the height the label helpers draw
+/// and measure with, and the room a ladder row is sized to hold.
+pub(in crate::chartdx) fn label_line_px(label_font_delta: f32) -> f32 {
+    label_font_px(label_font_delta) + 4.0
+}
+
 /// Size of the cursor's volume readout: the order-line label size plus [`READOUT_FONT_BUMP`].
 ///
 /// Clamped again after the bump so the step cannot push the largest slider setting past the bound
@@ -512,7 +518,7 @@ fn draw_label_text_run(
         text,
         gpui::font(crate::design::mono()),
         content_px(ctx, fp),
-        content_px(ctx, fp + 4.0),
+        content_px(ctx, label_line_px(label_font_delta)),
         color,
         ax,
         ay,
@@ -535,7 +541,7 @@ fn measure_label_text_run(
         text,
         gpui::font(crate::design::mono()),
         content_px(ctx, fp),
-        content_px(ctx, fp + 4.0),
+        content_px(ctx, label_line_px(label_font_delta)),
     );
     chart_metrics(ctx, metrics)
 }
@@ -692,6 +698,8 @@ mod captions;
 mod column_scroll;
 mod labels;
 pub(in crate::chartdx) use labels::hours_and_minutes;
+mod ladder;
+pub(in crate::chartdx) use ladder::format_ladder_labels;
 mod prepare;
 mod ruler;
 mod runs;

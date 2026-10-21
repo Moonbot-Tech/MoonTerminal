@@ -71,6 +71,22 @@ pub enum TradeHistoryStyle {
     MoonbotLines,
 }
 
+/// How a tab draws the order book in its right-hand zone.
+///
+/// A display TYPE rather than a mode of the whole terminal: each tab picks its own, so a Main tab
+/// can read the book as a ladder while the AddToChart stacks keep Moonbot's glass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BookKind {
+    /// Moonbot's glass: cumulative depth fills with the individual level lines over them — the
+    /// picture this terminal shipped with.
+    #[default]
+    Bars,
+    /// A price ladder: one row per `tick × step`, the row's volume as a bar and as a number, and
+    /// the row's price beside it.
+    Ladder,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HvolSide {
@@ -328,6 +344,17 @@ pub struct ChartGraphicsCfg {
     /// standing captions, for a reader who knows what `Auto` picked and wants the zone bare.
     #[serde(default, deserialize_with = "de_lenient_false")]
     pub hvol_hide_captions: bool,
+
+    // --- Order book: how the right-hand zone draws the book. ---
+    /// Bars or a price ladder. ABSENT reads as bars, the picture every tab had before the ladder
+    /// existed.
+    #[serde(default, deserialize_with = "de_book_kind")]
+    pub book_kind: BookKind,
+    /// Ladder rows whose volume reaches this percentage of the largest visible row print their
+    /// volume in the last-price line's colour, one of `moon_chart::ladder::LADDER_BIG_PCTS`; `0`
+    /// turns the highlight off.
+    #[serde(default = "def_ladder_big_pct", deserialize_with = "de_ladder_big_pct")]
+    pub ladder_big_pct: u8,
 }
 
 /// The `hvol_tf_s` value that means "everything retained" — Moonbot's `Max`.
@@ -371,6 +398,8 @@ impl Default for ChartGraphicsCfg {
             hvol_stacked: false,
             hvol_overlay: false,
             hvol_hide_captions: false,
+            book_kind: BookKind::Bars,
+            ladder_big_pct: def_ladder_big_pct(),
         }
     }
 }

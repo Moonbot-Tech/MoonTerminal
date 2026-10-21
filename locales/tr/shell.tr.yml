@@ -322,6 +322,12 @@ chart.graphics.last_price_line: "Son fiyat çizgisi"
 chart.graphics.mark_price_line: "Mark Price çizgisi"
 chart.graphics.moonshot_zone: "MoonShot koridoru"
 chart.graphics.liquidations: "Likidasyonlar"
+chart.graphics.frame_book: "Emir defteri"
+chart.graphics.book_kind: "Defter görünümü"
+chart.graphics.book_kind_bars: "Çubuklar"
+chart.graphics.book_kind_ladder: "Merdiven"
+chart.graphics.ladder_big: "Büyük seviyeleri vurgula, ekrandaki en büyüğün %"
+chart.graphics.ladder_big_off: "Kapalı"
 # The "Trade history" popup (the book button): how the closed trades are drawn. Its rows keep
 # their `chart.graphics.*` keys from the popup they came out of.
 chart.history.title: "İşlem geçmişi"

@@ -451,3 +451,15 @@ fn venue_caps_unlisted_replay_without_terms_is_unknown() {
         crate::market::trade_replay::venue_caps::TickValue::Unknown,
     );
 }
+
+#[test]
+fn the_price_tick_falls_back_to_the_precision_grid() {
+    use super::read::tick_or_precision;
+    assert_eq!(tick_or_precision(0.0001, 2), Some(0.0001));
+    assert_eq!(tick_or_precision(0.0, 4), Some(0.0001));
+    assert_eq!(tick_or_precision(f64::NAN, 2), Some(0.01));
+    // Precision zero says nothing finer than a whole unit; the ladder keeps the glass instead.
+    assert_eq!(tick_or_precision(0.0, 0), None);
+    assert_eq!(tick_or_precision(0.0, -3), None);
+    assert_eq!(tick_or_precision(0.0, 40), None);
+}

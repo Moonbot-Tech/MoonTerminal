@@ -147,6 +147,19 @@ pub(super) fn positive(v: f64) -> Option<f64> {
     (v.is_finite() && v > 0.0).then_some(v)
 }
 
+/// The market's price tick, or the grid its price precision implies when the tick is not usable.
+///
+/// Both arrive as zero while unset, so a zero precision says nothing and is not read as a grid of
+/// whole units. The precision is trusted only within `1..=12` decimals: past that the grid is
+/// finer than an `f32` price can hold, and a negative count is not a precision.
+pub(super) fn tick_or_precision(tick: f64, precision: i32) -> Option<f64> {
+    positive(tick).or_else(|| {
+        (1..=12)
+            .contains(&precision)
+            .then(|| 10f64.powi(-precision))
+    })
+}
+
 /// Return a short exchange-type label from `server_info.exchange_type_mask`.
 ///
 /// The core is i18n-agnostic, so spot and futures labels are plain Russian strings that the UI may
@@ -635,6 +648,28 @@ impl MarketDataSource {
         let snapshot = client.snapshot_versioned()?;
         let step = snapshot.markets().price(market)?.chart_price_step;
         (step.is_finite() && step > 0.0).then_some(step)
+    }
+
+    /// Return the exchange's price tick for a market: the grid a resting order's price stands on,
+    /// unlike [`Self::price_step`]. The chart's price ladder buckets the book by it.
+    ///
+    /// A market whose tick did not arrive falls back to its price precision (`10^-precision`), the
+    /// grid the exchange prints prices at. `None` means the provider, snapshot, or market is
+    /// unavailable, or neither figure is usable; the ladder then keeps the glass instead of
+    /// inventing a grid.
+    pub fn price_tick(&self, core: CoreId, market: &str) -> Option<f64> {
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core).copied()?;
+            inner
+                .clients
+                .get(&provider)
+                .and_then(SharedMoonClient::get)?
+        };
+        let snapshot = client.snapshot_versioned()?;
+        let handle = snapshot.markets().get(market)?;
+        let (tick, precision) = handle.with(|m| (m.tick_size(), m.price_precision()));
+        tick_or_precision(tick, precision)
     }
 
     /// Return the last price and signed 1-hour and 24-hour percentage deltas for a market.

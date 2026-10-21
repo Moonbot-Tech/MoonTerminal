@@ -17,12 +17,16 @@
 //! liquidations from the tab spec — because the press copies the struct whole, and a switch shown
 //! here but stored elsewhere would either not travel with it or drag its own struct along.
 //!
+//! The order book's KIND sits here too — Moonbot's glass or a price ladder — with the ladder's
+//! highlight: how the book is drawn is part of the live picture, and like every
+//! switch here it travels per tab and with ⧉.
+//!
 //! Controls read stored config on every render and are stateless on purpose: `MoonSlider` needs a
 //! state entity held on the host, and every other control in these popups reads its value straight
 //! from the config, so the sizes are offered as steps.
 
 use gpui::*;
-use moon_core::config::ChartGraphicsCfg;
+use moon_core::config::{BookKind, ChartGraphicsCfg};
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonPopover,
     MoonPopoverPlacement, MoonSize, h_flex, v_flex,
@@ -52,6 +56,12 @@ const TRADE_VOLUME_ALPHAS: [f32; 6] = [0.0, 0.15, 0.34, 0.5, 0.75, 1.0];
 /// the localized ES strings are the longest of the three.
 pub(crate) const ROW_W: f32 = 7.0 * 42.0;
 const SEG_W6: f32 = ROW_W / 6.0;
+
+/// The book kinds the popup offers, in display order, with their locale keys.
+const BOOK_KINDS: [(BookKind, &str); 2] = [
+    (BookKind::Bars, "chart.graphics.book_kind_bars"),
+    (BookKind::Ladder, "chart.graphics.book_kind_ladder"),
+];
 
 /// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
 pub(super) fn content_width(cx: &App) -> Pixels {
@@ -287,6 +297,56 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         |c, v| c.liquidations = v,
     );
 
+    // --- Order book: its kind, and for a ladder the highlight. ---
+    let book_kind_row = {
+        let entity = entity.clone();
+        seg_row(
+            format!("{id}-book-kind"),
+            t!("chart.graphics.book_kind").to_string(),
+            BOOK_KINDS
+                .iter()
+                .map(|(kind, key)| (t!(*key).to_string(), *kind == cfg.book_kind))
+                .collect(),
+            ROW_W / BOOK_KINDS.len() as f32,
+            p,
+            cx,
+            move |ix, app| {
+                if let Some((kind, _)) = BOOK_KINDS.get(ix) {
+                    let kind = *kind;
+                    write_cfg(&entity, app, |c| c.book_kind = kind);
+                }
+            },
+        )
+    };
+    let ladder = cfg.book_kind == BookKind::Ladder;
+    let ladder_big_row = ladder.then(|| {
+        let entity = entity.clone();
+        let pcts = moon_chart::ladder::LADDER_BIG_PCTS;
+        seg_row(
+            format!("{id}-ladder-big"),
+            t!("chart.graphics.ladder_big").to_string(),
+            pcts.iter()
+                .map(|v| {
+                    let label = if *v == 0 {
+                        t!("chart.graphics.ladder_big_off").to_string()
+                    } else {
+                        format!("{v}%")
+                    };
+                    (label, *v == cfg.ladder_big_pct)
+                })
+                .collect(),
+            ROW_W / pcts.len() as f32,
+            p,
+            cx,
+            move |ix, app| {
+                if let Some(v) = pcts.get(ix) {
+                    let v = *v;
+                    write_cfg(&entity, app, |c| c.ladder_big_pct = v);
+                }
+            },
+        )
+    });
+
     // The ⧉ "apply to all" icon mirrors the candle popup beside it: distribute THIS target's
     // settings to all non-Main tabs and windows, include Main only when it is the source, then
     // update the global default inherited by new tabs.
@@ -344,6 +404,15 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                     .child(trade_volume_alpha_row)
                     .child(trade_volume_alpha_hint)
                     .child(liquidations_cb),
+            ),
+        )
+        .child(
+            popup_group("frame-book", t!("chart.graphics.frame_book")).child(
+                v_flex()
+                    .w(px(ROW_W))
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(book_kind_row)
+                    .children(ladder_big_row),
             ),
         )
         .into_any_element()

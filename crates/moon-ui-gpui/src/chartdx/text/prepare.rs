@@ -101,6 +101,11 @@ impl RenderState {
             let plot_h = view.bounds[3] / sf;
             let plot_bottom = plot_top + plot_h;
             let plot_right = plot_left + plot_w;
+            // The ladder's row text goes first, so every label laid out after it — the cursor's
+            // values among them — prints over it rather than under it.
+            if orderbook_enabled {
+                self.draw_ladder_text(ctx, idx, sf)?;
+            }
             // Bottom-volume scale readout: the visible maximum against the band's top
             // reference line and the visible average against its own. Without them the two lines
             // say "some scale" rather than a quantity, and the band cannot be compared across
@@ -325,7 +330,7 @@ impl RenderState {
             // so hidden captions produce neither text nor translucent backing plates.
             // Label row height follows the font size configured by the theme slider. Shared by
             // the order-label column and the figure readouts below it.
-            let label_line_h = self.label_font_px() + 4.0;
+            let label_line_h = label_line_px(self.label_font_delta);
             if self.line_labels {
                 // Where a label's line ends up, asked once and answered for both passes below —
                 // the Y, whether it moved, and which edge it moved to are one question, and two

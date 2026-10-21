@@ -322,6 +322,12 @@ chart.graphics.last_price_line: "Last price line"
 chart.graphics.mark_price_line: "Mark price line"
 chart.graphics.moonshot_zone: "MoonShot corridor"
 chart.graphics.liquidations: "Liquidations"
+chart.graphics.frame_book: "Order book"
+chart.graphics.book_kind: "Book style"
+chart.graphics.book_kind_bars: "Bars"
+chart.graphics.book_kind_ladder: "Ladder"
+chart.graphics.ladder_big: "Highlight large levels, % of the largest on screen"
+chart.graphics.ladder_big_off: "Off"
 # The "Trade history" popup (the book button): how the closed trades are drawn. Its rows keep
 # their `chart.graphics.*` keys from the popup they came out of.
 chart.history.title: "Trade history"

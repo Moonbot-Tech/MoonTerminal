@@ -483,6 +483,25 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) orderbook_levels: Vec<moon_core::data::BookDepthPoint>,
     /// Live best `(bid, ask)` book prices defining the three-color order-book zone background.
     pub(in crate::chartdx) book_best: Option<(f32, f32)>,
+    /// What the pane knows about its market's tick — the exchange's, else the book's spacing —
+    /// and when it last asked. Reset with the pane on a market change.
+    pub(in crate::chartdx) ladder_tick: moon_chart::ladder::LadderTick,
+    /// The grid the resident ladder was built on; `None` while the zone draws the glass. A
+    /// different grid — a zoom that moved the step, a tick that arrived — rebuilds the rows at once.
+    pub(in crate::chartdx) ladder_grid: Option<moon_core::data::LadderGrid>,
+    /// Ladder rows over the emitted window, for the row text. Empty while the zone draws the glass.
+    pub(in crate::chartdx) ladder_rows: Vec<moon_core::data::LadderRow>,
+    /// Each row's printed volume and price, formatted when the rows are rebuilt rather than on
+    /// every present; index-aligned with `ladder_rows`.
+    pub(in crate::chartdx) ladder_labels: Vec<(String, String)>,
+    /// The ladder text's own retained runs, two per slot, a row's slot fixed by its grid index: a
+    /// row scrolling into the zone neither shifts the chart's other labels off their cached
+    /// shaping nor makes the rows re-shape each other's strings.
+    pub(in crate::chartdx) ladder_runs: Vec<GpuCanvasTextRun>,
+    /// The largest visible row notional the bars were scaled to; the highlight reads the same one.
+    pub(in crate::chartdx) ladder_max_notional: f32,
+    /// The tab's ladder highlight threshold, percent of `ladder_max_notional`; `0` is off.
+    pub(in crate::chartdx) ladder_big_pct: u8,
     /// Own-pass X camera: time epoch, right-side future fraction, follow flag, and last QUANTIZED
     /// right-edge pixel position. The callback advances the camera from these fields on every
     /// whole-pixel vblank present, providing live scrolling without a separate timer.
@@ -716,6 +735,13 @@ impl PaneRender {
             label_placed_spare: Vec::new(),
             orderbook_levels: Vec::new(),
             book_best: None,
+            ladder_tick: moon_chart::ladder::LadderTick::default(),
+            ladder_grid: None,
+            ladder_rows: Vec::new(),
+            ladder_labels: Vec::new(),
+            ladder_runs: Vec::new(),
+            ladder_max_notional: 0.0,
+            ladder_big_pct: 0,
             epoch_ms: 0.0,
             right_margin_frac: 0.10,
             follow: false,
@@ -745,6 +771,11 @@ impl PaneRender {
     /// answering the cursor's percentage, and a stale sell-line volume would keep describing glass
     /// that is no longer drawn. `u64::MAX` also asks the book path to re-measure once one returns.
     pub(in crate::chartdx) fn forget_book_figures(&mut self) {
+        // The ladder's rows are figures of the same book, so they go with it — before the early
+        // return below, which only knows about the glass's own figures.
+        self.ladder_rows.clear();
+        self.ladder_labels.clear();
+        self.ladder_max_notional = 0.0;
         if self.book_best.is_none() && self.last_label_book_rev == u64::MAX {
             return;
         }
