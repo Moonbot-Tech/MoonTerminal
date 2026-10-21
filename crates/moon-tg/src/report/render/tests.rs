@@ -161,3 +161,31 @@ fn a_complete_total_keeps_one_band() {
     assert!(html.contains("<b>Total</b>"), "{html}");
     assert!(!html.contains("Total USDT"), "{html}");
 }
+
+/// The details' average order must not read "unavailable" for a row the table states per part.
+///
+/// A row in USDT and RUB (no USDT rate) splits per currency in the table — Average
+/// `+10.0%; +200.0%` — so the details block of the same message states the same row's average
+/// order per part too, instead of the whole-set "unavailable" (issue #1051).
+#[test]
+fn details_average_follows_the_table_split() {
+    let _locale = crate::test_locale::force("en");
+    let mixed = money(&[(USDT, 10.0, 1, 1, 10.0), (RUB, 200.0, 1, 0, 0.0)]);
+    let mut page = exchanges_page();
+    page.request.by_exchange = false;
+    page.total = mixed.clone();
+    page.rows = vec![Row::Line(Some(1), "Mixed".into(), mixed)];
+    page.layout = ReportLayout {
+        columns: vec![ReportColumn::Profit, ReportColumn::Average],
+        total: TotalPlace::Bottom,
+        ..Default::default()
+    }
+    .sanitized();
+    let html = report_html(&page);
+    assert!(html.contains("+10.0%; +200.0%"), "{html}");
+    let details = &html[html.find("<details>").unwrap()..];
+    assert!(
+        !details.contains(&*rust_i18n::t!("telegram.report_unvalued")),
+        "{details}"
+    );
+}
