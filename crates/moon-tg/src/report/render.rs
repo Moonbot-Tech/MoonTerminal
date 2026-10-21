@@ -146,6 +146,56 @@ fn per_part(
     (text, None)
 }
 
+/// The scopes the details block states a row's average order over.
+///
+/// The whole row while it has an average of its own; otherwise one scope per part of
+/// [`total_lines`], the way the Average column splits through [`per_part`] — a mixed row's
+/// whole-set average is `None`, and reading "unvalued" beside the table's per-part figures would
+/// give one message two answers for one number.
+fn details_parts(total: &QuoteBreakdown) -> Vec<QuoteBreakdown> {
+    if total.average_order_return().is_none() {
+        let parts = total_lines(total, "");
+        if parts.len() > 1 {
+            return parts.into_iter().map(|(_, part)| part).collect();
+        }
+    }
+    vec![total.clone()]
+}
+
+/// The details block's average order size over one comparable scope, or unvalued.
+fn average_order_text(total: &QuoteBreakdown) -> String {
+    total
+        .average_order_return()
+        .map(|value| {
+            format!(
+                "{} {}",
+                fmt::group_decimal(&if value.avg_order < 1.0 {
+                    fmt::adaptive(value.avg_order)
+                } else {
+                    fmt::compact(value.avg_order, 2)
+                }),
+                value.currency.ticker()
+            )
+        })
+        .unwrap_or_else(|| t!("telegram.report_unvalued").to_string())
+}
+
+/// `(counted, excluded)` orders of one comparable scope's average order.
+///
+/// Without an average the counted rows come from the entry spend, clamped to the scope's orders.
+fn average_coverage(total: &QuoteBreakdown) -> (i64, i64) {
+    total
+        .average_order_return()
+        .map(|value| (value.counted, value.excluded))
+        .unwrap_or_else(|| {
+            let counted = total
+                .entry_spend
+                .counted_orders
+                .clamp(0, total.orders.max(0));
+            (counted, total.orders.saturating_sub(counted))
+        })
+}
+
 /// Average-order return as a signed percent, or unvalued.
 fn average_cell(total: &QuoteBreakdown) -> (String, Option<DeltaSign>) {
     let value = total
@@ -392,38 +442,27 @@ pub(super) fn report_html(page: &Page) -> String {
     ));
     for &(_, name, total) in &lines {
         let label = plain_label(name);
-        let average = total
-            .average_order_return()
-            .map(|value| {
-                format!(
-                    "{} {}",
-                    fmt::group_decimal(&if value.avg_order < 1.0 {
-                        fmt::adaptive(value.avg_order)
-                    } else {
-                        fmt::compact(value.avg_order, 2)
-                    }),
-                    value.currency.ticker()
-                )
-            })
-            .unwrap_or_else(|| t!("telegram.report_unvalued").to_string());
+        let average = details_parts(total)
+            .iter()
+            .map(average_order_text)
+            .collect::<Vec<_>>()
+            .join("; ");
         html.push_str(&format!(
             "<tr><td colspan=\"2\"><b>{}</b></td></tr><tr><td>{}</td><td align=\"right\">{}</td></tr>",
             escape(&label),
             escape(&native(total)).replace(' ', "&#160;").replace(";&#160;", "; "),
-            escape(&average).replace(' ', "&#160;")
+            escape(&average)
+                .replace(' ', "&#160;")
+                .replace(";&#160;", "; ")
         ));
     }
     html.push_str("</table>");
     for &(_, name, total) in &lines {
-        let (counted, excluded) = total
-            .average_order_return()
-            .map(|value| (value.counted, value.excluded))
-            .unwrap_or_else(|| {
-                let counted = total
-                    .entry_spend
-                    .counted_orders
-                    .clamp(0, total.orders.max(0));
-                (counted, total.orders.saturating_sub(counted))
+        let (counted, excluded) = details_parts(total)
+            .iter()
+            .map(average_coverage)
+            .fold((0, 0), |(counted, excluded), (c, e)| {
+                (counted + c, excluded + e)
             });
         if excluded > 0 {
             let label = plain_label(name);
