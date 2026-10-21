@@ -541,6 +541,8 @@ impl Render for ReportPanel {
         // and uses an accent tint to distinguish the active selection state.
         let selection_actions = self.selection_actions(p, cx);
         let marker = self.scope_marker(self.backend.read(cx));
+        // The full-summary flag is on the snapshot, captured with its filter. A live scope read
+        // here would label the previous totals with the selection the user just made.
         let facts = totals::footer_facts(
             self.data.data().map(Arc::as_ref),
             matches!(self.data, LoadState::Failed(_)),

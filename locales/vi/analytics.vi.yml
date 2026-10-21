@@ -1107,3 +1107,17 @@ analytics.tuner.pick_strategy: "Chọn chiến lược trong danh sách để xe
 analytics.tuner.no_strategy: "Chưa chọn chiến lược"
 analytics.tuner.time_window: "Khoảng %{window} · giao dịch: %{n}"
 analytics.tuner.time_all_hours: "toàn bộ giai đoạn"
+
+# Window-lifetime numeric strategy-list conditions.
+analytics.conditions.title: "Điều kiện"
+analytics.conditions.all: "Chiến lược phải đáp ứng tất cả điều kiện."
+analytics.conditions.add: "Thêm điều kiện"
+analytics.conditions.remove: "Xóa điều kiện"
+analytics.conditions.reset: "Đặt lại"
+analytics.conditions.reset_all: "Đặt lại tất cả"
+analytics.conditions.reset_conditions: "Đặt lại điều kiện"
+analytics.conditions.matches: "%{n} trên %{m} phù hợp"
+analytics.conditions.done: "Xong"
+analytics.conditions.invalid: "Nhập một số; điều kiện này đang được bỏ qua."
+analytics.conditions.empty: "Không có chiến lược nào đáp ứng điều kiện"
+analytics.strat.shown_compact: "%{shown}/%{total}"

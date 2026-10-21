@@ -54,6 +54,7 @@ fn fixture() -> (Vec<String>, ReportData) {
                 ..Default::default()
             },
             valuation: Default::default(),
+            full_summary: false,
         },
     )
 }

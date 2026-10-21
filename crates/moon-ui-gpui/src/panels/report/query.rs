@@ -144,6 +144,12 @@ pub(super) struct ReportData {
     /// setting would put the new mode's words under the old mode's numbers for exactly as long as
     /// the requery takes — the one thing this feature must never do.
     pub(super) valuation: db::valuation::ValuationMode,
+    /// Whether this snapshot is the full summary, so the totals row omits the average-order percent.
+    ///
+    /// Captured with the filter when the query starts, for the same reason as [`Self::valuation`]:
+    /// the previous snapshot stays on screen while the next query runs. Reading the live scope at
+    /// render would put the new scope's decision under the previous scope's totals.
+    pub(super) full_summary: bool,
 }
 
 /// One completed background batch with optional selector-metadata refresh.
@@ -224,6 +230,7 @@ fn report_query_result_is_current(
 ///
 /// Args:
 ///     filter: Complete database filter.
+///     full_summary: Scope decision captured with `filter`. See [`ReportData::full_summary`].
 ///     sort_key: Validated-at-query report sort candidate.
 ///     sort_desc: Whether rows sort descending.
 ///     with_core_metadata: Whether to refresh the core selector in this snapshot.
@@ -236,6 +243,7 @@ fn report_query_result_is_current(
 ///     Propagates report database readiness, schema, and query failures.
 fn run_report_query(
     filter: ReportFilter,
+    full_summary: bool,
     sort_key: String,
     sort_desc: bool,
     with_core_metadata: bool,
@@ -287,6 +295,7 @@ fn run_report_query(
             totals: totals.quotes,
             open: totals.open,
             valuation: filter.valuation,
+            full_summary,
         },
     })
 }
@@ -408,6 +417,9 @@ impl ReportPanel {
             .unwrap_or(true);
 
         let request_id = self.query_seq;
+        // With the filter, not again at render. The previous snapshot stays on screen, and a live
+        // scope read would decide the average-order fact for totals that belong to the old scope.
+        let full_summary = self.omits_average_order(self.backend.read(cx));
         let filter = self.filter(cx);
         let request_filter = filter.clone();
         let strategy_scope = strategy_metadata_request(
@@ -424,6 +436,7 @@ impl ReportPanel {
                 .spawn(async move {
                     run_report_query(
                         filter,
+                        full_summary,
                         sort_key,
                         sort_desc,
                         with_core_metadata,

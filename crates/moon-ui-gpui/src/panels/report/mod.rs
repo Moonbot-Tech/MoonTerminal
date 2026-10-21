@@ -68,7 +68,9 @@ use rust_i18n::t;
 use crate::controls::date_range::{self, Bound};
 use crate::load_state::{LoadState, Note, note_el};
 use crate::workspace::scope_marker::ScopeMarker;
-use crate::workspace::{EffectiveCoreScope, RetainedCoreScope, query_core_ids};
+use crate::workspace::{
+    EffectiveCoreScope, EffectiveScopeLabel, RetainedCoreScope, query_core_ids,
+};
 use crate::{Backend, design};
 use moon_core::db::valuation::ValuationStatus;
 use moon_core::db::{
@@ -1089,5 +1091,58 @@ impl ReportPanel {
             return None;
         }
         overview_narrow::narrowed_ids(scope.ids(), &self.overview_cores)
+    }
+
+    /// Whether this Report is the full summary, so the totals row omits the average-order percent.
+    ///
+    /// Resolved once here and handed to the footer as a flag. The footer does not re-derive it
+    /// from the query's ids: Auto Overview's full summary sends those ids.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority.
+    ///
+    /// Returns:
+    ///     `true` when [`omits_average_order_fact`] says this scope is the full summary.
+    pub(super) fn omits_average_order(&self, b: &Backend) -> bool {
+        omits_average_order_fact(
+            self.report_scope(b).as_ref(),
+            &self.overview_cores,
+            self.sel_cores.is_empty(),
+        )
+    }
+}
+
+/// Whether the totals row must omit the average-order percent.
+///
+/// Decided by the scope, never by comparing how many ids the query lists. Auto Overview whose
+/// Report-only narrowing leaves the whole universe ([`overview_narrow::shown_selection`] empty —
+/// the same predicate that makes the core combo trigger read `workspace.overview`) omits it, and
+/// so does Classic all-cores ([`EffectiveScopeLabel::All`]) and a standalone Report with no
+/// retained selection. An Overview narrowed to some cores, a selected single core, and an
+/// explicit Classic or standalone selection — including one that names every core — keep the fact.
+///
+/// Args:
+///     scope: The Report scope, or `None` for the standalone window.
+///     overview_cores: The Report-only Overview narrowing. Ignored unless `scope` is Overview.
+///     retained_selection_empty: Whether the standalone window's retained core set is empty.
+///         Ignored when `scope` is present, so an empty Classic retention cannot hide a selected
+///         Auto core or a narrowed Overview.
+///
+/// Returns:
+///     `true` when the totals row must omit the average-order fact.
+pub(super) fn omits_average_order_fact(
+    scope: Option<&EffectiveCoreScope>,
+    overview_cores: &HashSet<CoreId>,
+    retained_selection_empty: bool,
+) -> bool {
+    let Some(scope) = scope else {
+        return retained_selection_empty;
+    };
+    match scope.label() {
+        EffectiveScopeLabel::Overview => {
+            overview_narrow::shown_selection(scope.ids(), overview_cores).is_empty()
+        }
+        EffectiveScopeLabel::All => true,
+        EffectiveScopeLabel::Selection(_) | EffectiveScopeLabel::Core(_) => false,
     }
 }

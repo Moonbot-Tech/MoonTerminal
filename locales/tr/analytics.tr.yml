@@ -1107,3 +1107,17 @@ analytics.tuner.pick_strategy: "Gerçek ve varyant değerleri için listeden bir
 analytics.tuner.no_strategy: "Strateji seçilmedi"
 analytics.tuner.time_window: "Aralık %{window} · işlem: %{n}"
 analytics.tuner.time_all_hours: "tüm dönem"
+
+# Window-lifetime numeric strategy-list conditions.
+analytics.conditions.title: "Koşullar"
+analytics.conditions.all: "Stratejiler tüm koşulları karşılamalıdır."
+analytics.conditions.add: "Koşul ekle"
+analytics.conditions.remove: "Koşulu kaldır"
+analytics.conditions.reset: "Sıfırla"
+analytics.conditions.reset_all: "Tümünü sıfırla"
+analytics.conditions.reset_conditions: "Koşulları sıfırla"
+analytics.conditions.matches: "%{m} stratejiden %{n} eşleşiyor"
+analytics.conditions.done: "Tamam"
+analytics.conditions.invalid: "Bir sayı girin; bu koşul yok sayılır."
+analytics.conditions.empty: "Hiçbir strateji koşulları karşılamıyor"
+analytics.strat.shown_compact: "%{shown}/%{total}"

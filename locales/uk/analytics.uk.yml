@@ -1107,3 +1107,17 @@ analytics.tuner.pick_strategy: "Вибери стратегію у списку 
 analytics.tuner.no_strategy: "Немає вибраної стратегії"
 analytics.tuner.time_window: "Вікно %{window} · угоди: %{n}"
 analytics.tuner.time_all_hours: "увесь період"
+
+# Window-lifetime numeric strategy-list conditions.
+analytics.conditions.title: "Умови"
+analytics.conditions.all: "Стратегії мають відповідати всім умовам."
+analytics.conditions.add: "Додати умову"
+analytics.conditions.remove: "Видалити умову"
+analytics.conditions.reset: "Скинути"
+analytics.conditions.reset_all: "Скинути все"
+analytics.conditions.reset_conditions: "Скинути умови"
+analytics.conditions.matches: "підходить %{n} із %{m}"
+analytics.conditions.done: "Готово"
+analytics.conditions.invalid: "Введіть число; ця умова поки не враховується."
+analytics.conditions.empty: "Жодна стратегія не відповідає умовам"
+analytics.strat.shown_compact: "%{shown}/%{total}"

@@ -382,6 +382,7 @@ impl AnalyticsView {
             strat_type: None,
             strat_active_only: true,
             strat_lists: tuner::StratListFilter::All,
+            strat_conditions: tuner::Conditions::default(),
             auto_picks: tuner::AutoPicks::default(),
             ready: tuner::ReadyPass::default(),
             strat_search_input: None,

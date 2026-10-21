@@ -4,8 +4,11 @@
 //! filters/sort/columns never change what is written, only what the list shows.
 //! The table itself (card, rows, sortable header) renders in `table`.
 
+/// Numeric conditions and their window-lifetime editor.
+mod conditions;
 /// The strategy row's right-click menu and the gate deciding whether its action can run.
 mod menu;
+pub(in crate::analytics) use conditions::Conditions;
 /// Pure selection arithmetic: the drawn row order and the Shift-click range over it.
 mod select;
 /// The list card, its rows and the sortable header row.
@@ -119,6 +122,10 @@ pub(in crate::analytics) struct VisibleKey {
     kind: Option<String>,
     lists: StratListFilter,
     active_only: bool,
+    /// Editable numeric conditions shared across all modes, including invalid drafts.
+    conditions: Vec<conditions::Condition>,
+    /// Cell formatters use this frame's profit lens and precision.
+    percent: bool,
     sort: Option<(String, bool)>,
     /// The batch auto-pick's classes and the "Auto-pick" filter.
     auto: AutoView,
@@ -207,6 +214,7 @@ pub(in crate::analytics) fn filter_sort_indices(
         base
     };
     let pool = out.len();
+    out.retain(|i| conditions::keeps(&all[*i], &key.conditions));
     if key.auto.filter != AutoFilter::All {
         out.retain(|i| key.auto.filter.keeps(key.auto.class(&all[*i].key)));
     }
@@ -277,6 +285,21 @@ pub(in crate::analytics) fn filter_sort_indices(
         }
     }
     (out, enabled_filter_available, pool)
+}
+
+/// Offer the conditions reset only when it would restore rows under every other active filter.
+/// The caller already knows the current list is empty. A running classifier keeps its computing
+/// explanation even after partial results arrive: an unseen strategy may still match later.
+pub(super) fn conditions_clear_restores_rows(
+    all: &[GroupStat],
+    mut key: VisibleKey,
+    computing: bool,
+) -> bool {
+    if computing {
+        return false;
+    }
+    key.conditions.clear();
+    !filter_sort_indices(all, &key).0.is_empty()
 }
 
 /// The rows a readiness pass counts first, in order: the list's own filters and sort with every
@@ -409,6 +432,8 @@ impl AnalyticsView {
             kind: self.strat_type.clone(),
             lists: self.strat_lists,
             active_only: self.strat_active_only,
+            conditions: self.strat_conditions.rows.clone(),
+            percent: crate::analytics::pnl_is_pct(),
             // A saved sort by the Auto column applies only where that column is drawn; the
             // saved choice itself is kept for the return to "By coin".
             sort: axis_sort(&self.strat_sort, self.strat_mode),
@@ -538,6 +563,7 @@ impl AnalyticsView {
                 .is_some_and(|rows| rows.enabled_filter_available)
         });
         h_flex()
+            .debug_selector(|| "an-strat-filter".into())
             .w_full()
             .flex_none()
             .flex_wrap()
@@ -557,6 +583,7 @@ impl AnalyticsView {
             .child(self.strat_lists_menu(cx))
             .children(self.strat_auto_menu(cx))
             .children(self.strat_ready_menu(cx))
+            .child(self.conditions_control(p, window, cx))
             .child(
                 div()
                     .id("an-strat-active-tip")

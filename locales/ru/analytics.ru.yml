@@ -1107,3 +1107,17 @@ analytics.tuner.pick_strategy: "Выбери стратегию в списке 
 analytics.tuner.no_strategy: "Нет выбранной стратегии"
 analytics.tuner.time_window: "Окно %{window} · сделки: %{n}"
 analytics.tuner.time_all_hours: "весь период"
+
+# Window-lifetime numeric strategy-list conditions.
+analytics.conditions.title: "Условия"
+analytics.conditions.all: "Стратегии должны подходить под все условия."
+analytics.conditions.add: "Добавить условие"
+analytics.conditions.remove: "Удалить условие"
+analytics.conditions.reset: "Сбросить"
+analytics.conditions.reset_all: "Сбросить всё"
+analytics.conditions.reset_conditions: "Сбросить условия"
+analytics.conditions.matches: "подходит %{n} из %{m}"
+analytics.conditions.done: "Готово"
+analytics.conditions.invalid: "Введите число; это условие пока не учитывается."
+analytics.conditions.empty: "Ни одна стратегия не подходит под условия"
+analytics.strat.shown_compact: "%{shown}/%{total}"

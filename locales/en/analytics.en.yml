@@ -1107,3 +1107,17 @@ analytics.tuner.pick_strategy: "Select a strategy in the list — fact and varia
 analytics.tuner.no_strategy: "No strategy selected"
 analytics.tuner.time_window: "Window %{window} · trades: %{n}"
 analytics.tuner.time_all_hours: "full period"
+
+# Window-lifetime numeric strategy-list conditions.
+analytics.conditions.title: "Conditions"
+analytics.conditions.all: "Strategies must match all conditions."
+analytics.conditions.add: "Add condition"
+analytics.conditions.remove: "Remove condition"
+analytics.conditions.reset: "Reset"
+analytics.conditions.reset_all: "Reset all"
+analytics.conditions.reset_conditions: "Reset conditions"
+analytics.conditions.matches: "matches %{n} of %{m}"
+analytics.conditions.done: "Done"
+analytics.conditions.invalid: "Enter a number; this condition is ignored."
+analytics.conditions.empty: "No strategy matches the conditions"
+analytics.strat.shown_compact: "%{shown}/%{total}"
