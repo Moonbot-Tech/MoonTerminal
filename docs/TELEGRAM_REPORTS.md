@@ -8,8 +8,10 @@ report view (by exchange unless changed) with its inline keyboard already attach
 where Telegram permits it: the welcome is not reused as a report.
 
 The bottom reply keyboard opens a global overview for the selected period. Buttons beneath a report
-work on that report: select an exchange to see its cores, switch to days, go back to all exchanges,
-or page. Tap a period again in the reply keyboard for fresh data; there is no inline Refresh button.
+work on that report: View switches it between exchanges, groups and cores, and the chat keeps that
+view for its later reports; Exchange lists the exchanges, and an exchange opens its summary — its
+total, its saved groups, its best and worst cores — with buttons for its cores with trades,
+another exchange, or back; All cores opens the cores view; long reports page. Tap a period again in the reply keyboard for fresh data; there is no inline Refresh button.
 Period choices are not duplicated inline. Button glyphs distinguish those actions.
 Mini App and its tunnel are not needed. A terminal-hosted bot needs MoonTerminal running for
 history synchronization; a station-hosted bot runs independently and reads the station's history.
@@ -44,7 +46,8 @@ Historical cores without known membership appear under Unidentified, never a gue
 | `/report 2026-09-01 2026-09-10` | Custom period |
 | `/daily 2026-09-01 2026-09-10` | Custom period by day |
 
-Period commands and buttons open in the bot's report view; `/daily` always splits by day, and a
+Period commands and buttons open in the chat's report view (the bot's default until the chat
+switches View); `/daily` always splits by day, and a
 one-day period always opens by exchange. Custom dates are inclusive, at most 366 days. Calendar boundaries follow the terminal clock's
 selected time zone, including daylight-saving changes. Paging and changing the view retain the
 resolved UTC bounds and the period basis the report was read on; a new reply-keyboard request
@@ -56,8 +59,8 @@ daily grouping on the next request; a station-hosted bot receives the new zone w
 Settings -> Telegram -> Bot menu lays out the reply keyboard as rows of buttons: a tick shows a
 button, "new row" starts a row, the arrows change the order. The Report section always shows all
 its periods; the Mini App opens from the chat's menu button, not from the keyboard. The same box
-sets the view reports open in (by exchange or by core; by day is a button under the report, a
-menu button and `/daily`) and whether periods count
+sets the view reports open in for a chat that has not switched View itself (by exchange, by core
+or by group; by day is a menu button and `/daily`) and whether periods count
 trades by close time (the default, as the terminal's Report) or by open time; a report read by open
 time says so under its period. A terminal-hosted bot saves these with Save; a station-hosted bot
 takes them with "Apply on the server", without a restart. Chats get a changed keyboard with the
@@ -68,10 +71,13 @@ does: one group header carrying its total, then its cores; groups by name, "Ungr
 core in two groups is listed under both and counts in both subtotals, while the report's total
 counts it once; a group of one core carries that core's total, and when one group would hold every core the
 list stays flat. A report long enough to page repeats a group's header on the page that continues
-it. A terminal-hosted bot reads the terminal's groups; a station keeps the set it
-was last sent. The station's bot menu shows whether its groups are this terminal's and offers "Send
-groups to the station" when they are not — never on its own, so a terminal without groups cannot
-wipe the set another one sent. Moving the bot to the station takes this terminal's groups along.
+it. The view by group has one summary row per saved group; a core in two groups counts in both
+rows. A terminal-hosted bot reads the terminal's groups; a station keeps the set it
+was last sent. The terminal sends its groups to the station by itself when they differ from the
+station's set and every member core is found on the station — once per changed set and station,
+and never an empty set, so a terminal without groups cannot wipe the set another one sent. The
+station's bot menu shows whether its groups are this terminal's and keeps "Send groups to the
+station" for when they are not. Moving the bot to the station takes this terminal's groups along.
 
 Settings -> Station -> Cores on the station compares cores by the endpoint the station dials: the
 key's address, or the Connections override where its cloud glyph is lit for the station (off by
@@ -154,9 +160,11 @@ Reports
 include closed real trades and exclude emulator and deleted trades. Offline bots' local history
 may be incomplete. The final Total row covers the whole period, including groups on other pages.
 
-USDT figures use the terminal's historical valuation at trade time. A missing rate or unknown
-currency makes the complete USDT result unavailable; it does not become zero or a partial total.
-Native currency subtotals remain separate. Average order calculations use Report's counted entry
+USDT figures use the terminal's historical valuation at trade time. A missing rate never becomes
+zero: a row without a complete USDT result states the fully valued currencies as one dollar figure
+and every other currency in its own ticker, and the Total splits the same way — "Total USDT" over
+the fully valued currencies, one line per remaining currency, and a count-only line for trades of
+an unknown currency. Amounts in different currencies are never added. Average order calculations use Report's counted entry
 spend and currency rules. These are historical reports, not balances or unrealized positions.
 
 Formatting uses Telegram's [Rich Messages](https://core.telegram.org/bots/api#rich-message-formatting-options),
@@ -304,7 +312,7 @@ Turning off the separate hourly reports does not turn off Today's hourly updates
 toggle labels show these schedules in both the bot's Notifications menu and Settings -> Telegram;
 the section hint explains replacement and the midnight summary.
 
-A new today or month report replaces the chat's previous one of its kind. Each opens in the bot's
+A new today or month report replaces the chat's previous one of its kind. Each opens in the chat's
 report view and counts on its period basis; a line on top names it, the zone offset and the basis,
 and its buttons keep the same frozen period. Reports with no trades are sent too. A report turned
 on starts at the next slot. A terminal-hosted bot sends only while the terminal runs; after a pause
