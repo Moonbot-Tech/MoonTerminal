@@ -178,6 +178,7 @@ Makefile выбирает MSVC-таргет на Windows и нативный т�
 |---|---|
 | [Инструкция для пользователей](https://moonbot-tech.github.io/MoonTerminal/) | Интерактивный тур: карта главного окна, первое подключение, панели, хоткеи |
 | [Архитектура](docs/ARCHITECTURE.md) | Крейты, платформенный GPU-рендеринг и живой data path |
+| [Отчёты в Telegram](docs/TELEGRAM_REPORTS.md) | Привязка бота, клавиатура и виды отчётов, уведомления (на английском) |
 | [FireTest](docs/FIRETEST.md) | Встроенный live-зонд `chart-smoke` |
 | [Сборка под macOS и Linux](docs/MAC_LINUX_BUILD.md) | Проверка Metal и настройка Linux |
 | [Окна](docs/WINDOWING.md) | Своя шапка окна и borderless/CSD-поведение |

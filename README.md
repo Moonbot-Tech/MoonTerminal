@@ -178,6 +178,7 @@ Runtime config lives next to the executable. Server credentials are stored in en
 |---|---|
 | [User guide](https://moonbot-tech.github.io/MoonTerminal/) | Interactive tour: the main-window map, first connection, panels, hotkeys |
 | [Architecture](docs/ARCHITECTURE.md) | Crates, per-platform GPU rendering, and the live data path |
+| [Telegram chat reports](docs/TELEGRAM_REPORTS.md) | Pairing the bot, the report keyboard and views, notifications |
 | [FireTest](docs/FIRETEST.md) | The built-in `chart-smoke` live probe |
 | [macOS & Linux build](docs/MAC_LINUX_BUILD.md) | Metal validation and Linux setup |
 | [Windowing](docs/WINDOWING.md) | Custom title bar and borderless/CSD behavior |
