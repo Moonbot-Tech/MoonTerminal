@@ -186,6 +186,9 @@ pub fn normalize_chart_graphics(cfg: ChartGraphicsCfg) -> ChartGraphicsCfg {
         hvol_width: crate::hvol::clamp_width(cfg.hvol_width),
         // The ladder's highlight snaps onto the list the popup offers, in the module that owns it.
         ladder_big_pct: crate::ladder::snap_big_pct(cfg.ladder_big_pct),
+        // The bubbles' merge window and small threshold snap onto the lists the popup offers.
+        trade_merge_ms: crate::clusters::snap_merge_ms(cfg.trade_merge_ms),
+        trade_small_pct: crate::clusters::snap_small_pct(cfg.trade_small_pct),
 
         ..cfg
     }

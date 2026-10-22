@@ -261,6 +261,57 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         )
     };
 
+    // --- Bubbles: the merge window and the small-print threshold, shown only in bubble mode. ---
+    let bubbles = cfg.trade_kind == TradeKind::Bubbles;
+    let trade_merge_row = bubbles.then(|| {
+        let entity = entity.clone();
+        let windows = moon_chart::clusters::MERGE_WINDOWS_MS;
+        seg_row(
+            format!("{id}-trade-merge"),
+            t!("chart.graphics.trade_merge").to_string(),
+            windows
+                .iter()
+                .map(|v| (v.to_string(), *v == cfg.trade_merge_ms))
+                .collect(),
+            ROW_W / windows.len() as f32,
+            p,
+            cx,
+            move |ix, app| {
+                if let Some(v) = windows.get(ix) {
+                    let v = *v;
+                    write_cfg(&entity, app, |c| c.trade_merge_ms = v);
+                }
+            },
+        )
+    });
+    let trade_small_row = bubbles.then(|| {
+        let entity = entity.clone();
+        let pcts = moon_chart::clusters::SMALL_PCTS;
+        seg_row(
+            format!("{id}-trade-small"),
+            t!("chart.graphics.trade_small").to_string(),
+            pcts.iter()
+                .map(|v| (format!("{v}%"), *v == cfg.trade_small_pct))
+                .collect(),
+            ROW_W / pcts.len() as f32,
+            p,
+            cx,
+            move |ix, app| {
+                if let Some(v) = pcts.get(ix) {
+                    let v = *v;
+                    write_cfg(&entity, app, |c| c.trade_small_pct = v);
+                }
+            },
+        )
+    });
+    // Says what a bubble is and what its size is measured against.
+    let trade_bubbles_hint = bubbles.then(|| {
+        div()
+            .text_size(design::t_caption(cx))
+            .text_color(rgb(p.text_muted))
+            .child(t!("chart.graphics.trade_bubbles_hint").to_string())
+    });
+
     // --- Trade marks: the live trade crosses, their per-trade volume bars, and the liquidation
     // crosses appended to the same ring. ---
     let marker_scale_row = {
@@ -429,8 +480,10 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                     .w(px(ROW_W))
                     .gap(design::ui_px(cx, 6.0))
                     .child(trade_kind_row)
-                    // Kept in bubble mode too: the liquidations stay crosses, and a pane with no
-                    // cluster grid yet draws its trades as crosses.
+                    .children(trade_merge_row)
+                    .children(trade_small_row)
+                    .children(trade_bubbles_hint)
+                    // Kept in bubble mode too: the liquidations stay crosses.
                     .child(marker_scale_row)
                     .child(trade_volume_alpha_row)
                     .child(trade_volume_alpha_hint)

@@ -1,115 +1,200 @@
-//! Unit tests for the cluster grid, the sums and the disc sizes.
+//! Unit tests for the trade prints: folding, the market's own scale and merging on zoom.
 
 use super::*;
 
-fn grid(time_step_ms: i64, tick: f64, price_step: u32) -> ClusterGrid {
-    ClusterGrid {
-        time_step_ms,
-        tick,
-        price_step,
+/// A trade at `ms` of `notional` quote at `price`.
+fn trade(ms: f64, price: f32, notional: f32, is_buy: bool) -> (f64, f32, f32, bool) {
+    (ms, price, notional / price, is_buy)
+}
+
+fn print(ms: f64, key: i64, buy: f32) -> Print {
+    Print {
+        time_ms: ms,
+        price: key as f32,
+        key,
+        buy,
+        sell: 0.0,
     }
 }
 
 #[test]
-fn the_time_step_is_the_finest_that_keeps_a_cell_wide_enough() {
-    // 0.001 px per ms: a second is 1 px, so 14 px needs the 15 s interval.
-    assert_eq!(time_step_ms(0.001, 14.0), Some(15_000));
-    // 0.02 px per ms: a second is already 20 px.
-    assert_eq!(time_step_ms(0.02, 14.0), Some(1_000));
-    assert_eq!(time_step_ms(0.0, 14.0), None);
-    // So far out that a day is under a pixel.
-    assert_eq!(time_step_ms(1e-9, 14.0), None);
-}
-
-#[test]
-fn trades_sum_into_their_cell_by_side() {
+fn trades_of_one_price_and_side_within_the_window_make_one_print() {
     let mut out = Vec::new();
-    aggregate(
+    aggregate_prints(
         [
-            (1_000.0, 100.0, 1.0, true),
-            (1_500.0, 99.99, 2.0, false),
-            (2_100.0, 100.04, 1.0, true),
+            trade(1_000.0, 10.0, 100.0, true),
+            trade(1_060.0, 10.0, 50.0, true),
+            // Past the window from the print's FIRST trade: a new print.
+            trade(1_150.0, 10.0, 20.0, true),
+            // Same time, other side: a new print.
+            trade(1_150.0, 10.0, 30.0, false),
+            // Other price: a new print.
+            trade(1_160.0, 10.5, 40.0, false),
         ],
-        grid(1_000, 0.01, 2),
+        Some(0.5),
+        100.0,
         &mut out,
     );
-    // Two ticks a row: 99.99 and 100.00 share the row centred on 100.00, the nearest; 100.04 is
-    // two rows up, so nothing merges.
+    let shape: Vec<(f64, f32, f32)> = out.iter().map(|p| (p.time_ms, p.buy, p.sell)).collect();
+    assert_eq!(shape.len(), 4);
+    assert_eq!(shape[0].0, 1_000.0);
+    assert!((shape[0].1 - 150.0).abs() < 1e-3);
+    assert!((shape[1].1 - 20.0).abs() < 1e-3);
+    assert!((shape[2].2 - 30.0).abs() < 1e-3);
+    assert_eq!(out[3].key, 21);
+}
+
+/// A tape bouncing between the bid and the ask: the buys at one price still fold into one print.
+#[test]
+fn a_trade_at_another_price_does_not_end_a_print() {
+    let mut out = Vec::new();
+    aggregate_prints(
+        [
+            trade(0.0, 10.0, 1.0, true),
+            trade(10.0, 9.5, 1.0, false),
+            trade(20.0, 10.0, 2.0, true),
+            trade(30.0, 9.5, 2.0, false),
+        ],
+        Some(0.5),
+        100.0,
+        &mut out,
+    );
     assert_eq!(out.len(), 2);
-    assert_eq!((out[0].time_idx, out[0].price_idx), (1, 5_000));
-    assert_eq!(out[0].buy, 100.0);
-    assert!((out[0].sell - 199.98).abs() < 1e-3);
-    assert_eq!(out[0].center_ms, 1_500.0);
-    assert_eq!((out[1].time_idx, out[1].price_idx), (2, 5_002));
-    assert!((out[1].buy - 100.04).abs() < 1e-3);
+    assert!((out[0].buy - 3.0).abs() < 1e-4);
+    assert!((out[1].sell - 3.0).abs() < 1e-4);
 }
 
 #[test]
-fn intervals_are_aligned_to_absolute_time() {
+fn a_zero_window_still_joins_one_timestamp() {
     let mut out = Vec::new();
-    aggregate(
-        [(59_999.0, 10.0, 1.0, true), (60_000.0, 12.0, 1.0, true)],
-        grid(60_000, 1.0, 1),
-        &mut out,
-    );
-    let idx: Vec<(i64, i64)> = out.iter().map(|c| (c.price_idx, c.time_idx)).collect();
-    assert_eq!(idx, vec![(10, 0), (12, 1)]);
-}
-
-#[test]
-fn consecutive_intervals_on_a_row_merge_up_to_the_span() {
-    let mut out = Vec::new();
-    aggregate(
+    aggregate_prints(
         [
-            // Row 10: intervals 0, 1, 2 merge; 3 starts the next cluster (the span is full);
-            // 5 stands alone after the empty 4.
-            (100.0, 10.0, 1.0, true),
-            (1_100.0, 10.0, 1.0, false),
-            (2_100.0, 10.0, 4.0, true),
-            (3_100.0, 10.0, 1.0, true),
-            (5_100.0, 10.0, 1.0, true),
-            // Row 11, interval 1: a neighbouring row never joins row 10's cluster.
-            (1_200.0, 11.0, 1.0, true),
+            trade(5.0, 10.0, 1.0, true),
+            trade(5.0, 10.0, 2.0, true),
+            trade(6.0, 10.0, 4.0, true),
         ],
-        grid(1_000, 1.0, 1),
+        None,
+        0.0,
         &mut out,
     );
-    let shape: Vec<(i64, i64)> = out.iter().map(|c| (c.price_idx, c.time_idx)).collect();
-    assert_eq!(shape, vec![(10, 0), (10, 3), (10, 5), (11, 1)]);
-    let first = out[0];
-    assert_eq!((first.buy, first.sell), (50.0, 10.0));
-    // Volumes 10, 10, 40 at offsets 0, 1, 2: the centre sits 1.5 intervals past the first one's.
-    assert_eq!(first.center_ms, 2_000.0);
-    assert_eq!(out[1].center_ms, 3_500.0);
-    assert_eq!(out[2].center_ms, 5_500.0);
+    assert_eq!(out.len(), 2);
+    assert!((out[0].buy - 3.0).abs() < 1e-4);
 }
 
 #[test]
-fn unusable_trades_and_grids_add_nothing() {
+fn unusable_trades_make_no_print() {
     let mut out = Vec::new();
-    aggregate(
+    aggregate_prints(
         [
             (f64::NAN, 10.0, 1.0, true),
             (1.0, 10.0, 0.0, true),
             (1.0, f32::NAN, 1.0, true),
+            (1.0, -1.0, 1.0, true),
         ],
-        grid(1_000, 1.0, 1),
+        Some(0.1),
+        100.0,
         &mut out,
     );
     assert!(out.is_empty());
-    aggregate([(1.0, 10.0, 1.0, true)], grid(0, 1.0, 1), &mut out);
-    assert!(out.is_empty());
+}
+
+/// The scale is the market's own: every volume multiplied by a thousand — the same tape quoted in
+/// another currency — draws the same discs.
+#[test]
+fn the_scale_does_not_depend_on_the_quote_currency() {
+    let volumes: Vec<f32> = (1..=200).map(|i| (i * i) as f32).collect();
+    let radii = |k: f32| {
+        let prints: Vec<Print> = volumes
+            .iter()
+            .enumerate()
+            .map(|(i, v)| print(i as f64, 1, v * k))
+            .collect();
+        let scale = print_scale(&prints, 50, &mut Vec::new()).expect("prints");
+        prints
+            .iter()
+            .map(|p| print_radius(p.total(), scale, DiscRadii::at(1.0)).0)
+            .collect::<Vec<_>>()
+    };
+    let (usdt, btc) = (radii(1.0), radii(1_000.0));
+    for (a, b) in usdt.iter().zip(&btc) {
+        assert!((a - b).abs() < 1e-3, "{a} vs {b}");
+    }
 }
 
 #[test]
-fn a_disc_s_area_follows_its_volume_against_the_biggest() {
-    let max_r = max_radius(30.0, 20.0);
-    assert_eq!(max_r, 9.0);
-    assert_eq!(disc_radius(400.0, 400.0, max_r), 9.0);
-    // A quarter of the volume: a quarter of the area, half the radius.
-    assert_eq!(disc_radius(100.0, 400.0, max_r), 4.5);
-    // A speck still shows.
-    assert_eq!(disc_radius(1e-6, 400.0, max_r), MIN_DISC_PX);
+fn a_print_is_a_dot_below_the_small_one_and_full_from_the_big_one() {
+    let scale = PrintScale {
+        small: 100.0,
+        big: 10_000.0,
+    };
+    let r = DiscRadii::at(1.0);
+    assert_eq!(print_radius(99.0, scale, r), (DOT_RADIUS_PX, true));
+    assert_eq!(print_radius(100.0, scale, r), (MIN_RADIUS_PX, false));
+    assert_eq!(print_radius(1_000_000.0, scale, r), (MAX_RADIUS_PX, false));
+    // Halfway in orders of magnitude: halfway in radius.
+    let (mid, _) = print_radius(1_000.0, scale, r);
+    assert!((mid - (MIN_RADIUS_PX + MAX_RADIUS_PX) * 0.5).abs() < 1e-3);
+    // A coin whose prints are all one size: none stands out as a full disc.
+    let flat = PrintScale {
+        small: 50.0,
+        big: 50.0,
+    };
+    assert_eq!(print_radius(50.0, flat, r), (MIN_RADIUS_PX, false));
+    // ...but a print above that one size still does.
+    assert_eq!(print_radius(500.0, flat, r), (MAX_RADIUS_PX, false));
+}
+
+/// A re-fold that barely moves the percentiles keeps the old scale, so the discs do not breathe.
+#[test]
+fn a_scale_holds_against_a_small_drift() {
+    let old = PrintScale {
+        small: 100.0,
+        big: 10_000.0,
+    };
+    let near = PrintScale {
+        small: 105.0,
+        big: 9_500.0,
+    };
+    let far = PrintScale {
+        small: 100.0,
+        big: 20_000.0,
+    };
+    assert!(old.holds_against(&near));
+    assert!(!old.holds_against(&far));
+}
+
+#[test]
+fn covering_discs_of_one_price_merge_and_grow() {
+    let prints = [
+        print(0.0, 1, 100.0),
+        print(1_000.0, 1, 100.0),
+        print(2_000.0, 1, 100.0),
+        // Another price at the same time never merges with the first row.
+        print(0.0, 2, 100.0),
+    ];
+    let mut order = Vec::new();
+    price_time_order(&prints, &mut order);
+    // Radius grows with the volume, so a merged disc is bigger than one print's.
+    let size = |v: f32| (v / 10.0, false);
+    let mut out = Vec::new();
+    // 1 px per 100 ms: the three prints of row 1 sit 10 px apart with 10 px discs — they cover,
+    // and the grown disc keeps swallowing the next.
+    merge_overlapping(&prints, &order, 0.01, size, &mut out);
+    assert_eq!(out.len(), 2);
+    assert!((out[0].total() - 300.0).abs() < 1e-3);
+    assert_eq!(out[0].radius, 30.0);
+    assert_eq!(out[0].time_ms, 1_000.0);
+    assert_eq!(out[0].first_ms, 0.0);
+    // Zoomed in to 1 px per ms they stand apart.
+    merge_overlapping(&prints, &order, 1.0, size, &mut out);
+    assert_eq!(out.len(), 4);
+}
+
+#[test]
+fn stored_settings_snap_onto_the_lists() {
+    assert_eq!(snap_merge_ms(120), 100);
+    assert_eq!(snap_merge_ms(9_999), 1_000);
+    assert_eq!(snap_small_pct(60), 50);
 }
 
 #[test]
@@ -122,7 +207,7 @@ fn a_volume_prints_with_at_most_three_digits() {
     // Rounding into the next unit prints that unit, not "1000K".
     assert_eq!(short_volume(999_700.0), "1M");
     assert_eq!(short_volume(0.4), "0.4");
-    // Below one: no "0.0" that reads as an empty cell, no "1.0" beside a plain "1".
+    // Below one: no "0.0" that reads as an empty disc, no "1.0" beside a plain "1".
     assert_eq!(short_volume(0.04), "<0.1");
     assert_eq!(short_volume(0.97), "1");
     assert_eq!(short_volume(999.7), "1K");

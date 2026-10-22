@@ -81,10 +81,10 @@ pub enum TradeKind {
     /// The 7×7 cross per trade — the picture this terminal shipped with.
     #[default]
     Crosses,
-    /// Clusters: the tape summed into a time × price grid, up to three consecutive intervals of one
-    /// price merged into one disc — its area the cluster's volume against the biggest on screen,
-    /// its colour the side that traded more. A disc big enough prints that volume inside it. The
-    /// grid always follows the zoom; there is no stored step.
+    /// Prints, as a scalping terminal's tape: trades of one price and side within the merge window
+    /// make one disc at its own time and price, sized on the market's own prints (never in the
+    /// quote currency) and coloured by the side; discs of one price that cover each other at the
+    /// current zoom merge. A disc big enough prints its volume inside it.
     Bubbles,
 }
 
@@ -255,6 +255,17 @@ pub struct ChartGraphicsCfg {
     /// before bubbles existed. Liquidations keep their crosses either way.
     #[serde(default, deserialize_with = "de_trade_kind")]
     pub trade_kind: TradeKind,
+    /// Bubbles: trades of one price and side up to this many milliseconds after a print's first
+    /// trade join it, one of `moon_chart::clusters::MERGE_WINDOWS_MS`.
+    #[serde(default = "def_trade_merge_ms", deserialize_with = "de_trade_merge_ms")]
+    pub trade_merge_ms: u16,
+    /// Bubbles: prints smaller than this percentage of the market's own prints draw as a dot with
+    /// no label, one of `moon_chart::clusters::SMALL_PCTS`; `0` sizes every print.
+    #[serde(
+        default = "def_trade_small_pct",
+        deserialize_with = "de_trade_small_pct"
+    )]
+    pub trade_small_pct: u8,
 
     // --- Bottom candle volumes, likewise moved off `ChartTheme`. ---
     /// Display style: `crate::market::candles::VOLUME_STYLE_OFF` or `_HILLS`. Together with
@@ -403,6 +414,8 @@ impl Default for ChartGraphicsCfg {
             marker_scale: def_marker_scale(),
             trade_volume_alpha: def_trade_volume_alpha(),
             trade_kind: TradeKind::Crosses,
+            trade_merge_ms: def_trade_merge_ms(),
+            trade_small_pct: def_trade_small_pct(),
 
             candle_volume_style: def_candle_volume_style(),
             candle_volume_height: def_candle_volume_height(),

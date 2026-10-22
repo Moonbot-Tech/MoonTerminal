@@ -24,7 +24,8 @@ use serde_compat::{
     de_hvol_width, de_ladder_big_pct, de_lenient_chart_labels, de_lenient_false,
     de_lenient_graphics, de_lenient_map, de_lenient_seed, de_lenient_true, de_lenient_u32,
     de_marker_scale, de_strategies_tree_text_step, de_table_order_map, de_table_sort_map,
-    de_tick_ranges, de_trade_history_style, de_trade_kind, de_trade_volume_alpha,
+    de_tick_ranges, de_trade_history_style, de_trade_kind, de_trade_merge_ms, de_trade_small_pct,
+    de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
 
@@ -119,6 +120,18 @@ fn def_hvol_width() -> f32 {
 /// Default ladder highlight threshold, in percent of the largest visible row: a row at half the
 /// biggest wall on screen or more stands out.
 fn def_ladder_big_pct() -> u8 {
+    50
+}
+
+/// Default bubble merge window, milliseconds: `moon_chart::clusters::DEFAULT_MERGE_MS`, which this
+/// crate cannot name.
+fn def_trade_merge_ms() -> u16 {
+    100
+}
+
+/// Default small-print threshold, percent of the market's prints:
+/// `moon_chart::clusters::DEFAULT_SMALL_PCT`, the smaller half as dots.
+fn def_trade_small_pct() -> u8 {
     50
 }
 

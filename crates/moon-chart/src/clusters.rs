@@ -1,240 +1,343 @@
-//! Backend-free decisions for the trade clusters: the grid the tape is summed on and how big each
-//! cell's disc is.
+//! Backend-free decisions for the trade bubbles: which trades make one print, how big a print's
+//! disc is, and which discs merge at the current zoom.
 //!
-//! A cluster starts as one cell of a time × price grid: every trade whose time falls into the
-//! cell's interval and whose price rounds to the cell's row adds its quote notional to it. Up to
-//! [`MERGE_SPAN`] consecutive intervals that kept trading on one row then merge into ONE cluster,
-//! so a busy price reads as one disc instead of a string of them. A cluster draws one disc, its
-//! AREA proportional to its volume against the biggest cluster on screen, its colour the side that
-//! traded more, placed at the volume-weighted centre of its intervals. The grid follows the zoom
-//! on both axes so the largest disc still fits a cell and no two discs overlap: the time interval
-//! from the X scale, the price row from the market's tick — always automatic, by decision.
+//! A bubble is a PRINT, as in a scalping terminal's tape: trades that follow each other at one
+//! price on one side within a short window (`trade_merge_ms`) add up into one disc at the first
+//! trade's time and its own price. Its size is measured against this market's OWN prints, never
+//! in the quote currency: the percentiles of the print sizes in the summed tape set the scale, so
+//! a BTC pair, a stablecoin, a coin-margined or a quarterly contract each read on their own scale.
+//! A print under the small percentile is a dot with no label. Zoomed out, discs of one price that
+//! cover each other merge into one, their volume summed and the disc grown by the same scale;
+//! discs of different prices may overlap, which is what keeps the tape dense.
 
-use std::collections::BTreeMap;
+/// Merge windows the reader can pick, milliseconds. `0` still joins the fills an exchange reports
+/// under one timestamp.
+pub const MERGE_WINDOWS_MS: [u16; 6] = [0, 50, 100, 250, 500, 1000];
 
-/// The most consecutive intervals of one row that merge into one cluster. A cap, so a price that
-/// trades all session does not become one disc spanning the screen.
-pub const MERGE_SPAN: i64 = 3;
+/// The merge window an absent setting reads as.
+pub const DEFAULT_MERGE_MS: u16 = 100;
 
-/// Time intervals a cell can span, in milliseconds, finest first.
-pub const TIME_STEPS_MS: [i64; 16] = [
-    1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000,
-    1_800_000, 3_600_000, 7_200_000, 14_400_000, 86_400_000,
-];
+/// Small-print thresholds the reader can pick, percent of this market's prints. `0` sizes every
+/// print.
+pub const SMALL_PCTS: [u8; 5] = [0, 25, 50, 75, 90];
 
-/// The smallest cell, in logical pixels on either axis. Sized for the LABEL, not the dot: at the
-/// default label size the biggest disc of a cell this size holds a four-glyph volume (`2.3M`), and
-/// a disc at about half its cell's volume still holds three (`11K`).
-pub const MIN_CELL_PX: f32 = 32.0;
+/// The small-print threshold an absent setting reads as: the smaller half of the prints are dots.
+pub const DEFAULT_SMALL_PCT: u8 = 50;
 
-/// Gap kept between the largest disc and its cell's edge, physical pixels, so neighbours never
-/// touch.
-pub const CELL_GAP_PX: f32 = 1.0;
+use std::collections::HashMap;
 
-/// The smallest disc a non-empty cell draws, physical pixels — still a visible dot however small
-/// its volume.
-pub const MIN_DISC_PX: f32 = 1.5;
+/// The percentile of this market's prints that gets the full disc; bigger prints stay at it.
+const BIG_PERCENTILE: f32 = 99.0;
 
-/// The grid a tape is summed on.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ClusterGrid {
-    /// One cell's time interval in milliseconds; cells are aligned to whole multiples of it in
-    /// absolute time, so a pan never re-buckets a trade.
-    pub time_step_ms: i64,
-    /// The market's price tick.
-    pub tick: f64,
-    /// How many ticks one price row spans.
-    pub price_step: u32,
-}
+/// How far a re-measured scale may drift and still keep the old one, as a share of it: the live
+/// edge re-folds every few hundred milliseconds, and a scale that followed every tick would make
+/// every disc on screen breathe.
+const SCALE_HOLD: f32 = 0.1;
 
-impl ClusterGrid {
-    /// Height of one price row in price units.
-    pub fn row_height(&self) -> f64 {
-        self.tick * f64::from(self.price_step)
-    }
-}
+/// A small print's dot, logical pixels.
+pub const DOT_RADIUS_PX: f32 = 2.0;
 
-/// The finest interval of [`TIME_STEPS_MS`] whose cell is at least `min_px` wide.
-///
-/// Args:
-///     px_per_ms: Physical pixels per millisecond of the plot.
-///     min_px: Physical width a cell needs.
-///
-/// Returns:
-///     The interval, or `None` for an unusable scale or a zoom so far out that even a day is too
-///     narrow — the chart then draws no clusters.
-pub fn time_step_ms(px_per_ms: f32, min_px: f32) -> Option<i64> {
-    if !(px_per_ms.is_finite() && px_per_ms > 0.0) {
-        return None;
-    }
-    TIME_STEPS_MS
+/// The smallest sized disc — a print right at the small threshold — logical pixels.
+pub const MIN_RADIUS_PX: f32 = 3.5;
+
+/// The full disc, logical pixels: big enough to hold a four-glyph volume (`2.3M`) at the default
+/// label size.
+pub const MAX_RADIUS_PX: f32 = 16.0;
+
+/// Snap a stored merge window onto [`MERGE_WINDOWS_MS`], so a hand-edited value lights one segment.
+pub fn snap_merge_ms(ms: u16) -> u16 {
+    MERGE_WINDOWS_MS
         .iter()
         .copied()
-        .find(|&step| step as f32 * px_per_ms >= min_px)
+        .min_by_key(|w| w.abs_diff(ms))
+        .unwrap_or(DEFAULT_MERGE_MS)
 }
 
-/// One cluster: one to [`MERGE_SPAN`] consecutive intervals of one row, and the quote notional
-/// bought and sold in them.
+/// Snap a stored small-print threshold onto [`SMALL_PCTS`].
+pub fn snap_small_pct(pct: u8) -> u8 {
+    SMALL_PCTS
+        .iter()
+        .copied()
+        .min_by_key(|p| p.abs_diff(pct))
+        .unwrap_or(DEFAULT_SMALL_PCT)
+}
+
+/// One print: trades of one price and one side within the merge window, in quote notional.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ClusterCell {
-    /// Index of the cluster's FIRST interval: its start is `time_idx × time_step_ms` in absolute
-    /// time. Stable while the cluster grows, so it keys the cluster's label slot.
-    pub time_idx: i64,
-    /// Index of the cluster's row: its centre price is `price_idx × row_height`.
-    pub price_idx: i64,
+pub struct Print {
+    /// The first trade's absolute time, milliseconds.
+    pub time_ms: f64,
+    /// The trades' price.
+    pub price: f32,
+    /// The price's identity for grouping, see [`price_key`].
+    pub key: i64,
     pub buy: f32,
     pub sell: f32,
-    /// Where the disc sits, absolute milliseconds: the centres of the merged intervals weighted by
-    /// their volume. Never outside the first and last interval's centres, so a disc no bigger than
-    /// a cell stays inside its own intervals and clear of the next cluster on the row.
-    pub center_ms: f64,
 }
 
-impl ClusterCell {
-    /// Everything traded in the cluster.
+impl Print {
+    /// Everything the print traded.
     pub fn total(&self) -> f32 {
         self.buy + self.sell
     }
 }
 
-/// A stretch of consecutive intervals on one row while [`aggregate`] merges it.
-struct Run {
-    /// The cluster so far; `center_ms` is filled by [`Run::finish`].
-    cell: ClusterCell,
-    /// The last interval merged.
-    last: i64,
-    /// Σ interval volume × that interval's offset from the first, for the weighted centre.
-    weighted: f64,
-}
-
-impl Run {
-    /// Open a run on one cell.
-    fn start(price_idx: i64, time_idx: i64, buy: f32, sell: f32) -> Self {
-        Self {
-            cell: ClusterCell {
-                time_idx,
-                price_idx,
-                buy,
-                sell,
-                center_ms: 0.0,
-            },
-            last: time_idx,
-            weighted: 0.0,
+/// A price's identity for grouping prints: its whole number of ticks when the tick is known, so
+/// an `f32` rounding never splits one level in two; its exact bits otherwise.
+pub fn price_key(price: f32, tick: Option<f64>) -> Option<i64> {
+    if !(price.is_finite() && price > 0.0) {
+        return None;
+    }
+    match tick.filter(|t| t.is_finite() && *t > 0.0) {
+        Some(tick) => {
+            let ticks = (f64::from(price) / tick).round();
+            (ticks.is_finite() && ticks.abs() < 9.0e15).then_some(ticks as i64)
         }
-    }
-
-    /// Whether the cell at `(price_idx, time_idx)` continues this run: same row, the very next
-    /// interval, and room left under [`MERGE_SPAN`].
-    fn takes(&self, price_idx: i64, time_idx: i64) -> bool {
-        price_idx == self.cell.price_idx
-            && time_idx == self.last + 1
-            && time_idx - self.cell.time_idx < MERGE_SPAN
-    }
-
-    /// Merge the next interval's volume into the run.
-    fn add(&mut self, time_idx: i64, buy: f32, sell: f32) {
-        self.cell.buy += buy;
-        self.cell.sell += sell;
-        self.weighted +=
-            (f64::from(buy) + f64::from(sell)) * (time_idx - self.cell.time_idx) as f64;
-        self.last = time_idx;
-    }
-
-    /// Close the run into a cluster, placing its disc at the volume-weighted centre.
-    fn finish(mut self, step_ms: f64) -> ClusterCell {
-        let total = f64::from(self.cell.buy) + f64::from(self.cell.sell);
-        let offset = if total.is_finite() && total > 0.0 {
-            self.weighted / total
-        } else {
-            0.0
-        };
-        self.cell.center_ms = (self.cell.time_idx as f64 + 0.5 + offset) * step_ms;
-        self.cell
+        None => Some(i64::from(price.to_bits())),
     }
 }
 
-/// Sum a tape into clusters.
+/// Fold a tape into prints.
 ///
-/// A trade's row is its price rounded to the tick first and then to the nearest row, so an `f32`
-/// price never lands a row off; its interval is its absolute time floored to the step. Non-empty
-/// intervals that follow each other on one row then merge, at most [`MERGE_SPAN`] to a cluster,
-/// counted from the first interval of the stretch — an empty interval breaks it.
+/// A trade joins the open print of its price and side even when trades at other prices came in
+/// between: a tape bouncing between the bid and the ask still folds within the window.
 ///
 /// Args:
-///     trades: `(absolute time ms, price, quantity, is_buy)` per trade, any order.
-///     grid: The grid to sum on.
-///     out: Cleared, then filled with the clusters ordered by row, then time.
-pub fn aggregate(
+///     trades: `(absolute time ms, price, quantity, is_buy)` in tape order.
+///     tick: The market's tick, `None` while unknown.
+///     window_ms: How far after a print's first trade, inclusive, a trade of its price and side
+///         still joins it.
+///     out: Cleared, then filled with the prints in tape order of their first trade.
+pub fn aggregate_prints(
     trades: impl IntoIterator<Item = (f64, f32, f32, bool)>,
-    grid: ClusterGrid,
-    out: &mut Vec<ClusterCell>,
+    tick: Option<f64>,
+    window_ms: f64,
+    out: &mut Vec<Print>,
 ) {
     out.clear();
-    if grid.time_step_ms <= 0 || !(grid.tick.is_finite() && grid.tick > 0.0) || grid.price_step == 0
-    {
-        return;
-    }
-    let step = i64::from(grid.price_step);
-    // Keyed row first: each row's intervals come out in time order, ready to merge.
-    let mut cells: BTreeMap<(i64, i64), (f32, f32)> = BTreeMap::new();
+    let mut open: HashMap<(i64, bool), usize> = HashMap::new();
     for (time_ms, price, qty, is_buy) in trades {
         let notional = price * qty;
         if !time_ms.is_finite() || !(notional > 0.0) || !notional.is_finite() {
             continue;
         }
-        let ticks = (f64::from(price) / grid.tick).round();
-        if !ticks.is_finite() || ticks.abs() > 9.0e15 {
+        let Some(key) = price_key(price, tick) else {
             continue;
-        }
-        let ticks = ticks as i64;
-        // Nearest row: half a row either side of the row's centre.
-        let price_idx = (ticks + step.div_euclid(2)).div_euclid(step);
-        let time_idx = (time_ms as i64).div_euclid(grid.time_step_ms);
-        let cell = cells.entry((price_idx, time_idx)).or_insert((0.0, 0.0));
-        if is_buy {
-            cell.0 += notional;
-        } else {
-            cell.1 += notional;
-        }
-    }
-    let step_ms = grid.time_step_ms as f64;
-    let mut open: Option<Run> = None;
-    for ((price_idx, time_idx), (buy, sell)) in cells {
-        match &mut open {
-            Some(run) if run.takes(price_idx, time_idx) => run.add(time_idx, buy, sell),
-            _ => {
-                if let Some(run) = open.take() {
-                    out.push(run.finish(step_ms));
+        };
+        if let Some(&i) = open.get(&(key, is_buy)) {
+            let print = &mut out[i];
+            if time_ms >= print.time_ms && time_ms - print.time_ms <= window_ms {
+                if is_buy {
+                    print.buy += notional;
+                } else {
+                    print.sell += notional;
                 }
-                open = Some(Run::start(price_idx, time_idx, buy, sell));
+                continue;
             }
         }
-    }
-    if let Some(run) = open {
-        out.push(run.finish(step_ms));
+        open.insert((key, is_buy), out.len());
+        out.push(Print {
+            time_ms,
+            price,
+            key,
+            buy: if is_buy { notional } else { 0.0 },
+            sell: if is_buy { 0.0 } else { notional },
+        });
     }
 }
 
-/// The largest disc's radius for cells of `cell_w × cell_h` physical pixels: half the narrower
-/// side, less the gap that keeps neighbours apart.
-pub fn max_radius(cell_w: f32, cell_h: f32) -> f32 {
-    (cell_w.min(cell_h) * 0.5 - CELL_GAP_PX).max(MIN_DISC_PX)
+/// Order prints by price, then time: the order [`merge_overlapping`] walks them in.
+pub fn price_time_order(prints: &[Print], order: &mut Vec<u32>) {
+    order.clear();
+    order.extend(0..prints.len() as u32);
+    order.sort_by(|&a, &b| {
+        let (a, b) = (&prints[a as usize], &prints[b as usize]);
+        a.key.cmp(&b.key).then(a.time_ms.total_cmp(&b.time_ms))
+    });
 }
 
-/// A cell's disc radius: its AREA proportional to its volume against the biggest cell on screen,
-/// floored at [`MIN_DISC_PX`] so a small cell still shows.
-pub fn disc_radius(total: f32, max_total: f32, max_r: f32) -> f32 {
-    if !(max_total > 0.0) || !(total > 0.0) {
-        return MIN_DISC_PX;
+/// The scale a market's prints are sized on: the volume of the smallest sized print and of the
+/// full disc, both percentiles of the prints themselves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PrintScale {
+    pub small: f32,
+    pub big: f32,
+}
+
+impl PrintScale {
+    /// Whether `fresh` is within [`SCALE_HOLD`] of this scale on both ends, so this one can stay.
+    pub fn holds_against(&self, fresh: &PrintScale) -> bool {
+        let near = |a: f32, b: f32| a > 0.0 && ((b / a) - 1.0).abs() <= SCALE_HOLD;
+        near(self.small, fresh.small) && near(self.big, fresh.big)
     }
-    (max_r * (total / max_total).min(1.0).sqrt()).max(MIN_DISC_PX)
 }
 
-/// A cell's volume printed short enough to sit inside its disc: at most three digits and an SI
-/// suffix — one decimal below ten of a unit (`2.3M`), whole above it (`11K`, `906`) — where the
-/// chart's usual format (`10.8K`) costs the glyph that decides whether the label fits. Below one
-/// it keeps a decimal, and a volume that rounds to nothing prints `<0.1` rather than a `0.0` that
-/// reads as an empty cell.
+/// Measure the scale from the prints of the summed tape.
+///
+/// Returns:
+///     `None` for a tape without a usable print.
+pub fn print_scale(prints: &[Print], small_pct: u8, scratch: &mut Vec<f32>) -> Option<PrintScale> {
+    scratch.clear();
+    scratch.extend(
+        prints
+            .iter()
+            .map(Print::total)
+            .filter(|v| v.is_finite() && *v > 0.0),
+    );
+    if scratch.is_empty() {
+        return None;
+    }
+    scratch.sort_unstable_by(f32::total_cmp);
+    let at = |pct: f32| {
+        let i = ((pct / 100.0) * (scratch.len() - 1) as f32).round() as usize;
+        scratch[i.min(scratch.len() - 1)]
+    };
+    let small = at(f32::from(small_pct.min(100)));
+    Some(PrintScale {
+        small,
+        big: at(BIG_PERCENTILE).max(small),
+    })
+}
+
+/// The radii a pane draws prints with, physical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DiscRadii {
+    pub dot: f32,
+    pub min: f32,
+    pub max: f32,
+}
+
+impl DiscRadii {
+    /// The logical radii at `ppp` physical pixels per logical one.
+    pub fn at(ppp: f32) -> Self {
+        Self {
+            dot: DOT_RADIUS_PX * ppp,
+            min: MIN_RADIUS_PX * ppp,
+            max: MAX_RADIUS_PX * ppp,
+        }
+    }
+}
+
+/// A volume's disc on a market's scale: a dot below the small print, otherwise growing with the
+/// LOGARITHM of the volume from the small print to the full disc at the big one — prints spread
+/// over orders of magnitude, so a linear scale would leave all but the giants as specks.
+///
+/// Returns:
+///     The radius and whether the volume is a small print (a dot with no label).
+pub fn print_radius(total: f32, scale: PrintScale, r: DiscRadii) -> (f32, bool) {
+    if !(total >= scale.small) {
+        return (r.dot, true);
+    }
+    let span = (scale.big / scale.small).ln();
+    // The small and the big percentile coincide — a fixed-lot coin, or a single print: that one
+    // size is the ordinary print, and only what trades above it stands out.
+    if !(span.is_finite() && span > 0.0) {
+        return if total > scale.big {
+            (r.max, false)
+        } else {
+            (r.min, false)
+        };
+    }
+    let t = ((total / scale.small).ln() / span).clamp(0.0, 1.0);
+    (r.min + (r.max - r.min) * t, false)
+}
+
+/// One disc as drawn: a print, or prints of one price merged because they covered each other.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PrintDisc {
+    /// The disc's absolute time, milliseconds: its prints' times weighted by their volume.
+    pub time_ms: f64,
+    pub price: f32,
+    pub key: i64,
+    pub buy: f32,
+    pub sell: f32,
+    pub radius: f32,
+    /// Below the small print: a dot with no label.
+    pub small: bool,
+    /// The first print's time, milliseconds — stable while the disc absorbs later prints, so it
+    /// keys the disc's label slot.
+    pub first_ms: f64,
+}
+
+impl PrintDisc {
+    /// Everything the disc traded.
+    pub fn total(&self) -> f32 {
+        self.buy + self.sell
+    }
+}
+
+/// Build the discs of one zoom: prints of one price whose discs would cover each other merge,
+/// with no cap on how many.
+///
+/// Args:
+///     prints: The tape's prints.
+///     order: `prints` by price, then time ([`price_time_order`]).
+///     px_per_ms: Physical pixels per millisecond of the plot.
+///     size: A volume's radius and small flag ([`print_radius`] on the market's scale).
+///     out: Cleared, then filled with the discs, by price, then time.
+pub fn merge_overlapping(
+    prints: &[Print],
+    order: &[u32],
+    px_per_ms: f64,
+    size: impl Fn(f32) -> (f32, bool),
+    out: &mut Vec<PrintDisc>,
+) {
+    out.clear();
+    for &i in order {
+        let Some(p) = prints.get(i as usize) else {
+            continue;
+        };
+        let (radius, small) = size(p.total());
+        let mut disc = PrintDisc {
+            time_ms: p.time_ms,
+            price: p.price,
+            key: p.key,
+            buy: p.buy,
+            sell: p.sell,
+            radius,
+            small,
+            first_ms: p.time_ms,
+        };
+        // A merge moves the disc's centre back and grows it, so it can reach the one before too.
+        loop {
+            let covers = out.last().is_some_and(|last| {
+                last.key == disc.key
+                    && (disc.time_ms - last.time_ms).abs() * px_per_ms
+                        < f64::from(last.radius + disc.radius)
+            });
+            if !covers {
+                break;
+            }
+            let last = out.pop().expect("checked above");
+            let (wa, wb) = (f64::from(last.total()), f64::from(disc.total()));
+            let buy = last.buy + disc.buy;
+            let sell = last.sell + disc.sell;
+            let time_ms = if wa + wb > 0.0 {
+                (last.time_ms * wa + disc.time_ms * wb) / (wa + wb)
+            } else {
+                last.time_ms
+            };
+            let (radius, small) = size(buy + sell);
+            disc = PrintDisc {
+                time_ms,
+                price: last.price,
+                key: last.key,
+                buy,
+                sell,
+                radius,
+                small,
+                first_ms: last.first_ms,
+            };
+        }
+        out.push(disc);
+    }
+}
+
+/// A volume printed short enough to sit inside its disc: at most three digits and an SI suffix —
+/// one decimal below ten of a unit (`2.3M`), whole above it (`11K`, `906`) — where the chart's
+/// usual format (`10.8K`) costs the glyph that decides whether the label fits. Below one it keeps
+/// a decimal, and a volume that rounds to nothing prints `<0.1` rather than a `0.0` that reads as
+/// an empty disc.
 pub fn short_volume(v: f32) -> String {
     if !v.is_finite() {
         return String::new();

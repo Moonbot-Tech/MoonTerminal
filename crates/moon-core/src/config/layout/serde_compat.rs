@@ -16,7 +16,8 @@ use super::{
     clamp_auto_workspace_rail_width, clamp_strategies_tree_text_step, def_candle_volume_alpha,
     def_candle_volume_height, def_candle_volume_scale, def_candle_volume_style,
     def_connector_thickness_px, def_hvol_price_frame_pct, def_hvol_width, def_ladder_big_pct,
-    def_marker_scale, def_trade_arrow_scale, def_trade_volume_alpha,
+    def_marker_scale, def_trade_arrow_scale, def_trade_merge_ms, def_trade_small_pct,
+    def_trade_volume_alpha,
 };
 
 /// Read the tuner seed from whatever `layout.toml` happens to hold, never failing.
@@ -259,6 +260,23 @@ where
     D: serde::Deserializer<'de>,
 {
     Ok(de_lenient::<D, TradeKind>(d)?.unwrap_or_default())
+}
+
+/// Read the bubble merge window leniently, defaulting an unusable value. Snapping onto the list is
+/// the normaliser's job (`moon_chart::normalize_chart_graphics`), not the reader's.
+pub(super) fn de_trade_merge_ms<'de, D>(d: D) -> Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, u16>(d)?.unwrap_or_else(def_trade_merge_ms))
+}
+
+/// Read the small-print threshold leniently, defaulting an unusable value.
+pub(super) fn de_trade_small_pct<'de, D>(d: D) -> Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, u8>(d)?.unwrap_or_else(def_trade_small_pct))
 }
 
 /// Read the ladder highlight threshold leniently, defaulting an unusable value.

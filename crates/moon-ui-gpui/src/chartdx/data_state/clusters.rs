@@ -1,59 +1,80 @@
-//! The per-pane trade clusters: when the grid's cells are re-summed and when their discs are
-//! re-sized and uploaded.
+//! The per-pane trade bubbles: when the prints are re-folded and when their discs are re-laid out
+//! and uploaded.
 //!
-//! The arithmetic is `moon_chart::clusters`; this module owns only the invalidation. Cells are summed
-//! from the backend's resident trade mirror over the visible window plus one window either side, so a
-//! pan within that reach re-sizes the discs without re-summing. Re-summing follows a new grid (a
-//! zoom moved the time interval or the price row, the tick arrived), a view that left the summed
-//! reach, and new trades — those at most once per [`CLUSTER_DATA_THROTTLE`], like the order book's
-//! own bake throttle. The discs follow the biggest VISIBLE cluster, so a pan that changes it
-//! re-sizes and re-uploads them.
+//! The arithmetic is `moon_chart::clusters`; this module owns only the invalidation. Prints are
+//! folded from the backend's resident trade mirror over the visible window plus one window either
+//! side, and the market's scale is measured from them. Re-folding follows a view that left that
+//! reach, a new merge window, small threshold or tick, and new trades — those at most once per
+//! [`CLUSTER_DATA_THROTTLE`], like the order book's own bake throttle. The discs are laid out
+//! again only when the X zoom, the pixel density or the colours change: which discs of one price
+//! cover each other depends on the pixels per millisecond and nothing else, so a pan or a price
+//! zoom uploads nothing.
 
 use std::time::{Duration, Instant};
 
-use moon_chart::clusters::{self, ClusterGrid};
+use moon_chart::clusters::{self, DiscRadii};
 use moon_chart::layers::{MARKER_SHAPE_KNOT, MarkerInstance};
 
 use super::super::pane_render::PaneRender;
 use super::super::types::ChartViewGpu;
 
-/// Minimum interval between two re-sums driven by new trades alone.
+/// Minimum interval between two re-folds driven by new trades alone.
 const CLUSTER_DATA_THROTTLE: Duration = Duration::from_millis(200);
 
 /// Opacity of a disc: a crowd of them still lets the candles show through.
 const DISC_ALPHA: f32 = 0.85;
 
-/// What a pane draws its clusters with this sync.
+/// What a pane draws its bubbles with this sync.
 pub(in crate::chartdx) struct ClusterInputs {
     /// Whether the tab draws its trades as bubbles at all.
     pub enabled: bool,
-    /// The market's tick, `None` while unknown.
+    /// The market's tick, `None` while unknown: prints then group by exact price.
     pub tick: Option<f64>,
     /// The plot's own transform, physical pixels.
     pub view: ChartViewGpu,
     /// The pane's time epoch, unix milliseconds: `time_rel` is relative to it.
     pub epoch_ms: f64,
-    /// Physical pixels a cell needs on either axis.
-    pub min_cell_px: f32,
-    /// sRGB colours of a cell that bought more and of one that sold more.
+    /// Physical pixels per logical pixel.
+    pub ppp: f32,
+    /// The tab's merge window, milliseconds.
+    pub merge_ms: u16,
+    /// The tab's small-print threshold, percent of the market's prints.
+    pub small_pct: u8,
+    /// sRGB colours of a disc that bought more and of one that sold more.
     pub buy: [f32; 3],
     pub sell: [f32; 3],
 }
 
-/// Whether new trades wait to be summed and the throttle now lets them through.
+/// What the prints were folded with; any change re-folds them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::chartdx) struct FoldKey {
+    merge_ms: u16,
+    small_pct: u8,
+    tick_bits: u64,
+}
+
+/// What the discs were laid out with; any change lays them out again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::chartdx) struct LayoutKey {
+    time_to_px: f32,
+    ppp: f32,
+    colors: [[f32; 3]; 2],
+}
+
+/// Whether new trades wait to be folded and the throttle now lets them through.
 ///
 /// Read by the sync's own trigger (`pull_market_source_if_visible`): a burst the throttle held
-/// back must still be summed on a market that then goes quiet, when no new revision would ever
+/// back must still be folded on a market that then goes quiet, when no new revision would ever
 /// run the sync again.
-pub(in crate::chartdx) fn resum_due(pr: &PaneRender, now: Instant) -> bool {
+pub(in crate::chartdx) fn refold_due(pr: &PaneRender, now: Instant) -> bool {
     pr.cluster_dirty
-        && pr.cluster_grid.is_some()
+        && pr.cluster_on
         && pr
             .cluster_built_at
             .is_none_or(|at| now.duration_since(at) >= CLUSTER_DATA_THROTTLE)
 }
 
-/// Bring the pane's clusters up to date.
+/// Bring the pane's bubbles up to date.
 ///
 /// Returns:
 ///     Whether the layer received new discs (or lost them), so the caller re-presents.
@@ -63,121 +84,120 @@ pub(in crate::chartdx) fn sync_clusters(
     now: Instant,
 ) -> bool {
     let view = input.view;
-    let grid = input
-        .enabled
-        .then_some(())
-        .and(input.tick)
-        .and_then(|tick| {
-            let time_step_ms = clusters::time_step_ms(view.time_to_px, input.min_cell_px)?;
-            let price_step =
-                moon_chart::ladder::row_step(tick, view.price_to_px, input.min_cell_px)?;
-            Some(ClusterGrid {
-                time_step_ms,
-                tick,
-                price_step,
-            })
-        });
-    let Some(grid) = grid else {
-        return clear(pr);
-    };
     let time_to_px = f64::from(view.time_to_px);
+    if !input.enabled || !(time_to_px.is_finite() && time_to_px > 0.0) {
+        return clear(pr);
+    }
     let visible = (
         input.epoch_ms + f64::from(view.view_time0),
         input.epoch_ms + f64::from(view.view_time0) + f64::from(view.bounds[2]) / time_to_px,
     );
     let reach = visible.1 - visible.0;
-    let left_reach = pr.cluster_grid != Some(grid)
+    let fold_key = FoldKey {
+        merge_ms: input.merge_ms,
+        small_pct: input.small_pct,
+        tick_bits: input.tick.map_or(0, f64::to_bits),
+    };
+    let left_reach = !pr.cluster_on
+        || pr.cluster_fold != Some(fold_key)
         || visible.0 < pr.cluster_range.0
         || visible.1 > pr.cluster_range.1;
     let data_due = pr.cluster_dirty
         && pr
             .cluster_built_at
             .is_none_or(|at| now.duration_since(at) >= CLUSTER_DATA_THROTTLE);
-    let mut resummed = false;
+    let mut refolded = false;
     if left_reach || data_due {
-        // The start lands on a whole number of merge spans: while the range keeps cutting the same
-        // stretch, every re-sum merges it from the same intervals, so a follow or a small pan does
-        // not make its discs hop. Once the stretch's real start enters the range it is merged from
-        // that start instead — one re-chunk, accepted with chunking from a stretch's first interval.
-        let span_ms = grid.time_step_ms as f64 * clusters::MERGE_SPAN as f64;
-        let range = (
-            ((visible.0 - reach) / span_ms).floor() * span_ms,
-            visible.1 + reach,
-        );
+        let range = (visible.0 - reach, visible.1 + reach);
         let epoch = input.epoch_ms;
+        // The ring keeps times as f32 from the pane's epoch, as the crosses draw them: on a pane
+        // open for days a short merge window groups on that same coarser clock.
         let samples = pr
             .layers
             .tick_samples(range.0 - epoch, range.1 - epoch)
             .filter(|c| c.side < 2)
             .map(|c| (epoch + f64::from(c.time_rel), c.price, c.qty, c.side == 0));
-        clusters::aggregate(samples, grid, &mut pr.cluster_cells);
-        pr.cluster_grid = Some(grid);
+        clusters::aggregate_prints(
+            samples,
+            input.tick,
+            f64::from(input.merge_ms),
+            &mut pr.cluster_prints,
+        );
+        clusters::price_time_order(&pr.cluster_prints, &mut pr.cluster_order);
+        let fresh =
+            clusters::print_scale(&pr.cluster_prints, input.small_pct, &mut pr.cluster_scratch);
+        // Same settings and a scale that barely moved: keep it, so the discs do not breathe. The
+        // small end never stays above the fresh one, or a print the threshold now sizes — every
+        // print, at 0% — would draw as a dot.
+        let same_fold = pr.cluster_fold == Some(fold_key);
+        pr.cluster_scale = match (pr.cluster_scale, fresh) {
+            (Some(old), Some(new)) if same_fold && old.holds_against(&new) => {
+                Some(moon_chart::clusters::PrintScale {
+                    small: old.small.min(new.small),
+                    ..old
+                })
+            }
+            (_, fresh) => fresh,
+        };
+        pr.cluster_fold = Some(fold_key);
         pr.cluster_range = range;
         pr.cluster_dirty = false;
         pr.cluster_built_at = Some(now);
-        resummed = true;
+        pr.cluster_on = true;
+        refolded = true;
     }
-    // The discs scale against the biggest cluster on screen — any whose disc can still show, so a
-    // centre just past the edge counts too, or its disc would draw at full size against a smaller
-    // visible maximum.
-    let row_h = grid.row_height();
-    let step_ms = grid.time_step_ms as f64;
-    let max_r = clusters::max_radius(
-        (step_ms * time_to_px) as f32,
-        (row_h * f64::from(view.price_to_px)) as f32,
-    );
-    let r_ms = f64::from(max_r) / time_to_px;
-    let r_price = f64::from(max_r / view.price_to_px);
-    let price_lo = f64::from(view.view_price0) - r_price;
-    let price_hi =
-        f64::from(view.view_price0) + f64::from(view.bounds[3] / view.price_to_px) + r_price;
-    let max_total = pr
-        .cluster_cells
-        .iter()
-        .filter(|c| {
-            let p = c.price_idx as f64 * row_h;
-            c.center_ms >= visible.0 - r_ms
-                && c.center_ms <= visible.1 + r_ms
-                && p >= price_lo
-                && p <= price_hi
-        })
-        .map(|c| c.total())
-        .fold(0.0_f32, f32::max);
-    let colors = [input.buy, input.sell];
-    if !resummed
-        && pr.cluster_max == max_total
-        && pr.cluster_max_r == max_r
-        && pr.cluster_colors == colors
-    {
+    let layout_key = LayoutKey {
+        time_to_px: view.time_to_px,
+        ppp: input.ppp,
+        colors: [input.buy, input.sell],
+    };
+    if !refolded && pr.cluster_layout == Some(layout_key) {
         return false;
     }
-    pr.cluster_max = max_total;
-    pr.cluster_max_r = max_r;
-    pr.cluster_colors = colors;
+    pr.cluster_layout = Some(layout_key);
+    match pr.cluster_scale {
+        Some(scale) => {
+            let radii = DiscRadii::at(input.ppp);
+            clusters::merge_overlapping(
+                &pr.cluster_prints,
+                &pr.cluster_order,
+                time_to_px,
+                |v| clusters::print_radius(v, scale, radii),
+                &mut pr.cluster_discs,
+            );
+        }
+        None => pr.cluster_discs.clear(),
+    }
     let buy = [input.buy[0], input.buy[1], input.buy[2], DISC_ALPHA];
     let sell = [input.sell[0], input.sell[1], input.sell[2], DISC_ALPHA];
     pr.cluster_markers.clear();
-    pr.cluster_markers.extend(pr.cluster_cells.iter().map(|c| {
+    pr.cluster_markers.extend(pr.cluster_discs.iter().map(|d| {
         MarkerInstance::at_price(
-            (c.center_ms - input.epoch_ms) as f32,
-            (c.price_idx as f64 * row_h) as f32,
-            clusters::disc_radius(c.total(), max_total, max_r),
+            (d.time_ms - input.epoch_ms) as f32,
+            d.price,
+            d.radius,
             0.0,
             MARKER_SHAPE_KNOT,
-            if c.buy >= c.sell { buy } else { sell },
+            if d.buy >= d.sell { buy } else { sell },
         )
     }));
+    // Small discs under big ones: a crowd of dots never hides a wall's disc.
+    pr.cluster_markers.sort_by(|a, b| a.size.total_cmp(&b.size));
     pr.layers.set_clusters(&pr.cluster_markers);
     pr.cluster_uploaded = true;
     true
 }
 
-/// Take the pane's clusters down: no grid this sync, so nothing may stay drawn.
+/// Take the pane's bubbles down: the tab draws crosses, or the view has no usable scale.
 fn clear(pr: &mut PaneRender) -> bool {
-    pr.cluster_grid = None;
-    pr.cluster_cells.clear();
+    pr.cluster_on = false;
+    pr.cluster_prints.clear();
+    pr.cluster_order.clear();
+    pr.cluster_discs.clear();
+    pr.cluster_scale = None;
+    pr.cluster_fold = None;
+    pr.cluster_layout = None;
     pr.cluster_range = (f64::NAN, f64::NAN);
-    pr.cluster_max = 0.0;
     if !pr.cluster_uploaded {
         return false;
     }
