@@ -255,6 +255,9 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) path_minis: Vec<moon_core::market::candles::PathMini>,
     /// Middle of the last path bar, so an append colours its first bar against it.
     pub(in crate::chartdx) path_last_mid: Option<f32>,
+    /// How many of `path_minis`, oldest first, are already placed or skipped. The rest lie under
+    /// trade crosses the pane still holds and wait for them to leave its ring.
+    pub(in crate::chartdx) path_placed: usize,
     /// Scratch for placing path bars; kept to avoid an allocation per append.
     pub(in crate::chartdx) path_bars: Vec<moon_chart::open_candle_path::PathBar>,
     pub(in crate::chartdx) path_style: CandleStyleGpu,
@@ -591,6 +594,7 @@ impl PaneRender {
         self.path_minis.clear();
         self.path_prefix = moon_core::market::PathPrefixRows::default();
         self.path_last_mid = None;
+        self.path_placed = 0;
         self.path_start_rel = f32::NAN;
         self.layers.set_path_candles(&[]);
     }
@@ -684,6 +688,7 @@ impl PaneRender {
             path_prefix: moon_core::market::PathPrefixRows::default(),
             path_minis: Vec::new(),
             path_last_mid: None,
+            path_placed: 0,
             path_bars: Vec::new(),
             path_style: CandleStyleGpu::default(),
             path_start_rel: f32::NAN,

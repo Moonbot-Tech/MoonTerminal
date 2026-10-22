@@ -5,6 +5,16 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+/// Liquidations share the pane's cross ring with the trades: a ring sized to the trades alone lost
+/// one trade per liquidation, and a cascade's worth of them opened a gap before the oldest cross.
+#[test]
+fn the_cross_ring_holds_the_trade_ring_and_the_liquidation_ring() {
+    assert_eq!(cross_ring_capacity(48_000, Some(27_280)), 75_280);
+    // A market without a liquidation ring keeps the trade ring's size.
+    assert_eq!(cross_ring_capacity(48_000, None), 48_000);
+    assert_eq!(cross_ring_capacity(usize::MAX, Some(1)), usize::MAX);
+}
+
 /// Extreme fine and coarse prefetch candles cannot move the paused chart away from its visible prices.
 #[test]
 fn visible_fit_excludes_prefetched_extremes_and_includes_intersecting_coarse_bars() {

@@ -32,9 +32,9 @@ const MIN_BAR_MS: f64 = 1.0;
 /// Args:
 ///     minis: Mini-candles, oldest first.
 ///     start_ms: Absolute opening of the current candle or an earlier hidden bucket.
-///     dots_left_ms: Absolute time of the oldest raw dot; non-finite means no dots were placed.
-///         An append of newly folded mini-candles passes `f64::INFINITY`: those prints already
-///         left the ring, so they cannot sit under a dot.
+///     dots_left_ms: Absolute time of the oldest trade cross the pane holds; a mini whose bar
+///         would reach past it waits (see [`ready_minis`]). `f64::INFINITY` places everything;
+///         NaN nothing.
 ///     epoch_ms: Chart epoch the output is relative to.
 ///     prev_mid: Middle of the last bar already placed, to colour the first new bar.
 ///     out: Receives the placed bars (appended).
@@ -54,12 +54,10 @@ pub fn place_path(
         return prev;
     }
     for (i, mini) in minis.iter().enumerate() {
-        if mini.t_open_ms < start_ms || mini.t_open_ms + PATH_MINI_MS > dots_left_ms {
+        let width = mini_width(minis, i);
+        if mini.t_open_ms < start_ms || mini.t_open_ms + width > dots_left_ms {
             continue;
         }
-        let width = minis.get(i + 1).map_or(PATH_MINI_MS, |next| {
-            (next.t_open_ms - mini.t_open_ms).min(PATH_MINI_MS)
-        });
         // A successor at or before this open: MoonProto only appends strictly newer minis, so
         // this guards malformed input rather than a case the core produces.
         if !(width >= MIN_BAR_MS) {
@@ -87,6 +85,25 @@ pub fn fit_before(t_open_rel: f32, duration_ms: f32, next_open_rel: f32) -> f32 
         return duration_ms;
     }
     gap.min(duration_ms).max(MIN_BAR_MS as f32)
+}
+
+/// The width mini `i` is drawn with: up to the next mini's open, at most [`PATH_MINI_MS`]; the
+/// last of the slice, its successor unknown yet, keeps the full five seconds.
+fn mini_width(minis: &[PathMini], i: usize) -> f64 {
+    let open = minis[i].t_open_ms;
+    minis.get(i + 1).map_or(PATH_MINI_MS, |next| {
+        (next.t_open_ms - open).min(PATH_MINI_MS)
+    })
+}
+
+/// How many of `minis`, oldest first, [`place_path`] can settle against `dots_left_ms`: each one
+/// whose bar ends at or before the oldest cross the pane holds. The rest still lie under crosses
+/// and wait until those leave the pane's ring. The bar's own width counts, not a nominal five
+/// seconds, or a mini closed early by its successor would leave a blank strip at the seam.
+pub fn ready_minis(minis: &[PathMini], dots_left_ms: f64) -> usize {
+    (0..minis.len())
+        .take_while(|&i| minis[i].t_open_ms + mini_width(minis, i) <= dots_left_ms)
+        .count()
 }
 
 /// Places cached ranges up to the first mini-candle or raw dot. One-minute data wins every
