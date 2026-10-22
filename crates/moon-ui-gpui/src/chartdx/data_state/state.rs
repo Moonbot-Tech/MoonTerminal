@@ -610,7 +610,7 @@ impl ChartDataState {
             pane.active
                 && ((self.trade_replay.is_some()
                     && super::market::replay_price_retry_due(pane.replay_prices_retry_at, now))
-                    || super::clusters::resum_due(pane, now))
+                    || super::clusters::refold_due(pane, now))
         });
         if !self.view_dirty && source_sig == self.last_source_market_sig && !retry_due {
             return false;

@@ -200,7 +200,7 @@ pub(crate) struct TradeLabels {
 // Responsibilities are split without logic changes: state handles lifecycle, signatures, and
 // frames; orders synchronizes orders and line labels; market synchronizes history, order books,
 // and automatic Y scaling.
-mod clusters;
+pub(in crate::chartdx) mod clusters;
 mod market;
 pub(crate) mod orders;
 mod state;

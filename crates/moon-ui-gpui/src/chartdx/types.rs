@@ -303,9 +303,9 @@ pub struct TickStyleGpu {
     pub sell: [f32; 4],
     /// Liquidation sRGB colour; the fourth channel is unused.
     pub liq: [f32; 4],
-    /// `x` is `1` while this pane's trade clusters are drawn — the clusters layer draws the trades
+    /// `x` is `1` while this pane's trade bubbles are drawn — the clusters layer draws the trades
     /// then and the cross pass culls them, keeping the liquidations — and `0` otherwise, bubble
-    /// mode included while no cluster grid fits; the rest is padding.
+    /// mode included while the view has no usable X scale; the rest is padding.
     pub shape: [f32; 4],
 }
 

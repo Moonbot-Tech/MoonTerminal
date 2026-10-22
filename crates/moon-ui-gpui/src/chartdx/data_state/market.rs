@@ -1988,7 +1988,9 @@ impl ChartDataState {
                     tick: pr.price_tick.tick(),
                     view: pr.view,
                     epoch_ms: pane.view.epoch_ms,
-                    min_cell_px: moon_chart::clusters::MIN_CELL_PX * self.last_ppp,
+                    ppp: self.last_ppp,
+                    merge_ms: self.chart_graphics.trade_merge_ms,
+                    small_pct: self.chart_graphics.trade_small_pct,
                     buy: [buy[0], buy[1], buy[2]],
                     sell: [sell[0], sell[1], sell[2]],
                 }
@@ -1999,16 +2001,10 @@ impl ChartDataState {
                 pr.gpu_prepare_dirty = true;
                 text_changed = true;
             }
-            // The trades step aside for the clusters only while the clusters are drawn: a pane with
-            // no grid yet — the tick unknown, a zoom too far out — keeps its crosses rather than
-            // showing an empty tape.
+            // The trades step aside for the bubbles only while the bubbles are drawn: a view with
+            // no usable X scale keeps its crosses rather than showing an empty tape.
             let tick_style = TickStyleGpu {
-                shape: [
-                    if pr.cluster_grid.is_some() { 1.0 } else { 0.0 },
-                    0.0,
-                    0.0,
-                    0.0,
-                ],
+                shape: [if pr.cluster_on { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
                 ..next_tick_style
             };
             if pr.tick_style != tick_style {
