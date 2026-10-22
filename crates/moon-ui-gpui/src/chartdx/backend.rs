@@ -101,6 +101,16 @@ impl PlatformLayers {
         }
     }
 
+    /// Time of the oldest trade cross the pane holds, relative ms, or `None` with none held.
+    ///
+    /// The ring yields its rows oldest first; liquidations share it and are skipped, because the
+    /// open candle's path is folded from trades alone.
+    pub(super) fn oldest_trade_rel(&self) -> Option<f32> {
+        self.tick_samples(f64::NEG_INFINITY, f64::INFINITY)
+            .find(|c| c.side < 2)
+            .map(|c| c.time_rel)
+    }
+
     /// Return individual quote amounts without changing the native band's base-quantity scale.
     pub(super) fn nearby_tick_volumes(
         &self,

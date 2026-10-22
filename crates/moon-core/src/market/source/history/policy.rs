@@ -1,5 +1,16 @@
 //! Series rebuild and deep-history writeback policy.
 
+/// Capacity of a pane's cross ring: the trade ring plus the liquidation ring.
+///
+/// The chart appends liquidations to the SAME ring as the trades. Sized to the trades alone,
+/// every liquidation evicted a trade the client ring still held. The open candle's mini-candle
+/// path only begins where the client ring ends, so a gap opened between the path and the oldest
+/// cross as wide as the liquidations retained — minutes after a cascade — and a zoom's re-read
+/// cut it in at once.
+pub(crate) fn cross_ring_capacity(trades: usize, liquidations: Option<usize>) -> usize {
+    trades.saturating_add(liquidations.unwrap_or(0))
+}
+
 /// Left edge the candle series should be built from. Keeps the current floor while the needed
 /// edge stays inside `[floor, floor + 4 * span]`; otherwise re-anchors one span LEFT of the needed
 /// edge, so a leftward pan re-anchors at most once per span of travel and a rightward pan never

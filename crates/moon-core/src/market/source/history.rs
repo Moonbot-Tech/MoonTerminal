@@ -27,7 +27,9 @@ mod prefix;
 pub(super) use convert::NativeBackfillGate;
 #[cfg(test)]
 pub(crate) use convert::take_visible_fit_visited;
-pub(crate) use policy::{SeriesResetInputs, deep_writeback_start, series_floor, series_reset_due};
+pub(crate) use policy::{
+    SeriesResetInputs, cross_ring_capacity, deep_writeback_start, series_floor, series_reset_due,
+};
 pub(crate) use prefix::{PendingCacheRead, poll_cache_prefix};
 
 use convert::*;
@@ -153,7 +155,11 @@ impl MarketDataSource {
 
         let trade_reader = readers.futures_trades.or(readers.spot_trades);
         if let Some(reader) = trade_reader.as_ref().filter(|_| display_trades) {
-            read.combo_capacity = reader.capacity();
+            // Room for the liquidations too: they share the pane's cross ring (see the policy).
+            read.combo_capacity = cross_ring_capacity(
+                reader.capacity(),
+                readers.liquidations.as_ref().map(|r| r.capacity()),
+            );
             let display_cap = reader.capacity().min(trades_limit);
             // Max follows the ring, not the clock. A full copy rebuilds the candle series
             // (`combo_reset` below), so it runs when the oldest retained trade leaves its

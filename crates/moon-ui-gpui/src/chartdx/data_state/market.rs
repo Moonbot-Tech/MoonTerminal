@@ -880,8 +880,12 @@ impl ChartDataState {
                 }
                 // A cache reply or full combo read composes the open candle's finer prefix and
                 // mini-candles. Ordinary live reads append only newly folded mini-candles.
+                // Minis waiting under crosses the pane still holds settle here too, as those
+                // crosses leave the ring on a read that brings no new mini.
                 if !candles_off
-                    && (history.path_update != PriceLineUpdate::None || history.path_prefix_changed)
+                    && (history.path_update != PriceLineUpdate::None
+                        || history.path_prefix_changed
+                        || pr.path_placed < pr.path_minis.len())
                 {
                     let epoch = pane.view.epoch_ms;
                     let hide_rel = moon_core::market::candles::hide_zone_start_rel(
@@ -899,44 +903,29 @@ impl ChartDataState {
                     if history.path_update == PriceLineUpdate::Replace {
                         pr.path_minis.clear();
                     }
-                    let copied_dots_left = if history.path_update == PriceLineUpdate::Replace
-                        && pr.combo_left_rel.is_finite()
-                    {
-                        epoch + f64::from(pr.combo_left_rel)
-                    } else {
-                        f64::INFINITY
-                    };
-                    pr.path_minis
-                        .extend(pr.history_buffers.path_minis.iter().copied().filter(|m| {
-                            m.t_open_ms + moon_core::market::candles::PATH_MINI_MS
-                                <= copied_dots_left
-                        }));
+                    // Every copied mini is kept: one reaching under a cross waits below instead of
+                    // being dropped for good.
+                    if history.path_update != PriceLineUpdate::None {
+                        pr.path_minis
+                            .extend_from_slice(&pr.history_buffers.path_minis);
+                    }
                     let replace = history.path_update == PriceLineUpdate::Replace
                         || history.path_prefix_changed;
-                    let (dots_left_ms, prev_mid) = if replace {
+                    // The path ends where the pane's OWN trade crosses begin, not where the client
+                    // ring does: the pane's ring also has room for the liquidations, so it can hold
+                    // trades the client has already folded into minis, and a mini placed there
+                    // would lie over them. With no trade cross held, a full read paths up to now
+                    // and an append places everything it has.
+                    let dots_left_ms = pr
+                        .layers
+                        .oldest_trade_rel()
+                        .map(|rel| epoch + f64::from(rel))
+                        .unwrap_or(if replace { now } else { f64::INFINITY });
+                    let prev_mid = if replace {
                         pr.path_rows.clear();
-                        (
-                            if pr.combo_left_rel.is_finite() {
-                                let stamped_left = epoch + f64::from(pr.combo_left_rel);
-                                // Appends have already folded past the original full-copy edge.
-                                // A cache-only reply must retain those minis instead of trimming
-                                // them against the old stamp that has not been recopied yet.
-                                if history.path_update == PriceLineUpdate::Replace {
-                                    stamped_left
-                                } else {
-                                    pr.path_minis.last().map_or(stamped_left, |m| {
-                                        stamped_left.max(
-                                            m.t_open_ms + moon_core::market::candles::PATH_MINI_MS,
-                                        )
-                                    })
-                                }
-                            } else {
-                                now
-                            },
-                            None,
-                        )
+                        None
                     } else {
-                        (f64::INFINITY, pr.path_last_mid)
+                        pr.path_last_mid
                     };
                     let from = pr.path_rows.len();
                     pr.path_bars.clear();
@@ -958,18 +947,24 @@ impl ChartDataState {
                     } else {
                         prev_mid
                     };
+                    let first_waiting = if replace {
+                        0
+                    } else {
+                        pr.path_placed.min(pr.path_minis.len())
+                    };
+                    let waiting = &pr.path_minis[first_waiting..];
+                    let ready = moon_chart::open_candle_path::ready_minis(waiting, dots_left_ms);
+                    // The settled ones plus the next, which fixes the last settled bar's width;
+                    // the rest are not walked while they wait.
                     pr.path_last_mid = moon_chart::open_candle_path::place_path(
-                        if replace {
-                            &pr.path_minis
-                        } else {
-                            &pr.history_buffers.path_minis
-                        },
+                        &waiting[..(ready + 1).min(waiting.len())],
                         path_start_ms,
                         dots_left_ms,
                         epoch,
                         prev_mid,
                         &mut pr.path_bars,
                     );
+                    pr.path_placed = first_waiting + ready;
                     if replace {
                         // Hidden closed buckets can precede the current bucket's cache prefix.
                         // Keep the combined layer chronological for backend binary searches.
@@ -1587,8 +1582,13 @@ impl ChartDataState {
                 let keep_from = pr
                     .path_rows
                     .partition_point(|r| r.t_open_rel < path_start_rel);
+                let minis_before = pr.path_minis.len();
                 pr.path_minis
                     .retain(|m| m.t_open_ms >= pane.view.epoch_ms + f64::from(path_start_rel));
+                // The dropped minis are the oldest, so they leave the placed count first.
+                pr.path_placed = pr
+                    .path_placed
+                    .saturating_sub(minis_before - pr.path_minis.len());
                 if keep_from > 0 {
                     pr.path_rows.drain(..keep_from);
                     if pr.path_rows.is_empty() {

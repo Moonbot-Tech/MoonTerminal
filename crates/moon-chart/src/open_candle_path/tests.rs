@@ -255,6 +255,43 @@ fn minis_closer_than_five_seconds_meet_edge_to_edge() {
     );
 }
 
+/// The pane can hold trades the client ring already folded into minis: those minis wait under
+/// the crosses and settle one by one as the crosses leave, never drawn over them.
+#[test]
+fn minis_under_resident_crosses_wait_for_them() {
+    let minis = [
+        mini(DAY, 1.0, 2.0),
+        mini(DAY + 5_000.0, 1.0, 2.0),
+        mini(DAY + 10_000.0, 1.0, 2.0),
+    ];
+    // The oldest cross at +12 s: the third mini would reach it.
+    assert_eq!(ready_minis(&minis, DAY + 12_000.0), 2);
+    // That cross left the ring: the third settles.
+    assert_eq!(ready_minis(&minis, DAY + 15_000.0), 3);
+    assert_eq!(ready_minis(&minis, f64::INFINITY), 3);
+    assert_eq!(ready_minis(&minis, f64::NAN), 0);
+    // The placed bars match what was counted as settled.
+    let mut out = Vec::new();
+    place_path(&minis, DAY, DAY + 12_000.0, DAY, None, &mut out);
+    assert_eq!(out.len(), 2);
+}
+
+/// A mini closed early by its successor settles as soon as the crosses clear its own bar, not five
+/// seconds later: a nominal width left a blank strip at the path/cross seam.
+#[test]
+fn a_mini_settles_by_its_own_width() {
+    let minis = [mini(DAY, 1.0, 2.0), mini(DAY + 1_000.0, 1.0, 2.0)];
+    assert_eq!(ready_minis(&minis, DAY + 1_500.0), 1);
+    let mut out = Vec::new();
+    place_path(&minis, DAY, DAY + 1_500.0, DAY, None, &mut out);
+    assert_eq!(
+        out.iter()
+            .map(|b| (b.t_open_rel, b.duration_ms))
+            .collect::<Vec<_>>(),
+        [(0.0, 1_000.0)]
+    );
+}
+
 /// An append brings the successor of the last bar already drawn: that bar is cut at its open.
 #[test]
 fn an_appended_mini_trims_the_bar_before_it() {
