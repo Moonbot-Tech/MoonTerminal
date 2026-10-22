@@ -60,6 +60,15 @@ pub struct CoreData {
     /// HAS fired, which is a fraction of the ring and never larger than it. The `Arc` is the same
     /// allocation as that row in [`Self::detects`].
     pub latest_detect: HashMap<String, Arc<DetectRow>>,
+    /// Last number handed to this core's detects, held for it by [`super::CoreStore`].
+    ///
+    /// Numbered here, not by the feed, because the UI cursors (detect cards, sound, AddToChart
+    /// tabs) outlive both: a new `live::run` — a respawn, or the retry after a failed connection —
+    /// and a removed-then-restored core that rebuilds this struct under the same id. Either one
+    /// restarting the count would leave every new detect at or below a cursor, silently skipped.
+    /// Per core rather than per fleet, so the numbers stay contiguous: the sound diagnostic counts
+    /// new detects as the distance between two of them.
+    detect_seq: Arc<AtomicU64>,
     /// What this core's strategies asked to report to Telegram, oldest first, trimmed to
     /// [`MAX_TG_EVENTS`]; see [`CoreData::push_tg_event`].
     pub tg_events: VecDeque<TgEventRow>,
@@ -514,6 +523,7 @@ impl CoreData {
             clock_skew: CoreClockSkew::default(),
             detects: VecDeque::new(),
             latest_detect: HashMap::new(),
+            detect_seq: Arc::default(),
             tg_events: VecDeque::new(),
             tg_events_seq: 0,
             tg_opened: VecDeque::new(),
@@ -994,7 +1004,10 @@ impl CoreData {
                         detects.len(),
                         self.detects_rev.wrapping_add(1)
                     ));
-                    for det in detects {
+                    for mut det in detects {
+                        // Never zero: the UI cursors start at zero and take only rows numbered
+                        // above them.
+                        det.seq = self.detect_seq.fetch_add(1, Ordering::Relaxed) + 1;
                         // Newest wins, and arrival order is the ring's order. One allocation is
                         // shared with the per-market index.
                         let det = Arc::new(det);

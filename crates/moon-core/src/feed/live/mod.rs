@@ -455,8 +455,6 @@ pub(super) fn run(
     // public snapshot can lag these commands, so conditional destructive actions check both.
     let mut strategy_placements = StrategyPlacementGuard::new();
     let mut strat_db_initial = true;
-    // Monotonic per-core detect number used as the ingestion cursor for the UI detect feed.
-    let mut detect_seq: u64 = 0;
     // Last HyperLiquid quota written to `channels.hl_limit`, so the channel reports the value the
     // snapshot HOLDS and not only the moments it changes. `None` means nothing written yet.
     let mut hl_last_logged: Option<Option<u64>> = None;
@@ -1997,9 +1995,9 @@ pub(super) fn run(
                                 d.is_alert_fire(),
                             ));
                         }
-                        detect_seq += 1;
                         detects.push(DetectRow {
-                            seq: detect_seq,
+                            // Numbered by the store on arrival, which outlives this run.
+                            seq: 0,
                             market: d.market_name.clone(),
                             time_ms: now_ms(),
                             sound_alert: params.sound_alert,

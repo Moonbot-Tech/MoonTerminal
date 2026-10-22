@@ -1518,8 +1518,54 @@ fn the_detect_index_shares_the_newest_row_in_the_ring() {
             Arc::ptr_eq(latest, newest),
             "{market} index must be the ring row"
         );
-        assert_eq!(latest.seq, 4_990 + market_index);
+        // A standalone `CoreData` owns a fresh counter, so the batch's row `k` carries `k + 1`
+        // whatever number it was handed.
+        assert_eq!(latest.seq, 4_991 + market_index);
     }
+}
+
+/// A rebuilt connection and a removed-then-restored core both keep numbering detects right after
+/// the last number the UI cursors hold, one by one, whatever another core fires in between. The
+/// rows hand in a restarted count, as the feed's own counter once did, to prove the store ignores
+/// it.
+///
+/// Breakage: numbering detects anywhere that restarts with a connection (a `live::run` local) or
+/// with the core's data (a `CoreData` field) hands the next detect a number at or below the
+/// cursors, and the detect cards, sound and auto-opened charts all skip it. One counter shared by
+/// the fleet leaves gaps, and the sound diagnostic, which counts new detects as the distance
+/// between numbers, then reports detects that never arrived.
+#[test]
+fn detect_numbers_continue_one_by_one_across_a_new_connection_and_a_rebuilt_core() {
+    let mut store = super::CoreStore::default();
+    store.ensure(7);
+    store.ensure(8);
+    store.core_mut(7).unwrap().apply(FeedMsg::Detects(vec![
+        detect_row(1, "A"),
+        detect_row(2, "B"),
+        detect_row(3, "C"),
+    ]));
+    // Another core firing in between must not move this core's numbers.
+    store.core_mut(8).unwrap().apply(FeedMsg::Detects(vec![
+        detect_row(1, "X"),
+        detect_row(2, "Y"),
+    ]));
+    let newest = |store: &super::CoreStore| store.core(7).unwrap().detects.back().unwrap().seq;
+    assert_eq!(newest(&store), 3);
+
+    // Respawn or retry: the same store, a new feed counting from one again.
+    let core = store.core_mut(7).unwrap();
+    core.begin_connection_attempt();
+    core.apply(FeedMsg::Detects(vec![detect_row(1, "D")]));
+    assert_eq!(newest(&store), 4, "a new connection continues the count");
+
+    // Deactivated and re-activated: the core's data is rebuilt under the same id.
+    store.remove(7);
+    store.ensure(7);
+    store
+        .core_mut(7)
+        .unwrap()
+        .apply(FeedMsg::Detects(vec![detect_row(1, "E")]));
+    assert_eq!(newest(&store), 5, "a rebuilt core continues the count");
 }
 
 /// Flattening captured turns into only the final row loses the 101 reprice before 102.

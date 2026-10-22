@@ -146,15 +146,11 @@ pub(crate) fn run(
     // opposite of the long finite TTL such a number asks for.
     let keep_in_chart = env_usize("MOON_SYNTH_KEEP_IN_CHART", 0).min(u32::MAX as usize) as u32;
     let mut dets = Vec::new();
-    // Numbered from ONE. The ingest side skips everything with `seq <= last` and starts `last` at
-    // zero, so a detect numbered zero is never taken. With fifty detects that lost one of them and
-    // nobody noticed; with one detect per core - which is what a bench wants - it lost all of them,
-    // and the chart tabs simply never appeared.
-    let mut seq = 1u64;
     for w in 1..=windows {
         for m in 0..charts {
             dets.push(DetectRow {
-                seq,
+                // Numbered by the store on arrival, never zero.
+                seq: 0,
                 market: markets[m % n].clone(),
                 time_ms: now_ms(),
                 sound_alert: false,
@@ -170,7 +166,6 @@ pub(crate) fn run(
                 msg: String::new(),
                 strat_name: String::new(),
             });
-            seq += 1;
         }
     }
     let _ = tx.send(FeedMsg::Detects(dets));

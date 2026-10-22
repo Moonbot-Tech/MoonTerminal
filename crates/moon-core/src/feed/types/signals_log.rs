@@ -32,7 +32,9 @@ pub enum CoreTgEvent {
 /// One core detect for the toolbar and history, decoupled from moonproto.
 #[derive(Debug, Clone)]
 pub struct DetectRow {
-    /// Monotonic per-core sequence number used as the ingestion cursor for the detects feed.
+    /// Ingestion cursor for the detects feed: per core, from one, contiguous, and continuing across
+    /// reconnects and a rebuilt core. Assigned by `CoreData` when the row enters the ring; a feed
+    /// leaves it 0 and whatever it puts there is overwritten.
     pub seq: u64,
     /// Market or coin.
     pub market: String,

@@ -13,14 +13,20 @@ impl Default for CoreData {
 pub struct CoreStore {
     cores: HashMap<CoreId, CoreData>,
     time_offset_epoch: Arc<AtomicU64>,
+    /// Each core's detect counter, kept past [`Self::remove`] on purpose: a core removed and
+    /// restored under the same id continues numbering after what the UI cursors already hold; see
+    /// `CoreData::detect_seq`. One `u64` per id ever seen.
+    detect_seqs: HashMap<CoreId, Arc<AtomicU64>>,
 }
 
 impl CoreStore {
-    /// Insert a core with the fleet epoch so every offset adoption invalidates the axis.
+    /// Insert a core with the fleet epoch so every offset adoption invalidates the axis, and with
+    /// its own detect counter so its detect numbers never restart.
     pub fn ensure(&mut self, id: CoreId) {
         self.cores.entry(id).or_insert_with(|| {
             let mut core = CoreData::new();
             core.time_offset_epoch = self.time_offset_epoch.clone();
+            core.detect_seq = self.detect_seqs.entry(id).or_default().clone();
             core
         });
     }
