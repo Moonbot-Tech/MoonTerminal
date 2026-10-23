@@ -175,7 +175,7 @@ hotkeys.super_zoom_in_hint: "Phóng thang thời gian vào tới cửa sổ 3 gi
 hotkeys.super_zoom_out: "Super zoom ra"
 hotkeys.super_zoom_out_hint: "Thu thang thời gian ra, cửa sổ nhỏ nhất 3 giây. Mặc định chưa gán."
 hotkeys.center_chart: "Căn giữa biểu đồ"
-hotkeys.center_chart_hint: "Đưa MỌI biểu đồ về giá hiện tại và mép Live: xóa pan/zoom giá bằng tay (kéo dọc, zoom nút phải) và Tạm dừng, không đụng hai thang. Trong ô chữ thì đè nhảy theo từ. Mặc định Moonbot: Ctrl+Right."
+hotkeys.center_chart_hint: "Đưa MỌI biểu đồ về giá hiện tại và mép Live: xóa pan giá bằng tay (kéo dọc) và Tạm dừng. Giữ zoom nút phải và hai thang — chọn thang sẽ đặt lại zoom. Trong ô chữ thì đè nhảy theo từ. Mặc định Moonbot: Ctrl+Right."
 hotkeys.toggle_live: "Live / Tạm dừng"
 hotkeys.toggle_live_hint: "Bật tắt tự cuộn biểu đồ — cùng nút Live/Tạm dừng trên thanh công cụ. Mặc định: Space. Trong ô chữ thì gõ dấu cách."
 hotkeys.builtin.wheel_super_zoom: "[Ctrl+Shift + Con lăn] super zoom thời gian xuống tới 3 giây"

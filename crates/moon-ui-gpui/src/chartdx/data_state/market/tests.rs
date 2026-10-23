@@ -116,7 +116,7 @@ fn replay_price_transform() {
                     engine.with_container_mut(|container| {
                         let v = &mut container.panes_mut()[0].view;
                         v.pan_x_px(800.0, 0.0, 1000.0);
-                        v.rmb_zoom(v.render_center, v.render_range, 80.0, 0.0);
+                        v.rmb_zoom(v.render_center, v.render_range, v.price_zoom(), 80.0, 0.0);
                     });
                 }
                 // These are the two operations Show trade applies to its own chart panel.

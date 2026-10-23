@@ -306,7 +306,8 @@ impl ChartEngine {
     }
 
     /// Moonbot's "Center chart" on every pane: the manual Y view is dropped, the last price snaps
-    /// to the centre, and the live edge is resumed — out of an explicit Pause as well.
+    /// to the centre, and the live edge is resumed — out of an explicit Pause as well. The
+    /// right-button zoom stays on the picked scale (#1071).
     ///
     /// A HISTORICAL engine refuses it for the same reason it refuses `set_follow`: its subject is
     /// a closed interval, and re-anchoring to `now` would take the trade off screen.

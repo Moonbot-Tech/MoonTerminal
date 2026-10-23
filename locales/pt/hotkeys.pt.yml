@@ -175,7 +175,7 @@ hotkeys.super_zoom_in_hint: "Aproxima o eixo do tempo até uma janela de 3 segun
 hotkeys.super_zoom_out: "Super zoom mais longe"
 hotkeys.super_zoom_out_hint: "Afasta o eixo do tempo com janela mínima de 3 segundos. Sem atalho por padrão."
 hotkeys.center_chart: "Centralizar o gráfico"
-hotkeys.center_chart_hint: "Traz TODOS os gráficos de volta ao preço atual e à borda ao vivo: limpa o arraste/zoom manual de preço (arraste vertical, zoom com o botão direito) e a Pausa, e não mexe nas escalas. Num campo de texto substitui o salto por palavra. Padrão do Moonbot: Ctrl+Right."
+hotkeys.center_chart_hint: "Traz TODOS os gráficos de volta ao preço atual e à borda ao vivo: limpa o arraste manual de preço (arraste vertical) e a Pausa. Mantém o zoom com o botão direito e as escalas: escolher uma escala zera o zoom. Num campo de texto substitui o salto por palavra. Padrão do Moonbot: Ctrl+Right."
 hotkeys.toggle_live: "Live / Pausa"
 hotkeys.toggle_live_hint: "Alterna a rolagem automática do gráfico — o mesmo botão Live/Pausa da barra. Padrão: Space. Num campo de texto digita um espaço."
 hotkeys.builtin.wheel_super_zoom: "[Ctrl+Shift + Roda] super zoom do tempo até 3 segundos"

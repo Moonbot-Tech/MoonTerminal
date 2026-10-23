@@ -23,7 +23,8 @@ impl ChartPanel {
     }
 
     /// Moonbot's Ctrl+Right for every pane of this panel: back to the price and the live edge on
-    /// the scale already chosen — see `ChartView::center_on_price` for what is and is not touched.
+    /// the scale already chosen, right-button zoom included — see `ChartView::center_on_price` for
+    /// what is and is not touched.
     ///
     /// Goes through `mark_input_changed` like a gesture would, so the resumed follow reaches the
     /// toolbar's Live flag the same way a pan's pull-back does.

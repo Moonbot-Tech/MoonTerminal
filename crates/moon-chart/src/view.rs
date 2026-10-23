@@ -385,6 +385,11 @@ pub struct ChartView {
     pub manual_price: bool,
     /// Last fixed percentage (range = price*percent), used for drift mode.
     pub scale_percent: f32,
+    /// Right-button price zoom: a multiplier on whatever window the picked scale (Auto or a
+    /// percent) fits, Moonbot's `yZoom`. Kept by Center chart, which resets only the vertical
+    /// offset; dropped back to 1 by any scale pick. No total bound: only one gesture is limited,
+    /// see [`Self::rmb_zoom`].
+    price_zoom: f32,
     /// The price a scale percentage is measured against: the rendered centre, FROZEN while the user
     /// holds a manual Y view.
     ///
@@ -470,6 +475,7 @@ impl ChartView {
             auto_price: true,
             manual_price: false,
             scale_percent: 0.10,
+            price_zoom: 1.0,
             scale_anchor: 0.0,
             px_per_price: 0.5,
             render_center: 0.0,
@@ -959,19 +965,32 @@ impl ChartView {
     // ── Y scale (toolbar buttons) ─────────────────────────────────────────────
 
     /// The "Auto" button: dynamically fits the visible range.
+    ///
+    /// Like every scale pick it drops the right-button zoom, as Moonbot's scale buttons reset
+    /// `yZoom` — even a click on the scale already chosen.
     pub fn set_auto(&mut self) {
         self.auto_price = true;
         self.manual_price = false;
+        self.price_zoom = 1.0;
+    }
+
+    /// The right-button zoom multiplier currently applied on top of the picked scale.
+    ///
+    /// The input layer snapshots it on the button press, together with the window, so a drag can
+    /// tell the picked scale's own window from the zoom already applied to it.
+    pub fn price_zoom(&self) -> f32 {
+        self.price_zoom
     }
 
     /// Moonbot's Ctrl+Right, "Center chart": leave the manual Y view, put the last price at the
     /// centre, and return to the live edge — including out of an explicit Pause.
     ///
-    /// Neither scale is touched: the chosen Auto/percent (`auto_price`, `scale_percent`) is what a
-    /// drag or a right-button zoom PARKED rather than changed, so dropping `manual_price` restores
-    /// it, and the X zoom is `resume_live`'s to keep. The centre itself is not written here — the
-    /// view does not hold the last price; the next `update_y` does, and the pending snap makes it
-    /// jump there rather than ease.
+    /// Neither scale is touched, and neither is the right-button zoom: Moonbot's handler resets
+    /// only the vertical offset (`yOffset`) and keeps `yZoom` (#1071). Dropping `manual_price`
+    /// lets the chosen Auto/percent (`auto_price`, `scale_percent`) fit again, multiplied by
+    /// `price_zoom`; the X zoom is `resume_live`'s to keep. The centre itself is not written here —
+    /// the view does not hold the last price; the next `update_y` does, and the pending snap makes
+    /// it jump there rather than ease.
     ///
     /// Args:
     ///     now_ms: Current Unix time in milliseconds, the live anchor to return to.
@@ -1056,9 +1075,12 @@ impl ChartView {
     }
 
     /// Fixed percentage: visible range = price*percent (like the moonweb ZoomBar).
+    ///
+    /// A scale pick drops the right-button zoom, as [`Self::set_auto`] does.
     pub fn set_scale_percent(&mut self, percent: f32) {
         self.auto_price = false;
         self.manual_price = false;
+        self.price_zoom = 1.0;
         self.scale_percent = percent;
         // Same reference the badge divides by, so the chosen step and the reported figure agree.
         let base = self.scale_ref_price().unwrap_or(self.price_range);
@@ -1186,12 +1208,46 @@ impl ChartView {
     }
 
     /// Zooms Y by RMB drag from the press-time snapshot. Up=zoom out, down=zoom in.
-    pub fn rmb_zoom(&mut self, start_center: f32, start_range: f32, cum_dy: f32, now_ms: f64) {
+    ///
+    /// The gesture moves [`Self::price_zoom`], the multiplier on the picked scale; the window shown
+    /// is the picked scale's own window times that multiplier. The own window is recovered from
+    /// the snapshot (`start_range` was drawn at `start_zoom`), so a second drag continues from the
+    /// first. One gesture changes the multiplier by at most 4x either way, the limit the drag has
+    /// always had; there is deliberately no total bound, so drags keep compounding.
+    ///
+    /// Args:
+    ///     start_center: Rendered centre at the press.
+    ///     start_range: Rendered window at the press.
+    ///     start_zoom: [`Self::price_zoom`] at the press.
+    ///     cum_dy: Vertical travel since the press, in pixels.
+    ///     now_ms: Current Unix time in milliseconds.
+    pub fn rmb_zoom(
+        &mut self,
+        start_center: f32,
+        start_range: f32,
+        start_zoom: f32,
+        cum_dy: f32,
+        now_ms: f64,
+    ) {
         self.note_interaction(now_ms);
         let factor = 2f32.powf(-cum_dy / YSCALE_PX_PER_2X);
-        let r = (start_range * factor).clamp(start_range * 0.25, start_range * 4.0);
+        // A non-finite or non-positive snapshot cannot divide the window back out; treat the press
+        // as unzoomed rather than poisoning the multiplier for the rest of the session.
+        let start_zoom = if start_zoom.is_finite() && start_zoom > 0.0 {
+            start_zoom
+        } else {
+            1.0
+        };
+        let r = (start_range * factor.clamp(0.25, 4.0)).max(Self::min_range(start_center));
+        // The multiplier is read back from the window actually drawn, floor included: stored
+        // apart from it, a zoom pushed past the floor would keep shrinking unseen, and Center chart
+        // would then fit below the floor and fall back to an unrelated default window.
+        let zoom = r / (start_range / start_zoom);
+        if zoom.is_finite() && zoom > 0.0 {
+            self.price_zoom = zoom;
+        }
         self.center_price = start_center;
-        self.price_range = r.max(Self::min_range(start_center));
+        self.price_range = r;
         self.manual_price = true;
         // Same rule as `pan_y_px`: the gesture cancels a pending centre request.
         self.center_snap_pending = false;
@@ -1204,7 +1260,9 @@ impl ChartView {
 
     /// Fits the price center/range. X-follow affects only target selection: live mode centers
     /// on the last price, while manual X centers on the visible range. Manual Y-pan/RMB-zoom
-    /// (`manual_price`) freezes Y until a scale is selected.
+    /// (`manual_price`) freezes Y until a scale is selected or Center chart is pressed. A scale
+    /// pick resets the RMB zoom (`price_zoom`); Center chart keeps it, so the fit resumes
+    /// multiplied by it.
     /// Automatic history fits retain the rendered scale between hysteresis crossings, unless
     /// retaining it would clip a visible extreme.
     pub fn update_y(
@@ -1265,7 +1323,12 @@ impl ChartView {
                     Some((base * self.scale_percent).max(Self::min_range(base)))
                 }
                 _ => None,
-            };
+            }
+            // The right-button zoom multiplies whatever the picked scale fits, Auto included —
+            // Moonbot applies `yZoom` after every scale branch. The floor is applied again after
+            // it, as each branch applies it to its own fit.
+            .zip(target_center)
+            .map(|(r, c)| (r * self.price_zoom).max(Self::min_range(c)));
 
             if let Some(r) = target_range {
                 if live && self.auto_price && self.center_price != 0.0 && self.price_range > 0.0 {
@@ -1304,8 +1367,10 @@ impl ChartView {
         }
         // A degenerate range gets a default that is a FRACTION OF THE PRICE. The old `+ 1.0`
         // was a whole price unit — on a 1.2e-8 instrument, eight orders of magnitude of chart —
-        // and it became reachable once the floors above stopped being absolute.
-        if !(self.price_range > Self::min_range(self.center_price)) {
+        // and it became reachable once the floors above stopped being absolute. A window exactly
+        // AT the floor is legitimate — a right-button zoom all the way in lands there — so only a
+        // window below it, or a NaN, counts as degenerate.
+        if !(self.price_range >= Self::min_range(self.center_price)) {
             self.price_range = if self.center_price.abs() > 0.0 {
                 self.center_price.abs() * 0.10
             } else {
