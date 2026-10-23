@@ -184,8 +184,10 @@ pub struct Deal {
     /// The coin as the report spells it (`coin`, e.g. `BEN`); the market (`BEN_USDT`) is the
     /// caller's to resolve through `symbol::` for the tape lookup.
     pub coin: String,
-    /// `buydatems` — the fill of the entry, Unix ms. Rows without a millisecond stamp are not
-    /// deals for this axis; the caller drops them and counts them.
+    /// `buydatems` — the fill of the entry, Unix ms on TRUE UTC: the read lifts the core's own
+    /// clock through its measured offset (`deals::read_on`), because the tape, the archived order
+    /// lines and the strategy versions it is held against are all true UTC. Rows without a
+    /// millisecond stamp are not deals for this axis; the caller drops them and counts them.
     pub buy_ms: i64,
     /// `buysetdatems` — the moment the core CREATED the entry order, Unix ms on the same clock
     /// as `buy_ms`. Filed by cores since 2026-09-21 and never backfilled; `None` on older rows,
@@ -198,7 +200,7 @@ pub struct Deal {
     /// but its width is the corridor's own, so the `real_data` bench holds the model's
     /// `MShotPriceMin` … `2 · MShotPrice − MShotPriceMin` band against it on every run.
     pub corridor: Option<(f64, f64)>,
-    /// `closedatems` — the fill of the exit, Unix ms.
+    /// `closedatems` — the fill of the exit, Unix ms on true UTC like [`Self::buy_ms`].
     pub close_ms: i64,
     pub buy_price: f64,
     pub sell_price: f64,

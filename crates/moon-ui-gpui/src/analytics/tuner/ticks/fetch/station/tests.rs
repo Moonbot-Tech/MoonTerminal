@@ -159,7 +159,8 @@ fn a_fill_evicted_by_the_injected_cap_is_not_requested_again() {
             .unwrap()
             .is_empty()
     );
-    super::commit_station_answer(&rows, filled, false);
+    let now_generation = super::unfillable().generation;
+    super::commit_station_answer(&rows, filled, false, now_generation);
     assert!(!super::candidate(uid));
     let next_requests = rows
         .iter()
@@ -176,6 +177,7 @@ fn partial_pull_failure_does_not_latch_unanswered_rows() {
     let _refusals = UNFILLABLE_TEST.lock().unwrap_or_else(|p| p.into_inner());
     let uid = -94_003;
     forget(uid);
+    let now_generation = super::unfillable().generation;
     super::commit_station_answer(
         &[queued_unservable(uid)],
         Filled {
@@ -185,6 +187,7 @@ fn partial_pull_failure_does_not_latch_unanswered_rows() {
             ..Default::default()
         },
         false,
+        now_generation,
     );
     let retry = super::candidate(uid);
     forget(uid);
@@ -252,7 +255,7 @@ fn refusals_since_names_only_the_markets_that_changed() {
         [("EX-XX".to_string(), "XALPHAUSDT".to_string())].into()
     );
     let before_refresh = rows.since(0).0;
-    rows.refresh((1, 0, (0, 0)));
+    rows.refresh((1, 0, (0, 0), 0));
     assert_eq!(
         rows.since(before_refresh).1,
         [("EX-XX".to_string(), "XBETAUSDT".to_string())].into(),
@@ -303,6 +306,7 @@ fn refusal_refreshes_cached_classification_until_its_market_is_filed() {
     let before = rows::counts_at(&mut state, 60, now);
     assert_eq!(before.get(DealChip::ShortTail), 1);
     assert!(rows::order_for(&mut state, 60, now).is_empty());
+    let now_generation = super::unfillable().generation;
     super::commit_station_answer(
         &[queued],
         Filled {
@@ -310,6 +314,7 @@ fn refusal_refreshes_cached_classification_until_its_market_is_filed() {
             ..Default::default()
         },
         false,
+        now_generation,
     );
     let after = rows::counts_at(&mut state, 60, now);
     assert_eq!(after.get(DealChip::AcceptedShortTail), 1);
@@ -402,7 +407,7 @@ fn already_held_rows_do_not_bump_the_station_filing_generation() {
 #[test]
 fn station_misses_survive_unrelated_filings() {
     let mut refused = Unfillable::default();
-    refused.refresh((7, 60, (180_000, 300_000)));
+    refused.refresh((7, 60, (180_000, 300_000), 0));
     refused.refuse(91, "synthetic", "XALPHA");
     let revision = refused.revision;
     refused.filed("synthetic", "XBETA");
@@ -413,10 +418,11 @@ fn station_misses_survive_unrelated_filings() {
     assert!(refused.uids.is_empty());
     assert_ne!(refused.revision, revision);
     for generation in [
-        (8, 60, (180_000, 300_000)),
-        (8, 120, (180_000, 300_000)),
-        (8, 120, (600_000, 300_000)),
-        (8, 120, (600_000, 1_800_000)),
+        (8, 60, (180_000, 300_000), 0),
+        (8, 120, (180_000, 300_000), 0),
+        (8, 120, (600_000, 300_000), 0),
+        (8, 120, (600_000, 1_800_000), 0),
+        (8, 120, (600_000, 1_800_000), 1),
     ] {
         refused.refuse(91, "synthetic", "XALPHA");
         let revision = refused.revision;
@@ -558,7 +564,8 @@ fn empty_station_answer_is_remembered_when_nothing_else_can_fetch() {
         1,
         "an empty answer must leave the row for refusal memory"
     );
-    super::commit_station_answer(&rows, filled, false);
+    let now_generation = super::unfillable().generation;
+    super::commit_station_answer(&rows, filled, false, now_generation);
     assert!(
         super::unfillable().uids.contains_key(&uid),
         "an empty station answer must remember a row nothing else can fetch"

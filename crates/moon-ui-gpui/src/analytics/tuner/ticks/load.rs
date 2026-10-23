@@ -165,6 +165,9 @@ impl AnalyticsView {
             cx,
             move || {
                 let deals = moon_core::db::tuner::ticks::read_deals(&q);
+                if let Ok(read) = &deals {
+                    super::fetch::station::note_axis(&read.axis);
+                }
                 // One line per load, so "no deals" can be read against the scope that was
                 // actually asked — period, strategies — instead of guessed from the panel.
                 // `q.strategies` is empty for "every strategy" (0 targets).

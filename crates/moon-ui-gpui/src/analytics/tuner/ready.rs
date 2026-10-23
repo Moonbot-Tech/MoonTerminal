@@ -1484,6 +1484,7 @@ impl AnalyticsView {
             cx,
             move || {
                 moon_core::db::tuner::ticks::read_deals(&q).map(|read| {
+                    super::ticks::fetch::station::note_axis(&read.axis);
                     let addresses = super::ticks::resolve_in(&mut resolver, &read.deals);
                     (read.deals, addresses)
                 })

@@ -160,7 +160,8 @@ pub fn strategy_current_values_opt(
 /// Args:
 ///     strategy_id: The strategy.
 ///     core: Its core, when known; rows are per-core.
-///     at_ms: The moment, Unix ms — the trade's `buydatems`.
+///     at_ms: The moment, true-UTC Unix ms like the version boundaries — the trade's entry as
+///         `Deal::buy_ms` carries it, lifted off the core's clock.
 ///     keys: Field names to read.
 pub fn strategy_values_at(
     strategy_id: i64,

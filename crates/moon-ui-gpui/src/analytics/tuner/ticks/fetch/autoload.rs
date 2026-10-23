@@ -150,7 +150,10 @@ impl Sources for LiveSources {
         &mut self,
         query: &moon_core::db::analytics::Query,
     ) -> Result<Vec<Deal>, moon_core::db::ReadFail> {
-        moon_core::db::tuner::ticks::read_deals(query).map(|read| read.deals)
+        moon_core::db::tuner::ticks::read_deals(query).map(|read| {
+            super::station::note_axis(&read.axis);
+            read.deals
+        })
     }
     /// Keep the station's disk-before/pull/disk-after coverage check.
     fn prefill(

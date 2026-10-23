@@ -174,6 +174,60 @@ fn the_orders_creation_and_corridor_are_read_where_filed() {
     );
 }
 
+/// A deal's stamps leave the read on true UTC: the tape it is replayed against, the station
+/// request and the strategy version boundaries are all true UTC, and a core eight hours behind
+/// UTC would otherwise ask for, and replay over, a stretch eight hours before its trade (#1070).
+/// A core measured on UTC reads exactly as stored, and the order is by the true close.
+#[test]
+fn stamps_are_lifted_onto_true_utc_by_each_cores_offset() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep(
+            reportuid INTEGER, core_uid INTEGER, strategyid INTEGER, coin TEXT,
+            buydate INTEGER, closedate INTEGER, buydatems INTEGER, closedatems INTEGER,
+            buyprice REAL, sellprice REAL, spentbtc REAL, profitbtc REAL, isshort INTEGER,
+            sellreason TEXT, basecurrency INTEGER, buysetdatems INTEGER
+         );
+         INSERT INTO orders_rep VALUES
+            (31, 7, 42, 'ACE', 100, 200, 100250, 200750, 99.0, 100.0, 1000.0, 10.0, 0,
+             'Sell Price', 1, 95000),
+            (32, 8, 42, 'BEN', 900, 1000, 900000, 1000000, 99.0, 100.0, 1000.0, 10.0, 0,
+             'Sell Price', 1, 899000);",
+    )
+    .expect("fixture");
+    crate::db::rep::core_offset::ensure_table(&conn).expect("offset table");
+    // Core 7 runs on UTC-08:00, core 8 on UTC, both measured since before every row.
+    crate::db::rep::core_offset::store_segment(&conn, 7, 0, -8 * 3_600, 0, "ping")
+        .expect("segment");
+    crate::db::rep::core_offset::store_segment(&conn, 8, 0, 0, 0, "ping").expect("segment");
+    let q = Query {
+        to: 100_000,
+        ..scope()
+    };
+    let (q, src) = tuner_source_on(&conn, &q).expect("source");
+    let read = read_on(&conn, &q, &src).expect("read");
+    const EIGHT_HOURS_MS: i64 = 8 * 3_600_000;
+    let ids: Vec<_> = read.deals.iter().map(|d| d.report_uid).collect();
+    assert_eq!(
+        ids,
+        [32, 31],
+        "core 7's close is the later one once both are on true UTC"
+    );
+    let (ben, ace) = (&read.deals[0], &read.deals[1]);
+    assert_eq!(
+        (ace.buy_ms, ace.close_ms, ace.buy_set_ms),
+        (
+            100_250 + EIGHT_HOURS_MS,
+            200_750 + EIGHT_HOURS_MS,
+            Some(95_000 + EIGHT_HOURS_MS)
+        )
+    );
+    assert_eq!(
+        (ben.buy_ms, ben.close_ms, ben.buy_set_ms),
+        (900_000, 1_000_000, Some(899_000))
+    );
+}
+
 #[test]
 fn a_replica_without_the_stamp_columns_yields_no_deals() {
     let conn = Connection::open_in_memory().expect("in-memory database");
