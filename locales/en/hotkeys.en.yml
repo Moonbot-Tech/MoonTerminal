@@ -175,7 +175,7 @@ hotkeys.super_zoom_in_hint: "Zoom the time axis in down to a 3-second window. Un
 hotkeys.super_zoom_out: "Super zoom out"
 hotkeys.super_zoom_out_hint: "Zoom the time axis out with a 3-second minimum window. Unbound by default."
 hotkeys.center_chart: "Center chart"
-hotkeys.center_chart_hint: "Bring EVERY chart back to the current price and the live edge: clears the manual price pan/zoom (vertical drag, right-button zoom) and Pause, leaves both scales alone. Overrides the word jump inside a text field. Moonbot default: Ctrl+Right."
+hotkeys.center_chart_hint: "Bring EVERY chart back to the current price and the live edge: clears the manual price pan (vertical drag) and Pause. Keeps the right-button zoom and both scales — a scale pick resets the zoom. Overrides the word jump inside a text field. Moonbot default: Ctrl+Right."
 hotkeys.toggle_live: "Live / Pause"
 hotkeys.toggle_live_hint: "Toggle chart auto-scroll — the same Live/Pause toolbar button. Default: Space. Types a space inside a text field."
 hotkeys.builtin.wheel_super_zoom: "[Ctrl+Shift + Wheel] super zooms time down to 3 seconds"

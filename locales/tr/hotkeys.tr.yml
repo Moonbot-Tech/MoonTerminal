@@ -175,7 +175,7 @@ hotkeys.super_zoom_in_hint: "Zaman eksenini 3 saniyelik pencereye kadar yakınla
 hotkeys.super_zoom_out: "Süper uzaklaştır"
 hotkeys.super_zoom_out_hint: "Zaman eksenini en az 3 saniyelik pencerede uzaklaştırır. Varsayılan olarak atanmamış."
 hotkeys.center_chart: "Grafiği ortala"
-hotkeys.center_chart_hint: "TÜM grafikleri güncel fiyata ve canlı kenara getirir: elle fiyat kaydırma/yakınlaştırmayı (dikey sürükleme, sağ düğme yakınlaştırma) ve Duraklat'ı kaldırır, iki ölçeğe dokunmaz. Metin alanında kelime atlamasının önüne geçer. Moonbot varsayılanı: Ctrl+Right."
+hotkeys.center_chart_hint: "TÜM grafikleri güncel fiyata ve canlı kenara getirir: elle fiyat kaydırmayı (dikey sürükleme) ve Duraklat'ı kaldırır. Sağ düğme yakınlaştırmasını ve iki ölçeği korur — ölçek seçmek yakınlaştırmayı sıfırlar. Metin alanında kelime atlamasının önüne geçer. Moonbot varsayılanı: Ctrl+Right."
 hotkeys.toggle_live: "Live / Duraklat"
 hotkeys.toggle_live_hint: "Grafik otomatik kaydırmayı açıp kapatır — araç çubuğundaki aynı Live/Duraklat düğmesi. Varsayılan: Space. Metin alanında boşluk yazar."
 hotkeys.builtin.wheel_super_zoom: "[Ctrl+Shift + Tekerlek] zamanı 3 saniyeye kadar süper yakınlaştırır"

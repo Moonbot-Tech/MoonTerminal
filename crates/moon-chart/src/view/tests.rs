@@ -1048,6 +1048,115 @@ fn center_on_price_snaps_a_dragged_paused_chart_back_in_one_frame() {
     );
 }
 
+/// #1071, Moonbot's `yZoom`: a right-button zoom is a multiplier on the picked scale, and Ctrl+Right
+/// keeps it — only the vertical offset and the live edge are reset. A scale pick drops it.
+///
+/// Plausible breakage: clearing the zoom together with `manual_price`, which sized the next frame
+/// from the bare percent again and read as a reset to the default scale.
+#[test]
+fn center_on_price_keeps_the_right_button_zoom_on_the_picked_scale() {
+    let now = 100_000.0;
+    let mut view = settled_view(1000.0, 0.01, now);
+    let base = view.render_range;
+    // Up by one doubling distance: zoom out to twice the picked window.
+    view.rmb_zoom(view.render_center, view.render_range, 1.0, -150.0, now);
+    view.pan_y_px(200.0 * view.px_per_price, now);
+
+    view.center_on_price(now + 300.0);
+    view.update_y(now + 316.0, 400.0, Some((1000.0, 1000.0)), Some(1000.0));
+    assert!(
+        (view.render_range - base * 2.0).abs() < base * 1e-3,
+        "the zoom was dropped: {} against a picked {}",
+        view.render_range,
+        base
+    );
+    assert!(
+        (view.render_center - 1000.0).abs() < 1e-3,
+        "the offset survived"
+    );
+
+    view.set_scale_percent(0.01);
+    view.update_y(now + 332.0, 400.0, Some((1000.0, 1000.0)), Some(1000.0));
+    assert!(
+        (view.render_range - base).abs() < base * 1e-3,
+        "a scale pick kept the zoom: {}",
+        view.render_range
+    );
+}
+
+/// The zoom compounds across drags with no total cap; only one gesture is limited to 4x either way.
+///
+/// Plausible breakage: clamping the multiplier itself (two doubling drags stop at some cap), or
+/// forgetting the press-time zoom, which makes the second drag's multiplier start from 1 again
+/// and jump the window on its first pixel.
+#[test]
+fn right_button_zoom_compounds_across_drags_without_a_total_cap() {
+    let now = 100_000.0;
+    let mut view = settled_view(1000.0, 0.01, now);
+    let base = view.render_range;
+    let drag = |view: &mut ChartView, dy: f32| {
+        let (c, r, z) = (view.render_center, view.render_range, view.price_zoom());
+        view.rmb_zoom(c, r, z, dy, now);
+    };
+    for _ in 0..3 {
+        drag(&mut view, -150.0);
+    }
+    assert!(
+        (view.price_zoom() - 8.0).abs() < 1e-4,
+        "{}",
+        view.price_zoom()
+    );
+    assert!((view.render_range - base * 8.0).abs() < base * 1e-3);
+
+    // Back down by three doubling distances — two gestures, one may not exceed 4x — lands on the
+    // picked window again.
+    drag(&mut view, 300.0);
+    drag(&mut view, 150.0);
+    assert!(
+        (view.render_range - base).abs() < base * 1e-3,
+        "the drag did not continue from the previous one: {}",
+        view.render_range
+    );
+
+    // One long gesture still stops at 4x of its own press window.
+    drag(&mut view, -1000.0);
+    assert!(
+        (view.price_zoom() - 4.0).abs() < 1e-4,
+        "{}",
+        view.price_zoom()
+    );
+}
+
+/// Zoomed in past the window floor, the kept multiplier must match the window drawn, so Center
+/// chart returns to that narrow window rather than to an unrelated default.
+///
+/// Plausible breakage: storing the multiplier apart from the floored window — it keeps shrinking
+/// with every drag, Center chart then fits below the floor, and the degenerate-range fallback
+/// replaces the view with a tenth of the price.
+#[test]
+fn a_zoom_past_the_floor_survives_center_chart_at_the_floor() {
+    let now = 100_000.0;
+    let mut view = settled_view(1000.0, 0.01, now);
+    for _ in 0..12 {
+        let (c, r, z) = (view.render_center, view.render_range, view.price_zoom());
+        view.rmb_zoom(c, r, z, 300.0, now);
+    }
+    let floored = view.render_range;
+    assert!(
+        floored < 0.01,
+        "the drags did not reach the floor: {floored}"
+    );
+
+    view.center_on_price(now + 300.0);
+    view.update_y(now + 316.0, 400.0, Some((1000.0, 1000.0)), Some(1000.0));
+    assert!(
+        (view.render_range - floored).abs() <= floored * 1e-3,
+        "Center chart left the floored window: {} instead of {}",
+        view.render_range,
+        floored
+    );
+}
+
 /// A gesture that lands after the request — the drag still in progress when Ctrl+Right was pressed,
 /// or the comparison lock re-asserting the anchor's window — cancels the pending snap, so it cannot
 /// fire later on an Auto pick that asked for no jump.
@@ -1060,7 +1169,7 @@ fn a_gesture_or_a_lock_after_center_on_price_cancels_the_pending_snap() {
     assert!(view.manual_price && !view.center_snap_pending);
 
     view.center_on_price(now + 400.0);
-    view.rmb_zoom(1000.0, 10.0, 20.0, now + 400.0);
+    view.rmb_zoom(1000.0, 10.0, 1.0, 20.0, now + 400.0);
     assert!(view.manual_price && !view.center_snap_pending);
 
     view.center_on_price(now + 500.0);
@@ -1322,7 +1431,7 @@ fn pan_zoom_and_y_drag_count_as_chart_interaction() {
     view.pan_y_px(8.0, NOW + 20.0);
     assert_eq!(view.last_interaction_ms, Some(NOW + 20.0));
 
-    view.rmb_zoom(100.0, 10.0, 20.0, NOW + 30.0);
+    view.rmb_zoom(100.0, 10.0, 1.0, 20.0, NOW + 30.0);
     assert_eq!(view.last_interaction_ms, Some(NOW + 30.0));
 }
 
@@ -1383,7 +1492,13 @@ fn history_manual_y_and_explicit_center_snap_remain_exact() {
     assert_eq!(view.px_per_price, before_scale, "a Y pan must not zoom");
     assert_eq!(view.render_center, dragged);
     assert_eq!(view.render_center, view.center_price);
-    view.rmb_zoom(view.center_price, view.price_range, 0.25, NOW + 48.0);
+    view.rmb_zoom(
+        view.center_price,
+        view.price_range,
+        view.price_zoom(),
+        0.25,
+        NOW + 48.0,
+    );
     let zoomed = view.render_range;
     view.update_y(NOW + 64.0, 400.0, Some((900.0, 1100.0)), None);
     assert_eq!(view.render_range, zoomed);

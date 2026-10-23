@@ -163,6 +163,8 @@ pub struct ChartInput {
     rmb_start_y: f32,
     rmb_start_range: f32,
     rmb_start_center: f32,
+    /// `ChartView::price_zoom` at the press: the window above was drawn at this multiplier.
+    rmb_start_zoom: f32,
     /// Time and position of the previous left-button press for double-click detection.
     last_lmb_ms: f64,
     last_lmb_pos: (f32, f32),
@@ -393,10 +395,11 @@ impl ChartInput {
                     self.rmb_start_y = self.last_ptr.1;
                     let snap = self
                         .view_mut(container, self.drag_pane)
-                        .map(|v| (v.render_range, v.render_center));
-                    if let Some((r, c)) = snap {
+                        .map(|v| (v.render_range, v.render_center, v.price_zoom()));
+                    if let Some((r, c, z)) = snap {
                         self.rmb_start_range = r;
                         self.rmb_start_center = c;
+                        self.rmb_start_zoom = z;
                     }
                 } else {
                     self.rmb_down = false;
@@ -467,10 +470,14 @@ impl ChartInput {
                 self.rmb_moved = true;
             }
             if self.rmb_moved {
-                let (c, r) = (self.rmb_start_center, self.rmb_start_range);
+                let (c, r, z) = (
+                    self.rmb_start_center,
+                    self.rmb_start_range,
+                    self.rmb_start_zoom,
+                );
                 let now = now_unix_ms();
                 if let Some(view) = self.view_mut(container, self.drag_pane.or(self.hovered_pane)) {
-                    view.rmb_zoom(c, r, cum, now);
+                    view.rmb_zoom(c, r, z, cum, now);
                     changed = true;
                 }
             }
