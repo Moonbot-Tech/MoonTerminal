@@ -132,6 +132,24 @@ fn moving_a_core_creates_its_group_row() {
     assert!(!set_core_group(&mut config, 5, "x"), "no such core");
 }
 
+/// #1061: the group menu's blank row is the unnamed group that cores stored before a name was
+/// required. Choosing it must move the core there; otherwise a new core stays in `default` and
+/// opens a second window beside the old ones.
+#[test]
+fn the_blank_group_row_joins_the_unnamed_group() {
+    let mut config = AppConfig::headless(vec![server("OLD", ""), server("NEW", "default")]);
+    assert!(
+        set_core_group(&mut config, 1, ""),
+        "the blank row moved nothing"
+    );
+    assert_eq!(config.servers[1].group, "");
+    assert_eq!(config.servers[0].group, "", "the old core was renamed");
+    assert!(
+        !set_core_group(&mut config, 1, " "),
+        "already in the unnamed group, nothing to move"
+    );
+}
+
 /// A probe host drawing the Cores page body at the probe's body width.
 struct Host {
     scroll: ScrollHandle,
