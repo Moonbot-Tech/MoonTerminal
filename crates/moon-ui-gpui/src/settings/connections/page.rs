@@ -37,14 +37,21 @@ use moon_core::config::{AppConfig, ServerConfig, TransportVersion};
 
 /// Move draft core `i` to group `name`, keeping the group rows in step.
 ///
+/// An empty name is the unnamed group that cores stored before a name was required (#1061): the
+/// group menu lists it as a blank row, and choosing it joins that window. It is accepted only
+/// while some core already sits there, so this setter can never START a new unnamed group.
+///
 /// Returns:
 ///     Whether the core moved.
 pub(crate) fn set_core_group(p: &mut AppConfig, i: usize, name: &str) -> bool {
     let name = name.trim();
+    if name.is_empty() && !p.servers.iter().any(|s| s.group.is_empty()) {
+        return false;
+    }
     let Some(s) = p.servers.get_mut(i) else {
         return false;
     };
-    if name.is_empty() || s.group == name {
+    if s.group == name {
         return false;
     }
     s.group = name.to_string();

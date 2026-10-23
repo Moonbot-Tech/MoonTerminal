@@ -248,8 +248,9 @@ pub(super) fn build_conn(
                     cx,
                     i,
                     s.group.clone(),
-                    // No placeholder: `build_conn` is only ever handed saved or pending rows
-                    // whose group defaults to "default", so the field is never empty in practice.
+                    // No placeholder: this state is never drawn — the card picks the group from a
+                    // menu — and `move_selected_to_group` only mirrors the choice into it. An
+                    // empty value is the unnamed group of cores stored before a name was required.
                     None,
                     |s| s.group.clone(),
                     |s, v| s.group = v,
