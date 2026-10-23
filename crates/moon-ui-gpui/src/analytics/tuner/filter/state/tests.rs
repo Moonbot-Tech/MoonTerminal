@@ -1,12 +1,13 @@
 //! Unit tests for persisted filter-tuner controls.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{
     DEFAULT_EDGES, DEFAULT_ITERS, DEFAULT_TRAIN, SuggestJob, SuggestState, TRAIN_OPTIONS,
-    TunerState, canonical_iters, edge_options, edge_options_upto, fmt_bound, iters_of, parse_num,
-    persist_seed, restore_edges, restore_edges_upto, restore_enabled, restore_iters, restore_seed,
-    restore_train, seed_of, staged_dirty, train_frac,
+    TunerState, canonical_iters, edge_options, edge_options_upto, fmt_bound, ignore_badge,
+    iters_of, parse_num, persist_seed, restore_edges, restore_edges_upto, restore_enabled,
+    restore_iters, restore_seed, restore_train, seed_of, staged_dirty, train_frac,
 };
 use moon_core::db::tuner::FIELDS;
 use moon_core::db::tuner::FieldClass;
@@ -267,6 +268,63 @@ fn stale_histogram_keeps_the_filter_axis_reloadable() {
     state.hist_dirty = true;
 
     assert!(state.needs_reload());
+}
+
+/// #1068: a group badge reads green only while MoonBot applies the class. BV/SV is switched off by
+/// its own `UseBV_SV_Filter`, by the Volume section's `IgnoreVolume` and by the master
+/// `IgnoreFilters`; every other section by its own flag and the master. The badge must agree with
+/// `StratFilters::class_ignored`, which already hides the "in strategy" chips by that rule.
+///
+/// Plausible breakage: painting the class's own switch alone, which left BV/SV green under
+/// `IgnoreVolume` and every section green under `IgnoreFilters`.
+#[test]
+fn ignore_badge_is_green_only_while_no_parent_switch_turns_the_class_off() {
+    let none = HashMap::new();
+    let on = StratFilters {
+        found: true,
+        use_bvsv: true,
+        ..Default::default()
+    };
+    let badge = |f: &StratFilters, class, staged: &HashMap<&'static str, bool>| {
+        ignore_badge(class, f, staged).expect("the class has a switch")
+    };
+    assert!(badge(&on, FieldClass::BvSv, &none).live());
+
+    let volume_off = StratFilters {
+        ignore_volume: true,
+        ..on.clone()
+    };
+    let b = badge(&volume_off, FieldClass::BvSv, &none);
+    assert!(!b.live(), "BV/SV green under IgnoreVolume");
+    assert!(!b.own_ignored, "the own switch is still on");
+    assert_eq!(b.overridden_by, Some("IgnoreVolume"));
+
+    let master_off = StratFilters {
+        ignore_filters: true,
+        ..on.clone()
+    };
+    for class in [
+        FieldClass::BvSv,
+        FieldClass::Volume,
+        FieldClass::Delta,
+        FieldClass::Ping,
+        FieldClass::Base,
+    ] {
+        let b = badge(&master_off, class, &none);
+        assert!(!b.live(), "{class:?} green under IgnoreFilters");
+        assert_eq!(b.overridden_by, Some("IgnoreFilters"));
+        assert_eq!(
+            !b.live(),
+            master_off.class_ignored(class),
+            "{class:?} disagrees with the chips"
+        );
+    }
+
+    // A staged click on the parent counts as the parent's value, both ways.
+    let staged_clear = HashMap::from([("IgnoreVolume", false)]);
+    assert!(badge(&volume_off, FieldClass::BvSv, &staged_clear).live());
+    let staged_set = HashMap::from([("IgnoreVolume", true)]);
+    assert!(!badge(&on, FieldClass::BvSv, &staged_set).live());
 }
 
 /// `filter/state.rs:TunerState::apply_strategy_read` must preserve a confirmed Save baseline

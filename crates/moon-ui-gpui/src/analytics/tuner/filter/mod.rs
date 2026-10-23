@@ -34,7 +34,9 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::GroupStat;
 use moon_core::db::tuner::threshold_search::{ComposeDecision, ComposeSkip};
 use moon_core::db::tuner::{FIELDS, FieldClass, StratFilters};
-pub(in crate::analytics::tuner) use state::{flag_of, fmt_bound, parse_num, staged_dirty};
+pub(in crate::analytics::tuner) use state::{
+    flag_of, fmt_bound, ignore_badge, parse_num, staged_dirty,
+};
 
 /// Histogram buckets.
 const HIST_BUCKETS: usize = 14;
@@ -1173,6 +1175,10 @@ impl AnalyticsView {
     /// 'apply' when the staged value differs from the strategy's current flag — it
     /// writes ONLY that flag TO THE STRATEGY (putting the ignore back is as easy as
     /// clearing it by saving thresholds).
+    ///
+    /// Green means MoonBot applies the class ([`ignore_badge`]): a parent switch that turns it
+    /// off greys the badge and is named after it, while the click still toggles the class's own
+    /// switch only.
     fn group_header(
         &self,
         class: FieldClass,
@@ -1213,23 +1219,24 @@ impl AnalyticsView {
                     .child(label),
             );
         if strat.found
-            && let Some((flag, cur_ignore)) = flag_of(class, strat)
+            && let Some(badge) = ignore_badge(class, strat, &self.tuner.staged_ignore)
             && !(sub && class != FieldClass::BvSv)
         {
-            let staged = self.tuner.staged_ignore.get(flag).copied();
-            let shown = staged.unwrap_or(cur_ignore);
+            let flag = badge.flag;
+            // The colour is what MoonBot will do (#1068); the text is the class's own switch,
+            // which is what a click stages. A parent that turns the class off is named beside it
+            // and is never cleared from here.
+            let off = moon_alpha(p.text_muted, 0.7);
             hdr = hdr.child(
                 div()
                     .id(SharedString::from(format!("tun-ign-{flag}")))
                     .cursor_pointer()
-                    .text_color(if shown {
-                        // The class's filters are IGNORED — dark grey.
-                        moon_alpha(p.text_muted, 0.7)
+                    .text_color(if badge.live() { moon(p.green) } else { off })
+                    .child(if badge.own_ignored {
+                        "ignore=YES"
                     } else {
-                        // The filters are live — green.
-                        moon(p.green)
+                        "ignore=NO"
                     })
-                    .child(if shown { "ignore=YES" } else { "ignore=NO" })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let cur =
                             flag_of(class, &this.tuner.strat.clone()).is_some_and(|(_, cur)| cur);
@@ -1243,6 +1250,11 @@ impl AnalyticsView {
                         cx.notify();
                     })),
             );
+            // Read-only, in the style of the time grid's observed `IgnoreFilters`: the flag name
+            // is MoonBot's own identifier, so it is not translated.
+            if let Some(parent) = badge.overridden_by {
+                hdr = hdr.child(div().text_color(off).child(format!("{parent}=YES")));
+            }
         }
         hdr.into_any_element()
     }

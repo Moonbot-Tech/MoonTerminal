@@ -858,6 +858,59 @@ pub(in crate::analytics::tuner) fn flag_of(
     })
 }
 
+/// What a group header's ignore badge says for one class of the anchor strategy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::analytics::tuner) struct IgnoreBadge {
+    /// The class's own switch — the one a click on the badge stages.
+    pub flag: &'static str,
+    /// That switch's value, staged or current, in ignore terms.
+    pub own_ignored: bool,
+    /// A parent switch that turns the class off above its own one, staged or current.
+    pub overridden_by: Option<&'static str>,
+}
+
+impl IgnoreBadge {
+    /// Whether MoonBot would actually apply the class's thresholds — the green badge.
+    pub fn live(&self) -> bool {
+        !self.own_ignored && self.overridden_by.is_none()
+    }
+}
+
+/// The badge for `class`, or `None` for a class without a switch of its own.
+///
+/// The parents follow MoonBot's entry check (`Strategies.pas`, `IntCheckMarketCond`, and
+/// `ActualUseBV_SV_Filter`): `IgnoreFilters` skips every section, and BV/SV additionally sits
+/// inside the Volume section. The master is named first when both apply — clearing the section
+/// alone would not bring the class back. Staged clicks count as the flag's value, so the badge
+/// shows what Save would leave behind.
+///
+/// Args:
+///     class: Field class of the group header.
+///     f: Anchor strategy's current flags.
+///     staged: Ignore toggles clicked but not yet saved, flag → ignore.
+pub(in crate::analytics::tuner) fn ignore_badge(
+    class: FieldClass,
+    f: &StratFilters,
+    staged: &HashMap<&'static str, bool>,
+) -> Option<IgnoreBadge> {
+    let now = |(flag, cur): (&'static str, bool)| (flag, staged.get(flag).copied().unwrap_or(cur));
+    let (flag, own_ignored) = now(flag_of(class, f)?);
+    let master = now(("IgnoreFilters", f.ignore_filters));
+    let section = (class.parent() != class)
+        .then(|| flag_of(class.parent(), f).map(now))
+        .flatten();
+    let overridden_by = [Some(master), section]
+        .into_iter()
+        .flatten()
+        .find(|(parent, ignored)| *ignored && *parent != flag)
+        .map(|(parent, _)| parent);
+    Some(IgnoreBadge {
+        flag,
+        own_ignored,
+        overridden_by,
+    })
+}
+
 // The sibling uses explicit imports because the parent's `gpui::*` re-export shadows `#[test]`.
 #[cfg(test)]
 mod tests;
