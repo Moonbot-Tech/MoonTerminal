@@ -21,11 +21,18 @@ const FILE_SYNC: Duration = Duration::from_secs(10);
 static FILED: AtomicU64 = AtomicU64::new(0);
 /// In-progress station work remains stoppable before a venue batch exists.
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+/// Bumped whenever a deal read lifts its stamps on different offsets than the last one
+/// ([`note_axis`]).
+static AXIS_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// What a refusal was judged under: the station's finalised-tail count, the tail floor, the
+/// margin and long-position window, and the report axis epoch.
+type Generation = (u64, u32, (i64, i64), u64);
 
 /// Station refusals survive unrelated filings, but not changes to their admission inputs.
 #[derive(Default)]
 struct Unfillable {
-    generation: (u64, u32, (i64, i64)),
+    generation: Generation,
     revision: u64,
     uids: HashMap<i64, (String, String)>,
     /// Each market's revision of its last membership change, for [`refusals_since`].
@@ -44,8 +51,8 @@ impl Unfillable {
         (self.revision, Arc::clone(&self.snapshot))
     }
 
-    /// A changed window, floor or station finalisation permits another attempt.
-    fn refresh(&mut self, generation: (u64, u32, (i64, i64))) {
+    /// A changed window, floor, station finalisation or report axis permits another attempt.
+    fn refresh(&mut self, generation: Generation) {
         if self.generation != generation {
             self.generation = generation;
             if !self.uids.is_empty() {
@@ -112,8 +119,31 @@ fn unfillable() -> MutexGuard<'static, Unfillable> {
             margin_ms(),
             moon_core::market::trade_replay::long_position_ms(),
         ),
+        AXIS_EPOCH.load(Ordering::Acquire),
     ));
     rows
+}
+
+/// Record the axis a deal read just lifted its stamps on.
+///
+/// A deal's tape window is its stamps lifted onto true UTC by its core's measured offset, so a
+/// refusal judged before an offset was measured, or before it changed, asked the station for a
+/// different stretch than the row now needs: a read on other offsets drops every remembered
+/// refusal. The read's own axis is the authority, not the session's — the session adopts an
+/// offset before the replica that the read resolves it from has stored it. Only the offsets
+/// count: the Analytics window and the startup pass read in different display zones.
+///
+/// Args:
+///     axis: `DealsRead::axis` of the read whose deals become rows.
+pub(in crate::analytics::tuner) fn note_axis(axis: &moon_core::db::ReportAxis) {
+    static LAST: Mutex<Option<moon_core::db::ReportAxis>> = Mutex::new(None);
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !last.as_ref().is_some_and(|last| last.same_offsets(axis)) {
+        *last = Some(axis.clone());
+        AXIS_EPOCH.fetch_add(1, Ordering::AcqRel);
+    }
 }
 
 /// Whether a station-only row still deserves an automatic request in this generation.
@@ -251,6 +281,9 @@ pub(super) fn prefill_counted(
     missing: impl Fn(usize),
 ) -> (Vec<super::job::QueuedRow>, usize, usize) {
     let _busy = Busy::new();
+    // The rows' windows were built under the inputs in force now; an answer that lands after
+    // they moved was asked for stretches no row needs any more.
+    let judged_under = unfillable().generation;
     let place = |row: &super::job::QueuedRow| {
         (
             row.address.exchange_key.clone(),
@@ -292,7 +325,7 @@ pub(super) fn prefill_counted(
             stopped = stop();
             filled
         });
-    commit_station_answer(&rows, filled, stopped);
+    commit_station_answer(&rows, filled, stopped, judged_under);
     let rows = rows
         .into_iter()
         .filter(|row| candidate(row.deal.report_uid))
@@ -308,10 +341,17 @@ pub(super) fn prefill_counted(
 ///     rows: Rows still missing after the station pass.
 ///     filled: The station's answer. `markets > 0` and not `unreachable` means it was asked.
 ///     stopped: The pass was cancelled after the answer; those rows stay eligible.
+///     judged_under: The refusal generation the rows' windows were built under; an answer that
+///         lands under another one is filed but not remembered as a refusal.
 ///
 /// Returns:
 ///     Nothing.
-fn commit_station_answer(rows: &[super::job::QueuedRow], filled: Filled, stopped: bool) {
+fn commit_station_answer(
+    rows: &[super::job::QueuedRow],
+    filled: Filled,
+    stopped: bool,
+    judged_under: Generation,
+) {
     note_filed(filled);
     if filled.markets == 0 || filled.unreachable || filled.failed || stopped {
         return;
@@ -329,6 +369,9 @@ fn commit_station_answer(rows: &[super::job::QueuedRow], filled: Filled, stopped
         );
     }
     let mut refusals = unfillable();
+    if refusals.generation != judged_under {
+        return;
+    }
     let before = refusals.revision;
     for row in refused {
         refusals.refuse(

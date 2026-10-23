@@ -39,13 +39,15 @@ fn failed_owner_metadata_never_applies_a_keep_map() {
     };
     assert!(
         context
-            .run_with(&cache, |_, _, _| anyhow::bail!(
+            .run_with(&cache, &ReportAxis::default(), |_, _, _| anyhow::bail!(
                 "strategy kinds read failed"
             ))
             .is_err()
     );
     assert_eq!(cache.held_spans("x", "M", 0, 20).unwrap(), vec![(1, 10)]);
-    let result = context.run_with(&cache, |_, _, _| Ok(vec![])).unwrap();
+    let result = context
+        .run_with(&cache, &ReportAxis::default(), |_, _, _| Ok(vec![]))
+        .unwrap();
     assert_eq!(result.report.spans_dropped, 1);
     assert!(cache.held_spans("x", "M", 0, 20).unwrap().is_empty());
 }
@@ -92,7 +94,7 @@ fn a_live_row_claims_at_the_margin() {
     let (keep, preview) = build_keep(
         &inv,
         &[&ace, &ben],
-        &ReportAxis::default(),
+        &[ReportAxis::default()],
         &quotes(),
         MARGINS,
         |o| Some(key("4:0", &format!("{}USDT", o.coin))),
@@ -121,7 +123,7 @@ fn overlapping_claims_are_one_stretch() {
     let (keep, _) = build_keep(
         &inv,
         &[&first, &second, &apart],
-        &ReportAxis::default(),
+        &[ReportAxis::default()],
         &quotes(),
         MARGINS,
         |_| Some(key("4:0", "ACEUSDT")),
@@ -143,7 +145,7 @@ fn a_row_with_its_orders_creation_claims_from_the_creation() {
     let (keep, _) = build_keep(
         &inv,
         &[&hook],
-        &ReportAxis::default(),
+        &[ReportAxis::default()],
         &quotes(),
         MARGINS,
         |_| Some(key("4:0", "ACEUSDT")),
@@ -157,7 +159,7 @@ fn a_row_with_its_orders_creation_claims_from_the_creation() {
     let (keep, _) = build_keep(
         &inv,
         &[&long],
-        &ReportAxis::default(),
+        &[ReportAxis::default()],
         &quotes(),
         MARGINS,
         |_| Some(key("4:0", "ACEUSDT")),
@@ -178,7 +180,7 @@ fn a_long_position_claims_its_two_ends() {
     let (keep, _) = build_keep(
         &inv,
         &[&long],
-        &ReportAxis::default(),
+        &[ReportAxis::default()],
         &quotes(),
         MARGINS,
         |_| Some(key("4:0", "ACEUSDT")),
@@ -206,7 +208,7 @@ fn an_offline_core_claims_by_name_on_every_matching_market() {
     let (keep, preview) = build_keep(
         &inv,
         &[&ace],
-        &ReportAxis::default(),
+        &[ReportAxis::default()],
         &quotes(),
         MARGINS,
         |_| None,
@@ -231,7 +233,7 @@ fn a_stored_full_market_name_matches_itself() {
     let (keep, _) = build_keep(
         &inv,
         &[&owner(2, "aceusdt", 1_000_000, 1_010_000, "")],
-        &ReportAxis::default(),
+        &[ReportAxis::default()],
         &quotes(),
         MARGINS,
         |_| None,
@@ -246,7 +248,7 @@ fn a_row_off_the_file_is_unresolved() {
     let (keep, preview) = build_keep(
         &inv,
         &[&owner(2, "ZZZ", 1_000_000, 1_010_000, "")],
-        &ReportAxis::default(),
+        &[ReportAxis::default()],
         &quotes(),
         MARGINS,
         |_| None,
@@ -258,10 +260,10 @@ fn a_row_off_the_file_is_unresolved() {
     );
 }
 
-/// The stamps: one claim when the core's clock is not offset, two when it is — the lifted pair
-/// the window and the capture use, and the raw one the tuner's fetch uses.
+/// The stamps: one claim on true UTC, lifted by the core's offset — the clock the trade window,
+/// the capture and the tuner's deal read all fetch on — and never the core's raw clock.
 #[test]
-fn stamps_claim_both_clocks_when_they_differ() {
+fn stamps_claim_the_lifted_clock_only() {
     let mut row = owner(1, "ACE", 1_000_000, 1_010_000, "");
     row.buy_set_ms = Some(990_000);
     let claim = |buy_ms, close_ms, buy_set_ms| ClaimStamps {
@@ -271,7 +273,7 @@ fn stamps_claim_both_clocks_when_they_differ() {
     };
     assert_eq!(
         stamps(&ReportAxis::default(), &row),
-        vec![claim(1_000_000, 1_010_000, Some(990_000))]
+        claim(1_000_000, 1_010_000, Some(990_000))
     );
     let axis = ReportAxis::from_measured(
         HashMap::from([(
@@ -288,10 +290,7 @@ fn stamps_claim_both_clocks_when_they_differ() {
     // The creation moves with the entry's clock.
     assert_eq!(
         stamps(&axis, &row),
-        vec![
-            claim(buy, close, Some(990_000 + (buy - 1_000_000))),
-            claim(1_000_000, 1_010_000, Some(990_000))
-        ]
+        claim(buy, close, Some(990_000 + (buy - 1_000_000)))
     );
     let seconds = TapeOwner {
         buy: ReportStamp::Seconds(1_000),
@@ -301,7 +300,7 @@ fn stamps_claim_both_clocks_when_they_differ() {
     };
     assert_eq!(
         stamps(&ReportAxis::default(), &seconds),
-        vec![claim(1_000_000, 1_010_000, None)]
+        claim(1_000_000, 1_010_000, None)
     );
 }
 
@@ -330,10 +329,18 @@ fn count(
     held: &[(i64, i64)],
 ) -> (TapeCount, usize) {
     let mut reads = 0;
-    let counted = count_with_tape(inv, rows, axis, &quotes(), MARGINS, live, |_| {
-        reads += 1;
-        Ok(Some(Coverage::from_spans(held.iter().copied())))
-    })
+    let counted = count_with_tape(
+        inv,
+        rows,
+        std::slice::from_ref(axis),
+        &quotes(),
+        MARGINS,
+        live,
+        |_| {
+            reads += 1;
+            Ok(Some(Coverage::from_spans(held.iter().copied())))
+        },
+    )
     .expect("counted");
     (counted, reads)
 }
@@ -348,7 +355,7 @@ fn timed_out_markets_make_tape_counts_lower_bounds() {
     let got = count_with_tape(
         &inv,
         &[&first, &second],
-        &ReportAxis::default(),
+        &[ReportAxis::default()],
         &quotes(),
         MARGINS,
         |_| None,
@@ -384,8 +391,8 @@ fn tape_in_the_margin_alone_counts_the_deal() {
     }
 }
 
-/// With the core's clock offset, tape the lifted claim alone reaches counts the deal, and a deal
-/// both clocks reach is still one deal.
+/// With the core's clock offset, tape the lifted claim reaches counts the deal, tape only the raw
+/// clock would reach does not, and a deal whose tape spans both is still one deal.
 #[test]
 fn an_offset_clock_counts_a_deal_once() {
     let inv = inventory(&[("4:0", "ACEUSDT")]);
@@ -420,6 +427,14 @@ fn an_offset_clock_counts_a_deal_once() {
         0,
         "without the offset nothing reaches that print"
     );
+    // Past the lifted claim's end (its close plus the margin), inside the raw one's.
+    let raw_only = (1_069_000, 1_069_000);
+    assert!(close + MARGINS.margin_ms < raw_only.0 && raw_only.0 <= 1_010_000 + MARGINS.margin_ms);
+    assert_eq!(
+        count(&inv, &[&ace], &axis, live, &[raw_only]).0.with_tape,
+        0,
+        "the core's raw clock claims no tape once its offset is measured"
+    );
     assert_eq!(
         count(&inv, &[&ace], &axis, live, &[(0, 10_000_000)]).0,
         TapeCount {
@@ -428,6 +443,58 @@ fn an_offset_clock_counts_a_deal_once() {
             incomplete_markets: 0
         }
     );
+}
+
+/// An offline core the session holds no offset for, while the replica stores one: the pass
+/// claims both the tuner's lifted window and the session's unlifted one, so neither path's tape
+/// is cut as the other's excess, and the deal still counts once.
+#[test]
+fn the_replicas_and_the_sessions_clocks_both_claim() {
+    let inv = inventory(&[("4:0", "ACEUSDT")]);
+    let ace = owner(1, "ACE", 1_000_000, 1_010_000, "MoonShot");
+    let persisted = ReportAxis::from_measured(
+        HashMap::from([(
+            1,
+            vec![moon_core::db::OffsetSegment {
+                from_utc: 0,
+                offset_secs: 3,
+            }],
+        )]),
+        chrono_tz::UTC,
+    );
+    let context = super::CleanupContext {
+        source: moon_core::market::MarketDataSource::new(moon_core::market::MarketStore::shared(
+            0.0,
+        )),
+        quotes: HashMap::new(),
+        axis: ReportAxis::default(),
+    };
+    let axes = context.axes(&persisted);
+    assert_eq!(axes.len(), 2);
+    assert_eq!(
+        super::CleanupContext {
+            axis: persisted.clone(),
+            ..context
+        }
+        .axes(&persisted)
+        .len(),
+        1
+    );
+    let live = |_: &TapeOwner| Some(key("4:0", "ACEUSDT"));
+    // The lift moves this core 3 s earlier: the first print is inside the lifted claim only, before
+    // the unlifted one starts; the second inside the unlifted claim only, past the lifted one's end.
+    for print in [(937_000, 937_000), (1_069_000, 1_069_000)] {
+        let got = count_with_tape(&inv, &[&ace], &axes, &quotes(), MARGINS, live, |_| {
+            Ok(Some(Coverage::from_spans([print])))
+        })
+        .unwrap();
+        assert_eq!(got.with_tape, 1, "print {print:?}");
+    }
+    let got = count_with_tape(&inv, &[&ace], &axes, &quotes(), MARGINS, live, |_| {
+        Ok(Some(Coverage::from_spans([(0, 10_000_000)])))
+    })
+    .unwrap();
+    assert_eq!(got.with_tape, 1, "one deal however many clocks reach it");
 }
 
 /// A long position's claim is its two ends: tape in its middle does not count it, tape at an end
@@ -552,7 +619,7 @@ fn probe_a_copied_data_dir() {
         let (keep, preview) = build_keep(
             &inventory,
             &claimants,
-            &ReportAxis::default(),
+            &[ReportAxis::default()],
             &quotes,
             margins,
             |_| None,

@@ -70,7 +70,9 @@ pub(super) struct CleanupContext {
     /// `core_uid` to the core's quote (`ServerConfig::market`), for spelling a coin into a
     /// market — the connected cores' and the offline ones' alike.
     quotes: HashMap<u64, String>,
-    /// The core clocks, for lifting the report's stamps onto the file's UTC.
+    /// The session's core clocks, for lifting the report's stamps onto the file's UTC the way
+    /// the trade window and the chart do. The tuner and the station lift through the replica's
+    /// stored offsets instead ([`persisted_axis`]); a pass claims for both.
     axis: ReportAxis,
 }
 
@@ -122,13 +124,25 @@ impl CleanupContext {
     pub(super) fn run(&self) -> anyhow::Result<CleanupPreview> {
         let cache = trade_cache::handle()
             .ok_or_else(|| anyhow::anyhow!("trade cache worker is not running"))?;
-        self.run_with(&cache, owners_around)
+        self.run_with(&cache, &persisted_axis()?, owners_around)
+    }
+
+    /// The axes a pass claims on: the replica's stored offsets, and the session's where they
+    /// lift differently — an offline core the session holds no offset for, or a trade from
+    /// before the core's offset last changed.
+    fn axes(&self, persisted: &ReportAxis) -> Vec<ReportAxis> {
+        let mut axes = vec![persisted.clone()];
+        if !self.axis.same_offsets(persisted) {
+            axes.push(self.axis.clone());
+        }
+        axes
     }
 
     /// Require complete owner metadata before building or applying any retention map.
     fn run_with(
         &self,
         cache: &trade_cache::TradeCache,
+        persisted: &ReportAxis,
         owners: impl FnOnce(i64, i64, Margins) -> anyhow::Result<Vec<TapeOwner>>,
     ) -> anyhow::Result<CleanupPreview> {
         let inventory = cache
@@ -143,7 +157,7 @@ impl CleanupContext {
         let (keep, mut preview) = build_keep(
             &inventory,
             &claimants,
-            &self.axis,
+            &self.axes(persisted),
             &self.quotes,
             margins,
             |owner| self.live_address(owner),
@@ -187,7 +201,7 @@ impl CleanupContext {
         count_with_tape(
             &inventory,
             &claimants,
-            &self.axis,
+            &self.axes(&persisted_axis()?),
             &self.quotes,
             margins,
             |owner| self.live_address(owner),
@@ -213,6 +227,13 @@ impl CleanupContext {
             .resolve_market(owner.core_uid, quote, &owner.coin)?;
         Some((address.exchange_key, market))
     }
+}
+
+/// The replica's stored core offsets — the axis the tuner's deal read lifts its windows on.
+/// Fails closed: a pass that cannot tell which tape the tuner asks for removes none of it.
+fn persisted_axis() -> anyhow::Result<ReportAxis> {
+    let conn = moon_core::db::open_reader().map_err(|e| anyhow::anyhow!("{e}"))?;
+    ReportAxis::load(&conn, chrono_tz::UTC).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// The replica's rows that can claim prints of a file spanning `from_ms..=to_ms`: read wider by
@@ -265,6 +286,19 @@ impl<'a> Resolver<'a> {
     }
 }
 
+/// One row's distinct windows across `axes`: two axes that lift it alike claim it once.
+fn claim_windows(axes: &[ReportAxis], owner: &TapeOwner, margins: Margins) -> Vec<ReplayWindow> {
+    let mut windows: Vec<ReplayWindow> = Vec::new();
+    for axis in axes {
+        if let Some(window) = claim_window(stamps(axis, owner), margins)
+            && !windows.contains(&window)
+        {
+            windows.push(window);
+        }
+    }
+    windows
+}
+
 /// The tuner's own window for one claim (`model_window_at`): from the entry order's creation
 /// where the row carries it, split by the pass's own threshold, not one read a moment later.
 fn claim_window(stamp: ClaimStamps, margins: Margins) -> Option<ReplayWindow> {
@@ -282,14 +316,14 @@ fn claim_window(stamp: ClaimStamps, margins: Margins) -> Option<ReplayWindow> {
 /// Args:
 ///     inventory: The file's markets, for the name fallback.
 ///     claimants: The rows let claim.
-///     axis: The core clocks.
+///     axes: The core clocks a claim is lifted on, each claiming its own window.
 ///     quotes: Each core's quote, for spelling a coin by name.
 ///     margins: The margins in force.
 ///     live: The catalog's answer for a row, or `None` — see [`CleanupContext::live_address`].
 fn build_keep(
     inventory: &Inventory,
     claimants: &[&TapeOwner],
-    axis: &ReportAxis,
+    axes: &[ReportAxis],
     quotes: &HashMap<u64, String>,
     margins: Margins,
     mut live: impl FnMut(&TapeOwner) -> Option<(String, String)>,
@@ -309,11 +343,8 @@ fn build_keep(
         if *by_name_only {
             preview.by_name += 1;
         }
-        for stamp in stamps(axis, owner) {
-            // The lead the tuner fetched for the order's life is claimed with the trade.
-            let Some(window) = claim_window(stamp, margins) else {
-                continue;
-            };
+        // The lead the tuner fetched for the order's life is claimed with the trade.
+        for window in claim_windows(axes, owner, margins) {
             let focus = window.focus_spans();
             for key in keys.iter() {
                 let coverage = keep.entry(key.clone()).or_insert_with(Coverage::none);
@@ -332,7 +363,7 @@ fn build_keep(
 /// Args:
 ///     inventory: The file's markets, for the name fallback.
 ///     claimants: The rows let claim.
-///     axis: The core clocks.
+///     axes: The core clocks a claim is lifted on, each claiming its own window.
 ///     quotes: Each core's quote, for spelling a coin by name.
 ///     margins: The margins in force.
 ///     live: The catalog's answer for a row, or `None`.
@@ -340,7 +371,7 @@ fn build_keep(
 fn count_with_tape(
     inventory: &Inventory,
     claimants: &[&TapeOwner],
-    axis: &ReportAxis,
+    axes: &[ReportAxis],
     quotes: &HashMap<u64, String>,
     margins: Margins,
     mut live: impl FnMut(&TapeOwner) -> Option<(String, String)>,
@@ -352,10 +383,7 @@ fn count_with_tape(
     for owner in claimants {
         let keys = resolver.resolve(owner, &mut live).0.clone();
         let (mut with_tape, mut long) = (false, false);
-        for stamp in stamps(axis, owner) {
-            let Some(window) = claim_window(stamp, margins) else {
-                continue;
-            };
+        for window in claim_windows(axes, owner, margins) {
             let focus = window.focus_spans();
             for key in &keys {
                 if !stored.contains_key(key) {
@@ -383,7 +411,7 @@ fn count_with_tape(
 /// for the catalog.
 type Addresses = HashMap<(u64, String), (Vec<(String, String)>, bool)>;
 
-/// One claim's stamps on one clock: the entry, the exit, and the entry order's creation.
+/// One claim's stamps on true UTC: the entry, the exit, and the entry order's creation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ClaimStamps {
     buy_ms: i64,
@@ -392,35 +420,23 @@ struct ClaimStamps {
 }
 
 /// The row's stamps on the file's clock: through the core's measured offset, the way the trade
-/// window and the close-time capture stamp their requests — and, when both stamps are
-/// milliseconds, the raw values too, the way the tuner's fetch stamps its. Two claims where the
-/// clocks disagree, so neither path's tape is cut as the other's excess. The order's creation is
-/// a millisecond stamp on the entry's clock and moves with it.
-fn stamps(axis: &ReportAxis, owner: &TapeOwner) -> Vec<ClaimStamps> {
+/// window, the close-time capture and the tuner's deal read (`db::tuner::ticks::deals`) stamp
+/// their requests. The order's creation is a millisecond stamp on the entry's clock and moves
+/// with it.
+fn stamps(axis: &ReportAxis, owner: &TapeOwner) -> ClaimStamps {
     let (buy_ms, close_ms) = axis.stamp_pair_to_utc_ms(owner.buy, owner.close, owner.core_uid);
     let raw_buy_ms = match owner.buy {
         ReportStamp::Millis(buy) => Some(buy),
         ReportStamp::Seconds(_) => None,
     };
-    let lifted = ClaimStamps {
+    ClaimStamps {
         buy_ms,
         close_ms,
         buy_set_ms: owner
             .buy_set_ms
             .zip(raw_buy_ms)
             .map(|(set, raw)| set + (buy_ms - raw)),
-    };
-    let mut out = vec![lifted];
-    if let (ReportStamp::Millis(buy), ReportStamp::Millis(close)) = (owner.buy, owner.close)
-        && (buy, close) != (buy_ms, close_ms)
-    {
-        out.push(ClaimStamps {
-            buy_ms: buy,
-            close_ms: close,
-            buy_set_ms: owner.buy_set_ms,
-        });
     }
-    out
 }
 
 /// The file's markets by their upper-cased name, for the name fallback.

@@ -39,6 +39,9 @@ pub struct DealsRead {
     /// Trades with stamps the tuner cannot be run on — a container or unresolved kind, an exit
     /// by hand or by the global panic sell — left out; see [`is_tunable`].
     pub untunable: usize,
+    /// The axis the stamps were lifted on, resolved inside the read's own snapshot: a caller that
+    /// remembers anything judged on these deals' windows must forget it when this moves.
+    pub axis: crate::db::ReportAxis,
 }
 
 /// The delta columns in the order [`Deltas`] is filled below; every one is a `FIELDS` column,
@@ -150,8 +153,15 @@ fn keep_drops_detect_on_drops(deals: &mut [Deal]) {
 
 /// The scan itself, inside the pinned snapshot. Ordered in memory by the millisecond close —
 /// the unified source has no total order to ask SQL for.
+///
+/// Every stamp leaves on TRUE UTC, lifted through the report axis resolved in this same
+/// snapshot: the report columns are the core machine's wall clock, while everything a deal is
+/// held against — the tape (terminal capture, station, venue), the archived order lines, klines,
+/// `now` and the strategy version boundaries — is true UTC. Lifted here, once, so no consumer
+/// can mix the two clocks; a core measured on UTC, or never measured, reads as stored.
 fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
     const CTX: &str = "tuner: ticks deals";
+    let axis = q.resolved_axis(conn)?;
     let deltas = DELTA_COLS
         .iter()
         .map(|c| format!("o.\"{c}\""))
@@ -198,9 +208,9 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
         let int = |i: usize| -> Result<i64, ReadFail> {
             Ok(r.get::<_, Option<i64>>(i).map_err(fail)?.unwrap_or(0))
         };
-        let buy_ms = int(4)?;
-        let close_ms = int(5)?;
-        if !has_ms_stamps(buy_ms, close_ms) {
+        let raw_buy_ms = int(4)?;
+        let raw_close_ms = int(5)?;
+        if !has_ms_stamps(raw_buy_ms, raw_close_ms) {
             out.without_ms += 1;
             continue;
         }
@@ -247,8 +257,20 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             *slot = num(12 + offset)?;
         }
         let report_uid = int(0)?;
+        let core_uid = int(1)? as u64;
+        // The same lift the station's recorder applies when it files this trade's tape.
+        let (buy_ms, close_ms) = axis.stamp_pair_to_utc_ms(
+            crate::db::ReportStamp::Millis(raw_buy_ms),
+            crate::db::ReportStamp::Millis(raw_close_ms),
+            core_uid,
+        );
         // Zero, NULL and a creation after the fill all read as "not filed" (`Deal::buy_set_ms`).
-        let buy_set_ms = Some(int(name_at + 3)?).filter(|&set| set > 0 && set <= buy_ms);
+        // Judged on the core's own clock, then moved by the entry's own shift: the creation and
+        // the fill are one clock, and lifting each separately could split them across an offset
+        // segment boundary.
+        let buy_set_ms = Some(int(name_at + 3)?)
+            .filter(|&set| set > 0 && set <= raw_buy_ms)
+            .map(|set| set + (buy_ms - raw_buy_ms));
         let corridor = Some((num(name_at + 4)?, num(name_at + 5)?))
             .filter(|&(down, up)| down > 0.0 && up > 0.0);
         let cost = r
@@ -277,7 +299,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             .or_else(|| Sizing::on_spend(buy_price, sell_price, is_short, spent, fact_money));
         out.deals.push(Deal {
             report_uid,
-            core_uid: int(1)? as u64,
+            core_uid,
             core_name: r
                 .get::<_, Option<String>>(name_at)
                 .map_err(fail)?
@@ -331,6 +353,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
     let mut index: Vec<usize> = (0..out.deals.len()).collect();
     index.sort_by_key(|&i| order[i]);
     out.deals = index.into_iter().map(|i| out.deals[i].clone()).collect();
+    out.axis = axis;
     Ok(out)
 }
 
@@ -381,8 +404,15 @@ fn overlay_hook_detect(conn: &Connection, q: &Query, deals: &mut [Deal]) -> Read
             src.table
         );
         let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
+        // `closedate` is the core's own clock and the bounds are true UTC: widened by the widest
+        // offset any core can carry, so a trade the scan admitted near a period edge is never
+        // cut here. The scanned keys (`wanted`) are what actually select.
         let mut rows = stmt
-            .query(rusqlite::params![q.from, q.to])
+            .query(rusqlite::params![
+                q.from
+                    .saturating_add(i64::from(crate::db::report_axis::MIN_OFFSET_SECS)),
+                q.to.saturating_add(i64::from(crate::db::report_axis::MAX_OFFSET_SECS))
+            ])
             .map_err(|e| read_fail_on(conn, CTX, e))?;
         while let Some(r) = rows.next().map_err(|e| read_fail_on(conn, CTX, e))? {
             let key = (

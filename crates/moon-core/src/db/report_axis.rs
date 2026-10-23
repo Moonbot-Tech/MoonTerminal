@@ -204,6 +204,17 @@ impl ReportAxis {
         self.zone
     }
 
+    /// Whether two axes convert every core's stamps identically, whatever zone each displays in.
+    ///
+    /// Args:
+    ///     other: The axis to compare against.
+    ///
+    /// Returns:
+    ///     `true` when both hold the same retained offset segments for the same cores.
+    pub fn same_offsets(&self, other: &Self) -> bool {
+        self.segments == other.segments
+    }
+
     /// Return whether every retained offset leaves every stored timestamp unchanged.
     ///
     /// An empty axis and explicitly measured UTC cores both satisfy this predicate. Invalid
