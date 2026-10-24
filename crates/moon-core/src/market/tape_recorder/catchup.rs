@@ -434,13 +434,6 @@ pub fn submit(trades: Vec<CatchupTrade>) {
     }
 }
 
-/// Retain resolved real windows without scheduling historical requests outside archive reach.
-pub fn protect(trades: Vec<CatchupTrade>) {
-    if enabled() {
-        super::notify(Cmd::Protect(trades));
-    }
-}
-
 /// Read the latest progress snapshot without touching either tape database.
 pub fn status() -> TapeCatchup {
     let snapshot = STATUS

@@ -11,7 +11,7 @@ use std::sync::{Arc, mpsc::Receiver};
 /// Retention age and report attribution have independent horizons.
 pub(super) struct KeepPolicy {
     pub edge: Option<i64>,
-    /// Earliest closed row enumerated by the protecting listings.
+    /// Earliest closed row the cores' listings enumerate.
     pub listed_from: i64,
     pub record_emulator: bool,
     /// Keep tape only for trades the tuner can replay.

@@ -66,8 +66,8 @@ fn a_listed_row_answers_for_the_hour_after_its_page() {
     assert_eq!(closed.lookup(TRADE, None, at), None);
 }
 
-/// A trade the protection set holds but no listing page carried — a protecting page or a live
-/// close's protect — stays unknown here, as it was when only pages and closes wrote the map.
+/// A trade the protection set holds but no listing page carried — a live close's protect after
+/// its own entry expired — stays unknown here, as it was when only pages and closes wrote the map.
 #[test]
 fn a_row_no_page_carried_is_not_answered() {
     let mut closed = ClosedTrades::default();
