@@ -11,19 +11,22 @@ use super::*;
 pub const HEADER_LABEL_MAX_W: f32 = 260.0;
 
 /// Window widths at which the header sheds its ambient readouts, in a fixed order of sacrifice:
-/// the BRAND first, then the ticker's per-window deltas, then the ticker itself, and the clock
-/// last.
+/// the brand's WORDMARK first, then the ticker's per-window deltas, then the ticker itself, then
+/// the balance's " / total USDT" tail, and the clock last.
 ///
-/// The order is by how much each one is worth once space runs out. The brand identifies an
-/// application the operator is already looking at, so it buys nothing and goes first; the clock is
-/// the only readout here whose absence cannot be reconstructed from anything else on screen, so it
-/// goes last. The ticker sits between them and collapses in two steps rather than clipping: the
-/// readout is monospaced and its informative part is the TAIL, so a character-level clip eats the
-/// deltas and then the price digits, turning "61 333$" into "61 33" — a plausible WRONG price
-/// stated as fact.
+/// The order is by how much each one is worth once space runs out. The wordmark identifies an
+/// application the operator is already looking at, so it buys nothing and goes first; the plane
+/// icon beside it never goes, because it is what the operator grabs to move the window (#1082).
+/// The clock is the only readout here whose absence cannot be reconstructed from anything else on
+/// screen, so it goes last. The account total sits just above it: the free amount stays — it is
+/// the figure an order is sized against — and the total is one double-click away in Assets and in
+/// the balance's tooltip. The ticker sits between them and collapses in two steps rather than
+/// clipping: the readout is monospaced and its informative part is the TAIL, so a character-level
+/// clip eats the deltas and then the price digits, turning "61 333$" into "61 33" — a plausible
+/// WRONG price stated as fact.
 ///
-/// Every threshold is a window width and must stay ordered — brand highest, clock lowest — or two
-/// readouts would disappear at the same width and the priority above would be a comment rather
+/// Every threshold is a window width and must stay ordered — wordmark highest, clock lowest — or
+/// two readouts would disappear at the same width and the priority above would be a comment rather
 /// than a behaviour. Usable only because [`HEADER_LABEL_MAX_W`] bounds the clusters that would
 /// otherwise grow without limit.
 ///
@@ -31,17 +34,34 @@ pub const HEADER_LABEL_MAX_W: f32 = 260.0;
 /// width does not enter them: the MoonTerminal lockup is 36px wider than the Moonbot one these
 /// were set against, and the `flex_1` drag spacer absorbs the difference. Re-tune them by looking
 /// at the row, not by arithmetic on the mark.
-const HEADER_BRAND_MIN_W: f32 = 1400.0;
+const HEADER_WORDMARK_MIN_W: f32 = 1400.0;
 const TICKER_DELTAS_MIN_W: f32 = 1200.0;
 const TICKER_MIN_W: f32 = 1000.0;
+const HEADER_BALANCE_TOTAL_MIN_W: f32 = 900.0;
 const HEADER_CLOCK_MIN_W: f32 = 820.0;
+// The order of sacrifice above, held by the compiler rather than by the comment.
+const _: () = assert!(
+    HEADER_WORDMARK_MIN_W > TICKER_DELTAS_MIN_W
+        && TICKER_DELTAS_MIN_W > TICKER_MIN_W
+        && TICKER_MIN_W > HEADER_BALANCE_TOTAL_MIN_W
+        && HEADER_BALANCE_TOTAL_MIN_W > HEADER_CLOCK_MIN_W
+);
 
-/// Return whether the header's brand mark fits at `chrome_width`.
+/// Return whether the header's full lockup — plane icon AND wordmark — fits at `chrome_width`.
 ///
-/// The drag region it lives in stays either way — only the logo and its trailing rule go — so a
-/// narrow window keeps a titlebar the operator can grab.
-pub fn header_brand_visible(cx: &App, chrome_width: f32) -> bool {
-    chrome_width >= font_w(cx, HEADER_BRAND_MIN_W)
+/// Below this width the header draws the icon alone ([`super::header_mark`]), never nothing: the
+/// drag region the brand lives in sizes to its content, so an empty region is a zero-width hit
+/// target and a narrow window would keep no titlebar to grab (#1082).
+pub fn header_wordmark_visible(cx: &App, chrome_width: f32) -> bool {
+    chrome_width >= font_w(cx, HEADER_WORDMARK_MIN_W)
+}
+
+/// Return whether the balance's " / total USDT" tail fits at `chrome_width`.
+///
+/// Below it the header keeps only the free amount; the full line moves into the balance tooltip.
+/// The free figure itself never yields to width: it is what an order is sized against.
+pub fn header_balance_total_visible(cx: &App, chrome_width: f32) -> bool {
+    chrome_width >= font_w(cx, HEADER_BALANCE_TOTAL_MIN_W)
 }
 
 /// Return whether the header clock fits at `chrome_width`.

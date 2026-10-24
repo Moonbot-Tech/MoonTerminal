@@ -157,9 +157,11 @@ pub fn header(
         .gap(design::ui_px(cx, design::CHROME_GAP))
         .bg(rgb(p.shell_high))
         // The brand carries its OWN trailing separator, so the groups below add only the seams
-        // after them. It is also the FIRST thing this row gives up on a narrow window
-        // (`design::header_brand_visible`): dropping the mark keeps the drag region and takes the
-        // rule with it, so the space goes to the readouts that carry information instead.
+        // after them. Its wordmark is the FIRST thing this row gives up on a narrow window
+        // (`design::header_wordmark_visible`), and the space goes to the readouts that carry
+        // information. The plane icon stays at every width: this region sizes to its content, so
+        // dropping the whole lockup left a zero-width drag target and a narrow window nothing to
+        // grab (#1082).
         //
         // The cluster is assembled here rather than through `MoonWindowFrame::brand_cluster`,
         // which draws MoonUI's own Moonbot lockup: the terminal ships the MoonTerminal one from
@@ -174,11 +176,14 @@ pub fn header(
                 .flex()
                 .items_center()
                 .gap(design::ui_px(cx, design::CHROME_GAP))
-                .when(design::header_brand_visible(cx, chrome_width), |cluster| {
-                    cluster
-                        .child(design::header_logo(cx))
-                        .child(design::chrome_divider(cx, p))
+                .map(|cluster| {
+                    if design::header_wordmark_visible(cx, chrome_width) {
+                        cluster.child(design::header_logo(cx))
+                    } else {
+                        cluster.child(design::header_mark(cx))
+                    }
                 })
+                .child(design::chrome_divider(cx, p))
                 .flex_none()
                 .h_full(),
         )
@@ -266,6 +271,7 @@ pub fn header(
                     group.to_string(),
                     backend.clone(),
                     balance,
+                    design::header_balance_total_visible(cx, chrome_width),
                     p,
                     cx,
                 ))
@@ -1006,6 +1012,10 @@ pub(crate) fn header_gear_popover(
 /// muted and tagged so a retained pre-outage number is not presented as current. Usable figures
 /// render in `free / total USDT` order with the shared grouped amount format.
 ///
+/// `show_total` is false on a window too narrow for the " / total USDT" tail
+/// (`design::header_balance_total_visible`). The row then keeps the free amount alone and the
+/// tooltip leads with the full line, so the total is hidden from the row but never lost.
+///
 /// Double-click reveals Assets: Auto requests the existing group-owned surface, Classic opens the
 /// singleton window. A dash is still clickable so a first-time user with no snapshot yet can reach
 /// the same panel.
@@ -1013,9 +1023,34 @@ fn balance_label(
     group: String,
     backend: Entity<Backend>,
     balance: Option<(BalanceState, f64, f64)>,
+    show_total: bool,
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
+    // The shared amount format, precision included: the Assets panel renders these same figures,
+    // and a locally formatted string drifts from it on trailing zeros. Spaces on BOTH sides of the
+    // slash: " /19983" reads as a fraction of the free amount.
+    let amounts = balance.map(|(state, free, total)| {
+        (
+            state.is_current(),
+            fmt::usd_grouped(free),
+            format!(" / {} USDT", fmt::usd_grouped(total)),
+        )
+    });
+    // With the tail off the row the tooltip leads with the whole figure, stale tag included: it
+    // hovers over the "Balance:" label already, so the figures need no label of their own.
+    let tip = t!("header.balance_tip").to_string();
+    let tooltip = match &amounts {
+        Some((live, free_text, total_text)) if !show_total => {
+            let stale = if *live {
+                String::new()
+            } else {
+                format!(" {}", t!("assets.balance_stale"))
+            };
+            format!("{free_text}{total_text}{stale}\n{tip}")
+        }
+        _ => tip,
+    };
     let row = h_flex()
         .id("header-balance")
         .flex_none()
@@ -1024,9 +1059,7 @@ fn balance_label(
         .text_size(design::t_body(cx))
         .text_color(rgb(p.text_soft))
         .cursor_pointer()
-        .tooltip(crate::panels::common::text_tooltip(
-            t!("header.balance_tip").to_string(),
-        ))
+        .tooltip(crate::panels::common::text_tooltip(tooltip))
         .on_click(move |ev: &ClickEvent, window, cx| {
             if ev.click_count() < 2 {
                 return;
@@ -1050,27 +1083,18 @@ fn balance_label(
             }
         })
         .child("Balance: ");
-    let Some((state, free, total)) = balance else {
+    let Some((live, free_text, total_text)) = amounts else {
         return row.child(div().text_color(rgb(p.text_muted)).child("—"));
     };
-    let live = state.is_current();
-    // The shared amount format, precision included: the Assets panel renders this same figure,
-    // and a locally formatted string drifts from it on trailing zeros.
-    let free_text = fmt::usd_grouped(free);
     row.child(
         div()
             .text_color(rgb(if live { p.text } else { p.text_muted }))
             .font_weight(FontWeight::SEMIBOLD)
             .child(free_text),
     )
-    .child(
-        // Spaces on BOTH sides of the slash: " /19983" reads as a fraction of the free amount.
-        // Same format as the free figure and as Assets — a locally rounded total would disagree
-        // with the very panel this shares a number with.
-        div()
-            .text_color(rgb(p.text_muted))
-            .child(format!(" / {} USDT", fmt::usd_grouped(total))),
-    )
+    .when(show_total, |el| {
+        el.child(div().text_color(rgb(p.text_muted)).child(total_text))
+    })
     .when(!live, |el| {
         el.child(
             div()
