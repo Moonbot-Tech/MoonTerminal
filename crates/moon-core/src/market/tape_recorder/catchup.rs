@@ -1,6 +1,7 @@
 //! Plan and execute closed-trade tape recovery without opening the terminal's tape store.
 
 mod executor;
+mod known;
 mod pacing;
 mod state;
 

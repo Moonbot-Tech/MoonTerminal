@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Sender};
 
 use super::executor::{self, Failure, Fault, PassResult};
+use super::known::Known;
 use super::{CatchupJob, CatchupPlan, CatchupTrade, Latch, STATUS, TradeId};
 use crate::market::trade_replay::trade_cache::TradeCache;
 use crate::market::trade_replay::{Coverage, gate};
@@ -44,10 +45,25 @@ fn read_spans(
     cache.held_spans_start(exchange, market, i64::MIN, i64::MAX)
 }
 
+/// The version a queue entry plans with: its own copy, else the protection set's. `None` only
+/// for an entry whose trade the protection set no longer holds, which no path creates.
+fn queued<'a>(known: &'a Known, id: &TradeId, entry: &'a Queued) -> Option<&'a CatchupTrade> {
+    entry.as_deref().or_else(|| known.get(id))
+}
+
+/// A queued trade's own copy, or `None` when it is the version [`RecorderCatchup::known`] holds.
+///
+/// The queues used to hold a full clone of every trade, so a station with tens of cores kept each
+/// historical trade resident two or three times (#1081). `None` costs one pointer. A queue entry
+/// keeps its own copy only where the protection set has since been overwritten with a different
+/// version of that trade (a live close's `protect` after the listing queued it), so what the
+/// queue plans with stays exactly what it was queued with.
+type Queued = Option<Box<CatchupTrade>>;
+
 /// Pending rows and refusals are owned by the recorder, alongside its sole cache handle.
 #[derive(Default)]
 pub(crate) struct RecorderCatchup {
-    pending: HashMap<TradeId, CatchupTrade>,
+    pending: HashMap<TradeId, Queued>,
     latched: HashMap<TradeId, Latch>,
     complete: HashSet<TradeId>,
     /// Cap clean core answers for tails and unlisted gaps independently of hourly retries.
@@ -57,9 +73,14 @@ pub(crate) struct RecorderCatchup {
     /// Retained coverage can outlive catch-up's shorter archive-reach settlement horizon.
     tape_complete: HashSet<TradeId>,
     /// Resolved identities also protect retained tape during later purge planning.
-    pub(super) known: HashMap<TradeId, CatchupTrade>,
+    pub(super) known: Known,
     /// Skipped trades ([`super::skipped`]) remain known but never enter the fetch queue.
-    skipped: HashMap<TradeId, CatchupTrade>,
+    skipped: HashMap<TradeId, Queued>,
+    /// The skip rule (`record_emulator`, `tuner_only`) the queues were last routed under; `None`
+    /// forces the next [`Self::route_skipped`] to walk them. Every row entering a queue is routed
+    /// as it enters, so only a rule change or a wholesale refill can leave one in the wrong
+    /// queue — walking both queues on every 250 ms tick found nothing to move otherwise.
+    routed: Option<(bool, bool)>,
     worker: Option<Sender<Pass>>,
     active: bool,
     hour: Option<i64>,
@@ -75,6 +96,10 @@ pub(crate) struct RecorderCatchup {
     rate_started: Option<i64>,
     /// Settlements cannot synchronously read coverage behind cache maintenance.
     deferred_finish: Option<(PassResult, i64)>,
+    /// Rows [`Self::prune`] dropped from the protection set since the recorder last took them
+    /// ([`Self::take_expired`]): a listed row may still owe a deal-chart reader the rest of its
+    /// hour, which the recorder's closed-trade map then serves from its own copy.
+    expired_rows: Vec<CatchupTrade>,
 }
 
 /// One serial fetch pass; continuation pages in the same UTC hour share the archive budget.
@@ -90,6 +115,17 @@ impl RecorderCatchup {
         self.known.contains_key(&id)
     }
 
+    /// The protection set's row for `id`, which answers a deal-chart reader for a listed trade
+    /// ([`super::super::peek`]).
+    pub(crate) fn known_trade(&self, id: &TradeId) -> Option<&CatchupTrade> {
+        self.known.get(id)
+    }
+
+    /// Hand over the rows the protection set dropped past the retention edge since the last call.
+    pub(crate) fn take_expired(&mut self) -> Vec<CatchupTrade> {
+        std::mem::take(&mut self.expired_rows)
+    }
+
     /// Merge protecting listings and live closes independently of the fetch queue.
     pub(crate) fn protect(&mut self, trades: Vec<CatchupTrade>) {
         let busy = self.maintenance_busy();
@@ -99,8 +135,30 @@ impl RecorderCatchup {
                     .recount_stale
                     .insert((trade.exchange.clone(), trade.market.clone()));
             }
-            self.known.insert(trade.id, trade);
+            self.set_known(trade);
         }
+    }
+
+    /// Overwrite the protection set's version of `trade`. Each queue entry still reading the
+    /// version being replaced first takes its own copy of it, so the overwrite changes what
+    /// retention protects and never what the queue plans with — as when every queue held its
+    /// own clone.
+    fn set_known(&mut self, trade: CatchupTrade) {
+        let id = trade.id;
+        let shared = matches!(self.pending.get(&id), Some(None))
+            || matches!(self.skipped.get(&id), Some(None));
+        if let Some(old) = self.known.get(&id).filter(|_| shared) {
+            let old = Box::new(old.clone());
+            for entry in [self.skipped.get_mut(&id), self.pending.get_mut(&id)]
+                .into_iter()
+                .flatten()
+            {
+                if entry.is_none() {
+                    *entry = Some(old.clone());
+                }
+            }
+        }
+        self.known.insert(id, trade);
     }
     /// Each distinct market of the known trades, once.
     fn known_markets(&self) -> HashSet<(String, String)> {
@@ -224,10 +282,11 @@ impl RecorderCatchup {
                             )
                             .collect()
                     };
-                    let known: Vec<_> = self.known.values().cloned().collect();
+                    // Borrowed, not cloned: a copy of the whole set here was the hourly step
+                    // toward the out-of-memory kill on a 70-core station (#1081).
                     let keep = retention::keep_map(
                         &inventory,
-                        &known,
+                        self.known.values(),
                         live,
                         &incomplete,
                         retention::KeepPolicy {
@@ -378,6 +437,7 @@ impl RecorderCatchup {
                         .collect();
                     self.tape_complete = complete.clone();
                     self.complete = complete;
+                    // Every rebuilt entry reads the protection set's version, as the clones did.
                     self.pending = self
                         .known
                         .iter()
@@ -387,7 +447,7 @@ impl RecorderCatchup {
                                 && !super::skipped(t)
                                 && t.close_ms >= super::edge_ms(now)
                         })
-                        .map(|(id, t)| (*id, t.clone()))
+                        .map(|(id, _)| (*id, None))
                         .collect();
                     self.publish_pending();
                     self.retention.hour = Some(now.div_euclid(HOUR_MS));
@@ -509,17 +569,20 @@ impl RecorderCatchup {
             self.sync_switches();
         }
         for trade in trades {
-            self.known.insert(trade.id, trade.clone());
+            let id = trade.id;
             if super::skipped(&trade) {
-                self.pending.remove(&trade.id);
-                self.skipped.insert(trade.id, trade);
+                self.pending.remove(&id);
+                self.skipped.insert(id, None);
+                self.known.insert(id, trade);
                 continue;
             }
-            self.skipped.remove(&trade.id);
-            if !self.complete.contains(&trade.id)
-                && self.latched.get(&trade.id) != Some(&Latch::Permanent)
-            {
-                self.pending.insert(trade.id, trade);
+            self.skipped.remove(&id);
+            if !self.complete.contains(&id) && self.latched.get(&id) != Some(&Latch::Permanent) {
+                self.pending.insert(id, None);
+                self.known.insert(id, trade);
+            } else {
+                // A pending entry left in place keeps the version it was queued with.
+                self.set_known(trade);
             }
         }
         self.publish_pending();
@@ -536,7 +599,12 @@ impl RecorderCatchup {
     ) -> CatchupPlan {
         self.prune(now_ms);
         self.route_skipped();
-        let ready: Vec<_> = self.pending.values().cloned().collect();
+        let ready: Vec<_> = self
+            .pending
+            .iter()
+            .filter_map(|(id, entry)| queued(&self.known, id, entry))
+            .cloned()
+            .collect();
         let batch = if archives {
             super::plan(&ready, held, &self.latched, now_ms, shape)
         } else {
@@ -580,9 +648,11 @@ impl RecorderCatchup {
             self.tape_complete.clear();
             self.core_gap_tries.clear();
             self.tail_final.clear();
-            for trade in self.known.values() {
-                self.pending.insert(trade.id, trade.clone());
+            for id in self.known.keys() {
+                self.pending.insert(*id, None);
             }
+            // The refill queued skipped rows too; route every entry again.
+            self.routed = None;
             self.switch_gen = generation;
         }
         self.route_skipped();
@@ -591,37 +661,46 @@ impl RecorderCatchup {
     }
 
     /// Keep skipped rows out of pending and return the ones the current choices admit again.
+    /// Walks both queues only when the skip rule changed or a refill asked for it
+    /// ([`Self::routed`]); otherwise every entry already sits where this walk would put it.
     fn route_skipped(&mut self) {
+        let rule = (super::record_emulator(), super::tuner_only());
+        if self.routed == Some(rule) {
+            return;
+        }
         let admitted: Vec<_> = self
             .skipped
             .iter()
-            .filter(|(_, trade)| !super::skipped(trade))
+            .filter(|(id, entry)| {
+                queued(&self.known, id, entry).is_some_and(|t| !super::skipped(t))
+            })
             .map(|(id, _)| *id)
             .collect();
         for id in admitted {
-            if let Some(trade) = self.skipped.remove(&id) {
-                self.pending.insert(id, trade);
+            if let Some(entry) = self.skipped.remove(&id) {
+                self.pending.insert(id, entry);
             }
         }
-        self.pending.retain(|id, trade| {
-            if super::skipped(trade) {
-                self.skipped.insert(*id, trade.clone());
+        let known = &self.known;
+        let skipped = &mut self.skipped;
+        self.pending.retain(|id, entry| {
+            if queued(known, id, entry).is_some_and(super::skipped) {
+                skipped.insert(*id, entry.take());
                 false
             } else {
                 true
             }
         });
+        self.routed = Some(rule);
     }
 
     /// Expire catch-up settlements at archive reach while retaining protection until its own edge.
     fn prune(&mut self, now_ms: i64) {
         let cutoff = super::retention_edge_ms(now_ms).unwrap_or(i64::MIN);
         let catchup_cutoff = super::edge_ms(now_ms);
-        for trade in self
-            .known
-            .values()
-            .filter(|trade| trade.close_ms < catchup_cutoff)
-        {
+        // The close index visits only trades past the edge, the same ones a filter over the
+        // whole set selected; this runs on every 250 ms tick.
+        for trade in self.known.closed_before(catchup_cutoff) {
             self.complete.remove(&trade.id);
             self.latched.remove(&trade.id);
             self.core_gap_tries.remove(&trade.id);
@@ -629,9 +708,8 @@ impl RecorderCatchup {
         }
         let expired: Vec<_> = self
             .known
-            .iter()
-            .filter(|(_, trade)| trade.close_ms < cutoff)
-            .map(|(&id, _)| id)
+            .closed_before(cutoff)
+            .map(|trade| trade.id)
             .collect();
         for id in expired {
             self.complete.remove(&id);
@@ -639,7 +717,9 @@ impl RecorderCatchup {
             self.core_gap_tries.remove(&id);
             self.tail_final.remove(&id);
             if !self.pending.contains_key(&id) {
-                self.known.remove(&id);
+                if let Some(row) = self.known.remove(&id) {
+                    self.expired_rows.push(row);
+                }
                 self.skipped.remove(&id);
                 self.tape_complete.remove(&id);
             }
@@ -714,9 +794,9 @@ impl RecorderCatchup {
             status.archive_bytes = self.archive_bytes;
         } else {
             self.worker = None;
-            for trade in self.pending.values() {
+            for id in self.pending.keys() {
                 self.latched
-                    .insert(trade.id, Latch::RetryAfter(next_pass(now_ms)));
+                    .insert(*id, Latch::RetryAfter(next_pass(now_ms)));
             }
             super::super::line(
                 "catch-up thread unavailable; pending trades wait for the next pass",
@@ -804,7 +884,10 @@ impl RecorderCatchup {
                     self.pending.remove(&job.trade.id);
                     self.latched.insert(job.trade.id, Latch::Permanent);
                 } else {
-                    self.pending.insert(job.trade.id, job.trade.clone());
+                    // The job's own version, as before: the protection set may have changed
+                    // under the pass.
+                    self.pending
+                        .insert(job.trade.id, Some(Box::new(job.trade.clone())));
                     self.latched
                         .insert(job.trade.id, Latch::RetryAfter(next_pass(now_ms)));
                 }
@@ -849,6 +932,8 @@ impl RecorderCatchup {
         for warn in &report.warns {
             log::warn!("{warn}");
         }
+        // A job was planned only if the skip rule admitted it, so under an unchanged rule its
+        // trade stays queued; a changed rule makes this call walk both queues again.
         self.sync_switches();
         let pending = self.pending.len().min(u32::MAX as usize) as u32;
         let mut status = STATUS

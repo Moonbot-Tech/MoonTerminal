@@ -6,6 +6,7 @@ use crate::market::tape_recorder::retention;
 use crate::venue::{Brand, MarketKind, Venue};
 use std::sync::Arc;
 
+mod queue;
 mod recount;
 
 /// The (exchange, market) key a trade's tape is filed under.
@@ -2397,10 +2398,10 @@ fn backlog_drains_in_bounded_passes_that_each_move_the_status() {
         assert_eq!(pass.jobs.len(), expected);
         assert!(catchup::status().running);
         // Rows not taken stay pending and unlatched, so the next tick may take them.
-        for trade in state.pending.values() {
-            let in_pass = pass.jobs.iter().any(|job| job.trade.id == trade.id);
-            let settled = taken.contains(&trade.id.rec_id);
-            assert!(in_pass || settled || !state.latched.contains_key(&trade.id));
+        for id in state.pending.keys() {
+            let in_pass = pass.jobs.iter().any(|job| job.trade.id == *id);
+            let settled = taken.contains(&id.rec_id);
+            assert!(in_pass || settled || !state.latched.contains_key(id));
         }
         taken.extend(pass.jobs.iter().map(|job| job.trade.id.rec_id));
         let failures: Vec<_> = pass

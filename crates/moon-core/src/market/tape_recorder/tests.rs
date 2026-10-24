@@ -503,3 +503,46 @@ fn a_close_on_an_unknown_venue_is_recorded_and_known_to_catchup() {
         "a known venue still reaches the catch-up"
     );
 }
+
+/// A listing page answers a deal-chart reader through the protection set, a live close after
+/// it takes over, and a later page takes back — the order the closed map kept when it held both.
+#[test]
+fn a_listed_trade_is_peeked_through_the_protection_set() {
+    let _guard = catchup::tests::SWITCH_LOCK.lock().unwrap();
+    let mut recorder = chart_recorder();
+    let key = ("CORE_A".to_string(), "XALPHA".to_string());
+    let id = TradeId {
+        core: 7,
+        rec_id: 43,
+    };
+    let listed = catchup::CatchupTrade {
+        id,
+        exchange: key.0.clone(),
+        market: key.1.clone(),
+        venue: None,
+        core: None,
+        open_ms: 1500,
+        close_ms: 2500,
+        emulator: false,
+        tunable: true,
+    };
+    let window = |recorder: &Recorder| {
+        recorder
+            .peek(id, 0, 0)
+            .map(|tape| (tape.exchange, tape.market, tape.open_ms, tape.close_ms))
+    };
+    assert!(matches!(window(&recorder), Err(TapeMiss::Unknown)));
+    let now_ms = crate::util::now_unix_ms_i64();
+    recorder.apply(Cmd::Catchup(vec![listed.clone()]), now_ms);
+    assert_eq!(
+        window(&recorder).ok(),
+        Some((key.0.clone(), key.1.clone(), 1500, 2500))
+    );
+    recorder.closed.closed(id, &key, 1600, 2600);
+    assert_eq!(
+        window(&recorder).ok(),
+        Some((key.0.clone(), key.1.clone(), 1600, 2600))
+    );
+    recorder.apply(Cmd::Catchup(vec![listed]), now_ms);
+    assert_eq!(window(&recorder).ok(), Some((key.0, key.1, 1500, 2500)));
+}
