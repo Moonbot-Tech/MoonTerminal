@@ -156,6 +156,75 @@ fn brand_cuts_match_their_geometry_and_scheme() {
     }
 }
 
+/// Rasterize an SVG document at `scale` pixels per source unit.
+fn rasterize(svg: &str, scale: f32) -> resvg::tiny_skia::Pixmap {
+    let tree = resvg::usvg::Tree::from_str(svg, &resvg::usvg::Options::default())
+        .expect("brand document must parse");
+    let size = tree.size();
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(
+        (size.width() * scale).ceil() as u32,
+        (size.height() * scale).ceil() as u32,
+    )
+    .expect("non-empty brand document");
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    pixmap
+}
+
+/// Count the fully opaque pixels of exactly `rgb`: a fill's interior, without anti-aliased edges.
+fn opaque_pixels_of(pixmap: &resvg::tiny_skia::Pixmap, rgb: u32) -> usize {
+    let [_, r, g, b] = rgb.to_be_bytes();
+    pixmap
+        .pixels()
+        .iter()
+        .filter(|px| px.is_opaque() && (px.red(), px.green(), px.blue()) == (r, g, b))
+        .count()
+}
+
+/// The narrow header's plane icon (#1082) must hold the WHOLE plane and NONE of the wordmark.
+///
+/// The cut is a hand-picked viewBox window over the lockup, so a re-export that shifts the drawing
+/// would silently slice the plane or let the first letter in. The oracle is the lockup itself,
+/// rendered at the same scale: every icon fill keeps its pixel count, and no wordmark fill appears.
+/// The scale keeps the cut's left edge on a whole pixel, so the two rasters share one grid.
+#[test]
+fn header_mark_keeps_the_whole_plane_and_none_of_the_wordmark() {
+    const ICON_FILLS: [u32; 3] = [0x46C722, 0xFE0032, 0xBECCCF];
+    const TERMINAL_FILL: u32 = 0x009DFF;
+    const SCALE: f32 = 4.0;
+    for (name, svg, wordmark) in BRAND_CUTS {
+        let lockup = rasterize(svg, SCALE);
+        let mark = rasterize(&super::mark_svg(name == "light"), SCALE);
+        for fill in ICON_FILLS {
+            let whole = opaque_pixels_of(&lockup, fill);
+            assert!(
+                whole > 0,
+                "{name} lockup no longer draws icon fill #{fill:06X}"
+            );
+            assert_eq!(
+                opaque_pixels_of(&mark, fill),
+                whole,
+                "{name} mark cut slices icon fill #{fill:06X}"
+            );
+        }
+        let wordmark = u32::from_str_radix(&wordmark[1..], 16).unwrap();
+        for fill in [wordmark, TERMINAL_FILL] {
+            assert!(
+                opaque_pixels_of(&lockup, fill) > 0,
+                "{name} lockup no longer draws wordmark fill #{fill:06X}"
+            );
+            assert_eq!(
+                opaque_pixels_of(&mark, fill),
+                0,
+                "{name} mark cut lets wordmark fill #{fill:06X} in"
+            );
+        }
+    }
+}
+
 // --- Goal A: header/toolbar chrome polish -----------------------------------------------------
 //
 // AUTHOR MODE: the four names below (`CHROME_RULE_H`, `readout_color`, `chrome_toggle_tone`,

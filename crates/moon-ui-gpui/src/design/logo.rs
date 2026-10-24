@@ -43,6 +43,14 @@ pub const CHART_CORNER_STRIP_H: f32 = CHART_CORNER_BTN_TOP + CHART_CORNER_BTN_SI
 /// its room in width, or the mark shrinks inside a row whose height cannot follow it.
 const HEADER_LOGO_W: f32 = 86.0 * LOGO_PORT_SCALE;
 
+/// Left edge and width of the plane icon's cut inside the lockup's source viewBox.
+///
+/// The icon's outlines span x ≈ 0..43.02 (one curve dips about 0.1 below zero) and the wordmark's
+/// first glyph starts at 46.7, so this window holds the whole plane and none of the text. A
+/// re-export that moves either edge is caught by `design::tests`, which renders both cuts.
+pub(super) const LOGO_MARK_SRC_X: f32 = -0.5;
+pub(super) const LOGO_MARK_SRC_W: f32 = 45.5;
+
 /// How much wider than the lockup the glow canvas is; the aura fills the difference.
 const LOGO_GLOW_SCALE: f32 = 1.2;
 /// The glow canvas is SQUARE, so the aura reads as a disc rather than a flat ellipse.
@@ -92,6 +100,40 @@ static LOGO_IMAGES: LazyLock<[Arc<Image>; 2]> =
 /// ~7.5KB string per empty pane per frame produced the same two documents forever.
 static GLOW_IMAGES: LazyLock<[Arc<Image>; 2]> =
     LazyLock::new(|| [svg_image(glow_svg(false)), svg_image(glow_svg(true))]);
+
+/// The plane-icon documents, indexed by `is_light()`.
+///
+/// The icon is cut from the SAME lockup file rather than shipped as an asset of its own, so the
+/// two can never drift apart. Built once for the reason [`LOGO_IMAGES`] gives.
+static MARK_IMAGES: LazyLock<[Arc<Image>; 2]> =
+    LazyLock::new(|| [svg_image(mark_svg(false)), svg_image(mark_svg(true))]);
+
+/// Compose the plane-icon document for one colour scheme: the lockup with its viewBox narrowed to
+/// [`LOGO_MARK_SRC_X`]..+[`LOGO_MARK_SRC_W`].
+///
+/// The wordmark's outlines stay in the document but fall outside the viewport, which the root
+/// `<svg>` clips — the same rule every renderer follows, so the text never paints.
+pub(super) fn mark_svg(light: bool) -> String {
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="{x} 0 {w} {h}" fill="none">{paths}</svg>"#,
+        w = LOGO_MARK_SRC_W,
+        h = LOGO_SRC_H,
+        x = LOGO_MARK_SRC_X,
+        paths = logo_paths(logo_svg(light)),
+    )
+}
+
+/// The header's plane icon alone: what the brand slot draws once the wordmark no longer fits.
+///
+/// Drawn at the lockup's own scale, so the plane keeps the size it had inside [`header_logo`] and
+/// does not jump when the wordmark leaves. It is the narrow window's grab handle (#1082), which is
+/// why it never collapses further.
+pub fn header_mark(cx: &App) -> impl IntoElement {
+    let height = ui_value(cx, HEADER_LOGO_W) * (LOGO_SRC_H / LOGO_SRC_W);
+    img(MARK_IMAGES[usize::from(MoonPalette::active(cx).is_light())].clone())
+        .w(px(height * (LOGO_MARK_SRC_W / LOGO_SRC_H)))
+        .h(px(height))
+}
 
 /// The header lockup: the brand at the left end of the main window's titlebar.
 ///
