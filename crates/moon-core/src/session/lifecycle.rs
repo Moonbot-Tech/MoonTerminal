@@ -20,6 +20,8 @@ use super::{
     conn_sig, orderbook_kind_for_exchange,
 };
 
+mod listing_slots;
+
 #[cfg(test)]
 mod identity_stale_tests;
 #[cfg(test)]
@@ -49,7 +51,7 @@ struct CatchupRow {
 
 const CATCHUP_PAGE: usize = 1000;
 
-/// Only attributable gaps can prevent a protecting listing from completing.
+/// Only attributable gaps can prevent a listing from completing.
 #[derive(Default)]
 struct ListingProgress {
     skipped: usize,
@@ -77,13 +79,9 @@ struct CatchupSql {
     next: String,
 }
 
-/// Build both keyset statements without retaining a reader permit between pages.
+/// Build both keyset statements over closes at or after the edge, without retaining a reader
+/// permit between pages.
 fn catchup_sql(conn: &rusqlite::Connection) -> rusqlite::Result<CatchupSql> {
-    listing_sql(conn, false)
-}
-
-/// Enumerate entry windows crossing the uncapped retention edge using close-index keysets.
-fn listing_sql(conn: &rusqlite::Connection, straddlers: bool) -> rusqlite::Result<CatchupSql> {
     let mut schema = conn.prepare("PRAGMA table_info(orders_rep)")?;
     let cols = schema
         .query_map([], |row| row.get::<_, String>(1))?
@@ -115,11 +113,9 @@ fn listing_sql(conn: &rusqlite::Connection, straddlers: bool) -> rusqlite::Resul
     } else {
         "0"
     };
-    // Seconds are deliberately conservative when millisecond columns refine the boundary.
-    let straddler = if straddlers { "AND buydate <= ?2" } else { "" };
     let select = format!(
         "SELECT newrecid, COALESCE(coin, ''), COALESCE(buydate, 0), {buy_ms}, closedate, {close_ms}, {emulator} FROM orders_rep \
-        WHERE core_uid = ?1 AND closedate > 0 AND closedate >= ?2 {deleted} {straddler}"
+        WHERE core_uid = ?1 AND closedate > 0 AND closedate >= ?2 {deleted}"
     );
     let order = format!(" ORDER BY closedate DESC, newrecid DESC LIMIT {CATCHUP_PAGE}");
     Ok(CatchupSql {
@@ -886,117 +882,114 @@ impl SessionManager {
             core,
         );
         let source = self.market_source.clone();
-        let retention_cutoff = crate::market::tape_recorder::catchup::retention_edge_ms(now_ms)
-            .map(|edge| axis.from_utc(edge.div_euclid(1000), core));
         let unknown = self.catchup_unknown.clone();
         let running = self.catchup_running.entry(core).or_default().clone();
         let spawned = spawn_catchup(running, move || {
+            let queued = Instant::now();
+            // Started when due, read in turn: at most a few cores list at once (#1081).
+            let _slot = listing_slots::acquire();
+            if crate::market::tape_recorder::catchup::relist_gen() != generation {
+                // A retention change while this listing waited: its completion would be
+                // discarded, and its core relists for the new generation once this one is gone.
+                return;
+            }
+            let started = Instant::now();
             let mut listing = ListingProgress::default();
-            for (cutoff, protecting) in
-                std::iter::once((cutoff, false)).chain(retention_cutoff.map(|edge| (edge, true)))
-            {
-                let mut after = None;
-                let mut sql = None;
-                loop {
-                    let page = match (|| {
-                        let conn =
-                            crate::db::open_reader().map_err(|error| format!("{error:?}"))?;
-                        if sql.is_none() {
-                            sql = Some(
-                                if protecting {
-                                    listing_sql(&conn, true)
-                                } else {
-                                    catchup_sql(&conn)
-                                }
-                                .map_err(|error| error.to_string())?,
-                            );
-                        }
-                        catchup_page(
-                            &conn,
-                            sql.as_ref().expect("resolved schema"),
-                            core,
-                            cutoff,
-                            after,
-                        )
-                        .map_err(|error| error.to_string())
-                    })() {
-                        Ok(page) => page,
-                        Err(error) => {
-                            log::debug!(
-                                "[x] tape catch-up core={core}: replica page unavailable: {error}"
-                            );
-                            return;
-                        }
+            let (mut rows, mut submitted) = (0_usize, 0_usize);
+            let mut after = None;
+            let mut sql = None;
+            loop {
+                let page = match (|| {
+                    // The listing reads `orders_rep` alone: the valuation cache stays detached.
+                    let conn = crate::db::open_reader_with(crate::db::AttachSet::STRATEGIES_ONLY)
+                        .map_err(|error| format!("{error:?}"))?;
+                    if sql.is_none() {
+                        sql = Some(catchup_sql(&conn).map_err(|error| error.to_string())?);
+                    }
+                    catchup_page(
+                        &conn,
+                        sql.as_ref().expect("resolved schema"),
+                        core,
+                        cutoff,
+                        after,
+                    )
+                    .map_err(|error| error.to_string())
+                })() {
+                    Ok(page) => page,
+                    Err(error) => {
+                        // Seen in the station journal: retention keeps every market's tape while
+                        // this core stays unlisted, and the core lists again on its next pass.
+                        log::warn!(
+                            "[x] tape catch-up core={core}: listing stopped after {rows} rows, replica page unavailable: {error}"
+                        );
+                        return;
+                    }
+                };
+                let Some(last) = page.last() else {
+                    break;
+                };
+                after = Some((last.closedate, last.rec_id));
+                let mut trades = Vec::new();
+                let mut unresolved = 0;
+                for row in &page {
+                    let id = crate::market::tape_recorder::TradeId {
+                        core,
+                        rec_id: row.rec_id,
                     };
-                    let Some(last) = page.last() else {
-                        break;
+                    if unknown
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .contains(&id)
+                    {
+                        continue;
+                    }
+                    let Some((open_ms, close_ms)) = catchup_stamps(row, &axis, core, now_ms) else {
+                        continue;
                     };
-                    after = Some((last.closedate, last.rec_id));
-                    let mut trades = Vec::new();
-                    let mut unresolved = 0;
-                    for row in &page {
-                        let id = crate::market::tape_recorder::TradeId {
-                            core,
-                            rec_id: row.rec_id,
-                        };
-                        if unknown
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner())
-                            .contains(&id)
-                        {
-                            continue;
+                    let Some(market) = source.resolve_market(core, &quote, &row.coin) else {
+                        if source.tradable_coins(core).is_none() {
+                            unresolved += 1;
                         }
-                        let stamps = if protecting {
-                            let (open, close) = axis.stamp_pair_to_utc_ms(row.buy, row.close, core);
-                            (open > 0 && close >= open).then_some((open, close))
-                        } else {
-                            catchup_stamps(row, &axis, core, now_ms)
-                        };
-                        let Some((open_ms, close_ms)) = stamps else {
-                            continue;
-                        };
-                        let Some(market) = source.resolve_market(core, &quote, &row.coin) else {
-                            if source.tradable_coins(core).is_none() {
-                                unresolved += 1;
-                            }
-                            if latch_unknown(
-                                &mut unknown.lock().unwrap_or_else(|error| error.into_inner()),
-                                id,
-                                source.tradable_coins(core).is_some(),
-                                source.replay_address(core).is_ok(),
-                            ) {
-                                crate::market::tape_recorder::catchup::note_no_route();
-                            }
-                            continue;
-                        };
-                        trades.push(crate::market::tape_recorder::catchup::CatchupTrade {
+                        if latch_unknown(
+                            &mut unknown.lock().unwrap_or_else(|error| error.into_inner()),
                             id,
-                            exchange: address.exchange_key.clone(),
-                            market,
-                            venue,
-                            core: Some(address.clone()),
-                            open_ms,
-                            close_ms,
-                            emulator: row.emulator,
-                            tunable: tuner_can_replay(row),
-                        });
-                    }
-                    // Permanently unattributable rows protect no market and must not stall all keys.
-                    listing.resolved_page(
-                        page.len(),
-                        trades.len(),
-                        page.len().saturating_sub(trades.len() + unresolved),
-                    );
-                    if protecting {
-                        crate::market::tape_recorder::catchup::protect(trades);
-                    } else {
-                        crate::market::tape_recorder::catchup::submit(trades);
-                    }
-                    if page.len() < CATCHUP_PAGE {
-                        break;
-                    }
+                            source.tradable_coins(core).is_some(),
+                            source.replay_address(core).is_ok(),
+                        ) {
+                            crate::market::tape_recorder::catchup::note_no_route();
+                        }
+                        continue;
+                    };
+                    trades.push(crate::market::tape_recorder::catchup::CatchupTrade {
+                        id,
+                        exchange: address.exchange_key.clone(),
+                        market,
+                        venue,
+                        core: Some(address.clone()),
+                        open_ms,
+                        close_ms,
+                        emulator: row.emulator,
+                        tunable: tuner_can_replay(row),
+                    });
+                }
+                // Permanently unattributable rows protect no market and must not stall all keys.
+                listing.resolved_page(
+                    page.len(),
+                    trades.len(),
+                    page.len().saturating_sub(trades.len() + unresolved),
+                );
+                rows += page.len();
+                submitted += trades.len();
+                crate::market::tape_recorder::catchup::submit(trades);
+                if page.len() < CATCHUP_PAGE {
+                    break;
                 }
             }
+            log::info!(
+                "tape catch-up core={core}: listed {rows} rows ({submitted} resolved) in {:.1} s, after {:.1} s waiting for a listing slot",
+                started.elapsed().as_secs_f64(),
+                started.duration_since(queued).as_secs_f64()
+            );
             if listing.complete() {
                 crate::market::tape_recorder::catchup::listed(core, generation);
             }

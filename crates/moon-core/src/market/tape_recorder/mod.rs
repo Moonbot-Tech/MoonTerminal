@@ -160,8 +160,6 @@ enum Cmd {
         to_ms: i64,
         reply: Sender<Result<RecorderSpan, TapeMiss>>,
     },
-    /// Retention protection outside the historical fetch horizon.
-    Protect(Vec<catchup::CatchupTrade>),
     /// Resolved closed rows whose tape may still be recovered from public sources.
     Catchup(Vec<catchup::CatchupTrade>),
     /// A successful listing follows all of its pages on this same queue.
@@ -607,7 +605,6 @@ impl Recorder {
                 }
                 self.cache.release_after_writes(reservation);
             }
-            Cmd::Protect(trades) => self.catchup.protect(trades),
             Cmd::CatchupDone(result) => self.catchup.finish(&self.cache, result, now_ms),
             Cmd::Opened {
                 exchange,
@@ -1264,8 +1261,10 @@ impl Recorder {
         let pairs: usize = self.donors.values().map(Donor::selected).sum();
         let asking: usize = self.donors.values().map(Donor::in_flight).sum();
         let recording = self.tasks.values().filter(|t| t.is_live()).count();
+        let (known, queued, skipped) = self.catchup.sizes();
+        let (live_closes, listed_closes) = self.closed.sizes();
         line(&format!(
-            "{what}: keys {} (recording {recording}), pairs {pairs} (asking {asking}), donors {} ({ready} ready), requests {}, answers {}, failed {}, filed {} prints in {} spans, lost {} s in {} gaps, clipped {}, late {}, breaks {}, stale opens skipped {}, resumed {}",
+            "{what}: keys {} (recording {recording}), pairs {pairs} (asking {asking}), donors {} ({ready} ready), requests {}, answers {}, failed {}, filed {} prints in {} spans, lost {} s in {} gaps, clipped {}, late {}, breaks {}, stale opens skipped {}, resumed {}, known trades {known} (queued {queued}, skipped {skipped}), chart closes {live_closes} live + {listed_closes} listed",
             self.tasks.len(),
             self.donors.len(),
             s.requests,

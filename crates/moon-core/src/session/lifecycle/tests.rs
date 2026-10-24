@@ -229,19 +229,6 @@ fn permanently_unattributable_rows_do_not_block_the_listing() {
     );
 }
 
-/// The protecting query reaches straddlers older than a year without listing all old rows.
-#[test]
-fn protecting_listing_reads_only_retention_straddlers() {
-    let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, newrecid INTEGER, coin TEXT, buydate INTEGER, closedate INTEGER);
-        INSERT INTO orders_rep VALUES (1,1,'XALPHA',10,30),(1,2,'XALPHA',21,30),(1,3,'XALPHA',1,19);").unwrap();
-    let rows = catchup_page(&conn, &listing_sql(&conn, true).unwrap(), 1, 20, None).unwrap();
-    assert_eq!(
-        rows.iter().map(|row| row.rec_id).collect::<Vec<_>>(),
-        vec![1]
-    );
-}
-
 /// A listed row is tuner-usable only when BOTH stamps came from the millisecond columns, the
 /// same gate the tuner's deal read applies. Treating a seconds fallback as usable would keep
 /// fetching tape for the pre-millisecond history the switch exists to skip.

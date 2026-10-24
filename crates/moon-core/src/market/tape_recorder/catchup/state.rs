@@ -121,12 +121,18 @@ impl RecorderCatchup {
         self.known.get(id)
     }
 
+    /// Trades in the protection set, the fetch queue and the skipped set, for the recorder's
+    /// summary line: what a station holds per trade inside its keep window (#1081).
+    pub(crate) fn sizes(&self) -> (usize, usize, usize) {
+        (self.known.len(), self.pending.len(), self.skipped.len())
+    }
+
     /// Hand over the rows the protection set dropped past the retention edge since the last call.
     pub(crate) fn take_expired(&mut self) -> Vec<CatchupTrade> {
         std::mem::take(&mut self.expired_rows)
     }
 
-    /// Merge protecting listings and live closes independently of the fetch queue.
+    /// Merge live closes into the protection set independently of the fetch queue.
     pub(crate) fn protect(&mut self, trades: Vec<CatchupTrade>) {
         let busy = self.maintenance_busy();
         for trade in trades {

@@ -101,9 +101,9 @@ impl ClosedTrades {
 
     /// Where `trade` closed, by the latest of its live close and its listing page within
     /// [`CLOSED_MEMORY`]. A listed row is read from `row`, its entry in the protection set:
-    /// written by the same page, and since overwritten only by a protecting page of the same
-    /// report row or by a live close, which takes the trade back into `live`; when the
-    /// protection set drops it, [`Self::expired`] moves it into `live` first.
+    /// written by the same page, and since overwritten only by a live close, which takes the
+    /// trade back into `live`; when the protection set drops it, [`Self::expired`] moves it
+    /// into `live` first.
     pub(super) fn lookup(
         &self,
         trade: TradeId,
@@ -124,6 +124,11 @@ impl ClosedTrades {
                 row.close_ms,
             )
         })
+    }
+
+    /// Live closes and listing stamps held, for the recorder's summary line.
+    pub(super) fn sizes(&self) -> (usize, usize) {
+        (self.live.len(), self.listed.len())
     }
 
     /// Forget closes older than [`CLOSED_MEMORY`], and stale listing stamps once a

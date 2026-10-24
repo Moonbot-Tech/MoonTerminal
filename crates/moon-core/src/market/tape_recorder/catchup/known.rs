@@ -63,7 +63,6 @@ impl Known {
     }
 
     /// How many trades are stored.
-    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.by_id.len()
     }
