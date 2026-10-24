@@ -571,14 +571,7 @@ impl Recorder {
             Cmd::Watch { key, until_ms } => self.watch_key(key, until_ms, now_ms),
             Cmd::Listed { core, generation } => catchup::listing_applied(core, generation),
             Cmd::Catchup(trades) => {
-                for trade in &trades {
-                    self.closed.closed(
-                        trade.id,
-                        &(trade.exchange.clone(), trade.market.clone()),
-                        trade.open_ms,
-                        trade.close_ms,
-                    );
-                }
+                self.closed.listed(&trades);
                 self.catchup.submit(trades);
             }
             Cmd::Backfilled {
@@ -787,6 +780,9 @@ impl Recorder {
             .retention_tick(&self.cache, now_ms, &live, &shape);
         if !purging {
             self.catchup.tick(&self.cache, now_ms, &shape);
+        }
+        for row in self.catchup.take_expired() {
+            self.closed.expired(row, now);
         }
         self.collect_replies(now, now_ms);
         self.expire(now);

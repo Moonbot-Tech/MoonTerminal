@@ -20,9 +20,12 @@ pub(super) struct KeepPolicy {
 }
 
 /// Keep fresh unattributable spans, real-trade edges, and all live plain windows.
-pub(super) fn keep_map(
+///
+/// `trades` is borrowed so the recorder can pass its protection set as it stands: copying
+/// millions of trades for this one pass was the hourly memory spike of #1081.
+pub(super) fn keep_map<'a>(
     inventory: &Inventory,
-    trades: &[catchup::CatchupTrade],
+    trades: impl IntoIterator<Item = &'a catchup::CatchupTrade>,
     live: &HashMap<Key, Coverage>,
     incomplete: &HashSet<Key>,
     policy: KeepPolicy,

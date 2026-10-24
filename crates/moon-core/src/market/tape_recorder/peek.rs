@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use super::catchup::CatchupTrade;
 use super::{Cmd, Key, Recorder, TX, TradeId};
 use crate::feed::Tick;
 use crate::market::trade_replay::Coverage;
@@ -32,14 +33,33 @@ pub(super) struct Closed {
     seen: Instant,
 }
 
+/// How often stale listing stamps are dropped. [`ClosedTrades::lookup`] checks a stamp's age on
+/// every read, so this bounds memory only and never changes an answer; a station holds millions
+/// of stamps, too many to walk on every 250 ms tick.
+const LISTED_PRUNE_EVERY: Duration = Duration::from_secs(60);
+
 /// Closed trades by id, for [`trade_tape`].
+///
+/// A listed row used to be copied here whole, stamped when its page arrived, so on a station the
+/// map held every trade inside the keep window: the hourly relisting re-stamped them all (#1081).
+/// The catch-up's protection set already holds those rows, so a listed row keeps only its stamp
+/// here and is answered from the protection set, for the same hour after the same page.
 #[derive(Default)]
-pub(super) struct ClosedTrades(HashMap<TradeId, Closed>);
+pub(super) struct ClosedTrades {
+    /// Live closes, with what they said.
+    live: HashMap<TradeId, Closed>,
+    /// When the latest listing page carrying each trade arrived, for trades whose latest
+    /// writer was a listing page rather than a live close.
+    listed: HashMap<TradeId, Instant>,
+    /// The last time [`Self::prune`] dropped stale listing stamps.
+    listed_pruned: Option<Instant>,
+}
 
 impl ClosedTrades {
-    /// Remember a close, replacing an earlier one of the same trade.
+    /// Remember a close, replacing an earlier one of the same trade — a listed row's included.
     pub(super) fn closed(&mut self, trade: TradeId, key: &Key, open_ms: i64, close_ms: i64) {
-        self.0.insert(
+        self.listed.remove(&trade);
+        self.live.insert(
             trade,
             Closed {
                 key: key.clone(),
@@ -50,10 +70,75 @@ impl ClosedTrades {
         );
     }
 
-    /// Forget closes older than [`CLOSED_MEMORY`].
+    /// A listing page arrived: each row replaces an earlier close of the same trade, as when the
+    /// page's copy overwrote it here.
+    pub(super) fn listed(&mut self, trades: &[CatchupTrade]) {
+        let now = Instant::now();
+        for trade in trades {
+            self.live.remove(&trade.id);
+            self.listed.insert(trade.id, now);
+        }
+    }
+
+    /// The protection set dropped `row` past the retention edge. A listed row still inside its
+    /// hour keeps answering from a copy of its own here until that hour ends, as its copy did.
+    pub(super) fn expired(&mut self, row: CatchupTrade, now: Instant) {
+        let Some(at) = self.listed.remove(&row.id) else {
+            return;
+        };
+        if now.duration_since(at) < CLOSED_MEMORY {
+            self.live.insert(
+                row.id,
+                Closed {
+                    key: (row.exchange, row.market),
+                    open_ms: row.open_ms,
+                    close_ms: row.close_ms,
+                    seen: at,
+                },
+            );
+        }
+    }
+
+    /// Where `trade` closed, by the latest of its live close and its listing page within
+    /// [`CLOSED_MEMORY`]. A listed row is read from `row`, its entry in the protection set:
+    /// written by the same page, and since overwritten only by a protecting page of the same
+    /// report row or by a live close, which takes the trade back into `live`; when the
+    /// protection set drops it, [`Self::expired`] moves it into `live` first.
+    pub(super) fn lookup(
+        &self,
+        trade: TradeId,
+        row: Option<&CatchupTrade>,
+        now: Instant,
+    ) -> Option<(Key, i64, i64)> {
+        if let Some(closed) = self.live.get(&trade) {
+            return Some((closed.key.clone(), closed.open_ms, closed.close_ms));
+        }
+        let fresh = self
+            .listed
+            .get(&trade)
+            .is_some_and(|at| now.duration_since(*at) < CLOSED_MEMORY);
+        row.filter(|_| fresh).map(|row| {
+            (
+                (row.exchange.clone(), row.market.clone()),
+                row.open_ms,
+                row.close_ms,
+            )
+        })
+    }
+
+    /// Forget closes older than [`CLOSED_MEMORY`], and stale listing stamps once a
+    /// [`LISTED_PRUNE_EVERY`].
     pub(super) fn prune(&mut self, now: Instant) {
-        self.0
+        self.live
             .retain(|_, closed| now.duration_since(closed.seen) < CLOSED_MEMORY);
+        if self
+            .listed_pruned
+            .is_none_or(|at| now.duration_since(at) >= LISTED_PRUNE_EVERY)
+        {
+            self.listed_pruned = Some(now);
+            self.listed
+                .retain(|_, at| now.duration_since(*at) < CLOSED_MEMORY);
+        }
     }
 }
 
@@ -212,16 +297,18 @@ impl Recorder {
         lead_ms: i64,
         tail_ms: i64,
     ) -> Result<TradeTape, TapeMiss> {
-        let closed = self.closed.0.get(&trade).ok_or(TapeMiss::Unknown)?;
-        let key = &closed.key;
-        let from_ms = closed.open_ms.saturating_sub(lead_ms.max(0));
-        let to_ms = closed.close_ms.saturating_add(tail_ms.max(0));
-        let span = self.read_key(key, from_ms, to_ms)?;
+        let (key, open_ms, close_ms) = self
+            .closed
+            .lookup(trade, self.catchup.known_trade(&trade), Instant::now())
+            .ok_or(TapeMiss::Unknown)?;
+        let from_ms = open_ms.saturating_sub(lead_ms.max(0));
+        let to_ms = close_ms.saturating_add(tail_ms.max(0));
+        let span = self.read_key(&key, from_ms, to_ms)?;
         Ok(TradeTape {
-            exchange: key.0.clone(),
-            market: key.1.clone(),
-            open_ms: closed.open_ms,
-            close_ms: closed.close_ms,
+            exchange: key.0,
+            market: key.1,
+            open_ms,
+            close_ms,
             ticks: span.ticks,
             settled: span.settled,
             covered: span.covered,
