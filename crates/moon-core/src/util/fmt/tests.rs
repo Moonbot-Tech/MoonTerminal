@@ -87,6 +87,20 @@ fn compact_si_trims_the_fraction_but_never_the_mantissa() {
     assert_eq!(compact_si(999.0), adaptive(999.0));
 }
 
+/// A mantissa that rounds up to a thousand belongs to the next unit: 999_600 is "1M", the way
+/// `compact_scale` ("999.6 k prints as 1 m, never 1000 k") and the chart's `short_volume` carry it.
+/// Without the carry the label reads "1000K" — a figure no other surface prints for that value.
+#[test]
+fn compact_si_carries_a_rounded_thousand_into_the_next_unit() {
+    assert_eq!(compact_si(999_600.0), "1M");
+    assert_eq!(compact_si(-999_600.0), "-1M");
+    assert_eq!(compact_si(999_700_000.0), "1B");
+    assert_eq!(compact_si(999_500.0), "1M");
+    assert_eq!(compact_order_size(999_999.0), "1m");
+    // Below the carry point the unit stays.
+    assert_eq!(compact_si(999_400.0), "999K");
+}
+
 /// Order-size labels keep meaningful fractions but use lowercase suffixes without forced zeros.
 ///
 /// Returning [`compact_si`] unchanged breaks the suffix assertions, while fixed-decimal output
