@@ -54,15 +54,23 @@ pub fn compact(v: f64, decimals: usize) -> String {
 /// Trailing zeros are trimmed from the FRACTION only, through [`compact`]. Trimming the whole
 /// mantissa used to eat a mantissa's own zeros — 100_000 rendered as "1K" rather than "100K", a
 /// hundredfold understatement of any value that happened to land on a round hundred.
+///
+/// A mantissa that rounds up to a thousand prints in the next unit (999_600 → "1M", not "1000K");
+/// `T` has no next unit and keeps its four digits.
 pub fn compact_si(v: f64) -> String {
     let a = v.abs();
     if a < 1000.0 {
         return adaptive(v);
     }
     const UNITS: [(f64, &str); 4] = [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")];
-    for (scale, suffix) in UNITS {
+    for (i, (scale, suffix)) in UNITS.into_iter().enumerate() {
         if a >= scale {
             let n = v / scale;
+            // `a` is below the next unit, so a carried mantissa is exactly one of it.
+            if n.abs().round() >= 1000.0 && i > 0 {
+                let sign = if v < 0.0 { "-" } else { "" };
+                return format!("{sign}1{}", UNITS[i - 1].1);
+            }
             let s = if n.abs() >= 100.0 {
                 compact(n, 0)
             } else if n.abs() >= 10.0 {
