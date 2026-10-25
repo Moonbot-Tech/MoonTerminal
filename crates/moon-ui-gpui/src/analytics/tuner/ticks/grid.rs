@@ -31,7 +31,7 @@ use rust_i18n::t;
 use super::super::super::AnalyticsView;
 use super::super::shared::{TunerKind, collapse_caret, glyph_btn};
 use super::sections::{GridSection, RowRole, layout};
-use super::state::{NowValue, TicksData};
+use super::state::{NowValue, SuggState, TicksData};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::ticks::params::{ParamGroup, ParamKind, ParamSection, TickParam};
@@ -321,7 +321,8 @@ pub(super) fn section_body_el(
 }
 
 impl AnalyticsView {
-    /// Keep search and result bands above expandable sections scrolling inside Parameters.
+    /// Pin the toolbar and the search row (and a running search's status); coverage, the
+    /// finished result and the expandable sections scroll together inside Parameters.
     pub(in crate::analytics::tuner) fn ticks_grid(
         &mut self,
         host_w: Pixels,
@@ -414,15 +415,30 @@ impl AnalyticsView {
         }
         // Coverage is useful before a search too: it explains which trades can teach it.
         let accuracy = self.ticks_accuracy_row(p, cx);
+        // The finished result grows with every changed field, warning and detail row: pinned, it
+        // took the whole card and left the fields a zero-height viewport, so it scrolls above
+        // them. A running search shows only its status, progress and Stop — bounded, and the
+        // one control that must stay in reach — so it stays pinned until the search ends.
+        let running = matches!(self.ticks.sugg, SuggState::Running { .. });
+        let (pinned_summary, scrolled_summary) = if running {
+            (Some(summary), None)
+        } else {
+            (None, Some(summary))
+        };
         let fixed = v_flex()
             .id("an-ticks-grid")
             .w_full()
             .child(header)
             .child(cfg_row)
-            .children(accuracy)
-            .child(summary)
+            .children(pinned_summary)
             .into_any_element();
-        super::super::layout::parameters(fixed, grid.into_any_element(), p, window, cx)
+        let body = v_flex()
+            .w_full()
+            .children(accuracy)
+            .children(scrolled_summary)
+            .child(grid)
+            .into_any_element();
+        super::super::layout::parameters(fixed, body, p, window, cx)
     }
 
     /// Tick or untick every field the grid shows — the header's tick. Unticked is held by the
