@@ -103,6 +103,8 @@ pub(super) struct ToolbarWrite {
     pub(super) copy: bool,
     /// Something differs from what is written: Save lights up.
     pub(super) dirty: bool,
+    /// Unique changed coins; only the coin axis supplies a count.
+    pub(super) changed_coins: usize,
 }
 
 /// The shared toolbar's handlers.
@@ -179,20 +181,36 @@ pub(super) fn toolbar_el(
         let on_save = acts.on_save.clone();
         header = header.child(
             div()
+                .flex()
+                .items_center()
+                .gap(design::ui_px(cx, 4.0))
                 .flex_none()
                 .debug_selector(move || format!("tun-save-{k}"))
                 .child(
                     MoonButton::new(SharedString::from(format!("tun-save-{k}")))
-                        .variant(if write.dirty {
+                        .variant(if kind == TunerKind::Coins && write.dirty {
+                            MoonButtonVariant::Blue
+                        } else if write.dirty {
                             MoonButtonVariant::Amber
                         } else {
                             MoonButtonVariant::Soft
                         })
                         .label(t!("analytics.tuner.save_btn").to_string())
-                        .disabled(!write.enabled)
+                        .disabled(!write.enabled || (kind == TunerKind::Coins && !write.dirty))
                         .on_click(move |_, window, app| on_save(window, app))
                         .render(),
-                ),
+                )
+                .when(kind == TunerKind::Coins && write.changed_coins > 0, |el| {
+                    el.child(
+                        div().debug_selector(|| "tun-save-c-count".into()).child(
+                            MoonTag::info()
+                                .variant(moon_ui::MoonTagVariant::Soft)
+                                .compact(true)
+                                .mono(true)
+                                .count(write.changed_coins.to_string()),
+                        ),
+                    )
+                }),
         );
     }
     header.into_any_element()
@@ -329,6 +347,11 @@ impl AnalyticsView {
         // Render write controls for a retained anchor, but enable them only when the action
         // authority admits at least one selected target.
         let write = self.sel_strategy.is_some().then(|| ToolbarWrite {
+            changed_coins: if kind == TunerKind::Coins {
+                self.coins.changed_count()
+            } else {
+                0
+            },
             enabled: self.visible_target_count(self.action_core_ids()) > 0,
             // Copy is single-target only — hidden in multi-select (many addressees, no
             // per-target preview); bulk Save is the multi path.

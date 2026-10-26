@@ -3,7 +3,7 @@
 //!
 //! Each field shows the WORKING list plus what the edit took out of the saved one: a saved
 //! coin the user removed stays in the field, struck through with an undo, and an unsaved
-//! addition is marked `+COIN`. The value written on Save never includes a removed entry.
+//! addition has an amber outline. The value written on Save never includes a removed entry.
 //!
 //! The blacklist is ordered newest first and shaded by WHEN each coin entered the list: the
 //! exact date on hover, the age as brightness. Brightness is relative to THIS list, not to the
@@ -17,7 +17,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonInputEvent, MoonInputState, MoonPalette, v_flex};
 use rust_i18n::t;
@@ -635,29 +634,7 @@ impl AnalyticsView {
                 ),
             );
         }
-        let band = super::fields::pending_text(&self.coins.pending_delta()).map(|text| {
-            let view = cx.entity();
-            super::fields::pending_band_el(
-                text,
-                Rc::new(move |_: &mut Window, app: &mut App| {
-                    view.update(app, |this, cx| {
-                        this.coins.revert();
-                        // Through the SAME debounced path as a tick: reverting is one more
-                        // edit of the same lists.
-                        this.arm_coin_kpi(cx);
-                        cx.notify();
-                    });
-                }),
-                p,
-                cx,
-            )
-        });
-        v_flex()
-            .w_full()
-            .flex_none()
-            .child(body)
-            .when_some(band, |el, band| el.child(band))
-            .into_any_element()
+        v_flex().w_full().flex_none().child(body).into_any_element()
     }
 
     /// Both fields, blacklist over whitelist.

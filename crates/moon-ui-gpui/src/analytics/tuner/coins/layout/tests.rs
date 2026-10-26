@@ -16,13 +16,10 @@ use rust_i18n::t;
 use super::super::super::kpi::{VarLabel, kpi_matrix_body};
 use super::super::super::shared::TunerKind;
 use super::super::super::shell::{ToolbarActs, ToolbarWrite, toolbar_el};
-use super::super::auto::{
-    AutoCardActs, AutoCardModel, AutoView, ResultModel, auto_card_el, tag_line, verdict_line,
-};
+use super::super::auto::{AutoCardActs, AutoCardModel, AutoView, auto_card_el};
 use super::super::coin_kpi_labels;
 use super::super::fields::{
-    ChipKind, FieldChip, ListFieldActs, ListFieldModel, list_field_el, pending_band_el,
-    pending_text,
+    ChipKind, FieldChip, ListFieldActs, ListFieldModel, list_field_el, pending_text,
 };
 use super::super::filter_bar::{FilterBarActs, FilterBarModel, filter_bar_el};
 use super::super::rows::CoinCounts;
@@ -35,9 +32,437 @@ const COLUMN_W: f32 = 470.0;
 
 /// The faces the probe walks. Face 0 is the mode without a strategy: empty-state fields, a
 /// toolbar without Make a copy / Save, the pick settings disabled. The others carry a
-/// strategy and differ in the auto-pick card: running, a useful result, a noise result
-/// (stale), a failed read.
-const FACES: usize = 5;
+/// strategy and cover running, useful/noise/empty results, a read failure, adopted/manual
+/// pending edits, report/list staleness, and exclusions.
+const FACES: usize = 14;
+
+/// Card-only probe keeps narrow-width assertions independent of the unchanged KPI table.
+struct AutoLayoutProbe(usize);
+
+impl Render for AutoLayoutProbe {
+    /// Render the production card with synthetic state and inert handlers.
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let noop: super::super::fields::Act = Rc::new(|_, _| {});
+        let acts = AutoCardActs {
+            on_pick: noop.clone(),
+            on_reset: noop.clone(),
+            on_one_by_one: noop.clone(),
+            on_add: noop.clone(),
+            on_save: noop.clone(),
+            on_revert: noop,
+            on_exclude: Rc::new(|_, _, _, _| {}),
+            on_black: Rc::new(|_, _, _| {}),
+            on_white: Rc::new(|_, _, _| {}),
+        };
+        let card = auto_card_el(
+            &auto_model(self.0),
+            None,
+            &acts,
+            MoonPalette::active(cx),
+            cx,
+        );
+        v_flex().w_full().child(card).child(
+            gpui::div()
+                .debug_selector(|| "probe-caption-line".into())
+                .font_family(design::mono())
+                .text_size(design::t_caption(cx))
+                .child("X"),
+        )
+    }
+}
+
+/// A shrinking action, duplicate primary or overflowing wrapped row breaks an approved card face.
+#[gpui::test]
+fn every_auto_face_has_one_primary_and_fits_narrow_and_default_widths(
+    cx: &mut gpui::TestAppContext,
+) {
+    const BUTTONS: &[(&str, &str)] = &[
+        ("an-pick-run", "analytics.coins.pick_btn"),
+        ("an-pick-stop", "analytics.coins.stop_btn"),
+        ("an-pick-settings", "analytics.coins.settings"),
+        ("an-pick-change", "analytics.coins.change_settings"),
+        ("an-pick-rerun", "analytics.coins.rerun"),
+        ("an-pick-add-save", "analytics.coins.add_save"),
+        ("an-pick-add-only", "analytics.coins.add_only"),
+        ("an-pick-one", "analytics.coins.one_by_one"),
+        ("an-coin-save", "analytics.coins.save_strategy"),
+        ("an-coin-revert", "analytics.coins.revert_edits"),
+    ];
+    for mode in [
+        UiThemeMode::Light,
+        UiThemeMode::Graphite,
+        UiThemeMode::LightExperimental,
+        UiThemeMode::DarkExperimental,
+        UiThemeMode::Dark,
+    ] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(mode, 1.0),
+                cx,
+            )
+        });
+        for language in ["ru", "en"] {
+            let _locale = crate::test_locale::force(language);
+            // No side splitter/minimum exists: the stacked page receives host minus padding.
+            // Cover the native minimum window (860 px), the reported 300 px side, and
+            // the preferred side in the default 1240 px window (also the narrowest native side).
+            let widths = cx.update(|cx| {
+                let native = f32::from(super::super::super::layout::side_width(860.0, cx));
+                let preferred = f32::from(super::super::super::layout::side_width(1240.0, cx));
+                [native, 300.0, preferred]
+            });
+            for width in widths {
+                for face in 0..FACES {
+                    let window = cx.open_window(gpui::size(px(width), px(1200.0)), |_, _| {
+                        AutoLayoutProbe(face)
+                    });
+                    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                    for _ in 0..3 {
+                        visual.update(|window, cx| {
+                            let _ = window.draw(cx);
+                        });
+                    }
+                    let card = visual.debug_bounds("an-pick-card").expect("card");
+                    assert!(f32::from(card.size.width) <= width + 0.5);
+                    let model = auto_model(face);
+                    let mut vertical = Vec::new();
+                    for id in [
+                        "an-pick-hint",
+                        "an-pick-settings-body",
+                        "an-pick-summary-row",
+                        "an-pick-running",
+                        "an-pick-progress",
+                        "an-pick-stop",
+                        "an-pick-verdict",
+                        "an-pick-stale",
+                        "an-pick-adopted",
+                        "an-pick-suggestions",
+                        "an-pick-actions",
+                        "an-coin-pending",
+                    ] {
+                        if let Some(b) = visual.debug_bounds(id) {
+                            assert!(
+                                b.left() >= card.left() && b.right() <= card.right() + px(0.5),
+                                "{id} escaped {language} width {width} face {face}: {b:?}, card {card:?}"
+                            );
+                            vertical.push((id, b));
+                        }
+                    }
+                    for pair in vertical.windows(2) {
+                        assert!(
+                            pair[0].1.bottom() <= pair[1].1.top() + px(0.5),
+                            "vertical overlap {language} {width} face {face}: {pair:?}"
+                        );
+                    }
+                    for id in [
+                        "an-pick-summary",
+                        "an-pick-result",
+                        "an-pick-settings-fields",
+                        "an-pick-min",
+                        "an-pick-hold",
+                        "an-pick-bl-ctl",
+                        "an-pick-wl-ctl",
+                        "an-coin-pending-lbl",
+                        "an-coin-pending-text",
+                    ] {
+                        if let Some(b) = visual.debug_bounds(id) {
+                            assert!(
+                                b.left() >= card.left() && b.right() <= card.right() + px(0.5),
+                                "descendant {id} escaped {language} {width} face {face}: {b:?}"
+                            );
+                            assert!(b.bottom() <= card.bottom() + px(0.5), "{id} below card");
+                        }
+                    }
+                    if let AutoView::Result(r) = model.view {
+                        for (black, chips) in [(true, r.black), (false, r.white)] {
+                            for chip in chips {
+                                if r.adopted {
+                                    continue;
+                                }
+                                let chip_box = visual
+                                    .debug_bounds(leak(format!(
+                                        "an-suggestion-{black}-{}-chip",
+                                        chip.token
+                                    )))
+                                    .unwrap();
+                                let remove = visual
+                                    .debug_bounds(leak(format!(
+                                        "an-suggestion-{black}-{}-exclude",
+                                        chip.token
+                                    )))
+                                    .unwrap();
+                                let label = visual
+                                    .debug_bounds(leak(format!(
+                                        "an-suggestion-{black}-{}-text",
+                                        chip.token
+                                    )))
+                                    .unwrap();
+                                assert!(
+                                    label.right() <= remove.left() + px(0.5)
+                                        && remove.right() <= chip_box.right() + px(0.5),
+                                    "chip contents overlap"
+                                );
+                                let needed = visual.update(|_, cx| {
+                                    design::mono_caption_text_width(cx, &chip.text, 400.0)
+                                });
+                                let row = visual.debug_bounds("an-pick-suggestions").unwrap();
+                                if px(needed) + remove.size.width + px(6.0) <= row.size.width {
+                                    assert!(
+                                        label.size.width + px(0.5) >= px(needed),
+                                        "short caption collapsed"
+                                    );
+                                } else {
+                                    assert!(
+                                        label.size.width > px(0.0),
+                                        "ellipsis lost its viewport"
+                                    );
+                                }
+                                for kind in ["text", "chip"] {
+                                    let id = format!("an-suggestion-{black}-{}-{kind}", chip.token);
+                                    let b = visual.debug_bounds(leak(id.clone())).expect(&id);
+                                    assert!(
+                                        b.right() <= card.right() + px(0.5),
+                                        "{id} escaped card"
+                                    );
+                                    let row = visual.debug_bounds("an-pick-suggestions").unwrap();
+                                    assert!(
+                                        b.top() >= row.top()
+                                            && b.bottom() <= row.bottom() + px(0.5),
+                                        "{id} paints outside its measured row"
+                                    );
+                                    // A chip includes the native Xs remove button; its text is one caption line.
+                                    let text = f32::from(
+                                        visual
+                                            .debug_bounds("probe-caption-line")
+                                            .unwrap()
+                                            .size
+                                            .height,
+                                    );
+                                    let line = visual.update(|_, cx| {
+                                        if kind == "text" {
+                                            text
+                                        } else {
+                                            text.max(design::ui_value(
+                                                cx,
+                                                moon_ui::MoonSize::Xs.control_metrics().height,
+                                            ))
+                                        }
+                                    });
+                                    assert!(
+                                        (f32::from(b.size.height) - line).abs() <= 1.0,
+                                        "{id} wrapped vertically {language} {width} face {face}: {b:?}, line {line}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    let mut primaries = Vec::new();
+                    let mut buttons = Vec::new();
+                    for (id, key) in BUTTONS {
+                        let key = if *id == "an-pick-add-save" {
+                            add_label_key(face)
+                        } else {
+                            key
+                        };
+                        if let Some(bounds) = visual.debug_bounds(leak(id.to_string())) {
+                            assert!(
+                                bounds.origin.x >= card.origin.x
+                                    && bounds.right() <= card.right() + px(0.5),
+                                "{id} outside {language} {width} face {face}"
+                            );
+                            let needed = visual
+                                .update(|_, cx| design::ui_caption_text_width(cx, &t!(key), 400.0));
+                            assert!(
+                                f32::from(bounds.size.width) + 0.1 >= needed,
+                                "{id} label clipped {language} {width} face {face}"
+                            );
+                            assert!(bounds.bottom() <= card.bottom(), "{id} below card");
+                            buttons.push((*id, bounds));
+                        }
+                        if visual
+                            .debug_bounds(leak(format!("an-primary-{id}")))
+                            .is_some()
+                        {
+                            primaries.push(*id);
+                        }
+                    }
+                    for (i, (id, a)) in buttons.iter().enumerate() {
+                        for (other, b) in &buttons[i + 1..] {
+                            assert!(
+                                a.right() <= b.left() + px(0.5)
+                                    || b.right() <= a.left() + px(0.5)
+                                    || a.bottom() <= b.top() + px(0.5)
+                                    || b.bottom() <= a.top() + px(0.5),
+                                "buttons {id} and {other} overlap {language} {width} face {face}"
+                            );
+                        }
+                    }
+                    assert_eq!(
+                        primaries.len(),
+                        1,
+                        "{language} {mode:?} {width} face {face}: {primaries:?}"
+                    );
+                    let expected = match face {
+                        0 | 4 => "an-pick-run",
+                        1 => "an-pick-stop",
+                        5 | 8 => "an-pick-change",
+                        6 | 9 => "an-coin-save",
+                        7 | 11 => "an-pick-rerun",
+                        _ => "an-pick-add-save",
+                    };
+                    assert_eq!(primaries[0], expected);
+                    assert!(visual.debug_bounds("an-pick-reset").is_none());
+                    assert!(visual.debug_bounds("an-pick-anyway").is_none());
+                    if matches!(face, 2 | 3 | 5 | 6 | 7 | 8 | 10 | 11) {
+                        assert!(
+                            visual.debug_bounds("an-pick-min").is_none(),
+                            "finished settings must collapse"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Use the production Parameters header/viewport boundary: a tall chip must move the lists down.
+struct IntegratedPickProbe;
+
+impl Render for IntegratedPickProbe {
+    /// Render the noise result and both real list editors through the page's side allocation.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let noop: super::super::fields::Act = Rc::new(|_, _| {});
+        let acts = AutoCardActs {
+            on_pick: noop.clone(),
+            on_reset: noop.clone(),
+            on_one_by_one: noop.clone(),
+            on_add: noop.clone(),
+            on_save: noop.clone(),
+            on_revert: noop.clone(),
+            on_exclude: Rc::new(|_, _, _, _| {}),
+            on_black: Rc::new(|_, _, _| {}),
+            on_white: Rc::new(|_, _, _| {}),
+        };
+        let fields = ListFieldActs {
+            on_remove: Rc::new(|_, _, _| {}),
+            on_restore: Rc::new(|_, _, _| {}),
+            on_copy: noop.clone(),
+            on_clear: noop.clone(),
+        };
+        let params = super::super::super::layout::parameters(
+            v_flex()
+                .w_full()
+                .child(toolbar_el(
+                    TunerKind::Coins,
+                    t!("analytics.tuner.fields_title").to_string(),
+                    None,
+                    &ToolbarActs {
+                        on_copy: noop.clone(),
+                        on_save: noop,
+                    },
+                    cx,
+                ))
+                .child(auto_card_el(&auto_model(12), None, &acts, p, cx))
+                .into_any_element(),
+            v_flex()
+                .w_full()
+                .child(list_field_el(&black_field(1), None, &fields, p, cx))
+                .child(list_field_el(&white_field(1), None, &fields, p, cx))
+                .into_any_element(),
+            p,
+            window,
+            cx,
+        );
+        let side = super::super::super::layout::side(
+            gpui::div().h(px(80.0)).flex_none().into_any_element(),
+            params,
+            cx,
+        );
+        let narrow =
+            super::super::super::layout::is_narrow(f32::from(window.viewport_size().width), cx);
+        let page = super::super::super::layout::page(
+            gpui::div().into_any_element(),
+            gpui::div().into_any_element(),
+            Some(side),
+            narrow,
+            window,
+            cx,
+        );
+        v_flex().size_full().child(page).child(
+            gpui::div()
+                .absolute()
+                .debug_selector(|| "probe-caption-line".into())
+                .font_family(design::mono())
+                .text_size(design::t_caption(cx))
+                .child("X"),
+        )
+    }
+}
+
+/// Removing width containment or shrinking the header must not paint a suggestion over the lists.
+#[gpui::test]
+fn coins_noise_pick_stays_above_integrated_lists(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Light, 1.0),
+            cx,
+        )
+    });
+    for language in ["ru", "en"] {
+        let _locale = crate::test_locale::force(language);
+        for width in [320.0, 860.0, 1240.0] {
+            let window = cx.open_window(gpui::size(px(width), px(1800.0)), |_, _| {
+                IntegratedPickProbe
+            });
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            let card = visual.debug_bounds("an-pick-card").unwrap();
+            let side = visual.debug_bounds("tuner-side").unwrap();
+            let expected =
+                visual.update(|_, cx| super::super::super::layout::side_width(width, cx));
+            assert!(
+                (side.size.width - expected).abs() <= px(0.5),
+                "probe must use production width"
+            );
+            assert!(card.right() <= side.right() + px(0.5));
+            for id in [
+                "an-pick-summary",
+                "an-pick-settings",
+                "an-pick-verdict",
+                "an-pick-suggestions",
+                "an-pick-actions",
+                "an-pick-add-save",
+                "an-pick-rerun",
+            ] {
+                let b = visual.debug_bounds(id).unwrap();
+                assert!(
+                    b.left() >= card.left() && b.right() <= card.right() + px(0.5),
+                    "integrated {id} escaped {language} {width}"
+                );
+            }
+            let black = visual.debug_bounds("an-coin-bl-field").unwrap();
+            assert!(
+                black.top() >= card.bottom(),
+                "lists overlap pick {language} {width}: {black:?} {card:?}"
+            );
+            let chip = visual.debug_bounds("an-suggestion-true-XAAA-text").unwrap();
+            let line = visual.debug_bounds("probe-caption-line").unwrap();
+            assert!(
+                (chip.size.height - line.size.height).abs() <= px(0.5),
+                "single suggestion wrapped {language} {width}: {chip:?}"
+            );
+            assert!(
+                chip.bottom() <= black.top(),
+                "suggestion paints over blacklist"
+            );
+        }
+    }
+}
 
 /// A saved entry far longer than a field edit accepts (`MAX_TOKEN_LEN`): saved lists are
 /// written by the core, not by the field, so the chip itself must keep its x inside.
@@ -137,29 +562,55 @@ fn pick(verdict: PickVerdict) -> CoinPick {
 /// The auto card in face `face`: settings without a strategy, running, a useful result,
 /// a noise result, a failed read.
 fn auto_model(face: usize) -> AutoCardModel {
-    let s = state();
-    let mut m = AutoCardModel::new(&s, face != 0, false, true);
-    m.view = match face {
-        0 => AutoView::Settings,
-        1 => AutoView::Running {
-            line: t!("analytics.coins.running", pct = 30).to_string(),
-        },
-        2 | 3 => {
-            let p = pick(if face == 2 {
-                PickVerdict::Useful
-            } else {
-                PickVerdict::Noise(NoiseReason::SmallGain)
-            });
-            AutoView::Result(ResultModel {
-                line: verdict_line(&p, 30),
-                useful: face == 2,
-                black: p.black.iter().map(tag_line).collect(),
-                white: p.white.iter().map(tag_line).collect(),
-            })
+    let mut s = state();
+    if face == 1 {
+        s.begin_pick();
+    } else if face == 4 {
+        s.pick = super::super::state::PickState::Failed(ReadFail::NotReady);
+    } else if face != 0 && face != 9 {
+        let verdict = match face {
+            3 => PickVerdict::Noise(NoiseReason::SmallGain),
+            12 => PickVerdict::Noise(NoiseReason::FewHoldout),
+            5 => PickVerdict::NothingFound,
+            8 => PickVerdict::TooFewTrades,
+            _ => PickVerdict::Useful,
+        };
+        let mut pick = pick(verdict);
+        if face == 2 {
+            pick.white.clear();
         }
-        _ => AutoView::Failed(ReadFail::NotReady),
-    };
-    m.stale = (face == 3).then_some(PickStaleCause::Lists);
+        if face == 3 {
+            pick.black.clear();
+        }
+        if face == 12 || face == 13 {
+            pick.black.truncate(1);
+            pick.white.clear();
+            if face == 13 {
+                pick.black[0].token = long_token();
+            }
+        }
+        if face == 5 || face == 8 {
+            pick.black.clear();
+            pick.white.clear();
+        }
+        let seq = s.begin_pick();
+        s.land_pick(seq, s.lists_rev, s.report_gen, 30, Ok(pick));
+        if face == 6 {
+            s.adopt_pick();
+        }
+        if face == 10 {
+            for (black, token) in [(true, "XAAA"), (true, "XBBB"), (false, "XEEE")] {
+                s.toggle_exclude(black, token.to_string());
+            }
+        }
+    }
+    if face == 9 || face == 11 {
+        s.add_tokens(true, "XALPHA");
+    }
+    let mut m = AutoCardModel::new(&s, face != 0, false, true);
+    if face == 7 {
+        m.stale = Some(PickStaleCause::Report);
+    }
     m
 }
 
@@ -208,7 +659,10 @@ impl Render for CoinsLayoutProbe {
             on_pick: noop.clone(),
             on_reset: noop.clone(),
             on_one_by_one: noop.clone(),
-            on_add: Rc::new(|_, _, _| {}),
+            on_add: noop.clone(),
+            on_save: noop.clone(),
+            on_revert: noop.clone(),
+            on_exclude: Rc::new(|_, _, _, _| {}),
             on_black: Rc::new(|_, _, _| {}),
             on_white: Rc::new(|_, _, _| {}),
         };
@@ -219,6 +673,7 @@ impl Render for CoinsLayoutProbe {
             on_save: noop.clone(),
         };
         let write = ToolbarWrite {
+            changed_coins: 2,
             enabled: true,
             copy: true,
             dirty: true,
@@ -271,7 +726,6 @@ impl Render for CoinsLayoutProbe {
                 p,
                 cx,
             ),
-            pending_band_el(pending_text(&delta()).unwrap_or_default(), noop, p, cx),
         ];
         v_flex()
             .w_full()
@@ -298,16 +752,19 @@ fn caption(cx: &gpui::App, sel: &str, text: &str) -> Need {
     }
 }
 
+/// Independent fixture labels cover black-only, white-only and combined suggestions.
+fn add_label_key(face: usize) -> &'static str {
+    match face {
+        2 | 12 | 13 => "analytics.coins.add_save_bl",
+        3 => "analytics.coins.add_save_wl",
+        _ => "analytics.coins.add_save",
+    }
+}
+
 /// What the probe asserts per language: every one-line text whose box must not clip it.
 fn needs(cx: &gpui::App, face: usize) -> Vec<Need> {
     let mut out = vec![
         caption(cx, "an-coin-hide-lbl", &t!("analytics.coins.hide_lbl")),
-        caption(
-            cx,
-            "an-coin-pending-lbl",
-            &t!("analytics.coins.pending_band"),
-        ),
-        caption(cx, "an-coin-revert", &t!("analytics.coins.revert_edits")),
         caption(cx, "an-coin-bl-copy", &t!("analytics.coins.copy")),
         caption(cx, "an-coin-bl-clear", &t!("analytics.coins.clear")),
         caption(cx, "an-coin-wl-copy", &t!("analytics.coins.copy")),
@@ -333,28 +790,30 @@ fn needs(cx: &gpui::App, face: usize) -> Vec<Need> {
         out.push(caption(cx, c.id, &c.label));
     }
     let auto: &[(&str, &str)] = match face {
-        0 => &[
-            ("an-pick-min", "analytics.coins.pick_min_lbl"),
-            ("an-pick-hold", "analytics.coins.pick_hold_lbl"),
-            ("an-pick-bl-ctl", "analytics.coins.pick_bl"),
-            ("an-pick-wl-ctl", "analytics.coins.pick_wl"),
-            ("an-pick-run", "analytics.coins.pick_btn"),
-        ],
+        0 | 4 => &[("an-pick-run", "analytics.coins.pick_btn")],
         1 => &[("an-pick-stop", "analytics.coins.stop_btn")],
-        2 => &[
-            ("an-pick-add-bl", "analytics.coins.add_bl"),
-            ("an-pick-add-wl", "analytics.coins.add_wl"),
-            ("an-pick-one", "analytics.coins.one_by_one"),
-            ("an-pick-reset", "analytics.coins.reset_btn"),
+        5 | 8 => &[("an-pick-change", "analytics.coins.change_settings")],
+        6 | 9 => &[
+            ("an-coin-save", "analytics.coins.save_strategy"),
+            ("an-coin-revert", "analytics.coins.revert_edits"),
         ],
-        3 => &[
-            ("an-pick-anyway", "analytics.coins.add_anyway"),
-            ("an-pick-reset", "analytics.coins.reset_btn"),
+        7 | 11 => &[
+            ("an-pick-rerun", "analytics.coins.rerun"),
+            ("an-pick-add-save", "analytics.coins.add_save"),
         ],
-        _ => &[("an-pick-reset", "analytics.coins.reset_btn")],
+        _ => &[
+            ("an-pick-add-save", "analytics.coins.add_save"),
+            ("an-pick-add-only", "analytics.coins.add_only"),
+            ("an-pick-rerun", "analytics.coins.rerun"),
+        ],
     };
     for (sel, key) in auto {
-        out.push(caption(cx, sel, &t!(*key)));
+        let key = if *sel == "an-pick-add-save" {
+            add_label_key(face)
+        } else {
+            key
+        };
+        out.push(caption(cx, sel, &t!(key)));
     }
     out
 }
@@ -400,7 +859,7 @@ fn no_coin_text_is_a_raw_key() {
             white_field(1),
         ] {
             drawn.push(m.title.clone());
-            drawn.extend(m.legend.iter().cloned());
+            drawn.push(m.legend.clone());
             drawn.extend(m.empty.iter().cloned());
         }
         for face in 0..FACES {
@@ -408,8 +867,8 @@ fn no_coin_text_is_a_raw_key() {
             drawn.extend(m.hint);
             if let AutoView::Result(r) = m.view {
                 drawn.push(r.line);
-                drawn.extend(r.black);
-                drawn.extend(r.white);
+                drawn.extend(r.black.into_iter().map(|c| c.text));
+                drawn.extend(r.white.into_iter().map(|c| c.text));
             }
         }
         for l in coin_kpi_labels(&state()) {
@@ -476,12 +935,7 @@ fn the_right_column_fits_every_language_theme_and_zoom(cx: &mut gpui::TestAppCon
                             "{what} escaped the column ({at})"
                         );
                     };
-                    for sel in [
-                        "an-coin-filter-bar",
-                        "an-coin-bl-field",
-                        "an-coin-wl-field",
-                        "an-coin-pending",
-                    ] {
+                    for sel in ["an-coin-filter-bar", "an-coin-bl-field", "an-coin-wl-field"] {
                         inside(visual.debug_bounds(sel).expect(sel), sel);
                     }
                     inside(

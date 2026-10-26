@@ -11,6 +11,185 @@ use moon_core::db::metrics::Tally;
 use moon_core::db::tuner::VarStats;
 use moon_core::db::tuner::coin_pick::{CoinPick, CoinSuggestion, PickVerdict};
 
+/// Removing exclusion filtering would put a coin the user crossed out into a saved list.
+#[test]
+fn exclusions_toggle_per_list_and_expire_with_the_pick() {
+    let mut s = CoinsState::default();
+    let mut pick = pick_of(&["XALPHA", "XBETA"]);
+    pick.white = pick.black.clone();
+    let seq = s.begin_pick();
+    s.land_pick(seq, s.lists_rev, s.report_gen, 30, Ok(pick));
+    s.toggle_exclude(true, "XALPHA".into());
+    assert!(s.excluded(true, "XALPHA"));
+    assert!(!s.excluded(false, "XALPHA"));
+    s.toggle_exclude(true, "XALPHA".into());
+    assert!(!s.excluded(true, "XALPHA"));
+    s.toggle_exclude(true, "XALPHA".into());
+    s.toggle_exclude(false, "XBETA".into());
+    s.adopt_pick();
+    assert_eq!(s.work.black, ["XBETA".to_string()].into());
+    assert_eq!(s.work.white, ["XALPHA".to_string()].into());
+    s.begin_pick();
+    assert!(!s.excluded(true, "XALPHA"));
+    assert!(!s.excluded(false, "XBETA"));
+}
+
+/// All excluded white suggestions must not turn a restrictive saved whitelist into an empty one.
+#[test]
+fn excluding_every_white_coin_preserves_the_working_whitelist() {
+    let mut s = CoinsState::default();
+    s.adopt(CoinLists::parse("", "XORIGINAL"));
+    let mut pick = pick_of(&[]);
+    pick.white = pick_of(&["XBETA"]).black;
+    let seq = s.begin_pick();
+    s.land_pick(seq, s.lists_rev, s.report_gen, 30, Ok(pick));
+    s.toggle_exclude(false, "XBETA".into());
+    s.adopt_pick();
+    assert_eq!(s.work.white, ["XORIGINAL".to_string()].into());
+    assert!(!s.has_changes());
+}
+
+/// Reverting a table tick must preserve an unapplied verdict, while reverting an adoption retires it.
+#[test]
+fn revert_preserves_unadopted_results_but_retires_adopted_results() {
+    let mut s = CoinsState::default();
+    let seq = s.begin_pick();
+    s.land_pick(seq, s.lists_rev, s.report_gen, 30, Ok(pick_of(&["XBETA"])));
+    s.toggle(true, "XMANUAL".into());
+    s.revert();
+    assert!(matches!(s.pick, PickState::Done { adopted: false, .. }));
+    assert_eq!(s.suggested().unwrap().black, vec!["XBETA"]);
+    assert!(!s.has_changes());
+    s.adopt_pick();
+    s.revert();
+    assert_eq!(s.pick, PickState::Idle);
+    assert!(!s.has_changes());
+}
+
+/// A no-op add needs visible feedback; only resolving a real edit should return to settings.
+#[test]
+fn no_op_adoption_survives_until_a_real_edit_is_saved() {
+    let mut s = CoinsState::default();
+    s.adopt(CoinLists::parse("XBETA", ""));
+    let seq = s.begin_pick();
+    s.land_pick(seq, s.lists_rev, s.report_gen, 30, Ok(pick_of(&["XBETA"])));
+    s.adopt_pick();
+    assert!(!s.retire_saved_pick());
+    assert!(matches!(s.pick, PickState::Done { adopted: true, .. }));
+    s.add_tokens(true, "XMANUAL");
+    assert!(!s.retire_saved_pick(), "pending edits must remain visible");
+    s.adopt(s.work.duplicate());
+    assert!(s.retire_saved_pick());
+    assert_eq!(s.pick, PickState::Idle);
+}
+
+/// The header counts changed coins once even when both their list memberships change.
+#[test]
+fn changed_badge_counts_unique_coins_and_revert_clears_the_card_edit() {
+    let mut s = CoinsState::default();
+    s.adopt(CoinLists::parse("XALPHA", ""));
+    s.toggle(true, "XALPHA".into());
+    s.toggle(false, "XALPHA".into());
+    s.toggle(true, "XBETA".into());
+    assert_eq!(s.changed_count(), 2);
+    s.revert();
+    assert_eq!(s.changed_count(), 0);
+    assert_eq!(s.work.black, ["XALPHA".to_string()].into());
+    assert!(s.work.white.is_empty());
+}
+
+/// A backend-free host for the same window-bound action used by the card.
+struct PickActionProbe {
+    state: std::rc::Rc<std::cell::RefCell<CoinsState>>,
+    requested: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl gpui::Render for PickActionProbe {
+    /// Use the real card and adoption; the injected dialog callback records its request.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use std::rc::Rc;
+        let add = {
+            let state = self.state.clone();
+            Rc::new(move |_: &mut gpui::Window, _: &mut gpui::App| state.borrow_mut().adopt_pick())
+        };
+        let save = {
+            let state = self.state.clone();
+            let requested = self.requested.clone();
+            Rc::new(move |_: &mut gpui::Window, _: &mut gpui::App| {
+                assert!(state.borrow().work.black.contains("XBETA"));
+                assert!(state.borrow().has_changes());
+                requested.set(true);
+            })
+        };
+        let acts = super::super::auto::AutoCardActs {
+            on_pick: Rc::new(|_, _| {}),
+            on_reset: Rc::new(|_, _| {}),
+            on_one_by_one: Rc::new(|_, _| {}),
+            on_add: add,
+            on_save: save,
+            on_revert: Rc::new(|_, _| {}),
+            on_exclude: Rc::new(|_, _, _, _| {}),
+            on_black: Rc::new(|_, _, _| {}),
+            on_white: Rc::new(|_, _, _| {}),
+        };
+        super::super::auto::auto_card_el(
+            &super::super::auto::AutoCardModel::new(&self.state.borrow(), true, false, true),
+            None,
+            &acts,
+            moon_ui::MoonPalette::active(cx),
+            cx,
+        )
+    }
+}
+
+/// Swapping save and adoption would request an empty dialog; dropping save would restore the extra click.
+#[gpui::test]
+fn add_and_save_adopts_before_requesting_the_existing_dialog(cx: &mut gpui::TestAppContext) {
+    use gpui::px;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(
+                moon_core::config::UiThemeMode::Light,
+                1.0,
+            ),
+            cx,
+        )
+    });
+    let state = Rc::new(RefCell::new(CoinsState::default()));
+    let seq = state.borrow_mut().begin_pick();
+    state
+        .borrow_mut()
+        .land_pick(seq, 0, 0, 30, Ok(pick_of(&["XBETA"])));
+    let requested = Rc::new(Cell::new(false));
+    let window = cx.open_window(gpui::size(px(470.0), px(600.0)), |_, _| PickActionProbe {
+        state: state.clone(),
+        requested: requested.clone(),
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    for _ in 0..3 {
+        visual.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    let button = visual
+        .debug_bounds("an-pick-add-save")
+        .expect("primary add and save");
+    visual.simulate_click(button.center(), gpui::Modifiers::none());
+    assert!(requested.get(), "existing save dialog callback requested");
+    assert!(matches!(
+        state.borrow().pick,
+        PickState::Done { adopted: true, .. }
+    ));
+}
+
 /// Toggling a mask-covered coin must neither add a redundant literal nor dirty either list.
 #[test]
 fn toggling_a_mask_covered_coin_leaves_both_lists_unchanged() {
@@ -652,6 +831,9 @@ fn startup_and_batch_picks_use_a_real_sample_baseline() {
     s.drop_pick();
     assert_eq!(s.pick_stale_cause(), None);
     s.pick = PickState::Done {
+        excluded: Default::default(),
+        adopted: false,
+        awaiting_save: false,
         pick: std::sync::Arc::new(pick_of(&[])),
         lists_rev: s.lists_rev,
         report_gen: 0,

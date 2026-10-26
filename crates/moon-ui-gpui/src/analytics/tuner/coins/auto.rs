@@ -82,8 +82,16 @@ pub(in crate::analytics::tuner) struct ResultModel {
     pub(in crate::analytics::tuner) line: String,
     /// The verdict says the pick helps.
     pub(in crate::analytics::tuner) useful: bool,
-    pub(in crate::analytics::tuner) black: Vec<String>,
-    pub(in crate::analytics::tuner) white: Vec<String>,
+    pub(in crate::analytics::tuner) black: Vec<SuggestionChip>,
+    pub(in crate::analytics::tuner) white: Vec<SuggestionChip>,
+    pub(in crate::analytics::tuner) adopted: bool,
+}
+
+/// A suggestion's identity and caption are separate so exclusions never parse display text.
+pub(in crate::analytics::tuner) struct SuggestionChip {
+    pub(in crate::analytics::tuner) token: String,
+    pub(in crate::analytics::tuner) text: String,
+    pub(in crate::analytics::tuner) excluded: bool,
 }
 
 /// Which face the card shows.
@@ -108,6 +116,8 @@ pub(in crate::analytics::tuner) struct AutoCardModel {
     /// The coin statistics and the saved lists have landed: a pick launched before would
     /// score against lists that are about to change.
     pub(in crate::analytics::tuner) loaded: bool,
+    pub(in crate::analytics::tuner) pending: Option<String>,
+    pub(in crate::analytics::tuner) summary: String,
 }
 
 impl AutoCardModel {
@@ -133,12 +143,32 @@ impl AutoCardModel {
                 line: t!("analytics.coins.running", pct = s.pick_cfg.holdout_pct).to_string(),
             },
             PickState::Done {
-                pick, holdout_pct, ..
+                pick,
+                holdout_pct,
+                adopted,
+                ..
             } => AutoView::Result(ResultModel {
                 line: verdict_line(pick, *holdout_pct),
                 useful: pick.verdict == PickVerdict::Useful,
-                black: pick.black.iter().map(tag_line).collect(),
-                white: pick.white.iter().map(tag_line).collect(),
+                black: pick
+                    .black
+                    .iter()
+                    .map(|c| SuggestionChip {
+                        token: c.token.clone(),
+                        text: tag_line(c),
+                        excluded: s.excluded(true, &c.token),
+                    })
+                    .collect(),
+                white: pick
+                    .white
+                    .iter()
+                    .map(|c| SuggestionChip {
+                        token: c.token.clone(),
+                        text: tag_line(c),
+                        excluded: s.excluded(false, &c.token),
+                    })
+                    .collect(),
+                adopted: *adopted,
             }),
             PickState::Failed(e) => AutoView::Failed(e.clone()),
         };
@@ -156,6 +186,8 @@ impl AutoCardModel {
             hint,
             stale: s.pick_stale_cause(),
             loaded,
+            pending: super::fields::pending_text(&s.pending_delta()),
+            summary: settings_summary(s.pick_cfg),
         }
     }
 
@@ -172,9 +204,41 @@ pub(in crate::analytics::tuner) struct AutoCardActs {
     pub(in crate::analytics::tuner) on_reset: Act,
     pub(in crate::analytics::tuner) on_one_by_one: Act,
     /// Adds the suggestion for one list (`true` = blacklist).
-    pub(in crate::analytics::tuner) on_add: Rc<dyn Fn(bool, &mut Window, &mut App)>,
+    pub(in crate::analytics::tuner) on_add: Act,
+    pub(in crate::analytics::tuner) on_save: Act,
+    pub(in crate::analytics::tuner) on_revert: Act,
+    pub(in crate::analytics::tuner) on_exclude: Rc<dyn Fn(bool, String, &mut Window, &mut App)>,
     pub(in crate::analytics::tuner) on_black: Rc<dyn Fn(bool, &mut Window, &mut App)>,
     pub(in crate::analytics::tuner) on_white: Rc<dyn Fn(bool, &mut Window, &mut App)>,
+}
+
+/// Keep adoption and the existing dialog request in one ordered action, including in probes.
+pub(in crate::analytics::tuner) fn add_and_save(add: Act, save: Act) -> Act {
+    Rc::new(move |window, app| {
+        add(window, app);
+        save(window, app);
+    })
+}
+
+/// Compact live settings with the locale's trade-count plural form.
+fn settings_summary(cfg: PickCfg) -> String {
+    let unit = plural_key("analytics.coins.summary_unit", cfg.min_trades as usize);
+    let sides = [
+        cfg.black.then(|| t!("analytics.coins.black").to_string()),
+        cfg.white.then(|| t!("analytics.coins.white").to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ");
+    t!(
+        "analytics.coins.summary",
+        n = cfg.min_trades,
+        unit = t!(unit.as_str()),
+        pct = cfg.holdout_pct,
+        sides = sides
+    )
+    .to_string()
 }
 
 /// A small text button with a tooltip.
@@ -194,10 +258,16 @@ fn btn(
         .disabled(!enabled)
         .on_click(move |_, window, app| act(window, app))
         .render();
+    let button = div()
+        .flex_none()
+        .when(matches!(variant, MoonButtonVariant::Blue), |el| {
+            el.debug_selector(move || format!("an-primary-{id}"))
+        })
+        .child(button);
     super::layout::tagged(id, button).into_any_element()
 }
 
-/// The card.
+/// The card, bounded by its host while prose wraps and the collapsed summary truncates.
 ///
 /// Args:
 ///     m: The card's model.
@@ -215,30 +285,69 @@ pub(in crate::analytics::tuner) fn auto_card_el(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    let caption = |text: String, color: u32| {
+    let caption = |id: &'static str, text: String, color: u32| {
         div()
+            .debug_selector(move || id.into())
             .w_full()
+            .min_w_0()
+            .flex_none()
+            .whitespace_normal()
             .text_size(design::t_caption(cx))
             .text_color(moon(color))
             .child(text)
     };
     let mut body = v_flex()
+        .debug_selector(|| "an-pick-card".into())
         .w_full()
+        .min_w_0()
+        .flex_none()
         .px(design::ui_px(cx, 12.0))
         .py(design::ui_px(cx, 10.0))
         .gap(design::ui_px(cx, 10.0))
         .font_family(design::ui_font())
         .text_size(design::t_body(cx))
         .when_some(m.hint.clone(), |el, hint| {
-            el.child(caption(hint, p.text_muted))
-        })
-        .child(settings_el(m, inputs, acts, cx));
+            el.child(caption("an-pick-hint", hint, p.text_muted))
+        });
+    if matches!(m.view, AutoView::Result(_)) {
+        body = body.child(
+            h_flex()
+                .debug_selector(|| "an-pick-summary-row".into())
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap(design::ui_px(cx, 8.0))
+                .child(
+                    div()
+                        .id("an-pick-summary")
+                        .debug_selector(|| "an-pick-summary".into())
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .tooltip(crate::panels::common::text_tooltip(m.summary.clone()))
+                        .text_size(design::t_caption(cx))
+                        .text_color(moon(p.text_muted))
+                        .child(m.summary.clone()),
+                )
+                .child(btn(
+                    "an-pick-settings",
+                    t!("analytics.coins.settings").to_string(),
+                    t!("analytics.coins.tip_settings").to_string(),
+                    MoonButtonVariant::Bare,
+                    true,
+                    acts.on_reset.clone(),
+                )),
+        );
+    } else {
+        body = body.child(settings_el(m, inputs, acts, cx));
+    }
     body = match &m.view {
         AutoView::Settings => body,
         AutoView::Running { line } => body
-            .child(caption(line.clone(), p.text_soft))
+            .child(caption("an-pick-running", line.clone(), p.text_soft))
             .child(
                 div()
+                    .debug_selector(|| "an-pick-progress".into())
                     .w_full()
                     .h(design::ui_px(cx, 4.0))
                     .rounded(design::ui_px(cx, 2.0))
@@ -250,11 +359,15 @@ pub(in crate::analytics::tuner) fn auto_card_el(
                 "an-pick-stop",
                 t!("analytics.coins.stop_btn").to_string(),
                 t!("analytics.coins.tip_stop").to_string(),
-                MoonButtonVariant::Soft,
+                if m.pending.is_some() {
+                    MoonButtonVariant::Soft
+                } else {
+                    MoonButtonVariant::Blue
+                },
                 true,
                 acts.on_reset.clone(),
             ))),
-        AutoView::Result(r) => body.child(result_el(r, m.stale, acts, p, cx)),
+        AutoView::Result(r) => body.child(result_el(r, m, acts, p, cx)),
         AutoView::Failed(note) => body.child(crate::load_state::note_el(
             "an-pick-note",
             note_of(note),
@@ -263,6 +376,16 @@ pub(in crate::analytics::tuner) fn auto_card_el(
             cx,
         )),
     };
+    if let Some(text) = &m.pending {
+        body = body.child(super::fields::pending_band_el(
+            text.clone(),
+            acts.on_revert.clone(),
+            acts.on_save.clone(),
+            !matches!(&m.view, AutoView::Result(r) if !r.adopted && m.stale.is_some()),
+            p,
+            cx,
+        ));
+    }
     body.into_any_element()
 }
 
@@ -274,7 +397,7 @@ fn note_of(e: &moon_core::db::ReadFail) -> Note {
     }
 }
 
-/// The settings face: the two numbers, the two switches and Pick.
+/// The settings face: whole controls wrap within the column, above the Pick action.
 fn settings_el(
     m: &AutoCardModel,
     inputs: Option<(&Entity<MoonInputState>, &Entity<MoonInputState>)>,
@@ -292,11 +415,21 @@ fn settings_el(
             .id(id)
             .debug_selector(move || id.to_string())
             .flex_none()
+            .max_w_full()
+            .min_w_0()
+            .flex_wrap()
             .items_center()
             .gap(design::ui_px(cx, 6.0))
             .text_size(design::t_caption(cx))
             .tooltip(crate::panels::common::text_tooltip(tip))
-            .child(lead)
+            .child(
+                div()
+                    .w(px(design::ui_caption_text_width(cx, &lead, 400.0).ceil()))
+                    .max_w_full()
+                    .flex_none()
+                    .whitespace_normal()
+                    .child(lead),
+            )
             .child(div().w(design::font_w_px(cx, 46.0)).flex_none().map(|el| {
                 match input {
                     Some(input) => el.child(
@@ -335,10 +468,14 @@ fn settings_el(
     let unit_key = plural_key("analytics.coins.pick_min_unit", m.cfg.min_trades as usize);
     let unit_text = t!(unit_key.as_str()).to_string();
     v_flex()
+        .debug_selector(|| "an-pick-settings-body".into())
         .w_full()
+        .min_w_0()
+        .flex_none()
         .gap(design::ui_px(cx, 8.0))
         .child(
             h_flex()
+                .debug_selector(|| "an-pick-settings-fields".into())
                 .w_full()
                 .flex_wrap()
                 .gap(design::ui_px(cx, 12.0))
@@ -381,22 +518,20 @@ fn settings_el(
                 .justify_end()
                 .debug_selector(|| "tuner-run-c".into())
                 .gap(design::ui_px(cx, 6.0))
-                .child(btn(
-                    "an-pick-reset",
-                    t!("analytics.coins.reset_btn").to_string(),
-                    t!("analytics.coins.tip_reset").to_string(),
-                    MoonButtonVariant::Soft,
-                    !matches!(m.view, AutoView::Settings),
-                    acts.on_reset.clone(),
-                ))
-                .child(btn(
-                    "an-pick-run",
-                    t!("analytics.coins.pick_btn").to_string(),
-                    t!("analytics.coins.tip_pick_btn").to_string(),
-                    MoonButtonVariant::Blue,
-                    m.can_pick() && enabled,
-                    acts.on_pick.clone(),
-                )),
+                .when(!matches!(m.view, AutoView::Running { .. }), |el| {
+                    el.child(btn(
+                        "an-pick-run",
+                        t!("analytics.coins.pick_btn").to_string(),
+                        t!("analytics.coins.tip_pick_btn").to_string(),
+                        if m.pending.is_some() {
+                            MoonButtonVariant::Soft
+                        } else {
+                            MoonButtonVariant::Blue
+                        },
+                        m.can_pick() && enabled,
+                        acts.on_pick.clone(),
+                    ))
+                }),
         )
         .into_any_element()
 }
@@ -415,129 +550,260 @@ fn stale_note(cause: PickStaleCause) -> String {
     }
 }
 
-/// The result face: the verdict, the suggested coins and what to do with them.
+/// Name each adopted list with the approved sentence and a singular or plural coin subject.
+fn adopted_hint(r: &ResultModel) -> String {
+    [(true, &r.black), (false, &r.white)]
+        .into_iter()
+        .filter_map(|(black, chips)| {
+            let tokens = chips
+                .iter()
+                .filter(|c| !c.excluded)
+                .map(|c| c.token.as_str())
+                .collect::<Vec<_>>();
+            (!tokens.is_empty()).then(|| {
+                let key = match (black, tokens.len() == 1) {
+                    (true, true) => "analytics.coins.added_below_bl_one",
+                    (true, false) => "analytics.coins.added_below_bl_many",
+                    (false, true) => "analytics.coins.added_below_wl_one",
+                    (false, false) => "analytics.coins.added_below_wl_many",
+                };
+                t!(key, coins = tokens.join(", ")).to_string()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The result face: wrapping prose, measured single-line suggestions, and wrapping actions.
 fn result_el(
     r: &ResultModel,
-    stale: Option<PickStaleCause>,
+    m: &AutoCardModel,
     acts: &AutoCardActs,
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    let tags = |items: &[String], black: bool| {
-        let (bg, fg) = if black {
-            (p.red, p.red_text)
-        } else {
-            (p.green, p.green_text)
-        };
-        items
-            .iter()
-            .map(move |text| {
-                div()
-                    .flex_none()
-                    .px(design::ui_px(cx, 6.0))
-                    .rounded(design::ui_px(cx, 3.0))
-                    .bg(moon_alpha(bg, 0.16))
-                    .text_color(moon(fg))
-                    .font_family(design::mono())
-                    .text_size(design::t_caption(cx))
-                    .child(text.clone())
-                    .into_any_element()
-            })
-            .collect::<Vec<_>>()
-    };
     let has_pick = !r.black.is_empty() || !r.white.is_empty();
-    let add = |id: &'static str, label: String, tip: String, black: bool| {
-        let act = acts.on_add.clone();
-        btn(
-            id,
-            label,
-            tip,
-            MoonButtonVariant::Soft,
-            true,
-            Rc::new(move |window: &mut Window, app: &mut App| act(black, window, app)),
-        )
+    let enabled = r.black.iter().chain(&r.white).any(|c| !c.excluded);
+    let primary = if m.pending.is_some() && m.stale.is_none() {
+        MoonButtonVariant::Soft
+    } else {
+        MoonButtonVariant::Blue
     };
-    let mut actions = h_flex()
+    let mut body = v_flex()
+        .debug_selector(|| "an-pick-result".into())
         .w_full()
-        .flex_wrap()
-        .items_center()
-        .gap(design::ui_px(cx, 8.0));
-    if r.useful {
-        if !r.black.is_empty() {
-            actions = actions.child(add(
-                "an-pick-add-bl",
-                t!("analytics.coins.add_bl").to_string(),
-                t!("analytics.coins.tip_add_bl").to_string(),
-                true,
-            ));
-        }
-        if !r.white.is_empty() {
-            actions = actions.child(add(
-                "an-pick-add-wl",
-                t!("analytics.coins.add_wl").to_string(),
-                t!("analytics.coins.tip_add_wl").to_string(),
-                false,
-            ));
-        }
-        actions = actions.child(btn(
-            "an-pick-one",
-            t!("analytics.coins.one_by_one").to_string(),
-            t!("analytics.coins.tip_one_by_one").to_string(),
-            MoonButtonVariant::Soft,
-            true,
-            acts.on_one_by_one.clone(),
-        ));
-    } else if has_pick {
-        let act = acts.on_add.clone();
-        let has_white = !r.white.is_empty();
-        actions = actions.child(btn(
-            "an-pick-anyway",
-            t!("analytics.coins.add_anyway").to_string(),
-            t!("analytics.coins.tip_add_anyway").to_string(),
-            MoonButtonVariant::Soft,
-            true,
-            Rc::new(move |window: &mut Window, app: &mut App| {
-                act(true, window, app);
-                if has_white {
-                    act(false, window, app);
-                }
-            }),
-        ));
-    }
-    v_flex()
-        .w_full()
-        .gap(design::ui_px(cx, 8.0))
+        .min_w_0()
+        .flex_none()
+        .gap(design::ui_px(cx, 10.0))
         .child(
             div()
+                .debug_selector(|| "an-pick-verdict".into())
                 .w_full()
+                .min_w_0()
+                .whitespace_normal()
                 .px(design::ui_px(cx, 10.0))
                 .py(design::ui_px(cx, 8.0))
                 .rounded(design::ui_px(cx, 5.0))
-                .bg(moon_alpha(if r.useful { p.green } else { p.red }, 0.12))
+                .bg(moon_alpha(
+                    if r.useful {
+                        p.green
+                    } else if has_pick {
+                        p.red
+                    } else {
+                        p.border
+                    },
+                    0.12,
+                ))
                 .text_size(design::t_caption(cx))
                 .child(r.line.clone()),
-        )
-        .when_some(stale, |el, cause| {
-            el.child(
+        );
+    if let Some(cause) = m.stale {
+        body = body.child(
+            div()
+                .debug_selector(|| "an-pick-stale".into())
+                .w_full()
+                .min_w_0()
+                .whitespace_normal()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(p.amber))
+                .child(stale_note(cause)),
+        );
+    }
+    if r.adopted {
+        return body
+            .child(
                 div()
+                    .debug_selector(|| "an-pick-adopted".into())
                     .w_full()
+                    .min_w_0()
+                    .whitespace_normal()
                     .text_size(design::t_caption(cx))
-                    .text_color(moon(p.amber))
-                    .child(stale_note(cause)),
+                    .text_color(moon(p.text_muted))
+                    .child(adopted_hint(r)),
             )
-        })
-        .when(has_pick, |el| {
-            el.child(
+            .into_any_element();
+    }
+    if !has_pick {
+        return body
+            .child(h_flex().w_full().justify_end().child(btn(
+                "an-pick-change",
+                t!("analytics.coins.change_settings").to_string(),
+                t!("analytics.coins.tip_settings").to_string(),
+                primary,
+                true,
+                acts.on_reset.clone(),
+            )))
+            .into_any_element();
+    }
+    let mut chips = Vec::new();
+    for (black, items) in [(true, &r.black), (false, &r.white)] {
+        for c in items {
+            let token = c.token.clone();
+            let action = acts.on_exclude.clone();
+            let id = format!("an-suggestion-{black}-{}", c.token);
+            let (bg, fg) = if black {
+                (p.red, p.red_text)
+            } else {
+                (p.green, p.green_text)
+            };
+            chips.push(
                 h_flex()
-                    .w_full()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 6.0))
-                    .children(tags(&r.black, true))
-                    .children(tags(&r.white, false)),
-            )
-        })
-        .child(actions)
-        .into_any_element()
+                    .debug_selector({
+                        let id = id.clone();
+                        move || format!("{id}-chip")
+                    })
+                    .flex_none()
+                    .max_w_full()
+                    .whitespace_nowrap()
+                    .items_center()
+                    .pl(design::ui_px(cx, 6.0))
+                    .rounded(design::ui_px(cx, 3.0))
+                    .bg(moon_alpha(bg, if c.excluded { 0.06 } else { 0.16 }))
+                    .text_color(moon_alpha(fg, if c.excluded { 0.45 } else { 1.0 }))
+                    .font_family(design::mono())
+                    .text_size(design::t_caption(cx))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("{id}-caption")))
+                            // A measured basis survives GPUI's intrinsic-width pass even for
+                            // one chip. Only this viewport shrinks for an oversized caption.
+                            .w(px(
+                                design::mono_caption_text_width(cx, &c.text, 400.0).ceil()
+                            ))
+                            .min_w_0()
+                            .truncate()
+                            .tooltip(crate::panels::common::text_tooltip_value(c.text.clone()))
+                            .when(c.excluded, |el| el.line_through())
+                            .child(
+                                div()
+                                    .debug_selector({
+                                        let id = id.clone();
+                                        move || format!("{id}-text")
+                                    })
+                                    .w_full()
+                                    .flex_none()
+                                    .truncate()
+                                    .child(c.text.clone()),
+                            ),
+                    )
+                    .child(super::layout::tagged(
+                        format!("{id}-exclude"),
+                        MoonButton::new(SharedString::from(id))
+                            .variant(MoonButtonVariant::Bare)
+                            .xsmall()
+                            .label("\u{00d7}")
+                            .tooltip(t!("analytics.coins.tip_exclude").to_string())
+                            .on_click(move |_, window, app| {
+                                action(black, token.clone(), window, app)
+                            })
+                            .render(),
+                    ))
+                    .into_any_element(),
+            );
+        }
+    }
+    body = body.child(
+        h_flex()
+            .debug_selector(|| "an-pick-suggestions".into())
+            .w_full()
+            .min_w_0()
+            .flex_none()
+            .flex_wrap()
+            .gap(design::ui_px(cx, 6.0))
+            .children(chips),
+    );
+    let label = match (r.black.is_empty(), r.white.is_empty()) {
+        (false, true) => "analytics.coins.add_save_bl",
+        (true, false) => "analytics.coins.add_save_wl",
+        _ => "analytics.coins.add_save",
+    };
+    let save = add_and_save(acts.on_add.clone(), acts.on_save.clone());
+    let mut actions = h_flex()
+        .debug_selector(|| "an-pick-actions".into())
+        .w_full()
+        .min_w_0()
+        .flex_none()
+        .flex_wrap()
+        .items_center()
+        .gap(design::ui_px(cx, 8.0));
+    if m.stale.is_some() {
+        actions = actions
+            .child(btn(
+                "an-pick-rerun",
+                t!("analytics.coins.rerun").to_string(),
+                t!("analytics.coins.tip_pick_btn").to_string(),
+                primary,
+                m.can_pick(),
+                acts.on_pick.clone(),
+            ))
+            .child(div().flex_1())
+            .child(btn(
+                "an-pick-add-save",
+                t!(label).to_string(),
+                t!("analytics.coins.tip_add_save").to_string(),
+                MoonButtonVariant::Bare,
+                enabled,
+                save,
+            ));
+    } else {
+        actions = actions
+            .child(btn(
+                "an-pick-add-save",
+                t!(label).to_string(),
+                t!("analytics.coins.tip_add_save").to_string(),
+                primary,
+                enabled,
+                save,
+            ))
+            .child(btn(
+                "an-pick-add-only",
+                t!("analytics.coins.add_only").to_string(),
+                t!("analytics.coins.tip_add_only").to_string(),
+                MoonButtonVariant::Soft,
+                enabled,
+                acts.on_add.clone(),
+            ))
+            .child(div().flex_1());
+        if r.useful {
+            actions = actions.child(btn(
+                "an-pick-one",
+                t!("analytics.coins.one_by_one").to_string(),
+                t!("analytics.coins.tip_one_by_one").to_string(),
+                MoonButtonVariant::Bare,
+                true,
+                acts.on_one_by_one.clone(),
+            ));
+        }
+        actions = actions.child(btn(
+            "an-pick-rerun",
+            t!("analytics.coins.rerun").to_string(),
+            t!("analytics.coins.tip_pick_btn").to_string(),
+            MoonButtonVariant::Bare,
+            m.can_pick(),
+            acts.on_pick.clone(),
+        ));
+    }
+    body.child(actions).into_any_element()
 }
 
 impl AnalyticsView {
@@ -601,6 +867,9 @@ impl AnalyticsView {
             s.data().is_some() && !matches!(s, LoadState::Loading { .. })
         }
         let loaded = settled(&self.coins.stats) && settled(&self.coin_lists.rows);
+        if self.coins.retire_saved_pick() {
+            self.arm_coin_kpi(cx);
+        }
         // The batch already fitted this strategy: show its verdict without a second scan.
         self.adopt_auto_pick(loaded, cx);
         let model = AutoCardModel::new(
@@ -628,11 +897,25 @@ impl AnalyticsView {
                 this.coins.settle_filter();
                 cx.notify();
             }),
-            on_add: flag(|this, black, cx| {
-                if this.coins.adopt_suggestion(black) > 0 {
-                    this.arm_coin_kpi(cx);
-                }
+            on_add: act(|this, cx| {
+                this.coins.adopt_pick();
+                this.arm_coin_kpi(cx);
                 cx.notify();
+            }),
+            on_save: act(|this, cx| this.coins_open_save_dialog(cx)),
+            on_revert: act(|this, cx| {
+                this.coins.revert();
+                this.arm_coin_kpi(cx);
+                cx.notify();
+            }),
+            on_exclude: Rc::new({
+                let view = view.clone();
+                move |black, token, _, app| {
+                    view.update(app, |this, cx| {
+                        this.coins.toggle_exclude(black, token);
+                        cx.notify();
+                    })
+                }
             }),
             on_black: flag(|this, on, cx| {
                 this.coins.pick_cfg.black = on;

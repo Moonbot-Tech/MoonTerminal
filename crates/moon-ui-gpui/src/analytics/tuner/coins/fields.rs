@@ -70,7 +70,7 @@ pub(in crate::analytics::tuner) struct ListFieldModel {
     pub(in crate::analytics::tuner) more: usize,
     /// The sentence shown instead of chips.
     pub(in crate::analytics::tuner) empty: Option<String>,
-    pub(in crate::analytics::tuner) legend: Vec<String>,
+    pub(in crate::analytics::tuner) legend: String,
     pub(in crate::analytics::tuner) can_copy: bool,
     pub(in crate::analytics::tuner) can_clear: bool,
 }
@@ -105,15 +105,12 @@ impl ListFieldModel {
         } else {
             None
         };
-        let legend = if black {
-            vec![
-                t!("analytics.coins.legend_bright").to_string(),
-                t!("analytics.coins.legend_hover").to_string(),
-                t!("analytics.coins.legend_paste").to_string(),
-            ]
-        } else {
-            vec![t!("analytics.coins.white_empty_hint").to_string()]
-        };
+        let legend = [
+            t!("analytics.coins.legend_unsaved").to_string(),
+            t!("analytics.coins.legend_hover").to_string(),
+            t!("analytics.coins.legend_paste").to_string(),
+        ]
+        .join(" · ");
         let listed = count.unwrap_or(0) > 0;
         Self {
             black,
@@ -146,17 +143,27 @@ pub(in crate::analytics::tuner) struct ListFieldActs {
     pub(in crate::analytics::tuner) on_clear: Act,
 }
 
-/// The "Not saved" text: each side's additions and removals, signed and sorted.
+/// The "Not saved" text: signed additions and removals, shortened after three names per side.
 ///
 /// Returns:
 ///     `None` when nothing is pending, so the band is not drawn.
 pub(in crate::analytics::tuner) fn pending_text(d: &PendingDelta) -> Option<String> {
     let side = |label: String, added: &[String], removed: &[String]| {
         (!added.is_empty() || !removed.is_empty()).then(|| {
-            let signed = added
-                .iter()
-                .map(|t| format!("+{t}"))
-                .chain(removed.iter().map(|t| format!("\u{2212}{t}")))
+            let compact = |sign: &str, tokens: &[String]| {
+                if tokens.len() <= 3 {
+                    tokens
+                        .iter()
+                        .map(|t| format!("{sign}{t}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else {
+                    format!("{sign}{} ({}…)", tokens.len(), tokens[..3].join(", "))
+                }
+            };
+            let signed = [compact("+", added), compact("\u{2212}", removed)]
+                .into_iter()
+                .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
                 .join(" ");
             format!("{label} {signed}")
@@ -267,7 +274,13 @@ pub(in crate::analytics::tuner) fn list_field_el(
     if let Some(empty) = &m.empty {
         items.push(
             div()
+                .id(SharedString::from(format!("an-coin-{side}-empty")))
                 .w_full()
+                .when(!m.black, |el| {
+                    el.tooltip(crate::panels::common::text_tooltip(
+                        t!("analytics.coins.white_empty_hint").to_string(),
+                    ))
+                })
                 .font_family(design::ui_font())
                 .text_size(design::t_caption(cx))
                 .text_color(moon(p.text_muted))
@@ -313,39 +326,49 @@ pub(in crate::analytics::tuner) fn list_field_el(
                 .gap(design::ui_px(cx, 4.0))
                 .children(items),
         );
-    let legend = h_flex()
-        .w_full()
-        .flex_wrap()
-        .gap(design::ui_px(cx, 10.0))
-        .font_family(design::ui_font())
-        .text_size(design::t_caption(cx))
-        .text_color(moon(p.text_muted))
-        .children(m.legend.iter().map(|l| div().child(l.clone())));
     v_flex()
         .id(SharedString::from(format!("an-coin-{side}-field")))
         .debug_selector(move || format!("an-coin-{side}-field"))
         .w_full()
+        .min_w_0()
+        .flex_none()
         .px(design::ui_px(cx, 12.0))
         .py(design::ui_px(cx, 10.0))
         .gap(design::ui_px(cx, 6.0))
         .when(!m.black, |el| el.border_t_1().border_color(moon(p.border)))
         .child(header)
         .child(well)
-        .child(legend)
+        .child(list_hint_el(&m.legend, side, p, cx))
         .into_any_element()
+}
+
+/// Draw the approved list hint as one wrapping text node, so narrow editors never clip fragments.
+pub(in crate::analytics::tuner) fn list_hint_el(
+    text: &str,
+    side: &'static str,
+    p: MoonPalette,
+    cx: &App,
+) -> Div {
+    div()
+        .debug_selector(move || format!("an-coin-{side}-hint"))
+        .w_full()
+        .min_w_0()
+        .flex_none()
+        .whitespace_normal()
+        .font_family(design::ui_font())
+        .text_size(design::t_caption(cx))
+        .text_color(moon(p.text_muted))
+        .child(text.to_string())
 }
 
 /// One chip with a measured text basis: native ellipsis has no reliable intrinsic flex width.
 fn chip_el(c: &FieldChip, acts: &ListFieldActs, p: MoonPalette, cx: &App) -> AnyElement {
     let (bg, fg) = match c.kind {
         ChipKind::Saved => (moon(p.shell_high), moon_alpha(p.text, c.alpha)),
-        ChipKind::Added => (moon_alpha(p.green, 0.16), moon(p.green_text)),
+        ChipKind::Added => (moon_alpha(p.amber, 0.12), moon(p.text)),
         ChipKind::Removed => (moon_alpha(p.red, 0.16), moon(p.red_text)),
     };
-    let label = match c.kind {
-        ChipKind::Added => format!("+{}", c.text),
-        _ => c.text.to_string(),
-    };
+    let label = c.text.to_string();
     let removed = c.kind == ChipKind::Removed;
     let token = c.token.clone();
     let act = if removed {
@@ -372,6 +395,12 @@ fn chip_el(c: &FieldChip, acts: &ListFieldActs, p: MoonPalette, cx: &App) -> Any
         .pl(design::ui_px(cx, 6.0))
         .rounded(design::ui_px(cx, 3.0))
         .bg(bg)
+        .border_1()
+        .border_color(if c.kind == ChipKind::Added {
+            moon(p.amber)
+        } else {
+            moon_alpha(p.border, 0.0)
+        })
         .debug_selector({
             let sel = format!("{}-chip", c.id);
             move || sel
@@ -415,11 +444,13 @@ fn chip_el(c: &FieldChip, acts: &ListFieldActs, p: MoonPalette, cx: &App) -> Any
         .into_any_element()
 }
 
-/// The "Not saved: ..." band with its Revert edits button.
+/// The "Not saved: ..." band keeps Revert and the existing Save dialog beside the edit.
 ///
 /// Args:
 ///     text: The signed delta from [`pending_text`].
 ///     on_revert: Throws the edit away.
+///     on_save: Opens the existing confirmation dialog.
+///     primary: Save leads unless a stale pick gives that priority to rerunning.
 ///     p: Theme palette.
 ///     cx: App, for scale.
 ///
@@ -428,6 +459,8 @@ fn chip_el(c: &FieldChip, acts: &ListFieldActs, p: MoonPalette, cx: &App) -> Any
 pub(in crate::analytics::tuner) fn pending_band_el(
     text: String,
     on_revert: Act,
+    on_save: Act,
+    primary: bool,
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -435,13 +468,14 @@ pub(in crate::analytics::tuner) fn pending_band_el(
         .id("an-coin-pending")
         .debug_selector(|| "an-coin-pending".into())
         .w_full()
+        .min_w_0()
+        .flex_none()
         .flex_wrap()
         .items_center()
         .gap(design::ui_px(cx, 8.0))
-        .px(design::ui_px(cx, 12.0))
+        .px(design::ui_px(cx, 10.0))
         .py(design::ui_px(cx, 8.0))
-        .border_t_1()
-        .border_color(moon(p.border))
+        .rounded(design::ui_px(cx, 5.0))
         .bg(moon_alpha(p.amber, 0.12))
         .text_size(design::t_caption(cx))
         .text_color(moon(p.amber))
@@ -455,19 +489,41 @@ pub(in crate::analytics::tuner) fn pending_band_el(
         .child(
             div()
                 .flex_1()
+                .flex_basis(design::ui_px(cx, 120.0))
                 .min_w_0()
+                .whitespace_normal()
+                .debug_selector(|| "an-coin-pending-text".into())
                 .font_family(design::mono())
                 .child(text),
         )
         .child(super::layout::tagged(
             "an-coin-revert",
             MoonButton::new("an-coin-revert")
-                .variant(MoonButtonVariant::Soft)
+                .variant(MoonButtonVariant::Bare)
                 .xsmall()
                 .label(t!("analytics.coins.revert_edits").to_string())
                 .tooltip(t!("analytics.coins.tip_revert_edits").to_string())
                 .on_click(move |_, window, app| on_revert(window, app))
                 .render(),
+        ))
+        .child(super::layout::tagged(
+            "an-coin-save",
+            div()
+                .when(primary, |el| {
+                    el.debug_selector(|| "an-primary-an-coin-save".into())
+                })
+                .child(
+                    MoonButton::new("an-coin-save")
+                        .variant(if primary {
+                            MoonButtonVariant::Blue
+                        } else {
+                            MoonButtonVariant::Soft
+                        })
+                        .xsmall()
+                        .label(t!("analytics.coins.save_strategy").to_string())
+                        .on_click(move |_, window, app| on_save(window, app))
+                        .render(),
+                ),
         ))
         .into_any_element()
 }

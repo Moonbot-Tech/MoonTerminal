@@ -72,7 +72,10 @@ impl Probe {
                     on_pick: Rc::new(|_, _| {}),
                     on_reset: Rc::new(|_, _| {}),
                     on_one_by_one: Rc::new(|_, _| {}),
-                    on_add: Rc::new(|_, _, _| {}),
+                    on_add: Rc::new(|_, _| {}),
+                    on_save: Rc::new(|_, _| {}),
+                    on_revert: Rc::new(|_, _| {}),
+                    on_exclude: Rc::new(|_, _, _, _| {}),
                     on_black: Rc::new(|_, _, _| {}),
                     on_white: Rc::new(|_, _, _| {}),
                 },
@@ -110,6 +113,7 @@ impl Render for Probe {
             on_save: Rc::new(|_, _| {}),
         };
         let writes = ToolbarWrite {
+            changed_coins: 0,
             enabled: true,
             copy: true,
             dirty: true,
