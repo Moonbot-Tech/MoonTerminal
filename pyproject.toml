@@ -1,0 +1,9 @@
+# Keep Python tooling caches with the repository's Python tools, including root invocations.
+[tool.mypy]
+cache_dir = "$MYPY_CONFIG_FILE_DIR/tools/.mypy_cache"
+
+[tool.ruff]
+cache-dir = "tools/.ruff_cache"
+
+[tool.pytest.ini_options]
+cache_dir = "tools/.pytest_cache"

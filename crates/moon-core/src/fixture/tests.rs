@@ -258,10 +258,17 @@ fn locate_accepts_the_set_or_its_parent() {
 #[test]
 fn committed_fixture_is_readable() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(dir) = locate("chart-ace") else {
-        // A source checkout always has it; a packaged build may not ship `fixtures/`.
-        return;
-    };
+    std::env::remove_var("MOON_FIXTURE_DIR");
+    let dir = locate("chart-ace").expect("the committed fixture must be discoverable");
+    assert_eq!(
+        dir.canonicalize().expect("located fixture"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join("chart-ace")
+            .canonicalize()
+            .expect("core crate fixture"),
+        "development lookup must find the core crate's committed fixture"
+    );
     let (exchange, market) = describe(&dir.join("klines.sqlite")).expect("candle pair");
     assert_eq!(market, "ACEUSDT");
     assert!(exchange.starts_with("200:"), "exchange key: {exchange}");

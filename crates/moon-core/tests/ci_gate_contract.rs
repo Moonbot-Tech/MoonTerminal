@@ -1321,7 +1321,10 @@ fn repository_shell_scripts_stay_portable_to_bsd_userlands() {
     ];
 
     let workspace = workspace_dir();
-    for directory in [workspace.join(".github/scripts"), workspace.join("scripts")] {
+    for directory in [
+        workspace.join(".github/scripts"),
+        workspace.join("tools/macos"),
+    ] {
         let scripts = shell_scripts_below(&directory);
         assert!(
             !scripts.is_empty(),

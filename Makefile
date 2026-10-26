@@ -49,11 +49,11 @@ endif
 # macOS: after building, sign the binary with a STABLE self-signed identity. Otherwise,
 # the ad-hoc signature changes with every build, and macOS Keychain (which stores the configuration
 # encryption key through the keyring/apple-native crate) asks for the password again on every launch.
-# See scripts/macos-sign.sh. This is a no-op on Windows/Linux (which do not have this issue).
+# See tools/macos/macos-sign.sh. This is a no-op on Windows/Linux (which do not have this issue).
 ifeq ($(OS),Windows_NT)
   SIGN = @echo ">> codesign: пропуск (Windows)"
 else ifeq ($(shell uname -s),Darwin)
-  SIGN = ./scripts/macos-sign.sh
+  SIGN = ./tools/macos/macos-sign.sh
 else
   SIGN = @true
 endif
@@ -69,7 +69,7 @@ help:
 # macOS: create the self-signed code-signing certificate once (otherwise it will be created
 # automatically during the first build). On other operating systems, the script is a no-op.
 codesign-setup:
-	./scripts/macos-codesign-setup.sh
+	./tools/macos/macos-codesign-setup.sh
 
 # run depends on build → it launches the already SIGNED binary (not the freshly built unsigned one from
 # `cargo run`), so Keychain does not ask for the password again.

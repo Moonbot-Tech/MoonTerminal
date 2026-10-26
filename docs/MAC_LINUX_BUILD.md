@@ -77,16 +77,16 @@ access to the binary/bundle identity, and a remote CLI session easily hits
 
 ```bash
 FEATURES=debug-tools \
-./scripts/macos-bundle.sh
+./tools/macos/macos-bundle.sh
 
 open -n target/macos/MoonTerminal.app
 ```
 
-`scripts/macos-bundle.sh` defaults `TOOLCHAINS` to `com.apple.dt.toolchain.Metal` before the
+`tools/macos/macos-bundle.sh` defaults `TOOLCHAINS` to `com.apple.dt.toolchain.Metal` before the
 build. That variable does not turn `runtime_shaders` off, so the build still does not invoke
 `xcrun metal`.
 
-`scripts/macos-bundle.sh` does a release build, `.app`, stable bundle id `pro.moonbot.terminal`,
+`tools/macos/macos-bundle.sh` does a release build, `.app`, stable bundle id `pro.moonbot.terminal`,
 an ad-hoc signature by default and `codesign --verify --deep --strict`.
 
 This is **a local dev bundle, not what goes to Releases**: it is built for the machine's own

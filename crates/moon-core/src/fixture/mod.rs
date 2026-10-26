@@ -6,7 +6,7 @@
 //! runs, so "before" and "after" are never the same picture. The bench replaces the variable half
 //! with a fixed one: the same candles and the same closed trades every time.
 //!
-//! Layout: `fixtures/<name>/` holds `reports.sqlite` (the typed replica schema, so
+//! Layout: `crates/moon-core/fixtures/<name>/` holds `reports.sqlite` (the typed replica schema, so
 //! `db::query_chart_trade_history` reads it unchanged) and `klines.sqlite` (the `chunks` schema of
 //! [`crate::market::kline_cache`]). Both are committed and anonymised; see `docs-internal/FIXTURES.md`.
 //!
@@ -26,7 +26,7 @@ pub mod unlisted;
 
 use crate::market::candles::{ChartCandle, resample};
 
-/// Directory holding the committed fixture sets inside the working tree.
+/// Directory holding fixture sets beside a packaged executable or inside the core crate.
 const FIXTURES_DIR: &str = "fixtures";
 
 /// Database file names copied into the throwaway data root.
@@ -221,7 +221,7 @@ fn base_kind_for(tf_ms: i64) -> u32 {
 /// data path, and before the process starts a second thread.
 ///
 /// Args:
-///     name: Fixture directory name under `fixtures/`, e.g. `chart-ace`.
+///     name: Fixture directory name under `crates/moon-core/fixtures/`, e.g. `chart-ace`.
 ///
 /// Returns:
 ///     The opened bench.
@@ -518,8 +518,9 @@ fn newest_close(klines: &Path) -> anyhow::Result<f32> {
 
 /// Find the fixture directory: explicit override, beside the executable, then up the working tree.
 ///
-/// The walk upward exists because a development build runs from `target/<triple>/debug`, four
-/// levels below the `fixtures/` directory it is committed in.
+/// The walk upward lets development builds find the core crate's committed sets while packaged
+/// builds can still carry a `fixtures` directory beside the executable. The manifest fallback
+/// also covers development builds using a target directory outside the checkout.
 fn locate(name: &str) -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("MOON_FIXTURE_DIR") {
         let dir = PathBuf::from(dir);
@@ -533,14 +534,20 @@ fn locate(name: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let mut dir = exe.parent()?.to_path_buf();
     loop {
-        let candidate = dir.join(FIXTURES_DIR).join(name);
-        if candidate.is_dir() {
-            return Some(candidate);
+        for base in [dir.clone(), dir.join("crates").join("moon-core")] {
+            let candidate = base.join(FIXTURES_DIR).join(name);
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
         }
         if !dir.pop() {
-            return None;
+            break;
         }
     }
+    let candidate = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(FIXTURES_DIR)
+        .join(name);
+    candidate.is_dir().then_some(candidate)
 }
 
 #[cfg(test)]
