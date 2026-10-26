@@ -111,8 +111,13 @@ impl OrderBookModel {
     /// tick, so a grid coarser than the real one moves levels, while a finer one only means the
     /// row step stacks more ticks into a row.
     ///
+    /// A gap of several ticks can snap onto a grid the levels are NOT on — three ticks of 0.5 read
+    /// 1.5 and snap to 1.0, which `100.5` is off — so the snapped grid steps a decade finer until
+    /// every level sits on it.
+    ///
     /// Returns:
-    ///     The inferred tick, or `None` for a book without two levels on one side.
+    ///     The inferred tick, or `None` for a book without two levels on one side or without a grid
+    ///     within [`MAX_FINER_DECADES`] of the snapped one that every level sits on.
     pub fn infer_tick(&self) -> Option<f64> {
         let gap = self
             .raw
@@ -121,8 +126,26 @@ impl OrderBookModel {
             .map(|w| (f64::from(w[1].price) - f64::from(w[0].price)).abs())
             .filter(|g| g.is_finite() && *g > 0.0)
             .fold(f64::INFINITY, f64::min);
-        gap.is_finite().then(|| snap_tick(gap)).flatten()
+        let snapped = gap.is_finite().then(|| snap_tick(gap)).flatten()?;
+        (0..=MAX_FINER_DECADES)
+            .map(|k| snapped / 10f64.powi(k))
+            .find(|&tick| {
+                self.raw
+                    .iter()
+                    .filter(|r| r.price.is_finite())
+                    .all(|r| on_grid(r.price, tick))
+            })
     }
+}
+
+/// How many decades finer than the snapped gap [`OrderBookModel::infer_tick`] looks for a grid
+/// every level sits on: a `2.5 × 10ⁿ` tick needs two below a gap of `10ⁿ⁺¹`.
+const MAX_FINER_DECADES: i32 = 3;
+
+/// Whether an `f32` price is a whole number of `tick`s, within the `f32` rounding of the price.
+fn on_grid(price: f32, tick: f64) -> bool {
+    let p = f64::from(price);
+    (p - (p / tick).round() * tick).abs() <= p.abs() * f64::from(f32::EPSILON)
 }
 
 /// Snap a measured price gap onto a grid every level of the book sits on: `2.5 × 10ⁿ` or

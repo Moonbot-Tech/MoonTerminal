@@ -166,3 +166,36 @@ fn a_book_without_two_levels_on_a_side_infers_nothing() {
     let m = model(vec![lvl(100.0, 1.0)], vec![lvl(101.0, 1.0)]);
     assert_eq!(m.infer_tick(), None);
 }
+
+#[test]
+fn levels_several_half_ticks_apart_keep_a_grid_they_sit_on() {
+    // Tick 0.5, levels three ticks apart: the smallest gap reads 1.5, whose decade is 1.0. On a
+    // 1.0 grid 100.5 rounds to 101 and 103.5 to 104, two prices nobody quoted; every level is a
+    // whole number of 0.5 (201, 204 and 207 of them), so the grid must divide 0.5.
+    let m = model(
+        vec![lvl(103.5, 1.0), lvl(102.0, 1.0), lvl(100.5, 1.0)],
+        vec![],
+    );
+    let tick = m.infer_tick().expect("a tick");
+    assert!(
+        ((0.5 / tick) - (0.5 / tick).round()).abs() < 1e-9,
+        "tick {tick} is not a divisor of 0.5"
+    );
+    let prices: Vec<i64> = rows(&m, tick, 1, 0.0, 1000.0)
+        .iter()
+        .map(|r| (r.price * 10.0).round() as i64)
+        .collect();
+    assert_eq!(prices, vec![1035, 1020, 1005]);
+}
+
+#[test]
+fn a_quarter_tick_two_apart_is_not_widened_to_half_a_cent() {
+    // Tick 0.0025, levels two ticks apart: the gap 0.005 snaps to 0.005 exactly, and 1.0025 is
+    // 200.5 of those, so it would round onto 1.005 or 1.0. The grid must divide 0.0025.
+    let m = model(vec![lvl(1.0075, 1.0), lvl(1.0025, 1.0)], vec![]);
+    let tick = m.infer_tick().expect("a tick");
+    assert!(
+        ((0.0025 / tick) - (0.0025 / tick).round()).abs() < 1e-6,
+        "tick {tick} is not a divisor of 0.0025"
+    );
+}
