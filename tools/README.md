@@ -2,6 +2,8 @@
 
 | What | Where |
 |---|---|
+| macOS signing and local app bundling | [`macos/`](macos/) |
+| Windows MSVC debug build | [`windows/build-win-debug.ps1`](windows/build-win-debug.ps1) |
 | Tutorial page generator (`docs/tour/index.html`) | [`tour/`](tour/README.md) |
 | Render benchmark (native terminal) | this file, below |
 | Telegram Mini App preview and interaction check | [`miniapp_preview/`](#telegram-mini-app-preview), below |

@@ -3,14 +3,14 @@
 # macOS Keychain does not ask for the password on every launch. See
 # macos-codesign-setup.sh for details. Called automatically by `make build`/`make run`.
 #
-# Usage: scripts/macos-sign.sh <path-to-binary>
+# Usage: tools/macos/macos-sign.sh <path-to-binary>
 # On non-macOS systems, this is a silent no-op (the Keychain issue does not apply).
 set -euo pipefail
 
 BIN="${1:?usage: macos-sign.sh <path-to-binary>}"
 IDENTITY="${MOON_CODESIGN_IDENTITY:-MoonTerminal Dev}"
 # The fixed identifier is the second half of the stable designated requirement.
-# It matches the CFBundleIdentifier from scripts/macos-bundle.sh.
+# It matches the CFBundleIdentifier from tools/macos/macos-bundle.sh.
 BUNDLE_ID="${MOON_BUNDLE_ID:-pro.moonbot.terminal}"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then

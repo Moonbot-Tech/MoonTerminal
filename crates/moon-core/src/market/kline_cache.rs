@@ -983,7 +983,7 @@ fn unpack_rows_v1(blob: &[u8], day_start: i64, volume_is_quote: bool) -> Vec<Cha
 /// its own, and it would also misfire on legitimate base-denominated v2 rows.
 ///
 /// An unknown or unparsable exchange code returns `false`, which keeps the shipped fixture
-/// (`fixtures/chart-ace/klines.sqlite`, code `200`, `venue(200) == None`) byte-for-byte unchanged.
+/// (`crates/moon-core/fixtures/chart-ace/klines.sqlite`, code `200`, `venue(200) == None`) byte-for-byte unchanged.
 ///
 /// `chunks_v2` rows are NEVER reinterpreted by this or any other function: goal E (`chunks_v2`) is
 /// unreleased as of this change (`git tag --contains 143c6b50` is empty), so no poisoned v2 row

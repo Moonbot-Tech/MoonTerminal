@@ -30,7 +30,7 @@ $env:MOON_FIRETEST_MARKET = "ACEUSDT"
 ```
 
 The `--fixture [name]` flag is standalone and is not tied to FireTest: without `--debug-script` it simply
-opens the application on the set, to look at it with your eyes. The set (`fixtures/chart-ace` by default)
+opens the application on the set, to look at it with your eyes. The set (`crates/moon-core/fixtures/chart-ace` by default)
 is copied into a temporary directory, the data root is redirected there too, and a synthetic
 core is raised with no network — the run does not open live databases. The data is shifted in time so that the day
 of trades lands under the current moment, otherwise a chart following the live edge would show emptiness.

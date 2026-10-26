@@ -77,7 +77,7 @@ else
 fi
 
 # 3) Re-sign the debug binary with the current (now trusted) signature if it exists.
-BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/debug/moonterminal"
+BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/target/debug/moonterminal"
 if [[ -e "$BIN" ]]; then
   codesign --force --sign "$IDENTITY" --identifier "${MOON_BUNDLE_ID:-pro.moonbot.terminal}" "$BIN"
   echo ">> Переподписан: $BIN"
