@@ -284,14 +284,12 @@ pub struct Deal {
     /// Factual drop detect parsed from this trade's comment, kept only on DropsDetection.
     pub drops_detect: Option<drops::DropsDetect>,
     /// The take the core actually placed on a hook trade, per cent from the buy before the delta
-    /// modifiers, as the same comment states it. It does not stand in for the formula — a
-    /// variant asks about a level the core never used — but it fixes the depth the formula runs
-    /// on ([`record::placed_hook_depth`]), and through it every variant's `HookSellLevel` scales
-    /// from the core's own take.
+    /// modifiers, as the same comment states it. It fixes the calibrated depth
+    /// ([`record::placed_hook_depth`]) for fixed depth-percent variants. Fixed=NO keeps only
+    /// this stated take at the fact's level; variants at another level are refused.
     pub hook_stated_take_pct: Option<f64>,
-    /// What the core wrote about a MoonStrike trade's detect — its depth and `TradePrice` — the
-    /// inputs of that kind's take rule ([`strike::strike_take_level`]). `None` for every other
-    /// kind, and for a strike row whose comment the scan could not read.
+    /// MoonStrike's depth and `TradePrice`, parsed from its detect comment.
+    /// `None` for other kinds and comments without a usable strike detect.
     pub strike_detect: Option<strike::StrikeDetect>,
     /// How much later than `PriceDownDelay` the deal's CORE makes the next PriceDown step after
     /// one that moved the order, milliseconds — its replace round trip, calibrated by the caller

@@ -167,6 +167,7 @@ fn the_facts_stop_bounds_the_hole_at_its_deepest_level() {
     d.stop_anchor = Some(crate::db::tuner::ticks::StopAnchor {
         entry_price: 100.0,
         entry_ms: 0,
+        take_shift_pct: 0.0,
         sell_delay_ms: 0,
         use_stop_loss: true,
         stop_pct: -2.0,

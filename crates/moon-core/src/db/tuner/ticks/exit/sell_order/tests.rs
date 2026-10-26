@@ -5,6 +5,208 @@ use crate::db::tuner::ticks::ExitKind;
 use crate::db::tuner::ticks::exit::line::walk;
 use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape};
 
+/// Guessing a non-fixed hook rule would score unsupported levels; its fact stays bit-exact.
+#[test]
+fn hook_non_fixed_take_requires_the_stated_fact_level() {
+    let mut d = deal(false);
+    d.kind = KIND_MOONHOOK.into();
+    d.hook_depth_pct = Some(10.0);
+    d.hook_stated_take_pct = None;
+    d.strike_detect = Some(crate::db::tuner::ticks::strike::StrikeDetect {
+        trade_price: 100.0,
+        depth_pct: 10.0,
+    });
+    let mut p = ExitParams {
+        hook_sell_level_pct: 100.0,
+        ..ExitParams::default()
+    };
+    let fill = Fill {
+        t_ms: 0,
+        price: 102.0,
+    };
+    assert!(!ExitModel::new(&p).take_known(&d));
+    p.hook_sell_fixed = true;
+    assert!(ExitModel::new(&p).take_known(&d));
+    assert!((ExitModel::new(&p).take_level(&d, &[], fill) - 112.2).abs() < 1e-9);
+    p.hook_sell_fixed = false;
+    d.hook_stated_take_pct = Some(10.0);
+    assert!(ExitModel::new(&p).take_known(&d));
+    let old = level_off_buy(fill.price, hook_take_pct(10.0, 100.0), true);
+    assert_eq!(
+        ExitModel::new(&p).take_level(&d, &[], fill).to_bits(),
+        old.to_bits()
+    );
+    p.hook_sell_level_pct = 50.0;
+    assert!(!ExitModel::new(&p).take_known(&d));
+    d.strike_detect = None;
+    p.hook_sell_level_pct = 100.0;
+    assert!(ExitModel::new(&p).take_known(&d));
+    assert_eq!(
+        ExitModel::new(&p).take_level(&d, &[], fill).to_bits(),
+        old.to_bits()
+    );
+}
+
+/// Hook fact-level equality is relative, including levels smaller than one percent.
+#[test]
+fn hook_fact_level_tolerance_is_relative() {
+    let mut d = deal(false);
+    d.kind = KIND_MOONHOOK.into();
+    d.hook_depth_pct = Some(10.0);
+    d.hook_stated_take_pct = Some(0.001);
+    let mut p = ExitParams {
+        hook_sell_level_pct: 0.01 * (1.0 + 0.5e-9),
+        ..ExitParams::default()
+    };
+    assert!(ExitModel::new(&p).take_known(&d));
+    p.hook_sell_level_pct = 0.01 + 0.5e-9;
+    assert!(!ExitModel::new(&p).take_known(&d));
+}
+
+/// A changed Spread modifier must move the archived take once, preserving the fact exactly.
+#[test]
+fn spread_variant_divides_out_fact_shift() {
+    let mut d = deal(false);
+    d.kind = KIND_SPREAD.into();
+    d.archived_take = Some(103.0);
+    d.deltas.d1h = 3.0;
+    let fact = ExitParams {
+        sell_modifier: 1.0,
+        sell_mods: crate::db::tuner::ticks::mshot::Modifiers {
+            add_1h: 1.0,
+            ..Default::default()
+        },
+        ..ExitParams::default()
+    };
+    d.stop_anchor = Some(crate::db::tuner::ticks::StopAnchor::of(&d, &fact, None));
+    assert_eq!(d.stop_anchor.unwrap().take_shift_pct, 3.0);
+    let variant = ExitParams {
+        sell_modifier: 0.0,
+        ..fact.clone()
+    };
+    let fill = Fill {
+        t_ms: d.buy_ms,
+        price: 90.0,
+    };
+    assert_eq!(ExitModel::new(&fact).take_level(&d, &[], fill), 103.0);
+    assert_eq!(ExitModel::new(&variant).take_level(&d, &[], fill), 100.0);
+    let inside = ExitParams {
+        sell_modifier: (3.0 + 0.5e-9) / 3.0,
+        ..fact.clone()
+    };
+    assert_eq!(ExitModel::new(&inside).take_level(&d, &[], fill), 103.0);
+    let outside = ExitParams {
+        sell_modifier: (3.0 + 2.0e-9) / 3.0,
+        ..fact
+    };
+    assert_ne!(ExitModel::new(&outside).take_level(&d, &[], fill), 103.0);
+    d.stop_anchor.as_mut().unwrap().take_shift_pct = -99.0;
+    assert!(!ExitModel::new(&variant).take_known(&d));
+}
+
+/// Re-shifting at the buy would spend a different delta from the one divided out at booking.
+#[test]
+fn spread_variant_uses_the_sell_booking_clock() {
+    use crate::db::tuner::ticks::deltas::{DeltaTrack, TrackInputs};
+    let mut d = deal(false);
+    d.kind = KIND_SPREAD.into();
+    d.archived_take = Some(103.0);
+    let ticks = tape(&[(-1_000, 100.0), (-1, 101.0), (4_999, 103.0)]);
+    d.delta_track = Some(std::sync::Arc::new(
+        DeltaTrack::build(TrackInputs {
+            coin_bars: &[],
+            ticks: &ticks,
+            covered: &[(-60_000, 6_000)],
+            btc_bars: &[],
+            eval: (0, 6_000),
+            anchor: None,
+        })
+        .expect("live delta track"),
+    ));
+    let fact = ExitParams {
+        sell_modifier: 1.0,
+        sell_mods: crate::db::tuner::ticks::mshot::Modifiers {
+            add_1m: 1.0,
+            ..Default::default()
+        },
+        ..ExitParams::default()
+    };
+    d.stop_anchor = Some(crate::db::tuner::ticks::StopAnchor::of(
+        &d,
+        &fact,
+        Some(&[(6_000, 103.0)]),
+    ));
+    assert_eq!(d.stop_anchor.unwrap().entry_ms, 6_000);
+    assert!((d.stop_anchor.unwrap().take_shift_pct - 3.0).abs() < 1e-9);
+    let variant = ExitParams {
+        sell_modifier: 2.0,
+        ..fact.clone()
+    };
+    assert!((ExitModel::new(&variant).modifier_pct(&d, d.buy_ms) - 2.0).abs() < 1e-9);
+    assert_eq!(ExitModel::new(&fact).take_level(&d, &ticks, fill()), 103.0);
+    assert!((ExitModel::new(&variant).take_level(&d, &ticks, fill()) - 106.0).abs() < 1e-9);
+}
+
+/// Inverting a take clamped by a negative shift would invent its lost unmodified price.
+#[test]
+fn spread_negative_fact_shift_at_or_past_fill_is_unknown() {
+    for short in [false, true] {
+        let mut d = deal(short);
+        d.kind = KIND_SPREAD.into();
+        d.deltas.d1h = 3.0;
+        let fact = ExitParams {
+            sell_modifier: -1.0,
+            sell_mods: crate::db::tuner::ticks::mshot::Modifiers {
+                add_1h: 1.0,
+                ..Default::default()
+            },
+            ..ExitParams::default()
+        };
+        d.stop_anchor = Some(crate::db::tuner::ticks::StopAnchor::of(&d, &fact, None));
+        let variant = ExitParams {
+            sell_modifier: 0.0,
+            ..fact.clone()
+        };
+        for take in [100.0, if short { 101.0 } else { 99.0 }] {
+            d.archived_take = Some(take);
+            assert!(ExitModel::new(&fact).take_known(&d));
+            assert_eq!(ExitModel::new(&variant).spread_base(&d), None);
+            assert!(!ExitModel::new(&variant).take_known(&d));
+        }
+        d.archived_take = Some(if short { 99.0 } else { 101.0 });
+        assert!(ExitModel::new(&variant).take_known(&d));
+    }
+}
+
+/// Adjustment needs the calculated buy, and a relative zero buy starts at the detect.
+#[test]
+fn strike_adjustment_requires_buy_level_and_compares_takes() {
+    let mut d = deal(false);
+    d.kind = KIND_MOONSTRIKE.into();
+    d.strike_detect = Some(crate::db::tuner::ticks::strike::StrikeDetect {
+        trade_price: 100.0,
+        depth_pct: 10.0,
+    });
+    let mut p = ExitParams {
+        strike_sell_level_pct: 80.0,
+        strike_sell_adjust: true,
+        strike_buy_relative: true,
+        ..ExitParams::default()
+    };
+    assert!(!ExitModel::new(&p).take_known(&d));
+    p.strike_buy_level_pct = Some(0.0);
+    assert!(ExitModel::new(&p).take_known(&d));
+    let take = ExitModel::new(&p).take_level(
+        &d,
+        &[],
+        Fill {
+            t_ms: 0,
+            price: 90.0,
+        },
+    );
+    assert!((take - 106.0).abs() < 1e-9, "{take}");
+}
+
 /// A later spike must use its own pre-spike tape price instead of the fact's archived ask.
 #[test]
 fn barrier_r14_later_fill_uses_its_own_pre_spike_ask() {
@@ -157,6 +359,8 @@ fn a_hook_take_is_not_lifted_to_the_ask() {
     let mut hook = deal(false);
     hook.kind = "MoonHook".into();
     hook.hook_depth_pct = Some(4.0);
+    assert!(!ExitModel::new(&p).take_known(&hook), "no stated take");
+    hook.hook_stated_take_pct = Some(2.0);
     // A print far above the hook's 2 % take, where a lift would carry it.
     let ticks = tape(&[(-5_000, 110.0), (1_000, 100.0)]);
     let take = ExitModel::new(&p).take_level(&hook, &ticks, fill());

@@ -10,6 +10,157 @@ use crate::feed::types::Side;
 mod performance;
 mod stopped;
 
+/// A non-invertible Spread fact shift cannot support a changed sell modifier.
+#[test]
+fn spread_variant_with_unknown_base_is_refused() {
+    let mut d = prepared(1, 104.0);
+    d.deal.kind = "Spread".into();
+    d.deal.archived_take = Some(103.0);
+    d.deal.deltas.d1h = 99.0;
+    let own: HashMap<String, String> = [
+        ("SellModifier".into(), "-1".into()),
+        ("AddHourlyDelta".into(), "1".into()),
+    ]
+    .into();
+    let defaults = HashMap::new();
+    let model = ModelSettings::default();
+    let exit = exit_params(
+        &StrategyValues {
+            values: &own,
+            defaults: &defaults,
+        },
+        model,
+    );
+    d.deal.stop_anchor = Some(crate::db::tuner::ticks::StopAnchor::of(
+        &d.deal, &exit, None,
+    ));
+    assert_eq!(d.deal.stop_anchor.unwrap().take_shift_pct, -99.0);
+    assert_eq!(
+        check_corridors([(&d.deal, &own)], &defaults, &[], model).take_unknown,
+        0
+    );
+    let variant = [("SellModifier".into(), "0".into())];
+    assert_eq!(
+        check_corridors([(&d.deal, &own)], &defaults, &variant, model).take_unknown,
+        1
+    );
+    let variant = ExitParams {
+        sell_modifier: 0.0,
+        ..exit
+    };
+    assert_eq!(
+        unknown_takes(&[d], &[0], &[(EntryParams::Fact, variant)]),
+        1
+    );
+}
+
+/// A fact-calibrated hook cannot lend a percent fallback to search or hand-typed variants.
+#[test]
+fn unknown_hook_variant_is_refused_before_scoring() {
+    let mut d = prepared(1, 104.0);
+    d.deal.kind = "MoonHook".into();
+    d.deal.hook_depth_pct = Some(4.0);
+    d.deal.hook_stated_take_pct = Some(2.0);
+    d.deal.sell_price = 102.0;
+    d.own = Arc::new(
+        [
+            ("HookSellLevel".into(), "50".into()),
+            ("HookSellFixed".into(), "NO".into()),
+            ("StopLoss".into(), "-50".into()),
+        ]
+        .into(),
+    );
+    let defaults = HashMap::new();
+    let model = ModelSettings {
+        latency_ms: 0.0,
+        ..Default::default()
+    };
+    let own = exit_params(
+        &StrategyValues {
+            values: &d.own,
+            defaults: &defaults,
+        },
+        model,
+    );
+    let verdict = crate::db::tuner::ticks::verify::verify(
+        &d.deal,
+        &d.ticks,
+        &EntryParams::Fact,
+        &own,
+        None,
+        None,
+    );
+    assert!(
+        crate::db::tuner::ticks::record::fit_for_search(&verdict),
+        "{verdict:?}"
+    );
+    let variant = vec![("HookSellLevel".into(), "100".into())];
+    let (manual, per_deal) = variant_tally_by_deal(
+        std::slice::from_ref(&d),
+        &defaults,
+        "MoonHook",
+        &variant,
+        model,
+    );
+    assert_eq!(manual.unjudged, 1);
+    assert_eq!(manual.tally.n, 0);
+    assert_eq!(manual.untraded, 0);
+    assert_eq!(manual.open, 0);
+    assert_eq!(per_deal, vec![(d.deal.report_uid, None)]);
+    let scored = variant_tally(
+        std::slice::from_ref(&d),
+        &defaults,
+        "MoonHook",
+        &variant,
+        model,
+    );
+    assert_eq!(scored.unjudged, 1);
+    assert_eq!(scored.tally.n, 0);
+    assert_eq!(scored.untraded, 0);
+    let picture = variant_picture(&d, &defaults, "MoonHook", &variant, model);
+    assert!(picture.outcome.fill.is_some());
+    assert_eq!(picture.outcome.exit, None);
+    assert_eq!(picture.outcome.profit_pct, None);
+    assert!(picture.sell_line.is_empty());
+    let fact = variant_tally(std::slice::from_ref(&d), &defaults, "MoonHook", &[], model);
+    assert_eq!(fact.unjudged, 0);
+    assert_eq!(fact.tally.n, 1);
+    let check = check_corridors([(&d.deal, d.own.as_ref())], &defaults, &variant, model);
+    assert_eq!(check.take_unknown, 1);
+    assert_eq!(
+        check_corridors([(&d.deal, d.own.as_ref())], &defaults, &[], model).take_unknown,
+        0
+    );
+    let mut grids = Grids::default();
+    grids.insert("HookSellLevel", Arc::from([100.0]));
+    let mut locked: HashSet<String> = TICK_PARAMS.iter().map(|f| f.key.to_string()).collect();
+    locked.remove("HookSellLevel");
+    let held = HashMap::new();
+    let found = suggest(
+        &[d],
+        &SearchParams {
+            held: &held,
+            defaults: &defaults,
+            kind: "MoonHook",
+            vary_entry: false,
+            vary_exit: true,
+            locked: &locked,
+            grids: &grids,
+            restarts: 1,
+            min_n: Some(1),
+            seed: Some(1),
+            train_frac: 1.0,
+            max_passes: DEFAULT_MAX_PASSES,
+            keep_corridor: false,
+            risk: Default::default(),
+            screen_entry: false,
+            model,
+        },
+        &SearchHandle::new(),
+    );
+    assert!(matches!(found, Err(SearchMiss::Corridor)), "{found:?}");
+}
+
 /// Search only the take on a chronological half sample, exposing embargo selection regressions.
 fn embargo_search(deals: &[PreparedDeal]) -> SearchResult {
     let held = HashMap::new();

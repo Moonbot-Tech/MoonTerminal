@@ -23,7 +23,7 @@ use crate::db::tuner::ticks::{Deal, PRICE_TOLERANCE};
 impl ExitModel<'_> {
     /// What the delta modifiers add to the sell level, per cent — the capped sum times
     /// `SellModifier`, per the FAQ — as the deltas stood when the sell was placed, at `at_ms`.
-    pub(super) fn modifier_pct(&self, deal: &Deal, at_ms: i64) -> f64 {
+    pub(in crate::db::tuner::ticks) fn modifier_pct(&self, deal: &Deal, at_ms: i64) -> f64 {
         modifier_sum(self.params, deal, at_ms) * self.params.sell_modifier
     }
 }

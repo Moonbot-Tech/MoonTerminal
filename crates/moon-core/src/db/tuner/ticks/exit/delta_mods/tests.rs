@@ -48,8 +48,8 @@ fn modifier_residual_uses_the_sell_booking_clock() {
     }
 }
 
-/// The market and the BTC deltas are read as magnitudes in the sell family; the corridor family
-/// keeps their sign.
+/// Both families read the market and BTC deltas as magnitudes; the test below exercises the
+/// explicit `Signed` arithmetic.
 #[test]
 fn the_sell_family_reads_btc_as_a_magnitude() {
     let mut d = deal(false).deltas;

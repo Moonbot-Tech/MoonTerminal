@@ -143,7 +143,7 @@ pub struct VariantPicture {
     /// model, which walk no corridor of their own.
     pub corridor: Vec<CorridorStep>,
     /// The sell order's path as the exit model walked it from the fill — every level the line
-    /// stood at, placement first; empty when the entry never filled.
+    /// stood at, placement first; empty when the entry never filled or the take is unknown.
     pub sell_line: Vec<LinePoint>,
 }
 
@@ -156,7 +156,7 @@ pub struct VariantPicture {
 ///     defaults, kind, values, model: As for [`variant_tally`].
 ///
 /// Returns:
-///     The modelled outcome and corridor.
+///     The modelled outcome and corridor; an unknown take keeps only the entry fill.
 pub fn variant_picture(
     deal: &PreparedDeal,
     defaults: &HashMap<String, f64>,
@@ -173,7 +173,16 @@ pub fn variant_picture(
         model.sanitized(),
     );
     let line = deal.entry_line.as_deref();
-    let outcome = simulate(&deal.deal, &deal.ticks, &entry, &exit, line);
+    let unknown = scoring::take_unknown(&deal.deal, &exit);
+    let outcome = if unknown {
+        Outcome {
+            fill: super::super::entry_fill(&deal.deal, &deal.ticks, &entry, line),
+            exit: None,
+            profit_pct: None,
+        }
+    } else {
+        simulate(&deal.deal, &deal.ticks, &entry, &exit, line)
+    };
     // A variant that keeps the trade's own entry fills where the report says (`simulate`), and
     // the fact's own line is already on the chart: a modelled path beside it would end somewhere
     // else than the fill it is drawn with.
@@ -195,11 +204,14 @@ pub fn variant_picture(
     };
     // The same walk `simulate` took its exit from — `ExitModel::exit` is this walk's `exit` —
     // run again for its levels: one deal, once per pane refresh.
-    let sell_line = outcome.fill.map_or_else(Vec::new, |fill| {
-        ExitModel::new(&exit)
-            .walk(&deal.deal, &deal.ticks, fill)
-            .points
-    });
+    let sell_line = outcome
+        .fill
+        .filter(|_| !unknown)
+        .map_or_else(Vec::new, |fill| {
+            ExitModel::new(&exit)
+                .walk(&deal.deal, &deal.ticks, fill)
+                .points
+        });
     VariantPicture {
         outcome,
         corridor,
@@ -218,6 +230,7 @@ pub type DealResults = Vec<(i64, Option<(f64, f64)>)>;
 /// what the deal table's plan column shows. `None` where the variant makes no trade of the deal
 /// (no fill, or still open where the tape ends): the same rule that leaves the deal out of
 /// [`variant_tally`].
+/// An unknown take is likewise absent and counted separately in [`VariantScore::unjudged`].
 ///
 /// Args:
 ///     deals, defaults, kind, values, model: As for [`variant_tally`].
@@ -246,6 +259,9 @@ pub fn variant_tally_by_deal(
             .zip(bases.of_deal.par_iter())
             .map(|(d, &base)| {
                 let (entry, exit) = &per_base[base];
+                if scoring::take_unknown(&d.deal, exit) {
+                    return (d.deal.report_uid, None, None, false, None, None, true);
+                }
                 let outcome = simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref());
                 // A deal that spent nothing has no per cent. The percent projection admits only
                 // `spentbtc > 0`, so the zero is never a percent-metric cell or tally value.
@@ -264,23 +280,28 @@ pub fn variant_tally_by_deal(
                     outcome.left_open(),
                     at_tape_end,
                     outcome.exit.map(|exit| exit.t_ms),
+                    false,
                 )
             })
             .collect();
         let mut score = VariantScore::default();
-        for (_, _, metric, left_open, at_tape_end, _) in
+        for (_, _, metric, left_open, at_tape_end, _, unjudged) in
             scored.iter().filter(|deal| deal.2.is_none())
         {
-            score.push(*metric, *left_open, *at_tape_end);
+            if *unjudged {
+                score.unjudged += 1;
+            } else {
+                score.push(*metric, *left_open, *at_tape_end);
+            }
         }
         let mut chronological: Vec<_> = scored.iter().filter(|deal| deal.2.is_some()).collect();
         chronological.sort_by_key(|deal| deal.5);
-        for (_, _, metric, left_open, at_tape_end, _) in chronological {
+        for (_, _, metric, left_open, at_tape_end, _, _) in chronological {
             score.push(*metric, *left_open, *at_tape_end);
         }
         let money = scored
             .into_iter()
-            .map(|(uid, result, _, _, _, _)| (uid, result))
+            .map(|(uid, result, _, _, _, _, _)| (uid, result))
             .collect();
         (score, money)
     })

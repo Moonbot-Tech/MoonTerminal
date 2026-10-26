@@ -132,9 +132,7 @@ pub fn read_deals(q: &Query) -> ReadResult<DealsRead> {
     Ok(read)
 }
 
-/// Drop [`Deal::strike_detect`] from every deal whose resolved kind is not MoonStrike: the
-/// comment scan runs before the kinds are known, and a bare `Depth:` with a `TradePrice:` in
-/// another kind's comment is not a strike's detect.
+/// Keep a parsed strike detect only for MoonStrike after kind resolution.
 fn keep_strike_detect_on_strikes(deals: &mut [Deal]) {
     for deal in deals.iter_mut().filter(|d| d.kind != KIND_MOONSTRIKE) {
         deal.strike_detect = None;
@@ -446,8 +444,7 @@ fn overlay_hook_detect(conn: &Connection, q: &Query, deals: &mut [Deal]) -> Read
             deal.hook_depth_pct = Some(detect.depth_pct);
             deal.hook_stated_take_pct = detect.stated_take_pct;
         }
-        // The kinds resolve after this scan; `keep_strike_detect_on_strikes` drops the
-        // detect again from every deal that turns out not to be a strike.
+        // Kind resolution later discards a strike detect from unrelated kinds.
         deal.strike_detect = strikes.get(&(deal.core_uid, deal.report_uid)).copied();
         deal.drops_detect = drops.get(&(deal.core_uid, deal.report_uid)).copied();
     }

@@ -2,6 +2,101 @@
 
 use super::*;
 
+/// Losing the KB default or minimum would keep canceled MoonShot entries fillable.
+#[test]
+fn moonshot_auto_cancel_buy_uses_default_minimum_and_disable() {
+    let defaults = HashMap::new();
+    for (value, expected) in [
+        (None, 300.0),
+        (Some("1"), 15.0),
+        (Some("20"), 20.0),
+        (Some("0"), 0.0),
+    ] {
+        let values = value
+            .map(|v| ("AutoCancelBuy".into(), v.into()))
+            .into_iter()
+            .collect();
+        let params = mshot_params(
+            &StrategyValues {
+                values: &values,
+                defaults: &defaults,
+            },
+            ModelSettings::default(),
+        );
+        assert_eq!(params.auto_cancel_buy_s, expected);
+    }
+}
+
+/// Treating a PostOnly rejection as a tape fill would invent an entry verdict.
+#[test]
+fn moonshot_with_post_only_leaves_entry_unjudged() {
+    let defaults = HashMap::new();
+    for (value, unjudged) in [("YES", true), ("NO", false)] {
+        let values = [("UsePostOnly".into(), value.into())].into();
+        let params = entry_params_for(
+            KIND_MOONSHOT,
+            &StrategyValues {
+                values: &values,
+                defaults: &defaults,
+            },
+            ModelSettings::default(),
+        );
+        assert_eq!(matches!(params, EntryParams::Fact), unjudged);
+        assert_eq!(matches!(params, EntryParams::MoonShot(_)), !unjudged);
+    }
+}
+
+/// Replaying an inter-exchange adjustment without its history would invent an entry verdict.
+#[test]
+fn moonshot_with_arbitrage_range_leaves_entry_unjudged() {
+    let defaults = HashMap::new();
+    for (value, unjudged) in [("0.1", true), ("0", false)] {
+        let values = [("MShotAddArbRange".into(), value.into())].into();
+        let params = entry_params_for(
+            KIND_MOONSHOT,
+            &StrategyValues {
+                values: &values,
+                defaults: &defaults,
+            },
+            ModelSettings::default(),
+        );
+        assert_eq!(matches!(params, EntryParams::Fact), unjudged);
+        assert_eq!(matches!(params, EntryParams::MoonShot(_)), !unjudged);
+    }
+    let keys = param_keys();
+    for key in ["AutoCancelBuy", "MShotAddArbRange", "UsePostOnly"] {
+        assert_eq!(keys.iter().filter(|k| k.as_str() == key).count(), 1);
+    }
+}
+
+/// Reading a falling BTC delta with its sign would pull the MoonShot corridor nearer.
+#[test]
+fn moonshot_reads_btc_delta_as_a_magnitude() {
+    let values = [
+        ("MShotAddBTCDelta".into(), "0.5".into()),
+        ("MShotPriceMin".into(), "1".into()),
+        ("MShotPrice".into(), "2".into()),
+    ]
+    .into();
+    let defaults = HashMap::new();
+    let params = mshot_params(
+        &StrategyValues {
+            values: &values,
+            defaults: &defaults,
+        },
+        ModelSettings::default(),
+    );
+    assert_eq!(
+        params
+            .bounds_pct(&super::super::Deltas {
+                btc1h: -2.0,
+                ..Default::default()
+            })
+            .0,
+        2.0
+    );
+}
+
 /// Omitted dump fields use the absolute step, while an explicit relative step survives parsing.
 #[test]
 fn price_down_relative_uses_the_core_default_when_omitted() {

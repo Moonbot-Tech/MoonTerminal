@@ -245,10 +245,9 @@ fn a_replica_without_the_stamp_columns_yields_no_deals() {
     assert_eq!(read.without_ms, 1);
 }
 
-/// A strike's detect comes off the comment scan and stays only on a deal whose kind resolves to
-/// MoonStrike — another kind's comment with a bare `Depth:` lends it nothing.
+/// Retaining hook spans would feed unsupported hook rules; only strike detects survive resolution.
 #[test]
-fn strike_detect_overlaid_only_on_strike_deals() {
+fn strike_detect_survives_overlay_only_on_strikes() {
     let conn = Connection::open_in_memory().expect("in-memory database");
     conn.execute_batch(
         "CREATE TABLE orders_rep(
@@ -261,17 +260,23 @@ fn strike_detect_overlaid_only_on_strike_deals() {
             (21, 7, 42, 'XALPHA', 100, 200, 100000, 200000, 1.0, 1.01, 100.0, 1.0, 0,
              'Sell Price', 1, ' MoonStrike USDT-XALPHA [Long] TradePrice: 1.0 Depth: 4.00 Vol: 1$'),
             (22, 7, 43, 'XBETA', 110, 210, 110000, 210000, 1.0, 1.01, 100.0, 1.0, 0,
-             'Sell Price', 1, ' Other USDT-XBETA TradePrice: 1.0 Depth: 4.00 Vol: 1$');",
+             'Sell Price', 1, ' Other USDT-XBETA TradePrice: 1.0 Depth: 4.00 Vol: 1$'),
+            (23, 7, 44, 'XGAMMA', 110, 210, 110000, 210000, 102.0, 110.0, 100.0, 1.0, 0,
+             'Sell Price', 1, 'Hook Long Depth: 10% AbsHigh: 9 High: 110 Min: 100'),
+            (24, 7, 45, 'XDELTA', 110, 210, 110000, 210000, 102.0, 110.0, 100.0, 1.0, 1,
+             'Sell Price', 1, 'Hook Short Depth: 10% High: 110 Min: 100'),
+            (25, 7, 46, 'XEPSILON', 110, 210, 110000, 210000, 102.0, 110.0, 100.0, 1.0, 0,
+             'Sell Price', 1, 'Other Depth: 10% High: 110 Min: 100');",
     )
     .expect("fixture");
     let (q, src) = tuner_source_on(&conn, &scope()).expect("source");
     let mut read = read_on(&conn, &q, &src).expect("read");
     overlay_hook_detect(&conn, &q, &mut read.deals).expect("overlay");
     for deal in &mut read.deals {
-        deal.kind = if deal.report_uid == 21 {
-            KIND_MOONSTRIKE.into()
-        } else {
-            "PumpsDetection".into()
+        deal.kind = match deal.report_uid {
+            21 => KIND_MOONSTRIKE.into(),
+            23 | 24 => super::super::hook::KIND_MOONHOOK.into(),
+            _ => "PumpsDetection".into(),
         };
     }
     keep_strike_detect_on_strikes(&mut read.deals);
@@ -284,6 +289,9 @@ fn strike_detect_overlaid_only_on_strike_deals() {
     let strike = by_uid(21).strike_detect.expect("the strike's detect");
     assert_eq!((strike.depth_pct, strike.trade_price), (4.0, 1.0));
     assert_eq!(by_uid(22).strike_detect, None);
+    assert_eq!(by_uid(23).strike_detect, None);
+    assert_eq!(by_uid(24).strike_detect, None);
+    assert_eq!(by_uid(25).strike_detect, None);
     // Neither comment is a hook's: the bare depth carries no per-cent sign.
     assert_eq!(by_uid(21).hook_depth_pct, None);
 }

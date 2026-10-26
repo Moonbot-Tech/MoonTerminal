@@ -2,7 +2,7 @@
 //! `SellLevel*`.
 //!
 //! - **The take** is `SellPrice` per cent above the fill for every kind but three: MoonHook, whose
-//!   take replaces it with `HookSellLevel` per cent of the trade's own detect depth
+//!   take uses a fixed depth share or preserves its stated factual take
 //!   ([`crate::db::tuner::ticks::hook`]), MoonStrike, whose take is `MStrikeSellLevel` per cent
 //!   of the strike's span off its detect price ([`crate::db::tuner::ticks::strike`]), and
 //!   Spread, whose take is the edge of the spread it
@@ -49,6 +49,7 @@ impl ExitModel<'_> {
     /// adjustment when `MShotSellAtLastPrice` is on ([`lifts_take_to_ask`]). Long above, short
     /// below. An archived ask belongs only to fills inside the fact's shift window.
     pub fn take_level(&self, deal: &Deal, ticks: &[Tick], fill: Fill) -> f64 {
+        let mut spread_base = None;
         // A kind whose take rule the model does not have starts where the core's line did —
         // when the fact is being judged; a variant computes the take from the rules for every
         // kind (see `ExitParams::take_from_archive`) but the one whose take is not a rule at
@@ -58,7 +59,13 @@ impl ExitModel<'_> {
             || take_is_recorded(&deal.kind)
         {
             if let Some(take) = deal.archived_take.filter(|t| t.is_finite() && *t > 0.0) {
-                return take;
+                if take_is_recorded(&deal.kind) && self.spread_shift_changed(deal) {
+                    // Source: https://moonbot.pro/documentation/advanced-strategy-parameters/spread-strategy-and-its-parameters
+                    // Divide out the fact's shift before the normal variant shift below.
+                    spread_base = self.spread_base(deal);
+                } else {
+                    return take;
+                }
             }
         }
         // A short's take divides off the fill for every kind (the core developer, 2026-09-23 for
@@ -68,7 +75,7 @@ impl ExitModel<'_> {
         // as any other take. A strike's take
         // is no model of its own ([`take_model_for`] is false for it), so when the fact is judged
         // the archived level above still comes first.
-        let mut take = self.unmodified_take(deal, fill.price);
+        let mut take = spread_base.unwrap_or_else(|| self.unmodified_take(deal, fill.price));
         if lifts_take_to_ask(self.params, &deal.kind) {
             let pre = deal
                 .pre_spike_ask
@@ -98,7 +105,10 @@ impl ExitModel<'_> {
         // the entry — toward zero, a short's toward infinity at −100 % — is held AT the entry.
         // What the core does there is not known (no trade of the live sample reaches it), and a
         // take on the losing side would turn every level the line steps from inside out.
-        let shift = self.modifier_pct(deal, fill.t_ms);
+        let shift_ms = spread_base
+            .and(deal.stop_anchor.map(|a| a.entry_ms))
+            .unwrap_or(fill.t_ms);
+        let shift = self.modifier_pct(deal, shift_ms);
         if shift.is_finite() && shift != 0.0 {
             let shifted = level_off_buy(take, shift.max(-99.0), deal.is_long());
             take = if deal.is_long() {
@@ -110,8 +120,39 @@ impl ExitModel<'_> {
         take
     }
 
-    /// The take price before the lift and the delta modifiers, off `fill_price`: a MoonStrike's
-    /// span rule where its level and detect are known ([`Self::strike_take`]), else the kind's
+    /// Whether a Spread variant changes the fact's sell shift at its booking clock.
+    fn spread_shift_changed(&self, deal: &Deal) -> bool {
+        deal.stop_anchor.is_some_and(|a| {
+            let shift = self.modifier_pct(deal, a.entry_ms);
+            !(shift.is_finite()
+                && a.take_shift_pct.is_finite()
+                && (shift - a.take_shift_pct).abs() <= 1e-9)
+        })
+    }
+
+    /// The archived Spread take with the fact's modifier divided out, if invertible.
+    fn spread_base(&self, deal: &Deal) -> Option<f64> {
+        let shift = deal.stop_anchor?.take_shift_pct;
+        if !shift.is_finite() || shift <= -99.0 {
+            return None;
+        }
+        let archived = deal.archived_take?;
+        // A negative shift clamped at the fill has lost its original base.
+        if shift < 0.0
+            && if deal.is_long() {
+                archived <= deal.buy_price
+            } else {
+                archived >= deal.buy_price
+            }
+        {
+            return None;
+        }
+        let take = level_off_buy(archived, shift, !deal.is_long());
+        (take.is_finite() && take > 0.0).then_some(take)
+    }
+
+    /// The take price before the lift and delta modifiers: a hook's stated factual take or
+    /// a strike's span rule where their inputs are known, else the kind's
     /// per cent ([`Self::base_take_pct`]) off the fill. Shared by [`Self::take_level`] and the
     /// fact's modifier reading (`delta_mods::take_reading`), so the two never disagree on the base.
     pub(in crate::db::tuner::ticks) fn unmodified_take(&self, deal: &Deal, fill_price: f64) -> f64 {
@@ -124,6 +165,16 @@ impl ExitModel<'_> {
         })
     }
 
+    /// The fact's calibrated hook level, when its stated take defines one.
+    fn hook_fact_level(&self, deal: &Deal) -> Option<f64> {
+        let depth = deal.hook_depth_pct.filter(|v| v.is_finite() && *v > 0.0)?;
+        let stated = deal
+            .hook_stated_take_pct
+            .filter(|v| v.is_finite() && *v > 0.0)?;
+        let level = 100.0 * stated / depth;
+        level.is_finite().then_some(level)
+    }
+
     /// A MoonStrike's take price before the modifiers — `MStrikeSellLevel` of the strike's span
     /// ([`strike_take_level`]) — or `None` for every other kind and for a strike whose level or
     /// detect is unknown. Non-positive levels have no defined strike take.
@@ -132,11 +183,17 @@ impl ExitModel<'_> {
             return None;
         }
         let d = deal.strike_detect?;
+        let adjust = if self.params.strike_sell_adjust {
+            Some(self.strike_buy(deal)?)
+        } else {
+            None
+        };
         let take = strike_take_level(
             d,
             fill_price,
             self.params.strike_sell_level_pct,
             deal.is_long(),
+            adjust,
         );
         // A fill past the strike's top would put the span's take on the losing side; it is held
         // at the fill instead, as the modifier shift is.
@@ -147,8 +204,23 @@ impl ExitModel<'_> {
         })
     }
 
-    /// The take distance before the modifiers, per cent of the fill: `HookSellLevel` of the
-    /// trade's own detect depth for a MoonHook, `SellPrice` for every other kind. A MoonStrike
+    /// The strike's calculated buy; missing or non-finite inputs leave it unknown.
+    /// Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonstrike-strategy-and-its-parameters
+    fn strike_buy(&self, deal: &Deal) -> Option<f64> {
+        let d = deal.strike_detect?;
+        let level = self.params.strike_buy_level_pct.filter(|v| v.is_finite())?;
+        let sign = if deal.is_long() { 1.0 } else { -1.0 };
+        let top = d.trade_price * (1.0 + sign * d.depth_pct / 100.0);
+        let buy = if self.params.strike_buy_relative {
+            d.trade_price + level / 100.0 * (top - d.trade_price)
+        } else {
+            level_off_buy(top, level, deal.is_long())
+        };
+        (buy.is_finite() && buy > 0.0).then_some(buy)
+    }
+
+    /// The percent-path take distance: fixed `HookSellLevel` of the detect depth for MoonHook,
+    /// or the fallback for an unknown non-fixed take; `SellPrice` for other kinds. A MoonStrike
     /// with its level and detect never reaches it ([`Self::strike_take`] places a price); one
     /// without falls back to `SellPrice` like a hook below.
     ///
@@ -171,11 +243,11 @@ impl ExitModel<'_> {
     /// variant cannot place is one the search cannot run, whatever the fact's own replay did
     /// with the level the core recorded. Per kind:
     ///
-    /// - a MoonHook needs its rule's inputs — the detect depth and `HookSellLevel`, with
-    ///   `HookSellFixed` on or off alike (`ExitParams::hook_sell_fixed`);
+    /// - a MoonHook needs positive depth and level; Fixed=NO also needs a stated take and
+    ///   the fact's calibrated level;
     /// - a MoonStrike needs `MStrikeSellLevel` and its detect — the depth and `TradePrice` the
-    ///   comment wrote ([`Deal::strike_detect`]);
-    /// - a Spread needs the take the core recorded ([`take_is_recorded`]);
+    ///   comment wrote ([`Deal::strike_detect`]), and its calculated buy when adjusted;
+    /// - a Spread needs the recorded take and an invertible fact shift when modifiers change;
     /// - a MoonShot lifted to the pre-spike ask (`MShotSellAtLastPrice`) needs that ask off the
     ///   core's record (`Deal::pre_spike_ask`) — the tape's print before the spike sits 0.1–0.5 %
     ///   under the book's ask on a dump, and on 88 stopped MoonShot trades (2026-09-23) a take
@@ -190,18 +262,29 @@ impl ExitModel<'_> {
     pub fn take_known(&self, deal: &Deal) -> bool {
         let positive = |v: Option<f64>| v.is_some_and(|x| x.is_finite() && x > 0.0);
         if deal.kind == KIND_MOONHOOK {
-            return self.params.hook_sell_level_pct > 0.0 && positive(deal.hook_depth_pct);
+            // Fixed=NO: the documented spike rule does not reproduce the core's stated takes;
+            // only the stated take at the fact's own level is kept, other levels are refused.
+            // Fixed=YES keeps the percent-of-depth rule. Source:
+            // https://moonbot.pro/documentation/advanced-strategy-parameters/moonhook-strategy-and-its-parameters
+            return positive(Some(self.params.hook_sell_level_pct))
+                && positive(deal.hook_depth_pct)
+                && (self.params.hook_sell_fixed
+                    || self
+                        .hook_fact_level(deal)
+                        .is_some_and(|fact| same_level(self.params.hook_sell_level_pct, fact)));
         }
         if deal.kind == KIND_MOONSTRIKE {
             // Re-checked here though the scan parses only positive numbers: a Deal is also
             // built by hand (tests, callers), and the verdict must not trust it.
             return self.params.strike_sell_level_pct > 0.0
+                && (!self.params.strike_sell_adjust || self.strike_buy(deal).is_some())
                 && deal
                     .strike_detect
                     .is_some_and(|d| positive(Some(d.depth_pct)) && positive(Some(d.trade_price)));
         }
         if take_is_recorded(&deal.kind) {
-            return positive(deal.archived_take);
+            return positive(deal.archived_take)
+                && (!self.spread_shift_changed(deal) || self.spread_base(deal).is_some());
         }
         if lifts_take_to_ask(self.params, &deal.kind) {
             return positive(deal.pre_spike_ask);
@@ -210,15 +293,21 @@ impl ExitModel<'_> {
     }
 }
 
+/// Relative equality preserves the fact's exact price without hiding a changed level.
+fn same_level(a: f64, b: f64) -> bool {
+    a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-9 * a.abs().max(b.abs())
+}
+
 /// The kind name of Spread as the strategy list spells it.
 pub const KIND_SPREAD: &str = "Spread";
 
 /// Whether the kind's take is not a rule of its parameters but a level the core took off the
 /// detect — the spread it detected. `SellPrice` places it on 5 of 157 archived Spread takes
 /// (2026-09-23) — the coincidences it takes for the width of a spread to land on the field. The
-/// report's `comment` keeps only the width, rounded to 0.1 %, so the level is the take the order
-/// archive recorded or nothing, for the fact and for every variant alike; and `SellPrice` is no
-/// knob of the kind (`params::TICK_PARAMS`).
+/// report's `comment` keeps only the rounded width, so the archive supplies the fact's take.
+/// A variant changing modifiers divides out the anchored fact shift before applying its own.
+/// `SellPrice` is no knob of the kind (`params::TICK_PARAMS`).
+/// Source: https://moonbot.pro/documentation/advanced-strategy-parameters/spread-strategy-and-its-parameters
 pub fn take_is_recorded(kind: &str) -> bool {
     kind == KIND_SPREAD
 }

@@ -37,6 +37,9 @@ pub struct StopAnchor {
     /// the take, where it starts every sell timer (`verify::fact_sell_start`).
     pub entry_price: f64,
     pub entry_ms: i64,
+    /// The fact's sell modifier shift, for deriving a Spread variant's unshifted take.
+    /// Source: https://moonbot.pro/documentation/advanced-strategy-parameters/spread-strategy-and-its-parameters
+    pub take_shift_pct: f64,
     /// Effective `SellDelay` in milliseconds, which offsets the ladder's sell placement.
     pub sell_delay_ms: i64,
     /// Whether the fact ran with `UseStopLoss` on: `StopLoss` is kept while it is off.
@@ -91,6 +94,7 @@ impl StopAnchor {
         Self {
             entry_price: deal.buy_price,
             entry_ms: sell_start_ms,
+            take_shift_pct: super::exit::ExitModel::new(exit).modifier_pct(deal, sell_start_ms),
             sell_delay_ms: exit.sell_delay_ms.max(0.0) as i64,
             use_stop_loss: exit.use_stop_loss,
             stop_pct: pct,
@@ -245,8 +249,10 @@ pub fn entry_placement(deal: &Deal, lines: OwnLines<'_>) -> Option<f64> {
 /// sale sat on the stated take to its hundredth (GEOD 7.467 % against 7.47 %, W3GG 28.567 against
 /// 28.56), a tenth to a half above `Depth · HookSellLevel` (5.55, 19.64).
 ///
-/// `HookSellFixed` places the same take (`ExitParams::hook_sell_fixed`), so it is read back the
-/// same way: where its comment's depth and stated take agree, this returns that depth.
+/// Both branches retain this depth as the fact's level calibration. Fixed=NO's documented
+/// spike rule does not reproduce the core's stated takes: only the stated take at the fact's
+/// own level is kept, other levels are refused. Fixed=YES keeps the depth-percent rule.
+/// Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonhook-strategy-and-its-parameters
 ///
 /// `None` — the comment's depth stays — for every other kind, without a stated take, and with a
 /// level of zero.

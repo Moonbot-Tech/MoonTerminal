@@ -4,6 +4,8 @@ use super::*;
 
 /// One replay result, retaining its simulated close for chronological risk aggregation.
 pub(super) struct ReplayedDeal {
+    /// The variant lacks the inputs needed to judge this deal's take.
+    pub(super) unjudged: bool,
     /// Closed result in the scope's metric and the entry spend.
     pub(super) result: Option<(f64, f64)>,
     /// Whether the position remains open at the tape's end.
@@ -25,6 +27,7 @@ pub(super) struct ReplayedDeal {
 ///     params: The point's parameters per base ([`Bases::params`]).
 ///     fills: Each deal's entry fill under `params`, when read already ([`fills::FillCache`]);
 ///         `None` replays the entry too.
+/// Deals with an unknown take are left unjudged without replaying entry or exit.
 pub(super) fn results(
     deals: &[PreparedDeal],
     of_deal: &[usize],
@@ -37,6 +40,15 @@ pub(super) fn results(
         .zip(of_deal.par_iter())
         .map(|((i, d), &base)| {
             let (entry, exit) = &params[base];
+            if take_unknown(&d.deal, exit) {
+                return ReplayedDeal {
+                    unjudged: true,
+                    result: None,
+                    left_open: false,
+                    at_tape_end: None,
+                    exit_ms: None,
+                };
+            }
             let outcome = match fills {
                 Some(fills) => simulate_from(&d.deal, &d.ticks, fills[i], exit),
                 None => simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref()),
@@ -46,6 +58,7 @@ pub(super) fn results(
                 .map(|value| (value, d.deal.spent));
             let at_tape_end = outcome.open_metric_at_tape_end(&d.deal, &d.ticks);
             ReplayedDeal {
+                unjudged: false,
                 result,
                 left_open: outcome.left_open(),
                 at_tape_end,
@@ -60,6 +73,8 @@ pub(super) fn results(
 /// deals silently dropped out.
 #[derive(Clone, Debug, Default)]
 pub struct VariantScore {
+    /// Deals whose take the variant cannot place: neither traded nor untraded, outside the tally.
+    pub unjudged: usize,
     /// The results of the deals the variant traded and closed, in order.
     pub tally: Tally,
     /// Sum of the entry sizes of the deals in `tally`.
@@ -110,7 +125,10 @@ pub(super) fn score(
     let mut score = VariantScore::default();
     let mut replayed = results(deals, of_deal, params, None);
     replayed.retain(|deal| {
-        if deal.result.is_some() {
+        if deal.unjudged {
+            score.unjudged += 1;
+            false
+        } else if deal.result.is_some() {
             true
         } else {
             score.push(None, deal.left_open, deal.at_tape_end);
@@ -191,9 +209,29 @@ pub(super) fn inverts(start_ordered: &[bool], params: &[(EntryParams, ExitParams
         .any(|(was, (entry, _))| *was && !ordered(entry))
 }
 
+/// Count fitted deals whose take the variant cannot place; refuse before any replay.
+pub(super) fn unknown_takes(
+    deals: &[PreparedDeal],
+    of_deal: &[usize],
+    params: &[(EntryParams, ExitParams)],
+) -> usize {
+    deals
+        .iter()
+        .zip(of_deal)
+        .filter(|(d, base)| take_unknown(&d.deal, &params[**base].1))
+        .count()
+}
+
+/// Whether the variant lacks a take rule for one fitted deal, shared by search and write checks.
+pub(super) fn take_unknown(deal: &Deal, exit: &ExitParams) -> bool {
+    !ExitModel::new(exit).take_known(deal)
+}
+
 /// What [`check_corridors`] finds of one variant over a sample.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CorridorCheck {
+    /// Fitted deals whose take is unknown under the variant's exit parameters.
+    pub take_unknown: usize,
     /// Deals whose corridor the variant brings nearer the price than their own.
     pub nearer: usize,
     /// Deals whose corridor fields the variant inverts (`MShotPriceMin ≥ MShotPrice`).
@@ -205,7 +243,7 @@ pub struct CorridorCheck {
 /// The corridor rules the search keeps, asked of a variant the search did not make — one typed
 /// into a column, before it is written: on how many deals it comes nearer the price than their
 /// own corridor ([`SearchParams::keep_corridor`]), and on how many it inverts the corridor's two
-/// fields ([`MshotParams::is_ordered`]).
+/// fields ([`MshotParams::is_ordered`]), and how many fitted deals lack the variant's take inputs.
 ///
 /// Args:
 ///     deals: Each deal with its strategy's current values ([`PreparedDeal::own`]).
@@ -221,10 +259,13 @@ pub fn check_corridors<'a>(
     let held = HashMap::new();
     let mut out = CorridorCheck::default();
     for (deal, own_base) in deals {
+        let (entry, exit) = params_of(own_base, &held, defaults, &point, &deal.kind, model);
+        if take_unknown(deal, &exit) {
+            out.take_unknown += 1;
+        }
         let Some(EntryParams::MoonShot(own)) = &deal.own_entry else {
             continue;
         };
-        let (entry, _) = params_of(own_base, &held, defaults, &point, &deal.kind, model);
         out.checked += 1;
         if !keeps_corridor(&entry, own, &deal.entry_deltas()) {
             out.nearer += 1;

@@ -26,7 +26,8 @@ pub const FILL_CLOCK_WINDOW_MS: i64 = 10_000;
 /// What the entry group found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryFinding {
-    /// The kind has no entry model; the entry was taken from the fact.
+    /// The kind has no entry model, or a strategy enables an input the model cannot replay;
+    /// the entry was taken from the fact and left unjudged.
     Fact,
     /// Reproduced within the corridor's tolerance.
     Hit,

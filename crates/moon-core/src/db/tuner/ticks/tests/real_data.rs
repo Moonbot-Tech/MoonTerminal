@@ -8,7 +8,9 @@
 //! coverage column uses) and its entry line from `order_traces.sqlite`, runs [`verify`] on the
 //! parameters as of the buy, and prints one line per deal plus the ✓ share per group. The
 //! environment variables are read HERE only, in a test a developer runs by hand (`MOON_TICKS_COIN`
-//! narrows the run to one coin; `MOON_TICKS_DUMP=<dir>` writes every deal and its prints for an
+//! narrows the run to one coin; `MOON_TICKS_KINDS=<k1,k2>` selects strategy kinds;
+//! `MOON_TICKS_PAIR_TSV=<path>` writes keyed per-deal verdicts;
+//! `MOON_TICKS_DUMP=<dir>` writes every deal and its prints for an
 //! analysis outside; `MOON_TICKS_LATENCY_MS` replays with another latency and
 //! `MOON_TICKS_LATENCY_BASE_MS` with that plus each core's archived round trip, the entry's only
 //! unless `MOON_TICKS_LATENCY_EXIT` is set; `MOON_TICKS_PATH_DEBUG` prints each order's modelled
@@ -42,6 +44,7 @@ use crate::symbol::{coin_match_key, coin_of_market};
 mod accuracy;
 mod core_log;
 mod drops;
+mod entry_fix;
 mod money;
 mod search;
 mod stop_logs;
@@ -1001,6 +1004,17 @@ fn print_delta_quality(tracks: &[std::sync::Arc<deltas::DeltaTrack>], no_track: 
 #[test]
 #[ignore = "needs a live data root in MOON_TICKS_DATA_DIR"]
 fn real_data_reproduction() {
+    use std::io::Write;
+
+    let mut pair_tsv = std::env::var("MOON_TICKS_PAIR_TSV").ok().map(|path| {
+        let mut file = std::fs::File::create(path).expect("create pairing TSV");
+        writeln!(
+            file,
+            "core_uid\treport_uid\tkind\tcoin\tentry_ok2\texit_ok\texit_kind\tsell_reason"
+        )
+        .expect("write pairing TSV header");
+        file
+    });
     let Some(root) = std::env::var_os("MOON_TICKS_DATA_DIR") else {
         eprintln!("MOON_TICKS_DATA_DIR is not set; nothing to do");
         return;
@@ -1051,7 +1065,22 @@ fn real_data_reproduction() {
     let venue_of_core = core_venues();
     eprintln!("core venues (from the identity lines of the logs): {venue_of_core:?}");
 
-    let keys = param_keys();
+    let mut keys = param_keys();
+    for key in [
+        "AutoCancelBuy",
+        "UsePostOnly",
+        "MShotAddArbRange",
+        "MStrikeSellAdjust",
+        "MStrikeBuyLevel",
+        "MStrikeBuyRelative",
+        "HookSellFixed",
+        "MStrikeSellLevel",
+        "HookSellLevel",
+    ] {
+        if !keys.iter().any(|existing| existing == key) {
+            keys.push(key.to_string());
+        }
+    }
     // `MOON_TICKS_DEFAULTS=selldelay=0,mshotsellatlastprice=1`: the strategy-field defaults the
     // app reads off the live schema (`strategy_field_defaults`), which a data root does not keep.
     let defaults: HashMap<String, f64> = std::env::var("MOON_TICKS_DEFAULTS")
@@ -1135,6 +1164,7 @@ fn real_data_reproduction() {
     // Covered deals whose tape ends less than a minute after the close.
     let mut short_tail: Vec<bool> = Vec::new();
     let mut take_diag = TakeFillDiag::default();
+    let mut entry_fix = entry_fix::EntryFixDiag::new(&read.deals);
     let mut stop_diag = StopSlipDiag::default();
     let mut stop_logs = stop_logs::StopLogDiag::from_env();
     let mut late_diag = LateBookedDiag::default();
@@ -1147,6 +1177,11 @@ fn real_data_reproduction() {
         // its exit from the factual entry.
         if !is_tunable(&deal.kind, &deal.sell_reason) {
             continue;
+        }
+        if let Ok(only) = std::env::var("MOON_TICKS_KINDS") {
+            if !only.split(',').any(|kind| kind.trim() == deal.kind) {
+                continue;
+            }
         }
         // One coin, when a single deal is under the glass: `MOON_TICKS_COIN=ARX`.
         if let Ok(only) = std::env::var("MOON_TICKS_COIN") {
@@ -1528,6 +1563,21 @@ fn real_data_reproduction() {
             entry_line.as_deref(),
             exit_points.as_deref(),
         );
+        if let Some(file) = pair_tsv.as_mut() {
+            writeln!(
+                file,
+                "{}\t{}\t{}\t{}\t{:?}\t{:?}\t{:?}\t{}",
+                deal.core_uid,
+                deal.report_uid,
+                deal.kind,
+                deal.coin,
+                archived.entry,
+                archived.exit,
+                archived.exit_kind,
+                deal.sell_reason,
+            )
+            .expect("write pairing TSV deal");
+        }
         eprintln!(
             "{uid} {coin:<8} {kind:<8} buy {buy:.6} | plain fill {fill:?} dev {dev:?} ✓{ok:?} | \
              archived start {start:?} fill {fill2:?} dev {dev2:?} ✓{ok2:?} | \
@@ -1646,6 +1696,13 @@ fn real_data_reproduction() {
             };
             *unfit.entry(why).or_default() += 1;
         }
+        entry_fix.add(
+            &deal,
+            &sv,
+            entry_line.as_deref(),
+            exit_points.as_deref(),
+            &archived,
+        );
         report_items.push((deal.clone(), archived, venue.clone()));
         // Measured as the table does (`load.rs`, `row.held`): the held coverage's end past the
         // close — `ticks` is only the model window's prints. No hull is the shortest tail.
@@ -1849,6 +1906,7 @@ fn real_data_reproduction() {
         fact_sum / own_n.max(1) as f64,
     );
     take_diag.print();
+    entry_fix.print();
     stop_diag.print();
     stop_logs.print();
     late_diag.print();
