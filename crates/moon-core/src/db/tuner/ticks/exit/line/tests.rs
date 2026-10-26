@@ -41,6 +41,7 @@ fn replacement_resting_at_arrival_fills_at_its_limit() {
             latency_ms: 100.0,
             ..ModelSettings::default()
         },
+        use_stop_loss: false,
         ..params()
     };
     let ticks = tape(&[(0, 100.0), (300, 100.0), (500, 100.0), (700, 104.0)]);
@@ -346,6 +347,7 @@ fn verify_holds_the_line_against_the_archived_points() {
         price_down_delay_s: 1.0,
         price_down_relative: true,
         price_down_allowed_drop_pct: 0.1,
+        use_stop_loss: false,
         ..params()
     };
     let mut d = deal(false);
@@ -378,6 +380,7 @@ fn grid_walk(take: f64, step_lag_ms: f64, ticks: &[Tick]) -> Vec<(i64, f64)> {
         price_down_delay_s: 1.0,
         price_down_relative: true,
         price_down_allowed_drop_pct: 0.1,
+        use_stop_loss: false,
         ..params()
     };
     let mut d = deal(false);
@@ -467,6 +470,7 @@ fn a_step_kept_in_place_adds_no_lag() {
 /// PriceDown 50 % relative every second, 100 ms to the book: the take and its steps.
 fn clock_params(take_pct: f64) -> ExitParams {
     ExitParams {
+        use_stop_loss: false,
         sell_price_pct: take_pct,
         price_down_timer_s: 1.0,
         price_down_pct: 50.0,

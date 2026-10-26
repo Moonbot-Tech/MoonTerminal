@@ -111,6 +111,9 @@ pub enum Unjudged {
     /// The core closed by a rule other than the one the model's line was under at the close: the
     /// two prices are not comparable.
     OtherRule,
+    /// The modelled stop sale is priced past the panic sell's `AllowedDrop` floor, or has no
+    /// observed execution after the fill: where it would fill is the book's.
+    SaleUnknown,
 }
 
 /// How many flags [`RuleFlags::named`] lists — the length of every per-flag count, so the list
@@ -162,7 +165,7 @@ impl RuleFlags {
     ///     kind: The trade's strategy kind — a field read only by some kinds counts only there.
     pub fn of(entry: &EntryParams, exit: &ExitParams, kind: &str) -> Self {
         use super::super::exit::delta_mods::has_delta_terms;
-        let stop = exit.stop_loss_pct != 0.0;
+        let stop = exit.use_stop_loss;
         // MoonShot's corridor modifiers; no other kind has an entry model to carry them.
         let corridor = match entry {
             EntryParams::MoonShot(params) => Some(&params.modifiers),

@@ -547,3 +547,76 @@ fn anchored_fast_stop_ignores_fast_price() {
         );
     }
 }
+
+/// A positive time stop's anchor waits for the delayed activation, not the take placement.
+#[test]
+fn stop_anchor_quiet_until_follows_delayed_activation() {
+    let d = Deal {
+        core_name: "CORE_A".into(),
+        coin: "XALPHA".into(),
+        close_ms: 61_000,
+        sell_price: 99.9,
+        sell_reason: "StopLoss AutoActivated on price drop: BID = 99.9 ASK: 100.0 \
+                      (strategy <S>); StopLoss fixed: 150.000 AllowedDrop: BUY -15.0%"
+            .into(),
+        archived_take: Some(101.0),
+        ..stopped()
+    };
+    let p = ExitParams {
+        stop_loss_pct: 50.0,
+        stop_loss_delay_s: 60.0,
+        ..book()
+    };
+    let line = [(50, 101.0), (60_100, 100.0)];
+    let anchor = StopAnchor::of(&d, &p, Some(&line));
+    assert_eq!(anchor.fired, Some((60_100, 99.9)));
+    assert_eq!(anchor.quiet_until_ms, 60_100);
+}
+
+/// A stop sale past the panic sell's floor is left unjudged, so the search never fits on it.
+#[test]
+fn past_floor_stop_is_not_fit_for_search() {
+    let d = Deal {
+        core_name: "CORE_A".into(),
+        coin: "XALPHA".into(),
+        close_ms: 400,
+        sell_price: 90.0,
+        ..stopped()
+    };
+    let p = ExitParams {
+        fast_stop_loss: true,
+        allowed_drop_pct: -2.0,
+        use_market_order: false,
+        ..book()
+    };
+    let ticks = [tick(10, 98.0), sold(300, 90.0)];
+    let verdict = verify(&d, &ticks, &EntryParams::Fact, &p, None, None);
+    assert_eq!(verdict.exit, None, "{verdict:?}");
+    assert!(!fit_for_search(&verdict));
+}
+
+/// `StopLoss` is kept while `UseStopLoss` is off, so a variant flipping only the switch runs
+/// another stop: it neither inherits the fact's quiet span nor the fact's fired stop.
+#[test]
+fn a_variant_flipping_use_stop_loss_does_not_hold_the_anchor() {
+    let ticks = vec![sold(1_500, 99.5), sold(2_500, 98.8), tick(5_000, 100.0)];
+    let off = ExitParams {
+        use_stop_loss: false,
+        ..book()
+    };
+    // Fact off, variant on: the variant's own stop fires.
+    let mut quiet = stopped();
+    quiet.sell_reason = "Auto Price Down".into();
+    let anchor = StopAnchor::of(&quiet, &off, None);
+    assert!(!anchor.holds(&quiet, fact_fill(), &book()));
+    quiet.stop_anchor = Some(anchor);
+    let w = walk(&quiet, &ticks, fact_fill(), 101.0, &book());
+    assert_eq!(w.exit.kind, ExitKind::Stop, "{w:?}");
+    // Fact stopped, variant off: no stop sale is borrowed from the fact.
+    let mut d = stopped();
+    let anchor = StopAnchor::of(&d, &book(), Some(&PANIC_LINE));
+    assert!(!anchor.holds(&d, fact_fill(), &off));
+    d.stop_anchor = Some(anchor);
+    let w = walk(&d, &ticks, fact_fill(), 101.0, &off);
+    assert_ne!(w.exit.kind, ExitKind::Stop, "{w:?}");
+}

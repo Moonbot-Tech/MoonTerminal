@@ -123,10 +123,10 @@ fn fact_stop(
     hole_end_ms: i64,
     exit_points: Option<&[(i64, f64)]>,
 ) -> Option<GapStop> {
-    let pct = stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms);
-    if pct == 0.0 {
+    if !exit.use_stop_loss {
         return None;
     }
+    let pct = stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms);
     let quiet_until = deal
         .stop_anchor
         .map_or(deal.close_ms, |anchor| anchor.quiet_until_ms);

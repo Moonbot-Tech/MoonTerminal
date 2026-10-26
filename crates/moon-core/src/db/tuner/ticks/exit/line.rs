@@ -69,6 +69,10 @@ pub struct LineWalk {
     pub marketable_take: Option<f64>,
     /// When the first move of the line reached the exchange; `None` when none did.
     pub moved_at: Option<i64>,
+    /// The stop sale is priced strictly past the panic sell's floor (`Stops::sale_floor`), or
+    /// the immediate stop has no print after the fill to price it: no sale the core could have
+    /// made, so the outcome is left open and the verdict unjudged.
+    pub past_floor: bool,
 }
 
 /// Whether no move of the line had landed at or before `horizon`: the take still untouched.
@@ -313,6 +317,7 @@ impl Line {
             stop_level: None,
             stop_trigger: None,
             stop_fired_ms: None,
+            past_floor: false,
         }
     }
 }
@@ -436,7 +441,7 @@ pub fn walk_held(
                 index,
                 StopFillContext {
                     deal,
-                    model: &params.model,
+                    params,
                     hold_until_ms,
                 },
             );
@@ -472,7 +477,7 @@ pub fn walk_held(
             ticks.len(),
             StopFillContext {
                 deal,
-                model: &params.model,
+                params,
                 hold_until_ms,
             },
         );
@@ -622,7 +627,7 @@ fn finish(line: Line, exit: Exit, stops: &Stops) -> LineWalk {
 /// Inputs shared by the resting sell and its panic replacement.
 struct StopFillContext<'a> {
     deal: &'a Deal,
-    model: &'a ModelSettings,
+    params: &'a ExitParams,
     hold_until_ms: Option<i64>,
 }
 
@@ -640,9 +645,10 @@ fn finish_stop(
 ) -> LineWalk {
     let StopFillContext {
         deal,
-        model,
+        params,
         hold_until_ms,
     } = context;
+    let model = &params.model;
     let index = index.max(post_fill);
     if model.stop_fill == StopFill::MarketAfterLatency
         && stops.fired_trigger() != Some(StopTrigger::Fact)
@@ -684,13 +690,12 @@ fn finish_stop(
         }
     }
     let mut walked = finish(line, fire, stops);
+    let stop_side = stop_side(deal.is_long());
+    let valid = |tick: &&Tick| tick.side == stop_side && tick.price.is_finite() && tick.price > 0.0;
     if model.stop_fill == StopFill::MarketAfterLatency
         && walked.stop_trigger != Some(StopTrigger::Fact)
     {
         let arrival = fire.t_ms.saturating_add(model.latency_whole_ms());
-        let stop_side = stop_side(deal.is_long());
-        let valid =
-            |tick: &&Tick| tick.side == stop_side && tick.price.is_finite() && tick.price > 0.0;
         let next_print = ticks[index..]
             .iter()
             .filter(valid)
@@ -705,6 +710,8 @@ fn finish_stop(
             |tick| tick.time_ms as i64,
         );
         let print = next_print.or_else(|| ticks[post_fill..index].iter().rfind(valid));
+        // No print after the fill shows where the immediate stop's order filled.
+        walked.past_floor = print.is_none() && walked.stop_trigger == Some(StopTrigger::Immediate);
         // A short tape still dates the order at arrival; the last bid/ask supplies its price.
         walked.exit.t_ms = arrival;
         if let Some(print) = print {
@@ -723,6 +730,25 @@ fn finish_stop(
             };
             walked.stop_trigger = None;
             walked.stop_fired_ms = None;
+            walked.past_floor = false;
+        }
+    } else if walked.stop_trigger == Some(StopTrigger::Immediate) {
+        // No print after the fill shows where the immediate stop's order filled.
+        walked.past_floor = !ticks[post_fill..].iter().any(|tick| valid(&tick));
+    }
+    // A sale past the panic sell's floor is none the core could have made; the fact's own
+    // stop keeps the fact's sale.
+    if walked.exit.kind == ExitKind::Stop && walked.stop_trigger != Some(StopTrigger::Fact) {
+        let long = deal.is_long();
+        let price = walked.exit.price;
+        if let Some(floor) = stops.sale_floor(params, price, long) {
+            // Past the floor only by more than the price tolerance.
+            let tol = params.model.price_pct / 100.0;
+            walked.past_floor |= if long {
+                price < floor * (1.0 - tol)
+            } else {
+                price > floor * (1.0 + tol)
+            };
         }
     }
     walked

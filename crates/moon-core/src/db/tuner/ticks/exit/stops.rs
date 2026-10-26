@@ -3,7 +3,7 @@
 //!
 //! **StopLoss** — `StopLoss` per cent from the buy (negative: a loss), adjusted by
 //! `StopLossModifier` ([`stop_pct`]), armed `StopLossDelay` seconds after the buy; `UseStopLoss`
-//! off zeroes it (`params::exit_params`). With `FastStopLoss`, `ModelSettings::fast_price`
+//! arms it, and `StopLoss` 0 is a stop at the buy price (matches the core's rule). With `FastStopLoss`, `ModelSettings::fast_price`
 //! (default: the last price) is checked as each [`SERIES_TICK_MS`] tick closes, a market exit
 //! at the tick's last print
 //! ([`FastStop`]). Without it — the core's default — the core watches the
@@ -24,7 +24,7 @@ pub mod trailing;
 use self::ladder::Ladder;
 use self::trailing::Trailing;
 use super::delta_mods::modifier_sum;
-use super::{ExitParams, Side};
+use super::{ExitParams, Side, level_off_buy};
 use crate::db::tuner::ticks::settings::FastPrice;
 use crate::db::tuner::ticks::verify::{StopGroup, stop_group};
 use crate::db::tuner::ticks::{Deal, Exit, ExitKind, Fill, reaches};
@@ -173,6 +173,8 @@ pub enum StopTrigger {
     Trailing,
     /// The fact's own stop (`record::StopAnchor`) — never in a verdict, which runs unanchored.
     Fact,
+    /// The documented immediate `StopLoss`, fired at the fill ([`immediate_stop`]).
+    Immediate,
 }
 
 /// The stop distance of a trade, per cent: `StopLoss` adjusted by `StopLossModifier · Σ`.
@@ -181,29 +183,33 @@ pub enum StopTrigger {
 /// coefficient deepens the stop; but live strategies carry `StopLossModifier` down to −0.3, and
 /// that pulls the stop TOWARD the entry.
 ///
-/// An adjustment big enough to pull it THROUGH the entry answers `0.0` — no stop on this trade
-/// — rather than a level. Clamping it to a hair's breadth from the entry instead would fire on
-/// the first print that moves, which is not a stop but a coin flip dressed as one; and placing
-/// it beyond the entry would fire on the first print, full stop. What the core does with an
-/// adjustment that large is unknown: none of the 1 735 replayed trades reaches this branch, so
-/// the model declines to invent an answer. A configured stop on the profit side (`StopLoss` positive —
-/// live data has it) is a different thing and is left exactly as configured.
+/// An adjustment big enough to pull it THROUGH the entry gives a positive effective stop: a
+/// positive effective stop is accepted and checked against the current price — it can fire at
+/// the next allowed check (matches the core's rule). Whether a stop is armed at all is
+/// `ExitParams::use_stop_loss`, never this distance: 0 is a stop at the buy.
 ///
 /// Args:
 ///     params: The sell parameters.
 ///     deal: The trade, for its deltas.
 ///     at_ms: When the sell was placed — the fill; see [`modifier_sum`].
 pub fn stop_pct(params: &ExitParams, deal: &Deal, at_ms: i64) -> f64 {
-    if params.stop_loss_pct == 0.0 || params.stop_loss_modifier == 0.0 {
+    if params.stop_loss_modifier == 0.0 {
         return params.stop_loss_pct;
     }
-    let adjusted =
-        params.stop_loss_pct - modifier_sum(params, deal, at_ms) * params.stop_loss_modifier;
-    // Same side as configured, or nothing at all.
-    if adjusted == 0.0 || adjusted.is_sign_negative() != params.stop_loss_pct.is_sign_negative() {
-        return 0.0;
-    }
-    adjusted
+    params.stop_loss_pct - modifier_sum(params, deal, at_ms) * params.stop_loss_modifier
+}
+
+/// Whether the strategy runs the documented immediate `StopLoss`: `FastStopLoss` on,
+/// `StopLossEMA` 0, `StopLossDelay` 0 and a positive `StopLoss` — "In this case, after purchase,
+/// the Sell order is immediately placed at (purchase price – StopLossSpread), resulting in an
+/// instant sale of the position right after purchase."
+/// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+pub(crate) fn immediate_stop(params: &ExitParams) -> bool {
+    params.use_stop_loss
+        && params.fast_stop_loss
+        && params.stop_loss_ema == 0.0
+        && (params.stop_loss_delay_s * 1000.0).round() as i64 == 0
+        && params.stop_loss_pct > 0.0
 }
 
 /// The weight of a new ticker price in the average the non-fast stop watches, when the core
@@ -303,6 +309,12 @@ fn next_series_tick(t_ms: i64, tick_ms: i64) -> i64 {
 ///
 /// Checking every print can fire before the core; the tick's last price better approximates
 /// its timing. The delta series' closest-to-previous-point selection can instead fire late.
+///
+/// The core's own rule reacts to "spikes" without waiting for an average to be crossed, and
+/// confirms one by a VWAP check plus a run of trades past the level. Neither the run's length
+/// nor the VWAP's window is documented, so none is modelled here; a strategy with `FastStopLoss` on is warned
+/// about instead (`unmodelled::PARTLY_MODELLED`).
+/// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
 struct FastStop {
     price_rule: FastPrice,
     state: FastPriceState,
@@ -496,8 +508,7 @@ pub(crate) fn stop_side(long: bool) -> crate::feed::types::Side {
 
 /// What fires the trade's stop.
 enum Trigger {
-    /// No stop: `StopLoss` 0, `UseStopLoss` off, or an adjustment that pulled it through the
-    /// entry ([`stop_pct`]).
+    /// No stop: `UseStopLoss` off.
     Off,
     /// Compare `ModelSettings::fast_price` (default: last of tick) at tick end.
     /// Boxing once per walk keeps the inline trade ring from expanding every trigger variant.
@@ -520,6 +531,14 @@ pub(super) struct Stops {
     fired: Option<(i64, f64)>,
     /// Which rule fired the stop this walk closed on; `None` until one did.
     fired_rule: Option<StopTrigger>,
+    /// The documented immediate `StopLoss` ([`immediate_stop`]), pending until the walk's first
+    /// look past the fill.
+    immediate: Option<Exit>,
+    /// The buy every floor counts from.
+    buy: f64,
+    /// The first stop's level, before any ladder step: past it `AllowedDrop` bounds the sale
+    /// again, whatever rung stands.
+    main_level: Option<f64>,
 }
 
 impl Stops {
@@ -532,15 +551,13 @@ impl Stops {
         params: &ExitParams,
         side: Side,
     ) -> Self {
-        // The ADJUSTED distance decides both whether there is a stop and where it stands —
-        // reading the raw `stop_loss_pct` for the first and the adjusted one for the second would
-        // arm a stop the adjustment had cancelled, at the fill price itself, where the next print
-        // fires it. `level_off_buy` puts the distance on the trade's side, so only the distance is
-        // adjusted here; the level is NOT snapped to the price grid, unlike every level that
-        // reaches the exchange —
-        // a stop is the core's own trigger for a market sell, and nothing about it is ever placed.
+        // UseStopLoss arms the stop; StopLoss 0 is a stop at the buy price (matches the core's
+        // rule). The ADJUSTED distance decides where it stands, on either side of the buy.
+        // `level_off_buy` puts the distance on the trade's side; the level is NOT snapped to the
+        // price grid, unlike every level that reaches the exchange — a stop is the core's own
+        // trigger for a market sell, and nothing about it is ever placed.
         let stop = stop_pct(params, deal, fill.t_ms);
-        let stop_on = stop != 0.0;
+        let stop_on = params.use_stop_loss;
         let level = side.off_buy(fill.price, stop);
         let stop_from = fill.t_ms + (params.stop_loss_delay_s.max(0.0) * 1000.0) as i64;
         // What the fact proves about the stop when this walk runs the trade's own
@@ -572,6 +589,20 @@ impl Stops {
             .stop_anchor
             .filter(|_| group_holds)
             .and_then(|a| a.fired);
+        // The documented immediate StopLoss: "In this case, after purchase, the Sell order is
+        // immediately placed at (purchase price – StopLossSpread), resulting in an instant sale
+        // of the position right after purchase." It fires at the fill, its order limit
+        // `StopLossSpread` under the buy (over it for a short) — unless the fact proves the
+        // core's stop quiet past the fill, or the trade's own stop never fired.
+        // Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+        let fact_quiet = quiet_until > fill.t_ms
+            || (stop_holds && deal.stop_anchor.and_then(|a| a.fired).is_none());
+        let immediate = (stop_on && immediate_stop(params) && !fact_quiet).then(|| {
+            stop_exit(
+                fill.t_ms,
+                side.off_buy(fill.price, -params.stop_loss_spread_pct),
+            )
+        });
         // The ticker's clock of both proxies is run back to the tape's first print, so the stop's
         // and the trailing's arrivals fall on the same moments.
         let first_ms = ticks
@@ -668,6 +699,42 @@ impl Stops {
             trailing,
             fired,
             fired_rule: None,
+            immediate,
+            buy: fill.price,
+            main_level: stop_on.then_some(level),
+        }
+    }
+
+    /// The panic sell's floor for a stop sale at `print`: the price past which the core's panic
+    /// sell could never have sold — "the minimum allowed level in percent from the purchase
+    /// price to which the Sell order may be lowered after the stop is triggered and Panic Sell
+    /// is activated" (`AllowedDrop`). `None` under `UseMarketOrder`, and without a floor
+    /// (`AllowedDrop` at -98 or under). While the third stop's rung is the level in force
+    /// `AllowedDrop3` replaces it, until the print passes the main stop's level, where the main
+    /// stop's `AllowedDrop` applies again. The immediate stop's order limit (buy less
+    /// `StopLossSpread`) bounds it too: the tighter of the two. The panic sell's re-stepping by
+    /// `StopLossSpread` needs the book — this is a bound, not a fill model.
+    /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+    pub(super) fn sale_floor(&self, params: &ExitParams, print: f64, long: bool) -> Option<f64> {
+        if params.use_market_order {
+            return None;
+        }
+        let third = self.ladder.as_ref().is_some_and(Ladder::active_is_third)
+            && !self
+                .main_level
+                .is_some_and(|main| reaches(print, main, long));
+        let drop = if third {
+            params.allowed_drop3_pct
+        } else {
+            params.allowed_drop_pct
+        };
+        let drop_floor = (drop > -98.0).then(|| level_off_buy(self.buy, drop, long));
+        let limit = (self.fired_rule == Some(StopTrigger::Immediate))
+            .then(|| level_off_buy(self.buy, -params.stop_loss_spread_pct, long));
+        match (drop_floor, limit) {
+            // The tighter: nearer the buy.
+            (Some(a), Some(b)) => Some(if long { a.max(b) } else { a.min(b) }),
+            (a, b) => a.or(b),
         }
     }
 
@@ -751,6 +818,10 @@ impl Stops {
     /// tick closing by it, comparing the selected fast-price estimate.
     /// A ladder cycle at that tick's own close applies before its price is compared.
     pub(super) fn on_print(&mut self, tick: &Tick, t_ms: i64, price: f64) -> Option<Exit> {
+        if let Some(exit) = self.immediate.take() {
+            self.fired_rule = Some(StopTrigger::Immediate);
+            return Some(exit);
+        }
         // The fast stop's tick is judged against the level as it stood when the tick closed,
         // before the ladder's steps up to this print move it — and a tick that fires leaves the
         // ladder where it stood then.
@@ -807,6 +878,10 @@ impl Stops {
             self.climb(at + 1);
             self.fired_rule = Some(StopTrigger::Fact);
             return Some(stop_exit(at, sold));
+        }
+        if let Some(exit) = self.immediate.take() {
+            self.fired_rule = Some(StopTrigger::Immediate);
+            return Some(exit);
         }
         // The tape's last tick closes on its last print — nothing the tape holds follows it — and
         // is judged against the ladder as it stood at the tick's end.

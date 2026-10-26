@@ -439,5 +439,6 @@ fn unjudged_label(why: Unjudged) -> &'static str {
         Unjudged::InGap => "in tape hole",
         Unjudged::TakeUnknown => "take unknown",
         Unjudged::OtherRule => "closed by another rule",
+        Unjudged::SaleUnknown => "stop sale past its floor",
     }
 }

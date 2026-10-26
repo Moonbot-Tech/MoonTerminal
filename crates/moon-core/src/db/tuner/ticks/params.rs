@@ -312,10 +312,12 @@ pub const TICK_PARAMS: &[TickParam] = &[
     exit_num("SellLevelAllowedDrop", ParamSection::SellOrder),
     exit_num("SellLevelWorkTime", ParamSection::SellOrder),
     // The Stops section in the strategy window's order. `FastStopLoss` is read with the strategy's
-    // value — the trigger hangs on it — but is no knob; `UseMarketOrder` is read by nothing (the
-    // verdict tells a market stop by the fact's own reason, `StopLoss Market Sell`); nor are the panic sell's execution fields (`StopLossSpread`,
-    // `StopSpreadAdd1mDelta`, `AllowedDrop`, `AllowedDrop3`, `TrailingSpread`): where a panic
-    // sell fills is the book's, which the tape does not carry (the developer's call, 2026-09-24).
+    // value — the trigger hangs on it — but is no knob. `AllowedDrop`, `AllowedDrop3`,
+    // `UseMarketOrder` and `StopLossSpread` are read too (`MODEL_ONLY_KEYS`), as BOUNDS only: a
+    // sale priced past the floor is not the core's sale. Where a panic sell fills between its
+    // level and the floor — its `StopLossSpread`/`TrailingSpread` re-stepping, and
+    // `StopSpreadAdd1mDelta` — stays the book's, which the tape does not carry.
+    // Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
     exit_bool("UseStopLoss", ParamSection::Stops),
     TickParam {
         key: "StopLossEMA",
@@ -433,6 +435,11 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     // The stop's trigger (see `ExitParams::fast_stop_loss`): read with the strategy's value, no
     // knob.
     "FastStopLoss",
+    // The panic sell's bounds (see `ExitParams::allowed_drop_pct`): read, never a knob.
+    "AllowedDrop",
+    "AllowedDrop3",
+    "UseMarketOrder",
+    "StopLossSpread",
     // PumpsDetection's one sell move (see `exit::pump_move::PUMP_MOVE_LAG_MS`); `PumpMovePersent` is the
     // core's own spelling of the field.
     "PumpMoveTimer",
@@ -697,12 +704,15 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         // omits the switch runs at the schema's default (zero when the schema sends none —
         // `ticks::fetch::schema_default` in the terminal); the fallback `true` stands only
         // without a schema: 2 of 1 422 live strategies omit it.
-        stop_loss_pct: if v.bool("UseStopLoss", true) {
-            v.num("StopLoss", base.stop_loss_pct)
-        } else {
-            0.0
-        },
+        use_stop_loss: v.bool("UseStopLoss", true),
+        stop_loss_pct: v.num("StopLoss", base.stop_loss_pct),
         stop_loss_delay_s: v.num("StopLossDelay", base.stop_loss_delay_s),
+        // The panic sell's bounds; `AllowedDrop3` matters only while the third stop is on
+        // (`third_stop` below), and is read regardless.
+        allowed_drop_pct: v.num("AllowedDrop", base.allowed_drop_pct),
+        allowed_drop3_pct: v.num("AllowedDrop3", base.allowed_drop3_pct),
+        use_market_order: v.bool("UseMarketOrder", base.use_market_order),
+        stop_loss_spread_pct: v.num("StopLossSpread", base.stop_loss_spread_pct),
         // Absent means the core default, NO: every live stop of a strategy that omits the field
         // closed as "StopLoss AutoActivated on price drop: BID = …" (173 of 184 with a tape),
         // the book-watching stop, never as the fast stop's "StopLoss Market Sell".

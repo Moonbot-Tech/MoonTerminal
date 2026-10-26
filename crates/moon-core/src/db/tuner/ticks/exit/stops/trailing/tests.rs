@@ -39,6 +39,7 @@ fn trailing() -> ExitParams {
     ExitParams {
         sell_price_pct: 50.0,
         trailing_pct: -1.0,
+        use_stop_loss: false,
         ..params()
     }
 }
@@ -119,6 +120,35 @@ fn the_take_profit_holds_the_line_back_and_floors_the_sale() {
     ]);
     let w = walk(&deal(false), &through, fill(), far_take(), &tp);
     assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd, "{w:?}");
+}
+
+/// With a take profit the line sells only while the last trade stands past the take too: the
+/// middle 102.1 is above the take 102, but a last print at 101.9 holds the sale back; a last
+/// print at 102.2 lets it go.
+#[test]
+fn trailing_take_needs_the_last_trade_at_or_above_the_take() {
+    let mut tp = ExitParams {
+        trailing_take_profit_pct: Some(2.0),
+        ..trailing()
+    };
+    tp.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
+    // Ask first, bid last: the last trade is the bid 101.9, under the take.
+    let last_below = vec![
+        print(100, 103.3, TickSide::Buy),
+        print(100, 103.1, TickSide::Sell),
+        print(3_000, 102.3, TickSide::Buy),
+        print(3_000, 101.9, TickSide::Sell),
+    ];
+    let w = walk(&deal(false), &last_below, fill(), far_take(), &tp);
+    assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd, "{w:?}");
+    // The same middle with the last trade at the ask 102.2, above the take: sold.
+    let last_above = tape(&[
+        (100, 103.1, 103.3),
+        (3_000, 102.0, 102.2),
+        (9_000, 102.0, 102.2),
+    ]);
+    let w = walk(&deal(false), &last_above, fill(), far_take(), &tp);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 4_300), "{w:?}");
 }
 
 /// The peak followed inside `StopLossDelay` restarts at the middle of the delay's end: a spike
@@ -240,4 +270,67 @@ fn the_stop_goes_first_on_the_same_arrival() {
     let w = walk(&deal(false), &ticks, fill(), far_take(), &both);
     assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 4_300), "{w:?}");
     assert!((w.exit.price - 98.0).abs() < 1e-4, "the bid, {w:?}");
+}
+
+/// The take gate needs the mid AND the last trade strictly beyond the take: a long bought at
+/// 100 with take profit 2 holds on mid 102.1 with the last trade AT 102 (a touch does not sell)
+/// and sells once the last trade stands at 102.05.
+#[test]
+fn trailing_take_needs_mid_and_last_trade_beyond_the_take() {
+    let mut tp = ExitParams {
+        trailing_take_profit_pct: Some(2.0),
+        ..trailing()
+    };
+    tp.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
+    let with_last = |ask: f64, bid: f64| {
+        vec![
+            print(100, 103.3, TickSide::Buy),
+            print(100, 103.1, TickSide::Sell),
+            print(3_000, ask, TickSide::Buy),
+            print(3_000, bid, TickSide::Sell),
+            print(9_000, ask, TickSide::Buy),
+            print(9_000, bid, TickSide::Sell),
+        ]
+    };
+    let w = walk(
+        &deal(false),
+        &with_last(102.2, 102.0),
+        fill(),
+        far_take(),
+        &tp,
+    );
+    assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd, "{w:?}");
+    let w = walk(
+        &deal(false),
+        &with_last(102.15, 102.05),
+        fill(),
+        far_take(),
+        &tp,
+    );
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 4_300), "{w:?}");
+}
+
+/// The short mirror: bought at 100 with take profit 2 the take is 100 / 1.02; a last trade
+/// a hair over the take (98.04) holds, one strictly under it sells.
+#[test]
+fn trailing_take_needs_mid_and_last_trade_beyond_the_take_for_a_short() {
+    let mut tp = ExitParams {
+        trailing_take_profit_pct: Some(2.0),
+        ..trailing()
+    };
+    tp.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
+    let with_last = |bid: f64, ask: f64| {
+        vec![
+            print(100, 96.8, TickSide::Sell),
+            print(100, 97.0, TickSide::Buy),
+            print(3_000, bid, TickSide::Sell),
+            print(3_000, ask, TickSide::Buy),
+            print(9_000, bid, TickSide::Sell),
+            print(9_000, ask, TickSide::Buy),
+        ]
+    };
+    let w = walk(&deal(true), &with_last(97.95, 98.05), fill(), 50.0, &tp);
+    assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd, "{w:?}");
+    let w = walk(&deal(true), &with_last(98.0, 98.02), fill(), 50.0, &tp);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 4_300), "{w:?}");
 }

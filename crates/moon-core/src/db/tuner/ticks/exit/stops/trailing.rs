@@ -13,8 +13,9 @@
 //!   middle of that moment.
 //! - With `UseTakeProfit`, there is no line until the middle has gone `TakeProfit +
 //!   |TrailingPercent|` past the buy; from then on the line stands no lower than the `TakeProfit`
-//!   level, and it sells only while the middle is still beyond that level — a middle that fell
-//!   through it in one tick sells nothing. A short's levels off the buy are divisions.
+//!   level, and it sells only while both the middle and the last trade are still beyond that
+//!   level — a middle or a last trade that fell through it sells nothing (matches the core's
+//!   rule); once it has fired, the sale goes on. A short's levels off the buy are divisions.
 //! - It fires on the middle crossing the line, at the ticker's arrival; a stop past its own level
 //!   at the same moment goes first ([`super::Stops`]). The sale is a market one, so it prices at
 //!   the bid proxy for a long (the ask proxy for a short), the middle while that side is unseen.
@@ -92,6 +93,8 @@ pub(super) struct Trailing {
     last_step: i64,
     bid: Option<f64>,
     ask: Option<f64>,
+    /// The last print's price, either side: with a take profit it must stand past the take too.
+    last_trade: Option<f64>,
     next_sample: i64,
     period_ms: i64,
 }
@@ -147,6 +150,7 @@ impl Trailing {
             last_step: i64::MIN,
             bid: None,
             ask: None,
+            last_trade: None,
             next_sample: anchor - back * period_ms,
             period_ms,
         })
@@ -218,7 +222,11 @@ impl Trailing {
                 continue;
             };
             let crossed = !self.beyond(mid, self.line(peak));
-            let above_take = self.take.is_none_or(|take| self.beyond(mid, take));
+            // With a take profit the mid and the last trade must both stand beyond TakeProfit —
+            // a touch of it does not sell (the core's reason prints "allowed drop > TakeProfit").
+            let above_take = self.take.is_none_or(|take| {
+                self.beyond(mid, take) && self.last_trade.is_none_or(|lt| self.beyond(lt, take))
+            });
             if crossed && above_take && at > self.quiet_until {
                 return Some(Exit {
                     t_ms: at,
@@ -233,6 +241,7 @@ impl Trailing {
     /// Read a print into the spread proxy: a taker sell prints at the bid, a taker buy at the ask.
     pub(super) fn see(&mut self, tick: &Tick) {
         let price = f64::from(tick.price);
+        self.last_trade = Some(price);
         match tick.side {
             TickSide::Sell => self.bid = Some(price),
             TickSide::Buy => self.ask = Some(price),

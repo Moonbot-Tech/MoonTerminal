@@ -39,6 +39,8 @@ pub struct StopAnchor {
     pub entry_ms: i64,
     /// Effective `SellDelay` in milliseconds, which offsets the ladder's sell placement.
     pub sell_delay_ms: i64,
+    /// Whether the fact ran with `UseStopLoss` on: `StopLoss` is kept while it is off.
+    pub use_stop_loss: bool,
     /// The stop the fact ran: its adjusted distance ([`stop_pct`]), delay and trigger.
     pub stop_pct: f64,
     pub delay_s: f64,
@@ -82,7 +84,7 @@ impl StopAnchor {
             // Only a record-derived level can anchor the fact; a ladder whose level was lost
             // falls back to the close, never to the model's estimate of its firing level.
             let at = stop_jump_level(deal, exit, exit_points)
-                .and_then(|level| archived_stop_jump(deal, level, exit_points))
+                .and_then(|level| archived_stop_jump(deal, exit, level, exit_points))
                 .unwrap_or(deal.close_ms);
             (at, deal.sell_price)
         });
@@ -90,6 +92,7 @@ impl StopAnchor {
             entry_price: deal.buy_price,
             entry_ms: sell_start_ms,
             sell_delay_ms: exit.sell_delay_ms.max(0.0) as i64,
+            use_stop_loss: exit.use_stop_loss,
             stop_pct: pct,
             delay_s: exit.stop_loss_delay_s,
             fast: exit.fast_stop_loss,
@@ -125,6 +128,7 @@ impl StopAnchor {
         self.same_entry(fill, params)
             && ((params.second_stop.is_none() && params.third_stop.is_none())
                 || params.sell_delay_ms.max(0.0) as i64 == self.sell_delay_ms)
+            && params.use_stop_loss == self.use_stop_loss
             && stop_pct(params, deal, self.entry_ms) == self.stop_pct
             && params.stop_loss_delay_s == self.delay_s
             && params.fast_stop_loss == self.fast

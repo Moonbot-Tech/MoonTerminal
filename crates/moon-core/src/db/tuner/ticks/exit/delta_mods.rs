@@ -290,7 +290,7 @@ fn take_reading(
 /// prints no usable level.
 fn stop_reading(deal: &Deal, params: &ExitParams) -> Option<Reading> {
     if params.stop_loss_modifier == 0.0
-        || params.stop_loss_pct == 0.0
+        || !params.use_stop_loss
         || params.second_stop.is_some()
         || params.third_stop.is_some()
         || !reason_starts_with(deal.sell_reason.trim(), REASON_STOP)

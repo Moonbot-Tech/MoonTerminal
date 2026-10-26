@@ -1722,6 +1722,7 @@ fn trigger_name(t: Option<StopTrigger>) -> &'static str {
         Some(StopTrigger::FastTick) => "FastTick",
         Some(StopTrigger::Trailing) => "Trailing",
         Some(StopTrigger::Fact) => "Fact",
+        Some(StopTrigger::Immediate) => "Immediate",
         None => "none",
     }
 }

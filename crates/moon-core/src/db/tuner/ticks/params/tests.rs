@@ -85,3 +85,40 @@ fn strike_grid_shows_mstrike_sell_level_not_sell_price() {
         .collect();
     assert!(!pump.contains(&"MStrikeSellLevel"), "a strike-only field");
 }
+
+/// The panic sell's bounds are read with the strategy's values, defaults when absent.
+#[test]
+fn exit_params_reads_the_panic_sell_bounds() {
+    let values: HashMap<String, String> = [
+        ("AllowedDrop", "-12"),
+        ("AllowedDrop3", "-20"),
+        ("UseMarketOrder", "1"),
+        ("StopLossSpread", "0.4"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    let defaults = HashMap::new();
+    let sv = StrategyValues {
+        values: &values,
+        defaults: &defaults,
+    };
+    let p = exit_params(&sv, ModelSettings::default());
+    assert_eq!(p.allowed_drop_pct, -12.0);
+    assert_eq!(p.allowed_drop3_pct, -20.0);
+    assert!(p.use_market_order);
+    assert_eq!(p.stop_loss_spread_pct, 0.4);
+    let empty = HashMap::new();
+    let p = exit_params(
+        &StrategyValues {
+            values: &empty,
+            defaults: &defaults,
+        },
+        ModelSettings::default(),
+    );
+    let base = ExitParams::default();
+    assert_eq!(p.allowed_drop_pct, base.allowed_drop_pct);
+    assert_eq!(p.allowed_drop3_pct, base.allowed_drop3_pct);
+    assert_eq!(p.use_market_order, base.use_market_order);
+    assert_eq!(p.stop_loss_spread_pct, base.stop_loss_spread_pct);
+}

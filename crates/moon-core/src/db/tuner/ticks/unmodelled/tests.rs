@@ -353,3 +353,16 @@ fn the_delta_tab_is_in_use_only_when_a_modifier_applies_a_term() {
         ["sellmodifier", "maxmodifier", "addpricebug"]
     );
 }
+
+/// The fast stop is modelled in part: a strategy running it is warned, never left unjudged.
+#[test]
+fn fast_stop_loss_is_warned_not_unjudged() {
+    let v = values(&[("UseStopLoss", "YES"), ("FastStopLoss", "YES")]);
+    let found = unmodelled_fields(&v, &HashMap::new(), &FieldDeps::bundled());
+    assert_eq!(keys(&found), ["FastStopLoss"]);
+    assert_eq!(found[0].section, ParamSection::Stops);
+    assert_eq!(found[0].rule, None);
+    assert!(watched_keys().iter().any(|k| k == "FastStopLoss"));
+    let off = values(&[("UseStopLoss", "YES"), ("FastStopLoss", "NO")]);
+    assert!(unmodelled_fields(&off, &HashMap::new(), &FieldDeps::bundled()).is_empty());
+}
