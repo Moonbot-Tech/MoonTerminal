@@ -1056,14 +1056,12 @@ fn serve(
             reply,
         } => {
             let before = trim::disk_bytes(conn);
+            let walked = Instant::now();
             if matches!(compact, Compact::Incremental) {
                 match trim::trim_progress(conn, &keep, progress.as_deref()) {
                     Ok(report) => {
                         *held = held_bytes(conn).unwrap_or(*held);
-                        log::info!(
-                            "trade cache trimmed: {} span(s)",
-                            report.spans_dropped + report.spans_cut
-                        );
+                        log_trimmed(&report, walked);
                         return Served(
                             PendingCompact {
                                 report,
@@ -1081,10 +1079,7 @@ fn serve(
             }
             let result = trim::trim_progress(conn, &keep, progress.as_deref()).map(|report| {
                 *held = held_bytes(conn).unwrap_or(*held);
-                log::info!(
-                    "trade cache trimmed: {} span(s)",
-                    report.spans_dropped + report.spans_cut
-                );
+                log_trimmed(&report, walked);
                 let compacted = if report.is_empty() {
                     Ok(())
                 } else {
@@ -1360,6 +1355,21 @@ fn insert_span(
         )?;
     }
     Ok(written)
+}
+
+/// The one line a committed retention walk leaves: what it removed, out of how many rows and
+/// packed bytes the file held, how long the walk took and what the process held when it ended
+/// (#1081 — the removed count alone said nothing about how large a file the walk had read).
+fn log_trimmed(report: &TrimReport, walked: Instant) {
+    log::info!(
+        "trade cache trimmed: {} of {} span(s), {} of {} packed bytes, walk {:.1} s, {}",
+        report.spans_dropped + report.spans_cut,
+        report.spans_total,
+        report.bytes_dropped,
+        report.bytes_total,
+        walked.elapsed().as_secs_f64(),
+        crate::metrics::memory_now()
+    );
 }
 
 /// Every span of the key intersecting `[from_ms, to_ms]`, from both tables, ascending by

@@ -277,3 +277,118 @@ fn the_inventory_counts_legacy_rows() {
     assert_eq!(got.keys.len(), 2);
     assert_eq!(got.range_ms, Some((50, 599)));
 }
+
+/// A walk read a few rows at a time judges exactly the rows a whole-file read would: none skipped
+/// at a chunk's edge, and no cut piece written during the pass judged again as a row of its own.
+#[test]
+fn a_chunked_walk_matches_one_whole_read() {
+    let fill = |conn: &rusqlite::Connection| {
+        for n in 0..7 {
+            let from = n * 1_000;
+            file(
+                conn,
+                ("x", "M"),
+                from,
+                from + 999,
+                &ticks(from, from + 999, 100),
+            );
+        }
+        file_legacy(conn, ("x", "N"), 0, 999, &ticks(0, 999, 100));
+        file_legacy(conn, ("x", "N"), 5_000, 5_999, &ticks(5_000, 5_999, 100));
+        file(conn, ("x", "Q"), 0, 999, &ticks(0, 999, 250));
+    };
+    // M: one row whole, one cut at each end of the kept stretch, the rest dropped; N: one legacy
+    // row cut, one dropped; Q: off the map.
+    let map = keep(&[
+        (("x", "M"), &[(1_500, 3_499)]),
+        (("x", "N"), &[(500, 2_000)]),
+    ]);
+    let whole = conn();
+    fill(&whole);
+    let expected = trim_in_chunks(&whole, &map, None, usize::MAX).expect("whole read");
+    let chunked = conn();
+    fill(&chunked);
+    let progress = TrimProgress::default();
+    let report = trim_in_chunks(&chunked, &map, Some(&progress), 2).expect("chunked");
+    assert_eq!(report, expected);
+    assert_eq!(report.spans_total, 10);
+    assert_eq!(report.spans_cut, 3);
+    assert_eq!(progress.total.load(Ordering::Relaxed), 10);
+    assert_eq!(progress.done.load(Ordering::Relaxed), 10);
+    for market in ["M", "N", "Q"] {
+        assert_eq!(
+            bounds(&read_spans(&chunked, "x", market, i64::MIN, i64::MAX).expect("read")),
+            bounds(&read_spans(&whole, "x", market, i64::MIN, i64::MAX).expect("read")),
+            "{market}"
+        );
+    }
+}
+
+/// Test-only measurement: how far one retention walk over a file of a million rows raises this
+/// process's resident memory above where it stood before the walk (#1081). The map keeps every
+/// row, so the walk deletes nothing and only its own bookkeeping shows.
+#[test]
+#[ignore = "memory report, run by hand"]
+fn trim_walk_memory_over_a_million_rows() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    const ROWS: i64 = 1_000_000;
+    const MARKETS: i64 = 2_000;
+    let conn = conn();
+    let empty = encode(&[]);
+    let tx = conn.unchecked_transaction().expect("tx");
+    for n in 0..ROWS {
+        tx.prepare_cached(
+            "INSERT INTO packs(exchange, market, from_ms, to_ms, ticks, prints, source, updated_ms)
+             VALUES('binance:00000000', ?1, ?2, ?3, ?4, 0, 1, 7)",
+        )
+        .expect("prepare")
+        .execute(rusqlite::params![
+            format!("SYN{}USDT", n % MARKETS),
+            n * 1_000,
+            n * 1_000 + 999,
+            empty
+        ])
+        .expect("row");
+    }
+    tx.commit().expect("commit");
+    let map: KeepMap = (0..MARKETS)
+        .map(|m| {
+            (
+                ("binance:00000000".to_string(), format!("SYN{m}USDT")),
+                Coverage::one((i64::MIN, i64::MAX)),
+            )
+        })
+        .collect();
+    let rss = || {
+        let pid = sysinfo::get_current_pid().expect("pid");
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+        sys.process(pid).map_or(0, |p| p.memory())
+    };
+    let before = rss();
+    let peak = Arc::new(AtomicU64::new(before));
+    let stop = Arc::new(AtomicBool::new(false));
+    let sampler = {
+        let (peak, stop) = (peak.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                peak.fetch_max(rss(), Ordering::Relaxed);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        })
+    };
+    let started = std::time::Instant::now();
+    let report = trim_progress(&conn, &map, None).expect("trim");
+    let elapsed = started.elapsed();
+    stop.store(true, Ordering::Relaxed);
+    sampler.join().expect("sampler");
+    assert!(report.is_empty(), "{report:?}");
+    assert_eq!(report.spans_total, ROWS as u64);
+    let grown = peak.load(Ordering::Relaxed).saturating_sub(before);
+    println!(
+        "trim walk over {ROWS} rows: peak RSS +{} MiB ({} B a row) in {elapsed:?}",
+        grown / (1024 * 1024),
+        grown / ROWS as u64
+    );
+}

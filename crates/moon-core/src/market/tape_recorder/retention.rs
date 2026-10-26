@@ -6,7 +6,39 @@ use crate::market::trade_replay::{
     trade_cache::{CompactFail, Inventory, KeepMap, TrimOutcome, TrimProgress},
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, mpsc::Receiver};
+
+/// The retention phase the recorder thread last entered, as an index into [`PHASE_NAMES`]; read
+/// by the resource line on the metrics thread ([`phase_name`]).
+static PHASE: AtomicU8 = AtomicU8::new(0);
+
+/// What [`phase_name`] prints for each published phase; 0 is idle and prints nothing.
+const PHASE_NAMES: [&str; 6] = [
+    "idle",
+    "listing wait",
+    "inventory",
+    "keep map",
+    "trim",
+    "recount",
+];
+
+/// The keep map is built synchronously on the recorder thread inside the inventory phase, and on
+/// a large protection set it is a phase of its own as far as memory is concerned.
+pub(super) const KEEP_MAP: u8 = 3;
+
+/// Say which phase the recorder is in, for the resource line.
+pub(super) fn publish(code: u8) {
+    PHASE.store(code, Ordering::Relaxed);
+}
+
+/// The retention phase in progress, `None` while idle or when no recorder runs.
+pub(crate) fn phase_name() -> Option<&'static str> {
+    match PHASE.load(Ordering::Relaxed) {
+        0 => None,
+        code => PHASE_NAMES.get(usize::from(code)).copied(),
+    }
+}
 
 /// Retention age and report attribution have independent horizons.
 pub(super) struct KeepPolicy {
@@ -115,6 +147,8 @@ pub(super) struct Recount {
     pub rerun: HashSet<Key>,
     /// Markets already granted their one re-read this recount.
     pub reread: HashSet<Key>,
+    /// Span bounds the answered reads carried, for the pass's log line.
+    pub spans: usize,
 }
 
 /// Maintenance phases are polled; no recorder tick waits for the cache thread.
@@ -140,6 +174,19 @@ pub(super) enum Phase {
     },
 }
 
+impl Phase {
+    /// This phase's index into [`PHASE_NAMES`].
+    pub(super) fn code(&self) -> u8 {
+        match self {
+            Phase::Idle => 0,
+            Phase::Listing { .. } => 1,
+            Phase::Inventory { .. } => 2,
+            Phase::Trim { .. } => 4,
+            Phase::Recount { .. } => 5,
+        }
+    }
+}
+
 /// Wall-clock scheduling and compaction retries remain independent of catch-up availability.
 pub(super) struct Retention {
     pub phase: Phase,
@@ -153,6 +200,8 @@ pub(super) struct Retention {
     /// Resume a conservatively withheld emulator or untunable purge once protecting reports
     /// arrive.
     pub attributed_deferred: bool,
+    /// When the running pass left its listing wait (Unix ms), for the phase lines' timings.
+    pub pass_started: Option<i64>,
 }
 
 impl Default for Retention {
@@ -166,6 +215,7 @@ impl Default for Retention {
             recount_stale: HashSet::new(),
             recount_all: false,
             attributed_deferred: false,
+            pass_started: None,
         }
     }
 }

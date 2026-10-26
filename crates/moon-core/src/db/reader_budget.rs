@@ -35,7 +35,7 @@ use std::time::Duration;
 use rusqlite::Connection;
 
 /// Maximum simultaneous report readers in this process.
-pub(super) const READER_BUDGET: usize = 8;
+pub(crate) const READER_BUDGET: usize = 8;
 
 /// How long a ninth reader waits for a slot before failing retryable.
 ///
@@ -137,6 +137,13 @@ pub(super) fn acquire_with_cancellation(
         return AcquireOutcome::Permit(ReaderPermit);
     }
     AcquireOutcome::Timeout
+}
+
+/// Report readers holding a slot right now, for the resource line
+/// ([`crate::metrics`]): a station whose memory climbs while all eight are taken is told apart
+/// from one that climbs with the replica idle.
+pub(crate) fn in_use() -> usize {
+    READER_BUDGET.saturating_sub(*lock_slots())
 }
 
 /// Slots still free, observed by sibling tests to verify permit accounting.

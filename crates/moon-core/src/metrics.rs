@@ -19,6 +19,7 @@ mod resource_watch;
 pub(crate) use resource_watch::{DescriptorCount, open_descriptor_count};
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -33,6 +34,67 @@ use sysinfo::{Pid, ProcessesToUpdate, System};
 const REFRESH_EVERY: Duration = Duration::from_millis(1000);
 /// Time window used to calculate memory growth or decline.
 const MEM_WINDOW: Duration = Duration::from_secs(5);
+
+/// Resident memory of this process in MiB as the sampler last read it; zero before its first
+/// read, and when no sampler runs.
+static RSS_MB: AtomicU32 = AtomicU32::new(0);
+
+/// This process's memory for a log line that names what it was doing: resident memory as the
+/// sampler last read it (up to a second old) and what SQLite holds on the heap right now.
+///
+/// The two answer different questions: the second is every connection's page cache, sorter and
+/// statement memory in this process, so RSS minus it is the Rust side's allocations, mappings
+/// and stacks. A station that grows by gigabytes in one phase is told apart from one that grows
+/// in SQLite by reading both on the same line (#1081).
+pub fn memory_now() -> String {
+    let sqlite_mb = sqlite_heap_mb();
+    match RSS_MB.load(Ordering::Relaxed) {
+        0 => format!("RSS - MiB, SQLite heap {sqlite_mb} MiB"),
+        rss => format!("RSS {rss} MiB, SQLite heap {sqlite_mb} MiB"),
+    }
+}
+
+/// What SQLite holds on the heap across every connection of this process, in MiB.
+fn sqlite_heap_mb() -> u64 {
+    // SAFETY: a plain read of SQLite's global memory counter; it takes SQLite's own mutex and is
+    // callable from any thread at any time.
+    let bytes = unsafe { rusqlite::ffi::sqlite3_memory_used() };
+    bytes.max(0) as u64 / (1024 * 1024)
+}
+
+/// The tail of every resource line: SQLite's share of the memory, and what was running.
+fn resource_context() -> String {
+    let busy = activity();
+    if busy.is_empty() {
+        format!("SQLite heap {} MiB", sqlite_heap_mb())
+    } else {
+        format!("SQLite heap {} MiB; busy: {busy}", sqlite_heap_mb())
+    }
+}
+
+/// What the process is busy with that is known to move its memory by hundreds of megabytes, for
+/// the resource line ([`resource_watch`]); empty when none of it is running.
+///
+/// Read only when a line is written — at most once a minute — so the two short locks it takes
+/// (the report-reader budget and the listing gate) cost nothing on their own paths.
+fn activity() -> String {
+    let mut busy = Vec::new();
+    let readers = crate::db::readers_in_use();
+    if readers > 0 {
+        busy.push(format!(
+            "report readers {readers}/{}",
+            crate::db::READER_BUDGET
+        ));
+    }
+    let (listing, waiting) = crate::session::tape_listings();
+    if listing > 0 || waiting > 0 {
+        busy.push(format!("tape listings {listing} + {waiting} waiting"));
+    }
+    if let Some(phase) = crate::market::tape_recorder::retention_phase() {
+        busy.push(format!("tape retention {phase}"));
+    }
+    busy.join(", ")
+}
 
 /// Copyable metrics snapshot passed cheaply to UI and diagnostic consumers.
 #[derive(Clone, Copy, Default)]
@@ -112,6 +174,9 @@ impl Metrics {
             )
         });
         let (cpu_process, mem_mb) = seen.unwrap_or((0.0, 0.0));
+        if seen.is_some() {
+            RSS_MB.store(mem_mb.round() as u32, Ordering::Relaxed);
+        }
 
         self.mem_hist.push_back((now, mem_mb));
         while self

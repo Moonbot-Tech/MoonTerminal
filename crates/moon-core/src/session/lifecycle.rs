@@ -22,6 +22,8 @@ use super::{
 
 mod listing_slots;
 
+pub(crate) use listing_slots::load as tape_listings;
+
 #[cfg(test)]
 mod identity_stale_tests;
 #[cfg(test)]
@@ -920,7 +922,8 @@ impl SessionManager {
                         // Seen in the station journal: retention keeps every market's tape while
                         // this core stays unlisted, and the core lists again on its next pass.
                         log::warn!(
-                            "[x] tape catch-up core={core}: listing stopped after {rows} rows, replica page unavailable: {error}"
+                            "[x] tape catch-up core={core}: listing stopped after {rows} rows, replica page unavailable: {error}; {}",
+                            crate::metrics::memory_now()
                         );
                         return;
                     }
@@ -986,9 +989,10 @@ impl SessionManager {
                 }
             }
             log::info!(
-                "tape catch-up core={core}: listed {rows} rows ({submitted} resolved) in {:.1} s, after {:.1} s waiting for a listing slot",
+                "tape catch-up core={core}: listed {rows} rows ({submitted} resolved) in {:.1} s, after {:.1} s waiting for a listing slot, {}",
                 started.elapsed().as_secs_f64(),
-                started.duration_since(queued).as_secs_f64()
+                started.duration_since(queued).as_secs_f64(),
+                crate::metrics::memory_now()
             );
             if listing.complete() {
                 crate::market::tape_recorder::catchup::listed(core, generation);

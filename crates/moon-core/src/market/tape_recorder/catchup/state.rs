@@ -255,6 +255,7 @@ impl RecorderCatchup {
                         ));
                     }
                     self.retention.hour = Some(now.div_euclid(HOUR_MS));
+                    self.retention.pass_started = Some(now);
                     status = Some(TapePurge::Running { done: 0, total: 0 });
                     Phase::Inventory {
                         rx: cache.inventory_start(),
@@ -290,6 +291,8 @@ impl RecorderCatchup {
                     };
                     // Borrowed, not cloned: a copy of the whole set here was the hourly step
                     // toward the out-of-memory kill on a 70-core station (#1081).
+                    retention::publish(retention::KEEP_MAP);
+                    let built = std::time::Instant::now();
                     let keep = retention::keep_map(
                         &inventory,
                         self.known.values(),
@@ -302,6 +305,14 @@ impl RecorderCatchup {
                             tuner_only: super::tuner_only(),
                             shape: *shape,
                         },
+                    );
+                    log::info!(
+                        "tape retention: keep map of {} market(s), {} span(s) from {} known trade(s) built in {:.1} s, {}",
+                        keep.len(),
+                        keep.values().map(|held| held.spans().len()).sum::<usize>(),
+                        self.known.len(),
+                        built.elapsed().as_secs_f64(),
+                        crate::metrics::memory_now()
                     );
                     let progress = Arc::new(TrimProgress::default());
                     let rx = cache.trim_start(
@@ -338,6 +349,14 @@ impl RecorderCatchup {
                         let rx = read_spans(cache, &key);
                         recount.reads.insert(key, rx);
                     }
+                    log::info!(
+                        "tape retention: trim done {:.1} s into the pass, file {} -> {} bytes; reading the spans of {} market(s), {}",
+                        self.pass_seconds(now),
+                        outcome.bytes_before,
+                        outcome.bytes_after,
+                        recount.reads.len(),
+                        crate::metrics::memory_now()
+                    );
                     Phase::Recount {
                         recount,
                         failure: outcome.compacted.err(),
@@ -388,6 +407,7 @@ impl RecorderCatchup {
                 }
                 recount.reads.retain(|key, rx| match rx.try_recv() {
                     Ok(Ok(spans)) => {
+                        recount.spans += spans.len();
                         recount
                             .held
                             .insert(key.clone(), Some(Coverage::from_spans(spans)));
@@ -441,6 +461,15 @@ impl RecorderCatchup {
                         })
                         .map(|t| t.id)
                         .collect();
+                    log::info!(
+                        "tape retention: recount read {} span(s) of {} market(s) and judged {} known trade(s), {} complete; pass done in {:.1} s, {}",
+                        recount.spans,
+                        recount.held.len(),
+                        self.known.len(),
+                        complete.len(),
+                        self.pass_seconds(now),
+                        crate::metrics::memory_now()
+                    );
                     self.tape_complete = complete.clone();
                     self.complete = complete;
                     // Every rebuilt entry reads the protection set's version, as the clones did.
@@ -496,12 +525,20 @@ impl RecorderCatchup {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .purge = Some(purge);
         }
+        retention::publish(self.retention.phase.code());
         if !self.maintenance_busy() {
             if let Some((result, at)) = self.deferred_finish.take() {
                 self.finish(cache, result, at);
             }
         }
         purging
+    }
+
+    /// Seconds since the running retention pass left its listing wait, for its log lines.
+    fn pass_seconds(&self, now: i64) -> f64 {
+        self.retention
+            .pass_started
+            .map_or(0.0, |started| now.saturating_sub(started) as f64 / 1000.0)
     }
 
     /// Inventory and delete failures share room-pressure reporting and the same retry backoff.
