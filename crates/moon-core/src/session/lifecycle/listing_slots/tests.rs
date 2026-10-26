@@ -74,3 +74,20 @@ fn waiting_listings_are_served_in_arrival_order() {
         waiter.join().unwrap();
     }
 }
+
+/// The load the resource line prints counts taken slots and queued listings, not free slots.
+#[test]
+fn the_load_counts_readers_and_the_queue_behind_them() {
+    static GATE: Slots = Slots::new(1);
+    assert_eq!(GATE.load(), (0, 0));
+    let held = GATE.acquire();
+    let waiter = std::thread::spawn(|| drop(GATE.acquire()));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while GATE.load() != (1, 1) {
+        assert!(std::time::Instant::now() < deadline, "{:?}", GATE.load());
+        std::thread::yield_now();
+    }
+    drop(held);
+    waiter.join().unwrap();
+    assert_eq!(GATE.load(), (0, 0));
+}

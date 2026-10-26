@@ -81,6 +81,7 @@ use donor::{Donor, Reply};
 pub use peek::{RecorderSpan, TapeMiss, TradeTape, market_tape, trade_tape};
 pub use plan::TradeId;
 use plan::{Filing, KeyTask, QUIET_TAIL_MS};
+pub(crate) use retention::phase_name as retention_phase;
 
 use crate::config::ServerConfig;
 use crate::feed::Tick;
@@ -383,6 +384,7 @@ fn run(rx: &Receiver<Cmd>) {
         if !enabled() {
             if let Some(stopped) = recorder.take() {
                 stopped.summary("stopped");
+                retention::publish(0);
             }
             pending.clear();
             continue;
@@ -1264,7 +1266,7 @@ impl Recorder {
         let (known, queued, skipped) = self.catchup.sizes();
         let (live_closes, listed_closes) = self.closed.sizes();
         line(&format!(
-            "{what}: keys {} (recording {recording}), pairs {pairs} (asking {asking}), donors {} ({ready} ready), requests {}, answers {}, failed {}, filed {} prints in {} spans, lost {} s in {} gaps, clipped {}, late {}, breaks {}, stale opens skipped {}, resumed {}, known trades {known} (queued {queued}, skipped {skipped}), chart closes {live_closes} live + {listed_closes} listed",
+            "{what}: keys {} (recording {recording}), pairs {pairs} (asking {asking}), donors {} ({ready} ready), requests {}, answers {}, failed {}, filed {} prints in {} spans, lost {} s in {} gaps, clipped {}, late {}, breaks {}, stale opens skipped {}, resumed {}, known trades {known} (queued {queued}, skipped {skipped}), chart closes {live_closes} live + {listed_closes} listed, {}",
             self.tasks.len(),
             self.donors.len(),
             s.requests,
@@ -1279,6 +1281,7 @@ impl Recorder {
             s.breaks,
             s.stale_opens,
             s.resumed,
+            crate::metrics::memory_now(),
         ));
         if s.compared > 0 {
             let t = s.touches;

@@ -34,6 +34,7 @@ pub use crate::feed::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreIdentityFacts, CoreInitStep, CoreStartupState,
     CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL, ReportSyncProgress,
 };
+pub(crate) use lifecycle::tape_listings;
 pub use run_dispatch::{RunDispatch, RunSwitch, RunTarget};
 pub use run_state::{AutoAction, CoreRunState, RunSummary, TradingAction};
 pub use store::{BalanceState, CoreId, CoreStore, TgEventRow};

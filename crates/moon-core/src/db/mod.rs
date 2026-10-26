@@ -55,6 +55,7 @@ pub use read_cancel::{
 };
 pub use read_fail::{FailCode, FailKind, ReadFail, ReadResult};
 pub use reader_budget::ReportReader;
+pub(crate) use reader_budget::{READER_BUDGET, in_use as readers_in_use};
 pub(crate) use rep::core_offset::{latest_segment, latest_source as latest_offset_source};
 pub use rep::{DbMsg, ReportSink};
 pub(crate) use rep::{OPEN_ROWS_PAGE, ReportStart};

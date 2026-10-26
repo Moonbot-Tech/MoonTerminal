@@ -17,6 +17,8 @@ pub(super) const LISTING_SLOTS: usize = 4;
 /// A first-come, first-served counting gate over the listing threads: a core queued behind
 /// seventy others is served in turn, never overtaken indefinitely.
 pub(super) struct Slots {
+    /// Slots the gate was built with.
+    capacity: usize,
     state: Mutex<Queue>,
     changed: Condvar,
 }
@@ -38,10 +40,16 @@ pub(super) fn acquire() -> Slot<'static> {
     SLOTS.acquire()
 }
 
+/// Listings reading the replica now and listings queued behind them, for the resource line.
+pub(crate) fn load() -> (usize, u64) {
+    SLOTS.load()
+}
+
 impl Slots {
     /// A gate with `slots` free.
     pub(super) const fn new(slots: usize) -> Self {
         Self {
+            capacity: slots,
             state: Mutex::new(Queue {
                 free: slots,
                 next: 0,
@@ -49,6 +57,15 @@ impl Slots {
             }),
             changed: Condvar::new(),
         }
+    }
+
+    /// Slots taken and tickets not yet admitted: what is reading and what waits for a turn.
+    pub(super) fn load(&self) -> (usize, u64) {
+        let queue = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        (
+            self.capacity.saturating_sub(queue.free),
+            queue.next.saturating_sub(queue.head),
+        )
     }
 
     /// Block until this caller's turn comes and a slot is free, then take it.

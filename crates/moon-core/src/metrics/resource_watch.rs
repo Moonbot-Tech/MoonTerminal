@@ -17,6 +17,9 @@
 //! the baseline and nothing more for the rest of the session; a leaking one writes a line per step,
 //! and the slope between those lines is the diagnosis. Every line carries every count, so any one
 //! of them is a complete snapshot — the last line before a silent exit is what the report reads.
+//! The baseline and movement lines also carry what SQLite holds on the heap and what heavy work
+//! was running that second (report readers, tape listings, the tape retention phase), so a step
+//! names the phase that made it instead of leaving it to be guessed from the clock (#1081).
 //!
 //! Like `cpu_watch`, it rides the sampler that already polls the process once a second and adds
 //! no polling of its own; the two Windows calls it needs are microseconds. The detector returns
@@ -342,8 +345,9 @@ pub(super) fn report(event: ResourceEvent) {
     match event {
         ResourceEvent::Baseline { after_secs, sample } => {
             log::info!(
-                "resources: baseline {after_secs}s after start — {}",
-                counts(&sample)
+                "resources: baseline {after_secs}s after start — {}; {}",
+                counts(&sample),
+                super::resource_context()
             );
         }
         ResourceEvent::Moved {
@@ -367,7 +371,11 @@ pub(super) fn report(event: ResourceEvent) {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            log::info!("resources: {moves} — {}", counts(&cur));
+            log::info!(
+                "resources: {moves} — {}; {}",
+                counts(&cur),
+                super::resource_context()
+            );
         }
         ResourceEvent::NearLimit {
             what,

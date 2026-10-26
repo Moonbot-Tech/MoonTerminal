@@ -208,40 +208,101 @@ struct RowMeta {
     prints: i64,
 }
 
+/// Rows of one table a retention walk holds in memory at a time.
+///
+/// The walk used to collect every row of the file before judging the first one: two owned
+/// strings and the bounds per row, ~190 bytes each, so a file of tens of millions of rows put
+/// gigabytes on the heap for the length of the pass (#1081). Ten thousand rows are ~2 MB.
+const WALK_CHUNK: usize = 10_000;
+
 /// Clip rows atomically while publishing progress for a non-blocking caller.
 pub(super) fn trim_progress(
     conn: &rusqlite::Connection,
     keep: &KeepMap,
     progress: Option<&TrimProgress>,
 ) -> rusqlite::Result<TrimReport> {
-    let mut rows = Vec::new();
+    trim_in_chunks(conn, keep, progress, WALK_CHUNK)
+}
+
+/// [`trim_progress`] reading `chunk` rows of a table at a time, in rowid order.
+///
+/// Each table's highest rowid is taken before anything is written, and the walk stops there. A
+/// cut piece is inserted into `packs` with a rowid above every row still unread, so the bound
+/// keeps the walk to the rows the file held when the pass began — the set the old whole-file
+/// read judged — and a piece is never judged a second time.
+fn trim_in_chunks(
+    conn: &rusqlite::Connection,
+    keep: &KeepMap,
+    progress: Option<&TrimProgress>,
+    chunk: usize,
+) -> rusqlite::Result<TrimReport> {
+    let tx = conn.unchecked_transaction()?;
+    let mut last = Vec::with_capacity(Table::ALL.len());
+    let mut total = 0u64;
     for table in Table::ALL {
-        let mut stmt = conn.prepare(&format!(
-            "SELECT rowid, exchange, market, from_ms, to_ms, LENGTH(ticks), {} FROM {}",
-            table.prints_sql(),
-            table.name()
-        ))?;
-        let found = stmt
-            .query_map([], |r| {
-                Ok(RowMeta {
-                    table,
-                    rowid: r.get(0)?,
-                    exchange: r.get(1)?,
-                    market: r.get(2)?,
-                    from_ms: r.get(3)?,
-                    to_ms: r.get(4)?,
-                    bytes: r.get(5)?,
-                    prints: r.get(6)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.extend(found);
+        let (rows, max): (i64, Option<i64>) = conn.query_row(
+            &format!("SELECT COUNT(*), MAX(rowid) FROM {}", table.name()),
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        total += rows.max(0) as u64;
+        last.push((table, max));
     }
     if let Some(p) = progress {
-        p.total.store(rows.len() as u64, Ordering::Relaxed);
+        p.total.store(total, Ordering::Relaxed);
     }
-    let tx = conn.unchecked_transaction()?;
     let mut report = TrimReport::default();
+    for (table, max) in last {
+        let Some(max) = max else {
+            continue;
+        };
+        let mut after = i64::MIN;
+        loop {
+            let rows = conn
+                .prepare_cached(&format!(
+                    "SELECT rowid, exchange, market, from_ms, to_ms, LENGTH(ticks), {} FROM {}
+                     WHERE rowid > ?1 AND rowid <= ?2 ORDER BY rowid LIMIT ?3",
+                    table.prints_sql(),
+                    table.name()
+                ))?
+                .query_map(rusqlite::params![after, max, chunk as i64], |r| {
+                    Ok(RowMeta {
+                        table,
+                        rowid: r.get(0)?,
+                        exchange: r.get(1)?,
+                        market: r.get(2)?,
+                        from_ms: r.get(3)?,
+                        to_ms: r.get(4)?,
+                        bytes: r.get(5)?,
+                        prints: r.get(6)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let Some(tail) = rows.last() else {
+                break;
+            };
+            after = tail.rowid;
+            let full = rows.len() == chunk;
+            clip_rows(conn, &tx, keep, progress, rows, &mut report)?;
+            if !full {
+                break;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(report)
+}
+
+/// Judge one chunk of rows against `keep` inside the pass's transaction: drop the ones outside
+/// it, cut the straddlers to their pieces inside, leave the rest.
+fn clip_rows(
+    conn: &rusqlite::Connection,
+    tx: &rusqlite::Transaction<'_>,
+    keep: &KeepMap,
+    progress: Option<&TrimProgress>,
+    rows: Vec<RowMeta>,
+    report: &mut TrimReport,
+) -> rusqlite::Result<()> {
     for row in rows {
         if let Some(p) = progress {
             p.done.fetch_add(1, Ordering::Relaxed);
@@ -263,7 +324,7 @@ pub(super) fn trim_progress(
             report.prints_dropped += row.prints.max(0) as u64;
         };
         if kept.is_empty() {
-            whole(&mut report);
+            whole(report);
             tx.prepare_cached(&delete)?.execute([row.rowid])?;
             continue;
         }
@@ -286,7 +347,7 @@ pub(super) fn trim_progress(
                     row.exchange,
                     row.market
                 );
-                whole(&mut report);
+                whole(report);
                 continue;
             }
         };
@@ -316,8 +377,7 @@ pub(super) fn trim_progress(
         report.bytes_dropped += (row.bytes - kept_bytes).max(0);
         report.prints_dropped += (ticks.len() as i64 - kept_prints).max(0) as u64;
     }
-    tx.commit()?;
-    Ok(report)
+    Ok(())
 }
 
 /// The prints of `ticks` stamped inside `[from_ms, to_ms]`, in their stored order.
