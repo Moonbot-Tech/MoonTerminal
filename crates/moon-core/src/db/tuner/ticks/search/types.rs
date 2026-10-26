@@ -155,6 +155,10 @@ pub struct SearchStats {
     /// Points scored on the entry fills of a point scored before ([`fills`]), whether their exit
     /// was replayed or its folded result was read from the memo.
     pub fills_reused: usize,
+    /// Point requests refused by a corridor rule or an unknown take.
+    pub cornered: usize,
+    /// Point requests refused because replay left at least one deal unjudged.
+    pub unjudged_refused: usize,
 }
 
 /// What the search found.

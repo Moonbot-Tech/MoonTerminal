@@ -92,6 +92,11 @@ impl Side {
         if self.long { a.max(b) } else { a.min(b) }
     }
 
+    /// The profit direction: positive for a long, negative for a short.
+    fn sign(self) -> f64 {
+        if self.long { 1.0 } else { -1.0 }
+    }
+
     /// The extreme print in the profit direction over a run.
     fn extreme(self, prices: impl Iterator<Item = f64>) -> Option<f64> {
         if self.long {
@@ -198,6 +203,9 @@ pub struct ExitParams {
     /// The core omits `PriceDownRelative` at its default NO; strategies that set it dump
     /// `True`. Archived Exit lines without the field step by a fixed share of the buy.
     pub price_down_relative: bool,
+    /// Calculate a relative step toward the allowed-drop level rather than the buy.
+    /// https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
+    pub price_down_to_allowed_drop: bool,
     pub price_down_allowed_drop_pct: f64,
     // SellLevel
     pub sell_level_delay_s: f64,
@@ -304,6 +312,7 @@ impl Default for ExitParams {
             price_down_pct: 0.0,
             price_down_delay_s: 0.0,
             price_down_relative: false,
+            price_down_to_allowed_drop: false,
             price_down_allowed_drop_pct: 0.0,
             sell_level_delay_s: 0.0,
             sell_level_delay_next_s: 0.0,
@@ -349,6 +358,11 @@ impl ExitParams {
     pub fn sell_level_on(&self) -> bool {
         self.sell_level_delay_s != 0.0 && self.sell_level_time_s > 0.0 && self.sell_level_count > 0
     }
+
+    /// WorkTime=1 waits for a manual move, absent from replay; other positive values expire.
+    pub fn sell_level_work_time_limited(&self) -> bool {
+        self.sell_level_work_time_s > 0.0 && self.sell_level_work_time_s != 1.0
+    }
 }
 
 /// A sell rule the strategy can switch on that the model does not have.
@@ -379,9 +393,16 @@ impl<'a> ExitModel<'a> {
     ///     deal: The report row — its side, and its own exit for the fallback.
     ///     ticks: The window's prints, ascending.
     ///     fill: The modelled (or factual) entry.
+    /// Missing SellLevel history returns an unpriced open exit; `simulate_from` retains
+    /// that distinction as an absent exit so it cannot be estimated at the tape's end.
     pub fn exit(&self, deal: &Deal, ticks: &[Tick], fill: Fill) -> Exit {
-        let walk = self.walk(deal, ticks, fill);
-        if walk.past_floor {
+        Self::exit_of(self.walk(deal, ticks, fill))
+    }
+
+    /// Price a completed walk only when its execution and SellLevel history are known.
+    pub(super) fn exit_of(walk: LineWalk) -> Exit {
+        if walk.past_floor || walk.sell_level_short_at.is_some() {
+            // A SellLevel move without its full look-back has no reproducible price either.
             // A stop sale past the panic sell's `AllowedDrop` floor — "the minimum allowed level
             // in percent from the purchase price to which the Sell order may be lowered after the
             // stop is triggered and Panic Sell is activated" — is none the core could have made,

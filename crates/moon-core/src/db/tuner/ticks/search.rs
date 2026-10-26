@@ -233,7 +233,8 @@ fn search(
         .collect();
     let evaluations = std::sync::atomic::AtomicUsize::new(0);
     // Why points were refused, for the answer's reason when none is left.
-    let (cornered, unclosed) = (
+    let (cornered, unclosed, unjudged_refused) = (
+        std::sync::atomic::AtomicUsize::new(0),
         std::sync::atomic::AtomicUsize::new(0),
         std::sync::atomic::AtomicUsize::new(0),
     );
@@ -280,9 +281,15 @@ fn search(
         // Keep the fills cache's access and statistics on every request, as before. Only the
         // folded replay is memoized: refusals and tracker offers still run for every caller.
         let fills = replays::PROFILE.timed_fills(|| fill_cache.fills(&train, &train_of, &per_base));
-        Some(replay_cache.replay(&per_base, || {
+        let replayed = replay_cache.replay(&per_base, || {
             closing::replay(&train, &train_of, &per_base, &fills)
-        }))
+        });
+        // Missing exit history refuses the whole point, like an unknown take above.
+        if replayed.unjudged > 0 {
+            unjudged_refused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return None;
+        }
+        Some(replayed)
     };
     // A point the search may answer: one that closes every deal it bought (`closing`).
     let score_point = |point: &Point| -> Option<Tally> {
@@ -484,6 +491,7 @@ fn search(
     // What the descents refused, read before the counts below and the trim add to it.
     let load = |c: &std::sync::atomic::AtomicUsize| c.load(std::sync::atomic::Ordering::Relaxed);
     let (cornered_n, unclosed_n, risky_n) = (load(&cornered), load(&unclosed), load(&risky));
+    let unjudged_refused_n = load(&unjudged_refused);
     // A restart steered by the deals a point closes can end on one that leaves some open: it is
     // refused all the same, read the answer's way.
     let refused = runs
@@ -523,6 +531,8 @@ fn search(
         left_open_by_held,
         entry_points: entry_scored.load(std::sync::atomic::Ordering::Relaxed),
         fills_reused: fill_cache.reused(),
+        cornered: load(&cornered),
+        unjudged_refused: load(&unjudged_refused),
     };
     // The strategies as they stand against the answer, on the slice both were fitted on: a best
     // below its own base is a search that could not reach the base — or one whose typed range
@@ -553,7 +563,7 @@ fn search(
     });
     log::info!(
         target: crate::diagnostics::TICKS_AXIS_TARGET,
-        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} purged, {} left out; base refused by (inverts, deals nearer than their own corridor, guarded, unknown takes) {:?}; points refused by the corridor or unknown take {}, by a deal left open {}, by the risk limits {}; points scored on entry fills read before {} of {}; stopped {}/{} ({})",
+        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} purged, {} left out; base refused by (inverts, deals nearer than their own corridor, guarded, unknown takes) {:?}; points refused by the corridor or unknown take {}, by an unjudged deal {}, by a deal left open {}, by the risk limits {}; points scored on entry fills read before {} of {}; stopped {}/{} ({})",
         brief(&base_score),
         brief(&score),
         train.len(),
@@ -561,6 +571,7 @@ fn search(
         left_open.len(),
         base_why,
         cornered_n,
+        unjudged_refused_n,
         unclosed_n,
         risky_n,
         stats.fills_reused,

@@ -111,6 +111,8 @@ pub enum Unjudged {
     CustomEmaUnparsed,
     /// The held tape cannot warm the custom formula's first check.
     CustomEmaShortHistory,
+    /// Admissible tape and closed bars do not cover a SellLevel move's whole look-back.
+    SellLevelShortLookback,
     /// The strategy ran a sell rule the model does not have.
     Rule(UnmodelledRule),
     /// The rule followed the price through a hole in the tape.

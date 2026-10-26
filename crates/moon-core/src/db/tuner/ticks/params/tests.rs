@@ -2,6 +2,108 @@
 
 use super::*;
 
+/// Omitting this model-only key would silently lose the switch on historical buys.
+#[test]
+fn price_down_allowed_drop_switch_is_fetched_and_parsed() {
+    assert!(
+        param_keys()
+            .iter()
+            .any(|key| key == "PriceDownToAllowedDrop")
+    );
+    for spelling in ["YES", "True", "1"] {
+        let values = [("PriceDownToAllowedDrop".into(), spelling.into())].into();
+        let p = exit_params(
+            &StrategyValues {
+                values: &values,
+                defaults: &HashMap::new(),
+            },
+            ModelSettings::default(),
+        );
+        assert!(p.price_down_to_allowed_drop, "{spelling}");
+    }
+    let p = exit_params(
+        &StrategyValues {
+            values: &HashMap::new(),
+            defaults: &HashMap::new(),
+        },
+        ModelSettings::default(),
+    );
+    assert!(!p.price_down_to_allowed_drop);
+}
+
+/// Neutral model fallbacks would disable PriceDown or replay an omitted sell field incorrectly.
+#[test]
+fn omitted_sell_fields_use_the_core_defaults_without_a_schema() {
+    let values = [("PriceDownTimer".into(), "1".into())].into();
+    let defaults = HashMap::new();
+    let p = exit_params(
+        &StrategyValues {
+            values: &values,
+            defaults: &defaults,
+        },
+        ModelSettings::default(),
+    );
+    assert!(p.price_down_on());
+    assert_eq!(p.sell_price_pct, 0.5);
+    assert_eq!(p.price_down_pct, 0.2);
+    assert_eq!(p.price_down_delay_s, 10.0);
+    assert_eq!(p.price_down_allowed_drop_pct, 0.1);
+    assert_eq!(p.sell_level_time_s, 3600.0);
+    assert_eq!(p.sell_level_adjust_pct, 0.2);
+    assert_eq!(p.sell_level_count, 1);
+    assert_eq!(p.sell_level_allowed_drop_pct, 0.1);
+}
+
+/// Hardcoded core defaults must not override schema defaults or explicitly stored sell fields.
+#[test]
+fn sell_fields_prefer_explicit_values_then_schema_defaults() {
+    let fields = [
+        "SellPrice",
+        "PriceDownPercent",
+        "PriceDownDelay",
+        "PriceDownAllowedDrop",
+        "SellLevelTime",
+        "SellLevelAdjust",
+        "SellLevelCount",
+        "SellLevelAllowedDrop",
+    ];
+    let defaults = fields
+        .iter()
+        .map(|key| (key.to_ascii_lowercase(), 7.0))
+        .collect();
+    for explicit in [false, true] {
+        let values = if explicit {
+            fields
+                .iter()
+                .map(|key| ((*key).into(), "9".into()))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let p = exit_params(
+            &StrategyValues {
+                values: &values,
+                defaults: &defaults,
+            },
+            ModelSettings::default(),
+        );
+        let expected = if explicit { 9.0 } else { 7.0 };
+        assert_eq!(
+            [
+                p.sell_price_pct,
+                p.price_down_pct,
+                p.price_down_delay_s,
+                p.price_down_allowed_drop_pct,
+                p.sell_level_time_s,
+                p.sell_level_adjust_pct,
+                f64::from(p.sell_level_count),
+                p.sell_level_allowed_drop_pct,
+            ],
+            [expected; 8]
+        );
+    }
+}
+
 /// Losing the KB default or minimum would keep canceled MoonShot entries fillable.
 #[test]
 fn moonshot_auto_cancel_buy_uses_default_minimum_and_disable() {

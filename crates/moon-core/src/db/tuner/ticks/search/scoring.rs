@@ -4,7 +4,7 @@ use super::*;
 
 /// One replay result, retaining its simulated close for chronological risk aggregation.
 pub(super) struct ReplayedDeal {
-    /// The variant lacks the inputs needed to judge this deal's take.
+    /// The variant lacks the inputs needed to judge this deal's take or SellLevel history.
     pub(super) unjudged: bool,
     /// Closed result in the scope's metric and the entry spend.
     pub(super) result: Option<(f64, f64)>,
@@ -58,7 +58,7 @@ pub(super) fn results(
                 .map(|value| (value, d.deal.spent));
             let at_tape_end = outcome.open_metric_at_tape_end(&d.deal, &d.ticks);
             ReplayedDeal {
-                unjudged: false,
+                unjudged: outcome_unjudged(&outcome),
                 result,
                 left_open: outcome.left_open(),
                 at_tape_end,
@@ -68,12 +68,17 @@ pub(super) fn results(
         .collect()
 }
 
+/// A filled position whose exit cannot be judged is neither open nor an untraded deal.
+pub(super) fn outcome_unjudged(outcome: &Outcome) -> bool {
+    outcome.fill.is_some() && outcome.exit.is_none()
+}
+
 /// One variant's score over a set of deals: the tally of the deals it traded, their spend, and
 /// the deals that fell out of the tally — so a variant never reads better than the fact because
 /// deals silently dropped out.
 #[derive(Clone, Debug, Default)]
 pub struct VariantScore {
-    /// Deals whose take the variant cannot place: neither traded nor untraded, outside the tally.
+    /// Deals whose take or SellLevel history is unknown: outside both traded and untraded tallies.
     pub unjudged: usize,
     /// The results of the deals the variant traded and closed, in order.
     pub tally: Tally,

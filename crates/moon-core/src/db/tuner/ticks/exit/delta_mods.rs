@@ -13,7 +13,7 @@
 //! snapshot (0.105).
 
 use super::sell_order::{archived_take, take_is_recorded};
-use super::{ExitModel, ExitParams};
+use super::{ExitModel, ExitParams, Side};
 use crate::db::tuner::ticks::mshot::Modifiers;
 use crate::db::tuner::ticks::verify::{
     REASON_STOP, REASON_TAKE, reason_starts_with, stated_stop_level,
@@ -51,9 +51,9 @@ impl ExitModel<'_> {
 ///     deal: The trade, for its deltas and the core's own sum.
 ///     at_ms: When the sell was placed — the fill.
 pub fn modifier_sum(params: &ExitParams, deal: &Deal, at_ms: i64) -> f64 {
-    let model = model_sum(&params.sell_mods, deal, at_ms);
+    let (model, mark_active) = model_sum(&params.sell_mods, deal, at_ms);
     let sum = match deal.fact_modifier {
-        Some(fact) => (model + fact.residual_for(&params.sell_mods)).max(0.0),
+        Some(fact) => (model + fact.residual_for(&params.sell_mods, mark_active)).max(0.0),
         None => model,
     };
     if params.max_modifier > 0.0 {
@@ -63,16 +63,32 @@ pub fn modifier_sum(params: &ExitParams, deal: &Deal, at_ms: i64) -> f64 {
     }
 }
 
-/// The sum as the deltas give it, uncapped and without the record's correction.
-fn model_sum(mods: &Modifiers, deal: &Deal, at_ms: i64) -> f64 {
-    mods.near_addition(&deal.deltas_at(at_ms)).abs()
+/// The uncapped oriented sum and whether its mark term receives residual weight at `at_ms`.
+fn model_sum(mods: &Modifiers, deal: &Deal, at_ms: i64) -> (f64, bool) {
+    let mut deltas = deal.deltas_at(at_ms);
+    // Matches the core's rule: turn the mark-price delta to the position's direction and
+    // floor it at zero before it enters the Add sum.
+    // Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/delta-modifiers-tab
+    // MarkPriceDelta: https://moonbot.pro/documentation/reports-window/main-reports-area-with-settings
+    deltas.dmark = oriented_mark(deal, deltas.dmark);
+    (mods.near_addition(&deltas).abs(), deltas.dmark > 0.0)
+}
+
+/// Only adverse mark deviation contributes to the sell sum or receives residual weight.
+fn oriented_mark(deal: &Deal, mark: f64) -> f64 {
+    (Side {
+        long: deal.is_long(),
+    }
+    .sign()
+        * mark)
+        .max(0.0)
 }
 
 /// The weights the record's miss is spread over, one per `Add*` term: the coefficient's
 /// magnitude. The price-bug term is left out — its contribution has a ceiling of its own
 /// (`Modifiers::pricebug_term`) and it never moves off the snapshot, so no part of the miss is
-/// its.
-fn weights(mods: &Modifiers) -> [f64; 15] {
+/// its. A mark term floored to zero by the position's direction receives no weight either.
+fn weights(mods: &Modifiers, mark_active: bool) -> [f64; 15] {
     [
         mods.add_5s,
         mods.add_1m,
@@ -81,7 +97,7 @@ fn weights(mods: &Modifiers) -> [f64; 15] {
         mods.add_1h,
         mods.add_3h,
         mods.add_24h,
-        mods.add_mark,
+        if mark_active { mods.add_mark } else { 0.0 },
         mods.add_btc_1h,
         mods.add_btc_5m,
         mods.add_btc_1m,
@@ -94,14 +110,14 @@ fn weights(mods: &Modifiers) -> [f64; 15] {
 }
 
 /// The total weight of a family's terms ([`weights`]).
-fn weight(mods: &Modifiers) -> f64 {
-    weights(mods).iter().sum()
+fn weight(mods: &Modifiers, mark_active: bool) -> f64 {
+    weights(mods, mark_active).iter().sum()
 }
 
 /// Whether a family sets any delta term ([`weights`]) — the price-bug term, capped and read off
 /// the snapshot, is a rule of its own and left out.
 pub fn has_delta_terms(mods: &Modifiers) -> bool {
-    weight(mods) > 0.0
+    weight(mods, true) > 0.0
 }
 
 /// The core's own delta-modifier sum on one trade, read back off its record, kept as what the
@@ -150,7 +166,10 @@ impl FactModifier {
         params: &ExitParams,
         exit_points: Option<&[(i64, f64)]>,
     ) -> Option<Self> {
-        let weight = weight(&params.sell_mods);
+        let at_ms =
+            crate::db::tuner::ticks::verify::fact_sell_start(deal, params, exit_points).t_ms;
+        let (raw, mark_active) = model_sum(&params.sell_mods, deal, at_ms);
+        let weight = weight(&params.sell_mods, mark_active);
         if weight <= 0.0 {
             return None;
         }
@@ -163,9 +182,6 @@ impl FactModifier {
             (Some(take), Some(stop)) => take.overlap(stop).unwrap_or(take),
             (take, stop) => take.or(stop)?,
         };
-        let at_ms =
-            crate::db::tuner::ticks::verify::fact_sell_start(deal, params, exit_points).t_ms;
-        let raw = model_sum(&params.sell_mods, deal, at_ms);
         let cap = params.max_modifier;
         let capped = if cap > 0.0 { raw.min(cap) } else { raw };
         let kept = reading.nearest(capped);
@@ -179,9 +195,9 @@ impl FactModifier {
         Some(Self { residual, weight })
     }
 
-    /// What the model's sum misses under `mods`: the fact's miss, scaled by the terms' weight.
-    pub fn residual_for(&self, mods: &Modifiers) -> f64 {
-        self.residual * weight(mods) / self.weight
+    /// Scale the fact's miss by the variant's terms active at its own sell-booking time.
+    pub fn residual_for(&self, mods: &Modifiers, mark_active: bool) -> f64 {
+        self.residual * weight(mods, mark_active) / self.weight
     }
 }
 

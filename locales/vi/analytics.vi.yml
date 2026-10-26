@@ -1,6 +1,8 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.why.sell_level_short: "không đủ lịch sử cho SellLevel"
+analytics.ticks.why.sell_level_short.why: "Dữ liệu giao dịch và các nến đã đóng hoàn toàn không bao phủ toàn bộ khoảng thời gian SellLevel mà không có khoảng trống."
 analytics.ticks.param.custom_ema_threshold: "Ngưỡng công thức EMA %{k}"
 analytics.ticks.chip.accepted_short_tail: "dùng được: đuôi ngắn"
 analytics.ticks.chip.accepted_short_tail_tip: "Giao dịch dùng được có dữ liệu đầy đủ đến lúc đóng. Đuôi ngắn và không có nguồn đang bật nào có thể bổ sung."
@@ -956,8 +958,6 @@ analytics.ticks.model_series: "Nhịp chuỗi giá, ms"
 analytics.ticks.model_series_tip: "Nhịp chuỗi giá của core: cắt lỗ ở StopLossEMA 0 cũng kích trên nó, và cắt lỗ nhanh (FastStopLoss) kiểm giá cuối của mỗi nhịp"
 analytics.ticks.model_step_floor: "Bước đường tối thiểu, ms"
 analytics.ticks.model_step_floor_tip: "Độ trễ bước PriceDown / SellLevel đặt bằng không trong chiến lược (FAQ: 0.33 giây)"
-analytics.ticks.model_pump_lag: "Pump: trễ dịch, ms"
-analytics.ticks.model_pump_lag_tip: "Core dịch một lệnh bán PumpsDetection bao xa sau PumpMoveTimer"
 analytics.ticks.model_pump_peak: "Pump: cửa sổ đỉnh, ms"
 analytics.ticks.model_pump_peak_tip: "Đỉnh của pump được tìm bao xa trước lúc chốt"
 analytics.ticks.model_point_time: "Dung sai thời gian, ms"

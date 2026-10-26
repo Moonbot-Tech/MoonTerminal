@@ -1,5 +1,20 @@
 use super::*;
 
+/// Removing a model knob must keep old saved settings readable and retain their other values.
+#[test]
+fn legacy_pump_lag_is_ignored_when_loading_settings() {
+    let s: ModelSettings =
+        serde_json::from_str(r#"{"pump_move_lag_ms": 900, "latency_ms": 250.0}"#).unwrap();
+    assert_eq!(s.latency_ms, 250.0);
+    assert_eq!(s.pump_peak_lookback_ms, PUMP_PEAK_LOOKBACK_MS);
+    assert!(
+        serde_json::to_value(s)
+            .unwrap()
+            .get("pump_move_lag_ms")
+            .is_none()
+    );
+}
+
 #[test]
 fn the_defaults_are_the_measured_constants() {
     let d = ModelSettings::default();

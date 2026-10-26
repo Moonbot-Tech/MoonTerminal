@@ -77,18 +77,21 @@ pub(in crate::analytics::tuner) enum UncheckedWhy {
     SaleUnknown,
     /// A custom formula could not be parsed, supported, or warmed from tape.
     CustomEma,
+    /// A SellLevel move needs history older than the continuous tape and closed bars cover.
+    SellLevel,
     /// No verdict yet.
     Pending,
 }
 
 impl UncheckedWhy {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Rule,
         Self::TakeUnknown,
         Self::Gap,
         Self::OtherRule,
         Self::SaleUnknown,
         Self::CustomEma,
+        Self::SellLevel,
         Self::Pending,
     ];
 
@@ -106,6 +109,7 @@ impl UncheckedWhy {
                 | Unjudged::CustomEmaUnparsed
                 | Unjudged::CustomEmaShortHistory,
             )) => Some(Self::CustomEma),
+            Some(DealWhy::Unjudged(Unjudged::SellLevelShortLookback)) => Some(Self::SellLevel),
             Some(DealWhy::NoVerdict) => Some(Self::Pending),
             Some(
                 DealWhy::Fit
@@ -126,6 +130,7 @@ impl UncheckedWhy {
         }
     }
 
+    /// Localized cause for unchecked counts, sharing SellLevel's detailed reason label.
     fn text(self) -> String {
         match self {
             Self::Rule => t!("analytics.ticks.pick.why_rule"),
@@ -134,6 +139,7 @@ impl UncheckedWhy {
             Self::OtherRule => t!("analytics.ticks.pick.why_other"),
             Self::SaleUnknown => t!("analytics.ticks.pick.why_sale"),
             Self::CustomEma => t!("analytics.ticks.pick.why_custom_ema"),
+            Self::SellLevel => t!("analytics.ticks.why.sell_level_short"),
             Self::Pending => t!("analytics.ticks.pick.why_pending"),
         }
         .to_string()

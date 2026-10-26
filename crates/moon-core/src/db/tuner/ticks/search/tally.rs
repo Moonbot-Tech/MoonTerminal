@@ -280,7 +280,7 @@ pub fn variant_tally_by_deal(
                     outcome.left_open(),
                     at_tape_end,
                     outcome.exit.map(|exit| exit.t_ms),
-                    false,
+                    scoring::outcome_unjudged(&outcome),
                 )
             })
             .collect();

@@ -1,6 +1,18 @@
 use super::*;
 use crate::db::tuner::ticks::params::{StrategyValues, unmodelled_rule};
 
+/// Reintroducing the obsolete warning would label the newly modelled relative rule unsupported.
+#[test]
+fn price_down_to_allowed_drop_is_modelled() {
+    let v = values(&[
+        ("AutoSell", "YES"),
+        ("PriceDownTimer", "1"),
+        ("PriceDownRelative", "YES"),
+        ("PriceDownToAllowedDrop", "YES"),
+    ]);
+    assert!(unmodelled_fields(&v, &HashMap::new(), &FieldDeps::bundled()).is_empty());
+}
+
 fn values(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     pairs
         .iter()

@@ -36,7 +36,7 @@ fn a_sale_bigger_than_its_entry_is_not_a_deal() {
     ));
 }
 
-/// Every trading kind is tunable; the containers and an unresolved kind are not.
+/// Book-dependent listings, containers and unresolved kinds must stay outside replay.
 #[test]
 fn tunable_kinds_are_the_trading_ones_resolved() {
     for kind in [
@@ -49,7 +49,7 @@ fn tunable_kinds_are_the_trading_ones_resolved() {
     ] {
         assert!(tunable_kind(kind), "{kind}");
     }
-    for kind in ["", "Manual", "Alerts", "Watcher"] {
+    for kind in ["", "Manual", "Alerts", "Watcher", "NewListing"] {
         assert!(!tunable_kind(kind), "{kind:?}");
     }
 }

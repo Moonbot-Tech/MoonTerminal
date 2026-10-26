@@ -4,6 +4,86 @@ use super::*;
 use crate::db::tuner::ticks::{Deltas, ModelSettings};
 use crate::feed::types::{Side, Tick};
 
+/// A plausible sell level from a truncated hour must not become a judged hit or miss.
+#[test]
+fn sell_level_short_lookback_is_unjudged() {
+    let mut d = ema_deal();
+    d.kind = "PumpsDetection".into();
+    d.sell_reason = "Auto Price Down".into();
+    d.close_ms = 5_000;
+    d.archived_take = None;
+    let p = ExitParams {
+        sell_price_pct: 30.0,
+        sell_at_last_price: false,
+        use_stop_loss: false,
+        sell_level_delay_s: 5.0,
+        sell_level_time_s: 3600.0,
+        sell_level_count: 1,
+        sell_level_adjust_pct: 0.0,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let ticks = [-295_000, 0, 5_000, 6_000]
+        .into_iter()
+        .map(|at| Tick {
+            time_ms: f64::from(at),
+            price: 100.0,
+            qty: 1.0,
+            side: Side::Buy,
+        })
+        .collect::<Vec<_>>();
+    let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, None);
+    assert_eq!(
+        v.exit_finding,
+        ExitFinding::Unjudged(Unjudged::SellLevelShortLookback)
+    );
+    assert_eq!(v.exit, None);
+    assert!(!crate::db::tuner::ticks::record::fit_for_search(&v));
+}
+
+/// A later short look-back must not erase a fact sold before SellLevel first ran.
+#[test]
+fn sell_level_short_after_the_fact_sale_keeps_its_verdict() {
+    let mut d = ema_deal();
+    d.kind = "PumpsDetection".into();
+    d.sell_reason = "Sell Price".into();
+    d.sell_price = 101.0;
+    d.archived_take = None;
+    let p = ExitParams {
+        sell_price_pct: 1.0,
+        sell_at_last_price: false,
+        use_stop_loss: false,
+        sell_level_delay_s: 5.0,
+        sell_level_time_s: 3600.0,
+        sell_level_count: 1,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let ticks = [
+        (-300_000, 100.0),
+        (0, 100.0),
+        (1_000, 101.0),
+        (5_000, 100.0),
+    ]
+    .into_iter()
+    .map(|(at, price)| Tick {
+        time_ms: f64::from(at),
+        price,
+        qty: 1.0,
+        side: Side::Buy,
+    })
+    .collect::<Vec<_>>();
+    let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, None);
+    assert_eq!(v.exit_finding, ExitFinding::Hit);
+    assert!(v.exit.is_some());
+}
+
 /// Neutral factual entry with an EMA close and a recorded take unrelated to its market sale.
 fn ema_deal() -> Deal {
     Deal {

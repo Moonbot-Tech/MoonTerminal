@@ -69,6 +69,8 @@ pub struct LineWalk {
     pub custom_ema_fired_ms: Option<i64>,
     /// The first formula check lacked the required warm-up tape.
     pub custom_ema_short: bool,
+    /// First SellLevel move whose look-back the admissible tape and bars do not cover.
+    pub sell_level_short_at: Option<i64>,
     /// Source that warmed the first evaluable formula check.
     pub custom_ema_path: Option<EmaHistoryPath>,
     /// The first print once the take was live, when it was already through the untouched take:
@@ -176,6 +178,8 @@ pub(super) struct Line {
     /// earlier one — still the market the take meets.
     prevailing: Option<f64>,
     points: Vec<LinePoint>,
+    /// Once a SellLevel move lacks history, later moves cannot restore a priced verdict.
+    pub(super) sell_level_short_at: Option<i64>,
 }
 
 impl Line {
@@ -208,6 +212,7 @@ impl Line {
                 t_ms: armed_at,
                 price: take_placed,
             }],
+            sell_level_short_at: None,
         }
     }
 
@@ -329,6 +334,7 @@ impl Line {
             past_floor: false,
             custom_ema_fired_ms: None,
             custom_ema_short: false,
+            sell_level_short_at: self.sell_level_short_at,
             custom_ema_path: None,
         }
     }
@@ -427,6 +433,7 @@ fn walk_with_clock(
     );
     let mut price_down = PriceDown::new(params, deal, fill, side);
     let mut pump_move = PumpMove::new(params, fill, side, armed_at);
+    let mut price_down_deferred = false;
     let mut sell_level = SellLevel::new(params, deal, fill, side);
     let mut stops = Stops::new(deal, ticks, fill, params, side);
 
@@ -504,6 +511,7 @@ fn walk_with_clock(
             hole = None;
             let from_ms = gap.from_ms.max(fill.t_ms);
             let rules = Rules {
+                price_down_deferred: &mut price_down_deferred,
                 pump_move: &mut pump_move,
                 price_down: &mut price_down,
                 sell_level: &mut sell_level,
@@ -512,6 +520,7 @@ fn walk_with_clock(
             line.land(from_ms);
             let held_through = hold_until_ms.is_some_and(|until| until >= gap.to_ms);
             let rules = Rules {
+                price_down_deferred: &mut price_down_deferred,
                 pump_move: &mut pump_move,
                 price_down: &mut price_down,
                 sell_level: &mut sell_level,
@@ -533,6 +542,7 @@ fn walk_with_clock(
         // step due by this print happened BEFORE it, and a step that also reached the book
         // before it is what this print meets.
         let rules = Rules {
+            price_down_deferred: &mut price_down_deferred,
             pump_move: &mut pump_move,
             price_down: &mut price_down,
             sell_level: &mut sell_level,
@@ -616,26 +626,33 @@ fn walk_with_clock(
 
 /// The rules that move the sell line on their own clocks.
 struct Rules<'r, 'a> {
+    /// A PumpMove pass left PriceDown waiting for the next print's placement clock.
+    price_down_deferred: &'r mut bool,
     pump_move: &'r mut PumpMove<'a>,
     price_down: &'r mut PriceDown<'a>,
     sell_level: &'r mut SellLevel<'a>,
 }
 
 impl Rules<'_, '_> {
-    /// Every step due by `t_ms`: PriceDown steps, the pump move and SellLevel's moves, one per
-    /// due moment, in the order they fell due — on a tie the pump move, then PriceDown, then
-    /// SellLevel: each step chains off where the one before it left the line. (SellLevel ran as
-    /// a pass of its own after the others until 2026-09-24, so a PriceDown step due after a
-    /// SellLevel move went first, off the level the move then replaced.)
+    /// Drain steps in due-time order. At one due moment the pass matches the core's rule:
+    /// SellLevel first, then PumpMove or PriceDown, chaining off the preceding level. A fired
+    /// PumpMove suppresses a simultaneous PriceDown even without a price change; that step waits
+    /// for the next print and is placed at its time. Other overdue steps keep their due moments.
     ///
     /// Args:
     ///     seen: The prints up to `t_ms` — what the price-following rules read.
     fn step_through(self, t_ms: i64, seen: &[Tick], line: &mut Line) {
+        let mut suppress_price_down = false;
         loop {
+            let price_down_due = self
+                .price_down
+                .due(t_ms)
+                .filter(|_| !suppress_price_down)
+                .map(|due| if *self.price_down_deferred { t_ms } else { due });
             let due = [
-                self.pump_move.due(t_ms),
-                self.price_down.due(t_ms),
                 self.sell_level.due(t_ms),
+                self.pump_move.due(t_ms),
+                price_down_due,
             ]
             .into_iter()
             .enumerate()
@@ -643,9 +660,18 @@ impl Rules<'_, '_> {
             .min();
             match due {
                 None => break,
-                Some((due, 0)) => self.pump_move.step(due, seen, line),
-                Some((due, 1)) => self.price_down.step(due, line),
-                Some((due, _)) => self.sell_level.step(due, seen, line),
+                Some((due, 0)) => self.sell_level.step(due, seen, line),
+                Some((due, 1)) => {
+                    self.pump_move.step(due, seen, line);
+                    if price_down_due == Some(due) {
+                        *self.price_down_deferred = true;
+                        suppress_price_down = true;
+                    }
+                }
+                Some((due, _)) => {
+                    *self.price_down_deferred = false;
+                    self.price_down.step(due, line);
+                }
             }
         }
     }
@@ -684,7 +710,8 @@ fn cross_hole(
         price: f64::NAN,
         kind: ExitKind::InGap,
     });
-    if rules.pump_move.due(i64::MAX).is_some()
+    if *rules.price_down_deferred
+        || rules.pump_move.due(i64::MAX).is_some()
         || rules.sell_level.due(i64::MAX).is_some()
         || stops.follows_price()
     {

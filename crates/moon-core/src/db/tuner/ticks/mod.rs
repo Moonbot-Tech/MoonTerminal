@@ -520,6 +520,8 @@ pub struct Outcome {
     /// `None` — the entry never filled on this tape; there is no trade and the KPI does not
     /// count it (the caption's "by N of M" is where that shows).
     pub fill: Option<Fill>,
+    /// Absent after a fill when a SellLevel look-back cannot be reproduced; no priced exit
+    /// or open-position estimate may be inferred from that unknown history.
     pub exit: Option<Exit>,
     /// Signed result in per cent of the fill price, sign already flipped for a short. `None`
     /// without a fill, with an [`ExitKind::OpenAtWindowEnd`] or [`ExitKind::InGap`] exit, or when
@@ -729,6 +731,7 @@ fn fact_fill(deal: &Deal) -> Fill {
 
 /// The exit half of [`simulate`]: the trade from an entry `fill` already read
 /// ([`entry_fill`]) — `None` makes no trade.
+/// Incomplete SellLevel history retains the fill but leaves exit and profit unknown.
 pub fn simulate_from(
     deal: &Deal,
     ticks: &[Tick],
@@ -765,7 +768,16 @@ pub fn simulate_from(
             } else {
                 fill
             };
-            ExitModel::new(exit).exit(deal, ticks, sell_fill)
+            let walked = ExitModel::new(exit).walk(deal, ticks, sell_fill);
+            if walked.sell_level_short_at.is_some() {
+                // Bought, but no reproducible exit: do not price it or mark it to the tail.
+                return Outcome {
+                    fill: Some(fill),
+                    exit: None,
+                    profit_pct: None,
+                };
+            }
+            ExitModel::exit_of(walked)
         }
     };
     let profit_pct = match exit_result.kind {

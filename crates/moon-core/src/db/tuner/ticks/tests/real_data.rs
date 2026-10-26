@@ -1047,6 +1047,7 @@ fn miss_cause(finding: verify::ExitFinding) -> Option<String> {
         ExitFinding::Unjudged(Unjudged::CustomEmaUnsupported) => "··ema-unsupported".to_string(),
         ExitFinding::Unjudged(Unjudged::CustomEmaUnparsed) => "··ema-unparsed".to_string(),
         ExitFinding::Unjudged(Unjudged::CustomEmaShortHistory) => "··ema-short".to_string(),
+        ExitFinding::Unjudged(Unjudged::SellLevelShortLookback) => "sell-level-short".to_string(),
     })
 }
 

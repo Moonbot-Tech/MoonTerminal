@@ -138,15 +138,6 @@ pub(super) const MODEL_FIELDS: &[ModelField] = &[
         set: |m, v| m.step_floor_ms = v as i64,
     },
     ModelField {
-        id: "pump-lag",
-        label: "analytics.ticks.model_pump_lag",
-        tip: "analytics.ticks.model_pump_lag_tip",
-        section: Section::Line,
-        whole: true,
-        get: |m| m.pump_move_lag_ms as f64,
-        set: |m, v| m.pump_move_lag_ms = v as i64,
-    },
-    ModelField {
         id: "pump-peak",
         label: "analytics.ticks.model_pump_peak",
         tip: "analytics.ticks.model_pump_peak_tip",

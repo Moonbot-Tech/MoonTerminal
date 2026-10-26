@@ -98,13 +98,12 @@ impl ExitModel<'_> {
         // Then the delta modifiers move the sell so placed — by `SellModifier · Σ` per cent of
         // its own price, a short's by a division as every short per cent — after the floor of
         // `SellPrice` over the buy and after the lift to the ask, so a negative coefficient can
-        // take it under that floor (the core developer via LinKvo, 2026-09-24; the core's own
-        // "SellPrice adjusted by +0.30 * +2.30% = +0.69% (0.00056430 => 0.00056044)" is a short's
-        // 0.00056430 / 1.0069).
-        // Under the floor, but not through the fill: a shift deep enough to carry the sell past
-        // the entry — toward zero, a short's toward infinity at −100 % — is held AT the entry.
-        // What the core does there is not known (no trade of the live sample reaches it), and a
-        // take on the losing side would turn every level the line steps from inside out.
+        // take it toward the fill. This matches the core's rule: a short's shift is
+        // take / (1 + SellModifier * sum / 100).
+        // The core floors a modified sell at the buy for a long (a mirrored ceiling for a
+        // short), without fee compensation, so this does not guarantee net break-even.
+        // SellShot / SellSpread may replace that price later.
+        // Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/delta-modifiers-tab
         let shift_ms = spread_base
             .and(deal.stop_anchor.map(|a| a.entry_ms))
             .unwrap_or(fill.t_ms);
@@ -485,6 +484,7 @@ pub(super) struct PriceDown<'a> {
 }
 
 impl<'a> PriceDown<'a> {
+    /// Arm the timer and its allowed-drop level at the replayed buy.
     pub(super) fn new(params: &'a ExitParams, deal: &Deal, fill: Fill, side: Side) -> Self {
         let pd_on = params.price_down_on();
         Self {
@@ -509,10 +509,18 @@ impl<'a> PriceDown<'a> {
         let (params, fill, side) = (self.params, self.fill, self.side);
         let core = line.core();
         let next = if params.price_down_relative {
-            core - (core - fill.price) * params.price_down_pct / 100.0
+            // The percentage uses the distance to PriceDownAllowedDrop when enabled,
+            // rather than the distance to the buy price.
+            // https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
+            let base = if params.price_down_to_allowed_drop {
+                self.floor
+            } else {
+                fill.price
+            };
+            core - (core - base) * params.price_down_pct / 100.0
         } else {
-            // A share of the price, not a level off the buy: the step multiplies for a short too
-            // (the core developer, 2026-09-24, answer 9).
+            // A share of the price, not a level off the buy: the step multiplies for a short too,
+            // matching the core's rule.
             core - side.over(fill.price, params.price_down_pct) + fill.price
         };
         let next = side.farther(next, self.floor);
@@ -545,11 +553,13 @@ pub(super) struct SellLevel<'a> {
     until: Option<i64>,
     /// `SellLevelAllowedDrop` over the buy.
     floor: f64,
-    /// The market's bars (`Deal::bars`), for the part of the look-back the tape does not reach.
-    bars: &'a [Bar],
+    /// Valid market bars, sorted by descending end once and reused by every look-back step.
+    bars: Vec<&'a Bar>,
 }
 
 impl<'a> SellLevel<'a> {
+    /// Arm the moves; WorkTime=1 stops only after a manual sell move, absent from replay.
+    /// https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
     pub(super) fn new(params: &'a ExitParams, deal: &'a Deal, fill: Fill, side: Side) -> Self {
         let floor_ms = params.model.step_floor_ms;
         let sl_on = params.sell_level_on();
@@ -565,6 +575,17 @@ impl<'a> SellLevel<'a> {
         } else {
             sl_first_ms.max(floor_ms)
         };
+        let mut bars: Vec<_> = deal
+            .bars
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|b| {
+                let price = if side.long { b.high } else { b.low };
+                b.from_ms < b.to_ms && price.is_finite() && price > 0.0
+            })
+            .collect();
+        bars.sort_unstable_by_key(|b| std::cmp::Reverse(b.to_ms));
         Self {
             params,
             fill,
@@ -572,10 +593,11 @@ impl<'a> SellLevel<'a> {
             next: sl_on.then(|| fill.t_ms + sl_first_ms),
             every_ms,
             left: params.sell_level_count,
-            until: (params.sell_level_work_time_s > 0.0)
+            until: params
+                .sell_level_work_time_limited()
                 .then(|| fill.t_ms + (params.sell_level_work_time_s * 1000.0) as i64),
             floor: side.off_buy(fill.price, params.sell_level_allowed_drop_pct),
-            bars: deal.bars.as_deref().unwrap_or_default(),
+            bars,
         }
     }
 
@@ -599,6 +621,45 @@ impl<'a> SellLevel<'a> {
         side.extreme(prints.into_iter().chain(bars))
     }
 
+    /// The continuous tape covers from its first print through due; silence is not a gap.
+    /// Deal carries no held-window start, so use its first print as the coverage boundary.
+    /// Extend back through contiguous bars, ending at due without tape. A bar straddling
+    /// `from` is safe only if its extreme is no farther in profit than the admissible extreme E:
+    /// the window is a subset of that union, whose extreme is E, so its extreme is exactly E.
+    /// A farther boundary extreme could lie outside the window; a gap also leaves it unknown.
+    fn covered(&self, seen: &[Tick], from: i64, due: i64, extreme: Option<f64>) -> bool {
+        let mut start = seen
+            .iter()
+            .find(|t| {
+                let at = t.time_ms as i64;
+                at <= due && t.price > 0.0
+            })
+            .map(|t| t.time_ms as i64);
+        if start.is_some_and(|at| at <= from) {
+            return true;
+        }
+        let mut joins_tape = start.is_some();
+        for bar in self
+            .bars
+            .iter()
+            .filter(|b| b.to_ms <= due && b.to_ms > from)
+        {
+            let next = start.unwrap_or(due);
+            if bar.from_ms < next && (bar.to_ms == next || (joins_tape && bar.to_ms >= next)) {
+                if bar.from_ms < from {
+                    let price = if self.side.long { bar.high } else { bar.low };
+                    return extreme.is_some_and(|e| self.side.farther(price, e) == e);
+                }
+                start = Some(bar.from_ms);
+                joins_tape = false;
+                if start == Some(from) {
+                    return true;
+                }
+            }
+        }
+        start == Some(from)
+    }
+
     /// The move due at `due`: to the high of the look-back, adjusted.
     ///
     /// Args:
@@ -610,7 +671,11 @@ impl<'a> SellLevel<'a> {
             return;
         }
         let from = due - (params.sell_level_time_s * 1000.0) as i64;
-        if let Some(high) = self.high(seen, from, due) {
+        let high = self.high(seen, from, due);
+        if !self.covered(seen, from, due, high) {
+            line.sell_level_short_at.get_or_insert(due);
+        }
+        if let Some(high) = high {
             let next = if params.sell_level_relative {
                 fill.price + (high - fill.price) * params.sell_level_adjust_pct / 100.0
             } else {

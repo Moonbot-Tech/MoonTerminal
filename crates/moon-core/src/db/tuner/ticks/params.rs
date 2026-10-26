@@ -443,6 +443,7 @@ pub fn params_for<'k>(
 /// since 2026-09-25, all but `MaxModifier` on a MoonShot, which the grid draws fixed there
 /// (see its [`TICK_PARAMS`] entry) — so it is listed here as well.
 const MODEL_ONLY_KEYS: &[&str] = &[
+    "PriceDownToAllowedDrop",
     "SellByCustomEMA",
     "SellEMADelay",
     "HookSellFixed",
@@ -458,7 +459,7 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "AllowedDrop3",
     "UseMarketOrder",
     "StopLossSpread",
-    // PumpsDetection's one sell move (see `exit::pump_move::PUMP_MOVE_LAG_MS`); `PumpMovePersent` is the
+    // PumpsDetection's one sell move (see `exit::pump_move`); `PumpMovePersent` is the
     // core's own spelling of the field.
     "PumpMoveTimer",
     "PumpMovePersent",
@@ -809,7 +810,20 @@ pub fn entry_params_for(kind: &str, v: &StrategyValues<'_>, model: ModelSettings
     }
 }
 
-/// Sell-line parameters out of a strategy's values, under the model's own settings.
+/// Core sell defaults used only when neither a historical value nor the schema supplies one.
+/// https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
+const CORE_SELL_PRICE: f64 = 0.5;
+const CORE_PRICE_DOWN_PERCENT: f64 = 0.2;
+const CORE_PRICE_DOWN_DELAY: f64 = 10.0;
+const CORE_PRICE_DOWN_ALLOWED_DROP: f64 = 0.1;
+const CORE_SELL_LEVEL_TIME: f64 = 3600.0;
+const CORE_SELL_LEVEL_COUNT: f64 = 1.0;
+const CORE_SELL_LEVEL_ADJUST: f64 = 0.2;
+const CORE_SELL_LEVEL_ALLOWED_DROP: f64 = 0.1;
+
+/// Sell-line parameters out of a strategy's values, using the core's default when the schema
+/// supplies none for the sell price, PriceDown steps and SellLevel adjustments.
+/// Source: https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
 pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
     let base = ExitParams::default();
     let text = v.text("SellByCustomEMA", "").trim();
@@ -828,7 +842,7 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         custom_ema,
         custom_ema_refusal,
         custom_ema_delay_s: v.num("SellEMADelay", 0.0),
-        sell_price_pct: v.num("SellPrice", base.sell_price_pct),
+        sell_price_pct: v.num("SellPrice", CORE_SELL_PRICE),
         sell_at_last_price: v.bool("MShotSellAtLastPrice", base.sell_at_last_price),
         sell_price_adjust_pct: v.num("MShotSellPriceAdjust", base.sell_price_adjust_pct),
         sell_delay_ms: v.num("SellDelay", base.sell_delay_ms),
@@ -871,21 +885,19 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
             pricebug_cap: 0.0,
         },
         price_down_timer_s: v.num("PriceDownTimer", base.price_down_timer_s),
-        price_down_pct: v.num("PriceDownPercent", base.price_down_pct),
-        price_down_delay_s: v.num("PriceDownDelay", base.price_down_delay_s),
+        price_down_pct: v.num("PriceDownPercent", CORE_PRICE_DOWN_PERCENT),
+        price_down_delay_s: v.num("PriceDownDelay", CORE_PRICE_DOWN_DELAY),
         price_down_relative: v.bool("PriceDownRelative", base.price_down_relative),
-        price_down_allowed_drop_pct: v
-            .num("PriceDownAllowedDrop", base.price_down_allowed_drop_pct),
+        price_down_to_allowed_drop: v
+            .bool("PriceDownToAllowedDrop", base.price_down_to_allowed_drop),
+        price_down_allowed_drop_pct: v.num("PriceDownAllowedDrop", CORE_PRICE_DOWN_ALLOWED_DROP),
         sell_level_delay_s: v.num("SellLevelDelay", base.sell_level_delay_s),
         sell_level_delay_next_s: v.num("SellLevelDelayNext", base.sell_level_delay_next_s),
-        sell_level_time_s: v.num("SellLevelTime", base.sell_level_time_s),
-        sell_level_count: v
-            .num("SellLevelCount", f64::from(base.sell_level_count))
-            .max(0.0) as u32,
-        sell_level_adjust_pct: v.num("SellLevelAdjust", base.sell_level_adjust_pct),
+        sell_level_time_s: v.num("SellLevelTime", CORE_SELL_LEVEL_TIME),
+        sell_level_count: v.num("SellLevelCount", CORE_SELL_LEVEL_COUNT).max(0.0) as u32,
+        sell_level_adjust_pct: v.num("SellLevelAdjust", CORE_SELL_LEVEL_ADJUST),
         sell_level_relative: v.bool("SellLevelRelative", base.sell_level_relative),
-        sell_level_allowed_drop_pct: v
-            .num("SellLevelAllowedDrop", base.sell_level_allowed_drop_pct),
+        sell_level_allowed_drop_pct: v.num("SellLevelAllowedDrop", CORE_SELL_LEVEL_ALLOWED_DROP),
         sell_level_work_time_s: v.num("SellLevelWorkTime", base.sell_level_work_time_s),
         pump_move_timer_s: v.num("PumpMoveTimer", base.pump_move_timer_s),
         pump_move_pct: v.num("PumpMovePersent", base.pump_move_pct),

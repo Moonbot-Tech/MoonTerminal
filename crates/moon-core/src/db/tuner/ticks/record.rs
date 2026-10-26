@@ -297,6 +297,7 @@ pub fn unanchored(deal: &Deal) -> Deal {
 ///
 /// Args:
 ///     verdict: The trade's verdict on its own parameters.
+/// A judged fact does not prove a longer variant look-back; variant replay checks that separately.
 pub fn fit_for_search(verdict: &Verdict) -> bool {
     verdict.entry != Some(false) && verdict.exit == Some(true)
 }
