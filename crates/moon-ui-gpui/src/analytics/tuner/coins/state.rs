@@ -195,6 +195,12 @@ pub(in crate::analytics::tuner) enum PickState {
     /// change (`invalidate`) drops it.
     Done {
         pick: Arc<CoinPick>,
+        /// Per-list exclusions belong to this result and disappear with it.
+        excluded: HashSet<(bool, String)>,
+        /// The result has already been applied to the working lists.
+        adopted: bool,
+        /// An applied result has had an unsaved edit; only its resolution retires the result.
+        awaiting_save: bool,
         lists_rev: u64,
         /// `CoinsState::report_gen` at publication. A later report publication bumps
         /// that counter and the pick becomes stale without being dropped.
@@ -227,7 +233,7 @@ impl std::fmt::Debug for PickState {
 }
 
 /// Two states are equal when they are the same state of the same pick: a finished pick is
-/// compared by identity, a failure by kind alone.
+/// compared by request identity, a failure by kind alone. Presentation edits do not retire a request.
 impl PartialEq for PickState {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -239,12 +245,14 @@ impl PartialEq for PickState {
                     lists_rev: ra,
                     report_gen: ga,
                     holdout_pct: ha,
+                    ..
                 },
                 Self::Done {
                     pick: b,
                     lists_rev: rb,
                     report_gen: gb,
                     holdout_pct: hb,
+                    ..
                 },
             ) => Arc::ptr_eq(a, b) && ra == rb && ga == gb && ha == hb,
             _ => false,
@@ -528,6 +536,9 @@ impl CoinsState {
         );
         self.pick = PickState::Done {
             pick,
+            excluded: HashSet::new(),
+            adopted: false,
+            awaiting_save: false,
             lists_rev: self.lists_rev,
             report_gen: self.report_gen,
             holdout_pct,
@@ -569,6 +580,9 @@ impl CoinsState {
                 }
                 self.pick = PickState::Done {
                     pick: Arc::new(pick),
+                    excluded: HashSet::new(),
+                    adopted: false,
+                    awaiting_save: false,
                     lists_rev,
                     report_gen,
                     holdout_pct,
@@ -619,9 +633,9 @@ impl CoinsState {
         }
     }
 
-    /// Apply the finished pick's own suggestion for one list to the working list, exactly as
-    /// the Auto column scored it: blacklist coins are added, a suggested whitelist REPLACES
-    /// the working one.
+    /// Apply the non-excluded suggestion for one list: blacklist coins are added and a
+    /// non-empty suggested whitelist REPLACES the working one. Excluding every whitelist
+    /// suggestion leaves the existing whitelist intact.
     ///
     /// Adopting the pick's own answer is not an edit the pick missed, so it is re-bound to the
     /// new list revision and shows no stale note — unless it was stale already.
@@ -633,6 +647,15 @@ impl CoinsState {
             return 0;
         };
         let tokens = if black_side { &s.black } else { &s.white };
+        let tokens: Vec<_> = tokens
+            .iter()
+            .filter(|token| !self.excluded(black_side, token))
+            .cloned()
+            .collect();
+        // Excluding every white suggestion must not clear an existing whitelist.
+        if tokens.is_empty() {
+            return 0;
+        }
         let raw = tokens.join(",");
         let was_current = !self.pick_stale();
         let added = if black_side {
@@ -653,6 +676,84 @@ impl CoinsState {
             *lists_rev = self.lists_rev;
         }
         added
+    }
+
+    /// Whether this result excludes a token on the requested list side.
+    pub(in crate::analytics::tuner) fn excluded(&self, black: bool, token: &str) -> bool {
+        matches!(&self.pick, PickState::Done { excluded, .. } if excluded.contains(&(black, token.to_string())))
+    }
+
+    /// Toggle a suggestion without editing either working list.
+    pub(in crate::analytics::tuner) fn toggle_exclude(&mut self, black: bool, token: String) {
+        if let PickState::Done {
+            excluded,
+            adopted: false,
+            pick,
+            ..
+        } = &mut self.pick
+        {
+            let suggestions = if black { &pick.black } else { &pick.white };
+            if suggestions.iter().any(|coin| coin.token == token) {
+                let key = (black, token);
+                if !excluded.remove(&key) {
+                    excluded.insert(key);
+                }
+            }
+        }
+    }
+
+    /// Apply both non-excluded suggestions, retaining the existing per-side semantics.
+    pub(in crate::analytics::tuner) fn adopt_pick(&mut self) {
+        self.adopt_suggestion(true);
+        self.adopt_suggestion(false);
+        let pending = self.has_changes();
+        if let PickState::Done {
+            adopted,
+            awaiting_save,
+            ..
+        } = &mut self.pick
+        {
+            *adopted = true;
+            *awaiting_save = pending;
+        }
+    }
+
+    /// Retire an applied result once an actual pending edit reaches its saved baseline.
+    /// A no-op adoption keeps its hint instead of silently disappearing; later edits latch here.
+    /// Returning whether it retired lets the host rescore through its existing KPI scheduler.
+    pub(in crate::analytics::tuner) fn retire_saved_pick(&mut self) -> bool {
+        let pending = self.has_changes();
+        let retire = if let PickState::Done {
+            adopted: true,
+            awaiting_save,
+            ..
+        } = &mut self.pick
+        {
+            if pending {
+                *awaiting_save = true;
+                false
+            } else {
+                *awaiting_save
+            }
+        } else {
+            false
+        };
+        if retire {
+            self.drop_pick();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Count unique coins with a pending membership change across either list.
+    pub(in crate::analytics::tuner) fn changed_count(&self) -> usize {
+        self.work
+            .black
+            .symmetric_difference(&self.saved.black)
+            .chain(self.work.white.symmetric_difference(&self.saved.white))
+            .collect::<HashSet<_>>()
+            .len()
     }
 
     /// What the last finished pick suggests, for the Auto column and the Suggested view.
@@ -743,10 +844,13 @@ impl CoinsState {
         }
     }
 
-    /// Throw the edit away and go back to what the strategies have saved.
+    /// Throw the edit away, retaining a pick that was never applied to the lists.
     pub(in crate::analytics::tuner) fn revert(&mut self) {
         self.lists_rev = self.lists_rev.wrapping_add(1);
         self.work = self.saved.duplicate();
+        if matches!(self.pick, PickState::Done { adopted: true, .. }) {
+            self.drop_pick();
+        }
         // Same duty as `toggle`: the view the user is on may no longer have anything behind it.
         self.settle_filter();
     }

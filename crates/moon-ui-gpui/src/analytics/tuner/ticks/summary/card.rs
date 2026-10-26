@@ -571,6 +571,7 @@ pub(in crate::analytics::tuner) fn parameters_header(
         on_save: acts.write.clone(),
     };
     let write = crate::analytics::tuner::shell::ToolbarWrite {
+        changed_coins: 0,
         enabled: m.write_enabled
             && m.can_reset
             && !matches!(m.verdict, Verdict::Running { .. } | Verdict::Loading),

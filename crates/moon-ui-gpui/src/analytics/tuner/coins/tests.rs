@@ -59,6 +59,9 @@ fn the_auto_heading_names_a_finished_empty_verdict() {
     use moon_core::db::tuner::coin_pick::{CoinPick, NoiseReason, PickVerdict};
     let _locale = crate::test_locale::force("en");
     let done = |verdict| PickState::Done {
+        excluded: Default::default(),
+        adopted: false,
+        awaiting_save: false,
         pick: std::sync::Arc::new(CoinPick {
             black: Vec::new(),
             white: Vec::new(),

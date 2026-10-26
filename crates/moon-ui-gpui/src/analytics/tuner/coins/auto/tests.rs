@@ -1,5 +1,5 @@
 use super::super::state::CoinsState;
-use super::{AutoCardModel, tag_line, verdict_line};
+use super::{AutoCardModel, AutoView, settings_summary, tag_line, verdict_line};
 use moon_core::db::metrics::Tally;
 use moon_core::db::tuner::coin_pick::{CoinPick, CoinSuggestion, NoiseReason, PickVerdict};
 
@@ -77,4 +77,84 @@ fn pick_waits_for_the_data() {
     assert!(AutoCardModel::new(&s, true, false, true).can_pick());
     assert!(!AutoCardModel::new(&s, true, false, false).can_pick());
     assert!(!AutoCardModel::new(&s, false, false, true).can_pick());
+}
+
+/// Keeping an adopted result forever would strand the card after its saved baseline catches up.
+#[test]
+fn adopted_result_keeps_verdict_until_saved_baseline_arrives() {
+    let _locale = crate::test_locale::force("en");
+    let mut s = CoinsState::default();
+    let seq = s.begin_pick();
+    s.land_pick(
+        seq,
+        s.lists_rev,
+        s.report_gen,
+        30,
+        Ok(pick(PickVerdict::Useful)),
+    );
+    s.adopt_pick();
+    let m = AutoCardModel::new(&s, true, false, true);
+    assert!(matches!(
+        m.view,
+        AutoView::Result(super::ResultModel { adopted: true, .. })
+    ));
+    assert!(m.pending.is_some());
+    assert!(!s.retire_saved_pick(), "unsaved edits retain their verdict");
+    s.adopt(s.work.duplicate());
+    assert!(s.retire_saved_pick());
+    assert!(s.suggested().is_none());
+    let m = AutoCardModel::new(&s, true, false, true);
+    assert!(matches!(m.view, AutoView::Settings));
+    assert!(m.pending.is_none());
+    s.add_tokens(true, "XBETA");
+    let m = AutoCardModel::new(&s, true, false, true);
+    assert!(
+        matches!(m.view, AutoView::Settings),
+        "a later manual edit must not resurrect the old verdict"
+    );
+    assert!(m.pending.is_some());
+}
+
+/// A hard-coded count or plural would misdescribe the settings the user is about to reuse.
+#[test]
+fn compact_settings_use_live_values_and_russian_plurals() {
+    let _locale = crate::test_locale::force("ru");
+    let mut cfg = super::PickCfg {
+        min_trades: 3,
+        holdout_pct: 50,
+        black: true,
+        white: false,
+    };
+    assert_eq!(
+        settings_summary(cfg),
+        "мин. 3 сделки · проверка на свежих 50% · ищет ЧС"
+    );
+    cfg.min_trades = 1;
+    assert!(settings_summary(cfg).contains("1 сделка"));
+    cfg.min_trades = 5;
+    assert!(settings_summary(cfg).contains("5 сделок"));
+}
+
+/// A generic list label must not replace the approved per-list confirmation sentence.
+#[test]
+fn adopted_hint_uses_the_approved_black_and_white_sentences() {
+    let _locale = crate::test_locale::force("ru");
+    let mut s = CoinsState::default();
+    let mut pick = pick(PickVerdict::Useful);
+    pick.black[0].token = "XBETA".into();
+    let seq = s.begin_pick();
+    s.land_pick(seq, s.lists_rev, s.report_gen, 30, Ok(pick));
+    s.adopt_pick();
+    let AutoView::Result(mut result) = AutoCardModel::new(&s, true, false, true).view else {
+        panic!("result")
+    };
+    assert_eq!(
+        super::adopted_hint(&result),
+        "XBETA добавлена в чёрный список ниже."
+    );
+    result.white = std::mem::take(&mut result.black);
+    assert_eq!(
+        super::adopted_hint(&result),
+        "XBETA добавлена в белый список ниже."
+    );
 }

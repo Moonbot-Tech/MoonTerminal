@@ -17,8 +17,7 @@ fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
 
-/// An empty whitelist says what empty MEANS for the strategy, and offers nothing to clear
-/// or copy.
+/// An empty whitelist retains its original sentence and offers nothing to clear or copy.
 #[test]
 fn an_empty_whitelist_explains_itself_and_cannot_be_cleared() {
     let _locale = crate::test_locale::force("en");
@@ -27,13 +26,6 @@ fn an_empty_whitelist_explains_itself_and_cannot_be_cleared() {
     assert!(!m.can_clear && !m.can_copy);
     assert_eq!(m.key, "CoinsWhiteList");
     assert_eq!(m.empty.as_deref(), Some("The list is empty."));
-    assert!(
-        m.legend
-            .iter()
-            .any(|l| l.contains("every coin except the blacklist")),
-        "legend: {:?}",
-        m.legend
-    );
 }
 
 /// Without a strategy both fields say so, and the count is not claimed.
@@ -86,6 +78,21 @@ fn the_pending_band_is_signed_per_side() {
     );
 }
 
+/// A large pick must keep the pending band compact while retaining both additions and removals.
+#[test]
+fn long_pending_lists_show_count_and_three_names() {
+    let _locale = crate::test_locale::force("en");
+    let d = PendingDelta {
+        added_bl: strings(&["XA", "XB", "XC", "XD", "XE"]),
+        removed_bl: strings(&["XF"]),
+        ..Default::default()
+    };
+    assert_eq!(
+        pending_text(&d).as_deref(),
+        Some("BL +5 (XA, XB, XC…) \u{2212}XF")
+    );
+}
+
 /// The count is in COINS: two written entries of one coin count once.
 #[test]
 fn two_entries_of_one_coin_count_once() {
@@ -95,6 +102,104 @@ fn two_entries_of_one_coin_count_once() {
     let m = ListFieldModel::new(true, Some(vec![chip("BTC", ChipKind::Saved), second]));
     assert_eq!(m.count, Some(1));
     assert_eq!(m.chips.len(), 2, "both entries are still drawn");
+}
+
+/// Restoring the old brightness sentence or separate fragments must diverge from the approved hint.
+#[test]
+fn both_lists_use_the_single_approved_hint() {
+    for (language, expected) in [
+        (
+            "ru",
+            "жёлтая рамка — ещё не сохранено · наведи — дата · вставка списка через запятую работает",
+        ),
+        (
+            "en",
+            "amber outline — not saved yet · hover — date · pasting a comma list works",
+        ),
+    ] {
+        let _locale = crate::test_locale::force(language);
+        for black in [true, false] {
+            assert_eq!(
+                ListFieldModel::new(black, Some(Vec::new())).legend,
+                expected
+            );
+        }
+    }
+}
+
+/// Capture the real hint's text-child bounds instead of counting source fragments.
+type HintChildren = std::rc::Rc<std::cell::RefCell<Vec<Vec<gpui::Bounds<gpui::Pixels>>>>>;
+
+/// The production hint and its captured text children.
+struct HintProbe(HintChildren);
+
+impl gpui::Render for HintProbe {
+    /// Render both production hints and capture their direct text nodes after layout.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement, Styled};
+        moon_ui::v_flex()
+            .w_full()
+            .children([true, false].map(|black| {
+                let captured = self.0.clone();
+                super::list_hint_el(
+                    &ListFieldModel::new(black, Some(Vec::new())).legend,
+                    if black { "bl" } else { "wl" },
+                    moon_ui::MoonPalette::active(cx),
+                    cx,
+                )
+                .on_children_prepainted(move |bounds, _, _| captured.borrow_mut().push(bounds))
+            }))
+    }
+}
+
+/// Reintroducing multiple legend nodes or intrinsic-width clipping fails at a real narrow width.
+#[gpui::test]
+fn coins_list_hints_are_single_bounded_text_elements(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(
+                moon_core::config::UiThemeMode::Light,
+                1.0,
+            ),
+            cx,
+        )
+    });
+    for language in ["ru", "en"] {
+        let _locale = crate::test_locale::force(language);
+        let widths = cx.update(|cx| {
+            [
+                300.0,
+                f32::from(super::super::super::layout::side_width(860.0, cx)),
+                f32::from(super::super::super::layout::side_width(1240.0, cx)),
+            ]
+        });
+        for width in widths {
+            let captured = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let window = cx.open_window(gpui::size(gpui::px(width), gpui::px(500.0)), |_, _| {
+                HintProbe(captured.clone())
+            });
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                captured.borrow_mut().clear();
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            let rows = captured.borrow();
+            assert_eq!(rows.len(), 2);
+            for nodes in rows.iter() {
+                assert_eq!(nodes.len(), 1, "one text element per hint");
+                assert!(
+                    nodes[0].left() >= gpui::px(0.0) && nodes[0].right() <= gpui::px(width + 0.5),
+                    "hint clipped {language} {width}: {nodes:?}"
+                );
+            }
+        }
+    }
 }
 
 /// Exercise intrinsic chip sizing inside the real wrapping list well, rather than a fixed box.
@@ -163,7 +268,7 @@ fn livefix_coin_names_keep_their_measured_width(cx: &mut gpui::TestAppContext) {
             for black in [true, false] {
                 for (token, label) in [
                     ("XALPHA", "XALPHA"),
-                    ("XBETA", "+XBETA"),
+                    ("XBETA", "XBETA"),
                     ("XGAMMA", "XGAMMA"),
                 ] {
                     let selector = Box::leak(format!("chip-{black}-{token}").into_boxed_str());
