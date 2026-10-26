@@ -11,11 +11,64 @@ use moon_core::db::metrics::Tally;
 use moon_core::db::tuner::VarStats;
 use moon_core::db::tuner::coin_pick::{CoinPick, CoinSuggestion, PickVerdict};
 
+/// Toggling a mask-covered coin must neither add a redundant literal nor dirty either list.
+#[test]
+fn toggling_a_mask_covered_coin_leaves_both_lists_unchanged() {
+    for black_side in [false, true] {
+        let mut state = CoinsState::default();
+        state.work.black.insert("XAL*".into());
+        state.work.white.insert("XAL*".into());
+        state.saved.black = state.work.black.clone();
+        state.saved.white = state.work.white.clone();
+        let rev = state.lists_rev;
+        state.toggle(black_side, "XALPHA".into());
+        state.toggle(black_side, "XALPHA".into());
+        assert!(!state.has_changes());
+        assert_eq!(state.lists_rev, rev);
+        assert!(!state.work.black.contains("XALPHA"));
+        assert!(!state.work.white.contains("XALPHA"));
+    }
+}
+
 fn coin(name: &str) -> GroupStat {
     GroupStat {
         name: name.to_string(),
         ..Default::default()
     }
+}
+
+/// Manual and Auto must expand the same masks the fitter applies, including all contracts.
+#[test]
+fn manual_masks_expand_by_prefix_or_suffix() {
+    let universe = [
+        coin("YPERP"),
+        coin("XPERP_RP"),
+        coin("YBETA"),
+        coin("XALPHA"),
+    ];
+    let mut state = CoinsState::default();
+    state.adopt(CoinLists::parse("X*", "*PERP"));
+    let plan = state.plan(&universe);
+    assert_eq!(
+        plan.variants[1].coins_in,
+        Some(vec!["XPERP_RP".into(), "YPERP".into()])
+    );
+    assert_eq!(plan.variants[1].coins_out, vec!["XALPHA", "XPERP_RP"]);
+    assert_eq!((plan.bl, plan.wl), (2, 2));
+    state.suggestion = Some(SuggestedLists {
+        black: vec!["YPERP".into()],
+        white: Vec::new(),
+    });
+    let plan = state.plan(&universe);
+    assert_eq!(plan.variants[2].coins_in, plan.variants[1].coins_in);
+    assert_eq!(
+        plan.variants[2].coins_out,
+        vec!["XALPHA", "XPERP_RP", "YPERP"]
+    );
+    state.adopt(CoinLists::parse("X*", "*X*"));
+    let plan = state.plan(&universe);
+    assert_eq!(plan.variants[1].coins_in, Some(Vec::new()));
+    assert_eq!(plan.variants[1].coins_out, vec!["XALPHA", "XPERP_RP"]);
 }
 
 /// The two sides name a coin differently — the report writes the contract (`BTC_RP`),

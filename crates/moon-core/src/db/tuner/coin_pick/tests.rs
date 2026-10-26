@@ -13,6 +13,35 @@ fn params() -> CoinPickParams {
     }
 }
 
+/// Literal-only matching loses manual mask restrictions before fitting and holdout scoring.
+#[test]
+fn manual_masks_match_by_prefix_or_suffix() {
+    let rows: Vec<_> = (0..100)
+        .map(|i| CoinTrade {
+            token: ["XPERP_RP", "XALPHA", "YBETA", "YPERP"][i as usize % 4].into(),
+            close: i,
+            profit: 1.0,
+        })
+        .collect();
+    let mut p = params();
+    p.black = false;
+    p.manual_white.insert(" *perp ".into());
+    let suffix = coin_pick_from_rows(&rows, &p);
+    assert_eq!(suffix.manual_holdout.n, 15);
+    assert_eq!(suffix.manual_holdout.profit, 15.0);
+    p.manual_white.clear();
+    p.manual_black.insert("x*".into());
+    let prefix = coin_pick_from_rows(&rows, &p);
+    assert_eq!(prefix.manual_holdout.n, 16);
+    assert_eq!(prefix.pick_holdout.profit, 16.0);
+    p.manual_white.insert("*PERP".into());
+    assert_eq!(coin_pick_from_rows(&rows, &p).manual_holdout.n, 8);
+    for unsupported in ["*X*", "*", "X*P"] {
+        p.manual_white = [unsupported.to_string()].into();
+        assert_eq!(coin_pick_from_rows(&rows, &p).manual_holdout.n, 0);
+    }
+}
+
 /// Two alternating tokens with an independently controlled train and fresh loss coin.
 fn sample(fresh: f64) -> Vec<CoinTrade> {
     (0..100)

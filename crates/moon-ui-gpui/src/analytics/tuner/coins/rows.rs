@@ -21,6 +21,7 @@ use gpui::SharedString;
 use super::super::list::{MAX_ROWS, partial_sort};
 use super::state::{CoinFilter, CoinsState, coin_token};
 use moon_core::db::analytics::GroupStat;
+use moon_core::symbol::CoinMask;
 
 /// One row, ready to draw. Owned, so the cache outlives the borrows it was built from —
 /// only the `MAX_ROWS` the table can actually show are kept.
@@ -143,6 +144,8 @@ fn build(
     // With no lists and no suggestion in play nothing can be a member, so the per-row token —
     // one allocation per coin over thousands of them — is never built.
     let lists_known = !state.work.is_empty() || !state.saved.is_empty() || suggested.is_some();
+    let black_mask = CoinMask::new(&state.work.black);
+    let white_mask = CoinMask::new(&state.work.white);
     let (sug_black, sug_white): (HashSet<&str>, HashSet<&str>) =
         suggested.map_or_else(Default::default, |s| {
             (
@@ -208,8 +211,8 @@ fn build(
         let (mut black, mut white, mut changed, mut auto) = (false, false, false, None);
         if lists_known {
             let token = coin_token(&name);
-            black = state.work.black.contains(&token);
-            white = state.work.white.contains(&token);
+            black = black_mask.matches(&token);
+            white = white_mask.matches(&token);
             changed = state.is_changed(&token);
             auto = if sug_black.contains(token.as_str()) {
                 Some(true)

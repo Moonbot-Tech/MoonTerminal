@@ -19,6 +19,13 @@ pub(super) struct Item {
     pub(super) close: f64,
 }
 
+impl Item {
+    /// Raw prints occupy one millisecond; wider items are historical bars, not cadence samples.
+    pub(super) fn is_print(self) -> bool {
+        self.end_ms - self.from_ms == 1
+    }
+}
+
 /// A market's history, ascending by end: the bars that do not overlap the tape, then the prints.
 pub(super) struct Series {
     pub(super) items: Vec<Item>,

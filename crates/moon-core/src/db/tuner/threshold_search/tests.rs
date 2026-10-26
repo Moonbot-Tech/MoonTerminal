@@ -11,6 +11,111 @@ use super::{
 };
 use crate::db::tuner::FIELDS;
 
+/// Eligibility follows emitted observations across empty bins rather than quantile labels.
+#[test]
+fn zero_off_edge_masks_follow_observed_bounds_across_empty_bins() {
+    use super::search::saved_edge_mask;
+    let spec = FIELDS.iter().find(|f| f.col == "pricebug").unwrap();
+    // Quantile labels [-2, -1, 0, 1, 2]: upper edge 0 emits -1; upper edge 1 emits 0.
+    let (lower, upper) = saved_edge_mask(spec, &[0, 1, 2, 3], &[-2.0, -1.0, 0.0, 2.0], 4);
+    assert!(upper[2]);
+    assert!(!upper[3]);
+    assert!(!lower[2]);
+    // Empty bins must use the nearest observation on the selection's own side.
+    let (lower, upper) = saved_edge_mask(spec, &[0, 3, 5], &[-1.0, 0.0, 2.0], 6);
+    assert!(!lower[1] && !lower[2] && !lower[3]);
+    assert!(lower[4] && lower[5]);
+    assert!(upper[1] && upper[2] && upper[3]);
+    assert!(!upper[4] && !upper[5]);
+    assert!(lower[0] && upper[6]);
+}
+
+/// A zero-only PriceBug optimum disables both sides when saved and cannot be suggested.
+#[test]
+fn a_zero_upper_bound_on_a_zero_off_field_is_never_suggested() {
+    use super::search::{Columns, Search};
+    use std::sync::Arc;
+
+    let fi = FIELDS.iter().position(|f| f.col == "pricebug").unwrap();
+    let mut locked = vec![Some((None, None)); FIELDS.len()];
+    locked[fi] = None;
+    for round in [false, true] {
+        // Repeated values keep <= 1 representable at this quantile resolution.
+        let profits = vec![20.0, 20.0, -5.0, -5.0, -20.0, -30.0, -30.0, -30.0];
+        let mut vals = vec![vec![0.0; 8]; FIELDS.len()];
+        vals[fi] = vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0];
+        let search = Search::new(
+            Arc::new(Columns { profits, vals }),
+            &locked,
+            vec![false; FIELDS.len()],
+            1,
+            4,
+            8,
+        )
+        .unwrap();
+        let outcome = search.run(1, 1, &super::SearchHandle::new()).unwrap();
+        let applied = search.applied_ranges(&outcome.sel, round);
+        assert_eq!(applied, vec![(fi, None, Some(1.0))]);
+        let tally = search.tally(&applied, 0..8);
+        assert_eq!((tally.n, tally.profit), (4, 30.0));
+
+        let profits = vec![-50.0, 20.0, 20.0, -10.0, -50.0];
+        let values = vec![-2.0, -1.0, 0.0, 1.0, 2.0];
+        let mut vals = vec![vec![0.0; 5]; FIELDS.len()];
+        vals[fi] = values.clone();
+        let search = Search::new(
+            Arc::new(Columns {
+                profits: profits.clone(),
+                vals,
+            }),
+            &locked,
+            vec![false; FIELDS.len()],
+            1,
+            4,
+            5,
+        )
+        .unwrap();
+        let outcome = search.run(1, 1, &super::SearchHandle::new()).unwrap();
+        let applied = search.applied_ranges(&outcome.sel, round);
+        assert!(!applied.is_empty());
+        for (_, from, to) in &applied {
+            assert_ne!(*from, Some(0.0));
+            assert_ne!(*to, Some(0.0));
+        }
+        let kept: Vec<f64> = values
+            .iter()
+            .zip(&profits)
+            .filter(|(v, _)| {
+                applied.iter().all(|(_, from, to)| {
+                    from.is_none_or(|lo| **v >= lo) && to.is_none_or(|hi| **v <= hi)
+                })
+            })
+            .map(|(_, profit)| *profit)
+            .collect();
+        let tally = search.tally(&applied, 0..5);
+        assert_eq!(tally.n as usize, kept.len());
+        assert_eq!(tally.profit, kept.iter().sum::<f64>());
+
+        locked[fi] = Some((Some(0.0), Some(0.0)));
+        let mut vals = vec![vec![0.0; 4]; FIELDS.len()];
+        vals[fi] = vec![-1.0, 0.0, 1.0, 2.0];
+        let fixed = Search::new(
+            Arc::new(Columns {
+                profits: vec![1.0; 4],
+                vals,
+            }),
+            &locked,
+            vec![false; FIELDS.len()],
+            1,
+            4,
+            4,
+        )
+        .unwrap();
+        assert_eq!(fixed.tally(&[], 0..4).n, 4);
+        locked[fi] = None;
+    }
+}
+
 /// Trades with distinct timestamps, so a split can land anywhere.
 fn distinct(n: usize) -> Vec<i64> {
     (0..n as i64).collect()

@@ -15,7 +15,7 @@ use super::state::{
 };
 use super::{fmt_bound, parse_num, staged_dirty};
 use moon_core::db::tuner::threshold_search::{SearchHandle, SearchParams, composition_budget};
-use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
+use moon_core::db::tuner::{FIELDS, FieldClass, FieldSpec, slot_type_for};
 
 /// How often the suggestion row repaints while a search runs.
 ///
@@ -25,6 +25,18 @@ use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 const SUGGEST_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 /// Marker identifying the analyzer-owned suffix inside a strategy comment.
 const ANALYZER_MARK: &str = "(Save from analyzer)";
+
+/// Serialize an open zero-off side explicitly so Save clears the strategy's previous bound.
+fn suggestion_inputs(field: &FieldSpec, from: Option<f64>, to: Option<f64>) -> (String, String) {
+    let (zero_min, zero_max) = field.zero_disables();
+    let input = |bound: Option<f64>, zero_off: bool| {
+        bound
+            .or(zero_off.then_some(0.0))
+            .map(fmt_bound)
+            .unwrap_or_default()
+    };
+    (input(from, zero_min), input(to, zero_max))
+}
 
 /// Format the analyzer save stamp in the selected application-wide display zone.
 ///
@@ -244,8 +256,8 @@ impl AnalyticsView {
                         }
                         let (from, to) = by_field
                             .get(field.col)
-                            .map(|f| (fmt_bound(f.from), fmt_bound(f.to)))
-                            .unwrap_or_default();
+                            .map(|f| suggestion_inputs(field, f.from, f.to))
+                            .unwrap_or_else(|| suggestion_inputs(field, None, None));
                         this.tuner.bounds[0][fi] = (from, to);
                         this.tuner.inputs.remove(&format!("tv0f{fi}a"));
                         this.tuner.inputs.remove(&format!("tv0f{fi}b"));

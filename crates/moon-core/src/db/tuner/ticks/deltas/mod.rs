@@ -255,7 +255,7 @@ impl DeltaTrack {
     /// Put every field the evaluation has at the stamp onto the report: shift it by what separates
     /// the two there. A field the report holds at exactly zero where zero means "never filled"
     /// ([`DeltaField::zero_is_unfilled`]) is not made live — the model keeps the report's zero, as
-    /// it did before the track.
+    /// it did before the track. Unanswered points remain NaN so later reads keep the snapshot.
     fn anchor(
         &mut self,
         snapshot: &Deltas,
@@ -281,7 +281,9 @@ impl DeltaTrack {
                     let i = field.index();
                     let shifted = point[i] + offset[i];
                     // BTC's hour deviation carries a sign; every other field is a size.
-                    point[i] = if field == DeltaField::Btc1h {
+                    point[i] = if shifted.is_nan() {
+                        f64::NAN
+                    } else if field == DeltaField::Btc1h {
                         shifted
                     } else {
                         shifted.max(0.0)

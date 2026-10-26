@@ -9,7 +9,7 @@ use crate::db::ReadResult;
 use crate::db::analytics::Query;
 use crate::db::metrics::Tally;
 use crate::db::read_fail::read_fail_on;
-use crate::symbol::coin_match_key;
+use crate::symbol::{CoinMask, coin_match_key};
 
 /// The same pick for every strategy of the list at once.
 mod batch;
@@ -132,8 +132,8 @@ impl Moments {
 }
 
 /// Apply whitelist restriction before blacklist exclusion.
-fn allowed(token: &str, black: &HashSet<String>, white: &HashSet<String>) -> bool {
-    (white.is_empty() || white.contains(token)) && !black.contains(token)
+fn allowed(token: &str, black: &CoinMask, white: &CoinMask) -> bool {
+    (white.is_empty() || white.matches(token)) && !black.matches(token)
 }
 
 /// Aggregate rows in their chronological order for correct drawdown.
@@ -163,8 +163,8 @@ pub fn coin_pick_from_rows(rows: &[CoinTrade], p: &CoinPickParams) -> CoinPick {
         .clamp(*HOLDOUT_PCT_RANGE.start(), *HOLDOUT_PCT_RANGE.end());
     let train_n = super::threshold_search::train_split(&closes, 1.0 - f64::from(pct) / 100.0);
     let (train, holdout) = rows.split_at(train_n);
-    let manual_black: HashSet<_> = p.manual_black.iter().map(|s| coin_match_key(s)).collect();
-    let manual_white: HashSet<_> = p.manual_white.iter().map(|s| coin_match_key(s)).collect();
+    let manual_black = CoinMask::new(&p.manual_black);
+    let manual_white = CoinMask::new(&p.manual_white);
     let manual = |r: &CoinTrade| allowed(&r.token, &manual_black, &manual_white);
     let fact_holdout = tally(holdout, |_| true);
     let manual_holdout = tally(holdout, manual);

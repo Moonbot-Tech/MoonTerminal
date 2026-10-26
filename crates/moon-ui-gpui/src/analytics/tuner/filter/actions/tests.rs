@@ -1,6 +1,22 @@
 // Explicit imports avoid pulling the parent's `gpui::*`, whose `test` shadows the built-in
 // attribute and recursively expands `#[test]`.
-use super::analyzer_stamp;
+use super::{analyzer_stamp, suggestion_inputs};
+
+/// Empty searched sides must clear old zero-off bounds without inventing a Min-only Max.
+#[test]
+fn suggestion_inputs_clear_open_zero_off_sides() {
+    let fields = moon_core::db::tuner::FIELDS;
+    let pricebug = fields.iter().find(|f| f.col == "pricebug").unwrap();
+    assert_eq!(
+        suggestion_inputs(pricebug, None, Some(2.0)),
+        ("0".into(), "2".into())
+    );
+    let detect = fields.iter().find(|f| f.col == "xpricedelta").unwrap();
+    assert_eq!(
+        suggestion_inputs(detect, Some(1.0), None),
+        ("1".into(), "".into())
+    );
+}
 
 /// A hidden Detect bound must neither serialize an unscored threshold nor keep Save amber.
 #[test]

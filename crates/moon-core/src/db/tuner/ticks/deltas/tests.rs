@@ -3,6 +3,37 @@ use crate::feed::types::Side;
 
 const T0: i64 = 1_790_000_000_000; // a multiple of STEP_MS and of a minute
 
+/// Clamping NaN during anchoring must not overwrite the report when later BTC bars are coarse.
+#[test]
+fn an_unanswered_point_stays_unanswered_after_the_anchor() {
+    let mut btc = flat_bars(T0 - 60 * MINUTE_MS, T0, 100.0);
+    btc.push(Bar {
+        from_ms: T0,
+        to_ms: T0 + CANDLE_MS,
+        open: 100.0,
+        high: 110.0,
+        low: 90.0,
+        close: 100.0,
+    });
+    let snapshot = Deltas {
+        btc1m: 0.7,
+        ..Deltas::default()
+    };
+    let track = DeltaTrack::build(TrackInputs {
+        coin_bars: &[],
+        ticks: &[tick(T0, 100.0)],
+        covered: &[(T0, T0 + CANDLE_MS + STEP_MS)],
+        btc_bars: &btc,
+        eval: (T0, T0 + CANDLE_MS + STEP_MS),
+        anchor: Some((T0, &snapshot)),
+    })
+    .unwrap();
+    assert!(track.is_live(DeltaField::Btc1m));
+    assert_eq!(track.apply(T0, &snapshot).btc1m, 0.7);
+    assert_eq!(track.value(T0 + CANDLE_MS, DeltaField::Btc1m), None);
+    assert_eq!(track.apply(T0 + CANDLE_MS, &snapshot).btc1m, 0.7);
+}
+
 fn tick(t_ms: i64, price: f32) -> Tick {
     Tick {
         time_ms: t_ms as f64,
@@ -275,26 +306,238 @@ fn the_track_is_evaluated_only_where_the_models_read_it() {
     assert!(track.value(T0 + 3 * MINUTE_MS, DeltaField::D1m).is_none());
 }
 
+/// Replacing the smoothed range with adjacent bucket moves loses spikes and smooth decay.
 #[test]
-fn d5s_is_the_move_over_the_last_bucket() {
-    let ticks = [
-        tick(T0 + 1_000, 100.0),
-        tick(T0 + 6_000, 102.0),
-        tick(T0 + 8_000, 101.0),
-    ];
-    let track = raw(&day_of_bars(), &ticks, (T0, T0 + 20_000), (T0, T0 + 20_000));
-    // No previous boundary for the first point.
-    assert!(track.value(T0, DeltaField::D5s).is_none());
-    // +10 s: the last price before it (101) against the last before +5 s (100).
+fn last5s_rises_fast_and_decays_smoothly() {
+    assert!(close(coin::last5s_step(1.0, Some(0.5)), 0.9));
+    assert!(close(coin::last5s_step(0.5, Some(1.0)), 1.0));
+    assert!(close(coin::last5s_step(1.0, None), 0.98));
+    let mut ticks = vec![tick(T0 + 100, 100.0), tick(T0 + 4_900, 101.0)];
+    ticks.extend((5_100..20_000).step_by(250).map(|ms| tick(T0 + ms, 101.0)));
+    let track = raw(&day_of_bars(), &ticks, (T0, T0 + 25_000), (T0, T0 + 25_000));
     assert!(close(
-        track.value(T0 + 10_000, DeltaField::D5s).unwrap(),
+        track.value(T0 + 5_000, DeltaField::D5s).unwrap(),
         1.0
     ));
-    // +15 s: nothing printed in the bucket.
+    let later = track.value(T0 + 20_000, DeltaField::D5s).unwrap();
+    // The border's 100 price survives through +10 s; forty occupied slots then have d5 = 0.
+    assert!(close(later, 0.8f64.powi(40)), "{later}");
+    let empty = track.value(T0 + 25_000, DeltaField::D5s).unwrap();
+    assert!(close(empty, later * 0.98f64.powi(20)), "{empty}");
+    // The left-border record matters even when it is older than the nominal window.
+    let border = raw(
+        &[],
+        &[tick(T0 - 10_000, 100.0), tick(T0 + 5_000, 101.0)],
+        (T0, T0 + 10_000),
+        (T0, T0 + 10_000),
+    );
     assert!(close(
-        track.value(T0 + 15_000, DeltaField::D5s).unwrap(),
-        0.0
+        border.value(T0 + 10_000, DeltaField::D5s).unwrap(),
+        0.98f64.powi(19)
     ));
+    // An extreme one millisecond before the border is already outside the range.
+    let older = raw(
+        &[],
+        &[
+            tick(T0 - 10_001, 80.0),
+            tick(T0 - 10_000, 100.0),
+            tick(T0 + 5_000, 101.0),
+        ],
+        (T0, T0 + 10_000),
+        (T0, T0 + 10_000),
+    );
+    // The print enters at +5250, then nineteen quiet slots lead to the track's +10000 point.
+    let expected = (0.8 * 25.0 * 0.98f64.powi(59) + 0.2) * 0.98f64.powi(19);
+    assert!(close(
+        older.value(T0 + 10_000, DeltaField::D5s).unwrap(),
+        expected
+    ));
+}
+
+/// Reading a print at its own timestamp would give D5s future information other fields lack.
+#[test]
+fn last5s_excludes_a_print_at_the_boundary_until_the_next_slot() {
+    let series = series::Series::new(&[], &[tick(T0 - 100, 100.0), tick(T0, 101.0)], &[]);
+    let mut eval = coin::CoinEval::new(&series);
+    assert!(close(eval.at(T0)[6].0.unwrap(), 0.0));
+    assert!(close(eval.at(T0 + 250)[6].0.unwrap(), 1.0));
+}
+
+/// Empty cadence slots must decay in closed form even across a long coverage gap.
+#[test]
+fn last5s_jumps_a_quiet_stretch_in_one_step() {
+    let end = T0 + 2_505_250;
+    let series = series::Series::new(&[], &[tick(T0, 100.0), tick(T0 + 5_000, 101.0)], &[]);
+    let mut eval = coin::CoinEval::new(&series);
+    assert!(close(eval.at(T0 + 5_250)[6].0.unwrap(), 1.0));
+    let jumped = eval.at(end)[6].0.unwrap();
+    let expected = 0.98f64.powi(10_000);
+    assert!(
+        (jumped / expected - 1.0).abs() < 1e-12,
+        "{jumped} vs {expected}"
+    );
+}
+
+/// Inspecting only the first and last items misses a coarse bar inside the minute.
+#[test]
+fn btc1m_with_a_coarse_bar_in_the_middle_is_unanswered() {
+    let bars = [
+        Bar {
+            from_ms: T0 - 60_000,
+            to_ms: T0 - 50_000,
+            open: 100.0,
+            high: 100.0,
+            low: 100.0,
+            close: 100.0,
+        },
+        Bar {
+            from_ms: T0 - 330_000,
+            to_ms: T0 - 30_000,
+            open: 100.0,
+            high: 110.0,
+            low: 90.0,
+            close: 100.0,
+        },
+        Bar {
+            from_ms: T0 - 30_000,
+            to_ms: T0,
+            open: 100.0,
+            high: 100.0,
+            low: 100.0,
+            close: 100.0,
+        },
+    ];
+    let series = series::Series::new(&bars, &[], &[]);
+    let mut eval = btc::BtcEval::new(&series);
+    assert_eq!(eval.at(T0)[0], (None, 0.0));
+    // Once the coarse item expires, the remaining fine bar can answer again.
+    assert_eq!(eval.at(T0 + 30_000)[0], (Some(0.0), 0.5));
+}
+
+/// Reusing the current price for older average steps changes the signed hourly delta.
+#[test]
+fn btc_average_steps_each_on_its_own_price() {
+    let first_avg = btc::btc_avg_step(100.0, 110.0);
+    let second_avg = btc::btc_avg_step(first_avg, 90.0);
+    assert!(close(first_avg, 100.1));
+    assert!(close(second_avg, 99.999));
+    assert!(!close(second_avg, 99.801));
+    let start = T0.div_euclid(CANDLE_MS) * CANDLE_MS;
+    let bars = flat_bars(start - 60 * MINUTE_MS, start, 100.0);
+    let ticks = [
+        tick(start + 29_999, 110.0),
+        tick(start + 30_001, 110.0),
+        tick(start + 60_001, 90.0),
+        tick(start + 60_002, 90.0),
+        tick(start + 200_000, 90.0),
+    ];
+    let series = series::Series::new(&bars, &ticks, &[]);
+    let mut eval = btc::BtcEval::new(&series);
+    eval.at(start);
+    // Item ends are exclusive; an update ending exactly 30 seconds after the seed cannot step.
+    let exact = eval.at(start + 30_000)[2].0.unwrap();
+    assert!(close(exact, 10.0), "{exact}");
+    let first = eval.at(start + 30_002)[2].0.unwrap();
+    assert!(close(first, (110.0 - 100.1) / 100.1 * 100.0), "{first}");
+    let strict = eval.at(start + 60_002)[2].0.unwrap();
+    assert!(close(strict, (90.0 - 100.1) / 100.1 * 100.0), "{strict}");
+    let second = eval.at(start + 60_003)[2].0.unwrap();
+    assert!(close(second, (90.0 - 99.999) / 99.999 * 100.0), "{second}");
+    let gap = eval.at(start + 200_000)[2].0.unwrap();
+    assert!(
+        close(gap, second),
+        "no update means no caught-up steps: {gap}"
+    );
+    let resumed = eval.at(start + 200_001)[2].0.unwrap();
+    assert!(
+        close(resumed, (90.0 - 99.89901) / 99.89901 * 100.0),
+        "{resumed}"
+    );
+    let reseeded = eval.at(start + CANDLE_MS)[2].0.unwrap();
+    assert!(close(reseeded, -10.0), "{reseeded}");
+}
+
+/// A five-minute low cannot be attributed to the last minute; the snapshot must survive.
+#[test]
+fn btc1m_on_five_minute_bars_is_unanswered() {
+    let btc: Vec<Bar> = (T0 - 60 * MINUTE_MS..T0)
+        .step_by(CANDLE_MS as usize)
+        .map(|from_ms| Bar {
+            from_ms,
+            to_ms: from_ms + CANDLE_MS,
+            open: 100.0,
+            high: 100.0,
+            low: 90.0,
+            close: 100.0,
+        })
+        .collect();
+    let inputs = TrackInputs {
+        coin_bars: &[],
+        ticks: &[tick(T0 - 1_000, 100.0)],
+        covered: &[(T0 - 5_000, T0 + 5_000)],
+        btc_bars: &btc,
+        eval: (T0, T0 + 5_000),
+        anchor: None,
+    };
+    let track = DeltaTrack::build(inputs).unwrap();
+    assert_eq!(track.value(T0, DeltaField::Btc1m), None);
+    assert!(close(
+        track.value(T0, DeltaField::Btc5m).unwrap(),
+        100.0 / 9.0
+    ));
+    let snapshot = Deltas {
+        d1m: 1.0,
+        btc1m: 0.7,
+        btc5m: 0.8,
+        ..Deltas::default()
+    };
+    let anchored = DeltaTrack::build(TrackInputs {
+        anchor: Some((T0, &snapshot)),
+        ..inputs
+    })
+    .unwrap();
+    assert_eq!(anchored.stamp().coverage[DeltaField::Btc1m.index()], 0.0);
+    assert_eq!(anchored.apply(T0, &snapshot).btc1m, 0.7);
+    // A minute-sized latest bar does not make an older overlapping five-minute bar precise.
+    let mixed = [
+        Bar {
+            from_ms: T0 - CANDLE_MS - 30_000,
+            to_ms: T0 - 30_000,
+            open: 100.0,
+            high: 100.0,
+            low: 90.0,
+            close: 100.0,
+        },
+        Bar {
+            from_ms: T0 - 30_000,
+            to_ms: T0,
+            open: 100.0,
+            high: 100.0,
+            low: 100.0,
+            close: 100.0,
+        },
+    ];
+    let series = series::Series::new(&mixed, &[], &[]);
+    let point = btc::BtcEval::new(&series).at(T0);
+    assert_eq!(point[0], (None, 0.0));
+    assert!(point[1].0.is_some());
+}
+
+/// Using the recovered price instead of the hour's low would erase an earlier dump.
+#[test]
+fn dump1h_holds_the_hours_minimum() {
+    let mut bars = flat_bars(T0 - 2 * 60 * MINUTE_MS, T0, 100.0);
+    bars.iter_mut()
+        .find(|b| b.from_ms == T0 - 20 * MINUTE_MS)
+        .unwrap()
+        .low = 90.0;
+    let track = raw(
+        &bars,
+        &[tick(T0 + 1_000, 100.0)],
+        (T0, T0 + 5_000),
+        (T0, T0 + 5_000),
+    );
+    assert!(close(track.value(T0, DeltaField::Dump1h).unwrap(), 10.0));
 }
 
 #[test]
@@ -315,6 +558,7 @@ fn pump_and_dump_run_off_the_price_an_hour_ago() {
     assert!(close(track.value(T0, DeltaField::Dump1h).unwrap(), 5.0));
 }
 
+/// Reading the coin price, or stepping earlier updates at the last BTC close, changes BTC1h.
 #[test]
 fn btc_reads_its_own_market() {
     // BTC flat at 50 000 for four hours, then its last five minutes range 50 000 … 50 500.
@@ -334,10 +578,10 @@ fn btc_reads_its_own_market() {
     .unwrap();
     assert!(close(track.value(T0, DeltaField::Btc1m).unwrap(), 1.0));
     assert!(close(track.value(T0, DeltaField::Btc5m).unwrap(), 1.0));
-    // The average was re-seeded at the last five-minute close, 200 s before T0, off the hour's
-    // flat candles — 50 000 — and stepped six times since toward the price.
+    // The seed at -200 s is 50 000. Updates at -120 s and -60 s stay flat; the update at
+    // T0 is the first at 50 500, so exactly one step moves the average to 50 005.
     assert_eq!(T0.rem_euclid(CANDLE_MS), 200_000);
-    let average = 50_000.0 + 500.0 * (1.0 - 0.99f64.powi(6));
+    let average = 50_005.0;
     let expected = (50_500.0 - average) / average * 100.0;
     assert!(close(track.value(T0, DeltaField::Btc1h).unwrap(), expected));
     // Without BTC's bars the fields keep the snapshot.

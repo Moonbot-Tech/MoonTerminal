@@ -12,6 +12,61 @@ fn keys(found: &[UnmodelledField]) -> Vec<&'static str> {
     found.iter().map(|f| f.key).collect()
 }
 
+/// Resting-order checks need a warning without removing the deal's observed fill from scoring.
+#[test]
+fn check_after_buy_with_a_moving_filter_bound_is_warned() {
+    let deps = FieldDeps::bundled();
+    let mut v = values(&[("CheckAfterBuy", "YES"), ("Delta_3h_Max", "10")]);
+    let found = unmodelled_fields(&v, &HashMap::new(), &deps);
+    assert_eq!(keys(&found), ["CheckAfterBuy"]);
+    assert_eq!(found[0].section.schema_title(), "Filters");
+    assert_eq!(found[0].rule, None);
+    v.insert("IgnoreFilters".into(), "YES".into());
+    assert!(unmodelled_fields(&v, &HashMap::new(), &deps).is_empty());
+    v.remove("IgnoreFilters");
+    v.insert("IgnoreDelta".into(), "YES".into());
+    assert!(unmodelled_fields(&v, &HashMap::new(), &deps).is_empty());
+    let none = values(&[("CheckAfterBuy", "YES")]);
+    assert!(unmodelled_fields(&none, &HashMap::new(), &deps).is_empty());
+    let shot = values(&[("SignalType", "MoonShot"), ("Delta_3h_Max", "10")]);
+    let found = unmodelled_fields(&shot, &HashMap::new(), &deps);
+    assert_eq!(keys(&found), ["CheckAfterBuy"]);
+    assert_eq!(found[0].value, "YES (MoonShot)");
+    let position = values(&[
+        ("CheckAfterBuy", "YES"),
+        ("MaxPosition", "3"),
+        ("IgnorePrice", "YES"),
+    ]);
+    assert!(unmodelled_fields(&position, &HashMap::new(), &deps).is_empty());
+    let defaults = [("delta_3h_max".into(), 10.0)].into();
+    let on = values(&[("CheckAfterBuy", "YES"), ("Delta_3h_Max", "10")]);
+    assert!(unmodelled_fields(&on, &defaults, &deps).is_empty());
+    for (bound, switch) in [
+        ("MinHourlyVolFast", "IgnoreVolume"),
+        ("BinancePriceBug", "IgnorePing"),
+        ("MaxPosition", "IgnorePrice"),
+    ] {
+        let mut v = values(&[("CheckAfterBuy", "YES"), (bound, "3")]);
+        assert_eq!(
+            keys(&unmodelled_fields(&v, &HashMap::new(), &deps)),
+            ["CheckAfterBuy"]
+        );
+        v.insert(switch.into(), "YES".into());
+        assert!(unmodelled_fields(&v, &HashMap::new(), &deps).is_empty());
+    }
+    let mut ratio = values(&[
+        ("CheckAfterBuy", "YES"),
+        ("BV_SV_FilterRatioMax", "3"),
+        ("UseBV_SV_Filter", "NO"),
+    ]);
+    assert!(unmodelled_fields(&ratio, &HashMap::new(), &deps).is_empty());
+    ratio.insert("UseBV_SV_Filter".into(), "YES".into());
+    assert_eq!(
+        keys(&unmodelled_fields(&ratio, &HashMap::new(), &deps)),
+        ["CheckAfterBuy"]
+    );
+}
+
 /// A strategy the model covers raises nothing; the fields the dump leaves out are at default.
 #[test]
 fn a_plain_strategy_raises_nothing() {
@@ -203,12 +258,16 @@ fn the_condition_fields_are_fetched() {
         .into_iter()
         .map(|k| k.to_ascii_lowercase())
         .collect();
-    for w in WATCHED {
-        for field in deps.conditions_of(w.key) {
+    for key in WATCHED
+        .iter()
+        .map(|w| w.key)
+        .chain(MOVING_FILTER_BOUNDS.iter().copied())
+    {
+        for field in deps.conditions_of(key) {
             assert!(
                 fetched.iter().any(|k| k == field),
                 "{} depends on {field}, which is never read",
-                w.key
+                key
             );
         }
     }

@@ -1,4 +1,4 @@
-//! The warning about the exit fields the model does not have (`moon_core::db::tuner::ticks::
+//! The warning about entry checks and exit fields the model does not follow (`moon_core::db::tuner::ticks::
 //! unmodelled`): before a search, a dialog listing them per strategy with Continue / Cancel; in the
 //! write dialog, the same list as its warning lines. Which fields and when a field counts as on is
 //! the core crate's; this module only reads them per strategy at load and draws them.
@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::*;
+use moon_core::db::tuner::ticks::params::ParamSection;
 use moon_core::db::tuner::ticks::unmodelled::{UnmodelledField, unmodelled_fields};
 use moon_core::feed::strategy_deps::FieldDeps;
 use moon_ui::{MoonButton, MoonButtonVariant, MoonPalette, MoonWindowExt as _, h_flex, v_flex};
@@ -27,7 +28,52 @@ pub(in crate::analytics::tuner) type UnmodelledMap =
 
 /// One strategy's line of the warning, ready to draw: its name and, per field, the field, the
 /// value and the strategy window's section, and whether the model leaves its trades unjudged.
-type WarnRow = (String, Vec<(String, String, String, bool)>);
+type WarnRow = (String, Vec<(String, String, String, bool, ParamSection)>);
+
+/// Keep only risks affected by the searched axes; drop strategies with no remaining rows.
+fn search_warn_rows(rows: Vec<WarnRow>, entry_fields: usize, exit_fields: usize) -> Vec<WarnRow> {
+    rows.into_iter()
+        .filter_map(|(name, mut fields)| {
+            fields.retain(|(_, _, _, _, section)| {
+                if *section == ParamSection::Filters {
+                    entry_fields > 0
+                } else {
+                    exit_fields > 0
+                }
+            });
+            (!fields.is_empty()).then_some((name, fields))
+        })
+        .collect()
+}
+
+/// Select copy from the actual row mix so entry cancellation is never labelled as an exit.
+fn warning_keys(rows: &[WarnRow]) -> (&'static str, &'static str) {
+    let mut entry = false;
+    let mut exit = false;
+    for (_, fields) in rows {
+        for field in fields {
+            if field.4 == ParamSection::Filters {
+                entry = true;
+            } else {
+                exit = true;
+            }
+        }
+    }
+    match (entry, exit) {
+        (true, true) => (
+            "analytics.ticks.unmodelled_title_mixed",
+            "analytics.ticks.unmodelled_intro_mixed",
+        ),
+        (true, false) => (
+            "analytics.ticks.unmodelled_title_entry",
+            "analytics.ticks.unmodelled_intro_entry",
+        ),
+        _ => (
+            "analytics.ticks.unmodelled_title",
+            "analytics.ticks.unmodelled_intro",
+        ),
+    }
+}
 
 /// Read the fields off each strategy's values, once per load, off the UI thread.
 ///
@@ -55,6 +101,7 @@ pub(super) fn unmodelled_map<'a>(
 /// Returns:
 ///     The warning lines, empty when both inputs are empty.
 fn warn_lines(rows: Vec<WarnRow>, unread: Vec<String>) -> Vec<String> {
+    let rows = search_warn_rows(rows, 0, 1);
     let mut warns = Vec::new();
     if !rows.is_empty() {
         warns.push(t!("analytics.ticks.unmodelled_save").to_string());
@@ -62,7 +109,7 @@ fn warn_lines(rows: Vec<WarnRow>, unread: Vec<String>) -> Vec<String> {
     warns.extend(rows.into_iter().map(|(name, fields)| {
         let fields: Vec<String> = fields
             .into_iter()
-            .map(|(key, value, section, _)| format!("{key} = {value} ({section})"))
+            .map(|(key, value, section, _, _)| format!("{key} = {value} ({section})"))
             .collect();
         format!("{name}: {}", fields.join(", "))
     }));
@@ -138,6 +185,7 @@ impl AnalyticsView {
                             human,
                         ),
                         f.rule.is_some(),
+                        f.section,
                     )
                 })
                 .collect();
@@ -166,29 +214,25 @@ impl AnalyticsView {
         keys
     }
 
-    /// Open the warning before a search when a strategy of the scope switches on an exit field
-    /// the model does not have; answers whether it opened — the search then waits for Continue.
-    /// Only a search that varies an exit field is warned: the fields listed are the exit's, and a
-    /// search of the entry alone does not tune them (LinKvo, 2026-09-25: "I search the entry, and
-    /// it warns me about exit fields that take no part").
+    /// Warn about resting-order checks for entry searches and unmodelled exits for exit searches.
+    /// Returns whether the search must wait for Continue.
     pub(super) fn ticks_warn_before_search(
         &mut self,
         only: Option<&'static str>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self
-            .ticks_search_size(only)
-            .is_some_and(|size| size.exit_fields > 0)
-        {
+        let Some(size) = self.ticks_search_size(only) else {
             return false;
-        }
+        };
         // A search runs on the loaded scope's deals, so a strategy the load has not read is not
         // one it searches: only the rows speak here.
         let (rows, _) = self.ticks_unmodelled_rows(self.ticks_search_strategies(), cx);
+        let rows = search_warn_rows(rows, size.entry_fields, size.exit_fields);
         if rows.is_empty() {
             return false;
         }
+        let (title_key, intro_key) = warning_keys(&rows);
         let rows = Arc::new(rows);
         let view = cx.entity();
         window.open_unique_moon_dialog(
@@ -214,9 +258,11 @@ impl AnalyticsView {
                             .border_b_1()
                             .border_color(moon(p.border))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(t!("analytics.ticks.unmodelled_title").to_string()),
+                            .child(t!(title_key).to_string()),
                     )
-                    .content(move |content, _window, cx| content.child(warn_body(&rows, cx)))
+                    .content(move |content, _window, cx| {
+                        content.child(warn_body(&rows, intro_key, cx))
+                    })
                     .footer(
                         h_flex()
                             .w_full()
@@ -262,7 +308,7 @@ impl AnalyticsView {
 
 /// The dialog's body: why it asks, then each strategy with its fields as rows — field, value,
 /// section — and a note on the fields whose trades the model does not judge.
-fn warn_body(rows: &[WarnRow], cx: &App) -> AnyElement {
+fn warn_body(rows: &[WarnRow], intro_key: &'static str, cx: &App) -> AnyElement {
     let p = MoonPalette::active(cx);
     let mut list = v_flex()
         .id("an-ticks-unmodelled-list")
@@ -281,7 +327,7 @@ fn warn_body(rows: &[WarnRow], cx: &App) -> AnyElement {
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(name.clone()),
         );
-        for (key, value, section, rule) in fields {
+        for (key, value, section, rule, _) in fields {
             list = list.child(
                 h_flex()
                     .w_full()
@@ -328,7 +374,7 @@ fn warn_body(rows: &[WarnRow], cx: &App) -> AnyElement {
                 .font_family(design::ui_font())
                 .text_size(design::t_body(cx))
                 .text_color(moon(p.orange))
-                .child(t!("analytics.ticks.unmodelled_intro").to_string()),
+                .child(t!(intro_key).to_string()),
         )
         .child(list)
         .into_any_element()

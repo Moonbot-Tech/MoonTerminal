@@ -1,33 +1,31 @@
 //! BTC's deltas, read off the BTC market of the deal's own exchange.
 //!
-//! What the core computes (FAQ :1068, :1073, :1074; moonproto `state/markets/prices.rs`):
+//! BTC1m and BTC5m are ranges over the last minute and five minutes. BTC1h is signed:
+//! `(price - average) / average * 100`. The average is re-seeded at every five-minute close
+//! from the hour's mean OHLC4, then stepped once on the first update strictly more than thirty
+//! seconds after the previous step. Each step uses that update's own price; missed steps are
+//! never caught up. The core uses mid (Bid + Ask) / 2; trade closes are the nearest observable
+//! price in the history.
+//! Source: https://moonbot.pro/documentation/filters-tab/filters-delta-tab
 //!
-//! - `btc5mdelta`, `dbtc1m`: BTC's range over the last five minutes and the last minute,
-//!   `(max / min − 1) · 100`;
-//! - `btc1hdelta`: signed — how far BTC's price stands from its one-hour average,
-//!   `(price − average) / average · 100`. The core developer (2026-09-23): the average is
-//!   re-seeded on EVERY five-minute close as the mean OHLC4 of the last hour's closed candles,
-//!   and between closes stepped every thirty seconds with weight 0.01 (moonproto: `avg = p ·
-//!   0.01 + avg · 0.99`) — so it is an hour's mean with at most ten small steps on top, not the
-//!   long exponential memory the steps alone would give. The closes are taken on the clock's
-//!   five-minute grid, the phase the core starts on (see `coin::REACH`); a five-minute bar off
-//!   the grid is a candle of its own. At the report's stamp (620 tracks, 2026-09-23) the re-seeded
-//!   average brought `btc1hdelta`'s median error from 0.084 to 0.054 pp, 331 → 443 within 0.1.
-//!
-//! The history is whatever bars the kline cache holds for that market — the minute bars where
-//! something fetched them, the recorder's five-minute ones elsewhere. A window narrower than the
-//! bar it is read off takes that bar whole, so on five-minute bars `dbtc1m` is a bar's range, not
-//! a minute's: the summary says how much of each window the history covered.
+//! History uses minute bars where available and five-minute bars elsewhere. A one-minute field
+//! over five-minute bars is left unanswered, with zero coverage, and falls back to the report
+//! snapshot rather than attributing a five-minute range to the last minute.
 
 use super::field::DeltaField;
 use super::series::{Extremes, Series};
 use super::{CANDLE_MS, MINUTE_MS};
 
-/// The step the core moves BTC's average by (moonproto: at most every 30 s).
+/// An update must arrive strictly after this interval to move BTC's average.
 const AVERAGE_STEP_MS: i64 = 30_000;
 
 /// What the average keeps of itself at each step.
 const AVERAGE_KEEP: f64 = 0.99;
+
+/// Move the average once toward the price observed at this step, preserving earlier steps.
+pub(super) fn btc_avg_step(avg: f64, price: f64) -> f64 {
+    AVERAGE_KEEP * avg + 0.01 * price
+}
 
 /// The oldest BTC print the average may stand on, relative to the boundary: past it the bars
 /// have stopped and the price is stale.
@@ -48,20 +46,33 @@ pub(super) struct BtcEval<'a> {
     next: usize,
     /// The first item whose candle is still inside the hour the average is seeded from.
     hour_first: usize,
-    /// The seed and the close it was taken at.
-    seed: Option<(i64, f64)>,
+    /// The first item still inside the one-minute range, including a possible coarse bar.
+    minute_first: usize,
+    /// Coarse items inside `[minute_first, next)` make the minute's range unanswerable.
+    minute_coarse: usize,
+    /// The close at which the current hour mean was seeded.
+    seeded_ms: Option<i64>,
+    /// The running average, stepped using each update's own close.
+    avg: Option<f64>,
+    /// The next update must end strictly after this moment to step the average.
+    next_step_ms: i64,
     /// The last complete bar's close, its end, and its length.
     last: Option<(f64, i64, i64)>,
 }
 
 impl<'a> BtcEval<'a> {
+    /// Start an ascending walk without a seed or a last observed price.
     pub(super) fn new(series: &'a Series) -> Self {
         Self {
             series,
             windows: [Extremes::new(), Extremes::new()],
             next: 0,
             hour_first: 0,
-            seed: None,
+            minute_first: 0,
+            minute_coarse: 0,
+            seeded_ms: None,
+            avg: None,
+            next_step_ms: 0,
             last: None,
         }
     }
@@ -105,6 +116,16 @@ impl<'a> BtcEval<'a> {
         (count > 0).then(|| sum / count as f64)
     }
 
+    /// Reset the average at a new grid close, including when the hour contains no candles.
+    fn reseed(&mut self, at: i64) {
+        let close = at.div_euclid(CANDLE_MS) * CANDLE_MS;
+        if self.seeded_ms != Some(close) {
+            self.avg = self.hour_mean(close);
+            self.seeded_ms = Some(close);
+            self.next_step_ms = close + AVERAGE_STEP_MS;
+        }
+    }
+
     /// BTC's fields at a boundary, over the bars complete before it. Called at ascending
     /// boundaries.
     pub(super) fn at(&mut self, at: i64) -> BtcPoint {
@@ -112,39 +133,45 @@ impl<'a> BtcEval<'a> {
         let items = &series.items;
         while self.next < items.len() && items[self.next].end_ms <= at {
             let item = items[self.next];
+            self.reseed(item.end_ms);
+            if item.end_ms > self.next_step_ms {
+                self.avg = self.avg.map(|avg| btc_avg_step(avg, item.close));
+                self.next_step_ms = item.end_ms + AVERAGE_STEP_MS;
+            }
             for window in &mut self.windows {
                 window.push(self.next, items);
             }
             let length = (item.end_ms - item.from_ms).max(1);
+            self.minute_coarse += usize::from(length > MINUTE_MS);
             self.last = Some((item.close, item.end_ms, length));
             self.next += 1;
         }
-        // Re-seeded on every five-minute close, then stepped toward the price every thirty
-        // seconds since it.
-        let close = at.div_euclid(CANDLE_MS) * CANDLE_MS;
         // An hour without a closed candle has no average: the field answers nothing there rather
         // than stepping an old seed toward the price for as long as the hole lasts.
-        if self.seed.is_none_or(|(seeded, _)| seeded != close) {
-            self.seed = self.hour_mean(close).map(|mean| (close, mean));
+        self.reseed(at);
+        while self.minute_first < self.next && items[self.minute_first].end_ms <= at - MINUTE_MS {
+            let item = items[self.minute_first];
+            self.minute_coarse -= usize::from(item.end_ms - item.from_ms > MINUTE_MS);
+            self.minute_first += 1;
         }
         let fresh = self.last.filter(|&(_, end, _)| end > at - STALE_MS);
         let bar = fresh.map_or(0, |(_, _, length)| length);
-        let reach_1m = MINUTE_MS.max(bar);
+        let reach_1m = MINUTE_MS;
         let reach_5m = (5 * MINUTE_MS).max(bar);
-        let btc1m = fresh.and_then(|_| self.windows[0].range_at(at, reach_1m, items));
+        let coarse_1m = self.minute_coarse > 0;
+        let btc1m = fresh
+            .filter(|_| !coarse_1m)
+            .and_then(|_| self.windows[0].range_at(at, reach_1m, items));
         let btc5m = fresh.and_then(|_| self.windows[1].range_at(at, reach_5m, items));
-        let btc1h = match (fresh, self.seed) {
-            (Some((price, _, _)), Some((seeded, mean))) if mean > 0.0 => {
-                let steps = ((at - seeded).max(0) / AVERAGE_STEP_MS) as i32;
-                let keep = AVERAGE_KEEP.powi(steps);
-                let average = price * (1.0 - keep) + mean * keep;
+        let btc1h = match (fresh, self.avg) {
+            (Some((price, _, _)), Some(average)) if average > 0.0 => {
                 Some((price - average) / average * 100.0)
             }
             _ => None,
         };
         let cover = |reach: i64| series.covered_fraction(at - reach, at);
         [
-            (btc1m, cover(reach_1m)),
+            (btc1m, if coarse_1m { 0.0 } else { cover(reach_1m) }),
             (btc5m, cover(reach_5m)),
             (btc1h, cover(STALE_MS)),
         ]

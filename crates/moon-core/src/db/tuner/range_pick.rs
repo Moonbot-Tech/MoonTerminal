@@ -17,6 +17,7 @@ mod tests;
 /// `floor`.
 ///
 /// `open_top` restricts the slice to end at the last edge (a lower bound only).
+/// `eligible` optionally restricts lower and upper edges to bounds a strategy can represent.
 ///
 /// `floor` is supplied rather than derived from a baseline here: both callers happen to build it
 /// the same way, as the no-filter profit plus [`super::super::metrics::improvement_margin`], but
@@ -40,6 +41,7 @@ pub(super) fn best_pair(
     tot_c: usize,
     floor: f64,
     open_top: bool,
+    eligible: Option<(&[bool], &[bool])>,
 ) -> Option<(usize, usize)> {
     let last = profit_at.len() - 1;
     // A slice keeping nothing is not a filter, and admitting it would let the lower edge run
@@ -67,6 +69,10 @@ pub(super) fn best_pair(
         }
         let limit = count_at[j] - min_n;
         while admitted <= last && count_at[admitted] <= limit {
+            if eligible.is_some_and(|(lower, _)| !lower[admitted]) {
+                admitted += 1;
+                continue;
+            }
             let value = profit_at[admitted];
             if min_any.is_none_or(|(m, _)| value < m) {
                 min_any = Some((value, admitted));
@@ -75,6 +81,9 @@ pub(super) fn best_pair(
                 min_dropping = Some((value, admitted));
             }
             admitted += 1;
+        }
+        if eligible.is_some_and(|(_, upper)| !upper[j]) {
+            continue;
         }
         // Reaching every trade from an empty lower prefix is the no-op filter the pairwise scan
         // rejected by exact count; fall back to a lower edge that drops something.
