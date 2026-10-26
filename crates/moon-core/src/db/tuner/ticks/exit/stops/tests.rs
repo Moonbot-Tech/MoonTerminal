@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::db::tuner::ticks::exit::level_off_buy;
-use crate::db::tuner::ticks::exit::line::walk;
+use crate::db::tuner::ticks::exit::line::{LineWalk, walk};
 use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape, tick};
 use crate::db::tuner::ticks::{EntryParams, verify};
 use crate::feed::types::Side as TickSide;
@@ -359,6 +359,8 @@ fn market_stop_fill_ignores_the_anchored_fact_exit() {
 fn positive_stop_does_not_sell_the_rebound_print() {
     let mut p = fast_params(FastPrice::LastOfTick);
     p.stop_loss_pct = 2.0;
+    // Off the immediate configuration (`StopLossEMA` 0): the fast stop ignores the average.
+    p.stop_loss_ema = 3.0;
     p.model.latency_ms = 300.0;
     p.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
     let f = Fill {
@@ -991,4 +993,313 @@ fn the_walk_names_the_rule_that_fired_its_stop() {
     let w = walk(&deal(false), &lone, fill(), 101.0, &bare_book_stop());
     assert_ne!(w.exit.kind, ExitKind::Stop, "{w:?}");
     assert_eq!(w.stop_trigger, None);
+}
+
+/// The documented immediate StopLoss: fast, `StopLossEMA` 0, no delay, a positive stop.
+fn immediate_params() -> ExitParams {
+    let mut p = fast_params(FastPrice::LastOfTick);
+    p.stop_loss_pct = 2.0;
+    p.stop_loss_spread_pct = 1.0;
+    p
+}
+
+/// Waiting for the first fast tick would sell 250 ms late, at the tick's print.
+#[test]
+fn immediate_positive_fast_stop_fires_at_the_fill() {
+    let mut p = immediate_params();
+    let ticks = vec![sold(10, 99.5), sold(400, 99.8)];
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms, w.exit.price),
+        (ExitKind::Stop, 10, 99.5)
+    );
+    assert_eq!(
+        (w.stop_trigger, w.stop_fired_ms),
+        (Some(StopTrigger::Immediate), Some(0))
+    );
+    assert!(!w.past_floor);
+    p.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
+    let at_check = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!((at_check.exit.t_ms, at_check.exit.price), (0, 99.0));
+}
+
+/// A delay or an averaged stop is not the immediate configuration: the tick rule fires it.
+#[test]
+fn immediate_fast_stop_needs_zero_delay_and_zero_ema() {
+    let ticks = vec![sold(10, 99.5), sold(1_100, 99.6), sold(1_400, 99.6)];
+    let mut delayed = immediate_params();
+    delayed.stop_loss_delay_s = 1.0;
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &delayed);
+    assert_eq!(
+        (w.stop_trigger, w.stop_fired_ms),
+        (Some(StopTrigger::FastTick), Some(1_250))
+    );
+    let mut averaged = immediate_params();
+    averaged.stop_loss_ema = 3.0;
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &averaged);
+    assert_eq!(
+        (w.stop_trigger, w.stop_fired_ms),
+        (Some(StopTrigger::FastTick), Some(250))
+    );
+}
+
+/// A short's immediate order stands `StopLossSpread` OVER the buy, on the ask side.
+#[test]
+fn immediate_fast_stop_mirrored_for_short() {
+    let mut p = immediate_params();
+    let ticks = tape(&[(10, 100.5), (400, 100.2)]);
+    let w = walk(&deal(true), &ticks, fill(), 90.0, &p);
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms, w.exit.price, w.stop_trigger),
+        (ExitKind::Stop, 10, 100.5, Some(StopTrigger::Immediate))
+    );
+    assert!(!w.past_floor);
+    p.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
+    let at_check = walk(&deal(true), &ticks, fill(), 90.0, &p);
+    assert!((at_check.exit.price - 100.0 / 0.99).abs() < 1e-9);
+}
+
+/// A fact proving the core's stop quiet past the fill rules the immediate sale out.
+#[test]
+fn immediate_fast_stop_obeys_a_quiet_anchor() {
+    let p = immediate_params();
+    let mut d = deal(false);
+    d.stop_anchor = Some(crate::db::tuner::ticks::record::StopAnchor::of(
+        &d, &p, None,
+    ));
+    let ticks = vec![sold(10, 99.5), sold(400, 99.8)];
+    let w = walk(&d, &ticks, fill(), 110.0, &p);
+    assert_ne!(w.stop_trigger, Some(StopTrigger::Immediate), "{:?}", w.exit);
+}
+
+/// A long fast stop -1 % fired at 250, its market sale on the bid `bid` at 300.
+fn floor_walk(p: &ExitParams, bid: f64) -> (Exit, LineWalk) {
+    let ticks = vec![tick(10, 98.0), sold(300, bid)];
+    let model = crate::db::tuner::ticks::exit::ExitModel::new(p);
+    (
+        model.exit(&deal(false), &ticks, fill()),
+        walk(&deal(false), &ticks, fill(), 110.0, p),
+    )
+}
+
+/// A long fast stop -1 % whose panic sell is bounded by `AllowedDrop`.
+fn dropped(allowed_drop_pct: f64) -> ExitParams {
+    ExitParams {
+        allowed_drop_pct,
+        use_market_order: false,
+        ..fast_params(FastPrice::LastOfTick)
+    }
+}
+
+/// Counting a sale under the panic sell's floor would book a loss the core never took.
+#[test]
+fn market_stop_fill_past_allowed_drop_is_left_open() {
+    let (exit, w) = floor_walk(&dropped(-2.0), 90.0);
+    assert!(w.past_floor);
+    assert_eq!((w.exit.kind, w.exit.price), (ExitKind::Stop, 90.0));
+    assert_eq!(exit.kind, ExitKind::OpenAtWindowEnd);
+}
+
+/// The KB's "no floor" setting must never bound the sale.
+#[test]
+fn allowed_drop_at_or_below_minus_98_has_no_floor() {
+    let (exit, w) = floor_walk(&dropped(-98.0), 3.0);
+    assert!(!w.past_floor);
+    assert_eq!((exit.kind, exit.price), (ExitKind::Stop, 3.0));
+}
+
+/// A market order sells wherever the book is.
+#[test]
+fn use_market_order_skips_the_floor() {
+    let p = ExitParams {
+        use_market_order: true,
+        ..dropped(-2.0)
+    };
+    let (exit, w) = floor_walk(&p, 90.0);
+    assert!(!w.past_floor);
+    assert_eq!(exit.kind, ExitKind::Stop);
+}
+
+/// A long whose third rung (to 100.5) is taken at 1 000, then fired by the 1 100 print; the
+/// sale on the bid `bid` at 1 300. Main stop -5 % (95), AllowedDrop -50, AllowedDrop3 -1.
+fn third_rung_walk(bid: f64) -> LineWalk {
+    let mut p = ExitParams {
+        allowed_drop_pct: -50.0,
+        allowed_drop3_pct: -1.0,
+        third_stop: Some(ladder::StopStep {
+            after_s: 0.0,
+            switch_pct: 1.0,
+            level_pct: 0.5,
+        }),
+        ..fast_params(FastPrice::LastOfTick)
+    };
+    p.stop_loss_pct = -5.0;
+    p.model.ticker_period_ms = 1_000;
+    let ticks = vec![sold(100, 102.0), sold(1_100, 100.0), sold(1_300, bid)];
+    walk(&deal(false), &ticks, fill(), 110.0, &p)
+}
+
+/// The third stop's own floor bounds its panic sell while the main level stands unpassed.
+#[test]
+fn allowed_drop3_applies_while_the_third_rung_is_active() {
+    let w = third_rung_walk(98.5);
+    assert_eq!(
+        (w.exit.kind, w.stop_fired_ms),
+        (ExitKind::Stop, Some(1_250))
+    );
+    assert!(w.stop_level.is_some_and(|l| (l - 100.5).abs() < 1e-9));
+    assert!(w.past_floor, "98.5 is under AllowedDrop3's 99");
+}
+
+/// Past the main stop's level its AllowedDrop works again.
+#[test]
+fn allowed_drop_after_the_main_stop_level_is_passed() {
+    let w = third_rung_walk(94.0);
+    assert_eq!(w.exit.price, 94.0);
+    assert!(
+        !w.past_floor,
+        "AllowedDrop -50 bounds a sale past the main level"
+    );
+}
+
+/// A short's floor stands over the buy.
+#[test]
+fn allowed_drop_floor_mirrored_for_short() {
+    let p = dropped(-2.0);
+    let ticks = tape(&[(10, 102.0), (300, 110.0)]);
+    let w = walk(&deal(true), &ticks, fill(), 90.0, &p);
+    assert_eq!((w.exit.kind, w.exit.price), (ExitKind::Stop, 110.0));
+    assert!(w.past_floor);
+    let near = tape(&[(10, 102.0), (300, 101.5)]);
+    assert!(!walk(&deal(true), &near, fill(), 90.0, &p).past_floor);
+}
+
+/// The fact's own sale is the core's, wherever it stands.
+#[test]
+fn own_anchored_stop_ignores_the_floor() {
+    let mut d = deal(false);
+    d.close_ms = 400;
+    d.sell_reason = "StopLoss".into();
+    d.sell_price = 90.0;
+    let p = dropped(-1.0);
+    d.stop_anchor = Some(crate::db::tuner::ticks::record::StopAnchor::of(
+        &d, &p, None,
+    ));
+    let w = walk(&d, &tape(&[(10, 100.0), (800, 90.0)]), fill(), 110.0, &p);
+    assert_eq!(
+        (w.exit.price, w.stop_trigger),
+        (90.0, Some(StopTrigger::Fact))
+    );
+    assert!(!w.past_floor);
+}
+
+/// The immediate order's limit and AllowedDrop's floor bound it together: the nearer one.
+#[test]
+fn immediate_fast_stop_takes_the_tighter_of_spread_and_allowed_drop() {
+    let with_drop = |allowed_drop_pct: f64, bid: f64| {
+        let p = ExitParams {
+            allowed_drop_pct,
+            ..immediate_params()
+        };
+        walk(&deal(false), &[sold(10, bid)], fill(), 110.0, &p).past_floor
+    };
+    // AllowedDrop -5 (95): the spread's 99 is tighter.
+    assert!(with_drop(-5.0, 98.5));
+    assert!(!with_drop(-5.0, 99.2));
+    // AllowedDrop -0.5 (99.5): tighter than the spread's 99.
+    assert!(with_drop(-0.5, 99.2));
+    assert!(!with_drop(-0.5, 99.6));
+}
+
+/// No print after the fill shows the immediate order's fill: no sale at its limit is invented.
+#[test]
+fn immediate_fast_stop_without_a_post_fill_print_is_unjudged() {
+    let p = immediate_params();
+    let ticks = tape(&[(10, 100.5)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(w.stop_trigger, Some(StopTrigger::Immediate));
+    assert!(w.past_floor);
+    let exit = crate::db::tuner::ticks::exit::ExitModel::new(&p).exit(&deal(false), &ticks, fill());
+    assert_eq!(exit.kind, ExitKind::OpenAtWindowEnd);
+}
+
+/// `UseStopLoss` with `StopLoss` 0 is a stop at the buy price: a print at 99.9 after a fill at
+/// 100 fires it at level 100.
+#[test]
+fn zero_stop_loss_with_use_stop_loss_is_a_stop_at_the_buy() {
+    let mut p = fast_params(FastPrice::LastOfTick);
+    p.stop_loss_pct = 0.0;
+    p.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
+    let ticks = tape(&[(100, 100.2), (510, 99.9), (1_100, 100.5)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(w.exit.kind, ExitKind::Stop, "{w:?}");
+    assert_eq!(w.stop_level, Some(100.0), "{w:?}");
+}
+
+/// `UseStopLoss` off arms no stop, whatever `StopLoss` holds.
+#[test]
+fn use_stop_loss_off_arms_no_stop_whatever_the_value() {
+    for pct in [0.0, -1.0, 1.0] {
+        let mut p = fast_params(FastPrice::LastOfTick);
+        p.stop_loss_pct = pct;
+        p.use_stop_loss = false;
+        let ticks = tape(&[(100, 100.2), (510, 90.0), (1_100, 89.0)]);
+        let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+        assert_ne!(w.exit.kind, ExitKind::Stop, "StopLoss {pct}: {w:?}");
+        assert_eq!(w.stop_level, None, "StopLoss {pct}: {w:?}");
+    }
+}
+
+/// A modifier pushing `StopLoss` -1 to +1 keeps a stop above the buy, level 101: a print at
+/// 100.5 after the delay fires it.
+#[test]
+fn modifier_flipping_the_stop_positive_keeps_a_stop_above_the_buy() {
+    let mut p = fast_params(FastPrice::LastOfTick);
+    p.stop_loss_pct = -1.0;
+    p.stop_loss_delay_s = 1.0;
+    p.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
+    // StopLoss − modifier · Σ = −1 − (−2 · 1) = +1.
+    p.sell_mods = crate::db::tuner::ticks::mshot::Modifiers {
+        add_1h: 1.0,
+        ..Default::default()
+    };
+    p.stop_loss_modifier = -2.0;
+    let d = Deal {
+        deltas: crate::db::tuner::ticks::Deltas {
+            d1h: 1.0,
+            ..Default::default()
+        },
+        ..deal(false)
+    };
+    assert!((stop_pct(&p, &d, 0) - 1.0).abs() < 1e-9);
+    let ticks = tape(&[(1_500, 100.5), (2_100, 100.6)]);
+    let w = walk(&d, &ticks, fill(), 110.0, &p);
+    assert_eq!(w.exit.kind, ExitKind::Stop, "{w:?}");
+    assert!(
+        w.stop_level.is_some_and(|l| (l - 101.0).abs() < 1e-9),
+        "{w:?}"
+    );
+}
+
+/// Under AtCheck too, no print after the fill shows the immediate order's fill.
+#[test]
+fn immediate_fast_stop_without_a_print_is_unjudged_at_check() {
+    let mut p = immediate_params();
+    p.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
+    let ticks = tape(&[(10, 100.5)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(w.stop_trigger, Some(StopTrigger::Immediate));
+    assert!(w.past_floor);
+    let exit = crate::db::tuner::ticks::exit::ExitModel::new(&p).exit(&deal(false), &ticks, fill());
+    assert_eq!(exit.kind, ExitKind::OpenAtWindowEnd);
+}
+
+/// A print a hair past the AllowedDrop floor (98) is within the price tolerance, not past it.
+#[test]
+fn a_print_within_tolerance_of_the_floor_is_not_past_it() {
+    let (exit, w) = floor_walk(&dropped(-2.0), 97.97);
+    assert!(!w.past_floor, "{w:?}");
+    assert_eq!(exit.kind, ExitKind::Stop);
+    let (_, w) = floor_walk(&dropped(-2.0), 97.9);
+    assert!(w.past_floor, "{w:?}");
 }

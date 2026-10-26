@@ -115,7 +115,7 @@ fn dump_deal(
     let level = super::super::exit::level_off_buy(deal.buy_price, stop, deal.is_long());
     let stated = verify::stated_stop_level(&deal.sell_reason);
     let activation = verify::stop_jump_level(deal, exit, exit_points)
-        .and_then(|jump_at| verify::archived_stop_jump(deal, jump_at, exit_points));
+        .and_then(|jump_at| verify::archived_stop_jump(deal, exit, jump_at, exit_points));
     let dir = PathBuf::from(dir);
     let _ = std::fs::create_dir_all(dir.join("ticks"));
     let sum_around_fill: Vec<(i64, f64)> = [
@@ -864,6 +864,7 @@ fn miss_cause(finding: verify::ExitFinding) -> Option<String> {
         ExitFinding::Unjudged(Unjudged::InGap) => "··in-gap".to_string(),
         ExitFinding::Unjudged(Unjudged::TakeUnknown) => "··take-unknown".to_string(),
         ExitFinding::Unjudged(Unjudged::OtherRule) => "··other-rule".to_string(),
+        ExitFinding::Unjudged(Unjudged::SaleUnknown) => "··sale-unknown".to_string(),
     })
 }
 

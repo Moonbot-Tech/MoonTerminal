@@ -181,11 +181,11 @@ impl<'a> Coupling<'a> {
 fn inert_on(role: Role, exit: &ExitParams) -> bool {
     let sell_spends = exit.sell_modifier != 0.0;
     // `exit::stops::stop_pct`: no stop, or no coefficient on it, spends nothing.
-    let stop_spends = exit.stop_loss_modifier != 0.0 && exit.stop_loss_pct != 0.0;
+    let stop_spends = exit.stop_loss_modifier != 0.0 && exit.use_stop_loss;
     let no_terms = silent(exit);
     match role {
         Role::SellCoefficient => no_terms,
-        Role::StopCoefficient => no_terms || exit.stop_loss_pct == 0.0,
+        Role::StopCoefficient => no_terms || !exit.use_stop_loss,
         Role::Term => !sell_spends && !stop_spends,
         Role::Cap => no_terms || (!sell_spends && !stop_spends),
     }
@@ -204,7 +204,7 @@ fn coefficient_of(role: Role, exit: &ExitParams) -> f64 {
 /// always, the stop only where there is one (`exit::stops::stop_pct`).
 fn can_spend(role: Role, exit: &ExitParams) -> bool {
     match role {
-        Role::StopCoefficient => exit.stop_loss_pct != 0.0,
+        Role::StopCoefficient => exit.use_stop_loss,
         _ => true,
     }
 }

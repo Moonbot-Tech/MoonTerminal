@@ -6,14 +6,13 @@
 //! Delta Modifiers — less the fields the model reads ([`super::params::param_keys`]) and less
 //! those that do not change WHERE or WHEN the position is sold:
 //!
-//! - the panic sell's execution — `AllowedDrop`, `AllowedDrop3`, `StopLossSpread`,
-//!   `StopSpreadAdd1mDelta`, `TrailingSpread`: the verdict judges a stop by its decision, and a
-//!   variant that keeps the trade's stop takes the fact's own sale (`record::StopAnchor`);
+//! - the panic sell's bounds — `AllowedDrop`, `AllowedDrop3`, `UseMarketOrder` and
+//!   `StopLossSpread` are read ([`super::params::exit_params`]) and bound the modelled sale;
+//!   its execution — `StopSpreadAdd1mDelta`, `TrailingSpread` and the spreads' re-stepping —
+//!   stays unmodelled (the book's): the verdict judges a stop by its decision, and a variant
+//!   that keeps the trade's stop takes the fact's own sale (`record::StopAnchor`);
 //! - the liquidation guards and the grid's fixed stop — `DontSellBelowLiq`, `StopAboveLiq`,
 //!   `StopLossFixed`: not taken into account at all (the developer's call, 2026-09-24);
-//! - `UseMarketOrder` — how a stop's sale goes, the book's again: the verdict tells a market stop
-//!   by the fact's own reason (`StopLoss Market Sell`), and a variant keeping the stop takes the
-//!   fact's sale;
 //! - the entry — `SellEMACheckEnter` (checks the EMA filter before the BUY), `BuyModifier`,
 //!   `DetectModifier`;
 //! - what acts only by hand or only in another kind — `SplitPiece` (a chart menu item),
@@ -122,6 +121,17 @@ const WATCHED: &[Watched] = &[
     },
 ];
 
+/// Fields the model reads, but whose rule it reproduces only in part: warned about, never a
+/// reason to leave a trade unjudged. Kept apart from [`WATCHED`], whose fields the model does
+/// not read at all.
+const PARTLY_MODELLED: &[Watched] = &[
+    // `FastStopLoss` YES: the core confirms a spike by a VWAP check and a run of trades past the
+    // level; no run length is documented, so the model fires on the last print of each 250 ms tick
+    // (`ModelSettings::fast_price`, `exit::stops::FastStop`). NO is the core's default.
+    // Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+    watched("FastStopLoss", ParamSection::Stops, "NO"),
+];
+
 /// The Delta Modifiers tab's fields that APPLY its sum `Σ Pn·Dn`, lowercase — the sell's, the
 /// stop's, and the buy's and the detect's for the kinds whose schema shows them; every other field
 /// of the tab but `MaxModifier` is a term of the sum.
@@ -163,6 +173,7 @@ pub struct UnmodelledField {
 pub fn watched_keys() -> Vec<String> {
     WATCHED
         .iter()
+        .chain(PARTLY_MODELLED)
         .map(|w| w.key)
         .chain(CONDITION_KEYS.iter().copied())
         .map(str::to_string)
@@ -199,6 +210,7 @@ pub fn unmodelled_fields(
     }
     WATCHED
         .iter()
+        .chain(PARTLY_MODELLED)
         .filter_map(|w| {
             let value = values.get(w.key)?;
             let default = defaults

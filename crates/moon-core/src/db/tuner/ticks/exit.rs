@@ -28,7 +28,7 @@ pub use self::stops::ladder::StopStep;
 use self::line::{LineWalk, walk, walk_held};
 use super::mshot::Modifiers;
 use super::settings::ModelSettings;
-use super::{Deal, Exit, Fill};
+use super::{Deal, Exit, ExitKind, Fill};
 use crate::feed::types::Tick;
 
 /// A level `pct` per cent off the buy, positive in the PROFIT direction: `buy·(1 + pct/100)` for a
@@ -204,11 +204,27 @@ pub struct ExitParams {
     /// stops short of the peak.
     pub pump_move_pct: f64,
     // Stops
-    /// `StopLoss`, already zeroed by [`super::params::exit_params`] when `UseStopLoss` is off —
-    /// the field keeps its value in a strategy whose stop is switched off, and the core then
-    /// arms nothing.
+    /// `UseStopLoss`: UseStopLoss arms the stop; StopLoss 0 is a stop at the buy price (matches
+    /// the core's rule). Off, nothing is armed whatever `StopLoss` holds.
+    pub use_stop_loss: bool,
+    /// `StopLoss`, read as is whether or not `UseStopLoss` arms it.
     pub stop_loss_pct: f64,
     pub stop_loss_delay_s: f64,
+    /// `AllowedDrop` — the panic sell's floor, per cent off the buy: the core never sells a
+    /// stop or trailing panic sale below it. At -98 or under there is no floor. Read as a
+    /// bound only.
+    /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+    pub allowed_drop_pct: f64,
+    /// `AllowedDrop3` — the floor that replaces `AllowedDrop` once the third stop took over.
+    /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+    pub allowed_drop3_pct: f64,
+    /// `UseMarketOrder` — the stop sells by a market order instead of a panic sell, with no
+    /// floor.
+    /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+    pub use_market_order: bool,
+    /// `StopLossSpread` — how far under the price the panic sell places its order, per cent.
+    /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+    pub stop_loss_spread_pct: f64,
     /// `FastStopLoss` — what the stop watches. YES: the trades ("crosses", FAQ), checked by the
     /// last price of each series tick as it closes (`stops::FastStop`). NO — the core's default: the REST ticker's BID (the
     /// ASK for a short), a long's averaged per `StopLossEMA`, which the trade tape does not
@@ -252,7 +268,8 @@ pub struct ExitParams {
 }
 
 impl Default for ExitParams {
-    /// A plain 1 % take, nothing moving it, no stop.
+    /// A plain 1 % take, nothing moving it; `UseStopLoss` on at `StopLoss` 0, as a dump without
+    /// the switch reads — a stop at the buy price.
     fn default() -> Self {
         Self {
             sell_price_pct: 1.0,
@@ -281,8 +298,13 @@ impl Default for ExitParams {
             sell_level_work_time_s: 0.0,
             pump_move_timer_s: 0.0,
             pump_move_pct: 0.0,
+            use_stop_loss: true,
             stop_loss_pct: 0.0,
             stop_loss_delay_s: 0.0,
+            allowed_drop_pct: -99.0,
+            allowed_drop3_pct: -99.0,
+            use_market_order: false,
+            stop_loss_spread_pct: 1.0,
             // The trigger the tape itself carries; `exit_params` reads the strategy's own, and
             // its absence there is the core's default, NO.
             fast_stop_loss: true,
@@ -341,7 +363,20 @@ impl<'a> ExitModel<'a> {
     ///     ticks: The window's prints, ascending.
     ///     fill: The modelled (or factual) entry.
     pub fn exit(&self, deal: &Deal, ticks: &[Tick], fill: Fill) -> Exit {
-        self.walk(deal, ticks, fill).exit
+        let walk = self.walk(deal, ticks, fill);
+        if walk.past_floor {
+            // A stop sale past the panic sell's `AllowedDrop` floor — "the minimum allowed level
+            // in percent from the purchase price to which the Sell order may be lowered after the
+            // stop is triggered and Panic Sell is activated" — is none the core could have made,
+            // and where its sale filled is the book's: the outcome is left open.
+            // Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+            return Exit {
+                price: f64::NAN,
+                kind: ExitKind::OpenAtWindowEnd,
+                ..walk.exit
+            };
+        }
+        walk.exit
     }
 
     /// The same replay with every level the line stood at, for the archive comparison.

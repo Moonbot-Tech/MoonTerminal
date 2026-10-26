@@ -110,6 +110,8 @@ fn exit(stop: f64, trailing: f64, take_profit: Option<f64>) -> (EntryParams, Exi
     (
         EntryParams::Fact,
         ExitParams {
+            // `StopLoss` 0 here stands for a strategy whose stop is off.
+            use_stop_loss: stop != 0.0,
             stop_loss_pct: stop,
             trailing_pct: trailing,
             trailing_take_profit_pct: take_profit,

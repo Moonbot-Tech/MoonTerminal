@@ -1704,18 +1704,35 @@ fn exit_params_read_the_stop_switch_and_trigger() {
         )
     };
     let off = read(&[("UseStopLoss", "NO"), ("StopLoss", "-2")]);
-    assert_eq!(off.stop_loss_pct, 0.0, "a switched-off stop arms nothing");
+    assert!(!off.use_stop_loss, "a switched-off stop arms nothing");
     let on = read(&[
         ("UseStopLoss", "YES"),
         ("StopLoss", "-2"),
         ("StopLossEMA", "3"),
     ]);
     assert_eq!(on.stop_loss_pct, -2.0);
+    assert!(on.use_stop_loss);
     assert!(!on.fast_stop_loss, "absent is the core default, NO");
     assert_eq!(on.stop_loss_ema, 3.0);
     let unswitched = read(&[("StopLoss", "-2"), ("FastStopLoss", "YES")]);
     assert_eq!(unswitched.stop_loss_pct, -2.0, "no switch keeps the stop");
     assert!(unswitched.fast_stop_loss);
+}
+
+/// `StopLoss` is read as is with `UseStopLoss` off; only the switch says the stop is unarmed.
+#[test]
+fn exit_params_keeps_stop_loss_when_use_stop_loss_is_off() {
+    let defaults = HashMap::new();
+    let v = values(&[("UseStopLoss", "NO"), ("StopLoss", "-2")]);
+    let p = exit_params(
+        &StrategyValues {
+            values: &v,
+            defaults: &defaults,
+        },
+        ModelSettings::default(),
+    );
+    assert_eq!(p.stop_loss_pct, -2.0);
+    assert!(!p.use_stop_loss);
 }
 
 #[test]
@@ -2167,7 +2184,7 @@ fn the_stop_modifier_deepens_the_stop_by_the_summed_deltas() {
     };
     let pct = moon_core_stop_pct(&params, &d, d.buy_ms);
     assert!((pct - -2.372).abs() < 1e-9, "{pct}");
-    // No coefficient, no movement; no stop, nothing to move.
+    // No coefficient, no movement; `StopLoss` 0 is a stop at the buy, moved like any other.
     let off = ExitParams {
         stop_loss_modifier: 0.0,
         ..params.clone()
@@ -2177,7 +2194,7 @@ fn the_stop_modifier_deepens_the_stop_by_the_summed_deltas() {
         stop_loss_pct: 0.0,
         ..params.clone()
     };
-    assert_eq!(moon_core_stop_pct(&no_stop, &d, d.buy_ms), 0.0);
+    assert!((moon_core_stop_pct(&no_stop, &d, d.buy_ms) - -0.372).abs() < 1e-9);
     // `MaxModifier` caps the sum before the coefficient, as it does for the sell.
     let capped = ExitParams {
         max_modifier: 1.0,
@@ -2187,10 +2204,10 @@ fn the_stop_modifier_deepens_the_stop_by_the_summed_deltas() {
 }
 
 /// The adjustment may pull the stop toward the entry — live strategies carry a negative
-/// `StopLossModifier` — but one that pulls it THROUGH the entry leaves no stop at all, rather
-/// than one a hair from the entry that the next print would trip.
+/// `StopLossModifier` — and one that pulls it THROUGH the entry gives a positive stop, kept as
+/// is (matches the core's rule).
 #[test]
-fn an_adjustment_through_the_entry_leaves_no_stop() {
+fn an_adjustment_through_the_entry_keeps_a_positive_stop() {
     let mods = Modifiers {
         add_1h: 1.0,
         ..Modifiers::default()
@@ -2208,12 +2225,8 @@ fn an_adjustment_through_the_entry_leaves_no_stop() {
         },
         ..deal()
     };
-    // −2 − 70·(−0.3) = +19 unguarded: a "stop" nineteen per cent in profit.
-    assert_eq!(
-        moon_core_stop_pct(&base, &far, far.buy_ms),
-        0.0,
-        "no stop, not a near one"
-    );
+    // −2 − 70·(−0.3) = +19: a stop nineteen per cent in profit.
+    assert!((moon_core_stop_pct(&base, &far, far.buy_ms) - 19.0).abs() < 1e-9);
     // A falling coin does not: the sum is a magnitude, so a positive coefficient deepens the
     // stop whichever way the deltas went — −2 − |−70|·0.3 = −23.
     let other = ExitParams {
@@ -2254,10 +2267,10 @@ fn an_adjustment_through_the_entry_leaves_no_stop() {
     assert!((moon_core_stop_pct(&positive, &up, up.buy_ms) - 0.4).abs() < 1e-9);
 }
 
-/// An adjustment that exactly cancels the stop must not leave one armed at the fill price,
-/// where the next print fires it.
+/// An adjustment that exactly cancels the stop leaves a stop at the buy price, armed by
+/// `UseStopLoss` (matches the core's rule): the first print under the entry fires it.
 #[test]
-fn a_cancelled_stop_does_not_fire_at_the_entry() {
+fn a_cancelled_stop_is_a_stop_at_the_entry() {
     let mods = Modifiers {
         add_1h: 1.0,
         ..Modifiers::default()
@@ -2277,25 +2290,18 @@ fn a_cancelled_stop_does_not_fire_at_the_entry() {
         },
         ..deal()
     };
-    // The adjustment cancels the stop exactly, so there is none — and the print below the
-    // entry must not read as one.
-    assert_eq!(moon_core_stop_pct(&params, &d, d.buy_ms), 0.0);
+    // The adjustment cancels the distance exactly: the stop stands at the entry.
+    assert!(moon_core_stop_pct(&params, &d, d.buy_ms).abs() < 1e-9);
     let walk = ExitModel::new(&params).walk(
         &d,
-        // A real move down, not float noise: without the guard the stop sits ON the entry and
-        // this print trips it.
+        // A real move down past the entry trips the stop standing on it.
         &tape(&[(10_000, 100.0), (11_000, 99.99), (12_000, 100.02)]),
         Fill {
             t_ms: 10_000,
             price: 100.0,
         },
     );
-    assert_ne!(
-        walk.exit.kind,
-        ExitKind::Stop,
-        "a print a hundredth of a per cent away is not a stop: {:?}",
-        walk.exit
-    );
+    assert_eq!(walk.exit.kind, ExitKind::Stop, "{:?}", walk.exit);
 }
 
 /// A short's stop sits ABOVE the entry, the adjusted distance included (`exit::level_off_buy`
@@ -2459,6 +2465,7 @@ fn archived_strike_take_must_match_the_variant_formula() {
             latency_ms: 0.0,
             ..ModelSettings::default()
         },
+        use_stop_loss: false,
         ..ExitParams::default()
     };
     // The span formula gives 102; the archive is either exact or 1% above it.
@@ -2618,6 +2625,7 @@ fn archived_strike_take_allows_half_a_price_step() {
             latency_ms: 0.0,
             ..ModelSettings::default()
         },
+        use_stop_loss: false,
         ..ExitParams::default()
     };
     let d = Deal {

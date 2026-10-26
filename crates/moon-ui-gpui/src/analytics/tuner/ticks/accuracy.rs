@@ -73,16 +73,19 @@ pub(in crate::analytics::tuner) enum UncheckedWhy {
     Gap,
     /// The core closed by a rule other than the model's at the close.
     OtherRule,
+    /// The modelled stop sale is past the panic sell's floor, or no print shows its fill.
+    SaleUnknown,
     /// No verdict yet.
     Pending,
 }
 
 impl UncheckedWhy {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Rule,
         Self::TakeUnknown,
         Self::Gap,
         Self::OtherRule,
+        Self::SaleUnknown,
         Self::Pending,
     ];
 
@@ -94,6 +97,7 @@ impl UncheckedWhy {
             Some(DealWhy::Unjudged(Unjudged::TakeUnknown)) => Some(Self::TakeUnknown),
             Some(DealWhy::Unjudged(Unjudged::InGap)) => Some(Self::Gap),
             Some(DealWhy::Unjudged(Unjudged::OtherRule)) => Some(Self::OtherRule),
+            Some(DealWhy::Unjudged(Unjudged::SaleUnknown)) => Some(Self::SaleUnknown),
             Some(DealWhy::NoVerdict) => Some(Self::Pending),
             Some(
                 DealWhy::Fit
@@ -120,6 +124,7 @@ impl UncheckedWhy {
             Self::TakeUnknown => t!("analytics.ticks.pick.why_take"),
             Self::Gap => t!("analytics.ticks.pick.why_gap"),
             Self::OtherRule => t!("analytics.ticks.pick.why_other"),
+            Self::SaleUnknown => t!("analytics.ticks.pick.why_sale"),
             Self::Pending => t!("analytics.ticks.pick.why_pending"),
         }
         .to_string()

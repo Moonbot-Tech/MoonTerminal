@@ -48,6 +48,8 @@ struct Rung {
     switch_at: f64,
     level: f64,
     taken: bool,
+    /// The third stop's rung (`UseStopLoss3`), whose `AllowedDrop3` bounds the panic sell.
+    third: bool,
 }
 
 /// The ladder as the walk runs it.
@@ -59,6 +61,8 @@ pub(super) struct Ladder {
     next_sample: i64,
     period_ms: i64,
     fill_ms: i64,
+    /// Whether the rung taken last — the level in force — is the third stop's.
+    active_third: bool,
 }
 
 impl Ladder {
@@ -87,8 +91,9 @@ impl Ladder {
     ) -> Option<Self> {
         let rungs: Vec<Rung> = steps
             .iter()
-            .flatten()
-            .map(|step| Rung {
+            .enumerate()
+            .filter_map(|(i, step)| step.map(|step| (i == 1, step)))
+            .map(|(third, step)| Rung {
                 // Whole seconds (the site), the elapsed ones rounded (the core): "more than 60"
                 // holds from 60.5 s — and never inside `StopLossDelay`.
                 from_ms: (placed_ms + ((step.after_s.max(0.0).trunc() + 0.5) * 1000.0) as i64)
@@ -96,6 +101,7 @@ impl Ladder {
                 switch_at: level_off_buy(fill_price, step.switch_pct, long),
                 level: level_off_buy(fill_price, step.level_pct, long),
                 taken: false,
+                third,
             })
             .collect();
         if rungs.is_empty() {
@@ -111,6 +117,7 @@ impl Ladder {
             next_sample: anchor - back * period_ms,
             period_ms,
             fill_ms,
+            active_third: false,
         })
     }
 
@@ -119,6 +126,7 @@ impl Ladder {
     /// stop now stands — `None` when no step was taken by `until`.
     pub(super) fn before(&mut self, until: i64) -> Option<f64> {
         let mut moved = None;
+        let mut active_third = self.active_third;
         while self.next_sample < until {
             let at = self.next_sample;
             self.next_sample += self.period_ms;
@@ -138,10 +146,18 @@ impl Ladder {
                 if at >= rung.from_ms && past {
                     rung.taken = true;
                     moved = Some(rung.level);
+                    active_third = rung.third;
                 }
             }
         }
+        self.active_third = active_third;
         moved
+    }
+
+    /// Whether the third stop's rung is the level in force: a second rung taken after it
+    /// overwrites it.
+    pub(super) fn active_is_third(&self) -> bool {
+        self.active_third
     }
 
     /// Whether a step is still to be taken.

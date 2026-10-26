@@ -47,8 +47,8 @@ use super::exit::ExitModel;
 use super::exit::level_off_buy;
 use super::exit::line::LinePoint;
 use super::exit::sell_order::{take_is_recorded, take_model_for};
-use super::exit::stops::stop_pct;
 use super::exit::stops::trailing::trailing_level;
+use super::exit::stops::{immediate_stop, stop_pct};
 use super::mshot::MshotParams;
 use super::settings::ModelSettings;
 use super::{
@@ -310,8 +310,7 @@ pub fn verify(
         || reason.eq_ignore_ascii_case(REASON_MARKET_STOP);
     let missed_stop = fact_stopped
         && closed.kind != ExitKind::Stop
-        && (stop_pct(&fact_exit, deal, fact_fill.t_ms) != 0.0
-            || (fact_exit.trailing_pct != 0.0 && trailing_can_be_it));
+        && (fact_exit.use_stop_loss || (fact_exit.trailing_pct != 0.0 && trailing_can_be_it));
     let unjudged = |why: Unjudged| -> (ExitFinding, Option<f64>, Option<(usize, usize)>) {
         (ExitFinding::Unjudged(why), None, None)
     };
@@ -326,6 +325,13 @@ pub fn verify(
         // bounded by what the fact proves there: where the line or the stop stood at the close
         // is a function of prints nobody holds (`gap`).
         unjudged(Unjudged::InGap)
+    } else if walked.past_floor && closed.kind == ExitKind::Stop {
+        // The modelled stop sale is priced past the panic sell's floor, or nothing after the
+        // fill shows where it filled: "the minimum allowed level in percent from the purchase
+        // price to which the Sell order may be lowered after the stop is triggered and Panic
+        // Sell is activated" (`AllowedDrop`). Where the core's sale filled is the book's.
+        // Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+        unjudged(Unjudged::SaleUnknown)
     } else if missed_stop {
         (ExitFinding::Miss(ExitMiss::StopNotFired), None, None)
     } else if !take_known {
@@ -649,7 +655,7 @@ fn verify_stop(
     let mut first_unmatched: Option<usize> = None;
     let points = exit_points.filter(|p| !p.is_empty()).map(|archived| {
         let mut moves = archived_replacements(archived);
-        if let Some(i) = panic_at.and_then(|level| stop_jump(deal, &moves, level)) {
+        if let Some(i) = panic_at.and_then(|level| stop_jump(deal, exit, &moves, level)) {
             activation = Some(moves[i].0);
             moves.truncate(i);
         }
@@ -712,10 +718,10 @@ pub(super) fn stop_jump_level(
             .flatten()
             .map(|peak| trailing_level(peak, deal.buy_price, exit, deal.is_long()));
     }
-    let pct = stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms);
-    if !reason_starts_with(reason, REASON_STOP) || pct == 0.0 {
+    if !reason_starts_with(reason, REASON_STOP) || !exit.use_stop_loss {
         return None;
     }
+    let pct = stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms);
     stated_stop_level(reason).or_else(|| {
         (exit.second_stop.is_none() && exit.third_stop.is_none())
             .then(|| level_off_buy(deal.buy_price, pct, deal.is_long()))
@@ -734,12 +740,42 @@ pub fn stated_peak(reason: &str) -> Option<f64> {
     (value.is_finite() && value > 0.0).then_some(value)
 }
 
-/// Where the stop took over an archived line: the first move at or after the buy that stands at
-/// or past the stop level — the panic sell's first price, or the market order's.
-fn stop_jump(deal: &Deal, moves: &[(i64, f64)], level: f64) -> Option<usize> {
-    moves
-        .iter()
-        .position(|&(t, p)| t >= deal.buy_ms && reaches(p, level, deal.is_long()))
+/// Where the stop took over an archived line: the first move at or past the stop level, no
+/// earlier than the stop's activation — the panic sell's first price, or the market order's.
+///
+/// The stop arms only `StopLossDelay` seconds after the buy (less the point tolerance), and a
+/// level on the profit side of the buy (a "time stop") is already reached by the take placement
+/// and every re-placement of the take, all skipped: the doc's "the stop-loss will be placed at ASK at +50% from the
+/// purchase price, but it will trigger only after 60 seconds, activate Panic Sell". The
+/// immediate positive fast stop (fast, `StopLossEMA` 0, no delay) is the exception: its first
+/// placement is the stop's own order.
+/// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+fn stop_jump(deal: &Deal, exit: &ExitParams, moves: &[(i64, f64)], level: f64) -> Option<usize> {
+    let long = deal.is_long();
+    let delay_ms = (exit.stop_loss_delay_s * 1000.0).round() as i64;
+    let slack = if delay_ms > 0 {
+        exit.model.point_time_ms
+    } else {
+        0
+    };
+    let armed_ms = deal.buy_ms + delay_ms.max(0) - slack;
+    let profit_side = if long {
+        level > deal.buy_price
+    } else {
+        level < deal.buy_price
+    };
+    let immediate = immediate_stop(exit);
+    let take = deal
+        .archived_take
+        .filter(|t| t.is_finite() && *t > 0.0 && profit_side && !immediate);
+    let is_take = |p: f64| {
+        take.is_some_and(|take| {
+            deviation_pct(p, take).is_some_and(|d| d.abs() <= exit.model.price_pct)
+        })
+    };
+    moves.iter().position(|&(t, p)| {
+        t >= deal.buy_ms.max(armed_ms) && !is_take(p) && reaches(p, level, long)
+    })
 }
 
 /// The moment the core's own Exit line jumped past the stop level — the stop's activation as the
@@ -747,15 +783,17 @@ fn stop_jump(deal: &Deal, moves: &[(i64, f64)], level: f64) -> Option<usize> {
 ///
 /// Args:
 ///     deal: The trade.
+///     exit: The sell parameters of the fact (the stop's delay and switches).
 ///     level: The stop level: the one the core printed when it did, else the model's.
 ///     exit_points: The core's own Exit line.
 pub(super) fn archived_stop_jump(
     deal: &Deal,
+    exit: &ExitParams,
     level: f64,
     exit_points: Option<&[(i64, f64)]>,
 ) -> Option<i64> {
     let moves = archived_replacements(exit_points?);
-    stop_jump(deal, &moves, level).map(|i| moves[i].0)
+    stop_jump(deal, exit, &moves, level).map(|i| moves[i].0)
 }
 
 /// The stop level the core printed into a book-watching stop's reason — `StopLoss fixed: X` —

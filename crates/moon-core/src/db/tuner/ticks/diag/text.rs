@@ -402,6 +402,7 @@ fn trigger_label(trigger: StopTrigger) -> &'static str {
         StopTrigger::FastTick => "fast tick",
         StopTrigger::Trailing => "trailing",
         StopTrigger::Fact => "fact",
+        StopTrigger::Immediate => "immediate",
     }
 }
 

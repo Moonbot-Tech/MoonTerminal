@@ -246,6 +246,7 @@ fn price_down_steps_the_line_toward_the_buy_on_the_timer() {
         price_down_delay_s: 1.0,
         price_down_relative: true,
         price_down_allowed_drop_pct: 0.1,
+        use_stop_loss: false,
         ..params()
     };
     let ticks = tape(&[
@@ -277,6 +278,7 @@ fn price_down_absolute_takes_a_share_of_the_price() {
         price_down_pct: 0.2,
         price_down_relative: false,
         price_down_allowed_drop_pct: 0.0,
+        use_stop_loss: false,
         ..params()
     };
     let ticks = tape(&[(1_500, 100.0), (2_000, 100.9)]);
@@ -290,6 +292,7 @@ fn a_zero_timer_never_starts_the_steps() {
     let p = ExitParams {
         price_down_timer_s: 0.0,
         price_down_pct: 50.0,
+        use_stop_loss: false,
         ..params()
     };
     let ticks = tape(&[(5_000, 100.0), (60_000, 100.5)]);

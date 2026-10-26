@@ -46,8 +46,7 @@ pub fn unguarded_strategies<'a>(
 
 /// One strategy's guard.
 fn guarded(exit: &ExitParams) -> bool {
-    exit.stop_loss_pct != 0.0
-        || (exit.trailing_pct != 0.0 && exit.trailing_take_profit_pct.is_none())
+    exit.use_stop_loss || (exit.trailing_pct != 0.0 && exit.trailing_take_profit_pct.is_none())
 }
 
 /// One point's replay of a slice, read the two ways the search needs it: the trades it closed

@@ -144,6 +144,7 @@ fn no_stop_no_ladder() {
         stop_loss_pct: 0.0,
         fast_stop_loss: true,
         second_stop: Some(step(0.0, 0.5, 0.4)),
+        use_stop_loss: false,
         ..params()
     };
     let ticks = [sell(500, 100.8), sell(4_000, 100.9), sell(6_000, 100.3)];

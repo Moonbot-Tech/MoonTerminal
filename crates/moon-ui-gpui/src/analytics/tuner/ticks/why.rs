@@ -533,6 +533,7 @@ fn unjudged_key(why: Unjudged) -> &'static str {
         Unjudged::InGap => "in_gap",
         Unjudged::TakeUnknown => "take_unknown",
         Unjudged::OtherRule => "other_rule",
+        Unjudged::SaleUnknown => "sale_unknown",
     }
 }
 

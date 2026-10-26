@@ -95,7 +95,7 @@ pub(super) fn quote_facts(
             .as_ref()
             .is_none_or(|gap| gap.to_ms <= at - QUOTE_LOOKBACK_MS || gap.from_ms >= at)
     };
-    let ticker_age_ms = archived_stop_jump(deal, level, exit_points)
+    let ticker_age_ms = archived_stop_jump(deal, exit, level, exit_points)
         .filter(|&at| held(at))
         .and_then(|at| ticker_age_ms(ticks, at, own, long));
     StopFacts {

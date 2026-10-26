@@ -89,7 +89,16 @@ fn barrier_r13_stop_jump_reads_the_sell_booking_clock() {
 fn a_long_positions_hole_lies_between_its_held_ends() {
     let d = deal(false);
     let covered = Coverage::from_spans([(-30_000, 30_000), (2 * HOUR - 30_000, 2 * HOUR + 30_000)]);
-    let gap = TapeGap::of(&d, &covered, &ExitParams::default(), None).expect("a hole");
+    let gap = TapeGap::of(
+        &d,
+        &covered,
+        &ExitParams {
+            use_stop_loss: false,
+            ..ExitParams::default()
+        },
+        None,
+    )
+    .expect("a hole");
     assert_eq!((gap.from_ms, gap.to_ms), (30_000, 2 * HOUR - 30_000));
     assert_eq!(gap.fact_line, None);
     assert_eq!(gap.fact_stop, None, "the default sell runs no stop");
@@ -159,6 +168,7 @@ fn the_facts_stop_bounds_the_hole_at_its_deepest_level() {
         entry_price: 100.0,
         entry_ms: 0,
         sell_delay_ms: 0,
+        use_stop_loss: true,
         stop_pct: -2.0,
         delay_s: 0.0,
         fast: false,
@@ -241,6 +251,7 @@ fn two_ends() -> Vec<Tick> {
 fn weighted_fast_stop_is_unjudged_across_a_hole() {
     let mut p = sell();
     p.fast_stop_loss = true;
+    p.use_stop_loss = true;
     p.stop_loss_pct = -1.0;
     p.model.fast_price = super::super::settings::FastPrice::VwapLastTrades(5);
     let d = holed(
@@ -285,9 +296,10 @@ fn fill() -> Fill {
     }
 }
 
-/// A 1 % take and no latency.
+/// A 1 % take, no latency and no stop.
 fn sell() -> ExitParams {
     ExitParams {
+        use_stop_loss: false,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -347,6 +359,7 @@ fn a_stop_nearer_than_the_facts_is_not_judged_and_a_deeper_one_is() {
     });
     let d = holed(Some(&[(0, 101.0)]), fact_stop);
     let stop = |pct: f64, fast: bool| ExitParams {
+        use_stop_loss: true,
         stop_loss_pct: pct,
         fast_stop_loss: fast,
         ..sell()
