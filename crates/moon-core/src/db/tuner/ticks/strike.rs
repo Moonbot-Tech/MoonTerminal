@@ -17,52 +17,53 @@
 //! spans the strike from its deeper end back toward where it started:
 //!
 //! - `top = TradePrice · (1 + s · Depth / 100)`, `s = +1` for a long, `−1` for a short;
-//! - `low` = the deeper of `TradePrice` and the fill (the lower for a long, the higher for a
-//!   short);
-//! - the take price `= low + MStrikeSellLevel / 100 · (top − low)`.
+//! - `f(x) = x + MStrikeSellLevel / 100 · (top - x)`;
+//! - without `MStrikeSellAdjust`, the take is `f(TradePrice)`;
+//! - with adjustment, the take is the minimum (short: maximum) of `f(TradePrice)`,
+//!   `f(calculated buy)` and `f(fill)`.
 //!
-//! Checked against 505 take-closed live trades (2026-10-15): fact vs prediction median within
-//! 0.05 %, 239 of 505 within 0.05 %; alternatives off the buy price or off
-//! `TradePrice` alone fit worse. `MStrikeSellAdjust` is not separable by that data and is not
-//! modelled.
+//! Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonstrike-strategy-and-its-parameters
 
 /// Strategy kind name, as `strategies.sqlite` spells it.
 pub const KIND_MOONSTRIKE: &str = "MoonStrike";
 
-/// What the core wrote about one strike trade's detect, parsed out of the report's `comment`.
+/// MoonStrike's deeper-end price and detect depth.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StrikeDetect {
-    /// `Depth: X` — the strike's depth, per cent, written without a per-cent sign.
+    /// Strike's bare `Depth: X`.
     pub depth_pct: f64,
-    /// `TradePrice: P` — the price at the detect, the strike's deeper end.
+    /// Strike's `TradePrice: P`.
     pub trade_price: f64,
 }
 
 /// The take PRICE of a strike trade, before the delta modifiers.
 ///
 /// The strike runs from `TradePrice` back up (a short: down) by its depth to `top`; the take
-/// stands `MStrikeSellLevel` per cent of the way from the deeper of `TradePrice` and the fill
-/// to that top — a fill deeper than the detect price shortens nothing it did not have to.
+/// stands `MStrikeSellLevel` per cent of the way from the detect to that top. An adjusted
+/// take compares the three resulting prices, including when levels above 100 reverse order.
 ///
 /// Args:
 ///     d: The trade's detect.
 ///     fill_price: The entry's fill.
 ///     sell_level_pct: `MStrikeSellLevel` of the strategy, per cent of the span.
 ///     is_long: The position's side.
+///     adjust: Calculated buy price when `MStrikeSellAdjust` is on; `None` selects NO.
 pub fn strike_take_level(
     d: StrikeDetect,
     fill_price: f64,
     sell_level_pct: f64,
     is_long: bool,
+    adjust: Option<f64>,
 ) -> f64 {
     let s = if is_long { 1.0 } else { -1.0 };
     let top = d.trade_price * (1.0 + s * d.depth_pct / 100.0);
-    let low = if is_long {
-        d.trade_price.min(fill_price)
-    } else {
-        d.trade_price.max(fill_price)
-    };
-    low + sell_level_pct / 100.0 * (top - low)
+    let f = |price| price + sell_level_pct / 100.0 * (top - price);
+    let take = f(d.trade_price);
+    match adjust {
+        Some(buy) if is_long => take.min(f(buy)).min(f(fill_price)),
+        Some(buy) => take.max(f(buy)).max(f(fill_price)),
+        None => take,
+    }
 }
 
 /// Read `Depth:` and `TradePrice:` out of a report row's comment.

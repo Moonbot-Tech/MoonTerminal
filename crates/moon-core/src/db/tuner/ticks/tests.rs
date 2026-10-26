@@ -149,7 +149,7 @@ fn tick(t_ms: i64, price: f64, side: Side) -> Tick {
 }
 
 /// A tape of buy-side prints at `(t_ms, price)`.
-fn tape(points: &[(i64, f64)]) -> Vec<Tick> {
+pub(super) fn tape(points: &[(i64, f64)]) -> Vec<Tick> {
     points.iter().map(|&(t, p)| tick(t, p, Side::Buy)).collect()
 }
 
@@ -291,8 +291,8 @@ fn the_archived_level_is_the_latest_by_time_whatever_the_archive_order() {
 fn a_move_archived_inside_the_blind_window_is_applied_as_archived() {
     // Raise wait 30 s. The archive: 97 from t=-60 000 (the price ran away long before the
     // tape), re-placed at 99 at t=300 — 0.3 s into the tape, a wait the model cannot see the
-    // start of. The print at 99 at t=1000 fills the archived level; on its own the model would
-    // wait 30 s from the first print and never fill (the tape ends first).
+    // start of. The print at 99 at t=1000 fills the archived level. Without the hint, the
+    // last command at -60 000 already satisfies RaiseWait and the model moves at t=0.
     let params = MshotParams {
         raise_wait_s: 30.0,
         ..mshot()
@@ -306,8 +306,11 @@ fn a_move_archived_inside_the_blind_window_is_applied_as_archived() {
     assert!((fill.price - 99.0).abs() < 1e-9);
     assert_eq!(
         MshotEntry::new(&params).fill(&deal(), &ticks, Some(&line[..1])),
-        None,
-        "without the move the model waits its 30 s"
+        Some(Fill {
+            t_ms: 1_000,
+            price: 99.0
+        }),
+        "the archived start already satisfies the wait since the last command"
     );
 }
 
@@ -436,15 +439,15 @@ fn raise_wait_follows_the_price_up_only_after_the_wait() {
     assert!((fill.price - 100.98).abs() < 1e-9, "{}", fill.price);
 }
 
+/// Resetting Retreat at a later breach would miss the command due as the old low ages out.
 #[test]
-fn leaving_and_re_entering_the_corridor_resets_the_wait() {
+fn re_entering_the_corridor_fills_the_already_replaced_order() {
     let params = MshotParams {
         raise_wait_s: 1.0,
         ..mshot()
     };
-    // Out at t=1000, back inside at t=1500 (100.5: distance 1.49 %… still out). Use 99.8:
-    // distance 0.8 %, inside. Out again at t=1800; at t=2500 only 700 ms have passed since
-    // the SECOND breach, so the order has not moved and 99.0 still fills.
+    // The creation low ages out at 1001, after the strict wait from the last command.
+    // The re-place at 102 * 0.99 = 100.98 reaches the exchange before the return to 99.8.
     let ticks = tape(&[
         (0, 100.0),
         (1_000, 102.0),
@@ -454,7 +457,8 @@ fn leaving_and_re_entering_the_corridor_resets_the_wait() {
         (2_600, 99.0),
     ]);
     let fill = fill_of(&deal(), &ticks, &params).expect("filled");
-    assert!((fill.price - 99.0).abs() < 1e-9);
+    assert_eq!(fill.t_ms, 1_500);
+    assert!((fill.price - 100.98).abs() < 1e-9);
 }
 
 /// The corridor the core saves is symmetric around the placement: a run-away re-places the order
@@ -650,10 +654,10 @@ fn price_bug_deepens_the_order() {
     assert!((far - 1.4).abs() < 1e-9, "{far}");
 }
 
+/// Keeping a signed MoonShot market delta would pull a falling-market corridor nearer.
 #[test]
-fn the_sell_family_reads_the_market_as_a_magnitude_and_the_corridor_with_its_sign() {
-    // FAQ :1171, :1172 — AddMarketDelta / AddMarket24Delta "по модулю"; MShotAddMarketDelta has
-    // no such word.
+fn both_modifier_families_read_the_market_as_a_magnitude() {
+    // KB PARAMS.md section 13: market deltas are magnitudes in both families.
     let d = Deltas {
         market1h: -2.0,
         market24h: -3.0,
@@ -675,7 +679,7 @@ fn the_sell_family_reads_the_market_as_a_magnitude_and_the_corridor_with_its_sig
     let sell = exit_params(&sv, ModelSettings::default()).sell_mods;
     assert!((sell.near_addition(&d) - 0.5).abs() < 1e-9);
     let corridor = mshot_params(&sv, ModelSettings::default()).modifiers;
-    assert!((corridor.near_addition(&d) - -0.2).abs() < 1e-9);
+    assert!((corridor.near_addition(&d) - 0.2).abs() < 1e-9);
     assert!(param_keys().iter().any(|k| k == "AddMarket24Delta"));
 }
 
@@ -773,8 +777,9 @@ fn shifted_variant(price_pct: f64) -> (Deal, MshotParams) {
 
 /// The shift keeps the fact's order where it stood at the spike — 99, one per cent under 100 —
 /// and moves it by the variant's far bound: 1.5 % puts it at 98.5, which the spike's 98.4 fills
-/// and a spike to 98.6 does not; 0.5 % puts it at 99.5, filled on the way down by the fact's own
-/// fill print. A print past the spike's window fills nothing.
+/// and a spike to 98.6 does not; a raw 0.5 % far bound beside the 0.5 % near bound is raised to
+/// 0.501 % by the minimum width, putting it at 99.499, filled by the fact's own print.
+/// A print past the spike's window fills nothing.
 #[test]
 fn the_shift_moves_the_facts_order_by_the_variants_far_bound() {
     let (d, deeper) = shifted_variant(1.5);
@@ -789,7 +794,7 @@ fn the_shift_moves_the_facts_order_by_the_variants_far_bound() {
     let (d, shallower) = shifted_variant(0.5);
     let fill = fill_of(&d, &spike, &shallower).expect("reached on the way down");
     assert_eq!(fill.t_ms, 10_000);
-    assert!((fill.price - 99.5).abs() < 1e-9, "{fill:?}");
+    assert!((fill.price - 99.499).abs() < 1e-9, "{fill:?}");
 }
 
 /// The short mirror: 101 is one per cent over 100, and 1.5 % puts the order at 101.5.
@@ -838,11 +843,10 @@ fn the_shift_keeps_the_fact_and_needs_it() {
     );
 }
 
-/// The corridor is measured from the current print, whatever `FastShotAlgo` is; a re-placed
-/// order goes off the lowest print of the last 100 ms, not off the print that decided the move
-/// (the core developer, 2026-09-23).
+/// Measuring Approach from the short extreme would miss a recovery; delaying a due command
+/// until another print would use the wrong placement price.
 #[test]
-fn the_corridor_reads_the_last_print_and_re_places_off_the_windows_low() {
+fn approach_reads_the_last_print_and_the_timer_places_off_the_short_extreme() {
     let params = MshotParams {
         fast_algo: true,
         raise_wait_s: 30.0,
@@ -873,9 +877,8 @@ fn the_corridor_reads_the_last_print_and_re_places_off_the_windows_low() {
             "fast {fast_algo}: {fill:?}"
         );
     }
-    // An approach held 60 ms past a 50 ms delay: the order is re-placed 1 % under the window's
-    // low, 99.40 — not under 99.48, the print that decided the move — so 98.45 does not reach
-    // it, and 98.40 does.
+    // The approach at 1000 is due at 1048, off the short-window low 99.40. A later
+    // approach at 1200 is due at 1248, so the print at 1230 still fills the first move.
     let held = MshotParams {
         replace_delay_s: 0.05,
         ..params
@@ -886,18 +889,18 @@ fn the_corridor_reads_the_last_print_and_re_places_off_the_windows_low() {
         (1_020, 99.40),
         (1_060, 99.48),
         (1_200, 98.45),
-        (1_300, 98.40),
+        (1_230, 98.40),
     ]);
     let fill = fill_of(&deal(), &ticks, &held).expect("filled");
-    assert_eq!(fill.t_ms, 1_300);
+    assert_eq!(fill.t_ms, 1_230);
     assert!(
         (fill.price - f64::from(99.40_f32) * 0.99).abs() < 1e-9,
         "{fill:?}"
     );
 }
 
-/// One re-place at a time: while the last one is on its way to the exchange, a spike's prints
-/// move nothing — the order the spike meets is the one the exchange has.
+/// Overlapping commands would move the exchange level too soon; waiting for a new print
+/// after the acknowledgement would move it too late.
 #[test]
 fn no_re_place_while_the_last_is_in_flight() {
     let params = MshotParams {
@@ -910,8 +913,8 @@ fn no_re_place_while_the_last_is_in_flight() {
     // Level 99 off 100, on the book at once (placed off the first print). At t=1000 the price
     // runs 1.59 % away, past the 1.5 % edge: the order is re-placed off 100.6 (99.594), on the
     // book at 1300. At t=1150 101.2 runs away again; the move is in flight, so nothing moves —
-    // chasing it would have put the order at 100.188, which 100.15 fills. The exchange's
-    // 99.594 is what 99.5 fills.
+    // the next command waits until 1300, when the first reaches the exchange. Its level
+    // 100.188 reaches the exchange at 1600, and the print at 99.5 fills it then.
     let ticks = tape(&[
         (0, 100.0),
         (1_000, 100.6),
@@ -919,10 +922,15 @@ fn no_re_place_while_the_last_is_in_flight() {
         (1_500, 100.15),
         (1_600, 99.5),
     ]);
-    let fill = fill_of(&deal(), &ticks, &params).expect("filled");
+    let (fill, moves) = MshotEntry::new(&params).trace(&deal(), &ticks, None);
+    let fill = fill.expect("filled");
+    assert_eq!(
+        moves.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+        vec![0, 1_000, 1_300]
+    );
     assert_eq!(fill.t_ms, 1_600);
     assert!(
-        (fill.price - f64::from(100.6_f32) * 0.99).abs() < 1e-9,
+        (fill.price - f64::from(101.2_f32) * 0.99).abs() < 1e-9,
         "{fill:?}"
     );
 }
@@ -1863,12 +1871,13 @@ fn hook_deal() -> Deal {
     }
 }
 
-/// `HookSellLevel` = 50 of a 4 % depth is a 2 % take — and `SellPrice` is not consulted at all.
+/// A fixed `HookSellLevel` = 50 of a 4 % depth is a 2 % take; `SellPrice` is ignored.
 #[test]
 fn a_hook_takes_a_share_of_its_detect_depth() {
     let params = ExitParams {
         sell_price_pct: 1.0,
         hook_sell_level_pct: 50.0,
+        hook_sell_fixed: true,
         ..ExitParams::default()
     };
     let fill = Fill {
@@ -1923,6 +1932,7 @@ fn a_fixed_hook_take_is_judged() {
 fn a_short_hook_takes_below_the_entry() {
     let params = ExitParams {
         hook_sell_level_pct: 50.0,
+        hook_sell_fixed: true,
         ..ExitParams::default()
     };
     let d = Deal {
@@ -1946,7 +1956,17 @@ fn a_hook_without_its_depth_is_not_a_known_take() {
         ..ExitParams::default()
     };
     let model = ExitModel::new(&params);
-    assert!(model.take_known(&hook_deal()));
+    assert!(
+        model.take_known(&hook_deal()),
+        "the stated fact level stays known"
+    );
+    assert!(
+        !model.take_known(&Deal {
+            hook_stated_take_pct: None,
+            ..hook_deal()
+        }),
+        "a non-fixed take without its fact level needs the spike"
+    );
     let no_depth = Deal {
         hook_depth_pct: None,
         drops_detect: None,
@@ -1958,7 +1978,7 @@ fn a_hook_without_its_depth_is_not_a_known_take() {
         ..params.clone()
     };
     assert!(!ExitModel::new(&no_level).take_known(&hook_deal()));
-    // `HookSellFixed` places the same take: known just the same.
+    // Fixed takes require only the depth and level.
     let fixed = ExitParams {
         hook_sell_fixed: true,
         ..params.clone()
@@ -2658,6 +2678,9 @@ fn strike_take_level_long_end_to_end() {
     let p = ExitParams {
         sell_price_pct: 1.0,
         strike_sell_level_pct: 50.0,
+        strike_sell_adjust: true,
+        strike_buy_level_pct: Some(0.0),
+        strike_buy_relative: true,
         ..ExitParams::default()
     };
     // top 104, low the fill 99: half way 101.5 — `SellPrice` not consulted.
@@ -2669,6 +2692,9 @@ fn strike_take_level_long_end_to_end() {
 fn strike_take_level_short_end_to_end() {
     let p = ExitParams {
         strike_sell_level_pct: 50.0,
+        strike_sell_adjust: true,
+        strike_buy_level_pct: Some(0.0),
+        strike_buy_relative: true,
         ..ExitParams::default()
     };
     // top 96, low the detect 100 (fill 99.5 is shallower): half way 98.
@@ -2680,6 +2706,9 @@ fn strike_take_level_short_end_to_end() {
 fn strike_take_level_applies_sell_modifier_after() {
     let p = ExitParams {
         strike_sell_level_pct: 50.0,
+        strike_sell_adjust: true,
+        strike_buy_level_pct: Some(0.0),
+        strike_buy_relative: true,
         sell_modifier: 1.0,
         sell_mods: Modifiers {
             add_1h: 1.0,

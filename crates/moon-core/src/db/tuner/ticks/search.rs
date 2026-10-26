@@ -243,12 +243,14 @@ fn search(
     // searched fields are gridded one by one, and nothing else ties them. Only a search of the
     // Entry group can produce one — an Exit search leaves the strategy's own fields alone,
     // whatever they hold. Both rules read the entry alone, which is what lets the nested search
-    // refuse an entry point before it searches the exit under it.
+    // refuse an entry point before it searches the exit under it. Unknown variant takes are
+    // refused here too, before either the fill cache or replay cache can score a guessed take.
     let corridor_refuses = |per_base: &[(EntryParams, ExitParams)]| {
         let refused = (params.vary_entry && inverts(&start_ordered, per_base))
             || guard
                 .as_ref()
-                .is_some_and(|g| !g.holds(&bases.of_deal, per_base));
+                .is_some_and(|g| !g.holds(&bases.of_deal, per_base))
+            || unknown_takes(deals, &bases.of_deal, per_base) > 0;
         if refused {
             cornered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -542,11 +544,12 @@ fn search(
             params.vary_entry && inverts(&start_ordered, &per_base),
             nearer,
             closing::protected(&per_base),
+            unknown_takes(deals, &bases.of_deal, &per_base),
         )
     });
     log::info!(
         target: crate::diagnostics::TICKS_AXIS_TARGET,
-        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} purged, {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}, by the risk limits {}; points scored on entry fills read before {} of {}; stopped {}/{} ({})",
+        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} purged, {} left out; base refused by (inverts, deals nearer than their own corridor, guarded, unknown takes) {:?}; points refused by the corridor or unknown take {}, by a deal left open {}, by the risk limits {}; points scored on entry fills read before {} of {}; stopped {}/{} ({})",
         brief(&base_score),
         brief(&score),
         train.len(),

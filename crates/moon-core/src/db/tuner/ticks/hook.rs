@@ -1,5 +1,11 @@
 //! MoonHook's own take rule, and the numbers the core writes about its detect.
 //!
+//! The documented `HookSellFixed=NO` rule locates the take inside High/Min's spike.
+//! That rule does not reproduce the core's stated takes. Only the stated take at the fact's calibrated level
+//! is retained; Fixed=NO variants at another level, or without a stated take, are refused.
+//! Fixed=YES specifies a share of depth as a percent distance off the buy.
+//! Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonhook-strategy-and-its-parameters
+//!
 //! A MoonHook carries **no `SellPrice` field at all** — its sell lives in `HookSellLevel`, in
 //! per cent OF THE DETECT DEPTH (core FAQ: "HookSellLevel: заменяет SellPrice. Задается в
 //! процентах от глубины детекта… 100 % означает продажу в верхней точке, из которой начался
@@ -19,9 +25,9 @@
 //! that number on 90 of 118 trades within 0.01 pp, with the buy price as the base (median of
 //! fact against prediction +0.003 %). The remaining 28 all sit HIGHER than the formula, never
 //! lower; the depth in the comment is written at close time while the take was placed at fill
-//! time, and the detect's state in between is not in the report. So the model runs the formula
-//! on the depth the stated take implies (`record::placed_hook_depth`) wherever the comment
-//! states one. See `docs-internal/STRATEGY_FORMULAS/moonhook.md`.
+//! time. The depth inferred by `record::placed_hook_depth` preserves that stated factual take
+//! and identifies its `HookSellLevel`; a non-fixed variant at another level is refused.
+//! See `docs-internal/STRATEGY_FORMULAS/moonhook.md`.
 //!
 //! The archive cannot stand in for this: the core files a line only when it was RE-PLACED, and
 //! a take that never moved has none — 0 of 155 take-closed trades on the same sample carry an
@@ -51,7 +57,7 @@ pub fn hook_take_pct(depth_pct: f64, sell_level_pct: f64) -> f64 {
     depth_pct * sell_level_pct / 100.0
 }
 
-/// Read `Depth:` and `SellPrice:` out of a report row's comment.
+/// Read the percent depth and stated take from a comment.
 ///
 /// Returns `None` for a comment that carries no hook detect — every other kind's comment, and a
 /// hook row whose depth the core did not write.

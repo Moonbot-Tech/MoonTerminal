@@ -54,7 +54,7 @@ fn long_take_level_from_trade_price() {
         trade_price: 100.0,
     };
     // top 104, low 100 (fill above it), half way: 102.
-    assert!(close(strike_take_level(d, 100.5, 50.0, true), 102.0));
+    assert!(close(strike_take_level(d, 100.5, 50.0, true, None), 102.0));
 }
 
 #[test]
@@ -64,27 +64,43 @@ fn short_take_level_from_trade_price() {
         trade_price: 100.0,
     };
     // top 96, low 100 (fill below it), a quarter of the way: 99.
-    assert!(close(strike_take_level(d, 99.5, 25.0, false), 99.0));
+    assert!(close(strike_take_level(d, 99.5, 25.0, false, None), 99.0));
 }
 
 #[test]
-fn long_fill_below_trade_price_uses_fill() {
+fn adjusted_long_fill_below_trade_price_uses_fill() {
     let d = StrikeDetect {
         depth_pct: 4.0,
         trade_price: 100.0,
     };
     // low = fill 98, top 104: half way is 101.
-    assert!(close(strike_take_level(d, 98.0, 50.0, true), 101.0));
+    assert!(close(
+        strike_take_level(d, 98.0, 50.0, true, Some(100.0)),
+        101.0
+    ));
 }
 
 #[test]
-fn short_fill_above_trade_price_uses_fill() {
+fn adjusted_short_fill_above_trade_price_uses_fill() {
     let d = StrikeDetect {
         depth_pct: 4.0,
         trade_price: 100.0,
     };
     // low = fill 102, top 96: half way is 99.
-    assert!(close(strike_take_level(d, 102.0, 50.0, false), 99.0));
+    assert!(close(
+        strike_take_level(d, 102.0, 50.0, false, Some(100.0)),
+        99.0
+    ));
+}
+
+/// Disabling adjustment must not pull the take toward a deeper fill.
+#[test]
+fn unadjusted_take_ignores_deeper_fill() {
+    let d = StrikeDetect {
+        trade_price: 100.0,
+        depth_pct: 10.0,
+    };
+    assert!(close(strike_take_level(d, 90.0, 80.0, true, None), 108.0));
 }
 
 #[test]

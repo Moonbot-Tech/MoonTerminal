@@ -7,31 +7,21 @@
 //!   down to `MShotPriceMin` % — closer than that, the order is re-placed at `MShotPrice` again
 //!   after `MShotReplaceDelay` seconds; when the price runs away, it is re-placed after
 //!   `MShotRaiseWait` seconds. How far it may run is not what the FAQ's wording suggests: the
-//!   corridor the core saves with the report (`BuyCorridorDown` / `BuyCorridorUp`) is a band of
-//!   ORDER prices symmetric around the placement, from `MShotPriceMin` to `2 · MShotPrice −
-//!   MShotPriceMin` off the reference, modifiers included — to 0.05 % on 155 of 287 MoonShot
-//!   trades (2026-09-23), the rest wider by what the live deltas moved. So the order is re-placed
-//!   only past `far + min(near, far − near)` ([`retreat_pct`], the core developer's rule, the
-//!   same band wherever `near ≥ far / 2`), not past `far`;
+//!   far bound uses the minimum print of the RaiseWait window (maximum for a short), with
+//!   retreat depth `far + min(near, far - near)` and the width clamps in [`retreat_pct`];
 //! - every `MShotAdd*Delta` adds `k · delta` to BOTH bounds, the delta's sign as the report
 //!   carries it: the FAQ's `-10% + (-20 · 0.05) = -11%` is a coin UP 20 % on 3 h putting the
 //!   order 1 % deeper (checked on the live tape on 2026-09-20: a long on ROSE, up 7 % / 11 % on
 //!   3 h / 24 h, had its real order deeper than the unmodified corridor by exactly `Σ k · δ`);
 //!   `MShotAddPriceBug` adds `k · pricebug` — deeper during exchange lag — and
 //!   `MShotAddDistance` scales what the FAR bound receives by `1 + distance / 100`;
-//! - `MShotMinusSatoshi` keeps the order at least two price steps off the reference;
+//! - `MShotMinusSatoshi` keeps the order at least two price steps off the ASK;
 //! - `MShotUsePrice` picks the reference: the last trade, or the book's ASK / BID;
-//! - the corridor is measured from the current price, and a re-placed order is put off the
-//!   lowest print of the last 100 ms (highest, for a short) — for every `MShotRaiseWait`, which
-//!   is what keeps the order from being placed off a spike's rebound (the core developer,
-//!   2026-09-23; the FAQ gives the window to `FastShotAlgo`'s "algorithm 2" alone). See
-//!   [`Reference`]. The core re-places one order at a time — the next only once the exchange
-//!   answered the last — and checks the corridor on a timer, 16 ms with `FastShotAlgo` and 80 ms
-//!   without; the model decides on the prints and folds the timer into `latency_ms`. Stepping the
-//!   timer, and `FastShotAlgo = NO`'s own run-away rule and 100 ms sleep, moved the live sample by
-//!   −1…−4 entries of 823 (2026-09-23) while the corridor's LEVEL was still off by 0.2 % on the
-//!   median — `MShotAddMarkDelta` reads a mark price with no history here — and are left out
-//!   until the level can tell them apart.
+//! - the near bound uses the current price. A Trade re-place uses records younger than 74 ms,
+//!   the core's short extreme, regardless of RaiseWait; ASK/BID use the last wanted-side print.
+//!   Approach is due after `max(ReplaceDelay - 2 ms, 0)`; Retreat waits strictly more than
+//!   RaiseWait since the last replacement command. Timers fire between prints before the next
+//!   fill check. Only one re-place may be in flight; order-loop jitter is not modelled.
 //!
 //! Two things the tape cannot give and the model states instead: the book (an ASK / BID
 //! reference is approximated by the last buy-side / sell-side print), and the time a
@@ -79,7 +69,7 @@
 
 use super::settings::ModelSettings;
 use super::verify::archived_replacements;
-use super::{Deal, Deltas, EntryParams, Fill, deltas, reaches, snap_to_step};
+use super::{Deal, Deltas, EntryParams, Fill, ORDER_WAIT_CAP_MS, deltas, reaches, snap_to_step};
 use crate::feed::types::{Side, Tick};
 
 /// Which price the order keeps its distance from (`MShotUsePrice`).
@@ -117,7 +107,7 @@ pub enum EntryMethod {
     /// The corridor model from the order's creation ([`MshotEntry::fill`] via `run`): the whole
     /// path the variant's order would have walked. The one that answers for `MShotRaiseWait`,
     /// `MShotReplaceDelay` and `MShotUsePrice`, which change the path (`FastShotAlgo` is read
-    /// at the strategy's value; the model folds its timer into the latency).
+    /// at the strategy's value; order-loop jitter is not modelled).
     #[default]
     Model,
     /// The fact's order at the spike, shifted by the variant's far bound
@@ -151,13 +141,11 @@ impl EntryMethod {
 /// How a family of modifiers reads the market-wide and the BTC deltas.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MarketSign {
-    /// With the sign the report carries — `MShotAddMarketDelta` ("аналогично", FAQ :1289) and the
-    /// corridor's BTC terms.
-    #[default]
+    /// With the sign the report carries, for an explicitly signed modifier family.
     Signed,
-    /// As a magnitude — the Delta Modifiers tab's `AddMarketDelta` and `AddMarket24Delta`, "по
-    /// модулю, то есть всегда положительный" (FAQ :1171, :1172), and its BTC terms likewise (the
-    /// core developer via LinKvo, 2026-09-24: "рыночные и BTC берутся по модулю").
+    /// As a magnitude for both MoonShot and the Delta Modifiers tab: market and BTC terms
+    /// always use the absolute delta (KB PARAMS.md section 13).
+    #[default]
     Magnitude,
 }
 
@@ -193,17 +181,15 @@ pub struct Modifiers {
     pub market_sign: MarketSign,
     /// `MShotAddDistance` — per cent by which the far bound's addition exceeds the near one's.
     pub distance_pct: f64,
-    /// The ceiling on the `add_pricebug` term alone, per cent; 0 for none. The corridor family's
-    /// `MShotAddPriceBug` contributes at most 30 % (the core developer via LinKvo, 2026-09-24);
+    /// The ceiling on the `add_pricebug` term alone, per cent; 0 for none.
+    /// Matches the core's rule: `MShotAddPriceBug` contributes at most 30 %;
     /// the Delta Modifiers tab's `AddPriceBug` has no ceiling of its own.
     pub pricebug_cap: f64,
 }
 
 impl Modifiers {
-    /// The addition to the NEAR bound, in per cent, for these deltas — `Σ k · δ`, every delta
-    /// with its own sign, so a coin that went up gets a deeper order (the module doc has the
-    /// FAQ example and the live check behind the sign), the market-wide ones as the family reads
-    /// them ([`MarketSign`]).
+    /// The addition to the NEAR bound, in per cent: coin deltas keep their sign, while market
+    /// and BTC deltas follow [`MarketSign`] (magnitudes by default, KB PARAMS.md section 13).
     pub fn near_addition(&self, d: &Deltas) -> f64 {
         let wide = |delta: f64| match self.market_sign {
             MarketSign::Signed => delta,
@@ -241,9 +227,12 @@ impl Modifiers {
 /// The ceiling `MShotPriceBug`'s term stands under in the corridor family, per cent.
 pub const MSHOT_PRICEBUG_CAP_PCT: f64 = 30.0;
 
-/// Smallest distance either bound may end up at after the modifiers, in per cent — the
-/// expert-mode floor of `MShotPrice`, so a pumping coin cannot push the order ABOVE the price.
-const BOUND_FLOOR_PCT: f64 = 0.02;
+/// Smallest near distance, per cent. Source:
+/// https://moonbot.pro/documentation/advanced-strategy-parameters/moonshot-strategy-and-its-parameters
+const NEAR_FLOOR_PCT: f64 = 0.002;
+
+/// Smallest gap between near and far bounds, per cent (KB PARAMS.md section 13).
+const WIDTH_FLOOR_PCT: f64 = 0.001;
 
 /// Default replacement latency, milliseconds — see the module doc.
 pub const DEFAULT_LATENCY_MS: f64 = 100.0;
@@ -274,11 +263,8 @@ pub const SHIFT_WINDOW_MS: i64 = 2_000;
 /// The seconds the FAQ's "4-second-old ASK" of `MShotSellAtLastPrice` looks back.
 pub const PRE_SPIKE_LOOKBACK_MS: i64 = 4_000;
 
-/// The window a re-placed order's price is read off: the extreme print of the last 100 ms. The
-/// FAQ gives it to `FastShotAlgo`'s algorithm 2 ("the minimum trade over 100 ms"); the core
-/// developer (2026-09-23) to every re-place, whatever `MShotRaiseWait` — the trades of the last
-/// ~75–150 ms.
-pub const FAST_ALGO_WINDOW_MS: i64 = 100;
+/// Trade re-places use records younger than 74 ms, the core's short extreme.
+pub const FAST_ALGO_WINDOW_MS: i64 = 74;
 
 /// MoonShot entry parameters, in the strategy's own units (per cent, seconds).
 #[derive(Clone, Debug, PartialEq)]
@@ -288,21 +274,21 @@ pub struct MshotParams {
     /// `MShotPriceMin` — the near bound.
     pub price_min_pct: f64,
     pub use_price: UsePrice,
-    /// `MShotRaiseWait`, seconds — before re-placing after the price RAN AWAY.
+    /// `MShotRaiseWait`, seconds — strict wait since the last command before a Retreat.
     pub raise_wait_s: f64,
     /// `MShotReplaceDelay`, seconds — before re-placing after the price CAME TOO CLOSE.
     pub replace_delay_s: f64,
+    /// `AutoCancelBuy`, seconds from creation; zero disables expiry.
+    pub auto_cancel_buy_s: f64,
     /// `MShotMinusSatoshi`.
     pub minus_satoshi: bool,
-    /// `FastShotAlgo` — the core's corridor timer (16 ms on, 80 ms off) and, off, a run-away
-    /// read off the last print with a 100 ms sleep after each re-place (the core developer,
-    /// 2026-09-23). Off on 224 of the 823 live MoonShot entries of that day; the model reads the
-    /// same corridor either way (see the module doc).
+    /// `FastShotAlgo` — the core's order-loop period (16 ms on, 80 ms off). The model
+    /// evaluates due commands without that loop's jitter (see the module doc).
     pub fast_algo: bool,
     pub modifiers: Modifiers,
     /// `MaxModifier` — the one ceiling the Delta Modifiers tab shares with the corridor: the sum
     /// of the `MShotAdd*` terms is capped by it from above when it is above zero, with its sign
-    /// kept (no magnitude, unlike the sell's sum) — the core developer via LinKvo, 2026-09-24.
+    /// kept (no magnitude, unlike the sell's sum), matching the core's rule.
     pub max_modifier: f64,
     /// The model's own settings, not strategy fields: the replacement latency, the replay
     /// method, the windows.
@@ -331,6 +317,7 @@ impl Default for MshotParams {
             use_price: UsePrice::Trade,
             raise_wait_s: 0.0,
             replace_delay_s: 0.0,
+            auto_cancel_buy_s: 0.0,
             minus_satoshi: false,
             fast_algo: false,
             modifiers: Modifiers::default(),
@@ -345,8 +332,8 @@ impl MshotParams {
     pub fn bounds_pct(&self, deltas: &Deltas) -> (f64, f64) {
         let near_add = self.addition(deltas);
         let far_add = near_add * (1.0 + self.modifiers.distance_pct / 100.0);
-        let near = (self.price_min_pct + near_add).max(BOUND_FLOOR_PCT);
-        let far = (self.price_pct + far_add).max(near);
+        let near = (self.price_min_pct + near_add).max(NEAR_FLOOR_PCT);
+        let far = (self.price_pct + far_add).max(near + WIDTH_FLOOR_PCT);
         (near, far)
     }
 
@@ -364,9 +351,8 @@ impl MshotParams {
     /// Whether the near bound sits below the far one — `MShotPriceMin < MShotPrice`, the
     /// corridor the fields describe: the price moves above the order between the two (FAQ: 10 %
     /// and 7 %, the price between +7 and +10 %). A pair at or past that is a corridor no field
-    /// describes; the model reads it as a band of no width (`bounds_pct` lifts the far bound to
-    /// the near one), and what the core does with it is not known — a variant built on it is
-    /// judged on a regime that may not exist.
+    /// describes; `bounds_pct` still enforces the minimum width, but such a variant's raw
+    /// fields describe no ordered corridor; callers exclude such a variant (search eligibility).
     pub fn is_ordered(&self) -> bool {
         self.price_min_pct < self.price_pct
     }
@@ -437,10 +423,36 @@ impl<'a> MshotEntry<'a> {
         self.params.model.entry_method
     }
 
-    /// Where the order would stand for a reference price: the far bound away, kept two steps
-    /// off the reference when `MShotMinusSatoshi` says so, snapped to the price grid AWAY from
-    /// the reference (a limit is placed on the grid, and the core rounds toward safety).
-    fn place(&self, reference: f64, far_pct: f64, deal: &Deal) -> f64 {
+    /// First command time: Approach waits from detection; Retreat strictly from the last command.
+    fn due_ms(&self, kind: Breach, since: i64, last_replace_ms: i64) -> i64 {
+        match kind {
+            Breach::Approach => {
+                since.saturating_add((wait_ms(self.params.replace_delay_s) - 2).max(0))
+            }
+            Breach::Retreat => last_replace_ms
+                .saturating_add(wait_ms(self.params.raise_wait_s))
+                .saturating_add(1)
+                .max(since),
+        }
+    }
+
+    /// Expire from known creation using the parsed timer. Corridor re-places are not
+    /// manual moves and do not disable or restart the timer. Source:
+    /// https://moonbot.pro/documentation/general-parameters-for-all-strategies/buy-conditions-tab
+    fn expiry_ms(&self, deal: &Deal) -> Option<i64> {
+        let seconds = self.params.auto_cancel_buy_s;
+        if seconds > 0.0 {
+            deal.order_open_ms()
+                .map(|created_ms| created_ms.saturating_add((seconds * 1000.0) as i64))
+        } else {
+            None
+        }
+    }
+
+    /// Place a far bound off the reference, enforcing two steps from `ask` when requested,
+    /// then snap away from the reference. Source:
+    /// https://moonbot.pro/documentation/advanced-strategy-parameters/moonshot-strategy-and-its-parameters
+    fn place(&self, reference: f64, far_pct: f64, deal: &Deal, ask: Option<f64>) -> f64 {
         let distance = reference * far_pct / 100.0;
         let mut level = if deal.is_long() {
             reference - distance
@@ -450,10 +462,12 @@ impl<'a> MshotEntry<'a> {
         if let Some(tick) = deal.tick.filter(|t| *t > 0.0) {
             if self.params.minus_satoshi {
                 let keep_off = 2.0 * tick;
+                // The ASK is never below the trade/BID reference; a lower taker-buy proxy is stale.
+                let ask = ask.unwrap_or(reference).max(reference);
                 level = if deal.is_long() {
-                    level.min(reference - keep_off)
+                    level.min(ask - keep_off)
                 } else {
-                    level.max(reference + keep_off)
+                    level.max(ask + keep_off)
                 };
             }
             level = snap_to_step(level, tick, deal.is_long());
@@ -478,11 +492,18 @@ impl<'a> MshotEntry<'a> {
     ///     deal: The report row, with its model inputs.
     ///     created_ms: The order's creation, where both far bounds are read.
     ///     far_pct: These parameters' far bound for the deal at the creation.
+    ///     ask: Last taker-buy print before creation, the tape's ASK proxy.
     ///
     /// Returns:
     ///     The level, or `None` when the record proves no placement or no reference can be read
     ///     back from it.
-    fn placement_at_creation(&self, deal: &Deal, created_ms: i64, far_pct: f64) -> Option<f64> {
+    fn placement_at_creation(
+        &self,
+        deal: &Deal,
+        created_ms: i64,
+        far_pct: f64,
+        ask: Option<f64>,
+    ) -> Option<f64> {
         let fact_level = deal.entry_placed.filter(|l| l.is_finite() && *l > 0.0)?;
         let Some(EntryParams::MoonShot(own)) = deal.own_entry.as_ref() else {
             return Some(fact_level);
@@ -491,7 +512,8 @@ impl<'a> MshotEntry<'a> {
         if fact_far_pct == far_pct && own.minus_satoshi == self.params.minus_satoshi {
             return Some(fact_level);
         }
-        Self::reference_of(fact_level, fact_far_pct, deal).map(|r| self.place(r, far_pct, deal))
+        Self::reference_of(fact_level, fact_far_pct, deal)
+            .map(|r| self.place(r, far_pct, deal, ask))
     }
 
     /// The reference a placed level stood off, read back from the level and the far bound it was
@@ -542,11 +564,13 @@ impl<'a> MshotEntry<'a> {
     ///     deal: The trade.
     ///     own: The trade's own entry parameters.
     ///     (placed_ms, level): When and where the fact's order was placed ([`Self::fact_anchor`]).
+    ///     ticks: Ascending prints providing the last ASK proxy at or before placement.
     fn anchored_level(
         &self,
         deal: &Deal,
         own: &MshotParams,
         (placed_ms, level): (i64, f64),
+        ticks: &[Tick],
     ) -> Option<f64> {
         let deltas = deal.deltas_at(placed_ms);
         let (_, fact_far) = own.bounds_pct(&deltas);
@@ -554,7 +578,13 @@ impl<'a> MshotEntry<'a> {
         if fact_far == far && own.minus_satoshi == self.params.minus_satoshi {
             return Some(level);
         }
-        Self::reference_of(level, fact_far, deal).map(|r| self.place(r, far, deal))
+        let end = ticks.partition_point(|t| t.time_ms as i64 <= placed_ms);
+        let ask = ticks[..end]
+            .iter()
+            .rev()
+            .find(|t| t.side == Side::Buy && t.price.is_finite() && t.price > 0.0)
+            .map(|t| f64::from(t.price));
+        Self::reference_of(level, fact_far, deal).map(|r| self.place(r, far, deal, ask))
     }
 
     /// The entry as a SHIFT of the fact: the variant's order at [`Self::anchored_level`] from the
@@ -562,7 +592,8 @@ impl<'a> MshotEntry<'a> {
     /// or shallower, since the same moment — filled by the first print that reaches it by
     /// the shift window past the buy (`ModelSettings::shift_window_ms`, [`SHIFT_WINDOW_MS`] by
     /// default): the same spike. Nothing about the corridor is modelled:
-    /// the order is taken to stand still through the spike, as the fact's did.
+    /// the order is taken to stand still through the spike, as the fact's did. An enabled
+    /// `AutoCancelBuy` with known creation ends the fill window at expiry.
     pub(super) fn shifted_fill(
         &self,
         deal: &Deal,
@@ -571,12 +602,16 @@ impl<'a> MshotEntry<'a> {
         line: Option<&[(i64, f64)]>,
     ) -> Option<Fill> {
         let (since, fact_level) = Self::fact_anchor(deal, line);
-        let level = self.anchored_level(deal, own, (since, fact_level))?;
+        let level = self.anchored_level(deal, own, (since, fact_level), ticks)?;
+        let window_end = deal.buy_ms + self.params.model.shift_window_ms;
+        let until = self
+            .expiry_ms(deal)
+            .map_or(window_end, |expiry| window_end.min(expiry));
         ticks
             .iter()
             .map(|t| (t.time_ms as i64, f64::from(t.price)))
             .filter(|&(t, p)| t >= since && p > 0.0)
-            .take_while(|&(t, _)| t <= deal.buy_ms + self.params.model.shift_window_ms)
+            .take_while(|&(t, _)| t <= until)
             .find(|&(_, p)| reaches(p, level, deal.is_long()))
             .map(|(t_ms, _)| Fill { t_ms, price: level })
     }
@@ -673,17 +708,20 @@ impl<'a> MshotEntry<'a> {
             return None;
         }
         let mut bounds = LiveBounds::new(self.params, deal);
-        let raise_wait_ms = (self.params.raise_wait_s * 1000.0).max(0.0);
-        let replace_delay_ms = (self.params.replace_delay_s * 1000.0).max(0.0);
+        let raise_wait_ms = wait_ms(self.params.raise_wait_s);
+        let replace_delay_ms = wait_ms(self.params.replace_delay_s);
         let latency_ms = entry_latency_ms(self.params.model, deal);
+        let expiry_ms = self.expiry_ms(deal);
 
         let mut reference = Reference::new(
             self.params.use_price,
             deal.is_long(),
             self.params.model.replace_window_ms,
+            raise_wait_ms,
         );
 
         let first_print_ms = ticks[0].time_ms as i64;
+        let mut last_replace_ms = first_print_ms;
         let mut index = 0;
         let mut hints: Vec<(i64, f64)> = Vec::new();
         // The whole life of the order, when the tape reaches back to its creation.
@@ -692,8 +730,13 @@ impl<'a> MshotEntry<'a> {
             .filter(|&created_ms| first_print_ms <= created_ms)
         {
             Some(created_ms) => {
+                // Creation needs the ASK proxy from the prints preceding it.
+                while index < ticks.len() && (ticks[index].time_ms as i64) < created_ms {
+                    reference.observe(&ticks[index]);
+                    index += 1;
+                }
                 let (_, far_pct) = bounds.at(created_ms);
-                self.placement_at_creation(deal, created_ms, far_pct)
+                self.placement_at_creation(deal, created_ms, far_pct, reference.ask())
                     .map(|level| (created_ms, level))
             }
             None => None,
@@ -703,14 +746,14 @@ impl<'a> MshotEntry<'a> {
         // the exchange has not seen yet.
         let (mut exch_level, mut core_level, mut pending) = match created {
             Some((created_ms, level)) => {
-                // Prints before the creation only feed the reference, and the placement reaches
-                // the book a latency after it, like any move.
-                while index < ticks.len() && (ticks[index].time_ms as i64) < created_ms {
-                    reference.observe(&ticks[index]);
-                    index += 1;
-                }
+                // The placement reaches the book a latency after creation, like any move.
                 note(created_ms, level);
-                (None, level, Some((created_ms + latency_ms as i64, level)))
+                last_replace_ms = created_ms;
+                (
+                    None,
+                    level,
+                    Some((created_ms.saturating_add(latency_ms as i64), level)),
+                )
             }
             None => {
                 // The archive's moves, and where the order stood when the tape begins: the last
@@ -731,7 +774,8 @@ impl<'a> MshotEntry<'a> {
                 // levels apply as archived for the fact and every variant, including the
                 // two-tick minimum (MShotMinusSatoshi). Only the creation placement and the
                 // Shift entry apply that minimum to the archived level.
-                let blind_until_ms = first_print_ms + raise_wait_ms.max(replace_delay_ms) as i64;
+                let blind_until_ms =
+                    first_print_ms.saturating_add(raise_wait_ms.max(replace_delay_ms));
                 hints = moves
                     .iter()
                     .filter(|(t, p)| {
@@ -750,6 +794,7 @@ impl<'a> MshotEntry<'a> {
                 // Where the tape starts for the order: at the archived start, or at the first
                 // print. Prints before the start only feed the reference.
                 if let Some((start_ms, _)) = start {
+                    last_replace_ms = start_ms;
                     while index < ticks.len() && (ticks[index].time_ms as i64) < start_ms {
                         reference.observe(&ticks[index]);
                         index += 1;
@@ -764,9 +809,14 @@ impl<'a> MshotEntry<'a> {
                         reference.observe(first);
                         index += 1;
                         let (_, far_pct) = bounds.at(first.time_ms as i64);
-                        let level =
-                            self.place(reference.placement(first.time_ms as i64)?, far_pct, deal);
+                        let level = self.place(
+                            reference.placement(first.time_ms as i64)?,
+                            far_pct,
+                            deal,
+                            reference.ask(),
+                        );
                         note(first.time_ms as i64, level);
+                        last_replace_ms = first.time_ms as i64;
                         level
                     }
                 };
@@ -774,11 +824,17 @@ impl<'a> MshotEntry<'a> {
             }
         };
         let mut hints = hints.into_iter().peekable();
-        // The breach the corridor is waiting out: which way, and since when.
+        // The open condition and its detection time; only Approach waits from detection.
         let mut breach: Option<(Breach, i64)> = None;
+        let mut previous_ms = ticks
+            .get(index.saturating_sub(1))
+            .map_or(first_print_ms, |tick| tick.time_ms as i64);
 
         for tick in &ticks[index..] {
             let t_ms = tick.time_ms as i64;
+            if expiry_ms.is_some_and(|expiry| t_ms > expiry) {
+                return None;
+            }
             let price = f64::from(tick.price);
             if !price.is_finite() || price <= 0.0 {
                 continue;
@@ -787,9 +843,45 @@ impl<'a> MshotEntry<'a> {
             // it after the latency, like any move.
             while let Some((hint_ms, level)) = hints.next_if(|(h, _)| *h <= t_ms) {
                 core_level = level;
-                pending = Some((hint_ms + latency_ms as i64, level));
+                pending = Some((hint_ms.saturating_add(latency_ms as i64), level));
                 breach = None;
                 note(hint_ms, level);
+                last_replace_ms = hint_ms;
+            }
+            // A retained low/high can age out without a print and open the retreat edge.
+            if breach.is_none() {
+                let opened = reference.retreat_open_ms(
+                    previous_ms.max(last_replace_ms),
+                    t_ms,
+                    |extreme, at| {
+                        let (near, far) = bounds.at(at);
+                        Self::distance_pct(extreme, core_level, deal) > retreat_pct(near, far)
+                    },
+                );
+                if let Some(opened) = opened {
+                    breach = Some((Breach::Retreat, opened));
+                }
+            }
+            previous_ms = t_ms;
+            // Matches the core's rule: a due command fires before the next print can
+            // cancel its breach or fill the order. The exchange still sees the old level
+            // until the command's latency has elapsed.
+            if let Some((kind, since)) = breach {
+                let due = self.due_ms(kind, since, last_replace_ms);
+                let due = pending.map_or(due, |(apply_at, _)| due.max(apply_at));
+                if due < t_ms {
+                    if let Some((_, level)) = pending.take() {
+                        exch_level = Some(level);
+                    }
+                    let (_, far_pct) = bounds.at(due);
+                    if let Some(placement) = reference.placement(due) {
+                        core_level = self.place(placement, far_pct, deal, reference.ask());
+                        pending = Some((due.saturating_add(latency_ms as i64), core_level));
+                        breach = None;
+                        note(due, core_level);
+                        last_replace_ms = due;
+                    }
+                }
             }
             if let Some((_, level)) = pending.filter(|(apply_at, _)| t_ms >= *apply_at) {
                 exch_level = Some(level);
@@ -807,7 +899,10 @@ impl<'a> MshotEntry<'a> {
             let distance = Self::distance_pct(check, core_level, deal);
             let now = if distance < near_pct {
                 Some(Breach::Approach)
-            } else if distance > retreat_pct {
+            } else if reference
+                .window_extreme(t_ms)
+                .is_some_and(|extreme| Self::distance_pct(extreme, core_level, deal) > retreat_pct)
+            {
                 Some(Breach::Retreat)
             } else {
                 None
@@ -822,25 +917,19 @@ impl<'a> MshotEntry<'a> {
                             t_ms
                         }
                     };
-                    let wait_ms = match kind {
-                        Breach::Approach => replace_delay_ms,
-                        Breach::Retreat => raise_wait_ms,
-                    };
-                    // One re-place at a time: the core sends the next only once the exchange
-                    // has answered the last — the archive files every re-place as a request and
-                    // its answer, and none overlaps the one before (2026-09-23). A spike's prints
-                    // inside the round trip move nothing; without the rule the model chased them
-                    // print by print, 676 re-places the archive never shows on 143 orders
-                    // replayed from their creation, against 389 with it.
+                    let due = self.due_ms(kind, since, last_replace_ms);
+                    // Matches the core's rule: send the next command only after the
+                    // exchange has answered the last, preserving the old fill level meanwhile.
                     let in_flight = pending.is_some();
-                    if !in_flight && (t_ms - since) as f64 >= wait_ms {
+                    if !in_flight && t_ms >= due {
                         // The new level comes off the window's extreme, not off the print that
                         // decided the move (see `Reference`).
                         let placement = reference.placement(t_ms).unwrap_or(check);
-                        core_level = self.place(placement, far_pct, deal);
-                        pending = Some((t_ms + latency_ms as i64, core_level));
+                        core_level = self.place(placement, far_pct, deal, reference.ask());
+                        pending = Some((t_ms.saturating_add(latency_ms as i64), core_level));
                         breach = None;
                         note(t_ms, core_level);
+                        last_replace_ms = t_ms;
                     }
                 }
             }
@@ -885,41 +974,41 @@ impl<'a> LiveBounds<'a> {
     }
 }
 
-/// How far off the reference a run-away price leaves the order before the core re-places it:
-/// `MShotPrice + min(MShotPriceMin, MShotPrice − MShotPriceMin)` (the core developer,
-/// 2026-09-23). Where `near ≥ far / 2` — every one of the 292 corridors the core saved by
-/// 2026-09-23 — that is `2 · far − near`, the band's far edge the saved corridor shows; a
-/// variant with a narrower `near` re-places at `far + near`. Where the bounds meet after the
-/// modifiers (`bounds_pct` lifts far to near) the band has no width and every move re-places.
+/// Matches the core's rule: add min(near, far - near), floored at 0.001 percent and
+/// capped by the room remaining below 99 percent, to the far depth.
 fn retreat_pct(near_pct: f64, far_pct: f64) -> f64 {
-    far_pct + near_pct.min(far_pct - near_pct)
+    let width = near_pct.min(far_pct - near_pct).max(0.001);
+    far_pct + width.min(99.0 - far_pct)
 }
 
-/// The prices the corridor reads, as the prints go by (the core developer, 2026-09-23).
-///
-/// - [`Self::check`], what the corridor is measured from — whether the price came too close or
-///   ran away: the last print of the wanted side (`MShotUsePrice`), falling back to the last
-///   print of any side until one of that side has been seen. The core reads the current price
-///   for both, and a run-away holds for `MShotRaiseWait` exactly when the price stayed away that
-///   long — the timer in [`MshotEntry::run`]; neither looks at a window.
-/// - [`Self::placement`], what a re-placed order is put off: the extreme of the wanted side's
-///   prints inside the last `window_ms` ([`FAST_ALGO_WINDOW_MS`] by default) — the lowest for a
-///   long — whatever `MShotRaiseWait` is. The core takes the minimum of the trades of the last
-///   ~75–150 ms, so a spike's own low prints place the order below it rather than off the
-///   rebound.
+/// Bound externally supplied waits before converting them to the command clock.
+fn wait_ms(seconds: f64) -> i64 {
+    (seconds * 1000.0).clamp(0.0, ORDER_WAIT_CAP_MS as f64) as i64
+}
+
+/// Prices read by the corridor: current wanted-side price for Approach, the RaiseWait
+/// window's minimum (maximum for a short) for Retreat, and records younger than 74 ms,
+/// the core's short extreme, for Trade placement. ASK/BID placement uses the last side print.
 struct Reference {
     wanted_side: Option<Side>,
     is_long: bool,
     /// The placement window (`ModelSettings::replace_window_ms`).
     window_ms: i64,
+    /// The independent far-bound window (`MShotRaiseWait`).
+    raise_window_ms: i64,
     last_any: Option<f64>,
     last_side: Option<f64>,
+    /// Last taker-buy print, the ASK proxy regardless of the selected reference side.
+    last_buy: Option<f64>,
     /// `(t_ms, price)` of the wanted side's prints inside the window, oldest first.
     recent: std::collections::VecDeque<(i64, f64)>,
+    /// Far-bound candidates, oldest first with the best extreme at the front.
+    raise_recent: std::collections::VecDeque<(i64, f64)>,
 }
 
 impl Reference {
-    fn new(use_price: UsePrice, is_long: bool, window_ms: i64) -> Self {
+    /// Build independent placement and Retreat windows for the selected price side.
+    fn new(use_price: UsePrice, is_long: bool, window_ms: i64, raise_window_ms: i64) -> Self {
         Self {
             wanted_side: match use_price {
                 UsePrice::Trade => None,
@@ -928,18 +1017,25 @@ impl Reference {
             },
             is_long,
             window_ms,
+            raise_window_ms,
             last_any: None,
             last_side: None,
+            last_buy: None,
             recent: std::collections::VecDeque::new(),
+            raise_recent: std::collections::VecDeque::new(),
         }
     }
 
+    /// Record a valid print and prune each window against its own age limit.
     fn observe(&mut self, tick: &Tick) {
         let price = f64::from(tick.price);
         if !price.is_finite() || price <= 0.0 {
             return;
         }
         self.last_any = Some(price);
+        if tick.side == Side::Buy {
+            self.last_buy = Some(price);
+        }
         if self.wanted_side.is_none_or(|s| s == tick.side) {
             self.last_side = Some(price);
             let t_ms = tick.time_ms as i64;
@@ -947,11 +1043,27 @@ impl Reference {
             while self
                 .recent
                 .front()
-                .is_some_and(|(t, _)| t_ms - *t > self.window_ms)
+                .is_some_and(|(t, _)| t_ms - *t >= self.window_ms)
             {
                 self.recent.pop_front();
             }
+            self.prune_raise(t_ms);
+            while self.raise_recent.back().is_some_and(|(_, old)| {
+                if self.is_long {
+                    *old >= price
+                } else {
+                    *old <= price
+                }
+            }) {
+                self.raise_recent.pop_back();
+            }
+            self.raise_recent.push_back((t_ms, price));
         }
+    }
+
+    /// The tape's ASK proxy, independent of `MShotUsePrice`.
+    fn ask(&self) -> Option<f64> {
+        self.last_buy
     }
 
     /// What the corridor is measured from. The core takes the lower of the last print and the
@@ -962,17 +1074,69 @@ impl Reference {
         self.last_side.or(self.last_any)
     }
 
-    /// What a re-placed order is put off, deciding at `now_ms`: the extreme of the wanted side's
-    /// prints of the last `window_ms` before it, else the check price. The window is
-    /// pruned only when that side prints, so it is read against the decision's own moment: a
-    /// burst an ASK / BID side printed seconds ago is not "the last 100 ms". Its fallback is still
-    /// that side's last print, however old — the tape has no book, and the corridor is measured
-    /// off that same print; the placement only stays consistent with it.
+    /// Far-bound reference at a decision time; zero RaiseWait uses the current price.
+    fn window_extreme(&mut self, now_ms: i64) -> Option<f64> {
+        if self.raise_window_ms == 0 {
+            return self.check();
+        }
+        self.prune_raise(now_ms);
+        self.raise_recent
+            .front()
+            .map(|(_, price)| *price)
+            .or_else(|| self.check())
+    }
+
+    /// Discard expired extremes; each retained print is removed only once.
+    fn prune_raise(&mut self, now_ms: i64) {
+        while self
+            .raise_recent
+            .front()
+            .is_some_and(|(at, _)| now_ms.saturating_sub(*at) > self.raise_window_ms)
+        {
+            self.raise_recent.pop_front();
+        }
+    }
+
+    /// First expiry strictly between prints whose successor extreme opens Retreat.
+    fn retreat_open_ms(
+        &self,
+        after: i64,
+        before: i64,
+        mut beyond: impl FnMut(f64, i64) -> bool,
+    ) -> Option<i64> {
+        if self.raise_window_ms == 0 {
+            return None;
+        }
+        for (i, (at, _)) in self.raise_recent.iter().enumerate() {
+            let expires = at.saturating_add(self.raise_window_ms).saturating_add(1);
+            if expires >= before {
+                break;
+            }
+            if expires <= after {
+                continue;
+            }
+            let next = self
+                .raise_recent
+                .get(i + 1)
+                .map(|(_, price)| *price)
+                .or_else(|| self.check());
+            if next.is_some_and(|price| beyond(price, expires)) {
+                return Some(expires);
+            }
+        }
+        None
+    }
+
+    /// Trade placement uses the short extreme at the command time, falling back to check
+    /// when the window is empty; ASK/BID use their last print without a short window.
     fn placement(&self, now_ms: i64) -> Option<f64> {
+        if self.wanted_side.is_some() {
+            return self.check();
+        }
         let prices = self
             .recent
             .iter()
-            .filter(|(t, _)| now_ms - *t <= self.window_ms)
+            .filter(|(t, _)| now_ms - *t < self.window_ms)
             .map(|(_, p)| *p);
         let extreme = if self.is_long {
             prices.reduce(f64::min)

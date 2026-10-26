@@ -425,12 +425,18 @@ pub fn params_for<'k>(
 /// which is how the delta modifiers went unapplied through a whole measurement run on 2026-09-22
 /// while every test passed.
 ///
-/// `HookSellFixed` is here because it is not a knob (both of its branches place the same take,
-/// `ExitParams::hook_sell_fixed`) but the record keeps it. The Delta Modifiers section is a knob
+/// `HookSellFixed` selects the fixed depth-percent rule or the stated factual take only:
+/// Fixed=NO variants at another level are refused (`ExitParams::hook_sell_fixed`).
+/// Read at the strategy's own value, never as a grid knob.
+/// Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonhook-strategy-and-its-parameters
+/// The Delta Modifiers section is a knob
 /// since 2026-09-25, all but `MaxModifier` on a MoonShot, which the grid draws fixed there
 /// (see its [`TICK_PARAMS`] entry) — so it is listed here as well.
 const MODEL_ONLY_KEYS: &[&str] = &[
     "HookSellFixed",
+    "MStrikeSellAdjust",
+    "MStrikeBuyLevel",
+    "MStrikeBuyRelative",
     "MaxModifier",
     // The stop's trigger (see `ExitParams::fast_stop_loss`): read with the strategy's value, no
     // knob.
@@ -472,6 +478,9 @@ const DROPS_INPUT_KEYS: &[&str] = &[
     "Use30SecOldASK",
 ];
 
+/// Entry lifetime and refusal inputs, fetched even though the grid offers no knobs for them.
+const ENTRY_INPUT_KEYS: &[&str] = &["AutoCancelBuy", "MShotAddArbRange", "UsePostOnly"];
+
 /// The switches of the sell rules the model does NOT have — read only to tell that one is on,
 /// which keeps the trade out of the verdict and the search ([`unmodelled_rule`]). Not
 /// [`MODEL_ONLY_KEYS`]: the model acts on none of them, and the grid draws them as outside it.
@@ -506,7 +515,7 @@ pub fn is_model_only(key: &str) -> bool {
 
 /// Every field name the models read — [`TICK_PARAMS`], [`MODEL_ONLY_KEYS`] and the switches of
 /// the rules they do not have ([`RULE_SWITCH_KEYS`]), plus gated calibration inputs
-/// ([`DROPS_INPUT_KEYS`]) — for a `strategy_current_values` read,
+/// ([`DROPS_INPUT_KEYS`]) and entry inputs ([`ENTRY_INPUT_KEYS`]) — for a `strategy_current_values` read,
 /// each once: a knob for some kinds is model-only for others (`MaxModifier`).
 pub fn param_keys() -> Vec<String> {
     let mut keys: Vec<String> = Vec::new();
@@ -516,6 +525,7 @@ pub fn param_keys() -> Vec<String> {
         .chain(MODEL_ONLY_KEYS.iter().copied())
         .chain(RULE_SWITCH_KEYS.iter().copied())
         .chain(DROPS_INPUT_KEYS.iter().copied())
+        .chain(ENTRY_INPUT_KEYS.iter().copied())
     {
         if !keys.iter().any(|k| k == key) {
             keys.push(key.to_string());
@@ -571,15 +581,26 @@ fn parse_num(s: &str) -> Option<f64> {
         .filter(|v| v.is_finite())
 }
 
+/// Minimum positive MoonShot cancellation timer, in seconds.
+/// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/buy-conditions-tab
+const MSHOT_MIN_AUTO_CANCEL_S: f64 = 15.0;
+
 /// MoonShot entry parameters out of a strategy's values, under the model's own settings.
 pub fn mshot_params(v: &StrategyValues<'_>, model: ModelSettings) -> MshotParams {
     let base = MshotParams::default();
+    // KB default: 300 s. MoonShot's documented minimum for a positive timer is 15 s.
+    let auto_cancel_buy_s = v.num("AutoCancelBuy", 300.0);
     MshotParams {
         price_pct: v.num("MShotPrice", base.price_pct),
         price_min_pct: v.num("MShotPriceMin", base.price_min_pct),
         use_price: UsePrice::parse(v.text("MShotUsePrice", "Trade")),
         raise_wait_s: v.num("MShotRaiseWait", base.raise_wait_s),
         replace_delay_s: v.num("MShotReplaceDelay", base.replace_delay_s),
+        auto_cancel_buy_s: if auto_cancel_buy_s > 0.0 {
+            auto_cancel_buy_s.max(MSHOT_MIN_AUTO_CANCEL_S)
+        } else {
+            0.0
+        },
         minus_satoshi: v.bool("MShotMinusSatoshi", base.minus_satoshi),
         fast_algo: v.bool("FastShotAlgo", base.fast_algo),
         modifiers: Modifiers {
@@ -601,7 +622,7 @@ pub fn mshot_params(v: &StrategyValues<'_>, model: ModelSettings) -> MshotParams
             add_market_24h: 0.0,
             add_pump_1h: 0.0,
             add_dump_1h: 0.0,
-            market_sign: MarketSign::Signed,
+            market_sign: MarketSign::Magnitude,
             distance_pct: v.num("MShotAddDistance", 0.0),
             pricebug_cap: MSHOT_PRICEBUG_CAP_PCT,
         },
@@ -636,6 +657,10 @@ pub fn entry_params_for(kind: &str, v: &StrategyValues<'_>, model: ModelSettings
         return EntryParams::Fact;
     }
     match kind {
+        // No history of the inter-exchange range; entry left unjudged.
+        KIND_MOONSHOT if v.num("MShotAddArbRange", 0.0) != 0.0 => EntryParams::Fact,
+        // The tape cannot tell whether the exchange would reject a PostOnly order.
+        KIND_MOONSHOT if v.bool("UsePostOnly", false) => EntryParams::Fact,
         KIND_MOONSHOT => EntryParams::MoonShot(mshot_params(v, model)),
         KIND_DROPS => EntryParams::Drops(drops_params(v)),
         _ => EntryParams::Fact,
@@ -653,6 +678,14 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         hook_sell_level_pct: v.num("HookSellLevel", base.hook_sell_level_pct),
         hook_sell_fixed: v.bool("HookSellFixed", base.hook_sell_fixed),
         strike_sell_level_pct: v.num("MStrikeSellLevel", base.strike_sell_level_pct),
+        strike_sell_adjust: v.bool("MStrikeSellAdjust", base.strike_sell_adjust),
+        strike_buy_level_pct: v
+            .values
+            .get("MStrikeBuyLevel")
+            .and_then(|s| parse_num(s))
+            .or_else(|| v.defaults.get("mstrikebuylevel").copied())
+            .filter(|v| v.is_finite()),
+        strike_buy_relative: v.bool("MStrikeBuyRelative", base.strike_buy_relative),
         sell_modifier: v.num("SellModifier", base.sell_modifier),
         max_modifier: v.num("MaxModifier", base.max_modifier),
         stop_loss_modifier: v.num("StopLossModifier", base.stop_loss_modifier),

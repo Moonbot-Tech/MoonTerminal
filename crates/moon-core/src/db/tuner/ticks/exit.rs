@@ -139,21 +139,24 @@ pub struct ExitParams {
     /// verdict then answers nothing rather than judging the line against a guessed level
     /// ([`ExitModel::take_known`]). Ignored by every other kind.
     pub hook_sell_level_pct: f64,
-    /// `HookSellFixed` — the core then takes the distance as `HookSellLevel · depth` per cent
-    /// "whatever the buy price" (FAQ). On live data without `SellModifier` (2026-10-15) that is the
-    /// SAME take the rule places without it: the comment's `SellPrice` sat at
-    /// `HookSellLevel · Depth / 100` to the rounding, and take-closed sales landed on that level
-    /// off the buy to the price step. So the model places
-    /// both branches alike and the field is read only so that the record keeps it. Whether the
-    /// delta modifiers move a fixed take the sample cannot tell; they are applied as for the
-    /// other branch. Not a grid parameter: a knob that moves no column is worse than no knob.
+    /// `HookSellFixed`: YES places a depth share as a percent off the buy.
+    /// NO's documented spike rule does not reproduce the core's stated takes; only the stated
+    /// take at the fact's own level is kept, other levels are refused. Never a grid knob.
+    /// Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonhook-strategy-and-its-parameters
     pub hook_sell_fixed: bool,
     /// `MStrikeSellLevel` — MoonStrike's replacement for `SellPrice`: the take in per cent OF THE
     /// STRIKE'S SPAN, from its deeper end back to where it started (`Deal::strike_detect`,
     /// [`crate::db::tuner::ticks::strike::strike_take_level`]). 0 means the level is unknown,
     /// and the verdict then answers nothing ([`ExitModel::take_known`]). Ignored by every other
-    /// kind. `MStrikeSellAdjust` is not modelled.
+    /// kind.
     pub strike_sell_level_pct: f64,
+    /// `MStrikeSellAdjust`: compare takes from the detect, calculated buy and actual fill.
+    /// Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonstrike-strategy-and-its-parameters
+    pub strike_sell_adjust: bool,
+    /// `MStrikeBuyLevel`; `None` means the calculated buy is unknown.
+    pub strike_buy_level_pct: Option<f64>,
+    /// `MStrikeBuyRelative`: buy level inside the spike rather than a distance off its top.
+    pub strike_buy_relative: bool,
     /// `SellModifier` — the coefficient the summed `Add*` delta modifiers are multiplied by
     /// before they move the sell level (FAQ: a summed delta of 5 % with `SellModifier = 0.2`
     /// places the sell 1 % higher). 0 leaves the level alone.
@@ -279,6 +282,9 @@ impl Default for ExitParams {
             hook_sell_level_pct: 0.0,
             hook_sell_fixed: false,
             strike_sell_level_pct: 0.0,
+            strike_sell_adjust: false,
+            strike_buy_level_pct: None,
+            strike_buy_relative: false,
             sell_modifier: 0.0,
             max_modifier: 0.0,
             stop_loss_modifier: 0.0,

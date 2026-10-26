@@ -7,7 +7,8 @@
 //! volume detect does not — their entry is a detect the core made on data the tape does not
 //! carry, and the axis takes it from the report as it happened. Enabling a kind requires arms
 //! in [`entry_model_for`] and `entry_params_for`, knobs in `TICK_PARAMS`, and a refusal status
-//! through fills, scoring and verification. DropsDetection has a model in `drops.rs`, kept off
+//! through fills, scoring and verification. A strategy enabling an entry input the tape cannot
+//! replay uses the fact and leaves entry unjudged. DropsDetection has a model in `drops.rs`, kept off
 //! because replay disagreed with the core on real deals (see the ignored real-data Drops bench).
 
 use super::drops::DropsEntry;
