@@ -53,6 +53,8 @@ fn guarded(exit: &ExitParams) -> bool {
 /// inside the tape, and how many deals it bought and left open there.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Replayed {
+    /// Deals with a fill but no judgeable exit; the entire point must be refused.
+    pub(super) unjudged: usize,
     /// The deals the point bought and closed inside the tape, in order.
     pub(super) closed: Tally,
     /// The deals the point bought and closed neither inside the tape nor provably in a hole of
@@ -61,12 +63,10 @@ pub(super) struct Replayed {
 }
 
 impl Replayed {
-    /// The tally of a point that closes every deal it buys inside the tape — by its stop or its
-    /// sell — else `None`: such a point is the only one the search may ANSWER, since the loss an
-    /// open deal would carry past the tape is on no record and dropping the deal would only
-    /// reward it (the developer, 2026-09-24).
+    /// Answer only when every bought deal has a judged close inside the tape. Dropping an
+    /// unjudged or open deal would reward a point for losses absent from its scored sample.
     pub(super) fn closed_all(&self) -> Option<&Tally> {
-        (self.open == 0).then_some(&self.closed)
+        (self.open == 0 && self.unjudged == 0).then_some(&self.closed)
     }
 }
 
@@ -80,6 +80,7 @@ pub(super) fn replay(
 ) -> Replayed {
     let mut replayed = Replayed::default();
     let mut results = results(deals, of_deal, params, Some(fills));
+    replayed.unjudged = results.iter().filter(|deal| deal.unjudged).count();
     replayed.open = results.iter().filter(|deal| deal.left_open).count();
     results.retain(|deal| deal.result.is_some());
     results.sort_by_key(|deal| deal.exit_ms);

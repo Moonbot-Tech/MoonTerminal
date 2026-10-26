@@ -15,6 +15,22 @@ use moon_core::db::tuner::ticks::verify::{
 use moon_core::db::tuner::ticks::{Deal, Deltas, Verdict};
 use moon_core::market::trade_replay::TickStatus;
 
+/// Missing locale routing would expose a raw key for an unjudged SellLevel window.
+#[test]
+fn sell_level_short_reason_is_localized_in_every_language() {
+    let key = super::unjudged_key(Unjudged::SellLevelShortLookback);
+    assert_eq!(key, "sell_level_short");
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for suffix in ["", ".why"] {
+            let full = format!("analytics.ticks.why.{key}{suffix}");
+            let text = rust_i18n::t!(&full);
+            assert_ne!(text, full, "{}: {full}", language.code());
+            assert!(!text.is_empty());
+        }
+    }
+}
+
 /// Stage-B placeholders must say reading until the local replay answers, then expose its result.
 #[test]
 fn unanswered_tape_rows_are_neutral_without_hiding_known_coverage() {

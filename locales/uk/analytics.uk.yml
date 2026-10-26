@@ -1,6 +1,8 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.why.sell_level_short: "недостатньо історії для SellLevel"
+analytics.ticks.why.sell_level_short.why: "Стрічка угод і повністю закриті свічки не покривають усе вікно SellLevel без прогалин."
 analytics.ticks.param.custom_ema_threshold: "Поріг формули EMA %{k}"
 analytics.ticks.chip.accepted_short_tail: "для підбору: короткий хвіст"
 analytics.ticks.chip.accepted_short_tail_tip: "Угоди для підбору з повною стрічкою до закриття. Хвіст короткий, і жодне ввімкнене джерело не може його доповнити."
@@ -956,8 +958,6 @@ analytics.ticks.model_series: "Крок ряду цін, мс"
 analytics.ticks.model_series_tip: "Крок ряду цін ядра: по ньому ще спрацьовує стоп при StopLossEMA 0, а швидкий стоп (FastStopLoss) перевіряє останню ціну кожного кроку"
 analytics.ticks.model_step_floor: "Мін. крок лінії, мс"
 analytics.ticks.model_step_floor_tip: "Затримка кроку PriceDown / SellLevel при нулі в стратегії (FAQ: 0,33 с)"
-analytics.ticks.model_pump_lag: "Pump: запізнення кроку, мс"
-analytics.ticks.model_pump_lag_tip: "На скільки після PumpMoveTimer ядро переставляє продаж PumpsDetection"
 analytics.ticks.model_pump_peak: "Pump: вікно піку, мс"
 analytics.ticks.model_pump_peak_tip: "Як далеко до тейку шукається пік пампа"
 analytics.ticks.model_point_time: "Допуск за часом, мс"

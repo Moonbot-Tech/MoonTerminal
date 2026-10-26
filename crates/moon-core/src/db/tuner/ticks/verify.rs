@@ -336,6 +336,8 @@ pub fn verify(
         unjudged(Unjudged::CustomEmaUnparsed)
     } else if fact_is_ema && walked.custom_ema_short {
         unjudged(Unjudged::CustomEmaShortHistory)
+    } else if walked.sell_level_short_at.is_some_and(|at| at <= filled_at) {
+        unjudged(Unjudged::SellLevelShortLookback)
     } else if fact_is_ema
         && exit.custom_ema.is_some()
         && !matches!(closed.kind, ExitKind::CustomEma | ExitKind::InGap)

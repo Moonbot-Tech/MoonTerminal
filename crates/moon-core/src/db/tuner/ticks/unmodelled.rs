@@ -17,7 +17,8 @@
 //!   `DetectModifier`;
 //! - what acts only by hand or only in another kind — `SplitPiece` (a chart menu item),
 //!   `UseMarketStop`/`MarketStopLevel` (Manual), `SellPriceAbsolute`/`SellFromAssets`/
-//!   `SellQuantity` (NewListing): none of them is a kind the tuner runs;
+//!   `SellQuantity` (NewListing): their kinds are excluded by `scope::tunable_kind` because
+//!   these rules require a book or assets without a recorded buy;
 //! - the fields of a listed switch (`SecondStopLoss`, `BV_SV_Ratio`, `SellEMADelay`, …): the
 //!   switch stands for them.
 //!
@@ -98,9 +99,6 @@ const WATCHED: &[Watched] = &[
         rule: Some(UnmodelledRule::NoAutoSell),
         ..watched("AutoSell", ParamSection::SellOrder, "YES")
     },
-    // PriceDown counted to `PriceDownAllowedDrop`, not to the buy (the core developer's answer
-    // 10 and the site); the model counts to the buy, which is NO.
-    watched("PriceDownToAllowedDrop", ParamSection::SellOrder, "NO"),
     // The sell placed under the ASK book's walls, up to 2 % — the book, which the tape has not.
     Watched {
         also: Also::SellPriceUnderOne,
@@ -155,8 +153,6 @@ const CONDITION_KEYS: &[&[&str]] = &[
         "HODLmode",
         "AutoSell",
         "UseStopLoss",
-        "PriceDownTimer",
-        "PriceDownRelative",
         "SellPrice",
         "SellShotDistance",
         "CheckAfterBuy",

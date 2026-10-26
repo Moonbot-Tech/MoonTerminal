@@ -6,6 +6,89 @@ use crate::db::tuner::ticks::exit::tests::deal;
 use crate::db::tuner::ticks::hook::KIND_MOONHOOK;
 use crate::db::tuner::ticks::mshot::{MarketSign, Modifiers};
 
+/// Spreading a residual onto a zeroed mark term would change variants with no live delta weight.
+#[test]
+fn favourable_mark_gets_no_residual_weight() {
+    let mods = Modifiers {
+        add_mark: 2.0,
+        add_1h: 1.0,
+        ..Default::default()
+    };
+    for (short, mark) in [(false, -2.0), (true, 2.0)] {
+        let mut d = deal(short);
+        d.deltas.dmark = mark;
+        let mark_active = oriented_mark(&d, mark) > 0.0;
+        assert_eq!(weights(&mods, mark_active)[7], 0.0);
+        assert_eq!(weight(&mods, mark_active), 1.0);
+        d.kind = "PumpsDetection".into();
+        d.deltas.d1h = 1.0;
+        let p = ExitParams {
+            sell_mods: mods,
+            sell_modifier: 1.0,
+            sell_at_last_price: false,
+            ..Default::default()
+        };
+        let base = ExitModel::new(&p).unmodified_take(&d, d.buy_price);
+        let archive = [(0, super::super::level_off_buy(base, 4.0, !short))];
+        let fact = FactModifier::of(&d, &p, Some(&archive)).expect("calibrated sum");
+        assert_eq!(fact.weight, 1.0);
+        let mark_only = Modifiers {
+            add_mark: 20.0,
+            ..Default::default()
+        };
+        assert_eq!(fact.residual_for(&mark_only, mark_active), 0.0);
+    }
+}
+
+/// A variant must weight the mark active at its booking, rather than reuse the fact's state.
+#[test]
+fn residual_uses_the_variants_current_mark_state() {
+    let mut d = deal(false);
+    d.kind = "PumpsDetection".into();
+    d.deltas.dmark = 2.0;
+    let mods = Modifiers {
+        add_mark: 1.0,
+        ..Default::default()
+    };
+    let p = ExitParams {
+        sell_mods: mods,
+        ..Default::default()
+    };
+    d.fact_modifier = Some(FactModifier {
+        residual: 3.0,
+        weight: 1.0,
+    });
+    assert_eq!(modifier_sum(&p, &d, 0), 5.0);
+    d.deltas.dmark = -2.0;
+    assert_eq!(modifier_sum(&p, &d, 6_000), 0.0);
+}
+
+/// Counting favourable mark deviation would cancel or inflate the sell modifier's other terms.
+#[test]
+fn sell_sum_counts_only_adverse_mark_delta_for_each_side() {
+    let p = ExitParams {
+        sell_mods: Modifiers {
+            add_mark: 1.0,
+            add_1h: 1.0,
+            ..Modifiers::default()
+        },
+        ..ExitParams::default()
+    };
+    for (short, mark, expected) in [
+        (false, -2.0, 3.0),
+        (false, 2.0, 5.0),
+        (true, 2.0, 3.0),
+        (true, -2.0, 5.0),
+    ] {
+        let mut d = deal(short);
+        d.coin = "XALPHA".into();
+        d.core_name = "CORE_A".into();
+        d.deltas.d1h = 3.0;
+        d.deltas.dmark = mark;
+        assert!((modifier_sum(&p, &d, d.buy_ms) - expected).abs() < 1e-9);
+    }
+}
+
 /// Calibrating at the buy would spend the delta growth twice at a later sell booking.
 #[test]
 fn modifier_residual_uses_the_sell_booking_clock() {
@@ -35,8 +118,8 @@ fn modifier_residual_uses_the_sell_booking_clock() {
         })
         .expect("live delta track"),
     ));
-    assert!((model_sum(&p.sell_mods, &d, 0) - 1.0).abs() < 1e-9);
-    assert!((model_sum(&p.sell_mods, &d, 6_000) - 3.0).abs() < 1e-9);
+    assert!((model_sum(&p.sell_mods, &d, 0).0 - 1.0).abs() < 1e-9);
+    assert!((model_sum(&p.sell_mods, &d, 6_000).0 - 3.0).abs() < 1e-9);
     for booked_at in [0, 6_000] {
         let line = [(booked_at, 102.0 * 1.03)];
         d.fact_modifier = None;

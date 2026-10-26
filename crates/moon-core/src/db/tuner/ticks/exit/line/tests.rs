@@ -6,6 +6,81 @@ use crate::db::tuner::ticks::exit::ExitModel;
 use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape};
 use crate::db::tuner::ticks::{EntryParams, ModelSettings, verify};
 
+/// Sparse prints must not reorder different due moments by the rules' same-pass priority.
+#[test]
+fn overdue_pump_move_precedes_a_later_sell_level() {
+    let p = ExitParams {
+        pump_move_timer_s: 2.0,
+        pump_move_pct: 1.0,
+        sell_level_delay_s: 3.0,
+        sell_level_time_s: 10.0,
+        sell_level_count: 1,
+        sell_level_adjust_pct: 10.0,
+        ..params()
+    };
+    let d = deal(false);
+    let ticks = tape(&[(0, 110.0), (4_000, 100.0)]);
+    let w = walk(&d, &ticks, fill(), 120.0, &p);
+    assert_eq!(
+        w.points.iter().map(|pt| pt.t_ms).collect::<Vec<_>>(),
+        vec![0, 2_501, 3_000]
+    );
+    assert!((w.points[1].price - 109.9).abs() < 1e-9);
+    assert!((w.points[2].price - 121.0).abs() < 1e-9);
+}
+
+/// PriceDown must wait for the next print after PumpMove, even when PumpMove sends no change.
+#[test]
+fn pump_move_ends_the_pass_before_price_down() {
+    for (sell_level_on, take) in [(false, 120.0), (true, 120.0), (false, 109.9)] {
+        let p = ExitParams {
+            pump_move_timer_s: 2.0,
+            pump_move_pct: 1.0,
+            price_down_timer_s: 2.501,
+            price_down_delay_s: 1.0,
+            price_down_pct: 50.0,
+            price_down_relative: true,
+            sell_level_delay_s: if sell_level_on { 2.501 } else { 0.0 },
+            sell_level_time_s: 10.0,
+            sell_level_count: 1,
+            sell_level_adjust_pct: 10.0,
+            ..params()
+        };
+        let d = deal(false);
+        let side = Side { long: true };
+        let mut pump_move = PumpMove::new(&p, fill(), side, 0);
+        let mut price_down = PriceDown::new(&p, &d, fill(), side);
+        let mut sell_level = SellLevel::new(&p, &d, fill(), side);
+        let mut deferred = false;
+        let mut line = Line::new(None, take, 0, 0, 0);
+        let seen = tape(&[(0, 110.0), (2_501, 100.0)]);
+        Rules {
+            pump_move: &mut pump_move,
+            price_down: &mut price_down,
+            sell_level: &mut sell_level,
+            price_down_deferred: &mut deferred,
+        }
+        .step_through(2_501, &seen, &mut line);
+        assert!((line.core() - 109.9).abs() < 1e-9);
+        assert_eq!(price_down.due(2_501), Some(2_501));
+        if sell_level_on {
+            assert_eq!(line.points[1].t_ms, 2_501);
+            assert!((line.points[1].price - 121.0).abs() < 1e-9);
+        }
+        Rules {
+            pump_move: &mut pump_move,
+            price_down: &mut price_down,
+            sell_level: &mut sell_level,
+            price_down_deferred: &mut deferred,
+        }
+        .step_through(3_700, &seen, &mut line);
+        assert!((line.core() - 104.95).abs() < 1e-9);
+        assert_eq!(line.points.last().unwrap().t_ms, 3_700);
+        assert_eq!(price_down.due(4_699), None);
+        assert_eq!(price_down.due(4_700), Some(4_700));
+    }
+}
+
 /// A supported always-true formula with stops off isolates the replay clock from EMA calibration.
 fn ema_params(delay_s: f64, latency_ms: f64) -> ExitParams {
     ExitParams {
@@ -414,7 +489,7 @@ fn queued_moves_survive_latency_longer_than_the_interval() {
     assert_eq!(line.exch, 102.5);
 }
 
-/// Equal arrival times retain placement order while recording the first arrived move.
+/// SellLevel must precede a simultaneous relative PriceDown, which chains off its moved level.
 #[test]
 fn queued_moves_at_the_same_time_keep_placement_order() {
     let p = ExitParams {
@@ -438,20 +513,21 @@ fn queued_moves_at_the_same_time_keep_placement_order() {
     let mut sell_level = SellLevel::new(&p, &d, fill, side);
     let mut line = Line::new(None, 110.0, 0, 0, 100);
     Rules {
+        price_down_deferred: &mut false,
         pump_move: &mut pump_move,
         price_down: &mut price_down,
         sell_level: &mut sell_level,
     }
     .step_through(330, &tape(&[(0, 100.0)]), &mut line);
     line.land(430);
-    assert_eq!(line.exch, 103.0);
+    assert_eq!(line.exch, 101.5);
     assert_eq!(line.moved_at, Some(430));
     assert_eq!(
         line.points
             .iter()
             .map(|p| (p.t_ms, p.price))
             .collect::<Vec<_>>(),
-        vec![(0, 110.0), (430, 105.0), (430, 103.0)]
+        vec![(0, 110.0), (430, 103.0), (430, 101.5)]
     );
 }
 

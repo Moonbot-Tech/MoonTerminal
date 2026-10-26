@@ -202,6 +202,8 @@ impl Modifiers {
             + self.add_1h * d.d1h
             + self.add_3h * d.d3h
             + self.add_24h * d.d24h
+            // Shared addition takes the mark as given: the sell sum orients it first,
+            // while the corridor sum passes the raw delta.
             + self.add_mark * d.dmark
             + self.add_btc_1h * wide(d.btc1h)
             + self.add_btc_5m * wide(d.btc5m)

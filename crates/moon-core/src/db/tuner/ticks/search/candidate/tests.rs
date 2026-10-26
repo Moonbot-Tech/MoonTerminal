@@ -7,7 +7,11 @@ fn replayed(profits: &[f64], open: usize) -> Replayed {
     for p in profits {
         closed.push(*p);
     }
-    Replayed { closed, open }
+    Replayed {
+        closed,
+        open,
+        unjudged: 0,
+    }
 }
 
 fn point(value: &str) -> Point {

@@ -10,6 +10,248 @@ use crate::feed::types::Side;
 mod performance;
 mod stopped;
 
+/// A fact's covered look-back cannot license profit from a variant needing older history.
+#[test]
+fn longer_sell_level_variant_is_unjudged_without_profit() {
+    let mut d = prepared(1, 104.0);
+    d.deal.buy_ms = 0;
+    d.deal.close_ms = 6_000;
+    d.deal.sell_price = 105.0;
+    d.deal.sell_reason = "Auto Price Down".into();
+    d.ticks = Arc::from(vec![
+        tick(-5_000, 105.0),
+        tick(0, 100.0),
+        tick(5_000, 100.0),
+        tick(6_000, 105.0),
+    ]);
+    let own = ExitParams {
+        sell_price_pct: 30.0,
+        sell_level_delay_s: 5.0,
+        sell_level_time_s: 10.0,
+        sell_level_count: 1,
+        sell_level_adjust_pct: 0.0,
+        sell_at_last_price: false,
+        use_stop_loss: false,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let verdict = crate::db::tuner::ticks::verify::verify(
+        &d.deal,
+        &d.ticks,
+        &EntryParams::Fact,
+        &own,
+        None,
+        None,
+    );
+    assert!(
+        crate::db::tuner::ticks::record::fit_for_search(&verdict),
+        "{verdict:?}"
+    );
+    let variant = ExitParams {
+        sell_level_time_s: 3600.0,
+        ..own.clone()
+    };
+    d.own = Arc::new(HashMap::from([
+        ("SellPrice".into(), "30".into()),
+        ("SellLevelDelay".into(), "5".into()),
+        ("SellLevelTime".into(), "10".into()),
+        ("SellLevelCount".into(), "1".into()),
+        ("SellLevelAdjust".into(), "0".into()),
+        ("MShotSellAtLastPrice".into(), "NO".into()),
+        ("UseStopLoss".into(), "NO".into()),
+    ]));
+    let deals = [d];
+    let fact = scoring::score(&deals, &[0], &[(EntryParams::Fact, own)]);
+    assert_eq!(fact.unjudged, 0);
+    assert!(fact.spent > 0.0);
+    let score = scoring::score(&deals, &[0], &[(EntryParams::Fact, variant)]);
+    assert_eq!(score.unjudged, 1);
+    assert_eq!(score.spent, 0.0);
+    assert_eq!(score.open, 0);
+    assert_eq!(score.open_profit, 0.0);
+    assert_eq!(score.untraded, 0);
+    let (column, money) = variant_tally_by_deal(
+        &deals,
+        &HashMap::new(),
+        "PumpsDetection",
+        &[("SellLevelTime".into(), "3600".into())],
+        ModelSettings {
+            latency_ms: 0.0,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        (column.unjudged, column.untraded, column.tally.n),
+        (1, 0, 0)
+    );
+    assert_eq!(money, vec![(1, None)]);
+    let picture = variant_picture(
+        &deals[0],
+        &HashMap::new(),
+        "PumpsDetection",
+        &[("SellLevelTime".into(), "3600".into())],
+        ModelSettings::default(),
+    );
+    assert!(picture.outcome.fill.is_some());
+    assert!(picture.outcome.exit.is_none());
+
+    let mut searchable = deals[0].clone();
+    Arc::make_mut(&mut searchable.own).insert("UseStopLoss".into(), "YES".into());
+    let found = history_search(&[searchable], "SellLevelTime", &[10.0, 3600.0]);
+    assert_eq!(found.train.n, 1);
+    assert!(found.stats.unjudged_refused > 0);
+    assert_eq!(found.stats.cornered, 0);
+}
+
+/// Search a single exit field so history regressions cannot hide behind unrelated moves.
+fn history_search(deals: &[PreparedDeal], field: &'static str, values: &[f64]) -> SearchResult {
+    let held = HashMap::new();
+    let defaults = HashMap::new();
+    let mut locked: HashSet<String> = TICK_PARAMS.iter().map(|f| f.key.to_string()).collect();
+    locked.remove(field);
+    let grids = Grids::of([(field, Arc::from(values))]);
+    suggest(
+        deals,
+        &SearchParams {
+            held: &held,
+            defaults: &defaults,
+            kind: "PumpsDetection",
+            vary_entry: false,
+            vary_exit: true,
+            locked: &locked,
+            grids: &grids,
+            restarts: 1,
+            min_n: Some(1),
+            seed: Some(1),
+            train_frac: 1.0,
+            max_passes: DEFAULT_MAX_PASSES,
+            keep_corridor: false,
+            risk: Default::default(),
+            screen_entry: false,
+            model: ModelSettings {
+                latency_ms: 0.0,
+                ..Default::default()
+            },
+        },
+        &SearchHandle::new(),
+    )
+    .expect("covered facts must retain a ranked answer")
+}
+
+/// Losing a single deal's exit must refuse the point instead of ranking its remaining wins.
+#[test]
+fn unjudged_loser_refuses_the_whole_search_point() {
+    let mut loser = prepared(1, 100.0);
+    loser.deal.buy_ms = 0;
+    loser.deal.close_ms = 6_000;
+    loser.deal.sell_price = 95.0;
+    loser.deal.fact_pnl = -50.0;
+    loser.ticks = Arc::from(vec![tick(0, 100.0), tick(5_000, 95.0), tick(6_000, 95.0)]);
+    let winner = prepared(2, 104.0);
+    let model = ModelSettings {
+        latency_ms: 0.0,
+        ..Default::default()
+    };
+    let unknown = ExitParams {
+        sell_price_pct: 30.0,
+        sell_level_delay_s: 5.0,
+        sell_level_time_s: 3600.0,
+        sell_level_count: 1,
+        use_stop_loss: false,
+        sell_at_last_price: false,
+        model,
+        ..Default::default()
+    };
+    let known = ExitParams {
+        sell_price_pct: 1.0,
+        use_stop_loss: false,
+        sell_at_last_price: false,
+        model,
+        ..Default::default()
+    };
+    let deals = [loser, winner];
+    let fills: Vec<_> = deals
+        .iter()
+        .map(|d| {
+            Some(Fill {
+                t_ms: d.deal.buy_ms,
+                price: d.deal.buy_price,
+            })
+        })
+        .collect();
+    let mut replayed = closing::replay(
+        &deals,
+        &[0, 1],
+        &[(EntryParams::Fact, unknown), (EntryParams::Fact, known)],
+        &fills,
+    );
+    assert_eq!(
+        (replayed.unjudged, replayed.closed.n, replayed.open),
+        (1, 1, 0)
+    );
+    assert!(replayed.closed.profit > 0.0);
+    assert!(replayed.closed_all().is_none());
+    let tracker = candidate::Tracker::default();
+    tracker.offer(&Point::new(), &replayed, 0, 1);
+    assert!(tracker.answer().is_none());
+    replayed.open = 1;
+    tracker.offer(&Point::new(), &replayed, 0, 1);
+    assert!(tracker.candidate().is_none());
+}
+
+/// Short formula history must not remove a take-closed fit fact from every search point.
+#[test]
+fn custom_ema_short_take_fact_keeps_a_ranked_search_answer() {
+    let mut d = prepared(1, 104.0);
+    d.deal.close_ms = 3_000;
+    d.deal.sell_price = 104.0;
+    d.ticks = Arc::from(vec![
+        tick(1_000, 100.0),
+        tick(2_000, 100.0),
+        tick(3_000, 104.0),
+    ]);
+    let p = ExitParams {
+        sell_price_pct: 4.0,
+        sell_at_last_price: false,
+        use_stop_loss: true,
+        stop_loss_pct: -50.0,
+        custom_ema: Some(Arc::new(
+            super::super::custom_ema::parse("EMA(1h,1s) > 888").unwrap(),
+        )),
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let verdict = crate::db::tuner::ticks::verify::verify(
+        &d.deal,
+        &d.ticks,
+        &EntryParams::Fact,
+        &p,
+        None,
+        None,
+    );
+    assert!(
+        crate::db::tuner::ticks::record::fit_for_search(&verdict),
+        "{verdict:?}"
+    );
+    d.own = Arc::new(HashMap::from([
+        ("SellPrice".into(), "4".into()),
+        ("StopLoss".into(), "-50".into()),
+        ("UseStopLoss".into(), "YES".into()),
+        ("MShotSellAtLastPrice".into(), "NO".into()),
+        ("SellByCustomEMA".into(), "EMA(1h,1s) > 888".into()),
+    ]));
+    let found = history_search(&[d], "SellPrice", &[1.0, 4.0]);
+    assert_eq!(found.train.n, 1);
+    assert_eq!(found.stats.unjudged_refused, 0);
+    assert!(found.train.profit > 0.0);
+}
+
 /// A non-invertible Spread fact shift cannot support a changed sell modifier.
 #[test]
 fn spread_variant_with_unknown_base_is_refused() {

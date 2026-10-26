@@ -97,6 +97,8 @@ fn repeated_point_search_preserves_the_answer() {
             left_open_by_held: 0,
             entry_points: 0,
             fills_reused: 52_209,
+            cornered: 0,
+            unjudged_refused: 0,
         }
     );
     let bases = Bases::of(&deals);

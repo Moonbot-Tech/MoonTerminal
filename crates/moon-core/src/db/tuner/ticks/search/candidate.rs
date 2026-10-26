@@ -79,6 +79,9 @@ impl Tracker {
     ///     min_n: The trade floor; a point that leaves deals open and closes fewer than this is
     ///         no candidate.
     pub(super) fn offer(&self, point: &Point, replayed: &Replayed, restart: usize, min_n: i64) {
+        if replayed.unjudged > 0 {
+            return;
+        }
         let slot = if replayed.open == 0 {
             &self.answer
         } else if replayed.closed.n >= min_n {

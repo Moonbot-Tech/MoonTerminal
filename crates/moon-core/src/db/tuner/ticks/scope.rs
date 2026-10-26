@@ -9,10 +9,9 @@
 //! has no parameters to run a model with. Those are the SERVICE rows, and the axis never takes
 //! them. Measured on the live replica (2026-09-20): 16 of 1217 rows with millisecond stamps.
 //!
-//! The axis narrows further, always (the developer's call, 2026-09-20: a trade the tuner cannot
-//! be run on is noise in its table), to what the tuner can actually be RUN on: a kind whose
+//! The axis narrows further to what the tuner can actually be RUN on: a kind whose
 //! trades close on a sell line the exit model has
-//! (every trading kind; a `Manual`, `Alerts` or `Watcher` strategy is a container, not a rule),
+//! (NewListing needs the book; a `Manual`, `Alerts` or `Watcher` strategy is a container),
 //! resolved in `strategies.sqlite` (a kind the database does not know has no versions to take
 //! the parameters as of the buy from), and an exit the strategy made itself — a manual sell or
 //! the core's global panic sell is a fact the model can only ever miss, and a miss the sample
@@ -26,6 +25,12 @@ const GLOBAL_PANIC_SELL: &str = "Global PanicSell";
 
 /// Strategy kinds (`SignalType`) that hold no trading rule of their own.
 const CONTAINER_KINDS: [&str; 3] = ["Manual", "Alerts", "Watcher"];
+
+/// NewListing sells at an absolute price or a percentage of ASK, absent from the tape;
+/// SellFromAssets listings also have no buy to replay.
+/// https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
+/// https://moonbot.pro/documentation/advanced-strategy-parameters/newlisting-strategy-and-its-parameters
+const UNMODELLED_KINDS: [&str; 1] = ["NewListing"];
 
 /// How much more than it bought a row may sell and still be one position: the fraction the
 /// exchange's own rounding of a lot can add. Anything past it is coins the core topped the sale
@@ -68,7 +73,7 @@ pub fn is_service_row(strategy_id: i64, sell_reason: &str) -> bool {
 /// Args:
 ///     kind: The kind as `strategies.sqlite` spells it; empty when unresolved.
 pub fn tunable_kind(kind: &str) -> bool {
-    !kind.is_empty() && !CONTAINER_KINDS.contains(&kind)
+    !kind.is_empty() && !CONTAINER_KINDS.contains(&kind) && !UNMODELLED_KINDS.contains(&kind)
 }
 
 /// Whether the exit was the operator's, not the strategy's: the `Manual …` family and a sell

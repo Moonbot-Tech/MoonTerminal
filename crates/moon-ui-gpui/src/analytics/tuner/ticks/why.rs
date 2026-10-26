@@ -538,6 +538,7 @@ fn unjudged_key(why: Unjudged) -> &'static str {
         Unjudged::CustomEmaUnsupported => "custom_ema_unsupported",
         Unjudged::CustomEmaUnparsed => "custom_ema_unparsed",
         Unjudged::CustomEmaShortHistory => "custom_ema_short",
+        Unjudged::SellLevelShortLookback => "sell_level_short",
     }
 }
 

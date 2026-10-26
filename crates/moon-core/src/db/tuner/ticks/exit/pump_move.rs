@@ -1,32 +1,22 @@
-//! PumpsDetection's one sell move — a field of that kind's own settings, not of the sell
-//! sections the other kinds share.
-//!
-//! **PumpMove** (`PumpMoveTimer` non-zero) — once, `PumpMoveTimer` seconds after the take is
-//! placed, the sell moves to `PumpMovePersent` per cent of the way from the pump's peak back to
-//! the buy (FAQ: "учитывается процент между пиковой ценой и ценой покупки"), the peak read over
-//! [`PUMP_PEAK_LOOKBACK_MS`] before the take up to the move. `docs-internal/STRATEGY_FORMULAS/
-//! pumpsdetection.md` has the archive it was read off.
+//! PumpsDetection's one sell move matches the core's rule: a rounded timer from the sell-phase
+//! start, then a share of the profitable distance from the buy to the farther of the peak and ASK.
+//! The tape's last print at or before the move proxies the book's side for longs and shorts.
+//! The core's floor buy*(2*commission - 1) is not modelled: the deal has no commission rate,
+//! and that floor can bind only when PumpMovePersent exceeds 100. The core's pump detector keeps the
+//! peak from the last confirmed detect, raised by later trades, without a fixed window. The
+//! report has no detect stamp, so [`PUMP_PEAK_LOOKBACK_MS`] defines the model's proxy window.
+//! Source: https://moonbot.pro/documentation/advanced-strategy-parameters/pumpdetection-strategy-and-its-parameters
 
 use super::line::Line;
 use super::{ExitParams, Side, due_by};
 use crate::db::tuner::ticks::Fill;
 use crate::feed::types::Tick;
 
-/// How far past `PumpMoveTimer` the core's pump move lands, less the model's own placement
-/// latency: over 32 archived PumpsDetection lines (2026-09-22, every live Pump strategy runs
-/// `PumpMoveTimer` 2 with `PumpMovePersent` 1) the move came 575–704 ms past the timer, a
-/// median of 610 ms — counted from the take, not from the buy's report stamp: one take placed
-/// 32 s after `buydatems` still moved 2.6 s after itself.
-pub const PUMP_MOVE_LAG_MS: i64 = 500;
-
-/// How far before the take the pump's peak is looked for. The FAQ counts the peak from the
-/// detect, which the report does not stamp on older rows, and the peak itself is the print that
-/// triggered it — a median 70 ms before the buy, up to 6 s when the buy order waited for the
-/// retrace. Over the same 32 lines a window from 10 s before the take reproduces the moved level
-/// on 31; from the buy it reproduces 1, from 4 s before the take 27.
+/// Default proxy look-back before the take for the detector's peak since its last confirmed
+/// detect. The report has no detect stamp; the core itself uses no fixed look-back window.
 pub const PUMP_PEAK_LOOKBACK_MS: i64 = 10_000;
 
-/// The pump move's clock: one move, timed off the take (see [`PUMP_MOVE_LAG_MS`]).
+/// The pump move's clock: one move, timed off the sell-phase start with rounded elapsed seconds.
 pub(super) struct PumpMove<'a> {
     params: &'a ExitParams,
     fill: Fill,
@@ -39,15 +29,16 @@ pub(super) struct PumpMove<'a> {
 }
 
 impl<'a> PumpMove<'a> {
+    /// Arm once using round-half-to-even: Round(elapsed/1000) > N first reaches k=floor(N)+1
+    /// at k-0.5 seconds for even k, and one millisecond later for odd k.
     pub(super) fn new(params: &'a ExitParams, fill: Fill, side: Side, armed_at: i64) -> Self {
         Self {
             params,
             fill,
             side,
             next: (params.pump_move_timer_s > 0.0).then(|| {
-                armed_at
-                    + (params.pump_move_timer_s * 1000.0) as i64
-                    + params.model.pump_move_lag_ms
+                let k = params.pump_move_timer_s.floor() as i64 + 1;
+                armed_at + k * 1000 - 500 + k % 2
             }),
             peak_from: armed_at - params.model.pump_peak_lookback_ms,
         }
@@ -58,14 +49,26 @@ impl<'a> PumpMove<'a> {
         due_by(self.next, t_ms)
     }
 
-    /// The move due at `due`: to the peak less `PumpMovePersent` of its distance to the buy.
+    /// Place the profitable peak/ASK distance less `PumpMovePersent`, mirrored for a short.
     ///
     /// Args:
     ///     seen: The prints up to and including the one the move is due by.
     pub(super) fn step(&mut self, due: i64, seen: &[Tick], line: &mut Line) {
         self.next = None;
-        if let Some(peak) = self.side.extreme_between(seen, self.peak_from, due) {
-            let next = peak + (self.fill.price - peak) * self.params.pump_move_pct / 100.0;
+        let ask = seen
+            .iter()
+            .rev()
+            .find(|t| t.time_ms as i64 <= due && t.price > 0.0);
+        if let Some(ask) = ask {
+            let peak = self
+                .side
+                .extreme_between(seen, self.peak_from, due)
+                .unwrap_or(f64::from(ask.price));
+            let peak = self.side.farther(peak, f64::from(ask.price));
+            let sign = self.side.sign();
+            let distance = (sign * (peak - self.fill.price)).max(0.0);
+            let next =
+                self.fill.price + sign * distance * (1.0 - self.params.pump_move_pct / 100.0);
             line.place(due, next);
         }
     }

@@ -2,6 +2,24 @@
 
 use super::*;
 
+/// Applying the sell sum's orientation here would change the MoonShot corridor's signed shift.
+#[test]
+fn corridor_sum_keeps_the_raw_mark_delta() {
+    let mods = Modifiers {
+        add_mark: 1.0,
+        add_1h: 1.0,
+        ..Modifiers::default()
+    };
+    for (mark, expected) in [(-2.0, 1.0), (2.0, 5.0)] {
+        let deltas = Deltas {
+            d1h: 3.0,
+            dmark: mark,
+            ..Deltas::default()
+        };
+        assert!((mods.near_addition(&deltas) - expected).abs() < 1e-9);
+    }
+}
+
 /// Losing the width floor or upper clamp would change the core's run-away threshold.
 #[test]
 fn retreat_depth_keeps_the_core_width_clamps() {

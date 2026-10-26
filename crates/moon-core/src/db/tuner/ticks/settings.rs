@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::exit::pump_move::{PUMP_MOVE_LAG_MS, PUMP_PEAK_LOOKBACK_MS};
+use super::exit::pump_move::PUMP_PEAK_LOOKBACK_MS;
 use super::exit::sell_order::STEP_FLOOR_MS;
 use super::exit::stops::{FAST_TRADES_MAX, SERIES_TICK_MS, TICKER_PERIOD_MS};
 use super::mshot::{
@@ -75,8 +75,6 @@ pub struct ModelSettings {
     pub series_tick_ms: i64,
     /// The floor on a sell-line step delay of zero.
     pub step_floor_ms: i64,
-    /// How far past `PumpMoveTimer` the pump move lands.
-    pub pump_move_lag_ms: i64,
     /// How far before the take the pump's peak is looked for.
     pub pump_peak_lookback_ms: i64,
     /// Verdict: how far apart in time a modelled and an archived move may be and still be one.
@@ -105,7 +103,6 @@ impl Default for ModelSettings {
             ticker_period_ms: TICKER_PERIOD_MS,
             series_tick_ms: SERIES_TICK_MS,
             step_floor_ms: STEP_FLOOR_MS,
-            pump_move_lag_ms: PUMP_MOVE_LAG_MS,
             pump_peak_lookback_ms: PUMP_PEAK_LOOKBACK_MS,
             point_time_ms: POINT_TIME_TOLERANCE_MS,
             book_stop_time_ms: BOOK_STOP_TIME_TOLERANCE_MS,
@@ -165,7 +162,6 @@ impl ModelSettings {
             ticker_period_ms: ms(self.ticker_period_ms, 1),
             series_tick_ms: ms(self.series_tick_ms, 1),
             step_floor_ms: ms(self.step_floor_ms, 0),
-            pump_move_lag_ms: ms(self.pump_move_lag_ms, 0),
             pump_peak_lookback_ms: ms(self.pump_peak_lookback_ms, 0),
             point_time_ms: ms(self.point_time_ms, 0),
             book_stop_time_ms: ms(self.book_stop_time_ms, 0),

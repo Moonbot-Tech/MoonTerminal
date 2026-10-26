@@ -5,6 +5,198 @@ use crate::db::tuner::ticks::ExitKind;
 use crate::db::tuner::ticks::exit::line::walk;
 use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape};
 
+/// Treating WorkTime=1 as a one-second deadline would suppress the delayed sell move.
+#[test]
+fn sell_level_work_time_one_waits_for_manual_move() {
+    let ticks = tape(&[(-5_000, 105.0), (0, 100.0), (5_000, 100.0)]);
+    for (work_time, moves) in [(1.0, 2), (2.0, 1)] {
+        let p = ExitParams {
+            sell_level_delay_s: 5.0,
+            sell_level_work_time_s: work_time,
+            sell_level_time_s: 10.0,
+            sell_level_count: 1,
+            sell_level_adjust_pct: 0.0,
+            ..params()
+        };
+        let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+        assert_eq!(w.points.len(), moves);
+        if moves == 2 {
+            assert_eq!((w.points[1].t_ms, w.points[1].price), (5_000, 105.0));
+            assert!(w.sell_level_short_at.is_none());
+        }
+    }
+}
+
+/// Relative steps toward a negative allowed-drop level must continue below the buy.
+#[test]
+fn price_down_relative_can_count_toward_allowed_drop() {
+    let ticks = tape(&[(0, 100.0), (1_000, 100.0)]);
+    for (enabled, expected) in [(true, 100.5), (false, 101.0)] {
+        let p = ExitParams {
+            price_down_timer_s: 1.0,
+            price_down_pct: 50.0,
+            price_down_relative: true,
+            price_down_to_allowed_drop: enabled,
+            price_down_allowed_drop_pct: -1.0,
+            ..params()
+        };
+        let w = walk(&deal(false), &ticks, fill(), 102.0, &p);
+        // Half the distance 102 -> 99 is 100.5; half of 102 -> 100 is 101.
+        assert!((w.points[1].price - expected).abs() < 1e-9);
+    }
+}
+
+/// A boundary bar is safe only when it cannot change the extreme; gaps remain unjudged.
+#[test]
+fn sell_level_requires_contiguous_admissible_history() {
+    let ticks = tape(&[(-295_000, 105.0), (0, 100.0), (5_000, 100.0)]);
+    let p = ExitParams {
+        sell_level_delay_s: 5.0,
+        sell_level_time_s: 3600.0,
+        sell_level_count: 1,
+        sell_level_adjust_pct: 0.0,
+        ..params()
+    };
+    let bars: Vec<_> = (0..55)
+        .map(|i| Bar {
+            from_ms: -3_595_000 + i * 60_000,
+            to_ms: -3_535_000 + i * 60_000,
+            open: 100.0,
+            high: 120.0,
+            low: 99.0,
+            close: 100.0,
+        })
+        .collect();
+    for scenario in [
+        "tape",
+        "aligned",
+        "straddling",
+        "gap",
+        "overlap",
+        "continuous",
+    ] {
+        let mut d = deal(false);
+        let mut ticks = ticks.clone();
+        let mut history = bars.clone();
+        match scenario {
+            "tape" => history.clear(),
+            "straddling" => history[0].from_ms -= 1,
+            "gap" => {
+                history.remove(25);
+            }
+            "overlap" => history[25].to_ms += 1,
+            "continuous" => {
+                history.clear();
+                // A continuous tape need not print exactly at the look-back boundary.
+                ticks.insert(
+                    0,
+                    crate::db::tuner::ticks::exit::tests::tick(-3_600_000, 100.0),
+                );
+            }
+            _ => (),
+        }
+        d.bars = Some(history.into());
+        let w = walk(&d, &ticks, fill(), 130.0, &p);
+        let short = !matches!(scenario, "aligned" | "continuous" | "straddling");
+        assert_eq!(w.sell_level_short_at.is_some(), short, "{scenario}");
+        assert_eq!(
+            w.points[1].price,
+            if matches!(scenario, "tape" | "continuous") {
+                105.0
+            } else {
+                120.0
+            }
+        );
+        let outcome = crate::db::tuner::ticks::simulate_from(&d, &ticks, Some(fill()), &p);
+        if short {
+            assert!(outcome.exit.is_none());
+            assert!(outcome.profit_pct.is_none());
+            assert!(!outcome.left_open());
+            assert!(outcome.open_metric_at_tape_end(&d, &ticks).is_none());
+            ticks.push(crate::db::tuner::ticks::exit::tests::tick(6_000, 125.0));
+            let exit = ExitModel::new(&p).exit(&d, &ticks, fill());
+            assert!(
+                exit.price.is_nan(),
+                "short history must not price the later fill"
+            );
+        }
+    }
+}
+
+/// Minute boundaries need not match a millisecond due; only a farther boundary extreme is unknown.
+#[test]
+fn sell_level_straddling_bar_must_not_change_the_window_extreme() {
+    for (short, boundary, expected_short) in [
+        (false, 110.0, false),
+        (false, 120.0, false),
+        (false, 130.0, true),
+        (true, 90.0, false),
+        (true, 80.0, false),
+        (true, 70.0, true),
+    ] {
+        let mut d = deal(short);
+        d.bars = Some(
+            vec![
+                Bar {
+                    from_ms: -120_000,
+                    to_ms: -60_000,
+                    open: 100.0,
+                    high: if short { 100.0 } else { boundary },
+                    low: if short { boundary } else { 100.0 },
+                    close: 100.0,
+                },
+                Bar {
+                    from_ms: -60_000,
+                    to_ms: 0,
+                    open: 100.0,
+                    high: if short { 100.0 } else { 120.0 },
+                    low: if short { 80.0 } else { 100.0 },
+                    close: 100.0,
+                },
+            ]
+            .into(),
+        );
+        let p = ExitParams {
+            sell_level_delay_s: 5.123,
+            sell_level_time_s: 120.0,
+            sell_level_count: 1,
+            sell_level_adjust_pct: 0.0,
+            ..params()
+        };
+        let ticks = tape(&[(0, 100.0), (5_123, 100.0)]);
+        let w = walk(&d, &ticks, fill(), if short { 50.0 } else { 150.0 }, &p);
+        assert_eq!(
+            w.sell_level_short_at,
+            expected_short.then_some(5_123),
+            "{short} {boundary}"
+        );
+        assert_eq!(w.points[1].price, if short { 80.0 } else { 120.0 });
+    }
+}
+
+/// Removing the entry clamp would let a negative modifier place the initial take at a loss.
+#[test]
+fn modified_take_stops_at_the_buy_for_both_sides() {
+    let p = ExitParams {
+        sell_price_pct: 1.0,
+        sell_modifier: -1.0,
+        sell_at_last_price: false,
+        sell_mods: crate::db::tuner::ticks::mshot::Modifiers {
+            add_1h: 1.0,
+            ..Default::default()
+        },
+        ..ExitParams::default()
+    };
+    for short in [false, true] {
+        let mut d = deal(short);
+        d.coin = "XALPHA".into();
+        d.core_name = "CORE_A".into();
+        d.deltas.d1h = 2.0;
+        let take = ExitModel::new(&p).take_level(&d, &[], fill());
+        assert!((take / 100.0 - 1.0).abs() < 1e-9, "short={short}: {take}");
+    }
+}
+
 /// Guessing a non-fixed hook rule would score unsupported levels; its fact stays bit-exact.
 #[test]
 fn hook_non_fixed_take_requires_the_stated_fact_level() {

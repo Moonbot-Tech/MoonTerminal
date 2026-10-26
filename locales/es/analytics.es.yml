@@ -1,6 +1,8 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.why.sell_level_short: "historial insuficiente para SellLevel"
+analytics.ticks.why.sell_level_short.why: "La cinta de operaciones y las velas completamente cerradas no cubren toda la ventana de SellLevel sin huecos."
 analytics.ticks.param.custom_ema_threshold: "Umbral de fórmula EMA %{k}"
 analytics.ticks.chip.accepted_short_tail: "utilizable: cola corta"
 analytics.ticks.chip.accepted_short_tail_tip: "Operaciones utilizables con cinta completa hasta el cierre. La cola es corta y ninguna fuente habilitada puede ampliarla."
@@ -956,8 +958,6 @@ analytics.ticks.model_series: "Paso de la serie de precios, ms"
 analytics.ticks.model_series_tip: "El paso de la serie de precios del núcleo: con él también salta un stop con StopLossEMA 0, y el stop rápido (FastStopLoss) comprueba el último precio de cada paso"
 analytics.ticks.model_step_floor: "Paso mínimo de la línea, ms"
 analytics.ticks.model_step_floor_tip: "Retardo de paso PriceDown / SellLevel en cero en la estrategia (FAQ: 0,33 s)"
-analytics.ticks.model_pump_lag: "Pump: retraso del movimiento, ms"
-analytics.ticks.model_pump_lag_tip: "Cuánto después de PumpMoveTimer el núcleo mueve la venta de PumpsDetection"
 analytics.ticks.model_pump_peak: "Pump: ventana del pico, ms"
 analytics.ticks.model_pump_peak_tip: "Cuánto antes del take se busca el pico del bombeo"
 analytics.ticks.model_point_time: "Tolerancia de tiempo, ms"

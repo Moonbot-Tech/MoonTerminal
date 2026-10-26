@@ -446,5 +446,6 @@ fn unjudged_label(why: Unjudged) -> &'static str {
         Unjudged::CustomEmaUnsupported => "custom EMA term not modelled",
         Unjudged::CustomEmaUnparsed => "custom EMA formula unparsed",
         Unjudged::CustomEmaShortHistory => "custom EMA history too short",
+        Unjudged::SellLevelShortLookback => "SellLevel lookback too short",
     }
 }
