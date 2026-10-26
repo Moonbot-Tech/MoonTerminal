@@ -595,10 +595,12 @@ fn is_fill_point(deal: &Deal, exit: &ExitParams, last: (i64, f64), prev: (i64, f
 /// `exit::delta_mods::modifier_sum`), and the residual sits right there where the record kept
 /// no sum of the core's own.
 ///
-/// Archived moves from the activation on — the first move past the level [`stop_jump_level`]
-/// gives: the stop's, or for a trailing stop's reason its own line under the printed peak — are
-/// the panic sell, not the line the rules moved, and are not held against the model. A fact whose
-/// level is on no record (a trailing stop rewritten to `StopLoss Market Sell`) keeps them.
+/// Archived moves from the activation on are the panic sell, not the line the rules moved,
+/// and are not held against the model. A stop uses its printed fixed level when available;
+/// a trailing stop uses its line under the printed peak ([`stop_jump_level`]). A trailing stop
+/// rewritten to `StopLoss Market Sell` has no peak on record and keeps the unknown moves.
+/// When a stop's reason lost its fixed level, the fallback is the walk's level at firing,
+/// including any ladder step, rather than the initial distance before that step.
 ///
 /// A trailing stop's reason is timed with the book stop's tolerance whatever `FastStopLoss` says:
 /// the trailing fires on the ticker's arrivals, like the book stop.
@@ -638,7 +640,11 @@ fn verify_stop(
         )
     });
     let stated = stated_stop_level(&deal.sell_reason);
-    let panic_at = stop_jump_level(deal, exit, exit_points);
+    let panic_at = if stop_group(&deal.sell_reason) == Some(StopGroup::Stop) {
+        stated.or(Some(level))
+    } else {
+        stop_jump_level(deal, exit, exit_points)
+    };
     let mut activation: Option<i64> = None;
     let mut first_unmatched: Option<usize> = None;
     let points = exit_points.filter(|p| !p.is_empty()).map(|archived| {
@@ -682,7 +688,8 @@ fn verify_stop(
 /// The level an archived line's jump into the panic sell is read against:
 ///
 /// - a stop's reason (`REASON_STOP`): the level the core printed into it when it kept one, else
-///   the stop's own — `None` for a strategy without a stop;
+///   the stop's own when no ladder can have moved it — `None` for a strategy without a stop
+///   or a ladder whose fixed level the reason lost;
 /// - a trailing stop's reason (`REASON_TRAILING`): the fact's own line at the activation, under
 ///   the `PeakPrice` the core printed ([`trailing_level`]) — `None` without a trailing setting or
 ///   a readable peak.
@@ -691,6 +698,8 @@ fn verify_stop(
 /// core rewrote (the core's answer of 2026-09-24): read against the stop's level, its market sale
 /// stands short of it, no jump is found, and the moment is the close's as well.
 /// The fallback stop reads its modifier at sell booking, recovered from `exit_points`.
+/// Unlike the verdict, record consumers have no walked firing level: a missing ladder level
+/// stays unknown instead of treating the initial stop as the recorded one.
 pub(super) fn stop_jump_level(
     deal: &Deal,
     exit: &ExitParams,
@@ -704,9 +713,12 @@ pub(super) fn stop_jump_level(
             .map(|peak| trailing_level(peak, deal.buy_price, exit, deal.is_long()));
     }
     let pct = stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms);
-    (reason_starts_with(reason, REASON_STOP) && pct != 0.0).then(|| {
-        stated_stop_level(reason)
-            .unwrap_or_else(|| level_off_buy(deal.buy_price, pct, deal.is_long()))
+    if !reason_starts_with(reason, REASON_STOP) || pct == 0.0 {
+        return None;
+    }
+    stated_stop_level(reason).or_else(|| {
+        (exit.second_stop.is_none() && exit.third_stop.is_none())
+            .then(|| level_off_buy(deal.buy_price, pct, deal.is_long()))
     })
 }
 

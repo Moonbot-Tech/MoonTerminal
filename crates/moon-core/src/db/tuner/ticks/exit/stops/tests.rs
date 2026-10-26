@@ -8,6 +8,54 @@ use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape, tick};
 use crate::db::tuner::ticks::{EntryParams, verify};
 use crate::feed::types::Side as TickSide;
 
+/// Using the initial stop to split the archive would judge a raised stop's panic sell as line moves.
+#[test]
+fn raised_stop_with_a_truncated_reason_excludes_the_panic_line() {
+    let mut d = deal(false);
+    d.kind = "EMA".into();
+    d.core_name = "CORE_A".into();
+    d.coin = "XALPHA".into();
+    d.close_ms = 60_250;
+    d.sell_price = 100.1;
+    d.archived_take = Some(104.0);
+    d.sell_reason = "StopLoss AutoActivated on price drop: BID = 100.2 ASK: 100.3 (strategy".into();
+    let p = ExitParams {
+        sell_price_pct: 4.0,
+        stop_loss_pct: -2.4,
+        fast_stop_loss: true,
+        second_stop: Some(ladder::StopStep {
+            after_s: 10.0,
+            switch_pct: 1.0,
+            level_pct: 0.3,
+        }),
+        ..params()
+    };
+    let mut ticks = tape(&[
+        (1, 100.0),
+        (11_000, 102.0),
+        (13_000, 102.0),
+        (60_000, 100.2),
+        (61_000, 100.1),
+    ]);
+    for tick in &mut ticks {
+        tick.side = TickSide::Sell;
+    }
+    let archive = [(0, 104.0), (60_250, 99.5), (60_270, 100.1)];
+    let verdict = verify(&d, &ticks, &EntryParams::Fact, &p, None, Some(&archive));
+    assert_eq!(verdict.exit_kind, Some(ExitKind::Stop));
+    assert_eq!(verdict.line_points, Some((1, 1)), "{verdict:?}");
+    assert_eq!(verdict.exit, Some(true), "{verdict:?}");
+    // Record consumers cannot infer that the factual ladder took the model's step.
+    assert_eq!(
+        crate::db::tuner::ticks::verify::stop_jump_level(&d, &p, Some(&archive)),
+        None
+    );
+    assert_eq!(verdict.stop.quote, None);
+    assert_eq!(verdict.stop.ticker_age_ms, None);
+    let anchor = crate::db::tuner::ticks::record::StopAnchor::of(&d, &p, Some(&archive));
+    assert_eq!(anchor.fired, Some((d.close_ms, d.sell_price)));
+}
+
 /// Dropping the resting order at fire would lose a take touched before panic arrival.
 #[test]
 fn market_stop_fill_lets_the_resting_take_fill_during_latency() {
