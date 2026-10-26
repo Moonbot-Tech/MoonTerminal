@@ -49,13 +49,17 @@ feature — a row in the map, a new user word — a row in the dictionary.
   bottom volumes. Do not confuse either with the
   **order book on the chart** — that exists: cumulative bid/ask walls on the sides of
   the chart + thin lines of individual levels on top (Settings → Interface →
-  Order book; drawn by the shaders, the same in DX11/native/Metal). The word “heatmap”
+  Order book; drawn by the shaders, the same in DX11/native/Metal); per tab the book can
+  instead be a price ladder — one row per tick step with its volume and price (Chart
+  graphics → Book style: Bars/Ladder). The word “heatmap”
   in the code is only about Analytics (profit).
 - **«Превью графиков»** (“chart previews”) = Moonbot charts: small detect chart-cards
   that open into the main chart on click.
 - **«Тики»** (“ticks”) — trade dots on the chart (buy/sell/liquidation); colours
   are baked as constants in the shaders, only size and opacity are configurable
-  (#490).
+  (#490). Per tab they can be crosses (the default) or bubbles — trades of one price and side
+  within a merge window as one disc, sized against that market's own prints; liquidations keep
+  their crosses (Chart graphics → Trade style).
 - **«Вспышка» / «моргание»** (“flash” / “blink”) — the pulse frame of a chart that arrived on a tab
   from a detect (3 pulses, colour — the theme accent; turned off in the tab setting).
 - **«Каптионы» / подписи** (“Captions”) — caption modules around the chart (background deltas,
@@ -91,7 +95,8 @@ schedule. Second row — order size, leverage, MAX, SL/TP, sell
 percentages. Clusters with dividers; on a narrow window it compresses in a cascade.
 
 **Chart**: tick trail + candles with TF, history is pulled from the core's
-archives, a “trades only” zone, the order book on the sides (walls + level lines),
+archives, a “trades only” zone, the order book on the sides (walls + level lines,
+or a price ladder per tab), trades as crosses or bubbles per tab,
 volumes at the bottom (in quote currency), horizontal volumes by price beside the
 plot (Moonbot's HVol), bought/sold volume by the chart,
 volume measure around the cursor, liquidation count, news marks (gems by
