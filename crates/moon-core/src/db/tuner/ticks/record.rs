@@ -79,7 +79,8 @@ impl StopAnchor {
         // The verdict's own test of a stopped fact (`verify::is_stop_reason`), not a copy.
         let stopped = is_stop_reason(&deal.sell_reason);
         let fired = stopped.then(|| {
-            // The level the jump is read against — the verdict's own (`verify::stop_jump_level`).
+            // Only a record-derived level can anchor the fact; a ladder whose level was lost
+            // falls back to the close, never to the model's estimate of its firing level.
             let at = stop_jump_level(deal, exit, exit_points)
                 .and_then(|level| archived_stop_jump(deal, level, exit_points))
                 .unwrap_or(deal.close_ms);

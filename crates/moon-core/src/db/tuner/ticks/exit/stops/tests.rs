@@ -8,6 +8,82 @@ use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape, tick};
 use crate::db::tuner::ticks::{EntryParams, verify};
 use crate::feed::types::Side as TickSide;
 
+/// Excluding a ladder cycle tied with a fast tick delays the newly raised stop by a full tick.
+#[test]
+fn fast_tick_reads_a_ladder_cycle_at_its_own_moment() {
+    let mut p = fast_params(FastPrice::LastOfTick);
+    p.model.ticker_period_ms = 1_000;
+    p.second_stop = Some(ladder::StopStep {
+        after_s: 0.0,
+        switch_pct: 1.0,
+        level_pct: 2.0,
+    });
+    let mut d = deal(false);
+    d.kind = "EMA".into();
+    d.core_name = "CORE_A".into();
+    d.coin = "XALPHA".into();
+    let mut stops = Stops::new(&d, &[], fill(), &p, Side { long: true });
+    let mut first = tick(750, 101.5);
+    first.side = TickSide::Sell;
+    assert!(stops.on_print(&first, 750, 101.5).is_none());
+    let next = tick(2_000, 101.5);
+    let fire = stops.on_print(&next, 2_000, 101.5).expect("raised stop");
+    assert_eq!(fire.t_ms, 1_000);
+    assert_eq!(stops.level(), Some(102.0));
+    // Finishing the same tape at its actual last print must read the same ladder cycle.
+    let mut exhausted = Stops::new(&d, &[], fill(), &p, Side { long: true });
+    assert!(exhausted.on_print(&first, 750, 101.5).is_none());
+    assert_eq!(exhausted.after_tape(750).map(|exit| exit.t_ms), Some(1_000));
+}
+
+/// Using the initial stop to split the archive would judge a raised stop's panic sell as line moves.
+#[test]
+fn raised_stop_with_a_truncated_reason_excludes_the_panic_line() {
+    let mut d = deal(false);
+    d.kind = "EMA".into();
+    d.core_name = "CORE_A".into();
+    d.coin = "XALPHA".into();
+    d.close_ms = 60_250;
+    d.sell_price = 100.1;
+    d.archived_take = Some(104.0);
+    d.sell_reason = "StopLoss AutoActivated on price drop: BID = 100.2 ASK: 100.3 (strategy".into();
+    let p = ExitParams {
+        sell_price_pct: 4.0,
+        stop_loss_pct: -2.4,
+        fast_stop_loss: true,
+        second_stop: Some(ladder::StopStep {
+            after_s: 10.0,
+            switch_pct: 1.0,
+            level_pct: 0.3,
+        }),
+        ..params()
+    };
+    let mut ticks = tape(&[
+        (1, 100.0),
+        (11_000, 102.0),
+        (13_000, 102.0),
+        (60_000, 100.2),
+        (61_000, 100.1),
+    ]);
+    for tick in &mut ticks {
+        tick.side = TickSide::Sell;
+    }
+    let archive = [(0, 104.0), (60_250, 99.5), (60_270, 100.1)];
+    let verdict = verify(&d, &ticks, &EntryParams::Fact, &p, None, Some(&archive));
+    assert_eq!(verdict.exit_kind, Some(ExitKind::Stop));
+    assert_eq!(verdict.line_points, Some((1, 1)), "{verdict:?}");
+    assert_eq!(verdict.exit, Some(true), "{verdict:?}");
+    // Record consumers cannot infer that the factual ladder took the model's step.
+    assert_eq!(
+        crate::db::tuner::ticks::verify::stop_jump_level(&d, &p, Some(&archive)),
+        None
+    );
+    assert_eq!(verdict.stop.quote, None);
+    assert_eq!(verdict.stop.ticker_age_ms, None);
+    let anchor = crate::db::tuner::ticks::record::StopAnchor::of(&d, &p, Some(&archive));
+    assert_eq!(anchor.fired, Some((d.close_ms, d.sell_price)));
+}
+
 /// Dropping the resting order at fire would lose a take touched before panic arrival.
 #[test]
 fn market_stop_fill_lets_the_resting_take_fill_during_latency() {
