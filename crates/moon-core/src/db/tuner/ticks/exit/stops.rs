@@ -749,6 +749,7 @@ impl Stops {
     /// tick closing by it the points they left, and the earliest past its level fires at its own
     /// moment, the stop first on the same moment (the core checks it first) — or the fast stop's
     /// tick closing by it, comparing the selected fast-price estimate.
+    /// A ladder cycle at that tick's own close applies before its price is compared.
     pub(super) fn on_print(&mut self, tick: &Tick, t_ms: i64, price: f64) -> Option<Exit> {
         // The fast stop's tick is judged against the level as it stood when the tick closed,
         // before the ladder's steps up to this print move it — and a tick that fires leaves the
@@ -758,7 +759,7 @@ impl Stops {
             Trigger::Off | Trigger::Book(_) => None,
         };
         let by_fast = fast_due.and_then(|closes_at| {
-            self.climb(closes_at);
+            self.climb(closes_at + 1);
             match &mut self.trigger {
                 Trigger::Fast(fast) => fast.before(t_ms),
                 Trigger::Off | Trigger::Book(_) => None,

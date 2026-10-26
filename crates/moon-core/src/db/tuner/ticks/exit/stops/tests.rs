@@ -8,6 +8,34 @@ use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape, tick};
 use crate::db::tuner::ticks::{EntryParams, verify};
 use crate::feed::types::Side as TickSide;
 
+/// Excluding a ladder cycle tied with a fast tick delays the newly raised stop by a full tick.
+#[test]
+fn fast_tick_reads_a_ladder_cycle_at_its_own_moment() {
+    let mut p = fast_params(FastPrice::LastOfTick);
+    p.model.ticker_period_ms = 1_000;
+    p.second_stop = Some(ladder::StopStep {
+        after_s: 0.0,
+        switch_pct: 1.0,
+        level_pct: 2.0,
+    });
+    let mut d = deal(false);
+    d.kind = "EMA".into();
+    d.core_name = "CORE_A".into();
+    d.coin = "XALPHA".into();
+    let mut stops = Stops::new(&d, &[], fill(), &p, Side { long: true });
+    let mut first = tick(750, 101.5);
+    first.side = TickSide::Sell;
+    assert!(stops.on_print(&first, 750, 101.5).is_none());
+    let next = tick(2_000, 101.5);
+    let fire = stops.on_print(&next, 2_000, 101.5).expect("raised stop");
+    assert_eq!(fire.t_ms, 1_000);
+    assert_eq!(stops.level(), Some(102.0));
+    // Finishing the same tape at its actual last print must read the same ladder cycle.
+    let mut exhausted = Stops::new(&d, &[], fill(), &p, Side { long: true });
+    assert!(exhausted.on_print(&first, 750, 101.5).is_none());
+    assert_eq!(exhausted.after_tape(750).map(|exit| exit.t_ms), Some(1_000));
+}
+
 /// Using the initial stop to split the archive would judge a raised stop's panic sell as line moves.
 #[test]
 fn raised_stop_with_a_truncated_reason_excludes_the_panic_line() {
