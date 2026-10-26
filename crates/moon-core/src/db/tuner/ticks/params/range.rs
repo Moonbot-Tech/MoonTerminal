@@ -103,11 +103,16 @@ impl Population {
     ) -> Self {
         let mut by_kind: HashMap<String, HashMap<&'static str, Vec<f64>>> = HashMap::new();
         for strategy in strategies {
+            let slots = super::formula_slot_values(&strategy.values);
             let values =
                 crate::db::tuner::ticks::search::strategy_values(&strategy.values, defaults);
             for field in number_fields() {
                 let lower = field.key.to_ascii_lowercase();
-                let Some(value) = strategy.values.get(&lower).and_then(|s| parse_num(s)) else {
+                let Some(value) = slots
+                    .get(field.key)
+                    .copied()
+                    .or_else(|| strategy.values.get(&lower).and_then(|s| parse_num(s)))
+                else {
                     continue;
                 };
                 if defaults.get(&lower).is_some_and(|d| same(*d, value))
@@ -140,6 +145,32 @@ impl Population {
         }
         self.by_kind.values().flat_map(of).collect()
     }
+}
+
+/// Automatic threshold candidates stay near the selection's current values and preserve sign.
+/// Small thresholds also try a tenth on either side; zero can move in both directions.
+pub fn custom_ema_slot_grid(current: &[f64]) -> Arc<[f64]> {
+    let mut points = Vec::new();
+    for &value in current
+        .iter()
+        .filter(|value| value.is_finite() && value.abs() < 888.0)
+    {
+        points.extend(
+            [0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5].map(|factor| snap(value * factor, MAX_DECIMALS)),
+        );
+        if value.abs() < 1.0 {
+            points.extend(
+                [value - 0.1, value + 0.1]
+                    .map(|point| snap(point, MAX_DECIMALS))
+                    .into_iter()
+                    .filter(|point| value == 0.0 || point.signum() == value.signum()),
+            );
+        }
+    }
+    points.retain(|value| value.abs() < 888.0);
+    points.sort_by(f64::total_cmp);
+    points.dedup();
+    points.into()
 }
 
 /// The number knobs of the axis, each once.
@@ -294,6 +325,31 @@ pub struct Resolved {
     pub points: Arc<[f64]>,
     /// Why the typed range was set aside for the automatic one.
     pub error: Option<RangeError>,
+}
+
+/// Resolve a named field, centering virtual EMA candidates on the selected formulas.
+/// Explicit ranges retain the ordinary range rules; invalid ranges fall back to slot candidates.
+pub fn resolve_field(
+    key: &str,
+    span: Option<&FieldSpan>,
+    typed: &TickRange,
+    integer: bool,
+    steps: u32,
+) -> Resolved {
+    let mut resolved = resolve(span, typed, integer, steps);
+    if super::formula_slot(key).is_some() && (typed.is_auto() || resolved.error.is_some()) {
+        resolved.points = custom_ema_slot_grid(span.map_or(&[], |span| &span.selected));
+        resolved.shown = resolved
+            .points
+            .first()
+            .zip(resolved.points.last())
+            .map(|(&from, &to)| Shown {
+                from,
+                to,
+                step: 0.0,
+            });
+    }
+    resolved
 }
 
 /// One field's grid: the typed slots over the automatic ones.

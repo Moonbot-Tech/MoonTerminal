@@ -9,6 +9,43 @@ use crate::analytics::tuner::ticks::state::{RowAddress, TapeStatus};
 use moon_core::db::tuner::ticks::Deal;
 use moon_core::market::trade_replay::TickStatus;
 
+/// Reading virtual keys from storage would leave thresholds blank and hide mixed values.
+#[test]
+fn custom_ema_now_values_project_each_formula() {
+    use std::{collections::HashMap, sync::Arc};
+    let own = HashMap::from([
+        (
+            (1, 11),
+            Arc::new(HashMap::from([(
+                "SellByCustomEMA".into(),
+                "EMA(5s,1s)>0.2".into(),
+            )])),
+        ),
+        (
+            (2, 11),
+            Arc::new(HashMap::from([(
+                "SellByCustomEMA".into(),
+                "EMA(5s,1s)>0.3".into(),
+            )])),
+        ),
+    ]);
+    let keys = vec!["SellByCustomEMA#1".into()];
+    let (one, _) = super::now_values(&[(1, Some(11))], &keys, &own);
+    assert!(
+        matches!(one.get(&keys[0]), Some(crate::analytics::tuner::ticks::state::NowValue::Same(value)) if value == "0.2")
+    );
+    let (both, selected) = super::now_values(&[(1, Some(11)), (2, Some(11))], &keys, &own);
+    assert!(matches!(
+        both.get(&keys[0]),
+        Some(crate::analytics::tuner::ticks::state::NowValue::Differs)
+    ));
+    assert!(
+        selected
+            .iter()
+            .all(|(_, values)| !values.contains_key(&keys[0]))
+    );
+}
+
 /// Shared load/fetch reach must keep a recent unlisted row out of the terminal refusal state.
 #[test]
 fn unlisted_load_reach_is_core_aware() {

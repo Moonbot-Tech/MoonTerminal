@@ -15,6 +15,8 @@
 //! `PriceDownAllowedDrop` floor computed to 0.196445, the core's order stood at 0.1964, and
 //! the tape's high was exactly 0.1964 — the unrounded line was never reached.
 
+use super::super::custom_ema::{EmaHistoryPath, cached_series};
+use super::custom_ema_exit::{CustomEmaClock, first_check_ms, sell_delay_ms};
 use super::pump_move::PumpMove;
 use super::sell_order::{PriceDown, SellLevel, armed_at, take_model_for};
 use super::stops::{StopTrigger, Stops, stop_side};
@@ -63,6 +65,12 @@ pub struct LineWalk {
     pub stop_trigger: Option<StopTrigger>,
     /// The trigger's fire moment, before the panic sell's optional order latency.
     pub stop_fired_ms: Option<i64>,
+    /// Formula trigger moment, separate from its market fill; absent if the take filled first.
+    pub custom_ema_fired_ms: Option<i64>,
+    /// The first formula check lacked the required warm-up tape.
+    pub custom_ema_short: bool,
+    /// Source that warmed the first evaluable formula check.
+    pub custom_ema_path: Option<EmaHistoryPath>,
     /// The first print once the take was live, when it was already through the untouched take:
     /// the take fills at the market there, not at its level. What the verdict prices the take at,
     /// while no move had landed by the moment it judges ([`Self::moved_at`]).
@@ -307,6 +315,7 @@ impl Line {
             .map(|p| p.price)
     }
 
+    /// Close without trigger metadata; `finish` attaches the winning market rule's clock.
     fn close(self, exit: Exit) -> LineWalk {
         LineWalk {
             // The first live print alone; the verdict weighs it against `moved_at`.
@@ -318,6 +327,9 @@ impl Line {
             stop_trigger: None,
             stop_fired_ms: None,
             past_floor: false,
+            custom_ema_fired_ms: None,
+            custom_ema_short: false,
+            custom_ema_path: None,
         }
     }
 }
@@ -337,11 +349,12 @@ pub fn walk(deal: &Deal, ticks: &[Tick], fill: Fill, take: f64, params: &ExitPar
 /// [`walk`] with the sell HELD — no print fills it — until `hold_until_ms`: the rules keep
 /// moving the line, so its level at that moment is known whatever print the model would have
 /// sold on before it. The stop is not held: it is a market order and fires as it does. The
-/// verdict on a fact reads the line this way, at the close.
+/// verdict on a fact reads the line this way, at the close. Custom-EMA triggers are not held.
 /// Initial placement uses [`take_latency_ms`]; subsequent moves use the model's latency.
 ///
 /// Args:
 ///     hold_until_ms: `None` walks as [`walk`] does.
+/// EMA history starts at the first check's warm-up while retaining the full variant tail.
 pub fn walk_held(
     deal: &Deal,
     ticks: &[Tick],
@@ -349,6 +362,57 @@ pub fn walk_held(
     take: f64,
     params: &ExitParams,
     hold_until_ms: Option<i64>,
+) -> LineWalk {
+    // Core logs place the sale in the condition's second, so the delay is read as time after
+    // purchase before checks start: https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
+    let check_start_ms = fill
+        .t_ms
+        .saturating_add(sell_delay_ms(params.custom_ema_delay_s));
+    let series = params.custom_ema.as_ref().map(|formula| {
+        let second = |tick: &Tick| (tick.time_ms / 1000.0).floor() as i64;
+        let first = first_check_ms(check_start_ms);
+        let warm_from_s = first
+            .div_euclid(1000)
+            .saturating_sub(1)
+            .saturating_sub(i64::from(formula.warm_up_s()));
+        cached_series(
+            ticks,
+            ticks.first().map_or(0, second).max(warm_from_s),
+            ticks.last().map_or(0, second),
+        )
+    });
+    let mut clock = params
+        .custom_ema
+        .as_ref()
+        .zip(series.as_deref())
+        .map(|(formula, series)| {
+            CustomEmaClock::new(
+                formula,
+                check_start_ms,
+                deal.bars.as_deref().unwrap_or_default(),
+                series,
+            )
+        });
+    let mut walked = walk_with_clock(deal, ticks, fill, take, params, hold_until_ms, &mut clock);
+    if let Some(clock) = clock {
+        walked.custom_ema_short = clock.short_history;
+        walked.custom_ema_path = clock.history_path;
+        if walked.exit.kind == ExitKind::CustomEma {
+            walked.custom_ema_fired_ms = clock.fired_ms;
+        }
+    }
+    walked
+}
+
+/// Merge formula checks with the existing sell-line and stop clocks.
+fn walk_with_clock(
+    deal: &Deal,
+    ticks: &[Tick],
+    fill: Fill,
+    take: f64,
+    params: &ExitParams,
+    hold_until_ms: Option<i64>,
+    clock: &mut Option<CustomEmaClock<'_>>,
 ) -> LineWalk {
     let side = Side {
         long: deal.is_long(),
@@ -383,15 +447,60 @@ pub fn walk_held(
         }
         last_t = t_ms;
         let seen = &ticks[..=index];
+        // Never evaluate through a known hole, even when the next print lies beyond it.
+        let ema_until = hole
+            .filter(|gap| t_ms > gap.from_ms.max(fill.t_ms))
+            .map_or(t_ms, |gap| gap.from_ms.max(fill.t_ms));
+        if let Some(clock) = clock.as_mut() {
+            clock.next_fire(ema_until, seen);
+        }
+        let ema_at = clock.as_ref().and_then(|clock| clock.fired_ms);
         // The fact's own stop fired between the last print and this one: ahead of anything
         // this print does, and after everything the prints before it did.
         if let Some(exit) = stops.fired_by(t_ms) {
-            return finish(line, exit, &stops);
+            if ema_at.is_none_or(|at| exit.t_ms <= at) {
+                return finish(line, exit, &stops);
+            }
         }
         // The first print past a hole is not the market's next print: the rules ran through
         // hours nobody holds. Everything due before the hole ran on the prints before it; what
         // the hole itself did is judged against the fact (`cross_hole`), never sold on here.
         if let Some(gap) = hole.filter(|gap| t_ms > gap.from_ms.max(fill.t_ms)) {
+            if ema_at.is_none()
+                && clock
+                    .as_ref()
+                    .is_some_and(|clock| clock.armed_by(gap.to_ms))
+            {
+                return finish(
+                    line,
+                    Exit {
+                        t_ms: gap.from_ms.max(fill.t_ms),
+                        price: f64::NAN,
+                        kind: ExitKind::InGap,
+                    },
+                    &stops,
+                );
+            }
+            // A formula already fired before the hole: its market-fill path judges the gap.
+            if let Some(at) = ema_at {
+                return finish_stop(
+                    line,
+                    Exit {
+                        t_ms: at,
+                        price,
+                        kind: ExitKind::CustomEma,
+                    },
+                    &stops,
+                    ticks,
+                    post_fill,
+                    index,
+                    StopFillContext {
+                        deal,
+                        params,
+                        hold_until_ms,
+                    },
+                );
+            }
             hole = None;
             let from_ms = gap.from_ms.max(fill.t_ms);
             let rules = Rules {
@@ -431,7 +540,17 @@ pub fn walk_held(
         rules.step_through(t_ms, seen, &mut line);
         line.land(t_ms);
         // The stops come before the print-driven rule below moves anything.
-        if let Some(exit) = stops.on_print(tick, t_ms, price) {
+        let stop_exit = stops.on_print(tick, t_ms, price);
+        let fire = match (stop_exit, ema_at) {
+            (Some(stop), Some(at)) if stop.t_ms <= at => Some(stop),
+            (_, Some(at)) => Some(Exit {
+                t_ms: at,
+                price,
+                kind: ExitKind::CustomEma,
+            }),
+            (stop, None) => stop,
+        };
+        if let Some(exit) = fire {
             return finish_stop(
                 line,
                 exit,
@@ -613,7 +732,7 @@ fn cross_hole(
     if reached { in_gap } else { None }
 }
 
-/// Close the line on `exit`, with the stop's level as it then stood and the rule that fired it.
+/// Close on `exit`, retaining the stop level and only the winning market rule's trigger clock.
 fn finish(line: Line, exit: Exit, stops: &Stops) -> LineWalk {
     let mut walked = line.close(exit);
     walked.stop_level = stops.level();
@@ -621,6 +740,7 @@ fn finish(line: Line, exit: Exit, stops: &Stops) -> LineWalk {
         .fired_trigger()
         .filter(|_| exit.kind == ExitKind::Stop);
     walked.stop_fired_ms = (exit.kind == ExitKind::Stop).then_some(exit.t_ms);
+    walked.custom_ema_fired_ms = (exit.kind == ExitKind::CustomEma).then_some(exit.t_ms);
     walked
 }
 
@@ -631,7 +751,7 @@ struct StopFillContext<'a> {
     hold_until_ms: Option<i64>,
 }
 
-/// Resolve a modelled panic sell separately so the trigger diagnostics retain its fire time.
+/// Resolve a stop or custom-EMA market sell while retaining its kind and original fire time.
 /// Without an arrival print, carry the last consumed post-fill stop-side price, else fire price.
 /// Only prints at or past `post_fill` can price the replacement.
 fn finish_stop(
@@ -651,7 +771,7 @@ fn finish_stop(
     let model = &params.model;
     let index = index.max(post_fill);
     if model.stop_fill == StopFill::MarketAfterLatency
-        && stops.fired_trigger() != Some(StopTrigger::Fact)
+        && (fire.kind == ExitKind::CustomEma || stops.fired_trigger() != Some(StopTrigger::Fact))
     {
         let arrival = fire.t_ms.saturating_add(model.latency_whole_ms());
         let side = Side {
@@ -731,6 +851,7 @@ fn finish_stop(
             walked.stop_trigger = None;
             walked.stop_fired_ms = None;
             walked.past_floor = false;
+            walked.custom_ema_fired_ms = None;
         }
     } else if walked.stop_trigger == Some(StopTrigger::Immediate) {
         // No print after the fill shows where the immediate stop's order filled.

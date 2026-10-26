@@ -8,6 +8,160 @@ use super::{
 };
 use crate::analytics::tuner::shared::{SaveAuthority, SaveDialog, SaveTarget};
 
+/// Classic's shared strategy id must keep each core's unedited formula digits on save and copy.
+#[test]
+fn classic_custom_ema_save_and_copy_keep_each_cores_formula() {
+    let targets = vec![SaveTarget {
+        sid: 101,
+        core: None,
+        name: "UNIT_01".into(),
+    }];
+    let live = HashMap::from([(101, vec![11, 22])]);
+    let sources = HashMap::from([
+        (
+            11,
+            vec![
+                (
+                    "SellByCustomEMA".into(),
+                    "EMA(5s,1s)>0.2 AND EMA(15s,1s)<-0.5".into(),
+                ),
+                ("StopLoss".into(), "2".into()),
+            ],
+        ),
+        (
+            22,
+            vec![
+                (
+                    "SellByCustomEMA".into(),
+                    "EMA(5s,1s)>0.3 AND EMA(15s,1s)<-0.8".into(),
+                ),
+                ("StopLoss".into(), "3".into()),
+            ],
+        ),
+    ]);
+    let edits = vec![("SellByCustomEMA#1".into(), "0.4".into())];
+    let expected = moon_core::db::tuner::ticks::params::formula_identity(
+        &sources[&11].iter().cloned().collect(),
+    )
+    .unwrap();
+    let cores = resolve_complete_target_cores(&targets, &live).unwrap();
+    for (core, expected_formula, stop) in [
+        (11, "EMA(5s,1s)>0.4 AND EMA(15s,1s)<-0.5", "2"),
+        (22, "EMA(5s,1s)>0.4 AND EMA(15s,1s)<-0.8", "3"),
+    ] {
+        assert!(cores[0].contains(&core));
+        let own = sources[&core].iter().cloned().collect();
+        assert!(super::target_slots_valid(&own, &edits, Some(&expected)));
+        assert_eq!(edits[0].0, "SellByCustomEMA#1");
+        assert_eq!(
+            super::target_changes(&own, &edits, Some(&expected)).unwrap(),
+            vec![("SellByCustomEMA".into(), expected_formula.into())]
+        );
+        let copied: HashMap<_, _> =
+            super::copy_target_fields(&sources[&core], &edits, Some(&expected))
+                .unwrap()
+                .into_iter()
+                .collect();
+        assert_eq!(copied["SellByCustomEMA"], expected_formula);
+        assert_eq!(copied["StopLoss"], stop);
+        assert!(!copied.contains_key("SellByCustomEMA#1"));
+    }
+    let stale = vec![("SellByCustomEMA".into(), "EMA(5s,1s)>888".into())];
+    assert!(!super::target_slots_valid(
+        &stale.iter().cloned().collect(),
+        &edits,
+        Some(&expected)
+    ));
+    assert!(super::copy_target_fields(&stale, &edits, Some(&expected)).is_none());
+}
+
+/// Folding a shared draft before choosing its target would overwrite other targets' thresholds.
+#[test]
+fn changes_of_folds_custom_ema_slots_into_each_targets_formula() {
+    let draft = HashMap::from([("SellByCustomEMA#1".into(), "0.4".into())]);
+    let edits = crate::analytics::tuner::ticks::state::changes_of(&draft);
+    assert_eq!(edits, vec![("SellByCustomEMA#1".into(), "0.4".into())]);
+    for (source, expected) in [
+        (
+            "EMA(5s,1s)>0.2 AND EMA(15s,1s)<-0.5",
+            "EMA(5s,1s)>0.4 AND EMA(15s,1s)<-0.5",
+        ),
+        (
+            "EMA(5s,1s)>0.3 AND EMA(15s,1s)<-0.8",
+            "EMA(5s,1s)>0.4 AND EMA(15s,1s)<-0.8",
+        ),
+    ] {
+        let own = HashMap::from([("SellByCustomEMA".into(), source.into())]);
+        let identity = moon_core::db::tuner::ticks::params::formula_identity(&own);
+        let payload = super::target_changes(&own, &edits, identity.as_ref()).expect("valid target");
+        assert_eq!(payload, vec![("SellByCustomEMA".into(), expected.into())]);
+    }
+    assert_eq!(
+        draft.get("SellByCustomEMA#1").map(String::as_str),
+        Some("0.4")
+    );
+    assert!(super::target_changes(&HashMap::new(), &edits, None).is_none());
+}
+
+/// Slot existence alone must not authorize a draft on changed windows, comparisons or sentinels.
+#[test]
+fn custom_ema_save_and_copy_refuse_changed_formula_identity() {
+    let source = HashMap::from([("SellByCustomEMA".into(), "EMA(5s,1s) > 0.2".into())]);
+    let expected = moon_core::db::tuner::ticks::params::formula_identity(&source).unwrap();
+    let edits = vec![("SellByCustomEMA#1".into(), "0.4".into())];
+    let mut draft = crate::analytics::tuner::ticks::state::TicksState::default();
+    draft.capture_formula_identity(Some(expected.clone()));
+    draft.set_variant("SellByCustomEMA#1", "0.4".into());
+    let targets = vec![SaveTarget {
+        sid: 101,
+        core: None,
+        name: "UNIT_01".into(),
+    }];
+    let cores =
+        resolve_complete_target_cores(&targets, &HashMap::from([(101, vec![11, 22])])).unwrap();
+    for changed in ["EMA(60s,1s) < 0.2", "EMA(60s,1s) > 0.2", "EMA(5s,1s) < 0.2"] {
+        let sources = HashMap::from([
+            (11, source.clone()),
+            (
+                22,
+                HashMap::from([("SellByCustomEMA".into(), changed.into())]),
+            ),
+        ]);
+        draft.capture_formula_identity(moon_core::db::tuner::ticks::params::formula_identity(
+            &sources[&22],
+        ));
+        let producer = super::SaveProducer::FormulaSelection(draft.formula_identity.clone());
+        assert_eq!(producer.formula_identity(), Some(&expected));
+        let saved: Option<Vec<_>> = cores[0]
+            .iter()
+            .map(|core| super::target_changes(&sources[core], &edits, producer.formula_identity()))
+            .collect();
+        let copied: Option<Vec<_>> = cores[0]
+            .iter()
+            .map(|core| {
+                let fields: Vec<_> = sources[core]
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                super::copy_target_fields(&fields, &edits, producer.formula_identity())
+            })
+            .collect();
+        assert!(saved.is_none(), "stale save accepted: {changed}");
+        assert!(copied.is_none(), "stale copy accepted: {changed}");
+    }
+    let original = HashMap::from([(
+        "SellByCustomEMA".into(),
+        "EMA(5s,1s)>0.2 AND EMA(15s,1s)>888".into(),
+    )]);
+    let identity = moon_core::db::tuner::ticks::params::formula_identity(&original).unwrap();
+    let changed_mask = HashMap::from([(
+        "SellByCustomEMA".into(),
+        "EMA(5s,1s)>0.2 AND EMA(15s,1s)>0.3".into(),
+    )]);
+    assert!(super::target_changes(&changed_mask, &edits, Some(&identity)).is_none());
+    assert!(super::target_changes(&source, &edits, None).is_none());
+}
+
 /// Restoring shared-only rendering hides edits on a mixed save while confirmation sends them.
 #[test]
 fn seam_mixed_save_preview_lists_every_targets_exact_rows() {

@@ -1,6 +1,7 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.param.custom_ema_threshold: "EMA formül eşiği %{k}"
 analytics.ticks.chip.accepted_short_tail: "kullanılabilir: kısa kuyruk"
 analytics.ticks.chip.accepted_short_tail_tip: "Kapanışa kadar eksiksiz işlem verisi olan kullanılabilir işlemler. Kuyruk kısa ve etkin kaynaklar onu uzatamıyor."
 analytics.ticks.why.accepted_short_tail: "kısa kuyruk (kullanılabilir)"
@@ -65,6 +66,7 @@ analytics.ticks.pick.acc_none_checked: "hiçbir çıkış kontrol edilemedi: %{w
 analytics.ticks.pick.why_rule: "modelde olmayan bir satış kuralı"
 analytics.ticks.pick.why_take: "kâr al seviyesi bilinmiyor"
 analytics.ticks.pick.why_gap: "akışta boşluk"
+analytics.ticks.pick.why_custom_ema: "özel EMA formülü denetlenemedi"
 analytics.ticks.pick.why_other: "başka bir kuralla kapandı"
 analytics.ticks.pick.why_sale: "stop satışı tabanın ötesinde"
 analytics.ticks.pick.why_pending: "henüz kontrol edilmedi"
@@ -579,6 +581,7 @@ analytics.coins.tag_line: "%{coin} %{profit} · %{n} işl."
 analytics.write_failed_title: "Yazma geçmedi"
 analytics.write_failed: "Hiçbir şey yazılmadı — düzenleme panelde duruyor, yeniden deneyin. %{err}"
 analytics.write_failed_stale: "seçili stratejilerin hiçbiri artık çekirdeğinde yok (atlanan: %{n})"
+analytics.write_failed_formula_stale: "Değişiklikler gönderilmedi: bir hedefin mevcut EMA formülü artık düzenlenen eşik alanını içermiyor. Stratejileri yenileyip tekrar deneyin."
 analytics.write_partial: "Bazı çekirdekler yazmayı kabul etmedi: %{err}"
 # Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /
 # TimedOut), not merely that the terminal managed to send it.
@@ -798,6 +801,14 @@ analytics.ticks.why.other_rule: "başka kuralla kapandı"
 analytics.ticks.why.other_rule.why: "Çekirdek o andaki model çizgisinden farklı kuralla kapandı. Farklı kuralların fiyatları karşılaştırılamaz."
 analytics.ticks.why.sale_unknown: "stop satışı tabanın ötesinde"
 analytics.ticks.why.sale_unknown.why: "Modelin stop satışı panik satışın AllowedDrop tabanının ötesinde fiyatlandı ya da alımdan sonra nerede gerçekleştiğini gösteren işlem yok. Çekirdeğin panik satışının nerede gerçekleştiği emir defterine bağlı; çıkış değerlendirilmedi."
+analytics.ticks.why.custom_ema_not_fired: "çekirdek EMA formülüyle sattı, modelin formülü tetiklenmedi"
+analytics.ticks.why.custom_ema_not_fired.why: "Çekirdek SellByCustomEMA koşulu gerçekleşince sattı; modelin tekrarında başka bir kural işlemi kapatmadan önce koşul gerçekleşmedi."
+analytics.ticks.why.custom_ema_unsupported: "formülde modelin hesaplayamadığı bir fonksiyon var"
+analytics.ticks.why.custom_ema_unsupported.why: "Stratejinin SellByCustomEMA formülü modelin tekrarlamadığı bir fonksiyon (Avg, MAvg, BTC, Arb) kullanıyor; bu nedenle çıkış değerlendirilmiyor."
+analytics.ticks.why.custom_ema_unparsed: "formül anlaşılamadı"
+analytics.ticks.why.custom_ema_unparsed.why: "SellByCustomEMA formülü ayrıştırılamadığı için çıkışı değerlendirilmiyor."
+analytics.ticks.why.custom_ema_short: "formül için işlem öncesi kayıt yetersiz"
+analytics.ticks.why.custom_ema_short.why: "En uzun EMA penceresi denetimden önce optimizasyon aracının tuttuğundan daha fazla kayıt gerektiriyor veya formül etkinken kayıtta boşluk var."
 analytics.ticks.why.no_verdict: "model henüz çalışmadı"
 analytics.ticks.why.no_verdict.why: "Bant kapsanıyor, ancak model değerlendirmesi henüz yok. Pozisyon örnekleme dahil değil."
 analytics.ticks.why.short_tail: "kuyruk %{trail} < %{min}"

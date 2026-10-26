@@ -23,6 +23,82 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::BufRead;
 
+/// Compare EMA reproduction on exactly the frozen holdout, using the reproduction summary.
+fn ema_holdout(
+    rows: &[&Loaded],
+    defaults: &HashMap<String, f64>,
+    values: &[(String, String)],
+    own_profit: f64,
+    suggestion_profit: f64,
+) {
+    use crate::db::tuner::ticks::{ExitModel, params, record, verify};
+    let mut summaries = [
+        super::super::EmaFilterCheck::default(),
+        super::super::EmaFilterCheck::default(),
+    ];
+    let mut printed = HashSet::new();
+    for row in rows {
+        let before = params::formula_slot_values(&row.values);
+        let mut laid = row.values.clone();
+        laid.extend(params::fold_formula_edits(&row.values, values));
+        let after = params::formula_slot_values(&laid);
+        if !before.is_empty() {
+            let source = params::formula_source(&laid).unwrap_or("");
+            let original = params::formula_source(&row.values).unwrap_or("");
+            if printed.insert((original.to_owned(), source.to_owned())) {
+                let mut slots: Vec<_> = before.iter().collect();
+                slots.sort_by_key(|(key, _)| *key);
+                for (key, old) in slots {
+                    if let Some(new) = after.get(key) {
+                        eprintln!("EMA holdout slot {key}: {old} -> {new}");
+                    }
+                }
+                eprintln!("EMA holdout formula: {}", source.escape_default());
+            }
+        }
+        for (summary, values) in summaries.iter_mut().zip([&row.values, &laid]) {
+            let sv = params::StrategyValues { values, defaults };
+            let model = ModelSettings::default();
+            let entry = params::entry_params_for(&row.deal.kind, &sv, model);
+            let exit = params::exit_params(&sv, model);
+            let verdict = verify::verify(
+                &row.deal,
+                &row.ticks,
+                &entry,
+                &exit,
+                row.entry_line.as_deref(),
+                row.exit_points.as_deref(),
+            );
+            let fact_exit = crate::db::tuner::ticks::ExitParams {
+                take_from_archive: true,
+                ..exit.clone()
+            };
+            let fill = verify::fact_sell_start(&row.deal, &exit, row.exit_points.as_deref());
+            let held = ExitModel::new(&fact_exit).walk_held(
+                &record::unanchored(&row.deal),
+                &row.ticks,
+                fill,
+                row.deal.close_ms,
+            );
+            summary.add(
+                &row.deal,
+                &verdict,
+                held.custom_ema_path,
+                exit.custom_ema.as_deref(),
+            );
+        }
+    }
+    for (label, summary) in ["own", "suggestion"].into_iter().zip(&summaries) {
+        eprintln!("EMA HOLDOUT {label}");
+        summary.print();
+    }
+    eprintln!(
+        "EMA HOLDOUT hit-share: {} -> {}; profit: {own_profit} -> {suggestion_profit}",
+        summaries[0].total.share(),
+        summaries[1].total.share()
+    );
+}
+
 /// Pick the largest fit group per requested kind, then one other factual-entry kind.
 /// Ties use lower strategy id and then lower core uid; explicit picks preserve NEW's choices.
 pub(super) fn pick(loaded: &[Loaded]) -> Vec<(u64, i64)> {
@@ -319,6 +395,24 @@ pub(super) fn run_pick(
             let (holdout_tally, holdout_lines) = replay(&holdout, defaults, kind, &found.values);
             result["train"] = tally_line(&train_tally);
             result["holdout"] = tally_line(&holdout_tally);
+            if train
+                .iter()
+                .any(|d| !crate::db::tuner::ticks::params::formula_slot_values(&d.own).is_empty())
+            {
+                let rows: Vec<_> = group
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !cohorts[*i])
+                    .map(|(_, row)| *row)
+                    .collect();
+                ema_holdout(
+                    &rows,
+                    defaults,
+                    &found.values,
+                    base.profit,
+                    holdout_tally.profit,
+                );
+            }
             for line in train_lines.into_iter().chain(holdout_lines) {
                 if let Some(target) = deal_lines
                     .iter_mut()

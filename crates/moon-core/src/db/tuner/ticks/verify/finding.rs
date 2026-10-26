@@ -76,6 +76,8 @@ pub enum ExitMiss {
     /// The core's exit was a stop; the model, holding a stop of its own, never fired it — its line
     /// sold first, or its stop never saw the price the core's did.
     StopNotFired,
+    /// The core sold by its custom-EMA formula; the model's formula never turned true first.
+    CustomEmaNotFired,
     /// No level of the model stood at the close: the walk ran out of tape still holding.
     NoLevel,
     /// The model closed by the same rule and landed elsewhere; which parts of it disagreed.
@@ -90,9 +92,9 @@ pub struct MissParts {
     /// outside the price tolerance; `Verdict::exit_dev_pct` holds the deviation when it could be
     /// formed.
     pub level: bool,
-    /// The stop fired at a different moment than the core's: the model's firing minus the
-    /// core's activation, milliseconds (positive — the model fired later). `None` when the
-    /// moment agreed, and for every non-stop exit, whose moment is the core's close.
+    /// The stop's or the custom-EMA formula's firing minus the core's moment, milliseconds
+    /// (positive — the model fired later). `None` when the moment agreed, and for exits
+    /// without a firing clock.
     pub late_ms: Option<i64>,
     /// The first archived move of the core's sell line the model did not re-place, as an index
     /// into the moves (0 — the take as placed). `None` when every move was re-placed or the
@@ -103,6 +105,12 @@ pub struct MissParts {
 /// Why an exit was not judged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unjudged {
+    /// The custom formula uses a term the evaluator cannot replay.
+    CustomEmaUnsupported,
+    /// The custom formula could not be parsed.
+    CustomEmaUnparsed,
+    /// The held tape cannot warm the custom formula's first check.
+    CustomEmaShortHistory,
     /// The strategy ran a sell rule the model does not have.
     Rule(UnmodelledRule),
     /// The rule followed the price through a hole in the tape.

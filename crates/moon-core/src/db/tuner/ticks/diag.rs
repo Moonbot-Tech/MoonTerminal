@@ -229,6 +229,8 @@ pub(super) struct ExitTally {
     pub hits: usize,
     pub misses: usize,
     pub stop_not_fired: usize,
+    /// The fact sold by its EMA formula but the replay did not fire it first.
+    pub custom_ema_not_fired: usize,
     pub no_level: usize,
     /// Signed deviation of every level miss that had one, per cent of the fact: a modifier sum or
     /// a take shift the model reads wrong leans one way, a price grid's rounding both.
@@ -384,6 +386,7 @@ fn add(seg: &mut Segment, verdict: &Verdict, outside: &[UnmodelledField]) {
             exit.misses += 1;
             match miss {
                 ExitMiss::StopNotFired => exit.stop_not_fired += 1,
+                ExitMiss::CustomEmaNotFired => exit.custom_ema_not_fired += 1,
                 ExitMiss::NoLevel => exit.no_level += 1,
                 ExitMiss::Off(parts) => {
                     if parts.level {
@@ -440,5 +443,8 @@ fn unjudged_label(why: Unjudged) -> &'static str {
         Unjudged::TakeUnknown => "take unknown",
         Unjudged::OtherRule => "closed by another rule",
         Unjudged::SaleUnknown => "stop sale past its floor",
+        Unjudged::CustomEmaUnsupported => "custom EMA term not modelled",
+        Unjudged::CustomEmaUnparsed => "custom EMA formula unparsed",
+        Unjudged::CustomEmaShortHistory => "custom EMA history too short",
     }
 }

@@ -1,6 +1,7 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.param.custom_ema_threshold: "Ngưỡng công thức EMA %{k}"
 analytics.ticks.chip.accepted_short_tail: "dùng được: đuôi ngắn"
 analytics.ticks.chip.accepted_short_tail_tip: "Giao dịch dùng được có dữ liệu đầy đủ đến lúc đóng. Đuôi ngắn và không có nguồn đang bật nào có thể bổ sung."
 analytics.ticks.why.accepted_short_tail: "đuôi ngắn (dùng được)"
@@ -65,6 +66,7 @@ analytics.ticks.pick.acc_none_checked: "không thoát lệnh nào kiểm tra đ�
 analytics.ticks.pick.why_rule: "quy tắc bán mà mô hình không có"
 analytics.ticks.pick.why_take: "không rõ mức chốt lời"
 analytics.ticks.pick.why_gap: "lỗ hổng trong dữ liệu"
+analytics.ticks.pick.why_custom_ema: "không thể kiểm tra công thức EMA tùy chỉnh"
 analytics.ticks.pick.why_other: "đóng bởi quy tắc khác"
 analytics.ticks.pick.why_sale: "lệnh bán cắt lỗ vượt mức sàn"
 analytics.ticks.pick.why_pending: "chưa kiểm tra"
@@ -579,6 +581,7 @@ analytics.coins.tag_line: "%{coin} %{profit} · %{n} lệnh"
 analytics.write_failed_title: "Ghi không thành công"
 analytics.write_failed: "Không ghi gì — sửa vẫn nằm trong bảng, hãy thử lại. %{err}"
 analytics.write_failed_stale: "không chiến lược đã chọn nào còn trên core của nó (bỏ qua: %{n})"
+analytics.write_failed_formula_stale: "Chưa gửi thay đổi: công thức EMA hiện tại của một đích không còn chứa ngưỡng đang chỉnh sửa. Hãy làm mới các chiến lược rồi thử lại."
 analytics.write_partial: "Một số core không nhận lần ghi: %{err}"
 # Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /
 # TimedOut), not merely that the terminal managed to send it.
@@ -798,6 +801,14 @@ analytics.ticks.why.other_rule: "đóng theo quy tắc khác"
 analytics.ticks.why.other_rule.why: "Lõi đóng theo quy tắc khác với đường mô hình lúc đó. Không thể so sánh giá của hai quy tắc khác nhau."
 analytics.ticks.why.sale_unknown: "bán cắt lỗ vượt mức sàn"
 analytics.ticks.why.sale_unknown.why: "Lệnh bán cắt lỗ của mô hình vượt mức sàn AllowedDrop của lệnh bán hoảng loạn, hoặc không có giao dịch nào sau khi mua cho thấy nơi khớp. Nơi lệnh bán hoảng loạn của lõi khớp phụ thuộc sổ lệnh nên chưa đánh giá đầu ra."
+analytics.ticks.why.custom_ema_not_fired: "lõi đã bán theo công thức EMA nhưng công thức của mô hình không kích hoạt"
+analytics.ticks.why.custom_ema_not_fired.why: "Lõi đã bán khi điều kiện SellByCustomEMA trở thành đúng; khi mô hình phát lại, điều kiện không đúng trước khi quy tắc khác đóng giao dịch."
+analytics.ticks.why.custom_ema_unsupported: "công thức có hàm mà mô hình không tính được"
+analytics.ticks.why.custom_ema_unsupported.why: "SellByCustomEMA của chiến lược dùng hàm (Avg, MAvg, BTC, Arb) mà mô hình không phát lại, nên lần thoát này không được đánh giá."
+analytics.ticks.why.custom_ema_unparsed: "không hiểu được công thức"
+analytics.ticks.why.custom_ema_unparsed.why: "Không thể phân tích công thức SellByCustomEMA nên lần thoát theo công thức không được đánh giá."
+analytics.ticks.why.custom_ema_short: "không đủ lịch sử khớp lệnh trước giao dịch cho công thức"
+analytics.ticks.why.custom_ema_short.why: "Cửa sổ EMA dài nhất cần nhiều lịch sử trước lúc kiểm tra hơn bộ tối ưu lưu giữ, hoặc lịch sử có khoảng trống khi công thức đang hoạt động."
 analytics.ticks.why.no_verdict: "mô hình chưa chạy"
 analytics.ticks.why.no_verdict.why: "Băng đã bao phủ nhưng chưa có đánh giá của mô hình. Lệnh chưa nằm trong mẫu."
 analytics.ticks.why.short_tail: "đuôi %{trail} < %{min}"

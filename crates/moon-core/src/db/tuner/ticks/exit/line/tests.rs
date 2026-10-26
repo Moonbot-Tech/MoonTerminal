@@ -6,6 +6,330 @@ use crate::db::tuner::ticks::exit::ExitModel;
 use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape};
 use crate::db::tuner::ticks::{EntryParams, ModelSettings, verify};
 
+/// A supported always-true formula with stops off isolates the replay clock from EMA calibration.
+fn ema_params(delay_s: f64, latency_ms: f64) -> ExitParams {
+    ExitParams {
+        use_stop_loss: false,
+        custom_ema: Some(std::sync::Arc::new(
+            crate::db::tuner::ticks::custom_ema::parse("EMA(2s,1s) > 888").unwrap(),
+        )),
+        custom_ema_delay_s: delay_s,
+        model: ModelSettings {
+            latency_ms,
+            ..ModelSettings::default()
+        },
+        ..params()
+    }
+}
+
+/// Include the whole held run-up; sell-side prints also price a long's market replacement.
+fn ema_tape(points: &[(i64, f64)]) -> Vec<Tick> {
+    let mut ticks = tape(&[(-10_000, 100.0), (-5_000, 100.0), (0, 100.0)]);
+    ticks.extend(tape(points));
+    for tick in &mut ticks {
+        tick.side = crate::feed::types::Side::Sell;
+    }
+    ticks
+}
+
+/// Checking inside SellEMADelay would sell a position before its formula is armed.
+#[test]
+fn custom_ema_not_checked_inside_delay() {
+    let early = ema_tape(&[(500, 100.0), (1_000, 100.0)]);
+    let w = walk(&deal(false), &early, fill(), 110.0, &ema_params(1.0, 0.0));
+    assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd);
+    assert_eq!(w.custom_ema_fired_ms, None);
+    let ticks = ema_tape(&[(1_250, 100.0), (2_500, 101.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &ema_params(1.0, 0.0));
+    assert_eq!(w.exit.kind, ExitKind::CustomEma);
+    assert_eq!(w.custom_ema_fired_ms, Some(2_000));
+    assert_eq!((w.exit.t_ms, w.exit.price), (2_500, 101.0));
+    // The jump after the 2000 boundary must not leak back into that check's second.
+    let mut p = ema_params(0.0, 0.0);
+    p.custom_ema = Some(std::sync::Arc::new(
+        crate::db::tuner::ticks::custom_ema::parse("EMA(2s,1s) > 0.1").unwrap(),
+    ));
+    let ticks = ema_tape(&[(1_250, 100.0), (2_500, 101.0), (3_000, 101.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(w.custom_ema_fired_ms, Some(3_000));
+}
+
+/// Tape before the formula's warm-up must not exhaust the dense-series cap.
+#[test]
+fn custom_ema_series_starts_at_warm_up_not_tape_start() {
+    let mut ticks = tape(&[(-4 * 86_400_000, 100.0)]);
+    ticks.extend(ema_tape(&[(1_250, 100.0), (2_500, 101.0)]));
+    let mut d = deal(false);
+    d.close_ms = 1_000;
+    let p = ema_params(1.0, 300.0);
+    for hold in [None, Some(2_000)] {
+        let w = walk_held(&d, &ticks, fill(), 110.0, &p, hold);
+        assert_eq!(w.exit.kind, ExitKind::CustomEma);
+        assert_eq!(w.custom_ema_fired_ms, Some(2_000));
+        assert_eq!(w.exit.t_ms, 2_500);
+        assert!(!w.custom_ema_short);
+    }
+}
+
+/// Adding SellEMADelay after a true check would place the sale a second delay too late.
+#[test]
+fn custom_ema_sells_at_trigger() {
+    let ticks = ema_tape(&[(1_000, 100.0), (2_000, 100.0), (3_000, 98.0), (5_000, 97.0)]);
+    let p = ema_params(2.0, 0.0);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(w.exit.kind, ExitKind::CustomEma);
+    assert_eq!(w.custom_ema_fired_ms, Some(3_000));
+    assert_eq!((w.exit.t_ms, w.exit.price), (3_000, 98.0));
+}
+
+/// Delaying formula checks must leave the resting take live before they start.
+#[test]
+fn take_before_custom_ema_checks_wins() {
+    let ticks = ema_tape(&[(1_000, 100.0), (1_500, 111.0), (3_000, 99.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &ema_params(2.0, 0.0));
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Take, 1_500));
+    assert_eq!(w.custom_ema_fired_ms, None);
+}
+
+/// Pricing at the trigger print would ignore transport latency and overstate the sale.
+#[test]
+fn custom_ema_sells_at_next_print_after_latency() {
+    let ticks = ema_tape(&[(1_000, 100.0), (1_100, 99.0), (1_500, 98.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &ema_params(0.0, 300.0));
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms, w.exit.price),
+        (ExitKind::CustomEma, 1_500, 98.0)
+    );
+    assert_eq!(w.stop_trigger, None);
+    assert_eq!(w.stop_fired_ms, None);
+}
+
+/// Equal-time triggers must keep the stop's established priority.
+#[test]
+fn stop_wins_same_second_over_custom_ema() {
+    let mut p = ema_params(0.0, 0.0);
+    p.use_stop_loss = true;
+    p.fast_stop_loss = true;
+    p.stop_loss_pct = -1.0;
+    p.model.series_tick_ms = 250;
+    let ticks = ema_tape(&[(750, 98.0), (1_000, 98.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(
+        (w.exit.kind, w.stop_fired_ms),
+        (ExitKind::Stop, Some(1_000))
+    );
+    assert_eq!(w.custom_ema_fired_ms, None);
+}
+
+/// Comparing call order instead of event time would incorrectly choose the 2000 EMA boundary.
+#[test]
+fn earlier_stop_between_prints_beats_later_custom_ema() {
+    let mut p = ema_params(2.0, 0.0);
+    p.use_stop_loss = true;
+    p.fast_stop_loss = true;
+    p.stop_loss_pct = -1.0;
+    p.model.series_tick_ms = 250;
+    let ticks = ema_tape(&[(1_100, 98.0), (2_500, 98.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(
+        (w.exit.kind, w.stop_fired_ms),
+        (ExitKind::Stop, Some(1_250))
+    );
+}
+
+/// The archived stop path must not eclipse an earlier formula boundary between prints.
+#[test]
+fn earlier_custom_ema_beats_later_stop() {
+    let mut d = deal(false);
+    let mut p = ema_params(0.0, 0.0);
+    p.use_stop_loss = true;
+    p.fast_stop_loss = true;
+    p.stop_loss_pct = -1.0;
+    d.sell_reason = "StopLoss Market Sell".into();
+    d.close_ms = 1_800;
+    let mut anchor = crate::db::tuner::ticks::record::StopAnchor::of(&d, &p, None);
+    anchor.fired = Some((1_800, 98.0));
+    d.stop_anchor = Some(anchor);
+    let ticks = ema_tape(&[(500, 100.0), (2_500, 98.0)]);
+    let w = walk(&d, &ticks, fill(), 110.0, &p);
+    assert_eq!(
+        (w.exit.kind, w.custom_ema_fired_ms),
+        (ExitKind::CustomEma, Some(1_000))
+    );
+}
+
+/// Forward-filling missing armed seconds would invent a known formula state through the hole.
+#[test]
+fn custom_ema_across_hole_is_in_gap() {
+    let mut d = deal(false);
+    d.gap = Some(TapeGap {
+        from_ms: 1_500,
+        to_ms: 10_000,
+        fact_line: None,
+        fact_stop: None,
+    });
+    let mut p = ema_params(1.0, 0.0);
+    p.custom_ema = Some(std::sync::Arc::new(
+        crate::db::tuner::ticks::custom_ema::parse("EMA(2s,1s) > 100").unwrap(),
+    ));
+    let ticks = ema_tape(&[(1_000, 100.0), (1_500, 100.0), (10_000, 100.0)]);
+    let w = walk(&d, &ticks, fill(), 110.0, &p);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::InGap, 1_500));
+    assert!(!w.custom_ema_short);
+    // Even a hole between two adjacent check boundaries invalidates an already armed formula.
+    p.custom_ema_delay_s = 0.0;
+    d.gap = Some(TapeGap {
+        from_ms: 1_200,
+        to_ms: 1_500,
+        fact_line: None,
+        fact_stop: None,
+    });
+    let narrow = ema_tape(&[
+        (1_000, 100.0),
+        (1_200, 100.0),
+        (1_500, 100.0),
+        (2_000, 100.0),
+    ]);
+    let w = walk_held(&d, &narrow, fill(), 110.0, &p, Some(60_000));
+    assert_eq!(w.exit.kind, ExitKind::InGap);
+    d.gap = Some(TapeGap {
+        from_ms: 1_500,
+        to_ms: 10_000,
+        fact_line: None,
+        fact_stop: None,
+    });
+    // An already fired market sell cannot price its arrival through the hole either.
+    let w = walk(&d, &ticks, fill(), 110.0, &ema_params(1.0, 1_000.0));
+    assert_eq!(w.exit.kind, ExitKind::InGap);
+    assert_eq!(w.custom_ema_fired_ms, None);
+}
+
+/// Waiting for later warm-up after a short first check would silently invent an armed exit.
+#[test]
+fn custom_ema_short_history_disables_and_flags() {
+    let ticks = tape(&[(0, 100.0), (1_000, 100.0), (10_000, 100.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &ema_params(1.0, 0.0));
+    assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd);
+    assert!(w.custom_ema_short);
+    assert_eq!(w.custom_ema_fired_ms, None);
+    // The whole held margin, rather than a 30-second pad, warms a longer formula.
+    let mut p = ema_params(0.0, 0.0);
+    p.custom_ema = Some(std::sync::Arc::new(
+        crate::db::tuner::ticks::custom_ema::parse("EMA(30s,1s) > 888").unwrap(),
+    ));
+    let ticks = (-120..=1)
+        .map(|second| (second * 1_000, 100.0))
+        .collect::<Vec<_>>();
+    let w = walk(&deal(false), &tape(&ticks), fill(), 110.0, &p);
+    assert_eq!(w.exit.kind, ExitKind::CustomEma);
+    assert!(!w.custom_ema_short);
+    let ticks = tape(&[(-120_000, 100.0), (0, 100.0), (1_000, 100.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert!(
+        w.custom_ema_short,
+        "a warm-up hole cannot be forward-filled"
+    );
+}
+
+/// Arrival must not replace the trigger clock, and a take filled during latency cancels it.
+#[test]
+fn custom_ema_fired_ms_kept_apart_from_fill() {
+    let p = ema_params(0.0, 300.0);
+    let ticks = ema_tape(&[(1_000, 100.0), (1_500, 98.0)]);
+    let w = walk_held(&deal(false), &ticks, fill(), 110.0, &p, Some(60_000));
+    assert_eq!(w.custom_ema_fired_ms, Some(1_000));
+    assert_eq!(w.exit.t_ms, 1_500);
+    let ticks = ema_tape(&[(1_000, 100.0), (1_100, 111.0), (1_500, 98.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(w.exit.kind, ExitKind::Take);
+    assert_eq!(w.custom_ema_fired_ms, None);
+}
+
+/// Minute and five-minute closes cover three hours before a ten-minute held tape.
+fn ema_warm_fixture() -> (Deal, Vec<Tick>, ExitParams) {
+    let mut d = deal(false);
+    let mut bars = Vec::new();
+    let mut from_ms = -10_800_000;
+    while from_ms < -600_000 {
+        let to_ms = from_ms
+            + if from_ms < -3_600_000 {
+                300_000
+            } else {
+                60_000
+            };
+        bars.push(crate::db::tuner::ticks::deltas::Bar {
+            from_ms,
+            to_ms,
+            open: 90.0,
+            high: 90.0,
+            low: 90.0,
+            close: 90.0,
+        });
+        from_ms = to_ms;
+    }
+    // Neither an overlapping bar nor a future bar may override held prints.
+    bars.push(crate::db::tuner::ticks::deltas::Bar {
+        from_ms: -600_000,
+        to_ms: 0,
+        open: 1.0,
+        high: 1.0,
+        low: 1.0,
+        close: 1.0,
+    });
+    d.bars = Some(bars.into());
+    let points = (-600..=2).map(|s| (s * 1000, 100.0)).collect::<Vec<_>>();
+    let mut ticks = tape(&points);
+    for tick in &mut ticks {
+        tick.side = crate::feed::types::Side::Sell;
+    }
+    let mut p = ema_params(0.0, 0.0);
+    p.custom_ema = Some(std::sync::Arc::new(
+        crate::db::tuner::ticks::custom_ema::parse("EMA(1h,1) > 0.1").unwrap(),
+    ));
+    (d, ticks, p)
+}
+
+/// Losing the bar prefix would disable an otherwise evaluable long-window formula.
+#[test]
+fn custom_ema_warms_from_bars_when_tape_short() {
+    let (d, ticks, p) = ema_warm_fixture();
+    let w = walk(&d, &ticks, fill(), 110.0, &p);
+    assert_eq!(w.exit.kind, ExitKind::CustomEma);
+    assert_eq!(w.custom_ema_fired_ms, Some(1000));
+    assert_eq!(w.custom_ema_path, Some(EmaHistoryPath::KlineWarmed));
+    assert!(!w.custom_ema_short);
+    // No bars in the requested historical hour must remain explicit missing history.
+    let mut sparse = d.clone();
+    let mut bars = sparse.bars.as_deref().unwrap().to_vec();
+    bars.retain(|bar| bar.to_ms <= -3_600_000 || bar.from_ms >= 0);
+    sparse.bars = Some(bars.into());
+    assert!(walk(&sparse, &ticks, fill(), 110.0, &p).custom_ema_short);
+}
+
+/// Ten minutes of tape alone cannot manufacture the historical hour's candle price.
+#[test]
+fn custom_ema_short_without_bars() {
+    let (mut d, ticks, p) = ema_warm_fixture();
+    d.bars = None;
+    let w = walk(&d, &ticks, fill(), 110.0, &p);
+    assert!(w.custom_ema_short);
+    assert_eq!(w.custom_ema_fired_ms, None);
+    assert_eq!(w.custom_ema_path, None);
+}
+
+/// Kline quote volume is not comparable to tape volume and cannot satisfy a Vol window.
+#[test]
+fn vol_never_warms_from_bars() {
+    let (d, ticks, mut p) = ema_warm_fixture();
+    p.custom_ema = Some(std::sync::Arc::new(
+        crate::db::tuner::ticks::custom_ema::parse("Vol(1h,1m) < 888").unwrap(),
+    ));
+    let w = walk(&d, &ticks, fill(), 110.0, &p);
+    assert!(w.custom_ema_short);
+    assert_eq!(w.custom_ema_fired_ms, None);
+    assert_eq!(w.custom_ema_path, None);
+}
+
 /// Moving a sell limit into the prevailing market must not underprice its market fill.
 #[test]
 fn replacement_marketable_at_arrival_fills_at_the_print() {

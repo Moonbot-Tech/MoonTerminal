@@ -430,6 +430,7 @@ pub(super) fn auto_grids(
         .map(|f| f.key)
         .collect();
     let mut keys: Vec<String> = numbers.iter().map(|k| k.to_string()).collect();
+    keys.push("SellByCustomEMA".into());
     for key in &numbers {
         keys.extend(deps.conditions_of(key).map(str::to_string));
     }
@@ -442,16 +443,25 @@ pub(super) fn auto_grids(
     );
     let kinds = [kind.to_string()];
     let mut grids = Grids::default();
+    let slots = crate::db::tuner::ticks::params::formula_slot_values(own);
     for key in numbers {
         let default = defaults.get(&key.to_ascii_lowercase()).copied();
-        let selected: Vec<f64> = own
+        let selected: Vec<f64> = slots
             .get(key)
-            .and_then(|v| v.trim().replace(',', ".").parse::<f64>().ok())
+            .copied()
+            .or_else(|| {
+                own.get(key)
+                    .and_then(|v| v.trim().replace(',', ".").parse::<f64>().ok())
+            })
             .or(default)
             .into_iter()
             .collect();
         let span = field_span(&population.values(&kinds, key), default, &selected);
-        let points = resolve(span.as_ref(), &TickRange::default(), false, steps).points;
+        let points = if crate::db::tuner::ticks::params::formula_slot(key).is_some() {
+            crate::db::tuner::ticks::params::range::custom_ema_slot_grid(&selected)
+        } else {
+            resolve(span.as_ref(), &TickRange::default(), false, steps).points
+        };
         if !points.is_empty() {
             grids.insert(key, points);
         }

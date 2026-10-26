@@ -1,6 +1,93 @@
 use super::*;
 use moon_core::feed::{SchemaField, SchemaFieldUi};
 
+/// Showing slots for unrelated formula skeletons would advertise knobs the search refuses.
+#[test]
+fn grid_custom_ema_slots_require_compatible_formulas() {
+    let deal = Deal {
+        report_uid: 1,
+        core_uid: 11,
+        core_name: "CORE_A".into(),
+        strategy_id: 101,
+        kind: "Spread".into(),
+        coin: "XALPHA".into(),
+        buy_ms: 100_000,
+        close_ms: 110_000,
+        buy_price: 1.0,
+        sell_price: 1.01,
+        spent: 100.0,
+        is_short: false,
+        sell_reason: String::new(),
+        fact_pnl: 0.0,
+        sizing: None,
+        pnl_pct: false,
+        profit: None,
+        deltas: Default::default(),
+        tick: None,
+        pre_spike_ask: None,
+        archived_take: None,
+        fact_modifier: None,
+        hook_depth_pct: None,
+        drops_detect: None,
+        hook_stated_take_pct: None,
+        strike_detect: None,
+        step_lag_ms: 0.0,
+        round_trip_ms: None,
+        stop_anchor: None,
+        delta_track: None,
+        bars: None,
+        own_entry: None,
+        buy_set_ms: None,
+        corridor: None,
+        entry_placed: None,
+        gap: None,
+    };
+    let first = HashMap::from([(
+        "SellByCustomEMA".into(),
+        "EMA(5s,1s)>0.2 AND EMA(15s,1s)<888".into(),
+    )]);
+    for (source, expected) in [
+        (
+            "EMA(5s,1s)>0.4 AND EMA(15s,1s)<888",
+            vec!["SellByCustomEMA#1"],
+        ),
+        ("EMA(6s,1s)>0.4 AND EMA(15s,1s)<888", vec![]),
+        ("EMA(5s,1s)>888 AND EMA(15s,1s)<0.4", vec![]),
+    ] {
+        let other = HashMap::from([("SellByCustomEMA".into(), source.into())]);
+        let sections = grid_for(
+            &CoreStore::default(),
+            std::slice::from_ref(&deal),
+            [((101, Some(11)), &first), ((202, Some(22)), &other)],
+            &FieldDeps::bundled(),
+        );
+        let offered: Vec<_> = sections
+            .iter()
+            .flat_map(GridSection::knobs)
+            .filter(|field| moon_core::db::tuner::ticks::params::formula_slot(field.key).is_some())
+            .map(|field| field.key)
+            .collect();
+        assert_eq!(offered, expected);
+    }
+}
+
+/// Virtual fields absent from the core schema must retain editable Sell-order rows.
+#[test]
+fn custom_ema_slot_rows_are_knob_rows() {
+    let knobs = scope_knobs(&["Spread".into()]);
+    let out = layout(&[], &knobs, &HashSet::new());
+    let sell = find(&out, ParamSection::SellOrder);
+    for k in 1..=8 {
+        let key = format!("SellByCustomEMA#{k}");
+        let row = sell
+            .rows
+            .iter()
+            .find(|row| row.key == key)
+            .expect("slot row");
+        assert!(matches!(row.role, RowRole::Knob(_)));
+    }
+}
+
 /// Foreign, fixed and unticked fields must not inflate the section's changed count.
 #[test]
 fn changed_counts_only_the_sections_live_ticked_knobs() {

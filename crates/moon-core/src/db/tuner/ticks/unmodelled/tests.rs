@@ -101,19 +101,23 @@ fn a_field_under_a_switch_that_is_off_is_not_in_effect() {
     );
 }
 
-/// The custom-EMA sell is a warning when its formula is set; blank is off, and `AutoSell=NO`
-/// greys it out.
+/// Unsupported custom functions still warn; blank and disabled formulas remain silent.
 #[test]
-fn a_custom_ema_formula_is_watched() {
+fn custom_ema_warning_only_when_formula_not_covered() {
     let deps = FieldDeps::bundled();
     let on = values(&[
         ("AutoSell", "YES"),
-        ("SellByCustomEMA", "EMA(15s,1s) > 0.5"),
+        ("SellByCustomEMA", "Avg(15s,1s) > 0.5"),
     ]);
     let found = unmodelled_fields(&on, &HashMap::new(), &deps);
     assert_eq!(keys(&found), ["SellByCustomEMA"]);
     assert_eq!(found[0].section, ParamSection::SellOrder);
     assert_eq!(found[0].rule, None, "a warning, not a rule");
+    let broken = values(&[("AutoSell", "YES"), ("SellByCustomEMA", "garbage")]);
+    assert_eq!(
+        keys(&unmodelled_fields(&broken, &HashMap::new(), &deps)),
+        ["SellByCustomEMA"]
+    );
     for blank in ["", "   "] {
         let v = values(&[("AutoSell", "YES"), ("SellByCustomEMA", blank)]);
         assert!(
@@ -121,8 +125,21 @@ fn a_custom_ema_formula_is_watched() {
             "{blank:?}"
         );
     }
-    let off = values(&[("AutoSell", "NO"), ("SellByCustomEMA", "EMA(15s,1s) > 0.5")]);
+    let off = values(&[("AutoSell", "NO"), ("SellByCustomEMA", "Max(15s,1s) > 0.5")]);
     assert!(!keys(&unmodelled_fields(&off, &HashMap::new(), &deps)).contains(&"SellByCustomEMA"));
+}
+
+/// Reintroducing the unconditional warning would mark replayable strategies as uncovered.
+#[test]
+fn covered_formula_raises_no_warning() {
+    let v = values(&[
+        ("AutoSell", "YES"),
+        (
+            "SellByCustomEMA",
+            "EMA(15s,1s) > 0.5 OR Vol(30s,5s) > 2 OR MAX(5m,1s)>1 OR MIN(1h,2m)<0",
+        ),
+    ]);
+    assert!(unmodelled_fields(&v, &HashMap::new(), &FieldDeps::bundled()).is_empty());
 }
 
 /// `UseScalpingMode` acts only under a 1 % `SellPrice`; SellShot only with a distance.
@@ -197,10 +214,13 @@ fn the_condition_fields_are_fetched() {
     }
 }
 
-/// A watched field is outside the model: none of them is a field the models act on.
+/// Fully uncovered fields stay outside the model; custom formulas warn only when not covered.
 #[test]
-fn no_watched_field_is_read_by_the_model() {
-    for w in WATCHED {
+fn fully_unmodelled_watched_fields_are_not_read_by_the_model() {
+    for w in WATCHED
+        .iter()
+        .filter(|w| w.also != Also::CustomEmaNotCovered)
+    {
         assert!(
             !crate::db::tuner::ticks::params::is_model_only(w.key)
                 && !crate::db::tuner::ticks::TICK_PARAMS

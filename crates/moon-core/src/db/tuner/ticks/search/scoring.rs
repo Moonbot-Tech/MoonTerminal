@@ -49,10 +49,10 @@ pub(super) fn results(
                     exit_ms: None,
                 };
             }
-            let outcome = match fills {
+            let outcome = super::super::custom_ema::with_series_tape(&d.ticks, || match fills {
                 Some(fills) => simulate_from(&d.deal, &d.ticks, fills[i], exit),
                 None => simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref()),
-            };
+            });
             let result = outcome
                 .profit_metric(&d.deal)
                 .map(|value| (value, d.deal.spent));

@@ -510,6 +510,9 @@ impl Drop for TicksState {
 /// State of the "Entry/Exit" mode.
 pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) data: LoadState<TicksData>,
+    /// Formula structure used to project the slot draft; retained while that draft has slots.
+    pub(in crate::analytics::tuner) formula_identity:
+        Option<moon_core::db::tuner::ticks::params::FormulaIdentity>,
     /// The period `data`'s rows were read under, `(from, to)` in UTC seconds as the query holds
     /// them — set with the rows they describe, so a report names the rows' period and not one a
     /// pending reload will read.
@@ -708,6 +711,20 @@ pub(in crate::analytics::tuner) struct SettledMiss {
 }
 
 impl TicksState {
+    /// Keep a slot draft bound to its original comparison structure across current-value reloads.
+    pub(in crate::analytics::tuner) fn capture_formula_identity(
+        &mut self,
+        identity: Option<moon_core::db::tuner::ticks::params::FormulaIdentity>,
+    ) {
+        if !self
+            .variant
+            .keys()
+            .any(|key| moon_core::db::tuner::ticks::params::formula_slot(key).is_some())
+        {
+            self.formula_identity = identity;
+        }
+    }
+
     /// Record the key the published rows were settled under, with the instant the clock alone
     /// may move one of them.
     pub(in crate::analytics::tuner) fn settle_key(
@@ -730,6 +747,7 @@ impl Default for TicksState {
     fn default() -> Self {
         Self {
             data: LoadState::default(),
+            formula_identity: None,
             loaded_period: None,
             variant: HashMap::new(),
             var_stats: None,

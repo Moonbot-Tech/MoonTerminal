@@ -5,6 +5,35 @@ use std::collections::HashSet;
 use super::*;
 use crate::db::tuner::ticks::TICK_PARAMS;
 
+/// UI and search must reject incompatible skeletons and comparison-position sentinel masks.
+#[test]
+fn public_slot_gate_requires_matching_skeleton_and_sentinel_positions() {
+    let first = own(&[("SellByCustomEMA", "EMA(5s,1s)>0.2 AND EMA(15s,1s)<888")]);
+    for (formula, expected) in [
+        (
+            "EMA(5s,1s)>0.4 AND EMA(15s,1s)<888",
+            vec!["SellByCustomEMA#1"],
+        ),
+        ("EMA(6s,1s)>0.4 AND EMA(15s,1s)<888", vec![]),
+        ("EMA(5s,1s)>888 AND EMA(15s,1s)<0.4", vec![]),
+    ] {
+        let other = own(&[("SellByCustomEMA", formula)]);
+        let fields = TICK_PARAMS
+            .iter()
+            .filter(|field| super::super::super::params::formula_slot(field.key).is_some())
+            .collect();
+        let offered = crate::db::tuner::ticks::search::compatible_slots(
+            fields,
+            &[&first, &other],
+            &HashMap::new(),
+        );
+        assert_eq!(
+            offered.iter().map(|field| field.key).collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
 /// A typed range must never offer an undefined non-positive MoonStrike sell level.
 #[test]
 fn barrier_r6_strike_range_offers_only_positive_levels() {

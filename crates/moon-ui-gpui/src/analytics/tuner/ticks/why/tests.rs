@@ -159,6 +159,7 @@ fn exits() -> Vec<ExitFinding> {
     vec![
         ExitFinding::Hit,
         ExitFinding::Miss(ExitMiss::StopNotFired),
+        ExitFinding::Miss(ExitMiss::CustomEmaNotFired),
         ExitFinding::Miss(ExitMiss::NoLevel),
         ExitFinding::Miss(ExitMiss::Off(MissParts {
             level: true,
@@ -171,6 +172,9 @@ fn exits() -> Vec<ExitFinding> {
         ExitFinding::Unjudged(Unjudged::InGap),
         ExitFinding::Unjudged(Unjudged::TakeUnknown),
         ExitFinding::Unjudged(Unjudged::OtherRule),
+        ExitFinding::Unjudged(Unjudged::CustomEmaUnsupported),
+        ExitFinding::Unjudged(Unjudged::CustomEmaUnparsed),
+        ExitFinding::Unjudged(Unjudged::CustomEmaShortHistory),
     ]
 }
 

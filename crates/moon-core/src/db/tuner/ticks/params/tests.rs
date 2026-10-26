@@ -217,3 +217,70 @@ fn exit_params_reads_the_panic_sell_bounds() {
     assert_eq!(p.use_market_order, base.use_market_order);
     assert_eq!(p.stop_loss_spread_pct, base.stop_loss_spread_pct);
 }
+
+/// Hash iteration must never select an alias over the canonical source during projection/save.
+#[test]
+fn formula_lookup_prefers_canonical_key() {
+    for _ in 0..64 {
+        let own = HashMap::from([
+            ("sellbycustomema".into(), "EMA(5,1)<9".into()),
+            ("SellByCustomEMA".into(), "EMA(2,1)>1".into()),
+        ]);
+        assert_eq!(formula_slot_values(&own)["SellByCustomEMA#1"], 1.0);
+        assert_eq!(
+            fold_formula_edits(&own, &[("SellByCustomEMA#1".into(), "2".into())]),
+            [("SellByCustomEMA".into(), "EMA(2,1)>2".into())]
+        );
+        let edits = vec![
+            ("SellByCustomEMA".into(), "EMA(3,1)>3".into()),
+            ("sellbycustomema".into(), "EMA(5,1)<9".into()),
+            ("SellByCustomEMA#1".into(), "4".into()),
+        ];
+        assert_eq!(
+            fold_formula_edits(&own, &edits),
+            [("SellByCustomEMA".into(), "EMA(3,1)>4".into())]
+        );
+        assert_eq!(
+            formula_slot_values(&HashMap::from([(
+                "sellbycustomema".into(),
+                "EMA(5,1)>6".into()
+            )]))["SellByCustomEMA#1"],
+            6.0
+        );
+    }
+}
+
+/// Losing model-only strings or accepting unsupported syntax would silently disable the exit.
+#[test]
+fn exit_params_reads_custom_ema_and_delay() {
+    use crate::db::tuner::ticks::custom_ema::Refusal;
+    let defaults = HashMap::new();
+    for (text, parsed, refusal) in [
+        ("EMA(2s,1s) > 0.5", true, None),
+        ("   ", false, None),
+        ("Avg(2s,1s) > 0.5", false, Some(Refusal::Unsupported)),
+        ("Max(2s,1s) > 0.5", false, Some(Refusal::Unparsed)),
+        ("garbage", false, Some(Refusal::Unparsed)),
+    ] {
+        let values = HashMap::from([
+            ("SellByCustomEMA".into(), text.into()),
+            ("SellEMADelay".into(), "1.25".into()),
+        ]);
+        let p = exit_params(
+            &StrategyValues {
+                values: &values,
+                defaults: &defaults,
+            },
+            ModelSettings::default(),
+        );
+        assert_eq!(p.custom_ema.is_some(), parsed);
+        assert_eq!(p.custom_ema_refusal, refusal);
+        assert_eq!(p.custom_ema_delay_s, 1.25);
+        if let Some(formula) = p.custom_ema {
+            assert_eq!(formula.terms[0].window_s, 2);
+        }
+    }
+    let keys = param_keys();
+    assert!(keys.iter().any(|key| key == "SellByCustomEMA"));
+    assert!(keys.iter().any(|key| key == "SellEMADelay"));
+}

@@ -72,6 +72,46 @@ pub(super) fn offered<'a>(p: &SearchParams<'a>) -> Vec<&'static TickParam> {
         .collect()
 }
 
+/// Gate virtual fields against every selected base, including comparison-position sentinels.
+pub fn compatible_slots(
+    fields: Vec<&'static TickParam>,
+    owns: &[&HashMap<String, String>],
+    held: &HashMap<String, String>,
+) -> Vec<&'static TickParam> {
+    let formulas: Option<Vec<_>> = owns
+        .iter()
+        .map(|own| {
+            let source = super::super::params::formula_source(held)
+                .or_else(|| super::super::params::formula_source(own))?;
+            super::super::custom_ema::parse(source)
+                .ok()
+                .filter(|formula| formula.unsupported().is_none())
+        })
+        .collect();
+    let shared = formulas
+        .as_ref()
+        .filter(|formulas| !formulas.is_empty())
+        .filter(|formulas| {
+            formulas.iter().all(|formula| {
+                formula.skeleton() == formulas[0].skeleton()
+                    && formula.sentinel_mask() == formulas[0].sentinel_mask()
+            })
+        });
+    fields
+        .into_iter()
+        .filter(|field| {
+            super::super::params::formula_slot(field.key).is_none_or(|slot| {
+                shared.is_some_and(|formulas| {
+                    formulas[0]
+                        .thresholds
+                        .get(slot)
+                        .is_some_and(|threshold| threshold.value.abs() < 888.0)
+                })
+            })
+        })
+        .collect()
+}
+
 /// Where each number field of the search starts on its grid, and the completion over those
 /// steps.
 ///
@@ -90,7 +130,14 @@ pub(super) fn dependents_of(
     owns: &[&HashMap<String, String>],
 ) -> (HashMap<&'static str, usize>, Dependents) {
     let parse = |text: &String| text.trim().replace(',', ".").parse::<f64>().ok();
-    let offered = offered(params);
+    let offered = compatible_slots(offered(params), owns, params.held);
+    let slots: Vec<_> = owns
+        .iter()
+        .map(|own| {
+            let values = super::super::params::formula_overlay(own, params.held);
+            super::super::params::formula_slot_values(&values)
+        })
+        .collect();
     let start: HashMap<&'static str, usize> = offered
         .iter()
         .filter_map(|f| {
@@ -104,7 +151,13 @@ pub(super) fn dependents_of(
                 Some(held) => vec![held],
                 None => owns
                     .iter()
-                    .filter_map(|own| own.get(f.key).and_then(parse).or(default))
+                    .zip(&slots)
+                    .filter_map(|(own, slots)| {
+                        own.get(f.key)
+                            .and_then(parse)
+                            .or_else(|| slots.get(f.key).copied())
+                            .or(default)
+                    })
                     .collect(),
             };
             values.sort_by(f64::total_cmp);

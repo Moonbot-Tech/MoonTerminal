@@ -17,6 +17,7 @@
 //!
 //! [`ExitKind::OpenAtWindowEnd`]: super::ExitKind::OpenAtWindowEnd
 
+pub mod custom_ema_exit;
 pub mod delta_mods;
 pub mod line;
 pub mod pump_move;
@@ -123,6 +124,13 @@ fn due_by(next: Option<i64>, t_ms: i64) -> Option<i64> {
 /// Every rule's fields are documented in its section's module.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExitParams {
+    /// Parsed, supported `SellByCustomEMA` formula; absent when off or refused.
+    pub custom_ema: Option<std::sync::Arc<super::custom_ema::Formula>>,
+    /// `SellEMADelay` in seconds after purchase before formula checks start.
+    /// https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
+    pub custom_ema_delay_s: f64,
+    /// Why a nonblank custom formula could not be replayed.
+    pub custom_ema_refusal: Option<super::custom_ema::Refusal>,
     /// `SellPrice` — take-profit distance from the fill, per cent.
     pub sell_price_pct: f64,
     /// `MShotSellAtLastPrice` — lift the take to the pre-spike price less the adjustment. Read
@@ -275,6 +283,9 @@ impl Default for ExitParams {
     /// the switch reads — a stop at the buy price.
     fn default() -> Self {
         Self {
+            custom_ema: None,
+            custom_ema_delay_s: 0.0,
+            custom_ema_refusal: None,
             sell_price_pct: 1.0,
             sell_at_last_price: false,
             sell_price_adjust_pct: 0.0,

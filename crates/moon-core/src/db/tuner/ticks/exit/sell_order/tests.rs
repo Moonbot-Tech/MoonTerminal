@@ -383,7 +383,7 @@ fn a_short_take_divides_off_the_fill() {
     let lifted = ExitParams {
         sell_at_last_price: true,
         sell_price_adjust_pct: 1.0,
-        ..p
+        ..p.clone()
     };
     let mut d = deal(true);
     d.pre_spike_ask = Some(97.0);

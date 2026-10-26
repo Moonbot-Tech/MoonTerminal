@@ -19,15 +19,94 @@ use super::super::{AnalyticsView, StrategyEditWatch};
 use super::shared::{InlineWrite, SaveAuthority, SaveDialog, SaveTarget};
 use crate::design;
 use crate::design::{moon, moon_alpha};
+use moon_core::db::tuner::ticks::params::{
+    FormulaIdentity, fold_formula_edits, formula_identity, formula_slot,
+};
 
 #[cfg(test)]
 mod tests;
+
+/// Fold a captured target's virtual edits against its own source, leaving the held draft intact.
+fn target_changes(
+    own: &HashMap<String, String>,
+    edits: &[(String, String)],
+    expected: Option<&FormulaIdentity>,
+) -> Option<Vec<(String, String)>> {
+    if !edits.iter().any(|(key, _)| formula_slot(key).is_some()) {
+        return Some(edits.to_vec());
+    }
+    if !target_slots_valid(own, edits, expected) {
+        return None;
+    }
+    Some(fold_formula_edits(own, edits))
+}
+
+/// Validate virtual edits without replacing them with one core's rewritten formula.
+fn target_slots_valid(
+    own: &HashMap<String, String>,
+    edits: &[(String, String)],
+    expected: Option<&FormulaIdentity>,
+) -> bool {
+    if !edits.iter().any(|(key, _)| formula_slot(key).is_some()) {
+        return true;
+    }
+    if expected.is_none() || formula_identity(own).as_ref() != expected {
+        return false;
+    }
+    let slots = moon_core::db::tuner::ticks::params::formula_slot_values(own);
+    edits
+        .iter()
+        .all(|(key, _)| formula_slot(key).is_none() || slots.contains_key(key))
+}
+
+/// Apply edits to one core's copy source, refusing stale slots before any copy is queued.
+fn copy_target_fields(
+    fields: &[(String, String)],
+    edits: &[(String, String)],
+    expected: Option<&FormulaIdentity>,
+) -> Option<Vec<(String, String)>> {
+    let own = fields.iter().cloned().collect();
+    let changes = target_changes(&own, edits, expected)?;
+    let mut fields = fields.to_vec();
+    for (key, value) in changes {
+        crate::strategies::tree::ops::set_field(&mut fields, &key, &value);
+    }
+    Some(fields)
+}
+
+/// Read virtual thresholds from the stored formula so slot rows retain their current values.
+fn current_preview_values(sid: i64, core: Option<u64>, keys: &[String]) -> HashMap<String, String> {
+    let mut read_keys = keys.to_vec();
+    if keys.iter().any(|key| formula_slot(key).is_some()) {
+        read_keys.push("SellByCustomEMA".into());
+    }
+    let mut values = moon_core::db::tuner::strategy_current_values(sid, core, &read_keys);
+    let slots = moon_core::db::tuner::ticks::params::formula_slot_values(&values);
+    values.extend(
+        slots
+            .into_iter()
+            .map(|(key, value)| (key, value.to_string())),
+    );
+    values
+}
 
 /// The source whose exact ordered targets authorize a pending confirmation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::analytics::tuner) enum SaveProducer {
     /// The strategies the user selected in the list.
     Selection,
+    /// Selection carrying the structure from which the editable slots were projected.
+    FormulaSelection(Option<FormulaIdentity>),
+}
+
+impl SaveProducer {
+    /// Expected comparison structure, frozen before preview or live target reads.
+    fn formula_identity(&self) -> Option<&FormulaIdentity> {
+        match self {
+            Self::Selection => None,
+            Self::FormulaSelection(identity) => identity.as_ref(),
+        }
+    }
 }
 
 /// Resolve the live targets a confirmation producer is allowed to write.
@@ -40,7 +119,7 @@ pub(in crate::analytics::tuner) enum SaveProducer {
 ///     The targets that producer may dispatch.
 fn producer_targets(producer: &SaveProducer, selection: Vec<SaveTarget>) -> Vec<SaveTarget> {
     match producer {
-        SaveProducer::Selection => selection,
+        SaveProducer::Selection | SaveProducer::FormulaSelection(_) => selection,
     }
 }
 
@@ -230,7 +309,12 @@ impl AnalyticsView {
             revision.read(cx).generation()
         });
         SaveAuthority {
-            producer,
+            producer: match producer {
+                SaveProducer::Selection => {
+                    SaveProducer::FormulaSelection(self.ticks.formula_identity.clone())
+                }
+                producer => producer,
+            },
             dialog_seq: self.tuner.dialog_seq,
             workspace_generation,
             workspace_cores,
@@ -303,9 +387,24 @@ impl AnalyticsView {
             return;
         };
         let authority = self.capture_save_authority(&targets, SaveProducer::Selection, cx);
+        if per_target
+            .as_ref()
+            .is_some_and(|all| all.len() != targets.len())
+        {
+            self.set_write_error(
+                t!("analytics.write_failed_stale", n = targets.len()).to_string(),
+                cx,
+            );
+            return;
+        }
+        let needs_formula = changes
+            .iter()
+            .chain(per_target.iter().flatten().flatten())
+            .any(|(key, _)| formula_slot(key).is_some());
         // A row that carries a NOTE never draws the "now" side, so reading it would be a
         // round trip whose result is discarded. The coins axis annotates every row.
-        let needs_olds = per_target.is_some()
+        let needs_olds = needs_formula
+            || per_target.is_some()
             || notes.len() < changes.len()
             || notes.iter().any(std::option::Option::is_none);
         if !needs_olds {
@@ -343,27 +442,68 @@ impl AnalyticsView {
                 })
                 .collect::<Vec<_>>()
         });
+        let formula_targets = needs_formula.then(|| {
+            targets
+                .iter()
+                .enumerate()
+                .map(|(i, target)| {
+                    (
+                        target.clone(),
+                        per_target.as_ref().map_or(&changes, |all| &all[i]).clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+        let expected_formula = authority.producer.formula_identity().cloned();
         self.spawn_db(
             true,
             cx,
             move || {
-                let olds = moon_core::db::tuner::strategy_current_values(sid, core, &keys);
+                if let Some(targets) = formula_targets {
+                    for (target, edits) in targets {
+                        let cores = moon_core::db::tuner::strategy_cores(target.sid);
+                        let cores = match target.core {
+                            Some(core) if cores.contains(&core) => vec![core],
+                            Some(_) => return None,
+                            None => cores,
+                        };
+                        if cores.is_empty()
+                            || cores.into_iter().any(|core| {
+                                let own = moon_core::db::tuner::strategy_current_values(
+                                    target.sid,
+                                    Some(core),
+                                    &["SellByCustomEMA".into()],
+                                );
+                                !target_slots_valid(&own, &edits, expected_formula.as_ref())
+                            })
+                        {
+                            return None;
+                        }
+                    }
+                }
+                let olds = current_preview_values(sid, core, &keys);
                 let individual_olds = individual
                     .unwrap_or_default()
                     .into_iter()
                     .map(|(sid, core, keys)| {
-                        let values =
-                            moon_core::db::tuner::strategy_current_values(sid, core, &keys);
+                        let values = current_preview_values(sid, core, &keys);
                         keys.iter().map(|key| values.get(key).cloned()).collect()
                     })
                     .collect();
-                (olds, individual_olds)
+                Some((olds, individual_olds))
             },
-            move |this, (olds_map, per_target_olds), cx| {
+            move |this, prepared, cx| {
                 if !this.save_authority_is_current(&req, &targets, cx) {
                     log::info!("analytics: the confirmation's scope changed, dialog dropped");
                     return;
                 }
+                let Some((olds_map, per_target_olds)) = prepared else {
+                    this.set_write_error(
+                        t!("analytics.write_failed_formula_stale").to_string(),
+                        cx,
+                    );
+                    return;
+                };
                 let olds = changes
                     .iter()
                     .map(|(k, _)| olds_map.get(k).cloned())
@@ -473,6 +613,7 @@ impl AnalyticsView {
             moon_core::feed::NewStrategySpec,
             String,
         )> = Vec::new();
+        let mut formula_stale = false;
         for (cid, cd) in b.session.store().cores() {
             if !self.workspace_core_visible(cid) {
                 continue;
@@ -490,10 +631,14 @@ impl AnalyticsView {
             let taken: std::collections::HashSet<String> =
                 cd.strategies.iter().map(|r| r.name.clone()).collect();
             let name = unique_name(&taken, &desired);
-            let mut fields = row.fields.clone();
-            for (k, v) in &dlg.changes {
-                set_field(&mut fields, k, v);
-            }
+            let Some(mut fields) = copy_target_fields(
+                &row.fields,
+                &dlg.changes,
+                dlg.authority.producer.formula_identity(),
+            ) else {
+                formula_stale = true;
+                break;
+            };
             set_field(&mut fields, STRATEGY_NAME_FIELD, &name);
             plans.push((
                 cid,
@@ -508,6 +653,10 @@ impl AnalyticsView {
                 }),
                 name,
             ));
+        }
+        if formula_stale {
+            self.set_write_error(t!("analytics.write_failed_formula_stale").to_string(), cx);
+            return;
         }
         if plans.is_empty() {
             let (sid, core) = (target.sid, target_core);
@@ -599,7 +748,13 @@ impl AnalyticsView {
         if targets.is_empty() {
             return;
         }
-        let n_fields = changes.len();
+        let n_fields = per_target.as_ref().map_or(changes.len(), |all| {
+            all.iter().map(Vec::len).max().unwrap_or(0)
+        });
+        let needs_formula = changes
+            .iter()
+            .chain(per_target.iter().flatten().flatten())
+            .any(|(key, _)| formula_slot(key).is_some());
         let mut sids: Vec<i64> = targets.iter().map(|t| t.sid).collect();
         sids.sort_unstable();
         sids.dedup();
@@ -613,6 +768,24 @@ impl AnalyticsView {
                         .collect()
                 })
                 .await;
+            let formula_sources = executor.spawn({
+                let targets = targets.clone();
+                let live = live.clone();
+                async move {
+                    let mut sources = HashMap::new();
+                    if !needs_formula {
+                        return sources;
+                    }
+                    for target in targets {
+                        for core in live.get(&target.sid).into_iter().flatten() {
+                            if target.core.is_none_or(|selected| selected == *core) {
+                                sources.insert((target.sid, *core), moon_core::db::tuner::strategy_current_values(target.sid, Some(*core), &["SellByCustomEMA".into()]));
+                            }
+                        }
+                    }
+                    sources
+                }
+            }).await;
             let _ = cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     let changes = Arc::new(changes);
@@ -670,10 +843,14 @@ impl AnalyticsView {
                             },
                         };
                         for c in cores {
+                            let Some(payload) = target_changes(formula_sources.get(&(t.sid, c)).unwrap_or(&HashMap::new()), &mine, authority.producer.formula_identity()) else {
+                                this.set_write_error(t!("analytics.write_failed_formula_stale").to_string(), cx);
+                                return false;
+                            };
                             by_core
                                 .entry(c)
                                 .or_default()
-                                .push((t.sid as u64, mine.clone()));
+                                .push((t.sid as u64, payload));
                         }
                     }
                     // Per-core resolved-note cursor, captured BEFORE the first send: installed

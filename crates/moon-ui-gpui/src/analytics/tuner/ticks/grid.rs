@@ -96,11 +96,17 @@ pub(super) fn field_name_el(
     odd: Option<ParamGroup>,
     p: MoonPalette,
 ) -> Stateful<Div> {
+    let label = field_label(key);
+    let selector = format!("an-ticks-name-{key}");
     div()
         .id(SharedString::from(format!("an-ticks-name-{key}")))
+        .debug_selector(move || selector.clone())
         .flex_1()
         .min_w_0()
-        .truncate()
+        .when(
+            moon_core::db::tuner::ticks::params::formula_slot(key).is_none(),
+            |el| el.truncate(),
+        )
         .cursor_pointer()
         .font_family(design::ui_font())
         .tooltip(crate::panels::common::text_tooltip(key.to_string()))
@@ -123,7 +129,15 @@ pub(super) fn field_name_el(
                 t!(locale_key)
             )))
         })
-        .child(key.to_string())
+        .child(label)
+}
+
+/// Name virtual thresholds in the UI while retaining ordinal identity in the draft.
+fn field_label(key: &str) -> String {
+    match moon_core::db::tuner::ticks::params::formula_slot(key) {
+        Some(slot) => t!("analytics.ticks.param.custom_ema_threshold", k = slot + 1).to_string(),
+        None => key.to_string(),
+    }
 }
 
 /// Build the real current-value cell without clipping values or localized status text.

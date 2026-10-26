@@ -212,6 +212,7 @@ pub fn verify(
     // by then, the model's own latency allowed for — and the rule is the take when no move
     // had reached the exchange, the moving line otherwise.
     let fact_stopped = is_stop_reason(&deal.sell_reason);
+    let fact_is_ema = super::custom_ema::is_custom_ema_reason(&deal.sell_reason);
     // The archive's own record of the sell: its moves, and the fill it filed as a point.
     let archive = exit_points
         .filter(|p| !p.is_empty())
@@ -230,6 +231,13 @@ pub fn verify(
             if walked.stop_fired_ms.unwrap_or(walked.exit.t_ms)
                 <= deal.close_ms + model.point_time_ms
                 || fact_stopped =>
+        {
+            walked.exit
+        }
+        ExitKind::CustomEma
+            if walked.custom_ema_fired_ms.unwrap_or(walked.exit.t_ms)
+                <= deal.close_ms + model.point_time_ms
+                || fact_is_ema =>
         {
             walked.exit
         }
@@ -320,6 +328,19 @@ pub fn verify(
         // A rule the model does not have was on: whatever the walk made of the trade is not
         // an answer about it (see `ExitParams::unmodelled`).
         unjudged(Unjudged::Rule(rule))
+    } else if fact_is_ema
+        && exit.custom_ema_refusal == Some(super::custom_ema::Refusal::Unsupported)
+    {
+        unjudged(Unjudged::CustomEmaUnsupported)
+    } else if fact_is_ema && exit.custom_ema_refusal == Some(super::custom_ema::Refusal::Unparsed) {
+        unjudged(Unjudged::CustomEmaUnparsed)
+    } else if fact_is_ema && walked.custom_ema_short {
+        unjudged(Unjudged::CustomEmaShortHistory)
+    } else if fact_is_ema
+        && exit.custom_ema.is_some()
+        && !matches!(closed.kind, ExitKind::CustomEma | ExitKind::InGap)
+    {
+        (ExitFinding::Miss(ExitMiss::CustomEmaNotFired), None, None)
     } else if closed.kind == ExitKind::InGap {
         // A rule of the trade follows the price through its tape's hole, or its stop is not
         // bounded by what the fact proves there: where the line or the stop stood at the close
@@ -334,6 +355,25 @@ pub fn verify(
         unjudged(Unjudged::SaleUnknown)
     } else if missed_stop {
         (ExitFinding::Miss(ExitMiss::StopNotFired), None, None)
+    } else if closed.kind == ExitKind::CustomEma && fact_is_ema && take_known {
+        // A formula sells at market; take placements and archived moves do not price it.
+        let dev = deviation_pct(closed.price, deal.sell_price);
+        let price_ok = dev.is_some_and(|d| d.abs() <= model.price_pct);
+        let sale = walked.custom_ema_fired_ms.unwrap_or(closed.t_ms);
+        let late = sale - filled_at;
+        // The core logs formula checks in whole seconds, unlike archived millisecond moves.
+        let tolerance_ms = model.point_time_ms.max(1_000);
+        let on_time = late.abs() <= tolerance_ms;
+        let finding = if price_ok && on_time {
+            ExitFinding::Hit
+        } else {
+            ExitFinding::Miss(ExitMiss::Off(MissParts {
+                level: !price_ok,
+                late_ms: (!on_time).then_some(late),
+                first_unmatched: None,
+            }))
+        };
+        (finding, dev, None)
     } else if !take_known {
         unjudged(Unjudged::TakeUnknown)
     } else if closed.kind == ExitKind::OpenAtWindowEnd {
@@ -932,6 +972,7 @@ fn exit_rule_matches(kind: ExitKind, sell_reason: &str) -> bool {
         ExitKind::Take => reason.eq_ignore_ascii_case(REASON_TAKE),
         ExitKind::Line => REASONS_LINE.iter().any(|r| starts(r)),
         ExitKind::Stop => is_stop_reason(reason),
+        ExitKind::CustomEma => super::custom_ema::is_custom_ema_reason(reason),
         ExitKind::OpenAtWindowEnd | ExitKind::InGap => false,
     }
 }

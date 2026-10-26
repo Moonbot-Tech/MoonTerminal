@@ -299,6 +299,14 @@ pub const TICK_PARAMS: &[TickParam] = &[
         not_kinds: &[],
     },
     exit_num("PriceDownTimer", ParamSection::SellOrder),
+    exit_num("SellByCustomEMA#1", ParamSection::SellOrder),
+    exit_num("SellByCustomEMA#2", ParamSection::SellOrder),
+    exit_num("SellByCustomEMA#3", ParamSection::SellOrder),
+    exit_num("SellByCustomEMA#4", ParamSection::SellOrder),
+    exit_num("SellByCustomEMA#5", ParamSection::SellOrder),
+    exit_num("SellByCustomEMA#6", ParamSection::SellOrder),
+    exit_num("SellByCustomEMA#7", ParamSection::SellOrder),
+    exit_num("SellByCustomEMA#8", ParamSection::SellOrder),
     exit_num("PriceDownPercent", ParamSection::SellOrder),
     exit_num("PriceDownDelay", ParamSection::SellOrder),
     exit_bool("PriceDownRelative", ParamSection::SellOrder),
@@ -433,6 +441,8 @@ pub fn params_for<'k>(
 /// since 2026-09-25, all but `MaxModifier` on a MoonShot, which the grid draws fixed there
 /// (see its [`TICK_PARAMS`] entry) — so it is listed here as well.
 const MODEL_ONLY_KEYS: &[&str] = &[
+    "SellByCustomEMA",
+    "SellEMADelay",
     "HookSellFixed",
     "MStrikeSellAdjust",
     "MStrikeBuyLevel",
@@ -539,6 +549,136 @@ pub fn param_keys() -> Vec<String> {
 pub struct StrategyValues<'a> {
     pub values: &'a HashMap<String, String>,
     pub defaults: &'a HashMap<String, f64>,
+}
+
+/// Resolve a virtual threshold key to its zero-based comparison position.
+pub fn formula_slot(key: &str) -> Option<usize> {
+    let (prefix, number) = key.split_once('#')?;
+    if !prefix.eq_ignore_ascii_case("SellByCustomEMA") {
+        return None;
+    }
+    number
+        .parse::<usize>()
+        .ok()
+        .filter(|slot| (1..=8).contains(slot))
+        .map(|slot| slot - 1)
+}
+
+/// Prefer the canonical formula key, then the lexically first case-insensitive alias.
+pub(super) fn formula_source(values: &HashMap<String, String>) -> Option<&str> {
+    values
+        .get("SellByCustomEMA")
+        .or_else(|| {
+            values
+                .iter()
+                .filter(|(key, _)| key.eq_ignore_ascii_case("SellByCustomEMA"))
+                .min_by(|(a, _), (b, _)| a.cmp(b))
+                .map(|(_, value)| value)
+        })
+        .map(String::as_str)
+}
+
+/// Overlay held drafts while resolving formula aliases within each layer before merging.
+pub(super) fn formula_overlay(
+    own: &HashMap<String, String>,
+    held: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut values = own.clone();
+    values.extend(held.clone());
+    if let Some(source) = formula_source(held).or_else(|| formula_source(own)) {
+        values.retain(|key, _| !key.eq_ignore_ascii_case("SellByCustomEMA"));
+        values.insert("SellByCustomEMA".into(), source.into());
+    }
+    values
+}
+
+/// Structural identity of the comparisons whose thresholds a draft edits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FormulaIdentity {
+    skeleton: String,
+    sentinel_mask: Vec<bool>,
+}
+
+/// Capture formula identity with the same deterministic source selection as slot projection.
+pub fn formula_identity(values: &HashMap<String, String>) -> Option<FormulaIdentity> {
+    let formula = super::custom_ema::parse(formula_source(values)?).ok()?;
+    if formula.unsupported().is_some() {
+        return None;
+    }
+    Some(FormulaIdentity {
+        skeleton: formula.skeleton(),
+        sentinel_mask: formula.sentinel_mask(),
+    })
+}
+
+/// Project a strategy's formula into virtual numeric fields for every core and UI consumer.
+/// Explicit draft slot values overlay the original formula; sentinels never become knobs.
+pub fn formula_slot_values(values: &HashMap<String, String>) -> HashMap<String, f64> {
+    let Some(formula) =
+        formula_source(values).and_then(|source| super::custom_ema::parse(source).ok())
+    else {
+        return HashMap::new();
+    };
+    if formula.unsupported().is_some() {
+        return HashMap::new();
+    }
+    formula
+        .thresholds
+        .iter()
+        .take(8)
+        .enumerate()
+        .filter(|(_, threshold)| threshold.value.abs() < 888.0)
+        .map(|(slot, threshold)| {
+            let key = format!("SellByCustomEMA#{}", slot + 1);
+            let value = values
+                .iter()
+                .find(|(candidate, _)| candidate.eq_ignore_ascii_case(&key))
+                .and_then(|(_, value)| parse_num(value))
+                .filter(|value| value.abs() < 888.0)
+                .unwrap_or(threshold.value);
+            (key, value)
+        })
+        .collect()
+}
+
+/// Fold virtual edits only at a target's write boundary, using that target's source spelling.
+pub fn fold_formula_edits(
+    own: &HashMap<String, String>,
+    edits: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut out: Vec<_> = edits
+        .iter()
+        .filter(|(key, _)| formula_slot(key).is_none())
+        .cloned()
+        .collect();
+    let source = edits
+        .iter()
+        .rev()
+        .find(|(key, _)| key == "SellByCustomEMA")
+        .or_else(|| {
+            edits
+                .iter()
+                .rev()
+                .find(|(key, _)| key.eq_ignore_ascii_case("SellByCustomEMA"))
+        })
+        .map(|(_, source)| source.as_str())
+        .or_else(|| formula_source(own));
+    let slots: Vec<_> = edits
+        .iter()
+        .filter_map(|(key, value)| Some((formula_slot(key)?, parse_num(value)?)))
+        .collect();
+    if !slots.is_empty() {
+        if let Some(source) = source {
+            if let Ok(formula) = super::custom_ema::parse(source) {
+                out.retain(|(key, _)| !key.eq_ignore_ascii_case("SellByCustomEMA"));
+                out.push((
+                    "SellByCustomEMA".into(),
+                    formula.with_thresholds(source, &slots),
+                ));
+            }
+        }
+    }
+    out
 }
 
 impl StrategyValues<'_> {
@@ -670,7 +810,22 @@ pub fn entry_params_for(kind: &str, v: &StrategyValues<'_>, model: ModelSettings
 /// Sell-line parameters out of a strategy's values, under the model's own settings.
 pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
     let base = ExitParams::default();
+    let text = v.text("SellByCustomEMA", "").trim();
+    let (custom_ema, custom_ema_refusal) = if text.is_empty() {
+        (None, None)
+    } else {
+        match super::custom_ema::parse(text) {
+            Ok(formula) if formula.unsupported().is_none() => {
+                (Some(std::sync::Arc::new(formula)), None)
+            }
+            Ok(_) => (None, Some(super::custom_ema::Refusal::Unsupported)),
+            Err(_) => (None, Some(super::custom_ema::Refusal::Unparsed)),
+        }
+    };
     ExitParams {
+        custom_ema,
+        custom_ema_refusal,
+        custom_ema_delay_s: v.num("SellEMADelay", 0.0),
         sell_price_pct: v.num("SellPrice", base.sell_price_pct),
         sell_at_last_price: v.bool("MShotSellAtLastPrice", base.sell_at_last_price),
         sell_price_adjust_pct: v.num("MShotSellPriceAdjust", base.sell_price_adjust_pct),
@@ -790,9 +945,9 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
 /// 2026-09-24 (`exit::stops::trailing`, `exit::stops::ladder`). SellShot and SellSpread are not modelled
 /// at all (the developer's call, 2026-09-24); each is on for 2 live strategies of 1 422 (24.09),
 /// SellShot only where a distance is set (the walk kept it off at a zero one). `AutoSell` off
-/// places no sell order at all (no live strategy, 24.09). The EMA exit and
-/// the rest of the sell fields the model does not have are in `unmodelled`, which warns about
-/// them; this is the set that takes a trade out of the verdict.
+/// places no sell order at all (no live strategy, 24.09). Unsupported or unparsed custom-EMA
+/// formulas and the remaining uncovered sell fields raise warnings in `unmodelled`; this
+/// function names the rules that take a trade out of the verdict.
 pub(super) fn unmodelled_rule(v: &StrategyValues<'_>) -> Option<UnmodelledRule> {
     if !v.bool("AutoSell", true) {
         Some(UnmodelledRule::NoAutoSell)

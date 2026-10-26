@@ -2428,6 +2428,11 @@ fn knob_sections_match_the_schema_copy() {
     // spec's §11, 20.09), so its section there is unconfirmed. A new absence fails below.
     const NOT_IN_COPY: &[&str] = &["MShotAdd24hDelta"];
     for p in TICK_PARAMS {
+        if super::params::formula_slot(p.key).is_some() {
+            assert_eq!(p.section, ParamSection::SellOrder);
+            assert!(!filed.contains_key(p.key), "{} is virtual", p.key);
+            continue;
+        }
         if NOT_IN_COPY.contains(&p.key) {
             assert!(!filed.contains_key(p.key), "{} is in the copy now", p.key);
             continue;

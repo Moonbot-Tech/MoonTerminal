@@ -26,6 +26,7 @@ use crate::feed::types::Tick;
 use crate::market::trade_replay::{Coverage, ReplayWindow, replay_window_ms};
 
 pub mod calibrate;
+pub mod custom_ema;
 pub mod deals;
 pub mod deltas;
 pub mod diag;
@@ -487,6 +488,8 @@ pub enum ExitKind {
     Line,
     /// The stop-loss level was crossed: a market exit at the print.
     Stop,
+    /// The custom-EMA formula turned true: a market sell.
+    CustomEma,
     /// Nothing closed the position before the tape ran out. Not a trade: excluded from the KPI
     /// and counted in the caption. Under the strategy's own parameters this is the model
     /// failing to reproduce an exit the core made, and the verdict says so.

@@ -6,6 +6,29 @@ use super::*;
 use crate::db::tuner::LiveStrategy;
 use crate::feed::strategy_deps::FieldDeps;
 
+/// Threshold grids must offer relative movement around either sign and tenths near zero.
+#[test]
+fn custom_ema_slot_grid_centres_on_current() {
+    assert_eq!(
+        &*custom_ema_slot_grid(&[2.0]),
+        &[1.0, 1.5, 1.8, 2.0, 2.2, 2.5, 3.0]
+    );
+    assert_eq!(
+        &*custom_ema_slot_grid(&[-2.0]),
+        &[-3.0, -2.5, -2.2, -2.0, -1.8, -1.5, -1.0]
+    );
+    let small = custom_ema_slot_grid(&[-0.25]);
+    assert!(small.contains(&-0.35) && small.contains(&-0.15) && small.contains(&-0.25));
+    assert_eq!(&*custom_ema_slot_grid(&[0.0]), &[-0.1, 0.0, 0.1]);
+    let live = [live(
+        "PumpsDetection",
+        &[("SellByCustomEMA", "EMA(60,1)>0.25 AND EMA(5,1)<888")],
+    )];
+    let population = Population::of(&live, &HashMap::new(), &FieldDeps::bundled());
+    assert_eq!(population.values(&[], "SellByCustomEMA#1"), [0.25]);
+    assert!(population.values(&[], "SellByCustomEMA#2").is_empty());
+}
+
 fn live(kind: &str, values: &[(&str, &str)]) -> LiveStrategy {
     LiveStrategy {
         kind: kind.to_string(),
