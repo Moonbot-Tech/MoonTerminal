@@ -315,6 +315,10 @@ impl AnalyticsView {
                     cx.notify();
                     return;
                 }
+                this.ticks.capture_formula_identity(projected_formula_identity(
+                    own.values().map(|values| values.as_ref())
+                        .chain(selected.iter().map(|(_, values)| values.as_ref())),
+                ));
                 this.start_replay_stage(
                     req,
                     report_req,
@@ -1114,7 +1118,7 @@ fn ask_held(
 /// The grid's "now" column: every selected strategy's current value per field, folded to
 /// one value or "varies" — and those values per target. A target on a known core that the deals'
 /// strategies already read (`own`, from [`own_values`]) is not read again.
-fn now_values(
+pub(super) fn now_values(
     targets: &[(i64, Option<u64>)],
     keys: &[String],
     own: &OwnValues,
@@ -1126,10 +1130,14 @@ fn now_values(
             Some(values) => Arc::clone(values),
             None => Arc::new(strategy_current_values(sid, core, keys)),
         };
+        let slots = params::formula_slot_values(&values);
         for key in keys {
-            seen.entry(key.clone())
-                .or_default()
-                .push(values.get(key).cloned());
+            seen.entry(key.clone()).or_default().push(
+                slots
+                    .get(key)
+                    .map(|value| format!("{value:?}"))
+                    .or_else(|| values.get(key).cloned()),
+            );
         }
         read.push(((sid, core), values));
     }
@@ -1152,6 +1160,17 @@ fn now_values(
 /// A selected strategy's current values, by `(strategy_id, core)`.
 type SelectedValues = ((i64, Option<u64>), Arc<HashMap<String, String>>);
 
+/// Bind projected slots to one shared comparison structure, refusing missing or mixed formulas.
+fn projected_formula_identity<'a>(
+    values: impl IntoIterator<Item = &'a HashMap<String, String>>,
+) -> Option<params::FormulaIdentity> {
+    let mut identities = values.into_iter().map(params::formula_identity);
+    let first = identities.next()??;
+    identities
+        .all(|identity| identity.as_ref() == Some(&first))
+        .then_some(first)
+}
+
 /// Each number knob's automatic search span: the live strategies of the scope's `kinds`, read
 /// once per state of the strategies file (`live_strategies`), under the field rules `deps`,
 /// widened to the schema default and the selected strategies' values — a strategy that leaves a
@@ -1169,6 +1188,7 @@ fn range_spans(
         .collect();
     // The knobs and every field their rules read, so "in effect" is asked of real values.
     let mut keys: Vec<String> = numbers.iter().map(|k| k.to_string()).collect();
+    keys.push("SellByCustomEMA".into());
     for key in &numbers {
         for condition in deps.conditions_of(key) {
             if !keys.iter().any(|k| k.eq_ignore_ascii_case(condition)) {
@@ -1186,10 +1206,15 @@ fn range_spans(
             let own: Vec<f64> = selected
                 .iter()
                 .filter_map(|(_, values)| {
-                    values
+                    params::formula_slot_values(values)
                         .get(key)
-                        .and_then(|text| text.trim().replace(',', ".").parse::<f64>().ok())
-                        .or(default)
+                        .copied()
+                        .or_else(|| {
+                            values
+                                .get(key)
+                                .and_then(|text| text.trim().replace(',', ".").parse::<f64>().ok())
+                                .or(default)
+                        })
                 })
                 .collect();
             let span = field_span(&population.values(kinds, key), default, &own)?;

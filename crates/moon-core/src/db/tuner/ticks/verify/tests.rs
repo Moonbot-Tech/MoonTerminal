@@ -4,6 +4,322 @@ use super::*;
 use crate::db::tuner::ticks::{Deltas, ModelSettings};
 use crate::feed::types::{Side, Tick};
 
+/// Neutral factual entry with an EMA close and a recorded take unrelated to its market sale.
+fn ema_deal() -> Deal {
+    Deal {
+        report_uid: 1,
+        core_uid: 7,
+        core_name: "CORE_A".into(),
+        strategy_id: 42,
+        kind: "MoonShot".into(),
+        coin: "XALPHA".into(),
+        buy_ms: 0,
+        close_ms: 1_000,
+        buy_price: 100.0,
+        sell_price: 100.0,
+        spent: 1_000.0,
+        is_short: false,
+        sell_reason: "Sell by FilterCheck:EMA(2s,1s) = 0.0%".into(),
+        fact_pnl: 0.0,
+        sizing: None,
+        pnl_pct: false,
+        profit: None,
+        deltas: Deltas::default(),
+        tick: None,
+        pre_spike_ask: None,
+        archived_take: Some(110.0),
+        fact_modifier: None,
+        hook_depth_pct: None,
+        drops_detect: None,
+        hook_stated_take_pct: None,
+        strike_detect: None,
+        step_lag_ms: 0.0,
+        round_trip_ms: None,
+        stop_anchor: None,
+        delta_track: None,
+        bars: None,
+        own_entry: None,
+        buy_set_ms: None,
+        corridor: None,
+        entry_placed: None,
+        gap: None,
+    }
+}
+
+/// Build EMA-only parameters through the real strategy reader, including refusals, with stops off.
+fn ema_exit(text: &str) -> ExitParams {
+    use crate::db::tuner::ticks::params::{StrategyValues, exit_params};
+    let values = std::collections::HashMap::from([
+        ("SellByCustomEMA".into(), text.into()),
+        ("SellEMADelay".into(), "0".into()),
+        ("UseStopLoss".into(), "NO".into()),
+        ("MShotSellAtLastPrice".into(), "NO".into()),
+        ("SellPrice".into(), "10".into()),
+    ]);
+    exit_params(
+        &StrategyValues {
+            values: &values,
+            defaults: &Default::default(),
+        },
+        ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+    )
+}
+
+/// A warm sell-side tape whose flat market gives a hand-known EMA deviation of zero.
+fn ema_ticks() -> Vec<Tick> {
+    [-10_000, -5_000, 0, 1_000, 2_000]
+        .into_iter()
+        .map(|at| Tick {
+            time_ms: f64::from(at),
+            price: 100.0,
+            qty: 1.0,
+            side: Side::Sell,
+        })
+        .collect()
+}
+
+/// Demanding take-line agreement for a formula exit would turn this same-price sale into a miss.
+#[test]
+fn filtercheck_ema_deal_judged_hit_within_tolerance() {
+    let p = ema_exit("EMA(2s,1s) > 888");
+    let archive = [(0, 110.0), (500, 109.0)];
+    let v = verify(
+        &ema_deal(),
+        &ema_ticks(),
+        &EntryParams::Fact,
+        &p,
+        Some(&archive),
+        None,
+    );
+    assert_eq!(v.exit_kind, Some(ExitKind::CustomEma));
+    assert_eq!(v.exit_finding, ExitFinding::Hit);
+    assert_eq!(v.line_points, None);
+    let mut d = ema_deal();
+    d.sell_price = 90.0;
+    let v = verify(&d, &ema_ticks(), &EntryParams::Fact, &p, None, None);
+    assert!(matches!(
+        v.exit_finding,
+        ExitFinding::Miss(ExitMiss::Off(MissParts { level: true, .. }))
+    ));
+}
+
+/// An on-time EMA sale must not admit variants whose resting take cannot be reconstructed.
+#[test]
+fn custom_ema_hit_with_unknown_take_is_unjudged() {
+    let mut d = ema_deal();
+    d.kind = "MoonHook".into();
+    let p = ema_exit("EMA(2s,1s) > 888");
+    assert!(!ExitModel::new(&p).take_known(&d));
+    let v = verify(&d, &ema_ticks(), &EntryParams::Fact, &p, None, None);
+    assert_eq!(v.exit_kind, Some(ExitKind::CustomEma));
+    assert_eq!(v.exit_finding, ExitFinding::Unjudged(Unjudged::TakeUnknown));
+}
+
+/// An unplaced take must not hide a covered EMA formula that never closes the model.
+#[test]
+fn custom_ema_open_at_window_end_is_not_fired() {
+    let mut p = ema_exit("EMA(2s,1s) > 100");
+    p.sell_delay_ms = 60_000.0;
+    for kind in ["MoonShot", "MoonHook"] {
+        let mut d = ema_deal();
+        d.kind = kind.into();
+        let v = verify(&d, &ema_ticks(), &EntryParams::Fact, &p, None, None);
+        assert_eq!(v.exit_kind, Some(ExitKind::OpenAtWindowEnd));
+        assert_eq!(
+            v.exit_finding,
+            ExitFinding::Miss(ExitMiss::CustomEmaNotFired)
+        );
+    }
+}
+
+/// Price-only judging would accept a formula firing forty minutes after the factual sale.
+#[test]
+fn custom_ema_late_trigger_same_price_is_miss_with_late_ms() {
+    let mut p = ema_exit("EMA(2s,1s) > 888");
+    p.custom_ema_delay_s = 2_400.0;
+    let ticks = (-10..=2_402)
+        .map(|second| Tick {
+            time_ms: f64::from(second * 1_000),
+            price: 100.0,
+            qty: 1.0,
+            side: Side::Sell,
+        })
+        .collect::<Vec<_>>();
+    let v = verify(&ema_deal(), &ticks, &EntryParams::Fact, &p, None, None);
+    assert_eq!(v.exit_kind, Some(ExitKind::CustomEma));
+    assert_eq!(
+        v.exit_finding,
+        ExitFinding::Miss(ExitMiss::Off(MissParts {
+            level: false,
+            late_ms: Some(2_400_000),
+            first_unmatched: None,
+        }))
+    );
+}
+
+/// Comparing market arrival instead of the formula clock would reject an on-time sale.
+#[test]
+fn custom_ema_on_time_trigger_same_price_is_hit() {
+    let mut p = ema_exit("EMA(2s,1s) > 888");
+    p.model.point_time_ms = 1;
+    p.model.latency_ms = 500.0;
+    let mut d = ema_deal();
+    d.close_ms = 1_100;
+    let v = verify(&d, &ema_ticks(), &EntryParams::Fact, &p, None, None);
+    assert_eq!(v.exit_kind, Some(ExitKind::CustomEma));
+    assert_eq!(v.exit_finding, ExitFinding::Hit);
+}
+
+/// Adding SellEMADelay to the trigger would reject a correctly timed market sale.
+#[test]
+fn custom_ema_timing_compares_trigger_moment() {
+    let mut p = ema_exit("EMA(2s,1s)>888");
+    p.custom_ema_delay_s = 5.0;
+    p.model.point_time_ms = 1;
+    let ticks = (-10..=8)
+        .map(|s| Tick {
+            time_ms: f64::from(s * 1000),
+            price: 100.0,
+            qty: 1.0,
+            side: Side::Sell,
+        })
+        .collect::<Vec<_>>();
+    let mut d = ema_deal();
+    d.close_ms = 6_000;
+    assert_eq!(
+        verify(&d, &ticks, &EntryParams::Fact, &p, None, None).exit_finding,
+        ExitFinding::Hit
+    );
+    d.close_ms = 11_000;
+    assert!(matches!(
+        verify(&d, &ticks, &EntryParams::Fact, &p, None, None).exit_finding,
+        ExitFinding::Miss(ExitMiss::Off(MissParts {
+            level: false,
+            late_ms: Some(-5_000),
+            ..
+        }))
+    ));
+    d.close_ms = 1_000;
+    assert!(matches!(
+        verify(&d, &ticks, &EntryParams::Fact, &p, None, None).exit_finding,
+        ExitFinding::Miss(ExitMiss::Off(MissParts {
+            level: false,
+            late_ms: Some(5_000),
+            ..
+        }))
+    ));
+}
+
+/// Falling back to OtherRule would hide a covered formula that never became true.
+#[test]
+fn filtercheck_ema_deal_miss_when_model_never_fires() {
+    let p = ema_exit("EMA(2s,1s) > 100");
+    let v = verify(
+        &ema_deal(),
+        &ema_ticks(),
+        &EntryParams::Fact,
+        &p,
+        None,
+        None,
+    );
+    assert_eq!(
+        v.exit_finding,
+        ExitFinding::Miss(ExitMiss::CustomEmaNotFired)
+    );
+}
+
+/// Treating every FilterCheck as a formula would misjudge ordinary filter-bound exits.
+#[test]
+fn filtercheck_bounds_text_stays_other_rule() {
+    let mut d = ema_deal();
+    d.sell_reason = "Sell by FilterCheck: Vol Minute delta (45.64) doesnt match".into();
+    let v = verify(
+        &d,
+        &ema_ticks(),
+        &EntryParams::Fact,
+        &ema_exit(""),
+        None,
+        None,
+    );
+    assert_eq!(v.exit_finding, ExitFinding::Unjudged(Unjudged::OtherRule));
+}
+
+/// Unsupported terms and broken syntax must remain explicit refusals instead of model misses.
+#[test]
+fn unsupported_term_formula_is_unjudged_with_reason() {
+    for (text, why) in [
+        ("Avg(2s,1s) > 0", Unjudged::CustomEmaUnsupported),
+        ("Max(2s,1s) > 0", Unjudged::CustomEmaUnparsed),
+        ("garbage", Unjudged::CustomEmaUnparsed),
+    ] {
+        let v = verify(
+            &ema_deal(),
+            &ema_ticks(),
+            &EntryParams::Fact,
+            &ema_exit(text),
+            None,
+            None,
+        );
+        assert_eq!(v.exit_finding, ExitFinding::Unjudged(why));
+    }
+}
+
+/// Missing initial history must not turn into either an ordinary-rule refusal or a miss.
+#[test]
+fn short_history_is_unjudged_with_reason() {
+    let ticks = ema_ticks()
+        .into_iter()
+        .filter(|t| t.time_ms >= 0.0)
+        .collect::<Vec<_>>();
+    let v = verify(
+        &ema_deal(),
+        &ticks,
+        &EntryParams::Fact,
+        &ema_exit("EMA(2s,1s) > 888"),
+        None,
+        None,
+    );
+    assert_eq!(
+        v.exit_finding,
+        ExitFinding::Unjudged(Unjudged::CustomEmaShortHistory)
+    );
+}
+
+/// Routing on fill time would discard an on-time trigger when arrival exceeds point tolerance.
+#[test]
+fn custom_ema_trigger_before_close_judged_despite_latency() {
+    let mut p = ema_exit("EMA(2s,1s) > 888");
+    p.model.latency_ms = 500.0;
+    p.model.point_time_ms = 1;
+    let mut d = ema_deal();
+    d.sell_reason = "Sell Price".into();
+    d.close_ms = 1_100;
+    let ticks = ema_ticks();
+    let walked = ExitModel::new(&p).walk_held(
+        &d,
+        &ticks,
+        Fill {
+            t_ms: 0,
+            price: 100.0,
+        },
+        d.close_ms,
+    );
+    assert_eq!(walked.custom_ema_fired_ms, Some(1_000));
+    assert_eq!(walked.exit.t_ms, 2_000);
+    // A non-EMA fact removes the fact_is_ema override and tests the trigger clock itself.
+    let v = verify(&d, &ticks, &EntryParams::Fact, &p, None, None);
+    assert_eq!(v.exit_kind, Some(ExitKind::CustomEma));
+    assert_eq!(v.exit_finding, ExitFinding::Unjudged(Unjudged::OtherRule));
+    d.sell_reason = ema_deal().sell_reason;
+    assert_eq!(
+        verify(&d, &ticks, &EntryParams::Fact, &p, None, None).exit_finding,
+        ExitFinding::Hit
+    );
+}
+
 /// Routing on arrival instead of fire would replace this on-time stop with the take line.
 #[test]
 fn default_market_stop_routes_on_fire_and_prices_the_market_print() {

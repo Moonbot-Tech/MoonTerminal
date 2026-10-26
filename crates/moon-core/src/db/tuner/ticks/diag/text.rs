@@ -268,6 +268,9 @@ fn segment(out: &mut String, seg: &Segment) {
     if x.stop_not_fired > 0 {
         misses.push(format!("stop not fired {}", x.stop_not_fired));
     }
+    if x.custom_ema_not_fired > 0 {
+        misses.push(format!("custom EMA not fired {}", x.custom_ema_not_fired));
+    }
     if x.no_level > 0 {
         misses.push(format!("no level at close {}", x.no_level));
     }

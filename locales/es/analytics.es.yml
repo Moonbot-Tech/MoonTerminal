@@ -1,6 +1,7 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.param.custom_ema_threshold: "Umbral de fórmula EMA %{k}"
 analytics.ticks.chip.accepted_short_tail: "utilizable: cola corta"
 analytics.ticks.chip.accepted_short_tail_tip: "Operaciones utilizables con cinta completa hasta el cierre. La cola es corta y ninguna fuente habilitada puede ampliarla."
 analytics.ticks.why.accepted_short_tail: "cola corta (utilizable)"
@@ -65,6 +66,7 @@ analytics.ticks.pick.acc_none_checked: "no se pudo comprobar ninguna salida: %{w
 analytics.ticks.pick.why_rule: "una regla de venta que el modelo no tiene"
 analytics.ticks.pick.why_take: "nivel de toma desconocido"
 analytics.ticks.pick.why_gap: "un hueco en la cinta"
+analytics.ticks.pick.why_custom_ema: "no se pudo comprobar la fórmula EMA"
 analytics.ticks.pick.why_other: "cerrada por otra regla"
 analytics.ticks.pick.why_sale: "venta de stop más allá de su piso"
 analytics.ticks.pick.why_pending: "aún sin comprobar"
@@ -579,6 +581,7 @@ analytics.coins.tag_line: "%{coin} %{profit} · %{n} op."
 analytics.write_failed_title: "La escritura no se realizó"
 analytics.write_failed: "No se escribió nada — el cambio sigue en el panel, reinténtelo. %{err}"
 analytics.write_failed_stale: "ninguna de las estrategias seleccionadas sigue en su núcleo (omitidas: %{n})"
+analytics.write_failed_formula_stale: "No se enviaron los cambios: la fórmula EMA actual de un destino ya no contiene el umbral editado. Actualiza las estrategias e inténtalo de nuevo."
 analytics.write_partial: "Algunos núcleos no aceptaron la escritura: %{err}"
 # Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /
 # TimedOut), not merely that the terminal managed to send it.
@@ -798,6 +801,14 @@ analytics.ticks.why.other_rule: "cierre por otra regla"
 analytics.ticks.why.other_rule.why: "El núcleo cerró por una regla distinta de la línea del modelo en ese momento. No se comparan precios de reglas distintas."
 analytics.ticks.why.sale_unknown: "venta de stop más allá del piso"
 analytics.ticks.why.sale_unknown.why: "La venta de stop del modelo queda más allá del piso AllowedDrop de la venta de pánico, o ninguna operación tras la compra muestra dónde se ejecutó. Dónde se ejecutó la venta de pánico del núcleo depende del libro; no se evaluó la salida."
+analytics.ticks.why.custom_ema_not_fired: "el núcleo vendió por su fórmula EMA, pero la fórmula del modelo no se activó"
+analytics.ticks.why.custom_ema_not_fired.why: "El núcleo vendió cuando se cumplió su fórmula SellByCustomEMA; al reproducirla, el modelo no cumplió la condición antes de que otra regla cerrara la operación."
+analytics.ticks.why.custom_ema_unsupported: "la fórmula contiene una función que el modelo no puede calcular"
+analytics.ticks.why.custom_ema_unsupported.why: "SellByCustomEMA usa una función (Avg, MAvg, BTC, Arb) que el modelo no reproduce, por lo que esta salida no se evalúa."
+analytics.ticks.why.custom_ema_unparsed: "no se pudo interpretar la fórmula"
+analytics.ticks.why.custom_ema_unparsed.why: "No se pudo analizar la fórmula SellByCustomEMA, por lo que su salida no se evalúa."
+analytics.ticks.why.custom_ema_short: "historial de operaciones insuficiente antes de la entrada para la fórmula"
+analytics.ticks.why.custom_ema_short.why: "La ventana EMA más larga necesita más historial antes de la comprobación del que conserva el optimizador, o hay un hueco mientras la fórmula estaba activa."
 analytics.ticks.why.no_verdict: "modelo aún sin ejecutar"
 analytics.ticks.why.no_verdict.why: "La cinta está cubierta, pero aún no hay evaluación del modelo. La operación no pertenece a la muestra."
 analytics.ticks.why.short_tail: "cola %{trail} < %{min}"

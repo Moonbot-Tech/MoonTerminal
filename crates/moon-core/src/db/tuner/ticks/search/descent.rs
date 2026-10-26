@@ -288,13 +288,17 @@ pub(super) fn params_of(
     kind: &str,
     model: ModelSettings,
 ) -> (EntryParams, ExitParams) {
-    let mut values = own.clone();
-    for (key, value) in held {
-        values.insert(key.clone(), value.clone());
-    }
+    let mut values = super::super::params::formula_overlay(own, held);
     for (key, value) in point {
         values.insert((*key).to_string(), value.clone());
     }
+    let edits: Vec<_> = values
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    values = super::super::params::fold_formula_edits(own, &edits)
+        .into_iter()
+        .collect();
     let sv = StrategyValues {
         values: &values,
         defaults,
@@ -366,6 +370,12 @@ impl<'a> Bases<'a> {
     /// equals the schema's default.
     pub(super) fn moves(&self, held: &HashMap<String, String>, key: &str, value: &str) -> bool {
         self.owns.iter().any(|own| {
+            if super::super::params::formula_slot(key).is_some() {
+                let values = super::super::params::formula_overlay(own, held);
+                return super::super::params::formula_slot_values(&values)
+                    .get(key)
+                    .is_none_or(|base| !same_value(&base.to_string(), value));
+            }
             held.get(key)
                 .or_else(|| own.get(key))
                 .filter(|base| !base.trim().is_empty())

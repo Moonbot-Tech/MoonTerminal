@@ -2,6 +2,38 @@
 
 use super::{RANGE_INPUT_PREFIX, Slot, parse_cell, range_input_id};
 
+/// A generic population span would search unrelated formula scales instead of local thresholds.
+#[test]
+fn custom_ema_ui_range_matches_slot_grid() {
+    use moon_core::db::tuner::ticks::params::range::{TickRange, custom_ema_slot_grid, field_span};
+    let span = field_span(&[-100.0, 100.0], None, &[0.2, 0.3]).unwrap();
+    let resolved = super::resolve_field(
+        "SellByCustomEMA#1",
+        Some(&span),
+        &TickRange::default(),
+        false,
+        20,
+    );
+    assert_eq!(resolved.points, custom_ema_slot_grid(&[0.2, 0.3]));
+    assert_eq!(
+        resolved.points.as_ref(),
+        &[
+            0.1, 0.15, 0.18, 0.2, 0.22, 0.225, 0.25, 0.27, 0.3, 0.33, 0.375, 0.4, 0.45
+        ]
+    );
+    let typed = TickRange {
+        from: Some(0.2),
+        to: Some(0.4),
+        step: Some(0.1),
+    };
+    assert_eq!(
+        super::resolve_field("SellByCustomEMA#1", Some(&span), &typed, false, 20)
+            .points
+            .as_ref(),
+        &[0.2, 0.3, 0.4]
+    );
+}
+
 /// Dropping the selected value or omitting a default-only field would silently narrow a batch search.
 #[test]
 fn automatic_batch_grids_cover_own_values_and_default_only_fields() {

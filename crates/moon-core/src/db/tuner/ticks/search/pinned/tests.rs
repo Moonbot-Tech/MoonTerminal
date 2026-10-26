@@ -5,6 +5,22 @@ use super::super::tests::prepared;
 use super::super::*;
 use super::off_grid;
 
+/// Reading virtual keys from storage would leave an excluded formula threshold unpinned.
+#[test]
+fn custom_ema_off_grid_threshold_is_pinned_to_its_explicit_grid() {
+    let field = TICK_PARAMS
+        .iter()
+        .find(|f| f.key == "SellByCustomEMA#1")
+        .unwrap();
+    let grids = Grids::of([("SellByCustomEMA#1", Arc::from([0.2, 0.4, 0.6]))]);
+    let start = HashMap::from([("SellByCustomEMA#1", 2)]);
+    let own = HashMap::from([("SellByCustomEMA".into(), "EMA(5s,1s) > 1".into())]);
+    let pinned = off_grid(&[field], &grids, &start, &[&own], &HashMap::new());
+    assert_eq!(pinned.get(field.key).map(String::as_str), Some("0.6"));
+    let on_grid = HashMap::from([("SellByCustomEMA".into(), "EMA(5s,1s) > 0.4".into())]);
+    assert!(off_grid(&[field], &grids, &start, &[&on_grid], &HashMap::new()).is_empty());
+}
+
 /// A deal of `prepared` whose tape peaks at +1 % and whose own strategy takes at `take`.
 fn taking_at(uid: i64, take: &str) -> PreparedDeal {
     let mut deal = prepared(uid, 101.0);

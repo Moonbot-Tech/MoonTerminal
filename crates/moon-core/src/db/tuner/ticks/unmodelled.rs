@@ -21,8 +21,9 @@
 //! - the fields of a listed switch (`SecondStopLoss`, `BV_SV_Ratio`, `SellEMADelay`, …): the
 //!   switch stands for them.
 //!
-//! The custom-EMA sell (`SellByCustomEMA`) is watched as a warning: the model has no replay of its
-//! formula, and a deal the core sold by it is already unjudged as closed by another rule.
+//! The custom-EMA sell (`SellByCustomEMA`) warns only for unparsed formulas or unsupported terms;
+//! covered EMA/MAX/MIN/Vol formulas are replayed and their exits judged.
+//! https://moonbot.pro/documentation/advanced-strategy-parameters/ema-strategy-and-its-parameters
 //!
 //! "Switched on" is the Strategies window's own reading: the field's dependency rule holds
 //! (`assets/param_deps.toml`, [`FieldDeps`]) and its value differs from the core's default — the
@@ -53,6 +54,8 @@ enum Also {
     /// SellShot keeps the sell at a distance only when there is one (`SellShotDistance` ≠ 0) —
     /// as `params::unmodelled_rule` reads it.
     SellShotDistance,
+    /// Only nonblank formulas the evaluator cannot parse or support need a warning.
+    CustomEmaNotCovered,
 }
 
 /// One exit field the model does not have.
@@ -105,9 +108,11 @@ const WATCHED: &[Watched] = &[
     },
     // Sells when the filters' bounds are left, seconds after the buy; 0 is off.
     watched("SellByFilters", ParamSection::SellOrder, "0"),
-    // Sells on the custom EMA formula over the core's own EMA/MAX/MIN/AVG series, under a trigger
-    // condition the model has no replay of; blank is off. Its `SellEMADelay` is a field of it.
-    watched("SellByCustomEMA", ParamSection::SellOrder, ""),
+    // Unsupported functions and syntax remain warnings; blank is off.
+    Watched {
+        also: Also::CustomEmaNotCovered,
+        ..watched("SellByCustomEMA", ParamSection::SellOrder, "")
+    },
     // SellShot.
     Watched {
         also: Also::SellShotDistance,
@@ -331,6 +336,11 @@ fn also_holds(
         // The model's own fallback for `SellPrice` (`ExitParams::default`).
         Also::SellPriceUnderOne => num("SellPrice", 1.0) < 1.0,
         Also::SellShotDistance => num("SellShotDistance", 0.0) != 0.0,
+        Also::CustomEmaNotCovered => values.get("SellByCustomEMA").is_some_and(|text| {
+            !text.trim().is_empty()
+                && super::custom_ema::parse(text)
+                    .map_or(true, |formula| formula.unsupported().is_some())
+        }),
     }
 }
 

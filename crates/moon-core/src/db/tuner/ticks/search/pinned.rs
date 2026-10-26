@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use super::Point;
 use crate::db::tuner::ticks::params::range::Grids;
-use crate::db::tuner::ticks::params::{ParamKind, TickParam};
+use crate::db::tuner::ticks::params::{ParamKind, TickParam, formula_slot, formula_slot_values};
 
 /// The searched number fields some strategy holds off their grid, each at its start step.
 ///
@@ -33,6 +33,7 @@ pub(super) fn off_grid(
     defaults: &HashMap<String, f64>,
 ) -> Point {
     let parse = |text: &String| text.trim().replace(',', ".").parse::<f64>().ok();
+    let slots: Vec<_> = owns.iter().map(|own| formula_slot_values(own)).collect();
     fields
         .iter()
         .filter(|f| f.kind == ParamKind::Num)
@@ -45,7 +46,14 @@ pub(super) fn off_grid(
                     .any(|g| (g - v).abs() <= 1e-9 * v.abs().max(1.0))
             };
             owns.iter()
-                .filter_map(|own| own.get(f.key).and_then(parse).or(default))
+                .zip(&slots)
+                .filter_map(|(own, slots)| {
+                    if formula_slot(f.key).is_some() {
+                        slots.get(f.key).copied()
+                    } else {
+                        own.get(f.key).and_then(parse).or(default)
+                    }
+                })
                 .any(|v| !on_grid(v))
                 .then(|| (f.key, grids.spell(f, at)))
         })

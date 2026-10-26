@@ -75,17 +75,20 @@ pub(in crate::analytics::tuner) enum UncheckedWhy {
     OtherRule,
     /// The modelled stop sale is past the panic sell's floor, or no print shows its fill.
     SaleUnknown,
+    /// A custom formula could not be parsed, supported, or warmed from tape.
+    CustomEma,
     /// No verdict yet.
     Pending,
 }
 
 impl UncheckedWhy {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Rule,
         Self::TakeUnknown,
         Self::Gap,
         Self::OtherRule,
         Self::SaleUnknown,
+        Self::CustomEma,
         Self::Pending,
     ];
 
@@ -98,6 +101,11 @@ impl UncheckedWhy {
             Some(DealWhy::Unjudged(Unjudged::InGap)) => Some(Self::Gap),
             Some(DealWhy::Unjudged(Unjudged::OtherRule)) => Some(Self::OtherRule),
             Some(DealWhy::Unjudged(Unjudged::SaleUnknown)) => Some(Self::SaleUnknown),
+            Some(DealWhy::Unjudged(
+                Unjudged::CustomEmaUnsupported
+                | Unjudged::CustomEmaUnparsed
+                | Unjudged::CustomEmaShortHistory,
+            )) => Some(Self::CustomEma),
             Some(DealWhy::NoVerdict) => Some(Self::Pending),
             Some(
                 DealWhy::Fit
@@ -125,6 +133,7 @@ impl UncheckedWhy {
             Self::Gap => t!("analytics.ticks.pick.why_gap"),
             Self::OtherRule => t!("analytics.ticks.pick.why_other"),
             Self::SaleUnknown => t!("analytics.ticks.pick.why_sale"),
+            Self::CustomEma => t!("analytics.ticks.pick.why_custom_ema"),
             Self::Pending => t!("analytics.ticks.pick.why_pending"),
         }
         .to_string()

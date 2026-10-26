@@ -146,7 +146,13 @@ pub(in crate::analytics::tuner) fn grid_for<'a>(
             kinds.push(deal.kind.clone());
         }
     }
-    let knobs = scope_knobs(&kinds);
+    let strategies: Vec<_> = strategies.into_iter().collect();
+    let owns: Vec<_> = strategies.iter().map(|(_, values)| *values).collect();
+    let knobs = moon_core::db::tuner::ticks::search::compatible_slots(
+        scope_knobs(&kinds),
+        &owns,
+        &HashMap::new(),
+    );
     let schema = scope_schema(store, deals.iter().map(|d| (d.strategy_id, d.core_uid)));
     let mut in_use: HashSet<String> = HashSet::new();
     for ((sid, core), values) in strategies {

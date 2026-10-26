@@ -56,6 +56,191 @@ type ShortErrors = (Option<f64>, Option<f64>);
 /// for the deal with lines at all.
 type ArchivedLines = (Option<Vec<(i64, f64)>>, Option<Vec<(i64, f64)>>, bool);
 
+/// Counts keep unjudged deals in n while hit share uses judged outcomes alone.
+#[derive(Default)]
+struct EmaCounts {
+    n: usize,
+    hit: usize,
+    miss: usize,
+}
+
+impl EmaCounts {
+    /// Report judged hit share without counting unjudged history as a miss.
+    fn share(&self) -> String {
+        let judged = self.hit + self.miss;
+        if judged == 0 {
+            "n/a".to_string()
+        } else {
+            format!("{:.1}%", self.hit as f64 / judged as f64 * 100.0)
+        }
+    }
+
+    /// Count one verdict without treating missing history as a model miss.
+    fn add(&mut self, finding: verify::ExitFinding) {
+        self.n += 1;
+        match finding {
+            verify::ExitFinding::Hit => self.hit += 1,
+            verify::ExitFinding::Miss(_) => self.miss += 1,
+            verify::ExitFinding::Unjudged(_) => {}
+        }
+    }
+}
+
+/// FilterCheck diagnostics split by actual history source and formula window.
+#[derive(Default)]
+struct EmaFilterCheck {
+    total: EmaCounts,
+    paths: BTreeMap<&'static str, EmaCounts>,
+    windows: BTreeMap<&'static str, EmaCounts>,
+    unjudged: BTreeMap<String, usize>,
+    misses: BTreeMap<&'static str, usize>,
+    off_misses: BTreeMap<&'static str, usize>,
+    late_ms: Vec<i64>,
+    other: usize,
+}
+
+impl EmaFilterCheck {
+    /// Add the same held walk and verdict used by the existing reproduction diagnostics.
+    fn add(
+        &mut self,
+        deal: &Deal,
+        verdict: &Verdict,
+        path: Option<custom_ema::EmaHistoryPath>,
+        formula: Option<&custom_ema::Formula>,
+    ) {
+        use verify::{ExitFinding, ExitMiss};
+        if !custom_ema::is_custom_ema_reason(&deal.sell_reason) {
+            self.other += usize::from(verify::reason_starts_with(
+                deal.sell_reason.trim(),
+                "Sell by FilterCheck:",
+            ));
+            return;
+        }
+        let finding = verdict.exit_finding;
+        self.total.add(finding);
+        let name = match finding {
+            ExitFinding::Unjudged(verify::Unjudged::CustomEmaShortHistory) => "short",
+            ExitFinding::Unjudged(
+                verify::Unjudged::CustomEmaUnsupported | verify::Unjudged::CustomEmaUnparsed,
+            ) => "refused",
+            _ => match path {
+                Some(custom_ema::EmaHistoryPath::Tape) => "tape",
+                Some(custom_ema::EmaHistoryPath::KlineWarmed) => "kline",
+                None => "other",
+            },
+        };
+        self.paths.entry(name).or_default().add(finding);
+        if let Some(formula) = formula {
+            let longest = formula
+                .terms
+                .iter()
+                .filter(|term| term.fn_name == custom_ema::FnName::Ema)
+                .map(|term| term.window_s)
+                .max()
+                .unwrap_or(0);
+            let bucket = match longest {
+                0..=90 => "<=90s",
+                91..=600 => "91-600s",
+                _ => ">600s",
+            };
+            self.windows.entry(bucket).or_default().add(finding);
+        }
+        match finding {
+            ExitFinding::Unjudged(reason) => {
+                *self.unjudged.entry(format!("{reason:?}")).or_default() += 1;
+            }
+            ExitFinding::Miss(reason) => {
+                let name = match reason {
+                    ExitMiss::CustomEmaNotFired => "ema-not-fired",
+                    ExitMiss::Off(parts) => {
+                        let split = match (parts.level, parts.late_ms.is_some()) {
+                            (true, false) => Some("off-price"),
+                            (false, true) => Some("off-time"),
+                            (true, true) => Some("off-both"),
+                            (false, false) => None,
+                        };
+                        if let Some(split) = split {
+                            *self.off_misses.entry(split).or_default() += 1;
+                        }
+                        if let Some(late) = parts.late_ms {
+                            self.late_ms.push(late);
+                        }
+                        "off-level"
+                    }
+                    ExitMiss::NoLevel => "no-level",
+                    ExitMiss::StopNotFired => "stop-not-fired",
+                };
+                *self.misses.entry(name).or_default() += 1;
+            }
+            ExitFinding::Hit => {}
+        }
+    }
+
+    /// Print ASCII additions after the existing summary, leaving all old lines intact.
+    fn print(&self) {
+        let t = &self.total;
+        let judged = t.hit + t.miss;
+        let share = if judged == 0 {
+            "n/a".to_string()
+        } else {
+            format!("{:.2}%", t.hit as f64 / judged as f64 * 100.0)
+        };
+        eprintln!(
+            "EMA FILTERCHECK n={} judged={} hit={} miss={} hit-share={share}",
+            t.n, judged, t.hit, t.miss
+        );
+        for name in ["tape", "kline", "short", "refused", "other"] {
+            let zero = EmaCounts::default();
+            let t = self.paths.get(name).unwrap_or(&zero);
+            eprintln!(
+                "  path {name}: n={} hit={} miss={} share={}",
+                t.n,
+                t.hit,
+                t.miss,
+                t.share()
+            );
+        }
+        for (reason, n) in &self.unjudged {
+            eprintln!("  unjudged {reason}: {n}");
+        }
+        for (reason, n) in &self.misses {
+            eprintln!("  miss {reason}: {n}");
+        }
+        for name in ["<=90s", "91-600s", ">600s"] {
+            let zero = EmaCounts::default();
+            let t = self.windows.get(name).unwrap_or(&zero);
+            eprintln!(
+                "  window {name}: n={} hit={} miss={} share={}",
+                t.n,
+                t.hit,
+                t.miss,
+                t.share()
+            );
+        }
+        eprintln!(
+            "  FilterCheck without EMA terms (other-rule): {}",
+            self.other
+        );
+        for name in ["off-price", "off-time", "off-both"] {
+            eprintln!("  miss {name}: {}", self.off_misses.get(name).unwrap_or(&0));
+        }
+        let mut late = self.late_ms.clone();
+        late.sort_unstable();
+        let median = if late.is_empty() {
+            "n/a".to_string()
+        } else {
+            let middle = late.len() / 2;
+            let value = if late.len().is_multiple_of(2) {
+                late[middle - 1] as f64 / 2.0 + late[middle] as f64 / 2.0
+            } else {
+                late[middle] as f64
+            };
+            format!("{value:+}")
+        };
+        eprintln!("  late-ms median={median}");
+    }
+}
+
 /// The points of the deal's own entry line and of its own exit line, when the archive holds
 /// them, and whether it answered with lines — as the axis reads them (`load.rs::ArchivedLines`).
 fn archived_lines(deal: &Deal) -> ArchivedLines {
@@ -801,15 +986,6 @@ const SHORT_TAIL_MS: i64 = 60_000;
 /// words, so no ticker or strategy name in it can reach the output.
 fn reason_family(reason: &str) -> &'static str {
     const FILTER_CHECK: &str = "Sell by FilterCheck:";
-    const FILTER_FNS: [(&str, &str); 7] = [
-        ("EMA", "Sell by FilterCheck:EMA"),
-        ("Max", "Sell by FilterCheck:Max"),
-        ("Min", "Sell by FilterCheck:Min"),
-        ("MAvg", "Sell by FilterCheck:MAvg"),
-        ("AVG", "Sell by FilterCheck:AVG"),
-        ("BTC", "Sell by FilterCheck:BTC"),
-        ("Vol", "Sell by FilterCheck:Vol"),
-    ];
     const STOPS: [&str; 3] = [
         "StopLoss AutoActivated",
         "StopLoss Market Sell",
@@ -833,12 +1009,11 @@ fn reason_family(reason: &str) -> &'static str {
             .unwrap_or("other");
     }
     if verify::reason_starts_with(reason, FILTER_CHECK) {
-        let rest = reason[FILTER_CHECK.len()..].trim_start();
-        let name: String = rest.chars().take_while(char::is_ascii_alphabetic).collect();
-        return FILTER_FNS
-            .iter()
-            .find(|(f, _)| name.eq_ignore_ascii_case(f))
-            .map_or("Sell by FilterCheck:other", |(_, label)| label);
+        return if super::super::custom_ema::is_custom_ema_reason(reason) {
+            "Sell by FilterCheck:custom EMA"
+        } else {
+            "Sell by FilterCheck:other"
+        };
     }
     "other"
 }
@@ -849,6 +1024,7 @@ fn miss_cause(finding: verify::ExitFinding) -> Option<String> {
     Some(match finding {
         ExitFinding::Hit => return None,
         ExitFinding::Miss(ExitMiss::StopNotFired) => "✗stop-not-fired".to_string(),
+        ExitFinding::Miss(ExitMiss::CustomEmaNotFired) => "✗ema-not-fired".to_string(),
         ExitFinding::Miss(ExitMiss::NoLevel) => "✗no-level".to_string(),
         ExitFinding::Miss(ExitMiss::Off(parts)) => {
             let mut what: Vec<&str> = Vec::new();
@@ -868,6 +1044,9 @@ fn miss_cause(finding: verify::ExitFinding) -> Option<String> {
         ExitFinding::Unjudged(Unjudged::TakeUnknown) => "··take-unknown".to_string(),
         ExitFinding::Unjudged(Unjudged::OtherRule) => "··other-rule".to_string(),
         ExitFinding::Unjudged(Unjudged::SaleUnknown) => "··sale-unknown".to_string(),
+        ExitFinding::Unjudged(Unjudged::CustomEmaUnsupported) => "··ema-unsupported".to_string(),
+        ExitFinding::Unjudged(Unjudged::CustomEmaUnparsed) => "··ema-unparsed".to_string(),
+        ExitFinding::Unjudged(Unjudged::CustomEmaShortHistory) => "··ema-short".to_string(),
     })
 }
 
@@ -1171,7 +1350,26 @@ fn real_data_reproduction() {
     let (mut own_sum, mut fact_sum) = (0.0f64, 0.0f64);
     let search_kind = std::env::var("MOON_TICKS_SEARCH").ok();
     let mut searched: Vec<search::PreparedDeal> = Vec::new();
+    let mut ema_summary = EmaFilterCheck::default();
+    let picks = std::env::var("MOON_TICKS_AB_PICKS").ok().map(|spec| {
+        spec.split(',')
+            .map(|pick| {
+                let (core, strategy) = pick.trim().split_once(':').expect("AB pick core:id");
+                (
+                    core.parse::<u64>().expect("AB pick core uid"),
+                    strategy.parse::<i64>().expect("AB pick strategy id"),
+                )
+            })
+            .collect::<Vec<_>>()
+    });
     for mut deal in read.deals {
+        if picks
+            .as_ref()
+            .is_some_and(|picks| !picks.contains(&(deal.core_uid, deal.strategy_id)))
+        {
+            continue;
+        }
+        let ema_history_path;
         *kinds_seen.entry(deal.kind.clone()).or_default() += 1;
         // Every kind the axis takes, as the table does: a kind without an entry model replays
         // its exit from the factual entry.
@@ -1506,6 +1704,7 @@ fn real_data_reproduction() {
                 fact_fill,
                 deal.close_ms,
             );
+            ema_history_path = held.custom_ema_path;
             if let Ok(dir) = std::env::var("MOON_TICKS_DUMP") {
                 // The dump carries the custom-EMA sell formula too, for an analysis outside.
                 let mut dump_keys = keys.clone();
@@ -1702,6 +1901,12 @@ fn real_data_reproduction() {
             entry_line.as_deref(),
             exit_points.as_deref(),
             &archived,
+        );
+        ema_summary.add(
+            &deal,
+            &archived,
+            ema_history_path,
+            exit.custom_ema.as_deref(),
         );
         report_items.push((deal.clone(), archived, venue.clone()));
         // Measured as the table does (`load.rs`, `row.held`): the held coverage's end past the
@@ -1910,6 +2115,7 @@ fn real_data_reproduction() {
     stop_diag.print();
     stop_logs.print();
     late_diag.print();
+    ema_summary.print();
 }
 /// Parse the owner's one bench-wide estimator override, rejecting unknown grammar loudly.
 fn parse_fast_price_override(value: &str) -> super::super::settings::FastPrice {

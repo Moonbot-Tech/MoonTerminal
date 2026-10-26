@@ -517,6 +517,7 @@ fn entry_key(finding: EntryFinding) -> &'static str {
 fn miss_key(miss: ExitMiss) -> &'static str {
     match miss {
         ExitMiss::StopNotFired => "stop_not_fired",
+        ExitMiss::CustomEmaNotFired => "custom_ema_not_fired",
         ExitMiss::NoLevel => "no_level",
         ExitMiss::Off(_) => "exit_off",
     }
@@ -534,6 +535,9 @@ fn unjudged_key(why: Unjudged) -> &'static str {
         Unjudged::TakeUnknown => "take_unknown",
         Unjudged::OtherRule => "other_rule",
         Unjudged::SaleUnknown => "sale_unknown",
+        Unjudged::CustomEmaUnsupported => "custom_ema_unsupported",
+        Unjudged::CustomEmaUnparsed => "custom_ema_unparsed",
+        Unjudged::CustomEmaShortHistory => "custom_ema_short",
     }
 }
 

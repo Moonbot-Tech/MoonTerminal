@@ -2,6 +2,25 @@
 // then name, and it expands into itself.
 use super::{Accuracy, GroupCount, UncheckedWhy, accuracy_sentence, pct_text};
 
+/// Splitting formula refusals into other-rule or pending buckets would misstate coverage.
+#[test]
+fn custom_ema_reasons_bucket() {
+    use moon_core::db::tuner::ticks::verify::{ExitFinding, Unjudged};
+    let verdicts = [
+        Unjudged::CustomEmaUnsupported,
+        Unjudged::CustomEmaUnparsed,
+        Unjudged::CustomEmaShortHistory,
+    ]
+    .map(|why| Verdict {
+        exit_finding: ExitFinding::Unjudged(why),
+        ..verdict(None, None)
+    });
+    let acc = Accuracy::of(verdicts.iter().map(Some));
+    assert_eq!(acc.main_unchecked_why(), Some(UncheckedWhy::CustomEma));
+    assert_eq!(acc.exit_why[UncheckedWhy::CustomEma as usize], 3);
+    assert_eq!(acc.exit.unjudged, 3);
+}
+
 /// The checked exits and the unchecked ones are two numbers, the unchecked with their main
 /// reason; the search's fit sample is a third.
 #[test]

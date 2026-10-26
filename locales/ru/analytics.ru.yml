@@ -1,6 +1,7 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.ticks.param.custom_ema_threshold: "Порог формулы EMA %{k}"
 analytics.ticks.chip.accepted_short_tail: "для подбора: короткий хвост"
 analytics.ticks.chip.accepted_short_tail_tip: "Сделки для подбора с полной лентой до закрытия. Хвост короткий, и ни один включённый источник не может его дополнить."
 analytics.ticks.why.accepted_short_tail: "короткий хвост (для подбора)"
@@ -65,6 +66,7 @@ analytics.ticks.pick.acc_none_checked: "ни один выход не прове
 analytics.ticks.pick.why_rule: "правило продажи, которого нет в модели"
 analytics.ticks.pick.why_take: "неизвестен уровень тейка"
 analytics.ticks.pick.why_gap: "дыра в ленте"
+analytics.ticks.pick.why_custom_ema: "не удалось проверить формулу EMA"
 analytics.ticks.pick.why_other: "закрыто другим правилом"
 analytics.ticks.pick.why_sale: "продажа по стопу за пределом AllowedDrop"
 analytics.ticks.pick.why_pending: "ещё не проверено"
@@ -579,6 +581,7 @@ analytics.coins.tag_line: "%{coin} %{profit} · %{n} сд."
 analytics.write_failed_title: "Запись не прошла"
 analytics.write_failed: "Изменения НЕ записаны — правка сохранена в панели, повторите. %{err}"
 analytics.write_failed_stale: "ни одна из выбранных стратегий больше не числится на своём ядре (пропущено: %{n})"
+analytics.write_failed_formula_stale: "Изменения не отправлены: текущая формула EMA одной из целей больше не содержит редактируемый порог. Обновите стратегии и повторите попытку."
 analytics.write_partial: "Часть ядер не приняла запись: %{err}"
 # Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /
 # TimedOut), not merely that the terminal managed to send it.
@@ -798,6 +801,14 @@ analytics.ticks.why.other_rule: "закрыто другим правилом"
 analytics.ticks.why.other_rule.why: "Ядро закрыло по другому правилу, чем то, под которым стояла линия модели в этот момент. Цены разных правил не сравнить."
 analytics.ticks.why.sale_unknown: "продажа по стопу за пределом AllowedDrop"
 analytics.ticks.why.sale_unknown.why: "Продажа модели по стопу оказалась за пределом AllowedDrop панической продажи, или после покупки нет сделки, показывающей, где она исполнилась. Где исполнилась паническая продажа ядра, решает стакан, поэтому выход не судили."
+analytics.ticks.why.custom_ema_not_fired: "ядро продало по формуле EMA, а формула модели не сработала"
+analytics.ticks.why.custom_ema_not_fired.why: "Ядро продало, когда условие SellByCustomEMA стало истинным; при воспроизведении моделью условие не выполнилось до закрытия сделки другим правилом."
+analytics.ticks.why.custom_ema_unsupported: "в формуле есть функция, которую модель не вычисляет"
+analytics.ticks.why.custom_ema_unsupported.why: "SellByCustomEMA стратегии использует функцию (Avg, MAvg, BTC, Arb), которую модель не воспроизводит, поэтому этот выход не оценивается."
+analytics.ticks.why.custom_ema_unparsed: "не удалось разобрать формулу"
+analytics.ticks.why.custom_ema_unparsed.why: "Не удалось разобрать формулу SellByCustomEMA, поэтому выход по ней не оценивается."
+analytics.ticks.why.custom_ema_short: "для формулы недостаточно ленты до сделки"
+analytics.ticks.why.custom_ema_short.why: "Самому длинному окну EMA в формуле нужно больше ленты перед проверкой, чем хранит тюнер, либо в ленте есть пробел во время действия формулы."
 analytics.ticks.why.no_verdict: "модель ещё не запускалась"
 analytics.ticks.why.no_verdict.why: "Лента покрывает окно, но ответа модели ещё нет. Сделка пока не идёт в подбор."
 analytics.ticks.why.short_tail: "хвост %{trail} < %{min}"

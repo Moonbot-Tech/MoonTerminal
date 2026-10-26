@@ -25,7 +25,7 @@ use super::super::super::AnalyticsView;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::ticks::params::range::{
-    Grids, RangeError, Resolved, TickRange, resolve, spell_number,
+    Grids, RangeError, Resolved, TickRange, resolve_field, spell_number,
 };
 use moon_core::db::tuner::ticks::{ParamKind, TICK_PARAMS};
 
@@ -57,6 +57,7 @@ pub(in crate::analytics::tuner) fn auto_grids_for(
         .map(|f| f.key)
         .collect();
     let mut keys: Vec<String> = numbers.iter().map(|k| k.to_string()).collect();
+    keys.push("SellByCustomEMA".into());
     for key in &numbers {
         keys.extend(deps.conditions_of(key).map(str::to_string));
     }
@@ -66,14 +67,25 @@ pub(in crate::analytics::tuner) fn auto_grids_for(
     let mut grids = Grids::default();
     for key in numbers {
         let default = defaults.get(&key.to_ascii_lowercase()).copied();
-        let selected: Vec<f64> = own
+        let selected: Vec<f64> = moon_core::db::tuner::ticks::params::formula_slot_values(own)
             .get(key)
-            .and_then(|v| v.trim().replace(',', ".").parse::<f64>().ok())
-            .or(default)
+            .copied()
+            .or_else(|| {
+                own.get(key)
+                    .and_then(|v| v.trim().replace(',', ".").parse::<f64>().ok())
+                    .or(default)
+            })
             .into_iter()
             .collect();
         let span = field_span(&population.values(&kinds, key), default, &selected);
-        let points = resolve(span.as_ref(), &TickRange::default(), false, steps_of(None)).points;
+        let points = resolve_field(
+            key,
+            span.as_ref(),
+            &TickRange::default(),
+            false,
+            steps_of(None),
+        )
+        .points;
         if !points.is_empty() {
             grids.insert(key, points);
         }
@@ -193,7 +205,8 @@ impl AnalyticsView {
     fn ticks_resolved(&self, key: &str) -> Resolved {
         let data = self.ticks.data.data();
         let typed = self.ticks.ranges.get(key).copied().unwrap_or_default();
-        resolve(
+        resolve_field(
+            key,
             data.and_then(|d| d.spans.get(key)),
             &typed,
             data.is_some_and(|d| d.integers.contains(key)),

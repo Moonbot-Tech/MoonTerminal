@@ -133,7 +133,11 @@ pub fn suggest_with_candidate(
     // and outside the pool they would reach rayon's global one. The nested `install` of the
     // restarts runs in place.
     let result = install(|| search(deals, params, handle, &mut candidate));
-    let mut searched: Vec<String> = varied(params).iter().map(|f| f.key.to_string()).collect();
+    let mut searched: Vec<String> =
+        deps::compatible_slots(varied(params), &Bases::of(deals).owns, params.held)
+            .iter()
+            .map(|f| f.key.to_string())
+            .collect();
     searched.sort();
     Suggested {
         result,
@@ -150,7 +154,7 @@ fn search(
     handle: &SearchHandle,
     candidate_out: &mut Option<Candidate>,
 ) -> Result<SearchResult, SearchMiss> {
-    let fields = varied(params);
+    let fields = deps::compatible_slots(varied(params), &Bases::of(deals).owns, params.held);
     // A searched field starts from the strategies (or its grid step, `pinned`), never from what
     // the held edits put there (LinKvo, 2026-09-25: "a ticked field is searched anew, whatever
     // В1 holds"): its held value is set aside, and only the fields the search leaves alone are
@@ -660,6 +664,7 @@ mod closing;
 pub use self::closing::unguarded_strategies;
 mod coupled;
 mod deps;
+pub use self::deps::compatible_slots;
 mod fills;
 mod nested;
 mod pinned;

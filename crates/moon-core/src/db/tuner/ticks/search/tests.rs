@@ -1397,3 +1397,210 @@ fn a_field_that_moves_nothing_leaves_the_answer() {
     let (kept, _) = drop_passengers(point, at_point, &Point::new(), &fewer, 1, &|| false);
     assert!(kept.contains_key("SellLevelDelayNext"), "{kept:?}");
 }
+
+/// Held aliases override own canonical formulas, while each layer prefers its canonical key.
+#[test]
+fn slot_point_prefers_held_then_canonical_formula() {
+    for _ in 0..64 {
+        let own = HashMap::from([
+            ("SellByCustomEMA".into(), "EMA(2,1)>1".into()),
+            ("sellbycustomema".into(), "EMA(3,1)>2".into()),
+        ]);
+        for held in [
+            HashMap::new(),
+            HashMap::from([("sellbycustomema".into(), "EMA(5,1)<3".into())]),
+            HashMap::from([
+                ("sellbycustomema".into(), "EMA(6,1)>888".into()),
+                ("SellByCustomEMA".into(), "EMA(5,1)<3".into()),
+            ]),
+        ] {
+            let expected = if held.is_empty() {
+                "EMA(2,1)>-1"
+            } else {
+                "EMA(5,1)<-1"
+            };
+            let (_, exit) = params_of(
+                &own,
+                &held,
+                &HashMap::new(),
+                &Point::from([("SellByCustomEMA#1", "-1".into())]),
+                "PumpsDetection",
+                ModelSettings::default(),
+            );
+            assert_eq!(
+                *exit.custom_ema.unwrap(),
+                super::super::custom_ema::parse(expected).unwrap()
+            );
+            let base = if held.is_empty() { "1" } else { "3" };
+            let bases = Bases {
+                owns: vec![&own],
+                of_deal: vec![0],
+            };
+            assert!(!bases.moves(&held, "SellByCustomEMA#1", base));
+            assert!(bases.moves(&held, "SellByCustomEMA#1", "-1"));
+            let defaults = HashMap::new();
+            let locked = HashSet::new();
+            let grids = Grids::of([("SellByCustomEMA#1", Arc::from([1.0, 3.0]))]);
+            let params = SearchParams {
+                held: &held,
+                defaults: &defaults,
+                kind: "PumpsDetection",
+                vary_entry: false,
+                vary_exit: true,
+                locked: &locked,
+                grids: &grids,
+                restarts: 1,
+                min_n: None,
+                seed: Some(1),
+                train_frac: 1.0,
+                max_passes: 1,
+                model: ModelSettings::default(),
+                keep_corridor: false,
+                risk: Default::default(),
+                screen_entry: false,
+            };
+            assert_eq!(
+                deps::dependents_of(&params, &[&own]).0["SellByCustomEMA#1"],
+                usize::from(!held.is_empty())
+            );
+            let other = HashMap::from([("SellByCustomEMA".into(), "EMA(2,1)>1".into())]);
+            let slots: Vec<_> = TICK_PARAMS
+                .iter()
+                .filter(|field| super::super::params::formula_slot(field.key).is_some())
+                .collect();
+            let offered = deps::compatible_slots(slots, &[&own, &other], &held);
+            assert_eq!(
+                offered.iter().map(|field| field.key).collect::<Vec<_>>(),
+                ["SellByCustomEMA#1"]
+            );
+        }
+    }
+}
+
+/// Start indices read formula digits, including a held formula's override.
+#[test]
+fn custom_ema_start_indices_use_projected_values() {
+    let own = HashMap::from([("SellByCustomEMA".into(), "EMA(60,1)>0.25".into())]);
+    let held = HashMap::new();
+    let defaults = HashMap::new();
+    let locked = HashSet::new();
+    let grids = Grids::of([("SellByCustomEMA#1", Arc::from([0.1, 0.25, 0.5]))]);
+    let mut params = SearchParams {
+        held: &held,
+        defaults: &defaults,
+        kind: "PumpsDetection",
+        vary_entry: false,
+        vary_exit: true,
+        locked: &locked,
+        grids: &grids,
+        restarts: 1,
+        min_n: None,
+        seed: Some(1),
+        train_frac: 1.0,
+        max_passes: 1,
+        model: ModelSettings::default(),
+        keep_corridor: false,
+        risk: Default::default(),
+        screen_entry: false,
+    };
+    assert_eq!(
+        deps::dependents_of(&params, &[&own]).0["SellByCustomEMA#1"],
+        1
+    );
+    let held_formula = HashMap::from([("SellByCustomEMA".into(), "EMA(60,1)>0.5".into())]);
+    params.held = &held_formula;
+    assert_eq!(
+        deps::dependents_of(&params, &[&own]).0["SellByCustomEMA#1"],
+        2
+    );
+}
+
+/// Formula knobs are positional and require a shared structure and sentinel mask.
+#[test]
+fn custom_ema_slots_offered_only_for_shared_skeleton() {
+    let own = |src: &str| HashMap::from([("SellByCustomEMA".into(), src.into())]);
+    let a = own("EMA(60,1)>888 AND EMA(5,1)<-1");
+    let b = own("ema(60s,1s)>999 AND ema(5s,1s)<-2");
+    let swapped = own("EMA(60,1)>1 AND EMA(5,1)<-888");
+    let different = own("EMA(61,1)>888 AND EMA(5,1)<-1");
+    let empty = HashMap::new();
+    let slots = TICK_PARAMS
+        .iter()
+        .filter(|f| super::super::params::formula_slot(f.key).is_some())
+        .collect::<Vec<_>>();
+    let keys = |owns: &[&HashMap<String, String>]| {
+        deps::compatible_slots(slots.clone(), owns, &HashMap::new())
+            .iter()
+            .map(|f| f.key)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(keys(&[&a, &b]), ["SellByCustomEMA#2"]);
+    assert!(keys(&[&a, &swapped]).is_empty());
+    assert!(keys(&[&a, &different]).is_empty());
+    assert!(keys(&[&a, &empty]).is_empty());
+    assert!(keys(&[]).is_empty());
+}
+
+/// A virtual edit must reach exit_params as a rewritten formula before the replay evaluates it.
+#[test]
+fn slot_point_rewrites_formula_before_walk() {
+    let own = HashMap::from([("SellByCustomEMA".into(), "EMA(2,1)>1".into())]);
+    let point = Point::from([("SellByCustomEMA#1", "-1".into())]);
+    let (_, exit) = params_of(
+        &own,
+        &HashMap::new(),
+        &HashMap::new(),
+        &point,
+        "PumpsDetection",
+        ModelSettings::default(),
+    );
+    let tape = super::super::custom_ema::SecondSeries::from_ticks(&[tick(0, 100.0)], 0, 10);
+    let formula = exit.custom_ema.as_ref().unwrap();
+    assert_eq!(formula.eval(&tape, &[], 10), Ok(true));
+    let (_, original) = params_of(
+        &own,
+        &HashMap::new(),
+        &HashMap::new(),
+        &Point::new(),
+        "PumpsDetection",
+        ModelSettings::default(),
+    );
+    assert_eq!(
+        original.custom_ema.as_ref().unwrap().eval(&tape, &[], 10),
+        Ok(false)
+    );
+    let bases = Bases {
+        owns: vec![&own],
+        of_deal: vec![0],
+    };
+    assert!(!bases.moves(&HashMap::new(), "SellByCustomEMA#1", "1.0"));
+    assert!(bases.moves(&HashMap::new(), "SellByCustomEMA#1", "-1"));
+}
+
+/// Saving one draft to two targets must preserve each target's spelling and untouched digits.
+#[test]
+fn fold_formula_edits_rewrites_per_strategy_original() {
+    let edits = vec![
+        ("SellByCustomEMA#2".into(), "-0.25".into()),
+        ("SellPrice".into(), "2".into()),
+    ];
+    for (source, expected) in [
+        (
+            "EMA(60,1)>+1% AND EMA(5,1)<-1",
+            "EMA(60,1)>+1% AND EMA(5,1)<-0.25",
+        ),
+        (
+            "ema(60s,1s) > 2 and ema(5s,1s) < -2%",
+            "ema(60s,1s) > 2 and ema(5s,1s) < -0.25%",
+        ),
+    ] {
+        let own = HashMap::from([("SellByCustomEMA".into(), source.into())]);
+        assert_eq!(
+            super::super::params::fold_formula_edits(&own, &edits),
+            vec![
+                ("SellPrice".into(), "2".into()),
+                ("SellByCustomEMA".into(), expected.into())
+            ]
+        );
+    }
+}

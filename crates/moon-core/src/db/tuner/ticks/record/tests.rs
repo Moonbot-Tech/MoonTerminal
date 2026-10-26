@@ -480,7 +480,7 @@ fn a_market_sell_hands_its_firing_only_when_both_groups_hold() {
     for other in [
         ExitParams {
             trailing_pct: -2.0,
-            ..fact
+            ..fact.clone()
         },
         ExitParams {
             stop_loss_pct: -2.0,

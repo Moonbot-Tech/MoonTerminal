@@ -377,3 +377,37 @@ fn the_stop_facts_print_per_segment_and_per_core() {
         assert!(text.contains(line), "missing {line:?} in:\n{text}");
     }
 }
+
+/// Collapsing these labels would hide the actionable cause in the reproduction report.
+#[test]
+fn unjudged_labels_cover_custom_ema_reasons() {
+    assert_eq!(
+        unjudged_label(Unjudged::CustomEmaUnsupported),
+        "custom EMA term not modelled"
+    );
+    assert_eq!(
+        unjudged_label(Unjudged::CustomEmaUnparsed),
+        "custom EMA formula unparsed"
+    );
+    assert_eq!(
+        unjudged_label(Unjudged::CustomEmaShortHistory),
+        "custom EMA history too short"
+    );
+    let d = private_deal(11, "Sell by FilterCheck:EMA(2s,1s) = 0");
+    let missed = verdict(
+        EntryFinding::Fact,
+        ExitFinding::Miss(ExitMiss::CustomEmaNotFired),
+    );
+    let report = input(
+        vec![ReportRow {
+            deal: &d,
+            venue: Some("EX-XX".into()),
+            tape: TapeClass::Covered,
+            verdict: Some(&missed),
+            outside_model: &[],
+        }],
+        ModelSettings::default(),
+    );
+    assert_eq!(aggregate(&report).segments[0].exit.custom_ema_not_fired, 1);
+    assert!(render(&report).contains("custom EMA not fired 1"));
+}
