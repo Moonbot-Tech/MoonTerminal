@@ -2,6 +2,25 @@ use super::super::state::{CoinFilter, CoinLists, CoinsState, SuggestedLists, coi
 use super::rows_for;
 use moon_core::db::analytics::GroupStat;
 
+/// Mask-covered report rows must be ticked while the literal mask remains editable as a row.
+#[test]
+fn mask_membership_ticks_report_rows_and_keeps_the_literal() {
+    let base = [coin("XALPHA", 3), coin("YBETA", 2)];
+    let mut state = CoinsState::default();
+    state.work.black.insert("XAL*".into());
+    state.work.white.insert("XAL*".into());
+    let model = rows_for(&mut state, &base, &base);
+    let covered = model
+        .rows
+        .iter()
+        .find(|r| r.name.as_ref() == "XALPHA")
+        .unwrap();
+    assert!(covered.black && covered.white);
+    assert!(model.rows.iter().any(|r| r.name.as_ref() == "XAL*"));
+    assert_eq!(model.counts.black, 2);
+    assert_eq!(model.counts.white, 2);
+}
+
 fn coin(name: &str, n: i64) -> GroupStat {
     GroupStat {
         key: name.to_string(),

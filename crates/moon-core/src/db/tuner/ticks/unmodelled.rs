@@ -1,4 +1,4 @@
-//! The exit fields a strategy can switch on that the model does not have — what a search and a
+//! The entry checks and exit fields the model does not follow — what a search and a
 //! write must warn about: the search ran without them, and a strategy that keeps them on will not
 //! exit the way the columns counted.
 //!
@@ -150,17 +150,71 @@ const DELTA_APPLIERS: &[&str] = &[
 /// The fields the dependency rules of [`WATCHED`] and its extra conditions read, spelled as the
 /// strategy dump spells them — a read by key is case-sensitive, and [`FieldDeps`] hands the
 /// names back lowercase. A unit test holds this against the bundled rules.
-const CONDITION_KEYS: &[&str] = &[
-    "HODLmode",
-    "AutoSell",
-    "UseStopLoss",
-    "PriceDownTimer",
-    "PriceDownRelative",
-    "SellPrice",
-    "SellShotDistance",
+const CONDITION_KEYS: &[&[&str]] = &[
+    &[
+        "HODLmode",
+        "AutoSell",
+        "UseStopLoss",
+        "PriceDownTimer",
+        "PriceDownRelative",
+        "SellPrice",
+        "SellShotDistance",
+        "CheckAfterBuy",
+        "SignalType",
+        "IgnoreFilters",
+        "IgnoreDelta",
+        "IgnoreVolume",
+        "IgnorePing",
+        "IgnorePrice",
+        "UseBV_SV_Filter",
+        "FilterBy",
+        "Delta2_Type",
+        "Delta3_Type",
+    ],
+    MOVING_FILTER_BOUNDS,
 ];
 
-/// One field of one strategy that switches on exit behaviour the model does not have.
+/// Time-moving admission bounds from the Delta, Volume, Ping and Price tabs.
+/// Each bound keeps its own bundled dependency rule; schema defaults decide whether it is on.
+const MOVING_FILTER_BOUNDS: &[&str] = &[
+    "Delta_24h_Min",
+    "Delta_24h_Max",
+    "Delta_3h_Min",
+    "Delta_3h_Max",
+    "Delta_BTC_Min",
+    "Delta_BTC_Max",
+    "Delta_Market_Min",
+    "Delta_Market_Max",
+    "Delta_BTC_24_Min",
+    "Delta_BTC_24_Max",
+    "Delta_Market_24_Min",
+    "Delta_Market_24_Max",
+    "Delta_BTC_5m_Min",
+    "Delta_BTC_5m_Max",
+    "Delta_BTC_1m_Min",
+    "Delta_BTC_1m_Max",
+    "Delta2_Min",
+    "Delta2_Max",
+    "Delta3_Min",
+    "Delta3_Max",
+    "FilterMin",
+    "FilterMax",
+    "MinVolume",
+    "MaxVolume",
+    "MinHourlyVolume",
+    "MaxHourlyVolume",
+    "MinHourlyVolFast",
+    "MaxHourlyVolFast",
+    "MinuteVolDeltaMin",
+    "MinuteVolDeltaMax",
+    "BV_SV_FilterRatio",
+    "BV_SV_FilterRatioMax",
+    "BinancePriceBug",
+    "BinancePriceBugMin",
+    "MaxPosition",
+];
+
+/// One field of one strategy that switches on behaviour the model does not follow.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnmodelledField {
     /// The field, as the strategy window names it.
@@ -180,12 +234,12 @@ pub fn watched_keys() -> Vec<String> {
         .iter()
         .chain(PARTLY_MODELLED)
         .map(|w| w.key)
-        .chain(CONDITION_KEYS.iter().copied())
+        .chain(CONDITION_KEYS.iter().flat_map(|keys| keys.iter().copied()))
         .map(str::to_string)
         .collect()
 }
 
-/// The exit fields `values` switches on that the model does not have, in the strategy window's
+/// The fields `values` switches on that the model does not follow, in the strategy window's
 /// order.
 ///
 /// Args:
@@ -205,7 +259,7 @@ pub fn unmodelled_fields(
         .iter()
         .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
         .collect();
-    for key in CONDITION_KEYS {
+    for key in CONDITION_KEYS.iter().flat_map(|keys| keys.iter()) {
         let lower = key.to_ascii_lowercase();
         if let Some(default) = defaults.get(&lower) {
             effective
@@ -213,7 +267,7 @@ pub fn unmodelled_fields(
                 .or_insert_with(|| default.to_string());
         }
     }
-    WATCHED
+    let mut out: Vec<_> = WATCHED
         .iter()
         .chain(PARTLY_MODELLED)
         .filter_map(|w| {
@@ -231,7 +285,46 @@ pub fn unmodelled_fields(
                 rule: w.rule,
             })
         })
-        .collect()
+        .collect();
+    // Source: https://moonbot.pro/documentation/filters-tab/filters-tab-parameters
+    // CheckAfterBuy re-checks filters while Buy rests and cancels it on failure; MoonShot
+    // forces it on (support KB). By-filter search scores only one detect-time snapshot.
+    // Source: https://moonbot.pro/documentation/filters-tab/filters-delta-tab
+    // DeltaSwitch's expanded re-check bounds are not modelled either. An observed fill proves
+    // its own order survived; warn about deeper variants, without unjudging the deal (rule None).
+    let yes = |key: &str| effective.get(key).and_then(|v| as_bool(v)) == Some(true);
+    let moonshot = effective.get("signaltype").is_some_and(|kind| {
+        kind.trim()
+            .eq_ignore_ascii_case(super::entry::KIND_MOONSHOT)
+    });
+    if (yes("checkafterbuy") || moonshot)
+        && !yes("ignorefilters")
+        && MOVING_FILTER_BOUNDS.iter().any(|key| {
+            let lower = key.to_ascii_lowercase();
+            let default = defaults
+                .get(&lower)
+                .map(f64::to_string)
+                .unwrap_or_else(|| "0".into());
+            effective
+                .get(&lower)
+                .is_some_and(|value| switched_on(key, value, &default, &effective, deps))
+        })
+    {
+        out.push(UnmodelledField {
+            key: "CheckAfterBuy",
+            value: if moonshot {
+                "YES (MoonShot)".into()
+            } else {
+                values
+                    .get("CheckAfterBuy")
+                    .cloned()
+                    .unwrap_or_else(|| "YES".into())
+            },
+            section: ParamSection::Filters,
+            rule: None,
+        });
+    }
+    out
 }
 
 /// The fields of `sections` — one strategy kind's schema — that the strategy holding `values`

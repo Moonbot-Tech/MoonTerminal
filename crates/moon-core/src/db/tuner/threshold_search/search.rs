@@ -35,6 +35,9 @@ use crate::db::metrics::{Tally, improvement_margin};
 #[cfg(test)]
 mod tests;
 
+/// One applied field with optional saved Min and Max sides.
+pub(super) type AppliedRange = (usize, Option<f64>, Option<f64>);
+
 /// Sentinel bin for a value below the first quantile edge. Quantile edges currently include the
 /// observed minimum, making this a defensive, unreachable case for derived bins.
 ///
@@ -482,7 +485,7 @@ pub(super) struct Columns {
 ///
 /// A Detect Min does not apply to a missing value (NaN). That row never carried the detect's
 /// number, and the what-if SQL keeps it with `IS NULL OR value >= min`. A Min-only field's Max
-/// is never saved, so it never filters here either.
+/// is never saved, so it never filters here either. Zero-off sides are absent bounds.
 ///
 /// Args:
 ///     fi: Index into `FIELDS`.
@@ -494,6 +497,8 @@ pub(super) struct Columns {
 ///     Whether the trade stays in under those bounds.
 fn value_passes(fi: usize, v: f64, from: Option<f64>, to: Option<f64>) -> bool {
     let spec = &super::super::FIELDS[fi];
+    let from = from.filter(|v| !spec.bound_is_off(false, *v));
+    let to = to.filter(|v| !spec.bound_is_off(true, *v));
     let min_ok = match from {
         Some(_) if spec.class == super::super::FieldClass::Detect && !v.is_finite() => true,
         Some(bound) => v >= bound,
@@ -523,6 +528,41 @@ fn quantile_edges(sorted_asc: &[f64], ne: usize) -> Vec<f64> {
     (0..=ne).map(|k| sorted_asc[k * (m - 1) / ne]).collect()
 }
 
+/// Eligible lower and upper bin boundaries for bounds that can be saved without opening a side.
+type EdgeMask = (Vec<bool>, Vec<bool>);
+
+/// Derive saved-bound eligibility from observed extrema, carrying across empty bins.
+/// Outer edges may open a zero-off side because they already admit every row on that side.
+pub(super) fn saved_edge_mask(
+    spec: &super::super::FieldSpec,
+    bins: &[u16],
+    values: &[f64],
+    ne: usize,
+) -> EdgeMask {
+    let mut minima = vec![f64::INFINITY; ne];
+    let mut maxima = vec![f64::NEG_INFINITY; ne];
+    for (&bin, &value) in bins.iter().zip(values) {
+        if bin != BELOW && value.is_finite() {
+            let bin = bin as usize;
+            minima[bin] = minima[bin].min(value);
+            maxima[bin] = maxima[bin].max(value);
+        }
+    }
+    let mut lower = vec![true; ne + 1];
+    let mut upper = vec![true; ne + 1];
+    let mut next_min = f64::INFINITY;
+    for i in (1..ne).rev() {
+        next_min = next_min.min(minima[i]);
+        lower[i] = !spec.bound_is_off(false, next_min);
+    }
+    let mut previous_max = f64::NEG_INFINITY;
+    for j in 1..ne {
+        previous_max = previous_max.max(maxima[j - 1]);
+        upper[j] = !spec.bound_is_off(true, previous_max);
+    }
+    (lower, upper)
+}
+
 /// Prepared sample: the shared columns plus the quantile bins derived from them. Built once per
 /// search and shared by every restart.
 ///
@@ -540,6 +580,8 @@ pub(super) struct Search {
     /// Flattened to `fi * n + t`, the same layout as the workspace's pass mask, so the descent's
     /// innermost loop walks one contiguous slice per field instead of chasing a pointer per row.
     bins: Vec<u16>,
+    /// Saved-edge eligibility, precomputed from observed train-bin extrema for zero-off fields.
+    eligible: Vec<Option<EdgeMask>>,
     /// Failure counts contributed by fields the caller fixed, per trade.
     base_fail: Vec<u16>,
     /// Whether a field may be searched (`false` for a caller-fixed field).
@@ -667,10 +709,19 @@ impl Search {
                     && matches!(locked.get(*fi), Some(Some((lo, hi))) if lo.is_some() || hi.is_some())
             })
             .count();
+        let eligible = (0..nf)
+            .map(|fi| {
+                let spec = &super::super::FIELDS[fi];
+                (spec.zero_disables() != (false, false)).then(|| {
+                    saved_edge_mask(spec, &bins[fi * n..(fi + 1) * n], &cols.vals[fi][..n], ne)
+                })
+            })
+            .collect();
         Some(Self {
             cols,
             edges,
             bins,
+            eligible,
             base_fail,
             free,
             is_slot,
@@ -694,12 +745,12 @@ impl Search {
     ///
     /// Returns:
     ///     Field index with its inclusive `(from, to)`, omitting fields left unfiltered and
-    ///     pairs that span the whole observed range, which filter nothing.
+    ///     pairs that span the whole observed range or disable both sides, which filter nothing.
     pub(super) fn applied_ranges(
         &self,
         sel: &[Option<(usize, usize)>],
         round: bool,
-    ) -> Vec<(usize, f64, f64)> {
+    ) -> Vec<AppliedRange> {
         sel.iter()
             .enumerate()
             .filter_map(|(fi, s)| {
@@ -709,7 +760,8 @@ impl Search {
                     let e = &self.edges[fi];
                     (from, to) = round_pair_outward(from, to, e[0], e[self.ne]);
                 }
-                Some((fi, from, to))
+                let (from, to) = super::super::FIELDS[fi].canonical_bounds(from, to);
+                (from.is_some() || to.is_some()).then_some((fi, from, to))
             })
             .collect()
     }
@@ -770,7 +822,7 @@ impl Search {
     ///
     /// The test is the INCLUSIVE `from..=to` on the field's own value — the same predicate the
     /// variant KPI issues as SQL — rather than bin membership, so the figures shown next to a
-    /// suggestion describe the filter the user is about to apply, rounding included. The
+    /// suggestion describe the filter the user is about to apply, rounding and zero-off included. The
     /// caller-fixed filters are honoured through the baseline failure counts.
     ///
     /// Args:
@@ -779,13 +831,13 @@ impl Search {
     ///
     /// Returns:
     ///     Totals, win split and drawdown of the trades passing every bound.
-    pub(super) fn tally(&self, applied: &[(usize, f64, f64)], rows: Range<usize>) -> Tally {
+    pub(super) fn tally(&self, applied: &[AppliedRange], rows: Range<usize>) -> Tally {
         let mut out = Tally::default();
         for t in rows {
             let passes = self.base_fail[t] == 0
                 && applied.iter().all(|(fi, from, to)| {
                     let v = self.cols.vals[*fi][t];
-                    value_passes(*fi, v, Some(*from), Some(*to))
+                    value_passes(*fi, v, *from, *to)
                 });
             if passes {
                 out.push(self.cols.profits[t]);
@@ -1014,7 +1066,10 @@ impl Search {
                     let i = rng.below(ne);
                     let j = i + 1 + rng.below(ne - i);
                     if allow[fi] {
-                        *s = Some((i, j));
+                        *s = self.eligible[fi]
+                            .as_ref()
+                            .is_none_or(|(lower, upper)| lower[i] && upper[j])
+                            .then_some((i, j));
                     }
                 }
             }
@@ -1230,6 +1285,9 @@ impl Search {
             tot_c,
             floor,
             super::super::FIELDS[fi].min_only(),
+            self.eligible[fi]
+                .as_ref()
+                .map(|(lower, upper)| (lower.as_slice(), upper.as_slice())),
         )
     }
 

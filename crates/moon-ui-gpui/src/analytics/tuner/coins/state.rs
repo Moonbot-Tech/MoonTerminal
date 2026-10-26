@@ -23,6 +23,7 @@ use moon_core::db::analytics::GroupStat;
 use moon_core::db::coin_lists::CoinListRows;
 use moon_core::db::tuner::coin_pick::CoinPick;
 use moon_core::db::tuner::{VarStats, Variant};
+use moon_core::symbol::CoinMask;
 
 /// Which coins the table shows. A coin may sit in BOTH lists — the views are separate
 /// lenses, not a partition, so nothing has to resolve that contradiction.
@@ -784,8 +785,17 @@ impl CoinsState {
     /// A blank token is refused rather than stored: it matches no row, so it would sit in
     /// the list inflating every count and marking the panel "changed" against a coin that
     /// does not exist.
+    /// A mask-covered coin stays listed; removing it requires editing the mask entry itself.
     pub(in crate::analytics::tuner) fn toggle(&mut self, black_side: bool, token: String) {
         if token.is_empty() {
+            return;
+        }
+        let set = if black_side {
+            &self.work.black
+        } else {
+            &self.work.white
+        };
+        if !set.contains(&token) && CoinMask::new(set).matches(&token) {
             return;
         }
         self.lists_rev = self.lists_rev.wrapping_add(1);
@@ -1034,7 +1044,9 @@ fn expand(lists: &CoinLists, universe: &[GroupStat]) -> (Variant, HashSet<String
     if lists.is_empty() {
         return (Variant::default(), HashSet::new(), 0);
     }
-    let white_on = !lists.white.is_empty();
+    let white = CoinMask::new(&lists.white);
+    let black = CoinMask::new(&lists.black);
+    let white_on = !white.is_empty();
     let (mut coins_in, mut coins_out) = (Vec::new(), Vec::new());
     let (mut bl_tok, mut wl_tok) = (HashSet::new(), HashSet::new());
     for g in universe {
@@ -1042,11 +1054,11 @@ fn expand(lists: &CoinLists, universe: &[GroupStat]) -> (Variant, HashSet<String
             continue;
         }
         let token = coin_token(&g.name);
-        if white_on && lists.white.contains(&token) {
+        if white_on && white.matches(&token) {
             coins_in.push(g.name.clone());
             wl_tok.insert(token.clone());
         }
-        if lists.black.contains(&token) {
+        if black.matches(&token) {
             coins_out.push(g.name.clone());
             bl_tok.insert(token);
         }

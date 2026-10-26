@@ -95,6 +95,54 @@ pub fn coin_match_key(coin: &str) -> String {
     strip_contract_suffix(coin.trim()).to_ascii_uppercase()
 }
 
+/// Strategy coin-list membership after contract and case normalization.
+/// Source: https://moonbot.pro/documentation/filters-tab/filters-tab-parameters
+/// CoinsWhiteList/CoinsBlackList use the support KB's mask form: `*` at the start or end.
+#[derive(Debug, Default)]
+pub struct CoinMask {
+    exact: std::collections::HashSet<String>,
+    prefixes: Vec<String>,
+    suffixes: Vec<String>,
+}
+
+impl CoinMask {
+    /// Compile list tokens once; unsupported star forms remain exact literals matching no real coin.
+    pub fn new(tokens: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        let mut out = Self::default();
+        for token in tokens {
+            let token = coin_match_key(token.as_ref());
+            if let Some(prefix) = token
+                .strip_suffix('*')
+                .filter(|s| !s.is_empty() && !s.contains('*'))
+            {
+                out.prefixes.push(prefix.to_string());
+            } else if let Some(suffix) = token
+                .strip_prefix('*')
+                .filter(|s| !s.is_empty() && !s.contains('*'))
+            {
+                out.suffixes.push(suffix.to_string());
+            } else {
+                // Bare `*`, stars at both ends, and middle stars are undocumented, not wildcards.
+                out.exact.insert(token);
+            }
+        }
+        out
+    }
+
+    /// Whether the report coin matches an exact entry or a supported prefix/suffix mask.
+    pub fn matches(&self, token: &str) -> bool {
+        let token = coin_match_key(token);
+        self.exact.contains(&token)
+            || self.prefixes.iter().any(|prefix| token.starts_with(prefix))
+            || self.suffixes.iter().any(|suffix| token.ends_with(suffix))
+    }
+
+    /// Whether the list imposes no restriction; an unsupported literal still makes it nonempty.
+    pub fn is_empty(&self) -> bool {
+        self.exact.is_empty() && self.prefixes.is_empty() && self.suffixes.is_empty()
+    }
+}
+
 /// A strategy coin list (`"ANC, GALA"` / `"mith,tribe"`) as DISTINCT match keys.
 ///
 /// The separator set and the key both live here so the terminal's coin table, its

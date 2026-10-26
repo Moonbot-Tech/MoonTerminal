@@ -6,13 +6,128 @@ use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
 use super::*;
 
+/// Zero-off bounds must not turn a disabled strategy side into a restrictive SQL predicate.
+#[test]
+fn where_sql_treats_a_zero_bound_on_a_zero_off_side_as_unset() {
+    for (field, from, to, empty) in [
+        ("pricebug", None, Some(0.0), true),
+        ("dmark", Some(0.0), None, true),
+        ("hvol", None, Some(0.0), false),
+    ] {
+        let variant = Variant {
+            bounds: vec![Bound {
+                field: field.into(),
+                from,
+                to,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(variant.where_sql().is_empty(), empty, "{field}");
+    }
+}
+
+/// A zero-only PriceBug optimum must yield to the best realizable saved range and its figures.
+#[test]
+fn single_field_never_suggests_a_zero_off_bound() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE trades(closedate INTEGER, pricebug REAL, pnl REAL);
+        INSERT INTO trades VALUES(1,0,20),(2,0,20),(3,1,-10),(4,2,-50);",
+    )
+    .unwrap();
+    let q = Query {
+        from: 0,
+        to: 10,
+        ..Default::default()
+    };
+    for round in [false, true] {
+        let suggestion = suggest_field_from_source(
+            &conn,
+            &q,
+            "(SELECT * FROM trades WHERE closedate>=?1 AND closedate<?2) o",
+            "pricebug",
+            1,
+            4,
+            round,
+        )
+        .unwrap()
+        .expect("the upper bound 1 keeps two wins and one loss");
+        // Inclusive <= 1 admits 20 + 20 - 10; the zero-only candidate cannot be saved.
+        assert_eq!(
+            (
+                suggestion.from,
+                suggestion.to,
+                suggestion.profit,
+                suggestion.n
+            ),
+            (None, Some(1.0), 30.0, 3)
+        );
+    }
+}
+
+/// Using the fill minute admits orders created before the schedule and mis-scores By-time.
+#[test]
+fn working_time_reads_the_orders_creation() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep(core_uid INTEGER, core_name TEXT,
+        coin TEXT, isshort INTEGER, buydate INTEGER, buysetdatems INTEGER,
+        closedate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES
+        (1,'CORE_A','XALPHA',0,36120,35940000,40000,1,10,1);",
+    )
+    .unwrap();
+    let q = Query {
+        from: 0,
+        to: 50000,
+        ..Default::default()
+    };
+    let source = super::super::analytics::unified_from(&conn, &q)
+        .unwrap()
+        .unwrap();
+    let variants = [
+        Variant {
+            tod: Some(TimeWindow::Day(600, 660)),
+            ..Default::default()
+        },
+        Variant {
+            tod: Some(TimeWindow::Day(540, 599)),
+            ..Default::default()
+        },
+    ];
+    for (stamp, expected) in [
+        (Some(35940000_i64), [0, 1]),
+        (None, [1, 0]),
+        (Some(0), [1, 0]),
+        (Some(36200000), [1, 0]),
+    ] {
+        conn.execute("UPDATE orders_rep SET buysetdatems=?1", [stamp])
+            .unwrap();
+        let stats = variant_stats_from_source(&conn, &q, &source, &variants).unwrap();
+        assert_eq!([stats[0].n, stats[1].n], expected, "stamp {stamp:?}");
+    }
+    // REAL milliseconds in the fill's second remain valid after conversion to seconds.
+    conn.execute_batch("UPDATE orders_rep SET buydate=35940, buysetdatems=35940999.5;")
+        .unwrap();
+    let open: i64 = conn
+        .query_row(&format!("SELECT {OPEN_TS} FROM orders_rep o"), [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(open, 35940);
+    conn.execute_batch("UPDATE orders_rep SET buydate=0, buysetdatems=35940000;")
+        .unwrap();
+    let stats = variant_stats_from_source(&conn, &q, &source, &variants).unwrap();
+    assert_eq!([stats[0].n, stats[1].n], [0, 1]);
+}
+
 /// Both group sides are needed to retain an old attainable optimum inside a giant equal run.
 #[test]
 fn single_field_keeps_lower_edge_of_quantile_group() {
     let mut vals = vec![(1.0, -50.0)];
     vals.extend(std::iter::repeat_n((2.0, 1.0), 18));
     vals.push((3.0, -50.0));
-    let s = best_range_with_passing(&mut vals, 1, 4, false, false, (0, 0.0)).unwrap();
+    let s = best_range_with_passing(&mut vals, 1, 4, false, None, (0, 0.0)).unwrap();
     assert_eq!(
         (s.from, s.to, s.profit, s.n),
         (Some(2.0), Some(2.0), 18.0, 18)
@@ -23,7 +138,7 @@ fn single_field_keeps_lower_edge_of_quantile_group() {
 #[test]
 fn single_field_scores_rounded_bounds() {
     let mut vals = [(1.231, 20.0), (1.232, -30.0), (2.345, 10.0), (3.0, -50.0)];
-    let s = best_range_with_passing(&mut vals, 1, 4, true, false, (0, 0.0)).unwrap();
+    let s = best_range_with_passing(&mut vals, 1, 4, true, None, (0, 0.0)).unwrap();
     assert_eq!(
         (s.from, s.to, s.profit, s.n),
         (Some(2.34), Some(2.35), 10.0, 1)
@@ -37,7 +152,7 @@ fn best_range(
     edges: usize,
     round: bool,
 ) -> Option<Suggestion> {
-    best_range_with_passing(vals, min_n, edges, round, false, (0, 0.0))
+    best_range_with_passing(vals, min_n, edges, round, None, (0, 0.0))
 }
 
 /// Exercise Min-only bounds without leaving a dead production wrapper.
@@ -48,7 +163,8 @@ fn best_range_bounded(
     round: bool,
     open_top: bool,
 ) -> Option<Suggestion> {
-    best_range_with_passing(vals, min_n, edges, round, open_top, (0, 0.0))
+    let spec = open_top.then(|| FIELDS.iter().find(|s| s.min_only()).unwrap());
+    best_range_with_passing(vals, min_n, edges, round, spec, (0, 0.0))
 }
 
 /// Fitting and held-out drawdown must use true UTC closes while schedule coordinates stay civil.
@@ -69,7 +185,7 @@ fn time_validation_scan_uses_true_utc_closes() {
     visit_time_rows_with_close(
         &conn,
         &q,
-        "(SELECT * FROM trades WHERE closedate>=?1 AND closedate<?2) o",
+        "(SELECT *, NULL AS buysetdatems FROM trades WHERE closedate>=?1 AND closedate<?2) o",
         "test",
         |_, _, _, close| closes.push(close),
     )
@@ -100,7 +216,8 @@ fn by_time_drawdown_orders_closes_in_true_utc() {
         axis: crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::Europe::Warsaw),
         ..Default::default()
     };
-    let source = "(SELECT * FROM trades WHERE closedate>=?1 AND closedate<?2) o";
+    let source =
+        "(SELECT *, NULL AS buysetdatems FROM trades WHERE closedate>=?1 AND closedate<?2) o";
     // Exercise both the direct baseline scan and the materialized schedule projection.
     for variants in [
         vec![Variant::default()],
@@ -145,7 +262,8 @@ fn by_time_minute_windows_match_entry_profiles() {
         to: i64::MAX,
         ..Default::default()
     };
-    let source = "(SELECT * FROM trades WHERE closedate>=?1 AND closedate<?2) o";
+    let source =
+        "(SELECT *, NULL AS buysetdatems FROM trades WHERE closedate>=?1 AND closedate<?2) o";
     let variants = [
         Variant::default(),
         Variant {
@@ -486,7 +604,8 @@ fn one_ordered_variant_statement_matches_independent_variant_scans() {
         to: 400,
         ..Default::default()
     };
-    let source = "(SELECT * FROM trades WHERE closedate >= ?1 AND closedate < ?2) o";
+    let source =
+        "(SELECT *, NULL AS buysetdatems FROM trades WHERE closedate >= ?1 AND closedate < ?2) o";
     let variants = vec![
         Variant::default(),
         Variant {
@@ -570,7 +689,7 @@ fn one_ordered_variant_statement_matches_independent_variant_scans() {
     let sql = variant_stats_sql("trades o", &variants);
     assert_eq!(sql.matches("FROM trades o").count(), 1, "one source scan");
     assert_eq!(sql.matches("ORDER BY").count(), 1, "one shared sort");
-    assert_eq!(sql.matches("CASE WHEN").count(), variants.len());
+    assert_eq!(sql.matches("CASE WHEN 1=1").count(), variants.len());
 }
 
 /// Replacing the source-consuming calls inside `tuner/mod.rs:coin_tuner_data` with
@@ -771,7 +890,8 @@ fn the_tuner_schedule_stays_on_the_cores_own_clock() {
          INSERT INTO trades VALUES (1_767_259_900, 1_767_259_800, 5.0, 10.0, 1);",
     )
     .expect("seed trade");
-    let source = "(SELECT closedate, buydate, pnl, spentbtc, core_uid FROM trades
+    let source =
+        "(SELECT closedate, buydate, pnl, spentbtc, core_uid, NULL AS buysetdatems FROM trades
                    WHERE closedate >= ?1 AND closedate < ?2) o";
 
     // Both axes the tuner writes back: a `tod` window over the day, and a `week_span` over the
@@ -1073,7 +1193,8 @@ fn by_time_projection_keeps_every_variant_row_of_the_full_copy() {
     seed_wide_trades(&conn, 3_000);
     let axis = crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::UTC);
     super::super::analytics::time_zone::install(&conn, &axis).expect("tuner scalars");
-    let source = "(SELECT * FROM trades WHERE closedate >= ?1 AND closedate < ?2) o";
+    let source =
+        "(SELECT *, NULL AS buysetdatems FROM trades WHERE closedate >= ?1 AND closedate < ?2) o";
     let variants = by_time_variants();
 
     let narrowed = variant_stats_sql(source, &variants);
@@ -1113,7 +1234,8 @@ fn by_time_projection_timing_probe() {
     seed_wide_trades(&conn, 200_000);
     let axis = crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::UTC);
     super::super::analytics::time_zone::install(&conn, &axis).expect("tuner scalars");
-    let source = "(SELECT * FROM trades WHERE closedate >= ?1 AND closedate < ?2) o";
+    let source =
+        "(SELECT *, NULL AS buysetdatems FROM trades WHERE closedate >= ?1 AND closedate < ?2) o";
     let variants = by_time_variants();
     for round in 0..3 {
         let started = std::time::Instant::now();
@@ -1164,7 +1286,7 @@ fn round_bound_keeps_a_value_already_on_its_grid() {
 fn a_min_only_field_cuts_from_below_only() {
     let mut vals = vec![(2.9, -10.0), (3.0, 20.0), (3.1, -3.0), (3.2, 1.0)];
     let s = best_range_bounded(&mut vals, 1, 4, false, true).expect("cutting 2.9 improves");
-    assert_eq!((s.from, s.to), (Some(3.0), Some(3.2)));
+    assert_eq!((s.from, s.to), (Some(3.0), None));
     assert_eq!(s.profit, 18.0);
     let v = Variant {
         bounds: vec![Bound {

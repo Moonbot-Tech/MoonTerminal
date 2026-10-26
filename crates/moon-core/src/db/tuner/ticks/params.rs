@@ -34,6 +34,7 @@ pub enum ParamGroup {
 /// search gates on; the section only decides where the row is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ParamSection {
+    Filters,
     StrategySettings,
     Stops,
     SellOrder,
@@ -56,6 +57,7 @@ impl ParamSection {
     /// The section's title as the strategy schema spells it (`assets/param_deps.toml`).
     pub fn schema_title(self) -> &'static str {
         match self {
+            ParamSection::Filters => "Filters",
             ParamSection::StrategySettings => "Strategy settings",
             ParamSection::Stops => "Stops",
             ParamSection::SellOrder => "Sell order",

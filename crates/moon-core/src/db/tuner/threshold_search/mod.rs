@@ -111,15 +111,15 @@ fn edges_max_for(heavy: bool) -> usize {
     if heavy { EDGES_MAX } else { EDGES_MAX_LIGHT }
 }
 
-/// Final range for one field.
+/// Final saved range for one field, with zero-off sides represented as absent bounds.
 #[derive(Clone, Debug)]
 pub struct FieldRange {
     /// Report field the range constrains.
     pub field: &'static str,
-    /// Inclusive lower bound.
-    pub from: f64,
-    /// Inclusive upper bound.
-    pub to: f64,
+    /// Inclusive lower bound, or no Min.
+    pub from: Option<f64>,
+    /// Inclusive upper bound, or no Max.
+    pub to: Option<f64>,
 }
 
 /// The field set composition chose, reported through the ranges that were actually applied.
@@ -409,9 +409,9 @@ pub fn suggest(
 /// Report a composition through the ranges the final refit actually applied.
 ///
 /// A chosen field the refit left unfiltered is counted, not listed: the user is shown the set
-/// their thresholds came from, and a badge beside an empty threshold box would describe a
+/// their thresholds came from, and a badge beside empty threshold boxes would describe a
 /// different set than the grid does.
-fn composed_set(out: &compose::ComposeOutcome, applied: &[(usize, f64, f64)]) -> ComposedSet {
+fn composed_set(out: &compose::ComposeOutcome, applied: &[search::AppliedRange]) -> ComposedSet {
     let fields: Vec<(&'static str, u8)> = applied
         .iter()
         .filter(|(fi, _, _)| out.chosen[*fi])

@@ -62,6 +62,33 @@ const fn field(
 }
 
 impl FieldSpec {
+    /// Whether zero disables the Min and Max sides rather than imposing a numeric bound.
+    /// Source: https://moonbot.pro/documentation/filters-tab/filters-ping-tab
+    /// https://moonbot.pro/documentation/filters-tab/filters-volume-tab
+    /// https://moonbot.pro/documentation/filters-tab/filters-base-tab
+    /// These parameters ignore zero; the support KB also defines MarkPrice's zero as off.
+    pub fn zero_disables(&self) -> (bool, bool) {
+        match self.col {
+            "lev" => (false, true),
+            "dmark" | "pricebug" | "hvolf" | "vd1m" | "bvsvratio" => (true, true),
+            _ => (false, false),
+        }
+    }
+
+    /// Whether a value disables the requested side (`max_side` selects Max instead of Min).
+    pub fn bound_is_off(&self, max_side: bool, v: f64) -> bool {
+        let (min, max) = self.zero_disables();
+        (if max_side { max } else { min }) && v == 0.0
+    }
+
+    /// Turn saved zero-off values and an unsavable Max into absent bounds before scoring.
+    pub(super) fn canonical_bounds(&self, from: f64, to: f64) -> (Option<f64>, Option<f64>) {
+        (
+            (!self.bound_is_off(false, from)).then_some(from),
+            (!self.min_only() && !self.bound_is_off(true, to)).then_some(to),
+        )
+    }
+
     /// Whether the threshold can be saved to the strategy through parameters or a slot.
     /// Unmapped fields (da1m, d5s) are marked in the grid and excluded from automatic
     /// suggestions by default.

@@ -100,6 +100,7 @@ impl Lcg {
 ///
 /// Enumerates `i` then `j` ascending and keeps the first strict maximum, which is exactly the
 /// tie-breaking rule the fast path has to reproduce.
+/// Eligibility restricts both implementations to the same representable saved bounds.
 fn best_pair_reference(
     pre_profit: &[f64],
     pre_count: &[usize],
@@ -107,12 +108,16 @@ fn best_pair_reference(
     tot_c: usize,
     floor: f64,
     open_top: bool,
+    eligible: Option<(&[bool], &[bool])>,
 ) -> Option<(usize, usize)> {
     let ne = pre_profit.len() - 1;
     let mut best: Option<(usize, usize)> = None;
     let mut best_p = floor;
     for i in 0..ne {
         for j in (i + 1)..=ne {
+            if eligible.is_some_and(|(lower, upper)| !lower[i] || !upper[j]) {
+                continue;
+            }
             // A Min-only field's slice always runs to the top edge.
             if open_top && j != ne {
                 continue;
@@ -161,6 +166,7 @@ fn run_reference(s: &Search, allow: &[bool], restarts: usize, seed: u64) -> Opti
 /// The draws are taken for every SEARCHABLE field — both at initialization and in the per-pass
 /// shuffle — and only the assignment and the visit are withheld, mirroring the production rule
 /// that keeps the random stream a property of the search rather than of the mask.
+/// Unrepresentable random starts are discarded after consuming their usual draws.
 fn one_restart_reference(s: &Search, allow: &[bool], restart: usize, rng: &mut Rng) -> Outcome {
     let nf = s.field_count();
     let (n, ne) = (s.n, s.ne);
@@ -181,7 +187,10 @@ fn one_restart_reference(s: &Search, allow: &[bool], restart: usize, rng: &mut R
                 let i = rng.below(ne);
                 let j = i + 1 + rng.below(ne - i);
                 if allow[fi] {
-                    *sl = Some((i, j));
+                    *sl = s.eligible[fi]
+                        .as_ref()
+                        .is_none_or(|(lower, upper)| lower[i] && upper[j])
+                        .then_some((i, j));
                 }
             }
         }
@@ -276,7 +285,7 @@ fn one_restart_reference(s: &Search, allow: &[bool], restart: usize, rng: &mut R
     Outcome { sel, profit }
 }
 
-/// One field's best range, computed by scanning every trade and every pair.
+/// One field's best representable range, computed by scanning every trade and every pair.
 fn best_for_field_reference(
     s: &Search,
     fi: usize,
@@ -324,6 +333,9 @@ fn best_for_field_reference(
         tot_c,
         tot_p + improvement_margin(tot_p),
         FIELDS[fi].min_only(),
+        s.eligible[fi]
+            .as_ref()
+            .map(|(lower, upper)| (lower.as_slice(), upper.as_slice())),
     )
 }
 
@@ -475,7 +487,7 @@ fn try_build(
 }
 
 /// The bounds a result finally applies, through the production rule itself.
-fn applied_bounds(s: &Search, out: &Outcome, _ne: usize) -> Vec<(usize, f64, f64)> {
+fn applied_bounds(s: &Search, out: &Outcome, _ne: usize) -> Vec<AppliedRange> {
     s.applied_ranges(&out.sel, false)
 }
 
@@ -828,11 +840,11 @@ fn the_returned_range_selects_the_trades_the_optimizer_scored() {
     // where the half-open and the inclusive reading of a pair disagree about real money.
     let profits = vec![10.0, -100.0, 0.0, 0.0, 0.0];
     let mut vals = vec![vec![7.0; 5]; FIELDS.len()];
-    vals[0] = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+    vals[0] = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     let ne = 4;
     let search = build(profits, &vals, &all_free(), 1, ne);
 
-    // By hand: with five sorted values and four edges, `edges` is [0, 1, 2, 3, 4] and each trade
+    // By hand: with five sorted values and four edges, `edges` is [1, 2, 3, 4, 5] and each trade
     // lands in the bin of its own index (the last clamped into bin 3). So the pair 0..1 selects
     // the single profitable trade and nothing else.
     let applied = search.applied_ranges(&[Some((0, 1))], false);
@@ -846,8 +858,8 @@ fn the_returned_range_selects_the_trades_the_optimizer_scored() {
     assert!((scored.profit - 10.0).abs() < 1e-12, "{}", scored.profit);
 
     // And the arrangement really is one where the naive reading differs: taking the pair's upper
-    // EDGE as an inclusive bound would also pass the trade valued exactly 1.
-    let naive = search.tally(&[(0, 0.0, 1.0)], 0..5);
+    // EDGE as an inclusive bound would also pass the trade valued exactly 2.
+    let naive = search.tally(&[(0, Some(1.0), Some(2.0))], 0..5);
     assert_eq!(naive.n, 2, "the fixture must expose the difference");
     assert!((naive.profit - -90.0).abs() < 1e-12, "{}", naive.profit);
 }
@@ -1321,7 +1333,7 @@ fn a_detect_min_keeps_a_row_whose_number_is_missing() {
         1,
         4,
     );
-    let applied = open.tally(&[(xfi, 3.0, 3.0)], 0..3);
+    let applied = open.tally(&[(xfi, Some(3.0), Some(3.0))], 0..3);
     assert_eq!(applied.n, 2);
     assert_eq!(applied.profit, 12.0);
 }
@@ -1370,10 +1382,10 @@ fn a_detect_min_search_keeps_rows_that_never_carried_the_number() {
         .find(|(fi, _, _)| *fi == xfi)
         .expect("the search suggests a Detect Min");
     assert!(
-        from.is_finite() && *from > 2.0,
-        "from {from} must sit above the two losses"
+        from.is_some_and(|from| from.is_finite() && from > 2.0),
+        "from {from:?} must sit above the two losses"
     );
-    assert!(to.is_finite(), "a saved bound must not be NaN");
+    assert!(to.is_none(), "a Min-only field has no saved Max");
     let tally = search.tally(&applied, 0..7);
     assert_eq!(tally.n, 5);
     assert_eq!(tally.profit, -240.0);

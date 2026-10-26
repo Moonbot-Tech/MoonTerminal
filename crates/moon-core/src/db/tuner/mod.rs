@@ -49,10 +49,15 @@ pub struct Bound {
     pub to: Option<f64>,
 }
 
-/// Trade OPEN time for schedules: WorkingTime/WorkingWeekTime gate ENTRY into a trade, so the
-/// day and minute come from `buydate` (when the trade opened), not `closedate` (when it closed).
-/// Fall back to `closedate` when the open time is missing (0/NULL).
-const OPEN_TS: &str = "COALESCE(NULLIF(o.buydate, 0), o.closedate)";
+/// With CheckAfterBuy=NO, filters (including WorkingTime/WorkingWeekTime) are checked only at
+/// detect time, so schedules gate order creation. Fall back to the fill when creation is
+/// missing or its whole second is later than a present fill, then to close time. Stamps are core-local milliseconds;
+/// cast their quotient to seconds even when a replica stores them as REAL.
+/// CheckAfterBuy=YES (always on MoonShot) also cancels resting orders outside the window;
+/// this single-stamp gate cannot express that later cancellation.
+/// Source: https://moonbot.pro/documentation/filters-tab/filters-tab-parameters
+/// https://moonbot.pro/documentation/filters-tab/filters-time-tab
+const OPEN_TS: &str = "COALESCE(CASE WHEN o.buysetdatems > 0 AND (NULLIF(o.buydate,0) IS NULL OR CAST(o.buysetdatems / 1000 AS INTEGER) <= o.buydate) THEN CAST(o.buysetdatems / 1000 AS INTEGER) END, NULLIF(o.buydate, 0), o.closedate)";
 
 /// A "what-if" variant = extra conditions on top of the base selection. Empty = "Fact".
 /// The "By filter" axis sets `bounds` (field ranges); "By time" — two INDEPENDENT
@@ -95,14 +100,17 @@ impl Variant {
 
     /// Variant WHERE suffix. Fields are gated through the `FIELDS` whitelist; NULL counts as
     /// zero (as in other report filters); numbers are literals from form-provided f64 values,
-    /// so they cannot inject SQL. Hours, days, and minutes are integers and likewise safe.
+    /// so they cannot inject SQL. Zero-off sides impose no predicate. Hours, days, and minutes
+    /// are integers and likewise safe.
     fn where_sql(&self) -> String {
         let mut w = String::new();
         for b in &self.bounds {
             let Some(spec) = FIELDS.iter().find(|s| s.col == b.field) else {
                 continue;
             };
-            if let Some(v) = b.from.filter(|v| v.is_finite()) {
+            let (from, to) =
+                spec.canonical_bounds(b.from.unwrap_or(f64::NAN), b.to.unwrap_or(f64::NAN));
+            if let Some(v) = from.filter(|v| v.is_finite()) {
                 if spec.class == FieldClass::Detect {
                     // NULL is a deal of another detect, which this threshold never gates.
                     w.push_str(&format!(
@@ -114,7 +122,7 @@ impl Variant {
                 }
             }
             // A Min-only field's upper bound is never saved, so it never filters here either.
-            if let Some(v) = b.to.filter(|v| v.is_finite() && !spec.min_only()) {
+            if let Some(v) = to.filter(|v| v.is_finite()) {
                 w.push_str(&format!(" AND COALESCE(o.\"{}\",0) <= {v}", b.field));
             }
         }
@@ -1017,24 +1025,23 @@ fn suggest_field_from_source(
     };
     // The outer result reports read status; the inner option reports whether a
     // threshold improves on the baseline.
-    let open_top = spec.is_some_and(|spec| spec.min_only());
     Ok(best_range_with_passing(
         &mut vals,
         min_n.max(1) as usize,
         edges,
         round,
-        open_top,
+        spec,
         passing,
     ))
 }
 
-/// Pick a valued range without splitting equal field values, including always-passing rows.
+/// Pick a saved range without splitting equal values, canonicalizing zero-off sides before scoring.
 fn best_range_with_passing(
     vals: &mut [(f64, f64)],
     min_n: usize,
     edges: usize,
     round: bool,
-    open_top: bool,
+    spec: Option<&FieldSpec>,
     passing: (usize, f64),
 ) -> Option<Suggestion> {
     let (passing_n, passing_profit) = passing;
@@ -1077,35 +1084,40 @@ fn best_range_with_passing(
     // can appear to "win" by about 1e-12.
     let floor = total + improvement_margin(total + passing_profit);
     let valued_min = min_n.saturating_sub(passing_n).max(1);
-    if round {
-        return best_rounded_range(vals, &pre, &pos, valued_min, open_top, passing, floor);
+    let open_top = spec.is_some_and(|spec| spec.min_only());
+    if round || spec.is_some_and(|spec| spec.zero_disables() != (false, false)) {
+        return best_rounded_range(vals, &pre, &pos, valued_min, (spec, round), passing, floor);
     }
-    range_pick::best_pair(&profit_at, &pos, valued_min, len, floor, open_top).map(|(i, j)| {
+    range_pick::best_pair(&profit_at, &pos, valued_min, len, floor, open_top, None).map(|(i, j)| {
         let (a, b) = (pos[i], pos[j]);
-        // Always return both bounds; distribution edges use the observed
-        // minimum or maximum rather than an open interval.
+        // Distribution edges use observed values; unsavable sides remain absent.
         let (from, to) = (vals[a].0, vals[b - 1].0);
+        let (from, to) = spec.map_or((Some(from), Some(to)), |spec| {
+            spec.canonical_bounds(from, to)
+        });
         Suggestion {
-            from: Some(from),
-            to: Some(to),
+            from,
+            to,
             profit: pre[b] - pre[a] + passing_profit,
             n: (b - a + passing_n) as i64,
         }
     })
 }
 
-/// Choose among rounded quantile candidates by the rows their inclusive saved bounds admit.
+/// Choose among canonical quantile candidates by the rows their inclusive saved bounds admit.
 /// At most 1025 group edges are considered, and Min-only fields visit only one upper edge.
 fn best_rounded_range(
     vals: &[(f64, f64)],
     pre: &[f64],
     pos: &[usize],
     min_n: usize,
-    open_top: bool,
+    settings: (Option<&FieldSpec>, bool),
     passing: (usize, f64),
     floor: f64,
 ) -> Option<Suggestion> {
     let len = vals.len();
+    let (spec, round) = settings;
+    let open_top = spec.is_some_and(|spec| spec.min_only());
     let mut best = None;
     let mut best_profit = floor;
     for (i, &a) in pos.iter().enumerate().take(pos.len() - 1) {
@@ -1113,17 +1125,26 @@ fn best_rounded_range(
             if open_top && b != len {
                 continue;
             }
-            let (from, to) =
-                round_pair_outward(vals[a].0, vals[b - 1].0, vals[0].0, vals[len - 1].0);
-            let lo = vals.partition_point(|r| r.0 < from);
-            let hi = vals.partition_point(|r| r.0 <= to);
+            let (from, to) = if round {
+                round_pair_outward(vals[a].0, vals[b - 1].0, vals[0].0, vals[len - 1].0)
+            } else {
+                (vals[a].0, vals[b - 1].0)
+            };
+            let (from, to) = spec.map_or((Some(from), Some(to)), |spec| {
+                spec.canonical_bounds(from, to)
+            });
+            if from.is_none() && to.is_none() {
+                continue;
+            }
+            let lo = from.map_or(0, |from| vals.partition_point(|r| r.0 < from));
+            let hi = to.map_or(len, |to| vals.partition_point(|r| r.0 <= to));
             let n = hi - lo;
             let profit = pre[hi] - pre[lo];
             if n >= min_n && n < len && profit > best_profit {
                 best_profit = profit;
                 best = Some(Suggestion {
-                    from: Some(from),
-                    to: Some(to),
+                    from,
+                    to,
                     profit: profit + passing.1,
                     n: (n + passing.0) as i64,
                 });
