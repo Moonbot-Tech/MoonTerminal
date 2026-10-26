@@ -15,6 +15,7 @@
 //! moon-remote --data <dir> status --host <h> [--port 22] [--logs <n>]
 //! moon-remote --data <dir> telegram --host <h> [--port 22] (--off | --state | [--token]
 //!             [--mini-app on|off] [--zone <IANA zone>] [--language ru|en|es|uk|tr|pt|vi])
+//! moon-remote --data <dir> core-move | core-move-finish | core-move-remove …  (see move_cli.rs)
 //! ```
 //!
 //! A server not set up from this machine yet needs `--host-key`: without it `setup` only prints the
@@ -36,6 +37,8 @@ use moon_remote::station::CoreKey;
 use moon_remote::{app_key, hosts, keys, script, setup, station};
 use zeroize::Zeroizing;
 
+mod move_cli;
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("error: {e:#}");
@@ -55,7 +58,7 @@ fn run() -> anyhow::Result<()> {
     );
     anyhow::ensure!(
         !args.0.is_empty(),
-        "no command: setup | station-bin | station-update | cores | status | telegram"
+        "no command: setup | station-bin | station-update | cores | status | telegram | core-move"
     );
     let command = args.0.remove(0);
     let target = Target {
@@ -263,8 +266,12 @@ fn run() -> anyhow::Result<()> {
                 .map(|t| Secret::new(t.trim()));
             station::push_telegram(&target, token.as_ref(), &change, off, &mut say)?;
         }
+        "core-move" | "core-move-finish" | "core-move-remove" => {
+            move_cli::run(&command, target, &mut args)?;
+        }
         other => anyhow::bail!(
-            "unknown command {other:?}: setup | station-bin | station-update | cores | status | telegram"
+            "unknown command {other:?}: setup | station-bin | station-update | cores | status | \
+             telegram | core-move | core-move-finish | core-move-remove"
         ),
     }
     Ok(())
