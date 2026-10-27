@@ -69,7 +69,13 @@ impl CoreMoveView {
         let dir = default_dir(&name);
         Self {
             host: input(false, "", window, cx),
-            login: input(false, "root", window, cx),
+            // Empty, with the usual answer as its placeholder: a prefilled "root" was missed and
+            // sent where the provider's login is another (a stand that admits only `moon`).
+            login: {
+                let state = input(false, "", window, cx);
+                state.update(cx, |st, c| st.set_placeholder("root", window, c));
+                state
+            },
             password: input(true, "", window, cx),
             key_path: input(false, "", window, cx),
             passphrase: input(true, "", window, cx),
@@ -103,6 +109,13 @@ impl CoreMoveView {
         };
         if target.host.parse::<Ipv4Addr>().is_err() {
             self.error = Some(t!("core_move.form.need_ipv4").to_string());
+            cx.notify();
+            return;
+        }
+        // Asked here too: the review that follows shows no fields to correct it in.
+        let login = text(&self.login, cx);
+        if login.is_empty() || login.contains(char::is_whitespace) {
+            self.error = Some(t!("core_move.form.need_login").to_string());
             cx.notify();
             return;
         }
@@ -144,6 +157,10 @@ impl CoreMoveView {
             .host
             .parse::<Ipv4Addr>()
             .map_err(|_| t!("core_move.form.need_ipv4").to_string())?;
+        let login = text(&self.login, cx);
+        if login.is_empty() || login.contains(char::is_whitespace) {
+            return Err(t!("core_move.form.need_login").to_string());
+        }
         let dir = text(&self.dir, cx);
         if dir.is_empty() || dir.contains(char::is_whitespace) {
             return Err(t!("core_move.form.need_dir").to_string());
@@ -156,7 +173,7 @@ impl CoreMoveView {
         let key = self
             .by_key
             .then(|| (text(&self.key_path, cx), secret(&self.passphrase, cx)));
-        let first = job::first_access(text(&self.login, cx), secret(&self.password, cx), key)
+        let first = job::first_access(login, secret(&self.password, cx), key)
             .map_err(|e| format!("{e:#}"))?;
         Ok(MoveForm {
             target,
@@ -231,9 +248,13 @@ fn secret(state: &Entity<MoonInputState>, cx: &App) -> Option<Zeroizing<String>>
 }
 
 /// Open the move window of core `uid` named `name`, or bring up the one it has.
+///
+/// `owner_display` is the owner's display, read by the caller with `window.display(cx)`: called
+/// from the owner's own click handler, the owner window cannot be reached from here to ask.
 pub(crate) fn open(
     backend: Entity<Backend>,
     owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
     uid: u64,
     name: String,
     cx: &mut App,
@@ -246,16 +267,21 @@ pub(crate) fn open(
         return;
     }
     let zoom = moon_ui::MoonTheme::content_zoom(cx);
-    let bounds = Bounds {
-        origin: point(px(180.0), px(120.0)),
-        size: size(px(DEFAULT_SIZE.0 * zoom), px(DEFAULT_SIZE.1 * zoom)),
-    };
-    let opts = crate::window::windowing::tool_window_options(
+    // Centred on the display the Settings window is on: a one-off dialog keeps no position.
+    let display_id =
+        owner_display.or_else(|| crate::window::windowing::owner_display_id(owner, cx));
+    let bounds = Bounds::centered(
+        display_id,
+        size(px(DEFAULT_SIZE.0 * zoom), px(DEFAULT_SIZE.1 * zoom)),
+        cx,
+    );
+    let mut opts = crate::window::windowing::tool_window_options(
         t!("core_move.window_title", name = &name).to_string(),
         WindowBounds::Windowed(bounds),
         Some(size(px(MIN_SIZE.0 * zoom), px(MIN_SIZE.1 * zoom))),
         owner,
     );
+    opts.display_id = display_id;
     let b = backend.clone();
     let created = cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);

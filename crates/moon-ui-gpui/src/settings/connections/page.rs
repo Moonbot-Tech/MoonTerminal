@@ -205,6 +205,7 @@ impl SettingsView {
                     Some((uid, name)) => crate::core_move_window::open(
                         self.backend.clone(),
                         Some(window.window_handle()),
+                        window.display(cx).map(|display| display.id()),
                         uid,
                         name,
                         cx,
