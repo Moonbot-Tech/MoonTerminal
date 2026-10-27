@@ -5,7 +5,7 @@ permissions:
 
 # Eight jobs, seven of which gate a merge:
 #   Windows .exe — the real release binary, uploaded as an artifact.
-#   Tests        — `cargo test --workspace`. Blocking: a red suite is a red PR.
+#   Tests        — `cargo nextest run --workspace` plus doc-tests. Blocking: a red suite is a red PR.
 #   Clippy       — `cargo clippy --workspace --all-targets --locked -- -D warnings`. Blocking.
 #   Station      — the headless station for Linux (static musl): build, test and clippy of
 #                  `moon-station` on the target it ships for. Blocking.
@@ -132,7 +132,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # `--no-fail-fast`: without it the first red binary hides the other four,
+      # `--no-fail-fast`: report every failing test in one run rather than
       # costing a push-and-wait cycle per breakage. Default features only — that
       # is the set that ships; `debug-tools` is opt-in and gated separately.
       # The lockfile contract — see the header.
@@ -143,8 +143,16 @@ jobs:
       - name: Assert the refresh moved MoonUI and nothing else
         shell: bash
         run: bash .github/scripts/assert-only-moonui-moved.sh
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      # The CI profile gives slower hosted runners more time without retrying failures.
       - name: Run test suite
-        run: cargo test --workspace --no-fail-fast --target x86_64-pc-windows-msvc
+        run: cargo nextest run --workspace --profile ci --no-fail-fast --target x86_64-pc-windows-msvc
+      # nextest excludes doc-tests. Preserve --no-fail-fast coverage even when a test fails.
+      - name: Run workspace doc-tests
+        if: ${{ !cancelled() }}
+        run: cargo test --doc --workspace --no-fail-fast --target x86_64-pc-windows-msvc
 
   clippy:
     name: Clippy (x86_64-msvc)
@@ -203,8 +211,12 @@ jobs:
         run: bash .github/scripts/assert-only-moonui-moved.sh
       - name: Build the station
         run: cargo build -p moon-station --locked --target x86_64-unknown-linux-musl
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      # A bin-only package has no doc-tests; nextest runs its entire test set.
       - name: Test the station
-        run: cargo test -p moon-station --locked --target x86_64-unknown-linux-musl
+        run: cargo nextest run -p moon-station --profile ci --locked --target x86_64-unknown-linux-musl
       - name: Lint the station
         run: cargo clippy -p moon-station --all-targets --locked --target x86_64-unknown-linux-musl -- -D warnings
 
