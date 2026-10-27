@@ -77,6 +77,9 @@ enum Kind {
     Groups,
     /// A startup read that resolves durable bot ownership.
     Recovery,
+    /// A moved core's new address sent: its result goes to that core's move, not to the
+    /// station's own outcome.
+    CoreMove,
 }
 
 /// Backend-owned bot-host admission and station jobs, as the Settings segment shows them.
@@ -138,6 +141,10 @@ pub(crate) struct StationJobs {
     handing_over: bool,
     /// A user's job pressed while a quiet read or a zone push ran: it starts right after.
     waiting: Option<(job::Job, bool)>,
+    /// Moved cores whose new address waits for the station, sent one at a time when it is free.
+    core_moves: Vec<u64>,
+    /// The moved core whose address the running job sends.
+    core_move_running: Option<u64>,
     /// The last user job said nothing about the bot: its state is read again after it.
     pending_refresh: bool,
     /// The running job is an "Apply on the server" of the chats and the bot's menu.
@@ -900,7 +907,8 @@ impl Backend {
             | Kind::Window
             | Kind::Zone
             | Kind::Groups
-            | Kind::Recovery => {}
+            | Kind::Recovery
+            | Kind::CoreMove => {}
         }
         st.revision = st.revision.wrapping_add(1);
         let rx = if kind == Kind::Groups {
@@ -953,6 +961,23 @@ impl Backend {
         cx.notify();
     }
 
+    /// Have the station follow a core moved to a new address, behind whatever job runs now. A
+    /// terminal with no station of its own tells the move so and sends nothing.
+    pub(crate) fn station_follow_core(&mut self, uid: u64, cx: &mut Context<Self>) {
+        let Some(target) = known_target() else {
+            self.core_move_note(uid, t!("core_move.station.none").to_string());
+            return;
+        };
+        if self.station.running {
+            if !self.station.core_moves.contains(&uid) {
+                self.station.core_moves.push(uid);
+            }
+            return;
+        }
+        self.station.core_move_running = Some(uid);
+        self.station_begin(job::Job::CoreKey { target, uid }, false, Kind::CoreMove, cx);
+    }
+
     /// After a job, drain user work and refreshes before reconciling the observed shared window.
     fn station_next(&mut self, cx: &mut Context<Self>) {
         // Adopt the first report before rebuilding queued tape work; user work and refreshes
@@ -960,6 +985,10 @@ impl Backend {
         self.station_window_adopt(cx);
         if let Some((job, hand_over)) = self.station.waiting.take() {
             self.station_begin(job, hand_over, Kind::User, cx);
+        }
+        if !self.station.running && !self.station.core_moves.is_empty() {
+            let uid = self.station.core_moves.remove(0);
+            self.station_follow_core(uid, cx);
         }
         if !self.station.running && std::mem::take(&mut self.station.pending_refresh) {
             self.station_refresh_bot(cx);
@@ -994,7 +1023,12 @@ impl Backend {
                 return false;
             }
             job::Event::Line(line) => {
-                self.station.push_line(line);
+                match self.station.core_move_running {
+                    Some(uid) if self.station.kind == Kind::CoreMove => {
+                        self.core_move_note(uid, line)
+                    }
+                    _ => self.station.push_line(line),
+                }
                 return false;
             }
             job::Event::CoresResult(line) => {
@@ -1030,6 +1064,18 @@ impl Backend {
         }
         if kind == Kind::Window {
             self.station.apply_window(done);
+            return true;
+        }
+        if kind == Kind::CoreMove {
+            // The job's own lines say what it did; only a failure needs one more.
+            if let Some(uid) = self.station.core_move_running.take()
+                && let job::Done::Failed { reason, .. } = done
+            {
+                self.core_move_note(
+                    uid,
+                    t!("core_move.station.failed", reason = reason).to_string(),
+                );
+            }
             return true;
         }
         if kind == Kind::Zone || kind == Kind::Groups {

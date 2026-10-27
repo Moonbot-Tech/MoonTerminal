@@ -10,10 +10,10 @@ use crate::design;
 
 /// Owned display data lets MoonUI construct the scrollbar with the render window and app.
 #[derive(IntoElement)]
-pub(super) struct StationProgress {
-    pub(super) status: Option<moon_tg::StatusFacts>,
-    pub(super) lines: Vec<String>,
-    pub(super) scroll: ScrollHandle,
+pub(crate) struct StationProgress {
+    pub(crate) status: Option<moon_tg::StatusFacts>,
+    pub(crate) lines: Vec<String>,
+    pub(crate) scroll: ScrollHandle,
 }
 
 impl RenderOnce for StationProgress {

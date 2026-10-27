@@ -37,7 +37,7 @@ use super::access::{ChatEd, ChatsOf};
 use crate::backend::station::job::{self, BotPlan, Job};
 use crate::design;
 
-mod progress;
+pub(crate) mod progress;
 
 /// Field width in unscaled pixels, as the token field of the terminal's bot.
 const FIELD_W: f32 = 260.0;
@@ -172,7 +172,7 @@ pub(in crate::settings) fn known_server() -> Option<Target> {
 }
 
 /// `host` or `host:port`; an IPv6 address goes in brackets when it names a port.
-pub(super) fn parse_target(text: &str) -> Option<Target> {
+pub(crate) fn parse_target(text: &str) -> Option<Target> {
     let text = text.trim();
     if text.is_empty() {
         return None;

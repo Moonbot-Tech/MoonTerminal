@@ -3,6 +3,7 @@
 //! this sibling module use `pub(crate)` because private items here would not be crate-wide.
 
 mod alert_sound;
+pub(crate) mod core_move;
 pub(crate) mod core_warn;
 mod detect_sound;
 mod favorites;

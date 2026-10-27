@@ -164,6 +164,9 @@ pub(crate) enum Job {
     Status { target: Target },
     /// Read the tail of the station's journal.
     Logs { target: Target },
+    /// Send one core's new address after its move to a new server, when the station follows that
+    /// core; a core the station does not follow is left alone.
+    CoreKey { target: Target, uid: u64 },
 }
 
 impl Job {
@@ -273,6 +276,7 @@ impl JobButton {
             Job::Groups { .. } => Self::Key("telegram.server.groups_send"),
             Job::Status { .. } => Self::Key("telegram.server.status"),
             Job::Logs { .. } => Self::Key("telegram.server.logs"),
+            Job::CoreKey { .. } => Self::Background,
         }
     }
 
@@ -853,6 +857,55 @@ fn run(
                 moon_remote::script::STEP_TIMEOUT,
             )?)?;
             show_journal(&out.stdout_text(), say);
+            Ok(Done::Ok {
+                transferred: false,
+                bot: None,
+                bot_off: false,
+            })
+        }
+        Job::CoreKey { target, uid } => {
+            // The station matches cores by address, and a moved core keeps its key: the station
+            // reads it as an address edit of the core it already has, so its history goes on.
+            let status = bot::bot_state(&target)?.station.ok_or(CoresChanged)?;
+            let listing = status.cores.ok_or(CoresChanged)?;
+            let all = moon_core::config::read_core_keys()?;
+            let here = saved_local_cores(&all, &[uid]);
+            let fresh = cores_sync::reconcile(&here, &listing, status.core_uid_high_water);
+            let row = fresh.iter().find(|row| row.terminal_uid == Some(uid));
+            let wanted = match row {
+                Some(row) if row.state == cores_sync::RowState::Same => {
+                    say(Progress::Text(
+                        rust_i18n::t!("core_move.station.same").to_string(),
+                    ));
+                    None
+                }
+                Some(cores_sync::Row {
+                    state: cores_sync::RowState::KeyDiffers | cores_sync::RowState::NameDiffers,
+                    station_uid: Some(station_uid),
+                    ..
+                }) => Some(Upsert {
+                    terminal_uid: uid,
+                    station_uid: *station_uid,
+                    add: false,
+                }),
+                _ => {
+                    say(Progress::Text(
+                        rust_i18n::t!("core_move.station.not_followed").to_string(),
+                    ));
+                    None
+                }
+            };
+            if let Some(wanted) = wanted {
+                let selected =
+                    cores_sync::selected_changes(&[wanted], &fresh).ok_or(CoresChanged)?;
+                if !selected.is_empty() {
+                    let keys = upsert_keys(&all, &selected)?;
+                    station::push_cores_with_add_flags(&target, &keys, &[false], None, say)?;
+                }
+                say(Progress::Text(
+                    rust_i18n::t!("core_move.station.sent").to_string(),
+                ));
+            }
             Ok(Done::Ok {
                 transferred: false,
                 bot: None,

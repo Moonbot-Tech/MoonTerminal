@@ -31,7 +31,9 @@ mod share;
 mod sound_folder;
 mod storage;
 pub(crate) use storage::trades_cleanup_startup;
-mod telegram;
+/// Open for the core move window, which takes the station form's address parser and progress
+/// log; the tab's own items keep their narrower visibility.
+pub(crate) mod telegram;
 mod trade_sounds;
 
 use std::collections::HashSet;
@@ -451,6 +453,9 @@ pub struct SettingsView {
     /// Row key of the core whose card the Cores page shows. Re-validated by every rebuild of the
     /// core rows (`rebuild_conn`) and on every frame (`valid_selection`).
     conn_selected: Option<u64>,
+    /// The backend's count of core moves that switched a row, as the Connections fields last
+    /// showed it (`Backend::core_moves_switched`).
+    core_moves_seen: u64,
     /// Signature of data consumed by Settings: draft/configuration fields plus session statuses.
     last_sig: u64,
     /// Whether the CONFIG draft differed from the saved config as of the last backend
@@ -818,6 +823,7 @@ impl SettingsView {
         .detach();
 
         let initial_sig = settings_sig(backend.read(cx));
+        let core_moves_seen = backend.read(cx).core_moves_switched;
         let initial_counts = nav_counts(backend.read(cx));
         let initial_dirty = backend_dirty(backend.read(cx));
         let initial_saved = SavedPageSigs::of(&backend.read(cx).config);
@@ -858,6 +864,9 @@ impl SettingsView {
                 this.dirty_pages = pages;
                 changed = true;
             }
+            // A moved core's new address reaches the draft from outside; the render that sees
+            // the count move rebuilds the Connections fields (it has the window they need).
+            changed |= b.core_moves_switched != this.core_moves_seen;
             if changed {
                 cx.notify();
             }
@@ -917,6 +926,7 @@ impl SettingsView {
             icons: IconSet::discover(),
             picking: None,
             conn_selected: None,
+            core_moves_seen,
             last_sig: initial_sig,
             draft_dirty: initial_dirty,
             dirty_pages: initial_pages,

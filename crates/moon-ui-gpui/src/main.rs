@@ -26,6 +26,7 @@ mod contrast;
 mod controls;
 mod core_color;
 mod core_expert;
+mod core_move_window;
 mod crowd;
 mod design;
 mod diag;
@@ -94,6 +95,13 @@ struct Backend {
     telegram: moon_tg::TelegramState,
     /// The station's server work (Settings -> Telegram -> Bot on a server): outlives the window.
     station: backend::station::StationJobs,
+    /// Moves of cores onto Linux servers, one per core: they outlive their windows.
+    core_moves: backend::core_move::CoreMoves,
+    /// The "Move to VPS…" window of each core that has one open.
+    core_move_windows: HashMap<u64, WindowHandle<Root>>,
+    /// How many moves pointed a core's row at its new server; an open Settings window rebuilds
+    /// its Connections fields when this moves.
+    core_moves_switched: u64,
     /// Process-wide self-update state shared by every group window.
     updater: Entity<update::UpdateController>,
     session: SessionManager,
