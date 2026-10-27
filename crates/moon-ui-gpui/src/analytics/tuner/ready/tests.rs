@@ -93,6 +93,8 @@ fn deal(uid: i64, strategy_id: i64, core_uid: u64) -> Deal {
 }
 
 fn key(scope_gen: u64, report_gen: u64) -> ReadyKey {
+    // Class and status lines translate; the first lookup must not run on the 2 MiB test stack.
+    crate::test_locale::warm();
     ReadyKey {
         scope_gen,
         report_gen,

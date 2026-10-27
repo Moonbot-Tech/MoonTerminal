@@ -998,25 +998,29 @@ fn run_release_validator(root: &Path, tag: &str) -> Output {
 /// Resolve Git for Windows' Bash instead of the higher-priority WSL compatibility launcher.
 #[cfg(windows)]
 fn release_script_bash() -> PathBuf {
-    let output = Command::new("where.exe")
-        .arg("git.exe")
-        .output()
-        .expect("locate Git for Windows");
-    assert!(
-        output.status.success(),
-        "Git for Windows lookup failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("Git path must be UTF-8");
-    let bash = stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .flat_map(|git| Path::new(git).ancestors().skip(1).take(4))
-        .map(|root| root.join("bin/bash.exe"))
-        .find(|candidate| candidate.is_file())
-        .unwrap_or_else(|| panic!("Git for Windows Bash is missing below: {stdout}"));
-    bash
+    static BASH: OnceLock<PathBuf> = OnceLock::new();
+    BASH.get_or_init(|| {
+        let output = Command::new("where.exe")
+            .arg("git.exe")
+            .output()
+            .expect("locate Git for Windows");
+        assert!(
+            output.status.success(),
+            "Git for Windows lookup failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("Git path must be UTF-8");
+        let bash = stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .flat_map(|git| Path::new(git).ancestors().skip(1).take(4))
+            .map(|root| root.join("bin/bash.exe"))
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| panic!("Git for Windows Bash is missing below: {stdout}"));
+        bash
+    })
+    .clone()
 }
 
 /// Resolve the ordinary Bash executable for release scripts on non-Windows CI hosts.
@@ -1645,15 +1649,13 @@ fn run_release_script(root: &Path, script: &str, args: &[&str]) -> Output {
         .expect("run release script fixture")
 }
 
-/// Breakage guarded: replacing draft-list discovery with the tag endpoint reproduces GitHub's 404,
-/// while publishing by a tag or wrong id can finalize metadata other than the verified draft.
+/// Replacing draft-list discovery with the tag endpoint reproduces GitHub's 404.
 #[test]
-fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
+fn release_verifier_discovers_the_exact_draft_from_release_lists() {
     if !release_scripts_can_run() {
         return;
     }
-    let (root, commit) = create_release_script_fixture("publish");
-    let publisher = ".github/scripts/publish-verified-release.sh";
+    let (root, commit) = create_release_script_fixture("list-discovery");
 
     let draft = release_fixture_json(&commit, true, false);
     write_draft_fixture(&root, &draft);
@@ -1667,13 +1669,31 @@ fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
             && !verify_calls.contains("releases/tags/v0.24.2"),
         "draft verification did not use bounded list discovery: {verify_calls}"
     );
+    std::fs::remove_dir_all(root).expect("remove list-discovery fixture");
+}
 
+/// Accepting a draft for another commit would publish bytes outside the verified tag.
+#[test]
+fn release_verifier_rejects_the_wrong_target_commit() {
+    if !release_scripts_can_run() {
+        return;
+    }
+    let (root, _) = create_release_script_fixture("wrong-target");
     write_draft_fixture(&root, &release_fixture_json(&"0".repeat(40), true, false));
     assert_verifier(
         &root,
         Err("release target does not match the tagged commit"),
     );
+    std::fs::remove_dir_all(root).expect("remove wrong-target fixture");
+}
 
+/// Hex case must not make GitHub's valid digest appear different from the local asset.
+#[test]
+fn release_verifier_accepts_an_uppercase_digest() {
+    if !release_scripts_can_run() {
+        return;
+    }
+    let (root, commit) = create_release_script_fixture("uppercase-digest");
     // GitHub documents the asset digest as hex without fixing its case, so the comparison must
     // normalize what it receives — and must still refuse bytes that are not the local ones.
     let uppercase = WINDOWS_ASSET_SHA256.to_uppercase();
@@ -1682,7 +1702,16 @@ fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
         &release_fixture_json_with_digest(&commit, true, false, &uppercase),
     );
     assert_verifier(&root, Ok("4242"));
+    std::fs::remove_dir_all(root).expect("remove uppercase-digest fixture");
+}
 
+/// Accepting a mismatched Windows digest would install unverified bytes.
+#[test]
+fn release_verifier_rejects_a_bad_windows_digest() {
+    if !release_scripts_can_run() {
+        return;
+    }
+    let (root, commit) = create_release_script_fixture("bad-windows-digest");
     write_draft_fixture(
         &root,
         &release_fixture_json_with_digest(&commit, true, false, &"f".repeat(64)),
@@ -1691,7 +1720,16 @@ fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
         &root,
         Err("published digest does not match the local Windows asset"),
     );
+    std::fs::remove_dir_all(root).expect("remove bad-windows-digest fixture");
+}
 
+/// Accepting a mismatched station digest would install unverified bytes as root.
+#[test]
+fn release_verifier_rejects_a_bad_station_digest() {
+    if !release_scripts_can_run() {
+        return;
+    }
+    let (root, commit) = create_release_script_fixture("bad-station-digest");
     // A station binary that is not the one built is refused the same way: its updater would
     // install it as root on the user's server.
     write_draft_fixture(
@@ -1708,7 +1746,18 @@ fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
         &root,
         Err("published digest does not match the local station asset moon-station-x86_64"),
     );
+    std::fs::remove_dir_all(root).expect("remove bad-station-digest fixture");
+}
 
+/// Publishing by tag or checking postconditions out of order can finalize the wrong draft.
+#[test]
+fn release_publisher_patches_the_verified_id_before_checking_publication() {
+    if !release_scripts_can_run() {
+        return;
+    }
+    let (root, commit) = create_release_script_fixture("publish-order");
+    let publisher = ".github/scripts/publish-verified-release.sh";
+    let draft = release_fixture_json(&commit, true, false);
     write_draft_fixture(&root, &draft);
     std::fs::write(root.join("requests.log"), "").expect("reset publication request log");
     let published = run_release_script(&root, publisher, &["v0.24.2", &commit, "MoonTerminal.exe"]);

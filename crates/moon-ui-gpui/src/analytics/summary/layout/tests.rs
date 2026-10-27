@@ -1112,181 +1112,200 @@ fn page(face: PageFace, width: f32) -> Rc<dyn Fn(MoonPalette, &gpui::App) -> Any
 /// and above it below 1100, the side cards pair at 900 and stack at 600, and the KPI band follows
 /// its 4 / 2x2 / 1 layout; the empty and error buttons are never narrower than their labels and
 /// the banner keeps its text inside — in every theme, language and zoom.
-#[gpui::test]
-fn summary_tab_blocks_never_overlap_every_language_theme_and_width(cx: &mut gpui::TestAppContext) {
-    for face in [
-        PageFace::Data,
-        PageFace::CatchUp,
-        PageFace::Loading,
-        PageFace::Empty,
-        PageFace::Error,
-    ] {
-        probe(
-            cx,
-            |width| page(face, width),
-            |visual, at, width| {
-                let at = format!("{at} {face:?}");
-                let at = at.as_str();
-                let col = bounds(visual, "probe-col", at);
-                match face {
-                    PageFace::Data | PageFace::CatchUp => {
-                        let page = bounds(visual, "sum-page", at);
-                        assert!(inside(page, col), "page escaped the tab ({at})");
-                        let mut stack = Vec::new();
-                        if matches!(face, PageFace::CatchUp) {
-                            stack.push(("banner", bounds(visual, "sum-banner", at)));
-                        }
-                        stack.push(("kpi", bounds(visual, "sum-page-kpi", at)));
-                        stack.push(("main", bounds(visual, "sum-main", at)));
-                        stack.push(("cores", bounds(visual, "sum-page-cores", at)));
-                        for (k, (name, b)) in stack.iter().enumerate() {
-                            assert!(inside(*b, page), "{name} escaped the page ({at})");
-                            if k > 0 {
-                                let (prev, a) = stack[k - 1];
-                                assert!(
-                                    a.bottom() <= b.origin.y + px(0.5),
-                                    "{prev} runs into {name} ({at})"
-                                );
-                            }
-                        }
-                        let main = bounds(visual, "sum-main", at);
-                        let chart = bounds(visual, "sum-main-chart", at);
-                        let side = bounds(visual, "sum-side", at);
-                        let ins = bounds(visual, "sum-ins-card", at);
-                        let tr = bounds(visual, "sum-trades-card", at);
-                        for (name, b) in [
-                            ("chart", chart),
-                            ("side", side),
-                            ("insights", ins),
-                            ("trades", tr),
-                        ] {
-                            assert!(inside(b, main), "{name} escaped the main row ({at})");
-                        }
-                        assert!(no_overlap(chart, side), "chart over the side column ({at})");
-                        assert!(no_overlap(ins, tr), "insights over trades ({at})");
-                        match kpi_cols(width, 1.0) {
-                            KpiCols::Four => {
-                                assert!(
-                                    chart.right() <= side.origin.x + px(0.5),
-                                    "wide: side not beside the chart ({at})"
-                                );
-                                // A row that aligns its columns to the top (or a chart slot
-                                // that is not a column) leaves a hole under the chart card
-                                // whenever the side column is the taller one.
-                                let card = bounds(visual, "sum-chart-card", at);
-                                assert!(
-                                    (card.bottom() - side.bottom()).abs() <= px(2.0)
-                                        && card.bottom() + px(2.0) >= tr.bottom(),
-                                    "wide: chart card ends {} above the side column ({at})",
-                                    f32::from(side.bottom() - card.bottom())
-                                );
-                                let plot = bounds(visual, "sum-chart-area", at);
-                                assert!(
-                                    inside(plot, card),
-                                    "wide: grown plot escaped its card ({at})"
-                                );
-                                assert!(
-                                    chart.size.width > side.size.width,
-                                    "wide: the chart must take the larger share ({at})"
-                                );
-                            }
-                            KpiCols::Two => {
-                                assert!(
-                                    chart.bottom() <= side.origin.y + px(0.5),
-                                    "side not under the chart ({at})"
-                                );
-                                assert!(
-                                    ins.right() <= tr.origin.x + px(0.5),
-                                    "side cards not paired ({at})"
-                                );
-                            }
-                            KpiCols::One => {
-                                assert!(
-                                    chart.bottom() <= side.origin.y + px(0.5),
-                                    "side not under the chart ({at})"
-                                );
-                                assert!(
-                                    ins.bottom() <= tr.origin.y + px(0.5),
-                                    "side cards not stacked ({at})"
-                                );
-                            }
-                        }
-                        let g: Vec<_> = (0..4).map(|i| bounds(visual, &kpi_group(i), at)).collect();
-                        match kpi_cols(width, 1.0) {
-                            KpiCols::Four => assert!(
-                                (1..4).all(|i| g[i].origin.y == g[0].origin.y),
-                                "KPI not in one row ({at})"
-                            ),
-                            KpiCols::Two => assert!(
-                                g[1].origin.y == g[0].origin.y && g[2].origin.y > g[0].origin.y,
-                                "KPI not 2x2 ({at})"
-                            ),
-                            KpiCols::One => assert!(
-                                (1..4).all(|i| g[i].origin.y > g[i - 1].origin.y),
-                                "KPI not stacked ({at})"
-                            ),
-                        }
-                        if matches!(face, PageFace::CatchUp) {
-                            let banner = bounds(visual, "sum-banner", at);
-                            assert!(inside(banner, page), "banner escaped ({at})");
-                        }
+fn assert_summary_tab_blocks_never_overlap(cx: &mut gpui::TestAppContext, face: PageFace) {
+    probe(
+        cx,
+        |width| page(face, width),
+        |visual, at, width| {
+            let at = format!("{at} {face:?}");
+            let at = at.as_str();
+            let col = bounds(visual, "probe-col", at);
+            match face {
+                PageFace::Data | PageFace::CatchUp => {
+                    let page = bounds(visual, "sum-page", at);
+                    assert!(inside(page, col), "page escaped the tab ({at})");
+                    let mut stack = Vec::new();
+                    if matches!(face, PageFace::CatchUp) {
+                        stack.push(("banner", bounds(visual, "sum-banner", at)));
                     }
-                    PageFace::Loading => {
-                        let sk = bounds(visual, "sum-skeleton", at);
-                        let cap = bounds(visual, "sum-skeleton-caption", at);
-                        assert!(inside(sk, col), "skeleton escaped ({at})");
-                        assert!(inside(cap, sk), "loading caption escaped ({at})");
-                    }
-                    PageFace::Empty | PageFace::Error => {
-                        let sel = if matches!(face, PageFace::Empty) {
-                            "sum-state-empty"
-                        } else {
-                            "sum-state-error"
-                        };
-                        let frame = bounds(visual, sel, at);
-                        let title = bounds(visual, "sum-state-title", at);
-                        let body = bounds(visual, "sum-state-body", at);
-                        assert!(inside(frame, col), "state escaped ({at})");
-                        assert!(
-                            inside(title, frame) && inside(body, frame),
-                            "state text escaped ({at})"
-                        );
-                        assert!(
-                            title.bottom() <= body.origin.y + px(0.5),
-                            "title over body ({at})"
-                        );
-                        let labels: Vec<String> = if matches!(face, PageFace::Empty) {
-                            vec![
-                                t!("analytics.sum.empty.show_year").to_string(),
-                                t!("analytics.sum.empty.reset").to_string(),
-                            ]
-                        } else {
-                            vec![t!("analytics.sum.error.retry").to_string()]
-                        };
-                        for (k, label) in labels.iter().enumerate() {
-                            let btn = bounds(visual, &format!("sum-state-btn-{k}"), at);
-                            assert!(inside(btn, frame), "button {k} escaped ({at})");
-                            let need = visual.update(|_, cx| {
-                                // A MoonButton label renders at its tier's size under the UI zoom only.
-                                design::ui_text_width_zoomed(
-                                    cx,
-                                    label,
-                                    design::BODY_TEXT,
-                                    500.0,
-                                    false,
-                                )
-                            });
+                    stack.push(("kpi", bounds(visual, "sum-page-kpi", at)));
+                    stack.push(("main", bounds(visual, "sum-main", at)));
+                    stack.push(("cores", bounds(visual, "sum-page-cores", at)));
+                    for (k, (name, b)) in stack.iter().enumerate() {
+                        assert!(inside(*b, page), "{name} escaped the page ({at})");
+                        if k > 0 {
+                            let (prev, a) = stack[k - 1];
                             assert!(
-                                fits(btn, need),
-                                "button {k} narrower than {label:?} {} vs {need} ({at})",
-                                f32::from(btn.size.width)
+                                a.bottom() <= b.origin.y + px(0.5),
+                                "{prev} runs into {name} ({at})"
                             );
                         }
                     }
+                    let main = bounds(visual, "sum-main", at);
+                    let chart = bounds(visual, "sum-main-chart", at);
+                    let side = bounds(visual, "sum-side", at);
+                    let ins = bounds(visual, "sum-ins-card", at);
+                    let tr = bounds(visual, "sum-trades-card", at);
+                    for (name, b) in [
+                        ("chart", chart),
+                        ("side", side),
+                        ("insights", ins),
+                        ("trades", tr),
+                    ] {
+                        assert!(inside(b, main), "{name} escaped the main row ({at})");
+                    }
+                    assert!(no_overlap(chart, side), "chart over the side column ({at})");
+                    assert!(no_overlap(ins, tr), "insights over trades ({at})");
+                    match kpi_cols(width, 1.0) {
+                        KpiCols::Four => {
+                            assert!(
+                                chart.right() <= side.origin.x + px(0.5),
+                                "wide: side not beside the chart ({at})"
+                            );
+                            // A row that aligns its columns to the top (or a chart slot
+                            // that is not a column) leaves a hole under the chart card
+                            // whenever the side column is the taller one.
+                            let card = bounds(visual, "sum-chart-card", at);
+                            assert!(
+                                (card.bottom() - side.bottom()).abs() <= px(2.0)
+                                    && card.bottom() + px(2.0) >= tr.bottom(),
+                                "wide: chart card ends {} above the side column ({at})",
+                                f32::from(side.bottom() - card.bottom())
+                            );
+                            let plot = bounds(visual, "sum-chart-area", at);
+                            assert!(
+                                inside(plot, card),
+                                "wide: grown plot escaped its card ({at})"
+                            );
+                            assert!(
+                                chart.size.width > side.size.width,
+                                "wide: the chart must take the larger share ({at})"
+                            );
+                        }
+                        KpiCols::Two => {
+                            assert!(
+                                chart.bottom() <= side.origin.y + px(0.5),
+                                "side not under the chart ({at})"
+                            );
+                            assert!(
+                                ins.right() <= tr.origin.x + px(0.5),
+                                "side cards not paired ({at})"
+                            );
+                        }
+                        KpiCols::One => {
+                            assert!(
+                                chart.bottom() <= side.origin.y + px(0.5),
+                                "side not under the chart ({at})"
+                            );
+                            assert!(
+                                ins.bottom() <= tr.origin.y + px(0.5),
+                                "side cards not stacked ({at})"
+                            );
+                        }
+                    }
+                    let g: Vec<_> = (0..4).map(|i| bounds(visual, &kpi_group(i), at)).collect();
+                    match kpi_cols(width, 1.0) {
+                        KpiCols::Four => assert!(
+                            (1..4).all(|i| g[i].origin.y == g[0].origin.y),
+                            "KPI not in one row ({at})"
+                        ),
+                        KpiCols::Two => assert!(
+                            g[1].origin.y == g[0].origin.y && g[2].origin.y > g[0].origin.y,
+                            "KPI not 2x2 ({at})"
+                        ),
+                        KpiCols::One => assert!(
+                            (1..4).all(|i| g[i].origin.y > g[i - 1].origin.y),
+                            "KPI not stacked ({at})"
+                        ),
+                    }
+                    if matches!(face, PageFace::CatchUp) {
+                        let banner = bounds(visual, "sum-banner", at);
+                        assert!(inside(banner, page), "banner escaped ({at})");
+                    }
                 }
-            },
-        );
-    }
+                PageFace::Loading => {
+                    let sk = bounds(visual, "sum-skeleton", at);
+                    let cap = bounds(visual, "sum-skeleton-caption", at);
+                    assert!(inside(sk, col), "skeleton escaped ({at})");
+                    assert!(inside(cap, sk), "loading caption escaped ({at})");
+                }
+                PageFace::Empty | PageFace::Error => {
+                    let sel = if matches!(face, PageFace::Empty) {
+                        "sum-state-empty"
+                    } else {
+                        "sum-state-error"
+                    };
+                    let frame = bounds(visual, sel, at);
+                    let title = bounds(visual, "sum-state-title", at);
+                    let body = bounds(visual, "sum-state-body", at);
+                    assert!(inside(frame, col), "state escaped ({at})");
+                    assert!(
+                        inside(title, frame) && inside(body, frame),
+                        "state text escaped ({at})"
+                    );
+                    assert!(
+                        title.bottom() <= body.origin.y + px(0.5),
+                        "title over body ({at})"
+                    );
+                    let labels: Vec<String> = if matches!(face, PageFace::Empty) {
+                        vec![
+                            t!("analytics.sum.empty.show_year").to_string(),
+                            t!("analytics.sum.empty.reset").to_string(),
+                        ]
+                    } else {
+                        vec![t!("analytics.sum.error.retry").to_string()]
+                    };
+                    for (k, label) in labels.iter().enumerate() {
+                        let btn = bounds(visual, &format!("sum-state-btn-{k}"), at);
+                        assert!(inside(btn, frame), "button {k} escaped ({at})");
+                        let need = visual.update(|_, cx| {
+                            // A MoonButton label renders at its tier's size under the UI zoom only.
+                            design::ui_text_width_zoomed(cx, label, design::BODY_TEXT, 500.0, false)
+                        });
+                        assert!(
+                            fits(btn, need),
+                            "button {k} narrower than {label:?} {} vs {need} ({at})",
+                            f32::from(btn.size.width)
+                        );
+                    }
+                }
+            }
+        },
+    );
+}
+
+/// A data-page geometry regression must fail the complete language/theme/width probe.
+#[gpui::test]
+fn summary_tab_data_never_overlaps_every_language_theme_and_width(cx: &mut gpui::TestAppContext) {
+    assert_summary_tab_blocks_never_overlap(cx, PageFace::Data);
+}
+
+/// A catch-up banner must not overlap the data page in any presentation.
+#[gpui::test]
+fn summary_tab_catch_up_never_overlaps_every_language_theme_and_width(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_summary_tab_blocks_never_overlap(cx, PageFace::CatchUp);
+}
+
+/// Loading captions must stay inside their skeleton in every presentation.
+#[gpui::test]
+fn summary_tab_loading_never_overlaps_every_language_theme_and_width(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_summary_tab_blocks_never_overlap(cx, PageFace::Loading);
+}
+
+/// Empty-state text and actions must fit without overlap in every presentation.
+#[gpui::test]
+fn summary_tab_empty_never_overlaps_every_language_theme_and_width(cx: &mut gpui::TestAppContext) {
+    assert_summary_tab_blocks_never_overlap(cx, PageFace::Empty);
+}
+
+/// Error-state text and retry actions must fit without overlap in every presentation.
+#[gpui::test]
+fn summary_tab_error_never_overlaps_every_language_theme_and_width(cx: &mut gpui::TestAppContext) {
+    assert_summary_tab_blocks_never_overlap(cx, PageFace::Error);
 }
 
 /// With the comparison off a profitable period still shows "N% of profit" under the drawdown:

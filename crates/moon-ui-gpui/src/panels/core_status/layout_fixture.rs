@@ -22,6 +22,8 @@ pub(super) const LOCALES: [&str; 7] = ["ru", "en", "es", "uk", "tr", "pt", "vi"]
 
 /// Install the dark presentation theme at zoom 1. Layout does not depend on the light palette.
 pub(super) fn install_dark(cx: &mut gpui::TestAppContext) {
+    // Alarm and update copy translates; the first lookup must not run on the 2 MiB test stack.
+    crate::test_locale::warm();
     cx.update(|cx| {
         MoonTheme::install_config(
             crate::startup::moon_theme_config_for_presentation(

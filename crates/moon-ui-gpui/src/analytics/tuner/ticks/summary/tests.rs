@@ -65,6 +65,8 @@ fn tally(n: i64, profit: f64) -> Tally {
 
 /// A synthetic result whose gains and sufficient holdout independently support Apply.
 fn result() -> SearchResult {
+    // Summary copy translates; the first lookup must not run on the 2 MiB test stack.
+    crate::test_locale::warm();
     SearchResult {
         values: Vec::new(),
         searched: Vec::new(),
@@ -219,6 +221,8 @@ fn informational_range_note_does_not_refuse_a_successful_search() {
 /// An expired forecast without measured restart throughput must disappear instead of claiming zero.
 #[test]
 fn running_time_left_is_unknown_when_the_unmeasured_forecast_expires() {
+    // The summary title translates; the first lookup must not run on the 2 MiB test stack.
+    crate::test_locale::warm();
     let mut state = TicksState::default();
     let started = std::time::Instant::now() - Duration::from_secs(8);
     state.sugg = super::super::state::SuggState::Running {
@@ -370,6 +374,8 @@ fn changed_header_counts_only_differing_fields_and_localizes_varies() {
 /// A blank stored field must remain an explicit muted absence before the change arrow.
 #[test]
 fn changed_fields_show_absence_for_missing_empty_and_whitespace_old_values() {
+    // The summary title translates; the first lookup must not run on the 2 MiB test stack.
+    crate::test_locale::warm();
     for old in [None, Some(""), Some("  \t")] {
         let mut state = TicksState::default();
         state.set_variant("PriceToSwitch2Stop", "-2".into());
@@ -484,6 +490,8 @@ fn a_search_start_retires_inline_consent_before_publishing_running() {
 /// Stop keeps the run's generation, so its answer still lands; a later hard stop drops it.
 #[test]
 fn finish_search_keeps_the_generation_until_a_hard_stop() {
+    // The summary title translates; the first lookup must not run on the 2 MiB test stack.
+    crate::test_locale::warm();
     let mut state = TicksState::default();
     let handle = moon_core::db::tuner::threshold_search::SearchHandle::new();
     state.start_search(
@@ -547,6 +555,8 @@ fn a_stop_before_any_variant_is_the_cannot_state() {
 /// While the run winds down there is no time left to promise.
 #[test]
 fn a_stopping_run_shows_no_time_left() {
+    // The summary title translates; the first lookup must not run on the 2 MiB test stack.
+    crate::test_locale::warm();
     let mut state = TicksState::default();
     state.sugg = super::super::state::SuggState::Running {
         handle: moon_core::db::tuner::threshold_search::SearchHandle::new(),

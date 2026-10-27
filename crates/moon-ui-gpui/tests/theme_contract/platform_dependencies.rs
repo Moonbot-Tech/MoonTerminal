@@ -13,6 +13,32 @@ type Targets = [bool; 4];
 /// Local bindings retain the targets on which their declarations are present.
 type Names = BTreeMap<String, Targets>;
 
+/// Count independent declarations so excluding one import preserves every other binding.
+type NameCounts = BTreeMap<String, [usize; 4]>;
+
+/// Predeclared bindings and each import's contribution, collected once per lexical scope.
+struct ScopeNames {
+    counts: NameCounts,
+    imports: BTreeMap<usize, Names>,
+}
+
+impl ScopeNames {
+    /// Add one declaration without losing overlapping declarations on the same target.
+    fn declare(&mut self, name: String, targets: Targets) {
+        let counts = self.counts.entry(name).or_insert([0; 4]);
+        for n in 0..4 {
+            counts[n] += usize::from(targets[n]);
+        }
+    }
+
+    /// Resolve bindings while optionally subtracting exactly one import's contribution.
+    fn targets(&self, name: &str, excluded: Targets, enclosing: &Names) -> Targets {
+        let counts = self.counts.get(name).copied().unwrap_or([0; 4]);
+        let outer = enclosing.get(name).copied().unwrap_or([false; 4]);
+        std::array::from_fn(|n| outer[n] || counts[n] > usize::from(excluded[n]))
+    }
+}
+
 /// Tokenize source, preserving quoted attribute values but discarding comments and raw strings.
 fn tokens(source: &str) -> Vec<String> {
     let bytes = source.as_bytes();
@@ -256,9 +282,12 @@ fn merge_names(names: &mut Names, declarations: Names) {
     }
 }
 
-/// Predeclare cfg-aware scope items, excluding the import whose source is being checked.
-fn local_names(ts: &[String], excluded_use: Option<usize>) -> Names {
-    let mut names = Names::new();
+/// Predeclare cfg-aware scope items once, retaining each import's removable contribution.
+fn local_names(ts: &[String]) -> ScopeNames {
+    let mut names = ScopeNames {
+        counts: NameCounts::new(),
+        imports: BTreeMap::new(),
+    };
     let mut inherited = [true; 4];
     let mut active = inherited;
     let mut i = 0;
@@ -282,14 +311,14 @@ fn local_names(ts: &[String], excluded_use: Option<usize>) -> Names {
         }
         if ts[i] == "use" && ts.get(i + 1).is_some_and(|token| token != "<") {
             let end = (i + 1..ts.len()).find(|&n| ts[n] == ";").unwrap();
-            if excluded_use != Some(i) {
-                let mut bindings = BTreeSet::new();
-                import_names(&ts[i + 1..end], None, &mut bindings);
-                merge_names(
-                    &mut names,
-                    bindings.into_iter().map(|name| (name, active)).collect(),
-                );
+            let mut bindings = BTreeSet::new();
+            import_names(&ts[i + 1..end], None, &mut bindings);
+            for name in &bindings {
+                names.declare(name.clone(), active);
             }
+            names
+                .imports
+                .insert(i, bindings.into_iter().map(|name| (name, active)).collect());
             i = end;
             active = inherited;
         } else if matches!(
@@ -297,7 +326,7 @@ fn local_names(ts: &[String], excluded_use: Option<usize>) -> Names {
             "mod" | "struct" | "enum" | "union" | "trait" | "type"
         ) && let Some(name) = ts.get(i + 1)
         {
-            merge_names(&mut names, [(name.clone(), active)].into());
+            names.declare(name.clone(), active);
         } else if matches!(ts[i].as_str(), "{" | "(" | "[") {
             let end = close(ts, i);
             if ts[i] == "{" {
@@ -379,12 +408,25 @@ impl Contract {
     ) {
         let enclosing_names = names;
         let mut names = names.clone();
-        merge_names(&mut names, local_names(ts, None));
+        let declarations = local_names(ts);
+        merge_names(
+            &mut names,
+            declarations
+                .counts
+                .keys()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        declarations.targets(name, [false; 4], enclosing_names),
+                    )
+                })
+                .collect(),
+        );
         let mut inherited = inherited;
         let mut i = 0;
         let mut active = inherited;
         let mut relocated = None;
-        let mut import_scope = None;
+        let mut import_bindings = None;
         while i < ts.len() {
             if ts[i] == "#" && ts.get(i + 1).is_some_and(|s| s == "[" || s == "!") {
                 let inner = ts[i + 1] == "!";
@@ -461,9 +503,16 @@ impl Contract {
                 continue;
             }
             if ts[i] == "use" && ts.get(i + 1).is_some_and(|token| token != "<") {
-                let mut source_names = enclosing_names.clone();
-                merge_names(&mut source_names, local_names(ts, Some(i)));
-                import_scope = Some(source_names);
+                // Only this import's bindings change; never rescan or clone the entire scope.
+                let mut restore = Names::new();
+                for (name, targets) in &declarations.imports[&i] {
+                    restore.insert(name.clone(), names[name]);
+                    names.insert(
+                        name.clone(),
+                        declarations.targets(name, *targets, enclosing_names),
+                    );
+                }
+                import_bindings = Some(restore);
             }
             let nested_path = i >= 3
                 && ts[i - 1] == ":"
@@ -476,9 +525,7 @@ impl Contract {
             let absolute = i >= 2 && ts[i - 2] == ":" && ts[i - 1] == ":";
             // An import's own bindings cannot make its external source appear local.
             let local = if direct_import {
-                import_scope
-                    .as_ref()
-                    .filter(|_| i > 0 && ts[i - 1] == "use")
+                (i > 0 && ts[i - 1] == "use" && import_bindings.is_some()).then_some(&names)
             } else {
                 Some(&names)
             }
@@ -512,14 +559,7 @@ impl Contract {
             }
             if matches!(ts[i].as_str(), "{" | "(" | "[") {
                 let end = close(ts, i);
-                self.scope(
-                    &ts[i + 1..end],
-                    path,
-                    dir,
-                    attribute_dir,
-                    active,
-                    import_scope.as_ref().unwrap_or(&names),
-                );
+                self.scope(&ts[i + 1..end], path, dir, attribute_dir, active, &names);
                 if ts[i] == "{" {
                     active = inherited;
                     relocated = None;
@@ -529,7 +569,9 @@ impl Contract {
                 if ts[i] == ";" {
                     active = inherited;
                     relocated = None;
-                    import_scope = None;
+                    if let Some(restore) = import_bindings.take() {
+                        names.extend(restore);
+                    }
                 }
                 i += 1;
             }
@@ -546,6 +588,7 @@ fn platform_dependencies_cover_reachable_source() {
         failures: Vec::new(),
         files: 0,
     };
+    // The full-tree walk IS the coverage; optimizing scope bindings must never prune modules.
     contract.file(&root.join("src/main.rs"), [true; 4], None);
     contract.failures.sort();
     contract.failures.dedup();

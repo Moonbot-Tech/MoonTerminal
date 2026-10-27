@@ -64,6 +64,8 @@ fn healthy_db_is_ok_and_damaged_db_is_reported() {
          ALTER TABLE orders_rep ADD COLUMN closedate INTEGER;",
     )
     .unwrap();
+    // One transaction for the unchanged 2000-row fixture (the count keeps the damaged leaf off the header page); per-row commits only cost time.
+    conn.execute_batch("BEGIN").unwrap();
     {
         let mut stmt = conn
             .prepare(
@@ -76,6 +78,7 @@ fn healthy_db_is_ok_and_damaged_db_is_reported() {
                 .unwrap();
         }
     }
+    conn.execute_batch("COMMIT").unwrap();
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_t ON orders_rep(closedate)",
         [],

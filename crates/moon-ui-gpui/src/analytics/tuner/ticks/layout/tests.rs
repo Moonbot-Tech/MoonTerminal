@@ -406,8 +406,7 @@ impl Render for DealProbe {
 }
 
 /// Chips must keep complete labels and wrap; rows and headers must share bounded cells.
-#[gpui::test]
-fn deal_table_symbols_and_filters_fit_all_presentations(cx: &mut gpui::TestAppContext) {
+fn assert_deal_table_symbols_and_filters_fit(cx: &mut gpui::TestAppContext, theme: UiThemeMode) {
     use super::super::columns::{DEAL_COIN_MIN_W, DEAL_ROW_GAP, DEAL_ROW_PAD_X};
     // The coordinator retains the existing minima: rows are probed only where the whole table fits.
     let column_min = DEAL_COIN_MIN_W
@@ -416,152 +415,162 @@ fn deal_table_symbols_and_filters_fit_all_presentations(cx: &mut gpui::TestAppCo
             .sum::<f32>();
     let spacing =
         2.0 * DEAL_ROW_PAD_X + super::super::shown_deal_cols(false).count() as f32 * DEAL_ROW_GAP;
-    for theme in [UiThemeMode::Light, UiThemeMode::Dark] {
-        cx.update(|cx| {
-            MoonTheme::install_config(
-                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
-                cx,
-            )
-        });
-        let table_min = cx
-            .update(|cx| design::font_w(cx, column_min) + f32::from(design::ui_px(cx, spacing)))
-            .ceil();
-        for language in Language::ALL {
-            let _locale = crate::test_locale::force(language.code());
-            for zoom in [1.0, 1.25] {
-                for width in [400.0, 520.0, table_min, 1440.0] {
-                    for active in [false, true] {
-                        let window = cx.open_window(
-                            gpui::size(px(width * zoom), px(1000.0 * zoom)),
-                            |_, _| DealProbe {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+            cx,
+        )
+    });
+    let table_min = cx
+        .update(|cx| design::font_w(cx, column_min) + f32::from(design::ui_px(cx, spacing)))
+        .ceil();
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for zoom in [1.0, 1.25] {
+            for width in [400.0, 520.0, table_min, 1440.0] {
+                for active in [false, true] {
+                    let window =
+                        cx.open_window(gpui::size(px(width * zoom), px(1000.0 * zoom)), |_, _| {
+                            DealProbe {
                                 active,
                                 table: width >= table_min,
-                            },
-                        );
-                        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-                        visual.update(|window, cx| window.set_content_zoom(zoom, cx));
-                        for _ in 0..3 {
-                            visual.update(|w, cx| {
-                                let _ = w.draw(cx);
-                            });
-                        }
-                        let host = visual.debug_bounds("deal-probe").expect("table host");
-                        let inside = |bounds: gpui::Bounds<gpui::Pixels>,
-                                      parent: gpui::Bounds<gpui::Pixels>,
-                                      label: &str| {
-                            assert!(
-                                bounds.left() + px(0.5) >= parent.left()
-                                    && bounds.right() <= parent.right() + px(0.5),
-                                "{label} outside parent: {bounds:?}/{parent:?} {} {theme:?} {zoom}/{width}",
-                                language.code()
-                            );
-                        };
-                        let footer = visual.debug_bounds("an-ticks-chips").expect("footer");
-                        inside(footer, host, "footer");
-                        inside(
-                            visual
-                                .debug_bounds("an-ticks-filter-empty")
-                                .expect("empty state"),
-                            host,
-                            "empty state",
-                        );
-                        inside(
-                            visual
-                                .debug_bounds("an-ticks-filter-empty-text")
-                                .expect("empty text"),
-                            host,
-                            "empty text",
-                        );
-                        if active {
-                            inside(
-                                visual
-                                    .debug_bounds("an-ticks-chip-reset-box")
-                                    .expect("reset filter"),
-                                footer,
-                                "reset filter",
-                            );
-                        }
-                        let mut tops = Vec::new();
-                        for key in [
-                            "with_tape",
-                            "no_tape",
-                            "fit",
-                            "accepted_short_tail",
-                            "short_tail",
-                            "hole",
-                            "model_miss",
-                            "unjudged",
-                            "without_ms",
-                            "service",
-                            "untunable",
-                        ] {
-                            let chip = visual
-                                .debug_bounds(selector(format!("an-ticks-chip-{key}")))
-                                .expect("chip");
-                            inside(chip, footer, key);
-                            assert!(
-                                chip.top() >= footer.top()
-                                    && chip.bottom() <= footer.bottom() + px(0.5)
-                            );
-                            tops.push(chip.top());
-                        }
-                        if width == 400.0 {
-                            assert!(tops.iter().any(|top| *top > tops[0]), "footer must wrap");
-                        }
-                        for key in ["hit", "miss", "unjudged", "hole"] {
-                            inside(
-                                visual
-                                    .debug_bounds(selector(format!("an-ticks-legend-{key}")))
-                                    .expect("legend item"),
-                                host,
-                                "legend",
-                            );
-                        }
-                        for row in if width >= table_min {
-                            deal_rows()
-                        } else {
-                            Vec::new()
-                        } {
-                            for col in super::super::shown_deal_cols(false) {
-                                let cell = visual
-                                    .debug_bounds(selector(format!(
-                                        "an-ticks-cell-{}-{}",
-                                        col.key, row.deal.report_uid
-                                    )))
-                                    .expect("row cell");
-                                inside(cell, host, col.key);
-                                let text = visual
-                                    .debug_bounds(selector(format!(
-                                        "an-ticks-text-{}-{}",
-                                        col.key, row.deal.report_uid
-                                    )))
-                                    .expect("cell text");
-                                inside(text, cell, col.key);
-                                let header = visual
-                                    .debug_bounds(selector(format!("an-ticks-hdr-{}", col.key)))
-                                    .expect("header trigger");
-                                inside(header, host, "header");
-                                inside(
-                                    visual
-                                        .debug_bounds(selector(format!(
-                                            "an-ticks-hdr-text-{}",
-                                            col.key
-                                        )))
-                                        .expect("header text"),
-                                    header,
-                                    "header text",
-                                );
-                                assert!(
-                                    (f32::from(cell.left()) - f32::from(header.left())).abs() < 1.0
-                                );
                             }
-                        }
-                        visual.update(|w, _| w.remove_window());
+                        });
+                    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                    visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                    for _ in 0..3 {
+                        visual.update(|w, cx| {
+                            let _ = w.draw(cx);
+                        });
                     }
+                    let host = visual.debug_bounds("deal-probe").expect("table host");
+                    let inside = |bounds: gpui::Bounds<gpui::Pixels>,
+                                  parent: gpui::Bounds<gpui::Pixels>,
+                                  label: &str| {
+                        assert!(
+                            bounds.left() + px(0.5) >= parent.left()
+                                && bounds.right() <= parent.right() + px(0.5),
+                            "{label} outside parent: {bounds:?}/{parent:?} {} {theme:?} {zoom}/{width}",
+                            language.code()
+                        );
+                    };
+                    let footer = visual.debug_bounds("an-ticks-chips").expect("footer");
+                    inside(footer, host, "footer");
+                    inside(
+                        visual
+                            .debug_bounds("an-ticks-filter-empty")
+                            .expect("empty state"),
+                        host,
+                        "empty state",
+                    );
+                    inside(
+                        visual
+                            .debug_bounds("an-ticks-filter-empty-text")
+                            .expect("empty text"),
+                        host,
+                        "empty text",
+                    );
+                    if active {
+                        inside(
+                            visual
+                                .debug_bounds("an-ticks-chip-reset-box")
+                                .expect("reset filter"),
+                            footer,
+                            "reset filter",
+                        );
+                    }
+                    let mut tops = Vec::new();
+                    for key in [
+                        "with_tape",
+                        "no_tape",
+                        "fit",
+                        "accepted_short_tail",
+                        "short_tail",
+                        "hole",
+                        "model_miss",
+                        "unjudged",
+                        "without_ms",
+                        "service",
+                        "untunable",
+                    ] {
+                        let chip = visual
+                            .debug_bounds(selector(format!("an-ticks-chip-{key}")))
+                            .expect("chip");
+                        inside(chip, footer, key);
+                        assert!(
+                            chip.top() >= footer.top()
+                                && chip.bottom() <= footer.bottom() + px(0.5)
+                        );
+                        tops.push(chip.top());
+                    }
+                    if width == 400.0 {
+                        assert!(tops.iter().any(|top| *top > tops[0]), "footer must wrap");
+                    }
+                    for key in ["hit", "miss", "unjudged", "hole"] {
+                        inside(
+                            visual
+                                .debug_bounds(selector(format!("an-ticks-legend-{key}")))
+                                .expect("legend item"),
+                            host,
+                            "legend",
+                        );
+                    }
+                    for row in if width >= table_min {
+                        deal_rows()
+                    } else {
+                        Vec::new()
+                    } {
+                        for col in super::super::shown_deal_cols(false) {
+                            let cell = visual
+                                .debug_bounds(selector(format!(
+                                    "an-ticks-cell-{}-{}",
+                                    col.key, row.deal.report_uid
+                                )))
+                                .expect("row cell");
+                            inside(cell, host, col.key);
+                            let text = visual
+                                .debug_bounds(selector(format!(
+                                    "an-ticks-text-{}-{}",
+                                    col.key, row.deal.report_uid
+                                )))
+                                .expect("cell text");
+                            inside(text, cell, col.key);
+                            let header = visual
+                                .debug_bounds(selector(format!("an-ticks-hdr-{}", col.key)))
+                                .expect("header trigger");
+                            inside(header, host, "header");
+                            inside(
+                                visual
+                                    .debug_bounds(selector(format!(
+                                        "an-ticks-hdr-text-{}",
+                                        col.key
+                                    )))
+                                    .expect("header text"),
+                                header,
+                                "header text",
+                            );
+                            assert!(
+                                (f32::from(cell.left()) - f32::from(header.left())).abs() < 1.0
+                            );
+                        }
+                    }
+                    visual.update(|w, _| w.remove_window());
                 }
             }
         }
     }
+}
+
+/// Light-theme chips, rows and headers must fit the full language/zoom/width/filter matrix.
+#[gpui::test]
+fn deal_table_symbols_and_filters_fit_all_light_presentations(cx: &mut gpui::TestAppContext) {
+    assert_deal_table_symbols_and_filters_fit(cx, UiThemeMode::Light);
+}
+
+/// Dark-theme chips, rows and headers must fit the full language/zoom/width/filter matrix.
+#[gpui::test]
+fn deal_table_symbols_and_filters_fit_all_dark_presentations(cx: &mut gpui::TestAppContext) {
+    assert_deal_table_symbols_and_filters_fit(cx, UiThemeMode::Dark);
 }
 
 /// The real Stops section contributes two editable numeric knobs, without copying mockup fields.
@@ -989,405 +998,403 @@ fn every_ticks_language_has_the_same_keys_and_no_raw_card_text() {
 }
 
 /// Production card/field/range boxes must fit without truncating values in every presentation.
-#[gpui::test]
-fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::TestAppContext) {
+fn assert_ticks_column_fits(cx: &mut gpui::TestAppContext, theme: UiThemeMode) {
     cx.update(|_| {
         crate::analytics::set_pnl_unit(Some(moon_core::db::ProfitUnit::Quote(
             moon_core::db::QuoteCurrency::from_report_ordinal(8).expect("USDC report ordinal"),
         )))
     });
-    for theme in [UiThemeMode::Light, UiThemeMode::Dark] {
-        cx.update(|cx| {
-            MoonTheme::install_config(
-                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
-                cx,
-            )
-        });
-        for language in Language::ALL {
-            let _locale = crate::test_locale::force(language.code());
-            let normal_width = cx
-                .update(|cx| f32::from(design::font_w_px(cx, super::super::super::layout::SIDE_W)));
-            for zoom in [1.0, 1.25] {
-                for width in [normal_width, 520.0, 400.0] {
-                    for face in 0..10 {
-                        let window = cx.open_window(
-                            gpui::size(px(width * zoom), px(540.0 * zoom)),
-                            |window, cx| {
-                                let mut input = |value: &str, cx: &mut Context<Probe>| {
-                                    cx.new(|cx| {
-                                        MoonInputState::new(window, cx).default_value(value)
-                                    })
-                                };
-                                Probe {
-                                    face,
-                                    starts: input("11", cx),
-                                    variants: std::array::from_fn(|_| input("2.47", cx)),
-                                    ranges: std::array::from_fn(|_| {
-                                        [input("1.31", cx), input("2.47", cx), input("0.29", cx)]
-                                    }),
-                                }
-                            },
-                        );
-                        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-                        visual.update(|window, cx| window.set_content_zoom(zoom, cx));
-                        let expect_ranges = visual.update(|window, cx| {
-                            let fit = ranges_fit(
-                                window.viewport_size().width - design::ui_px(cx, 2.0),
-                                cx,
-                            );
-                            if width != 520.0 {
-                                assert_eq!(
-                                    fit,
-                                    width == normal_width,
-                                    "pure range decision at zoom {zoom}, width {width}"
-                                );
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+            cx,
+        )
+    });
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let normal_width =
+            cx.update(|cx| f32::from(design::font_w_px(cx, super::super::super::layout::SIDE_W)));
+        for zoom in [1.0, 1.25] {
+            for width in [normal_width, 520.0, 400.0] {
+                for face in 0..10 {
+                    let window = cx.open_window(
+                        gpui::size(px(width * zoom), px(540.0 * zoom)),
+                        |window, cx| {
+                            let mut input = |value: &str, cx: &mut Context<Probe>| {
+                                cx.new(|cx| MoonInputState::new(window, cx).default_value(value))
+                            };
+                            Probe {
+                                face,
+                                starts: input("11", cx),
+                                variants: std::array::from_fn(|_| input("2.47", cx)),
+                                ranges: std::array::from_fn(|_| {
+                                    [input("1.31", cx), input("2.47", cx), input("0.29", cx)]
+                                }),
                             }
-                            fit
-                        });
-                        for _ in 0..3 {
-                            visual.update(|window, cx| {
-                                let _ = window.draw(cx);
-                            });
-                        }
-                        let col = visual.debug_bounds("probe-col").expect("column");
-                        let host = visual
-                            .debug_bounds("probe-scroll")
-                            .expect("short scroll host");
-                        assert!(
-                            col.size.height > host.size.height,
-                            "short host must actually scroll"
-                        );
-                        let at = format!(
-                            "{} {theme:?} zoom {zoom} width {width} face {face}",
-                            language.code()
-                        );
-                        let inside = |bounds: gpui::Bounds<gpui::Pixels>, label: &str| {
-                            assert!(
-                                bounds.left() + px(0.5) >= col.left()
-                                    && bounds.right() <= col.right() + px(0.5),
-                                "{label} escaped ({at}): {bounds:?} / {col:?}"
+                        },
+                    );
+                    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                    visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                    let expect_ranges = visual.update(|window, cx| {
+                        let fit =
+                            ranges_fit(window.viewport_size().width - design::ui_px(cx, 2.0), cx);
+                        if width != 520.0 {
+                            assert_eq!(
+                                fit,
+                                width == normal_width,
+                                "pure range decision at zoom {zoom}, width {width}"
                             );
-                        };
-                        let line_height = visual.update(|window, cx| {
-                            let mut style = window.text_style();
-                            style.font_size = design::t_caption(cx).into();
-                            style.line_height_in_pixels(window.rem_size())
+                        }
+                        fit
+                    });
+                    for _ in 0..3 {
+                        visual.update(|window, cx| {
+                            let _ = window.draw(cx);
                         });
-                        for sel in [
-                            "an-ticks-sum",
-                            "an-ticks-pick-bar",
-                            "kpi-unclosed",
-                            "an-ticks-accuracy",
-                            "an-ticks-sec-note-probe-section",
-                            "an-tuner-card-title",
-                            "an-tuner-card-caption",
-                        ] {
-                            let bounds = visual
+                    }
+                    let col = visual.debug_bounds("probe-col").expect("column");
+                    let host = visual
+                        .debug_bounds("probe-scroll")
+                        .expect("short scroll host");
+                    assert!(
+                        col.size.height > host.size.height,
+                        "short host must actually scroll"
+                    );
+                    let at = format!(
+                        "{} {theme:?} zoom {zoom} width {width} face {face}",
+                        language.code()
+                    );
+                    let inside = |bounds: gpui::Bounds<gpui::Pixels>, label: &str| {
+                        assert!(
+                            bounds.left() + px(0.5) >= col.left()
+                                && bounds.right() <= col.right() + px(0.5),
+                            "{label} escaped ({at}): {bounds:?} / {col:?}"
+                        );
+                    };
+                    let line_height = visual.update(|window, cx| {
+                        let mut style = window.text_style();
+                        style.font_size = design::t_caption(cx).into();
+                        style.line_height_in_pixels(window.rem_size())
+                    });
+                    for sel in [
+                        "an-ticks-sum",
+                        "an-ticks-pick-bar",
+                        "kpi-unclosed",
+                        "an-ticks-accuracy",
+                        "an-ticks-sec-note-probe-section",
+                        "an-tuner-card-title",
+                        "an-tuner-card-caption",
+                    ] {
+                        let bounds = visual
+                            .debug_bounds(sel)
+                            .unwrap_or_else(|| panic!("missing {sel} ({at})"));
+                        inside(bounds, sel);
+                        assert!(
+                            bounds.size.height + px(0.1) >= line_height,
+                            "{sel} shorter than one line ({at})"
+                        );
+                    }
+                    let m = model(face);
+                    // Unset old values remain a visible full glyph before the arrow.
+                    for row in &m.changes {
+                        let old = visual
+                            .debug_bounds(selector(format!("an-ticks-change-old-{}", row.key)))
+                            .expect("old field value");
+                        inside(old, "old field value");
+                        let need = visual
+                            .update(|_, cx| design::mono_body_text_width(cx, &row.old, 400.0));
+                        assert!(
+                            f32::from(old.size.width) + 0.5 >= need,
+                            "old value clipped ({at}): {}",
+                            row.old
+                        );
+                    }
+                    // Each profit head must sit over its own figures, not float as one group.
+                    let rows: Vec<&str> = [
+                        m.train.as_ref().map(|_| "an-ticks-sum-train-count"),
+                        m.holdout.as_ref().map(|_| "an-ticks-sum-hold-count"),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                    for (col, suffix, text) in [
+                        ("an-ticks-sum-col-fact", "fact", 13.71),
+                        ("an-ticks-sum-col-v1", "v1", 19.23),
+                    ] {
+                        if rows.is_empty() {
+                            break;
+                        }
+                        let head = visual
+                            .debug_bounds(col)
+                            .unwrap_or_else(|| panic!("missing {col} ({at})"));
+                        inside(head, col);
+                        for row in &rows {
+                            let sel = selector(format!("{row}-{suffix}"));
+                            let figure = visual
                                 .debug_bounds(sel)
                                 .unwrap_or_else(|| panic!("missing {sel} ({at})"));
-                            inside(bounds, sel);
+                            inside(figure, sel);
                             assert!(
-                                bounds.size.height + px(0.1) >= line_height,
-                                "{sel} shorter than one line ({at})"
+                                (f32::from(figure.right()) - f32::from(head.right())).abs() <= 1.0,
+                                "{col} not over {sel} ({at}): {head:?} / {figure:?}"
+                            );
+                            let need = visual.update(|_, cx| {
+                                design::mono_body_text_width(
+                                    cx,
+                                    &crate::analytics::summary::fmt_signed(text),
+                                    400.0,
+                                )
+                            });
+                            assert!(
+                                f32::from(figure.size.width) + 0.5 >= need,
+                                "{sel} clipped ({at}): {:?} < {need}",
+                                figure.size.width
                             );
                         }
-                        let m = model(face);
-                        // Unset old values remain a visible full glyph before the arrow.
-                        for row in &m.changes {
-                            let old = visual
-                                .debug_bounds(selector(format!("an-ticks-change-old-{}", row.key)))
-                                .expect("old field value");
-                            inside(old, "old field value");
-                            let need = visual
-                                .update(|_, cx| design::mono_body_text_width(cx, &row.old, 400.0));
-                            assert!(
-                                f32::from(old.size.width) + 0.5 >= need,
-                                "old value clipped ({at}): {}",
-                                row.old
-                            );
-                        }
-                        // Each profit head must sit over its own figures, not float as one group.
-                        let rows: Vec<&str> = [
-                            m.train.as_ref().map(|_| "an-ticks-sum-train-count"),
-                            m.holdout.as_ref().map(|_| "an-ticks-sum-hold-count"),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .collect();
-                        for (col, suffix, text) in [
-                            ("an-ticks-sum-col-fact", "fact", 13.71),
-                            ("an-ticks-sum-col-v1", "v1", 19.23),
-                        ] {
-                            if rows.is_empty() {
-                                break;
-                            }
-                            let head = visual
-                                .debug_bounds(col)
-                                .unwrap_or_else(|| panic!("missing {col} ({at})"));
-                            inside(head, col);
-                            for row in &rows {
-                                let sel = selector(format!("{row}-{suffix}"));
-                                let figure = visual
-                                    .debug_bounds(sel)
-                                    .unwrap_or_else(|| panic!("missing {sel} ({at})"));
-                                inside(figure, sel);
-                                assert!(
-                                    (f32::from(figure.right()) - f32::from(head.right())).abs()
-                                        <= 1.0,
-                                    "{col} not over {sel} ({at}): {head:?} / {figure:?}"
-                                );
-                                let need = visual.update(|_, cx| {
-                                    design::mono_body_text_width(
-                                        cx,
-                                        &crate::analytics::summary::fmt_signed(text),
-                                        400.0,
-                                    )
-                                });
-                                assert!(
-                                    f32::from(figure.size.width) + 0.5 >= need,
-                                    "{sel} clipped ({at}): {:?} < {need}",
-                                    figure.size.width
-                                );
-                            }
-                        }
-                        let mut prose = vec![m.sentence];
-                        // Short labels sit beside a sibling in a wrapping row; they must wrap the row, never their glyphs.
-                        let mut labels = Vec::new();
-                        if face == 1 || face == 7 {
-                            labels.push(super::super::summary::progress_text(3, 11, 107));
-                            if face == 7 {
-                                prose.push(t!("analytics.ticks.sum.stopping").to_string());
-                            } else {
-                                labels.push(
-                                    t!(
-                                        "analytics.ticks.sum.left",
-                                        time = super::super::estimate::duration_text(
-                                            std::time::Duration::from_secs(43)
-                                        )
-                                    )
-                                    .to_string(),
-                                );
-                            }
+                    }
+                    let mut prose = vec![m.sentence];
+                    // Short labels sit beside a sibling in a wrapping row; they must wrap the row, never their glyphs.
+                    let mut labels = Vec::new();
+                    if face == 1 || face == 7 {
+                        labels.push(super::super::summary::progress_text(3, 11, 107));
+                        if face == 7 {
+                            prose.push(t!("analytics.ticks.sum.stopping").to_string());
                         } else {
-                            if m.train.is_some() || m.holdout.is_some() {
-                                let unit = crate::analytics::pnl_unit_label();
-                                labels.push(if unit.is_empty() {
-                                    t!("analytics.ticks.sum.profit_head").to_string()
-                                } else {
-                                    format!("{}, {unit}", t!("analytics.ticks.sum.profit_head"))
-                                });
-                            }
-                            for row in m.train.into_iter().chain(m.holdout) {
-                                prose.push(row.sub);
-                                prose.extend(row.open_line);
-                            }
-                            if !m.changes.is_empty() {
-                                prose.push(m.changed_header);
-                            }
-                            if m.can_reset {
-                                prose.extend(m.warnings);
-                                prose.push(t!("analytics.ticks.sum.write_note").to_string());
-                            }
-                            if let Some(confirm) = m.confirm {
-                                prose.push(confirm.title);
-                                prose.extend(confirm.reason);
-                                prose.extend(confirm.warns);
-                            }
-                            if !m.details.is_empty() {
-                                prose.push(t!("analytics.ticks.sum.details").to_string());
-                                prose.extend(m.details.into_iter().map(|(label, _)| label));
-                            }
-                        }
-                        for text in &labels {
-                            let content = visual
-                                .debug_bounds(selector(format!("an-ticks-prose-content-{text}")))
-                                .unwrap_or_else(|| panic!("missing label {text} ({at})"));
-                            let need = visual
-                                .update(|_, cx| design::ui_caption_text_width(cx, text, 400.0));
-                            assert!(
-                                f32::from(content.size.width) + 0.5 >= need,
-                                "label squeezed below one line ({at}): {text}: {:?} < {need}",
-                                content.size.width
-                            );
-                            assert!(
-                                content.size.height < line_height * 1.5,
-                                "label wrapped onto several lines ({at}): {text}: {:?}",
-                                content.size.height
+                            labels.push(
+                                t!(
+                                    "analytics.ticks.sum.left",
+                                    time = super::super::estimate::duration_text(
+                                        std::time::Duration::from_secs(43)
+                                    )
+                                )
+                                .to_string(),
                             );
                         }
-                        prose.extend(labels);
-                        for text in prose {
-                            let bounds = visual
-                                .debug_bounds(selector(format!("an-ticks-prose-{text}")))
-                                .unwrap_or_else(|| panic!("missing prose {text} ({at})"));
-                            let content = visual
-                                .debug_bounds(selector(format!("an-ticks-prose-content-{text}")))
-                                .expect("natural prose content");
-                            inside(bounds, &text);
-                            assert!(
-                                bounds.size.height + px(0.1) >= line_height,
-                                "prose shorter than a line ({at}): {text}"
-                            );
-                            assert!(
-                                content.top() + px(0.1) >= bounds.top()
-                                    && content.bottom() <= bounds.bottom() + px(0.1),
-                                "prose clipped vertically ({at}): {text}"
-                            );
+                    } else {
+                        if m.train.is_some() || m.holdout.is_some() {
+                            let unit = crate::analytics::pnl_unit_label();
+                            labels.push(if unit.is_empty() {
+                                t!("analytics.ticks.sum.profit_head").to_string()
+                            } else {
+                                format!("{}, {unit}", t!("analytics.ticks.sum.profit_head"))
+                            });
                         }
-                        let note = visual.debug_bounds("kpi-sample-note").expect("bias note");
+                        for row in m.train.into_iter().chain(m.holdout) {
+                            prose.push(row.sub);
+                            prose.extend(row.open_line);
+                        }
+                        if !m.changes.is_empty() {
+                            prose.push(m.changed_header);
+                        }
+                        if m.can_reset {
+                            prose.extend(m.warnings);
+                            prose.push(t!("analytics.ticks.sum.write_note").to_string());
+                        }
+                        if let Some(confirm) = m.confirm {
+                            prose.push(confirm.title);
+                            prose.extend(confirm.reason);
+                            prose.extend(confirm.warns);
+                        }
+                        if !m.details.is_empty() {
+                            prose.push(t!("analytics.ticks.sum.details").to_string());
+                            prose.extend(m.details.into_iter().map(|(label, _)| label));
+                        }
+                    }
+                    for text in &labels {
                         let content = visual
-                            .debug_bounds("kpi-sample-note-content")
-                            .expect("bias content");
-                        inside(note, "bias note");
-                        inside(content, "bias content");
+                            .debug_bounds(selector(format!("an-ticks-prose-content-{text}")))
+                            .unwrap_or_else(|| panic!("missing label {text} ({at})"));
+                        let need =
+                            visual.update(|_, cx| design::ui_caption_text_width(cx, text, 400.0));
                         assert!(
-                            content.top() >= note.top() && content.bottom() <= note.bottom(),
-                            "bias note clipped vertically ({at})"
+                            f32::from(content.size.width) + 0.5 >= need,
+                            "label squeezed below one line ({at}): {text}: {:?} < {need}",
+                            content.size.width
                         );
-                        let caption = visual
-                            .debug_bounds("an-tuner-card-caption")
-                            .expect("sample caption");
-                        inside(caption, "sample caption");
-                        let mut needs: Vec<(String, String, bool)> = vec![
-                            (
-                                "tun-suggest-one-x-box".into(),
-                                t!("analytics.ticks.pick.one").to_string(),
-                                false,
-                            ),
-                            (
-                                "tun-suggest-run-x-box".into(),
-                                pick_all_label(Some("3 min")),
-                                false,
-                            ),
-                            ("an-ticks-sum-tag".into(), model(face).tag, false),
-                            (
-                                "kpi-unclosed-label".into(),
-                                t!("analytics.ticks.kpi.unclosed").to_string(),
-                                false,
-                            ),
-                            ("kpi-unclosed-0".into(), "—".to_string(), true),
-                            ("kpi-unclosed-1".into(), "1.23M · ≈ +988K".to_string(), true),
-                        ];
-                        for (row, key) in [
-                            "analytics.kpi.trades",
-                            "analytics.kpi.profit",
-                            "analytics.kpi.avg_short",
-                            "analytics.kpi.winrate",
-                            "analytics.col.pf",
-                            "analytics.tuner.avg_win",
-                            "analytics.tuner.avg_loss",
-                            "analytics.kpi.maxdd",
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        {
-                            needs.push((
-                                format!("kpi-metric-{row}"),
-                                t!(key, unit = crate::analytics::pnl_unit_label()).to_string(),
-                                false,
-                            ));
+                        assert!(
+                            content.size.height < line_height * 1.5,
+                            "label wrapped onto several lines ({at}): {text}: {:?}",
+                            content.size.height
+                        );
+                    }
+                    prose.extend(labels);
+                    for text in prose {
+                        let bounds = visual
+                            .debug_bounds(selector(format!("an-ticks-prose-{text}")))
+                            .unwrap_or_else(|| panic!("missing prose {text} ({at})"));
+                        let content = visual
+                            .debug_bounds(selector(format!("an-ticks-prose-content-{text}")))
+                            .expect("natural prose content");
+                        inside(bounds, &text);
+                        assert!(
+                            bounds.size.height + px(0.1) >= line_height,
+                            "prose shorter than a line ({at}): {text}"
+                        );
+                        assert!(
+                            content.top() + px(0.1) >= bounds.top()
+                                && content.bottom() <= bounds.bottom() + px(0.1),
+                            "prose clipped vertically ({at}): {text}"
+                        );
+                    }
+                    let note = visual.debug_bounds("kpi-sample-note").expect("bias note");
+                    let content = visual
+                        .debug_bounds("kpi-sample-note-content")
+                        .expect("bias content");
+                    inside(note, "bias note");
+                    inside(content, "bias content");
+                    assert!(
+                        content.top() >= note.top() && content.bottom() <= note.bottom(),
+                        "bias note clipped vertically ({at})"
+                    );
+                    let caption = visual
+                        .debug_bounds("an-tuner-card-caption")
+                        .expect("sample caption");
+                    inside(caption, "sample caption");
+                    let mut needs: Vec<(String, String, bool)> = vec![
+                        (
+                            "tun-suggest-one-x-box".into(),
+                            t!("analytics.ticks.pick.one").to_string(),
+                            false,
+                        ),
+                        (
+                            "tun-suggest-run-x-box".into(),
+                            pick_all_label(Some("3 min")),
+                            false,
+                        ),
+                        ("an-ticks-sum-tag".into(), model(face).tag, false),
+                        (
+                            "kpi-unclosed-label".into(),
+                            t!("analytics.ticks.kpi.unclosed").to_string(),
+                            false,
+                        ),
+                        ("kpi-unclosed-0".into(), "—".to_string(), true),
+                        ("kpi-unclosed-1".into(), "1.23M · ≈ +988K".to_string(), true),
+                    ];
+                    for (row, key) in [
+                        "analytics.kpi.trades",
+                        "analytics.kpi.profit",
+                        "analytics.kpi.avg_short",
+                        "analytics.kpi.winrate",
+                        "analytics.col.pf",
+                        "analytics.tuner.avg_win",
+                        "analytics.tuner.avg_loss",
+                        "analytics.kpi.maxdd",
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        needs.push((
+                            format!("kpi-metric-{row}"),
+                            t!(key, unit = crate::analytics::pnl_unit_label()).to_string(),
+                            false,
+                        ));
+                    }
+                    for (i, values) in [
+                        [
+                            "73", "+17.63", "+1.27", "17.8%", "2.31", "+3.4", "-2.1", "-9.7",
+                        ],
+                        [
+                            "97", "+27.42", "+1.88", "29.9%", "3.17", "+4.8", "-1.9", "-5.2",
+                        ],
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        for (row, text) in values.into_iter().enumerate() {
+                            needs.push((format!("kpi-value-{row}-{i}"), text.to_string(), true));
                         }
-                        for (i, values) in [
-                            [
-                                "73", "+17.63", "+1.27", "17.8%", "2.31", "+3.4", "-2.1", "-9.7",
-                            ],
-                            [
-                                "97", "+27.42", "+1.88", "29.9%", "3.17", "+4.8", "-1.9", "-5.2",
-                            ],
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        {
-                            for (row, text) in values.into_iter().enumerate() {
+                    }
+                    needs.push((
+                        "tun-save-x".into(),
+                        t!("analytics.tuner.save_btn").to_string(),
+                        false,
+                    ));
+                    if model(face).copy_visible {
+                        needs.push((
+                            "tun-copy-x".into(),
+                            t!("analytics.tuner.copy_btn").to_string(),
+                            false,
+                        ));
+                    }
+                    let actions = if face == 1 || face == 7 {
+                        vec![("stop", "stop")]
+                    } else if (2..=6).contains(&face) {
+                        let mut out = vec![("reset", "reset")];
+                        if face == 3 {
+                            out.extend([
+                                ("confirm-yes", "confirm_yes"),
+                                ("confirm-no", "confirm_no"),
+                            ]);
+                        }
+                        out
+                    } else {
+                        Vec::new()
+                    };
+                    for (sel, key) in actions {
+                        needs.push((
+                            format!("an-ticks-sum-{sel}"),
+                            t!(format!("analytics.ticks.sum.{key}")).to_string(),
+                            false,
+                        ));
+                    }
+                    for key in fields() {
+                        let row = visual
+                            .debug_bounds(selector(format!("an-ticks-field-{key}")))
+                            .expect("production field row");
+                        inside(row, key);
+                        for (sel, text) in [
+                            (format!("an-ticks-current-cell-{key}"), "1.31"),
+                            (format!("an-ticks-variant-cell-{key}"), "2.47"),
+                        ] {
+                            needs.push((sel, text.to_string(), true));
+                        }
+                        let range = visual.debug_bounds(selector(format!("an-ticks-range-{key}")));
+                        assert_eq!(range.is_some(), expect_ranges, "range visibility ({at})");
+                        if let Some(range) = range {
+                            inside(range, "production range");
+                            for (slot, text) in [("from", "1.31"), ("to", "2.47"), ("step", "0.29")]
+                            {
                                 needs.push((
-                                    format!("kpi-value-{row}-{i}"),
+                                    format!("an-ticks-range-cell-{slot}-{key}"),
                                     text.to_string(),
                                     true,
                                 ));
                             }
                         }
-                        needs.push((
-                            "tun-save-x".into(),
-                            t!("analytics.tuner.save_btn").to_string(),
-                            false,
-                        ));
-                        if model(face).copy_visible {
-                            needs.push((
-                                "tun-copy-x".into(),
-                                t!("analytics.tuner.copy_btn").to_string(),
-                                false,
-                            ));
-                        }
-                        let actions = if face == 1 || face == 7 {
-                            vec![("stop", "stop")]
-                        } else if (2..=6).contains(&face) {
-                            let mut out = vec![("reset", "reset")];
-                            if face == 3 {
-                                out.extend([
-                                    ("confirm-yes", "confirm_yes"),
-                                    ("confirm-no", "confirm_no"),
-                                ]);
+                    }
+                    for (sel, text, mono) in needs {
+                        let bounds = visual
+                            .debug_bounds(selector(sel.clone()))
+                            .unwrap_or_else(|| panic!("missing {sel} ({at})"));
+                        inside(bounds, &sel);
+                        let need = visual.update(|_, cx| {
+                            if mono {
+                                design::mono_caption_text_width(cx, &text, 400.0)
+                            } else {
+                                design::ui_caption_text_width(cx, &text, 400.0)
                             }
-                            out
-                        } else {
-                            Vec::new()
-                        };
-                        for (sel, key) in actions {
-                            needs.push((
-                                format!("an-ticks-sum-{sel}"),
-                                t!(format!("analytics.ticks.sum.{key}")).to_string(),
-                                false,
-                            ));
-                        }
-                        for key in fields() {
-                            let row = visual
-                                .debug_bounds(selector(format!("an-ticks-field-{key}")))
-                                .expect("production field row");
-                            inside(row, key);
-                            for (sel, text) in [
-                                (format!("an-ticks-current-cell-{key}"), "1.31"),
-                                (format!("an-ticks-variant-cell-{key}"), "2.47"),
-                            ] {
-                                needs.push((sel, text.to_string(), true));
-                            }
-                            let range =
-                                visual.debug_bounds(selector(format!("an-ticks-range-{key}")));
-                            assert_eq!(range.is_some(), expect_ranges, "range visibility ({at})");
-                            if let Some(range) = range {
-                                inside(range, "production range");
-                                for (slot, text) in
-                                    [("from", "1.31"), ("to", "2.47"), ("step", "0.29")]
-                                {
-                                    needs.push((
-                                        format!("an-ticks-range-cell-{slot}-{key}"),
-                                        text.to_string(),
-                                        true,
-                                    ));
-                                }
-                            }
-                        }
-                        for (sel, text, mono) in needs {
-                            let bounds = visual
-                                .debug_bounds(selector(sel.clone()))
-                                .unwrap_or_else(|| panic!("missing {sel} ({at})"));
-                            inside(bounds, &sel);
-                            let need = visual.update(|_, cx| {
-                                if mono {
-                                    design::mono_caption_text_width(cx, &text, 400.0)
-                                } else {
-                                    design::ui_caption_text_width(cx, &text, 400.0)
-                                }
-                            });
-                            assert!(
-                                f32::from(bounds.size.width) + 0.1 >= need,
-                                "{sel} narrower than {text} ({at}): {:?} < {need}",
-                                bounds.size.width
-                            );
-                        }
+                        });
+                        assert!(
+                            f32::from(bounds.size.width) + 0.1 >= need,
+                            "{sel} narrower than {text} ({at}): {:?} < {need}",
+                            bounds.size.width
+                        );
                     }
                 }
             }
         }
     }
     cx.update(|_| crate::analytics::set_pnl_unit(None));
+}
+
+/// Light-theme cards, fields and ranges must fit every language, zoom, width and face.
+#[gpui::test]
+fn the_ticks_column_fits_all_languages_light_theme_zooms_and_widths(cx: &mut gpui::TestAppContext) {
+    assert_ticks_column_fits(cx, UiThemeMode::Light);
+}
+
+/// Dark-theme cards, fields and ranges must fit every language, zoom, width and face.
+#[gpui::test]
+fn the_ticks_column_fits_all_languages_dark_theme_zooms_and_widths(cx: &mut gpui::TestAppContext) {
+    assert_ticks_column_fits(cx, UiThemeMode::Dark);
 }

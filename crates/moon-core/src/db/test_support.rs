@@ -69,6 +69,8 @@ pub(super) fn build_replica(path: &Path, rows: &[(i64, f64, &str)]) -> Connectio
     .unwrap();
     rep_init(&conn);
 
+    // Preserve row counts for corruption-page layout while avoiding per-row commits.
+    conn.execute_batch("BEGIN").unwrap();
     let mut stmt = conn
         .prepare(
             "INSERT INTO orders_rep (core_uid, core_name, newrecid, closedate, buydate,
@@ -82,6 +84,7 @@ pub(super) fn build_replica(path: &Path, rows: &[(i64, f64, &str)]) -> Connectio
             .unwrap();
     }
     drop(stmt);
+    conn.execute_batch("COMMIT").unwrap();
     conn
 }
 
@@ -118,6 +121,8 @@ pub(super) fn build_replica_multi_core(path: &Path, rows: &[(u64, i64, f64, &str
     .unwrap();
     rep_init(&conn);
 
+    // Preserve row counts for corruption-page layout while avoiding per-row commits.
+    conn.execute_batch("BEGIN").unwrap();
     let mut stmt = conn
         .prepare(
             "INSERT INTO orders_rep (core_uid, core_name, newrecid, closedate, buydate,
@@ -138,6 +143,7 @@ pub(super) fn build_replica_multi_core(path: &Path, rows: &[(u64, i64, f64, &str
         .unwrap();
     }
     drop(stmt);
+    conn.execute_batch("COMMIT").unwrap();
     conn
 }
 
