@@ -112,7 +112,7 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   it. Blame history across the tree-wide reformat is preserved by `.git-blame-ignore-revs` —
   enable it locally with `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
 - Seven CI gates, all on every PR and all meant to be green before you merge: the Windows
-  `.exe` job (~15 min), `Tests (x86_64-msvc)` running `cargo test --workspace`,
+  `.exe` job (~15 min), `Tests (x86_64-msvc)` running `cargo nextest run --workspace` plus the doc-tests,
   `Clippy (x86_64-msvc)` running `cargo clippy --workspace --all-targets --locked -- -D warnings`,
   `Station (x86_64-linux-musl)` building, testing and linting `moon-station` for Linux musl,
   `Dependency audit (cargo-deny)`, `Tour` building the knowledge site, and `Fmt` running
