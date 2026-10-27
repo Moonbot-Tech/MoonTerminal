@@ -131,7 +131,7 @@ the Telegram bot's Days report), Tuner: “what-if” on report fields, Beam sea
 By coin and By time axes (heatmap sliders for week/day/hour), an Entry/Exit
 axis that replays every closed trade on its recorded tape of prints and searches
 the strategy's entry and exit fields (MoonShot corridor, MoonHook take, sell line,
-stops, delta modifiers) on the trades the model reproduces, a check
+SellByCustomEMA formula thresholds, stops, delta modifiers) on the trades the model reproduces, a check
 on held-out data, writing thresholds back into the core's strategy; history of
 strategy versions with each version's profit; a strategy-name mask everywhere.
 
