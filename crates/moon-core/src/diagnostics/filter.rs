@@ -36,9 +36,11 @@ use super::config::DiagCfg;
 /// Entry/Exit axis and one per deal it asks the venue for, written so a batch that looks stuck can
 /// be read instead of guessed. [`TELEGRAM_TARGET`] is the third: the Mini App's owner commands (a
 /// strategy toggle, an order action) are rare, and each is exactly the line a support case needs.
+/// [`CORE_MOVE_TARGET`] is the fourth: a core moved to a server logs a few dozen lines per move,
+/// and once its window is closed they are the only account of what the move did.
 pub const DEFAULT_BASE_FILTER: &str = "warn,moonterminal::panels::chart=info,\
     moonterminal::analytics::tuner::ticks=info,moon_tg=info,\
-    moon_gpui=info,moon_core=info";
+    moonterminal::backend::core_move=info,moon_gpui=info,moon_core=info";
 
 /// Module prefix carrying balance-repair tracing (`feed::live` and its children).
 const BALANCES_TARGET: &str = "moon_core::feed::live";
@@ -157,3 +159,8 @@ pub const TICKS_AXIS_TARGET: &str = "moonterminal::analytics::tuner::ticks";
 /// terminal and on the station alike. Public so that crate can check it against its own
 /// `module_path!()`.
 pub const TELEGRAM_TARGET: &str = "moon_tg";
+
+/// Explicit `target:` of a core move's lines in the terminal — every step, answer and failure —
+/// raised to `info` by [`DEFAULT_BASE_FILTER`]. Named beside the directive for the reason
+/// [`TICKS_AXIS_TARGET`] is: the binary's `warn` baseline mutes a target the two disagree on.
+pub const CORE_MOVE_TARGET: &str = "moonterminal::backend::core_move";

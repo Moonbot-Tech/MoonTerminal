@@ -9,6 +9,8 @@
 //! channel. Once the new core runs, the backend points this core's row at it and has the station
 //! follow ([`Backend::core_move_switch`]).
 
+#[cfg(test)]
+mod tests;
 mod text;
 mod worker;
 
@@ -17,6 +19,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use gpui::{Context, Task};
+use moon_core::diagnostics::CORE_MOVE_TARGET;
 use moon_remote::ssh::Target;
 use rust_i18n::t;
 
@@ -182,7 +185,7 @@ impl Backend {
 
     /// Add a line to core `uid`'s move log — the station's answer comes in this way.
     pub(crate) fn core_move_note(&mut self, uid: u64, line: String) {
-        log::info!("core move {uid}: {line}");
+        log::info!(target: CORE_MOVE_TARGET, "core move {uid}: {line}");
         if let Some(job) = self.core_moves.jobs.get_mut(&uid) {
             push_line(&mut job.lines, line);
         }
@@ -234,7 +237,7 @@ impl Backend {
                         && let Some(job) = b.core_moves.jobs.get_mut(&uid)
                         && job.phase.busy()
                     {
-                        log::warn!("core move {uid}: its thread ended without a word");
+                        log::warn!(target: CORE_MOVE_TARGET, "core move {uid}: its thread ended without a word");
                         job.phase = MovePhase::Failed {
                             reason: t!("core_move.lost").to_string(),
                         };
@@ -274,16 +277,24 @@ impl Backend {
             Event::Probed {
                 target,
                 fingerprint,
-            } => log::info!("core move {uid}: {} presents {fingerprint}", target.addr()),
-            Event::Line(line) => log::info!("core move {uid}: {line}"),
-            Event::Refused { open_deals } => {
-                log::info!("core move {uid}: the old core refuses to stop ({open_deals:?} open)")
+            } => {
+                log::info!(target: CORE_MOVE_TARGET, "core move {uid}: {} presents {fingerprint}", target.addr())
             }
-            Event::Waiting => log::info!("core move {uid}: waiting for the old core to stop"),
-            Event::Resumed => log::info!("core move {uid}: going on"),
-            Event::Started { address } => log::info!("core move {uid}: new core runs at {address}"),
-            Event::Failed(reason) => log::warn!("core move {uid}: failed: {reason}"),
-            Event::Cancelled => log::info!("core move {uid}: cancelled"),
+            Event::Line(line) => log::info!(target: CORE_MOVE_TARGET, "core move {uid}: {line}"),
+            Event::Refused { open_deals } => {
+                log::info!(target: CORE_MOVE_TARGET, "core move {uid}: the old core refuses to stop ({open_deals:?} open)")
+            }
+            Event::Waiting => {
+                log::info!(target: CORE_MOVE_TARGET, "core move {uid}: waiting for the old core to stop")
+            }
+            Event::Resumed => log::info!(target: CORE_MOVE_TARGET, "core move {uid}: going on"),
+            Event::Started { address } => {
+                log::info!(target: CORE_MOVE_TARGET, "core move {uid}: new core runs at {address}")
+            }
+            Event::Failed(reason) => {
+                log::warn!(target: CORE_MOVE_TARGET, "core move {uid}: failed: {reason}")
+            }
+            Event::Cancelled => log::info!(target: CORE_MOVE_TARGET, "core move {uid}: cancelled"),
         }
         match event {
             Event::Probed {
@@ -318,7 +329,7 @@ impl Backend {
                         self.station_follow_core(uid, cx);
                     }
                     Err(e) => {
-                        log::warn!("core move {uid}: the row was not switched to {address}: {e:#}");
+                        log::warn!(target: CORE_MOVE_TARGET, "core move {uid}: the row was not switched to {address}: {e:#}");
                         if let Some(job) = self.core_moves.jobs.get_mut(&uid) {
                             job.phase = MovePhase::Failed {
                                 reason: t!(

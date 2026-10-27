@@ -288,6 +288,21 @@ fn the_ticks_fetch_target_is_raised_by_the_base_filter() {
     );
 }
 
+/// A core move logs with `CORE_MOVE_TARGET` as its explicit target; the base filter must let its
+/// `info` lines through while the rest of the binary stays at `warn`.
+#[test]
+fn core_move_lines_pass_the_base_filter() {
+    let spec = compose(&DiagCfg::default(), None);
+    assert!(
+        allows(&spec, CORE_MOVE_TARGET, log::Level::Info),
+        "a move's info lines must reach the log: {spec}"
+    );
+    assert!(
+        !allows(&spec, "moonterminal::backend::station", log::Level::Info),
+        "and only the move's: {spec}"
+    );
+}
+
 /// The Mini App's owner commands log at `info` under the Telegram crate; the default
 /// base filter must let them through while the rest of the binary stays at `warn`.
 #[test]
