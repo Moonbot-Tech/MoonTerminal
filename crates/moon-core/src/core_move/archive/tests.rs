@@ -106,6 +106,23 @@ fn several_exchanges_need_an_explicit_name() {
     assert_eq!(archive.exchange, "Binance Futures");
 }
 
+/// The list a core-reported exchange is checked against: one entry per exchange, whatever the
+/// base currency, nothing from outside `data/` — the shape a live core's snapshot had.
+#[test]
+fn strategy_exchanges_lists_each_exchange_once() {
+    let zip = snapshot(&[
+        ("BotConfig.bcfg", b"cfg"),
+        ("data/Binance Futures-USDC-strat.txt", b""),
+        ("data/Binance Futures-USDT-strat.txt", b""),
+        ("data/ByBit Futures-USDT-strat.txt", b""),
+        ("bak/Hyper-USDC-strat.txt", b""),
+    ]);
+    assert_eq!(
+        strategy_exchanges(&zip).unwrap(),
+        ["Binance Futures", "ByBit Futures"]
+    );
+}
+
 #[test]
 fn unsafe_or_foreign_snapshots_are_refused() {
     let no_config = snapshot(&[("data/Gate-USDT-strat.txt", b"")]);

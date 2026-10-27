@@ -1,7 +1,8 @@
 //! The settings archive a moved core starts from.
 //!
-//! The input is the settings snapshot MoonBot's own VPS wizard saves ("Get settings"): the bot
-//! configuration, its INI and strategy files at their paths inside the bot folder. This module
+//! The input is the settings snapshot MoonBot's own VPS wizard saves ("Get settings"), or the same
+//! ZIP taken straight from the core ([`super::snapshot`]): the bot configuration, its INI and
+//! strategy files at their paths inside the bot folder. This module
 //! checks it, adds the report database rebuilt from the replica under the name the core opens,
 //! and sets one INI switch for the first start.
 //!
@@ -60,8 +61,10 @@ pub struct MoveArchive {
 
 /// Build the archive from a MoonBot settings snapshot.
 ///
-/// `exchange` overrides the name read from the strategy files, needed when a snapshot holds
-/// several; `report_db` is a rebuilt database file to put in as `data/<exchange>.db`.
+/// `exchange` is the core's exchange when the caller knows it — the user's choice or the name the
+/// core reports for itself — and is otherwise read off the strategy files, which fails when a
+/// snapshot holds several; `report_db` is a rebuilt database file to put in as
+/// `data/<exchange>.db`.
 pub fn compose(
     snapshot: &[u8],
     exchange: Option<&str>,
@@ -158,9 +161,19 @@ fn checked_name(raw: &str) -> anyhow::Result<String> {
     Ok(name)
 }
 
-/// The exchange name from the snapshot's strategy files; an error when there is none or more
-/// than one, since the database name must match the core's exchange exactly.
-fn exchange_from(names: &[String]) -> anyhow::Result<String> {
+/// The exchanges a settings snapshot holds strategy files for, sorted and without repeats — every
+/// exchange the bot has ever run on, not only the one it runs on now.
+pub fn strategy_exchanges(snapshot: &[u8]) -> anyhow::Result<Vec<String>> {
+    let mut zip = zip::ZipArchive::new(Cursor::new(snapshot)).context("read the settings ZIP")?;
+    let mut names = Vec::with_capacity(zip.len());
+    for i in 0..zip.len() {
+        names.push(zip.by_index_raw(i)?.name()?.replace('\\', "/"));
+    }
+    Ok(stems(&names))
+}
+
+/// The exchange part of every `data/<Exchange>-<Base>-strat.txt` among `names`, sorted, deduped.
+fn stems(names: &[String]) -> Vec<String> {
     let mut found: Vec<String> = names
         .iter()
         .filter_map(|n| n.strip_prefix("data/")?.strip_suffix(STRAT_SUFFIX))
@@ -172,6 +185,14 @@ fn exchange_from(names: &[String]) -> anyhow::Result<String> {
         .collect();
     found.sort();
     found.dedup();
+    found
+}
+
+/// The exchange name from the snapshot's strategy files, for a caller that has no better source;
+/// an error when there is none or more than one, since the database name must match the core's
+/// exchange exactly.
+fn exchange_from(names: &[String]) -> anyhow::Result<String> {
+    let found = stems(names);
     match found.as_slice() {
         [one] => Ok(one.clone()),
         [] => anyhow::bail!("no strategy file in the ZIP names the exchange: pass it explicitly"),

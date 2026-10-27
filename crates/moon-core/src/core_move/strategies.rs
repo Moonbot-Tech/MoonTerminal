@@ -186,7 +186,7 @@ fn write_on(client: &MoonClient, set: &StrategySet, timeout: Duration) -> anyhow
 
 /// Connect and wait until the client is ready, announcing no local strategies — what every
 /// terminal announces, and a Full snapshot never deletes what it omits.
-fn connect(cfg: ClientConfig, timeout: Duration) -> anyhow::Result<MoonClient> {
+pub(super) fn connect(cfg: ClientConfig, timeout: Duration) -> anyhow::Result<MoonClient> {
     let init = InitConfig {
         initial_strategies: Some(InitialStrategies::new(0, Vec::new())),
         ..Default::default()
