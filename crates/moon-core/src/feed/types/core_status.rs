@@ -122,7 +122,8 @@ pub struct CoreSysStatus {
     /// Logical CPU count of the machine.
     pub logical_cpu_count: Option<u8>,
     /// Smoothed client↔core UDP round-trip time, ms — the transport ping between this terminal and
-    /// the core (NOT the core→exchange path). `None` until the core has measured one Ping response.
+    /// the core (NOT the core→exchange path). `None` until the core has measured one Ping response;
+    /// a reported zero also stays `None`, since it can mean "no sample yet at the core".
     /// This is moonproto's `core_round_trip_ms`; MoonBot's displayed one-way ping is half of it.
     ///
     /// NOT the same figure as [`CoreStartupStatus::round_trip_ms`], which shares this field name on
@@ -347,7 +348,7 @@ pub struct CoreStartupStatus {
     pub received_packets_before_last_port_change: u64,
     /// Automatic local-socket replacements observed while this client was starting.
     pub local_port_change_count: u32,
-    /// Last full client↔core UDP round-trip reported by Ping, ms.
+    /// Last full client↔core UDP round-trip reported by Ping, ms; a reported zero stays `None`.
     ///
     /// NOT the same figure as [`CoreSysStatus::round_trip_ms`], which shares this field name on a
     /// sibling struct also reachable from `CoreData`: that one is LIVE and refreshes on every Ping,

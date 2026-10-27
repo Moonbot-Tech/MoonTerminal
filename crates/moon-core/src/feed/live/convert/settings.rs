@@ -121,6 +121,16 @@ pub(in crate::feed::live) fn snapshot_when<T>(
     gate.then(|| client.snapshot()).flatten().and_then(extract)
 }
 
+/// A client↔core round trip that is an actual measurement, or `None`.
+///
+/// moonproto reports a received zero as `Some(0)`, and a zero can also mean the core has no RTT
+/// sample yet. Fed into the ping baseline, connect-time zeros would drag the rolling mean down and
+/// make real pings look like spikes, and the panels would print "0 ms" for "not measured" — so the
+/// terminal keeps treating a zero as no reading, as it always has.
+fn measured_round_trip(ms: Option<u32>) -> Option<u32> {
+    ms.filter(|&ms| ms != 0)
+}
+
 /// Convert protocol-v4 `KernelHealth` into terminal telemetry and stamp its
 /// receipt time. The caller reads `KernelHealth` from `snapshot().kernel_health()`
 /// (its retained value keeps the last memory sample between CPU-only Pings), not
@@ -136,7 +146,7 @@ pub(in crate::feed::live) fn sys_status_from_proto(
         used_memory_mb: h.used_memory_mb,
         free_physical_memory_mb: h.free_physical_memory_mb,
         logical_cpu_count: h.logical_cpu_count,
-        round_trip_ms: h.core_round_trip_ms,
+        round_trip_ms: measured_round_trip(h.core_round_trip_ms),
         order_api_latency_ms: h.order_api_latency_ms,
         updated_ms,
     }
@@ -216,7 +226,7 @@ pub(in crate::feed::live) fn startup_status_from_proto(
         sent_packets_before_last_port_change: s.sent_packets_before_last_port_change,
         received_packets_before_last_port_change: s.received_packets_before_last_port_change,
         local_port_change_count: s.local_port_change_count,
-        round_trip_ms: s.round_trip_ms,
+        round_trip_ms: measured_round_trip(s.round_trip_ms),
         path_mtu_bytes: s.path_mtu_bytes,
         downlink_delivery_percent: s.downlink_delivery_percent,
     }
