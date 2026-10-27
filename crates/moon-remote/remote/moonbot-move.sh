@@ -3,7 +3,9 @@
 # core_move module, one step per call:
 #   check   <udp port>                          — the server can run MoonBot and the port is free
 #   install <work dir> <instance dir> <udp port> <package url>
-#                                               — package + settings, start, wait for MoonProto
+#                                               — package + settings and the service, not started
+#   start   <instance dir>                      — start the core, wait until it took its key and
+#                                                 listens for MoonProto
 #   finish  <instance dir>                      — drop the first-start INI switch the move added
 #   remove  <instance dir>                      — stop and delete an instance this script made
 # The work dir holds state.zip (settings archive), key (MoonProto connection packet) and, when
@@ -86,15 +88,10 @@ install)
     umask 077
     mkdir -p -- "$(dirname -- "$dest")"
     mkdir -- "$dest"
-    started=''
     opened=''
     cleanup() {
         code=$?
         if test "$code" != 0; then
-            if test -n "$started"; then
-                journalctl -u "$unit" -n 30 --no-pager >&2 || true
-                systemctl disable --now "$unit" >/dev/null 2>&1 || true
-            fi
             if test -n "$opened"; then
                 ufw delete allow "$port/udp" >/dev/null 2>&1 || true
             fi
@@ -131,7 +128,26 @@ install)
         echo ufw >> "$dest/$marker"
     fi
     systemctl daemon-reload
-    started=1
+    # Not started here: the old core must be down first, or two cores trade one account.
+    trap - EXIT
+    rm -rf -- "$work"
+    printf 'MOVE_DIRECTORY=%s\nMOVE_SERVICE=%s\n' "$dest" "$unit"
+    ;;
+start)
+    dest=$(resolve_dir "$1")
+    test -f "$dest/$marker" || { echo "$dest was not installed by a MoonTerminal move" >&2; exit 1; }
+    unit=$(unit_of "$dest")
+    port=$(head -n 1 "$dest/$marker")
+    # A failed start stops the core again and keeps the instance, for a retry or remove.
+    stop_on_error() {
+        code=$?
+        if test "$code" != 0; then
+            journalctl -u "$unit" -n 30 --no-pager >&2 || true
+            systemctl disable --now "$unit" >/dev/null 2>&1 || true
+        fi
+        exit "$code"
+    }
+    trap stop_on_error EXIT
     systemctl enable --now "$unit" >/dev/null 2>&1
     # The core takes the key file on its first start and deletes it.
     i=0
@@ -149,8 +165,7 @@ install)
         sleep 1
     done
     trap - EXIT
-    rm -rf -- "$work"
-    printf 'MOVE_DIRECTORY=%s\nMOVE_SERVICE=%s\n' "$dest" "$unit"
+    echo START_OK
     ;;
 finish)
     dest=$(resolve_dir "$1")

@@ -7,12 +7,14 @@
 //! - [`archive`] — the settings archive the new core starts from;
 //! - [`snapshot`] — the settings snapshot taken straight from the running core, the same ZIP
 //!   MoonBot's VPS wizard saves;
-//! - [`strategies`] — the old core's strategy set written to the new one over MoonProto.
+//! - [`strategies`] — the old core's strategy set written to the new one over MoonProto;
+//! - [`old_core`] — the old core stopped, and seen to be down, before the new one starts.
 //!
 //! The server side (install, start, roll back) lives in `moon-remote`.
 
 pub mod archive;
 pub mod key_packet;
+pub mod old_core;
 pub mod report_db;
 pub mod snapshot;
 pub mod strategies;

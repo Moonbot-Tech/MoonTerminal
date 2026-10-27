@@ -14,10 +14,12 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
+/// The client configuration every call in `core_move` takes, named here for callers that do not
+/// depend on MoonProto themselves.
+pub use moonproto::ClientConfig;
 use moonproto::state::StratsState;
 use moonproto::{
-    ClientConfig, ConnectConfig, InitConfig, InitialStrategies, MoonClient, StrategySnapshot,
-    TransportMode,
+    ConnectConfig, InitConfig, InitialStrategies, MoonClient, StrategySnapshot, TransportMode,
 };
 
 /// How often a wait below looks at the client's state again.
