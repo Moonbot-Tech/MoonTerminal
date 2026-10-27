@@ -1,0 +1,29 @@
+# Retries stay at 0: a flake must show red, not disappear behind a green retry.
+# There is no [test-groups] section. No genuinely shared resource was found:
+# process-wide statics are mutex-guarded, and nextest runs each test in its own process.
+[profile.default]
+fail-fast = false
+retries = 0
+slow-timeout = { period = "30s", terminate-after = 4 }
+status-level = "fail"
+final-status-level = "slow"
+
+# Priority starts the longest tests first; they are the critical path.
+[[profile.default.overrides]]
+filter = 'binary(ci_gate_contract) & test(/^release_/)'
+priority = 100
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'binary(theme_contract) & test(platform_dependencies)'
+priority = 100
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'binary(moonterminal) & test(/every_language|all_languages|fits_every|fit_all/)'
+priority = 100
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(/corrupt_replica_|damaged_db/)'
+priority = 50

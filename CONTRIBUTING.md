@@ -195,8 +195,10 @@ make build | run | release | check | fmt
   PowerShell 5.1 turns that into a terminating error — it reads as "the code does not compile"
   when nothing is wrong. Judge by the exit code.
 - Tests: `cargo test -p moon-core` / `-p moon-ui-gpui`. A single test:
-  `cargo test -p <crate> <name> -- --exact --nocapture`. CI runs the whole workspace, so a
-  crate you did not build locally still has to compile and pass.
+  `cargo test -p <crate> <name> -- --exact --nocapture`. The full suite, fast: `make test`
+  runs every test in its own process in parallel with cargo-nextest
+  (`cargo install cargo-nextest --locked`), then the doc-tests, which nextest skips.
+  CI runs the whole workspace, so a crate you did not build locally still has to compile and pass.
 - The release-script tests shell out to **`jq`** (the scripts parse GitHub's JSON with it). A local
   box without it prints `[skip]` and runs the rest; under `CI` the same tests fail hard instead,
   because every hosted runner ships `jq`. Install it if you touch `.github/scripts`.

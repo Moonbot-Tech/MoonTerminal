@@ -7,6 +7,7 @@ use moon_core::feed::StrategyRow;
 /// Omitting the folder actions or enabling an empty folder would make the menu disagree with arrows.
 #[test]
 fn folder_menu_keeps_both_directions_and_explains_empty_refusal() {
+    let _locale = crate::test_locale::force("en");
     let rows: Vec<_> = ["A", "B", "C"]
         .into_iter()
         .enumerate()

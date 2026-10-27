@@ -58,10 +58,10 @@ else
   SIGN = @true
 endif
 
-.PHONY: run build release check fmt clean update-moon-ui update-moonproto update-all update-forks codesign-setup help tour tour-site tour-check tour-theme tour-test
+.PHONY: run build release check test fmt clean update-moon-ui update-moonproto update-all update-forks codesign-setup help tour tour-site tour-check tour-theme tour-test
 
 help:
-	@echo "make run | build | release | check | fmt | clean | codesign-setup"
+	@echo "make run | build | release | check | test | fmt | clean | codesign-setup"
 	@echo "deps: update-moon-ui (MoonUI pin) | update-moonproto (deliberate) | update-all (moves EVERYTHING)"
 	@echo "docs: tour (regenerate the user tour) | tour-site (build the publishable site) | tour-check (verify it is current) | tour-theme (refresh the palette)"
 	@echo "bin: $(BIN)"
@@ -89,6 +89,11 @@ release:
 
 check:
 	$(CARGO) check $(PKG) $(TARGET)
+
+# cargo-nextest runs every test in its own process. Doc-tests are a second pass: nextest skips them.
+test:
+	$(CARGO) nextest run --workspace $(TARGET)
+	$(CARGO) test --doc --workspace $(TARGET)
 
 fmt:
 	$(CARGO) fmt

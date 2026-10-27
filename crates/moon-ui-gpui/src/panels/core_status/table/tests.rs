@@ -187,6 +187,8 @@ fn projected_column_keys_follow_drop_tiers_at_a_narrow_width() {
 
 /// Quiet row with known telemetry. The connection is the only field the caller changes.
 fn sample_row(status: ConnStatus) -> CoreStatusRow {
+    // Startup cells translate; the first lookup must not run on the 2 MiB test stack.
+    crate::test_locale::warm();
     CoreStatusRow {
         fault: None,
         mode_suggestion: None,

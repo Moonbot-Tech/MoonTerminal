@@ -247,6 +247,7 @@ fn nothing_is_written_before_the_saved_lists_are_read() {
 /// The whitelist field is plain: sorted by token, no dates, additions flagged.
 #[test]
 fn the_whitelist_field_is_sorted_by_token_without_dates() {
+    let _locale = crate::test_locale::force("en");
     let w = build_white(
         &[white_row("XCCC", &["XCCC"]), white_row("XAAA", &["XAAA"])],
         &set(&["XCCC", "XAAA", "XBBB"]),
