@@ -181,6 +181,23 @@ fn startup_status_maps_local_port_and_physical_packet_fields() {
     assert_eq!(startup.local_port_change_count, 1);
 }
 
+/// moonproto reports a received zero RTT as `Some(0)`; the terminal must keep it as "no reading",
+/// or connect-time zeros dilute the ping-warning baseline. Reddens if the boundary filter goes.
+#[test]
+// `..Default::default()` keeps this compiling when `KernelHealth` grows a field the converter ignores.
+#[allow(clippy::needless_update)]
+fn zero_round_trip_is_not_a_measurement() {
+    let h = moonproto::state::KernelHealth {
+        core_round_trip_ms: Some(0),
+        ..Default::default()
+    };
+    assert_eq!(sys_status_from_proto(h, 0).round_trip_ms, None);
+
+    let mut proto = moonproto::StartupStatus::default();
+    proto.round_trip_ms = Some(0);
+    assert_eq!(startup_status_from_proto(proto).round_trip_ms, None);
+}
+
 /// A future edit that wires machine-wide `system_cpu_percent` into the
 /// process-CPU field, swaps process/system, or feeds `used_memory_mb` from
 /// `free_physical_memory_mb` — the scope-vs-average confusion the panel must
