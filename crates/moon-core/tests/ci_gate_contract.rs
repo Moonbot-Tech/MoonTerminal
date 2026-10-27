@@ -221,45 +221,49 @@ fn job_body<'a>(text: &'a str, want: &str) -> Option<Vec<&'a str>> {
     body
 }
 
-/// The `cargo test` command a job body runs.
+/// The complete run command beginning with `prefix`, including block-form continuations.
 ///
 /// Anchored on `run:` rather than matched anywhere in the body, because a step's `name:` line
 /// precedes its `run:` line — a step renamed to "Run cargo test suite" would otherwise be
 /// picked up as the command itself. Both the inline and the block form (`run: |` with the
 /// command on the following line) are accepted: a meaning-preserving reformat must not turn the
 /// gate red.
-fn run_command(body: &[&str]) -> Option<String> {
+fn run_command(body: &[&str], prefix: &str) -> Option<String> {
     for (i, line) in body.iter().enumerate() {
         let Some(rest) = line.trim().strip_prefix("run:") else {
             continue;
         };
         let rest = rest.trim();
         let cmd = if rest.is_empty() || rest.starts_with('|') || rest.starts_with('>') {
+            let indent = line.len() - line.trim_start().len();
             body[i + 1..]
                 .iter()
+                .take_while(|l| l.trim().is_empty() || l.len() - l.trim_start().len() > indent)
                 .map(|l| l.trim())
-                .find(|l| !l.is_empty())?
-                .to_string()
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
         } else {
             rest.to_string()
         };
-        if cmd.contains("cargo test") {
+        if cmd.starts_with(prefix) {
             return Some(cmd);
         }
     }
     None
 }
 
+/// Find the suite command in the named test gate rather than an unrelated job or doc-test step.
 fn test_command(text: &str) -> String {
     let body = job_body(text, TEST_JOB)
         .unwrap_or_else(|| panic!("build.yml must keep a `{TEST_JOB}:` job that runs the suite"));
-    run_command(&body).unwrap_or_else(|| {
-        panic!("job `{TEST_JOB}` must run `cargo test` — CI that only builds lets a broken suite reach main")
+    run_command(&body, "cargo nextest run").unwrap_or_else(|| {
+        panic!("job `{TEST_JOB}` must run `cargo nextest run` — CI that only builds lets a broken suite reach main")
     })
 }
 
 /// Breakage guarded: narrowing the suite in `.github/workflows/build.yml` — the `tests` job's
-/// command changed from `cargo test --workspace` to `cargo test --workspace --exclude
+/// command changed from `cargo nextest run --workspace` to `cargo nextest run --workspace --exclude
 /// moon-ui-gpui` (or `-p moon-core`, or `--lib`, or `--no-run`) to shave CI minutes off the
 /// heaviest crate. Test binaries would stop being compiled or run, and a break in them would
 /// reach `main` silently — the exact failure this job was added to end.
@@ -268,12 +272,12 @@ fn ci_runs_the_whole_workspace_test_suite() {
     let cmd = test_command(&workflow_text());
 
     assert!(
-        cmd.starts_with("cargo test"),
-        "job `{TEST_JOB}` must invoke cargo test directly, so its exit status gates the job: `{cmd}`"
+        cmd.starts_with("cargo nextest run "),
+        "job `{TEST_JOB}` must invoke nextest directly, so its exit status gates the job: `{cmd}`"
     );
 
-    // Chaining lets the suite fail while the step still succeeds (`cargo test ...; exit 0`).
-    for sep in [";", "&&", "||", "|"] {
+    // Chaining lets the suite fail while the step still succeeds.
+    for sep in [";", "&&", "||", "|", "\n"] {
         assert!(
             !cmd.contains(sep),
             "job `{TEST_JOB}` must not chain anything onto the suite — `{sep}` can swallow a \
@@ -281,34 +285,39 @@ fn ci_runs_the_whole_workspace_test_suite() {
         );
     }
 
-    let tokens: Vec<&str> = cmd.split_whitespace().collect();
-    assert!(
-        tokens.contains(&"--workspace"),
-        "job `{TEST_JOB}` must test the WHOLE workspace, not one crate: `{cmd}`"
+    // An allow-list also rejects nextest filters (-E, partitions, positional names), package
+    // selectors and future narrowing flags instead of trusting an incomplete deny-list.
+    assert_eq!(
+        cmd,
+        "cargo nextest run --workspace --profile ci --no-fail-fast --target x86_64-pc-windows-msvc",
+        "job `{TEST_JOB}` must run the whole workspace with no filters or chained commands"
     );
+}
 
-    // Each of these keeps `--workspace` while silently dropping targets or tests from the run.
-    // `--exclude` is matched in its `=` form too, and `--` because everything after it is a
-    // filter handed to the test harness.
-    for narrowing in [
-        "--exclude",
-        "--no-run",
-        "--lib",
-        "--bins",
-        "--doc",
-        "--skip",
-        "--exact",
-        "--",
-    ] {
-        let hit = tokens
+/// Breakage guarded: nextest skips doc-tests, so dropping or narrowing the separate pass would
+/// silently stop checking public examples. Skipping it after a failing suite loses no-fail-fast.
+#[test]
+fn ci_runs_workspace_doc_tests_even_after_a_test_failure() {
+    let text = workflow_text();
+    let body = job_body(&text, TEST_JOB).expect("workspace test job");
+    assert_eq!(
+        run_command(&body, "cargo test").as_deref(),
+        Some("cargo test --doc --workspace --no-fail-fast --target x86_64-pc-windows-msvc"),
+        "nextest must be supplemented by an unfiltered workspace doc-test pass"
+    );
+    let doc_step = body
+        .split(|line| line.trim_start().starts_with("- "))
+        .find(|step| {
+            step.iter()
+                .any(|line| line.contains("run: cargo test --doc"))
+        })
+        .expect("doc-test step");
+    assert!(
+        doc_step
             .iter()
-            .find(|t| **t == narrowing || t.starts_with(&format!("{narrowing}=")));
-        assert!(
-            hit.is_none(),
-            "job `{TEST_JOB}` must not narrow the suite with `{}`: `{cmd}`",
-            hit.unwrap_or(&narrowing)
-        );
-    }
+            .any(|line| line.trim() == "if: ${{ !cancelled() }}"),
+        "doc-tests must run even if nextest failed, unless the job was cancelled"
+    );
 }
 
 /// Breakage guarded: demoting a gate in `.github/workflows/build.yml` — `continue-on-error:
@@ -558,7 +567,7 @@ fn the_station_job_builds_tests_and_lints_for_linux() {
         .collect();
     for expected in [
         "cargo build -p moon-station --locked --target x86_64-unknown-linux-musl",
-        "cargo test -p moon-station --locked --target x86_64-unknown-linux-musl",
+        "cargo nextest run -p moon-station --profile ci --locked --target x86_64-unknown-linux-musl",
         "cargo clippy -p moon-station --all-targets --locked --target x86_64-unknown-linux-musl -- -D warnings",
     ] {
         assert!(

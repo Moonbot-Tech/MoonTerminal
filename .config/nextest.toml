@@ -27,3 +27,13 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [[profile.default.overrides]]
 filter = 'test(/corrupt_replica_|damaged_db/)'
 priority = 50
+
+# Hosted CI runners can be much slower than a warm local build. Keep failures visible.
+[profile.ci]
+fail-fast = false
+retries = 0
+
+# A CI override takes precedence over default-profile per-test timeouts as well.
+[[profile.ci.overrides]]
+filter = 'all()'
+slow-timeout = { period = "60s", terminate-after = 10 }
