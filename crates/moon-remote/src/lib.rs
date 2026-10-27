@@ -1,4 +1,5 @@
-//! moon-remote: prepares a Linux server for the station over SSH, from the terminal's machine.
+//! moon-remote: prepares a Linux server for the station over SSH, from the terminal's machine,
+//! and installs MoonBot cores moved onto Linux servers (`core_move`).
 //!
 //! The mechanics of `docs-internal/STATION.md` §4.6 and §5.1, without the UI yet: the `moon-remote`
 //! binary drives them from a command line; the terminal's "Server" page will call the same
@@ -6,6 +7,7 @@
 //! crate so the binary that runs a setup is the one whose scripts run on the server.
 
 pub mod app_key;
+pub mod core_move;
 pub mod error;
 pub mod hosts;
 pub mod keys;
