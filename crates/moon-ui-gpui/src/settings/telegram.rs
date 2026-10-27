@@ -29,7 +29,7 @@ mod core_section;
 mod message_layout;
 mod qr;
 mod server_auto_update;
-mod server_bot;
+pub(crate) mod server_bot;
 mod server_tape;
 mod station_access;
 mod station_cores;

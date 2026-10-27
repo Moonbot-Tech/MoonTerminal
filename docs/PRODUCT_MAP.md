@@ -13,6 +13,7 @@ feature — a row in the map, a new user word — a row in the dictionary.
    shell, interface, settings, hotkeys, orders, report, analytics,
    strategies, screener, news, connections, core_status, core_run,
    core_expert (the Core settings window; its shared `core_settings.*` keys sit in shell),
+   core_move (the "Move to VPS…" window of a core in Connections),
    dialogs, crowd, assets, trade_window, station, telegram and telegram_*.
 2. The dictionary below — users' words that are not in the labels.
 3. `docs/ARCHITECTURE.md` — chapters on the mechanics (Rendering, Data Path, manual

@@ -181,6 +181,45 @@ impl SettingsView {
                     });
                 }
             }
+            CoreAction::MoveToVps => {
+                let Some(i) = self.conn_selected_index() else {
+                    return;
+                };
+                // Only a saved core moves: the move reads its key from servers.enc and its
+                // history by uid.
+                let saved = {
+                    let b = self.backend.read(cx);
+                    // The index is the draft's; the saved row is found by its uid.
+                    let uid = b
+                        .preview
+                        .as_ref()
+                        .unwrap_or(&b.config)
+                        .servers
+                        .get(i)
+                        .map(|s| s.uid)
+                        .filter(|uid| *uid != 0);
+                    uid.and_then(|uid| b.config.servers.iter().find(|s| s.uid == uid))
+                        .map(|s| (s.uid, s.name.clone()))
+                };
+                match saved {
+                    Some((uid, name)) => crate::core_move_window::open(
+                        self.backend.clone(),
+                        Some(window.window_handle()),
+                        window.display(cx).map(|display| display.id()),
+                        uid,
+                        name,
+                        cx,
+                    ),
+                    None => {
+                        window.push_notification(
+                            moon_ui::MoonNotification::warning(
+                                t!("core_move.save_first").to_string(),
+                            ),
+                            cx,
+                        );
+                    }
+                }
+            }
             CoreAction::AskDelete => self.ask_delete_core(window, cx),
             CoreAction::DeleteConfirmed(_) => {}
         }

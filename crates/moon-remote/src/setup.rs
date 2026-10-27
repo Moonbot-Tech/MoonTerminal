@@ -466,9 +466,24 @@ fn first_login(
     pin: &str,
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<(Conn, Privilege)> {
-    let (conn, sudo_password) = match &setup.first {
+    let (conn, privilege) = provider_login(&setup.target, &setup.first, pin)?;
+    say(Progress::step(
+        Step::Login,
+        format!("in as {} with the provider's login", conn.user()),
+    ));
+    Ok((conn, privilege))
+}
+
+/// Log in to `target` with the provider's login against the host key `pin`, and find how that
+/// login reaches root — sudo with the login's password, when it has one.
+pub fn provider_login(
+    target: &Target,
+    first: &FirstAccess,
+    pin: &str,
+) -> anyhow::Result<(Conn, Privilege)> {
+    let (conn, sudo_password) = match first {
         FirstAccess::Password { user, password } => {
-            let conn = Conn::open(&setup.target, &Auth::Password { user, password }, pin)?;
+            let conn = Conn::open(target, &Auth::Password { user, password }, pin)?;
             (conn, Some(password.clone()))
         }
         FirstAccess::Key {
@@ -476,14 +491,10 @@ fn first_login(
             key,
             sudo_password,
         } => {
-            let conn = Conn::open(&setup.target, &Auth::Key { user, key }, pin)?;
+            let conn = Conn::open(target, &Auth::Key { user, key }, pin)?;
             (conn, sudo_password.clone())
         }
     };
-    say(Progress::step(
-        Step::Login,
-        format!("in as {} with the provider's login", conn.user()),
-    ));
     let privilege = Privilege::detect(&conn, sudo_password.as_ref())?;
     Ok((conn, privilege))
 }

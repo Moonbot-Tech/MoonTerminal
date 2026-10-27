@@ -64,6 +64,8 @@ pub(crate) enum CoreAction {
     /// Put the clipboard's key into the selected core.
     PasteKey,
     Reconnect,
+    /// Open the selected core's "Move to VPS…" window.
+    MoveToVps,
     /// The delete button: asks first.
     AskDelete,
     /// The dialog's confirm: deletes the core at this draft index.
@@ -952,6 +954,14 @@ pub(crate) fn core_card(
                     .render(),
             )
         })
+        .child(
+            MoonButton::new("core-card-move")
+                .variant(moon_ui::MoonButtonVariant::Neutral)
+                .size(MoonButtonSize::density(cx))
+                .label(t!("core_move.card_button").to_string())
+                .on_click(on(act, CoreAction::MoveToVps))
+                .render(),
+        )
         .child(div().flex_1())
         .child(
             MoonButton::new("core-card-delete")

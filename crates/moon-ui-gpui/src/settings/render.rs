@@ -58,6 +58,14 @@ impl Render for SettingsView {
         self.chat_notify_sync(window, cx);
         // The station tape's long-position field follows the station's reads.
         self.server_tape_input_sync(window, cx);
+        // A core moved to a new server got its new address outside this window: the Connections
+        // fields are rebuilt from the draft, or one of them would write the old address back.
+        let moved = self.backend.read(cx).core_moves_switched;
+        if moved != self.core_moves_seen {
+            self.core_moves_seen = moved;
+            let selected = self.conn_selected_index();
+            self.rebuild_conn(selected, None, window, cx);
+        }
         let p = MoonPalette::active(cx);
         let chrome_width = f32::from(window.viewport_size().width);
 

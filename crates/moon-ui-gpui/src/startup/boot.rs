@@ -202,6 +202,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let backend = cx.new(|_| Backend {
         telegram,
         station,
+        core_moves: Default::default(),
+        core_move_windows: HashMap::new(),
+        core_moves_switched: 0,
         updater: updater.clone(),
         session: SessionManager::start(
             &cfg,
