@@ -267,7 +267,7 @@ impl AnalyticsView {
         }
         let entry_modelled = data.entry_modelled();
         let without_tape = data.rows.len().saturating_sub(acc.n());
-        let fit = data.fit();
+        let fit = self.ticks.population().fit;
         let text = accuracy_sentence(&acc, entry_modelled, fit);
         Some(
             accuracy_footer_el(text, p, cx)

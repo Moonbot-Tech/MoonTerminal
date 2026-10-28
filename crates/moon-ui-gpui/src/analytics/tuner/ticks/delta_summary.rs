@@ -7,17 +7,47 @@ use rust_i18n::t;
 use super::state::{DealRow, TapeStatus};
 use moon_core::db::tuner::ticks::deltas::{self, NotComputed};
 
+/// The formatted summary belongs to both a row publication and an interface language.
+pub(super) struct Cache {
+    rows_rev: u64,
+    locale: String,
+    text: Option<(String, String)>,
+}
+
+/// Reuse the complete caption and tooltip without scanning tracks or sorting medians per paint.
+pub(super) fn cached(state: &mut super::state::TicksState) -> Option<(String, String)> {
+    let locale = rust_i18n::locale();
+    if !state
+        .delta_summary
+        .as_ref()
+        .is_some_and(|cache| cache.rows_rev == state.rows_rev && cache.locale == *locale)
+    {
+        state.delta_summary = Some(Cache {
+            rows_rev: state.rows_rev,
+            locale: locale.to_string(),
+            text: state.data.data().and_then(|data| delta_summary(&data.rows)),
+        });
+    }
+    state
+        .delta_summary
+        .as_ref()
+        .and_then(|cache| cache.text.clone())
+}
+
 /// The caption and its tooltip, or `None` while no row has its tape.
-pub(super) fn delta_summary(rows: &[DealRow]) -> Option<(String, String)> {
+pub(super) fn delta_summary<'a>(
+    rows: impl IntoIterator<Item = &'a DealRow> + Clone,
+) -> Option<(String, String)> {
     let covered = rows
-        .iter()
+        .clone()
+        .into_iter()
         .filter(|r| r.tape == TapeStatus::Covered)
         .count();
     if covered == 0 {
         return None;
     }
     let tracks = rows
-        .iter()
+        .into_iter()
         .filter(|r| r.tape == TapeStatus::Covered)
         .filter_map(|r| r.deal.delta_track.as_deref());
     let quality = deltas::summarize(tracks);

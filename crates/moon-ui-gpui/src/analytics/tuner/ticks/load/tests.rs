@@ -228,7 +228,7 @@ fn unlisted_load_reach_is_core_aware() {
         crate::analytics::tuner::ticks::readiness::Readiness::of_rows(&rows, 3_710_000, 60);
     assert_eq!(readiness.covered, 1);
     let data = crate::analytics::tuner::ticks::state::TicksData {
-        rows,
+        rows: rows.into(),
         ..Default::default()
     };
     assert_eq!(data.covered(), 1);

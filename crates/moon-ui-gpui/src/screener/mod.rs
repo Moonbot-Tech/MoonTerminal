@@ -10,8 +10,10 @@
 //! core, and a chart opens on it. Rows come from moon-core's `MarketDataSource::screener_rows`.
 //!
 //! [`view`] owns state, window rendering, and [`open`]; [`table`] owns the column schema, formatting,
-//! sorting, and row rendering.
+//! sorting, and row rendering. [`prepared`] holds coherent market publications and applies the
+//! current controls through compact row indices without rebuilding market data on the UI thread.
 
+mod prepared;
 mod table;
 mod view;
 

@@ -73,3 +73,41 @@ fn the_tooltip_names_every_delta_computed_or_not() {
         assert!(tip.contains(column), "{column} missing from {tip}");
     }
 }
+
+/// Reusing a summary across row publication or language changes would show stale coverage or copy.
+#[test]
+fn cached_summary_follows_rows_and_locale() {
+    use super::super::state::{TicksData, TicksState};
+    let mut state = TicksState::default();
+    state.publish(
+        Ok(TicksData {
+            rows: vec![row(TapeStatus::Covered)].into(),
+            ..Default::default()
+        }),
+        false,
+    );
+    let english = {
+        let _locale = crate::test_locale::force("en");
+        let expected = delta_summary(&state.data.data().unwrap().rows);
+        assert_eq!(super::cached(&mut state), expected);
+        assert_eq!(super::cached(&mut state), expected);
+        expected
+    };
+    {
+        let _locale = crate::test_locale::force("ru");
+        let expected = delta_summary(&state.data.data().unwrap().rows);
+        assert_ne!(expected, english);
+        assert_eq!(super::cached(&mut state), expected);
+    }
+    let _locale = crate::test_locale::force("en");
+    state.publish(
+        Ok(TicksData {
+            rows: vec![row(TapeStatus::Missing)].into(),
+            ..Default::default()
+        }),
+        false,
+    );
+    assert_eq!(super::cached(&mut state), None);
+    state.publish(Err(moon_core::db::ReadFail::NotReady), false);
+    assert_eq!(super::cached(&mut state), None);
+}

@@ -31,6 +31,7 @@ fn localized_tests_initialize_on_default_stacks() {
 /// Exact targets that exited with STATUS_STACK_OVERFLOW when each was run cold, before guards.
 /// Keep these independent of source scanning so moving or removing a guard cannot hide a target.
 const COLD_LOOKUPS: &[&str] = &[
+    "analytics::tuner::ticks::delta_summary::tests::cached_summary_follows_rows_and_locale",
     "panels::label_edit::tests::module_editor_labels_fit_every_locale",
     "analytics::profit_monitor::tests::exchange_rows_group_by_venue_identity_not_by_caption",
     "analytics::profit_monitor::tests::idle_rows_cover_active_cores_only_and_only_by_core",

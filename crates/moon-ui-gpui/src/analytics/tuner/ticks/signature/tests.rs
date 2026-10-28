@@ -2,6 +2,24 @@ use super::*;
 use crate::analytics::tuner::ticks::state::{DealRow, TapeStatus};
 use moon_core::market::trade_replay::TickStatus;
 
+/// A completed skip pass cannot hide a row edit, changed dependency, clock reversal or due retry.
+#[test]
+fn background_skip_is_bound_to_publication_dependencies_and_time() {
+    let checked = SkipCheck {
+        key: key(5, 2),
+        rows_rev: 7,
+        checked_at_ms: 100,
+        until_ms: 500,
+    };
+    assert!(checked.holds(&key(5, 2), 7, 100));
+    assert!(checked.holds(&key(5, 2), 7, 499));
+    assert!(!checked.holds(&key(5, 2), 8, 101));
+    assert!(!checked.holds(&key(6, 2), 7, 101));
+    assert!(!checked.holds(&key(5, 3), 7, 101));
+    assert!(!checked.holds(&key(5, 2), 7, 99));
+    assert!(!checked.holds(&key(5, 2), 7, 500));
+}
+
 fn deal(core_uid: u64, report_uid: i64) -> Deal {
     Deal {
         report_uid,

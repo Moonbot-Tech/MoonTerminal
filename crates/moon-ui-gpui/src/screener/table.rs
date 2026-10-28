@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use gpui::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone};
 
-use moon_core::market::ScreenerRow;
+use moon_core::market::SharedScreenerRow;
 use moon_core::util::fmt::{self, DeltaSign};
 
 use crate::panels::num;
@@ -165,12 +165,12 @@ pub(super) fn restore_sort(
 /// Screener row data plus the displayed name of its core, `row.core`, which is also the core a
 /// click opens the chart on.
 pub(super) struct Entry {
-    pub(super) row: ScreenerRow,
+    pub(super) row: SharedScreenerRow,
     pub(super) core_name: SharedString,
     /// Normalized search text, leaving the market's display and chart identity intact.
-    pub(super) market_uc: String,
+    pub(super) market_uc: std::sync::Arc<str>,
     /// Normalized coin text shared by all filter comparisons for this entry.
-    pub(super) coin_uc: String,
+    pub(super) coin_uc: std::sync::Arc<str>,
 }
 
 /// Parse the minimum volume from the DVol filter, such as `500`, `500k`, or `2m`.
@@ -210,19 +210,36 @@ fn vol_fmt(v: f64) -> String {
     }
 }
 
-pub(super) fn sort_entries(entries: &mut [Entry], key: &str, desc: bool) {
-    // Compare string columns by name, leverage by its dedicated key, and remaining numeric
-    // columns using total floating-point ordering.
-    let cmp_str = |a: &Entry, b: &Entry, f: fn(&Entry) -> &str| f(a).cmp(f(b));
-    entries.sort_by(|a, b| {
-        let ord = match key {
-            "market" => cmp_str(a, b, |e| &e.row.market),
-            "core" => cmp_str(a, b, |e| &e.core_name),
-            "lev" => (lev_sort(a)).total_cmp(&lev_sort(b)),
-            _ => num_key(a, key).total_cmp(&num_key(b, key)),
-        };
-        if desc { ord.reverse() } else { ord }
-    });
+/// Stable index sorting preserves the source order within equal keys without moving row data.
+pub(super) fn sort_indices(entries: &[Entry], order: &mut [usize], key: &str, desc: bool) {
+    let direction = |ord: std::cmp::Ordering| if desc { ord.reverse() } else { ord };
+    match key {
+        "market" => {
+            order.sort_by(|&a, &b| direction(entries[a].row.market.cmp(&entries[b].row.market)))
+        }
+        "core" => {
+            order.sort_by(|&a, &b| direction(entries[a].core_name.cmp(&entries[b].core_name)))
+        }
+        _ => {
+            let values: Vec<_> = entries
+                .iter()
+                .map(|entry| {
+                    float_sort_key(if key == "lev" {
+                        lev_sort(entry)
+                    } else {
+                        num_key(entry, key)
+                    })
+                })
+                .collect();
+            order.sort_by(|&a, &b| direction(values[a].cmp(&values[b])));
+        }
+    }
+}
+
+/// The signed integer ordering used by `f64::total_cmp`, including NaN payloads and signed zero.
+fn float_sort_key(value: f64) -> i64 {
+    let bits = value.to_bits() as i64;
+    bits ^ (((bits >> 63) as u64 >> 1) as i64)
 }
 
 fn lev_sort(e: &Entry) -> f64 {
@@ -451,4 +468,4 @@ fn market_cell(
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

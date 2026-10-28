@@ -23,7 +23,7 @@ use crate::feed::{OrderBook, Tick};
 use crate::session::CoreId;
 
 pub use candles::{CandleViewCfg, ChartCandle};
-pub use screener::ScreenerRow;
+pub use screener::{ScreenerRow, SharedScreenerRow};
 pub use source::{
     ArbQuote, ArbVenue, CORE_ARCHIVE_RETENTION_MS, CandleReadParams, ChartHistoryBuffers,
     ChartHistoryCursor, ChartHistoryRead, CoinTag, DetectSnapshot, LatestPriceError,

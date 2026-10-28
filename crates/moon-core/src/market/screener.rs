@@ -15,6 +15,7 @@
 //! plus automatic candles), so these columns need no per-market subscriptions.
 
 use moonproto::{MoonTime, state::DerivedDeltaSnapshot};
+use std::sync::Arc;
 
 use crate::session::CoreId;
 
@@ -104,6 +105,67 @@ pub struct ScreenerRow {
     pub orders: u32,
 }
 
+/// One member's account values over an immutable market half shared across the exchange group.
+#[derive(Clone, Debug, Default)]
+pub struct SharedScreenerRow {
+    /// Market fields and identity read once per exchange, without per-member string copies.
+    pub market_data: Arc<ScreenerRow>,
+    /// Member whose account values and chart this row describes.
+    pub core: CoreId,
+    /// Active account leverage, or zero when unset.
+    pub leverage_x: i32,
+    /// Margin mode, absent until leverage is known.
+    pub isolated: Option<bool>,
+    /// This member's raw profit counter.
+    pub core_pnl: f64,
+    /// This member's Session counter in USDT, when available.
+    pub session: Option<f64>,
+    /// This member's open position in the coin.
+    pub pos_size: f64,
+    /// Exact-market open-order count supplied by the UI store.
+    pub orders: u32,
+}
+
+impl std::ops::Deref for SharedScreenerRow {
+    type Target = ScreenerRow;
+    /// Read shared exchange fields while member fields remain explicit on the row.
+    fn deref(&self) -> &Self::Target {
+        &self.market_data
+    }
+}
+
+impl SharedScreenerRow {
+    /// Create a member row with neutral account values without allocating another market half.
+    fn of_market(market_data: Arc<ScreenerRow>, core: CoreId) -> Self {
+        Self {
+            market_data,
+            core,
+            leverage_x: 0,
+            isolated: None,
+            core_pnl: 0.0,
+            session: None,
+            pos_size: 0.0,
+            orders: 0,
+        }
+    }
+}
+
+impl From<ScreenerRow> for SharedScreenerRow {
+    /// Move an owned row into a shared publication without changing any account values.
+    fn from(row: ScreenerRow) -> Self {
+        Self {
+            core: row.core,
+            leverage_x: row.leverage_x,
+            isolated: row.isolated,
+            core_pnl: row.core_pnl,
+            session: row.session,
+            pos_size: row.pos_size,
+            orders: row.orders,
+            market_data: Arc::new(row),
+        }
+    }
+}
+
 impl ScreenerRow {
     /// Apply one coherent retained-history delta snapshot to every Screener period.
     ///
@@ -140,10 +202,14 @@ impl MarketDataSource {
     ///
     /// Returns:
     ///     Rows grouped by member, each member's in the provider's market order.
-    pub fn screener_rows(&self, provider: CoreId, members: &[CoreId]) -> Vec<ScreenerRow> {
-        let market_rows = self.screener_market_rows(provider);
+    pub fn screener_rows(&self, provider: CoreId, members: &[CoreId]) -> Vec<SharedScreenerRow> {
+        let market_rows: Vec<Arc<ScreenerRow>> = self
+            .screener_market_rows(provider)
+            .into_iter()
+            .map(Arc::new)
+            .collect();
         if market_rows.is_empty() {
-            return market_rows;
+            return Vec::new();
         }
         // Account snapshots come from exactly the supplied members; the provider is not implicit.
         // Each carries its Session base rate, resolved ONCE per member: the rate is a property of
@@ -165,8 +231,7 @@ impl MarketDataSource {
         for (core, msnap) in &member_snaps {
             let markets = msnap.as_ref().map(|(snap, _)| snap.markets());
             for market_row in &market_rows {
-                let mut row = market_row.clone();
-                row.core = *core;
+                let mut row = SharedScreenerRow::of_market(Arc::clone(market_row), *core);
                 if let Some((mh, rate)) = markets
                     .and_then(|markets| markets.get(&row.market))
                     .zip(msnap.as_ref().map(|(_, rate)| *rate))

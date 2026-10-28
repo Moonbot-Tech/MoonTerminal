@@ -156,7 +156,11 @@ fn venue_name(venue: Option<moon_core::venue::Venue>, exchange_key: &str) -> Str
 
 /// Each core's build and time zone, as the session holds them now. A core the session does not
 /// hold is left out, and the report says it is not connected.
-fn core_facts(rows: &[DealRow], view: &AnalyticsView, cx: &App) -> HashMap<u64, CoreFacts> {
+fn core_facts<'a>(
+    rows: impl IntoIterator<Item = &'a DealRow>,
+    view: &AnalyticsView,
+    cx: &App,
+) -> HashMap<u64, CoreFacts> {
     let backend = view.backend.read(cx);
     let store = backend.session.store();
     let mut out = HashMap::new();

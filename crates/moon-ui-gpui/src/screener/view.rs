@@ -21,9 +21,7 @@ use crate::panels::{RenderGate, data_table_host};
 use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::{Backend, design};
 
-use super::table::{
-    COLS, ColDef, Entry, column_title, moon, moon_alpha, parse_vol, screener_row, sort_entries,
-};
+use super::table::{COLS, ColDef, Entry, column_title, moon, moon_alpha, parse_vol, screener_row};
 
 const SCREENER_HEADER_H: f32 = 32.0;
 
@@ -38,7 +36,13 @@ enum ScrSource {
 pub struct ScreenerView {
     pub(super) backend: Entity<Backend>,
     /// Cached rows after the current source, coin, volume, and sort selections are applied.
-    rows: Rc<Vec<Entry>>,
+    rows: Rc<Vec<usize>>,
+    /// Source rows and their dense counting identities are published together.
+    prepared: std::sync::Arc<super::prepared::Prepared>,
+    /// A newer refresh retires the previous publication task.
+    prepare_task: Option<Task<()>>,
+    /// Publication identity independent of user controls, which apply to either snapshot.
+    prepare_seq: u64,
     /// Distinct markets after source grouping but before the coin and volume filters, the footer's
     /// "total". Markets, not rows: a market has one row per core sharing its exchange.
     total: usize,
@@ -76,6 +80,7 @@ pub struct ScreenerView {
 }
 
 impl ScreenerView {
+    /// Retain control state while the first market publication is prepared off-thread.
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let coin_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("BTC"));
         let dvol_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("500k"));
@@ -195,6 +200,9 @@ impl ScreenerView {
         let mut this = Self {
             backend,
             rows: Rc::new(Vec::new()),
+            prepared: Default::default(),
+            prepare_task: None,
+            prepare_seq: 0,
             total: 0,
             shown: 0,
             scope_marker: None,
@@ -214,120 +222,129 @@ impl ScreenerView {
         this
     }
 
-    /// Rebuild cached rows by grouping cores, overlaying orders, filtering, and sorting.
+    /// Prepare a coherent feed publication off-thread; the current controls remain immediate.
     fn rebuild(&mut self, cx: &mut Context<Self>) {
         crate::diag::bump(&crate::diag::SCREENER_REBUILD);
-        let coin_filter = self.coin_input.read(cx).value().trim().to_uppercase();
-        let min_vol = parse_vol(self.dvol_input.read(cx).value().trim());
-
+        self.filter_cached(cx);
         let b = self.backend.read(cx);
         let source = b.session.market_source();
-        // Screener is a group-less singleton, following the Strategies-window pattern (`mod.rs`),
-        // so it inherits the last focused group's preset, Auto or Classic, rather than owning a
-        // group of its own.
+        let mut groups: Vec<(CoreId, Vec<CoreId>)> = Vec::new();
+        let mut names = HashMap::new();
+        let mut orders = HashMap::new();
+        let store = b.session.store();
+        for session in b.session.sessions() {
+            names.insert(session.id, SharedString::from(session.name.clone()));
+            if let Some(data) = store.core(session.id) {
+                let mut counts: HashMap<&str, u32> = HashMap::new();
+                for order in &data.orders {
+                    *counts.entry(order.market.as_str()).or_default() += 1;
+                }
+                orders.insert(
+                    session.id,
+                    counts
+                        .into_iter()
+                        .map(|(market, count)| (market.to_string(), count))
+                        .collect::<HashMap<_, _>>(),
+                );
+            }
+            let Some(provider) = source.provider_of(session.id) else {
+                continue;
+            };
+            match groups.iter_mut().find(|(id, _)| *id == provider) {
+                Some((_, members)) => members.push(session.id),
+                None => groups.push((provider, vec![session.id])),
+            }
+        }
+        self.prepare_seq = self.prepare_seq.wrapping_add(1);
+        let seq = self.prepare_seq;
+        let sort_key = self.sort_key.clone();
+        let sort_desc = self.sort_desc;
+        self.prepare_task = Some(cx.spawn(async move |this, cx| {
+            let prepared = cx
+                .background_spawn(async move {
+                    let mut entries = Vec::new();
+                    for (provider, members) in groups {
+                        let mut rows = source.screener_rows(provider, &members);
+                        for row in &mut rows {
+                            row.orders = orders
+                                .get(&row.core)
+                                .and_then(|counts| counts.get(row.market.as_str()))
+                                .copied()
+                                .unwrap_or(0);
+                        }
+                        entries.extend(entries_for(rows, &names));
+                    }
+                    std::sync::Arc::new(super::prepared::Prepared::new(
+                        entries, &sort_key, sort_desc,
+                    ))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.prepare_seq != seq {
+                    return;
+                }
+                this.prepared = prepared;
+                // The source snapshot is unfiltered: completion always applies the LATEST
+                // source, scope, text, volume and sort, never the controls a job started with.
+                this.filter_cached(cx);
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Filter a prepared publication using the live preset and controls without cloning rows.
+    fn filter_cached(&mut self, cx: &mut Context<Self>) {
+        let coin = self.coin_input.read(cx).value().trim().to_uppercase();
+        let min_vol = parse_vol(self.dvol_input.read(cx).value().trim());
+        let b = self.backend.read(cx);
         let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
-        // The universe is LIVE SESSIONS, and that is load-bearing: it is exactly the universe the
-        // group-building loop below filters with the same `core_displayed(preset, s.id)` call. A
-        // different universe (e.g. connected-only) would make the marker's `N of M` describe a set
-        // the table never drew rows from.
-        //
-        // Answered ONCE per session and reused by the grouping loop below: `core_displayed` scans
-        // `config.servers` linearly, so asking twice per session doubles that scan on every
-        // rebuild for an answer that cannot have changed in between.
         let sessions = b.session.sessions();
         self.sessions_total = sessions.len();
-        let displayed: Vec<bool> = sessions
+        let displayed: HashMap<_, _> = sessions
             .iter()
-            .map(|s| b.core_displayed(preset, s.id))
+            .enumerate()
+            .map(|(rank, session)| {
+                (
+                    session.id,
+                    b.core_displayed(preset, session.id).then_some(rank),
+                )
+            })
             .collect();
-        self.scope_marker = ScopeMarker::from_membership(preset, displayed.iter().copied());
-        // A retained core filter can point at a core the current preset just hid; keep it selected
-        // and it filters every group away, producing an unexplained empty view. Fall back to the
-        // all-cores view instead, same shape as `Backend::valid_auto_workspace_core`.
+        self.scope_marker = ScopeMarker::from_membership(
+            preset,
+            sessions
+                .iter()
+                .map(|session| displayed[&session.id].is_some()),
+        );
         if let ScrSource::Core(only) = self.source
             && !b.core_displayed(preset, only)
         {
             self.source = ScrSource::All;
         }
-        // Deduplicate by market-data provider: each group contains the consumer cores sharing that
-        // provider, and every member gets its own row per market — the market half read once from
-        // the provider, the account half its own. With a core filter, the group contains only that
-        // core.
-        let mut groups: Vec<(CoreId, Vec<CoreId>)> = Vec::new();
-        let mut names: HashMap<CoreId, SharedString> = HashMap::new();
-        for s in b.session.sessions() {
-            if !b.core_displayed(preset, s.id) {
-                continue;
-            }
-            names.insert(s.id, SharedString::from(s.name.clone()));
-            if let ScrSource::Core(only) = self.source
-                && s.id != only
-            {
-                continue;
-            }
-            let Some(provider) = source.provider_of(s.id) else {
-                continue;
-            };
-            match groups.iter_mut().find(|(p, _)| *p == provider) {
-                Some((_, members)) => members.push(s.id),
-                None => groups.push((provider, vec![s.id])),
-            }
-        }
-
-        let store = b.session.store();
-        let mut entries: Vec<Entry> = Vec::new();
-        for (provider, members) in &groups {
-            let mut rows = source.screener_rows(*provider, members);
-            // Overlay open-order counts by exact market, per member core: a row states ONE core,
-            // so its Orders are that core's alone.
-            let order_counts: HashMap<CoreId, HashMap<&str, u32>> = members
-                .iter()
-                .filter_map(|&m| {
-                    let cd = store.core(m)?;
-                    let mut counts: HashMap<&str, u32> = HashMap::new();
-                    for o in &cd.orders {
-                        *counts.entry(o.market.as_str()).or_default() += 1;
-                    }
-                    Some((m, counts))
-                })
-                .collect();
-            for row in &mut rows {
-                row.orders = order_counts
-                    .get(&row.core)
-                    .and_then(|counts| counts.get(row.market.as_str()))
+        let allowed: Vec<_> = self
+            .prepared
+            .cores
+            .iter()
+            .map(|core| {
+                displayed
+                    .get(core)
                     .copied()
-                    .unwrap_or(0);
-            }
-            // The Core column names the row's own core — the one whose account fields it states —
-            // never the group's provider.
-            entries.extend(rows.into_iter().map(|row| {
-                let core_name = names
-                    .get(&row.core)
-                    .cloned()
-                    .unwrap_or_else(|| SharedString::from(format!("#{}", row.core)));
-                Entry {
-                    market_uc: row.market.to_uppercase(),
-                    coin_uc: row.coin.to_uppercase(),
-                    row,
-                    core_name,
-                }
-            }));
-        }
-
-        // The footer counts COINS, as its label says, and a market now has one row per core
-        // sharing its exchange — so both halves of "shown / total" count distinct markets, not rows.
-        self.total = distinct_markets(&entries);
-        if !coin_filter.is_empty() {
-            entries.retain(|entry| matches_coin_filter(entry, &coin_filter));
-        }
-        if min_vol > 0.0 {
-            entries.retain(|e| e.row.vol_24h >= min_vol);
-        }
-        sort_entries(&mut entries, &self.sort_key, self.sort_desc);
-        self.shown = distinct_markets(&entries);
-        self.rows = Rc::new(entries);
+                    .flatten()
+                    .filter(|_| match self.source {
+                        ScrSource::All => true,
+                        ScrSource::Core(only) => only == *core,
+                    })
+            })
+            .collect();
+        let (rows, total, shown) =
+            self.prepared
+                .select(&allowed, &coin, min_vol, &self.sort_key, self.sort_desc);
+        self.rows = Rc::new(rows);
+        self.total = total;
+        self.shown = shown;
     }
 
+    /// Apply the header order immediately and refresh its source data for the next publication.
     fn set_sort(&mut self, key: &str, desc: bool, cx: &mut Context<Self>) {
         let next = super::table::restore_sort(
             Some(moon_core::config::TableSortPreference {
@@ -355,6 +372,7 @@ impl ScreenerView {
         cx.notify();
     }
 
+    /// Change the session-only core filter while preserving control-triggered source sampling.
     fn set_source(&mut self, source: ScrSource, cx: &mut Context<Self>) {
         if self.source != source {
             self.source = source;
@@ -418,7 +436,11 @@ impl ScreenerView {
     ///
     /// The request does not activate or raise the owning window.
     fn open_chart(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(e) = self.rows.get(ix) else {
+        let Some(e) = self
+            .rows
+            .get(ix)
+            .and_then(|&index| self.prepared.entries.get(index))
+        else {
             return;
         };
         let core = e.row.core;
@@ -429,12 +451,14 @@ impl ScreenerView {
         });
     }
 
+    /// Render each virtual row from the same publication that owns its selected index.
     fn table(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let rows = self.rows.clone();
         let row_count = rows.len();
         let view = cx.entity();
         let table_rows = rows.clone();
+        let prepared = self.prepared.clone();
         let sort_view = cx.entity();
         let dbl_view = cx.entity();
         let state_reset = self.table_state.clone();
@@ -465,7 +489,7 @@ impl ScreenerView {
             p,
             cx,
             MoonDataTable::new("screener-table", row_count, move |ix, _window, _app| {
-                screener_row(&table_rows[ix], &view, p, &row_cols)
+                screener_row(&prepared.entries[table_rows[ix]], &view, p, &row_cols)
             })
             .columns(
                 visible
@@ -728,32 +752,45 @@ impl Render for ScreenerView {
     }
 }
 
-/// Count the distinct markets among per-core rows, for the footer's coin count.
-///
-/// Rows on one exchange repeat every market once per core, and two exchanges may list the same
-/// market name, so the key is the market together with its exchange — `row.provider`, the core
-/// its market half was read from. That is what the footer counted before rows went per-core.
-///
-/// Args:
-///     entries: The rows to count over.
-///
-/// Returns:
-///     The number of distinct `(provider, market)` pairs across the entries.
-fn distinct_markets(entries: &[Entry]) -> usize {
-    entries
-        .iter()
-        .map(|e| (e.row.provider, e.row.market.as_str()))
-        .collect::<HashSet<_>>()
-        .len()
+/// Normalize a provider's markets once while preserving member order and account identity.
+fn entries_for(
+    rows: Vec<moon_core::market::SharedScreenerRow>,
+    names: &HashMap<CoreId, SharedString>,
+) -> Vec<Entry> {
+    use std::sync::Arc;
+    let mut search_text: HashMap<usize, (Arc<str>, Arc<str>)> = HashMap::new();
+    rows.into_iter()
+        .map(|row| {
+            let (market_uc, coin_uc) = search_text
+                .entry(Arc::as_ptr(&row.market_data) as usize)
+                .or_insert_with(|| {
+                    (
+                        row.market.to_uppercase().into(),
+                        row.coin.to_uppercase().into(),
+                    )
+                })
+                .clone();
+            let core_name = names
+                .get(&row.core)
+                .cloned()
+                .unwrap_or_else(|| SharedString::from(format!("#{}", row.core)));
+            Entry {
+                row,
+                core_name,
+                market_uc,
+                coin_uc,
+            }
+        })
+        .collect()
 }
 
 /// Match an already-normalized filter against cached market and coin search text.
-fn matches_coin_filter(entry: &Entry, filter_uc: &str) -> bool {
+pub(super) fn matches_coin_filter(entry: &Entry, filter_uc: &str) -> bool {
     entry.market_uc.contains(filter_uc) || entry.coin_uc.contains(filter_uc)
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 /// Build the window header with native minimize, maximize, and close controls.
 fn screener_header(p: MoonPalette, cx: &App) -> impl IntoElement {
