@@ -7,8 +7,9 @@ use super::*;
 pub(super) struct Lane {
     pub(super) order: VecDeque<CoreId>,
     pub(super) active: Option<CoreId>,
-    /// Set by a `NeverDropped` or `Timeout` failure. While set, the lane never pops its next
-    /// entry -- see [`SessionManager::clear_stalled_lane`] for the only exit.
+    /// Set by a `NeverDropped`, `Timeout` or pop-time `NotReady` failure. While set, the lane
+    /// never pops its next entry -- see [`SessionManager::clear_stalled_lane`] for the only exit,
+    /// reached by a retry or by a fresh enqueue of the very core that stalled it.
     ///
     /// `active` is deliberately left pointing at the core that caused the stall rather than
     /// cleared to `None`: it is what lets [`SessionManager::clear_stalled_lane`] find which lane a
