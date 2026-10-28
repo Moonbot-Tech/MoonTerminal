@@ -4,6 +4,7 @@ pub mod display_time;
 pub mod fmt;
 pub mod hash;
 pub mod sound;
+pub mod thread_name;
 pub mod time;
 
 pub use hash::fnv1a64;
