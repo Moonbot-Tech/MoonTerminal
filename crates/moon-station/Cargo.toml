@@ -31,7 +31,7 @@ libc = "0.2"
 
 [features]
 # Read the cores from a copy of the terminal's `cfg/servers.enc` when no `station.toml` is
-# present — a development convenience on the terminal's own machine, where the keyring holds
+# present, or when it lists no `[[core]]` (its `[tape]` and `[update]` still apply) — a development convenience on the terminal's own machine, where the keyring holds
 # the file's machine key.
 terminal-config = ["moon-core/desktop"]
 

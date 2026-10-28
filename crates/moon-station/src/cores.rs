@@ -56,7 +56,8 @@
 //! A `key =` line is refused rather than ignored: a key in a plain file is exactly what this
 //! layout exists to prevent.
 //!
-//! Without the file, a build with the `terminal-config` feature reads the terminal's own
+//! Without the file — or with one that lists no `[[core]]`, whose `[tape]` and `[update]` then
+//! apply — a build with the `terminal-config` feature reads the terminal's own
 //! configuration from the same data root (a copy of its `cfg/`), which is how the probe runs on
 //! the developer's machine. A COPY: loading may assign uids to entries that lack one and save
 //! them, without the terminal's durable-store uid floor.
@@ -244,11 +245,18 @@ fn default_true() -> bool {
 }
 
 /// The station's configuration: every core of `station.toml` at `path`, or of the terminal's own
-/// files when there is none. Unavailable core credentials skip only that core, with a warning.
+/// files when there is none — or, on a `terminal-config` build, when the file lists none.
+/// Unavailable core credentials skip only that core, with a warning.
 pub fn load(path: &Path) -> anyhow::Result<Station> {
     if path.exists() {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        #[cfg(feature = "terminal-config")]
+        if let Some(station) =
+            terminal_config_with(&text).with_context(|| format!("parse {}", path.display()))?
+        {
+            return Ok(station);
+        }
         let creds = std::env::var_os("CREDENTIALS_DIRECTORY").map(std::path::PathBuf::from);
         let mut station = from_station_file(&text, creds.as_deref())
             .with_context(|| format!("parse {}", path.display()))?;
@@ -438,6 +446,33 @@ fn terminal_config(_missing: &Path) -> anyhow::Result<Station> {
         auto_update: true,
         skipped_cores: Vec::new(),
     })
+}
+
+#[cfg(feature = "terminal-config")]
+/// A `station.toml` with no `[[core]]` on a terminal-config build: the terminal's cores with this
+/// file's `[tape]` and `[update]`. It runs the station's recording settings of a reported station
+/// against real cores on a developer's machine (#1081), where the cores' keys exist only in the
+/// terminal's `servers.enc`.
+///
+/// Returns:
+///     `None` when the file lists cores of its own, which then load as on any station.
+fn terminal_config_with(text: &str) -> anyhow::Result<Option<Station>> {
+    let file: StationFile = toml::from_str(text)?;
+    if !file.cores.is_empty() {
+        return Ok(None);
+    }
+    // The terminal-config path runs no bot; a section that would silently do nothing is refused.
+    anyhow::ensure!(
+        file.telegram.is_none(),
+        "[telegram] needs [[core]] entries: the terminal's cores run without a bot"
+    );
+    let mut station = terminal_config(Path::new(""))?;
+    station.tape = file.tape;
+    station.auto_update = file.update.auto.unwrap_or(true);
+    // The same floor a normal start applies: the file's, the terminal's uids, the report history.
+    station.core_uid_high_water =
+        observed_high_water(station.core_uid_high_water.max(file.core_uid_high_water));
+    Ok(Some(station))
 }
 
 #[cfg(not(feature = "terminal-config"))]
