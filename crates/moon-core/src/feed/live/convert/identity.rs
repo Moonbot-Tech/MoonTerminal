@@ -205,7 +205,9 @@ pub(in crate::feed::live) fn endpoint_fault(unresolved: bool) -> ConnFault {
 /// re-derived downstream — see [`api_days_and_unlimited`].
 ///
 /// A day count outside [`SANE_DAYS`] is dropped rather than displayed — see that constant for why
-/// the negative side is the narrow one.
+/// the negative side is the narrow one. A current answer whose count N is in 1..=90 and whose date
+/// sits about N days in the past published that date backwards; [`kept_at_unix`] stores the count
+/// anchored on this receipt instead, so the column and the warning age one expiry.
 ///
 /// Args:
 ///     expiration: The parsed expiration from `AccountEvent::ApiExpirationUpdated`.
@@ -227,17 +229,13 @@ pub(in crate::feed::live) fn api_key_expiry_from_proto(
     let dated_days = known.then(|| expiration.days_until(now)).flatten();
     let (days_left, unlimited) = api_days_and_unlimited(known, reported, dated_days);
     let checked_ms = crate::util::unix_ms_i64_of(now);
-    // The date is the third wire field and the day count is the second, so a core could answer with
-    // one sane and the other not. Keep the date only while BOTH agree on being plausible — the
-    // reader prefers the date, and an unchecked one would slip past the guard above.
-    let at_unix = (known && current)
+    // Only a current answer's date is normalized to this terminal's clock. A legacy date stays out
+    // — see the comment on `current` above — and [`kept_at_unix`] then decides whether the date
+    // that did arrive is the one to store.
+    let published_unix = (known && current)
         .then(|| expiration.unix_seconds())
-        .flatten()
-        .filter(|_| days_left.is_some())
-        .filter(|at_unix| {
-            let days = (at_unix - crate::util::unix_ms_i64_of(now).div_euclid(1_000)) / 86_400;
-            SANE_DAYS.contains(&days)
-        });
+        .flatten();
+    let at_unix = kept_at_unix(checked_ms.div_euclid(1_000), days_left, published_unix);
     ApiKeyExpiry {
         unlimited,
         known,
@@ -281,6 +279,74 @@ pub(super) fn api_days_and_unlimited(
         .filter(|days| *days != 0 || known)
         .map(|days| days as i32);
     (days_left, unlimited)
+}
+
+/// Whole seconds in one day. The sanity window and the backwards-date check both count in this unit.
+const SECONDS_PER_DAY: i64 = 86_400;
+
+/// Day counts a backwards-published date may be rewritten from.
+///
+/// The lower bound is 1: a non-positive count beside a past date is a key that really has expired.
+/// The upper bound is 90, the same cap as the warning horizon's maximum, and it excludes the round
+/// 1000-day stand-in two Bybit cores answer for a key with no expiry.
+const MIRRORED_DAYS: std::ops::RangeInclusive<i32> = 1..=90;
+
+/// Absolute expiry to store for one answer, or `None` when its date is not usable.
+///
+/// The date is kept only while it sits inside [`SANE_DAYS`] and the answer also kept a day count.
+/// The reader prefers the date, so an unchecked one would slip past the guard on the count.
+///
+/// When that date lies about N days before the receipt and N is inside [`MIRRORED_DAYS`], within
+/// one day, the core published the date backwards: the count and the date are one fact with the
+/// sign flipped. The stored expiry is then the count anchored on the receipt (`now + N days`),
+/// which still ages while the core is offline. Every other pair keeps the published date,
+/// including a genuinely past date beside a non-positive count. A 1000-day stand-in is outside
+/// [`MIRRORED_DAYS`], so a far-past date beside it stays dropped.
+///
+/// Args:
+///     now_secs: Unix seconds when the terminal received the answer.
+///     days_left: Day count retained from the answer, when it was plausible.
+///     published_unix: Absolute date the answer carried, when it had one.
+///
+/// Returns:
+///     Unix seconds to store, or `None` when there is no usable date.
+pub(super) fn kept_at_unix(
+    now_secs: i64,
+    days_left: Option<i32>,
+    published_unix: Option<i64>,
+) -> Option<i64> {
+    let published = published_unix
+        .filter(|_| days_left.is_some())
+        .filter(|at_unix| {
+            let days = (at_unix - now_secs) / SECONDS_PER_DAY;
+            SANE_DAYS.contains(&days)
+        })?;
+    Some(forward_mirrored_date(now_secs, days_left, published))
+}
+
+/// Replace a backwards-published date with the day count anchored on the receipt.
+///
+/// Args:
+///     now_secs: Unix seconds when the terminal received the answer.
+///     days_left: Day count retained from the answer. `None` and any count outside
+///         [`MIRRORED_DAYS`] leave the date alone.
+///     published_unix: Absolute date that already passed the plausibility window.
+///
+/// Returns:
+///     `now_secs + N days` when the date is N days in the past within one day, otherwise
+///     `published_unix`.
+fn forward_mirrored_date(now_secs: i64, days_left: Option<i32>, published_unix: i64) -> i64 {
+    let Some(days) = days_left.filter(|days| MIRRORED_DAYS.contains(days)) else {
+        return published_unix;
+    };
+    let span = i64::from(days).saturating_mul(SECONDS_PER_DAY);
+    let mirrored = now_secs.saturating_sub(span);
+    // One day of skew, not one floored day-bucket: a timezone or a rounding step stays inside,
+    // and a date two days off the count still wins on its own.
+    if published_unix.abs_diff(mirrored) > SECONDS_PER_DAY.unsigned_abs() {
+        return published_unix;
+    }
+    now_secs.saturating_add(span)
 }
 
 /// Plausible remaining lifetime of an exchange API key, in days.

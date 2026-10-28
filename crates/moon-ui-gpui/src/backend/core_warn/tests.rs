@@ -53,8 +53,8 @@ use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreSysStatus};
 
 use super::{
-    CPU_SUSTAIN_SECS, CoreSample, CoreWarnEngine, LATENCY_SUSTAIN_SECS, LatencySeverity,
-    RingSubject, WarnAxis, WarnEnabled, latency_severity,
+    API_EXPIRY_WARN_DAYS, CPU_SUSTAIN_SECS, CoreSample, CoreWarnEngine, LATENCY_SUSTAIN_SECS,
+    LatencySeverity, RingSubject, WarnAxis, WarnEnabled, latency_severity,
 };
 
 /// Build one Ready core sample; `process` and `system` CPU are set equal, memory optional.
@@ -680,6 +680,57 @@ fn the_key_episode_records_its_lowest_day_count() {
     assert_eq!(open[0].peak, 2, "the closest the key came to expiring");
     assert_eq!(open[0].axis, WarnAxis::ApiExpiry);
     assert_eq!(open[0].core_id, Some(1), "the key belongs to the core");
+}
+
+/// The column and this engine both read `days_left_at` of one stored expiry. A mirrored answer
+/// is stored as the receipt plus N days, so a count above the horizon opens nothing, a count
+/// inside the horizon warns with that count (not a clamped 0), and a genuinely past count still
+/// warns with the unsigned peak at 0.
+#[test]
+fn a_forwarded_count_warns_only_inside_the_horizon() {
+    let checked_ms = 1_700_000_000_000;
+    let expiry_at = |days: i32| moon_core::session::ApiKeyExpiry {
+        unlimited: false,
+        known: true,
+        days_left: Some(days),
+        at_unix: Some(checked_ms / 1_000 + i64::from(days) * 86_400),
+        checked_ms,
+    };
+    let above = expiry_at(API_EXPIRY_WARN_DAYS + 1)
+        .days_left_at(checked_ms)
+        .expect("a forwarded count");
+    let inside = expiry_at(3).days_left_at(checked_ms).expect("three days");
+    let past = expiry_at(-10)
+        .days_left_at(checked_ms)
+        .expect("already past");
+
+    assert!(above > API_EXPIRY_WARN_DAYS);
+    assert_eq!(inside, 3);
+    assert_eq!(past, -10);
+
+    let mut engine = CoreWarnEngine::default();
+    engine.tick(&[sample_api(1, IP, Some(above))], checked_ms);
+    assert!(
+        !engine.core_api_warn(1),
+        "above the horizon is not a warning"
+    );
+    assert!(engine.open_episodes().is_empty());
+
+    engine.tick(&[sample_api(1, IP, Some(inside))], checked_ms + 1_000);
+    assert!(engine.core_api_warn(1));
+    assert_eq!(
+        engine.open_episodes()[0].peak,
+        3,
+        "the remaining days, not 0"
+    );
+
+    engine.tick(&[sample_api(1, IP, Some(past))], checked_ms + 2_000);
+    assert!(engine.core_api_warn(1));
+    assert_eq!(
+        engine.open_episodes()[0].peak,
+        0,
+        "a real negative count still clamps"
+    );
 }
 
 /// An expired key reports a NEGATIVE day count; `peak` is unsigned, so it has to clamp rather than

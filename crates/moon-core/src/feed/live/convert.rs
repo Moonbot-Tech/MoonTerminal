@@ -45,7 +45,7 @@ pub(super) use settings::{
 pub(super) use wallet::{engine_action_result, folders_from_proto, strategies_publish_sig};
 
 #[cfg(test)]
-use identity::api_days_and_unlimited;
+use identity::{api_days_and_unlimited, kept_at_unix};
 #[cfg(test)]
 use news_trace::{problems_supported, wire_text};
 #[cfg(test)]
