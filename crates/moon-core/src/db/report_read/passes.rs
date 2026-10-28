@@ -302,10 +302,31 @@ fn run_row_pass(
             Some(expression) => format!("({expression}) IS NULL, {expression} {dir}"),
             None => "1".to_string(),
         };
-        let sql = format!(
-            "SELECT r.core_uid, {rec_id_select}, {select} FROM {} r{joins}{where_sql} ORDER BY {order} LIMIT ?",
-            src.table
-        );
+        // Keep the existing indexes: widening the date index silently reorders ASC ties.
+        // The narrow key pass avoids sorting every display column over a broad date read.
+        // Coin seeks already bound the candidate set and keep their existing query shape.
+        // Materialize the same source-local top N before fetching their full projection;
+        // the total DESC tie-break and the one source limit remain exactly the original ones.
+        let sql = if desc
+            && sort_col == "closedate"
+            && src.cols.contains("closedate")
+            && scoped.coin.trim().is_empty()
+            && scoped.exact_coins.is_none()
+        {
+            format!(
+                "WITH chosen_report_rows AS MATERIALIZED (\
+                 SELECT r.rowid FROM {table} r{joins}{where_sql} ORDER BY {order} LIMIT ?) \
+                 SELECT r.core_uid, {rec_id_select}, {select} \
+                 FROM chosen_report_rows CROSS JOIN {table} r \
+                 ON r.rowid = chosen_report_rows.rowid{joins} ORDER BY {order}",
+                table = src.table,
+            )
+        } else {
+            format!(
+                "SELECT r.core_uid, {rec_id_select}, {select} FROM {} r{joins}{where_sql} ORDER BY {order} LIMIT ?",
+                src.table
+            )
+        };
         params.push(Box::new(limit as i64));
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
         let mut stmt = conn.prepare(&sql)?;
