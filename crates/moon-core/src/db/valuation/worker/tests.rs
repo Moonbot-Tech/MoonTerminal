@@ -3,6 +3,539 @@
 use super::*;
 use crate::db::valuation::{RateOrientation, RatePriceBasis, ResolvedRate};
 
+/// Disambiguate parallel report fixtures whose creation stamps share one millisecond.
+static REPORT_FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Inspect the full temporary queue only in small regression fixtures, independently of retry filtering.
+fn deferred_snapshot(store: &Connection) -> BTreeMap<(i64, i64, i64), TradeInput> {
+    store.prepare("SELECT source_kind,core_uid,row_id,closedate,quote_ordinal,profit_quote,spent_quote FROM temp.deferred_trades").unwrap()
+        .query_map([],|row| {
+            let input=TradeInput { source:TradeSource::from_code(row.get(0)?)?,core_uid:row.get(1)?,row_id:row.get(2)?,closedate:row.get(3)?,quote_ordinal:row.get(4)?,profit_quote:row.get(5)?,spent_quote:row.get(6)? };
+            Ok((trade_key(&input),input))
+        }).unwrap().collect::<rusqlite::Result<BTreeMap<_,_>>>().unwrap()
+}
+
+/// A later SQL chunk failure must leave neither partial prepared money nor retired retries.
+#[test]
+fn ready_batch_failure_rolls_back_every_chunk_and_keeps_retries() {
+    let store = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
+    let inputs = (0..130)
+        .map(|id| TradeInput {
+            source: TradeSource::Typed,
+            core_uid: 1,
+            row_id: id,
+            closedate: 1_700_000_000,
+            quote_ordinal: 1,
+            profit_quote: 1.25,
+            spent_quote: Some(10.0),
+        })
+        .collect::<Vec<_>>();
+    prefetch_rates(&store, &NoNetwork, &axis(), &inputs).unwrap();
+    for input in &inputs {
+        defer_trade(&store, &axis(), input).unwrap();
+    }
+    store.execute_batch("CREATE TEMP TRIGGER fail_ready BEFORE INSERT ON main.trade_values WHEN NEW.row_id=65 BEGIN SELECT RAISE(ABORT,'synthetic batch failure'); END;").unwrap();
+    assert!(prepare_ready_trades(&store, &axis(), &inputs).is_err());
+    assert_eq!(
+        store
+            .query_row("SELECT count(*) FROM trade_values", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(deferred_snapshot(&store).len(), 130);
+    store.execute_batch("DROP TRIGGER fail_ready").unwrap();
+    assert_eq!(
+        prepare_ready_trades(&store, &axis(), &inputs)
+            .unwrap()
+            .0
+            .len(),
+        130
+    );
+    assert!(!has_deferred(&store));
+}
+
+/// Batched outbox inserts must preserve sequence, duplicate ids and surrounding reset barriers.
+#[test]
+fn batched_outbox_has_exact_scalar_event_parity() {
+    let scalar = Connection::open_in_memory().unwrap();
+    let batched = Connection::open_in_memory().unwrap();
+    let ids = (0..513).map(|id| id % 300 - 1).collect::<Vec<_>>();
+    for conn in [&scalar, &batched] {
+        super::super::init_report_outbox(conn).unwrap();
+        super::super::stage_rescan_core(conn, 1).unwrap();
+    }
+    for id in &ids {
+        super::super::stage_row(&scalar, TradeSource::Typed, 1, *id).unwrap();
+    }
+    super::super::stage_rows(&batched, TradeSource::Typed, 1, ids).unwrap();
+    for conn in [&scalar, &batched] {
+        super::super::stage_delete(conn, TradeSource::Legacy, 2, 9).unwrap();
+    }
+    assert_eq!(
+        super::super::read_outbox(&scalar, 1000).unwrap(),
+        super::super::read_outbox(&batched, 1000).unwrap()
+    );
+}
+
+/// Chunked reads must keep every slot's source, core, missing-row and non-row identity.
+#[test]
+fn batched_report_loads_keep_slots_across_sources_and_chunk_boundaries() {
+    let (dir, reports) = report_fixture(&[(1, 7, 200), (2, 7, 300)]);
+    reports.execute_batch("CREATE UNIQUE INDEX fixture_identity ON orders_rep(core_uid,newrecid);
+        CREATE TABLE closed_sell_reports(core_uid INTEGER,db_id INTEGER,closedate INTEGER,basecurrency INTEGER,profitbtc REAL,spentbtc REAL);
+        INSERT INTO closed_sell_reports VALUES(1,7,110,1,6.0,NULL);").unwrap();
+    let mut events = Vec::new();
+    let mut expected = Vec::new();
+    for slot in 0..600 {
+        let source = if slot % 5 == 0 {
+            TradeSource::Legacy
+        } else {
+            TradeSource::Typed
+        };
+        let core_uid = slot % 2 + 1;
+        let row_id = if slot % 11 == 0 { 404 } else { 7 };
+        let action = if slot % 7 == 0 {
+            OutboxAction::Delete
+        } else {
+            OutboxAction::Row
+        };
+        events.push(OutboxEvent {
+            seq: slot,
+            source,
+            core_uid,
+            row_id,
+            action,
+        });
+        let input = if action != OutboxAction::Row
+            || row_id == 404
+            || (source == TradeSource::Legacy && core_uid == 2)
+        {
+            None
+        } else {
+            Some(TradeInput {
+                source,
+                core_uid,
+                row_id,
+                closedate: if source == TradeSource::Legacy {
+                    110
+                } else if core_uid == 1 {
+                    200
+                } else {
+                    300
+                },
+                quote_ordinal: 1,
+                profit_quote: if source == TradeSource::Legacy {
+                    6.0
+                } else {
+                    1.0
+                },
+                spent_quote: if source == TradeSource::Legacy {
+                    None
+                } else {
+                    Some(10.0)
+                },
+            })
+        };
+        expected.push(input);
+    }
+    assert_eq!(load_trades(&reports, &events).unwrap(), expected);
+    drop(reports);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Moving ready writes across resets, deletes, missing slots or duplicates changes final money.
+#[test]
+fn ready_event_batches_preserve_mutation_barriers_and_last_observation() {
+    let store = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
+    let rows = [
+        (OutboxAction::Row, 1, 1, Some(1.0)),
+        (OutboxAction::Row, 2, 1, Some(2.0)),
+        (OutboxAction::RescanCore, 1, 0, None),
+        (OutboxAction::Row, 1, 1, Some(3.0)),
+        (OutboxAction::Delete, 2, 1, None),
+        (OutboxAction::Row, 1, 1, Some(4.0)),
+        (OutboxAction::Row, 1, 1, None),
+        (OutboxAction::Row, 1, 2, Some(9.0)),
+        (OutboxAction::Row, 1, 2, Some(11.0)),
+    ];
+    let mut events = Vec::new();
+    let mut loaded = Vec::new();
+    for (index, (action, core_uid, row_id, profit)) in rows.into_iter().enumerate() {
+        events.push(OutboxEvent {
+            seq: index as i64 + 1,
+            source: TradeSource::Typed,
+            core_uid,
+            row_id,
+            action,
+        });
+        loaded.push(profit.map(|profit_quote| TradeInput {
+            source: TradeSource::Typed,
+            core_uid,
+            row_id,
+            closedate: 1_700_000_000,
+            quote_ordinal: 1,
+            profit_quote,
+            spent_quote: None,
+        }));
+    }
+    let turn = commit_batch(&store, || {
+        apply_loaded_events(&store, &NoNetwork, &axis(), &events, &loaded)
+    })
+    .unwrap();
+    assert!(turn.fault.is_none());
+    assert!(turn.provider_fault.is_none());
+    assert_eq!(turn.acknowledged, Some(9));
+    let values = store
+        .prepare("SELECT core_uid,row_id,profit_usdt FROM trade_values")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(values, vec![(1, 2, 11.0)]);
+}
+
+thread_local! {
+    /// Statement text retained only during this thread's synthetic measurement.
+    static SCALE_SQL: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Count actual executions rather than prepared handles; other tests have independent threads.
+fn scale_trace(event: rusqlite::trace::TraceEvent<'_>) {
+    if let rusqlite::trace::TraceEvent::Stmt(statement, _) = event {
+        SCALE_SQL.with_borrow_mut(|sql| sql.push(statement.expanded_sql().unwrap()));
+    }
+}
+
+/// Measure a fixture operation and print executed statements plus elapsed milliseconds.
+fn scale_measure(label: &str, body: impl FnOnce()) {
+    SCALE_SQL.with_borrow_mut(Vec::clear);
+    let start = std::time::Instant::now();
+    body();
+    let elapsed = start.elapsed();
+    SCALE_SQL.with_borrow(|sql| {
+        eprintln!(
+            "{label}: {:.4} ms, statements={}",
+            elapsed.as_secs_f64() * 1000.0,
+            sql.len()
+        )
+    });
+}
+
+/// Explain the actual expanded statement just measured, including its bound batch identities.
+fn scale_plan(conn: &Connection, needle: &str) {
+    let sql = SCALE_SQL.with_borrow(|sql| {
+        sql.iter()
+            .find(|sql| sql.contains(needle))
+            .cloned()
+            .unwrap()
+    });
+    let plan = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    eprintln!("{needle} plan: {plan:?}");
+}
+
+/// Former point-read shape on the exact same neutral 20k fixture as the batched measurement.
+fn scalar_fixture_loads(conn: &Connection, events: &[OutboxEvent]) -> Vec<TradeInput> {
+    source_layout(conn, TradeSource::Typed).unwrap();
+    let mut statement = conn
+        .prepare_cached(
+            "SELECT r.core_uid,r.newrecid,r.closedate,r.basecurrency,r.profitbtc,r.spentbtc
+        FROM orders_rep r WHERE r.core_uid=?1 AND r.newrecid=?2
+        AND typeof(r.closedate)='integer' AND r.closedate>0 AND r.basecurrency BETWEEN 0 AND 20
+        AND typeof(r.profitbtc) IN ('integer','real')",
+        )
+        .unwrap();
+    events
+        .iter()
+        .map(|event| {
+            statement
+                .query_row(rusqlite::params![event.core_uid, event.row_id], |row| {
+                    Ok(TradeInput {
+                        source: TradeSource::Typed,
+                        core_uid: row.get(0)?,
+                        row_id: row.get(1)?,
+                        closedate: row.get(2)?,
+                        quote_ordinal: row.get(3)?,
+                        profit_quote: row.get(4)?,
+                        spent_quote: row.get(5)?,
+                    })
+                })
+                .unwrap()
+        })
+        .collect()
+}
+
+/// Former eligibility pass materializes blocked rate keys for this same pending population.
+fn scalar_deferred_eligible(
+    store: &Connection,
+    pending: &BTreeMap<(i64, i64, i64), TradeInput>,
+) -> bool {
+    let mut statement=store.prepare("SELECT quote_ordinal,minute_utc FROM rate_searches WHERE algorithm_version=?1 AND next_retry_at_ms>?2").unwrap();
+    let blocked = statement
+        .query_map(
+            rusqlite::params![super::super::ALGORITHM_VERSION, now_unix_ms_i64()],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .unwrap()
+        .collect::<rusqlite::Result<BTreeSet<_>>>()
+        .unwrap();
+    let current = current_minute_utc();
+    let axis = axis();
+    pending.values().any(|input| {
+        let minute = valuation_minute(&axis, input);
+        minute < current && !blocked.contains(&(input.quote_ordinal, minute))
+    })
+}
+
+/// Synthetic heavy-user probe pins all 100k reconciliation identities and stored monetary parity.
+#[test]
+#[ignore = "synthetic 100k-row valuation timing probe"]
+fn valuation_scale_probe() {
+    let rows = (0..100_000)
+        .map(|id| (id % 10 + 1, id / 10 + 1, 1_700_000_000 + id / 10))
+        .collect::<Vec<_>>();
+    let (dir, reports) = report_fixture(&rows);
+    let (burst_dir, burst) = report_fixture(&rows[..20_000]);
+    burst
+        .execute_batch("CREATE UNIQUE INDEX scale_pk ON orders_rep(core_uid,newrecid)")
+        .unwrap();
+    reports.execute_batch("CREATE UNIQUE INDEX scale_pk ON orders_rep(core_uid,newrecid); CREATE INDEX idx_rep_closedate ON orders_rep(closedate);").unwrap();
+    super::super::init_report_outbox(&burst).unwrap();
+    let store = super::super::open_store(&dir.join("valuation.sqlite")).unwrap();
+    reports.trace_v2(
+        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+        Some(scale_trace),
+    );
+    burst.trace_v2(
+        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+        Some(scale_trace),
+    );
+    store.trace_v2(
+        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+        Some(scale_trace),
+    );
+    for id in 0..5000 {
+        let input = TradeInput {
+            source: TradeSource::Typed,
+            core_uid: id % 10 + 1,
+            row_id: 1_000_000 + id,
+            closedate: 1_600_000_020 + id * 60,
+            quote_ordinal: 8,
+            profit_quote: 1.25,
+            spent_quote: Some(10.0),
+        };
+        let minute = valuation_minute(&axis(), &input);
+        super::super::store_rate_search(&store, 8, minute, minute, now_unix_ms_i64(), false)
+            .unwrap();
+        defer_trade(&store, &axis(), &input).unwrap();
+    }
+    let pending_reference = deferred_snapshot(&store);
+    let events = (0..2000)
+        .map(|id| OutboxEvent {
+            seq: id,
+            source: TradeSource::Typed,
+            core_uid: id % 10 + 1,
+            row_id: id / 10 + 1,
+            action: OutboxAction::Row,
+        })
+        .collect::<Vec<_>>();
+    for _ in 0..3 {
+        let inputs = (0..2000)
+            .map(|id| TradeInput {
+                source: TradeSource::Typed,
+                core_uid: id % 10 + 1,
+                row_id: id / 10 + 1,
+                closedate: 1_700_000_000,
+                quote_ordinal: 1,
+                profit_quote: 1.25,
+                spent_quote: Some(10.0),
+            })
+            .collect::<Vec<_>>();
+        store.execute("DELETE FROM trade_values", []).unwrap();
+        scale_measure("ready values 2000", || {
+            commit_batch(&store, || {
+                prefetch_rates(&store, &NoNetwork, &axis(), &inputs).unwrap();
+                assert_eq!(
+                    prepare_ready_trades(&store, &axis(), &inputs)
+                        .unwrap()
+                        .0
+                        .len(),
+                    inputs.len()
+                );
+            })
+            .unwrap();
+        });
+        scale_plan(&store, "INSERT INTO trade_values");
+        scale_plan(&store, "FROM requested JOIN rates");
+        assert_eq!(
+            store
+                .query_row(
+                    "SELECT sum(profit_usdt),sum(spent_usdt) FROM trade_values",
+                    [],
+                    |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?))
+                )
+                .unwrap(),
+            (2500.0, 20000.0)
+        );
+        store.execute("DELETE FROM trade_values", []).unwrap();
+        scale_measure("outbox 2000", || {
+            let tx = burst.unchecked_transaction().unwrap();
+            for core in 1..=10 {
+                super::super::stage_rows(&tx, TradeSource::Typed, core, 1..=200).unwrap();
+            }
+            tx.commit().unwrap();
+        });
+        scale_plan(&burst, "INSERT INTO valuation_outbox");
+        let scalar_outbox_plan=burst.prepare("EXPLAIN QUERY PLAN INSERT INTO valuation_outbox(source_kind,core_uid,row_id,action) VALUES(0,1,1,0)").unwrap().query_map([],|row|row.get::<_,String>(3)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        eprintln!("scalar outbox plan: {scalar_outbox_plan:?}");
+        scale_measure("scalar load burst 2000 over 20000", || {
+            assert_eq!(scalar_fixture_loads(&burst, &events).len(), events.len());
+        });
+        scale_plan(&burst, "FROM orders_rep r WHERE");
+        scale_measure("load burst 2000 over 20000", || {
+            assert!(
+                load_trades(&burst, &events)
+                    .unwrap()
+                    .iter()
+                    .all(Option::is_some)
+            );
+        });
+        scale_plan(&burst, "FROM requested JOIN orders_rep");
+        scale_measure("scalar blocked deferred 5000", || {
+            assert!(!scalar_deferred_eligible(&store, &pending_reference))
+        });
+        scale_plan(&store, "SELECT quote_ordinal,minute_utc FROM rate_searches");
+        scale_measure("blocked deferred 5000", || {
+            assert!(!current_minute_closed_any(&store))
+        });
+        scale_plan(&store, "FROM temp.deferred_trades");
+        scale_measure("reconcile 100000", || {
+            let mut cursor = None;
+            let mut count = 0;
+            loop {
+                let batch = reconciliation_batch(&reports, TradeSource::Typed, cursor, 256)
+                    .unwrap()
+                    .unwrap();
+                if batch.is_empty() {
+                    break;
+                }
+                let last = batch.last().unwrap();
+                cursor = Some((last.closedate, last.core_uid, last.row_id));
+                count += batch.len();
+            }
+            assert_eq!(count, 100_000);
+        });
+        let sql = SCALE_SQL.with_borrow(|sql| {
+            sql.iter()
+                .find(|sql| sql.contains("LEFT JOIN valuation.trade_values"))
+                .unwrap()
+                .clone()
+        });
+        let plan = reports
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        eprintln!("reconcile plan: {plan:?}");
+    }
+    assert_eq!(
+        store
+            .query_row("SELECT count(*) FROM temp.deferred_trades", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        5000
+    );
+    let reference = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
+    let inputs = (0..20_000)
+        .map(|id| TradeInput {
+            source: TradeSource::Typed,
+            core_uid: id % 10 + 1,
+            row_id: id / 10 + 1,
+            closedate: 1_700_000_000,
+            quote_ordinal: 1,
+            profit_quote: 1.25,
+            spent_quote: Some(10.0),
+        })
+        .collect::<Vec<_>>();
+    store.execute("DELETE FROM trade_values", []).unwrap();
+    reference.trace_v2(
+        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+        Some(scale_trace),
+    );
+    SCALE_SQL.with_borrow_mut(Vec::clear);
+    assert!(matches!(
+        prepare_trade(&reference, &NoNetwork, &axis(), &inputs[0], false),
+        PrepareResult::Complete { .. }
+    ));
+    scale_plan(&reference, "SELECT resolved_minute_utc");
+    scale_plan(&reference, "INSERT INTO trade_values");
+    reference.trace_v2(rusqlite::trace::TraceEventCodes::empty(), None);
+    reference.execute("DELETE FROM trade_values", []).unwrap();
+    commit_batch(&reference, || {
+        for input in &inputs {
+            assert!(matches!(
+                prepare_trade(&reference, &NoNetwork, &axis(), input, false),
+                PrepareResult::Complete { .. }
+            ));
+        }
+    })
+    .unwrap();
+    commit_batch(&store, || {
+        prefetch_rates(&store, &NoNetwork, &axis(), &inputs).unwrap();
+        assert_eq!(
+            prepare_ready_trades(&store, &axis(), &inputs)
+                .unwrap()
+                .0
+                .len(),
+            20_000
+        );
+    })
+    .unwrap();
+    assert_eq!(stored_values(&store), stored_values(&reference));
+    assert_eq!(
+        store
+            .query_row("SELECT count(*) FROM temp.deferred_trades", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        5000
+    );
+    let pages: i64 = store
+        .query_row("PRAGMA temp.page_count", [], |row| row.get(0))
+        .unwrap();
+    let page_size: i64 = store
+        .query_row("PRAGMA temp.page_size", [], |row| row.get(0))
+        .unwrap();
+    let cache: i64 = store
+        .query_row("PRAGMA temp.cache_size", [], |row| row.get(0))
+        .unwrap();
+    eprintln!(
+        "deferred 5000 retained: temp_bytes={}, configured_cache_kib={cache}; parity 20000 complete",
+        pages * page_size
+    );
+    drop((reports, burst, store));
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(burst_dir).unwrap();
+}
+
 /// Load one current eligible report row after a durable outbox event.
 ///
 /// Args:
@@ -19,7 +552,18 @@ fn load_trade(
     core_uid: i64,
     row_id: i64,
 ) -> ReadResult<Option<TradeInput>> {
-    TradeLoader::default().load(conn, source, core_uid, row_id)
+    Ok(load_trades(
+        conn,
+        &[OutboxEvent {
+            seq: 0,
+            source,
+            core_uid,
+            row_id,
+            action: OutboxAction::Row,
+        }],
+    )?
+    .pop()
+    .flatten())
 }
 
 /// Time axis every worker call below resolves its rate minutes against.
@@ -306,7 +850,7 @@ fn partition_events_delete_only_the_named_source_and_core() {
     seed_value(&store, TradeSource::Typed, 1, 10);
     seed_value(&store, TradeSource::Typed, 2, 20);
     seed_value(&store, TradeSource::Legacy, 1, 30);
-    let mut deferred = BTreeMap::from([
+    let deferred = BTreeMap::from([
         (
             (TradeSource::Typed.code(), 1, 10),
             TradeInput {
@@ -333,6 +877,9 @@ fn partition_events_delete_only_the_named_source_and_core() {
         ),
     ]);
 
+    for input in deferred.values() {
+        defer_trade(&store, &axis(), input).unwrap();
+    }
     let reset = process_event(
         &store,
         &NoNetwork,
@@ -345,12 +892,11 @@ fn partition_events_delete_only_the_named_source_and_core() {
             action: OutboxAction::RescanCore,
         },
         None,
-        &mut deferred,
         &BTreeSet::new(),
     );
     assert!(matches!(reset, PrepareResult::Complete { changed: true }));
-    assert!(!deferred.contains_key(&(TradeSource::Typed.code(), 1, 10)));
-    assert!(deferred.contains_key(&(TradeSource::Typed.code(), 2, 20)));
+    assert!(!deferred_snapshot(&store).contains_key(&(TradeSource::Typed.code(), 1, 10)));
+    assert!(deferred_snapshot(&store).contains_key(&(TradeSource::Typed.code(), 2, 20)));
 
     let rows = store
         .prepare(
@@ -381,7 +927,6 @@ fn partition_events_delete_only_the_named_source_and_core() {
             action: OutboxAction::PurgeLegacy,
         },
         None,
-        &mut deferred,
         &BTreeSet::new(),
     );
     assert!(matches!(purge, PrepareResult::Complete { changed: true }));
@@ -402,8 +947,6 @@ fn hard_delete_removes_one_exact_prepared_identity() {
         super::super::open_store(std::path::Path::new(":memory:")).expect("open valuation fixture");
     seed_value(&store, TradeSource::Typed, 1, 10);
     seed_value(&store, TradeSource::Typed, 1, 11);
-    let mut deferred = BTreeMap::new();
-
     let deleted = process_event(
         &store,
         &NoNetwork,
@@ -416,7 +959,6 @@ fn hard_delete_removes_one_exact_prepared_identity() {
             action: OutboxAction::Delete,
         },
         None,
-        &mut deferred,
         &BTreeSet::new(),
     );
 
@@ -455,8 +997,7 @@ fn row_event_replaces_a_stale_deferred_copy() {
         profit_quote: 999.0,
         spent_quote: None,
     };
-    let key = trade_key(&stale);
-    let mut deferred = BTreeMap::from([(key, stale)]);
+    defer_trade(&store, &axis(), &stale).unwrap();
 
     let result = process_event(
         &store,
@@ -474,12 +1015,11 @@ fn row_event_replaces_a_stale_deferred_copy() {
                 .expect("load the row observed by its outbox event")
                 .expect("the staged row remains eligible"),
         ),
-        &mut deferred,
         &BTreeSet::new(),
     );
 
     assert!(matches!(result, PrepareResult::Complete { changed: true }));
-    assert!(deferred.is_empty());
+    assert!(!has_deferred(&store));
     assert_eq!(
         store
             .query_row(
@@ -572,7 +1112,6 @@ fn a_later_missing_row_observation_deletes_the_earlier_prepared_value() {
         "fixture must provide a later missing observation"
     );
 
-    let mut deferred = BTreeMap::new();
     assert!(matches!(
         process_event(
             &store,
@@ -580,7 +1119,6 @@ fn a_later_missing_row_observation_deletes_the_earlier_prepared_value() {
             &axis(),
             event,
             Some(first),
-            &mut deferred,
             &BTreeSet::new(),
         ),
         PrepareResult::Complete { changed: true }
@@ -600,7 +1138,6 @@ fn a_later_missing_row_observation_deletes_the_earlier_prepared_value() {
             &axis(),
             OutboxEvent { seq: 2, ..event },
             second,
-            &mut deferred,
             &BTreeSet::new(),
         ),
         PrepareResult::Complete { changed: true }
@@ -665,7 +1202,7 @@ fn deferred_processing_yields_after_one_bounded_batch() {
     let store =
         super::super::open_store(std::path::Path::new(":memory:")).expect("open valuation fixture");
     let minute = current_minute_utc() - 60;
-    let mut deferred = (0..=DEFERRED_BATCH)
+    let deferred = (0..=DEFERRED_BATCH)
         .map(|offset| {
             let input = TradeInput {
                 source: TradeSource::Typed,
@@ -682,18 +1219,14 @@ fn deferred_processing_yields_after_one_bounded_batch() {
     let generation = AtomicU64::new(0);
     let dirty = AtomicBool::new(false);
 
-    let turn = process_deferred(
-        &store,
-        &NoNetwork,
-        &axis(),
-        &generation,
-        &dirty,
-        &mut deferred,
-    )
-    .expect("process one deferred batch");
+    for input in deferred.values() {
+        defer_trade(&store, &axis(), input).unwrap();
+    }
+    let turn = process_deferred(&store, &NoNetwork, &axis(), &generation, &dirty)
+        .expect("process one deferred batch");
 
     assert!(matches!(turn, StageTurn::Ran { more: true }));
-    assert_eq!(deferred.len(), 1);
+    assert_eq!(deferred_snapshot(&store).len(), 1);
 }
 
 /// A provider range with no candle must persist retry pacing without creating a terminal rate.
@@ -805,13 +1338,11 @@ fn due_retry_values_the_row_when_a_successor_appears() {
     let source = CountingSource::new(&[("USDCUSDT", 1.001)]).at_minute(successor);
     let generation = AtomicU64::new(0);
     let dirty = AtomicBool::new(false);
-    let key = trade_key(&input);
-    let mut deferred = BTreeMap::from([(key, input)]);
+    defer_trade(&store, &axis(), &input).unwrap();
 
-    process_deferred(&store, &source, &axis(), &generation, &dirty, &mut deferred)
-        .expect("process due successor");
+    process_deferred(&store, &source, &axis(), &generation, &dirty).expect("process due successor");
 
-    assert!(deferred.is_empty());
+    assert!(!has_deferred(&store));
     let stored = store
         .query_row(
             "SELECT resolved_minute_utc, price_basis FROM rates WHERE quote_ordinal=8",
@@ -900,8 +1431,8 @@ fn reconciliation_restores_pending_rows_without_bypassing_the_retry_boundary() {
 
     assert_eq!(pending.len(), 1);
     let store = super::super::open_store(&path).expect("reopen valuation fixture");
-    let deferred = BTreeMap::from([(trade_key(&pending[0]), pending[0].clone())]);
-    assert!(!current_minute_closed_any(&store, &axis(), &deferred));
+    defer_trade(&store, &axis(), &pending[0]).unwrap();
+    assert!(!current_minute_closed_any(&store));
     drop(store);
     drop(reports);
     std::fs::remove_dir_all(&dir).expect("remove reconciliation fixture directory");
@@ -972,13 +1503,16 @@ fn recovery_resets_the_full_reconciliation_cursor() {
         profit_quote: 5.0,
         spent_quote: Some(100.0),
     };
-    let mut deferred = BTreeMap::from([(trade_key(&input), input)]);
+    let retired = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
+    defer_trade(&retired, &axis(), &input).unwrap();
+    drop(retired);
+    let replacement = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
     let mut reconciliation = None;
     let mut pending_ack = Some(512);
 
-    reset_after_recovery(&mut deferred, &mut reconciliation, &mut pending_ack);
+    reset_after_recovery(&mut reconciliation, &mut pending_ack);
 
-    assert!(deferred.is_empty());
+    assert!(!has_deferred(&replacement));
     let state = reconciliation.expect("full reconciliation must restart");
     assert_eq!(state.source_index, 0);
     assert_eq!(state.after, None);
@@ -1023,9 +1557,10 @@ fn in_flight_ack_filters_the_same_durable_prefix() {
 ///     Fixture directory and an in-memory report connection with an attached valuation cache.
 fn report_fixture(rows: &[(i64, i64, i64)]) -> (std::path::PathBuf, Connection) {
     let dir = std::env::temp_dir().join(format!(
-        "moonterminal-reconcile-order-{}-{}",
+        "moonterminal-reconcile-order-{}-{}-{}",
         std::process::id(),
-        crate::util::now_unix_ms_i64()
+        crate::util::now_unix_ms_i64(),
+        REPORT_FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
     ));
     std::fs::create_dir_all(&dir).expect("create reconciliation order fixture directory");
     let path = dir.join("valuation.sqlite");
@@ -1202,6 +1737,33 @@ struct CountingSource {
     transient: Option<&'static str>,
     /// Optional fixed candle minute used to model a sparse provider response.
     candle_minute: Option<i64>,
+}
+
+/// Complete synthetic candle history gives scalar and range requests the same rate provenance.
+struct DenseSource;
+
+impl SpotRateSource for DenseSource {
+    /// Return every requested USDC candle so batching cannot manufacture sparse-history gaps.
+    fn candles(
+        &self,
+        _provider: &'static str,
+        symbol: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<super::super::provider::SpotCandle>, FetchFailure> {
+        if symbol != "USDCUSDT" {
+            return Err(FetchFailure::Missing);
+        }
+        Ok((start..=end)
+            .step_by(60)
+            .map(|minute| super::super::provider::SpotCandle {
+                open_ms: minute * 1000,
+                close_ms: minute * 1000 + 59_999,
+                open: 1.001,
+                close: 1.001,
+            })
+            .collect())
+    }
 }
 
 impl CountingSource {
@@ -1843,14 +2405,12 @@ fn unavailable_currency_does_not_block_ready_rows_and_retries_exact_minute() {
     let mut usdt = minute_input(minute + 6, 2);
     usdt.quote_ordinal = 1;
     usdt.profit_quote = 17.0;
-    let mut pending = BTreeMap::from([
-        (trade_key(&usdc), usdc.clone()),
-        (trade_key(&usdt), usdt.clone()),
-    ]);
+    defer_trade(&store, &axis(), &usdc).unwrap();
+    defer_trade(&store, &axis(), &usdt).unwrap();
     let generation = AtomicU64::new(0);
     let dirty = AtomicBool::new(false);
     let source = CountingSource::unreachable();
-    let result = process_deferred(&store, &source, &axis(), &generation, &dirty, &mut pending);
+    let result = process_deferred(&store, &source, &axis(), &generation, &dirty);
     assert!(matches!(
         result,
         Err(FaultCause {
@@ -1858,8 +2418,8 @@ fn unavailable_currency_does_not_block_ready_rows_and_retries_exact_minute() {
             ..
         })
     ));
-    assert!(pending.contains_key(&trade_key(&usdc)));
-    assert!(!pending.contains_key(&trade_key(&usdt)));
+    assert!(deferred_snapshot(&store).contains_key(&trade_key(&usdc)));
+    assert!(!deferred_snapshot(&store).contains_key(&trade_key(&usdt)));
     assert_eq!(
         store
             .query_row(
@@ -1870,7 +2430,7 @@ fn unavailable_currency_does_not_block_ready_rows_and_retries_exact_minute() {
             .expect("ready sibling"),
         17.0
     );
-    assert!(!current_minute_closed_any(&store, &axis(), &pending));
+    assert!(!current_minute_closed_any(&store));
     let start = super::super::rate_search_start(&store, 8, minute, now_unix_ms_i64() + 301_000)
         .expect("durable retry");
     assert_eq!(
@@ -1882,16 +2442,8 @@ fn unavailable_currency_does_not_block_ready_rows_and_retries_exact_minute() {
         .execute("UPDATE rate_searches SET next_retry_at_ms=0", [])
         .expect("retry due");
     let recovered = CountingSource::new(&[("USDCUSDT", 1.001)]).at_minute(minute);
-    process_deferred(
-        &store,
-        &recovered,
-        &axis(),
-        &generation,
-        &dirty,
-        &mut pending,
-    )
-    .expect("recovered");
-    assert!(pending.is_empty());
+    process_deferred(&store, &recovered, &axis(), &generation, &dirty).expect("recovered");
+    assert!(!has_deferred(&store));
     assert_eq!(
         super::super::cached_rate(&store, 8, minute)
             .expect("cache")
@@ -2113,23 +2665,22 @@ fn file_store(tag: &str) -> (std::path::PathBuf, Connection) {
 fn stored_values(store: &Connection) -> (Vec<String>, Vec<String>) {
     let read = |sql: &str| {
         let mut stmt = store.prepare(sql).expect("prepare snapshot");
-        stmt.query_map([], |row| row.get::<_, String>(0))
-            .expect("read snapshot")
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .expect("decode snapshot")
+        // Both schemas put their nondeterministic local write stamp last. Compare every other
+        // field, including all rate legs and candle provenance, without decimal rounding.
+        let columns = stmt.column_count() - 1;
+        stmt.query_map([], |row| {
+            (0..columns)
+                .map(|index| row.get_ref(index).map(|value| format!("{value:?}")))
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map(|fields| fields.join("|"))
+        })
+        .expect("read snapshot")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("decode snapshot")
     };
     (
-        read(
-            "SELECT printf('%d|%d|%d|%d|%d|%d|%!.17g|%s|%d|%!.17g|%!.17g|%s', source_kind,
-                    core_uid, row_id, algorithm_version, closedate, quote_ordinal, profit_quote,
-                    quote(spent_quote), rate_minute_utc, rate_usdt, profit_usdt, quote(spent_usdt))
-             FROM trade_values ORDER BY source_kind, core_uid, row_id",
-        ),
-        read(
-            "SELECT printf('%d|%d|%d|%!.17g|%s|%s', quote_ordinal, minute_utc,
-                    resolved_minute_utc, rate_usdt, provider, symbol)
-             FROM rates ORDER BY quote_ordinal, minute_utc",
-        ),
+        read("SELECT * FROM trade_values ORDER BY source_kind, core_uid, row_id"),
+        read("SELECT * FROM rates ORDER BY quote_ordinal, minute_utc"),
     )
 }
 
@@ -2140,7 +2691,7 @@ fn stored_values(store: &Connection) -> (Vec<String>, Vec<String>) {
 fn a_batched_transaction_stores_the_same_values_as_per_trade_commits() {
     let first_minute = current_minute_utc() - 600;
     let inputs = batch_inputs(200, first_minute);
-    let source = CountingSource::new(&[("USDCUSDT", 1.001)]);
+    let source = DenseSource;
     let (single_dir, single) = file_store("single");
     let (batched_dir, batched) = file_store("batched");
 
@@ -2150,18 +2701,12 @@ fn a_batched_transaction_stores_the_same_values_as_per_trade_commits() {
             PrepareResult::Complete { .. }
         ));
     }
-    let results = commit_batch(&batched, || {
-        inputs
-            .iter()
-            .map(|input| prepare_trade(&batched, &source, &axis(), input, false))
-            .collect::<Vec<_>>()
+    let ready = commit_batch(&batched, || {
+        prefetch_rates(&batched, &source, &axis(), &inputs).unwrap();
+        prepare_ready_trades(&batched, &axis(), &inputs).unwrap().0
     })
     .expect("commit the batch");
-    assert!(
-        results
-            .iter()
-            .all(|result| matches!(result, PrepareResult::Complete { .. }))
-    );
+    assert_eq!(ready.len(), inputs.len());
 
     let expected = stored_values(&single);
     assert_eq!(expected.0.len(), inputs.len());

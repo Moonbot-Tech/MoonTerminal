@@ -18,7 +18,7 @@
 //! - The `v.closedate = r.closedate` coverage join and the `trade_values` upsert key
 //!   (`super::coverage_sql`, `super::store_trade_value`). Both sides of that comparison are the
 //!   stored value; converting one of them matches nothing.
-//! - [`trade_key`], the in-memory deferred-row identity.
+//! - [`trade_key`], the deferred-row identity.
 //!
 //! `moon-core/tests/valuation_never_routed_contract.rs` anchors on the exact source text of all
 //! four, so routing one of them through the axis reddens rather than silently costing a
@@ -109,7 +109,6 @@ fn run_worker(
     // that core, so the rows arrive at a stage that must already be on the new axis to value them
     // at the right minute.
     let mut axis = ReportAxis::identity_core_local();
-    let mut deferred: BTreeMap<(i64, i64, i64), TradeInput> = BTreeMap::new();
     let mut reconciliation = Some(ReconcileState::new());
     let mut pending_ack = None;
     let mut status = ValuationStatus::default();
@@ -161,7 +160,7 @@ fn run_worker(
             match super::open_canonical_store() {
                 Ok(recovered) => {
                     store = Some(recovered);
-                    reset_after_recovery(&mut deferred, &mut reconciliation, &mut pending_ack);
+                    reset_after_recovery(&mut reconciliation, &mut pending_ack);
                     // Clear only cache-caused runs; provider and report-read failures remain valid
                     // after the derived cache is replaced.
                     status.record_recovery();
@@ -205,7 +204,6 @@ fn run_worker(
                         &mut axis,
                         &generation,
                         &dirty,
-                        &mut deferred,
                         state,
                     )
                 },
@@ -231,7 +229,6 @@ fn run_worker(
                     &report_tx,
                     &generation,
                     &dirty,
-                    &mut deferred,
                     &mut pending_ack,
                     &mut reconciliation,
                 )
@@ -248,23 +245,14 @@ fn run_worker(
             Attempt::Done(StageTurn::Ran { more: true }) => continue,
             _ => {}
         }
-        if current_minute_closed_any(store_ref, &axis, &deferred) {
+        if current_minute_closed_any(store_ref) {
             match attempt(
                 &mut status,
                 &mut sink,
                 ValuationStage::DeferredMinute,
                 now_ms,
                 &mut retry_after,
-                || {
-                    process_deferred(
-                        store_ref,
-                        source.as_ref(),
-                        &axis,
-                        &generation,
-                        &dirty,
-                        &mut deferred,
-                    )
-                },
+                || process_deferred(store_ref, source.as_ref(), &axis, &generation, &dirty),
             ) {
                 Attempt::CacheLost => continue 'worker,
                 Attempt::Done(StageTurn::Ran { more: true }) => continue,
@@ -298,7 +286,7 @@ fn run_worker(
             &status,
             &current,
             &current_wanted,
-            !deferred.is_empty(),
+            has_deferred(store_ref),
             delay,
             settled,
         );

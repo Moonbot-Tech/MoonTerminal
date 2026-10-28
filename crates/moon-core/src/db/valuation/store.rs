@@ -418,6 +418,22 @@ pub(crate) fn open_store(path: &Path) -> rusqlite::Result<Connection> {
     // Room for every statement the worker repeats per trade, so none is re-prepared per event.
     conn.set_prepared_statement_cache_capacity(32);
     conn.busy_timeout(Duration::from_secs(3))?;
+    // The pending backlog is reconstructible from report rows at startup. Keep it in SQLite's
+    // disk-backed temporary store with a bounded page cache instead of retaining every input in
+    // a Rust tree throughout an outage. Only a 64-row retry batch enters worker memory.
+    conn.execute_batch(
+        "PRAGMA temp_store=FILE;
+         PRAGMA temp.cache_size=-256;
+         CREATE TEMP TABLE deferred_trades (
+             source_kind INTEGER NOT NULL, core_uid INTEGER NOT NULL, row_id INTEGER NOT NULL,
+             closedate INTEGER NOT NULL, quote_ordinal INTEGER NOT NULL,
+             profit_quote REAL NOT NULL, spent_quote REAL, minute_utc INTEGER NOT NULL,
+             closed_at_ms INTEGER NOT NULL, ready_at_ms INTEGER NOT NULL,
+             PRIMARY KEY(source_kind,core_uid,row_id)
+         ) WITHOUT ROWID;
+         CREATE INDEX temp.deferred_due ON deferred_trades(ready_at_ms,source_kind,core_uid,row_id);
+         CREATE INDEX temp.deferred_rate ON deferred_trades(quote_ordinal,minute_utc);",
+    )?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS rates (
              algorithm_version INTEGER NOT NULL,
@@ -470,6 +486,26 @@ pub(crate) fn open_store(path: &Path) -> rusqlite::Result<Connection> {
          CREATE INDEX IF NOT EXISTS idx_trade_values_inputs
              ON trade_values (algorithm_version, quote_ordinal, rate_minute_utc);",
     )?;
+    // Temporary triggers belong to this worker connection, not to the persisted schema. They
+    // make a retry update/deletion and its queue deadline one SQLite transaction, including when
+    // a successful rate retires the search or a fixture advances a retry without sleeping.
+    conn.execute_batch(&format!(
+        "CREATE TEMP TRIGGER deferred_search_insert AFTER INSERT ON main.rate_searches
+         WHEN NEW.algorithm_version={ALGORITHM_VERSION} BEGIN
+           UPDATE deferred_trades SET ready_at_ms=MAX(closed_at_ms,NEW.next_retry_at_ms)
+           WHERE quote_ordinal=NEW.quote_ordinal AND minute_utc=NEW.minute_utc;
+         END;
+         CREATE TEMP TRIGGER deferred_search_update AFTER UPDATE OF next_retry_at_ms ON main.rate_searches
+         WHEN NEW.algorithm_version={ALGORITHM_VERSION} BEGIN
+           UPDATE deferred_trades SET ready_at_ms=MAX(closed_at_ms,NEW.next_retry_at_ms)
+           WHERE quote_ordinal=NEW.quote_ordinal AND minute_utc=NEW.minute_utc;
+         END;
+         CREATE TEMP TRIGGER deferred_search_delete AFTER DELETE ON main.rate_searches
+         WHEN OLD.algorithm_version={ALGORITHM_VERSION} BEGIN
+           UPDATE deferred_trades SET ready_at_ms=closed_at_ms
+           WHERE quote_ordinal=OLD.quote_ordinal AND minute_utc=OLD.minute_utc;
+         END;"
+    ))?;
     let user_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if user_version < STORE_SCHEMA_VERSION {
         match purge_hyperliquid_collisions(&conn) {

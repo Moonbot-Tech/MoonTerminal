@@ -1,5 +1,99 @@
 use super::*;
 
+/// Read only the requested rate keys in chunks below SQLite's historical variable limit.
+pub(crate) fn cached_rates(
+    conn: &Connection,
+    keys: &[(i64, i64)],
+) -> rusqlite::Result<std::collections::BTreeMap<(i64, i64), ResolvedRate>> {
+    let mut rates = std::collections::BTreeMap::new();
+    for chunk in keys.chunks(256) {
+        let values = vec!["(?,?)"; chunk.len()].join(",");
+        let sql = format!("WITH requested(quote,minute) AS (VALUES {values})
+            SELECT r.resolved_minute_utc,r.rate_usdt,r.price_basis,r.provider,r.symbol,r.orientation,
+                   r.candle_open_ms,r.candle_close_ms,r.leg1_rate,r.leg2_provider,r.leg2_symbol,
+                   r.leg2_orientation,r.leg2_rate,requested.quote,requested.minute
+            FROM requested JOIN rates r ON r.algorithm_version={ALGORITHM_VERSION}
+              AND r.quote_ordinal=requested.quote AND r.minute_utc=requested.minute");
+        let mut statement = conn.prepare_cached(&sql)?;
+        let rows = statement.query_map(
+            rusqlite::params_from_iter(chunk.iter().flat_map(|(quote, minute)| [*quote, *minute])),
+            |row| {
+                let key = (row.get(13)?, row.get(14)?);
+                Ok((key, decode_rate_row(row, key.0, key.1)?))
+            },
+        )?;
+        for row in rows {
+            let (key, rate) = row?;
+            rates.insert(key, rate);
+        }
+    }
+    Ok(rates)
+}
+
+/// Persist ready valuations with Rust's existing monetary arithmetic and guarded upsert.
+///
+/// Each chunk carries at most 832 variables. Duplicate identities are applied in input order;
+/// callers must preserve event barriers before handing a group to this function.
+pub(crate) fn store_trade_values(
+    conn: &Connection,
+    values: &[(&TradeInput, &ResolvedRate)],
+    valued_at_ms: i64,
+) -> rusqlite::Result<usize> {
+    let mut changed = 0;
+    for chunk in values.chunks(64) {
+        let tuples = vec!["(?,?,?,?,?,?,?,?,?,?,?,?,?)"; chunk.len()].join(",");
+        let sql = trade_value_upsert(&tuples);
+        let mut bindings = Vec::<rusqlite::types::Value>::with_capacity(chunk.len() * 13);
+        for (input, rate) in chunk {
+            bindings.extend([
+                input.source.code().into(),
+                input.core_uid.into(),
+                input.row_id.into(),
+                ALGORITHM_VERSION.into(),
+                input.closedate.into(),
+                input.quote_ordinal.into(),
+                input.profit_quote.into(),
+                input.spent_quote.into(),
+                rate.minute_utc.into(),
+                rate.rate_usdt.into(),
+                (input.profit_quote * rate.rate_usdt).into(),
+                input.spent_quote.map(|spent| spent * rate.rate_usdt).into(),
+                valued_at_ms.into(),
+            ]);
+        }
+        changed += conn
+            .prepare_cached(&sql)?
+            .execute(rusqlite::params_from_iter(bindings))?;
+    }
+    Ok(changed)
+}
+
+/// Build the shared input-complete upsert for either one trade or a bounded batch.
+fn trade_value_upsert(tuples: &str) -> String {
+    format!(
+        "INSERT INTO trade_values (
+             source_kind, core_uid, row_id, algorithm_version, closedate, quote_ordinal,
+             profit_quote, spent_quote, rate_minute_utc, rate_usdt, profit_usdt,
+             spent_usdt, valued_at_ms
+         ) VALUES {tuples}
+         ON CONFLICT (source_kind, core_uid, row_id) DO UPDATE SET
+             algorithm_version=excluded.algorithm_version, closedate=excluded.closedate,
+             quote_ordinal=excluded.quote_ordinal, profit_quote=excluded.profit_quote,
+             spent_quote=excluded.spent_quote, rate_minute_utc=excluded.rate_minute_utc,
+             rate_usdt=excluded.rate_usdt, profit_usdt=excluded.profit_usdt,
+             spent_usdt=excluded.spent_usdt, valued_at_ms=excluded.valued_at_ms
+         WHERE trade_values.algorithm_version IS NOT excluded.algorithm_version
+            OR trade_values.closedate IS NOT excluded.closedate
+            OR trade_values.quote_ordinal IS NOT excluded.quote_ordinal
+            OR trade_values.profit_quote IS NOT excluded.profit_quote
+            OR trade_values.spent_quote IS NOT excluded.spent_quote
+            OR trade_values.rate_minute_utc IS NOT excluded.rate_minute_utc
+            OR trade_values.rate_usdt IS NOT excluded.rate_usdt
+            OR trade_values.profit_usdt IS NOT excluded.profit_usdt
+            OR trade_values.spent_usdt IS NOT excluded.spent_usdt"
+    )
+}
+
 /// Read a cached rate outcome for one quote minute.
 ///
 /// Args:
@@ -153,30 +247,6 @@ pub(crate) fn rate_search_start(
         Some((_, retry_at)) if retry_at > now_ms => None,
         Some((searched_through, _)) => Some(searched_through.saturating_add(60).max(minute_utc)),
     })
-}
-
-/// Read every historical rate key whose retry boundary is still in the future.
-///
-/// Args:
-///     conn: Open valuation store.
-///     now_ms: Current wall-clock time in Unix milliseconds.
-///
-/// Returns:
-///     Quote/minute keys that the deferred worker must not request yet.
-pub(crate) fn blocked_rate_searches(
-    conn: &Connection,
-    now_ms: i64,
-) -> rusqlite::Result<std::collections::BTreeSet<(i64, i64)>> {
-    let mut statement = conn.prepare(
-        "SELECT quote_ordinal, minute_utc FROM rate_searches
-         WHERE algorithm_version=?1 AND next_retry_at_ms>?2",
-    )?;
-    let blocked = statement
-        .query_map(params![ALGORITHM_VERSION, now_ms], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })?
-        .collect();
-    blocked
 }
 
 /// Persist one successful immutable closed-minute conversion.
@@ -343,28 +413,9 @@ pub(crate) fn store_trade_value(
 ) -> rusqlite::Result<usize> {
     let profit_usdt = input.profit_quote * rate.rate_usdt;
     let spent_usdt = input.spent_quote.map(|spent| spent * rate.rate_usdt);
-    conn.prepare_cached(
-        "INSERT INTO trade_values (
-             source_kind, core_uid, row_id, algorithm_version, closedate, quote_ordinal,
-             profit_quote, spent_quote, rate_minute_utc, rate_usdt, profit_usdt,
-             spent_usdt, valued_at_ms
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
-         ON CONFLICT (source_kind, core_uid, row_id) DO UPDATE SET
-             algorithm_version=excluded.algorithm_version, closedate=excluded.closedate,
-             quote_ordinal=excluded.quote_ordinal, profit_quote=excluded.profit_quote,
-             spent_quote=excluded.spent_quote, rate_minute_utc=excluded.rate_minute_utc,
-             rate_usdt=excluded.rate_usdt, profit_usdt=excluded.profit_usdt,
-             spent_usdt=excluded.spent_usdt, valued_at_ms=excluded.valued_at_ms
-         WHERE trade_values.algorithm_version IS NOT excluded.algorithm_version
-            OR trade_values.closedate IS NOT excluded.closedate
-            OR trade_values.quote_ordinal IS NOT excluded.quote_ordinal
-            OR trade_values.profit_quote IS NOT excluded.profit_quote
-            OR trade_values.spent_quote IS NOT excluded.spent_quote
-            OR trade_values.rate_minute_utc IS NOT excluded.rate_minute_utc
-            OR trade_values.rate_usdt IS NOT excluded.rate_usdt
-            OR trade_values.profit_usdt IS NOT excluded.profit_usdt
-            OR trade_values.spent_usdt IS NOT excluded.spent_usdt",
-    )?
+    conn.prepare_cached(&trade_value_upsert(
+        "(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+    ))?
     .execute(params![
         input.source.code(),
         input.core_uid,

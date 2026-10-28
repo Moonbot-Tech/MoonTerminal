@@ -734,9 +734,12 @@ pub(in crate::db) fn apply_msg(
             if page.database_recreated {
                 valuation::stage_rescan_core(conn, *core_uid)?;
             }
-            for row in page.rows.iter() {
-                valuation::stage_row(conn, valuation::TradeSource::Typed, *core_uid, row.rec_id)?;
-            }
+            valuation::stage_rows(
+                conn,
+                valuation::TradeSource::Typed,
+                *core_uid,
+                page.rows.iter().map(|row| row.rec_id),
+            )?;
             let effect = ApplyEffect::background(true);
             Ok(if page.database_recreated {
                 effect.publishing(PostCommit::ReplicaReset {

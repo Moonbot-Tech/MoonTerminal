@@ -79,7 +79,7 @@ pub(in crate::db::valuation::worker) fn report_fault(error: ReadFail) -> FaultCa
 
 /// Exclusive descending reconciliation cursor: `(closedate, core_uid, row_id)`.
 ///
-/// Named because the `deferred` map next door keys on a structurally identical `(i64, i64, i64)`
+/// Named because deferred identities key on a structurally identical `(i64, i64, i64)`
 /// meaning `(source_code, core_uid, row_id)`. A Rust alias is transparent, so this does NOT stop
 /// one being passed for the other — it only names the field order at each site so the swap is
 /// visible while reading. Make it a newtype if that stops being enough.
@@ -107,15 +107,12 @@ impl ReconcileState {
 /// Reset volatile worker state after the derived store is replaced.
 ///
 /// Args:
-///     deferred: Current-minute inputs tied to the retired cache.
 ///     reconciliation: Startup cursor that must restart from the first physical source.
 ///     pending_ack: In-flight outbox boundary tied to the retired worker state.
 pub(in crate::db::valuation::worker) fn reset_after_recovery(
-    deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
     reconciliation: &mut Option<ReconcileState>,
     pending_ack: &mut Option<i64>,
 ) {
-    deferred.clear();
     *reconciliation = Some(ReconcileState::new());
     *pending_ack = None;
 }

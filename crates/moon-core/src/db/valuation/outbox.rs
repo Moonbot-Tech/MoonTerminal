@@ -49,7 +49,7 @@ impl OutboxAction {
     ///
     /// Returns:
     ///     Known action, or a SQLite conversion error for corrupted data.
-    fn from_code(value: i64) -> rusqlite::Result<Self> {
+    pub(in crate::db::valuation) fn from_code(value: i64) -> rusqlite::Result<Self> {
         match value {
             0 => Ok(Self::Row),
             1 => Ok(Self::Delete),
@@ -88,7 +88,7 @@ impl TradeSource {
     ///
     /// Returns:
     ///     Typed or legacy source, or a SQLite conversion error for corrupted data.
-    fn from_code(value: i64) -> rusqlite::Result<Self> {
+    pub(in crate::db::valuation) fn from_code(value: i64) -> rusqlite::Result<Self> {
         match value {
             0 => Ok(Self::Typed),
             1 => Ok(Self::Legacy),
@@ -137,6 +137,34 @@ pub(in crate::db) fn stage_row(
     row_id: i64,
 ) -> rusqlite::Result<()> {
     stage_outbox(conn, source, core_uid, row_id, OutboxAction::Row)
+}
+
+/// Stage a page in its original order with at most 258 bound variables per insert.
+///
+/// The caller's report transaction still owns both replication and every outbox sequence.
+pub(in crate::db) fn stage_rows(
+    conn: &Connection,
+    source: TradeSource,
+    core_uid: u64,
+    row_ids: impl IntoIterator<Item = i64>,
+) -> rusqlite::Result<()> {
+    let mut ids = row_ids.into_iter();
+    loop {
+        let chunk = ids.by_ref().take(256).collect::<Vec<_>>();
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        let values = (0..chunk.len())
+            .map(|index| format!("(?1,?2,?{},0)", index + 3))
+            .collect::<Vec<_>>()
+            .join(",");
+        conn.prepare_cached(&format!(
+            "INSERT INTO {OUTBOX_TABLE}(source_kind,core_uid,row_id,action) VALUES {values}"
+        ))?
+        .execute(rusqlite::params_from_iter(
+            [source.code(), core_uid as i64].into_iter().chain(chunk),
+        ))?;
+    }
 }
 
 /// Stage one hard report-row delete.

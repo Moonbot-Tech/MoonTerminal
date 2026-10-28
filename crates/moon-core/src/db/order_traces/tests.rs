@@ -6,6 +6,170 @@ use super::*;
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
+thread_local! {
+    /// Query executions recorded by the archive probe's own thread.
+    static ARCHIVE_SQL: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Capture each executed archive query for statement counts and planner evidence.
+fn archive_trace(event: rusqlite::trace::TraceEvent<'_>) {
+    if let rusqlite::trace::TraceEvent::Stmt(statement, _) = event {
+        ARCHIVE_SQL.with_borrow_mut(|sql| sql.push(statement.expanded_sql().unwrap()));
+    }
+}
+
+/// Former scalar query path, kept only as the scale probe's before-count and parity oracle.
+fn archive_scalar_reference(
+    conn: &Connection,
+    core_uid: u64,
+    uids: &[i64],
+) -> HashMap<i64, TraceEntry> {
+    let mut answer=conn.prepare_cached("SELECT checked_at_ms,line_count FROM trace_answers WHERE core_uid=?1 AND report_uid=?2").unwrap();
+    let mut lines=conn.prepare_cached("SELECT own,kind,stop_price,stop_time_ms,points FROM trace_lines WHERE core_uid=?1 AND report_uid=?2 ORDER BY seq").unwrap();
+    let mut out = HashMap::new();
+    for &uid in uids {
+        if uid == 0 || out.contains_key(&uid) {
+            continue;
+        }
+        let filed = answer
+            .query_row(params![core_uid as i64, uid], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })
+            .optional()
+            .unwrap();
+        let Some((checked_at_ms, count)) = filed else {
+            continue;
+        };
+        if count == 0 {
+            out.insert(uid, TraceEntry::Empty { checked_at_ms });
+            continue;
+        }
+        let rows = lines
+            .query_map(params![core_uid as i64, uid], |row| {
+                let kind = match row.get::<_, i64>(1)? {
+                    KIND_ENTRY => ArchivedLineKind::Entry,
+                    KIND_EXIT => ArchivedLineKind::Exit,
+                    _ => return Ok(None),
+                };
+                let points = decode_points(&row.get::<_, Vec<u8>>(4)?);
+                if points.is_empty() {
+                    return Ok(None);
+                }
+                Ok(Some(ArchivedOrderTrace {
+                    own: row.get::<_, i64>(0)? != 0,
+                    kind,
+                    stop_price: row.get(2)?,
+                    stop_time_ms: row.get::<_, Option<i64>>(3)?.map(|ms| ms as f64),
+                    points,
+                }))
+            })
+            .unwrap();
+        let traces = rows.filter_map(Result::unwrap).collect::<Vec<_>>();
+        out.insert(uid, TraceEntry::Lines(Arc::from(traces)));
+    }
+    out
+}
+
+/// A nonempty answer with no usable decoded lines must never become an empty/retryable answer.
+#[test]
+fn joined_archive_reads_keep_unusable_filed_lines_distinct_from_empty_answers() {
+    let conn = Connection::open_in_memory().unwrap();
+    init(&conn).unwrap();
+    store_answer(
+        &conn,
+        1,
+        -7,
+        &[
+            line(true, ArchivedLineKind::Entry, &[(1.0, 2.0)]),
+            line(false, ArchivedLineKind::Exit, &[(3.0, 4.0)]),
+        ],
+        123,
+    )
+    .unwrap();
+    conn.execute_batch("UPDATE trace_lines SET kind=99 WHERE seq=0; UPDATE trace_lines SET points=x'00' WHERE seq=1;").unwrap();
+    let expected = TraceEntry::Lines(Arc::from([]));
+    assert_eq!(read_many_on(&conn, 1, &[-7]).unwrap()[&-7], expected);
+    conn.execute("DELETE FROM trace_lines", []).unwrap();
+    assert_eq!(read_many_on(&conn, 1, &[-7]).unwrap()[&-7], expected);
+    assert!(read_many_on(&conn, 2, &[-7]).unwrap().is_empty());
+}
+
+/// Scale probe catches reintroduced per-deal archive reads while checking full-width line parity.
+#[test]
+#[ignore = "synthetic 1000-trace timing probe"]
+fn archive_scale_probe() {
+    let conn = Connection::open_in_memory().unwrap();
+    init(&conn).unwrap();
+    let expected = [line(
+        true,
+        ArchivedLineKind::Entry,
+        &[(1.0, 1.23456789012345)],
+    )];
+    for core in 1..=10 {
+        for uid in 1..=1000 {
+            store_answer(
+                &conn,
+                core,
+                uid,
+                if uid % 5 == 0 { &[] } else { &expected },
+                123,
+            )
+            .unwrap();
+        }
+    }
+    let mut uids = (1..=1001).collect::<Vec<_>>();
+    uids.extend([0, -1, 1, 1000]);
+    conn.trace_v2(
+        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+        Some(archive_trace),
+    );
+    for _ in 0..3 {
+        ARCHIVE_SQL.with_borrow_mut(Vec::clear);
+        let scalar_start = std::time::Instant::now();
+        let scalar = archive_scalar_reference(&conn, 1, &uids);
+        let scalar_time = scalar_start.elapsed();
+        eprintln!(
+            "archive scalar reference: {:.4} ms, statements={}",
+            scalar_time.as_secs_f64() * 1000.0,
+            ARCHIVE_SQL.with_borrow(Vec::len)
+        );
+        ARCHIVE_SQL.with_borrow_mut(Vec::clear);
+        let start = std::time::Instant::now();
+        let result = read_many_on(&conn, 1, &uids).unwrap();
+        let elapsed = start.elapsed();
+        let statements = ARCHIVE_SQL.with_borrow(|sql| sql.clone());
+        assert_eq!(result, scalar);
+        eprintln!(
+            "archive_scale 1000 traces: {:.4} ms, statements={}",
+            elapsed.as_secs_f64() * 1000.0,
+            statements.len()
+        );
+        for sql in [
+            &statements[0],
+            "SELECT checked_at_ms,line_count FROM trace_answers WHERE core_uid=1 AND report_uid=1",
+            "SELECT own,kind,stop_price,stop_time_ms,points FROM trace_lines WHERE core_uid=1 AND report_uid=1 ORDER BY seq",
+        ] {
+            let plan = conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(3))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            eprintln!("archive plan: {plan:?}");
+        }
+        assert_eq!(result.len(), 1000);
+        for uid in 1..=1000 {
+            let entry = if uid % 5 == 0 {
+                TraceEntry::Empty { checked_at_ms: 123 }
+            } else {
+                TraceEntry::Lines(Arc::from(expected.clone()))
+            };
+            assert_eq!(result[&uid], entry);
+        }
+    }
+}
+
 /// Fresh on-disk store for one test; the backfill query attaches it by path, so `:memory:` is
 /// not enough for that half.
 fn store(tag: &str) -> (PathBuf, Connection) {
