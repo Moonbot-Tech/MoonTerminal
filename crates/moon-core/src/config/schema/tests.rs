@@ -265,15 +265,15 @@ fn legacy_telegram_keys_decode_and_are_dropped_without_losing_surviving_values()
     assert!(rewritten.contains("mini_app_enabled = true"));
 }
 
-/// Catches missing serde defaults or persistence dropping the user's global width.
+/// Catches the retired app-wide book width failing the load or coming back as a saved field: the
+/// width is per tab now, and a profile written while the global key existed must still load.
 #[test]
-fn order_book_width_loads_old_settings_and_round_trips_saved_values() {
-    let old: SettingsFile = toml::from_str("ui_scale = 1.25").expect("old settings");
-    assert_eq!(old.order_book_width_px, 220.0);
-    let saved: SettingsFile = toml::from_str("order_book_width_px = 340.0").expect("custom width");
-    let output = toml::to_string(&saved).expect("save settings");
-    let loaded: SettingsFile = toml::from_str(&output).expect("reload settings");
-    assert_eq!(loaded.order_book_width_px, 340.0);
+fn retired_global_book_width_is_ignored_and_not_written_back() {
+    let old: SettingsFile = toml::from_str("order_book_width_px = 340.0\nui_scale = 1.25")
+        .expect("a file carrying the retired width must still load");
+    assert_eq!(old.ui_scale, 1.25);
+    let output = toml::to_string(&old).expect("save settings");
+    assert!(!output.contains("order_book_width_px"));
 }
 
 /// Catches the live-scope default drifting off `all` (#688): a profile written before the setting

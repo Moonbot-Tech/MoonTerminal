@@ -17,7 +17,6 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::common::num_input;
 use super::{SettingsView, color_row};
 use crate::{Backend, design};
 use moon_core::config::{AppConfig, ChartTheme, UiThemeMode};
@@ -634,14 +633,6 @@ impl SettingsView {
             set_note: t!(set_note_key(mode)).to_string(),
             groups: self.color_groups(cx),
             preview: chart_preview(&theme, cx),
-            book_width: num_input(
-                "iface-book-width",
-                &self.appearance_ui.order_book_width_px,
-                f64::from(moon_core::config::book_width::MIN)
-                    ..=f64::from(moon_core::config::book_width::MAX),
-                10.0,
-                Some("px".into()),
-            ),
             dock_reset,
         };
         appearance_body(parts, &|key| self.more_toggle(key, cx), cx)
@@ -891,7 +882,6 @@ pub(super) struct AppearanceParts {
     set_note: String,
     groups: Vec<ColorGroup>,
     preview: AnyElement,
-    book_width: AnyElement,
     dock_reset: AnyElement,
 }
 
@@ -1007,22 +997,13 @@ fn appearance_body(
                 ),
         )
         .child(super::general::page_box(
-            vec![
-                row(
-                    "iface-book-width",
-                    t!("iface.order_book_width").to_string(),
-                    t!("iface.order_book_width.hint").to_string(),
-                    None,
-                    parts.book_width,
-                ),
-                row(
-                    "iface-dock-reset",
-                    t!("iface.dock_reset").to_string(),
-                    t!("iface.dock_reset.hint").to_string(),
-                    Some(t!("iface.dock_reset_tip").to_string()),
-                    parts.dock_reset,
-                ),
-            ],
+            vec![row(
+                "iface-dock-reset",
+                t!("iface.dock_reset").to_string(),
+                t!("iface.dock_reset.hint").to_string(),
+                Some(t!("iface.dock_reset_tip").to_string()),
+                parts.dock_reset,
+            )],
             cx,
         ))
         // `theme.toml` is the shareable file the colour set lands in.
@@ -1206,37 +1187,14 @@ fn chart_preview(theme: &ChartTheme, cx: &App) -> AnyElement {
 /// UI state of the Appearance page that the draft does not hold. Branch-owned: fields are added
 /// here, never on `SettingsView`.
 pub(super) struct AppearanceUi {
-    /// Number field for `order_book_width_px`.
-    pub(super) order_book_width_px: Entity<moon_ui::MoonInputState>,
     /// Whether the experimental theme cards are shown. Per Settings session; not a setting.
     pub(super) show_experimental: bool,
 }
 
 impl AppearanceUi {
-    /// Fields seeded from the draft `config` and bound to the draft.
-    pub(super) fn init(
-        config: &AppConfig,
-        window: &mut Window,
-        cx: &mut Context<SettingsView>,
-    ) -> Self {
-        use moon_core::config::book_width;
+    /// The page's session state, all of it starting closed.
+    pub(super) fn init() -> Self {
         Self {
-            order_book_width_px: super::general::draft_number(
-                f64::from(book_width::normalize(config.order_book_width_px).round()),
-                window,
-                cx,
-                |p| {
-                    Some(f64::from(
-                        book_width::normalize(p.order_book_width_px).round(),
-                    ))
-                },
-                |p, v| {
-                    let width = book_width::normalize(v as f32);
-                    let changed = p.order_book_width_px != width;
-                    p.order_book_width_px = width;
-                    changed
-                },
-            ),
             show_experimental: false,
         }
     }

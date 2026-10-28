@@ -547,7 +547,7 @@ impl SettingsView {
             let b = backend.read(cx);
             b.preview.as_ref().unwrap_or(&b.config).clone()
         };
-        let appearance_ui = interface::AppearanceUi::init(&draft, window, cx);
+        let appearance_ui = interface::AppearanceUi::init();
         let lines_ui = lines::LinesUi::init(&draft, window, cx);
         let general_ui = general::GeneralUi::init(&draft, window, cx);
         let storage_ed = storage::build();
@@ -974,7 +974,6 @@ fn settings_sig(b: &Backend) -> u64 {
     cfg.log_retention_days.hash(&mut h);
     cfg.ui_theme_mode.hash(&mut h);
     cfg.ui_scale.to_bits().hash(&mut h);
-    cfg.order_book_width_px.to_bits().hash(&mut h);
     cfg.hotkeys.hash(&mut h);
     format!("{:?}", cfg.theme).hash(&mut h);
     format!("{:?}", cfg.orders).hash(&mut h);
@@ -1195,7 +1194,6 @@ fn draft_sig(cfg: &AppConfig) -> u64 {
     cfg.log_retention_days.hash(&mut h);
     cfg.chart_memory_percent.hash(&mut h);
     cfg.ui_scale.to_bits().hash(&mut h);
-    cfg.order_book_width_px.to_bits().hash(&mut h);
 
     h.finish()
 }
@@ -1262,7 +1260,6 @@ fn page_sig(cfg: &AppConfig, tab: Tab) -> Option<u64> {
             hash_json(&mut h, &cfg.theme);
             cfg.ui_theme_mode.hash(&mut h);
             cfg.ui_scale.to_bits().hash(&mut h);
-            cfg.order_book_width_px.to_bits().hash(&mut h);
         }
         Tab::Lines => hash_json(&mut h, &cfg.orders),
         Tab::Badges => hash_json(&mut h, &cfg.badges),

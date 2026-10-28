@@ -189,6 +189,9 @@ pub fn normalize_chart_graphics(cfg: ChartGraphicsCfg) -> ChartGraphicsCfg {
         // The bubbles' merge window and small threshold snap onto the lists the popup offers.
         trade_merge_ms: crate::clusters::snap_merge_ms(cfg.trade_merge_ms),
         trade_small_pct: crate::clusters::snap_small_pct(cfg.trade_small_pct),
+        // The book width is bounded where the layout reads it, so the popup's field, the drawn
+        // zone and the hit test all see the same clamp.
+        book_width_px: moon_core::config::book_width::normalize(cfg.book_width_px),
 
         ..cfg
     }

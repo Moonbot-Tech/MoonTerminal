@@ -49,8 +49,6 @@ pub struct Merged {
     pub ui_theme_mode: UiThemeMode,
     /// Overall UI geometry scale.
     pub ui_scale: f32,
-    /// App-wide physical-pixel order-book width.
-    pub order_book_width_px: f32,
     /// Startup retained-history depth percentage applied when MoonProto feed clients are created.
     ///
     /// The legacy field name is retained for persisted-config compatibility; it no longer denotes
@@ -105,7 +103,6 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     let log_retention_days = meta.log_retention_days;
     let ui_theme_mode = meta.ui_theme_mode;
     let ui_scale = repair_ui_scale(meta.ui_scale);
-    let order_book_width_px = super::book_width::normalize(meta.order_book_width_px);
     let chart_memory_percent = clamp_chart_memory_percent(meta.chart_memory_percent);
     let core_sort = meta.core_sort;
     let report_valuation_mode = meta.report_valuation_mode;
@@ -224,7 +221,6 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
         log_retention_days,
         ui_theme_mode,
         ui_scale,
-        order_book_width_px,
         chart_memory_percent,
         core_sort,
         report_valuation_mode,
@@ -261,7 +257,6 @@ pub fn split(
     log_retention_days: u32,
     ui_theme_mode: UiThemeMode,
     ui_scale: f32,
-    order_book_width_px: f32,
     chart_memory_percent: u16,
     core_sort: CoreSortMode,
     report_valuation_mode: ValuationMode,
@@ -296,7 +291,6 @@ pub fn split(
         log_retention_days,
         ui_theme_mode,
         ui_scale,
-        order_book_width_px,
         chart_memory_percent: clamp_chart_memory_percent(chart_memory_percent),
         // Legacy field: since v13 it lives in hotkeys.toml and is not serialized in settings.toml.
         hotkeys: HotkeysConfig::default(),

@@ -229,6 +229,15 @@ where
     Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_hvol_width))
 }
 
+/// Read the per-tab book width leniently: a hand-typed string falls back to the shipped width
+/// instead of discarding the whole layout. The range is clamped by `normalize_chart_graphics`.
+pub(super) fn de_book_width<'de, D>(d: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, f32>(d)?.unwrap_or(crate::config::book_width::DEFAULT))
+}
+
 /// Read the closed-trade style leniently: an unknown spelling reads as arrows, the default.
 pub(super) fn de_trade_history_style<'de, D>(d: D) -> Result<TradeHistoryStyle, D::Error>
 where

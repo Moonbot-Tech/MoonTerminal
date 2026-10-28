@@ -271,7 +271,7 @@ impl ChartPanel {
             crate::chartdx::BookLayout {
                 only: self.orderbook_only,
                 enabled: self.orderbook_enabled,
-                width_px: self.settings_sig.order_book_width_px,
+                width_px: self.settings_sig.chart_graphics.book_width_px,
             },
             self.time_axis_visible,
             self.price_axis_pos,
@@ -347,7 +347,7 @@ impl ChartPanel {
             &areas,
             self.orderbook_drawn(),
             self.show_zone,
-            self.settings_sig.order_book_width_px,
+            self.settings_sig.chart_graphics.book_width_px,
         )
     }
 

@@ -44,7 +44,6 @@ iface.book_level_auto: "Reset to auto"
 iface.book_level_is_auto: "auto"
 iface.book_level_width: "Level-line thickness, px"
 
-iface.order_book_width: "Order book width, px"
 
 # Settings redesign (phases 3-5)
 iface.theme.title: "Interface theme"
@@ -62,5 +61,4 @@ iface.grp.labels: "Labels"
 iface.set_note.light: "the light theme's set"
 iface.set_note.dark: "the dark theme's set, shared by Dark and Graphite"
 iface.preview: "Preview"
-iface.order_book_width.hint: "One for every theme."
 iface.dock_reset.hint: "In every group window of the current mode. Applies at once."

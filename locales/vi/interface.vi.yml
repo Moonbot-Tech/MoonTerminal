@@ -44,7 +44,6 @@ iface.book_level_auto: "Đặt lại tự động"
 iface.book_level_is_auto: "tự động"
 iface.book_level_width: "Độ dày đường mức, px"
 
-iface.order_book_width: "Rộng sổ lệnh, px"
 
 # Settings redesign (phases 3-5)
 iface.theme.title: "Giao diện"
@@ -62,5 +61,4 @@ iface.grp.labels: "Nhãn"
 iface.set_note.light: "bộ màu giao diện sáng"
 iface.set_note.dark: "bộ màu giao diện tối, dùng chung cho Tối và Than chì"
 iface.preview: "Xem trước"
-iface.order_book_width.hint: "Một giá trị cho mọi giao diện."
 iface.dock_reset.hint: "Ở mọi cửa sổ nhóm của chế độ hiện tại. Áp dụng ngay."

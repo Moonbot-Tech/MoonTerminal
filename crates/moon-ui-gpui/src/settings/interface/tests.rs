@@ -115,7 +115,6 @@ fn appearance_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                     .into_iter()
                     .collect(),
                 preview: chart_preview(&theme, cx),
-                book_width: stub("probe-book-width", 130.0, 28.0),
                 dock_reset: stub("probe-dock-reset", 200.0, 28.0),
             };
             appearance_body(parts, &all_open, cx).into_any_element()
@@ -131,7 +130,6 @@ fn appearance_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                     "iface-zoom",
                     "iface-colors",
                     "iface-preview",
-                    "iface-book-width",
                     "iface-dock-reset",
                     "probe-dock-reset",
                 ]
@@ -148,7 +146,7 @@ fn appearance_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                         "iface-themes",
                         "iface-zoom",
                         "iface-colors",
-                        "iface-book-width",
+                        "iface-dock-reset",
                     ]
                     .map(String::from)
                     .to_vec(),
@@ -227,7 +225,6 @@ fn colour_labels_wrap_inside_their_card(cx: &mut gpui::TestAppContext) {
                             .into_iter()
                             .collect(),
                         preview: chart_preview(&theme, cx),
-                        book_width: stub("probe-book-width", 130.0, 28.0),
                         dock_reset: stub("probe-dock-reset", 200.0, 28.0),
                     };
                     appearance_body(parts, &all_open, cx).into_any_element()
@@ -263,7 +260,6 @@ fn the_zoom_slider_sits_beside_its_label(cx: &mut gpui::TestAppContext) {
                     set_note: String::new(),
                     groups: Vec::new(),
                     preview: stub("probe-preview", 300.0, 200.0),
-                    book_width: stub("probe-book-width", 130.0, 28.0),
                     dock_reset: stub("probe-dock-reset", 200.0, 28.0),
                 };
                 appearance_body(parts, &all_open, cx).into_any_element()

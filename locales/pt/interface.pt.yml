@@ -44,7 +44,6 @@ iface.book_level_auto: "Redefinir para auto"
 iface.book_level_is_auto: "auto"
 iface.book_level_width: "Espessura da linha de nível, px"
 
-iface.order_book_width: "Largura do livro de ofertas, px"
 
 # Settings redesign (phases 3-5)
 iface.theme.title: "Tema da interface"
@@ -62,5 +61,4 @@ iface.grp.labels: "Rótulos"
 iface.set_note.light: "o conjunto do tema claro"
 iface.set_note.dark: "o conjunto do tema escuro, comum a Escura e Grafite"
 iface.preview: "Prévia"
-iface.order_book_width.hint: "Uma para todos os temas."
 iface.dock_reset.hint: "Em todas as janelas de grupo do modo atual. Aplica-se na hora."

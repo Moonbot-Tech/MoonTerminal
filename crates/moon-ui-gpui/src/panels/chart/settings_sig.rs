@@ -39,8 +39,6 @@ pub(super) const DEBUG_HISTORY_FILL_SPAN_MS: i64 = 3_600_000;
 /// Effective settings that wake a chart when its appearance changes.
 #[derive(Clone)]
 pub(super) struct ChartSettingsSig {
-    /// Normalized app-wide book width; independent of per-tab appearance overrides.
-    pub(super) order_book_width_px: f32,
     pub(super) theme: ChartTheme,
     pub(super) orders: OrdersStyleSet,
     pub(super) follow: bool,
@@ -81,8 +79,7 @@ impl PartialEq for ChartSettingsSig {
     /// time, so the deep compare still runs there. It fires where the same signature is compared
     /// against itself, which is what a re-render that rebuilt nothing does.
     fn eq(&self, other: &Self) -> bool {
-        self.order_book_width_px == other.order_book_width_px
-            && self.theme == other.theme
+        self.theme == other.theme
             && self.orders == other.orders
             && self.follow == other.follow
             && self.live_scope == other.live_scope
@@ -112,9 +109,6 @@ pub(super) fn chart_settings_sig(
 ) -> ChartSettingsSig {
     let effective = backend.preview.as_ref().unwrap_or(&backend.config);
     ChartSettingsSig {
-        order_book_width_px: moon_core::config::book_width::normalize(
-            effective.order_book_width_px,
-        ),
         theme: effective.chart_theme().clone(),
         orders: effective.orders.clone(),
         follow: backend.follow,

@@ -309,6 +309,7 @@ impl Render for DetachedChartHost {
                                     })
                                     .selected(graphics_popup_open)
                                     .render(),
+                                window,
                                 cx,
                             ))
                             // The history button edits how THIS window draws closed trades.

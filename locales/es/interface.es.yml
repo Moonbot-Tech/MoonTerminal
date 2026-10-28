@@ -44,7 +44,6 @@ iface.book_level_auto: "Restablecer a automático"
 iface.book_level_is_auto: "auto"
 iface.book_level_width: "Grosor de líneas de niveles, px"
 
-iface.order_book_width: "Ancho del libro de órdenes, px"
 
 # Settings redesign (phases 3-5)
 iface.theme.title: "Tema de la interfaz"
@@ -62,5 +61,4 @@ iface.grp.labels: "Etiquetas"
 iface.set_note.light: "el conjunto del tema claro"
 iface.set_note.dark: "el conjunto del tema oscuro, común a Oscura y Grafito"
 iface.preview: "Vista previa"
-iface.order_book_width.hint: "Una para todos los temas."
 iface.dock_reset.hint: "En todas las ventanas de grupo del modo actual. Se aplica al instante."

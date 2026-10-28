@@ -83,9 +83,11 @@ pub(super) fn render_apply_row<T: ApplyRowHost>(
     if !press.open {
         return None;
     }
-    // Every value has a default of its own, or none does: each popup carries one kind of
-    // setting. A press whose values have nowhere to be stored can only be written into tabs.
-    let as_default = !values.is_empty() && values.iter().all(|v| v.global_slot().is_some());
+    // A press that carries any value with a default of its own sets that default; whatever it
+    // carries WITHOUT one — the graphics popup's two order-book checkboxes — rides along into the
+    // addressed tabs (`ChartTabs::set_kind_defaults`). A press with no storable value at all can
+    // only be written into tabs.
+    let as_default = values.iter().any(|v| v.global_slot().is_some());
     let targets = press.targets;
     // Only a default-setting press overwrites anything: the other kind writes its values into the
     // tabs of the ticked kinds, and every one of them takes it. A count there would name a number

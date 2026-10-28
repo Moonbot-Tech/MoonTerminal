@@ -268,6 +268,28 @@ impl super::ChartTabs {
         });
         // Including this strip's own stacks, through the same path every other window takes.
         self.drain_default_clears(cx);
+        // A pressed value with no default of its own — the graphics popup's two order-book
+        // checkboxes — is written into the addressed tabs instead, as a tab-only press would. A
+        // reset carries none: it puts DEFAULTS back, and those two have no default to put back.
+        if !reset {
+            let tab_values: Vec<StackSetting> = apply
+                .values
+                .iter()
+                .filter(|v| v.global_slot().is_none())
+                .cloned()
+                .collect();
+            if !tab_values.is_empty() {
+                self.write_into_kinds(
+                    ApplyAll {
+                        values: tab_values,
+                        x_ppm: None,
+                        targets,
+                        mode: ApplyMode::Tabs,
+                    },
+                    cx,
+                );
+            }
+        }
         // A reset carries no scale to begin with — `x_ppm` is what the popup SHOWS, and a press
         // that removes stored values has nothing to spread — so this is a no-op for one.
         self.apply_x_ppm(&apply, cx);
@@ -535,8 +557,6 @@ pub(super) fn layout_values(
     vec![
         StackSetting::Layout(Some(snap.mode), height_fit, height_scroll),
         StackSetting::Scale(scale),
-        StackSetting::Orderbook(snap.orderbook),
-        StackSetting::ShowZone(snap.show_zone),
         StackSetting::AutoPin(snap.auto_pin),
         StackSetting::Orientation(orientation),
         StackSetting::PriceAxis(snap.price_axis_pos),

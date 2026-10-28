@@ -709,6 +709,54 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
             }
         }
     }
+    // The app-wide book width of `settings.toml` moved into the per-tab chart graphics: a user who
+    // widened the book keeps that width on every default and override. `settings.toml` is read raw
+    // here, ahead of `AppConfig::load`, which no longer knows the key.
+    //
+    // Unlike the passes above, this one never defers once it has read the width: its source does
+    // NOT stay on disk — the config's next save drops the key — so a retry could find nothing and
+    // lose the width for good. The marker is set together with the stamp, in memory, so no later
+    // layout save can persist one without the other. What it cannot reach — the overrides of a
+    // `charts.json` that did not parse — keeps the shipped width. A `settings.toml` that exists but
+    // cannot be read leaves the pass undone and the profile untouched (`LegacyWidth::Unreadable`).
+    if !layout.chart_book_width_migrated {
+        use moon_core::config::book_width::{LegacyWidth, legacy_global_width};
+        let legacy = match legacy_global_width() {
+            LegacyWidth::Unreadable => None,
+            LegacyWidth::Absent => Some(None),
+            LegacyWidth::Stored(width) => Some(Some(width)),
+        };
+        if let Some(legacy) = legacy
+            && let Some(carried) = book_width_migration::migrate_book_width(
+                &mut layout,
+                &mut saved_chart_specs,
+                legacy,
+            )
+        {
+            layout.chart_book_width_migrated = true;
+            let specs_unreadable = saved_chart_specs.is_empty()
+                && charts_file_has_content
+                && std::fs::read_to_string(moon_core::config::paths::charts_path())
+                    .map(|text| {
+                        chart_persist::empty_load_is_unreadable(true, &saved_chart_specs, &text)
+                    })
+                    .unwrap_or(true);
+            if specs_unreadable {
+                log::warn!(
+                    "order book width: charts.json was not parsed; its tabs keep the default width"
+                );
+            } else if carried.specs_changed && !chart_persist::save_all(&saved_chart_specs) {
+                log::warn!(
+                    "order book width: charts.json was not saved; its tabs keep the old width"
+                );
+            }
+            if !layout.save() {
+                log::warn!(
+                    "order book width carried into the layout, but layout.toml was not saved"
+                );
+            }
+        }
+    }
     // The four switches that moved into `ChartGraphicsCfg` — three price-line/corridor flags out
     // of `candle_view`, the liquidations switch out of the tab spec — are carried over from
     // wherever an old profile still names them. No marker: both sources are consumed, and written
@@ -815,6 +863,7 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
 }
 
 mod action_buttons_migration;
+mod book_width_migration;
 mod boot;
 mod fixture;
 mod graphics_migration;

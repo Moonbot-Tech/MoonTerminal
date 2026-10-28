@@ -18,13 +18,14 @@ pub use lines_carry::stamp_carried_lines;
 pub use empty::{EmptyBlock, EmptyPlaces, EmptySlot};
 
 use serde_compat::{
-    de_arrow_scale, de_auto_workspace_rail_width, de_book_kind, de_candle_volume_alpha,
-    de_candle_volume_height, de_candle_volume_scale, de_candle_volume_style, de_candle_volume_tf_s,
-    de_clock_zone, de_connector_thickness, de_hvol_price_frame_pct, de_hvol_side, de_hvol_tf_s,
-    de_hvol_width, de_ladder_big_pct, de_lenient_chart_labels, de_lenient_false,
-    de_lenient_graphics, de_lenient_map, de_lenient_seed, de_lenient_true, de_lenient_u32,
-    de_marker_scale, de_strategies_tree_text_step, de_table_order_map, de_table_sort_map,
-    de_tick_ranges, de_trade_history_style, de_trade_kind, de_trade_merge_ms, de_trade_small_pct,
+    de_arrow_scale, de_auto_workspace_rail_width, de_book_kind, de_book_width,
+    de_candle_volume_alpha, de_candle_volume_height, de_candle_volume_scale,
+    de_candle_volume_style, de_candle_volume_tf_s, de_clock_zone, de_connector_thickness,
+    de_hvol_price_frame_pct, de_hvol_side, de_hvol_tf_s, de_hvol_width, de_ladder_big_pct,
+    de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map,
+    de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
+    de_strategies_tree_text_step, de_table_order_map, de_table_sort_map, de_tick_ranges,
+    de_trade_history_style, de_trade_kind, de_trade_merge_ms, de_trade_small_pct,
     de_trade_volume_alpha,
 };
 pub use serde_compat::{de_lenient, de_lenient_bool};
@@ -753,6 +754,15 @@ pub struct WindowLayout {
     /// on every tab the user has since shown it on.
     #[serde(default)]
     pub chart_path_visibility_migrated: bool,
+    /// One-shot marker: the retired app-wide `order_book_width_px` of `settings.toml` has been
+    /// folded into the per-tab `ChartGraphicsCfg::book_width_px` — into [`Self::chart_graphics`],
+    /// every stored per-kind default and every tab override — so a user who widened the book keeps
+    /// that width everywhere.
+    ///
+    /// NEVER reset it. The retired key survives in `settings.toml` until that file is next saved,
+    /// so a second pass could overwrite widths the reader has since set per tab.
+    #[serde(default)]
+    pub chart_book_width_migrated: bool,
     /// Chart caption labels — which figures the chart prints beside its plot, where, and how —
     /// GLOBAL DEFAULT (tabs can override it in their charts.json specification).
     ///
