@@ -317,3 +317,33 @@ fn a_currency_row_sends_an_unvalued_picture_at_once() {
         "a currency without a row waits for dollars"
     );
 }
+
+/// Scale probe: 20 pictures each summing a day of 2 000 closes across 10 cores. Ignored by
+/// default; run with `--ignored --nocapture` to print the timing. Dropping a matching close
+/// would understate a picture's day result and fail the independently counted per-core sum.
+#[test]
+#[ignore = "scale probe"]
+fn probe_day_sums_of_a_busy_day() {
+    let trades: Vec<ClosedTrade> = (0..2_000_i64)
+        .map(|n| ClosedTrade {
+            core: (n % 10 + 1) as u64,
+            rec_id: n,
+            close_utc: NOW - 86_000 + n * 40,
+            profit_usd: Some(1.0),
+            ..ClosedTrade::default()
+        })
+        .collect();
+    let rounds = 50_u32;
+    let start = std::time::Instant::now();
+    let mut total = 0.0;
+    for _ in 0..rounds {
+        for picture in 0..20_i64 {
+            let core = (picture % 10 + 1) as u64;
+            let sum = day_sum(&trades, core, NOW - 86_400, NOW - picture, Money::Usdt);
+            assert_eq!(sum, Some(200.0), "every core contributes its 200 closes");
+            total += sum.unwrap();
+        }
+    }
+    let ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(rounds);
+    eprintln!("probe day sums: 20 pictures over 2000 closes, {ms:.3} ms per batch ({total})");
+}

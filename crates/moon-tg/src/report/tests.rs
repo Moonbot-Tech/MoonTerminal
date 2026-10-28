@@ -1,4 +1,6 @@
 //! Money presentation must stay honest when valuation or currency identity is incomplete.
+
+mod scale;
 use super::paging;
 use super::render::{profit, render};
 use super::{Page, Row, page_rows, relabel, report_html, rich_message_fits, scope_of, sections};
