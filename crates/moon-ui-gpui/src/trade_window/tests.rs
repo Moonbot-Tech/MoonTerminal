@@ -432,3 +432,160 @@ mod tick_caption {
         assert_eq!(tick_caption(whole, true), "core ticks, 5 s step");
     }
 }
+
+/// Synthetic single-core/coin history, with ties and descending close times like the reader.
+fn scale_history(count: i64) -> Vec<moon_core::db::ChartTradeRecord> {
+    (0..count)
+        .rev()
+        .map(|id| moon_core::db::ChartTradeRecord {
+            record_id: id,
+            core_uid: 7,
+            coin: "XALPHA".to_owned(),
+            buy_date: id / 3,
+            close_date: id / 3 + 100,
+            buy_ms: None,
+            close_ms: None,
+            sell_set_date: 0,
+            sell_set_ms: None,
+            buy_set_ms: None,
+            corridor: None,
+            buy_price: 10.0,
+            sell_price: 12.0,
+            quantity: 2.0,
+            is_short: false,
+            emulator: false,
+            profit: None,
+            profit_pct: None,
+            report_uid: Some(id),
+            quote: None,
+        })
+        .collect()
+}
+
+/// Frozen pre-optimization selection provides the stable-sort parity oracle.
+fn sorted_neighbours<'a>(
+    history: &'a [moon_core::db::ChartTradeRecord],
+    focus: &moon_core::db::ChartTradeRecord,
+) -> Vec<&'a moon_core::db::ChartTradeRecord> {
+    let mut candidates: Vec<_> = history
+        .iter()
+        .filter(|r| r.record_id != focus.record_id)
+        .collect();
+    candidates.sort_by_key(|r| (r.close_date - focus.close_date).abs());
+    candidates.truncate(super::traces::NEIGHBOUR_CAP);
+    candidates
+}
+
+/// Measures three open/two re-click selections against prepared rows; scale is this probe's subject.
+#[test]
+#[ignore = "manual 50,000-trade timing probe"]
+fn neighbour_scale_probe() {
+    let history = scale_history(50_000);
+    for index in [0, 25_000, 49_999] {
+        let focus = &history[index];
+        let prepared = super::traces::select_neighbours(&history, focus);
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            for _ in 0..2 {
+                std::hint::black_box(sorted_neighbours(std::hint::black_box(&history), focus));
+            }
+        }
+        let before_reclick = start.elapsed().as_secs_f64() * 10.0;
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            for _ in 0..2 {
+                let rows: Vec<_> = std::hint::black_box(&prepared).iter().collect();
+                std::hint::black_box(rows);
+            }
+        }
+        let after_reclick = start.elapsed().as_secs_f64() * 10.0;
+        eprintln!(
+            "neighbour_scale index={index} before_open_ms={:.6} before_reclick_ms={before_reclick:.6} after_open_ms={:.6} after_reclick_ms={after_reclick:.6}",
+            before_reclick * 1.5,
+            after_reclick * 1.5
+        );
+    }
+}
+
+/// Changing selection or using an unstable tie order changes drawn/requested trace rows.
+#[test]
+fn prepared_neighbours_preserve_stable_order_and_full_period() {
+    let history = scale_history(50_000);
+    for index in [0, 25_000, 49_999] {
+        let expected: Vec<_> = sorted_neighbours(&history, &history[index])
+            .into_iter()
+            .cloned()
+            .collect();
+        assert_eq!(
+            super::traces::select_neighbours(&history, &history[index]),
+            expected
+        );
+    }
+    // Independent tie oracle: equal distances keep snapshot order, including unaskable rows.
+    let mut tied = history[..25].to_vec();
+    for row in &mut tied {
+        row.close_date = 100;
+        row.report_uid = None;
+    }
+    let focus = tied[3].clone();
+    let selected = super::traces::select_neighbours(&tied, &focus);
+    let ids: Vec<_> = selected.iter().map(|r| r.record_id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            49999, 49998, 49997, 49995, 49994, 49993, 49992, 49991, 49990, 49989, 49988, 49987,
+            49986, 49985, 49984, 49983, 49982, 49981, 49980, 49979
+        ]
+    );
+    assert!(selected.iter().all(|r| r.report_uid.is_none()));
+    assert!(super::traces::select_neighbours(&[], &focus).is_empty());
+    assert!(super::traces::select_neighbours(std::slice::from_ref(&focus), &focus).is_empty());
+    assert_eq!(history.len(), 50_000);
+    assert_eq!(history.last().unwrap().record_id, 0);
+}
+
+/// Sorting chronologically or changing the retained focus stamp picks a different drawn order.
+#[test]
+fn prepared_neighbours_use_distance_from_the_retained_focus() {
+    let mut history = scale_history(8);
+    for (row, close) in history
+        .iter_mut()
+        .zip([130, 99, 105, 80, 101, 95, 102, 100])
+    {
+        row.close_date = close;
+    }
+    let mut focus = history[0].clone();
+    focus.record_id = -1;
+    focus.close_date = 100;
+    let selected = super::traces::select_neighbours(&history, &focus);
+    // Distances 0, 1, 1, 2, 5, 5, 20, 30; equal distances retain snapshot order.
+    assert_eq!(
+        selected.iter().map(|r| r.record_id).collect::<Vec<_>>(),
+        vec![0, 6, 3, 1, 5, 2, 4, 7]
+    );
+}
+
+/// Removing the generation gate lets an older completion replace newer rows and request traces.
+#[test]
+fn out_of_order_history_selections_keep_the_newest_snapshot() {
+    let older = scale_history(2);
+    let newer = scale_history(3);
+    let focus = older[0].clone();
+    let mut applied = None;
+    let mut trace_requests = Vec::new();
+    // Both selections have started; finish the second first, then the first past cancellation.
+    for (generation, history) in [(2, newer.clone()), (1, older)] {
+        let neighbours = super::traces::select_neighbours(&history, &focus);
+        super::apply_current_selection(2, generation, || {
+            trace_requests.push(neighbours.iter().map(|r| r.record_id).collect::<Vec<_>>());
+            applied = Some((history, neighbours));
+        });
+    }
+    let (history, neighbours) = applied.expect("the latest completion must publish");
+    assert_eq!(history, newer);
+    assert_eq!(
+        neighbours.iter().map(|r| r.record_id).collect::<Vec<_>>(),
+        vec![2, 0]
+    );
+    assert_eq!(trace_requests, vec![vec![2, 0]]);
+}

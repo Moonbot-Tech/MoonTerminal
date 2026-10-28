@@ -44,6 +44,7 @@ const MAX_WINDOWS: usize = 2;
 ///     meta: What that trade carried beside its prices — the detect line, the strategy, the exit
 ///         reason — read in the same background pass as the record itself.
 ///     history: All closed neighbours selected from the same Report snapshot.
+///     neighbours: Nearest trace rows, prepared on that snapshot's background reader.
 ///     market: Exchange-native market the coin resolved to.
 ///     stamps: Entry and exit times, already formatted in the Report's own clock.
 ///     cx: Application context.
@@ -52,6 +53,7 @@ pub(crate) fn open_trade_window(
     record: ChartTradeRecord,
     meta: TradeMeta,
     history: Vec<ChartTradeRecord>,
+    neighbours: Vec<ChartTradeRecord>,
     market: String,
     stamps: (String, String),
     cx: &mut App,
@@ -133,6 +135,7 @@ pub(crate) fn open_trade_window(
         record,
         meta,
         history,
+        neighbours,
         market,
         stamps,
     };
@@ -166,6 +169,8 @@ pub(crate) struct TradeSeed {
     pub(crate) meta: TradeMeta,
     /// All closed neighbours selected from the same Report snapshot.
     pub(crate) history: Vec<ChartTradeRecord>,
+    /// Nearest trace rows in stable distance order, prepared off the UI thread.
+    pub(crate) neighbours: Vec<ChartTradeRecord>,
     /// Exchange-native market the coin resolved to.
     pub(crate) market: String,
     /// Entry and exit times, already formatted in the caller's own clock.
@@ -214,6 +219,7 @@ fn new_view(
         record,
         meta,
         history,
+        neighbours,
         market,
         stamps,
     } = seed;
@@ -349,7 +355,10 @@ fn new_view(
         ),
         record: record.clone(),
         history: std::rc::Rc::new(history),
+        neighbours,
         show_other_trades,
+        history_selection: None,
+        history_generation: 0,
         settings_open: false,
         fit_trade,
         hide_rail,
