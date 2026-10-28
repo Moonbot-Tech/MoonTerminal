@@ -42,6 +42,12 @@ opt-level = 3
 [profile.dev.package.moon-core]
 opt-level = 2
 
+# The chart builds per-frame order geometry and re-folds retained trades into bubbles. The
+# wildcard above covers dependencies only, leaving these numeric loops unoptimized in the
+# shipped dev build. Kept at 2 to make those loops fast without paying release build times.
+[profile.dev.package.moon-chart]
+opt-level = 2
+
 # Moon UI: a unified local/public base for the GPUI runtime and components.
 #
 # Moonbot-Tech/MoonUI is now the canonical source for the Moon stack: standalone GPUI

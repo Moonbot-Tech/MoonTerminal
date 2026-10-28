@@ -17,6 +17,7 @@ impl WgpuLayers {
             crosses: Vec::new(),
             cross_head: 0,
             cross_count: 0,
+            tick_time_order: moon_chart::tick_volume::TickTimeOrder::default(),
             last_line: Vec::new(),
             mark_line: Vec::new(),
             combo_capacity: MIN_COMBO_CAPACITY,
@@ -161,6 +162,7 @@ impl WgpuLayers {
             self.combo_capacity,
             &ordered,
         );
+        self.refresh_tick_time_order();
         if self.crosses.len() < self.combo_capacity {
             self.crosses
                 .resize(self.combo_capacity, ChartCross::zeroed());
@@ -186,6 +188,7 @@ impl WgpuLayers {
             self.combo_capacity,
             &data,
         );
+        self.refresh_tick_time_order();
         if self.crosses.len() < self.combo_capacity {
             self.crosses
                 .resize(self.combo_capacity, ChartCross::zeroed());
@@ -218,6 +221,11 @@ impl WgpuLayers {
             self.combo_capacity,
             data,
         );
+        if full_reset {
+            self.refresh_tick_time_order();
+        } else {
+            self.tick_time_order.extend(data.iter().map(|c| c.time_rel));
+        }
         if self.crosses.len() < self.combo_capacity {
             self.crosses
                 .resize(self.combo_capacity, ChartCross::zeroed());
@@ -301,11 +309,12 @@ impl WgpuLayers {
         self.base_cache.valid = false;
     }
 
-    /// Replace the trade clusters; uploaded on their own buffer on the next prepare.
-    pub fn set_clusters(&mut self, clusters: &[MarkerInstance]) {
-        self.clusters = clusters.iter().map(mk_of).collect();
+    /// Take the prepared clusters and return the previous buffer for background retirement.
+    pub fn set_clusters(&mut self, clusters: Vec<MarkerGpu>) -> Vec<MarkerGpu> {
+        let previous = std::mem::replace(&mut self.clusters, clusters);
         self.clusters_dirty = true;
         self.base_cache.valid = false;
+        previous
     }
 
     pub fn needs_base_cache(&self, gpu: &RawGpuAccess) -> bool {
@@ -355,16 +364,74 @@ impl WgpuLayers {
         self.hvol_buffers_dirty = true;
     }
 
-    /// Borrow the retained wgpu tick ring without a per-cursor copy.
-    pub(in crate::chartdx) fn tick_samples(&self) -> impl Iterator<Item = &ChartCross> {
-        moon_chart::tick_volume::pending_ring(
+    /// Copy bounded candidates through optimized chart code, retaining wgpu's exact predicate.
+    pub(in crate::chartdx) fn tick_snapshot(&self, from: f64, to: f64) -> Vec<ChartCross> {
+        let mut samples = moon_chart::tick_volume::snapshot_crosses(
             &self.crosses,
             self.cross_head,
             self.cross_count,
             self.combo_capacity,
             None,
             &[],
-        )
+            self.tick_time_order.max_lateness(),
+            from,
+            to,
+        );
+        samples.retain(|c| f64::from(c.time_rel) >= from && f64::from(c.time_rel) <= to);
+        samples
+    }
+
+    /// Borrow conservative time-window candidates, preserving pending-ring chronology and ties.
+    /// PlatformLayers keeps the exact final predicate, as it did before bounding this scan.
+    pub(in crate::chartdx) fn tick_samples(
+        &self,
+        from: f64,
+        to: f64,
+    ) -> impl Iterator<Item = &ChartCross> {
+        let samples = moon_chart::tick_volume::pending_ring(
+            &self.crosses,
+            self.cross_head,
+            self.cross_count,
+            self.combo_capacity,
+            None,
+            &[],
+        );
+        let range = moon_chart::tick_volume::tick_time_range(
+            samples.len(),
+            self.tick_time_order.max_lateness(),
+            from,
+            to,
+            |index| {
+                moon_chart::tick_volume::pending_ring_at(
+                    &self.crosses,
+                    self.cross_head,
+                    self.cross_count,
+                    self.combo_capacity,
+                    None,
+                    &[],
+                    index,
+                )
+                .time_rel
+            },
+        );
+        samples.skip(range.start).take(range.len())
+    }
+
+    /// Replaced storage rebuilds lateness evidence; appends extend it just like the other backends.
+    fn refresh_tick_time_order(&mut self) {
+        let mut order = moon_chart::tick_volume::TickTimeOrder::default();
+        order.extend(
+            moon_chart::tick_volume::pending_ring(
+                &self.crosses,
+                self.cross_head,
+                self.cross_count,
+                self.combo_capacity,
+                None,
+                &[],
+            )
+            .map(|c| c.time_rel),
+        );
+        self.tick_time_order = order;
     }
 
     fn recalc_volume_scale(&mut self) {

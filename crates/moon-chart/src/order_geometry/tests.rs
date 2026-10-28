@@ -3,6 +3,136 @@ use moon_core::config::ChartGraphicsCfg;
 use moon_core::feed::{OrderRow, OrderTrace, OrderTracePoint};
 use moon_core::util::time::now_unix_ms;
 
+/// Build neutral scale-probe rows independently of the older market-specific regression fixture.
+fn scale_probe_order(uid: u64, market: String, closed: bool, points: usize) -> OrderRow {
+    OrderRow {
+        market_display: market.clone(),
+        coin: market.trim_end_matches("USDT").to_owned(),
+        market,
+        quote: "USDT".into(),
+        is_short: false,
+        size: 1.0,
+        remaining_size: 1.0,
+        sl_on: false,
+        ts_on: false,
+        vstop_on: false,
+        sl_fixed: false,
+        ts_fixed: false,
+        vstop_fixed: false,
+        vstop_level: 0.0,
+        vstop_vol: 0.0,
+        buy_price: 10.0,
+        sell_price: 0.0,
+        create_time_ms: 1_000.0,
+        sell_create_time_ms: 0.0,
+        entry_fill_time_ms: 0.0,
+        price: 11.0,
+        fill_pct: 0.0,
+        strat: "UNIT_01".into(),
+        strat_name: String::new(),
+        strat_id: 0,
+        status: String::new(),
+        uid,
+        emulator: false,
+        job_is_done: closed,
+        pending: false,
+        filled: false,
+        stop_loss: None,
+        trailing: None,
+        take_profit: None,
+        vstop: None,
+        pending_cond: None,
+        liq: None,
+        panic_sell: false,
+        is_moon_shot: false,
+        corridor_price_down: 0.0,
+        corridor_price_up: 0.0,
+        buy_trace: Some(OrderTrace {
+            points: (0..points)
+                .map(|i| OrderTracePoint {
+                    time_ms: 1_000.0 + i as f64 * 10.0,
+                    price: 10.0 + i as f32 * 0.01,
+                })
+                .collect(),
+            tmp_point: Some(OrderTracePoint {
+                time_ms: 2_500.0,
+                price: 11.5,
+            }),
+            stop_price: Some(9.5),
+            stop_time_ms: Some(2_000.0),
+        }),
+        sell_trace: None,
+    }
+}
+
+/// Time traced orders against retained history without touching the GPU or live data.
+#[test]
+#[ignore = "manual heavy-user timing probe"]
+fn bench_goal_b_order_geometry_revision() {
+    use std::{hint::black_box, time::Instant};
+    let stores: Vec<_> = (0..10)
+        .map(|_| {
+            let mut store = OrderLineStore::default();
+            let closed: Vec<_> = (0..5_000)
+                .map(|i| scale_probe_order(i, format!("XALPHA{}USDT", i % 25), true, 4))
+                .collect();
+            store.update(&closed, 0);
+            let open: Vec<_> = (0..200)
+                .map(|i| {
+                    scale_probe_order(5_000 + i, "XALPHAUSDT".into(), false, 50 + i as usize % 151)
+                })
+                .collect();
+            store.update(&open, 0);
+            store
+        })
+        .collect();
+    let (mut zones, mut lines, mut segs, mut markers) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let start = Instant::now();
+    for _ in 0..30 {
+        for store in &stores {
+            build_order_geometry(
+                black_box(store),
+                &[],
+                None,
+                "XALPHAUSDT",
+                &OrdersStyle::default(),
+                &ChartGraphicsCfg::default(),
+                1.0,
+                None,
+                None,
+                0.0,
+                10_000.0,
+                0.0,
+                10_000.0,
+                10_000.0,
+                &mut zones,
+                &mut lines,
+                &mut segs,
+                &mut markers,
+            );
+            black_box((&segs, &markers));
+        }
+    }
+    println!(
+        "goal_b_geometry_10_cores: {} ns/iter",
+        start.elapsed().as_nanos() / 30
+    );
+    let start = Instant::now();
+    for _ in 0..30 {
+        for store in &stores {
+            black_box(store.market_draw_orders(
+                "XALPHAUSDT",
+                OrdersStyle::default().max_closed_orders as usize,
+            ));
+        }
+    }
+    println!(
+        "goal_b_geometry_collection_10_cores: {} ns/iter",
+        start.elapsed().as_nanos() / 30
+    );
+}
+
 fn test_order_with_buy_trace() -> OrderRow {
     OrderRow {
         market: "BTCUSDT".into(),

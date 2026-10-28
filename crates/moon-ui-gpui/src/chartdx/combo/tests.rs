@@ -75,6 +75,14 @@ fn bounded_samples_include_pending_eviction_and_reset() {
     layer.append(&[cross(4.0, 1, 5.0), cross(5.0, 0, 6.0)]);
     assert_eq!(
         layer
+            .tick_snapshot(2.0, 4.0)
+            .iter()
+            .map(|c| c.qty)
+            .collect::<Vec<_>>(),
+        [3.0, 4.0, 5.0]
+    );
+    assert_eq!(
+        layer
             .tick_samples(2.0, 4.0)
             .map(|c| c.qty)
             .collect::<Vec<_>>(),

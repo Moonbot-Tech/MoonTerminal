@@ -874,11 +874,12 @@ impl MetalLayers {
         self.base_cache.valid = false;
     }
 
-    /// Replace the trade clusters; uploaded on their own buffer on the next prepare.
-    pub fn set_clusters(&mut self, clusters: &[MarkerInstance]) {
-        self.clusters = clusters.iter().map(mk_of).collect();
+    /// Take the prepared clusters and return the previous buffer for background retirement.
+    pub fn set_clusters(&mut self, clusters: Vec<MarkerGpu>) -> Vec<MarkerGpu> {
+        let previous = std::mem::replace(&mut self.clusters, clusters);
         self.clusters_dirty = true;
         self.base_cache.valid = false;
+        previous
     }
 
     /// Rewrites markers in place by index and re-uploads only the marker buffer. Markers draw
@@ -2009,6 +2010,21 @@ impl MetalLayers {
             self.combo_capacity,
             None,
             &[],
+        )
+    }
+
+    /// Copy the same candidates through optimized chart code for a background bubble request.
+    pub(super) fn tick_snapshot(&self, from: f64, to: f64) -> Vec<ChartCross> {
+        moon_chart::tick_volume::snapshot_crosses(
+            &self.crosses,
+            self.cross_head,
+            self.cross_count,
+            self.combo_capacity,
+            None,
+            &[],
+            self.tick_time_order.max_lateness(),
+            from,
+            to,
         )
     }
 

@@ -175,6 +175,31 @@ pub fn pending_ring_at<'a, T>(
     }
 }
 
+/// Copy the bounded next-upload trade ring in the optimized chart crate, rather than walking
+/// a generic iterator in the unoptimized UI crate. Candidates and chronology match pending_ring.
+/// Callers retain their existing exact time predicate, if any, after the conservative selection.
+pub fn snapshot_crosses(
+    resident: &[crate::layers::ChartCross],
+    head: usize,
+    count: usize,
+    capacity: usize,
+    reset: Option<&[crate::layers::ChartCross]>,
+    append: &[crate::layers::ChartCross],
+    max_lateness: f64,
+    from: f64,
+    to: f64,
+) -> Vec<crate::layers::ChartCross> {
+    let samples = pending_ring(resident, head, count, capacity, reset, append);
+    let range = tick_time_range(samples.len(), max_lateness, from, to, |index| {
+        pending_ring_at(resident, head, count, capacity, reset, append, index).time_rel
+    });
+    samples
+        .skip(range.start)
+        .take(range.len())
+        .copied()
+        .collect()
+}
+
 /// Arrival-time evidence for conservative searches over late, interleaved ticks.
 /// Lateness never shrinks until the owner resets the evidence with its storage.
 #[derive(Clone, Copy, Debug, Default)]

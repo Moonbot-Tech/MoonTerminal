@@ -115,7 +115,7 @@ pub fn aggregate_prints(
     out: &mut Vec<Print>,
 ) {
     out.clear();
-    let mut open: HashMap<(i64, bool), usize> = HashMap::new();
+    let mut open: HashMap<i64, [Option<usize>; 2]> = HashMap::new();
     for (time_ms, price, qty, is_buy) in trades {
         let notional = price * qty;
         if !time_ms.is_finite() || !(notional > 0.0) || !notional.is_finite() {
@@ -124,7 +124,9 @@ pub fn aggregate_prints(
         let Some(key) = price_key(price, tick) else {
             continue;
         };
-        if let Some(&i) = open.get(&(key, is_buy)) {
+        // Both sides share a price lookup; replacing an expired slot does not hash it again.
+        let slot = &mut open.entry(key).or_insert([None; 2])[usize::from(is_buy)];
+        if let Some(i) = *slot {
             let print = &mut out[i];
             if time_ms >= print.time_ms && time_ms - print.time_ms <= window_ms {
                 if is_buy {
@@ -135,7 +137,7 @@ pub fn aggregate_prints(
                 continue;
             }
         }
-        open.insert((key, is_buy), out.len());
+        *slot = Some(out.len());
         out.push(Print {
             time_ms,
             price,
@@ -146,13 +148,17 @@ pub fn aggregate_prints(
     }
 }
 
-/// Order prints by price, then time: the order [`merge_overlapping`] walks them in.
+/// Order prints by price, then time, caching keys so comparisons do not chase scattered prints.
+/// Equal keys retain tape order, including signed zero and NaN times under `total_cmp` ordering.
 pub fn price_time_order(prints: &[Print], order: &mut Vec<u32>) {
     order.clear();
     order.extend(0..prints.len() as u32);
-    order.sort_by(|&a, &b| {
-        let (a, b) = (&prints[a as usize], &prints[b as usize]);
-        a.key.cmp(&b.key).then(a.time_ms.total_cmp(&b.time_ms))
+    order.sort_by_cached_key(|&i| {
+        let p = &prints[i as usize];
+        let bits = p.time_ms.to_bits();
+        let time = bits ^ (((bits as i64 >> 63) as u64) | (1 << 63));
+        // Pack the signed-price rank and total-time rank into one scalar comparison key.
+        (u128::from(p.key as u64 ^ (1 << 63)) << 64) | u128::from(time)
     });
 }
 
@@ -172,7 +178,8 @@ impl PrintScale {
     }
 }
 
-/// Measure the scale from the prints of the summed tape.
+/// Measure the scale with two rank selections instead of sorting every print volume.
+/// The scratch buffer has unspecified order; the selected percentile values match a full sort.
 ///
 /// Returns:
 ///     `None` for a tape without a usable print.
@@ -187,15 +194,29 @@ pub fn print_scale(prints: &[Print], small_pct: u8, scratch: &mut Vec<f32>) -> O
     if scratch.is_empty() {
         return None;
     }
-    scratch.sort_unstable_by(f32::total_cmp);
-    let at = |pct: f32| {
+    let index = |pct: f32| {
         let i = ((pct / 100.0) * (scratch.len() - 1) as f32).round() as usize;
-        scratch[i.min(scratch.len() - 1)]
+        i.min(scratch.len() - 1)
     };
-    let small = at(f32::from(small_pct.min(100)));
+    let small_index = index(f32::from(small_pct.min(100)));
+    let big_index = index(BIG_PERCENTILE);
+    let low = small_index.min(big_index);
+    let high = small_index.max(big_index);
+    let (below, selected, _) = scratch.select_nth_unstable_by(high, f32::total_cmp);
+    let high_value = *selected;
+    let low_value = if low == high {
+        high_value
+    } else {
+        *below.select_nth_unstable_by(low, f32::total_cmp).1
+    };
+    let (small, big) = if small_index <= big_index {
+        (low_value, high_value)
+    } else {
+        (high_value, low_value)
+    };
     Some(PrintScale {
         small,
-        big: at(BIG_PERCENTILE).max(small),
+        big: big.max(small),
     })
 }
 

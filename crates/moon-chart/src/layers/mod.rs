@@ -4,6 +4,17 @@
 
 pub mod order_lines;
 
+/// One retained trade cross, shared by CPU snapshots and all native shader buffers.
+/// Field order matches HLSL, Metal and WGSL; base quantity keeps the tick band's semantics.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ChartCross {
+    pub time_rel: f32,
+    pub price: f32,
+    pub side: u32,
+    pub qty: f32,
+}
+
 /// Line pattern codes, shared by the full-width line and the segment.
 ///
 /// The code IS Delphi's `TPenStyle` index, the same number the core's chart-object blob carries at

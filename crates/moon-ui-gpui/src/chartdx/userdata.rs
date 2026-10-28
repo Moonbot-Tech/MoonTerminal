@@ -103,11 +103,11 @@ impl UserDataLayer {
         }
     }
 
-    /// Replace the trade clusters; uploaded on the next prepare, on their own buffer.
-    pub fn set_clusters(&mut self, clusters: &[MarkerInstance]) {
-        self.cl_cpu.clear();
-        self.cl_cpu.extend(clusters.iter().map(mk_of));
+    /// Take the prepared clusters and return the previous buffer for background retirement.
+    pub fn set_clusters(&mut self, clusters: Vec<MarkerGpu>) -> Vec<MarkerGpu> {
+        let previous = std::mem::replace(&mut self.cl_cpu, clusters);
         self.cl_dirty = true;
+        previous
     }
 
     /// Upload all order geometry after an order or view mutation.

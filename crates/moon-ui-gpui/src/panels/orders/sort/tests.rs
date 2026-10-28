@@ -12,7 +12,7 @@ fn entry(core: u64, uid: u64, coin: &str, size: f64) -> OrderEntry {
     OrderEntry {
         core,
         core_name: format!("Core {core}"),
-        row: OrderRow {
+        row: Box::new(OrderRow {
             market: format!("{coin}USDT"),
             market_display: format!("{coin}USDT"),
             coin: coin.to_string(),
@@ -56,7 +56,7 @@ fn entry(core: u64, uid: u64, coin: &str, size: f64) -> OrderEntry {
             corridor_price_up: 0.0,
             buy_trace: None,
             sell_trace: None,
-        },
+        }),
     }
 }
 

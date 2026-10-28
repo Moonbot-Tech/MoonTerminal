@@ -6,6 +6,61 @@ use super::{
     tick_time_range, tick_touches_bake,
 };
 
+/// Copying the resident slots alone loses pending equal-time trades and exposes evicted rows.
+#[test]
+fn owned_snapshot_preserves_pending_tail_and_every_cross_field() {
+    use crate::layers::ChartCross;
+    let cross = |time_rel, qty, side| ChartCross {
+        time_rel,
+        price: 10.0 + qty,
+        qty,
+        side,
+    };
+    let resident = [
+        cross(3.0, 3.0, 1),
+        cross(4.0, 4.0, 0),
+        cross(1.0, 1.0, 0),
+        cross(2.0, 2.0, 1),
+    ];
+    let append = [cross(4.0, 14.0, 1), cross(5.0, 5.0, 0)];
+    let actual = super::snapshot_crosses(&resident, 2, 4, 4, None, &append, 0.0, 4.0, 4.0);
+    let expected = [cross(4.0, 4.0, 0), cross(4.0, 14.0, 1)];
+    assert_eq!(
+        bytemuck::cast_slice::<ChartCross, u8>(&actual),
+        bytemuck::cast_slice::<ChartCross, u8>(&expected)
+    );
+    let reset = [cross(10.0, 10.0, 0), cross(11.0, 11.0, 1)];
+    let append = [cross(11.0, 21.0, 0)];
+    let actual =
+        super::snapshot_crosses(&resident, 2, 4, 4, Some(&reset), &append, 0.0, 11.0, 11.0);
+    let expected = [cross(11.0, 11.0, 1), cross(11.0, 21.0, 0)];
+    assert_eq!(
+        bytemuck::cast_slice::<ChartCross, u8>(&actual),
+        bytemuck::cast_slice::<ChartCross, u8>(&expected)
+    );
+    assert!(super::snapshot_crosses(&[], 0, 0, 0, None, &[], 0.0, 0.0, 1.0).is_empty());
+}
+
+/// Clipping a conservative late-tick fringe here would change DX11 and Metal bubble membership.
+#[test]
+fn owned_snapshot_keeps_the_existing_lateness_fringe() {
+    use crate::layers::ChartCross;
+    let resident: Vec<_> = [10.0, 30.0, 20.0]
+        .into_iter()
+        .map(|time_rel| ChartCross {
+            time_rel,
+            price: 10.0,
+            qty: time_rel,
+            side: 0,
+        })
+        .collect();
+    let actual = super::snapshot_crosses(&resident, 0, 3, 4, None, &[], 10.0, 19.0, 21.0);
+    assert_eq!(
+        actual.iter().map(|c| c.qty).collect::<Vec<_>>(),
+        [10.0, 30.0, 20.0]
+    );
+}
+
 /// A wrong partition loses equal-time prints; rotating the ring must not change picks or draw order.
 #[test]
 fn time_lookup_matches_linear_oracle_across_ring_layouts() {

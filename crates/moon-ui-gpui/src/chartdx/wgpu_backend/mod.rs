@@ -376,6 +376,8 @@ pub struct WgpuLayers {
     crosses: Vec<ChartCross>,
     cross_head: usize,
     cross_count: usize,
+    /// Conservative lateness evidence for the same bounded time selection as DX11 and Metal.
+    tick_time_order: moon_chart::tick_volume::TickTimeOrder,
     last_line: Vec<PriceLinePoint>,
     mark_line: Vec<PriceLinePoint>,
     combo_capacity: usize,
