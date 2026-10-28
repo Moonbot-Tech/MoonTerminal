@@ -307,10 +307,16 @@ pub(super) fn run(
     let (event_sink, event_queue) = MoonEventSink::queue_with_waker(move || {
         let _ = event_wake_tx.send(());
     });
-    let client = Arc::new(MoonClient::connect_with_sink(
-        client_cfg,
-        ConnectConfig::new(init).with_connect_timeout(Duration::from_secs(15)),
-        event_sink,
+    // The client's own threads are named `mp-N`, apart from this `feed-N` thread (#1081).
+    let client = Arc::new(crate::util::thread_name::spawning_as(
+        &format!("mp-{}", server.id),
+        || {
+            MoonClient::connect_with_sink(
+                client_cfg,
+                ConnectConfig::new(init).with_connect_timeout(Duration::from_secs(15)),
+                event_sink,
+            )
+        },
     )?);
     let client_epoch = client_slot.set(Some(client.clone()));
     let _client_slot_guard = ClientSlotGuard {

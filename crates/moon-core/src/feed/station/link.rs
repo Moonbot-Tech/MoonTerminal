@@ -102,10 +102,13 @@ impl StationLink {
             initial_strategies: Some(InitialStrategies::new(0, Vec::new())),
             ..Default::default()
         };
-        let client = MoonClient::connect(
-            cfg,
-            ConnectConfig::new(init).with_connect_timeout(CONNECT_TIMEOUT),
-        )?;
+        // A donor's client threads are named `mpd-N`, apart from the recorder thread (#1081).
+        let client = crate::util::thread_name::spawning_as(&format!("mpd-{}", server.id), || {
+            MoonClient::connect(
+                cfg,
+                ConnectConfig::new(init).with_connect_timeout(CONNECT_TIMEOUT),
+            )
+        })?;
         Ok(Self { client })
     }
 

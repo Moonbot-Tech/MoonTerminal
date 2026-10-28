@@ -46,6 +46,24 @@ use crate::market::SharedMarketStore;
 
 pub type FeedRx = Receiver<FeedMsg>;
 
+/// Feed messages sent and not yet drained, across every core.
+///
+/// The channel is unbounded: a coordination loop that stalls lets it grow without a limit, and
+/// nothing else would show it (#1081). A core respawned or removed with messages still queued
+/// takes them off the count as its handle drops (`impl Drop for FeedHandle`); only what its
+/// thread sends between that and the receiver's drop stays counted.
+static QUEUED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// How many feed messages wait for the session drain, across every core.
+pub fn queued_messages() -> i64 {
+    QUEUED.load(Ordering::Relaxed)
+}
+
+/// The session drain took one message off a core's channel.
+pub(crate) fn note_drained() {
+    QUEUED.fetch_sub(1, Ordering::Relaxed);
+}
+
 /// Coalesced wake from feed threads to the UI.
 ///
 /// Clones share one latch. [`FeedWakeTx::notify`] sends a token only when the UI
@@ -230,7 +248,12 @@ impl FeedTx {
     // The error returns the unsent message. Boxing it would change this public `Result`.
     #[allow(clippy::result_large_err)]
     pub fn send(&self, msg: FeedMsg) -> Result<(), SendError<FeedMsg>> {
-        self.data.send(msg)?;
+        // Counted before the send, so the drain can never see a message the count does not hold.
+        QUEUED.fetch_add(1, Ordering::Relaxed);
+        if let Err(unsent) = self.data.send(msg) {
+            QUEUED.fetch_sub(1, Ordering::Relaxed);
+            return Err(unsent);
+        }
         if let Some(wake) = &self.wake {
             wake.notify();
         }
@@ -980,6 +1003,16 @@ pub struct FeedHandle {
     /// shutdown drops it. Neither operation depends on command-sender clones.
     _stop: Sender<()>,
     _join: std::thread::JoinHandle<()>,
+}
+
+impl Drop for FeedHandle {
+    /// A replaced or removed core's backlog leaves [`queued_messages`] with it: the backlog of a
+    /// stalled core is exactly what gets respawned.
+    fn drop(&mut self) {
+        while self.rx.try_recv().is_ok() {
+            note_drained();
+        }
+    }
 }
 
 /// Initial backoff step and its cap between initial connection attempts.

@@ -47,11 +47,13 @@
 //! a restart.
 //!
 //! The allocator is musl's own. `mimalloc` was measured in its place (2026-09-28): the same CPU at
-//! idle, and resident memory at twice the size and growing — not worth it on a 1 GB server.
+//! idle, and resident memory at twice the size and growing — not worth it on a 1 GB server. It is
+//! wrapped (`heap.rs`) only to say, on every resource line, which threads hold the live heap.
 
 mod api;
 mod auto_update;
 mod cores;
+mod heap;
 mod host;
 mod pull;
 mod release;
@@ -78,6 +80,12 @@ const STATUS_HEARTBEAT: Duration = Duration::from_secs(3600);
 /// How long a stopping station waits for the tape recorder's last writes. systemd waits 90 s
 /// before it kills.
 const STOP_WAIT: Duration = Duration::from_secs(15);
+/// A pass of the main loop longer than this is logged with where it went: the feeds' channels
+/// are unbounded, and every second the loop is away they fill (#1081).
+const SLOW_PASS: Duration = Duration::from_secs(2);
+
+#[global_allocator]
+static HEAP: heap::Tracking = heap::Tracking;
 
 /// Answer stateless helper queries first, then run the station with unavailable credentials visible.
 fn main() -> anyhow::Result<()> {
@@ -116,6 +124,7 @@ fn main() -> anyhow::Result<()> {
         eprintln!("logger not installed: {e}");
     }
     moon_core::applog::set_file_logging(true, 14);
+    moon_core::metrics::set_heap_report(heap::report);
     if let Some(e) = diag_err {
         log::warn!("{e}");
     }
@@ -245,20 +254,24 @@ fn main() -> anyhow::Result<()> {
                 Err(e) => log::error!("reload of {} failed: {e:#}", config_path.display()),
             }
         }
+        let pass_started = Instant::now();
         if session.drain().identity {
             session.map_cores_to_themselves();
         }
+        let drained = pass_started.elapsed();
         // A core whose exchange identity went stale (restart or hot exchange switch) is rebuilt on
         // a fresh client, debounced per core by the session; its new venue then re-maps above.
         for id in session.take_identity_respawn_requests(Instant::now()) {
             session.reconnect(id, &cfg, Some(&reports.tx));
         }
+        let bot_started = Instant::now();
         if let Some(bot) = bot.as_mut() {
             // The Mini App's Reconnect: the same rebuild on a fresh client.
             for id in bot.tick(&mut cfg, &mut session) {
                 session.reconnect(id, &cfg, Some(&reports.tx));
             }
         }
+        let bot_took = bot_started.elapsed();
         let station = StationNow {
             session: &session,
             groups: &groups,
@@ -304,6 +317,16 @@ fn main() -> anyhow::Result<()> {
                 logged_status = Some((summary.clone(), now));
                 log_status(summary);
             }
+        }
+        let pass = pass_started.elapsed();
+        if pass >= SLOW_PASS {
+            log::warn!(
+                "main loop pass took {:.1} s (feed drain {:.1} s, bot {:.1} s), feed queue {}",
+                pass.as_secs_f64(),
+                drained.as_secs_f64(),
+                bot_took.as_secs_f64(),
+                moon_core::feed::queued_messages()
+            );
         }
         std::thread::sleep(DRAIN_EVERY);
     }

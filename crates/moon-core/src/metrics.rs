@@ -62,14 +62,33 @@ fn sqlite_heap_mb() -> u64 {
     bytes.max(0) as u64 / (1024 * 1024)
 }
 
-/// The tail of every resource line: SQLite's share of the memory, and what was running.
+/// A host's account of its own heap for the resource line, set once by a host whose global
+/// allocator keeps one — the station's says which threads allocated the live bytes (#1081).
+static HEAP_REPORT: std::sync::OnceLock<fn() -> String> = std::sync::OnceLock::new();
+
+/// Add `report`'s text to every resource line. The first call wins.
+pub fn set_heap_report(report: fn() -> String) {
+    let _ = HEAP_REPORT.set(report);
+}
+
+/// The tail of every resource line: SQLite's share of the memory, the feed messages waiting for
+/// the drain, the host's heap account when it keeps one, and what was running.
 fn resource_context() -> String {
-    let busy = activity();
-    if busy.is_empty() {
-        format!("SQLite heap {} MiB", sqlite_heap_mb())
-    } else {
-        format!("SQLite heap {} MiB; busy: {busy}", sqlite_heap_mb())
+    let mut context = format!(
+        "SQLite heap {} MiB, feed queue {}",
+        sqlite_heap_mb(),
+        crate::feed::queued_messages()
+    );
+    if let Some(report) = HEAP_REPORT.get() {
+        context.push_str("; ");
+        context.push_str(&report());
     }
+    let busy = activity();
+    if !busy.is_empty() {
+        context.push_str("; busy: ");
+        context.push_str(&busy);
+    }
+    context
 }
 
 /// What the process is busy with that is known to move its memory by hundreds of megabytes, for
