@@ -12,3 +12,13 @@ fn cross_cull_margin_matches_shader_margin() {
     assert_eq!(cross_cull_margin_physical_px(&view, 3.5, 0.1), 8.0);
     assert_eq!(cross_cull_margin_physical_px(&view, 20.0, 0.1), 15.0);
 }
+
+/// Moving only one per-trade opacity default would make a fresh chart disagree with its fallback.
+#[test]
+fn trade_volume_default_matches_chart_fallback() {
+    let configured = moon_core::config::ChartGraphicsCfg::default().trade_volume_alpha;
+    let fallback = ViewStyle::default().volume_alpha;
+    assert_eq!(configured, 0.35);
+    assert_eq!(fallback, 0.35);
+    assert_eq!(configured, fallback);
+}

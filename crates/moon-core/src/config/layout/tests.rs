@@ -267,6 +267,21 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     );
 }
 
+/// Dropping the legacy-opacity migration would leave an old tab drawing at 34%, while migrating
+/// neighbours would silently rewrite a hand-edited choice.
+#[test]
+fn trade_volume_alpha_migrates_only_the_legacy_default() {
+    for (stored, expected) in [(0.34, 0.35), (0.33, 0.33), (0.36, 0.36)] {
+        let json = format!(r#"{{"trade_volume_alpha":{stored}}}"#);
+        let decoded: ChartGraphicsCfg =
+            serde_json::from_str(&json).expect("stored per-trade opacity must load");
+        assert_eq!(
+            decoded.trade_volume_alpha, expected,
+            "stored value {stored}"
+        );
+    }
+}
+
 /// The horizontal-volume fields load from a file written before them, round-trip their side
 /// spelling, and salvage a malformed one without dropping the rest of the block.
 ///

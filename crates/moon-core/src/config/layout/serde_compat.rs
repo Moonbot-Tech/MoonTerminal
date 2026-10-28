@@ -160,12 +160,14 @@ where
     Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_marker_scale))
 }
 
-/// Read the per-trade volume opacity leniently, defaulting an unusable value.
+/// Read the per-trade volume opacity leniently, defaulting an unusable value and migrating only
+/// the exact old shipped default; every other stored value remains unchanged.
 pub(super) fn de_trade_volume_alpha<'de, D>(d: D) -> Result<f32, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_trade_volume_alpha))
+    let alpha = de_lenient::<D, f32>(d)?.unwrap_or_else(def_trade_volume_alpha);
+    Ok(if alpha == 0.34 { 0.35 } else { alpha })
 }
 
 /// Read the bottom-volume style id leniently, defaulting an unusable value.

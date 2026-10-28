@@ -80,7 +80,7 @@ fn def_marker_scale() -> f32 {
 /// Default opacity of the per-TRADE volume bars. Was the compile-time `DEFAULT_VOLUME_ALPHA` in
 /// `chartdx` before it became configurable.
 fn def_trade_volume_alpha() -> f32 {
-    0.34
+    0.35
 }
 
 /// Default bottom-volume display style: the band is on. The only other live id is OFF — see
