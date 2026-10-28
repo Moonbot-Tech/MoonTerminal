@@ -47,8 +47,8 @@ use crate::panels::{
 /// click rather than by hand-editing a file.
 const MARKER_SCALES: [f32; 6] = [0.5, 0.7, 1.0, 1.5, 2.0, 3.0];
 
-/// Selectable opacities for the per-TRADE volume bars. `0.34` is the shipped default.
-const TRADE_VOLUME_ALPHAS: [f32; 6] = [0.0, 0.15, 0.34, 0.5, 0.75, 1.0];
+/// Selectable opacities for the per-TRADE volume bars. `0.35` is the shipped default.
+const TRADE_VOLUME_ALPHAS: [f32; 6] = [0.0, 0.15, 0.35, 0.5, 0.75, 1.0];
 
 /// Row width in rendered pixels, and the segment width of its six-step rows.
 ///
@@ -598,3 +598,6 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
     );
     popover
 }
+
+#[cfg(test)]
+mod tests;

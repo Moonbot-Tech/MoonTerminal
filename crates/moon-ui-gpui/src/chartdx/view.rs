@@ -21,7 +21,7 @@ pub struct ViewStyle {
 }
 
 impl Default for ViewStyle {
-    /// The NEUTRAL identity of the struct, not the product default.
+    /// The neutral marker scale and the shipped per-trade volume opacity used as a chart fallback.
     ///
     /// `marker_scale` stays at 1.0 even though the configured default is now 0.70
     /// (`moon_core::config::layout::def_marker_scale`), and that is deliberate: this struct is
@@ -30,10 +30,13 @@ impl Default for ViewStyle {
     /// multiplier, so such a path renders at unity — visibly wrong-but-normal rather than quietly
     /// shrunk. Copying 0.70 here would give one user-facing default two homes that can silently
     /// drift apart, which is the bug this comment exists to prevent.
+    ///
+    /// Opacity has no neutral identity: `volume_alpha` deliberately matches the configured shipped
+    /// default so a chart whose tab setting was not applied draws at the same opacity as a fresh one.
     fn default() -> Self {
         Self {
             marker_scale: 1.0,
-            volume_alpha: 0.34,
+            volume_alpha: 0.35,
         }
     }
 }
