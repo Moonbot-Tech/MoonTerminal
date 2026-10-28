@@ -854,3 +854,119 @@ fn an_old_core_update_record_deserializes_without_letter_fields() {
         }
     );
 }
+
+/// Put `core` on `ip` as the failed `active` of a stalled lane, with `sibling` held behind it --
+/// the state a `NeverDropped` failure leaves -- and give `core` a live session to enqueue through.
+fn stalled_by(manager: &mut SessionManager, core: CoreId, sibling: CoreId, ip: IpAddr) {
+    let (_tx, handle) = crate::feed::trade_sound_test_feed();
+    manager.sessions.push(crate::session::CoreSession {
+        id: core,
+        name: format!("core-{core}"),
+        group: String::new(),
+        conn_sig: 0,
+        handle,
+    });
+    insert_core(manager, core, ready_core(ip));
+    insert_core(manager, sibling, ready_core(ip));
+    manager.core_updates.phases.insert(
+        core,
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(UpdateFailure::NeverDropped)),
+    );
+    manager.core_updates.phases.insert(
+        sibling,
+        CoreUpdatePhase::Queued {
+            lane: ip,
+            held: true,
+            not_ready_since: None,
+        },
+    );
+    manager.core_updates.lanes.insert(
+        ip,
+        Lane {
+            order: VecDeque::from([sibling]),
+            active: Some(core),
+            stalled: true,
+        },
+    );
+}
+
+/// `core_update.rs:enqueue_core_update` must release the lane its own failed core stalled when
+/// that core is pressed again. Restoring the old `return false` drops the press without a word and
+/// leaves the lane held until the terminal restarts -- the corrected build name never goes out.
+#[test]
+fn a_fresh_press_on_the_core_that_stalled_its_lane_releases_it() {
+    let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 9, 1));
+    let (core, sibling) = (21, 22);
+    let mut manager = manager();
+    stalled_by(&mut manager, core, sibling, ip);
+
+    let target = UpdateTarget::Named("MoonBot-L4".to_string());
+    assert!(manager.enqueue_core_update(core, target.clone(), 10));
+
+    let lane = &manager.core_updates.lanes[&ip];
+    assert!(!lane.stalled, "the press must release the stall");
+    assert_eq!(lane.active, None);
+    assert_eq!(lane.order, VecDeque::from([sibling, core]));
+    assert!(matches!(
+        manager.core_update_phase(core),
+        Some(CoreUpdatePhase::Queued { held: false, .. })
+    ));
+    assert!(
+        matches!(
+            manager.core_update_phase(sibling),
+            Some(CoreUpdatePhase::Queued { held: false, .. })
+        ),
+        "the sibling held behind the stall must be freed with it"
+    );
+    assert_eq!(manager.last_update_target(core), Some(target));
+}
+
+/// The release must wait for eligibility: a stalled core that is not `Ready` any more is refused
+/// and its stall stays. Clearing before the `eligible` check would free the sibling behind an
+/// attempt that was never proven finished, and still send nothing for the pressed core.
+#[test]
+fn a_press_on_an_ineligible_stalled_core_keeps_the_stall() {
+    let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 9, 2));
+    let (core, sibling) = (23, 24);
+    let mut manager = manager();
+    stalled_by(&mut manager, core, sibling, ip);
+    manager.store.core_mut(core).unwrap().status = ConnStatus::Connecting;
+
+    assert!(!manager.enqueue_core_update(core, UpdateTarget::Release, 10));
+
+    let lane = &manager.core_updates.lanes[&ip];
+    assert!(lane.stalled);
+    assert_eq!(lane.active, Some(core));
+}
+
+/// A lane is keyed by the address pinned at enqueue, so a core that failed and came back on
+/// another address must still release its old lane. Looking the stall up under the CURRENT
+/// address misses it: the sibling stays held forever and the core loses its retry button.
+#[test]
+fn a_press_after_the_core_moved_address_releases_its_old_lane() {
+    let old_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 9, 3));
+    let new_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 9, 4));
+    let (core, sibling) = (25, 26);
+    let mut manager = manager();
+    stalled_by(&mut manager, core, sibling, old_ip);
+    manager.store.core_mut(core).unwrap().endpoint = Some(CoreEndpoint {
+        address: new_ip,
+        port: 8_888,
+    });
+
+    assert!(manager.enqueue_core_update(core, UpdateTarget::Release, 10));
+
+    let old_lane = &manager.core_updates.lanes[&old_ip];
+    assert!(
+        !old_lane.stalled,
+        "the stall on the old address must be released"
+    );
+    assert!(matches!(
+        manager.core_update_phase(sibling),
+        Some(CoreUpdatePhase::Queued { held: false, .. })
+    ));
+    assert_eq!(
+        manager.core_updates.lanes[&new_ip].order,
+        VecDeque::from([core])
+    );
+}

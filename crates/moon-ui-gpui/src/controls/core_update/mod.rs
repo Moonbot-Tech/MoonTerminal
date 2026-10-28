@@ -20,15 +20,80 @@
 //! directly: bulk fills the queue, it never bursts commands.
 
 mod actions;
+mod named;
 mod scope;
 mod view;
 
-pub(crate) use actions::{retry_core, update_core, update_scope};
+pub(crate) use actions::{retry_core, update_scope};
+pub(crate) use named::{
+    build_name_hint, build_name_input, open_named_dialog, scope_name_list, typed_build_name,
+};
 pub(crate) use scope::resolve_menu_scope;
 pub(crate) use view::update_button;
 
 use moon_core::feed::ConnStatus;
 use moon_core::session::core_update::CoreUpdatePhase;
+use rust_i18n::t;
+
+use crate::display_text::plural_key;
+
+/// What a press would skip, worded once for the server tooltip, the menu's leading row and the
+/// nothing-queued notice, so the three can never describe one situation two ways.
+///
+/// Args:
+///     offline: Cores not ready, without a reported build, or without a known address.
+///     already: Cores already tracked in a live attempt.
+///
+/// Returns:
+///     One phrase per non-zero count, offline first; empty when nothing is skipped.
+pub(crate) fn skip_reasons(offline: usize, already: usize) -> Vec<String> {
+    let mut parts = Vec::new();
+    if offline > 0 {
+        parts.push(t!("core_update.skipped_offline", n = offline).to_string());
+    }
+    if already > 0 {
+        parts.push(
+            t!(
+                plural_key("core_update.skipped_already", already as u64),
+                n = already
+            )
+            .to_string(),
+        );
+    }
+    parts
+}
+
+/// The warning a RELEASE update owes cores that run a lettered (named/test) build.
+///
+/// A release press installs the core's release package whatever the core runs now, so a core on
+/// `L4` goes back to the release -- and nothing on the update page used to say so. The letter is
+/// what the core reports beside its number; a release reports none, so a letter is the one signal
+/// the terminal has that a press would replace a test build.
+///
+/// Args:
+///     letters: The reported letter of every core the press would update, one entry per core;
+///         blank entries are ignored.
+///
+/// Returns:
+///     The warning naming each distinct letter once, or `None` when no core runs a lettered build.
+pub(crate) fn replaces_test_note<'a>(letters: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let mut cores = 0usize;
+    let mut builds: Vec<&str> = Vec::new();
+    for letter in letters.into_iter().map(str::trim).filter(|l| !l.is_empty()) {
+        cores += 1;
+        if !builds.contains(&letter) {
+            builds.push(letter);
+        }
+    }
+    (cores > 0).then(|| {
+        t!(
+            plural_key("core_update.release_replaces_test", cores as u64),
+            n = cores,
+            builds = builds.join(", ")
+        )
+        .to_string()
+    })
+}
 
 /// Design-reference edge of the button's slot, matching [`crate::controls::core_run`]'s own
 /// `SLOT_W` so a hover-revealed update control lines up with the run buttons beside it. A

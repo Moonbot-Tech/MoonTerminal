@@ -20,7 +20,7 @@ use moon_core::session::CoreId;
 use moon_ui::{MoonButtonIconSlot, MoonButtonVariant, MoonPalette};
 use rust_i18n::t;
 
-use super::{OfferCounts, SLOT_W, retry_core, update_core, update_scope};
+use super::{OfferCounts, SLOT_W, retry_core, skip_reasons, update_scope};
 use crate::Backend;
 use crate::design;
 
@@ -88,19 +88,12 @@ fn enqueue_slot(
             tip,
             MoonButtonVariant::Ghost,
             design::ui_value(cx, SLOT_W),
-            move |_window, app| {
+            move |window, app| {
                 app.stop_propagation();
                 let Some(backend) = target.upgrade() else {
                     return;
                 };
-                // A row control commands its one core through `update_core`; a server (or wider)
-                // control fills the queue through `update_scope` -- the two shared entry points,
-                // dispatched here by scope size rather than duplicated per caller.
-                if cores.len() == 1 {
-                    update_core(&backend, cores[0], UpdateTarget::Release, app);
-                } else {
-                    update_scope(&backend, &cores, UpdateTarget::Release, app);
-                }
+                update_scope(&backend, &cores, UpdateTarget::Release, window, app);
             },
         ),
         cx,
@@ -127,10 +120,10 @@ fn retry_slot(
             tip,
             MoonButtonVariant::Ghost,
             design::ui_value(cx, SLOT_W),
-            move |_window, app| {
+            move |window, app| {
                 app.stop_propagation();
                 if let Some(backend) = target.upgrade() {
-                    retry_core(&backend, core, app);
+                    retry_core(&backend, core, window, app);
                 }
             },
         ),
@@ -152,20 +145,15 @@ fn enqueue_tooltip(counts: OfferCounts, scope_len: usize) -> String {
     if scope_len <= 1 {
         return t!("core_update.row.action").to_string();
     }
-    let mut tip = t!("core_update.server.action", n = counts.offerable).to_string();
-    if counts.offline > 0 {
-        tip = format!(
-            "{tip} \u{2014} {}",
-            t!("core_update.skipped_offline", n = counts.offline)
-        );
-    }
-    if counts.tracked > 0 {
-        tip = format!(
-            "{tip} \u{2014} {}",
-            t!("core_update.skipped_already", n = counts.tracked)
-        );
-    }
-    tip
+    let mut parts = vec![
+        t!(
+            crate::display_text::plural_key("core_update.server.action", counts.offerable as u64),
+            n = counts.offerable
+        )
+        .to_string(),
+    ];
+    parts.extend(skip_reasons(counts.offline, counts.tracked));
+    parts.join(" \u{2014} ")
 }
 
 /// Wrap a button in its reserved, hover-revealed slot.

@@ -52,32 +52,25 @@ impl SessionManager {
     ///     now_ms: Injected clock, recorded as the attempt's `started_ms`.
     ///
     /// Returns:
-    ///     Whether the core was accepted. `false` means [`eligible`] rejected it or it is the
-    ///     failed core that still owns a stalled lane and must be retried instead.
+    ///     Whether the core was accepted. `false` means [`eligible`] rejected it.
     pub fn enqueue_core_update(&mut self, core: CoreId, target: UpdateTarget, now_ms: i64) -> bool {
         let now_ms = self.core_updates.clamped_now(now_ms);
         let Some(addr) = self.eligible(core) else {
             return false;
         };
         // `eligible` treats a `Done` phase as idle, but a core whose OWN failure stalled its
-        // lane is not simply idle: `active` still points at it (see `Lane::stalled`), and only
-        // `clear_stalled_lane` may release that lane. An ordinary enqueue reaching this core
-        // must skip it rather than silently overwriting the `Done` phase and stranding the lane
-        // -- and every sibling still queued behind it -- with no way back. This check
-        // deliberately lives here rather than inside `eligible`: `retry_core_update` calls
-        // `eligible` BEFORE `clear_stalled_lane`, and at that moment this core IS its lane's
-        // stalled `active` by
-        // construction -- putting the same check in `eligible` would make every retry attempt
-        // fail eligibility and never reach the clear. Placed here instead, retry is unaffected:
-        // it reaches this function only AFTER `clear_stalled_lane` has already run.
-        if self
-            .core_updates
-            .lanes
-            .get(&addr)
-            .is_some_and(|lane| lane.stalled && lane.active == Some(core))
-        {
-            return false;
-        }
+        // lane is not simply idle: `active` still points at it (see `Lane::stalled`). A fresh
+        // press that names this very core is the operator deciding to try again -- the same
+        // decision `retry_core_update` records, only with a target they may have corrected -- so
+        // it releases the lane through `clear_stalled_lane`, the one exit a stall has. Skipping
+        // the core instead left the update page offering a button whose press was dropped without
+        // a word, and the stall outlived everything but a terminal restart. The check stays out
+        // of `eligible`: `retry_core_update` decides eligibility BEFORE it touches the lane, and
+        // a core that is not eligible must leave a stall exactly where it was. It is not looked up
+        // under `addr` either: a lane is keyed by the address pinned when the failed attempt was
+        // enqueued, and a core that came back on another address would miss its own stall --
+        // `clear_stalled_lane` finds it by `active` on every lane, and is a no-op when none is.
+        self.clear_stalled_lane(core);
         let core_name = self
             .sessions
             .iter()

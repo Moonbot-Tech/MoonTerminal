@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonVariant, MoonInput, MoonInputEvent, MoonInputState, MoonNotification,
@@ -14,9 +15,10 @@ use moon_ui::{
 
 use super::health::HealthFilter;
 use super::model::{CoreStatusRow, ServerKey};
-use super::update_menu;
 use super::{ChartWindow, CoreStatusMode, CoreStatusView, ordering};
+use crate::controls::core_update;
 use crate::design;
+use crate::display_text::plural_key;
 use moon_core::feed::UpdateTarget;
 use moon_core::session::CoreId;
 use rust_i18n::t;
@@ -30,6 +32,38 @@ pub(super) enum FleetUpdateKind {
     Behind,
     /// Every offerable core, to a build name the operator types inside the confirm.
     Named,
+}
+
+/// The footer confirm's question: what is updated, on how many servers, and to what.
+///
+/// Composed from two counted phrases rather than one string with two numbers, because a noun
+/// agrees with its own count -- one string could only ever be right for one of them, which is how
+/// a single core read "1 ядер на 1 серверах".
+///
+/// Args:
+///     named: Whether the target is the build typed below the question rather than the release.
+///     cores: How many cores the press enqueues.
+///     servers: How many server lanes they span.
+///
+/// Returns:
+///     The localized question.
+fn fleet_question(named: bool, cores: usize, servers: usize) -> String {
+    let cores = t!(
+        plural_key("core_update.confirm.cores", cores as u64),
+        n = cores
+    )
+    .to_string();
+    let servers = t!(
+        plural_key("core_update.confirm.servers", servers as u64),
+        n = servers
+    )
+    .to_string();
+    let key = if named {
+        "core_update.confirm.q_named"
+    } else {
+        "core_update.confirm.q_release"
+    };
+    t!(key, cores = cores, servers = servers).to_string()
 }
 
 /// Exactly what a bulk update would enqueue, resolved before the confirm opens.
@@ -1165,21 +1199,20 @@ impl CoreStatusView {
         let confirmed: Rc<[CoreId]> = plan.cores.clone();
         let backend = self.backend.clone();
         let view = cx.entity();
-        let input = (kind == FleetUpdateKind::Named).then(|| {
-            let input = cx.new(|cx| {
-                MoonInputState::new(window, cx).placeholder(
-                    t!(
-                        "core_update.menu.named_ph",
-                        cmd = moon_core::feed::CORE_UPDATE_COMMAND_WORD
-                    )
-                    .to_string(),
-                )
-            });
-            input
-                .clone()
-                .update(cx, |input, cx| input.focus(window, cx));
-            input
-        });
+        let named = kind == FleetUpdateKind::Named;
+        // A release press replaces whatever lettered build a core runs; say so before Yes.
+        let replaces_test = if named {
+            None
+        } else {
+            let b = self.backend.read(cx);
+            let letters: Vec<String> = plan
+                .cores
+                .iter()
+                .filter_map(|core| b.session.store().core(*core)?.server_version_suffix.clone())
+                .collect();
+            core_update::replaces_test_note(letters.iter().map(String::as_str))
+        };
+        let input = named.then(|| core_update::build_name_input(None, window, cx));
         window.open_unique_moon_dialog(
             "core-status-fleet-update-confirm",
             cx,
@@ -1191,12 +1224,8 @@ impl CoreStatusView {
                 let confirm_input = input.clone();
                 let field = input.clone();
                 let names = names.clone();
-                let question = t!(
-                    "core_update.confirm.q",
-                    cores = core_count,
-                    servers = lane_count
-                )
-                .to_string();
+                let replaces_test = replaces_test.clone();
+                let question = fleet_question(named, core_count, lane_count);
                 dialog
                     .w(design::ui_px(cx, 360.0))
                     .close_button(true)
@@ -1223,18 +1252,41 @@ impl CoreStatusView {
                                 .gap_2()
                                 .child(
                                     div()
-                                        // MIXED NODE: `core_update.confirm.q` welds the core and
-                                        // server COUNTS into the question. Half a node cannot be
-                                        // styled.
+                                        // MIXED NODE: `fleet_question` welds the core and server
+                                        // COUNTS into the question. Half a node cannot be styled.
                                         .font_family(design::mono())
                                         .text_size(design::t_body(cx))
                                         .text_color(rgb(p.text))
                                         .child(question.clone()),
                                 )
+                                .child(
+                                    div()
+                                        .text_size(design::t_caption(cx))
+                                        .text_color(rgb(p.text_muted))
+                                        .child(t!("core_update.confirm.lanes").to_string()),
+                                )
+                                // What a release press installs: the page has no release number
+                                // to show, so it at least says which package it asks the core for.
+                                .when(!named, |col| {
+                                    col.child(
+                                        div()
+                                            .text_size(design::t_caption(cx))
+                                            .text_color(rgb(p.text_muted))
+                                            .child(
+                                                t!("core_update.confirm.release_what").to_string(),
+                                            ),
+                                    )
+                                })
+                                .children(replaces_test.clone().map(|note| {
+                                    div()
+                                        .text_size(design::t_caption(cx))
+                                        .text_color(rgb(p.amber))
+                                        .child(note)
+                                }))
                                 // The same non-truncating list the row menu draws, from the same
                                 // helper: two dialogs describing one scope must not be able to
                                 // word it differently, and a core name is never shortened.
-                                .children(update_menu::scope_name_list(&names, p, cx))
+                                .children(core_update::scope_name_list(&names, p, cx))
                                 .children(field.clone().map(|field| {
                                     v_flex()
                                         .w_full()
@@ -1247,14 +1299,7 @@ impl CoreStatusView {
                                                 .state(&field)
                                                 .size(design::INPUT_SIZE),
                                         )
-                                        .child(
-                                            div()
-                                                .text_color(rgb(p.text_muted))
-                                                .text_size(design::t_caption(cx))
-                                                .child(
-                                                    t!("core_update.menu.named_hint").to_string(),
-                                                ),
-                                        )
+                                        .child(core_update::build_name_hint(p, cx))
                                 })),
                         )
                     })
@@ -1279,7 +1324,7 @@ impl CoreStatusView {
                                     .on_click(move |_, window, cx| {
                                         let target = match &confirm_input {
                                             Some(input) => {
-                                                let typed = update_menu::typed_build_name(
+                                                let typed = core_update::typed_build_name(
                                                     &input.read(cx).value(),
                                                 );
                                                 let Some(typed) = typed else {
@@ -1322,10 +1367,11 @@ impl CoreStatusView {
                                         if still.is_empty() {
                                             return;
                                         }
-                                        crate::controls::core_update::update_scope(
+                                        core_update::update_scope(
                                             &confirm_backend,
-                                            &Rc::from(still),
+                                            &still,
                                             target,
+                                            window,
                                             cx,
                                         );
                                     })
@@ -1404,7 +1450,7 @@ fn problem_confirm_dialog(
                     // draw, from the same helper: dialogs describing one scope must not be able to
                     // word it differently, and a core name is never shortened. It renders nothing
                     // for a single core, which the question above has already named.
-                    .children(update_menu::scope_name_list(&names, p, cx)),
+                    .children(core_update::scope_name_list(&names, p, cx)),
             )
         })
         .footer(
