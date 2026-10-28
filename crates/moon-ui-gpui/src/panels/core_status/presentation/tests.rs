@@ -40,6 +40,27 @@ fn a_day_count_renders_without_its_unit() {
     assert_eq!(api_expiry_text(ApiKeyState::Days(0)), "0", "its last day");
 }
 
+/// A genuinely past date whose count agrees (non-positive) still reads as expired. The mirrored
+/// shape — a positive count beside a date that far in the past — is corrected before it gets
+/// here; this is the shape that correction must leave alone.
+#[test]
+fn a_genuinely_past_key_reads_as_expired() {
+    let _locale = crate::test_locale::force("ru");
+    let checked_ms = 1_700_000_000_000;
+    let days = -10i32;
+    let expiry = moon_core::session::ApiKeyExpiry {
+        unlimited: false,
+        known: true,
+        days_left: Some(days),
+        at_unix: Some(checked_ms / 1_000 + i64::from(days) * 86_400),
+        checked_ms,
+    };
+
+    let state = ApiKeyState::of(Some(expiry), checked_ms);
+
+    assert_eq!(api_expiry_text(state), "истёк");
+}
+
 /// A key past its date reads as a WORD, not as a negative number: "-3" under a heading that says
 /// days would look like a count, and this is the one arm an operator must not have to decode.
 #[test]

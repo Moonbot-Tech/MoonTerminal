@@ -592,6 +592,173 @@ fn an_implausible_count_never_becomes_unlimited() {
     );
 }
 
+/// Seconds in one day, matching the converter's own unit for the backwards-date check.
+const DAY_SECS: i64 = 86_400;
+
+/// A positive count N in 1..=90 beside a date about N days in the past is one fact said twice
+/// with the sign flipped. Trusting the date would show the key as already expired (`0 дн` on the
+/// warning, `истёк` in the column) for as long as the core keeps publishing that shape.
+///
+/// The oracle is the receipt plus N days, computed here from that rule — not by re-reading a
+/// field the function just wrote.
+#[test]
+fn a_backwards_date_is_anchored_on_the_day_count() {
+    let now = 1_700_000_000;
+    let days = 30;
+    let published = now - i64::from(days) * DAY_SECS;
+
+    let kept = kept_at_unix(now, Some(days), Some(published));
+
+    assert_eq!(kept, Some(now + i64::from(days) * DAY_SECS));
+}
+
+/// The same stored answer, read five days later, shows N−5. Aging has to follow the forwarded
+/// expiry: a frozen count would keep saying 30 while the key runs down during an outage, which
+/// is why the date is stored at all.
+#[test]
+fn a_forwarded_expiry_ages_from_the_receipt() {
+    let now = 1_700_000_000;
+    let days = 30i32;
+    let checked_ms = now * 1_000;
+    let at_unix = kept_at_unix(now, Some(days), Some(now - i64::from(days) * DAY_SECS));
+    let stored = ApiKeyExpiry {
+        unlimited: false,
+        known: true,
+        days_left: Some(days),
+        at_unix,
+        checked_ms,
+    };
+
+    assert_eq!(stored.days_left_at(checked_ms), Some(days));
+    assert_eq!(
+        stored.days_left_at(checked_ms + 5 * DAY_SECS * 1_000),
+        Some(days - 5)
+    );
+}
+
+/// One day of skew still counts as the mirrored shape (a timezone, or the core rounding to a
+/// calendar date). One second past that day does not: the date then wins, including when that
+/// leaves the key in the past.
+#[test]
+fn a_backwards_date_tolerates_one_day_and_no_more() {
+    let now = 1_700_000_000;
+    let days = 30i32;
+    let mirrored = now - i64::from(days) * DAY_SECS;
+    let forward = now + i64::from(days) * DAY_SECS;
+
+    assert_eq!(
+        kept_at_unix(now, Some(days), Some(mirrored + DAY_SECS)),
+        Some(forward),
+        "one day toward the present"
+    );
+    assert_eq!(
+        kept_at_unix(now, Some(days), Some(mirrored - DAY_SECS)),
+        Some(forward),
+        "one day further into the past"
+    );
+    assert_eq!(
+        kept_at_unix(now, Some(days), Some(mirrored + DAY_SECS + 1)),
+        Some(mirrored + DAY_SECS + 1),
+        "a second beyond one day keeps the published date"
+    );
+    assert_eq!(
+        kept_at_unix(now, Some(days), Some(mirrored - DAY_SECS - 1)),
+        Some(mirrored - DAY_SECS - 1)
+    );
+}
+
+/// The ends of the range rewrite, and the two counts just outside it do not. 0 is a key on its
+/// last day or already past; 91 is past the horizon this correction is allowed to touch.
+#[test]
+fn only_counts_from_one_to_ninety_are_forwarded() {
+    let now = 1_700_000_000;
+    for days in [1i32, 90] {
+        let published = now - i64::from(days) * DAY_SECS;
+        assert_eq!(
+            kept_at_unix(now, Some(days), Some(published)),
+            Some(now + i64::from(days) * DAY_SECS),
+            "{days}"
+        );
+    }
+    for days in [0i32, 91, -10] {
+        let published = now - 10 * DAY_SECS;
+        assert_eq!(
+            kept_at_unix(now, Some(days), Some(published)),
+            Some(published),
+            "{days} keeps the published date"
+        );
+    }
+    // 91 days in the past is also outside the plausible window, so the date is dropped rather
+    // than turned into a future expiry.
+    assert_eq!(kept_at_unix(now, Some(91), Some(now - 91 * DAY_SECS)), None);
+}
+
+/// A date that already agrees with the count is a normal key. Rewriting it to `now + N days`
+/// would drop the hour the exchange actually named.
+#[test]
+fn an_agreeing_future_date_is_kept() {
+    let now = 1_700_000_000;
+    let published = now + 30 * DAY_SECS + 3_600;
+
+    assert_eq!(
+        kept_at_unix(now, Some(30), Some(published)),
+        Some(published)
+    );
+}
+
+/// A genuinely past date with a matching non-positive count is a key that has expired. The date
+/// wins, and the aged count stays negative — that is what the column spells as expired and what
+/// opens the warning. Forwarding it would hide a real expiry.
+#[test]
+fn a_past_date_with_a_matching_non_positive_count_stays_past() {
+    let now = 1_700_000_000;
+    let days = -10i32;
+    let published = now + i64::from(days) * DAY_SECS;
+    let checked_ms = now * 1_000;
+    let at_unix = kept_at_unix(now, Some(days), Some(published));
+    let stored = ApiKeyExpiry {
+        unlimited: false,
+        known: true,
+        days_left: Some(days),
+        at_unix,
+        checked_ms,
+    };
+
+    assert_eq!(at_unix, Some(published));
+    assert_eq!(stored.days_left_at(checked_ms), Some(days));
+}
+
+/// A round 1000 is the stand-in two Bybit cores answer for a key with no expiry, and the date
+/// beside it is about 1000 days in the past — outside the plausible window, so it is dropped
+/// rather than forwarded. The count stays, and a count of a year or more is what the column
+/// draws as unlimited. Forwarding it to `now + 1000 days` would invent an expiry the stand-in
+/// does not have.
+#[test]
+fn a_thousand_day_stand_in_is_not_forwarded() {
+    let now = 1_700_000_000;
+    let published = now - 1_000 * DAY_SECS;
+
+    assert_eq!(
+        kept_at_unix(now, Some(1000), Some(published)),
+        None,
+        "a date 1000 days in the past is not a usable expiry"
+    );
+    let (days, unlimited) = api_days_and_unlimited(true, Some(1000), Some(-1000));
+    assert_eq!(days, Some(1000));
+    assert!(
+        !unlimited,
+        "dropping the date must not invent an unlimited flag"
+    );
+    let stored = ApiKeyExpiry {
+        unlimited: false,
+        known: true,
+        days_left: days,
+        at_unix: None,
+        checked_ms: now * 1_000,
+    };
+    assert_eq!(stored.days_left_at(now * 1_000), Some(1000));
+}
+
 /// A count the plausibility range REJECTS still proves the core was talking about a lifetime, so
 /// the answer must not fall through to "unlimited". Deciding that flag after the filter would put
 /// an infinity glyph on a key whose only number we just threw away.

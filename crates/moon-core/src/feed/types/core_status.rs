@@ -36,6 +36,10 @@ pub struct ApiKeyExpiry {
     pub days_left: Option<i32>,
     /// Absolute expiration as whole Unix seconds, on the terminal's clock. `None` for a legacy
     /// answer that carries no normalized duration, and while `known` is false.
+    ///
+    /// This is the effective expiry, not always the date bytes. A current answer that published
+    /// its date backwards (a positive count N in 1..=90 beside a date about N days in the past)
+    /// is stored as the receipt plus N days, so a later read ages that one instant.
     pub at_unix: Option<i64>,
     /// Unix ms the terminal received this answer, so a stored day count can be aged.
     pub checked_ms: i64,
