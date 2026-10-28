@@ -239,8 +239,11 @@ is chosen by `MoonWindowFrame` from `MoonWindowFrameKind`:
 The only exception is the main window's full logo: `MoonWindowFrame` draws its own
 Moonbot lockup, baked into the component, and the product is called MoonTerminal. Therefore
 the main window's header assembles the brand cluster itself (`chrome/terminal_chrome.rs`):
-the drag zone is still given by `MoonWindowFrame::drag_handle()`, and the logo and divider by
-`design::header_logo` over the `assets/brand/` assets. Cluster geometry is the same as
+the drag zone is still given by `MoonWindowFrame::drag_handle()`, and the logo by
+`design::header_logo` over the `assets/brand/` assets. Once the window is too narrow for the
+wordmark (`design::header_wordmark_visible`), the cluster draws `design::header_mark` instead — the
+plane icon alone, cut from the same lockup — so the drag zone never shrinks to zero width and a
+narrow main window keeps a spot to grab. Cluster geometry is the same as
 `brand_cluster` (`CHROME_GAP`, a 16px rule), but the rule is drawn by `design::chrome_divider`:
 once the terminal assembles the cluster, the seam follows the same contrast as the other seams
 of the row, not the paler `border` from MoonUI. `brand_cluster` should come back exactly
