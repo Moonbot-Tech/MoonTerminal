@@ -14,13 +14,13 @@ use moon_core::config::{
 };
 use moon_core::util::fmt::DeltaSign;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
-    MoonPalette, MoonWindowExt as _, h_flex, v_flex,
+    MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
+    MoonInput, MoonPalette, MoonSegmentDensity, MoonSegmentItem, MoonSegmentedControl,
+    MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use super::LabelEditState;
-use crate::chart_tabs::seg_row;
 use crate::controls::field_picker;
 use crate::design::{self, moon};
 use crate::panels::{micro_button, popup_group, popup_group_inset_px, toggle_variant};
@@ -47,6 +47,53 @@ const MICRO_W: f32 = 20.0;
 /// Width of the caption list column.
 const LIST_W: f32 = 214.0;
 
+/// Keep full choice labels inside the pane, wrapping whole MoonUI cells when they cannot share
+/// one line. Fit at the selected weight so changing a choice never changes its width.
+fn seg_row(
+    id: String,
+    caption: String,
+    labels: Vec<(String, bool)>,
+    min_width: f32,
+    p: MoonPalette,
+    cx: &App,
+    on_pick: impl Fn(usize, &mut App) + 'static,
+) -> impl IntoElement {
+    let on_pick = std::rc::Rc::new(on_pick);
+    let cells = labels
+        .into_iter()
+        .enumerate()
+        .map(|(ix, (label, selected))| {
+            let item = MoonSegmentItem::new("", label)
+                .density(MoonSegmentDensity::Compact)
+                .selected(selected)
+                .fit_width(cx, min_width, 560.0);
+            let width = item.resolved_width();
+            let selector = format!("{id}-cell-{ix}");
+            let on_pick = on_pick.clone();
+            div()
+                .flex_none()
+                .w(px(width))
+                .debug_selector(move || selector.clone())
+                .child(
+                    MoonSegmentedControl::new(SharedString::from(format!("{id}-{ix}")))
+                        .accent(MoonAccent::Blue)
+                        .density(MoonSegmentDensity::Compact)
+                        .item(item)
+                        .on_click(move |_, _, _, cx| on_pick(ix, cx)),
+                )
+        });
+    v_flex()
+        .w_full()
+        .gap(design::ui_px(cx, 2.0))
+        .child(
+            div()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(p.text))
+                .child(caption),
+        )
+        .child(h_flex().w_full().flex_wrap().children(cells))
+}
+
 /// Edit the working row and repaint.
 fn write_row(state: &Entity<LabelEditState>, cx: &mut App, f: impl FnOnce(&mut LabelEditState)) {
     state.update(cx, |s, cx| {
@@ -56,6 +103,7 @@ fn write_row(state: &Entity<LabelEditState>, cx: &mut App, f: impl FnOnce(&mut L
     });
 }
 
+/// Render the editable module copy using the dialog's available content width.
 pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyElement {
     let p = MoonPalette::active(cx);
     let (row, selected, name_input) = {
@@ -173,6 +221,7 @@ fn dropdown_row(
 ) -> impl IntoElement {
     h_flex()
         .w_full()
+        .flex_wrap()
         .items_center()
         .gap(design::ui_px(cx, 6.0))
         .child(
@@ -182,14 +231,19 @@ fn dropdown_row(
                 .child(label.to_string()),
         )
         .child(
-            MoonDropdown::new(id)
-                .label(current.to_string())
-                .trigger_caret(true)
-                .trigger_variant(MoonButtonVariant::Soft)
-                .trigger_size(MoonButtonSize::density(cx))
-                .trigger_width_scaled(84.0)
-                .fit_menu_width(104.0, 560.0)
-                .items(items),
+            div()
+                .flex_none()
+                .debug_selector(move || format!("{id}-trigger"))
+                .child(
+                    MoonDropdown::new(id)
+                        .label(current.to_string())
+                        .trigger_caret(true)
+                        .trigger_variant(MoonButtonVariant::Soft)
+                        .trigger_size(MoonButtonSize::density(cx))
+                        .fit_trigger_width(84.0, 160.0)
+                        .fit_menu_width(104.0, 560.0)
+                        .items(items),
+                ),
         )
 }
 
@@ -405,7 +459,10 @@ fn caption_settings(
     }
     let part: ChartLabelPart = row.parts[selected];
     let resolved = part.resolved_style();
-    let mut col = v_flex().w_full().gap(design::ui_px(cx, 6.0));
+    let mut col = v_flex()
+        .w_full()
+        .debug_selector(|| "le-settings-content".into())
+        .gap(design::ui_px(cx, 6.0));
 
     // The caption's figure is NAMED where it is chosen — the list beside this pane, where the row
     // for it is already selected — so this pane does not repeat it. It answers "what does this one
@@ -766,16 +823,28 @@ fn caption_settings(
     col = col.child(
         h_flex()
             .w_full()
+            .flex_wrap()
             .items_center()
             .gap(design::ui_px(cx, 8.0))
-            .child(caption_cb)
-            .child(reset),
+            .child(
+                div()
+                    .flex_none()
+                    .debug_selector(|| "le-caption-check".into())
+                    .child(caption_cb),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .debug_selector(|| "le-reset".into())
+                    .child(reset),
+            ),
     );
     // `min_w_0` so a long dropdown label cannot push this pane wider than the dialog and slide it
     // under the column beside it.
     div()
         .flex_1()
         .min_w_0()
+        .debug_selector(|| "le-settings".into())
         .child(popup_group("le-style", t!("chart_labels.frame_caption")).child(col))
         .into_any_element()
 }
