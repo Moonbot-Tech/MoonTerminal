@@ -7,6 +7,32 @@ use gpui::*;
 use super::Shell;
 use crate::controls;
 
+/// Select a newly rendered preset editor through the same registered action as Ctrl+A.
+///
+/// Call from the frame mounting the editor: its dispatch tree is ready when the defer runs.
+/// The input's selection methods are private to MoonUI. Target its own focus handle and skip
+/// selection if focus has moved elsewhere, so another field can never receive this action.
+pub(super) fn select_preset_editor_after_render(
+    input: &Entity<moon_ui::MoonInputState>,
+    window: &Window,
+    cx: &mut App,
+) {
+    let focus = input.read(cx).focus_handle(cx);
+    let action = match cx.build_action("input::SelectAll", None) {
+        Ok(action) => action,
+        Err(error) => {
+            static LOG_ONCE: std::sync::Once = std::sync::Once::new();
+            LOG_ONCE.call_once(|| log::warn!("preset select-all action unavailable: {error}"));
+            return;
+        }
+    };
+    window.defer(cx, move |window, cx| {
+        if focus.is_focused(window) {
+            focus.dispatch_action(action.as_ref(), window, cx);
+        }
+    });
+}
+
 /// Take an inline-edit request only when it belongs to the observing Shell's group.
 fn take_group_edit(
     request: &mut Option<(String, usize)>,
@@ -29,7 +55,7 @@ fn select_hotkey_target(
 }
 
 impl Shell {
-    /// Open and focus this group's pending F1-F6 inline editor without consuming another group's.
+    /// Open, focus, and select this group's F1-F6 number without consuming another group's request.
     pub(super) fn drain_order_size_edit_request(&mut self, cx: &mut Context<Self>) {
         let group = self.group.clone();
         let edit_req = self.backend.update(cx, |b, _| {
@@ -44,6 +70,7 @@ impl Shell {
         let cur = self.backend.read(cx).write_aligned_order_sizes(&group).0[ix];
         self.size_edit = Some((group, ix));
         let input = self.size_input.clone();
+        self.pending_preset_selection = Some(input.clone());
         let value = controls::fmt_adaptive(cur);
         let handle = self.window_handle;
         cx.defer(move |app| {
@@ -178,7 +205,7 @@ impl Shell {
         });
     }
 
-    /// Open and focus the inline editor after a fixed-sell S button is double-clicked.
+    /// Open, focus, and select the number after a fixed-sell S button is double-clicked.
     /// Seeds it with the group's current preset percentage, mirroring the order-size editor.
     pub(super) fn drain_sell_edit_request(&mut self, cx: &mut Context<Self>) {
         let group = self.group.clone();
@@ -198,6 +225,7 @@ impl Shell {
             .fixed_sell_pcts[ix];
         self.sell_edit = Some((group, ix));
         let input = self.sell_input.clone();
+        self.pending_preset_selection = Some(input.clone());
         let value = controls::fmt_adaptive(cur);
         let handle = self.window_handle;
         cx.defer(move |app| {
