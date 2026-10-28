@@ -164,15 +164,13 @@ fn mode_label(m: StackLayoutMode) -> &'static str {
 /// `height_fit_input` and `height_scroll_input` are separate fields whose Blur/Enter subscription
 /// belongs to the caller. `on_pick_mode` runs on mode selection. `MoonPopover` positions the panel.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_layout_popup<F, G, H, I, J, K, N, O, P2, Q2, S2>(
+pub(super) fn render_layout_popup<F, G, J, K, N, O, P2, Q2, S2>(
     id: &str,
     current: StackLayoutMode,
     orientation: StackOrientation,
     rename_input: Option<&Entity<MoonInputState>>,
     height_fit_input: &Entity<MoonInputState>,
     height_scroll_input: &Entity<MoonInputState>,
-    orderbook_enabled: bool,
-    show_zone: bool,
     auto_pin: bool,
     price_axis_pos: PriceAxisPos,
     time_axis_visible: bool,
@@ -185,8 +183,6 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, N, O, P2, Q2, S2>(
     on_pick_mode: F,
     apply_all_label: String,
     on_apply_all: G,
-    on_toggle_orderbook: H,
-    on_toggle_show_zone: I,
     on_toggle_auto_pin: J,
     on_toggle_orientation: K,
     on_pick_price_axis: N,
@@ -199,8 +195,6 @@ where
     S2: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: Fn(StackLayoutMode, &mut App) + 'static,
     G: Fn(&mut App) + 'static,
-    H: Fn(bool, &mut App) + 'static,
-    I: Fn(bool, &mut App) + 'static,
     J: Fn(bool, &mut App) + 'static,
     K: Fn(&mut App) + 'static,
     N: Fn(PriceAxisPos, &mut App) + 'static,
@@ -357,20 +351,6 @@ where
                     }),
             )
     });
-
-    // "Order book" toggles the order book on this tab's charts.
-    let orderbook_cb = MoonCheckbox::new(SharedString::from(format!("{id}-orderbook")))
-        .label(t!("chart.layout.orderbook").to_string())
-        .checked(orderbook_enabled)
-        .on_change(move |ch: &bool, _w, app| on_toggle_orderbook(*ch, app));
-
-    // "Order zone with the book hidden": whether a hidden order book still leaves the marked order
-    // strip on the right. Off together with the book, such a tab is chart edge to edge and takes
-    // no order gesture — click placement, drag, cancel, menu, keyboard cancel (#557).
-    let show_zone_cb = MoonCheckbox::new(SharedString::from(format!("{id}-show-zone")))
-        .label(t!("chart.layout.show_zone").to_string())
-        .checked(show_zone)
-        .on_change(move |ch: &bool, _w, app| on_toggle_show_zone(*ch, app));
 
     // "Auto-pin on order" pins a chart when placing a long or short order.
     let auto_pin_cb = MoonCheckbox::new(SharedString::from(format!("{id}-auto-pin")))
@@ -549,15 +529,14 @@ where
                     .children(min_slot_row.filter(|_| divider_shown)),
             ),
         )
-        // "Display" frame: order book, control zone, time axis, line labels, and crosshair labels —
-        // what shares the pane with the plot. The liquidation crosses used to be a row here; they
-        // are drawn among the trade marks and moved to the graphics popup with them.
+        // "Display" frame: time axis, line labels, and crosshair labels — what shares the pane with
+        // the plot. The order book and its control-zone switch used to open this frame; they moved
+        // to the graphics popup's order-book frame, beside the book's width and kind, as the
+        // liquidation crosses moved there before them.
         .child(
             popup_group("frame-display", t!("chart.layout.frame_display")).child(
                 v_flex()
                     .gap(design::ui_px(cx, 6.0))
-                    .child(orderbook_cb)
-                    .child(show_zone_cb)
                     .child(time_axis_cb)
                     .child(line_labels_cb)
                     .child(cursor_labels_cb),

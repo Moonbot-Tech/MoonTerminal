@@ -79,6 +79,8 @@ pub(crate) struct DetachedChartHost {
     layout_max_charts_input: Entity<MoonInputState>,
     /// Minimum-slot input of the screen divider, shown only in FIT-stretch.
     layout_min_slot_input: Entity<MoonInputState>,
+    /// Order-book width input of the chart-graphics popup.
+    book_width_input: Entity<MoonInputState>,
     /// Custom-tab name input in the ⚙ popup, only when this window holds a detached Custom tab.
     custom_name_input: Entity<MoonInputState>,
     /// Window-header market-search input; its universe depends on this window bucket's cores.
@@ -371,6 +373,8 @@ impl DetachedChartHost {
         ] {
             super::common::subscribe_layout_commit(input, cx);
         }
+        let book_width_input = cx.new(|cx| MoonInputState::new(window, cx));
+        super::graphics_popup::subscribe_book_width(&book_width_input, window, cx);
         // Custom-tab name input commits renaming on Blur or Enter.
         let custom_name_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(
@@ -445,6 +449,7 @@ impl DetachedChartHost {
             layout_scroll_input,
             layout_max_charts_input,
             layout_min_slot_input,
+            book_width_input,
             custom_name_input,
             coin_input,
             coin_query: String::new(),
@@ -839,6 +844,9 @@ impl DetachedChartHost {
 /// "Apply to all" sends a group request through Backend, drained by the tab strip, exactly like the
 /// candle popup's below.
 impl super::graphics_popup::GraphicsPopupHost for DetachedChartHost {
+    fn book_width_input(&self) -> &Entity<MoonInputState> {
+        &self.book_width_input
+    }
     fn graphics_override(&self, cx: &App) -> Option<moon_core::config::ChartGraphicsCfg> {
         self.panel.read(cx).chart_graphics()
     }
@@ -952,8 +960,9 @@ impl LayoutPopupHost for DetachedChartHost {
         self.panel.update(cx, |s, c| set_stack_setting!(s, c, v));
     }
     /// Apply this window's settings to all by queueing them through Backend for the tab strip,
-    /// because the host cannot access group stacks directly. Copy ALL window settings, including
-    /// scale and order-book toggle, while leaving Main unchanged.
+    /// because the host cannot access group stacks directly. Copy every ⚙ setting, scale
+    /// included, while leaving Main unchanged; the order-book checkboxes travel with the graphics
+    /// popup's press.
     fn layout_press_values(&self, cx: &App) -> Vec<StackSetting> {
         let snap = self.layout_popup_snapshot(cx);
         let height_fit = self.read_layout_height(StackLayoutMode::Fit, cx);

@@ -304,6 +304,9 @@ impl super::apply_row::ApplyRowHost for ChartTabs {
 ///
 /// Application and persistence use `apply_tab_setting(StackSetting::Graphics)`.
 impl super::graphics_popup::GraphicsPopupHost for ChartTabs {
+    fn book_width_input(&self) -> &Entity<MoonInputState> {
+        &self.book_width_input
+    }
     fn graphics_override(&self, cx: &App) -> Option<moon_core::config::ChartGraphicsCfg> {
         match &self.active {
             Tab::Main => self.main.read(cx).chart_graphics(),
@@ -455,9 +458,10 @@ impl LayoutPopupHost for ChartTabs {
     }
     /// Apply all active-tab layout-popup settings plus price scale directly to every group stack.
     ///
-    /// Candle view, chart graphics and X scale are not copied: each has its own popup and its own ⧉.
-    /// These twelve values have no default of their own, so the press WRITES them into the tabs of
-    /// the kinds it names rather than storing them.
+    /// Candle view, chart graphics and X scale are not copied: each has its own popup and its own ⧉,
+    /// and so do the order-book checkboxes, which moved to the graphics popup. These values have no
+    /// default of their own, so the press WRITES them into the tabs of the kinds it names rather
+    /// than storing them.
     fn layout_press_values(&self, cx: &App) -> Vec<StackSetting> {
         let hf = self.read_layout_height(StackLayoutMode::Fit, cx);
         let hs = self.read_layout_height(StackLayoutMode::Scroll, cx);

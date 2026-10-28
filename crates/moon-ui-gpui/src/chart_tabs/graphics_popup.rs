@@ -17,19 +17,23 @@
 //! liquidations from the tab spec — because the press copies the struct whole, and a switch shown
 //! here but stored elsewhere would either not travel with it or drag its own struct along.
 //!
-//! The order book's KIND sits here too — Moonbot's glass or a price ladder — with the ladder's
-//! highlight: how the book is drawn is part of the live picture, and like every
-//! switch here it travels per tab and with ⧉.
+//! The order book has its own frame: whether it is shown at all, whether a hidden book still
+//! leaves the order strip, its width, its KIND — Moonbot's glass or a price ladder — and the
+//! ladder's highlight. The kind and the width are fields of [`ChartGraphicsCfg`] and travel per
+//! tab and with ⧉ like every switch here. The two checkboxes are tab-spec fields with no per-kind
+//! default (`StackSetting::Orderbook`, `StackSetting::ShowZone`); the ⧉ press writes them into the
+//! addressed tabs beside storing the graphics default.
 //!
 //! Controls read stored config on every render and are stateless on purpose: `MoonSlider` needs a
 //! state entity held on the host, and every other control in these popups reads its value straight
-//! from the config, so the sizes are offered as steps.
+//! from the config, so the sizes are offered as steps. The book width is the one exception — a
+//! number field asked for by name — and its state lives on the host beside the ⚙ popup's fields.
 
 use gpui::*;
-use moon_core::config::{BookKind, ChartGraphicsCfg, TradeKind};
+use moon_core::config::{BookKind, ChartGraphicsCfg, TradeKind, book_width};
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonPopover,
-    MoonPopoverPlacement, MoonSize, h_flex, v_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputEvent,
+    MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -192,11 +196,22 @@ pub(super) fn all_cores_toggle_button<T: GraphicsPopupHost>(
         })
 }
 
+/// The order-book frame's tab-spec state, read from the host for one render.
+struct BookToggles<'a> {
+    /// Whether the tab draws its order book.
+    shown: bool,
+    /// Whether a hidden book still leaves the marked order strip on the right.
+    zone: bool,
+    /// The width field; its state belongs to the host.
+    width_input: &'a Entity<MoonInputState>,
+}
+
 /// Render popup content by reading the stored values on every render for the stateless controls.
 fn render_graphics_popup<T: GraphicsPopupHost>(
     id: &str,
     entity: Entity<T>,
     cfg: ChartGraphicsCfg,
+    book: BookToggles<'_>,
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -376,7 +391,69 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         |c, v| c.liquidations = v,
     );
 
-    // --- Order book: its kind, and for a ladder the highlight. ---
+    // --- Order book: shown or not, the strip it leaves when hidden, its width, its kind, and for
+    // a ladder the highlight. ---
+    let book_show_cb = {
+        let entity = entity.clone();
+        MoonCheckbox::new(SharedString::from(format!("{id}-book-show")))
+            .label(t!("chart.graphics.book_show").to_string())
+            .checked(book.shown)
+            .on_change(move |ch: &bool, _w, app| {
+                let v = *ch;
+                entity.update(app, |this, cx| {
+                    this.apply_tab_setting(StackSetting::Orderbook(v), cx)
+                });
+            })
+    };
+    // Off together with the book, such a tab is chart edge to edge and takes no order gesture —
+    // click placement, drag, cancel, menu, keyboard cancel (#557).
+    let book_zone_cb = {
+        let entity = entity.clone();
+        MoonCheckbox::new(SharedString::from(format!("{id}-book-zone")))
+            .label(t!("chart.graphics.book_zone").to_string())
+            .checked(book.zone)
+            .on_change(move |ch: &bool, _w, app| {
+                let v = *ch;
+                entity.update(app, |this, cx| {
+                    this.apply_tab_setting(StackSetting::ShowZone(v), cx)
+                });
+            })
+    };
+    let book_width_row = v_flex()
+        .gap(design::ui_px(cx, 2.0))
+        .child(
+            h_flex()
+                .gap(design::ui_px(cx, 6.0))
+                .items_center()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(design::t_caption(cx))
+                        .text_color(rgb(p.text))
+                        .child(t!("chart.graphics.book_width").to_string()),
+                )
+                .child(
+                    div().w(px(64.0)).child(
+                        MoonInput::new(SharedString::from(format!("{id}-book-width")))
+                            .state(book.width_input)
+                            .size(design::INPUT_SIZE),
+                    ),
+                )
+                .child(div().text_color(rgb(p.text_muted)).child("px")),
+        )
+        .child(
+            div()
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text_muted))
+                .child(
+                    t!(
+                        "chart.graphics.book_width_hint",
+                        min = book_width::MIN,
+                        max = book_width::MAX
+                    )
+                    .to_string(),
+                ),
+        );
     let book_kind_row = {
         let entity = entity.clone();
         seg_row(
@@ -455,8 +532,8 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                     SharedString::from(format!("{id}-close")),
                     {
                         let entity = entity.clone();
-                        move |_, _w, app: &mut App| {
-                            entity.update(app, |this, cx| this.close_graphics_popup(cx));
+                        move |_, window, app: &mut App| {
+                            entity.update(app, |this, cx| this.close_graphics_popup(window, cx));
                         }
                     },
                 )),
@@ -495,6 +572,9 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 v_flex()
                     .w(px(ROW_W))
                     .gap(design::ui_px(cx, 6.0))
+                    .child(book_show_cb)
+                    .child(book_zone_cb)
+                    .child(book_width_row)
                     .child(book_kind_row)
                     .children(ladder_big_row),
             ),
@@ -511,6 +591,75 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
 pub(super) trait GraphicsPopupHost: LayoutPopupHost {
     /// Return the target's per-tab override, or `None` to follow the global default.
     fn graphics_override(&self, cx: &App) -> Option<ChartGraphicsCfg>;
+
+    /// The book-width field. Held by the host, like the ⚙ popup's fields, because a
+    /// `MoonInputState` has to outlive the popup's per-render content.
+    fn book_width_input(&self) -> &Entity<MoonInputState>;
+
+    /// Fill the width field with what the target draws now, rounded to whole pixels.
+    fn seed_book_width_input(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let width = self.graphics_cfg(cx).book_width_px.round().to_string();
+        self.book_width_input()
+            .clone()
+            .update(cx, |input, c| input.set_value(width, window, c));
+    }
+
+    /// Keep the width field in step with the target while nobody is typing in it, and hand the
+    /// keyboard back when the popup is gone.
+    ///
+    /// Called on every render of the host. Seeding only on open would leave the field stale after
+    /// anything else moves the width while the popup is up — a ⧉ press setting or resetting the
+    /// kind's default, another window editing the default this tab follows. A popup DISPLACED by
+    /// a neighbouring button closes through the slot, where no window is at hand to release the
+    /// field's focus; that release happens here, on the next frame.
+    fn sync_book_width_field(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = self.book_width_input();
+        if !self.popup_shows(ChartPopup::Graphics) {
+            crate::hotkeys::release_field_focus(input, window, cx);
+            return;
+        }
+        let focused = window
+            .focused(cx)
+            .is_some_and(|f| f == input.read(cx).focus_handle(cx));
+        let shown = self.graphics_cfg(cx).book_width_px.round().to_string();
+        if !focused && input.read(cx).value() != shown.as_str() {
+            self.seed_book_width_input(window, cx);
+        }
+    }
+
+    /// The field's number when it lies OUTSIDE the offered range, for a clamped commit.
+    ///
+    /// An in-range number has already been applied by the field's change event; committing it
+    /// again on leaving the field could only re-apply a value something else has replaced since,
+    /// such as a ⧉ reset, turning the tab back into an override of its own.
+    fn pending_out_of_range_width(&self, cx: &App) -> Option<f32> {
+        self.book_width_input()
+            .read(cx)
+            .value()
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|w| !(book_width::MIN..=book_width::MAX).contains(w))
+    }
+
+    /// Store a book width on the target, bounded the way the layout reads it.
+    ///
+    /// Writes nothing when the target already draws that width, so a blur on an untouched field
+    /// does not turn a tab that follows its kind default into one with an override of its own.
+    fn commit_book_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        let cfg = self.graphics_cfg(cx);
+        let width = book_width::normalize(width);
+        if cfg.book_width_px == width {
+            return;
+        }
+        self.apply_graphics(
+            ChartGraphicsCfg {
+                book_width_px: width,
+                ..cfg
+            },
+            cx,
+        );
+    }
 
     /// Read the target's effective settings, NORMALIZED to what the chart actually draws.
     ///
@@ -533,14 +682,67 @@ pub(super) trait GraphicsPopupHost: LayoutPopupHost {
         self.apply_tab_setting(StackSetting::Graphics(cfg), cx);
     }
 
-    /// Close the popup.
+    /// Close the popup, handing the keyboard back if the width field held it.
     ///
     /// Ownership is checked by the slot, which is load-bearing: clicking the button while the popup
     /// is open makes `Popover` fire `on_open_change(false)` twice (outside-click handler, then the
-    /// trigger re-arming).
-    fn close_graphics_popup(&mut self, cx: &mut Context<Self>) {
+    /// trigger re-arming). The focus release is the ⚙ popup's reason exactly — see
+    /// `LayoutPopupHost::release_layout_field_focus`: a host-owned field left focused after its
+    /// popup stops rendering silently kills every hotkey. A pending out-of-range number is applied
+    /// clamped FIRST: the blur the release causes arrives with the popup already gone, and the
+    /// field's subscription ignores it then.
+    fn close_graphics_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.popup_shows(ChartPopup::Graphics)
+            && let Some(width) = self.pending_out_of_range_width(cx)
+        {
+            self.commit_book_width(width, cx);
+        }
         self.close_chart_popup(ChartPopup::Graphics, cx);
+        crate::hotkeys::release_field_focus(self.book_width_input(), window, cx);
     }
+}
+
+/// Keep the book-width field and the target's width in step.
+///
+/// Every edit whose number is already in range is applied at once: both bounds have three digits,
+/// so the one- and two-digit states a number passes through on its way are never in range and
+/// never applied. Leaving the field or pressing Enter applies an out-of-range number clamped and
+/// rewrites the field with what the chart now draws, so a stray "700" reads back as 600; an
+/// in-range number is not applied a second time there (see `pending_out_of_range_width`).
+///
+/// One subscription per host, set up where the field is created, as the ⚙ popup's fields are.
+pub(super) fn subscribe_book_width<T: GraphicsPopupHost>(
+    input: &Entity<MoonInputState>,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) {
+    cx.subscribe_in(
+        input,
+        window,
+        |this, input, ev: &MoonInputEvent, window, cx| {
+            if !this.popup_shows(ChartPopup::Graphics) {
+                return;
+            }
+            match ev {
+                MoonInputEvent::Change => {
+                    let typed = input.read(cx).value().trim().parse::<f32>().ok();
+                    if let Some(width) =
+                        typed.filter(|w| (book_width::MIN..=book_width::MAX).contains(w))
+                    {
+                        this.commit_book_width(width, cx);
+                    }
+                }
+                MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. } => {
+                    if let Some(width) = this.pending_out_of_range_width(cx) {
+                        this.commit_book_width(width, cx);
+                    }
+                    this.seed_book_width_input(window, cx);
+                }
+                _ => {}
+            }
+        },
+    )
+    .detach();
 }
 
 /// Build the chart-graphics popup: a `MoonPopover` anchored to the button that opens it.
@@ -552,6 +754,7 @@ pub(super) trait GraphicsPopupHost: LayoutPopupHost {
 ///     this: The popup's host.
 ///     id_prefix: Per-host element identity prefix.
 ///     trigger: The button the popover anchors to.
+///     window: The host's window, for keeping the width field in step.
 ///     cx: Host context.
 ///
 /// Returns:
@@ -560,8 +763,10 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
     this: &T,
     id_prefix: &'static str,
     trigger: impl IntoElement,
+    window: &mut Window,
     cx: &mut Context<T>,
 ) -> MoonPopover {
+    this.sync_book_width_field(window, cx);
     let open_entity = cx.entity();
     let mut popover = MoonPopover::new(SharedString::from(format!("{id_prefix}-popover")))
         // Anchored bottom-right of the button, as the candle popup beside it is: growing left
@@ -570,9 +775,13 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
         .content_width(f32::from(content_width(cx)))
         .close_on_content_click(false)
         .open(this.popup_shows(ChartPopup::Graphics))
-        .on_open_change(move |open, _window, app| {
-            open_entity.update(app, |this, cx| {
-                this.report_chart_popup(ChartPopup::Graphics, open, cx)
+        .on_open_change(move |open, window, app| {
+            open_entity.update(app, |this, cx| match open {
+                true => {
+                    this.seed_book_width_input(window, cx);
+                    this.open_chart_popup(ChartPopup::Graphics, cx);
+                }
+                false => this.close_graphics_popup(window, cx),
             });
         })
         .trigger(trigger);
@@ -581,20 +790,29 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
     }
     let p = MoonPalette::active(cx);
     let cfg = this.graphics_cfg(cx);
+    let snap = this.layout_popup_snapshot(cx);
     let entity = cx.entity();
-    let row = crate::chart_tabs::apply_row::render_apply_row(
-        this,
-        id_prefix,
-        vec![StackSetting::Graphics(cfg)],
-        None,
-        p,
+    // The graphics travel as a kind default; the two book checkboxes have none and are written
+    // into the addressed tabs by the same press (`ChartTabs::set_kind_defaults`).
+    let values = this.applicable_here(
+        vec![
+            StackSetting::Graphics(cfg),
+            StackSetting::Orderbook(snap.orderbook),
+            StackSetting::ShowZone(snap.show_zone),
+        ],
         cx,
     );
+    let row = crate::chart_tabs::apply_row::render_apply_row(this, id_prefix, values, None, p, cx);
+    let book = BookToggles {
+        shown: snap.orderbook,
+        zone: snap.show_zone,
+        width_input: this.book_width_input(),
+    };
     popover = popover.content(
         v_flex()
             .gap_2()
             .children(row)
-            .child(render_graphics_popup(id_prefix, entity, cfg, p, cx)),
+            .child(render_graphics_popup(id_prefix, entity, cfg, book, p, cx)),
     );
     popover
 }

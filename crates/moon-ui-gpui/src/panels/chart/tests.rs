@@ -108,11 +108,11 @@ fn chart_stacks_pass_their_workspace_group_into_every_panel() {
 ///
 /// Dropping that comparison leaves an idle chart asleep after a core's clock offset is measured,
 /// so its closed-trade arrows continue to use stale timestamps until an unrelated repaint.
-/// Omitting the width comparison similarly leaves a quiet chart at the previous book width.
+/// The book width rides in the effective chart graphics: comparing that struct is what wakes a
+/// quiet chart whose kind default was widened from another window.
 #[test]
 fn chart_settings_signature_changes_when_the_report_axis_changes() {
     let identity = ChartSettingsSig {
-        order_book_width_px: moon_core::config::book_width::DEFAULT,
         theme: ChartTheme::default(),
         orders: OrdersStyleSet::default(),
         follow: false,
@@ -133,12 +133,15 @@ fn chart_settings_signature_changes_when_the_report_axis_changes() {
         "a newly measured core offset must wake an idle chart"
     );
     let wider_book = ChartSettingsSig {
-        order_book_width_px: 340.0,
+        chart_graphics: ChartGraphicsCfg {
+            book_width_px: 340.0,
+            ..ChartGraphicsCfg::default()
+        },
         ..identity.clone()
     };
     assert!(
         identity != wider_book,
-        "a global width edit must wake an idle chart"
+        "a book width edit must wake an idle chart"
     );
 }
 

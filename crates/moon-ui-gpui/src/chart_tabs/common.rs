@@ -546,7 +546,11 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     /// exactly as it does when dismissed by a click on the chart. The Custom-tab NAME field is not
     /// part of that: it commits from its own `Blur`/Enter subscription, which is gated on the ⚙
     /// popup still being the one showing, so a name typed and never confirmed is dropped on every
-    /// close path. That predates the slot and is left as it was.
+    /// close path. That predates the slot and is left as it was. The graphics popup's book-width
+    /// field is not settled here either: every in-range edit is applied as it is typed, and a
+    /// displaced popup's focus is released on the host's next render (`sync_book_width_field`).
+    /// An OUT-of-range number still in the field when another popup displaces it is dropped —
+    /// only the popup's own close funnel clamps one, and this path has no graphics host to ask.
     ///
     /// Args:
     ///     popup: The overlay that just stopped showing.
@@ -569,8 +573,8 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     ///
     /// Reachable because ending a market search releases the keyboard rather than parking it
     /// somewhere (see [`coin_toolbar_press_handler`]), which is what leaves a popover opened by
-    /// that same press with nothing to restore. The ⚙ popup is the only one of the four that has
-    /// text fields at all.
+    /// that same press with nothing to restore. The graphics popup's book-width field has the same
+    /// exposure and its own release (`GraphicsPopupHost::close_graphics_popup`).
     ///
     /// Args:
     ///     window: The window whose focus is being released.
@@ -978,8 +982,6 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
     let close_entity = entity.clone();
     let pick_entity = entity.clone();
     let all_entity = entity.clone();
-    let ob_entity = entity.clone();
-    let sz_entity = entity.clone();
     let ap_entity = entity.clone();
     let or_entity = entity.clone();
     let pap_entity = entity.clone();
@@ -1007,8 +1009,6 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         is_custom.then_some(this.rename_input()),
         this.fit_input(),
         this.scroll_input(),
-        snap.orderbook,
-        snap.show_zone,
         snap.auto_pin,
         snap.price_axis_pos,
         snap.time_axis,
@@ -1080,16 +1080,6 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
         apply_all_label,
         move |app| {
             all_entity.update(app, |this, cx| this.arm_apply_press(cx));
-        },
-        move |checked, app| {
-            ob_entity.update(app, |this, cx| {
-                this.apply_tab_setting(StackSetting::Orderbook(checked), cx)
-            });
-        },
-        move |checked, app| {
-            sz_entity.update(app, |this, cx| {
-                this.apply_tab_setting(StackSetting::ShowZone(checked), cx)
-            });
         },
         move |checked, app| {
             ap_entity.update(app, |this, cx| {

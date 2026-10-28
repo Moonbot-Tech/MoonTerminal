@@ -44,7 +44,6 @@ iface.book_level_auto: "Скинути на авто"
 iface.book_level_is_auto: "авто"
 iface.book_level_width: "Товщина ліній рівнів, px"
 
-iface.order_book_width: "Ширина стакана, px"
 
 # Settings redesign (phases 3-5)
 iface.theme.title: "Тема інтерфейсу"
@@ -62,5 +61,4 @@ iface.grp.labels: "Підписи"
 iface.set_note.light: "набір світлої теми"
 iface.set_note.dark: "набір темної теми — спільний для «Темної» і «Графіту»"
 iface.preview: "Попередній перегляд"
-iface.order_book_width.hint: "Одна для всіх тем."
 iface.dock_reset.hint: "У всіх вікнах груп поточного режиму. Застосовується одразу."

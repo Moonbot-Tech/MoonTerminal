@@ -178,8 +178,6 @@ fn the_layout_press_carries_every_layout_value() {
     assert_eq!(s.layout_height_fit, Some(40));
     assert_eq!(s.layout_height_scroll, Some(700));
     assert_eq!(s.scale, Some(1.5));
-    assert_eq!(s.orderbook_enabled, Some(false));
-    assert_eq!(s.show_zone, Some(false));
     assert_eq!(s.auto_pin, Some(true));
     assert_eq!(s.layout_orientation, Some(StackOrientation::Horizontal));
     assert_eq!(s.price_axis_pos, Some(PriceAxisPos::Right));
@@ -194,7 +192,10 @@ fn the_layout_press_carries_every_layout_value() {
     assert_eq!(s.layout_columns, Some(3));
     assert_eq!(s.layout_columns_exact, Some(true));
     assert_eq!(s.layout_min_slot, Some(200));
-    // Not the layout popup's to copy: each has its own ⧉.
+    // Not the layout popup's to copy: each has its own ⧉. The two order-book checkboxes moved to
+    // the graphics popup and travel with its press.
+    assert_eq!(s.orderbook_enabled, None);
+    assert_eq!(s.show_zone, None);
     assert_eq!(s.candle_view, None);
     assert_eq!(s.chart_graphics, None);
     assert_eq!(s.x_ppm, None);
@@ -478,8 +479,9 @@ fn a_stored_default_is_normalized_on_the_way_in() {
 /// the ⧉ walk — one definition, so the two cannot drift apart.
 #[test]
 fn only_an_orderbook_value_rebuilds_demand() {
+    assert!(StackSetting::Orderbook(false).rebuilds_orderbook_demand());
     assert!(
-        layout_values(
+        !layout_values(
             &loud_snapshot(),
             None,
             None,
@@ -490,7 +492,7 @@ fn only_an_orderbook_value_rebuilds_demand() {
         )
         .iter()
         .any(|v| v.rebuilds_orderbook_demand()),
-        "the layout press carries the order-book toggle, so its walk must rebuild demand"
+        "the order-book toggle moved to the graphics popup; the layout press no longer carries it"
     );
     assert!(!StackSetting::CandleView(CandleViewCfg::default()).rebuilds_orderbook_demand());
     assert!(!StackSetting::Graphics(ChartGraphicsCfg::default()).rebuilds_orderbook_demand());

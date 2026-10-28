@@ -6,7 +6,6 @@ use moon_core::config::{ChartTheme, OrdersStyleSet};
 /// Construct independent input settings without a GPUI entity or running backend.
 fn signature() -> ChartSettingsSig {
     ChartSettingsSig {
-        order_book_width_px: moon_core::config::book_width::DEFAULT,
         theme: ChartTheme::default(),
         orders: OrdersStyleSet::default(),
         follow: false,

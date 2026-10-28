@@ -369,6 +369,8 @@ pub struct ChartTabs {
     layout_max_charts_input: Entity<MoonInputState>,
     /// Minimum-slot field of the screen divider, shown only in FIT-stretch.
     layout_min_slot_input: Entity<MoonInputState>,
+    /// Order-book width field of the chart-graphics popup.
+    book_width_input: Entity<MoonInputState>,
     /// Custom-tab name field, shown only for `Custom` in the layout popup.
     custom_name_input: Entity<MoonInputState>,
     /// Per-window market-search input in the tab strip; available markets depend on the active
@@ -710,6 +712,8 @@ impl ChartTabs {
         ] {
             common::subscribe_layout_commit(input, cx);
         }
+        let book_width_input = cx.new(|cx| MoonInputState::new(window, cx));
+        graphics_popup::subscribe_book_width(&book_width_input, window, cx);
         // Commit the custom-tab name field from the layout popup on blur or Enter.
         let custom_name_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(
@@ -768,6 +772,7 @@ impl ChartTabs {
             layout_scroll_input,
             layout_max_charts_input,
             layout_min_slot_input,
+            book_width_input,
             custom_name_input,
             coin_input,
             coin_query: String::new(),

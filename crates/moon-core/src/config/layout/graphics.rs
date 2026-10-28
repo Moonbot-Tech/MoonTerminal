@@ -387,6 +387,15 @@ pub struct ChartGraphicsCfg {
     /// turns the highlight off.
     #[serde(default = "def_ladder_big_pct", deserialize_with = "de_ladder_big_pct")]
     pub ladder_big_pct: u8,
+    /// Width of the right-hand book zone in PHYSICAL pixels, before the pane's own limits narrow
+    /// it (`chartdx::pane_layout`). Per tab like the book's kind: a scalping tab can give the book
+    /// room while a crowded AddToChart stack keeps it slim. It used to be one app-wide value in
+    /// `settings.toml`; `startup::book_width_migration` carried that value here.
+    #[serde(
+        default = "crate::config::book_width::default_width",
+        deserialize_with = "de_book_width"
+    )]
+    pub book_width_px: f32,
 }
 
 /// The `hvol_tf_s` value that means "everything retained" — Moonbot's `Max`.
@@ -436,6 +445,7 @@ impl Default for ChartGraphicsCfg {
             hvol_hide_captions: false,
             book_kind: BookKind::Bars,
             ladder_big_pct: def_ladder_big_pct(),
+            book_width_px: crate::config::book_width::DEFAULT,
         }
     }
 }

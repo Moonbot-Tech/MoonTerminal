@@ -267,6 +267,7 @@ impl Render for ChartTabs {
                 })
                 .selected(graphics_popup_open)
                 .render(),
+            window,
             cx,
         );
         // The history button beside the palette one edits how the ACTIVE TAB draws closed trades.
