@@ -239,7 +239,7 @@ fn run_worker(
             // draining a full outbox batch cannot re-run a stage that is resting. Gating this on
             // another stage's wait would throttle live report changes to one 512-event batch per
             // backoff, up to five minutes apart. The reconciliation re-arm itself lives inside
-            // `consume_outbox` (see `outbox_activity_should_rearm_reconciliation`), keyed on
+            // `consume_outbox` (see `rearm_reconciliation_for_outbox`), keyed on
             // whether the drain saw a partition-invalidating event this turn — not on any event,
             // and not on `more`/`batch_was_full`.
             Attempt::Done(StageTurn::Ran { more: true }) => continue,

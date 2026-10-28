@@ -166,7 +166,7 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
     Ok(StageTurn::Drained)
 }
 
-/// Whether a drained reconciliation walk should resume because the outbox drain this turn
+/// Restart reconciliation from its first source because the outbox drain this turn
 /// observed a PARTITION-INVALIDATING event — one that wipes a whole core/source of prepared
 /// values with no per-row outbox event left behind to re-value them individually.
 ///
@@ -182,13 +182,14 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
 /// with the live outbox drain on the money-path thread — the very thing this goal exists to speed
 /// up.
 ///
-/// The only two facts that matter: whether reconciliation has anything left to do on its own, and
-/// whether this turn's outbox activity actually left rows unvalued with no per-row event able to
-/// catch them. Only `OutboxAction::RescanCore`/`PurgeLegacy` do that — both call
+/// The deciding fact is whether this turn's outbox activity left rows unvalued with no per-row
+/// event able to catch them. Only `OutboxAction::RescanCore`/`PurgeLegacy` do that — both call
 /// `delete_partition`, wiping `trade_values` for a whole core/source, so a walk is the only thing
 /// that can recover the now-unvalued rows. `Row` values its own row directly in the same batch;
 /// `Delete` removes a row that needs no revaluing; neither leaves anything for a walk to find. A
-/// cold start needs no re-arm at all — `run_worker` already seeds `reconciliation = Some(..)`.
+/// running walk must restart too: the wiped partition can include rows its cursor already passed,
+/// or belong to a source it already drained. Keeping that cursor would strand those rows until
+/// restart. A cold start already seeds `reconciliation = Some(..)` in `run_worker`.
 ///
 /// **Named residual, not silently fixed**: the walk this re-arms still drains `[Typed, Legacy]`
 /// sequentially (see [`reconcile_step`]'s own doc), so "newest-first" holds PER SOURCE, not
@@ -197,31 +198,31 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
 /// walk, which would reshape the cursor expression `valuation_never_routed_contract.rs:156`
 /// anchors verbatim; that is a materially bigger change than this goal and is not made here.
 ///
+/// Reconciliation is reset for a partition invalidation whether idle or running; otherwise its
+/// source and cursor remain untouched.
+///
 /// Args:
 ///     reconciliation: Current startup/backfill reconciliation cursor, or `None` once drained.
 ///     events: This turn's unacknowledged outbox events, already durability-filtered by the
 ///         caller.
-///
-/// Returns:
-///     `true` when a drained walk should be re-armed: reconciliation is idle AND at least one
-///     event this turn invalidated a whole partition.
-pub(in crate::db::valuation::worker) fn outbox_activity_should_rearm_reconciliation(
-    reconciliation: &Option<ReconcileState>,
+pub(in crate::db::valuation::worker) fn rearm_reconciliation_for_outbox(
+    reconciliation: &mut Option<ReconcileState>,
     events: &[OutboxEvent],
-) -> bool {
-    reconciliation.is_none()
-        && events.iter().any(|event| {
-            matches!(
-                event.action,
-                OutboxAction::RescanCore | OutboxAction::PurgeLegacy
-            )
-        })
+) {
+    if events.iter().any(|event| {
+        matches!(
+            event.action,
+            OutboxAction::RescanCore | OutboxAction::PurgeLegacy
+        )
+    }) {
+        *reconciliation = Some(ReconcileState::new());
+    }
 }
 
 /// Consume one contiguous report outbox prefix and acknowledge it only after valuation commits.
 ///
-/// A partition-invalidating event observed this turn also re-arms a drained reconciliation walk —
-/// see [`outbox_activity_should_rearm_reconciliation`] for why only that event kind qualifies, and
+/// A partition-invalidating event observed this turn also restarts the reconciliation walk —
+/// see [`rearm_reconciliation_for_outbox`] for why only that event kind qualifies, and
 /// for the per-source residual it does not fix.
 ///
 /// Args:
@@ -232,8 +233,8 @@ pub(in crate::db::valuation::worker) fn outbox_activity_should_rearm_reconciliat
 ///     generation: Monotonic valuation publication counter.
 ///     dirty: Coalescing UI wake edge.
 ///     pending_ack: Highest sequence sent to the report writer but not yet observed deleted.
-///     reconciliation: Startup/backfill reconciliation cursor, re-armed here once drained if this
-///         turn's durable activity makes that worthwhile.
+///     reconciliation: Startup/backfill reconciliation cursor, reset here when this turn's
+///         durable activity invalidates a partition.
 ///
 /// Returns:
 ///     Whether another full outbox batch may already be waiting, or that the replica is absent.
@@ -259,9 +260,7 @@ pub(in crate::db::valuation::worker) fn consume_outbox(
     if events.is_empty() {
         return Ok(StageTurn::Ran { more: false });
     }
-    if outbox_activity_should_rearm_reconciliation(reconciliation, events) {
-        *reconciliation = Some(ReconcileState::new());
-    }
+    rearm_reconciliation_for_outbox(reconciliation, events);
     // One slot per event in `events`, index-aligned rather than keyed by identity. A duplicate
     // `Row` event for one identity therefore keeps its OWN observation instead of collapsing into
     // a shared map entry: a later `None` correctly overrides an earlier `Some` in pass 2 rather

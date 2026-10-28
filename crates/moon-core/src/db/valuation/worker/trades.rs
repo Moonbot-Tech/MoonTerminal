@@ -4,6 +4,7 @@ use super::*;
 ///
 /// Returns the ready identities and whether any monetary value changed. The caller groups
 /// distinct identities between event barriers so writing ahead cannot reorder a delete/reset.
+/// Cleanup attempts release even if rollback fails, returning the rollback error first.
 pub(in crate::db::valuation::worker) fn prepare_ready_trades(
     store: &Connection,
     axis: &ReportAxis,
@@ -53,9 +54,11 @@ pub(in crate::db::valuation::worker) fn prepare_ready_trades(
         Ok((keys, changed))
     })();
     if result.is_err() {
-        store
-            .execute_batch("ROLLBACK TO ready_values; RELEASE ready_values")
-            .map_err(super::super::store_fault)?;
+        let rollback = store.execute_batch("ROLLBACK TO ready_values");
+        // A failed rollback must not skip releasing the connection's savepoint.
+        let release = store.execute_batch("RELEASE ready_values");
+        rollback.map_err(super::super::store_fault)?;
+        release.map_err(super::super::store_fault)?;
     }
     result
 }

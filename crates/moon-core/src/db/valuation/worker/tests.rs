@@ -55,6 +55,64 @@ fn ready_batch_failure_rolls_back_every_chunk_and_keeps_retries() {
     assert!(!has_deferred(&store));
 }
 
+/// Skipping RELEASE after a rollback error leaves standalone deferred batches in a transaction.
+/// A nested batch must instead release only its own savepoint and preserve the outer transaction.
+#[test]
+fn ready_batch_releases_savepoint_even_when_rollback_fails() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization, TransactionOperation};
+
+    for nested in [false, true] {
+        let store = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
+        let input = TradeInput {
+            source: TradeSource::Typed,
+            core_uid: 1,
+            row_id: 10,
+            closedate: 1_700_000_000,
+            quote_ordinal: 1,
+            profit_quote: 1.25,
+            spent_quote: Some(10.0),
+        };
+        prefetch_rates(&store, &NoNetwork, &axis(), std::slice::from_ref(&input)).unwrap();
+        store.execute_batch("CREATE TEMP TRIGGER fail_ready BEFORE INSERT ON main.trade_values BEGIN SELECT RAISE(ABORT,'synthetic batch failure'); END;").unwrap();
+        if nested {
+            store.execute_batch("BEGIN").unwrap();
+        }
+        let releases = Arc::new(AtomicU64::new(0));
+        let seen = releases.clone();
+        store
+            .authorizer(Some(move |context: AuthContext<'_>| match context.action {
+                AuthAction::Savepoint {
+                    operation: TransactionOperation::Rollback,
+                    savepoint_name: "ready_values",
+                } => Authorization::Deny,
+                AuthAction::Savepoint {
+                    operation: TransactionOperation::Release,
+                    savepoint_name: "ready_values",
+                } => {
+                    seen.fetch_add(1, Ordering::Relaxed);
+                    Authorization::Allow
+                }
+                _ => Authorization::Allow,
+            }))
+            .unwrap();
+        let error = prepare_ready_trades(&store, &axis(), &[input]).unwrap_err();
+        assert_eq!(error.kind, FailureKind::CacheWrite);
+        assert!(
+            error.detail.contains("not authorized"),
+            "keep the rollback error: {error:?}"
+        );
+        assert_eq!(
+            releases.load(Ordering::Relaxed),
+            1,
+            "release must still be attempted"
+        );
+        assert_eq!(store.is_autocommit(), !nested);
+        if nested {
+            store.execute_batch("ROLLBACK").unwrap();
+        }
+    }
+}
+
 /// Batched outbox inserts must preserve sequence, duplicate ids and surrounding reset barriers.
 #[test]
 fn batched_outbox_has_exact_scalar_event_parity() {
@@ -1036,12 +1094,10 @@ fn row_event_replaces_a_stale_deferred_copy() {
     );
 }
 
-/// A drained reconciliation must restart only after an event that invalidates an entire prepared
-/// partition. Breakage: `worker/reconcile.rs:outbox_activity_should_rearm_reconciliation` always returning
-/// `false` leaves rows deleted by a rescan or legacy purge without a value until a future manual
-/// rebuild, so recent profit figures remain blank.
+/// Restricting partition re-arms to idle walks strands passed rows; re-arming on Row/Delete
+/// instead would make live updates repeatedly scan the whole history.
 #[test]
-fn partition_invalidation_rearms_a_drained_reconciliation_only() {
+fn partition_invalidation_restarts_idle_and_running_reconciliation_only() {
     let rescan = OutboxEvent {
         seq: 1,
         source: TradeSource::Typed,
@@ -1057,18 +1113,109 @@ fn partition_invalidation_rearms_a_drained_reconciliation_only() {
         action: OutboxAction::Row,
     };
 
-    assert!(outbox_activity_should_rearm_reconciliation(
-        &None,
-        &[rescan]
-    ));
-    assert!(
-        !outbox_activity_should_rearm_reconciliation(&None, &[row]),
-        "a row event values itself and must not restart a full history walk"
+    for action in [OutboxAction::RescanCore, OutboxAction::PurgeLegacy] {
+        for source_index in [0, 1] {
+            for mut state in [
+                None,
+                Some(ReconcileState {
+                    source_index,
+                    after: Some((120, 7, 10)),
+                }),
+            ] {
+                rearm_reconciliation_for_outbox(&mut state, &[OutboxEvent { action, ..rescan }]);
+                let state = state.expect("partition invalidation must start a walk");
+                assert_eq!(state.source_index, 0);
+                assert_eq!(state.after, None);
+            }
+        }
+    }
+    for events in [
+        vec![],
+        vec![row],
+        vec![OutboxEvent {
+            action: OutboxAction::Delete,
+            ..row
+        }],
+    ] {
+        let mut idle = None;
+        rearm_reconciliation_for_outbox(&mut idle, &events);
+        assert!(idle.is_none());
+        let mut running = Some(ReconcileState {
+            source_index: 1,
+            after: Some((120, 7, 10)),
+        });
+        rearm_reconciliation_for_outbox(&mut running, &events);
+        let running = running.unwrap();
+        assert_eq!(running.source_index, 1);
+        assert_eq!(running.after, Some((120, 7, 10)));
+    }
+}
+
+/// Keeping a running cursor after a rescan strands already-visited rows without dollar values.
+#[test]
+fn mid_walk_rescan_revalues_rows_already_passed_by_the_cursor() {
+    let _health = super::super::test_health_guard();
+    let (dir, reports) = report_fixture(&[(1, 10, 1_700_000_120), (2, 20, 1_700_000_060)]);
+    let store = super::super::open_store(&dir.join("valuation.sqlite")).unwrap();
+    let mut reconciliation = Some(ReconcileState::new());
+    let first = reconciliation_batch(&reports, TradeSource::Typed, None, 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!((first[0].core_uid, first[0].row_id), (1, 10));
+    prefetch_rates(&store, &NoNetwork, &axis(), &first).unwrap();
+    prepare_ready_trades(&store, &axis(), &first).unwrap();
+    reconciliation.as_mut().unwrap().after = Some((first[0].closedate, 1, 10));
+
+    // Offset adoption keeps the report rows and emits only a partition reset, no Row events.
+    let rescan = OutboxEvent {
+        seq: 1,
+        source: TradeSource::Typed,
+        core_uid: 1,
+        row_id: 0,
+        action: OutboxAction::RescanCore,
+    };
+    rearm_reconciliation_for_outbox(&mut reconciliation, &[rescan]);
+    let turn = commit_batch(&store, || {
+        apply_loaded_events(&store, &NoNetwork, &axis(), &[rescan], &[None])
+    })
+    .unwrap();
+    assert!(turn.fault.is_none());
+    assert_eq!(turn.acknowledged, Some(1));
+    assert_eq!(
+        store
+            .query_row("SELECT count(*) FROM trade_values", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
     );
-    assert!(
-        !outbox_activity_should_rearm_reconciliation(&Some(ReconcileState::new()), &[rescan]),
-        "an active newest-first walk keeps its cursor instead of restarting"
-    );
+
+    let mut state = reconciliation.unwrap();
+    for source in [TradeSource::Typed, TradeSource::Legacy]
+        .into_iter()
+        .skip(state.source_index)
+    {
+        loop {
+            let batch = reconciliation_batch(&reports, source, state.after, 1)
+                .unwrap()
+                .unwrap();
+            if batch.is_empty() {
+                state.after = None;
+                break;
+            }
+            prefetch_rates(&store, &NoNetwork, &axis(), &batch).unwrap();
+            prepare_ready_trades(&store, &axis(), &batch).unwrap();
+            state.after = batch
+                .last()
+                .map(|input| (input.closedate, input.core_uid, input.row_id));
+        }
+    }
+    let valued = store.prepare("SELECT core_uid,row_id,profit_usdt,spent_usdt FROM trade_values ORDER BY core_uid,row_id")
+        .unwrap().query_map([], |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,f64>(2)?,row.get::<_,f64>(3)?)))
+        .unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+    assert_eq!(valued, vec![(1, 10, 1.0, 10.0), (2, 20, 1.0, 10.0)]);
+    drop(store);
+    drop(reports);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// Event-aligned observations must let a later missing row delete the value prepared by an earlier
