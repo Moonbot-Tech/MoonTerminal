@@ -475,11 +475,16 @@ pub struct OrderLineStore {
     /// Closure removes an entry and revival adds it back, so update-time backstop and auto-fit work
     /// scales with live orders instead of the retained closed-history cap.
     open_uids: Vec<u64>,
-    /// Groups orders with no close time by market so chart queries avoid scanning other markets.
+    /// Groups orders with no close time by market in retained-map iteration order. Membership and
+    /// map-layout changes rebuild it; price and trace edits reuse it without a history scan.
     open_by_market: HashMap<String, Vec<u64>>,
+    /// Retained-map length at the last draw-index rebuild. Archived appends can grow the map
+    /// outside live ingest and rehash open UIDs; the next changed batch must preserve that order.
+    draw_index_len: usize,
     /// Cached per-market price range for auto-Y over open-order buy/sell lines and active protective
     /// stops of filled orders. Stop, trailing, and VStop prices exist only after fill. The cache is
-    /// rebuilt only when orders change, together with `rev`, rather than on every prepare pass. Its
+    /// rebuilt only when membership or a contributing current price changes, rather than on every
+    /// trace or label edit. Its
     /// ordered map supports borrowed market lookup without SipHash and clones a key once per market.
     auto_fit_ranges: BTreeMap<String, (f32, f32)>,
     /// Increments on any render-affecting change, including geometry, label inputs, and zones.
@@ -506,6 +511,7 @@ impl Default for OrderLineStore {
             closed_keep_loaded: keep,
             open_uids: Vec::new(),
             open_by_market: HashMap::new(),
+            draw_index_len: 0,
             auto_fit_ranges: BTreeMap::new(),
             rev: 0,
             seq_counter: 0,
@@ -532,12 +538,19 @@ impl OrderLineStore {
         self.update_rows(rows, skew_generation, true)
     }
 
-    /// Applies corrected rows, checking absent UIDs only for a complete snapshot.
+    /// Applies corrected rows, checking absent UIDs only for a complete snapshot. Reuses draw
+    /// membership until insertion, closure or revival can change its contents or iteration order.
+    /// Auto-fit ranges refresh only when open membership or a contributing line changes.
     fn update_rows(&mut self, rows: &[OrderRow], skew_generation: u64, complete: bool) -> bool {
         let now_ms = now_unix_ms();
         self.update_generation = self.update_generation.wrapping_add(1);
         let generation = self.update_generation;
         let mut changed = false;
+        let mut range_changed = false;
+        // Reprices and trace edits cannot change draw membership or HashMap iteration order.
+        // Insertions can rehash even when the new order is already terminal, so they invalidate
+        // the index too. Rebuilding on those transitions preserves the historical draw order.
+        let mut draw_membership_changed = self.draw_index_len != self.orders.len();
         // UIDs closed by an explicit `job_is_done` flag in this update are remembered after the
         // loop because the loop holds a mutable borrow of `self.orders` through its entry.
         // Revived UIDs leave the closed queues in that same gap: the queue update needs
@@ -588,6 +601,8 @@ impl OrderLineStore {
             let order = match self.orders.entry(r.uid) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
+                    range_changed = true;
+                    draw_membership_changed = true;
                     let seq = self.seq_counter;
                     self.seq_counter = self.seq_counter.wrapping_add(1);
                     changed = true;
@@ -625,6 +640,8 @@ impl OrderLineStore {
             // A terminal order may remain in snapshots throughout the core's deferred-removal
             // window; reviving it would make the line flicker from closed to open on every update.
             if order.closed_ms.is_some() && !r.job_is_done {
+                range_changed = true;
+                draw_membership_changed = true;
                 order.closed_ms = None;
                 order.closed_reason = None;
                 order.closed_store_ms = None;
@@ -736,19 +753,23 @@ impl OrderLineStore {
             let go = |show: bool, v: Option<f64>| if show { v.map(|x| x as f32) } else { None };
             // Value and first-step time by line kind.
             changed |= order.lines[LineKind::Buy as usize].update_server(r.buy_trace.as_ref());
-            changed |= order.lines[LineKind::Buy as usize].update(
+            let buy_changed = order.lines[LineKind::Buy as usize].update(
                 g(true, r.buy_price),
                 order.create_ms,
                 now_ms,
                 stale_correction,
             );
+            changed |= buy_changed;
+            range_changed |= buy_changed;
             changed |= order.lines[LineKind::Sell as usize].update_server(r.sell_trace.as_ref());
-            changed |= order.lines[LineKind::Sell as usize].update(
+            let sell_changed = order.lines[LineKind::Sell as usize].update(
                 g(f, r.sell_price),
                 sell_start_ms,
                 now_ms,
                 stale_correction,
             );
+            changed |= sell_changed;
+            range_changed |= sell_changed;
 
             let vals: [(Option<f32>, f64, usize); TRACED_KINDS - 2] = [
                 (go(f, r.stop_loss), fill_start_ms, LineKind::Stop as usize),
@@ -771,12 +792,18 @@ impl OrderLineStore {
                 ),
             ];
             for (v, start_ms, i) in vals {
-                changed |= order.lines[i].update(v, start_ms, now_ms, stale_correction);
+                let line_changed = order.lines[i].update(v, start_ms, now_ms, stale_correction);
+                changed |= line_changed;
+                range_changed |= line_changed
+                    && i != LineKind::TakeProfit as usize
+                    && i != LineKind::PendingCond as usize;
             }
             // The explicit core flag `job_is_done` means the order is terminal, either filled or
             // cancelled, and awaits deferred removal. Mark it closed immediately while it remains
             // in the snapshot instead of waiting for disappearance plus the grace period.
             if r.job_is_done && order.closed_ms.is_none() {
+                range_changed = true;
+                draw_membership_changed = true;
                 order.closed_ms = Some(now_ms);
                 order.closed_reason = Some(explicit_close_reason(r));
                 order.closed_store_ms = Some(now_ms);
@@ -815,6 +842,8 @@ impl OrderLineStore {
                 && ord.seen_generation != generation
                 && now_ms - ord.last_seen_ms > CLOSE_GRACE_MS
             {
+                range_changed = true;
+                draw_membership_changed = true;
                 ord.closed_ms = Some(ord.last_seen_ms);
                 ord.closed_reason = Some(OrderCloseReason::BackstopMissing);
                 ord.closed_store_ms = Some(now_ms);
@@ -848,14 +877,19 @@ impl OrderLineStore {
                     order.closed_rev = Some(self.rev);
                 }
             }
-            self.rebuild_auto_fit_ranges();
-            // Draw membership follows retained close state independently of the bookkeeping index.
-            self.open_by_market.clear();
-            for order in self.orders.values().filter(|o| o.closed_ms.is_none()) {
-                self.open_by_market
-                    .entry(order.market.clone())
-                    .or_default()
-                    .push(order.uid);
+            if range_changed {
+                self.rebuild_auto_fit_ranges();
+            }
+            if draw_membership_changed {
+                // Draw membership follows retained close state independently of the bookkeeping index.
+                self.open_by_market.clear();
+                for order in self.orders.values().filter(|o| o.closed_ms.is_none()) {
+                    self.open_by_market
+                        .entry(order.market.clone())
+                        .or_default()
+                        .push(order.uid);
+                }
+                self.draw_index_len = self.orders.len();
             }
         }
         changed
