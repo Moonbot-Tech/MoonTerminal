@@ -140,6 +140,8 @@ pub(crate) struct Shell {
     /// its `(group, S1-S6 index)` target. Blur or Enter updates the local group.
     sell_input: Entity<MoonInputState>,
     sell_edit: Option<(String, usize)>,
+    /// One-shot selection of the preset field after the frame mounting its editor is rendered.
+    pending_preset_selection: Option<Entity<MoonInputState>>,
     /// Which manual-strategy quick-select slot has its assign menu open, as `(core, slot)`.
     ///
     /// Addressed by CORE rather than by group: the buttons belong to one core's slots, and the

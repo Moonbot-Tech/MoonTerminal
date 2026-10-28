@@ -563,6 +563,7 @@ impl Shell {
             size_edit: None,
             sell_input,
             sell_edit: None,
+            pending_preset_selection: None,
             strat_slot_menu: None,
             strat_slots_open: false,
             tp_slider_normal,

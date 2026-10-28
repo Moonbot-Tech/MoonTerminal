@@ -1,7 +1,127 @@
-//! Group ownership contracts for shared inline-edit requests.
+//! Group ownership and real MoonUI replacement behavior for inline preset editors.
 
 // NOT `use super::*`: the parent imports `gpui::*`, whose `test` macro shadows `#[test]`.
-use super::{missing_sound_copy, select_hotkey_target, take_group_edit};
+use super::{
+    missing_sound_copy, select_hotkey_target, select_preset_editor_after_render, take_group_edit,
+};
+use gpui::{
+    AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div, px,
+};
+use moon_ui::{MoonInput, MoonInputState};
+
+/// Render the actual preset field only while its inline editor is open.
+struct PresetEditorHost {
+    input: Entity<MoonInputState>,
+    open: bool,
+    select_pending: bool,
+}
+
+impl Render for PresetEditorHost {
+    /// Mount and unmount MoonUI's real field so opening cannot rely on an old dispatch tree.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.select_pending) {
+            select_preset_editor_after_render(&self.input, window, cx);
+        }
+        div().w(px(100.0)).children(
+            self.open
+                .then(|| MoonInput::new("preset-editor-test").state(&self.input)),
+        )
+    }
+}
+
+/// Bridge each Shell producer to the render consumer exercised by the real-field tests below.
+///
+/// Constructing Shell would also construct Backend and its dock panels. These source checks cover
+/// that wiring separately: removing either drain's request must fail its own editor regression.
+fn assert_preset_selection_route(drain_name: &str, input_field: &str) {
+    let drain = function_body(include_str!("../actions.rs"), drain_name);
+    assert!(drain.contains(&format!("let input = self.{input_field}.clone();")));
+    assert!(drain.contains("self.pending_preset_selection = Some(input.clone());"));
+
+    let render = function_body(include_str!("../render.rs"), "render");
+    assert!(render.contains("self.pending_preset_selection.take()"));
+    assert!(render.contains("select_preset_editor_after_render(&input, window, cx)"));
+}
+
+/// Drive the shared selection path with real MoonUI text input, including a reopen.
+fn assert_preset_editor_replaces_on_open(cx: &mut gpui::TestAppContext, values: [&str; 2]) {
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(
+                moon_core::config::UiThemeMode::Light,
+                1.0,
+            ),
+            cx,
+        );
+    });
+    let mut host = None;
+    let window = cx.open_window(gpui::size(px(300.0), px(100.0)), |window, cx| {
+        let editor = cx.new(|cx| PresetEditorHost {
+            input: cx.new(|cx| MoonInputState::new(window, cx)),
+            open: false,
+            select_pending: false,
+        });
+        host = Some(editor.clone());
+        moon_ui::Root::new(editor, window, cx)
+    });
+    let host = host.unwrap();
+    for value in values {
+        cx.update_window(window.into(), |_, window, cx| {
+            host.update(cx, |host, cx| {
+                host.open = true;
+                host.select_pending = true;
+                host.input.update(cx, |state, cx| {
+                    state.set_value(value.to_string(), window, cx);
+                    state.focus(window, cx);
+                });
+                cx.notify();
+            });
+            let _ = window.draw(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |_, _, cx| {
+                assert_eq!(
+                    host.read(cx).input.read(cx).selected_value().as_ref(),
+                    value
+                );
+            })
+            .unwrap();
+        cx.simulate_input(window.into(), "2");
+        window
+            .update(cx, |_, _, cx| {
+                assert_eq!(host.read(cx).input.read(cx).value().as_ref(), "2");
+            })
+            .unwrap();
+        cx.simulate_input(window.into(), "3");
+        cx.update_window(window.into(), |_, window, cx| {
+            host.update(cx, |host, cx| {
+                assert_eq!(host.input.read(cx).value().as_ref(), "23");
+                host.open = false;
+                cx.notify();
+            });
+            window.blur();
+            let _ = window.draw(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+}
+
+/// Guard the size drain's wiring by source and prove the shared field replaces 5000 with 2.
+#[gpui::test]
+fn size_preset_editor_replaces_the_number_on_every_open(cx: &mut gpui::TestAppContext) {
+    assert_preset_selection_route("drain_order_size_edit_request", "size_input");
+    assert_preset_editor_replaces_on_open(cx, ["5000", "125.5"]);
+}
+
+/// Guard the take drain's wiring by source and prove replacement of fractional and zero values.
+#[gpui::test]
+fn take_preset_editor_replaces_the_number_on_every_open(cx: &mut gpui::TestAppContext) {
+    assert_preset_selection_route("drain_sell_edit_request", "sell_input");
+    assert_preset_editor_replaces_on_open(cx, ["1.25", "0"]);
+}
 
 /// The body of one function, from its `fn` line up to the next item.
 ///

@@ -336,6 +336,10 @@ impl Render for Shell {
         // and the dock frame are timed one by one below.
         crate::diag::record_us(&crate::diag::SHELL_PRELUDE_US, prelude_us);
 
+        if let Some(input) = self.pending_preset_selection.take() {
+            super::actions::select_preset_editor_after_render(&input, window, cx);
+        }
+
         v_flex()
             .size_full()
             .relative() // Anchor absolute popup layers over the dock.
