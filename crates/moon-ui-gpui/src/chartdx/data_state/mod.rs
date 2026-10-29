@@ -169,6 +169,8 @@ pub(in crate::chartdx) struct ChartDataState {
     pub(in crate::chartdx) last_order_sig: u64,
     pub(in crate::chartdx) last_prepared_market_sig: u64,
     pub(in crate::chartdx) last_source_market_sig: u64,
+    /// Volume-reader completion last consumed by a source sync, independent of feed revisions.
+    pub(in crate::chartdx) last_volume_prepared_rev: u64,
     /// When the countdown clock was last consulted, for the throttle in `tick_countdown_captions`.
     ///
     /// Monotonic rather than the wall clock this feature is about: it paces a CHECK, and a check

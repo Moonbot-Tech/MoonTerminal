@@ -33,6 +33,7 @@ fn localized_tests_initialize_on_default_stacks() {
 const COLD_LOOKUPS: &[&str] = &[
     "panels::report::widths::tests::widths_refresh_scale_probe",
     "panels::report::widths::tests::widths_refresh_cache_matches_full_measurement",
+    "chartdx::data_state::market::tests::chart_market_quiet_volume_completion_wakes_the_source_pull",
     "analytics::tuner::ticks::delta_summary::tests::cached_summary_follows_rows_and_locale",
     "panels::label_edit::tests::module_editor_labels_fit_every_locale",
     "analytics::profit_monitor::tests::exchange_rows_group_by_venue_identity_not_by_caption",

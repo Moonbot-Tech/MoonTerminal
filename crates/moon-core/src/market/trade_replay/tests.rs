@@ -1,5 +1,31 @@
 use super::*;
 
+/// Measure frozen history reads for a full prepared window and a camera-sized subrange.
+#[test]
+#[ignore = "scale probe: prints timings"]
+fn chart_market_scale_replay() {
+    let mut series = bars_only_series();
+    series.ticks = (0..98_000)
+        .map(|i| Tick {
+            time_ms: i as f64,
+            price: 100.0 + (i % 10) as f32,
+            qty: 1.0,
+            side: crate::feed::Side::Buy,
+        })
+        .collect();
+    let mut out = ChartHistoryBuffers::default();
+    for (from, to) in [(0.0, 98_000.0), (10_000.0, 11_000.0)] {
+        let mut samples = Vec::new();
+        for _ in 0..11 {
+            let start = std::time::Instant::now();
+            std::hint::black_box(series.read_into(0.0, from, to, None, &mut out));
+            samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        samples.sort_by(f64::total_cmp);
+        println!("chart_market replay [{from},{to}]: {:.3} ms", samples[5]);
+    }
+}
+
 /// A wrapper using whole-run thinning would unnecessarily remove the entry/exit neighborhoods.
 #[test]
 fn chart_fit_preserves_raw_small_runs_and_trade_edges() {

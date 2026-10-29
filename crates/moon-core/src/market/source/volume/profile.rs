@@ -19,22 +19,20 @@
 //! are spread over the rows that range crosses, in proportion to how much of the range each row
 //! holds — a five-second candle that walked three ticks is three thin rows, not one fat one.
 //!
-//! # Why a rebuild, not a cursor
-//!
-//! The sides band advances from a cursor because its slots are keyed by TIME, and a trailing window
-//! over a time-keyed series is two moving pointers. Rows keyed by PRICE have no such order: a
-//! trade leaving the window must be found and subtracted from the row it once landed in, which
-//! means keeping every row's contributions by time — the whole ring again, twice. A rebuild walks
-//! at most the aggregates inside the window plus the raw tail, which is bounded by the retained
-//! capacities (tens of thousands of rows at the widest), and it is asked for at the rate the
-//! profile is REPAINTED — once a second or slower — not at the rate the market prints.
+//! Cursor drains bin only new inputs. Each bin retains its ordered addends: expiry re-sums that
+//! bin in mini-then-trade order, rather than subtracting floating-point amounts and accumulating
+//! rounding dust. Cold seeds and advances run on the shared volume readers, outside VolumeBook.
 
 use std::collections::HashMap;
 
+use super::prepare::HistoryKey;
 use moonproto::MoonTime;
 use moonproto::state::{MiniCandle, SeqRingReader, TradeHistoryRow};
 
-use super::copy_window;
+mod incremental;
+mod prepare;
+
+pub(super) use prepare::{ProfileCache, ProfileRequest};
 
 /// The window a profile covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -65,7 +63,7 @@ pub struct PriceProfileRow {
 /// walk; the profile it draws is then coarser than the truth for that one candle, not wrong.
 const MAX_SPREAD_ROWS: i64 = 4_096;
 
-/// How long a built profile is reused before the rings are walked again.
+/// How long a published profile is reused before its retained cursors advance.
 ///
 /// A short window changes visibly within a second; a long one is dominated by history that does
 /// not move, and walking a day of aggregates four times a second to redraw a bar the eye cannot
@@ -85,8 +83,8 @@ pub(super) struct PriceProfile {
     /// The window and row width the rows were built for; a different pair is a rebuild.
     window: ProfileWindow,
     row_width: f64,
-    /// `MarketRevisions::archive` the rows were built under; a different one is a rebuild.
-    archive_rev: u64,
+    /// Retained source identity the rows were built under; a different one is a rebuild.
+    source_key: HistoryKey,
     /// When the rows were last built, for the reuse window.
     built_ms: i64,
     /// Bumped on every rebuild whose rows DIFFER from the previous ones, so a caller holding the
@@ -95,25 +93,27 @@ pub(super) struct PriceProfile {
     /// Reusable buffers, so a rebuild that folds in a minute of trades allocates nothing.
     minis: Vec<MiniCandle>,
     trades: Vec<TradeHistoryRow>,
-    bins: HashMap<i64, (f64, f64)>,
-    /// When this profile was last read, for the prune that drops markets nobody charts any more.
-    pub(super) used_ms: i64,
+    bins: incremental::Bins,
+    /// Independent retained cursors and selected sequence prefixes for the two history sources.
+    mini_tape: incremental::Tape,
+    trade_tape: incremental::Tape,
 }
 
 impl PriceProfile {
     /// An empty profile, before it has been built.
-    pub(super) fn new(now: i64) -> Self {
+    pub(super) fn new() -> Self {
         Self {
             rows: Vec::new(),
             window: ProfileWindow::All,
             row_width: 0.0,
-            archive_rev: 0,
+            source_key: HistoryKey::default(),
             built_ms: i64::MIN,
             revision: 0,
             minis: Vec::new(),
             trades: Vec::new(),
-            bins: HashMap::new(),
-            used_ms: now,
+            bins: incremental::Bins::default(),
+            mini_tape: incremental::Tape::default(),
+            trade_tape: incremental::Tape::default(),
         }
     }
 
@@ -127,14 +127,14 @@ impl PriceProfile {
         &self.rows
     }
 
-    /// Bring the profile up to date if its inputs moved or its reuse window ran out.
+    /// Bin newly retained inputs and expire old sequence prefixes on the profile's reuse clock.
     ///
     /// Args:
     ///     trades: The market's raw trade ring, if it has one.
     ///     minis: Its five-second aggregates, if it has any.
     ///     window: The trailing window to cover.
     ///     row_width: Row width in price units; non-positive reads as no profile.
-    ///     archive_rev: The market's `MarketRevisions::archive`; a change rebuilds.
+    ///     source_key: Provider, client, catalog and archive identity; a change rebuilds.
     ///     now: Current unix time in milliseconds.
     pub(super) fn refresh(
         &mut self,
@@ -142,21 +142,23 @@ impl PriceProfile {
         minis: Option<&SeqRingReader<MiniCandle>>,
         window: ProfileWindow,
         row_width: f64,
-        archive_rev: u64,
+        source_key: HistoryKey,
         now: i64,
     ) {
-        self.used_ms = now;
         let key_moved =
-            self.window != window || self.row_width != row_width || self.archive_rev != archive_rev;
+            self.window != window || self.row_width != row_width || self.source_key != source_key;
         if !key_moved && now.saturating_sub(self.built_ms) < rebuild_ttl_ms(window) {
             return;
         }
+        if key_moved {
+            self.bins = incremental::Bins::default();
+            self.mini_tape = incremental::Tape::default();
+            self.trade_tape = incremental::Tape::default();
+        }
         self.window = window;
         self.row_width = row_width;
-        self.archive_rev = archive_rev;
+        self.source_key = source_key;
         self.built_ms = now;
-        let mut bins = std::mem::take(&mut self.bins);
-        bins.clear();
         if row_width.is_finite() && row_width > 0.0 {
             let from = match window {
                 ProfileWindow::Millis(ms) => now.saturating_sub(ms.max(0)),
@@ -164,41 +166,57 @@ impl PriceProfile {
                 // clock type can hold is safer than a sentinel it may not.
                 ProfileWindow::All => 0,
             };
-            // Read to the far future rather than `now`: the rings hold what the core stamped,
-            // and a clock a second ahead of this machine must not drop the newest prints.
-            let to = i64::MAX / 2;
-            let mut newest_mini = i64::MIN;
-            if let Some(reader) = minis {
-                copy_window(reader, from, to, &mut self.minis);
-                for row in &self.minis {
-                    newest_mini = newest_mini.max(row.time.unix_millis());
-                    fold_mini(&mut bins, row_width, *row);
-                }
+            self.mini_tape.drain(minis, &mut self.minis);
+            let tail_from = self.fold_minis(from, row_width, minis.map_or(0, |r| r.capacity()));
+            if self.trade_tape.moved_back(tail_from) {
+                self.trade_tape = incremental::Tape::default();
+                self.bins.clear_trades();
             }
-            if let Some(reader) = trades {
-                // The tail the aggregates do not cover; see the module docs.
-                let tail_from = match newest_mini > i64::MIN {
-                    true => newest_mini + 1,
-                    false => from,
-                };
-                copy_window(reader, tail_from, to, &mut self.trades);
-                for row in &self.trades {
-                    fold_trade(&mut bins, row_width, *row);
-                }
+            self.trade_tape.drain(trades, &mut self.trades);
+            self.fold_trades(tail_from, row_width, trades.map_or(0, |r| r.capacity()));
+        }
+        self.publish(row_width);
+    }
+
+    /// Bin new aggregate addends and return the same raw-tail seam as the retained full fold.
+    fn fold_minis(&mut self, from: i64, row_width: f64, capacity: usize) -> i64 {
+        for row in &self.minis {
+            if let Some(seq) = self.mini_tape.push(row.time.unix_millis(), from) {
+                visit_mini(row_width, *row, |id, buy, sell| {
+                    self.bins.add(true, seq, id, buy, sell)
+                });
             }
         }
-        let mut rows: Vec<PriceProfileRow> = bins
-            .iter()
+        self.mini_tape.trim(capacity, from);
+        self.mini_tape.newest().map_or(from, |at| at + 1)
+    }
+
+    /// Bin new raw prints and expire exactly the retained prefix outside the aggregate seam.
+    fn fold_trades(&mut self, from: i64, row_width: f64, capacity: usize) {
+        for row in &self.trades {
+            if let Some(seq) = self.trade_tape.push(row.time.unix_millis(), from) {
+                visit_trade(row_width, *row, |id, buy, sell| {
+                    self.bins.add(false, seq, id, buy, sell)
+                });
+            }
+        }
+        self.trade_tape.trim(capacity, from);
+    }
+
+    /// Materialize sorted bins only after an advance; unchanged rows keep their old revision.
+    fn publish(&mut self, row_width: f64) {
+        let mut rows: Vec<PriceProfileRow> = self
+            .bins
+            .totals(self.mini_tape.first(), self.trade_tape.first())
             .filter(|(_, (buy, sell))| *buy > 0.0 || *sell > 0.0)
             .map(|(id, (buy, sell))| PriceProfileRow {
-                price_lo: (*id as f64 * row_width) as f32,
-                price_hi: ((*id + 1) as f64 * row_width) as f32,
-                buy_quote: *buy as f32,
-                sell_quote: *sell as f32,
+                price_lo: (id as f64 * row_width) as f32,
+                price_hi: ((id + 1) as f64 * row_width) as f32,
+                buy_quote: buy as f32,
+                sell_quote: sell as f32,
             })
             .collect();
         rows.sort_by(|a, b| a.price_lo.total_cmp(&b.price_lo));
-        self.bins = bins;
         if rows != self.rows {
             self.rows = rows;
             self.revision = self.revision.wrapping_add(1).max(1);
@@ -220,8 +238,8 @@ fn add(bins: &mut HashMap<i64, (f64, f64)>, id: i64, buy: f64, sell: f64) {
     slot.1 += sell;
 }
 
-/// Fold one trade into the row of its price.
-fn fold_trade(bins: &mut HashMap<i64, (f64, f64)>, row_width: f64, row: TradeHistoryRow) {
+/// Emit the one price contribution of a valid raw print, without choosing its storage.
+fn visit_trade(row_width: f64, row: TradeHistoryRow, mut emit: impl FnMut(i64, f64, f64)) {
     let price = f64::from(row.price);
     let value = price * f64::from(row.quantity());
     if !(price.is_finite() && price > 0.0 && value.is_finite() && value > 0.0) {
@@ -231,11 +249,16 @@ fn fold_trade(bins: &mut HashMap<i64, (f64, f64)>, row_width: f64, row: TradeHis
         true => (value, 0.0),
         false => (0.0, value),
     };
-    add(bins, row_of(price, row_width), buy, sell);
+    emit(row_of(price, row_width), buy, sell);
 }
 
 /// Fold one aggregate into the rows its price range crosses, in proportion to the overlap.
 fn fold_mini(bins: &mut HashMap<i64, (f64, f64)>, row_width: f64, row: MiniCandle) {
+    visit_mini(row_width, row, |id, buy, sell| add(bins, id, buy, sell));
+}
+
+/// Emit an aggregate's original overlap-weighted addends for incremental or synthetic storage.
+fn visit_mini(row_width: f64, row: MiniCandle, mut emit: impl FnMut(i64, f64, f64)) {
     let buy = f64::from(row.buy_vol);
     let sell = f64::from(row.sell_vol);
     let buy = if buy.is_finite() { buy.max(0.0) } else { 0.0 };
@@ -258,7 +281,7 @@ fn fold_mini(bins: &mut HashMap<i64, (f64, f64)>, row_width: f64, row: MiniCandl
     let span = hi - lo;
     if first == last || span <= 0.0 || last - first > MAX_SPREAD_ROWS {
         // One row, or too many to walk: the midpoint's row takes it all.
-        add(bins, row_of((lo + hi) * 0.5, row_width), buy, sell);
+        emit(row_of((lo + hi) * 0.5, row_width), buy, sell);
         return;
     }
     for id in first..=last {
@@ -269,7 +292,7 @@ fn fold_mini(bins: &mut HashMap<i64, (f64, f64)>, row_width: f64, row: MiniCandl
             continue;
         }
         let share = overlap / span;
-        add(bins, id, buy * share, sell * share);
+        emit(id, buy * share, sell * share);
     }
 }
 

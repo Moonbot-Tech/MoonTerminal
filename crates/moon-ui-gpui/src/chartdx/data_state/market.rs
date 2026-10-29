@@ -29,6 +29,8 @@ impl ChartDataState {
         source: &MarketDataSource,
         prepared_sig: Option<u64>,
     ) {
+        let volume_revision = source.volume_prepared_revision();
+        let volume_changed = volume_revision != self.last_volume_prepared_rev;
         let area = Rect {
             x: 0.0,
             y: 0.0,
@@ -640,8 +642,8 @@ impl ChartDataState {
                 (0, 0)
             };
             let side_key_moved = pr.side_tf_ms != side_tf_ms || pr.side_step_ms != side_step_ms;
-            let side_data_moved =
-                history.is_some() && (history_source_changed || force_history_reset);
+            let side_data_moved = volume_changed
+                || history.is_some() && (history_source_changed || force_history_reset);
             // The band's own range: the VISIBLE window plus the same prefetch the history read
             // carries — not `history_from`, whose candle floor reaches days back and would sample
             // a two-day series at one step per pixel for a chart showing an hour (measured: 35 k
@@ -683,7 +685,14 @@ impl ChartDataState {
                             window,
                             &mut fresh,
                         )
-                        .is_some(),
+                        .inspect(|&ready| {
+                            if !ready {
+                                // A cold/archive seed completes independently of feed revisions.
+                                // Keep asking until the whole band is ready, even on a quiet core.
+                                pr.side_range = (i64::MAX, i64::MIN);
+                            }
+                        })
+                        .unwrap_or(false),
                 };
                 if read {
                     let moved = side_key_moved || fresh != pr.side_samples;
@@ -1337,7 +1346,7 @@ impl ChartDataState {
                     0.0
                 };
                 let key_moved = pr.hvol_window != hvol_window || pr.hvol_row_width != row_width;
-                let data_moved = history_source_changed || force_history_reset;
+                let data_moved = volume_changed || history_source_changed || force_history_reset;
                 let clock_due = (now as i64).saturating_sub(pr.hvol_read_ms) >= HVOL_RECHECK_MS;
                 // Whether the resident bins changed this sync, so the samples must be retaken.
                 let mut bins_moved = false;
@@ -2271,6 +2280,7 @@ impl ChartDataState {
         self.last_prepared_market_sig =
             prepared_sig.unwrap_or_else(|| self.source_market_signature(source));
         self.view_dirty = false;
+        self.last_volume_prepared_rev = volume_revision;
     }
 }
 

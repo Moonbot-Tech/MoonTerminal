@@ -7,6 +7,57 @@ use moon_core::market::candles::{
 
 use super::window::{chart_history_floor_ms, hide_start_rel};
 
+/// A volume reader completion must wake both quiet-source guards exactly once without a tick.
+#[test]
+fn chart_market_quiet_volume_completion_wakes_the_source_pull() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(quiet_volume_completion)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Drive the real chart pull after only the consumed background-completion revision goes stale.
+fn quiet_volume_completion() {
+    crate::test_locale::warm();
+    let _window = crate::test_support::SharedWindowGuard::take();
+    use gpui::{Bounds, GpuFrameInfo, point, px, size};
+    use moon_core::config::ChartTheme;
+    use moon_core::market::{MarketDataSource, MarketStore};
+    let source = MarketDataSource::new(MarketStore::shared(0.0));
+    let mut engine = crate::chartdx::ChartEngine::new(0.0, ChartTheme::default());
+    engine.open(42, "XALPHAUSDT");
+    engine.set_historical(true);
+    engine.set_follow(false, 1_000.0);
+    engine.set_scene_visible(true);
+    engine.set_market_source(Some(source.clone()));
+    let mut data = engine.data.borrow_mut();
+    data.frame(GpuFrameInfo {
+        now: std::time::Instant::now(),
+        bounds: Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(1000.0), px(600.0)),
+        },
+        scale_factor: 1.0,
+        content_zoom: 1.0,
+        presentable: true,
+    });
+    assert!(
+        !data.pull_market_source_if_visible(),
+        "an unchanged source must stay idle"
+    );
+    data.last_volume_prepared_rev = source.volume_prepared_revision().wrapping_sub(1);
+    assert!(
+        data.pull_market_source_if_visible(),
+        "completed volume work must not wait for a market event"
+    );
+    assert!(
+        !data.pull_market_source_if_visible(),
+        "consuming completion must restore the quiet gate"
+    );
+}
+
 /// Dropping the replay's settlement band hides report-priced arrows when exchange tape differs.
 #[test]
 fn trade_window_settlement_prices_match_axis_after_zoom() {

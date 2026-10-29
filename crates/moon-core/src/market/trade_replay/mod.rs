@@ -31,6 +31,7 @@
 pub mod archive;
 pub mod coverage;
 pub mod gate;
+mod read_ticks;
 pub mod rest;
 mod settings;
 pub(crate) mod tick_tiles;
@@ -1137,6 +1138,7 @@ impl TradeReplaySeries {
         );
     }
 
+    /// Copy the prepared tick slice for this ask, fitting the visible prices in the same pass.
     pub fn read_with_price_window(
         &self,
         epoch_ms: f64,
@@ -1198,27 +1200,14 @@ impl TradeReplaySeries {
         read.revision = revision;
         read.candles_revision = revision;
 
-        // Points first: they are re-emitted whole on every read, because a frozen series has no
-        // live edge to drain incrementally and the whole window is bounded — a few hundred rows
-        // for a candle-only series, or up to `worker::TICK_BUDGET` for a tick one.
-        out.ticks.extend(
-            self.ticks
-                .iter()
-                .filter(|t| {
-                    t.time_ms.is_finite()
-                        && t.price.is_finite()
-                        && t.price > 0.0
-                        && (t.time_ms as i64) >= from_ms
-                        && (t.time_ms as i64) <= to_ms
-                })
-                .copied(),
-        );
+        // The frozen run is already prepared in time order. Camera moves select its slice rather
+        // than re-filtering the retained tail, and the copy also supplies the visible price fit.
+        read.tick_price_range =
+            read_ticks::copy_ticks(&self.ticks, (from_ms, to_ms), price_window, &mut out.ticks);
         read.combo_left_rel_ms = out.ticks.first().map(|t| (t.time_ms - epoch_ms) as f32);
         read.combo_capacity = out.ticks.len().max(1);
         read.combo_reset = true;
         read.replace_price_lines();
-        read.tick_price_range =
-            price_window.and_then(|window| price_range_of_ticks(&out.ticks, window));
         read.last_price = out.ticks.last().map(|t| t.price);
 
         // Bars, only when the caller both wants them and does not already hold this exact series.
@@ -1385,31 +1374,6 @@ fn uncovered_pieces(open: i64, width: i64, covered: &Coverage) -> Vec<(i64, i64)
             (piece_w > 0).then_some((lo, piece_w))
         })
         .collect()
-}
-
-/// Lowest and highest finite positive price across a run of trade points.
-///
-/// Args:
-///     ticks: Retained points, possibly extending beyond the visible window for prefetch.
-///     window: Inclusive visible interval in Unix milliseconds.
-///
-/// Returns:
-///     `(low, high)`, or `None` when no point carries a usable price.
-fn price_range_of_ticks(ticks: &[Tick], window: (i64, i64)) -> Option<(f32, f32)> {
-    ticks
-        .iter()
-        .filter(|t| {
-            t.price.is_finite()
-                && t.price > 0.0
-                && t.time_ms >= window.0 as f64
-                && t.time_ms <= window.1 as f64
-        })
-        .fold(None, |acc: Option<(f32, f32)>, t| {
-            Some(match acc {
-                None => (t.price, t.price),
-                Some((lo, hi)) => (lo.min(t.price), hi.max(t.price)),
-            })
-        })
 }
 
 /// Lowest low and highest high across displayed candle buckets intersecting a window.

@@ -1,5 +1,258 @@
 use super::*;
 
+/// Frozen pre-incremental aggregate fold, independent of the production contribution visitor.
+fn frozen_mini(bins: &mut HashMap<i64, (f64, f64)>, width: f64, row: MiniCandle) {
+    let buy = f64::from(row.buy_vol);
+    let sell = f64::from(row.sell_vol);
+    let buy = if buy.is_finite() { buy.max(0.0) } else { 0.0 };
+    let sell = if sell.is_finite() { sell.max(0.0) } else { 0.0 };
+    if buy <= 0.0 && sell <= 0.0 {
+        return;
+    }
+    if !(row.min_price.is_finite() && row.max_price.is_finite()) {
+        return;
+    }
+    let lo = f64::from(row.min_price.min(row.max_price));
+    let hi = f64::from(row.min_price.max(row.max_price));
+    if hi <= 0.0 {
+        return;
+    }
+    let row_of = |price: f64| {
+        (price / width)
+            .floor()
+            .clamp(i64::MIN as f64 / 4.0, i64::MAX as f64 / 4.0) as i64
+    };
+    let first = row_of(lo.max(0.0));
+    let last = row_of(hi);
+    let span = hi - lo;
+    if first == last || span <= 0.0 || last - first > 4_096 {
+        let slot = bins.entry(row_of((lo + hi) * 0.5)).or_insert((0.0, 0.0));
+        slot.0 += buy;
+        slot.1 += sell;
+        return;
+    }
+    for id in first..=last {
+        let row_lo = id as f64 * width;
+        let row_hi = row_lo + width;
+        let overlap = (hi.min(row_hi) - lo.max(row_lo)).max(0.0);
+        if overlap <= 0.0 {
+            continue;
+        }
+        let share = overlap / span;
+        let slot = bins.entry(id).or_insert((0.0, 0.0));
+        slot.0 += buy * share;
+        slot.1 += sell * share;
+    }
+}
+
+/// Frozen pre-incremental raw fold: pins both the price bin and the side sign interpretation.
+fn frozen_trade(bins: &mut HashMap<i64, (f64, f64)>, width: f64, row: TradeHistoryRow) {
+    let price = f64::from(row.price);
+    let value = price * f64::from(row.quantity());
+    if !(price.is_finite() && price > 0.0 && value.is_finite() && value > 0.0) {
+        return;
+    }
+    let id = (price / width)
+        .floor()
+        .clamp(i64::MIN as f64 / 4.0, i64::MAX as f64 / 4.0) as i64;
+    let slot = bins.entry(id).or_insert((0.0, 0.0));
+    if row.is_buy() {
+        slot.0 += value;
+    } else {
+        slot.1 += value;
+    }
+}
+
+/// Adapt the production visitor to the original hand-calculated bin assertions below.
+fn fold_trade(bins: &mut HashMap<i64, (f64, f64)>, width: f64, row: TradeHistoryRow) {
+    visit_trade(width, row, |id, buy, sell| {
+        let slot = bins.entry(id).or_insert((0.0, 0.0));
+        slot.0 += buy;
+        slot.1 += sell;
+    });
+}
+
+/// Frozen old full-profile selection, independent of the incremental tape and bin membership.
+fn old_profile(
+    minis: &[MiniCandle],
+    trades: &[TradeHistoryRow],
+    from: i64,
+    width: f64,
+) -> Vec<PriceProfileRow> {
+    let mut bins = HashMap::new();
+    let selected = minis.iter().skip_while(|r| r.time.unix_millis() < from);
+    let mut newest = None;
+    for row in selected {
+        newest = Some(newest.map_or(row.time.unix_millis(), |at: i64| {
+            at.max(row.time.unix_millis())
+        }));
+        frozen_mini(&mut bins, width, *row);
+    }
+    let tail = newest.map_or(from, |at| at + 1);
+    for row in trades.iter().skip_while(|r| r.time.unix_millis() < tail) {
+        frozen_trade(&mut bins, width, *row);
+    }
+    let mut rows: Vec<_> = bins
+        .into_iter()
+        .filter(|(_, (buy, sell))| *buy > 0.0 || *sell > 0.0)
+        .map(|(id, (buy, sell))| PriceProfileRow {
+            price_lo: (id as f64 * width) as f32,
+            price_hi: ((id + 1) as f64 * width) as f32,
+            buy_quote: buy as f32,
+            sell_quote: sell as f32,
+        })
+        .collect();
+    rows.sort_by(|a, b| a.price_lo.total_cmp(&b.price_lo));
+    rows
+}
+
+/// Appends, retention, time expiry, late resends and source compaction must keep exact old rows.
+#[test]
+fn chart_market_incremental_profile_matches_frozen_full_fold() {
+    let mut profile = PriceProfile::new();
+    let mut minis = Vec::new();
+    let mut trades = Vec::new();
+    let width = 0.3;
+    for step in 0..100 {
+        let from = (step - 12).max(0) * 1000;
+        profile.minis.clear();
+        profile.trades.clear();
+        if step % 5 == 0 {
+            let mut row = mini(9.1, 11.7, 77.3, 33.9);
+            row.time = MoonTime::from_unix_millis((step - 4).max(0) * 1000);
+            minis.push(row);
+            profile.minis.push(row);
+        }
+        for offset in [0, 100, -100] {
+            let row = trade(
+                step * 1000 + offset,
+                10.1 + (step % 7) as f32 * 0.13,
+                if offset < 0 { -1.7 } else { 2.3 },
+            );
+            trades.push(row);
+            profile.trades.push(row);
+        }
+        let tail = profile.fold_minis(from, width, 8);
+        profile.fold_trades(tail, width, 30);
+        profile.publish(width);
+        let retained_minis = &minis[minis.len().saturating_sub(8)..];
+        let retained_trades = &trades[trades.len().saturating_sub(30)..];
+        assert_eq!(
+            profile.rows(),
+            old_profile(retained_minis, retained_trades, from, width),
+            "step {step}"
+        );
+        let revision = profile.revision();
+        profile.publish(width);
+        assert_eq!(
+            profile.revision(),
+            revision,
+            "unchanged bins must not re-upload"
+        );
+    }
+}
+
+/// Time the retained fold at 100000 raw prints plus 20000 five-second aggregates.
+#[test]
+#[ignore = "scale probe: prints timings"]
+fn chart_market_scale_profile() {
+    let minis: Vec<_> = (0..20_000)
+        .map(|i| mini(100.0 + (i % 20) as f32, 103.0 + (i % 20) as f32, 77.0, 33.0))
+        .collect();
+    let trades: Vec<_> = (0..100_000)
+        .map(|i| trade(i, 100.0 + (i % 20) as f32 * 0.1, 1.5))
+        .collect();
+    let mut samples = Vec::new();
+    for _ in 0..11 {
+        let start = std::time::Instant::now();
+        let mut bins = HashMap::new();
+        for row in &minis {
+            frozen_mini(&mut bins, 0.25, *row);
+        }
+        for row in &trades {
+            frozen_trade(&mut bins, 0.25, *row);
+        }
+        std::hint::black_box(&bins);
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "chart_market profile fold 20000 minis + 100000 trades: {:.3} ms",
+        samples[5]
+    );
+    let mut profile = PriceProfile::new();
+    profile.minis = minis;
+    profile.trades = trades;
+    let tail = profile.fold_minis(0, 0.25, 20_000);
+    profile.fold_trades(tail, 0.25, 100_000);
+    profile.publish(0.25);
+    assert_eq!(
+        profile.rows(),
+        old_profile(&profile.minis, &profile.trades, 0, 0.25)
+    );
+    profile.minis.clear();
+    profile.trades.clear();
+    let mut samples = Vec::new();
+    for index in 0..11 {
+        profile.trades.clear();
+        profile.trades.push(trade(100_001 + index, 101.0, 1.5));
+        let start = std::time::Instant::now();
+        let tail = profile.fold_minis(0, 0.25, 20_000);
+        profile.fold_trades(tail, 0.25, 100_000);
+        profile.publish(0.25);
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "chart_market incremental profile append + retention expiry: {:.3} ms",
+        samples[5]
+    );
+}
+
+/// Reconnect and provider replacement invalidate retained cursors even without an archive merge.
+#[test]
+fn chart_market_profile_rebuilds_on_retained_source_replacement() {
+    let mut profile = PriceProfile::new();
+    let mut key = HistoryKey::default();
+    for next in [
+        HistoryKey {
+            client_epoch: 1,
+            ..key
+        },
+        HistoryKey {
+            generation: 1,
+            client_epoch: 1,
+            ..key
+        },
+        HistoryKey {
+            generation: 1,
+            client_epoch: 1,
+            catalog_rev: 1,
+            ..key
+        },
+    ] {
+        profile.refresh(None, None, ProfileWindow::All, 0.5, key, 1000);
+        profile.trades.push(trade(1000, 10.0, 2.0));
+        profile.fold_trades(0, 0.5, 10);
+        profile.publish(0.5);
+        assert_eq!(profile.rows(), old_profile(&[], &profile.trades, 0, 0.5));
+        let revision = profile.revision();
+        profile.refresh(None, None, ProfileWindow::All, 0.5, key, 1001);
+        assert_eq!(
+            profile.revision(),
+            revision,
+            "same-source TTL reuses the profile"
+        );
+        profile.refresh(None, None, ProfileWindow::All, 0.5, next, 1001);
+        assert!(
+            profile.rows().is_empty(),
+            "the replacement has no retained rows"
+        );
+        assert_eq!(profile.revision(), revision + 1);
+        key = next;
+    }
+}
+
 fn trade(ms: i64, price: f32, qty: f32) -> TradeHistoryRow {
     TradeHistoryRow {
         time: MoonTime::from_unix_millis(ms),
