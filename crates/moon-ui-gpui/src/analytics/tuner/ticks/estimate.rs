@@ -223,7 +223,8 @@ impl AnalyticsView {
 
     /// Capture the launched workload so later UI edits cannot re-label its throughput.
     pub(super) fn ticks_cost_key(&self, size: &SearchSize, starts: usize) -> Option<CostKey> {
-        let n = self.ticks.data.data()?.replayable().count();
+        self.ticks.data.data()?;
+        let n = self.ticks.population().replayable;
         (n > 0).then(|| CostKey::new(n, self.ticks.train_pct, starts, size, model_cfg::current()))
     }
 

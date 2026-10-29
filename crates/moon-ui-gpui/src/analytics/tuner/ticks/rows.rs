@@ -47,6 +47,11 @@ pub(in crate::analytics::tuner) fn next_verdict_flip(
     if row.tape != TapeStatus::Missing {
         return next_source_change(row, min_tail_s, now_ms);
     }
+    window_retention_edge(row, now_ms)
+}
+
+/// Missing tape and pending archives share the same window's source-retention boundaries.
+fn window_retention_edge(row: &DealRow, now_ms: i64) -> Option<i64> {
     let address = row.address.as_ref()?;
     let deal = &row.deal;
     let window = moon_core::db::tuner::ticks::model_window(
@@ -67,6 +72,94 @@ pub(in crate::analytics::tuner) fn next_verdict_flip(
             .chain(trail),
         now_ms,
     )
+}
+
+/// Whole-scope figures used by the KPI, search controls and summary on unrelated repaints.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::analytics::tuner) struct Population {
+    pub fit: usize,
+    pub covered: usize,
+    pub replayable: usize,
+    pub readiness: super::readiness::Readiness,
+}
+
+/// Population validity includes time and station availability, independently of row sorting.
+pub(in crate::analytics::tuner) struct PopulationCache {
+    rows_rev: u64,
+    data: Option<usize>,
+    min_tail_s: u32,
+    refusal_revision: u64,
+    station: bool,
+    margin_ms: i64,
+    long_position_ms: i64,
+    at_ms: i64,
+    valid_until_ms: i64,
+    value: Population,
+}
+
+/// Read cached figures until a row, policy, refusal or source-retention edge changes them.
+pub(in crate::analytics::tuner) fn population_at(
+    state: &TicksState,
+    min_tail_s: u32,
+    now_ms: i64,
+) -> Population {
+    let admission = super::tail::Admission::at(min_tail_s, now_ms);
+    let data = state.data.data();
+    let identity = data.map(|data| std::sync::Arc::as_ptr(data) as usize);
+    let station = crate::backend::station::known_cached();
+    let margin_ms = moon_core::market::trade_replay::margin_ms();
+    let long_position_ms = moon_core::market::trade_replay::long_position_ms();
+    let mut cache = state.population.borrow_mut();
+    if let Some(cache) = cache.as_ref().filter(|c| {
+        c.rows_rev == state.rows_rev
+            && c.data == identity
+            && c.min_tail_s == admission.min_s
+            && c.refusal_revision == admission.refusal_revision
+            && c.station == station
+            && c.margin_ms == margin_ms
+            && c.long_position_ms == long_position_ms
+            && now_ms >= c.at_ms
+            && now_ms < c.valid_until_ms
+    }) {
+        return cache.value;
+    }
+    let mut value = Population::default();
+    let mut valid_until_ms = i64::MAX;
+    if let Some(data) = data {
+        for row in &data.rows {
+            let fit = row.fit_with(&admission);
+            value.fit += usize::from(fit);
+            value.replayable += usize::from(fit && row.ticks.is_some());
+            let edge = if matches!(
+                row.tape,
+                TapeStatus::Refused(
+                    moon_core::market::trade_replay::TickStatus::ArchivePending { .. }
+                )
+            ) {
+                window_retention_edge(row, now_ms)
+            } else {
+                next_verdict_flip(row, admission.min_s, now_ms)
+            };
+            if let Some(edge) = edge {
+                valid_until_ms = valid_until_ms.min(edge);
+            }
+        }
+        value.covered = data.covered();
+        value.readiness = data.readiness(now_ms, admission.min_s);
+    }
+    *cache = Some(PopulationCache {
+        rows_rev: state.rows_rev,
+        data: identity,
+        min_tail_s: admission.min_s,
+        refusal_revision: admission.refusal_revision,
+        station,
+        margin_ms,
+        long_position_ms,
+        at_ms: now_ms,
+        valid_until_ms,
+        value,
+    });
+    value
 }
 
 /// The earliest instant past `now_ms` at which any of `anchors` falls out of one of the
@@ -177,7 +270,8 @@ pub(in crate::analytics::tuner) fn order_for(
             && c.min_tail_s == min_tail_s
     });
     if !fresh {
-        let rows: &[DealRow] = state.data.data().map(|d| d.rows.as_slice()).unwrap_or(&[]);
+        let empty = super::snapshots::SnapshotRows::default();
+        let rows = state.data.data().map(|d| &d.rows).unwrap_or(&empty);
         let mut order: Vec<usize> = (0..rows.len())
             .filter(|&i| {
                 let reason = state.classified.as_ref().expect("classified rows").chips[i];
@@ -275,7 +369,7 @@ fn model_rank(row: &DealRow) -> u8 {
 
 /// Stable sorts preserve the loaded chronological order within equal values or reason buckets.
 fn sort_indices(
-    rows: &[DealRow],
+    rows: &super::snapshots::SnapshotRows<DealRow>,
     plan: &std::collections::HashMap<i64, (f64, f64)>,
     order: &mut [usize],
     key: &str,

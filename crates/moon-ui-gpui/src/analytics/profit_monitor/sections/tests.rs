@@ -8,6 +8,53 @@ use super::*;
 use crate::analytics::profit_monitor::MonitorSortColumn;
 use crate::analytics::profit_monitor::next_sort;
 
+/// Measure grouping of ten core aggregates representing a heavy deal scope, not raw deals.
+#[test]
+#[ignore = "scale probe: run by hand with --ignored --nocapture"]
+fn scale_probe_monitor_grouping() {
+    use super::super::rows::{GroupMode, RowLabels, grouped_rows};
+    use moon_core::db::analytics::{ProfitMonitorCore, ProfitMonitorSummary};
+    let _locale = crate::test_locale::force("en");
+    let live = context(
+        &(1..=10).collect::<Vec<_>>(),
+        &[("UNIT_01", &[1, 3, 5]), ("UNIT_02", &[2, 4, 6])],
+    );
+    for deals in [20_000, 100_000] {
+        let summary = ProfitMonitorSummary {
+            cores: (1..=10)
+                .map(|core| ProfitMonitorCore {
+                    core_uid: core,
+                    report_name: "CORE_A".into(),
+                    trades: deals / 10,
+                    wins: deals / 20,
+                    profit: core as f64,
+                    ..Default::default()
+                })
+                .collect(),
+        };
+        let start = std::time::Instant::now();
+        for _ in 0..1_000 {
+            let rows = grouped_rows(
+                &summary,
+                &live,
+                GroupMode::Core,
+                true,
+                RowLabels { core: "Core" },
+            );
+            std::hint::black_box(sectioned(rows, &live, None, labels()));
+            std::hint::black_box(grouped_rows(
+                &summary,
+                &live,
+                GroupMode::Exchange,
+                false,
+                RowLabels { core: "Core" },
+            ));
+        }
+        let ms = start.elapsed().as_secs_f64();
+        println!("[probe] monitor deals={deals} cores=10 grouped_sections_exchange={ms:.3}ms");
+    }
+}
+
 /// Build the localized captions the pure pass takes as data.
 ///
 /// Returns:

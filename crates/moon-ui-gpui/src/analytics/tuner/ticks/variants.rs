@@ -317,7 +317,7 @@ impl AnalyticsView {
         self.ticks
             .data
             .data()
-            .is_some_and(|data| data.group_searchable(group))
+            .is_some_and(|data| data.group_searchable(group, self.ticks.population().fit))
     }
 
     /// The tooltips of "Search" and "Search all": what each varies and where its answer lands —
@@ -337,12 +337,9 @@ impl AnalyticsView {
         };
         let entry_on = data.is_some_and(|d| d.entry_modelled());
         let ticked = data.map_or(0, |d| {
-            // Once per group, not per knob: `group_searchable` counts the fit rows, and the
-            // tooltips are built on every paint of the search row.
-            let (entry_ok, exit_ok) = (
-                d.group_searchable(ParamGroup::Entry),
-                d.group_searchable(ParamGroup::Exit),
-            );
+            // Both group captions reuse the same population count as the KPI.
+            let has_fit = self.ticks.population().fit > 0;
+            let (entry_ok, exit_ok) = (entry_on && has_fit, has_fit);
             d.grid
                 .iter()
                 .flat_map(super::sections::GridSection::knobs)

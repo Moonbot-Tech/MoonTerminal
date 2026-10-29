@@ -1,5 +1,68 @@
 use super::*;
 
+/// Prepare cached rows together; unresolved rates still follow the canonical resolver.
+///
+/// Returns the ready identities and whether any monetary value changed. The caller groups
+/// distinct identities between event barriers so writing ahead cannot reorder a delete/reset.
+/// Cleanup attempts release even if rollback fails, returning the rollback error first.
+pub(in crate::db::valuation::worker) fn prepare_ready_trades(
+    store: &Connection,
+    axis: &ReportAxis,
+    inputs: &[TradeInput],
+) -> Result<(BTreeSet<(i64, i64, i64)>, bool), FaultCause> {
+    let current = current_minute_utc();
+    let keys = inputs
+        .iter()
+        .filter(|input| {
+            valuation_minute(axis, input) < current
+                && crate::db::QuoteCurrency::from_report_ordinal(input.quote_ordinal).is_some()
+        })
+        .map(|input| (input.quote_ordinal, valuation_minute(axis, input)))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let rates = super::super::cached_rates(store, &keys).map_err(super::super::store_fault)?;
+    let ready = inputs
+        .iter()
+        .filter_map(|input| {
+            let minute = valuation_minute(axis, input);
+            if minute >= current
+                || crate::db::QuoteCurrency::from_report_ordinal(input.quote_ordinal).is_none()
+            {
+                return None;
+            }
+            rates
+                .get(&(input.quote_ordinal, minute))
+                .map(|rate| (input, rate))
+        })
+        .collect::<Vec<_>>();
+    if ready.is_empty() {
+        return Ok((BTreeSet::new(), false));
+    }
+    store
+        .execute_batch("SAVEPOINT ready_values")
+        .map_err(super::super::store_fault)?;
+    let result = (|| {
+        let changed = super::super::store_trade_values(store, &ready, now_unix_ms_i64())
+            .map_err(super::super::store_fault)?
+            > 0;
+        let keys = ready.iter().map(|(input, _)| trade_key(input)).collect();
+        forget_deferred(store, &keys)?;
+        store
+            .execute_batch("RELEASE ready_values")
+            .map_err(super::super::store_fault)?;
+        Ok((keys, changed))
+    })();
+    if result.is_err() {
+        let rollback = store.execute_batch("ROLLBACK TO ready_values");
+        // A failed rollback must not skip releasing the connection's savepoint.
+        let release = store.execute_batch("RELEASE ready_values");
+        rollback.map_err(super::super::store_fault)?;
+        release.map_err(super::super::store_fault)?;
+    }
+    result
+}
+
 /// Prepare one current committed report row from cache or the canonical spot provider.
 ///
 /// Args:
@@ -181,6 +244,21 @@ pub(in crate::db::valuation::worker) fn prefetch_rates(
     let mut groups: BTreeMap<(i64, &'static str), BTreeSet<i64>> = BTreeMap::new();
     let mut seen = BTreeSet::new();
     let mut changed = false;
+    let keys = inputs
+        .iter()
+        .filter(|input| {
+            valuation_minute(axis, input) < current
+                && crate::db::QuoteCurrency::from_report_ordinal(input.quote_ordinal).is_some()
+        })
+        .map(|input| (input.quote_ordinal, valuation_minute(axis, input)))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let cached =
+        crate::db::valuation::cached_rates(store, &keys).map_err(|error| PrefetchError {
+            fault: crate::db::valuation::store_fault(error),
+            changed: false,
+        })?;
     for input in inputs {
         let minute = valuation_minute(axis, input);
         if !seen.insert((input.quote_ordinal, minute)) {
@@ -193,9 +271,9 @@ pub(in crate::db::valuation::worker) fn prefetch_rates(
         else {
             continue;
         };
-        match crate::db::valuation::cached_rate(store, input.quote_ordinal, minute) {
-            Ok(Some(_)) => continue,
-            Ok(None) => {
+        match cached.get(&(input.quote_ordinal, minute)) {
+            Some(_) => continue,
+            None => {
                 match crate::db::valuation::covering_successor_rate(
                     store,
                     input.quote_ordinal,
@@ -241,12 +319,6 @@ pub(in crate::db::valuation::worker) fn prefetch_rates(
                     .entry((input.quote_ordinal, currency.ticker()))
                     .or_default()
                     .insert(minute);
-            }
-            Err(error) => {
-                return Err(PrefetchError {
-                    fault: crate::db::valuation::store_fault(error),
-                    changed,
-                });
             }
         }
     }
@@ -349,62 +421,68 @@ pub(in crate::db::valuation::worker) fn settle_prefetch(
     }
 }
 
-/// Per-batch report-row loader: probes each source's layout once and reuses its statement.
+/// Load current inputs in bounded joins, retaining a distinct slot for every ordered event.
 ///
-/// The layout is derived from the replica schema, which cannot change under one reader
-/// connection's batch, so resolving it per event only repeated two `PRAGMA table_info` probes and
-/// the COIN-M scan for every row.
-#[derive(Default)]
-pub(in crate::db::valuation::worker) struct TradeLoader {
-    /// Lazily built single-row query per source; inner `None` means the source cannot be valued.
-    sql: [Option<Option<String>>; 2],
-}
-
-impl TradeLoader {
-    /// Load one current eligible report row through the batch's cached layout and statement.
-    ///
-    /// Args:
-    ///     conn: Report reader observing committed source data, the same for the whole batch.
-    ///     source: Typed or legacy physical source.
-    ///     core_uid: Runtime core identity.
-    ///     row_id: `newrecid` or `db_id` according to `source`.
-    ///
-    /// Returns:
-    ///     Complete valuation inputs, no eligible/current row, or a classified read failure.
-    pub(in crate::db::valuation::worker) fn load(
-        &mut self,
-        conn: &Connection,
-        source: TradeSource,
-        core_uid: i64,
-        row_id: i64,
-    ) -> ReadResult<Option<TradeInput>> {
-        let slot = &mut self.sql[usize::from(source == TradeSource::Legacy)];
-        if slot.is_none() {
-            *slot = Some(load_trade_sql(conn, source)?);
+/// Duplicate identities stay duplicated and missing rows leave their own slot empty. No input
+/// from a different core or source can satisfy a requested identity. Each query uses at most
+/// 768 variables, including the event slots, below SQLite's historical 999-variable limit.
+pub(in crate::db::valuation::worker) fn load_trades(
+    conn: &Connection,
+    events: &[OutboxEvent],
+) -> ReadResult<Vec<Option<TradeInput>>> {
+    let mut loaded = vec![None; events.len()];
+    for source in [TradeSource::Typed, TradeSource::Legacy] {
+        let wanted = events
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| event.source == source && event.action == OutboxAction::Row)
+            .collect::<Vec<_>>();
+        if wanted.is_empty() {
+            continue;
         }
-        let Some(Some(sql)) = slot.as_ref() else {
-            return Ok(None);
+        let Some(projection) = load_trade_sql(conn, source)? else {
+            continue;
         };
-        let read_fail =
-            |error| crate::db::read_fail::read_fail_on(conn, "valuation: load report row", error);
-        let mut stmt = conn.prepare_cached(sql).map_err(read_fail)?;
-        stmt.query_row(rusqlite::params![core_uid, row_id], |row| {
-            Ok(TradeInput {
-                source,
-                core_uid: row.get(0)?,
-                row_id: row.get(1)?,
-                closedate: row.get(2)?,
-                quote_ordinal: row.get(3)?,
-                profit_quote: row.get(4)?,
-                spent_quote: row.get(5)?,
-            })
-        })
-        .optional()
-        .map_err(read_fail)
+        for chunk in wanted.chunks(256) {
+            let values = vec!["(?,?,?)"; chunk.len()].join(",");
+            let sql =
+                format!("WITH requested(slot,core_uid,row_id) AS (VALUES {values}) {projection}");
+            let read_fail = |error| {
+                crate::db::read_fail::read_fail_on(conn, "valuation: load report rows", error)
+            };
+            let mut statement = conn.prepare_cached(&sql).map_err(read_fail)?;
+            let rows =
+                statement
+                    .query_map(
+                        rusqlite::params_from_iter(chunk.iter().flat_map(|(slot, event)| {
+                            [*slot as i64, event.core_uid, event.row_id]
+                        })),
+                        |row| {
+                            Ok((
+                                row.get::<_, i64>(6)? as usize,
+                                TradeInput {
+                                    source,
+                                    core_uid: row.get(0)?,
+                                    row_id: row.get(1)?,
+                                    closedate: row.get(2)?,
+                                    quote_ordinal: row.get(3)?,
+                                    profit_quote: row.get(4)?,
+                                    spent_quote: row.get(5)?,
+                                },
+                            ))
+                        },
+                    )
+                    .map_err(read_fail)?;
+            for row in rows {
+                let (slot, input) = row.map_err(read_fail)?;
+                loaded[slot] = Some(input);
+            }
+        }
     }
+    Ok(loaded)
 }
 
-/// Build the single-row eligibility query for one source's current layout.
+/// Build one source's eligibility projection joined to a bounded requested-identity relation.
 ///
 /// Args:
 ///     conn: Report reader observing committed source data.
@@ -440,9 +518,9 @@ fn load_trade_sql(conn: &Connection, source: TradeSource) -> ReadResult<Option<S
     // matches the entry the worker wrote for it.
     let settled_profit = crate::db::quote::settled_amount_expr("r", &columns, "profitbtc");
     Ok(Some(format!(
-        "SELECT r.core_uid, r.{id_column}, r.closedate, ({quote}), {settled_profit}, {spent}
-         FROM {table} r
-         WHERE r.core_uid=?1 AND r.{id_column}=?2
+        "SELECT r.core_uid, r.{id_column}, r.closedate, ({quote}), {settled_profit}, {spent}, requested.slot
+         FROM requested JOIN {table} r ON r.core_uid=requested.core_uid AND r.{id_column}=requested.row_id
+         WHERE 1=1
            AND typeof(r.closedate)='integer' AND r.closedate>0
            AND ({quote}) BETWEEN 0 AND 20
            AND typeof(r.profitbtc) IN ('integer','real')"
@@ -591,5 +669,3 @@ pub(in crate::db::valuation::worker) fn reconciliation_batch(
     }
     Ok(Some(inputs))
 }
-
-use rusqlite::OptionalExtension;

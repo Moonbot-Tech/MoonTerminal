@@ -122,6 +122,17 @@ pub(in crate::analytics::tuner) fn scope_knobs(kinds: &[String]) -> Vec<&'static
         .collect()
 }
 
+/// Compact the deal-dependent grid inputs off the UI thread, keeping first-occurrence order.
+/// Only kind and strategy/core identity are read by `grid_for`; prices and repeated deals add no rows.
+pub(super) fn grid_deals(deals: &[Deal]) -> Vec<Deal> {
+    let mut seen = HashSet::new();
+    deals
+        .iter()
+        .filter(|deal| seen.insert((deal.strategy_id, deal.core_uid, deal.kind.as_str())))
+        .cloned()
+        .collect()
+}
+
 /// The grid's rows for the deals' kinds, by section: the fields the live schema files under
 /// each of the kinds that a strategy of the scope switches on, every knob, the knobs no schema
 /// places under their own section.

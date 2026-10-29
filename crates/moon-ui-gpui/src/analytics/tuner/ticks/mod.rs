@@ -63,6 +63,7 @@ pub(in crate::analytics::tuner) mod rows;
 mod sample;
 mod sections;
 pub(in crate::analytics::tuner) mod signature;
+mod snapshots;
 pub(in crate::analytics) mod state;
 mod summary;
 pub(in crate::analytics) mod tail;
@@ -220,18 +221,13 @@ impl AnalyticsView {
         );
         // How many rows read live deltas, and — in the tooltip — how well each one's history
         // reproduces the core (`delta_summary`).
-        let deltas = self
-            .ticks
-            .data
-            .data()
-            .and_then(|d| delta_summary::delta_summary(&d.rows))
-            .map(|(caption, tip)| {
-                div()
-                    .id("an-ticks-deltas")
-                    .flex_none()
-                    .tooltip(crate::panels::common::text_tooltip(tip))
-                    .child(caption)
-            });
+        let deltas = delta_summary::cached(&mut self.ticks).map(|(caption, tip)| {
+            div()
+                .id("an-ticks-deltas")
+                .flex_none()
+                .tooltip(crate::panels::common::text_tooltip(tip))
+                .child(caption)
+        });
         let only_tip = t!("analytics.ticks.only_fit_tip").to_string();
         let only_switch = div()
             .id("an-ticks-only-tape-box")
@@ -430,17 +426,18 @@ impl AnalyticsView {
         p: MoonPalette,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let population = self.ticks.population();
         let (fit, covered, entry, exit, replayable, entry_on) = self
             .ticks
             .data
             .data()
             .map(|d| {
                 (
-                    d.fit(),
-                    d.covered(),
+                    population.fit,
+                    population.covered,
                     d.entry_share,
                     d.exit_share,
-                    d.replayable().count(),
+                    population.replayable,
                     d.entry_modelled(),
                 )
             })

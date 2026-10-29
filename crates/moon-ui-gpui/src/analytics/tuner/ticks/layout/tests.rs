@@ -362,7 +362,7 @@ impl Render for DealProbe {
         let p = MoonPalette::active(cx);
         let mut state = TicksState::default();
         state.data.apply(Ok(TicksData {
-            rows: deal_rows(),
+            rows: deal_rows().into(),
             ..Default::default()
         }));
         let counts = super::super::rows::counts_at(&mut state, 60, 0);

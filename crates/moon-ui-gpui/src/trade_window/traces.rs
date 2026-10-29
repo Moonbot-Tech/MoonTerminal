@@ -50,6 +50,21 @@ use crate::design::moon;
 /// one pass and asks the core for at most this many misses.
 pub(super) const NEIGHBOUR_CAP: usize = 20;
 
+/// Prepare the exact stable nearest-neighbour order on the replica reader's background task.
+/// The full history stays intact for arrows; only these bounded rows reach trace notifications.
+pub(super) fn select_neighbours(
+    history: &[ChartTradeRecord],
+    focus: &ChartTradeRecord,
+) -> Vec<ChartTradeRecord> {
+    let mut candidates: Vec<_> = history
+        .iter()
+        .filter(|r| r.record_id != focus.record_id)
+        .collect();
+    candidates.sort_by_key(|r| (r.close_date - focus.close_date).abs());
+    candidates.truncate(NEIGHBOUR_CAP);
+    candidates.into_iter().cloned().collect()
+}
+
 /// Where this window stands with the trade's archived order lines.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum TraceState {
@@ -136,8 +151,8 @@ impl TradeWindowView {
             return;
         }
         let uids: Vec<i64> = self
-            .nearest_neighbours()
-            .into_iter()
+            .neighbours
+            .iter()
             .filter_map(|record| record.report_uid)
             .collect();
         if uids.is_empty() {
@@ -147,22 +162,6 @@ impl TradeWindowView {
         self.backend.update(cx, |backend, cx| {
             backend.ensure_traces(core, uids, NEIGHBOUR_CAP, cx);
         });
-    }
-
-    /// The neighbours the "other trades" tick draws: the [`NEIGHBOUR_CAP`] trades of the
-    /// history nearest the subject in time, the subject itself excluded. ONE selection for the
-    /// ask and for the store, so what is drawn is exactly what was asked about — a row with no
-    /// `ReportUID` is drawn too (its exit line comes from the row), it just cannot be asked.
-    fn nearest_neighbours(&self) -> Vec<&ChartTradeRecord> {
-        let focus_close = self.record.close_date;
-        let mut candidates: Vec<&ChartTradeRecord> = self
-            .history
-            .iter()
-            .filter(|r| r.record_id != self.record.record_id)
-            .collect();
-        candidates.sort_by_key(|r| (r.close_date - focus_close).abs());
-        candidates.truncate(NEIGHBOUR_CAP);
-        candidates
     }
 
     /// Read the resolver's answers and rebuild the archived store when a line of this window's
@@ -181,7 +180,7 @@ impl TradeWindowView {
             let mut sig = subject_stamp;
             let mut neighbours = Vec::new();
             if self.show_other_trades {
-                for record in self.nearest_neighbours() {
+                for record in &self.neighbours {
                     // Answered or not, the neighbour draws: its exit line comes from its own
                     // row when the archive holds none (see `OrderLineStore::append_archived`).
                     // A row without a uid was never asked and has no state to fold in.

@@ -7,8 +7,8 @@ use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, HvolRowGpu, HvolStyleGpu, PriceStyleGpu, ReadoutRect, SideVolumeGpu, TickStyleGpu,
-    VolumeStyleGpu,
+    GridParams, HvolRowGpu, HvolStyleGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SideVolumeGpu,
+    TickStyleGpu, VolumeStyleGpu,
 };
 
 #[cfg(target_os = "macos")]
@@ -79,7 +79,7 @@ impl PlatformLayers {
     }
 
     /// Borrow tick candidates in a time window, including pending native uploads.
-    /// DX11 and Metal bound the lookup; wgpu retains its scan until its native path is ported.
+    /// All backends bound candidates by the ring's observed lateness before consumer predicates.
     pub(super) fn tick_samples(&self, from: f64, to: f64) -> impl Iterator<Item = &ChartCross> {
         #[cfg(windows)]
         {
@@ -88,7 +88,7 @@ impl PlatformLayers {
         #[cfg(target_os = "linux")]
         {
             self.wgpu
-                .tick_samples()
+                .tick_samples(from, to)
                 .filter(move |c| f64::from(c.time_rel) >= from && f64::from(c.time_rel) <= to)
         }
         #[cfg(target_os = "macos")]
@@ -98,6 +98,27 @@ impl PlatformLayers {
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             std::iter::empty()
+        }
+    }
+
+    /// Own a bubble request's selected tape without per-row work in the unoptimized UI crate.
+    pub(super) fn tick_snapshot(&self, from: f64, to: f64) -> Vec<ChartCross> {
+        #[cfg(windows)]
+        {
+            self.combo.tick_snapshot(from, to)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.wgpu.tick_snapshot(from, to)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.metal.tick_snapshot(from, to)
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = (from, to);
+            Vec::new()
         }
     }
 
@@ -540,17 +561,25 @@ impl PlatformLayers {
     }
 
     /// Replace the trade clusters, drawn with the marker glyph under the order geometry and
-    /// uploaded on their own so the moving tape never re-uploads the orders.
-    pub fn set_clusters(&mut self, clusters: &[MarkerInstance]) {
+    /// uploaded on their own so the moving tape never re-uploads the orders. Conversion is done
+    /// by the background job; return the previous buffer for release away from the UI thread.
+    pub fn set_clusters(&mut self, clusters: Vec<MarkerGpu>) -> Vec<MarkerGpu> {
         #[cfg(windows)]
-        self.userdata.set_clusters(clusters);
+        {
+            self.userdata.set_clusters(clusters)
+        }
         #[cfg(target_os = "linux")]
-        self.wgpu.set_clusters(clusters);
+        {
+            self.wgpu.set_clusters(clusters)
+        }
         #[cfg(target_os = "macos")]
-        self.metal.set_clusters(clusters);
+        {
+            self.metal.set_clusters(clusters)
+        }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = clusters;
+            Vec::new()
         }
     }
 

@@ -74,12 +74,12 @@ fn reproduction_note_waits_then_restores_the_settled_explanation(cx: &mut gpui::
             };
             state.tape_reading = true;
             assert_eq!(
-                super::grid::group_note(&state, group, &data, p),
+                super::grid::group_note(&state, group, &data, data.fit(), p),
                 Some((format!("{name}: reading the tape…"), p.text_muted))
             );
             state.tape_reading = false;
             assert_eq!(
-                super::grid::group_note(&state, group, &data, p),
+                super::grid::group_note(&state, group, &data, data.fit(), p),
                 Some((
                     format!(
                         "{name}: The reproduction share is not known yet — no trades with tape"
@@ -91,12 +91,12 @@ fn reproduction_note_waits_then_restores_the_settled_explanation(cx: &mut gpui::
         data.exit_share = (0, 400);
         state.tape_reading = true;
         assert_eq!(
-            super::grid::group_note(&state, ParamGroup::Exit, &data, p),
+            super::grid::group_note(&state, ParamGroup::Exit, &data, data.fit(), p),
             Some(("Exit: reading the tape…".into(), p.text_muted))
         );
         state.tape_reading = false;
         assert!(
-            super::grid::group_note(&state, ParamGroup::Exit, &data, p)
+            super::grid::group_note(&state, ParamGroup::Exit, &data, data.fit(), p)
                 .unwrap()
                 .0
                 .starts_with("Exit: No trade is fit for the search")

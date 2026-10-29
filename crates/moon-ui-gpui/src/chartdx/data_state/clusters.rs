@@ -1,51 +1,38 @@
-//! The per-pane trade bubbles: when the prints are re-folded and when their discs are re-laid out
-//! and uploaded.
+//! Per-pane bubble invalidation and atomic publication of background-prepared layouts.
 //!
-//! The arithmetic is `moon_chart::clusters`; this module owns only the invalidation. Prints are
-//! folded from the backend's resident trade mirror over the visible window plus one window either
-//! side, and the market's scale is measured from them. Re-folding follows a view that left that
-//! reach, a new merge window, small threshold or tick, and new trades — those at most once per
-//! [`CLUSTER_DATA_THROTTLE`], like the order book's own bake throttle. The discs are laid out
-//! again only when the X zoom, the pixel density or the colours change: which discs of one price
-//! cover each other depends on the pixels per millisecond and nothing else, so a pan or a price
-//! zoom uploads nothing.
+//! The last complete fold stays visible while its replacement is computed. Each pane has at
+//! most one in-flight request; the frame path accepts it only while the fold settings, layout,
+//! epoch and history generation still match and its captured reach covers the visible window.
+//! Live appends remain dirty while a job runs, then follow the existing 200 ms data throttle.
 
 use std::time::{Duration, Instant};
 
-use moon_chart::clusters::{self, DiscRadii};
-use moon_chart::layers::{MARKER_SHAPE_KNOT, MarkerInstance};
-
 use super::super::pane_render::PaneRender;
 use super::super::types::ChartViewGpu;
+use worker::Source;
+pub(in crate::chartdx) use worker::{Folded, Pending, Request};
+
+#[cfg(test)]
+mod tests;
+mod worker;
 
 /// Minimum interval between two re-folds driven by new trades alone.
 const CLUSTER_DATA_THROTTLE: Duration = Duration::from_millis(200);
 
-/// Opacity of a disc: a crowd of them still lets the candles show through.
-const DISC_ALPHA: f32 = 0.85;
-
 /// What a pane draws its bubbles with this sync.
 pub(in crate::chartdx) struct ClusterInputs {
-    /// Whether the tab draws its trades as bubbles at all.
     pub enabled: bool,
-    /// The market's tick, `None` while unknown: prints then group by exact price.
     pub tick: Option<f64>,
-    /// The plot's own transform, physical pixels.
     pub view: ChartViewGpu,
-    /// The pane's time epoch, unix milliseconds: `time_rel` is relative to it.
     pub epoch_ms: f64,
-    /// Physical pixels per logical pixel.
     pub ppp: f32,
-    /// The tab's merge window, milliseconds.
     pub merge_ms: u16,
-    /// The tab's small-print threshold, percent of the market's prints.
     pub small_pct: u8,
-    /// sRGB colours of a disc that bought more and of one that sold more.
     pub buy: [f32; 3],
     pub sell: [f32; 3],
 }
 
-/// What the prints were folded with; any change re-folds them.
+/// Settings that determine print membership and percentile scale.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::chartdx) struct FoldKey {
     merge_ms: u16,
@@ -53,7 +40,7 @@ pub(in crate::chartdx) struct FoldKey {
     tick_bits: u64,
 }
 
-/// What the discs were laid out with; any change lays them out again.
+/// Inputs that determine disc merging, physical size and colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::chartdx) struct LayoutKey {
     time_to_px: f32,
@@ -61,23 +48,24 @@ pub(in crate::chartdx) struct LayoutKey {
     colors: [[f32; 3]; 2],
 }
 
-/// Whether new trades wait to be folded and the throttle now lets them through.
-///
-/// Read by the sync's own trigger (`pull_market_source_if_visible`): a burst the throttle held
-/// back must still be folded on a market that then goes quiet, when no new revision would ever
-/// run the sync again.
+/// Wake on a completed job even on a quiet market, or on throttled data with no job in flight.
 pub(in crate::chartdx) fn refold_due(pr: &PaneRender, now: Instant) -> bool {
+    if let Some(pending) = &pr.cluster_pending {
+        return pending.is_ready();
+    }
+    pr.cluster_on && data_due(pr, now)
+}
+
+/// Whether the data throttle allows another snapshot; completion never clears newer appends.
+fn data_due(pr: &PaneRender, now: Instant) -> bool {
     pr.cluster_dirty
-        && pr.cluster_on
         && pr
             .cluster_built_at
             .is_none_or(|at| now.duration_since(at) >= CLUSTER_DATA_THROTTLE)
 }
 
-/// Bring the pane's bubbles up to date.
-///
-/// Returns:
-///     Whether the layer received new discs (or lost them), so the caller re-presents.
+/// Publish a matching completed snapshot and enqueue at most one replacement without blocking.
+/// Returns whether the native cluster buffer changed and needs a presentation.
 pub(in crate::chartdx) fn sync_clusters(
     pr: &mut PaneRender,
     input: &ClusterInputs,
@@ -93,115 +81,116 @@ pub(in crate::chartdx) fn sync_clusters(
         input.epoch_ms + f64::from(view.view_time0) + f64::from(view.bounds[2]) / time_to_px,
     );
     let reach = visible.1 - visible.0;
-    let fold_key = FoldKey {
-        merge_ms: input.merge_ms,
-        small_pct: input.small_pct,
-        tick_bits: input.tick.map_or(0, f64::to_bits),
+    let mut request = Request {
+        fold: FoldKey {
+            merge_ms: input.merge_ms,
+            small_pct: input.small_pct,
+            tick_bits: input.tick.map_or(0, f64::to_bits),
+        },
+        layout: LayoutKey {
+            time_to_px: view.time_to_px,
+            ppp: input.ppp,
+            colors: [input.buy, input.sell],
+        },
+        range: (visible.0 - reach, visible.1 + reach),
+        epoch: input.epoch_ms,
+        generation: pr.cluster_generation,
     };
-    let left_reach = !pr.cluster_on
-        || pr.cluster_fold != Some(fold_key)
-        || visible.0 < pr.cluster_range.0
-        || visible.1 > pr.cluster_range.1;
-    let data_due = pr.cluster_dirty
-        && pr
-            .cluster_built_at
-            .is_none_or(|at| now.duration_since(at) >= CLUSTER_DATA_THROTTLE);
-    let mut refolded = false;
-    if left_reach || data_due {
-        let range = (visible.0 - reach, visible.1 + reach);
-        let epoch = input.epoch_ms;
-        // The ring keeps times as f32 from the pane's epoch, as the crosses draw them: on a pane
-        // open for days a short merge window groups on that same coarser clock.
-        let samples = pr
-            .layers
-            .tick_samples(range.0 - epoch, range.1 - epoch)
-            .filter(|c| c.side < 2)
-            .map(|c| (epoch + f64::from(c.time_rel), c.price, c.qty, c.side == 0));
-        clusters::aggregate_prints(
-            samples,
-            input.tick,
-            f64::from(input.merge_ms),
-            &mut pr.cluster_prints,
-        );
-        clusters::price_time_order(&pr.cluster_prints, &mut pr.cluster_order);
-        let fresh =
-            clusters::print_scale(&pr.cluster_prints, input.small_pct, &mut pr.cluster_scratch);
-        // Same settings and a scale that barely moved: keep it, so the discs do not breathe. The
-        // small end never stays above the fresh one, or a print the threshold now sizes — every
-        // print, at 0% — would draw as a dot.
-        let same_fold = pr.cluster_fold == Some(fold_key);
-        pr.cluster_scale = match (pr.cluster_scale, fresh) {
-            (Some(old), Some(new)) if same_fold && old.holds_against(&new) => {
-                Some(moon_chart::clusters::PrintScale {
-                    small: old.small.min(new.small),
-                    ..old
-                })
+    let mut changed = false;
+    if pr.cluster_pending.as_ref().is_some_and(Pending::is_ready) {
+        match pr
+            .cluster_pending
+            .take()
+            .expect("ready request exists")
+            .take()
+        {
+            Ok(result) if result.request.matches(request, visible) => {
+                pr.cluster_request = Some(result.request);
+                let old_fold = pr.cluster_folded.replace(result.folded);
+                let old_discs = std::mem::replace(&mut pr.cluster_discs, result.discs);
+                let old_markers = pr.layers.set_clusters(result.markers);
+                worker::release_later((old_fold, old_discs, old_markers));
+                pr.cluster_on = true;
+                pr.cluster_uploaded = true;
+                changed = true;
             }
-            (_, fresh) => fresh,
-        };
-        pr.cluster_fold = Some(fold_key);
-        pr.cluster_range = range;
-        pr.cluster_dirty = false;
-        pr.cluster_built_at = Some(now);
-        pr.cluster_on = true;
-        refolded = true;
-    }
-    let layout_key = LayoutKey {
-        time_to_px: view.time_to_px,
-        ppp: input.ppp,
-        colors: [input.buy, input.sell],
-    };
-    if !refolded && pr.cluster_layout == Some(layout_key) {
-        return false;
-    }
-    pr.cluster_layout = Some(layout_key);
-    match pr.cluster_scale {
-        Some(scale) => {
-            let radii = DiscRadii::at(input.ppp);
-            clusters::merge_overlapping(
-                &pr.cluster_prints,
-                &pr.cluster_order,
-                time_to_px,
-                |v| clusters::print_radius(v, scale, radii),
-                &mut pr.cluster_discs,
-            );
+            result => {
+                if let Err(ref err) = result {
+                    log::error!("bubble preparation failed: {err}");
+                }
+                worker::release_later(result);
+                // A discarded raw fold must not lose the data whose dirty bit it consumed.
+                pr.cluster_dirty = true;
+                pr.cluster_built_at = None;
+            }
         }
-        None => pr.cluster_discs.clear(),
     }
-    let buy = [input.buy[0], input.buy[1], input.buy[2], DISC_ALPHA];
-    let sell = [input.sell[0], input.sell[1], input.sell[2], DISC_ALPHA];
-    pr.cluster_markers.clear();
-    pr.cluster_markers.extend(pr.cluster_discs.iter().map(|d| {
-        MarkerInstance::at_price(
-            (d.time_ms - input.epoch_ms) as f32,
-            d.price,
-            d.radius,
-            0.0,
-            MARKER_SHAPE_KNOT,
-            if d.buy >= d.sell { buy } else { sell },
+    if pr.cluster_pending.is_some() {
+        return changed;
+    }
+    let refold = pr.cluster_request.is_none_or(|old| {
+        old.fold != request.fold
+            || old.epoch != request.epoch
+            || old.generation != request.generation
+            || visible.0 < old.range.0
+            || visible.1 > old.range.1
+    }) || data_due(pr, now);
+    let relayout = pr
+        .cluster_request
+        .is_none_or(|old| old.layout != request.layout);
+    if !refold && !relayout {
+        return changed;
+    }
+    let source = if refold {
+        // Keep the ring's f32 clock and backend candidate selection exactly as the synchronous
+        // path did. No borrowed GPU state or mutable tape reaches the background executor.
+        let samples = pr.layers.tick_snapshot(
+            request.range.0 - request.epoch,
+            request.range.1 - request.epoch,
+        );
+        let previous = pr
+            .cluster_request
+            .filter(|old| old.fold == request.fold)
+            .and_then(|_| pr.cluster_folded.as_ref().and_then(|folded| folded.scale));
+        Source::Tape(samples, previous)
+    } else {
+        request.range = pr.cluster_request.expect("published layout exists").range;
+        Source::Fold(
+            pr.cluster_folded
+                .as_ref()
+                .expect("published fold exists")
+                .clone(),
         )
-    }));
-    // Small discs under big ones: a crowd of dots never hides a wall's disc.
-    pr.cluster_markers.sort_by(|a, b| a.size.total_cmp(&b.size));
-    pr.layers.set_clusters(&pr.cluster_markers);
-    pr.cluster_uploaded = true;
-    true
+    };
+    match Pending::spawn(request, source) {
+        Ok(pending) => {
+            pr.cluster_pending = Some(pending);
+            if refold {
+                pr.cluster_dirty = false;
+                pr.cluster_built_at = Some(now);
+            }
+        }
+        Err(err) => log::error!("cannot enqueue bubble preparation: {err}"),
+    }
+    changed
 }
 
-/// Take the pane's bubbles down: the tab draws crosses, or the view has no usable scale.
+/// Disable bubbles immediately, invalidate in-flight work, and retain its slot until completion.
 fn clear(pr: &mut PaneRender) -> bool {
+    pr.cluster_generation = pr.cluster_generation.wrapping_add(1);
+    if pr.cluster_pending.as_ref().is_some_and(Pending::is_ready) {
+        worker::release_later(pr.cluster_pending.take());
+    }
     pr.cluster_on = false;
-    pr.cluster_prints.clear();
-    pr.cluster_order.clear();
-    pr.cluster_discs.clear();
-    pr.cluster_scale = None;
-    pr.cluster_fold = None;
-    pr.cluster_layout = None;
-    pr.cluster_range = (f64::NAN, f64::NAN);
+    let old_fold = pr.cluster_folded.take();
+    pr.cluster_request = None;
+    let old_discs = std::mem::take(&mut pr.cluster_discs);
+    pr.cluster_dirty = true;
     if !pr.cluster_uploaded {
         return false;
     }
-    pr.layers.set_clusters(&[]);
+    let old_markers = pr.layers.set_clusters(Vec::new());
+    worker::release_later((old_fold, old_discs, old_markers));
     pr.cluster_uploaded = false;
     true
 }

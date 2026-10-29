@@ -5,6 +5,9 @@ use moon_core::config::ChartLabelField;
 
 use crate::chartdx::text::fmt_pct;
 
+#[cfg(test)]
+mod tests;
+
 fn hash_order_zones(zones: &[moon_chart::layers::ZoneInstance]) -> u64 {
     let mut h = 0x9E37_79B9_7F4A_7C15u64 ^ zones.len() as u64;
     for z in zones {

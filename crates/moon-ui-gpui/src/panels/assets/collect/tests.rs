@@ -7,6 +7,49 @@ use moon_core::feed::AssetRow;
 use std::hint::black_box;
 use std::time::Instant;
 
+/// Time ownership and default sorting of 200 visible holdings on each of 10 cores.
+#[test]
+#[ignore = "manual heavy-user timing probe"]
+fn bench_goal_b_assets_revision() {
+    let cores: Vec<_> = (1..=10)
+        .map(|id| {
+            (
+                id,
+                format!("CORE_A{id}"),
+                (0..200)
+                    .map(|i| {
+                        let mut row = row(i);
+                        row.value_usdt = ((i * 73) % 200) as f64;
+                        row
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    let start = Instant::now();
+    for _ in 0..100 {
+        let mut rows: Vec<_> = black_box(&cores)
+            .iter()
+            .flat_map(|(id, name, rows)| {
+                market_rows(rows, false, 0.0).map(move |row| super::AssetEntry {
+                    core: *id,
+                    core_name: name.clone(),
+                    value: row.value_usdt,
+                    display_value: row.value_usdt,
+                    market_exists: true,
+                    row,
+                })
+            })
+            .collect();
+        super::sort_by_value(&mut rows);
+        black_box(rows);
+    }
+    println!(
+        "goal_b_assets_collect_sort: {} ns/iter",
+        start.elapsed().as_nanos() / 100
+    );
+}
+
 /// Builds a complete made-up market row without a session or production data.
 fn row(ix: usize) -> AssetRow {
     AssetRow {

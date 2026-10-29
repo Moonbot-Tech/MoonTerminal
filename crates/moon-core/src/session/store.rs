@@ -26,6 +26,8 @@ use crate::util::{now_unix_ms, now_unix_ms_i64};
 mod core_store;
 /// Snapshot trust accessors for retained core state.
 mod freshness;
+/// Bounded disposal of consumed order batches outside the UI drain.
+mod order_retirement;
 /// Retained row models and per-core capacity limits.
 mod rows;
 
@@ -514,8 +516,9 @@ impl CoreData {
         true
     }
 
-    /// Create an empty per-core store in the connecting state.
+    /// Creates an empty connecting core and primes off-thread order-batch retirement.
     pub fn new() -> Self {
+        order_retirement::warm_up();
         Self {
             status: ConnStatus::Connecting,
             orders: Vec::new(),
@@ -895,7 +898,8 @@ impl CoreData {
     ///     msg: Typed feed update for this core.
     ///
     /// Returns:
-    ///     Nothing; retained state and the relevant revision counter update in place.
+    ///     Nothing; retained state and the relevant revision counter update in place. Consumed
+    ///     order batches transfer their allocation teardown to the retirement worker.
     pub fn apply(&mut self, msg: FeedMsg) {
         match msg {
             FeedMsg::TimeOffset(status) => {
@@ -979,12 +983,16 @@ impl CoreData {
                 // table, while only render-affecting order-line changes matter to the chart.
                 let mut changed = self.ingest_captured_turns(&mut payload.captured_turns);
                 changed |= self.ingest_order_rows(&mut payload.rows);
-                self.orders = payload.rows;
+                let retired = crate::feed::OrderRows {
+                    rows: std::mem::replace(&mut self.orders, payload.rows),
+                    captured_turns: payload.captured_turns,
+                };
                 self.orders_table_rev = self.orders_table_rev.wrapping_add(1);
                 if changed {
                     self.order_lines_rev = self.order_lines_rev.wrapping_add(1);
                     self.order_lines_rev_ms = now_unix_ms_i64();
                 }
+                order_retirement::retire(retired);
             }
             FeedMsg::OrderLines(mut payload) => {
                 let mut changed = self.ingest_captured_turns(&mut payload.captured_turns);
@@ -993,6 +1001,7 @@ impl CoreData {
                     self.order_lines_rev = self.order_lines_rev.wrapping_add(1);
                     self.order_lines_rev_ms = now_unix_ms_i64();
                 }
+                order_retirement::retire(payload);
             }
             FeedMsg::Detects(detects) => {
                 if !detects.is_empty() {

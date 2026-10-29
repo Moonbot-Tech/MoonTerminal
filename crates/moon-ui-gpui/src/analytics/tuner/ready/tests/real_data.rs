@@ -583,7 +583,7 @@ fn ready_real_data_bench() {
                 differs += 1;
             }
             if wanted_keys.contains(key.as_str()) {
-                kept.insert(key.clone(), data.rows);
+                kept.insert(key.clone(), data.rows.iter().cloned().collect());
             }
         }
     });

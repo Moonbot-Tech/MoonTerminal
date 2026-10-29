@@ -275,7 +275,7 @@ pub(in crate::analytics::tuner) struct TicksData {
     /// All closed report-scope rows, before replay eligibility gates, for sample-bias context.
     pub(in crate::analytics::tuner) all: VarStats,
     /// Chronological by close, as `read_deals` orders them.
-    pub(in crate::analytics::tuner) rows: Vec<DealRow>,
+    pub(in crate::analytics::tuner) rows: super::snapshots::SnapshotRows<DealRow>,
     /// Scope rows without millisecond stamps — in the Fact column, not in the table.
     pub(in crate::analytics::tuner) without_ms: usize,
     /// Service rows with stamps the axis never takes (funding, liquidations, joined sells, no
@@ -366,12 +366,12 @@ impl TicksData {
 
     /// The table's tuning readiness: its sample, covered and fetchable rows, on one clock —
     /// what the card's verdict and the strategy list's "Tuning" column both read.
-    pub(in crate::analytics::tuner) fn readiness(&self) -> super::readiness::Readiness {
-        super::readiness::Readiness::of_rows(
-            &self.rows,
-            chrono::Utc::now().timestamp_millis(),
-            super::tail::effective_s(),
-        )
+    pub(in crate::analytics::tuner) fn readiness(
+        &self,
+        now_ms: i64,
+        min_tail_s: u32,
+    ) -> super::readiness::Readiness {
+        super::readiness::Readiness::of_rows(&self.rows, now_ms, min_tail_s)
     }
 
     /// Rows fit for the search ([`DealRow::fit_with`]), tape in memory or not.
@@ -411,11 +411,15 @@ impl TicksData {
     }
 
     /// Whether a group may be searched: its kinds have a model of it, and at least one trade is
-    /// fit for the search ([`Self::fit`]) — the search learns on those alone (`fit_for_search`,
+    /// fit for the search (the caller's cached `fit` count) — the search learns on those alone (`fit_for_search`,
     /// which needs the exit reproduced for an entry search too), so without one there is nothing
     /// to learn on. The share gate does not lock it ([`DEFAULT_GATE_PCT`], [`Self::under_gate`]).
-    pub(in crate::analytics::tuner) fn group_searchable(&self, group: ParamGroup) -> bool {
-        self.group_modelled(group) && self.fit() > 0
+    pub(in crate::analytics::tuner) fn group_searchable(
+        &self,
+        group: ParamGroup,
+        fit: usize,
+    ) -> bool {
+        self.group_modelled(group) && fit > 0
     }
 
     /// `(hits, answered)` of a modelled group under the share gate — none reproduced included,
@@ -637,6 +641,11 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) order: Option<super::rows::OrderCache>,
     /// Bumped whenever `data` changes, so the cached order is rebuilt.
     pub(in crate::analytics::tuner) rows_rev: u64,
+    /// Shared render figures, invalidated by population, admission and source changes.
+    pub(in crate::analytics::tuner) population:
+        std::cell::RefCell<Option<super::rows::PopulationCache>>,
+    /// Localized delta caption and tooltip for the current row publication.
+    pub(super) delta_summary: Option<super::delta_summary::Cache>,
     /// The task listening to the process-wide fetch job (`fetch::job`) for this view; `None`
     /// until a batch is started or found running. Dropped with the view, which ends it.
     pub(in crate::analytics::tuner) fetch_task: Option<gpui::Task<()>>,
@@ -683,7 +692,7 @@ pub(in crate::analytics) struct TicksState {
     /// The rows the last tape stage left "missing" after a held read that read every stretch
     /// it needed, by `reportuid`, with what that verdict was made under: a reload carries such a
     /// row while all of it still holds instead of asking the store again (`load.rs`, stage B).
-    pub(in crate::analytics::tuner) settled: HashMap<i64, SettledMiss>,
+    pub(in crate::analytics::tuner) settled: Arc<HashMap<i64, SettledMiss>>,
     /// What the published rows were loaded from, once their tape stage has judged them: a
     /// report-driven reload under an equal key keeps them as they are (`signature.rs`).
     pub(in crate::analytics::tuner) reload_key: Option<super::signature::ReloadKey>,
@@ -798,6 +807,8 @@ impl Default for TicksState {
             classified: None,
             order: None,
             rows_rev: 0,
+            population: Default::default(),
+            delta_summary: None,
             fetch_task: None,
             station_generation: 0,
             station_refusal_revision: 0,
@@ -811,7 +822,7 @@ impl Default for TicksState {
             keys_sig: None,
             schema_reload: None,
             open_sections: HashSet::new(),
-            settled: HashMap::new(),
+            settled: Arc::new(HashMap::new()),
             reload_key: None,
             reload_until_ms: i64::MAX,
             logged: (None, None),
@@ -983,8 +994,10 @@ impl TicksState {
         self.clear_var_score();
         self.plan.clear();
         if let Some(data) = self.data.data_mut() {
-            for row in &mut data.rows {
-                row.unmark_fetching();
+            for index in 0..data.rows.len() {
+                if data.rows[index].tape == TapeStatus::Fetching {
+                    data.rows[index].unmark_fetching();
+                }
             }
         }
     }
@@ -1078,7 +1091,17 @@ impl TicksState {
     /// search buttons are off and the search row says why. `None` at or above the floor, and
     /// while nothing is loaded.
     pub(in crate::analytics::tuner) fn search_too_few(&self) -> Option<usize> {
-        self.data.data()?.readiness().too_few()
+        self.data.data()?;
+        self.population().readiness.too_few()
+    }
+
+    /// Resolve display counts on one clock, reusing them across the whole render tree.
+    pub(in crate::analytics::tuner) fn population(&self) -> super::rows::Population {
+        super::rows::population_at(
+            self,
+            super::tail::effective_s(),
+            chrono::Utc::now().timestamp_millis(),
+        )
     }
 
     /// The deals the variant column was scored on while they are too few to recommend it
@@ -1284,12 +1307,13 @@ impl TicksData {
         let admission = super::tail::Admission::current();
         let mut held = 0usize;
         // Newest first: the rows are chronological, so walk them backwards.
-        for row in self.rows.iter_mut().rev() {
+        for index in (0..self.rows.len()).rev() {
+            let row = &self.rows[index];
             let Some(bytes) = row.ticks.as_ref().map(PackedTape::bytes) else {
                 continue;
             };
             if !row.fit_with(&admission) || held + bytes > MAX_RETAINED_BYTES {
-                row.ticks = None;
+                self.rows[index].ticks = None;
             } else {
                 held += bytes;
             }

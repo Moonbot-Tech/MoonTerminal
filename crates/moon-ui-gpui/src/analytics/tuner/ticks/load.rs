@@ -1,10 +1,10 @@
-//! Background loads of the "Entry/Exit" axis, in two stages.
+//! Background loads of the "Entry/Exit" axis: scope, row publication, then tape replay.
 //!
 //! Stage A reads the scope's deals, the grid's "now" values and the search ranges' automatic
-//! spans (over the live strategies, `params::range`) off the database. Its
-//! completion resolves, on the UI thread, where each deal's prints live — the core's exchange
-//! key and the coin's market, which only the live market source knows — and publishes the rows
-//! at once, without their tape (stage B). Stage C then asks the replay worker for the held tape of every row in
+//! spans (over the live strategies, `params::range`) off the database. The same worker resolves
+//! where each deal's prints live and checks whether the current publication can be retained.
+//! Its completion builds the grid from compact scope inputs; stage B prepares rows in the
+//! background and publishes them without their missing tape. Stage C asks for held tape in
 //! ONE batch of queries, reads the archived entry lines, runs the model on the parameters as
 //! of the buy, and folds the answers into the published rows. In one batch because it is one
 //! round trip for the table: the worker's coordinator answers held queries off no venue call,
@@ -62,8 +62,10 @@ type StageA = (
     Vec<SelectedValues>,
     FieldDeps,
     Arc<HashMap<&'static str, FieldSpan>>,
-    Option<u64>,
+    Option<ReloadKey>,
     HashMap<(u64, String), Option<Arc<RowAddress>>>,
+    Vec<Deal>,
+    Option<super::signature::SkipCheck>,
 );
 
 /// What stage B publishes beside the rows: the strategies' values, the grid's layout, the
@@ -159,6 +161,16 @@ impl AnalyticsView {
         self.ticks.data.begin();
         self.ticks.kpi.begin();
         let mut resolver = self.address_resolver(cx);
+        let skip_snapshot = (after_report && settled_before).then(|| {
+            (
+                self.ticks.data.data().cloned(),
+                self.ticks.reload_key.clone(),
+                Arc::clone(&self.ticks.settled),
+                self.ticks.rows_rev,
+                self.ticks.reload_until_ms,
+                self.ticks.judged_under,
+            )
+        });
         self.spawn_latest_db(
             &[ReadLane::Ticks],
             show_overlay,
@@ -227,6 +239,29 @@ impl AnalyticsView {
                     .as_ref()
                     .map(|read| super::fetch::resolve_in(&mut resolver, &read.deals))
                     .unwrap_or_default();
+                let grid_deals = deals.as_ref().map(|read| super::sections::grid_deals(&read.deals)).unwrap_or_default();
+                let key = scope.map(|scope| ReloadKey {
+                    scope, period, model: super::model_cfg::current(),
+                    sample: SamplePolicy::current(),
+                    refusal_revision: super::fetch::station::refusal_revision(),
+                    tape_rev: moon_core::market::trade_replay::trade_cache::filed_since(u64::MAX).0,
+                    addresses: super::signature::addresses_signature(&addresses),
+                });
+                let skip = skip_snapshot.and_then(|(data, stored, settled, rows_rev, until, judged)| {
+                    let data = data?;
+                    let key = key.as_ref()?;
+                    let admission = super::tail::Admission::current();
+                    if judged != Some(key.model) || !super::signature::can_skip(
+                        stored.as_ref(), key, &data.rows, admission.now_ms, until,
+                        |row| missing_still_holds(row, &settled, &admission),
+                    ) { return None; }
+                    let deadline = super::super::ready::verdict_deadline(
+                        &data.rows, admission.now_ms, key.sample.min_tail_s,
+                    ).unwrap_or(i64::MAX).min(until);
+                    Some(super::signature::SkipCheck {
+                        key: key.clone(), rows_rev, checked_at_ms: admission.now_ms, until_ms: deadline,
+                    })
+                });
                 (
                     deals,
                     now,
@@ -235,12 +270,14 @@ impl AnalyticsView {
                     selected,
                     deps,
                     spans,
-                    scope,
+                    key,
                     addresses,
+                    grid_deals,
+                    skip,
                 )
             },
             move |this,
-                  (deals, now, own, unmodelled, selected, deps, spans, scope, addresses): StageA,
+                  (deals, now, own, unmodelled, selected, deps, spans, key, addresses, grid_deals, skip): StageA,
                   cx| {
                 if this.ticks.seq != req {
                     return;
@@ -268,21 +305,19 @@ impl AnalyticsView {
                 ));
                 let grid = super::sections::grid_for(
                     this.backend.read(cx).session.store(),
-                    &read.deals,
+                    &grid_deals,
                     own.iter()
                         .map(|(&(sid, core), values)| ((sid, Some(core)), values.as_ref()))
                         .chain(selected.iter().map(|(key, values)| (*key, values.as_ref()))),
                     &deps,
                 )
                 .into();
-                let key = scope.map(|scope| ReloadKey {
-                    scope,
-                    period,
+                let key = key.map(|key| ReloadKey {
                     model: super::model_cfg::current(),
                     sample: SamplePolicy::current(),
                     refusal_revision: super::fetch::station::refusal_revision(),
                     tape_rev: moon_core::market::trade_replay::trade_cache::filed_since(u64::MAX).0,
-                    addresses: super::signature::addresses_signature(&addresses),
+                    ..key
                 });
                 // A report that moved without changing a closed deal of the scope — an open
                 // position's update, every few seconds live — reads the same rows: the ones in
@@ -291,17 +326,10 @@ impl AnalyticsView {
                     && settled_before
                     && let Some(key) = &key
                     && this.ticks.judged_under == Some(key.model)
-                    && this.ticks.data.data().is_some_and(|d| {
-                        let admission = super::tail::Admission::current();
-                        super::signature::can_skip(
-                            this.ticks.reload_key.as_ref(),
-                            key,
-                            &d.rows,
-                            admission.now_ms,
-                            this.ticks.reload_until_ms,
-                            |row| missing_still_holds(row, &this.ticks.settled, &admission),
-                        )
-                    })
+                    && this.ticks.reload_key.as_ref() == Some(key)
+                    && skip.as_ref().is_some_and(|skip| skip.holds(
+                        key, this.ticks.rows_rev, moon_core::util::time::now_unix_ms_i64(),
+                    ))
                 {
                     this.ticks.resume();
                     this.ticks.dirty = report_result_is_stale(
@@ -373,72 +401,82 @@ impl AnalyticsView {
     ) {
         let model = super::model_cfg::current();
         let period = scope.period;
-        let judged: HashMap<i64, DealRow> = if self.ticks.judged_under == Some(model) {
-            self.ticks
-                .data
-                .data()
-                .map(|d| {
-                    d.rows
-                        .iter()
-                        .filter(|r| matches!(r.tape, TapeStatus::Covered | TapeStatus::Refused(_)))
-                        .map(|r| (r.deal.report_uid, r.clone()))
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            HashMap::new()
-        };
+        // Retain the existing immutable publication in constant time; row copies belong to
+        // the background stage below, alongside the construction of its replacement.
+        let previous = (self.ticks.judged_under == Some(model))
+            .then(|| self.ticks.data.data().cloned())
+            .flatten();
+        let settled = Arc::clone(&self.ticks.settled);
+        let sample = SamplePolicy::current();
         // A refusal is of what the store held when it was said: a row whose market gained prints
         // since — the station's recording, the core's archive — is asked about again.
         let (tape_rev, refiled) =
             moon_core::market::trade_replay::trade_cache::filed_since(self.ticks.tape_rev);
-        let judged = super::refiled::drop_refiled(
-            judged,
-            &refiled,
-            moon_core::util::time::now_unix_ms_i64(),
-        );
         // The rows the last stage left missing off a settled read, whose verdict was made under
         // what is in force now and whose market gained no prints since: asking again would
         // read the same.
-        let misses: HashMap<i64, (DealRow, SettledMiss)> = if self.ticks.judged_under == Some(model)
-        {
-            let sample = SamplePolicy::current();
-            // Each revision a miss was judged under, with the markets whose refusals changed
-            // since — a refusal elsewhere leaves the miss standing.
-            let mut refusals: HashMap<u64, HashSet<(String, String)>> = HashMap::new();
-            self.ticks
-                .data
-                .data()
-                .map(|d| {
-                    d.rows
-                        .iter()
-                        .filter(|r| r.tape == TapeStatus::Missing)
-                        .filter_map(|r| {
-                            let miss = self.ticks.settled.get(&r.deal.report_uid)?;
-                            let refused =
-                                refusals.entry(miss.refusal_revision).or_insert_with(|| {
-                                    super::fetch::station::refusals_since(miss.refusal_revision).1
-                                });
-                            let fresh = miss.model == model
-                                && miss.sample == sample
-                                && !refused
-                                    .contains(&(miss.market.0.clone(), miss.market.1.clone()))
-                                && miss.held == r.held
-                                && !refiled
-                                    .contains(&(miss.market.0.clone(), miss.market.1.clone()));
-                            fresh.then(|| (r.deal.report_uid, (r.clone(), miss.clone())))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            HashMap::new()
-        };
         self.spawn_latest_db(
             &[ReadLane::TicksReplay],
             false,
             cx,
             move || {
+                let judged = previous
+                    .as_ref()
+                    .map(|data| {
+                        data.rows
+                            .iter()
+                            .filter(|row| {
+                                matches!(row.tape, TapeStatus::Covered | TapeStatus::Refused(_))
+                            })
+                            .map(|row| (row.deal.report_uid, row.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let judged = super::refiled::drop_refiled(
+                    judged,
+                    &refiled,
+                    moon_core::util::time::now_unix_ms_i64(),
+                );
+                let misses: HashMap<i64, (DealRow, SettledMiss)> = {
+                    // Each revision a miss was judged under, with the markets whose refusals changed
+                    // since — a refusal elsewhere leaves the miss standing.
+                    let mut refusals: HashMap<u64, HashSet<(String, String)>> = HashMap::new();
+                    previous
+                        .as_ref()
+                        .map(|d| {
+                            d.rows
+                                .iter()
+                                .filter(|r| r.tape == TapeStatus::Missing)
+                                .filter_map(|r| {
+                                    let miss = settled.get(&r.deal.report_uid)?;
+                                    let refused = refusals
+                                        .entry(miss.refusal_revision)
+                                        .or_insert_with(|| {
+                                            super::fetch::station::refusals_since(
+                                                miss.refusal_revision,
+                                            )
+                                            .1
+                                        });
+                                    let fresh = miss.model == model
+                                        && miss.sample == sample
+                                        && !refused.contains(&(
+                                            miss.market.0.clone(),
+                                            miss.market.1.clone(),
+                                        ))
+                                        && miss.held == r.held
+                                        && !refiled.contains(&(
+                                            miss.market.0.clone(),
+                                            miss.market.1.clone(),
+                                        ));
+                                    fresh.then(|| (r.deal.report_uid, (r.clone(), miss.clone())))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                // Release the publication as soon as the carried rows own their copies.
+                drop(previous);
+                drop(settled);
                 let admission = super::tail::Admission::current();
                 let mut carried: HashSet<i64> = HashSet::new();
                 let rows: Vec<DealRow> = read
@@ -485,7 +523,7 @@ impl AnalyticsView {
                 kinds.dedup();
                 let mut data = TicksData {
                     all: read.all,
-                    rows,
+                    rows: rows.into(),
                     without_ms: read.without_ms,
                     service: read.service,
                     untunable: read.untunable,
@@ -515,7 +553,7 @@ impl AnalyticsView {
                 this.ticks.loaded_period = Some(period);
                 // The rows just published are judged once their tape stage folds.
                 this.ticks.reload_key = None;
-                this.ticks.settled.retain(|uid, _| carried.contains(uid));
+                Arc::make_mut(&mut this.ticks.settled).retain(|uid, _| carried.contains(uid));
                 // The published rows' refusals now stand checked against this revision: the ones
                 // whose market gained prints before it were not carried.
                 this.ticks.tape_rev = tape_rev;
@@ -686,11 +724,12 @@ impl AnalyticsView {
                 this.ticks.judged_under = Some(model);
                 log_changed(&mut this.ticks.logged.0, line);
                 // Every row this stage judged has its settled miss replaced by this stage's word.
+                let settled = Arc::make_mut(&mut this.ticks.settled);
                 for row in &rows {
-                    this.ticks.settled.remove(&row.deal.report_uid);
+                    settled.remove(&row.deal.report_uid);
                 }
                 for (uid, (held, short_allowed, market)) in misses {
-                    this.ticks.settled.insert(
+                    settled.insert(
                         uid,
                         SettledMiss {
                             held,

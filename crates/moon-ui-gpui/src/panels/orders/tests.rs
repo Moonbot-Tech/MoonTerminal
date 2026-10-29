@@ -12,6 +12,146 @@ use super::{
     collect_scoped, main_highlights, orders_observe_action, orders_observe_step, prepare_entries,
 };
 
+/// Measure a complete revision with 10 cores and 200 traced open orders per core.
+#[test]
+#[ignore = "manual heavy-user timing probe"]
+fn bench_goal_b_orders_revision() {
+    let seed = fixture().remove(0).2.remove(0);
+    let cores: Vec<_> = (1..=10)
+        .map(|core| {
+            let rows: Vec<_> = (0..200)
+                .map(|uid| {
+                    let mut row = seed.clone();
+                    row.uid = uid;
+                    row.coin = format!("XALPHA{}", (uid * 73) % 200);
+                    row.buy_trace = Some(moon_core::feed::OrderTrace {
+                        points: (0..(50 + uid as usize % 151))
+                            .map(|i| moon_core::feed::OrderTracePoint {
+                                time_ms: 1_000.0 + i as f64,
+                                price: 10.0 + i as f32 * 0.01,
+                            })
+                            .collect(),
+                        ..Default::default()
+                    });
+                    row
+                })
+                .collect();
+            (core, format!("CORE_A{core}"), rows)
+        })
+        .collect();
+    for column in [
+        None,
+        Some((super::OrdCol::Token, true)),
+        Some((super::OrdCol::Pnl, false)),
+    ] {
+        let view = OrdersViewState {
+            kind: super::OrderKind::All,
+            header_sort: column,
+            ..Default::default()
+        };
+        measure(&format!("goal_b_orders_{column:?}"), 100, || {
+            prepare_entries(
+                collect_scoped(
+                    cores
+                        .iter()
+                        .map(|(id, name, rows)| (*id, name.as_str(), rows.as_slice())),
+                    |_, _| true,
+                ),
+                &view,
+                &HashMap::new(),
+            )
+        });
+    }
+    let view = OrdersViewState {
+        kind: super::OrderKind::All,
+        header_sort: Some((super::OrdCol::Token, true)),
+        ..Default::default()
+    };
+    let current = || {
+        prepare_entries(
+            collect_scoped(
+                cores
+                    .iter()
+                    .map(|(id, name, rows)| (*id, name.as_str(), rows.as_slice())),
+                |_, _| true,
+            ),
+            &view,
+            &HashMap::new(),
+        )
+        .0
+    };
+    // Frozen pre-change inline-row layout and Token comparator, including source-order ties.
+    let original = || {
+        let mut entries: Vec<_> = cores
+            .iter()
+            .flat_map(|(core, name, rows)| {
+                rows.iter()
+                    .map(move |row| (*core, name.clone(), row.clone()))
+            })
+            .collect();
+        entries.sort_by(|a, b| {
+            a.2.coin
+                .cmp(&b.2.coin)
+                .then_with(|| a.0.cmp(&b.0).then_with(|| a.2.uid.cmp(&b.2.uid)))
+        });
+        entries
+    };
+    let actual = current();
+    let expected = original();
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "sorting must preserve every row"
+    );
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(
+            (actual.core, &actual.core_name, format!("{:?}", actual.row)),
+            (expected.0, &expected.1, format!("{:?}", expected.2))
+        );
+    }
+    let mut elapsed = [0u128; 2];
+    for repetition in 0..100 {
+        for arm in [repetition % 2, 1 - repetition % 2] {
+            let start = Instant::now();
+            if arm == 0 {
+                black_box(original());
+            } else {
+                black_box(current());
+            }
+            elapsed[arm] += start.elapsed().as_nanos();
+        }
+    }
+    println!(
+        "goal_b_orders_token_paired_inline: {} ns/iter",
+        elapsed[0] / 100
+    );
+    println!(
+        "goal_b_orders_token_paired_boxed: {} ns/iter",
+        elapsed[1] / 100
+    );
+    let cores: Vec<_> = cores
+        .into_iter()
+        .map(|(id, name, mut rows)| {
+            for row in &mut rows {
+                row.status = "SellSet".into();
+            }
+            (id, name, rows)
+        })
+        .collect();
+    measure("goal_b_assets_sell_markers_all_selling", 1_000, || {
+        cores
+            .iter()
+            .flat_map(|(id, _, rows)| {
+                rows.iter()
+                    .filter(|o| {
+                        !o.job_is_done && matches!(o.status.as_str(), "SellSet" | "SellAlmostDone")
+                    })
+                    .map(move |o| (*id, o.coin.to_ascii_uppercase()))
+            })
+            .collect::<HashSet<_>>()
+    });
+}
+
 /// Build 200 synthetic cores with 25 orders each, without reading terminal data.
 fn fixture() -> Vec<(u64, String, Vec<OrderRow>)> {
     (1..=200)
@@ -76,7 +216,7 @@ fn reference_collect(cores: &[(u64, String, Vec<OrderRow>)]) -> Vec<OrderEntry> 
             entries.push(OrderEntry {
                 core: *core,
                 core_name: name.clone(),
-                row: row.clone(),
+                row: Box::new(row.clone()),
             });
         }
     }

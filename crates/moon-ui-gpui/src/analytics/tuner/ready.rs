@@ -1089,12 +1089,12 @@ pub(in crate::analytics::tuner) fn group_signature(
 /// The earliest moment past `now_ms` at which the clock alone changes a verdict among `rows`:
 /// a retention edge of a covered short tail or a missing row (the card's own rule,
 /// [`super::ticks::rows::next_verdict_flip`]) or an archive retry coming due.
-pub(in crate::analytics::tuner) fn verdict_deadline(
-    rows: &[DealRow],
+pub(in crate::analytics::tuner) fn verdict_deadline<'a>(
+    rows: impl IntoIterator<Item = &'a DealRow>,
     now_ms: i64,
     min_tail_s: u32,
 ) -> Option<i64> {
-    rows.iter()
+    rows.into_iter()
         .filter_map(|row| {
             let retry = match row.tape {
                 TapeStatus::Refused(

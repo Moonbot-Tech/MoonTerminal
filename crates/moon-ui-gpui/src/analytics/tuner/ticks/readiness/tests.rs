@@ -129,7 +129,7 @@ fn bare_row(uid: i64) -> DealRow {
 fn card_cannot(rows: &[DealRow]) -> bool {
     let mut state = TicksState::default();
     state.data.apply(Ok(TicksData {
-        rows: rows.to_vec(),
+        rows: rows.to_vec().into(),
         ..Default::default()
     }));
     matches!(
@@ -161,11 +161,15 @@ fn the_column_and_the_card_agree_on_can_few_and_no_tape() {
     ] {
         let ready = column(rows);
         let data = TicksData {
-            rows: rows.clone(),
+            rows: rows.clone().into(),
             ..Default::default()
         };
-        assert_eq!(data.readiness().fit, ready.fit, "one count for both");
-        assert_eq!(data.readiness().covered, ready.covered);
+        let card = data.readiness(
+            chrono::Utc::now().timestamp_millis(),
+            super::super::tail::effective_s(),
+        );
+        assert_eq!(card.fit, ready.fit, "one count for both");
+        assert_eq!(card.covered, ready.covered);
         assert_eq!(ReadyClass::of(&ready), want);
         assert_eq!(
             card_cannot(rows),

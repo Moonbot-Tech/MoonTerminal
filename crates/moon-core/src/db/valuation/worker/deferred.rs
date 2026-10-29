@@ -1,5 +1,90 @@
 use super::*;
 
+/// Retain an unresolved input without an in-memory entry per deal; restart re-derives the queue.
+pub(in crate::db::valuation::worker) fn defer_trade(
+    store: &Connection,
+    axis: &ReportAxis,
+    input: &TradeInput,
+) -> Result<(), FaultCause> {
+    let minute = valuation_minute(axis, input);
+    store
+        .prepare_cached(
+            &format!("INSERT INTO temp.deferred_trades VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,
+                MAX(?9,COALESCE((SELECT next_retry_at_ms FROM rate_searches WHERE algorithm_version={}
+                  AND quote_ordinal=?5 AND minute_utc=?8),0)))
+        ON CONFLICT(source_kind,core_uid,row_id) DO UPDATE SET closedate=excluded.closedate,
+        quote_ordinal=excluded.quote_ordinal,profit_quote=excluded.profit_quote,
+        spent_quote=excluded.spent_quote,minute_utc=excluded.minute_utc,
+        closed_at_ms=excluded.closed_at_ms,ready_at_ms=excluded.ready_at_ms",super::super::ALGORITHM_VERSION),
+        )
+        .and_then(|mut statement| {
+            statement.execute(rusqlite::params![
+                input.source.code(),
+                input.core_uid,
+                input.row_id,
+                input.closedate,
+                input.quote_ordinal,
+                input.profit_quote,
+                input.spent_quote,
+                minute,
+                minute.saturating_add(60).saturating_mul(1000),
+            ])
+        })
+        .map_err(super::super::store_fault)?;
+    Ok(())
+}
+
+/// Retire only the pending identities whose values were made durable by this batch.
+pub(in crate::db::valuation::worker) fn forget_deferred(
+    store: &Connection,
+    keys: &BTreeSet<(i64, i64, i64)>,
+) -> Result<(), FaultCause> {
+    let keys = keys.iter().copied().collect::<Vec<_>>();
+    for chunk in keys.chunks(256) {
+        let values = vec!["(?,?,?)"; chunk.len()].join(",");
+        store.prepare_cached(&format!("DELETE FROM temp.deferred_trades WHERE (source_kind,core_uid,row_id) IN (VALUES {values})"))
+            .and_then(|mut statement| statement.execute(rusqlite::params_from_iter(chunk.iter().flat_map(|(source,core,row)| [*source,*core,*row]))))
+            .map_err(super::super::store_fault)?;
+    }
+    Ok(())
+}
+
+/// Seek the earliest due rows without scanning the blocked backlog or loading its rate keys.
+fn deferred_inputs(store: &Connection, limit: usize) -> Result<Vec<TradeInput>, FaultCause> {
+    let mut statement = store.prepare_cached("SELECT d.source_kind,d.core_uid,d.row_id,d.closedate,d.quote_ordinal,d.profit_quote,d.spent_quote
+        FROM temp.deferred_trades d INDEXED BY deferred_due WHERE d.ready_at_ms<=?1 AND d.minute_utc<?2
+        ORDER BY d.ready_at_ms,d.source_kind,d.core_uid,d.row_id LIMIT ?3").map_err(super::super::store_fault)?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![now_unix_ms_i64(), current_minute_utc(), limit as i64],
+            |row| {
+                Ok(TradeInput {
+                    source: TradeSource::from_code(row.get(0)?)?,
+                    core_uid: row.get(1)?,
+                    row_id: row.get(2)?,
+                    closedate: row.get(3)?,
+                    quote_ordinal: row.get(4)?,
+                    profit_quote: row.get(5)?,
+                    spent_quote: row.get(6)?,
+                })
+            },
+        )
+        .map_err(super::super::store_fault)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(super::super::store_fault)
+}
+
+/// Whether any minute boundary can make pending work eligible, without loading the backlog.
+pub(in crate::db::valuation::worker) fn has_deferred(store: &Connection) -> bool {
+    store
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM temp.deferred_trades)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(true)
+}
+
 /// Resolution of one source's physical layout, distinguishing a durable absence from a startup
 /// schema that has not finished arriving.
 ///
@@ -70,6 +155,10 @@ pub(in crate::db::valuation::worker) fn delete_trade(
     core_uid: i64,
     row_id: i64,
 ) -> PrepareResult {
+    if let Err(error) = forget_deferred(store, &BTreeSet::from([(source.code(), core_uid, row_id)]))
+    {
+        return PrepareResult::Retry(error);
+    }
     match store
         .prepare_cached(
             "DELETE FROM trade_values WHERE source_kind=?1 AND core_uid=?2 AND row_id=?3",
@@ -98,6 +187,12 @@ pub(in crate::db::valuation::worker) fn delete_partition(
     source: TradeSource,
     core_uid: i64,
 ) -> PrepareResult {
+    if let Err(error) = store
+        .prepare_cached("DELETE FROM temp.deferred_trades WHERE source_kind=?1 AND core_uid=?2")
+        .and_then(|mut statement| statement.execute(rusqlite::params![source.code(), core_uid]))
+    {
+        return PrepareResult::Retry(super::super::store_fault(error));
+    }
     match store
         .prepare_cached("DELETE FROM trade_values WHERE source_kind=?1 AND core_uid=?2")
         .and_then(|mut statement| statement.execute(rusqlite::params![source.code(), core_uid]))
@@ -117,7 +212,6 @@ pub(in crate::db::valuation::worker) fn delete_partition(
 ///     axis: Per-core time axis rate minutes are resolved against.
 ///     generation: Monotonic valuation publication counter.
 ///     dirty: Coalescing UI wake edge.
-///     deferred: Current-minute rows retained by identity.
 ///
 /// Returns:
 ///     Completed stage turn indicating whether to loop immediately, or a classified failure.
@@ -127,24 +221,8 @@ pub(in crate::db::valuation::worker) fn process_deferred(
     axis: &ReportAxis,
     generation: &AtomicU64,
     dirty: &AtomicBool,
-    deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
 ) -> Result<StageTurn, FaultCause> {
-    let current = current_minute_utc();
-    let blocked =
-        crate::db::valuation::blocked_rate_searches(store, now_unix_ms_i64()).unwrap_or_default();
-    let keys = deferred
-        .iter()
-        .filter(|(_, input)| {
-            let minute = valuation_minute(axis, input);
-            minute < current && !blocked.contains(&(input.quote_ordinal, minute))
-        })
-        .map(|(key, _)| *key)
-        .take(DEFERRED_BATCH)
-        .collect::<Vec<_>>();
-    let inputs = keys
-        .iter()
-        .filter_map(|key| deferred.get(key).cloned())
-        .collect::<Vec<_>>();
+    let inputs = deferred_inputs(store, DEFERRED_BATCH)?;
     let prefetched = settle_prefetch(
         prefetch_rates(store, source, axis, &inputs),
         generation,
@@ -152,16 +230,27 @@ pub(in crate::db::valuation::worker) fn process_deferred(
     )?;
     let mut changed = prefetched.changed;
     let mut provider_fault = prefetched.provider_fault;
-    for key in &keys {
-        let Some(input) = deferred.get(key).cloned() else {
+    let (ready, ready_changed) = match prepare_ready_trades(store, axis, &inputs) {
+        Ok(ready) => ready,
+        Err(error) => {
+            if changed {
+                publish(generation, dirty);
+            }
+            return Err(error);
+        }
+    };
+    changed |= ready_changed;
+    for input in &inputs {
+        let key = trade_key(input);
+        if ready.contains(&key) {
             continue;
-        };
-        let minute = valuation_minute(axis, &input);
+        }
+        let minute = valuation_minute(axis, input);
         match prepare_trade(
             store,
             source,
             axis,
-            &input,
+            input,
             prefetched
                 .canonical_exact_missing
                 .contains(&(input.quote_ordinal, minute)),
@@ -170,13 +259,17 @@ pub(in crate::db::valuation::worker) fn process_deferred(
                 changed: input_changed,
             } => {
                 changed |= input_changed;
-                deferred.remove(key);
+                forget_deferred(store, &BTreeSet::from([key]))?;
             }
             PrepareResult::Deferred {
                 changed: input_changed,
-            } => changed |= input_changed,
+            } => {
+                changed |= input_changed;
+                defer_trade(store, axis, input)?;
+            }
             PrepareResult::Retry(error) if error.kind == FailureKind::Provider => {
-                changed |= defer_provider_trade(store, axis, &input)?;
+                changed |= defer_provider_trade(store, axis, input)?;
+                defer_trade(store, axis, input)?;
                 provider_fault.get_or_insert(error);
             }
             PrepareResult::Retry(error) => {
@@ -194,7 +287,7 @@ pub(in crate::db::valuation::worker) fn process_deferred(
         return Err(error);
     }
     Ok(StageTurn::Ran {
-        more: current_minute_closed_any(store, axis, deferred),
+        more: current_minute_closed_any(store),
     })
 }
 
@@ -202,21 +295,13 @@ pub(in crate::db::valuation::worker) fn process_deferred(
 ///
 /// Args:
 ///     store: Open valuation store carrying persisted retry boundaries.
-///     axis: Per-core time axis rate minutes are resolved against.
-///     deferred: Current-minute and unresolved rows retained by identity.
 ///
 /// Returns:
 ///     `true` when at least one row can now be retried.
-pub(in crate::db::valuation::worker) fn current_minute_closed_any(
-    store: &Connection,
-    axis: &ReportAxis,
-    deferred: &BTreeMap<(i64, i64, i64), TradeInput>,
-) -> bool {
-    let current = current_minute_utc();
-    let blocked =
-        crate::db::valuation::blocked_rate_searches(store, now_unix_ms_i64()).unwrap_or_default();
-    deferred.values().any(|input| {
-        let minute = valuation_minute(axis, input);
-        minute < current && !blocked.contains(&(input.quote_ordinal, minute))
-    })
+pub(in crate::db::valuation::worker) fn current_minute_closed_any(store: &Connection) -> bool {
+    // Let the fallible stage report a query failure; an eligibility failure must not masquerade
+    // as an empty queue and suppress that stage forever.
+    deferred_inputs(store, 1)
+        .map(|inputs| !inputs.is_empty())
+        .unwrap_or(true)
 }

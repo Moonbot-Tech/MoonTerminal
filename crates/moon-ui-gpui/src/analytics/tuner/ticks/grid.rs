@@ -584,6 +584,7 @@ pub(super) fn group_note(
     state: &super::state::TicksState,
     group: ParamGroup,
     d: &TicksData,
+    fit: usize,
     p: MoonPalette,
 ) -> Option<(String, u32)> {
     if group == ParamGroup::Entry && !d.entry_modelled() {
@@ -610,7 +611,7 @@ pub(super) fn group_note(
     }
     // Answered, but no trade fit for the search — whatever the share and the gate: the search
     // has nothing to learn on and refuses the group (`TicksData::group_searchable`).
-    if n > 0 && !d.group_searchable(group) {
+    if n > 0 && !d.group_searchable(group, fit) {
         // An exit nobody could check is named for why, not left to read as every trade missed.
         let why = (group == ParamGroup::Exit)
             .then(|| d.accuracy.none_checked_note())
@@ -695,7 +696,13 @@ impl AnalyticsView {
                 for group in [ParamGroup::Entry, ParamGroup::Exit] {
                     if section.knobs().any(|k| k.group == group) && !noted.contains(&group) {
                         noted.push(group);
-                        notes.extend(group_note(&self.ticks, group, d, p));
+                        notes.extend(group_note(
+                            &self.ticks,
+                            group,
+                            d,
+                            self.ticks.population().fit,
+                            p,
+                        ));
                     }
                 }
             }

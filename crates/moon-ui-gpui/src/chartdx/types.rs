@@ -91,16 +91,8 @@ pub fn extend_price_upload(points: &[PricePoint], epoch_ms: f64, out: &mut Vec<P
     }));
 }
 
-/// One trade marker in GPU memory. Layout matches chart shaders.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ChartCross {
-    pub time_rel: f32,
-    pub price: f32,
-    pub side: u32,
-    /// Base quantity, preserving the native tick band's existing height semantics.
-    pub qty: f32,
-}
+/// Shared trade-cross storage lets the optimized chart crate copy owned ring snapshots.
+pub use moon_chart::layers::ChartCross;
 
 /// One candle in the candle-layer GPU buffer, matching `Candle` in candles.hlsl.
 #[repr(C)]

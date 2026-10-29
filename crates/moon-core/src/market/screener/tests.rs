@@ -4,6 +4,63 @@ use moonproto::state::DerivedDeltaSnapshot;
 
 use super::ScreenerRow;
 
+/// Sharing a market must not share mutable member fields or copy market strings for each core.
+#[test]
+fn shared_market_rows_keep_account_values_independent() {
+    use super::SharedScreenerRow;
+    use std::sync::Arc;
+    let market = Arc::new(ScreenerRow {
+        provider: 3,
+        market: "XALPHAUSDT".into(),
+        coin: "XALPHA".into(),
+        vol_24h: 123.0,
+        ..Default::default()
+    });
+    let first = SharedScreenerRow::of_market(market.clone(), 5);
+    let mut second = SharedScreenerRow::of_market(market.clone(), 7);
+    second.core_pnl = -2.0;
+    second.session = Some(4.0);
+    second.pos_size = 6.0;
+    second.leverage_x = 8;
+    second.isolated = Some(true);
+    second.orders = 10;
+    assert!(Arc::ptr_eq(&first.market_data, &second.market_data));
+    assert_eq!(
+        (first.provider, first.core, second.provider, second.core),
+        (3, 5, 3, 7)
+    );
+    assert_eq!(
+        (
+            first.market.as_str(),
+            second.market.as_str(),
+            second.vol_24h
+        ),
+        ("XALPHAUSDT", "XALPHAUSDT", 123.0)
+    );
+    assert_eq!(
+        (
+            first.core_pnl,
+            first.session,
+            first.pos_size,
+            first.leverage_x,
+            first.isolated,
+            first.orders
+        ),
+        (0.0, None, 0.0, 0, None, 0)
+    );
+    assert_eq!(
+        (
+            second.core_pnl,
+            second.session,
+            second.pos_size,
+            second.leverage_x,
+            second.isolated,
+            second.orders
+        ),
+        (-2.0, Some(4.0), 6.0, 8, Some(true), 10)
+    );
+}
+
 /// Removing or swapping any assignment in `screener.rs:ScreenerRow::apply_range_deltas` must fail
 /// the distinct-value assertion; otherwise a Screener column displays zero or another period's
 /// movement instead of its matching retained-range delta.

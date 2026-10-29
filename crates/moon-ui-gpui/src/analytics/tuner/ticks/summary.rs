@@ -462,12 +462,7 @@ impl SummaryModel {
             title: t!("analytics.ticks.sum.title").to_string(),
             scope_label,
             tag: tag(&verdict),
-            sentence: sentence(
-                &verdict,
-                fit,
-                hold,
-                data.map_or(0, |d| d.readiness().fetchable),
-            ),
+            sentence: sentence(&verdict, fit, hold, state.population().readiness.fetchable),
             verdict,
             train,
             holdout,
@@ -524,8 +519,14 @@ impl AnalyticsView {
         if let Some(data) = self.ticks.data.data() {
             for group in [ParamGroup::Entry, ParamGroup::Exit] {
                 model.warnings.extend(
-                    super::grid::group_note(&self.ticks, group, data, MoonPalette::active(cx))
-                        .map(|(note, _)| note),
+                    super::grid::group_note(
+                        &self.ticks,
+                        group,
+                        data,
+                        self.ticks.population().fit,
+                        MoonPalette::active(cx),
+                    )
+                    .map(|(note, _)| note),
                 );
             }
         }

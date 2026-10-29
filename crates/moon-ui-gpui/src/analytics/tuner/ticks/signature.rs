@@ -93,16 +93,34 @@ pub(in crate::analytics::tuner) struct ReloadKey {
     pub(in crate::analytics::tuner) addresses: u64,
 }
 
+/// A background skip decision stays valid only for the same publication and clock interval.
+pub(super) struct SkipCheck {
+    pub(super) key: ReloadKey,
+    pub(super) rows_rev: u64,
+    pub(super) checked_at_ms: i64,
+    pub(super) until_ms: i64,
+}
+
+impl SkipCheck {
+    /// Validate the background pass without walking the rows again on the UI thread.
+    pub(super) fn holds(&self, key: &ReloadKey, rows_rev: u64, now_ms: i64) -> bool {
+        self.key == *key
+            && self.rows_rev == rows_rev
+            && self.checked_at_ms <= now_ms
+            && now_ms < self.until_ms
+    }
+}
+
 /// Whether a report-driven reload may keep the published rows as they stand: the last load
 /// settled under a key equal to this one, the clock has not reached `valid_until_ms` — the
 /// first instant a covered row's sample bucket moves ([`settled_until`]) — every missing row
 /// still reads as it did when judged (`missing_holds`: the retention edge and the short-tail
 /// admission, asked again at `now_ms`), and no row waits for a publication deadline that has
 /// passed (`refiled.rs` re-reads those).
-pub(in crate::analytics::tuner) fn can_skip(
+pub(in crate::analytics::tuner) fn can_skip<'a>(
     stored: Option<&ReloadKey>,
     now: &ReloadKey,
-    rows: &[super::state::DealRow],
+    rows: impl IntoIterator<Item = &'a super::state::DealRow> + Clone,
     now_ms: i64,
     valid_until_ms: i64,
     missing_holds: impl Fn(&super::state::DealRow) -> bool,
@@ -111,10 +129,11 @@ pub(in crate::analytics::tuner) fn can_skip(
     stored == Some(now)
         && now_ms < valid_until_ms
         && rows
-            .iter()
+            .clone()
+            .into_iter()
             .filter(|r| r.tape == super::state::TapeStatus::Missing)
             .all(missing_holds)
-        && !rows.iter().any(|r| {
+        && !rows.into_iter().any(|r| {
             matches!(r.tape,
                 super::state::TapeStatus::Refused(TickStatus::ArchivePending { retry_at_ms })
                     if retry_at_ms <= now_ms)
@@ -124,12 +143,12 @@ pub(in crate::analytics::tuner) fn can_skip(
 /// The first instant after `now_ms` at which a row's verdict can move with the clock alone —
 /// a retention edge of a covered short tail or of a missing row
 /// ([`super::rows::next_verdict_flip`]); `i64::MAX` when none can.
-pub(in crate::analytics::tuner) fn settled_until(
-    rows: &[super::state::DealRow],
+pub(in crate::analytics::tuner) fn settled_until<'a>(
+    rows: impl IntoIterator<Item = &'a super::state::DealRow>,
     min_tail_s: u32,
     now_ms: i64,
 ) -> i64 {
-    rows.iter()
+    rows.into_iter()
         .filter_map(|row| super::rows::next_verdict_flip(row, min_tail_s, now_ms))
         .min()
         .unwrap_or(i64::MAX)

@@ -1055,6 +1055,21 @@ impl ComboLayer {
             })
     }
 
+    /// Copy the same candidates through optimized chart code for a background bubble request.
+    pub(super) fn tick_snapshot(&self, from: f64, to: f64) -> Vec<ChartCross> {
+        moon_chart::tick_volume::snapshot_crosses(
+            &self.resident_crosses,
+            self.resident_head,
+            self.resident_count,
+            self.cross_capacity as usize,
+            self.pending_reset.as_deref(),
+            &self.pending_append,
+            self.tick_time_order.max_lateness(),
+            from,
+            to,
+        )
+    }
+
     /// Borrow candidates including pending uploads using O(1) slice probes and lateness bounds.
     pub(super) fn tick_samples(&self, from: f64, to: f64) -> impl Iterator<Item = &ChartCross> {
         let samples = moon_chart::tick_volume::pending_ring(

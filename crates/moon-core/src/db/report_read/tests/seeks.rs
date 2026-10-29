@@ -29,13 +29,16 @@ fn capture(event: rusqlite::trace::TraceEvent<'_>) {
     let Some(sql) = statement.expanded_sql() else {
         return;
     };
-    if sql.to_ascii_uppercase().contains("ORDERS_REP") && sql.trim_start().starts_with("SELECT") {
+    if sql.to_ascii_uppercase().contains("ORDERS_REP")
+        && (sql.trim_start().starts_with("SELECT")
+            || sql.trim_start().starts_with("WITH chosen_report_rows"))
+    {
         CAPTURED.with(|slot| slot.borrow_mut().push(sql));
     }
 }
 
 /// Run `read` and return every captured `orders_rep` SELECT with its query plan.
-fn plans_of(conn: &Connection, read: impl FnOnce()) -> Vec<(String, String)> {
+pub(super) fn plans_of(conn: &Connection, read: impl FnOnce()) -> Vec<(String, String)> {
     CAPTURED.with(|slot| slot.borrow_mut().clear());
     conn.trace_v2(
         rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
@@ -84,7 +87,7 @@ fn assert_seeks(plan: &str, sql: &str, index: &str, what: &str) {
 const OPEN_TEXT: &str = "(NOT (typeof(";
 
 /// The replica schema the core sends, with the production indexes `rep::init` creates.
-fn replica() -> Connection {
+pub(super) fn replica() -> Connection {
     let conn = Connection::open_in_memory().expect("open replica");
     crate::db::init_db(&conn).expect("init report database");
     replica_columns(&conn);
@@ -117,7 +120,14 @@ fn replica_columns(conn: &Connection) {
 
 /// Fill the replica with `rows` trades over `cores` cores and `coins` coins, one in `open_every`
 /// still open, then attach `strategies` strategies per core.
-fn seed(conn: &Connection, rows: i64, cores: i64, coins: i64, open_every: i64, strategies: i64) {
+pub(super) fn seed(
+    conn: &Connection,
+    rows: i64,
+    cores: i64,
+    coins: i64,
+    open_every: i64,
+    strategies: i64,
+) {
     conn.execute_batch("BEGIN").expect("begin seed");
     {
         let mut insert = conn
@@ -319,14 +329,9 @@ fn coin_reads_seek_the_coin_index() {
     }
 }
 
-/// Chart history over TWO coins must seek `idx_rep_coin_close` like the single-coin read.
-///
-/// Open finding, ignored until the production fix lands: the `OR` of two `coin COLLATE NOCASE =`
-/// terms is not turned into a multi-index seek; the planner walks `idx_rep_closedate` over every
-/// closed trade of the selected cores instead, so a chart showing a coin and its alias stays a
-/// full-history read.
+/// Replacing exact alias membership with a non-sargable expression must not make chart history
+/// walk every closed trade. The current IN predicate supports the same coin seek as one alias.
 #[test]
-#[ignore = "open finding: multi-coin chart history walks idx_rep_closedate"]
 fn multi_coin_chart_history_seeks_the_coin_index() {
     let conn = replica();
     seed(&conn, 6_000, 4, 200, 500, 10);
@@ -429,6 +434,86 @@ fn replica_indexes_are_idempotent_and_wait_for_their_columns() {
     let mut expected = all.clone();
     expected.remove("idx_rep_coin_close");
     assert_eq!(names(&no_coin), expected);
+}
+
+/// A date-order optimization must not widen shared indexes and change ASC tie order, nor change
+/// source-local top-N membership. Compare unlimited rows, including ties and computed sorts,
+/// across replica initialization, then compare the new key pass against the original statement.
+#[test]
+fn date_read_optimization_preserves_reports_and_other_sort_orders() {
+    let conn = replica();
+    seed(&conn, 600, 4, 20, 100, 8);
+    conn.execute_batch(
+        "DROP INDEX idx_rep_closedate;
+         CREATE INDEX idx_rep_closedate ON orders_rep(closedate);
+         UPDATE orders_rep SET closedate=1700000000 + newrecid % 5 WHERE closedate > 0;",
+    )
+    .unwrap();
+    let filter = ReportFilter {
+        rows: RowScope::Closed,
+        ..ReportFilter::default()
+    };
+    let sorts = ["closedate", "profitbtc", "profitpct", "coin"];
+    let mut before = Vec::new();
+    for sort in sorts {
+        for desc in [false, true] {
+            before.push(query_reports(&conn, &filter, sort, desc, 10_000).unwrap());
+            assert_eq!(before.last().unwrap().rows.len(), 594);
+        }
+    }
+    let totals = query_totals(&conn, &filter).unwrap();
+    crate::db::test_support::rep_init(&conn);
+    crate::db::test_support::rep_init(&conn);
+    let mut before = before.into_iter();
+    for sort in sorts {
+        for desc in [false, true] {
+            let old = before.next().unwrap();
+            let new = query_reports(&conn, &filter, sort, desc, 10_000).unwrap();
+            assert_eq!(old.cols, new.cols);
+            assert_eq!(old.rows, new.rows, "sort={sort}, desc={desc}");
+            assert_eq!(old.core_uids, new.core_uids);
+            assert_eq!(old.rec_ids, new.rec_ids);
+        }
+    }
+    assert_eq!(totals, query_totals(&conn, &filter).unwrap());
+    let key = conn
+        .prepare("PRAGMA index_info(idx_rep_closedate)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(2))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(key, ["closedate"]);
+    for (sql, plan) in plans_of(&conn, || {
+        query_reports(&conn, &filter, "closedate", true, 500).unwrap();
+    }) {
+        assert!(sql.starts_with("WITH chosen_report_rows"), "{sql}");
+        assert!(plan.contains("MATERIALIZE chosen_report_rows"), "{plan}");
+        let inner = sql
+            .strip_prefix("WITH chosen_report_rows AS MATERIALIZED (")
+            .unwrap();
+        let (keys, projection) = inner.split_once(") SELECT ").unwrap();
+        let suffix = keys.strip_prefix("SELECT r.rowid FROM ").unwrap();
+        let (projection, _) = projection.split_once(" FROM chosen_report_rows").unwrap();
+        let original = format!("SELECT {projection} FROM {suffix}");
+        let read = |statement: &str| {
+            let mut statement = conn.prepare(statement).unwrap();
+            let width = statement.column_count();
+            statement
+                .query_map([], |row| {
+                    (0..width)
+                        .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        assert_eq!(read(&original), read(&sql));
+        let unlimited = sql.replace("LIMIT 500", "LIMIT 10000");
+        let original = original.replace("LIMIT 500", "LIMIT 10000");
+        assert_eq!(read(&original), read(&unlimited));
+    }
 }
 
 /// The replaced name-mask predicates, verbatim from before the resolve-once rewrite, over the

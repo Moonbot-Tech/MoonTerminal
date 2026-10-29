@@ -1,6 +1,6 @@
 use super::*;
 
-/// Stable in-memory identity for one deferred prepared value.
+/// Stable source/core/row identity for pending and prepared values.
 ///
 /// Args:
 ///     input: Current report inputs.

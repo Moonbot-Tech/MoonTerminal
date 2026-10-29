@@ -1,4 +1,5 @@
 use super::*;
+use crate::feed::OrderTracePoint;
 
 /// Preserves the old restart-at-one assignment as an independent chart-label oracle.
 fn reference_chart_numbers(store: &OrderLineStore, rows: &[OrderRow]) -> HashMap<u64, u32> {
@@ -146,12 +147,17 @@ fn reference_market_draw_orders<'a>(
     out
 }
 
-/// Compares the same open set by sorted (seq, uid) pairs and preserves the exact closed suffix.
+/// Compares draw order against the original map scan and closed-ring traversal.
 fn assert_market_draw_reference(store: &OrderLineStore) {
     for market in ["SYN000", "SYN001", "SYN002", "absent"] {
         for cap in [0, 1, 50, CLOSED_RING_CAP + 1] {
             let actual = store.market_draw_orders(market, cap);
             let expected = reference_market_draw_orders(store, market, cap);
+            assert_eq!(
+                actual.iter().map(|order| order.uid).collect::<Vec<_>>(),
+                expected.iter().map(|order| order.uid).collect::<Vec<_>>(),
+                "draw order for {market}, cap {cap}"
+            );
             let open = |orders: &[&RetainedOrder]| {
                 let mut ids: Vec<_> = orders
                     .iter()
@@ -190,6 +196,83 @@ fn assert_market_draw_reference(store: &OrderLineStore) {
     }
 }
 
+/// Appended closed lines can rehash live UIDs without changing their membership. The next
+/// reprice must draw those UIDs in the same order as the original retained-map scan.
+#[test]
+fn market_draw_order_survives_archived_appends_before_a_reprice() {
+    let mut store = OrderLineStore::default();
+    let mut rows = bench_rows(12, 3);
+    store.update(&rows, 0);
+    for _ in 0..64 {
+        store.append_archived(
+            ArchivedOrdersInput {
+                market: "SYN000",
+                is_short: false,
+                quantity: 1.0,
+                entry_fill_ms: None,
+                close_ms: 2000.0,
+                exit: Some(ReportExit {
+                    price: 100.0,
+                    set_ms: 1000.0,
+                }),
+                entry: None,
+                bright: false,
+            },
+            &[],
+        );
+        rows[0].buy_price += 1.0;
+        assert!(store.update(&rows, 0));
+        assert_market_draw_reference(&store);
+    }
+}
+
+/// Trace, label and excluded-line edits must retain the current-price range; changing or disabling
+/// any contributing price must refresh it, including after closure and revival.
+#[test]
+fn auto_fit_tracks_current_prices_without_using_trace_or_label_values() {
+    let mut store = OrderLineStore::default();
+    let mut row = order(1);
+    row.buy_price = 100.0;
+    row.sell_price = 110.0;
+    row.filled = true;
+    row.stop_loss = Some(95.0);
+    row.trailing = Some(96.0);
+    row.vstop = Some(97.0);
+    store.update(std::slice::from_ref(&row), 0);
+    assert_eq!(store.auto_fit_range(&row.market), Some((95.0, 110.0)));
+    row.buy_trace = Some(OrderTrace {
+        points: vec![OrderTracePoint {
+            time_ms: 1000.0,
+            price: 900.0,
+        }],
+        ..OrderTrace::default()
+    });
+    row.size += 10.0;
+    row.take_profit = Some(1000.0);
+    assert!(store.update(std::slice::from_ref(&row), 0));
+    assert_eq!(store.auto_fit_range(&row.market), Some((95.0, 110.0)));
+    for (stop, trailing, vstop, expected) in [
+        (None, Some(96.0), Some(97.0), (96.0, 110.0)),
+        (None, None, Some(97.0), (97.0, 110.0)),
+        (None, None, None, (100.0, 110.0)),
+    ] {
+        row.stop_loss = stop;
+        row.trailing = trailing;
+        row.vstop = vstop;
+        assert!(store.update(std::slice::from_ref(&row), 0));
+        assert_eq!(store.auto_fit_range(&row.market), Some(expected));
+    }
+    row.sell_price = 120.0;
+    assert!(store.update(std::slice::from_ref(&row), 0));
+    assert_eq!(store.auto_fit_range(&row.market), Some((100.0, 120.0)));
+    row.job_is_done = true;
+    assert!(store.update(std::slice::from_ref(&row), 0));
+    assert_eq!(store.auto_fit_range(&row.market), None);
+    row.job_is_done = false;
+    assert!(store.update(std::slice::from_ref(&row), 0));
+    assert_eq!(store.auto_fit_range(&row.market), Some((100.0, 120.0)));
+}
+
 /// Missing index maintenance on insertion, closure, or revival would hide or duplicate chart lines.
 #[test]
 fn market_draw_orders_matches_reference() {
@@ -197,6 +280,18 @@ fn market_draw_orders_matches_reference() {
     let mut rows = bench_rows(12, 3);
     rows[0].job_is_done = true;
     store.update(&rows, 0);
+    assert_market_draw_reference(&store);
+
+    // Price/trace-only batches reuse membership, retaining the exact original map order.
+    rows[2].buy_price += 1.0;
+    rows[2].buy_trace = Some(OrderTrace {
+        points: vec![OrderTracePoint {
+            time_ms: 1000.0,
+            price: 102.0,
+        }],
+        ..OrderTrace::default()
+    });
+    assert!(store.update(&rows, 0));
     assert_market_draw_reference(&store);
 
     rows[1].job_is_done = true;
@@ -1136,4 +1231,360 @@ fn partial_updates_leave_absent_orders_open_but_full_updates_keep_the_backstop()
         store.order_state(42).unwrap().closed_reason,
         Some(OrderCloseReason::BackstopMissing)
     );
+}
+
+/// Heavy-user core: 5 000 retained closed orders and 200 open orders carrying 50-200 trace points
+/// on both legs, spread over 40 markets.
+fn heavy_core_store() -> (OrderLineStore, Vec<OrderRow>) {
+    let mut store = OrderLineStore::default();
+    let mut terminal = bench_rows(CLOSED_RING_CAP as u64, 40);
+    for row in &mut terminal {
+        row.uid += 1_000_000;
+        row.job_is_done = true;
+    }
+    store.update(&terminal, 0);
+    let mut open = bench_rows(200, 40);
+    for (i, row) in open.iter_mut().enumerate() {
+        let points = (0..50 + (i % 151))
+            .map(|k| OrderTracePoint {
+                time_ms: 1_000.0 + k as f64 * 1_000.0,
+                price: 100.0 + k as f32 * 0.01,
+            })
+            .collect::<Vec<_>>();
+        let trace = OrderTrace {
+            points,
+            ..OrderTrace::default()
+        };
+        row.buy_trace = Some(trace.clone());
+        row.sell_trace = Some(trace);
+    }
+    store.update(&open, 0);
+    assert_eq!(store.closed_ring.len(), CLOSED_RING_CAP);
+    assert_eq!(store.open_uids.len(), 200);
+    (store, open)
+}
+
+/// Measures one feed batch on a heavy core: unchanged, and with one repriced order.
+#[test]
+#[ignore]
+fn bench_heavy_core_update() {
+    let (mut store, mut open) = heavy_core_store();
+    for label in ["unchanged", "one repriced"] {
+        let mut samples = Vec::new();
+        for i in 0..50 {
+            if label == "one repriced" {
+                open[7].buy_price = 100.0 + (i % 2) as f64;
+                open[7].price = open[7].buy_price as f32;
+            }
+            let start = std::time::Instant::now();
+            std::hint::black_box(store.update(std::hint::black_box(&open), 0));
+            samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        samples.sort_by(f64::total_cmp);
+        println!("[bench] heavy update {label}: median {:.3} ms", samples[25]);
+    }
+    let mut samples = Vec::new();
+    for _ in 0..50 {
+        let start = std::time::Instant::now();
+        for market in 0..40 {
+            let name = format!("SYN{market:03}");
+            std::hint::black_box(store.market_draw_orders(&name, 50));
+        }
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] heavy draw 40 markets: median {:.3} ms",
+        samples[25]
+    );
+    let mut samples = Vec::new();
+    for _ in 0..50 {
+        let start = std::time::Instant::now();
+        std::hint::black_box(store.iter_market("SYN007").count());
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] heavy iter_market one market: median {:.3} ms",
+        samples[25]
+    );
+    // Proxy for the feed's per-publish row build: the same 200 rows and both traces allocated anew.
+    let mut samples = Vec::new();
+    for _ in 0..50 {
+        let start = std::time::Instant::now();
+        std::hint::black_box(open.clone());
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] heavy 200-row rebuild proxy: median {:.3} ms",
+        samples[25]
+    );
+}
+
+/// Replays the pre-change range and index rebuilds as a timed control on the identical store.
+/// Only trace edits use this control, so these rebuilds reproduce their original batch work.
+fn legacy_render_cache_rebuild(store: &mut OrderLineStore) {
+    store.rebuild_auto_fit_ranges();
+    store.open_by_market.clear();
+    for order in store
+        .orders
+        .values()
+        .filter(|order| order.closed_ms.is_none())
+    {
+        store
+            .open_by_market
+            .entry(order.market.clone())
+            .or_default()
+            .push(order.uid);
+    }
+}
+
+/// Measures synchronized feed batches at ten-core scale and catches lost trace edits or spurious
+/// revisions on unchanged batches. Full scale is intentional: retained history affects scan cost.
+#[test]
+#[ignore = "manual ten-core scale measurement"]
+fn bench_ten_core_ingest() {
+    let mut cores: Vec<_> = (0..10).map(|_| heavy_core_store()).collect();
+    for changed in [false, true] {
+        let mut samples = [Vec::new(), Vec::new()];
+        for iteration in 0..50 {
+            for pass in 0..2 {
+                let control = (iteration + pass) % 2;
+                if changed {
+                    for (_, rows) in &mut cores {
+                        rows[7].buy_trace.as_mut().unwrap().points[25].price =
+                            101.0 + (iteration * 2 + pass) as f32;
+                    }
+                }
+                let revisions: Vec<_> = cores.iter().map(|(store, _)| store.rev).collect();
+                let start = std::time::Instant::now();
+                for (store, rows) in &mut cores {
+                    let updated = std::hint::black_box(store.update(std::hint::black_box(rows), 0));
+                    if control == 1 && updated {
+                        legacy_render_cache_rebuild(store);
+                    }
+                }
+                samples[control].push(start.elapsed().as_secs_f64() * 1000.0);
+                for ((store, rows), revision) in cores.iter().zip(revisions) {
+                    assert_eq!(store.rev, revision + u64::from(changed));
+                    assert_eq!(store.closed_ring.len(), CLOSED_RING_CAP);
+                    assert_eq!(store.open_uids.len(), 200);
+                    for row in rows {
+                        let retained = &store.orders[&row.uid];
+                        assert!(retained.closed_ms.is_none());
+                        for (kind, trace) in [
+                            (LineKind::Buy, row.buy_trace.as_ref().unwrap()),
+                            (LineKind::Sell, row.sell_trace.as_ref().unwrap()),
+                        ] {
+                            let expected: Vec<_> = trace
+                                .points
+                                .iter()
+                                .map(|point| (point.time_ms, point.price))
+                                .collect();
+                            assert_eq!(retained.lines[kind as usize].server_points, expected);
+                        }
+                    }
+                }
+            }
+        }
+        for (control, samples) in samples.iter_mut().enumerate() {
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "[bench] ten-core ingest trace_changed={changed} legacy_caches={control}: median {:.3} ms p95 {:.3} ms",
+                samples[25], samples[47]
+            );
+        }
+    }
+}
+
+/// Times the available publication tail and the real session message handlers at ten-core scale.
+/// Losing a captured reprice or advancing the table revision for lines-only delivery fails this
+/// probe. Snapshot projection itself requires a MoonProto-owned snapshot and is not timed here.
+#[test]
+#[ignore = "manual ten-core publication and session measurement"]
+fn bench_ten_core_publication() {
+    use crate::feed::{FeedMsg, live::coalesced_order_rows};
+    use crate::session::store::CoreData;
+
+    let mut cores: Vec<_> = (0..10)
+        .map(|_| {
+            let (store, rows) = heavy_core_store();
+            let mut core = CoreData::new();
+            core.order_lines = store;
+            core.apply(FeedMsg::OrderLines(rows.clone().into()));
+            (core, rows)
+        })
+        .collect();
+    for table in [false, true] {
+        let mut publication_samples = Vec::new();
+        let mut ingestion_samples = [Vec::new(), Vec::new()];
+        for iteration in 0..50 {
+            for pass in 0..2 {
+                let control = (iteration + pass) % 2;
+                let mut deliveries = Vec::new();
+                for (_, rows) in &mut cores {
+                    let mut captured = rows[7].clone();
+                    captured.buy_trace.as_mut().unwrap().points[25].price =
+                        201.0 + (iteration * 2 + pass) as f32;
+                    let start = std::time::Instant::now();
+                    let payload = coalesced_order_rows(rows.clone(), vec![vec![captured]]);
+                    publication_samples.push(start.elapsed().as_secs_f64() * 1000.0);
+                    deliveries.push(if table {
+                        FeedMsg::Orders(payload)
+                    } else {
+                        FeedMsg::OrderLines(payload)
+                    });
+                }
+                let revisions: Vec<_> = cores
+                    .iter()
+                    .map(|(core, _)| (core.order_lines_rev, core.orders_table_rev))
+                    .collect();
+                let start = std::time::Instant::now();
+                for ((core, _), delivery) in cores.iter_mut().zip(deliveries) {
+                    core.apply(delivery);
+                    if control == 1 {
+                        legacy_render_cache_rebuild(&mut core.order_lines);
+                    }
+                }
+                ingestion_samples[control].push(start.elapsed().as_secs_f64() * 1000.0);
+                for ((core, rows), (lines_rev, table_rev)) in cores.iter().zip(revisions) {
+                    assert_eq!(core.order_lines_rev, lines_rev + 1);
+                    assert_eq!(core.orders_table_rev, table_rev + u64::from(table));
+                    assert_eq!(core.order_lines.closed_ring.len(), CLOSED_RING_CAP);
+                    assert_eq!(core.order_lines.open_uids.len(), 200);
+                    let expected = 201.0 + (iteration * 2 + pass) as f32;
+                    assert_eq!(
+                        core.order_lines.orders[&rows[7].uid].lines[LineKind::Buy as usize]
+                            .server_points[25]
+                            .1,
+                        expected
+                    );
+                    if table {
+                        assert_eq!(core.orders.len(), rows.len());
+                        assert_eq!(
+                            core.orders[7].buy_trace.as_ref().unwrap().points[25].price,
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+        publication_samples.sort_by(f64::total_cmp);
+        println!(
+            "[bench] converted-row publication table={table} per-core: median {:.3} ms p95 {:.3} ms",
+            publication_samples[500], publication_samples[950]
+        );
+        for (control, ingestion_samples) in ingestion_samples.iter_mut().enumerate() {
+            ingestion_samples.sort_by(f64::total_cmp);
+            println!(
+                "[bench] ten-core CoreData::apply table={table} legacy_caches={control}: median {:.3} ms p95 {:.3} ms",
+                ingestion_samples[25], ingestion_samples[47]
+            );
+        }
+    }
+}
+
+/// Measures unchanged-trace comparison separately from index and session work. Full scale keeps
+/// the ten-core working set and both legs' 50-200-point histories in the measurement.
+#[test]
+#[ignore = "manual trace-comparison scale measurement"]
+fn bench_ten_core_trace_comparison() {
+    let mut cores: Vec<_> = (0..10).map(|_| heavy_core_store()).collect();
+    let mut samples = Vec::new();
+    for _ in 0..50 {
+        let start = std::time::Instant::now();
+        let mut equal = 0;
+        for (store, rows) in &mut cores {
+            for row in rows {
+                for (kind, trace) in [
+                    (LineKind::Buy, row.buy_trace.as_ref().unwrap()),
+                    (LineKind::Sell, row.sell_trace.as_ref().unwrap()),
+                ] {
+                    let held = &mut store.orders.get_mut(&row.uid).unwrap().lines[kind as usize];
+                    equal += usize::from(!std::hint::black_box(
+                        held.update_server(Some(std::hint::black_box(trace))),
+                    ));
+                }
+            }
+        }
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        assert_eq!(equal, 4000);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] ten-core trace comparison: median {:.3} ms p95 {:.3} ms",
+        samples[25], samples[47]
+    );
+}
+
+/// Attributes the combined drain's residual work to real methods, allocation teardown and lookups.
+/// These measurements guide the next edit; input setup and cloning stay outside each timer.
+#[test]
+#[ignore = "manual drain component profiling"]
+fn bench_ten_core_components() {
+    use crate::session::store::CoreData;
+    let mut cores: Vec<_> = (0..10)
+        .map(|_| {
+            let (store, rows) = heavy_core_store();
+            let mut core = CoreData::new();
+            core.order_lines = store;
+            (core, rows)
+        })
+        .collect();
+    let mut samples: [Vec<f64>; 5] = std::array::from_fn(|_| Vec::new());
+    for _ in 0..50 {
+        let batches: Vec<_> = cores.iter().map(|(_, rows)| rows.clone()).collect();
+        let start = std::time::Instant::now();
+        drop(batches);
+        samples[0].push(start.elapsed().as_secs_f64() * 1000.0);
+        let start = std::time::Instant::now();
+        for (core, _) in &mut cores {
+            core.order_lines.rebuild_auto_fit_ranges();
+        }
+        samples[1].push(start.elapsed().as_secs_f64() * 1000.0);
+        let start = std::time::Instant::now();
+        for (core, rows) in &mut cores {
+            std::hint::black_box(core.clock_skew.observe(
+                rows,
+                |uid| core.order_lines.knows(uid),
+                now_unix_ms(),
+            ));
+            core.clock_skew.correct(rows);
+        }
+        samples[2].push(start.elapsed().as_secs_f64() * 1000.0);
+        let start = std::time::Instant::now();
+        for (core, rows) in &cores {
+            std::hint::black_box(
+                rows.iter()
+                    .filter(|row| !core.order_lines.orders.contains_key(&row.uid))
+                    .count(),
+            );
+            for uid in &core.order_lines.open_uids {
+                std::hint::black_box(core.order_lines.orders.get(uid));
+            }
+        }
+        samples[3].push(start.elapsed().as_secs_f64() * 1000.0);
+        let start = std::time::Instant::now();
+        for (core, rows) in &mut cores {
+            assert!(!core.order_lines.update(rows, 0));
+        }
+        samples[4].push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    for (name, samples) in [
+        "row drop",
+        "auto-fit rebuild",
+        "clock skew",
+        "fresh/backstop lookups",
+        "unchanged store update",
+    ]
+    .into_iter()
+    .zip(&mut samples)
+    {
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "[bench] ten-core {name}: median {:.3} ms p95 {:.3} ms",
+            samples[25], samples[47]
+        );
+    }
 }

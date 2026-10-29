@@ -22,7 +22,6 @@ use super::*;
 ///     axis: Per-core time axis rate minutes are resolved against.
 ///     generation: Monotonic valuation publication counter.
 ///     dirty: Coalescing UI wake edge.
-///     deferred: Current-minute rows retained until their candle closes.
 ///     state: Source and keyset cursor advanced only after a complete batch.
 ///
 /// Returns:
@@ -34,7 +33,6 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
     axis: &mut ReportAxis,
     generation: &AtomicU64,
     dirty: &AtomicBool,
-    deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
     state: &mut ReconcileState,
 ) -> Result<StageTurn, FaultCause> {
     let sources = [TradeSource::Typed, TradeSource::Legacy];
@@ -83,7 +81,20 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
             };
             turn.changed = prefetched.changed;
             let mut provider_fault = prefetched.provider_fault;
+            let ready = match prepare_ready_trades(store, axis, &inputs) {
+                Ok((ready, changed)) => {
+                    turn.changed |= changed;
+                    ready
+                }
+                Err(error) => {
+                    turn.fault = Some(error);
+                    return turn;
+                }
+            };
             for input in &inputs {
+                if ready.contains(&trade_key(input)) {
+                    continue;
+                }
                 let minute = valuation_minute(axis, input);
                 match prepare_trade(
                     store,
@@ -101,7 +112,10 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
                         changed: input_changed,
                     } => {
                         turn.changed |= input_changed;
-                        deferred.insert(trade_key(input), input.clone());
+                        if let Err(error) = defer_trade(store, axis, input) {
+                            turn.fault = Some(error);
+                            return turn;
+                        }
                     }
                     PrepareResult::Retry(error) if error.kind == FailureKind::Provider => {
                         match defer_provider_trade(store, axis, input) {
@@ -111,7 +125,10 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
                                 return turn;
                             }
                         }
-                        deferred.insert(trade_key(input), input.clone());
+                        if let Err(error) = defer_trade(store, axis, input) {
+                            turn.fault = Some(error);
+                            return turn;
+                        }
                         provider_fault.get_or_insert(error);
                     }
                     PrepareResult::Retry(error) => {
@@ -149,7 +166,7 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
     Ok(StageTurn::Drained)
 }
 
-/// Whether a drained reconciliation walk should resume because the outbox drain this turn
+/// Restart reconciliation from its first source because the outbox drain this turn
 /// observed a PARTITION-INVALIDATING event — one that wipes a whole core/source of prepared
 /// values with no per-row outbox event left behind to re-value them individually.
 ///
@@ -165,13 +182,14 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
 /// with the live outbox drain on the money-path thread — the very thing this goal exists to speed
 /// up.
 ///
-/// The only two facts that matter: whether reconciliation has anything left to do on its own, and
-/// whether this turn's outbox activity actually left rows unvalued with no per-row event able to
-/// catch them. Only `OutboxAction::RescanCore`/`PurgeLegacy` do that — both call
+/// The deciding fact is whether this turn's outbox activity left rows unvalued with no per-row
+/// event able to catch them. Only `OutboxAction::RescanCore`/`PurgeLegacy` do that — both call
 /// `delete_partition`, wiping `trade_values` for a whole core/source, so a walk is the only thing
 /// that can recover the now-unvalued rows. `Row` values its own row directly in the same batch;
 /// `Delete` removes a row that needs no revaluing; neither leaves anything for a walk to find. A
-/// cold start needs no re-arm at all — `run_worker` already seeds `reconciliation = Some(..)`.
+/// running walk must restart too: the wiped partition can include rows its cursor already passed,
+/// or belong to a source it already drained. Keeping that cursor would strand those rows until
+/// restart. A cold start already seeds `reconciliation = Some(..)` in `run_worker`.
 ///
 /// **Named residual, not silently fixed**: the walk this re-arms still drains `[Typed, Legacy]`
 /// sequentially (see [`reconcile_step`]'s own doc), so "newest-first" holds PER SOURCE, not
@@ -180,31 +198,31 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
 /// walk, which would reshape the cursor expression `valuation_never_routed_contract.rs:156`
 /// anchors verbatim; that is a materially bigger change than this goal and is not made here.
 ///
+/// Reconciliation is reset for a partition invalidation whether idle or running; otherwise its
+/// source and cursor remain untouched.
+///
 /// Args:
 ///     reconciliation: Current startup/backfill reconciliation cursor, or `None` once drained.
 ///     events: This turn's unacknowledged outbox events, already durability-filtered by the
 ///         caller.
-///
-/// Returns:
-///     `true` when a drained walk should be re-armed: reconciliation is idle AND at least one
-///     event this turn invalidated a whole partition.
-pub(in crate::db::valuation::worker) fn outbox_activity_should_rearm_reconciliation(
-    reconciliation: &Option<ReconcileState>,
+pub(in crate::db::valuation::worker) fn rearm_reconciliation_for_outbox(
+    reconciliation: &mut Option<ReconcileState>,
     events: &[OutboxEvent],
-) -> bool {
-    reconciliation.is_none()
-        && events.iter().any(|event| {
-            matches!(
-                event.action,
-                OutboxAction::RescanCore | OutboxAction::PurgeLegacy
-            )
-        })
+) {
+    if events.iter().any(|event| {
+        matches!(
+            event.action,
+            OutboxAction::RescanCore | OutboxAction::PurgeLegacy
+        )
+    }) {
+        *reconciliation = Some(ReconcileState::new());
+    }
 }
 
 /// Consume one contiguous report outbox prefix and acknowledge it only after valuation commits.
 ///
-/// A partition-invalidating event observed this turn also re-arms a drained reconciliation walk —
-/// see [`outbox_activity_should_rearm_reconciliation`] for why only that event kind qualifies, and
+/// A partition-invalidating event observed this turn also restarts the reconciliation walk —
+/// see [`rearm_reconciliation_for_outbox`] for why only that event kind qualifies, and
 /// for the per-source residual it does not fix.
 ///
 /// Args:
@@ -214,10 +232,9 @@ pub(in crate::db::valuation::worker) fn outbox_activity_should_rearm_reconciliat
 ///     report_tx: Sole report writer used for acknowledgement.
 ///     generation: Monotonic valuation publication counter.
 ///     dirty: Coalescing UI wake edge.
-///     deferred: Current-minute rows retained until their candle closes.
 ///     pending_ack: Highest sequence sent to the report writer but not yet observed deleted.
-///     reconciliation: Startup/backfill reconciliation cursor, re-armed here once drained if this
-///         turn's durable activity makes that worthwhile.
+///     reconciliation: Startup/backfill reconciliation cursor, reset here when this turn's
+///         durable activity invalidates a partition.
 ///
 /// Returns:
 ///     Whether another full outbox batch may already be waiting, or that the replica is absent.
@@ -228,7 +245,6 @@ pub(in crate::db::valuation::worker) fn consume_outbox(
     report_tx: &ReportTx,
     generation: &AtomicU64,
     dirty: &AtomicBool,
-    deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
     pending_ack: &mut Option<i64>,
     reconciliation: &mut Option<ReconcileState>,
 ) -> Result<StageTurn, FaultCause> {
@@ -244,52 +260,106 @@ pub(in crate::db::valuation::worker) fn consume_outbox(
     if events.is_empty() {
         return Ok(StageTurn::Ran { more: false });
     }
-    if outbox_activity_should_rearm_reconciliation(reconciliation, events) {
-        *reconciliation = Some(ReconcileState::new());
-    }
-    let mut row_inputs = Vec::with_capacity(events.len());
+    rearm_reconciliation_for_outbox(reconciliation, events);
     // One slot per event in `events`, index-aligned rather than keyed by identity. A duplicate
     // `Row` event for one identity therefore keeps its OWN observation instead of collapsing into
     // a shared map entry: a later `None` correctly overrides an earlier `Some` in pass 2 rather
     // than being lost behind it. It also lets pass 2 take ownership of each `TradeInput` by
-    // value, so inserting one into `deferred` needs no clone.
-    let mut loaded: Vec<Option<TradeInput>> = Vec::with_capacity(events.len());
-    let mut loader = TradeLoader::default();
-    for event in events {
-        let input = if event.action == OutboxAction::Row {
-            loader
-                .load(&conn, event.source, event.core_uid, event.row_id)
-                .map_err(report_fault)?
-        } else {
-            None
-        };
-        if let Some(input) = &input {
-            row_inputs.push(input.clone());
-        }
-        loaded.push(input);
-    }
+    // value without collapsing a missing-row slot behind an earlier observation.
+    let loaded = load_trades(&conn, events).map_err(report_fault)?;
     let turn = commit_batch(store, || {
-        let mut turn = BatchTurn::default();
-        let prefetched = match prefetch_rates(store, source, axis, &row_inputs) {
-            Ok(prefetched) => prefetched,
+        apply_loaded_events(store, source, axis, events, &loaded)
+    })?;
+    // Acknowledge and publish only what the batch transaction made durable.
+    if let Some(through_seq) = turn.acknowledged {
+        send_ack(report_tx, pending_ack, through_seq);
+    }
+    if turn.changed {
+        publish(generation, dirty);
+    }
+    if let Some(error) = turn.fault.or(turn.provider_fault) {
+        return Err(error);
+    }
+    Ok(StageTurn::Ran {
+        more: batch_was_full,
+    })
+}
+
+/// Apply loaded outbox slots in order, batching only distinct rows between mutation barriers.
+///
+/// The caller owns the cache transaction and acknowledges the returned prefix after commit.
+pub(in crate::db::valuation::worker) fn apply_loaded_events(
+    store: &Connection,
+    source: &dyn SpotRateSource,
+    axis: &ReportAxis,
+    events: &[OutboxEvent],
+    loaded: &[Option<TradeInput>],
+) -> BatchTurn {
+    let row_inputs = loaded.iter().flatten().cloned().collect::<Vec<_>>();
+    let mut turn = BatchTurn::default();
+    let prefetched = match prefetch_rates(store, source, axis, &row_inputs) {
+        Ok(prefetched) => prefetched,
+        Err(error) => {
+            turn.changed = error.changed;
+            turn.fault = Some(error.fault);
+            return turn;
+        }
+    };
+    turn.changed = prefetched.changed;
+    let mut provider_fault = prefetched.provider_fault;
+    let mut start = 0;
+    while start < events.len() {
+        let mut end = start;
+        let mut identities = BTreeSet::new();
+        while end < events.len()
+            && events[end].action == OutboxAction::Row
+            && loaded[end].is_some()
+            && identities.insert((
+                events[end].source.code(),
+                events[end].core_uid,
+                events[end].row_id,
+            ))
+        {
+            end += 1;
+        }
+        if end == start {
+            end += 1;
+        }
+        let inputs = loaded[start..end]
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>();
+        let ready = match prepare_ready_trades(store, axis, &inputs) {
+            Ok((ready, changed)) => {
+                turn.changed |= changed;
+                ready
+            }
             Err(error) => {
-                turn.changed = error.changed;
-                turn.fault = Some(error.fault);
+                turn.fault = Some(error);
                 return turn;
             }
         };
-        turn.changed = prefetched.changed;
-        let mut provider_fault = prefetched.provider_fault;
-        for (event, input) in events.iter().zip(loaded) {
-            match process_event(
-                store,
-                source,
-                axis,
-                *event,
-                input.clone(),
-                deferred,
-                &prefetched.canonical_exact_missing,
-            ) {
+        for (event, input) in events[start..end]
+            .iter()
+            .zip(loaded[start..end].iter().cloned())
+        {
+            let result = if input
+                .as_ref()
+                .is_some_and(|input| ready.contains(&trade_key(input)))
+            {
+                PrepareResult::Complete { changed: false }
+            } else {
+                process_event(
+                    store,
+                    source,
+                    axis,
+                    *event,
+                    input.clone(),
+                    &prefetched.canonical_exact_missing,
+                )
+            };
+            match result {
                 PrepareResult::Complete {
                     changed: event_changed,
                 }
@@ -310,7 +380,10 @@ pub(in crate::db::valuation::worker) fn consume_outbox(
                             return turn;
                         }
                     }
-                    deferred.insert(trade_key(input), input.clone());
+                    if let Err(error) = defer_trade(store, axis, input) {
+                        turn.fault = Some(error);
+                        return turn;
+                    }
                     provider_fault.get_or_insert(error);
                     turn.acknowledged = Some(event.seq);
                 }
@@ -320,35 +393,23 @@ pub(in crate::db::valuation::worker) fn consume_outbox(
                 }
             }
         }
-        turn.provider_fault = provider_fault;
-        turn
-    })?;
-    // Acknowledge and publish only what the batch transaction made durable.
-    if let Some(through_seq) = turn.acknowledged {
-        send_ack(report_tx, pending_ack, through_seq);
+        start = end;
     }
-    if turn.changed {
-        publish(generation, dirty);
-    }
-    if let Some(error) = turn.fault.or(turn.provider_fault) {
-        return Err(error);
-    }
-    Ok(StageTurn::Ran {
-        more: batch_was_full,
-    })
+    turn.provider_fault = provider_fault;
+    turn
 }
 
 /// What one batch transaction did, settled by the caller only after it commits.
 #[derive(Default)]
-struct BatchTurn {
+pub(in crate::db::valuation::worker) struct BatchTurn {
     /// Highest outbox sequence whose effect the batch wrote.
-    acknowledged: Option<i64>,
+    pub(in crate::db::valuation::worker) acknowledged: Option<i64>,
     /// Whether any prepared value or cached rate changed.
-    changed: bool,
+    pub(in crate::db::valuation::worker) changed: bool,
     /// Failure that ended the batch early.
-    fault: Option<FaultCause>,
+    pub(in crate::db::valuation::worker) fault: Option<FaultCause>,
     /// Provider outage met by rows the batch deferred; surfaced after the batch settles.
-    provider_fault: Option<FaultCause>,
+    pub(in crate::db::valuation::worker) provider_fault: Option<FaultCause>,
 }
 
 /// Run one batch of valuation-store writes as a single transaction.
@@ -404,7 +465,6 @@ pub(in crate::db::valuation::worker) fn commit_batch<T>(
 ///     event: Ordered durable outbox event.
 ///     loaded: This event's own pass-1 load outcome, `Some` for a `Row` event whose trade was
 ///         found, `None` otherwise.
-///     deferred: Current-minute rows retained until their candle closes.
 ///     canonical_exact_missing: Keys already proven absent on canonical exact routes.
 ///
 /// Returns:
@@ -415,13 +475,16 @@ pub(in crate::db::valuation::worker) fn process_event(
     axis: &ReportAxis,
     event: OutboxEvent,
     loaded: Option<TradeInput>,
-    deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
     canonical_exact_missing: &BTreeSet<(i64, i64)>,
 ) -> PrepareResult {
     match event.action {
         OutboxAction::Row => {
-            let key = (event.source.code(), event.core_uid, event.row_id);
-            deferred.remove(&key);
+            if let Err(error) = forget_deferred(
+                store,
+                &BTreeSet::from([(event.source.code(), event.core_uid, event.row_id)]),
+            ) {
+                return PrepareResult::Retry(error);
+            }
             match loaded {
                 Some(input) => {
                     let minute = valuation_minute(axis, &input);
@@ -433,8 +496,10 @@ pub(in crate::db::valuation::worker) fn process_event(
                         canonical_exact_missing.contains(&(input.quote_ordinal, minute)),
                     ) {
                         PrepareResult::Deferred { changed } => {
-                            deferred.insert(trade_key(&input), input);
-                            PrepareResult::Deferred { changed }
+                            match defer_trade(store, axis, &input) {
+                                Ok(()) => PrepareResult::Deferred { changed },
+                                Err(error) => PrepareResult::Retry(error),
+                            }
                         }
                         result => result,
                     }
@@ -442,14 +507,8 @@ pub(in crate::db::valuation::worker) fn process_event(
                 None => delete_trade(store, event.source, event.core_uid, event.row_id),
             }
         }
-        OutboxAction::Delete => {
-            deferred.remove(&(event.source.code(), event.core_uid, event.row_id));
-            delete_trade(store, event.source, event.core_uid, event.row_id)
-        }
+        OutboxAction::Delete => delete_trade(store, event.source, event.core_uid, event.row_id),
         OutboxAction::RescanCore | OutboxAction::PurgeLegacy => {
-            deferred.retain(|(source_kind, core_uid, _), _| {
-                *source_kind != event.source.code() || *core_uid != event.core_uid
-            });
             delete_partition(store, event.source, event.core_uid)
         }
     }

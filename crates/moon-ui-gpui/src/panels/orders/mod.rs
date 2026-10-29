@@ -54,11 +54,12 @@ use moon_core::session::core_order::{CoreOrder, OrderedCores};
 ///
 /// No quote asset is stored here; the token cell renders `OrderRow::coin`, which the feed resolved
 /// with the core's own exchange rules.
+/// The owned row stays at one address while sorting moves only the core identity and a pointer.
 #[derive(Clone)]
 pub(super) struct OrderEntry {
     pub(super) core: CoreId,
     pub(super) core_name: String,
-    pub(super) row: OrderRow,
+    pub(super) row: Box<OrderRow>,
 }
 
 /// Complete identity of the cached Orders rows and their presentation-sensitive ordering.
@@ -114,7 +115,7 @@ fn collect_scoped<'a>(
                 entries.push(OrderEntry {
                     core,
                     core_name: name.to_owned(),
-                    row: row.clone(),
+                    row: Box::new(row.clone()),
                 });
             }
         }

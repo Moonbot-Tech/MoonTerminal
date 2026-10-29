@@ -121,10 +121,13 @@ pub(crate) fn open_trade_record(
             record,
             meta,
             history,
+            neighbours,
             market,
             stamps,
         } = seed;
-        super::open_trade_window(&backend, record, meta, history, market, stamps, cx);
+        super::open_trade_window(
+            &backend, record, meta, history, neighbours, market, stamps, cx,
+        );
     });
 }
 
@@ -158,7 +161,7 @@ pub(crate) fn resolve_trade_record(
             .spawn(async move { load_trade(core, coin, record, filter) })
             .await;
         cx.update(|cx| {
-            let seed = found.map(|(record, meta, history)| {
+            let seed = found.map(|(record, meta, history, neighbours)| {
                 let stamps = (
                     stamp(&axis, core, record.buy_stamp()),
                     stamp(&axis, core, record.close_stamp()),
@@ -167,6 +170,7 @@ pub(crate) fn resolve_trade_record(
                     record,
                     meta,
                     history,
+                    neighbours,
                     market,
                     stamps,
                 }
@@ -190,13 +194,19 @@ pub(crate) fn resolve_trade_record(
 ///     filter: Published filter, including its time axis.
 ///
 /// Returns:
-///     Focus, metadata and period history, or `None` when the replica cannot resolve the focus.
+///     Focus, metadata, full period history and prepared trace neighbours, or `None` when the
+///     replica cannot resolve the focus. All history-sized shaping happens on this reader task.
 fn load_trade(
     core: u64,
     coin: String,
     record: RecordKey,
     filter: ReportFilter,
-) -> Option<(ChartTradeRecord, TradeMeta, Vec<ChartTradeRecord>)> {
+) -> Option<(
+    ChartTradeRecord,
+    TradeMeta,
+    Vec<ChartTradeRecord>,
+    Vec<ChartTradeRecord>,
+)> {
     let conn = db::open_reader_with(db::CHART_TRADE_HISTORY_ATTACH).ok()?;
     let snapshot = db::read_snapshot(&conn).ok()?;
     let history = period_history(&snapshot, core, &coin, &filter).ok()?;
@@ -205,7 +215,8 @@ fn load_trade(
         .ok()
         .flatten()
         .unwrap_or_default();
-    Some((record, meta, history))
+    let neighbours = super::traces::select_neighbours(&history, &record);
+    Some((record, meta, history, neighbours))
 }
 
 /// Read all matching closed trades and retain those with either endpoint in the filter's period.

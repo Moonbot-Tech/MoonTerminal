@@ -765,6 +765,7 @@ impl ChartDataState {
                         pr.cross_upload.len() as u64,
                     );
                     pr.layers.reset_combo(std::mem::take(&mut pr.cross_upload));
+                    pr.cluster_generation = pr.cluster_generation.wrapping_add(1);
                     pr.cluster_dirty = true;
                     // A full range read covers the requested left edge even when the first
                     // real trade is newer than that edge. Using the first tick as the resident
@@ -1107,6 +1108,7 @@ impl ChartDataState {
             } else if read_history {
                 if pr.resident_left_rel.is_finite() {
                     pr.layers.reset_combo(Vec::new());
+                    pr.cluster_generation = pr.cluster_generation.wrapping_add(1);
                     pr.cluster_dirty = true;
                     pr.last_line_rows.clear();
                     pr.mark_line_rows.clear();

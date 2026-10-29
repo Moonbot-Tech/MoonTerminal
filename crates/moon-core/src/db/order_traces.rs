@@ -534,7 +534,9 @@ pub fn read_many(core_uid: u64, uids: &[i64]) -> ReadResult<HashMap<i64, TraceEn
     read_many_on(&conn, core_uid, uids)
 }
 
-/// [`read_many`] on an open connection, for the reader and its tests.
+/// Read answers and ordered lines together in batches below SQLite's variable limit.
+///
+/// Empty answers remain distinct from missing answers and from undecodable filed lines.
 fn read_many_on(
     conn: &Connection,
     core_uid: u64,
@@ -543,45 +545,50 @@ fn read_many_on(
     const CTX: &str = "order traces: read";
     let core = core_uid as i64;
     let mut out = HashMap::with_capacity(uids.len());
-    let mut answer = conn
-        .prepare_cached(
-            "SELECT checked_at_ms, line_count FROM trace_answers WHERE core_uid=?1 AND report_uid=?2",
-        )
-        .map_err(|e| read_fail(CTX, e))?;
-    let mut lines = conn
-        .prepare_cached(
-            "SELECT own, kind, stop_price, stop_time_ms, points FROM trace_lines \
-             WHERE core_uid=?1 AND report_uid=?2 ORDER BY seq",
-        )
-        .map_err(|e| read_fail(CTX, e))?;
-    for &uid in uids {
-        if uid == 0 || out.contains_key(&uid) {
-            continue;
-        }
-        let filed: Option<(i64, i64)> = answer
-            .query_row(params![core, uid], |r| Ok((r.get(0)?, r.get(1)?)))
-            .optional()
+    let wanted = uids
+        .iter()
+        .copied()
+        .filter(|uid| *uid != 0)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    // One core parameter plus 256 uids also fits SQLite builds with the older 999-variable limit.
+    for chunk in wanted.chunks(256) {
+        let placeholders = vec!["?"; chunk.len()].join(",");
+        let sql = format!(
+            "SELECT a.report_uid, a.checked_at_ms, a.line_count,
+                    l.own, l.kind, l.stop_price, l.stop_time_ms, l.points
+             FROM trace_answers a LEFT JOIN trace_lines l
+               ON a.line_count<>0 AND l.core_uid=a.core_uid AND l.report_uid=a.report_uid
+             WHERE a.core_uid=? AND a.report_uid IN ({placeholders})
+             ORDER BY a.report_uid, l.seq"
+        );
+        let mut statement = conn.prepare_cached(&sql).map_err(|e| read_fail(CTX, e))?;
+        let mut rows = statement
+            .query(rusqlite::params_from_iter(
+                std::iter::once(core).chain(chunk.iter().copied()),
+            ))
             .map_err(|e| read_fail(CTX, e))?;
-        let Some((checked_at_ms, count)) = filed else {
-            continue;
-        };
-        if count == 0 {
-            out.insert(uid, TraceEntry::Empty { checked_at_ms });
-            continue;
-        }
-        let rows = lines
-            .query_map(params![core, uid], |r| {
-                let own: i64 = r.get(0)?;
-                let kind: i64 = r.get(1)?;
-                let stop_price: Option<f64> = r.get(2)?;
-                let stop_time_ms: Option<i64> = r.get(3)?;
-                let blob: Vec<u8> = r.get(4)?;
-                Ok((own, kind, stop_price, stop_time_ms, blob))
-            })
-            .map_err(|e| read_fail(CTX, e))?;
-        let mut traces = Vec::new();
-        for row in rows {
-            let (own, kind, stop_price, stop_time_ms, blob) = row.map_err(|e| read_fail(CTX, e))?;
+        let mut filed_lines: HashMap<i64, Vec<ArchivedOrderTrace>> = HashMap::new();
+        while let Some(row) = rows.next().map_err(|e| read_fail(CTX, e))? {
+            let uid: i64 = row.get(0).map_err(|e| read_fail(CTX, e))?;
+            let checked_at_ms = row.get(1).map_err(|e| read_fail(CTX, e))?;
+            let count: i64 = row.get(2).map_err(|e| read_fail(CTX, e))?;
+            if count == 0 {
+                out.insert(uid, TraceEntry::Empty { checked_at_ms });
+                continue;
+            }
+            let traces = filed_lines.entry(uid).or_default();
+            let Some(kind) = row
+                .get::<_, Option<i64>>(4)
+                .map_err(|e| read_fail(CTX, e))?
+            else {
+                continue;
+            };
+            let own: i64 = row.get(3).map_err(|e| read_fail(CTX, e))?;
+            let stop_price = row.get(5).map_err(|e| read_fail(CTX, e))?;
+            let stop_time_ms: Option<i64> = row.get(6).map_err(|e| read_fail(CTX, e))?;
+            let blob: Vec<u8> = row.get(7).map_err(|e| read_fail(CTX, e))?;
             let kind = match kind {
                 KIND_ENTRY => ArchivedLineKind::Entry,
                 KIND_EXIT => ArchivedLineKind::Exit,
@@ -602,9 +609,12 @@ fn read_many_on(
                 points,
             });
         }
-        // The answer said it had lines; a row whose lines all failed to decode is reported as
-        // what it is on disk — an answer with lines — so the core is not asked again for it.
-        out.insert(uid, TraceEntry::Lines(Arc::from(traces)));
+        // Even when every filed line was malformed, keep the answer's nonempty classification.
+        out.extend(
+            filed_lines
+                .into_iter()
+                .map(|(uid, traces)| (uid, TraceEntry::Lines(Arc::from(traces)))),
+        );
     }
     Ok(out)
 }

@@ -300,11 +300,12 @@ fn refusal_refreshes_cached_classification_until_its_market_is_filed() {
     let mut state = TicksState::default();
     state.only_fit = true;
     state.data.apply(Ok(TicksData {
-        rows: vec![row],
+        rows: vec![row].into(),
         ..Default::default()
     }));
     let before = rows::counts_at(&mut state, 60, now);
     assert_eq!(before.get(DealChip::ShortTail), 1);
+    assert_eq!(rows::population_at(&state, 60, now).fit, 0);
     assert!(rows::order_for(&mut state, 60, now).is_empty());
     let now_generation = super::unfillable().generation;
     super::commit_station_answer(
@@ -318,6 +319,7 @@ fn refusal_refreshes_cached_classification_until_its_market_is_filed() {
     );
     let after = rows::counts_at(&mut state, 60, now);
     assert_eq!(after.get(DealChip::AcceptedShortTail), 1);
+    assert_eq!(rows::population_at(&state, 60, now).fit, 1);
     assert_eq!(rows::order_for(&mut state, 60, now), &[0]);
     let admission = tail::Admission::at(60, now);
     assert!(state.data.data().unwrap().rows[0].fit_with(&admission));
@@ -334,6 +336,7 @@ fn refusal_refreshes_cached_classification_until_its_market_is_filed() {
         rows::counts_at(&mut state, 60, now).get(DealChip::ShortTail),
         1
     );
+    assert_eq!(rows::population_at(&state, 60, now).fit, 0);
     assert!(rows::order_for(&mut state, 60, now).is_empty());
     assert!(!state.data.data().unwrap().rows[0].fit_with(&tail::Admission::at(60, now)));
     assert!(!super::unfillable().uids.contains_key(&uid));

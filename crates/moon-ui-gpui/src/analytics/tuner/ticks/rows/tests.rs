@@ -154,7 +154,7 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
         "old short tails wait for reachable archives"
     );
     let data = TicksData {
-        rows: vec![row.clone()],
+        rows: vec![row.clone()].into(),
         ..Default::default()
     };
     assert_eq!(
@@ -182,7 +182,7 @@ fn covered_short_tails_are_fetchable_only_while_a_source_can_extend_them() {
         "unsupported old tape stays excluded"
     );
     let unavailable = TicksData {
-        rows: vec![row.clone()],
+        rows: vec![row.clone()].into(),
         ..Default::default()
     };
     assert_eq!(unavailable.fetchable_at(now, 60).count(), 0);
@@ -364,7 +364,7 @@ fn state() -> TicksState {
     // The sorts are exercised over every row; the "fit only" switch has its own test.
     state.only_fit = false;
     state.data.apply(Ok(TicksData {
-        rows,
+        rows: rows.into(),
         ..TicksData::default()
     }));
     state.rows_rev = 1;
@@ -394,8 +394,8 @@ fn the_default_order_is_newest_entry_first() {
 fn chip_state() -> TicksState {
     let mut state = replayable_state(8);
     let rows = &mut state.data.data_mut().unwrap().rows;
-    for row in rows.iter_mut() {
-        row.held = Some((60_000, 90_000));
+    for index in 0..rows.len() {
+        rows[index].held = Some((60_000, 90_000));
     }
     rows[1].tape = TapeStatus::Missing;
     rows[2].held = Some((60_000, 30_000));
@@ -410,6 +410,60 @@ fn chip_state() -> TicksState {
     rows[6].ticks = None;
     rows[7].tape = TapeStatus::NoAddress;
     state
+}
+
+/// Cached display counts must match the original predicates, including discarded retained tape.
+#[test]
+fn population_counts_match_uncached_rows_and_refresh_on_publication_and_floor() {
+    let mut state = chip_state();
+    for floor in [60, 120, 30] {
+        let admission = Admission::at(floor, 0);
+        let data = state.data.data().unwrap();
+        let expected_fit = data
+            .rows
+            .iter()
+            .filter(|row| row.fit_with(&admission))
+            .count();
+        let expected_replayable = data
+            .rows
+            .iter()
+            .filter(|row| row.fit_with(&admission) && row.ticks.is_some())
+            .count();
+        let expected_ready = super::super::readiness::Readiness::of_rows(&data.rows, 0, floor);
+        let counts = super::population_at(&state, floor, 0);
+        assert_eq!(counts.fit, expected_fit);
+        assert_eq!(counts.covered, data.covered());
+        assert_eq!(counts.replayable, expected_replayable);
+        assert_eq!(counts.readiness, expected_ready);
+        assert_eq!(super::population_at(&state, floor, 1), counts);
+    }
+    let before = super::population_at(&state, 60, 0);
+    state.data.data_mut().unwrap().rows[0].tape = TapeStatus::Missing;
+    state.rows_rev += 1;
+    let after = super::population_at(&state, 60, 0);
+    assert_eq!(after.fit + 1, before.fit);
+    assert_eq!(after.covered + 1, before.covered);
+}
+
+/// Retention can admit a short tail without a row edit, and a backwards clock must undo it.
+#[test]
+fn population_cache_tracks_retention_edges_and_clock_reversal() {
+    use super::super::state::RowAddress;
+    use std::sync::Arc;
+    let mut state = replayable_state(1);
+    let row = &mut state.data.data_mut().unwrap().rows[0];
+    row.address = Some(Arc::new(RowAddress {
+        core_uid: 1,
+        venue: None,
+        exchange_key: "EX-XX".into(),
+        market: "XALPHA".into(),
+        btc_market: None,
+    }));
+    row.held = Some((30_000, 30_000));
+    let edge = row.deal.close_ms + 30_000 + moon_core::market::CORE_ARCHIVE_RETENTION_MS;
+    assert_eq!(super::population_at(&state, 60, edge).fit, 0);
+    assert_eq!(super::population_at(&state, 60, edge + 1).fit, 1);
+    assert_eq!(super::population_at(&state, 60, edge).fit, 0);
 }
 
 /// Keeping a classification past its exact core-retention edge strands the row outside fit-only.
@@ -686,21 +740,21 @@ fn a_group_is_searched_with_a_model_and_a_fit_trade_whatever_its_share() {
     data.entry_share = (1, 10);
     data.exit_share = (1, 10);
     assert!(
-        data.group_searchable(ParamGroup::Exit),
+        data.group_searchable(ParamGroup::Exit, data.fit()),
         "under the gate, searched"
     );
     assert!(
-        !data.group_searchable(ParamGroup::Entry),
+        !data.group_searchable(ParamGroup::Entry, data.fit()),
         "no kind, no entry model"
     );
     data.kinds = vec!["MoonShot".into()];
-    assert!(data.group_searchable(ParamGroup::Entry));
+    assert!(data.group_searchable(ParamGroup::Entry, data.fit()));
     // No fit trade — the exit missed on the only covered one — and neither group has anything
     // to learn on, the entry included: a fit trade needs its exit reproduced as well.
     data.rows[1].verdict = Some(verdict(Some(true), Some(false)));
     assert_eq!(data.fit(), 0);
-    assert!(!data.group_searchable(ParamGroup::Exit));
-    assert!(!data.group_searchable(ParamGroup::Entry));
+    assert!(!data.group_searchable(ParamGroup::Exit, data.fit()));
+    assert!(!data.group_searchable(ParamGroup::Entry, data.fit()));
 }
 
 #[test]
@@ -878,7 +932,8 @@ fn the_cap_keeps_only_the_fit_rows_tapes_and_counts_them_packed() {
                 entry_line: None,
                 held: None,
             },
-        ],
+        ]
+        .into(),
         ..TicksData::default()
     };
     assert!(
@@ -983,7 +1038,7 @@ fn a_percent_that_rounds_to_zero_is_unsigned() {
 
 /// `n` fit rows whose tape is in memory — the set the search and the variant column replay.
 fn replayable_state(n: usize) -> TicksState {
-    let rows = (0..n)
+    let rows: Vec<_> = (0..n)
         .map(|i| DealRow {
             deal: deal(i as i64 + 1, 1_000 * (i as i64 + 1), 100.0, 101.0, false),
             tape: TapeStatus::Covered,
@@ -996,7 +1051,7 @@ fn replayable_state(n: usize) -> TicksState {
         .collect();
     let mut state = TicksState::default();
     state.data.apply(Ok(TicksData {
-        rows,
+        rows: rows.into(),
         ..TicksData::default()
     }));
     state
@@ -1064,4 +1119,271 @@ fn a_variant_scored_on_too_few_deals_does_not_light_save() {
         Verdict::Apply,
         "the sufficient current result gains on both independently checked slices"
     );
+}
+
+/// A heavy user's table: 10 cores, several strategies, `n` deals, most covered with live deltas.
+fn heavy_rows(n: usize) -> Vec<DealRow> {
+    use super::super::state::RowAddress;
+    use moon_core::db::tuner::ticks::deltas::{Bar, DeltaTrack, LOOKBACK_MS, TrackInputs};
+    use std::sync::Arc;
+    let t0: i64 = 1_790_000_000_000;
+    let bars = |price: f64| -> Vec<Bar> {
+        (t0 - LOOKBACK_MS - 600_000..t0)
+            .step_by(60_000)
+            .enumerate()
+            .map(|(i, from)| {
+                let p = price + (i % 17) as f64 * 0.3;
+                Bar {
+                    from_ms: from,
+                    to_ms: from + 60_000,
+                    open: p,
+                    high: p * 1.01,
+                    low: p * 0.99,
+                    close: p,
+                }
+            })
+            .collect()
+    };
+    let tracks: Vec<Arc<DeltaTrack>> = (0..64)
+        .filter_map(|i| {
+            let coin = bars(100.0 + i as f64);
+            let btc = bars(50_000.0 + i as f64 * 10.0);
+            let snapshot = Deltas {
+                btc1m: 0.1 * i as f64,
+                d1m: 0.05 * i as f64,
+                ..Deltas::default()
+            };
+            DeltaTrack::build(TrackInputs {
+                coin_bars: &coin,
+                ticks: &[],
+                covered: &[(t0, t0 + 60_000)],
+                btc_bars: &btc,
+                eval: (t0, t0 + 60_000),
+                anchor: Some((t0, &snapshot)),
+            })
+            .map(Arc::new)
+        })
+        .collect();
+    assert!(!tracks.is_empty(), "synthetic tracks build");
+    let addresses: Vec<Arc<RowAddress>> = (0..10u64)
+        .map(|core| {
+            Arc::new(RowAddress {
+                core_uid: core,
+                venue: Some(moon_core::venue::venue(4).expect("futures venue")),
+                exchange_key: "EX-XX".into(),
+                market: "XALPHAUSDT".into(),
+                btc_market: None,
+            })
+        })
+        .collect();
+    let now = chrono::Utc::now().timestamp_millis();
+    (0..n)
+        .map(|i| {
+            let mut d = deal(
+                i as i64,
+                now - 86_400_000 + i as i64,
+                100.0,
+                101.0,
+                i % 3 == 0,
+            );
+            d.core_uid = (i % 10) as u64;
+            d.strategy_id = (i % 7) as i64;
+            d.core_name = "CORE_A".into();
+            d.coin = "XALPHA".into();
+            let covered = i % 5 != 0;
+            if covered {
+                d.delta_track = Some(tracks[i % tracks.len()].clone());
+            }
+            DealRow {
+                deal: d,
+                tape: if covered {
+                    TapeStatus::Covered
+                } else {
+                    TapeStatus::Missing
+                },
+                verdict: covered.then(|| verdict(Some(i % 4 != 0), Some(i % 6 != 0))),
+                address: Some(addresses[i % 10].clone()),
+                ticks: None,
+                entry_line: None,
+                held: covered.then_some((30_000, if i % 9 == 0 { 5_000 } else { 120_000 })),
+            }
+        })
+        .collect()
+}
+
+/// Mean time of `f` over `iters` runs, in ms.
+fn time_ms(iters: u32, mut f: impl FnMut()) -> f64 {
+    let start = std::time::Instant::now();
+    for _ in 0..iters {
+        f();
+    }
+    start.elapsed().as_secs_f64() * 1_000.0 / f64::from(iters)
+}
+
+/// A fetch edit during a background reload must not copy the entire held publication on the UI.
+#[test]
+#[ignore = "scale probe: run by hand with --ignored --nocapture"]
+fn scale_probe_snapshot_updates() {
+    for n in [20_000, 100_000] {
+        let mut state = TicksState::default();
+        state.data.apply(Ok(TicksData {
+            rows: heavy_rows(n).into(),
+            ..Default::default()
+        }));
+        let copy_on_write = time_ms(5, || {
+            let before = state.data.data().cloned().unwrap();
+            state.data.data_mut().unwrap().rows[0].tape = TapeStatus::Covered;
+            assert_eq!(before.rows[0].tape, TapeStatus::Missing);
+            assert_eq!(state.data.data().unwrap().rows[0].tape, TapeStatus::Covered);
+            drop(before);
+            state.data.data_mut().unwrap().rows[0].tape = TapeStatus::Missing;
+        });
+        println!("[probe] n={n} snapshot_held_row_edit={copy_on_write:.3}ms");
+    }
+}
+
+/// Compaction must retain every kind/strategy/core combination and the grid's full row layout.
+#[test]
+fn compact_grid_scope_preserves_kinds_pairs_and_grid_rows() {
+    use super::super::sections::{grid_deals, grid_for};
+    let first = deal(1, 1_000, 1.0, 1.01, false);
+    let mut second_kind = first.clone();
+    second_kind.kind = "Spread".into();
+    let mut second_strategy = first.clone();
+    second_strategy.strategy_id += 1;
+    let mut second_core = first.clone();
+    second_core.core_uid += 1;
+    let deals = vec![
+        first.clone(),
+        first,
+        second_kind,
+        second_strategy,
+        second_core,
+    ];
+    let compact = grid_deals(&deals);
+    let identities = |deals: &[Deal]| {
+        deals
+            .iter()
+            .map(|deal| (deal.strategy_id, deal.core_uid, deal.kind.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(identities(&compact), identities(&deals[1..]));
+    let store = moon_core::session::CoreStore::default();
+    let deps = moon_core::feed::strategy_deps::FieldDeps::bundled();
+    assert_eq!(
+        grid_for(&store, &deals, std::iter::empty(), &deps),
+        grid_for(&store, &compact, std::iter::empty(), &deps)
+    );
+}
+
+/// Scale probe of the render-time passes over the deal table: `cargo test --release` is not
+/// what ships, so read the numbers on the debug build the user runs.
+#[test]
+#[ignore = "scale probe: run by hand with --ignored --nocapture"]
+fn scale_probe_ticks_render_passes() {
+    let _locale = crate::test_locale::force("en");
+    for n in [20_000usize, 100_000] {
+        let data = TicksData {
+            rows: heavy_rows(n).into(),
+            kinds: vec!["MoonShot".into()],
+            ..Default::default()
+        };
+        let kpi = time_ms(10, || {
+            std::hint::black_box((
+                data.fit(),
+                data.covered(),
+                data.replayable().count(),
+                data.entry_modelled(),
+            ));
+        });
+        let readiness = time_ms(10, || {
+            std::hint::black_box(data.readiness(
+                chrono::Utc::now().timestamp_millis(),
+                super::super::tail::effective_s(),
+            ));
+        });
+        let deltas = time_ms(10, || {
+            std::hint::black_box(super::super::delta_summary::delta_summary(&data.rows));
+        });
+        let clone = time_ms(10, || {
+            let judged: std::collections::HashMap<i64, DealRow> = data
+                .rows
+                .iter()
+                .filter(|r| matches!(r.tape, TapeStatus::Covered | TapeStatus::Refused(_)))
+                .map(|r| (r.deal.report_uid, r.clone()))
+                .collect();
+            std::hint::black_box(judged);
+        });
+        let deals: Vec<_> = data.rows.iter().map(|r| r.deal.clone()).collect();
+        let reload_key = super::super::signature::ReloadKey {
+            scope: 0,
+            period: (0, 1),
+            model: Default::default(),
+            sample: super::super::signature::SamplePolicy::current(),
+            refusal_revision: 0,
+            tape_rev: 0,
+            addresses: 0,
+        };
+        let skip = time_ms(10, || {
+            assert!(std::hint::black_box(super::super::signature::can_skip(
+                Some(&reload_key),
+                &reload_key,
+                &data.rows,
+                0,
+                i64::MAX,
+                |_| true,
+            )));
+        });
+        println!("[probe] n={n} unchanged_reload_scan={skip:.3}ms");
+        let compact = super::super::sections::grid_deals(&deals);
+        let compact_grid = time_ms(100, || {
+            std::hint::black_box(super::super::sections::grid_for(
+                &moon_core::session::CoreStore::default(),
+                &compact,
+                std::iter::empty(),
+                &moon_core::feed::strategy_deps::FieldDeps::bundled(),
+            ));
+        });
+        let grid = time_ms(10, || {
+            std::hint::black_box(super::super::sections::grid_for(
+                &moon_core::session::CoreStore::default(),
+                &deals,
+                std::iter::empty(),
+                &moon_core::feed::strategy_deps::FieldDeps::bundled(),
+            ));
+        });
+        println!(
+            "[probe] n={n} reload_grid={grid:.3}ms compact_grid={compact_grid:.3}ms representatives={}",
+            compact.len()
+        );
+        println!("[probe] n={n} kpi={kpi:.3}ms deltas={deltas:.3}ms judged_clone={clone:.3}ms");
+        let mut state = TicksState::default();
+        state.data.apply(Ok(data));
+        let snapshot = time_ms(1_000, || {
+            std::hint::black_box((
+                state.data.data().cloned(),
+                std::sync::Arc::clone(&state.settled),
+            ));
+        });
+        println!("[probe] n={n} reload_snapshot={snapshot:.6}ms");
+        let expected = state.population();
+        let expected_delta =
+            super::super::delta_summary::delta_summary(&state.data.data().unwrap().rows);
+        assert_eq!(
+            super::super::delta_summary::cached(&mut state),
+            expected_delta
+        );
+        let cached = time_ms(1_000, || {
+            assert_eq!(std::hint::black_box(state.population()), expected);
+        });
+        let cached_deltas = time_ms(100, || {
+            assert_eq!(
+                std::hint::black_box(super::super::delta_summary::cached(&mut state)),
+                expected_delta
+            );
+        });
+        println!(
+            "[probe] n={n} readiness={readiness:.3}ms cached_population={cached:.6}ms cached_deltas={cached_deltas:.6}ms"
+        );
+    }
 }

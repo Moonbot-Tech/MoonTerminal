@@ -623,7 +623,7 @@ fn sequential(groups: &[super::StrategyRows]) -> HashMap<String, Readiness> {
                     }),
             );
             let mut data = TicksData {
-                rows: replayed,
+                rows: replayed.into(),
                 ..Default::default()
             };
             data.retain_within_cap();

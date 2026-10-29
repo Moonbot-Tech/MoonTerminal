@@ -9,6 +9,114 @@ use super::{
     restore_sort,
 };
 
+/// Integer keys must reproduce the standard total float order for arbitrary NaN payloads too.
+#[test]
+fn cached_float_keys_match_standard_total_order_across_bit_patterns() {
+    let mut bits = 7_u64;
+    let mut direct: Vec<_> = (0..10_000)
+        .map(|_| {
+            bits = bits.wrapping_mul(6364136223846793005).wrapping_add(1);
+            f64::from_bits(bits)
+        })
+        .collect();
+    let mut cached = direct.clone();
+    direct.sort_by(f64::total_cmp);
+    cached.sort_by_key(|value| super::float_sort_key(*value));
+    assert_eq!(
+        direct
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        cached
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The previous direct comparator is the oracle for every column, stable tie, NaN and signed zero.
+#[test]
+fn index_sort_matches_direct_rows_for_every_column_and_direction() {
+    use super::{Entry, lev_sort, num_key};
+    use moon_core::market::ScreenerRow;
+    let entries = || {
+        [
+            f64::NAN,
+            -0.0,
+            0.0,
+            2.0,
+            2.0,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            -f64::NAN,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| Entry {
+            row: ScreenerRow {
+                core: i as u64,
+                market: if i % 2 == 0 { "XALPHA" } else { "XBETA" }.into(),
+                vol_24h: value,
+                vol_1h: value,
+                vol_1m: value,
+                vol_3m: value,
+                vol_5m: value,
+                ask: value,
+                high_1h: value,
+                max_order: value,
+                d_24h: value,
+                d_3h: value,
+                d_1h: value,
+                d_15m: value,
+                d_1m: value,
+                d_72h: value,
+                funding_pct: value,
+                mark_delta_pct: (i % 3 != 0).then_some(value),
+                price_step: value,
+                core_pnl: value,
+                session: (i % 3 != 0).then_some(value),
+                pos_size: value,
+                orders: (i % 3) as u32,
+                leverage_x: (i % 3) as i32,
+                max_leverage: (i % 4) as i32,
+                ..Default::default()
+            }
+            .into(),
+            core_name: if i % 2 == 0 { "CORE_A" } else { "CORE_B" }.into(),
+            market_uc: "".into(),
+            coin_uc: "".into(),
+        })
+        .collect::<Vec<_>>()
+    };
+    for key in COLS.iter().map(|column| column.0).chain(["unknown"]) {
+        for desc in [false, true] {
+            let mut direct = entries();
+            direct.sort_by(|a, b| {
+                let order = match key {
+                    "market" => a.row.market.cmp(&b.row.market),
+                    "core" => a.core_name.cmp(&b.core_name),
+                    "lev" => lev_sort(a).total_cmp(&lev_sort(b)),
+                    _ => num_key(a, key).total_cmp(&num_key(b, key)),
+                };
+                if desc { order.reverse() } else { order }
+            });
+            let mut actual = entries();
+            sort_entries(&mut actual, key, desc);
+            assert_eq!(
+                actual
+                    .iter()
+                    .map(|entry| entry.row.core)
+                    .collect::<Vec<_>>(),
+                direct
+                    .iter()
+                    .map(|entry| entry.row.core)
+                    .collect::<Vec<_>>(),
+                "{key} desc={desc}"
+            );
+        }
+    }
+}
+
 /// The footer labels must resolve from the same schema as the Market and Vol. headers.
 ///
 /// Mutation: restore independent `Coin` or `DVol` footer literals. The footer would again disagree
@@ -155,4 +263,21 @@ fn screener_saved_session_sort_and_width_follow_the_pnl_column() {
         migrate_legacy_widths(both),
         HashMap::from([("pnl".to_string(), 70.0_f32)])
     );
+}
+
+/// Retain the owned-row projection only as the test oracle for the index-based UI publication.
+pub(in crate::screener) fn sort_entries(entries: &mut [super::Entry], key: &str, desc: bool) {
+    let mut order: Vec<_> = (0..entries.len()).collect();
+    super::sort_indices(entries, &mut order, key, desc);
+    let mut destinations = vec![0; entries.len()];
+    for (destination, source) in order.into_iter().enumerate() {
+        destinations[source] = destination;
+    }
+    for source in 0..entries.len() {
+        while destinations[source] != source {
+            let destination = destinations[source];
+            entries.swap(source, destination);
+            destinations.swap(source, destination);
+        }
+    }
 }

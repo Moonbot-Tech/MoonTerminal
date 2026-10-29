@@ -504,30 +504,21 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) ladder_runs: Vec<GpuCanvasTextRun>,
     /// Whether this pane draws its trades as bubbles this sync; the cross pass steps aside for them.
     pub(in crate::chartdx) cluster_on: bool,
-    /// The prints folded over `cluster_range`, in tape order.
-    pub(in crate::chartdx) cluster_prints: Vec<moon_chart::clusters::Print>,
-    /// `cluster_prints` by price, then time, for the zoom merge.
-    pub(in crate::chartdx) cluster_order: Vec<u32>,
-    /// The market's own scale, measured from `cluster_prints`; `None` without a usable print.
-    pub(in crate::chartdx) cluster_scale: Option<moon_chart::clusters::PrintScale>,
-    /// Scratch for measuring the scale, reused.
-    pub(in crate::chartdx) cluster_scratch: Vec<f32>,
-    /// The discs of the current zoom, prints of one price that covered each other merged.
+    /// Immutable published prints, shared with background layout-only requests.
+    pub(in crate::chartdx) cluster_folded:
+        Option<std::sync::Arc<super::data_state::clusters::Folded>>,
+    /// Complete identity of the published fold and layout, including its retained reach.
+    pub(in crate::chartdx) cluster_request: Option<super::data_state::clusters::Request>,
+    /// At most one job per pane; a completion is consumed even when the market goes quiet.
+    pub(in crate::chartdx) cluster_pending: Option<super::data_state::clusters::Pending>,
+    /// Full history replacements and disabling bubbles invalidate in-flight snapshots.
+    pub(in crate::chartdx) cluster_generation: u64,
+    /// Published discs, kept visible while the next fold or zoom layout runs in the background.
     pub(in crate::chartdx) cluster_discs: Vec<moon_chart::clusters::PrintDisc>,
-    /// What the prints were folded with, so a new window, threshold or tick re-folds them.
-    pub(in crate::chartdx) cluster_fold: Option<super::data_state::clusters::FoldKey>,
-    /// What the discs were laid out with, so only an X zoom, a density or a colour change lays
-    /// them out again.
-    pub(in crate::chartdx) cluster_layout: Option<super::data_state::clusters::LayoutKey>,
-    /// Absolute milliseconds the prints were folded over: the visible window and one window
-    /// either side, so a pan inside it re-folds nothing.
-    pub(in crate::chartdx) cluster_range: (f64, f64),
-    /// New trades reached the pane since the prints were last folded.
+    /// New trades reached the pane since the last background snapshot was captured.
     pub(in crate::chartdx) cluster_dirty: bool,
-    /// When the prints were last folded, for the data throttle.
+    /// When the last data snapshot was queued, for the data throttle.
     pub(in crate::chartdx) cluster_built_at: Option<std::time::Instant>,
-    /// Disc instances of the last upload, reused across rebuilds.
-    pub(in crate::chartdx) cluster_markers: Vec<moon_chart::layers::MarkerInstance>,
     /// Whether the layer holds discs, so taking them down uploads once and not every sync.
     pub(in crate::chartdx) cluster_uploaded: bool,
     /// The bubble labels' own retained runs, a label's slot taken from its disc, so the chart's
@@ -783,17 +774,13 @@ impl PaneRender {
             ladder_labels: Vec::new(),
             ladder_runs: Vec::new(),
             cluster_on: false,
-            cluster_prints: Vec::new(),
-            cluster_order: Vec::new(),
-            cluster_scale: None,
-            cluster_scratch: Vec::new(),
+            cluster_folded: None,
+            cluster_request: None,
+            cluster_pending: None,
+            cluster_generation: 0,
             cluster_discs: Vec::new(),
-            cluster_fold: None,
-            cluster_layout: None,
-            cluster_range: (f64::NAN, f64::NAN),
             cluster_dirty: true,
             cluster_built_at: None,
-            cluster_markers: Vec::new(),
             cluster_uploaded: false,
             cluster_runs: Vec::new(),
             cluster_found: Vec::new(),

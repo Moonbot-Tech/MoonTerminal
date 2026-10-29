@@ -72,6 +72,19 @@ use moon_core::venue::Brand;
 
 pub(crate) use window::{TradeSeed, embedded_trade_view, open_trade_window};
 
+/// Publish a completed selection only while it belongs to the latest re-click.
+/// The callback includes trace requests, so stale results cannot cause side effects either.
+///
+/// Args:
+///     current: Generation of the latest replacement request.
+///     completed: Generation that produced this selection.
+///     publish: Publication to run only for the current generation.
+fn apply_current_selection(current: u64, completed: u64, publish: impl FnOnce()) {
+    if completed == current {
+        publish();
+    }
+}
+
 /// Where a trade view lives.
 pub(crate) enum Host {
     /// A window of its own, opened from a Report or a deal row.
@@ -378,6 +391,12 @@ pub(crate) struct TradeWindowView {
     record: ChartTradeRecord,
     /// Full Report-period snapshot retained independently of the drawing preference.
     history: std::rc::Rc<Vec<ChartTradeRecord>>,
+    /// Stable nearest rows prepared with the snapshot off-thread; shared by trace asks and draws.
+    neighbours: Vec<ChartTradeRecord>,
+    /// Replacing this task cancels the previous re-click's neighbour selection.
+    history_selection: Option<Task<()>>,
+    /// Latest re-click, independent of replay fetches and checked again before publication.
+    history_generation: u64,
     /// This window's drawing preference, remembered for later opens.
     show_other_trades: bool,
     /// Frame the window on the trade itself rather than on the fixed context; see [`frame`].
@@ -482,17 +501,59 @@ pub(crate) struct TradeWindowView {
 
 impl TradeWindowView {
     /// Adopt a newly clicked Report snapshot without resetting the existing window's view.
+    /// A replica correction can change the newly read focus stamp; this window deliberately keeps
+    /// its original record and replay, so prepare neighbours around THAT record off-thread too.
+    /// Replacing the retained task cancels superseded work; its generation also gates publication.
+    ///
+    /// Args:
+    ///     history: Full snapshot from the newly clicked Report period.
+    ///     cx: View context used to schedule selection.
     fn replace_history(&mut self, history: Vec<ChartTradeRecord>, cx: &mut Context<Self>) {
-        self.history = std::rc::Rc::new(history);
-        let history = visible_history(&self.history, &self.record, self.show_other_trades);
-        self.panel.update(cx, |panel, pcx| {
-            panel.publish_trade_history(history, pcx);
+        self.history_generation = self.history_generation.wrapping_add(1);
+        let generation = self.history_generation;
+        let focus = self.record.clone();
+        self.history_selection = Some(cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let (history, neighbours) = executor
+                .spawn(async move {
+                    let neighbours = traces::select_neighbours(&history, &focus);
+                    (history, neighbours)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.apply_history(generation, history, neighbours, cx);
+            });
+        }));
+    }
+
+    /// Publish the latest snapshot and its prepared trace neighbours together on the UI thread.
+    /// A superseded generation changes neither retained rows nor chart/trace state.
+    ///
+    /// Args:
+    ///     generation: Replacement request that produced these rows.
+    ///     history: Full Report-period snapshot.
+    ///     neighbours: Stable nearest rows prepared for the retained focus.
+    ///     cx: View context used to publish chart and trace updates.
+    fn apply_history(
+        &mut self,
+        generation: u64,
+        history: Vec<ChartTradeRecord>,
+        neighbours: Vec<ChartTradeRecord>,
+        cx: &mut Context<Self>,
+    ) {
+        apply_current_selection(self.history_generation, generation, || {
+            self.history = std::rc::Rc::new(history);
+            self.neighbours = neighbours;
+            let history = visible_history(&self.history, &self.record, self.show_other_trades);
+            self.panel.update(cx, |panel, pcx| {
+                panel.publish_trade_history(history, pcx);
+            });
+            // New neighbours may have arrived with the snapshot; resolve the ones not yet known and
+            // redraw with whatever is already in hand.
+            self.request_neighbour_traces(cx);
+            self.sync_traces(true, cx);
+            cx.notify();
         });
-        // New neighbours may have arrived with the snapshot; resolve the ones not yet known and
-        // redraw with whatever is already in hand.
-        self.request_neighbour_traces(cx);
-        self.sync_traces(true, cx);
-        cx.notify();
     }
 
     /// Change only the published arrow set and remember the preference through layout persistence.
