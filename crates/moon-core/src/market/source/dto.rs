@@ -321,6 +321,19 @@ pub struct MarketFiguresReadout {
     pub coin_balance: Option<f64>,
 }
 
+/// Captured detection-time address and clock for a background thumbnail read.
+///
+/// This owns only immutable snapshot/cache handles. Construct it on the UI thread, then call
+/// `build` off-thread: history copies and the cache's blocking read belong there.
+pub struct DetectSnapshotRequest {
+    pub(super) snapshot: Option<moonproto::MoonClientSnapshot>,
+    pub(super) kline_cache: Option<crate::market::kline_cache::KlineCache>,
+    pub(super) exchange_key: Option<String>,
+    pub(super) market: String,
+    pub(super) bars: usize,
+    pub(super) now_ms: i64,
+}
+
 /// Frozen snapshot for a detection card, built exactly once when the detection occurs.
 ///
 /// The mini-chart combines recent 5-minute candles from the provider's retained

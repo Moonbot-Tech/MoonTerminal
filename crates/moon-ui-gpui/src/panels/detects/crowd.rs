@@ -25,7 +25,7 @@ use moon_core::crowd::CrowdDetect;
 use moon_core::session::CoreId;
 use moon_ui::MoonPalette;
 
-use super::{DEFAULT_SERVER_COLOR, DETECT_THUMB_BARS, DetectItem, DetectsPanel, detect_expired};
+use super::{DEFAULT_SERVER_COLOR, DetectItem, DetectsPanel, detect_expired};
 use crate::design;
 
 /// Where a card came from.
@@ -107,18 +107,13 @@ impl DetectsPanel {
             if !cards.evict && !known && held >= CROWD_CARDS_MAX {
                 continue;
             }
-            let (market, identity, snap) = {
+            let (market, identity, snapshot_core) = {
                 let backend = self.backend.read(cx);
                 match crate::controls::coin_open::cores_for(backend, &self.group, &row.coin)
                     .into_iter()
                     .next()
                 {
                     Some(hit) => {
-                        let snap = backend.session.market_source().detect_snapshot(
-                            hit.core,
-                            &hit.market,
-                            DETECT_THUMB_BARS,
-                        );
                         // The identity is BORROWED with the chart, and it has to be: the crowd
                         // publishes a ticker and no catalog, so the only thing here that knows
                         // whether its `1kBONK` is Binance's coin is the core whose market this is.
@@ -127,7 +122,7 @@ impl DetectsPanel {
                             .market_source()
                             .market_label(hit.core, &hit.market)
                             .identity();
-                        (hit.market, identity, Some(snap))
+                        (hit.market, identity, Some(hit.core))
                     }
                     // No core trades it, so there is no card it could be a duplicate of, and the
                     // folded ticker is both the best available answer and one nothing collides with.
@@ -142,19 +137,9 @@ impl DetectsPanel {
                 profit: row.profit,
                 trades: row.trades,
             };
-            // Unpacked once: a coin no core trades has no chart and no venue, and every one of
-            // these is what that absence looks like on the card.
-            let (bars, line, delta_24h, delta_1h, venue, exchange_kind) = match snap {
-                Some(snap) => (
-                    snap.bars,
-                    snap.line,
-                    snap.delta_24h,
-                    snap.delta_1h,
-                    snap.venue,
-                    snap.exchange_kind,
-                ),
-                None => (Vec::new(), Vec::new(), 0.0, 0.0, None, String::new()),
-            };
+            // History is requested only after both card budgets have trimmed this pass.
+            let (bars, line, delta_24h, delta_1h, venue, exchange_kind) =
+                (Vec::new(), Vec::new(), 0.0, 0.0, None, String::new());
             if let Some(it) = self
                 .items
                 .iter_mut()
@@ -167,12 +152,18 @@ impl DetectsPanel {
                 it.ttl_ms = cards.keep_ms();
                 it.market = market;
                 it.identity = identity;
-                it.bars = bars;
-                it.line = line;
-                it.delta_24h = delta_24h;
-                it.delta_1h = delta_1h;
-                it.venue = venue;
-                it.exchange_kind = exchange_kind;
+                if snapshot_core.is_none() {
+                    it.bars = bars;
+                    it.line = line;
+                    it.delta_24h = delta_24h;
+                    it.delta_1h = delta_1h;
+                    it.venue = venue;
+                    it.exchange_kind = exchange_kind;
+                }
+                it.snapshot_core = snapshot_core;
+                it.snapshot_generation = 0;
+                it.snapshot_task = None;
+                it.snapshot_pending = true;
                 changed = true;
                 continue;
             }
@@ -202,6 +193,10 @@ impl DetectsPanel {
                 delta_1h,
                 venue,
                 exchange_kind,
+                snapshot_core,
+                snapshot_pending: true,
+                snapshot_generation: 0,
+                snapshot_task: None,
             });
             changed = true;
         }
@@ -336,7 +331,7 @@ pub(super) fn crowd_chip_text(profit: f64, trades: u32) -> String {
 /// summarising it is being inconsistent about one set of facts.
 ///
 /// Only the two DELTAS are gated here, and on the history rather than on the market: they are the
-/// one pair whose absence is indistinguishable from a real value. `detect_snapshot` returns them at
+/// one pair whose absence is indistinguishable from a real value. `DetectSnapshot` returns them at
 /// `0.0` whenever the market has no retained history, and `delta_chip` renders that as a measured
 /// `0.00%` — a flat day asserted from nothing. The venue and the exchange kind need no gate: both
 /// already answer `None` when the card carries none.

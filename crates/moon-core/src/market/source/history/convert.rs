@@ -63,7 +63,7 @@ pub(super) fn deep_row_candle(
 ///
 /// Rows in this ring are stamped at the END of their period — moonproto seals a 5-minute candle
 /// with the seal time, and the server's own snapshot is pushed in end-stamped as well. Shift back
-/// one period so the open aligns with every other base, which is what `detect_snapshot` already
+/// one period so the open aligns with every other base, which is what `DetectSnapshotRequest::build`
 /// does for the same ring. Without it the whole snapshot layer sat one bucket late and its
 /// boundary rows resampled into the wrong coarse bucket. This shift is unrelated to the volume
 /// question below and must not move.

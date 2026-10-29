@@ -24,6 +24,8 @@ mod cards;
 mod crowd;
 mod popup;
 mod rules;
+mod selection;
+mod snapshots;
 
 #[cfg(test)]
 mod tests;
@@ -107,6 +109,14 @@ pub(crate) struct DetectItem {
     /// and can name two markets at once (`Спот/Фьючи`), while the venue is the one market the core
     /// actually trades.
     exchange_kind: String,
+    /// Provider to borrow history from; crowd cards may have no matching market.
+    snapshot_core: Option<CoreId>,
+    /// Set during collection, consumed only after the final trim and expiry pass.
+    snapshot_pending: bool,
+    /// Unique incarnation across refreshes and even dismissal followed by the same detection.
+    snapshot_generation: u64,
+    /// Dropped with a superseded or pruned card; publication also validates its generation.
+    snapshot_task: Option<Task<()>>,
 }
 
 impl DetectItem {
@@ -128,7 +138,7 @@ impl DetectItem {
 
     /// Whether any price history stood behind this card when it was frozen.
     ///
-    /// The deltas and the chart come out of the SAME read: `detect_snapshot` leaves both empty when
+    /// The deltas and the chart come out of the SAME read: `DetectSnapshot` leaves both empty when
     /// the market has no retained history, and leaves the deltas at their `0.0` default while still
     /// filling in the venue. So emptiness here is the honest signal that a printed `0.00%` would be
     /// a flat day measured from nothing — a market name is not, and neither is having a core: a
@@ -179,6 +189,8 @@ pub struct DetectsPanel {
     /// Value of `show_add_to_chart` at the previous ingest, so that the pass which sees it turn on
     /// can replay each core's ring instead of waiting for the next unrelated detect.
     showed_add_to_chart: bool,
+    /// Monotonic snapshot incarnation shared by ordinary and crowd cards in this panel.
+    snapshot_generation: u64,
 }
 
 const MAX_DETECT_BTNS: usize = 48;
@@ -207,6 +219,7 @@ impl DetectsPanel {
                 changed |= this.ingest(backend.read(cx), now);
             }
             changed |= this.prune(now);
+            this.start_snapshots(cx);
             this.arm_prune_timer(cx);
             if changed {
                 cx.notify();
@@ -221,6 +234,7 @@ impl DetectsPanel {
             let now = now_unix_ms();
             let mut changed = this.ingest_crowd(now, cx);
             changed |= this.prune(now);
+            this.start_snapshots(cx);
             this.arm_prune_timer(cx);
             if changed {
                 cx.notify();
@@ -289,18 +303,19 @@ impl DetectsPanel {
             // from the first pass on. That pass needs no replay either way: its cursors are empty,
             // so it walks the rings regardless.
             showed_add_to_chart: initial_sig.1,
+            snapshot_generation: 0,
         };
         let now = now_unix_ms();
         this.ingest(initial_backend.read(cx), now);
         this.ingest_crowd(now, cx);
         this.prune(now);
+        this.start_snapshots(cx);
         this.arm_prune_timer(cx);
         this
     }
 
-    /// Applies a mutation to this group's display configuration and persists a changed value to
-    /// `detects_view.toml`. An unchanged mutation performs no write or notification, suppressing
-    /// slider-seeding echoes.
+    /// Apply a changed display preference immediately and mark it for the shared deferred writer.
+    /// An unchanged mutation emits neither a write request nor a notification (slider seeding).
     fn write_view(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut DetectViewCfg)) {
         let group = self.group.clone();
         let changed = self.backend.update(cx, |b, bcx| {
@@ -311,7 +326,7 @@ impl DetectsPanel {
                 return false;
             }
             b.detects_view.set_group(&group, cfg);
-            b.detects_view.save();
+            b.detects_view_dirty = true;
             bcx.notify();
             true
         });
@@ -320,11 +335,8 @@ impl DetectsPanel {
         }
     }
 
-    /// Ingests group-core detections newer than each core's sequence cursor. Rows are eligible when
-    /// they request a sound or represent an alert firing. A row routed to AddToChart joins them
-    /// only while this group enables `show_add_to_chart`; the setting is read here so that a
-    /// disabled feed pays for no snapshot at all. Returns whether the visible card collection or a
-    /// retained card changed.
+    /// Collect eligible core rows, select the historical surviving queue, then build only its cards.
+    /// History is scheduled separately after both sources have trimmed and expired cards are pruned.
     fn ingest(&mut self, b: &Backend, now_ms: f64) -> bool {
         let mut changed = false;
         let show_add_to_chart = b.detects_view.shows_add_to_chart(&self.group);
@@ -333,44 +345,27 @@ impl DetectsPanel {
             self.showed_add_to_chart = show_add_to_chart;
             changed = true;
             if show_add_to_chart {
-                // Cursors have walked past the rows dropped while the setting was off, so replay
-                // each ring — otherwise the feed would stay empty until some unrelated detect
-                // fired. Expired rows and rows this panel already holds are both skipped below, so
-                // the replay costs only the cards it actually adds. It does re-add ordinary cards
-                // dismissed by a click while they are still within their KeepAlert, exactly as
-                // rebuilding this panel has always done. Retained cards are NOT dropped first: a
-                // long-lived card whose row has since left the 2000-row ring could not be rebuilt.
                 self.last_seq.clear();
             } else {
-                // Drop what just became invisible instead of letting it hold a slot in the 48-card
-                // queue and keep the prune timer awake for the rest of its KeepAlert.
                 self.items.retain(|it| it.add_to_chart == 0);
             }
         }
-        // Read each core's server color from configuration. The coin label and its cross-exchange
-        // identity both come from the core's catalog when the card is built, not from the market
-        // name.
-        // Canonical order: fresh events are appended core by core and rendered back in
-        // reverse insertion order — so this order is what decides how detects of the same instant
-        // read on screen. The one exception is a replay (below), which re-fills the queue out of
-        // order and re-sorts it stably to put that right; nothing on the normal path re-sorts.
         let order = moon_core::session::core_order::CoreOrder::new(&b.config);
-        let mut cores: Vec<(CoreId, String, [u8; 3])> = b
+        let mut cores: Vec<_> = b
             .session
             .sessions()
             .iter()
             .filter(|s| s.group == self.group)
-            .map(|s| {
-                let color = crate::core_color::core_color(&b.config.servers, s.id)
-                    .unwrap_or(DEFAULT_SERVER_COLOR);
-                (s.id, s.name.clone(), color)
-            })
             .collect();
-        order.sort_by(&mut cores, |(id, _, _)| *id);
-        for (id, name, color) in cores {
+        order.sort_by(&mut cores, |session| session.id);
+        let mut incoming = Vec::new();
+        for session in cores {
+            let id = session.id;
             let Some(d) = b.session.store().core(id) else {
                 continue;
             };
+            let color = crate::core_color::core_color(&b.config.servers, id)
+                .unwrap_or(DEFAULT_SERVER_COLOR);
             let last = self.last_seq.get(&id).copied().unwrap_or(0);
             let mut fresh: Vec<&moon_core::feed::DetectRow> = Vec::new();
             let mut newest_of_market: HashSet<&str> = HashSet::new();
@@ -378,11 +373,8 @@ impl DetectsPanel {
                 if det.seq <= last {
                     break;
                 }
-                // Newest first, so the first row of a market is the one that decides its card —
-                // an older row would only be overwritten in place. Keeping the rest would buy each
-                // of them a market snapshot for nothing, which is what a replay is full of.
+                // Deduplicate before eligibility, exactly as the old ingest did.
                 if newest_of_market.insert(det.market.as_str()) {
-                    // The store keeps `Arc<DetectRow>`; the card list borrows the row.
                     fresh.push(&**det);
                 }
             }
@@ -390,10 +382,7 @@ impl DetectsPanel {
                 continue;
             }
             self.last_seq.insert(id, fresh[0].seq);
-            for det in fresh.iter().rev() {
-                // Show sound-enabled detections and alert firings, including alerts without a
-                // strategy. An AddToChart row passes the same gate as any other detect, but only
-                // when the group asked for those cards; otherwise chart tabs consume it alone.
+            for det in fresh.into_iter().rev() {
                 if !det.sound_alert && !det.is_alert {
                     continue;
                 }
@@ -402,97 +391,76 @@ impl DetectsPanel {
                 }
                 let ttl =
                     detect_card_ttl_ms(det.keep_alert_secs, det.is_alert, b.alert_duration_s());
-                // Drop a row whose card would be pruned on this very pass. A core's ring holds
-                // thousands of rows and is walked whole whenever cursors are empty — a panel just
-                // built, or the setting above just turned on — and each row accepted below pays
-                // for a market snapshot.
                 if detect_expired(now_ms, det.time_ms, ttl) {
                     continue;
                 }
-                // A row this panel already holds at the same instant is the same row seen twice —
-                // a replay. Leave that card untouched: its chart is frozen at detection time, and
-                // re-taking the snapshot would both cost a market read and hand the card a picture
-                // newer than the countdown printed on it.
-                if self.items.iter().any(|it| {
-                    it.core() == Some(id) && it.market == det.market && it.born_ms == det.time_ms
-                }) {
-                    continue;
-                }
-                // Freeze five-minute chart history, 24-hour line data, deltas, and exchange
-                // metadata. The market source assembles retained snapshots, local cache, and trade
-                // ring data without making an exchange API request here.
-                let snap =
-                    b.session
-                        .market_source()
-                        .detect_snapshot(id, &det.market, DETECT_THUMB_BARS);
-                let label = b.session.market_source().market_label(id, &det.market);
-                if let Some(it) = self
-                    .items
-                    .iter_mut()
-                    .find(|it| it.core() == Some(id) && it.market == det.market)
-                {
-                    it.born_ms = det.time_ms;
-                    it.ttl_ms = ttl;
-                    it.color = color;
-                    // Re-resolve the label too: a card first built before its core sent a market
-                    // list would otherwise wear the name-derived spelling — and the name-derived
-                    // IDENTITY — for its whole TTL.
-                    it.base = label.display_coin().to_string();
-                    it.identity = label.identity();
-                    it.kind = det.kind;
-                    it.is_short = det.is_short;
-                    it.strat_name = det.strat_name.clone();
-                    it.is_alert = det.is_alert;
-                    it.add_to_chart = det.add_to_chart;
-                    // Refresh the snapshot and TTL in place when the same core and market fire again.
-                    it.bars = snap.bars;
-                    it.line = snap.line;
-                    it.delta_24h = snap.delta_24h;
-                    it.delta_1h = snap.delta_1h;
-                    it.venue = snap.venue;
-                    it.exchange_kind = snap.exchange_kind;
-                    changed = true;
-                } else {
-                    self.items.push_back(DetectItem {
-                        origin: DetectOrigin::Core(id),
-                        core_name: name.clone(),
-                        market: det.market.clone(),
-                        // Resolved when the card is built, not while rendering: a card is
-                        // re-rendered constantly, and the core's catalog is the only thing that
-                        // can name a Hyperliquid spot index.
-                        base: label.display_coin().to_string(),
-                        identity: label.identity(),
-                        color,
-                        kind: det.kind,
-                        is_short: det.is_short,
-                        strat_name: det.strat_name.clone(),
-                        is_alert: det.is_alert,
-                        add_to_chart: det.add_to_chart,
-                        born_ms: det.time_ms,
-                        ttl_ms: ttl,
-                        bars: snap.bars,
-                        line: snap.line,
-                        delta_24h: snap.delta_24h,
-                        delta_1h: snap.delta_1h,
-                        venue: snap.venue,
-                        exchange_kind: snap.exchange_kind,
-                    });
-                    changed = true;
-                }
+                incoming.push(selection::Incoming {
+                    core: id,
+                    name: &session.name,
+                    color,
+                    row: det,
+                    ttl_ms: ttl,
+                });
             }
         }
-        if replayed {
-            // A replay appends rows the feed skipped earlier, and those can be older than cards it
-            // already holds — which would draw them ahead of fresher ones and make the trim below
-            // evict the wrong end. Sorting is STABLE, so detects of the same instant keep the
-            // ingest order this feed reads by; only the replayed rows move.
-            self.items
-                .make_contiguous()
-                .sort_by(|a, b| a.born_ms.total_cmp(&b.born_ms));
-        }
-        while self.items.len() > MAX_DETECT_BTNS {
-            self.items.pop_front();
-            changed = true;
+        let selected = selection::select(&self.items, incoming, replayed);
+        changed |= selected.len() != self.items.len()
+            || selected.iter().any(|slot| slot.incoming.is_some());
+        let mut held: Vec<_> = std::mem::take(&mut self.items)
+            .into_iter()
+            .map(Some)
+            .collect();
+        for slot in selected {
+            let old = slot.held.and_then(|index| held[index].take());
+            let Some(next) = slot.incoming else {
+                self.items.push_back(old.expect("retained card"));
+                continue;
+            };
+            let det = next.row;
+            let label = b
+                .session
+                .market_source()
+                .market_label(next.core, &det.market);
+            let mut item = old.unwrap_or_else(|| DetectItem {
+                origin: DetectOrigin::Core(next.core),
+                core_name: next.name.to_string(),
+                market: det.market.clone(),
+                base: String::new(),
+                identity: String::new(),
+                color: next.color,
+                kind: det.kind,
+                is_short: det.is_short,
+                strat_name: String::new(),
+                is_alert: det.is_alert,
+                add_to_chart: det.add_to_chart,
+                born_ms: det.time_ms,
+                ttl_ms: next.ttl_ms,
+                bars: Vec::new(),
+                line: Vec::new(),
+                delta_24h: 0.0,
+                delta_1h: 0.0,
+                venue: None,
+                exchange_kind: String::new(),
+                snapshot_core: Some(next.core),
+                snapshot_pending: false,
+                snapshot_generation: 0,
+                snapshot_task: None,
+            });
+            item.born_ms = det.time_ms;
+            item.ttl_ms = next.ttl_ms;
+            item.color = next.color;
+            item.base = label.display_coin().to_string();
+            item.identity = label.identity();
+            item.kind = det.kind;
+            item.is_short = det.is_short;
+            item.strat_name = det.strat_name.clone();
+            item.is_alert = det.is_alert;
+            item.add_to_chart = det.add_to_chart;
+            // Invalidate before scheduling: an older completion cannot publish during this refresh.
+            item.snapshot_generation = 0;
+            item.snapshot_task = None;
+            item.snapshot_pending = true;
+            self.items.push_back(item);
         }
         changed
     }

@@ -1,5 +1,43 @@
 use super::*;
 
+/// Measure actual canonical atomic writes for 100 slider steps without touching user settings.
+#[test]
+#[ignore = "synthetic detection settings slider timing"]
+fn detects_settings_scale_probe() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "detects-view-scale-{}-{nonce}.toml",
+        std::process::id()
+    ));
+    let mut file = DetectViewFile::default();
+    for i in 0..10 {
+        file.set_group(&format!("UNIT_{i:02}"), DetectViewCfg::default());
+    }
+    let mut elapsed = Vec::new();
+    let mut capture = Vec::new();
+    for width in 100..200 {
+        file.groups.get_mut("UNIT_00").unwrap().medium.w = width;
+        let start = std::time::Instant::now();
+        toml_io::save(&path, &file, "detects_view.toml").unwrap();
+        elapsed.push(start.elapsed().as_secs_f64() * 1000.0);
+        let start = std::time::Instant::now();
+        std::hint::black_box(file.clone());
+        capture.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    elapsed.sort_by(f64::total_cmp);
+    capture.sort_by(f64::total_cmp);
+    let saved: DetectViewFile = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(saved.group("UNIT_00").medium.w, 199);
+    eprintln!(
+        "detects_settings before_atomic_save_p50_ms={:.6} p95_ms={:.6} after_capture_p50_ms={:.6} p95_ms={:.6}",
+        elapsed[50], elapsed[95], capture[50], capture[95]
+    );
+}
+
 /// EVERY constructor field survives a TOML round trip (the path used to read/write
 /// detects_view.toml and for Copy/Paste): active size, per-size w/h/chart/rail,
 /// and every flag in every slot.

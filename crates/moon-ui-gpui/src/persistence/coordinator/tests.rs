@@ -4,12 +4,98 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+/// Complete synthetic settings authority identified by the edited card width.
+fn detects_file(width: u16) -> moon_core::config::DetectViewFile {
+    let mut file = moon_core::config::DetectViewFile::default();
+    let mut cfg = moon_core::config::DetectViewCfg::default();
+    cfg.medium.w = width;
+    file.set_group("UNIT_01", cfg);
+    file
+}
+
+/// Build a detection-only sink with deterministic blocking and failure injection.
+fn detects_coordinator(
+    writes: Arc<Mutex<Vec<String>>>,
+    entered: Option<Arc<Barrier>>,
+    release: Option<Arc<Barrier>>,
+    fail_detects_once: bool,
+) -> PersistenceCoordinator {
+    let sink = RecordingSink {
+        writes: writes.clone(),
+        entered,
+        release,
+        fail_layout_once: Arc::new(AtomicBool::new(false)),
+        fail_detects_once,
+    };
+    let fallback = RecordingSink {
+        writes,
+        entered: None,
+        release: None,
+        fail_layout_once: Arc::new(AtomicBool::new(false)),
+        fail_detects_once: false,
+    };
+    PersistenceCoordinator::with_sinks(Box::new(sink), Box::new(fallback))
+}
+
+/// A blocked disk save must neither block dispatch nor lose the final slider value on quit.
+#[test]
+fn detects_coalesces_in_flight_mutations_and_flushes_latest_value_on_quit() {
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let mut coordinator = detects_coordinator(
+        writes.clone(),
+        Some(entered.clone()),
+        Some(release.clone()),
+        false,
+    );
+    assert!(coordinator.dispatch(PersistenceSnapshot::empty().with_detects(detects_file(100))));
+    entered.wait();
+    let rejected =
+        !coordinator.dispatch(PersistenceSnapshot::empty().with_detects(detects_file(200)));
+    let shutdown = std::thread::spawn(move || {
+        coordinator.shutdown(PersistenceSnapshot::empty().with_detects(detects_file(300)))
+    });
+    release.wait();
+    let acknowledgement = shutdown.join().unwrap();
+    assert!(rejected);
+    assert_eq!(acknowledgement.failed(), PersistenceClasses::default());
+    assert_eq!(*writes.lock().unwrap(), ["detects:100", "detects:300"]);
+}
+
+/// A failed detection save must select that authority for retry, including the quit fallback.
+#[test]
+fn detects_failure_is_acknowledged_and_latest_authority_can_be_retried() {
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let mut coordinator = detects_coordinator(writes.clone(), None, None, true);
+    assert!(coordinator.dispatch(PersistenceSnapshot::empty().with_detects(detects_file(100))));
+    let acknowledgement = wait_for_ack(&mut coordinator);
+    assert!(acknowledgement.failed().detects);
+    assert!(!acknowledgement.failed().layout);
+    assert!(coordinator.dispatch(PersistenceSnapshot::empty().with_detects(detects_file(200))));
+    assert_eq!(
+        wait_for_ack(&mut coordinator).failed(),
+        PersistenceClasses::default()
+    );
+    assert_eq!(*writes.lock().unwrap(), ["detects:100", "detects:200"]);
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let mut coordinator = detects_coordinator(writes.clone(), None, None, true);
+    assert_eq!(
+        coordinator
+            .shutdown(PersistenceSnapshot::empty().with_detects(detects_file(250)))
+            .failed(),
+        PersistenceClasses::default()
+    );
+    assert_eq!(*writes.lock().unwrap(), ["detects:250", "detects:250"]);
+}
+
 /// Test sink whose first layout write can be blocked while dispatch behavior is inspected.
 struct RecordingSink {
     writes: Arc<Mutex<Vec<String>>>,
     entered: Option<Arc<Barrier>>,
     release: Option<Arc<Barrier>>,
     fail_layout_once: Arc<AtomicBool>,
+    fail_detects_once: bool,
 }
 
 impl PersistenceSink for RecordingSink {
@@ -64,6 +150,21 @@ impl PersistenceSink for RecordingSink {
             .push(format!("auto:{}", topology.panel_names().join(",")));
         true
     }
+
+    /// Record the exact detection preference and optionally fail its first save.
+    fn save_detects(&mut self, detects: &moon_core::config::DetectViewFile) -> bool {
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("detects:{}", detects.group("UNIT_01").medium.w));
+        if let Some(entered) = self.entered.take() {
+            entered.wait();
+        }
+        if let Some(release) = self.release.take() {
+            release.wait();
+        }
+        !std::mem::take(&mut self.fail_detects_once)
+    }
 }
 
 /// Build one layout snapshot identified by its Auto rail width.
@@ -114,12 +215,14 @@ fn coordinator(
             entered,
             release,
             fail_layout_once,
+            fail_detects_once: false,
         }),
         Box::new(RecordingSink {
             writes: fallback_writes,
             entered: None,
             release: None,
             fail_layout_once: fallback_failure,
+            fail_detects_once: false,
         }),
     )
 }
@@ -232,6 +335,7 @@ fn failure_acknowledgement_selects_the_class_for_retry() {
             layout: true,
             classic: false,
             auto: false,
+            detects: false,
         }
     );
     assert!(coordinator.dispatch(PersistenceSnapshot::empty().with_layout(layout(200.0))));

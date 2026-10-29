@@ -269,6 +269,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         coin_suggest: HashMap::new(),
         ui_session: UiSessionState::default(),
         detects_view: moon_core::config::DetectViewFile::load(),
+        detects_view_dirty: false,
         news_tag_settings: moon_core::config::NewsTagSettings::load(),
         arb_view: std::rc::Rc::new(moon_core::config::ArbViewCfg::load()),
         tab_badges: moon_core::config::TabBadgeSettings::load(),
@@ -606,6 +607,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             // can race the same atomic temp paths during shutdown.
             let mut snapshot = PersistenceSnapshot::empty()
                 .with_layout(b.layout.clone())
+                .with_detects(b.detects_view.clone())
                 .with_classic(b.dock_states.clone(), b.detached.clone());
             if b.auto_dock_automatic_persistence_allowed
                 && let Some(topology) = b.auto_dock_topology.clone()

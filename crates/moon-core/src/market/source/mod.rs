@@ -58,8 +58,8 @@ use diagnostics::{
 pub(super) use diagnostics::{SOURCE_TRACE_LEVEL, market_diag, market_diag_due, market_diag_floor};
 pub(crate) use dto::CandleEmit;
 pub use dto::{
-    ArbQuote, ArbVenue, CoinTag, DetectSnapshot, LatestPriceError, MarketContextReadout,
-    MarketFiguresReadout, MarketWindowsReadout, WindowFigures,
+    ArbQuote, ArbVenue, CoinTag, DetectSnapshot, DetectSnapshotRequest, LatestPriceError,
+    MarketContextReadout, MarketFiguresReadout, MarketWindowsReadout, WindowFigures,
 };
 pub use history_state::{
     CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, PriceLineUpdate,

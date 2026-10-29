@@ -10,14 +10,132 @@ use crate::workspace::scope_marker::ScopeMarker;
 use moon_core::config::WorkspaceMode;
 use rust_i18n::t;
 
+/// Build a synthetic card without an application or market-data connection.
+pub(super) fn detect_item(
+    core: Option<u64>,
+    market: &str,
+    born_ms: f64,
+    generation: u64,
+) -> super::DetectItem {
+    super::DetectItem {
+        origin: core.map_or(
+            super::crowd::DetectOrigin::Crowd {
+                profit: 1.0,
+                trades: 1,
+            },
+            super::crowd::DetectOrigin::Core,
+        ),
+        core_name: "CORE_A".to_string(),
+        market: market.to_string(),
+        base: market.to_string(),
+        identity: market.to_string(),
+        color: [1, 2, 3],
+        kind: 0,
+        is_short: false,
+        strat_name: "UNIT_01".to_string(),
+        is_alert: false,
+        add_to_chart: 0,
+        born_ms,
+        ttl_ms: 60_000.0,
+        bars: Vec::new(),
+        line: Vec::new(),
+        delta_24h: 0.0,
+        delta_1h: 0.0,
+        venue: None,
+        exchange_kind: String::new(),
+        snapshot_core: core,
+        snapshot_pending: false,
+        snapshot_generation: generation,
+        snapshot_task: None,
+    }
+}
+
+/// One already-qualified detection; production ingestion applies eligibility before selection.
+pub(super) fn detect_row(index: usize, time_ms: f64) -> moon_core::feed::DetectRow {
+    moon_core::feed::DetectRow {
+        seq: index as u64,
+        market: format!("XALPHA{index}"),
+        time_ms,
+        sound_alert: true,
+        keep_alert_secs: 60,
+        add_to_chart: 0,
+        keep_in_chart_secs: 60,
+        sound_name: None,
+        is_alert: false,
+        kind: 0,
+        is_short: false,
+        msg: String::new(),
+        strat_name: "UNIT_01".to_string(),
+    }
+}
+
+/// Time the old ingest's replace-in-place search at ten cores with 2000 live distinct markets.
+/// This ignored probe keeps full scale because a quadratic replay is the regression it measures.
+#[test]
+#[ignore = "synthetic ten-core replay timing"]
+fn detects_replay_scale_probe() {
+    let start = std::time::Instant::now();
+    let mut queue: Vec<(u64, usize, f64)> = Vec::new();
+    for core in 0..10 {
+        for market in 0..2000 {
+            if let Some(item) = queue.iter_mut().find(|it| it.0 == core && it.1 == market) {
+                item.2 = market as f64;
+            } else {
+                queue.push((core, market, market as f64));
+            }
+        }
+    }
+    queue.drain(..queue.len().saturating_sub(48));
+    std::hint::black_box(&queue);
+    eprintln!(
+        "detects_replay old_selection_ms={:.6} snapshot_requests=20000 survivors={}",
+        start.elapsed().as_secs_f64() * 1000.0,
+        queue.len()
+    );
+    assert_eq!(queue.len(), 48);
+}
+
+/// Measure the frozen old row-copy/conversion/aggregation with 100000 retained trade prints.
+#[test]
+#[ignore = "synthetic retained-print snapshot timing"]
+fn detects_snapshot_scale_probe() {
+    use moon_core::feed::{Side, Tick};
+    let rows: Vec<_> = (0..100_000)
+        .map(|i| Tick {
+            time_ms: i as f64 * 864.0,
+            price: 100.0 + (i % 100) as f32 * 0.01,
+            qty: 1.0,
+            side: Side::Buy,
+        })
+        .collect();
+    let start = std::time::Instant::now();
+    for _ in 0..48 {
+        let copied = rows.clone();
+        let ticks = copied.clone();
+        let mut candles = Vec::new();
+        moon_core::market::candles::aggregate_trades(&ticks, 300_000, &mut candles);
+        assert_eq!(candles.len(), 288);
+        std::hint::black_box(candles);
+    }
+    eprintln!(
+        "detects_snapshot old_48_cpu_ms={:.6} (excludes cache wait and provider locking)",
+        start.elapsed().as_secs_f64() * 1000.0
+    );
+}
+
 /// Body of `DetectsPanel::ingest`, the subject of the source-shape assertions below. Its closing
 /// brace is the first at method indentation.
-fn ingest_body() -> &'static str {
-    include_str!("mod.rs")
+fn ingest_body() -> String {
+    let ingest = include_str!("mod.rs")
         .split("fn ingest(")
         .nth(1)
         .and_then(|tail| tail.split("\n    }").next())
-        .expect("Detects ingest must exist")
+        .expect("Detects ingest must exist");
+    format!(
+        "{ingest}\n{}\n{}",
+        include_str!("selection.rs"),
+        include_str!("snapshots.rs")
+    )
 }
 
 /// `detects/mod.rs:ingest` filtering by the effective Auto core would advance every cursor while
@@ -108,7 +226,7 @@ fn turning_the_setting_on_replays_the_ring_for_every_panel_of_the_group() {
     // A replay appends rows older than cards already held, so the queue is re-ordered by birth
     // before the trim; stable sorting keeps same-instant detects in ingest order.
     assert!(ingest.contains("if replayed {"));
-    assert!(ingest.contains("sort_by(|a, b| a.born_ms.total_cmp(&b.born_ms))"));
+    assert!(ingest.contains("slots.sort_by(replay_order)"));
     // Only the newest row per market survives collection: an older one would be overwritten in
     // place anyway, after paying for a market snapshot of its own.
     assert!(ingest.contains("if newest_of_market.insert(det.market.as_str()) {"));
@@ -127,7 +245,7 @@ fn turning_the_setting_on_replays_the_ring_for_every_panel_of_the_group() {
 }
 
 /// A replayed ring must not pay for what it is about to throw away: a row already past its
-/// `KeepAlert` is skipped BEFORE `detect_snapshot`, which reads the kline cache and a day of trades
+/// `KeepAlert` is skipped BEFORE snapshot preparation, which reads the kline cache and a day of trades
 /// per accepted row. Cursors are empty whenever a panel is built or the setting comes on, so the
 /// whole per-core ring — thousands of rows — walks through this loop.
 ///
@@ -149,10 +267,10 @@ fn expired_rows_are_dropped_before_paying_for_a_snapshot() {
     // A row already held at the same instant is a replay of a card that exists: it keeps the chart
     // frozen at detection time, and pays for no market read.
     let held = ingest
-        .find("it.born_ms == det.time_ms")
+        .find("slot.born_ms == next.row.time_ms")
         .expect("a row already held must be recognized");
     let snapshot = ingest
-        .find("detect_snapshot(")
+        .find("prepare_detect_snapshot(")
         .expect("snapshot capture must remain");
     assert!(held < snapshot, "a replayed card is re-frozen and re-read");
     assert!(
@@ -403,7 +521,7 @@ fn the_crowd_yields_a_coin_a_core_already_reported() {
 fn the_card_carries_the_cross_exchange_key_and_not_the_local_one() {
     let src = include_str!("mod.rs");
     assert!(
-        src.contains("identity: label.identity(),"),
+        src.contains("item.identity = label.identity();"),
         "a core card must freeze the catalog's cross-exchange identity"
     );
     assert!(
@@ -423,7 +541,7 @@ fn the_card_carries_the_cross_exchange_key_and_not_the_local_one() {
 ///
 /// The chart, the venue and the deltas come out of ONE snapshot of ONE market, so a card that draws
 /// the picture and hides the numbers summarising it is inconsistent about a single set of facts.
-/// The one pair that needs a gate is the deltas: `detect_snapshot` returns them at `0.0` when the
+/// The one pair that needs a gate is the deltas: `DetectSnapshot` returns them at `0.0` when the
 /// market has no retained history, and `delta_chip` renders that as a measured `0.00%`.
 ///
 /// Mutation: gate on the card's ORIGIN again and every crowd card loses its deltas even when the
