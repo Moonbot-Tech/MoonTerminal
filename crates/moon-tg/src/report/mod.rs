@@ -366,7 +366,8 @@ fn read_page_on(
     )
 }
 
-/// Connection-injected reader lets fixtures exercise the exact production query contract.
+/// Read page rows and exchange-button activity together on one snapshot, avoiding a second
+/// full-period money pass when the report already covers every accessible exchange.
 ///
 /// `groups` are the bot's saved core groups: cores lists members under their headers, while groups
 /// lists one summary per group. Both query each group's total over its cores, so overlapping
@@ -554,18 +555,39 @@ fn read_page_with(
     }
     let mut slices = vec![whole(None)];
     slices.extend(rows_by.iter().map(|(_, slice)| slice.clone()));
+    let exchange_reads = if request.scope == ReportScope::All {
+        exchange_reads(&accessible, &venues, &filter)
+    } else {
+        Vec::new()
+    };
+    slices.extend(exchange_reads.iter().map(|(_, slice)| slice.clone()));
     let mut totals = db::query_totals_sliced(&snap, &filter, &slices)?.into_iter();
     let total = totals.next().unwrap_or_default().quotes;
     // Filter by actual activity before paging, retaining zero-PnL trades and native-only money.
     let mut active = Vec::new();
     let mut active_cores = Vec::new();
-    for (index, ((name, _), total)) in rows_by.into_iter().zip(totals).enumerate() {
+    let row_count = rows_by.len();
+    for (index, ((name, _), total)) in rows_by
+        .into_iter()
+        .zip(totals.by_ref().take(row_count))
+        .enumerate()
+    {
         let total = total.quotes;
         if total.orders > 0 {
             active.push(Row::Line(row_cores.get(index).copied(), name, total));
             active_cores.extend(row_cores.get(index).copied());
         }
     }
+    let drilldowns = if request.scope == ReportScope::All {
+        exchange_reads
+            .into_iter()
+            .zip(totals)
+            .filter_map(|((button, _), total)| (total.quotes.orders > 0).then_some(button))
+            .collect()
+    } else {
+        // Scoped daily/group reports still need activity outside their displayed scope.
+        exchange_drilldowns(&snap, &accessible, &venues, &filter)?
+    };
     let active = match sections::sections(&active_cores, groups).filter(|_| by_core) {
         Some(sections) => {
             let slices = sections
@@ -608,7 +630,6 @@ fn read_page_with(
         }
         None => active,
     };
-    let drilldowns = exchange_drilldowns(&snap, &accessible, &venues, &filter)?;
     // Every view shows all its rows while the message fits; an oversized one pages with the
     // largest ladder rung that fits (`paging`). A probe of a partial page carries the longest page
     // label it can show, so the page actually rendered is never longer than the one measured.
@@ -1609,28 +1630,43 @@ fn exchange_drilldowns(
     let mut base = filter.clone();
     // Buttons cover every accessible exchange, including outside the current scoped view.
     base.core_uids = Vec::new();
-    let sections = core_order::exchange_sections(
+    let reads = exchange_reads(cores, venues, filter);
+    let slices = reads
+        .iter()
+        .map(|(_, slice)| slice.clone())
+        .collect::<Vec<_>>();
+    let totals = db::query_totals_sliced(snap, &base, &slices)?;
+    Ok(reads
+        .into_iter()
+        .zip(totals)
+        .filter_map(|((button, _), total)| (total.quotes.orders > 0).then_some(button))
+        .collect())
+}
+
+/// Each accessible exchange's unchanged button and the slice whose activity admits it.
+fn exchange_reads(
+    cores: &[(u64, String)],
+    venues: &std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+    filter: &ReportFilter,
+) -> Vec<((String, ReportScope), db::TotalsSlice)> {
+    core_order::exchange_sections(
         cores
             .iter()
             .enumerate()
             .map(|(index, (id, _))| (index, venues.get(id))),
-    );
-    let slices = sections
-        .iter()
-        .map(|(_, members)| db::TotalsSlice {
-            core_uids: Some(members.iter().map(|&index| cores[index].0).collect()),
-            date_from: filter.date_from,
-            date_to: filter.date_to,
-        })
-        .collect::<Vec<_>>();
-    let totals = db::query_totals_sliced(snap, &base, &slices)?;
-    let mut drilldowns = Vec::new();
-    for ((venue, _), total) in sections.into_iter().zip(totals) {
-        if total.quotes.orders > 0 {
-            drilldowns.push((section_label(venue), scope_of(venue)));
-        }
-    }
-    Ok(drilldowns)
+    )
+    .into_iter()
+    .map(|(venue, members)| {
+        (
+            (section_label(venue), scope_of(venue)),
+            db::TotalsSlice {
+                core_uids: Some(members.iter().map(|&index| cores[index].0).collect()),
+                date_from: filter.date_from,
+                date_to: filter.date_to,
+            },
+        )
+    })
+    .collect()
 }
 
 /// Resolve exactly the same venue identity used by the terminal's core lists.

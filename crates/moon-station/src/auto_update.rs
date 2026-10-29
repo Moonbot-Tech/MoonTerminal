@@ -225,7 +225,7 @@ fn log_decision(decision: Decision) {
 
 /// How long from `now_s` to the next multiple of [`LOOK_EVERY`] on the UTC clock: the looks keep
 /// their times across restarts and slow scans.
-fn until_next_slot(now_s: u64) -> Duration {
+pub(crate) fn until_next_slot(now_s: u64) -> Duration {
     let every = LOOK_EVERY.as_secs();
     Duration::from_secs(every - now_s % every)
 }

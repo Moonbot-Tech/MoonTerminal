@@ -13,7 +13,6 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::config::Secret;
 use crate::telegram::api::{BotApi, is_permanent_bad_request, is_unreachable_chat};
 use crate::telegram::notify::receipts;
 use crate::telegram::notify::{AutoReport, AutoRow, CardKey, NotifyFile, Pending};
@@ -690,7 +689,7 @@ struct Accepted {
 /// Start the sender. [`super::TelegramService::stop`] joins the handle.
 ///
 /// Args:
-///     token: Bot token. The thread builds its own [`BotApi`] and does not share the poller.
+///     api: Independent notification transport sharing only the bot's explicit flood deadline.
 ///     alive: Service liveness. Dropping it ends the loop and interrupts `BotApi` waits.
 ///     store: Shared outbox. Enqueue and ack both take this mutex.
 ///
@@ -700,13 +699,13 @@ struct Accepted {
 /// Panics:
 ///     The operating system refused to spawn the thread.
 pub(crate) fn spawn_sender(
-    token: Secret,
+    api: BotApi,
     alive: Weak<()>,
     store: Arc<Mutex<NotifyStore>>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("telegram-notify".into())
-        .spawn(move || run_sender(token, alive, store))
+        .spawn(move || run_sender(api, alive, store))
         .expect("spawn telegram-notify")
 }
 
@@ -719,8 +718,7 @@ pub(crate) fn spawn_sender(
 /// clears the extra wait. After `send_html` returns `Ok`, the id stays in memory until the ack
 /// save lands. A later pass retries that ack, starting the extra wait again at five seconds when
 /// the ack save fails, and does not send the body again.
-fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
-    let mut api = BotApi::new(token);
+fn run_sender(mut api: BotApi, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
     api.set_liveness(alive.clone());
     let (store_path, wake) = {
         let store = lock_store(&store);

@@ -177,7 +177,7 @@ pub trait TgHost {
     fn repaint(&mut self);
 
     /// Answer the station's status through `reply` (the chat's "Status"): the station reads it on
-    /// its loop and looks for a newer release off it ([`crate::station_status_reply`]).
+    /// its loop with the latest completed background release result ([`crate::station_status_reply`]).
     ///
     /// Args:
     ///     from_settings: Asked from the Settings section, so the answer leads back to it; from

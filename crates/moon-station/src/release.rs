@@ -11,7 +11,6 @@
 //! The request names no version, so a station taken over cannot pick what root installs.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
@@ -19,7 +18,10 @@ use moon_core::update::{
     BuildIdentity, GitHubReleaseClient, ReleaseDiscovery, ReleaseVersion, UpdateEligibility,
     station_asset_name,
 };
-use moon_tg::{ReleaseCheck, ReleaseFailure, UpdateRefusal};
+use moon_tg::UpdateRefusal;
+
+mod watch;
+pub use watch::ReleaseWatch;
 
 /// The update request's name in the data root; the path unit watches for it.
 pub const UPDATE_REQUEST: &str = "update.request";
@@ -31,8 +33,6 @@ const UPDATE_PATH_ENABLED: &str = "/etc/systemd/system/paths.target.wants/moon-s
 /// A request older than this was never taken: the path unit that takes it at once has stopped or
 /// failed — the helper's `update-from-release`, run from the terminal, brings it back.
 const STALE_REQUEST: Duration = Duration::from_secs(15 * 60);
-/// How long the chat's "Status" waits for GitHub before it answers without the release.
-const CHECK_WAIT: Duration = Duration::from_secs(10);
 
 /// The release tag the station was built from, `unknown` for a build outside a tagged history.
 pub(crate) fn release_base() -> &'static str {
@@ -57,66 +57,6 @@ pub fn version() -> String {
     match BuildIdentity::from_release_base(release_base()).baseline() {
         Some(version) => format!("{version} ({revision})"),
         None => format!("dev ({revision})"),
-    }
-}
-
-/// The station's look at the latest release, for the chat's "Status": one discovery session kept
-/// for the process, so an unchanged release list costs GitHub a conditional request only.
-#[derive(Clone, Default)]
-pub struct ReleaseWatch {
-    discovery: Arc<Mutex<Option<ReleaseDiscovery>>>,
-}
-
-impl ReleaseWatch {
-    /// [`Self::check`], waited for at most [`CHECK_WAIT`]: a GitHub that does not answer costs the
-    /// chat a line in its status, not its whole answer. The look itself runs on, and its session
-    /// keeps what it learns for the next one.
-    pub fn check_within(&self) -> ReleaseCheck {
-        let (tx, rx) = mpsc::channel();
-        let watch = self.clone();
-        let started = std::thread::Builder::new()
-            .name("release-check".into())
-            .spawn(move || {
-                let _ = tx.send(watch.check());
-            });
-        if let Err(error) = started {
-            return ReleaseCheck::Failed(ReleaseFailure::Unavailable(format!(
-                "no thread for the check: {error}"
-            )));
-        }
-        rx.recv_timeout(CHECK_WAIT)
-            .unwrap_or(ReleaseCheck::Failed(ReleaseFailure::Timeout))
-    }
-
-    /// Whether a newer release carries this station's binary. Blocking — GitHub is asked — so it
-    /// runs off the main loop.
-    pub fn check(&self) -> ReleaseCheck {
-        let Some(asset) = station_asset_name() else {
-            return ReleaseCheck::Failed(ReleaseFailure::UnsupportedArchitecture(
-                std::env::consts::ARCH.into(),
-            ));
-        };
-        let identity = BuildIdentity::from_release_base(release_base());
-        if identity.baseline().is_none() {
-            return ReleaseCheck::Unversioned;
-        }
-        let Ok(mut discovery) = self.discovery.lock() else {
-            return ReleaseCheck::Failed(ReleaseFailure::Unavailable(
-                "the release check failed earlier".into(),
-            ));
-        };
-        let discovery =
-            discovery.get_or_insert_with(|| ReleaseDiscovery::for_asset(identity, asset));
-        match discovery.scan() {
-            Ok(result) => match result.eligibility {
-                UpdateEligibility::Available(release) => {
-                    ReleaseCheck::Newer(release.version().to_string())
-                }
-                UpdateEligibility::Current => ReleaseCheck::Current,
-                UpdateEligibility::Unsupported => ReleaseCheck::Unversioned,
-            },
-            Err(error) => ReleaseCheck::Failed(ReleaseFailure::Unavailable(error.to_string())),
-        }
     }
 }
 

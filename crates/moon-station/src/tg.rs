@@ -17,8 +17,8 @@
 //! for one more chat, and the chats' access read and replaced ([`StationTg::set_access`]).
 //!
 //! The chat's "Status" is the station's own status, read on the main loop
-//! ([`StationTg::answer_status`]) and sent from a thread that first asks GitHub for a newer
-//! release; "Update" files the request the root updater acts on (`release.rs`).
+//! ([`StationTg::answer_status`]) with the latest background release result; "Update" files
+//! the request the root updater acts on (`release.rs`).
 
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -68,7 +68,7 @@ pub struct StationTg {
     data_root: PathBuf,
     /// Chats' "Status" waiting for the main loop to read the station's status.
     status_asks: Vec<(SyncSender<Response>, bool)>,
-    /// The look at the latest release each "Status" takes.
+    /// Background release discovery; status reads the last completed result.
     release: ReleaseWatch,
     /// Optimistic Panic Sell override by `(core, market)`, reconciled every tick.
     panic_local: HashMap<(CoreId, String), PanicLocal>,
@@ -139,12 +139,17 @@ impl StationTg {
             if bot.mini_app_enabled { "on" } else { "off" },
         );
         let (finished_tx, finished_rx) = mpsc::channel();
+        let mut state = TelegramState::new_with_notifications(
+            bot,
+            HostKind::Station,
+            Some(data_root.join(NOTIFY_FILE)),
+        );
+        let owner = std::thread::current();
+        state.set_work_waker(Arc::new(move || owner.unpark()));
+        let mut release = ReleaseWatch::default();
+        release.refresh_if_due(std::time::SystemTime::now());
         Ok(Self {
-            state: TelegramState::new_with_notifications(
-                bot,
-                HostKind::Station,
-                Some(data_root.join(NOTIFY_FILE)),
-            ),
+            state,
             zone,
             zone_pushed: pushed.map(|(name, _)| name),
             groups_order: pairing.groups_order,
@@ -152,7 +157,7 @@ impl StationTg {
             pairing_path,
             data_root: data_root.to_path_buf(),
             status_asks: Vec::new(),
-            release: ReleaseWatch::default(),
+            release,
             panic_local: HashMap::new(),
             reconnect: Vec::new(),
             finished_tx,
@@ -169,6 +174,7 @@ impl StationTg {
     /// Returns:
     ///     The cores the Mini App asked to reconnect since the last pass.
     pub fn tick(&mut self, config: &mut AppConfig, session: &mut SessionManager) -> Vec<CoreId> {
+        self.release.refresh_if_due(std::time::SystemTime::now());
         let finished: Vec<Finish> = self.finished_rx.try_iter().collect();
         let mut host = StationHost {
             tg: self,
@@ -190,9 +196,8 @@ impl StationTg {
         std::mem::take(&mut tg.reconnect)
     }
 
-    /// Answer the chats that asked for "Status" since the last pass: the station's status read now
-    /// through `status` (given the bot's own), sent from a thread that first looks for a newer
-    /// release — GitHub can take seconds, the loop must not.
+    /// Answer status from current station facts and the latest completed release lookup.
+    /// An overdue lookup starts in the background; no chat or subsequent update waits for it.
     pub fn answer_status(&mut self, config: &AppConfig, status: impl FnOnce(BotStatus) -> Status) {
         if self.status_asks.is_empty() {
             return;
@@ -200,43 +205,15 @@ impl StationTg {
         let asks = std::mem::take(&mut self.status_asks);
         let status = status(self.status(config));
         let navigation = moon_tg::station_owner_navigation(&config.telegram);
-        let release = self.release.clone();
-        let answer = move |asks: Vec<(SyncSender<Response>, bool)>,
-                           check: moon_tg::ReleaseCheck| {
-            for (ask, from_settings) in asks {
-                let _ = ask.try_send(moon_tg::station_status_reply(
-                    &status,
-                    &check,
-                    navigation.clone(),
-                    from_settings,
-                ));
-            }
-        };
-        // Handed over through a slot, so a thread that cannot be started leaves the answer here:
-        // then without the look at the release, rather than none at all.
-        let slot = Arc::new(Mutex::new(Some((asks, answer))));
-        let theirs = Arc::clone(&slot);
-        let started = std::thread::Builder::new()
-            .name("tg-status".into())
-            .spawn(move || {
-                let taken = theirs.lock().ok().and_then(|mut slot| slot.take());
-                if let Some((asks, answer)) = taken {
-                    answer(asks, release.check_within());
-                }
-            });
-        if let Err(error) = started {
-            log::warn!(
-                "telegram: no thread for the status ({error}); answering without a release check"
-            );
-            let taken = slot.lock().ok().and_then(|mut slot| slot.take());
-            if let Some((asks, answer)) = taken {
-                answer(
-                    asks,
-                    moon_tg::ReleaseCheck::Failed(moon_tg::ReleaseFailure::Unavailable(
-                        error.to_string(),
-                    )),
-                );
-            }
+        self.release.refresh_if_due(std::time::SystemTime::now());
+        let check = self.release.latest();
+        for (ask, from_settings) in asks {
+            let _ = ask.try_send(moon_tg::station_status_reply(
+                &status,
+                &check,
+                navigation.clone(),
+                from_settings,
+            ));
         }
     }
 
@@ -560,18 +537,22 @@ impl TgHost for StationHost<'_> {
         }
     }
 
+    /// Run each read independently and wake the owner as soon as its completion is queued.
     fn spawn(&mut self, job: Job) {
         // Handed over through a slot, so a thread that cannot be started leaves the job here to
         // run in place: a job dropped unrun would leave its read `Busy` for good.
         let slot = Arc::new(Mutex::new(Some(job)));
         let theirs = Arc::clone(&slot);
         let tx = self.tg.finished_tx.clone();
+        let owner = std::thread::current();
         let started = std::thread::Builder::new()
             .name("tg-read".into())
             .spawn(move || {
                 let job = theirs.lock().ok().and_then(|mut job| job.take());
                 if let Some(job) = job {
-                    let _ = tx.send(job());
+                    if tx.send(job()).is_ok() {
+                        owner.unpark();
+                    }
                 }
             });
         if let Err(error) = started {
@@ -579,6 +560,7 @@ impl TgHost for StationHost<'_> {
             let job = slot.lock().ok().and_then(|mut job| job.take());
             if let Some(job) = job {
                 let _ = self.tg.finished_tx.send(job());
+                std::thread::current().unpark();
             }
         }
     }

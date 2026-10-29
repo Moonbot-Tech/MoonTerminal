@@ -1,17 +1,13 @@
 //! Blocking Bot API polling with application-owned localization and persistence.
-use super::{Response, SharedAuthorization, Work};
-use crate::config::Secret;
+use super::{Response, SharedAuthorization, Work, WorkSender};
 use crate::telegram::{
     TelegramStatus,
     api::{BotApi, ReplyMarkup},
     commands::{ParsedCommand, parse_reply_button, parse_update},
-    menu_action::{MenuAction, SettingsAction},
+    menu_action::MenuAction,
     reply::segment_pages,
 };
-use std::sync::{
-    Arc, Mutex, Weak,
-    mpsc::{self, SyncSender},
-};
+use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::time::{Duration, Instant};
 
 /// Pause after a non-retryable `getMe` Telegram error so an unchanged invalid token does not
@@ -24,15 +20,14 @@ const CONFLICT_RETRY: Duration = Duration::from_secs(10);
 /// Poll with private-chat pairing and Mini App guards; persistence publication owns admission.
 /// Refresh persisted navigation when the host's current role-filtered keyboard changes.
 pub(super) fn run(
-    token: Secret,
+    mut api: BotApi,
     alive: Weak<()>,
     auth: SharedAuthorization,
     labels: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
     menu: super::menu::SharedMenu,
     mut menu_sync: super::menu::MenuSync,
-    tx: SyncSender<Work>,
+    tx: WorkSender,
 ) {
-    let mut api = BotApi::new(token);
     api.set_liveness(alive.clone());
     let status_tx = tx.clone();
     api.set_error_observer(move |error| {
@@ -160,13 +155,6 @@ pub(super) fn run(
                     | ParsedCommand::Start
                     | ParsedCommand::Menu(MenuAction::Preset(_))
             );
-            // The station's status looks for a newer release before it answers.
-            let slow = is_report
-                || matches!(
-                    inbound.command,
-                    ParsedCommand::StationStatus
-                        | ParsedCommand::Menu(MenuAction::Settings(SettingsAction::StationStatus))
-                );
             // The message under which the pressed button sits; a typed command has none.
             let pressed = update
                 .callback_query
@@ -208,11 +196,11 @@ pub(super) fn run(
                     },
                 }
             };
-            if tx.try_send(work).is_err() {
+            if !tx.try_send(work) {
                 break;
             }
             api.acknowledge_update(update.update_id);
-            let Some(result) = super::response(rx, &alive, slow) else {
+            let Some(result) = super::response(rx, &alive, is_report) else {
                 if is_report {
                     report_failure(&mut api, &tx, &labels, chat_id);
                 }
@@ -417,7 +405,7 @@ fn tidy(api: &mut BotApi, chat: i64, message: i64, what: &str) {
 /// Best-effort localized feedback when a report times out or Telegram rejects its markup.
 fn report_failure(
     api: &mut BotApi,
-    tx: &SyncSender<Work>,
+    tx: &WorkSender,
     labels: &Mutex<std::collections::BTreeMap<String, String>>,
     chat: i64,
 ) {
@@ -432,7 +420,7 @@ fn report_failure(
 /// Deliver localized pages and expose redacted transport failures.
 fn send_text(
     api: &mut BotApi,
-    tx: &SyncSender<Work>,
+    tx: &WorkSender,
     chat: i64,
     text: &str,
     keyboard: Option<&ReplyMarkup>,
@@ -446,7 +434,7 @@ fn send_text(
     true
 }
 /// Publish typed failure and avoid hot retries for invalid credentials.
-fn publish_error(tx: &SyncSender<Work>, error: crate::telegram::api::ApiError) {
+fn publish_error(tx: &WorkSender, error: crate::telegram::api::ApiError) {
     publish_status(tx, &error);
     std::thread::sleep(Duration::from_millis(250));
 }
@@ -455,7 +443,7 @@ fn publish_error(tx: &SyncSender<Work>, error: crate::telegram::api::ApiError) {
 ///
 /// A chat out of the bot's reach (blocked, deleted) is that chat's state, not the bot's: it is
 /// logged and leaves the status alone.
-fn publish_status(tx: &SyncSender<Work>, error: &crate::telegram::api::ApiError) {
+fn publish_status(tx: &WorkSender, error: &crate::telegram::api::ApiError) {
     if crate::telegram::api::is_unreachable_chat(error) {
         log::info!("telegram chat unreachable: {error}");
         return;

@@ -16,11 +16,14 @@ mod history;
 mod menu;
 pub mod mini_app;
 mod notify;
+mod work;
 pub(crate) use notify::drop_chart;
 pub use notify::{
     NotifyStore, chart_spool_dir, cores_kept, drop_redraws, purge_outbox, purge_outbox_where,
     push_auto_report, push_edit, push_outbox, push_photo, push_redraw, push_trade_card,
 };
+use work::WorkSender;
+pub use work::WorkWaker;
 /// Authenticated work drained by the application's coordination loop.
 // `MiniApp` carries the settings document, so this variant is the large one.
 // Boxing it would allocate on every Mini App request.
@@ -74,6 +77,8 @@ pub struct TelegramService {
     notifications: Option<Arc<Mutex<NotifyStore>>>,
     /// The sender's wake, rung on stop so it leaves its wait at once.
     notify_wake: Option<Arc<notify::NotifyWake>>,
+    /// Causal owner wake shared with every bounded work producer.
+    work_waker: work::SharedWaker,
 }
 impl TelegramService {
     /// Start background transport only for a non-empty saved token.
@@ -125,6 +130,11 @@ impl TelegramService {
             config.authorized_chat_ids.clone(),
         )));
         let (tx, events) = mpsc::sync_channel(64);
+        let work_waker = Arc::default();
+        let tx = WorkSender {
+            tx,
+            waker: Arc::clone(&work_waker),
+        };
         let mini_config = Arc::new(Mutex::new(config.clone()));
         let labels = Arc::new(Mutex::new(labels));
         let menu = Arc::new(Mutex::new(menu::MenuIntent::stopped(
@@ -133,13 +143,14 @@ impl TelegramService {
         let weak = Arc::downgrade(&alive);
         let auth = authorization.clone();
         let bot_tx = tx.clone();
-        let token = config.token.clone();
+        let flood = super::api::FloodWait::default();
+        let bot_api = super::api::BotApi::with_flood_wait(config.token.clone(), flood.clone());
         let bot_labels = labels.clone();
         let bot_menu = menu.clone();
         let menu_sync = menu::MenuSync::with_cleanup(retired_chats);
         let join = thread::Builder::new()
             .name("telegram-bot".into())
-            .spawn(move || bot::run(token, weak, auth, bot_labels, bot_menu, menu_sync, bot_tx))
+            .spawn(move || bot::run(bot_api, weak, auth, bot_labels, bot_menu, menu_sync, bot_tx))
             .ok()?;
         let weak = Arc::downgrade(&alive);
         let cfg = mini_config.clone();
@@ -164,7 +175,7 @@ impl TelegramService {
                     }
                     let store = Arc::new(Mutex::new(store));
                     joins.push(notify::spawn_sender(
-                        config.token.clone(),
+                        super::api::BotApi::with_flood_wait(config.token.clone(), flood),
                         Arc::downgrade(&alive),
                         Arc::clone(&store),
                     ));
@@ -189,6 +200,7 @@ impl TelegramService {
             labels,
             notifications,
             notify_wake,
+            work_waker,
         })
     }
 
@@ -203,6 +215,14 @@ impl TelegramService {
     /// Drain one event without waiting on transport.
     pub fn try_recv(&self) -> Option<Work> {
         self.events.try_recv().ok()
+    }
+    /// Install the host's causal wake and wake once for work published before registration.
+    pub fn set_work_waker(&self, waker: WorkWaker) {
+        *self
+            .work_waker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(waker);
+        work::wake(&self.work_waker);
     }
     /// Issue a ten-minute code without waiting on network operations.
     pub fn pairing_code(&self) -> Option<String> {
@@ -263,8 +283,8 @@ impl Drop for TelegramService {
 /// Wait for application response while observing shutdown.
 ///
 /// Args:
-///     slow: The answer reads off the owner thread first — a report's database, the station
-///         status's look at the latest release — so it gets two minutes instead of ten seconds.
+///     slow: The answer reads the report database off the owner thread first, so it gets two
+///         minutes instead of ten seconds. Status uses completed background discovery results.
 fn response(rx: Receiver<Response>, alive: &Weak<()>, slow: bool) -> Option<Response> {
     let deadline = Instant::now() + std::time::Duration::from_secs(if slow { 120 } else { 10 });
     while alive.upgrade().is_some() && Instant::now() < deadline {

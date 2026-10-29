@@ -265,7 +265,7 @@ pub(super) fn run_service(
     labels: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
     menu: super::menu::SharedMenu,
     alive: Weak<()>,
-    tx: SyncSender<super::Work>,
+    tx: super::WorkSender,
 ) {
     let mut owner = MiniAppOwner::new();
     let mut previous: Option<(bool, Vec<i64>)> = None;
@@ -388,7 +388,7 @@ pub(super) fn run_service(
         }
         if owner.status() != last_status {
             let status = owner.status();
-            if tx.try_send(super::Work::MiniStatus(status.clone())).is_ok() {
+            if tx.try_send(super::Work::MiniStatus(status.clone())) {
                 last_status = status;
             }
         }
@@ -472,7 +472,7 @@ fn start_desired(
     current_labels: &std::collections::BTreeMap<String, String>,
     config: &Arc<Mutex<crate::config::TelegramConfig>>,
     alive: &Weak<()>,
-    tx: &SyncSender<super::Work>,
+    tx: &super::WorkSender,
 ) -> StartOutcome {
     let _ = tx.try_send(super::Work::MiniStatus(MiniAppStatus::Starting));
     match crate::telegram::cloudflared::ensure_verified_cloudflared() {

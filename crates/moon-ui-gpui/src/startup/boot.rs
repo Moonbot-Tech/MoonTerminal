@@ -189,7 +189,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
 
     // Read station presence and ownership before the constructor can start saved transport.
     let station = crate::backend::station::StationJobs::load();
-    let telegram = if !station.allows_terminal_bot() {
+    let mut telegram = if !station.allows_terminal_bot() {
         let mut state = moon_tg::TelegramState::new(
             &moon_core::config::TelegramConfig::default(),
             moon_tg::HostKind::Terminal,
@@ -199,6 +199,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     } else {
         moon_tg::TelegramState::new(&cfg.telegram, moon_tg::HostKind::Terminal)
     };
+    let telegram_wake = feed_wake_tx.clone();
+    telegram.set_work_waker(std::sync::Arc::new(move || telegram_wake.notify()));
     let backend = cx.new(|_| Backend {
         telegram,
         station,
@@ -656,6 +658,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             cx.update(|cx| {
                 data_backend.update(cx, |b, cx| {
                     let drain = b.session.drain();
+                    b.drain_telegram_work(cx);
                     if !drain.any {
                         return;
                     }

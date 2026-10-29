@@ -328,7 +328,7 @@ fn main() -> anyhow::Result<()> {
                 moon_core::feed::queued_messages()
             );
         }
-        std::thread::sleep(DRAIN_EVERY);
+        std::thread::park_timeout(DRAIN_EVERY);
     }
 }
 

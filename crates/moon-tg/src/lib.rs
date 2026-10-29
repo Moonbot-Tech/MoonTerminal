@@ -31,7 +31,7 @@ mod units;
 #[path = "../../moon-ui-gpui/src/test_locale.rs"]
 mod test_locale;
 
-pub use dispatch::{issue_pairing, reconcile, reset_pairing, tick};
+pub use dispatch::{drain_work, issue_pairing, reconcile, reset_pairing, tick};
 pub use host::{Finish, HostKind, Job, ReportRevision, TgHost};
 pub use labels::{station_owner_navigation, status_text};
 pub use mini_app::{check_notify_rows, notify_rows, save_notify_rows};
