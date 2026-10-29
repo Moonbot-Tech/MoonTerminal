@@ -56,6 +56,42 @@ impl OrdersPublish {
     }
 }
 
+/// What one orders turn's events put in debt: the table, the chart's line copies, or both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct OrderDebts {
+    /// The retained table owes a publication.
+    pub(super) table: bool,
+    /// The chart's line copies owe a publication.
+    pub(super) lines: bool,
+}
+
+impl OrderDebts {
+    /// The debts a turn with these events creates.
+    ///
+    /// A station has no chart, so it publishes no line copies: a line event puts the table in
+    /// debt instead, and the turns captured for the copies ride the next table, so an order
+    /// removed between two tables still reaches the store. Its order-line store — the Mini App's
+    /// Panic Sell state, the clock-skew estimator — then moves at the table's 250 ms instead of
+    /// the copies' 50 ms. Measured on a 27-core station with the Mini App on (#1081): the copies
+    /// were twice the tables' count, two thirds of the rows built, and 4 of its 13 CPU seconds a
+    /// minute; the table count rose by 2 % without them.
+    ///
+    /// Args:
+    ///     station: Whether this feed serves a headless station.
+    ///     table_event: The turn holds an event the table shows.
+    ///     line_event: The turn holds an event the chart's lines show — every table event, and
+    ///         trace points besides.
+    ///
+    /// Returns:
+    ///     Which publications the turn owes.
+    pub(super) fn of_turn(station: bool, table_event: bool, line_event: bool) -> Self {
+        Self {
+            table: table_event || (station && line_event),
+            lines: line_event && !station,
+        }
+    }
+}
+
 /// Whether `info_addr` is still the `ServerInfo` allocation observed at `ServerRestart`.
 ///
 /// The caller holds the `Arc<MoonStateSnapshot>` captured at the restart (`PinnedRestartInfo`).

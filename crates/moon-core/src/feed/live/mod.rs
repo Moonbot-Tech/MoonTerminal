@@ -20,7 +20,7 @@ use client_slot::{ClientSlotGuard, RunStateSeen};
 use loop_helpers::{
     closed_row_uid, hex_dump, should_publish_assets, tg_opened, trace_field_indices,
 };
-use publish_gate::{ORDER_LINES_PERIOD, ORDERS_TABLE_PERIOD, OrdersPublish};
+use publish_gate::{ORDER_LINES_PERIOD, ORDERS_TABLE_PERIOD, OrderDebts, OrdersPublish};
 pub(in crate::feed) use run_guards::{EndpointUnusable, KeyUnreadable, NeverOperational};
 use run_guards::{reconnect_is_operational, run_failed, startup_poll_settled};
 use strategy_publish::{
@@ -2387,14 +2387,22 @@ pub(super) fn run(
             }
         }
 
-        // Capture this turn now so terminal states survive removal during the line cooldown.
+        // Capture this turn now so terminal states survive removal during the line cooldown, or
+        // until the next table on a station, which sends no line copies.
         // Full row construction is reserved for a due table or leading-edge line publication.
         let orders_now = Instant::now();
-        if server.feed.orders && has_orders_table_event {
+        let debts = OrderDebts::of_turn(
+            station.is_some(),
+            has_orders_table_event,
+            has_order_line_event,
+        );
+        if server.feed.orders && debts.table {
             orders_table.queue(orders_now);
         }
-        if server.feed.orders && has_order_line_event {
+        if server.feed.orders && debts.lines {
             orders_lines.queue(orders_now);
+        }
+        if server.feed.orders && has_order_line_event {
             if let Some(snap) = client.snapshot() {
                 pending_turns.push(build_captured_rows(server.id, &snap, &events));
             }
