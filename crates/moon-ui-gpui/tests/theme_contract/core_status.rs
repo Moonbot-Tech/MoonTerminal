@@ -217,20 +217,22 @@ fn core_status_keeps_hover_out_of_view_state() {
 }
 
 /// `render.rs` must draw the Alarms list from the cache `rebuild_cache` fills, never query it.
-/// Every row hover transition and scroll tick re-runs `render`, so a
-/// `warn_episodes_recent_for_scope` call there is a SQLite query of up to 500 rows per mouse
-/// move. Mutation: move the query back into the Warnings arm; scrolling the Alarms view stutters.
+/// The persisted read belongs on the background executor, keyed by revision and scope. Mutation:
+/// query SQLite in the Warnings arm or rebuild; hovering or a once-per-second tick stutters again.
 #[test]
 fn core_status_render_never_queries_the_alarms_store() {
     let render = code_only(&read_src("panels/core_status/render.rs"));
     assert!(
-        !render.contains("warn_episodes_recent_for_scope"),
+        !render.contains("warn_episodes_recent"),
         "the Warnings arm must read the cached alarms list, not query the store per repaint"
     );
     let cache = code_only(&read_src("panels/core_status/cache.rs"));
     assert!(
-        cache.contains("warn_episodes_recent_for_scope") && cache.contains("AlarmsList::new("),
-        "rebuild_cache must own the one alarms query and build the cached list from it"
+        cache.contains("warn_episodes_recent_with_persisted")
+            && cache.contains("read_recent_episodes_for_scope")
+            && cache.contains("background_executor()")
+            && cache.contains("AlarmsList::new("),
+        "rebuild_cache must merge the background snapshot and build the cached list from it"
     );
 }
 

@@ -7,12 +7,25 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use rusqlite::Connection;
 
-use super::WarnStore;
+use super::{
+    RECENT_CORE_EPISODES_SQL, RECENT_CORE_TIES_SQL, RECENT_SERVER_EPISODES_SQL,
+    RECENT_SERVER_TIES_SQL, WarnStore, read_recent_episodes_for_scope,
+};
 use crate::backend::core_warn::{WarnAxis, WarnEpisode, WarnSnapshot};
 
 /// A store backed by a throwaway in-memory database.
 fn store() -> WarnStore {
     WarnStore::from_connection(Connection::open_in_memory().unwrap()).unwrap()
+}
+
+/// A store with the pre-optimization indexes, preserving the old query planner's choices.
+fn old_schema_store() -> WarnStore {
+    let store = store();
+    store
+        .conn
+        .execute_batch("DROP INDEX ix_warn_core_time; DROP INDEX ix_warn_server_null_time;")
+        .unwrap();
+    store
 }
 
 /// Build one closed episode; `id` is ignored on insert (the DB assigns the row id).
@@ -145,6 +158,229 @@ fn scoped_recent_query_filters_before_limit() {
     assert_eq!(rows[0].core_id, Some(7));
     assert_eq!(rows[1].server_ip, Some(selected_ip));
     assert_eq!(rows[1].core_id, None);
+}
+
+/// Frozen copy of the pre-optimization OR query, used as the independent row/order oracle.
+fn reference_recent_episodes_for_scope(
+    store: &WarnStore,
+    core_ids: &HashSet<u64>,
+    server_ips: &HashSet<IpAddr>,
+    limit: usize,
+) -> Vec<WarnEpisode> {
+    if limit == 0 || (core_ids.is_empty() && server_ips.is_empty()) {
+        return Vec::new();
+    }
+    let mut clauses = Vec::with_capacity(2);
+    let mut values = Vec::with_capacity(core_ids.len() + server_ips.len() + 1);
+    if !core_ids.is_empty() {
+        clauses.push(format!(
+            "core_id IN ({})",
+            std::iter::repeat_n("?", core_ids.len())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        values.extend(
+            core_ids
+                .iter()
+                .map(|core| rusqlite::types::Value::Integer(*core as i64)),
+        );
+    }
+    if !server_ips.is_empty() {
+        clauses.push(format!(
+            "(core_id IS NULL AND server_ip IN ({}))",
+            std::iter::repeat_n("?", server_ips.len())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        values.extend(
+            server_ips
+                .iter()
+                .map(|ip| rusqlite::types::Value::Text(ip.to_string())),
+        );
+    }
+    values.push(rusqlite::types::Value::Integer(
+        i64::try_from(limit).unwrap_or(i64::MAX),
+    ));
+    let sql = format!(
+        "SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, \
+         used_mb, logical_cpus, rtt_ms, order_ms FROM core_warnings \
+         WHERE ({}) ORDER BY start_ms DESC LIMIT ?",
+        clauses.join(" OR ")
+    );
+    let mut stmt = store.conn.prepare(&sql).unwrap();
+    let rows = stmt
+        .query_map(
+            rusqlite::params_from_iter(values.iter()),
+            super::row_to_episode,
+        )
+        .unwrap();
+    rows.collect::<rusqlite::Result<Vec<_>>>().unwrap()
+}
+
+/// Per-identity reads must return the frozen OR query's exact rows and order, including start-time
+/// ties and rows excluded by scope. Mutation: merge with a different tie rule or limit before merging.
+#[test]
+fn scoped_recent_query_matches_frozen_or_query() {
+    let store = store();
+    let reference = old_schema_store();
+    for i in 0..240_i64 {
+        let core_id = match i % 6 {
+            0 => None,
+            5 => Some(99),
+            _ => Some((i % 4 + 1) as u64),
+        };
+        let ip = if core_id == Some(99) {
+            [10, 0, 0, 9]
+        } else {
+            [10, 0, 0, (i % 4 + 1) as u8]
+        };
+        let start_ms = 10_000 + i % 29;
+        let row = episode(
+            if core_id.is_some() {
+                WarnAxis::MemGrowth
+            } else {
+                WarnAxis::SysCpu
+            },
+            ip,
+            core_id,
+            start_ms,
+            start_ms + 1,
+            i as u16,
+        );
+        store.insert_episode(&row).unwrap();
+        reference.insert_episode(&row).unwrap();
+    }
+    let core_ids = HashSet::from([1, 2, 3, 4]);
+    let server_ips =
+        HashSet::from_iter((1..=4).map(|last| IpAddr::V4(Ipv4Addr::new(10, 0, 0, last))));
+    for limit in [1, 7, 64, 500] {
+        let actual = store
+            .recent_episodes_for_scope(&core_ids, &server_ips, limit)
+            .unwrap();
+        let expected =
+            reference_recent_episodes_for_scope(&reference, &core_ids, &server_ips, limit);
+        assert_eq!(
+            actual.iter().map(|row| row.id).collect::<Vec<_>>(),
+            expected.iter().map(|row| row.id).collect::<Vec<_>>(),
+            "limit {limit}"
+        );
+    }
+}
+
+/// A descending index walk must not discard an older boundary-tied row before the legacy merge.
+#[test]
+fn scoped_recent_query_preserves_old_boundary_tie_selection() {
+    let store = store();
+    let reference = old_schema_store();
+    for (start_ms, peak) in [(1_000, 1), (1_000, 2)]
+        .into_iter()
+        .chain((0..499).map(|i| (2_000 + i, i as u16 + 3)))
+    {
+        let row = episode(
+            WarnAxis::MemGrowth,
+            [10, 0, 0, 1],
+            Some(1),
+            start_ms,
+            start_ms + 1,
+            peak,
+        );
+        store.insert_episode(&row).unwrap();
+        reference.insert_episode(&row).unwrap();
+    }
+    let core_ids = HashSet::from([1]);
+    let server_ips = HashSet::new();
+    let actual = store
+        .recent_episodes_for_scope(&core_ids, &server_ips, 500)
+        .unwrap();
+    let expected = reference_recent_episodes_for_scope(&reference, &core_ids, &server_ips, 500);
+    assert_eq!(
+        actual.iter().map(|row| row.id).collect::<Vec<_>>(),
+        expected.iter().map(|row| row.id).collect::<Vec<_>>()
+    );
+    assert_eq!(actual.last().map(|row| row.id), Some(1));
+}
+
+/// All per-identity statements must walk their indexes directly instead of sorting matching history.
+#[test]
+fn scoped_recent_queries_have_index_ordered_plans() {
+    let store = store();
+    for (sql, index) in [
+        (RECENT_CORE_EPISODES_SQL, "ix_warn_core_time"),
+        (RECENT_CORE_TIES_SQL, "ix_warn_core_time"),
+        (RECENT_SERVER_EPISODES_SQL, "ix_warn_server_null_time"),
+        (RECENT_SERVER_TIES_SQL, "ix_warn_server_null_time"),
+    ] {
+        let plan = store
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map(rusqlite::params![1, 500], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join(" | ");
+        assert!(plan.contains(index), "missing {index}: {plan}");
+        assert!(
+            !plan.contains("USE TEMP B-TREE FOR ORDER BY"),
+            "temporary sort: {plan}"
+        );
+    }
+}
+
+/// Episode inserts and deletions must invalidate a persisted-read cache; series writes must not.
+#[test]
+fn episode_mutations_advance_the_store_revision() {
+    let store = store();
+    let initial = store.revision();
+    store
+        .insert_episode(&episode(
+            WarnAxis::MemGrowth,
+            [10, 0, 0, 1],
+            Some(7),
+            1_000,
+            2_000,
+            5,
+        ))
+        .unwrap();
+    assert_eq!(store.revision(), initial + 1);
+    store.insert_series(1, 0, "server", 0, &[(1, 2)]).unwrap();
+    assert_eq!(store.revision(), initial + 1);
+    assert_eq!(store.forget_core(7).unwrap(), 1);
+    assert_eq!(store.revision(), initial + 2);
+}
+
+/// The background entry point must read the writer's rows through its own read-only connection.
+#[test]
+fn read_only_scoped_query_matches_writer_side_rows() {
+    static NEXT_PATH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = NEXT_PATH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "moon-warn-read-{}-{unique}.sqlite",
+        std::process::id()
+    ));
+    let store = WarnStore::open(&path).unwrap();
+    store
+        .insert_episode(&episode(
+            WarnAxis::SysCpu,
+            [10, 0, 0, 1],
+            None,
+            1_000,
+            2_000,
+            88,
+        ))
+        .unwrap();
+    let core_ids = HashSet::new();
+    let server_ips = HashSet::from([IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))]);
+    let expected = store
+        .recent_episodes_for_scope(&core_ids, &server_ips, 10)
+        .unwrap();
+    let actual = read_recent_episodes_for_scope(&path, &core_ids, &server_ips, 10).unwrap();
+    assert_eq!(
+        actual.iter().map(|row| row.id).collect::<Vec<_>>(),
+        expected.iter().map(|row| row.id).collect::<Vec<_>>()
+    );
+    drop(store);
+    std::fs::remove_file(path).unwrap();
 }
 
 /// A persisted ±1 min history slice must round-trip by episode id and subject; an absent subject or
@@ -406,4 +642,44 @@ fn forgetting_a_core_keeps_other_cores_and_server_episodes() {
     let mut want = vec![(other, 8), (server, 0), (server, 8)];
     want.sort();
     assert_eq!(slices, want);
+}
+
+/// Measure one scoped Warnings-list read over 100000 retained episodes on ten cores.
+#[test]
+#[ignore]
+fn bench_scoped_recent_episodes_100000() {
+    let store = store();
+    let tx = store.conn.unchecked_transaction().unwrap();
+    {
+        let mut insert = tx
+            .prepare(
+                "INSERT INTO core_warnings \
+                 (axis, server_ip, core_id, start_ms, end_ms, peak) \
+                 VALUES ('sys_cpu', ?1, ?2, ?3, ?3, 1)",
+            )
+            .unwrap();
+        for i in 0..100_000_i64 {
+            let core = i % 10 + 1;
+            let core_id = (i % 10 != 0).then_some(core);
+            insert
+                .execute(rusqlite::params![format!("10.0.0.{core}"), core_id, i])
+                .unwrap();
+        }
+    }
+    tx.commit().unwrap();
+    let core_ids = HashSet::from_iter(1..=10);
+    let server_ips =
+        HashSet::from_iter((1..=10).map(|last| IpAddr::V4(Ipv4Addr::new(10, 0, 0, last))));
+    let iterations = 20;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        let rows = store
+            .recent_episodes_for_scope(&core_ids, &server_ips, 500)
+            .unwrap();
+        std::hint::black_box(rows);
+    }
+    println!(
+        "bench_scoped_recent_episodes_100000 us/read={}",
+        start.elapsed().as_micros() / iterations
+    );
 }
