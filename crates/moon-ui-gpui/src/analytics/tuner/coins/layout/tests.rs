@@ -31,7 +31,7 @@ use crate::load_state::LoadState;
 const COLUMN_W: f32 = 470.0;
 
 /// The faces the probe walks. Face 0 is the mode without a strategy: empty-state fields, a
-/// toolbar without Make a copy / Save, the pick settings disabled. The others carry a
+/// toolbar without Make a copy / Save, live batch settings and a disabled Pick. The others carry a
 /// strategy and cover running, useful/noise/empty results, a read failure, adopted/manual
 /// pending edits, report/list staleness, and exclusions.
 const FACES: usize = 14;
@@ -79,8 +79,6 @@ fn every_auto_face_has_one_primary_and_fits_narrow_and_default_widths(
     const BUTTONS: &[(&str, &str)] = &[
         ("an-pick-run", "analytics.coins.pick_btn"),
         ("an-pick-stop", "analytics.coins.stop_btn"),
-        ("an-pick-settings", "analytics.coins.settings"),
-        ("an-pick-change", "analytics.coins.change_settings"),
         ("an-pick-rerun", "analytics.coins.rerun"),
         ("an-pick-add-save", "analytics.coins.add_save"),
         ("an-pick-add-only", "analytics.coins.add_only"),
@@ -101,7 +99,8 @@ fn every_auto_face_has_one_primary_and_fits_narrow_and_default_widths(
                 cx,
             )
         });
-        for language in ["ru", "en"] {
+        for language in Language::ALL {
+            let language = language.code();
             let _locale = crate::test_locale::force(language);
             // No side splitter/minimum exists: the stacked page receives host minus padding.
             // Cover the native minimum window (860 px), the reported 300 px side, and
@@ -129,7 +128,7 @@ fn every_auto_face_has_one_primary_and_fits_narrow_and_default_widths(
                     for id in [
                         "an-pick-hint",
                         "an-pick-settings-body",
-                        "an-pick-summary-row",
+                        "an-pick-scope",
                         "an-pick-running",
                         "an-pick-progress",
                         "an-pick-stop",
@@ -155,7 +154,6 @@ fn every_auto_face_has_one_primary_and_fits_narrow_and_default_widths(
                         );
                     }
                     for id in [
-                        "an-pick-summary",
                         "an-pick-result",
                         "an-pick-settings-fields",
                         "an-pick-min",
@@ -305,7 +303,7 @@ fn every_auto_face_has_one_primary_and_fits_narrow_and_default_widths(
                     let expected = match face {
                         0 | 4 => "an-pick-run",
                         1 => "an-pick-stop",
-                        5 | 8 => "an-pick-change",
+                        5 | 8 => "an-pick-rerun",
                         6 | 9 => "an-coin-save",
                         7 | 11 => "an-pick-rerun",
                         _ => "an-pick-add-save",
@@ -313,11 +311,47 @@ fn every_auto_face_has_one_primary_and_fits_narrow_and_default_widths(
                     assert_eq!(primaries[0], expected);
                     assert!(visual.debug_bounds("an-pick-reset").is_none());
                     assert!(visual.debug_bounds("an-pick-anyway").is_none());
-                    if matches!(face, 2 | 3 | 5 | 6 | 7 | 8 | 10 | 11) {
-                        assert!(
-                            visual.debug_bounds("an-pick-min").is_none(),
-                            "finished settings must collapse"
-                        );
+                    assert!(visual.debug_bounds("an-pick-summary-row").is_none());
+                    assert!(visual.debug_bounds("an-pick-settings").is_none());
+                    let mut fields = Vec::new();
+                    for id in [
+                        "an-pick-min",
+                        "an-pick-hold",
+                        "an-pick-bl-ctl",
+                        "an-pick-wl-ctl",
+                    ] {
+                        fields.push(visual.debug_bounds(id).expect("settings stay visible"));
+                    }
+                    for (i, a) in fields.iter().enumerate() {
+                        for b in &fields[i + 1..] {
+                            assert!(
+                                a.right() <= b.left() + px(0.5)
+                                    || b.right() <= a.left() + px(0.5)
+                                    || a.bottom() <= b.top() + px(0.5)
+                                    || b.bottom() <= a.top() + px(0.5),
+                                "settings overlap {language} {width} face {face}"
+                            );
+                        }
+                    }
+                    let settings = visual.debug_bounds("an-pick-settings-body").unwrap();
+                    if let Some(verdict) = visual.debug_bounds("an-pick-verdict") {
+                        assert!(settings.bottom() <= verdict.top());
+                        assert!(visual.debug_bounds("an-pick-run").is_none());
+                        assert!(visual.debug_bounds("an-pick-rerun").is_some());
+                    }
+                    if face == 0 {
+                        let scope = visual
+                            .debug_bounds("an-pick-scope")
+                            .expect("batch scope note");
+                        let run = visual.debug_bounds("an-pick-run").expect("disabled pick");
+                        assert!(settings.bottom() <= scope.top() && scope.bottom() <= run.top());
+                        if width == 300.0 {
+                            let line = visual.debug_bounds("probe-caption-line").unwrap();
+                            assert!(
+                                scope.size.height > line.size.height * 2.0,
+                                "scope must wrap"
+                            );
+                        }
                     }
                 }
             }
@@ -431,8 +465,8 @@ fn coins_noise_pick_stays_above_integrated_lists(cx: &mut gpui::TestAppContext) 
             );
             assert!(card.right() <= side.right() + px(0.5));
             for id in [
-                "an-pick-summary",
-                "an-pick-settings",
+                "an-pick-settings-body",
+                "an-pick-min",
                 "an-pick-verdict",
                 "an-pick-suggestions",
                 "an-pick-actions",
@@ -607,7 +641,7 @@ fn auto_model(face: usize) -> AutoCardModel {
     if face == 9 || face == 11 {
         s.add_tokens(true, "XALPHA");
     }
-    let mut m = AutoCardModel::new(&s, face != 0, false, true);
+    let mut m = AutoCardModel::new(&s, face != 0, false, true, 551);
     if face == 7 {
         m.stale = Some(PickStaleCause::Report);
     }
@@ -763,13 +797,21 @@ fn add_label_key(face: usize) -> &'static str {
 
 /// What the probe asserts per language: every one-line text whose box must not clip it.
 fn needs(cx: &gpui::App, face: usize) -> Vec<Need> {
-    let mut out = vec![
-        caption(cx, "an-coin-hide-lbl", &t!("analytics.coins.hide_lbl")),
-        caption(cx, "an-coin-bl-copy", &t!("analytics.coins.copy")),
-        caption(cx, "an-coin-bl-clear", &t!("analytics.coins.clear")),
-        caption(cx, "an-coin-wl-copy", &t!("analytics.coins.copy")),
-        caption(cx, "an-coin-wl-clear", &t!("analytics.coins.clear")),
-    ];
+    let mut out = vec![caption(
+        cx,
+        "an-coin-hide-lbl",
+        &t!("analytics.coins.hide_lbl"),
+    )];
+    if face != 0 {
+        for (id, key) in [
+            ("an-coin-bl-copy", "analytics.coins.copy"),
+            ("an-coin-bl-clear", "analytics.coins.clear"),
+            ("an-coin-wl-copy", "analytics.coins.copy"),
+            ("an-coin-wl-clear", "analytics.coins.clear"),
+        ] {
+            out.push(caption(cx, id, &t!(key)));
+        }
+    }
     for side in [black_field(face), white_field(face)] {
         out.push(Need {
             sel: format!("an-coin-{}-title", if side.black { "bl" } else { "wl" }),
@@ -792,7 +834,7 @@ fn needs(cx: &gpui::App, face: usize) -> Vec<Need> {
     let auto: &[(&str, &str)] = match face {
         0 | 4 => &[("an-pick-run", "analytics.coins.pick_btn")],
         1 => &[("an-pick-stop", "analytics.coins.stop_btn")],
-        5 | 8 => &[("an-pick-change", "analytics.coins.change_settings")],
+        5 | 8 => &[("an-pick-rerun", "analytics.coins.rerun")],
         6 | 9 => &[
             ("an-coin-save", "analytics.coins.save_strategy"),
             ("an-coin-revert", "analytics.coins.revert_edits"),

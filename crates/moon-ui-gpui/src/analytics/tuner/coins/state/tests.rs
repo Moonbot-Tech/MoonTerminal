@@ -137,7 +137,7 @@ impl gpui::Render for PickActionProbe {
             on_white: Rc::new(|_, _, _| {}),
         };
         super::super::auto::auto_card_el(
-            &super::super::auto::AutoCardModel::new(&self.state.borrow(), true, false, true),
+            &super::super::auto::AutoCardModel::new(&self.state.borrow(), true, false, true, 551),
             None,
             &acts,
             moon_ui::MoonPalette::active(cx),

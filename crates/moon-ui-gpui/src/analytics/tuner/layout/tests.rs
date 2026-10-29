@@ -66,7 +66,7 @@ impl Probe {
                 cx,
             ),
             TunerKind::Coins => auto::auto_card_el(
-                &auto::AutoCardModel::new(&Default::default(), true, false, true),
+                &auto::AutoCardModel::new(&Default::default(), true, false, true, 551),
                 Some((&self.input, &self.input)),
                 &auto::AutoCardActs {
                     on_pick: Rc::new(|_, _| {}),

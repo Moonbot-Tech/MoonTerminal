@@ -28,14 +28,17 @@ fn an_empty_whitelist_explains_itself_and_cannot_be_cleared() {
     assert_eq!(m.empty.as_deref(), Some("The list is empty."));
 }
 
-/// Without a strategy both fields say so, and the count is not claimed.
+/// The no-selection placeholder must explain how to reveal the lists without claiming a count.
 #[test]
 fn no_strategy_fields_say_so() {
     let _locale = crate::test_locale::force("en");
     for black in [true, false] {
         let m = ListFieldModel::new(black, None);
         assert_eq!(m.count, None);
-        assert_eq!(m.empty.as_deref(), Some("No strategy selected"));
+        assert_eq!(
+            m.empty.as_deref(),
+            Some("Lists will appear when you select a strategy.")
+        );
         assert!(!m.can_clear && !m.can_copy);
     }
 }

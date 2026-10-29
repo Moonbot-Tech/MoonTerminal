@@ -571,14 +571,14 @@ impl AnalyticsView {
     }
 
     /// The card: the shared Save/Copy toolbar, the blacklist over the whitelist, and the
-    /// "Not saved" band while an edit is pending.
+    /// "Not saved" band while an edit is pending. A retained read-hidden selection shows placeholders.
     pub(in crate::analytics::tuner) fn coins_lists_card(
         &mut self,
         p: MoonPalette,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let selected = self.sel_strategy.is_some();
+        let selected = self.visible_target_count(self.read_core_ids()) > 0;
         let inputs = selected.then(|| {
             (
                 self.coin_list_input(true, window, cx),

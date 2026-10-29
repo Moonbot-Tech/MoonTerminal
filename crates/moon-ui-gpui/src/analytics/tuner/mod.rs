@@ -710,7 +710,7 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Render every tuner axis through the same measured two-column page.
+    /// Render every axis through the shared page; coin batch settings need no selected row.
     pub(super) fn strategies_tab(
         &mut self,
         p: MoonPalette,
@@ -754,10 +754,13 @@ impl AnalyticsView {
                 StratMode::Coins => matches!(self.coins.stats, LoadState::Loading { stale: None }),
                 StratMode::Ticks => matches!(self.ticks.data, LoadState::Loading { stale: None }),
             };
-            if loading || matches!(self.strategy_data, super::ProfitLoadState::Loading) {
+            let coin_settings = mode == StratMode::Coins && !selected;
+            if !coin_settings
+                && (loading || matches!(self.strategy_data, super::ProfitLoadState::Loading))
+            {
                 return self.tuner_empty_side(true, p, cx);
             }
-            if !selected {
+            if !selected && mode != StratMode::Coins {
                 return self.tuner_empty_side(false, p, cx);
             }
             let (kpi, params) = match mode {
