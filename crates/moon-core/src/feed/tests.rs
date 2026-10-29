@@ -5,6 +5,8 @@ use anyhow::anyhow;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
+mod order_queue;
+
 /// Observations made by each injected connection attempt, independently of the retry timer.
 pub(crate) type Attempt = (Instant, Vec<super::QueuedCmd>, usize);
 
