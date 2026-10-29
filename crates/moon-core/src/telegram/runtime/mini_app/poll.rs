@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 
-use crate::telegram::runtime::Work;
+use crate::telegram::runtime::{Work, WorkSender};
 use crate::telegram::web::dto::{
     CoinTfDto, CoinTicksDto, CoresDto, LiveTicksDto, NotifyDto, OrdersDto, ReportDto,
     ReportPeriodDto, StrategiesDto, TradeTicksDto, TradesDto,
@@ -458,12 +458,12 @@ pub(super) struct MiniAppPolls {
 }
 
 impl MiniAppPolls {
-    /// Relay one request, attaching an identical read instead of consuming another queue slot.
-    pub(super) fn relay(&mut self, tx: &SyncSender<Work>, request: MiniAppApiRequest) {
+    /// Relay and wake for admitted work; attach identical reads without another queue slot or wake.
+    pub(super) fn relay(&mut self, tx: &WorkSender, request: MiniAppApiRequest) {
         let (key, request, poll) = match Poll::split(request) {
             PollSplit::Poll(split) => split,
             PollSplit::Other(request) => {
-                if tx.try_send(Work::MiniApp(request)).is_ok() {
+                if tx.try_send(Work::MiniApp(request)) {
                     self.write_generation = self.write_generation.wrapping_add(1);
                 }
                 return;
@@ -474,7 +474,7 @@ impl MiniAppPolls {
             pending.join(poll);
             return;
         }
-        if tx.try_send(Work::MiniApp(request)).is_ok() {
+        if tx.try_send(Work::MiniApp(request)) {
             self.pending.insert(key, poll);
         }
     }

@@ -1,14 +1,28 @@
 //! Typed relay regressions for queue coalescing and response fanout.
 
 use std::sync::mpsc::{Receiver, sync_channel};
+use std::sync::{Arc, Mutex};
 
 use crate::telegram::web::MiniAppApiError;
 
 use super::{MiniAppPolls, PollKey};
 use crate::telegram::init_data::{SignedInitData, SignedUser};
-use crate::telegram::runtime::Work;
+use crate::telegram::runtime::{Work, WorkSender};
 use crate::telegram::web::MiniAppApiRequest;
 use crate::telegram::web::dto::OrdersDto;
+
+/// Build a bounded owner queue and record every causal wake without timing or live transport.
+fn work_channel(capacity: usize) -> (WorkSender, Receiver<Work>, Receiver<()>) {
+    let (tx, receiver) = sync_channel(capacity);
+    let (wake, wakes) = std::sync::mpsc::channel();
+    let sender = WorkSender {
+        tx,
+        waker: Arc::new(Mutex::new(Some(Arc::new(move || {
+            wake.send(()).expect("wake receiver");
+        })))),
+    };
+    (sender, receiver, wakes)
+}
 
 /// Synthetic verified identity; no transport or real account is involved.
 fn identity() -> SignedInitData {
@@ -57,10 +71,10 @@ fn answer_orders(work: Work) {
         .expect("shared receiver");
 }
 
-/// Dropping duplicate Work items would return 503 to a burst even though one read can answer all.
+/// Dropping duplicate Work items would return 503 to a burst; bypassing WorkSender loses its wake.
 #[test]
 fn identical_polls_share_one_work_item_and_fan_out_the_result() {
-    let (tx, rx) = sync_channel(64);
+    let (tx, rx, wakes) = work_channel(64);
     let mut polls = MiniAppPolls::default();
     let mut waiters = Vec::new();
     for _ in 0..128 {
@@ -71,6 +85,7 @@ fn identical_polls_share_one_work_item_and_fan_out_the_result() {
     assert_eq!(polls.pending.len(), 1);
     let queued: Vec<_> = rx.try_iter().collect();
     assert_eq!(queued.len(), 1);
+    assert_eq!(wakes.try_iter().count(), 1);
     answer_orders(queued.into_iter().next().expect("one read"));
     polls.drain();
     assert!(polls.pending.is_empty());
@@ -85,16 +100,17 @@ fn identical_polls_share_one_work_item_and_fan_out_the_result() {
     }
 }
 
-/// Coalescing must never merge another chat, and a full queue must not retain a failed new read.
+/// Another chat needs its own read and wake; rejected or coalesced reads must not emit a wake.
 #[test]
 fn distinct_charts_and_failed_admission_keep_their_own_lifecycle() {
-    let (tx, rx) = sync_channel::<Work>(2);
+    let (tx, rx, wakes) = work_channel(2);
     let mut polls = MiniAppPolls::default();
     let (first, _first_rx) = orders(7);
     let (second, _second_rx) = orders(8);
     polls.relay(&tx, first);
     polls.relay(&tx, second);
     assert_eq!(polls.pending.len(), 2);
+    assert_eq!(wakes.try_iter().count(), 2);
     let (third, third_rx) = orders(9);
     polls.relay(&tx, third);
     assert!(third_rx.try_recv().is_err());
@@ -103,6 +119,7 @@ fn distinct_charts_and_failed_admission_keep_their_own_lifecycle() {
     polls.relay(&tx, duplicate);
     assert_eq!(rx.try_iter().count(), 2);
     assert_eq!(polls.pending.len(), 2);
+    assert_eq!(wakes.try_iter().count(), 0);
 }
 
 /// A new polling interval is a different chart read even on the same core and market.
@@ -144,10 +161,10 @@ fn chart_arguments_are_part_of_the_poll_key() {
     ));
 }
 
-/// Money commands must remain one Work item per request even when their arguments match.
+/// Money commands must retain one Work item and owner wake each even when their arguments match.
 #[test]
 fn commands_are_never_coalesced() {
-    let (tx, rx) = sync_channel::<Work>(4);
+    let (tx, rx, wakes) = work_channel(4);
     let mut polls = MiniAppPolls::default();
     for _ in 0..2 {
         let (reply, _rx) = sync_channel(1);
@@ -164,12 +181,13 @@ fn commands_are_never_coalesced() {
     }
     assert!(polls.pending.is_empty());
     assert_eq!(rx.try_iter().count(), 2);
+    assert_eq!(wakes.try_iter().count(), 2);
 }
 
-/// Coalescing across an intervening write could answer the second read with pre-write state.
+/// An admitted write must split pre-write reads from later reads and wake for all three items.
 #[test]
 fn writes_split_identical_poll_generations() {
-    let (tx, rx) = sync_channel::<Work>(4);
+    let (tx, rx, wakes) = work_channel(4);
     let mut polls = MiniAppPolls::default();
     let (first, first_rx) = orders(7);
     polls.relay(&tx, first);
@@ -189,6 +207,7 @@ fn writes_split_identical_poll_generations() {
     assert_eq!(polls.pending.len(), 2);
     let queued: Vec<_> = rx.try_iter().collect();
     assert_eq!(queued.len(), 3);
+    assert_eq!(wakes.try_iter().count(), 3);
     let mut queued = queued.into_iter();
     answer_orders(queued.next().expect("first read"));
     answer_orders(queued.last().expect("second read"));
@@ -197,13 +216,14 @@ fn writes_split_identical_poll_generations() {
     assert!(second_rx.try_recv().is_ok());
 }
 
-/// A command dropped by a full queue must not make a later identical poll miss its existing read.
+/// A rejected write must neither wake the owner nor split a later poll from its existing read.
 #[test]
 fn failed_write_does_not_split_an_inflight_poll() {
-    let (tx, rx) = sync_channel::<Work>(1);
+    let (tx, rx, wakes) = work_channel(1);
     let mut polls = MiniAppPolls::default();
     let (first, first_rx) = orders(7);
     polls.relay(&tx, first);
+    assert_eq!(wakes.try_iter().count(), 1);
     let (reply, _command_rx) = sync_channel(1);
     polls.relay(
         &tx,
@@ -220,6 +240,7 @@ fn failed_write_does_not_split_an_inflight_poll() {
     assert_eq!(polls.pending.len(), 1);
     let queued: Vec<_> = rx.try_iter().collect();
     assert_eq!(queued.len(), 1);
+    assert_eq!(wakes.try_iter().count(), 0);
     answer_orders(queued.into_iter().next().expect("existing read"));
     polls.drain();
     assert!(first_rx.try_recv().is_ok());
@@ -229,7 +250,7 @@ fn failed_write_does_not_split_an_inflight_poll() {
 /// Pending replies must not sit behind the ordinary 50 ms owner-loop wait.
 #[test]
 fn pending_replies_cap_the_idle_wait() {
-    let (tx, _rx) = sync_channel::<Work>(1);
+    let (tx, _rx, _wakes) = work_channel(1);
     let mut polls = MiniAppPolls::default();
     let base = std::time::Duration::from_millis(50);
     assert_eq!(polls.idle_interval(base), base);

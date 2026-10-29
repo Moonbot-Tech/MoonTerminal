@@ -77,6 +77,15 @@ fn mini_app_identical_poll_burst_scale() {
     use std::time::Instant;
 
     let (tx, rx) = mpsc::sync_channel::<super::super::Work>(64);
+    let (wake, wakes) = mpsc::channel();
+    let tx = super::super::WorkSender {
+        tx,
+        waker: std::sync::Arc::new(std::sync::Mutex::new(Some(std::sync::Arc::new(
+            move || {
+                wake.send(()).expect("wake receiver");
+            },
+        )))),
+    };
     let mut polls = super::poll::MiniAppPolls::default();
     let mut replies = Vec::new();
     let started = Instant::now();
@@ -93,6 +102,8 @@ fn mini_app_identical_poll_burst_scale() {
         );
     }
     let queued = rx.try_iter().count();
+    assert_eq!(queued, 1);
+    assert_eq!(wakes.try_iter().count(), 1);
     println!(
         "[scale] identical poll burst: {queued}/128 queued in {:.3} ms",
         started.elapsed().as_secs_f64() * 1000.0

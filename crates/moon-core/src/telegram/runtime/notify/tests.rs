@@ -320,6 +320,7 @@ fn service_stop_checkpoints_receipts_with_pending_rows() {
         labels: std::sync::Arc::default(),
         notifications: Some(shared),
         notify_wake: None,
+        work_waker: std::sync::Arc::default(),
     };
     service.stop();
     assert!(
