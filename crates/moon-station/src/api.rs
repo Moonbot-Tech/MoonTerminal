@@ -21,7 +21,7 @@ use serde::de::DeserializeOwned;
 /// How long a connection may take to send or receive one frame.
 #[cfg_attr(not(unix), allow(dead_code))]
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long a request waits for the main loop, which drains every 100 ms.
+/// How long a request waits for the main loop, which wakes when the request is queued.
 #[cfg_attr(not(unix), allow(dead_code))]
 const ANSWER_WITHIN: Duration = Duration::from_secs(10);
 /// How much longer than a call's deadline its connection waits: an answer made just before the
@@ -63,9 +63,10 @@ impl Api {
             UnixListener::bind(&path).with_context(|| format!("bind {}", path.display()))?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))?;
         let (tx, calls) = mpsc::channel();
+        let owner = std::thread::current();
         std::thread::Builder::new()
             .name("api".into())
-            .spawn(move || serve(listener, tx, direct))?;
+            .spawn(move || serve(listener, tx, direct, owner))?;
         Ok(Self { calls, path })
     }
 
@@ -97,7 +98,13 @@ impl Drop for Api {
 }
 
 #[cfg(unix)]
-fn serve(listener: std::os::unix::net::UnixListener, calls: Sender<Call>, direct: Direct) {
+/// Serve requests on the socket thread and wake the owner only for calls requiring its state.
+fn serve(
+    listener: std::os::unix::net::UnixListener,
+    calls: Sender<Call>,
+    direct: Direct,
+    owner: std::thread::Thread,
+) {
     for stream in listener.incoming() {
         let mut stream = match stream {
             Ok(stream) => stream,
@@ -113,7 +120,7 @@ fn serve(listener: std::os::unix::net::UnixListener, calls: Sender<Call>, direct
             .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)));
         if let Err(e) = bounded
             .map_err(anyhow::Error::from)
-            .and_then(|()| exchange(&mut stream, &calls, ANSWER_WITHIN, direct))
+            .and_then(|()| exchange(&mut stream, &calls, ANSWER_WITHIN, direct, &owner))
         {
             log::warn!("api: {e:#}");
         }
@@ -127,6 +134,7 @@ fn exchange(
     calls: &Sender<Call>,
     within: Duration,
     direct: Direct,
+    owner: &std::thread::Thread,
 ) -> anyhow::Result<()> {
     write_frame(
         stream,
@@ -154,11 +162,14 @@ fn exchange(
     };
     let reply = match calls.send(call) {
         Err(_) => Reply::Err("the station is stopping".into()),
-        Ok(()) => reply_rx
-            .recv_timeout(within + DELIVERY_GRACE)
-            .unwrap_or_else(|_| {
-                Reply::Err("the station did not answer in time; nothing was changed".into())
-            }),
+        Ok(()) => {
+            owner.unpark();
+            reply_rx
+                .recv_timeout(within + DELIVERY_GRACE)
+                .unwrap_or_else(|_| {
+                    Reply::Err("the station did not answer in time; nothing was changed".into())
+                })
+        }
     };
     write_frame(stream, &reply)
 }

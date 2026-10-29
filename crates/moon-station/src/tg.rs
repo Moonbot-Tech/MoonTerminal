@@ -23,9 +23,9 @@
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::Instant;
 
 use anyhow::Context;
@@ -43,6 +43,8 @@ use moon_tg::{Finish, HostKind, Job, ReportRevision, TelegramState, TgHost};
 
 use crate::cores::Telegram;
 use crate::release::{self, ReleaseWatch};
+
+mod read_worker;
 
 /// The station's own Telegram state file, in the data root.
 const PAIRING_FILE: &str = "telegram.json";
@@ -75,7 +77,7 @@ pub struct StationTg {
     /// Cores the Mini App asked to reconnect, for the loop to rebuild.
     reconnect: Vec<CoreId>,
     /// Finished reads, applied on the loop's thread.
-    finished_tx: Sender<Finish>,
+    reads: read_worker::ReadWorker,
     finished_rx: Receiver<Finish>,
     /// The pairing code last written to the log, so each is logged once.
     logged_code: Option<String>,
@@ -138,7 +140,7 @@ impl StationTg {
             bot.authorized_chat_ids.len(),
             if bot.mini_app_enabled { "on" } else { "off" },
         );
-        let (finished_tx, finished_rx) = mpsc::channel();
+        let (reads, finished_rx) = read_worker::ReadWorker::start();
         let mut state = TelegramState::new_with_notifications(
             bot,
             HostKind::Station,
@@ -160,7 +162,7 @@ impl StationTg {
             release,
             panic_local: HashMap::new(),
             reconnect: Vec::new(),
-            finished_tx,
+            reads,
             finished_rx,
             logged_code: None,
             logged_status: None,
@@ -537,32 +539,9 @@ impl TgHost for StationHost<'_> {
         }
     }
 
-    /// Run each read independently and wake the owner as soon as its completion is queued.
+    /// Schedule reads on the persistent pool; completed reads wake their owner immediately.
     fn spawn(&mut self, job: Job) {
-        // Handed over through a slot, so a thread that cannot be started leaves the job here to
-        // run in place: a job dropped unrun would leave its read `Busy` for good.
-        let slot = Arc::new(Mutex::new(Some(job)));
-        let theirs = Arc::clone(&slot);
-        let tx = self.tg.finished_tx.clone();
-        let owner = std::thread::current();
-        let started = std::thread::Builder::new()
-            .name("tg-read".into())
-            .spawn(move || {
-                let job = theirs.lock().ok().and_then(|mut job| job.take());
-                if let Some(job) = job {
-                    if tx.send(job()).is_ok() {
-                        owner.unpark();
-                    }
-                }
-            });
-        if let Err(error) = started {
-            log::warn!("telegram: no thread for a read ({error}); running it in place");
-            let job = slot.lock().ok().and_then(|mut job| job.take());
-            if let Some(job) = job {
-                let _ = self.tg.finished_tx.send(job());
-                std::thread::current().unpark();
-            }
-        }
+        self.tg.reads.spawn(job);
     }
 
     fn repaint(&mut self) {

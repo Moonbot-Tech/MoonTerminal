@@ -62,7 +62,14 @@ fn an_exchange_says_hello_and_relays_the_loops_answer() {
         call.reply.send(Reply::Err("no bot".into())).unwrap();
     });
     let mut conn = client_sends(&Request::PairIssue);
-    exchange(&mut conn, &tx, Duration::from_secs(5), |_| None).unwrap();
+    exchange(
+        &mut conn,
+        &tx,
+        Duration::from_secs(5),
+        |_| None,
+        &std::thread::current(),
+    )
+    .unwrap();
     answering.join().unwrap();
     let mut out = Cursor::new(conn.output);
     let hello: Hello = read_frame(&mut out).unwrap();
@@ -71,12 +78,49 @@ fn an_exchange_says_hello_and_relays_the_loops_answer() {
     assert_eq!(reply, Reply::Err("no bot".into()));
 }
 
+/// A queued API call must wake a parked owner before its slow housekeeping timer fires.
+#[test]
+fn an_api_request_wakes_a_parked_owner() {
+    let (tx, calls) = mpsc::channel::<Call>();
+    let (ready, waiting) = mpsc::channel();
+    let owner = std::thread::spawn(move || {
+        ready.send(()).unwrap();
+        std::thread::park_timeout(Duration::from_secs(5));
+        let call = calls.recv().unwrap();
+        call.reply.send(Reply::Err("owner woke".into())).unwrap();
+    });
+    waiting.recv().unwrap();
+    let mut conn = client_sends(&Request::Status);
+    exchange(
+        &mut conn,
+        &tx,
+        Duration::from_secs(1),
+        |_| None,
+        owner.thread(),
+    )
+    .unwrap();
+    let mut output = Cursor::new(conn.output);
+    let _: Hello = read_frame(&mut output).unwrap();
+    assert_eq!(
+        read_frame::<Reply>(&mut output).unwrap(),
+        Reply::Err("owner woke".into())
+    );
+    owner.join().unwrap();
+}
+
 /// A loop that does not answer in time still gets the client a reply — never a hang.
 #[test]
 fn a_loop_that_does_not_answer_times_out_with_a_reason() {
     let (tx, _rx) = mpsc::channel::<Call>();
     let mut conn = client_sends(&Request::Status);
-    exchange(&mut conn, &tx, Duration::from_millis(20), |_| None).unwrap();
+    exchange(
+        &mut conn,
+        &tx,
+        Duration::from_millis(20),
+        |_| None,
+        &std::thread::current(),
+    )
+    .unwrap();
     let mut out = Cursor::new(conn.output);
     let _: Hello = read_frame(&mut out).unwrap();
     let reply: Reply = read_frame(&mut out).unwrap();
@@ -111,7 +155,16 @@ fn an_unreadable_request_is_answered_with_a_reason() {
         input: Cursor::new(input),
         output: Vec::new(),
     };
-    assert!(exchange(&mut conn, &tx, Duration::from_secs(1), |_| None).is_err());
+    assert!(
+        exchange(
+            &mut conn,
+            &tx,
+            Duration::from_secs(1),
+            |_| None,
+            &std::thread::current()
+        )
+        .is_err()
+    );
     let mut out = Cursor::new(conn.output);
     let _: Hello = read_frame(&mut out).unwrap();
     let reply: Reply = read_frame(&mut out).unwrap();

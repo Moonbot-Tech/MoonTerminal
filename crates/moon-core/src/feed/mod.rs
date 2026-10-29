@@ -64,29 +64,33 @@ pub(crate) fn note_drained() {
     QUEUED.fetch_sub(1, Ordering::Relaxed);
 }
 
-/// Coalesced wake from feed threads to the UI.
+/// Coalesced wake from feed threads to their coordination owner.
 ///
-/// Clones share one latch. [`FeedWakeTx::notify`] sends a token only when the UI
-/// has cleared the previous wake, so a burst from every core wakes the UI once.
+/// Clones share one latch. [`FeedWakeTx::notify`] sends a token only when the owner
+/// has cleared the previous wake, so a burst from every core admits one wake.
 #[derive(Clone)]
 pub struct FeedWakeTx {
     tx: Sender<()>,
     pending: Arc<AtomicBool>,
+    owner: Option<std::thread::Thread>,
 }
 
 impl FeedWakeTx {
-    /// Wake the UI unless a wake is already waiting for [`FeedWakeRx::clear`].
+    /// Wake the owner unless a wake is already waiting for [`FeedWakeRx::clear`].
     ///
     /// Returns:
-    ///     Nothing. A disconnected UI drops the token.
+    ///     Nothing. A disconnected owner drops the token.
     pub fn notify(&self) {
         if !self.pending.swap(true, Ordering::AcqRel) {
-            let _ = self.tx.send(());
+            let sent = self.tx.send(());
+            if let (Ok(()), Some(owner)) = (sent, &self.owner) {
+                owner.unpark();
+            }
         }
     }
 }
 
-/// UI side of [`FeedWakeTx`].
+/// Owner side of [`FeedWakeTx`], used by both the UI and the headless station.
 ///
 /// [`FeedWakeRx::clear`] runs after duplicate tokens are discarded and before the
 /// session drain. Clearing later loses a message that arrives during the drain:
@@ -131,9 +135,18 @@ pub fn feed_wake_pair() -> (FeedWakeTx, FeedWakeRx) {
         FeedWakeTx {
             tx,
             pending: Arc::clone(&pending),
+            owner: None,
         },
         FeedWakeRx { rx, pending },
     )
+}
+
+/// Build the same coalesced protocol for a parked owner, without a relay thread.
+/// The owner clears the receiver before draining, exactly as the UI does.
+pub fn feed_wake_pair_for_thread(owner: std::thread::Thread) -> (FeedWakeTx, FeedWakeRx) {
+    let (mut sender, receiver) = feed_wake_pair();
+    sender.owner = Some(owner);
+    (sender, receiver)
 }
 
 /// Timestamp indicating that any Assets view rendered recently, in Unix milliseconds.

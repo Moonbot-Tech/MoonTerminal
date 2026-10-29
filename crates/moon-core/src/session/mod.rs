@@ -160,9 +160,8 @@ pub struct SessionManager {
     trade_sounds: Vec<(CoreId, ExchangeId, crate::feed::trade_sound::TradeSound)>,
     /// Last triggered catch-up enumeration per core; reconnects trigger a fresh pass.
     catchup_last: HashMap<CoreId, Instant>,
-    /// Unknown report coins counted once after a resolved venue and ready catalog.
-    catchup_unknown:
-        std::sync::Arc<std::sync::Mutex<HashSet<crate::market::tape_recorder::TradeId>>>,
+    /// Distinct unknown coins per core; an old listing keeps only its detached set on reconnect.
+    catchup_unknown: HashMap<CoreId, std::sync::Arc<std::sync::Mutex<HashSet<String>>>>,
     /// One background replica enumeration at a time for each core, including reconnects.
     catchup_running: HashMap<CoreId, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     sessions: Vec<CoreSession>,

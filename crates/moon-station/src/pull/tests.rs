@@ -343,3 +343,107 @@ fn synthetic_tape_paged_decode_measurement() {
     }
     panic!("synthetic file could not be removed: {}", path.display());
 }
+
+/// Time oversized prefix packing without disk I/O so compression cost is visible.
+#[test]
+#[ignore = "synthetic station prefix packing measurement"]
+fn station_prefix_measurement() {
+    let ticks: Vec<_> = (0..13).flat_map(synthetic_ticks).collect();
+    let whole_bytes = encode_prints(&ticks).len();
+    let room = whole_bytes * 3 / 4;
+    for _ in 0..5 {
+        let started = std::time::Instant::now();
+        let answer = fitting_prefix(&ticks, room, false, whole_bytes).unwrap();
+        println!(
+            "prefix 104000: {:.3} ms, bytes={}",
+            started.elapsed().as_secs_f64() * 1_000.0,
+            answer.1.len()
+        );
+    }
+}
+
+/// Frozen pre-optimization prefix search: the oracle for complete tape contents across pages.
+fn legacy_prefix(ticks: &[Tick], room: usize, forced: bool) -> Option<(i64, String)> {
+    let mut ends: Vec<usize> = (1..ticks.len())
+        .filter(|&i| ticks[i].time_ms as i64 != ticks[i - 1].time_ms as i64)
+        .collect();
+    ends.push(ticks.len());
+    let packed = |end: usize| encode_prints(&ticks[..end]);
+    let (mut lo, mut hi) = (0, ends.len());
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if packed(ends[mid]).len() <= room {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let end = match lo {
+        0 if forced && !ticks.is_empty() => ends[0],
+        0 => return None,
+        n => ends[n - 1],
+    };
+    Some((ticks[end - 1].time_ms as i64, packed(end)))
+}
+
+/// Estimation may change page cuts, but never bytes beyond budget, partial milliseconds or prints.
+#[test]
+fn estimated_pages_preserve_the_legacy_complete_tape() {
+    let mut ticks: Vec<_> = synthetic_ticks(0).into_iter().take(120).collect();
+    for (i, tick) in ticks.iter_mut().enumerate() {
+        tick.time_ms = (i / 3) as f64;
+        if i > 60 {
+            tick.price = 1.0;
+            tick.qty = 1.0;
+        }
+    }
+    for room in [0, 32, 128, 512] {
+        let mut outputs = Vec::new();
+        for legacy in [true, false] {
+            let mut left = ticks.as_slice();
+            let mut output = Vec::new();
+            while !left.is_empty() {
+                let whole = encode_prints(left);
+                let (cut, prints) = if whole.len() <= room {
+                    (left.last().unwrap().time_ms as i64, whole)
+                } else if legacy {
+                    legacy_prefix(left, room, true).unwrap()
+                } else {
+                    fitting_prefix(left, room, true, whole.len()).unwrap()
+                };
+                let end = left.partition_point(|tick| tick.time_ms as i64 <= cut);
+                assert!(end > 0);
+                if prints.len() > room {
+                    assert!(
+                        left[..end]
+                            .iter()
+                            .all(|tick| tick.time_ms == left[0].time_ms)
+                    );
+                }
+                output.extend(decode_prints(&prints).unwrap().into_iter().map(|tick| {
+                    (
+                        tick.time_ms as i64,
+                        tick.price.to_bits(),
+                        tick.qty.to_bits(),
+                        tick.side,
+                    )
+                }));
+                left = &left[end..];
+            }
+            outputs.push(output);
+        }
+        let expected: Vec<_> = ticks
+            .iter()
+            .map(|tick| {
+                (
+                    tick.time_ms as i64,
+                    tick.price.to_bits(),
+                    tick.qty.to_bits(),
+                    tick.side,
+                )
+            })
+            .collect();
+        assert_eq!(outputs[0], expected);
+        assert_eq!(outputs[1], expected);
+    }
+}

@@ -160,3 +160,78 @@ fn the_minute_just_ended_counts_before_the_next_tick() {
     assert_eq!(whole, vec![0]);
     assert_eq!(watch.whole_minutes(0).count(), 0);
 }
+/// Time a whole-tree scan on a private synthetic 20000-file station data root.
+#[test]
+#[ignore = "synthetic station disk scan measurement"]
+fn station_disk_measurement() {
+    let root = std::env::temp_dir().join(format!("station-disk-probe-{}", std::process::id()));
+    assert!(!root.exists());
+    for dir in 0..100 {
+        let path = root.join(format!("DIR_{dir}"));
+        std::fs::create_dir_all(&path).unwrap();
+        for file in 0..200 {
+            std::fs::write(path.join(format!("FILE_{file}")), [0; 8]).unwrap();
+        }
+    }
+    for _ in 0..5 {
+        let started = std::time::Instant::now();
+        let before = legacy_data_files(&root);
+        let before_ms = started.elapsed().as_secs_f64() * 1_000.0;
+        let started = Instant::now();
+        let files = data_files(&root);
+        println!(
+            "disk 20000: old={before_ms:.3} ms, new={:.3} ms, reported={}",
+            started.elapsed().as_secs_f64() * 1_000.0,
+            files.len()
+        );
+        assert_eq!(files, before);
+        assert_eq!(files.len(), MAX_FILES);
+        assert!(files.iter().all(|file| file.bytes == 1600));
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Frozen whole-tree stat path, to compare both grouping and all reported byte totals.
+fn legacy_data_files(root: &Path) -> Vec<DataFile> {
+    let mut sizes: BTreeMap<String, u64> = BTreeMap::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.path().symlink_metadata() else {
+            continue;
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let (name, bytes) = if meta.is_dir() {
+            (format!("{name}/"), legacy_tree_size(&entry.path()))
+        } else {
+            (database_of(&name).to_owned(), meta.len())
+        };
+        *sizes.entry(name).or_default() += bytes;
+    }
+    let mut files: Vec<_> = sizes
+        .into_iter()
+        .map(|(name, bytes)| DataFile { name, bytes })
+        .collect();
+    files.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.name.cmp(&b.name)));
+    files.truncate(MAX_FILES);
+    files
+}
+
+/// Frozen recursive traversal retains the old per-path stat operation for the measurement.
+fn legacy_tree_size(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let meta = entry.path().symlink_metadata().ok()?;
+            Some(if meta.is_dir() {
+                legacy_tree_size(&entry.path())
+            } else {
+                meta.len()
+            })
+        })
+        .sum()
+}

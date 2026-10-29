@@ -1524,6 +1524,45 @@ fn the_detect_index_shares_the_newest_row_in_the_ring() {
     }
 }
 
+/// Keeping a market after its last retained detect leaves its row alive forever.
+#[test]
+fn detect_index_evicts_markets_with_their_last_ring_row() {
+    let mut cd = CoreData::new();
+    cd.apply(FeedMsg::Detects(vec![detect_row(0, "COIN_A")]));
+    let evicted = Arc::downgrade(cd.latest_detect.get("COIN_A").unwrap());
+    cd.apply(FeedMsg::Detects(
+        (0..super::MAX_DETECTS)
+            .map(|i| detect_row(0, &format!("COIN_{i}")))
+            .collect(),
+    ));
+    assert!(evicted.upgrade().is_none());
+    assert_eq!(cd.latest_detect.len(), super::MAX_DETECTS);
+    assert!(!cd.latest_detect.contains_key("COIN_A"));
+}
+
+/// Measure retained memory and ingest cost as distinct markets outlive the detect ring.
+#[test]
+#[ignore = "synthetic station detect retention measurement"]
+fn station_detect_retention_measurement() {
+    for _ in 0..5 {
+        let mut cd = CoreData::new();
+        let started = std::time::Instant::now();
+        for batch in 0..100 {
+            cd.apply(FeedMsg::Detects(
+                (0..1_000)
+                    .map(|i| detect_row(0, &format!("COIN_{}", batch * 1_000 + i)))
+                    .collect(),
+            ));
+        }
+        println!(
+            "detect 100000: {:.3} ms, ring={}, index={}",
+            started.elapsed().as_secs_f64() * 1_000.0,
+            cd.detects.len(),
+            cd.latest_detect.len()
+        );
+    }
+}
+
 /// A rebuilt connection and a removed-then-restored core both keep numbering detects right after
 /// the last number the UI cursors hold, one by one, whatever another core fires in between. The
 /// rows hand in a restarted count, as the feed's own counter once did, to prove the store ignores
