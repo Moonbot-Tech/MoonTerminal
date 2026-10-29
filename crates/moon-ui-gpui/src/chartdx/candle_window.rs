@@ -138,6 +138,22 @@ impl CandleWindow {
         (upload, &self.rows, dropped)
     }
 
+    /// How many rows the window currently retains.
+    ///
+    /// wgpu's draw counts instances from this. That backend is not built on Windows.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Whether the window holds no rows.
+    ///
+    /// wgpu skips the candle pass when this is true. That backend is not built on Windows.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
     /// The instances a view spanning `[left_rel, right_rel]` can see.
     ///
     /// `start` is one row early on purpose: the hill INTO the first visible candle is drawn by the

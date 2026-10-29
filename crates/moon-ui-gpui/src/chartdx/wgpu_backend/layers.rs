@@ -1,6 +1,8 @@
 //! `WgpuLayers` layer data: combo ring, price lines, order book, user data, and volume scale.
 
 use super::*;
+use crate::chartdx::types::CandleGpu;
+use crate::chartdx::userdata_diff::{UserdataDirty, replace_pod};
 
 impl WgpuLayers {
     /// Creates empty GPU resources with retained default appearance.
@@ -22,9 +24,9 @@ impl WgpuLayers {
             mark_line: Vec::new(),
             combo_capacity: MIN_COMBO_CAPACITY,
             price_line_capacity: MIN_COMBO_CAPACITY,
-            candles: Vec::new(),
+            candles: CandleWindow::new(usize::MAX),
             candle_style: CandleStyleGpu::default(),
-            path_candles: Vec::new(),
+            path_candles: CandleWindow::new(usize::MAX),
             path_style: CandleStyleGpu::default(),
             sides: Vec::new(),
             hvol: Vec::new(),
@@ -71,7 +73,10 @@ impl WgpuLayers {
             combo_buffers_dirty: true,
             price_line_buffers_dirty: true,
             book_buffer_dirty: true,
-            userdata_buffers_dirty: true,
+            zones_dirty: true,
+            hlines_dirty: true,
+            segs_dirty: true,
+            markers_dirty: true,
             candle_buffers_dirty: true,
             path_buffers_dirty: true,
             side_buffer_dirty: true,
@@ -108,22 +113,37 @@ impl WgpuLayers {
 
     /// Replaces the complete candle set when the series revision changes.
     ///
-    /// Candles reside in the base cache, so this invalidates it for rebaking.
-    pub fn set_candles(&mut self, data: Vec<CandleGpu>) {
-        self.candles = data;
-        self.candle_buffers_dirty = true;
+    /// Candles reside in the base cache, so this invalidates it for rebaking. The GPU buffer
+    /// itself is uploaded from the window, which may be a full write or a tail range.
+    pub fn set_candles(&mut self, data: &[CandleGpu]) {
+        self.candles.set(data);
+        self.base_cache.valid = false;
+    }
+
+    /// Re-applies the composed list's tail from `from` on. Only those slots are uploaded.
+    ///
+    /// Candles reside in the base cache, so a tail that changed pixels still rebakes the image.
+    /// The upload is the range the window reports, the same rule as DX11 and Metal.
+    pub fn patch_candles(&mut self, from: usize, full: &[CandleGpu]) {
+        self.candles.patch(from, full);
         self.base_cache.valid = false;
     }
 
     /// Replaces the open candle's mini-candle path. Lives in the base cache, which is rebaked.
-    pub fn set_path_candles(&mut self, data: Vec<CandleGpu>) {
-        self.path_candles = data;
-        self.path_buffers_dirty = true;
+    pub fn set_path_candles(&mut self, data: &[CandleGpu]) {
+        self.path_candles.set(data);
+        self.base_cache.valid = false;
+    }
+
+    /// Appends the path's newly folded mini-candles. Only those slots are uploaded.
+    pub fn patch_path_candles(&mut self, from: usize, full: &[CandleGpu]) {
+        self.path_candles.patch(from, full);
         self.base_cache.valid = false;
     }
 
     /// Idempotently updates the path layer's style.
     pub fn set_path_style(&mut self, style: CandleStyleGpu) {
+        self.path_candles.set_style_tf(style.tf_rel_ms);
         if self.path_style != style {
             self.path_style = style;
             self.path_buffers_dirty = true;
@@ -133,6 +153,7 @@ impl WgpuLayers {
 
     /// Idempotently updates candle-layer mode, zone, colors, and outline style.
     pub fn set_candle_style(&mut self, style: CandleStyleGpu) {
+        self.candles.set_style_tf(style.tf_rel_ms);
         if self.candle_style != style {
             self.candle_style = style;
             self.candle_buffers_dirty = true;
@@ -301,19 +322,34 @@ impl WgpuLayers {
         segs: &[SegInstance],
         markers: &[MarkerInstance],
     ) {
-        self.zones = zones.iter().map(zone_of).collect();
-        self.hlines = hlines.iter().map(hl_of).collect();
-        self.segs = segs.iter().map(seg_of).collect();
-        self.markers = markers.iter().map(mk_of).collect();
-        self.userdata_buffers_dirty = true;
-        self.base_cache.valid = false;
+        let zones_changed = replace_pod(&mut self.zones, zones.iter().map(zone_of).collect());
+        let hlines_changed = replace_pod(&mut self.hlines, hlines.iter().map(hl_of).collect());
+        let segs_changed = replace_pod(&mut self.segs, segs.iter().map(seg_of).collect());
+        let markers_changed = replace_pod(&mut self.markers, markers.iter().map(mk_of).collect());
+        // A second identical call must not clear a flag the GPU has not uploaded yet.
+        self.zones_dirty |= zones_changed;
+        self.hlines_dirty |= hlines_changed;
+        self.segs_dirty |= segs_changed;
+        self.markers_dirty |= markers_changed;
+        // Zones are the only userdata inside the baked base. The predicate lives in
+        // `UserdataDirty::base_stale` so a line or marker edit cannot grow a second copy.
+        let dirty = UserdataDirty {
+            zones: zones_changed,
+            hlines: hlines_changed,
+            segs: segs_changed,
+            markers: markers_changed,
+        };
+        if dirty.base_stale() {
+            self.base_cache.valid = false;
+        }
     }
 
     /// Take the prepared clusters and return the previous buffer for background retirement.
+    ///
+    /// Clusters are drawn over the blit every frame, so a new set does not rebake the base.
     pub fn set_clusters(&mut self, clusters: Vec<MarkerGpu>) -> Vec<MarkerGpu> {
         let previous = std::mem::replace(&mut self.clusters, clusters);
         self.clusters_dirty = true;
-        self.base_cache.valid = false;
         previous
     }
 
@@ -355,10 +391,15 @@ impl WgpuLayers {
         self.hvol_style_uniform = BufferSlot::default();
         self.price_style_uniform = BufferSlot::default();
         self.tick_style_uniform = BufferSlot::default();
+        self.candles.invalidate_gpu();
+        self.path_candles.invalidate_gpu();
         self.combo_buffers_dirty = true;
         self.price_line_buffers_dirty = true;
         self.book_buffer_dirty = true;
-        self.userdata_buffers_dirty = true;
+        self.zones_dirty = true;
+        self.hlines_dirty = true;
+        self.segs_dirty = true;
+        self.markers_dirty = true;
         self.candle_buffers_dirty = true;
         self.side_buffer_dirty = true;
         self.hvol_buffers_dirty = true;

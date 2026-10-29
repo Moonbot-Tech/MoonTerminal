@@ -699,6 +699,9 @@ mod column_scroll;
 mod labels;
 pub(in crate::chartdx) use labels::hours_and_minutes;
 mod clusters;
+pub(in crate::chartdx) use clusters::{
+    ClusterLabelKey, PlannedClusterLabel, note_cluster_discs_published,
+};
 mod ladder;
 pub(in crate::chartdx) use ladder::format_ladder_labels;
 mod prepare;

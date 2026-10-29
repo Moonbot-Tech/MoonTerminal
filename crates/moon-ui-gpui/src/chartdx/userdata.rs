@@ -16,6 +16,7 @@ use super::gpu::{
     device_changed, full_viewport, make_ps, make_vs, update_dynamic,
 };
 use super::types::{HLineGpu, MarkerGpu, SegGpu, ZoneGpu, hl_of, mk_of, seg_of, zone_of};
+use super::userdata_diff::resync_mapped;
 
 const HLSL: &str = include_str!("shaders/order_lines.hlsl");
 const INITIAL_ZONE_BUFFER_CAPACITY: u32 = 64;
@@ -74,6 +75,17 @@ pub struct UserDataLayer {
     mk_cpu: Vec<MarkerGpu>,
     /// `mk_cpu` was patched after its upload and the marker buffer must be written again.
     mk_dirty: bool,
+    /// A hover patch changed markers after the last `set`. The next `set` maps markers again
+    /// even when the source instances match, because a full set replaces a patch.
+    markers_patched: bool,
+    /// Source instances last mapped into the zone buffer.
+    last_zones: Vec<ZoneInstance>,
+    /// Source instances last mapped into the horizontal-line buffer.
+    last_hlines: Vec<LineInstance>,
+    /// Source instances last mapped into the segment buffer.
+    last_segs: Vec<SegInstance>,
+    /// Source instances last mapped into the marker buffer.
+    last_markers: Vec<MarkerInstance>,
     /// The trade clusters: discs the marker pipeline draws from a buffer of their own, so the tape
     /// moving never re-uploads the order geometry. Kept on the CPU to be written again whenever
     /// the pipe is rebuilt.
@@ -96,6 +108,11 @@ impl UserDataLayer {
             spare: Pending::default(),
             mk_cpu: Vec::new(),
             mk_dirty: false,
+            markers_patched: false,
+            last_zones: Vec::new(),
+            last_hlines: Vec::new(),
+            last_segs: Vec::new(),
+            last_markers: Vec::new(),
             cl_cpu: Vec::new(),
             cl_count: 0,
             cl_dirty: false,
@@ -111,6 +128,9 @@ impl UserDataLayer {
     }
 
     /// Upload all order geometry after an order or view mutation.
+    ///
+    /// An unchanged source leaves the buffers alone. A tail edit rewrites that tail. A hover
+    /// patch is replaced, because this call is the whole union again.
     pub fn set(
         &mut self,
         zones: &[ZoneInstance],
@@ -118,18 +138,39 @@ impl UserDataLayer {
         segs: &[SegInstance],
         markers: &[MarkerInstance],
     ) {
+        // After a prepare, the marker mirror lives in `mk_cpu` and `spare.mk` is the previous
+        // mirror. Swap them back so the edit below sees the buffer that was uploaded.
+        let patched = self.markers_patched;
+        let from_spare = self.pending.is_none();
         let mut p = self
             .pending
             .take()
             .unwrap_or_else(|| std::mem::take(&mut self.spare));
-        p.zone.clear();
-        p.zone.extend(zones.iter().map(zone_of));
-        p.hl.clear();
-        p.hl.extend(hlines.iter().map(hl_of));
-        p.seg.clear();
-        p.seg.extend(segs.iter().map(seg_of));
-        p.mk.clear();
-        p.mk.extend(markers.iter().map(mk_of));
+        if from_spare {
+            std::mem::swap(&mut p.mk, &mut self.mk_cpu);
+        }
+        let mut changed = resync_mapped(zones, &mut self.last_zones, &mut p.zone, zone_of);
+        changed |= resync_mapped(hlines, &mut self.last_hlines, &mut p.hl, hl_of);
+        changed |= resync_mapped(segs, &mut self.last_segs, &mut p.seg, seg_of);
+        if patched {
+            p.mk.clear();
+            p.mk.extend(markers.iter().map(mk_of));
+            self.last_markers.clear();
+            self.last_markers.extend_from_slice(markers);
+            self.markers_patched = false;
+            changed = true;
+        } else {
+            changed |= resync_mapped(markers, &mut self.last_markers, &mut p.mk, mk_of);
+        }
+        if !changed {
+            if from_spare {
+                std::mem::swap(&mut p.mk, &mut self.mk_cpu);
+                self.spare = p;
+            } else {
+                self.pending = Some(p);
+            }
+            return;
+        }
         self.pending = Some(p);
         // The full upload supersedes any patch still waiting.
         self.mk_dirty = false;
@@ -156,6 +197,7 @@ impl UserDataLayer {
         if self.pending.is_none() {
             self.mk_dirty = true;
         }
+        self.markers_patched = true;
         #[cfg(test)]
         MARKER_PATCHES.with(|n| n.set(n.get() + 1));
         true
@@ -180,6 +222,11 @@ impl UserDataLayer {
             // The GPU copy is gone; a patch has nothing to patch until the next `set`.
             self.mk_cpu.clear();
             self.mk_dirty = false;
+            self.markers_patched = false;
+            self.last_zones.clear();
+            self.last_hlines.clear();
+            self.last_segs.clear();
+            self.last_markers.clear();
             self.cl_count = 0;
         }
         if self.pipe.is_none() {

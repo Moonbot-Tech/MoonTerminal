@@ -31,6 +31,7 @@ use super::types::{
     queue_appended_ranges, ranges_touch_volume_max, reset_cross_ring, ring_run_slices,
     ring_span_runs, seg_of, update_cross_volume_max, zone_of,
 };
+use super::userdata_diff::{UserdataDirty, replace_pod};
 
 const SHADER: &str = include_str!("shaders/chart_native.metal");
 const BACKGROUND_PNG: &[u8] = include_bytes!("../../../../assets/img/3Dlogo_s01.png");
@@ -425,9 +426,14 @@ pub struct MetalLayers {
     hvol_buffer: BufferSlot,
     hvol_style_uniform: BufferSlot,
     price_line_buffers_dirty: bool,
-    userdata_buffers_dirty: bool,
-    /// Only markers changed since the last upload, by a hover patch; zones stay in the base cache.
-    marker_buffer_dirty: bool,
+    /// Zone buffer owes an upload. Only a zone change stales the baked base.
+    zones_dirty: bool,
+    /// Horizontal-line buffer owes an upload. Drawn over the blit.
+    hlines_dirty: bool,
+    /// Segment buffer owes an upload. Drawn over the blit.
+    segs_dirty: bool,
+    /// Marker buffer owes an upload, including a hover patch. Drawn over the blit.
+    markers_dirty: bool,
     candle_buffers_dirty: bool,
     side_buffer_dirty: bool,
     hvol_buffers_dirty: bool,
@@ -503,8 +509,10 @@ impl MetalLayers {
             hvol_buffer: BufferSlot::default(),
             hvol_style_uniform: BufferSlot::default(),
             price_line_buffers_dirty: true,
-            userdata_buffers_dirty: true,
-            marker_buffer_dirty: false,
+            zones_dirty: true,
+            hlines_dirty: true,
+            segs_dirty: true,
+            markers_dirty: true,
             candle_buffers_dirty: true,
             side_buffer_dirty: true,
             hvol_buffers_dirty: true,
@@ -866,19 +874,34 @@ impl MetalLayers {
         segs: &[SegInstance],
         markers: &[MarkerInstance],
     ) {
-        self.zones = zones.iter().map(zone_of).collect();
-        self.hlines = hlines.iter().map(hl_of).collect();
-        self.segs = segs.iter().map(seg_of).collect();
-        self.markers = markers.iter().map(mk_of).collect();
-        self.userdata_buffers_dirty = true;
-        self.base_cache.valid = false;
+        let zones_changed = replace_pod(&mut self.zones, zones.iter().map(zone_of).collect());
+        let hlines_changed = replace_pod(&mut self.hlines, hlines.iter().map(hl_of).collect());
+        let segs_changed = replace_pod(&mut self.segs, segs.iter().map(seg_of).collect());
+        let markers_changed = replace_pod(&mut self.markers, markers.iter().map(mk_of).collect());
+        // A second identical call must not clear a flag the GPU has not uploaded yet.
+        self.zones_dirty |= zones_changed;
+        self.hlines_dirty |= hlines_changed;
+        self.segs_dirty |= segs_changed;
+        self.markers_dirty |= markers_changed;
+        // Zones are the only userdata inside the baked base. The predicate lives in
+        // `UserdataDirty::base_stale` so a line or marker edit cannot grow a second copy.
+        let dirty = UserdataDirty {
+            zones: zones_changed,
+            hlines: hlines_changed,
+            segs: segs_changed,
+            markers: markers_changed,
+        };
+        if dirty.base_stale() {
+            self.base_cache.valid = false;
+        }
     }
 
     /// Take the prepared clusters and return the previous buffer for background retirement.
+    ///
+    /// Clusters are drawn over the blit every frame, so a new set does not rebake the base.
     pub fn set_clusters(&mut self, clusters: Vec<MarkerGpu>) -> Vec<MarkerGpu> {
         let previous = std::mem::replace(&mut self.clusters, clusters);
         self.clusters_dirty = true;
-        self.base_cache.valid = false;
         previous
     }
 
@@ -900,7 +923,7 @@ impl MetalLayers {
         for (ix, marker) in patches {
             self.markers[*ix as usize] = mk_of(marker);
         }
-        self.marker_buffer_dirty = true;
+        self.markers_dirty = true;
         true
     }
 
@@ -946,7 +969,10 @@ impl MetalLayers {
         self.hvol_buffer = BufferSlot::default();
         self.hvol_style_uniform = BufferSlot::default();
         self.price_line_buffers_dirty = true;
-        self.userdata_buffers_dirty = true;
+        self.zones_dirty = true;
+        self.hlines_dirty = true;
+        self.segs_dirty = true;
+        self.markers_dirty = true;
         self.candle_buffers_dirty = true;
         self.side_buffer_dirty = true;
         self.hvol_buffers_dirty = true;
@@ -1874,25 +1900,24 @@ impl MetalLayers {
                 .write(device, "moon_chart_price_style", &[self.price_style]);
             self.price_line_buffers_dirty = false;
         }
-        if self.userdata_buffers_dirty
-            || self.zone_buffer.buffer.is_none()
-            || self.hline_buffer.buffer.is_none()
-            || self.seg_buffer.buffer.is_none()
-            || self.marker_buffer.buffer.is_none()
-        {
+        if self.zones_dirty || self.zone_buffer.buffer.is_none() {
             self.zone_buffer
                 .write(device, "moon_chart_zones", &self.zones);
+            self.zones_dirty = false;
+        }
+        if self.hlines_dirty || self.hline_buffer.buffer.is_none() {
             self.hline_buffer
                 .write(device, "moon_chart_hlines", &self.hlines);
+            self.hlines_dirty = false;
+        }
+        if self.segs_dirty || self.seg_buffer.buffer.is_none() {
             self.seg_buffer.write(device, "moon_chart_segs", &self.segs);
+            self.segs_dirty = false;
+        }
+        if self.markers_dirty || self.marker_buffer.buffer.is_none() {
             self.marker_buffer
                 .write(device, "moon_chart_markers", &self.markers);
-            self.userdata_buffers_dirty = false;
-            self.marker_buffer_dirty = false;
-        } else if self.marker_buffer_dirty {
-            self.marker_buffer
-                .write(device, "moon_chart_markers", &self.markers);
-            self.marker_buffer_dirty = false;
+            self.markers_dirty = false;
         }
         if self.clusters_dirty || self.cluster_buffer.buffer.is_none() {
             self.cluster_buffer
