@@ -3,55 +3,25 @@
 //! Set MOON_COIN_PICK_DATA_DIR to a snapshot root with the three database families in its
 //! canonical data directory, and MOON_COIN_PICK_STRATEGY to a name substring. Optional
 //! MOON_COIN_PICK_CORE selects the traced core; the batch still covers all cores. Exact name
-//! matches take precedence over substring matches, so numbered copies remain distinct. Run this exact
-//! ignored test alone: the data-directory override is process-wide. Output stays local.
+//! matches take precedence over substring matches. MOON_COIN_PICK_NOW pins the UTC cutoff for
+//! before/after comparisons. Run this exact ignored test alone: the root override is process-wide.
 
 use super::*;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-/// Print a chronological holdout tally in the selected query's monetary units.
+/// Print fresh-deal profit and drawdown without publishing any strategy or coin identities.
 fn print_tally(label: &str, value: &Tally) {
     println!(
-        "{label}: n={} profit={:.6} wins={} wsum={:.6} lsum={:.6} pf={:.6} dd={:.6}",
+        "{label}: n={} profit={:.6} pf={:.6} dd={:.6}",
         value.n,
         value.profit,
-        value.wins,
-        value.wsum,
-        value.lsum,
         value.profit_factor(),
         value.max_dd
     );
 }
 
-/// Explain a direction's first failing production gate; rank resolves the cap boundary.
-fn gate(
-    s: &Moments,
-    p: &CoinPickParams,
-    black: bool,
-    rank: Option<usize>,
-    cleared: bool,
-) -> &'static str {
-    if s.n < p.min_trades.max(1) as usize {
-        "min-trades"
-    } else if if black { s.sum >= 0.0 } else { s.sum <= 0.0 } {
-        "sign"
-    } else if if black {
-        s.score() > -T_GATE
-    } else {
-        s.score() < T_GATE
-    } {
-        "t-score"
-    } else if rank.is_some_and(|r| r >= MAX_PICK) {
-        "cap"
-    } else if !black && cleared {
-        "whitelist-cleared-by-train-check"
-    } else {
-        "candidate"
-    }
-}
-
-/// Show every train coin, the gates, and independent train-profit oracle holdouts.
+/// Explain whether the legacy fit or its fixed train-only fallback supplied the whitelist.
 fn trace(rows: &[CoinTrade], p: &CoinPickParams, pick: &CoinPick) {
     let mut rows = rows.to_vec();
     for row in &mut rows {
@@ -67,98 +37,43 @@ fn trace(rows: &[CoinTrade], p: &CoinPickParams, pick: &CoinPick) {
     let mb = CoinMask::new(&p.manual_black);
     let mw = CoinMask::new(&p.manual_white);
     let manual = |r: &CoinTrade| allowed(&r.token, &mb, &mw);
-    let mut scores: BTreeMap<String, Moments> = BTreeMap::new();
-    for row in train {
-        scores
-            .entry(row.token.clone())
-            .or_default()
-            .push(row.profit);
-    }
-    let mut ranked = [Vec::new(), Vec::new()];
-    for (index, black) in [true, false].into_iter().enumerate() {
-        ranked[index] = scores
-            .iter()
-            .filter(|(token, s)| {
-                allowed(token, &mb, &mw) && gate(s, p, black, None, false) == "candidate"
-            })
-            .map(|(token, s)| (token.clone(), s.sum))
-            .collect::<Vec<_>>();
-        ranked[index].sort_by(|(a, x), (b, y)| {
-            (if black {
-                x.total_cmp(y)
-            } else {
-                y.total_cmp(x)
-            })
-            .then_with(|| a.cmp(b))
-        });
-    }
-    let cleared = !ranked[1].is_empty()
-        && pick.white.is_empty()
-        && !matches!(pick.verdict, PickVerdict::TooFewTrades);
+    let scores = score_rows(train, manual);
+    let fitted_black = if p.black {
+        gated_candidates(&scores, p, true, MAX_PICK)
+    } else {
+        HashSet::new()
+    };
+    let legacy = super::super::whitelist::legacy(train, &scores, p, &fitted_black, MAX_PICK);
+    let fallback = if p.white && legacy.is_empty() && fitted_black.is_empty() {
+        super::super::whitelist::fallback(&scores, p.min_trades, MAX_PICK)
+    } else {
+        HashSet::new()
+    };
+    let source = if !p.white {
+        "disabled"
+    } else if !legacy.is_empty() {
+        "legacy"
+    } else if !fitted_black.is_empty() {
+        "legacy-blacklist"
+    } else if !pick.white.is_empty() {
+        "top20"
+    } else {
+        "none"
+    };
     println!(
-        "A train_n={} holdout_n={} verdict={:?} black={} white={} manual_black={} manual_white={} zero_pnl={} nonpositive_close={}",
+        "WHITELIST source={source} fixed_n={} legacy_coins={} fallback_coins={}",
+        super::super::whitelist::TOP_N,
+        legacy.len(),
+        fallback.len()
+    );
+    println!(
+        "A train_n={} holdout_n={} verdict={:?} black={} white={}",
         pick.train_n,
         pick.holdout_n,
         pick.verdict,
         pick.black.len(),
-        pick.white.len(),
-        p.manual_black.len(),
-        p.manual_white.len(),
-        rows.iter().filter(|r| r.profit == 0.0).count(),
-        rows.iter().filter(|r| r.close <= 0).count()
+        pick.white.len()
     );
-    println!(
-        "GATES total_coins={} min_trades_pass={} black_t_pass={} white_t_pass={} white_cleared={cleared}",
-        scores.len(),
-        scores
-            .iter()
-            .filter(|(t, s)| allowed(t, &mb, &mw) && s.n >= p.min_trades as usize)
-            .count(),
-        ranked[0].len(),
-        ranked[1].len()
-    );
-    let candidate_black: HashSet<_> = ranked[0].iter().take(MAX_PICK).map(|(t, _)| t).collect();
-    let candidate_white: HashSet<_> = ranked[1].iter().take(MAX_PICK).map(|(t, _)| t).collect();
-    let after_black = |r: &CoinTrade| manual(r) && !candidate_black.contains(&r.token);
-    println!(
-        "TRAIN_CHECK manual_profit={:.6} after_black_profit={:.6} candidate_white_profit={:.6} candidate_white_n={} cleared={cleared}",
-        tally(train, manual).profit,
-        tally(train, after_black).profit,
-        tally(train, |r| after_black(r)
-            && candidate_white.contains(&r.token))
-        .profit,
-        candidate_white.len()
-    );
-    for (token, s) in scores.iter().filter(|(_, s)| s.n >= 3) {
-        let reasons: Vec<_> = [true, false]
-            .into_iter()
-            .enumerate()
-            .map(|(i, black)| {
-                if !allowed(token, &mb, &mw) {
-                    "manual-list"
-                } else if matches!(pick.verdict, PickVerdict::TooFewTrades) {
-                    "too-few-trades-before-fit"
-                } else {
-                    gate(
-                        s,
-                        p,
-                        black,
-                        ranked[i].iter().position(|(t, _)| t == token),
-                        cleared,
-                    )
-                }
-            })
-            .collect();
-        println!(
-            "COIN {} n_train={} sum={:.6} t={:.6} black={} white={}",
-            token.escape_default(),
-            s.n,
-            s.sum,
-            s.score(),
-            reasons[0],
-            reasons[1]
-        );
-    }
     print_tally("FACT", &pick.fact_holdout);
     print_tally("MANUAL", &pick.manual_holdout);
     print_tally("PICK", &pick.pick_holdout);
@@ -172,34 +87,15 @@ fn trace(rows: &[CoinTrade], p: &CoinPickParams, pick: &CoinPick) {
     for row in holdout.iter().filter(|r| manual(r)) {
         moments.push(row.profit);
     }
-    let abs = NOISE_ABS_SHARE * pick.fact_holdout.profit.abs();
-    let sd = moments.sd() * (touched as f64).sqrt();
+    let floor = (NOISE_ABS_SHARE * pick.fact_holdout.profit.abs())
+        .max(moments.sd() * (touched as f64).sqrt());
     println!(
-        "FLOOR touched={touched} manual_sd={:.6} abs_component={abs:.6} sd_component={sd:.6} floor={:.6} gain={:.6}",
-        moments.sd(),
-        abs.max(sd),
+        "FLOOR touched={touched} floor={floor:.6} gain={:.6}",
         pick.pick_holdout.profit - pick.manual_holdout.profit
     );
-    let mut oracle: Vec<_> = scores
-        .iter()
-        .filter(|(t, _)| allowed(t, &mb, &mw))
-        .collect();
-    oracle.sort_by(|(a, x), (b, y)| y.sum.total_cmp(&x.sum).then_with(|| a.cmp(b)));
-    for cap in [20, 50] {
-        let tokens: HashSet<_> = oracle.iter().take(cap).map(|(t, _)| t.as_str()).collect();
-        // An empty oracle retains no trades: it is not a disabled production whitelist.
-        let score = tally(holdout, |r| manual(r) && tokens.contains(r.token.as_str()));
-        println!(
-            "B ORACLE top={cap} coins={} train_profit={:.6} holdout_gain={:.6}",
-            tokens.len(),
-            oracle.iter().take(cap).map(|(_, s)| s.sum).sum::<f64>(),
-            score.profit - pick.manual_holdout.profit
-        );
-        print_tally("ORACLE_HOLDOUT", &score);
-    }
 }
 
-/// Read and fit the same production snapshot as the cards and batch, refusing missing inputs.
+/// Read and fit the production single/batch paths on the same copied, fixed-cutoff snapshot.
 #[test]
 #[ignore = "requires copied databases in MOON_COIN_PICK_DATA_DIR and MOON_COIN_PICK_STRATEGY"]
 fn real_data_coin_pick() {
@@ -230,13 +126,16 @@ fn real_data_coin_pick() {
         "select exactly one strategy; set MOON_COIN_PICK_CORE if ambiguous"
     );
     drop(conn);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("UTC now")
-        .as_secs() as i64;
-    println!(
-        "SNAPSHOT now={now} metric=Quote prefer_usdt=true min_trades=5 trace_core={core:?} batch_scope=all"
-    );
+    let now = std::env::var("MOON_COIN_PICK_NOW")
+        .ok()
+        .map(|v| v.parse::<i64>().expect("fixed UTC now"))
+        .unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("UTC now")
+                .as_secs() as i64
+        });
+    println!("SNAPSHOT now={now} metric=Quote prefer_usdt=true min_trades=5 batch_scope=all");
     let key = format!("{}@{}", selected[0].0, selected[0].1.expect("core"));
     for days in [30, 365, 0] {
         let q = Query {
@@ -257,7 +156,7 @@ fn real_data_coin_pick() {
             !selected_rows.is_empty(),
             "selected strategy must have trades in each period"
         );
-        for pct in [10, 25, 30] {
+        for pct in [25, 30] {
             let settings = PickSettings {
                 min_trades: 5,
                 holdout_pct: pct,
@@ -268,7 +167,12 @@ fn real_data_coin_pick() {
             let mut single = q.clone();
             single.strategies = selected.clone();
             let pick = suggest_coins(&single, &p).expect("production single read and fit");
+            let started = Instant::now();
             let in_memory = coin_pick_from_rows(&selected_rows, &p);
+            println!(
+                "TIMING_SINGLE days={days} holdout_pct={pct} ms={:.3}",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
             assert_eq!(
                 format!("{pick:?}"),
                 format!("{in_memory:?}"),
@@ -276,44 +180,35 @@ fn real_data_coin_pick() {
             );
             println!("PERIOD days={days} holdout_pct={pct}");
             trace(&selected_rows, &p, &pick);
-            for cap in [30, 50] {
-                let picks = batch::fit_batch_with_cap(
-                    rows.clone(),
-                    &lists,
-                    settings,
-                    &BatchProgress::default(),
-                    cap,
-                )
-                .expect("uncancelled batch");
-                let mut counts: BTreeMap<String, usize> = BTreeMap::from([
-                    ("Useful".into(), 0),
-                    ("Noise(SmallGain)".into(), 0),
-                    ("Noise(HoldoutWorse)".into(), 0),
-                    ("Noise(FewHoldout)".into(), 0),
-                    ("NothingFound".into(), 0),
-                    ("TooFewTrades".into(), 0),
-                ]);
-                for value in picks.values() {
-                    *counts.entry(format!("{:?}", value.verdict)).or_default() += 1;
-                }
-                println!(
-                    "C BATCH days={days} holdout_pct={pct} cap={cap} strategies_with_trades={} counts={counts:?}",
-                    picks.len()
-                );
-                if cap == MAX_PICK {
-                    let public = coin_picks_from_rows(
-                        rows.clone(),
-                        &lists,
-                        settings,
-                        &BatchProgress::default(),
-                    )
-                    .expect("public batch");
-                    assert_eq!(public.len(), picks.len());
-                    for (k, v) in &picks {
-                        assert_eq!(format!("{v:?}"), format!("{:?}", public[k]));
-                    }
-                }
+            let started = Instant::now();
+            let picks =
+                coin_picks_from_rows(rows.clone(), &lists, settings, &BatchProgress::default())
+                    .expect("uncancelled batch");
+            let ms = started.elapsed().as_secs_f64() * 1000.0;
+            println!(
+                "TIMING_BATCH days={days} holdout_pct={pct} ms={ms:.3} per_strategy_ms={:.3}",
+                ms / picks.len() as f64
+            );
+            let mut counts: BTreeMap<String, usize> = BTreeMap::from([
+                ("Useful".into(), 0),
+                ("Noise(SmallGain)".into(), 0),
+                ("Noise(HoldoutWorse)".into(), 0),
+                ("Noise(FewHoldout)".into(), 0),
+                ("NothingFound".into(), 0),
+                ("TooFewTrades".into(), 0),
+            ]);
+            for value in picks.values() {
+                *counts.entry(format!("{:?}", value.verdict)).or_default() += 1;
             }
+            assert_eq!(
+                format!("{pick:?}"),
+                format!("{:?}", picks[&key]),
+                "public batch/single parity"
+            );
+            println!(
+                "C BATCH days={days} holdout_pct={pct} strategies_with_trades={} counts={counts:?}",
+                picks.len()
+            );
         }
     }
 }

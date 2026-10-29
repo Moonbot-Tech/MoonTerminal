@@ -2,6 +2,7 @@
 use super::*;
 
 mod real_data;
+mod whitelist;
 
 /// A smaller cap silently truncates both independently fitted lists before fifty entries.
 #[test]
