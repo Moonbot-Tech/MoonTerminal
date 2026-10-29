@@ -331,6 +331,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         .ok(),
         warn_pending_slices: Vec::new(),
         warn_last_prune_ms: 0,
+        warn_persisted_rev: 0,
         reconnect_request: Vec::new(),
         show_group_request: Vec::new(),
         group_windows: HashMap::new(),

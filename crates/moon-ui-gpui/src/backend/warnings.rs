@@ -119,38 +119,39 @@ impl Backend {
             if !enabled.allows(episode.axis) {
                 continue;
             }
-            let rowid = match self.warn_store.as_ref().map(|s| s.insert_episode(episode)) {
-                Some(Ok(rowid)) => rowid,
-                Some(Err(err)) => {
+            let Some(store) = self.warn_store.as_ref() else {
+                continue;
+            };
+            // Structural, NOT `warn_chart`: display toggles must never stop persistence of an axis
+            // that has per-second history. Standing API axes keep only their episode row.
+            let has_series = axis_has_series(episode.axis);
+            let ip = episode.server_ip;
+            let roster = if has_series {
+                match ip {
+                    Some(ip) => self.cores_on_ip(ip),
+                    None => episode.core_id.into_iter().collect(),
+                }
+            } else {
+                Vec::new()
+            };
+            // Ring slicing and encoding stay cheap and synchronous; the episode and all its series
+            // commit together on the writer, so even a shutdown sees one atomic partial capture.
+            let slices = if has_series {
+                self.episode_topology(ip, &roster, episode.start_ms, now_ms)
+            } else {
+                Vec::new()
+            };
+            let rowid = match store.insert_episode_with_slices(episode, slices) {
+                Ok(rowid) => rowid,
+                Err(err) => {
                     log::warn!("core warning persist failed: {err}");
                     continue;
                 }
-                None => continue,
             };
-            // Graph slices exist to fill a chart badge's hover card. An axis with no per-second
-            // series would write one blob per core for a card that can never have content, so it
-            // keeps the episode row and skips the slices.
-            //
-            // Structural, NOT `warn_chart`: that folds in the user's "show on chart" checkbox, and
-            // gating PERSISTENCE on a display toggle would silently stop recording slices for CPU
-            // the moment someone unticks it — and leave those episodes graph-less forever after.
-            if !axis_has_series(episode.axis) {
-                continue;
-            }
-            // The roster to record per-core slices for: every core on the server, or the episode's
-            // own core when it has no known endpoint.
-            let ip = episode.server_ip;
-            let roster = match ip {
-                Some(ip) => self.cores_on_ip(ip),
-                None => episode.core_id.into_iter().collect(),
-            };
-            // Capture immediately with whatever window exists now, so a shutdown before the forward
-            // tail fills still leaves a (partial) graph on disk.
-            self.capture_episode_topology(rowid, ip, &roster, episode.start_ms, now_ms);
             // If the forward tail has not accrued yet, re-capture the full window later; OR REPLACE
             // overwrites the partial with the complete slice.
             let capture_at_ms = episode.start_ms + WARN_SLICE_FWD_MS;
-            if capture_at_ms > now_ms {
+            if has_series && capture_at_ms > now_ms {
                 pending.push(PendingWarnSlice {
                     episode_id: rowid,
                     ip,
@@ -164,35 +165,37 @@ impl Backend {
             push_pending_slice(&mut self.warn_pending_slices, item);
         }
         self.drain_pending_slices(now_ms);
+        // The close that bumped the live revision may have been read before its transaction committed.
+        // Wake one replacement generation once the writer publishes that commit; the 100 ms loop's
+        // ordinary dirty flag carries it through the existing coalesced observer path.
+        let persisted_rev = self.warn_store.as_ref().map_or(0, |store| store.revision());
+        if self.warn_persisted_rev != persisted_rev {
+            self.warn_persisted_rev = persisted_rev;
+            self.warn.bump_rev();
+            self.backend_dirty_since_notify = true;
+        }
     }
 
-    /// Capture one episode's full topology (server graph + every core in `roster`) from the current
-    /// rings into `warn_store`. A no-op when persistence is off.
-    fn capture_episode_topology(
+    /// Capture one episode's server and per-core rings as data for the background writer.
+    fn episode_topology(
         &self,
-        episode_id: i64,
         ip: Option<IpAddr>,
         roster: &[CoreId],
         start_ms: i64,
         now_ms: i64,
-    ) {
-        let Some(store) = self.warn_store.as_ref() else {
-            return;
-        };
+    ) -> Vec<crate::backend::core_warn::store::WarnSlice> {
         let cores: Vec<_> = roster
             .iter()
             .map(|id| (*id, self.core_line_hist.ring(*id)))
             .collect();
         capture_topology(
-            store,
             ip.and_then(|ip| self.core_chart_hist.ring(ip)),
             ip.and_then(|ip| self.server_ping_hist.ring(ip)),
             ip.and_then(|ip| self.server_exch_hist.ring(ip)),
             &cores,
-            episode_id,
             start_ms,
             now_ms,
-        );
+        )
     }
 
     /// Core ids whose configured endpoint resolves to `ip` (the server's roster this second).
@@ -240,13 +243,13 @@ impl Backend {
             ready.push(self.warn_pending_slices.remove(i));
         }
         for pending in ready {
-            self.capture_episode_topology(
-                pending.episode_id,
-                pending.ip,
-                &pending.roster,
-                pending.start_ms,
-                now_ms,
-            );
+            let slices =
+                self.episode_topology(pending.ip, &pending.roster, pending.start_ms, now_ms);
+            if let Some(store) = self.warn_store.as_ref()
+                && let Err(error) = store.insert_slices(pending.episode_id, slices)
+            {
+                log::warn!("core warning slice recapture failed: {error}");
+            }
         }
     }
 
@@ -280,37 +283,8 @@ impl Backend {
         ring_slice(self.server_exch_hist.ring(ip), at_ms, now_ms)
     }
 
-    /// The persisted server history slice for a closed episode, for a card whose warning has already
-    /// rolled out of the live ring. `None` if it was never captured or persistence is off.
-    pub(crate) fn warn_series_slice(&self, episode_id: u64) -> Option<Vec<(u8, u8)>> {
-        self.warn_store
-            .as_ref()?
-            .series_for_episode(episode_id as i64, 0, "server")
-            .ok()
-            .flatten()
-    }
-
-    /// The persisted client↔core ping slice for a closed episode, past the live ring. `None` if it
-    /// was never captured or persistence is off.
-    pub(crate) fn warn_ping_series_slice(&self, episode_id: u64) -> Option<Vec<u16>> {
-        self.warn_store
-            .as_ref()?
-            .ping_series_for_episode(episode_id as i64, 0, "ping")
-            .ok()
-            .flatten()
-    }
-
-    /// The persisted core→exchange ping slice for a closed episode, past the live ring.
-    pub(crate) fn warn_exch_series_slice(&self, episode_id: u64) -> Option<Vec<u16>> {
-        self.warn_store
-            .as_ref()?
-            .ping_series_for_episode(episode_id as i64, 0, "exch")
-            .ok()
-            .flatten()
-    }
-
     /// The engine's axis master switches, projected from the persisted layout toggles.
-    fn warn_enabled(&self) -> crate::backend::core_warn::WarnEnabled {
+    pub(crate) fn warn_enabled(&self) -> crate::backend::core_warn::WarnEnabled {
         let axes = self.layout.warn_axes;
         crate::backend::core_warn::WarnEnabled {
             cpu: axes.cpu,
@@ -373,25 +347,6 @@ impl Backend {
         sound.clone().filter(|s| !s.trim().is_empty())
     }
 
-    /// Whether one axis draws on charts (separate from whether it is detected/recorded).
-    fn warn_chart(&self, axis: crate::backend::core_warn::WarnAxis) -> bool {
-        use crate::backend::core_warn::WarnAxis;
-        let p = &self.layout.warn_params;
-        match axis {
-            WarnAxis::SysCpu => p.cpu.chart,
-            WarnAxis::MemGrowth => p.mem.chart,
-            WarnAxis::Unreachable => p.conn.chart,
-            WarnAxis::Ping => p.ping.chart,
-            WarnAxis::ExchPing => p.exch.chart,
-            // Never on a chart: an expiring key has no per-second history, so its badge would open
-            // a card with an empty graph. It lives in Core Status and the Warnings list only.
-            WarnAxis::ApiExpiry => false,
-            // Never on a chart either: the quota is a standing number the core republishes every
-            // few minutes, not a per-second series.
-            WarnAxis::ApiQuota => false,
-        }
-    }
-
     /// The persisted per-axis warning params (chart visibility, sound, thresholds).
     pub(crate) fn warn_params(&self) -> moon_core::config::layout::WarnParams {
         self.layout.warn_params.clone()
@@ -404,41 +359,6 @@ impl Backend {
             self.layout_dirty = true;
             self.warn.bump_rev();
         }
-    }
-
-    /// Warning episodes for one server within `[from_ms, to_ms]`: persisted (closed) plus still-open.
-    ///
-    /// The chart draws a badge per episode. Merges the SQLite log with the engine's live open
-    /// episodes, so an in-progress warning already shows a badge.
-    ///
-    /// Args:
-    ///     ip: Server endpoint address.
-    ///     from_ms: Inclusive lower bound on `start_ms`.
-    ///     to_ms: Inclusive upper bound on `start_ms`.
-    ///
-    /// Returns:
-    ///     Matching episodes; empty if persistence is off and nothing is open.
-    pub(crate) fn warn_episodes_for_server(
-        &self,
-        ip: IpAddr,
-        from_ms: i64,
-        to_ms: i64,
-    ) -> Vec<crate::backend::core_warn::WarnEpisode> {
-        let mut out = self
-            .warn_store
-            .as_ref()
-            .and_then(|store| store.episodes_for_server(ip, from_ms, to_ms).ok())
-            .unwrap_or_default();
-        for open in self.warn.open_episodes() {
-            if open.server_ip == Some(ip) && open.start_ms >= from_ms && open.start_ms <= to_ms {
-                out.push(open);
-            }
-        }
-        // A disabled axis hides its already-recorded history from the chart too; an axis with
-        // "show on chart" off is still recorded and listed, just not drawn here.
-        let enabled = self.warn_enabled();
-        out.retain(|episode| enabled.allows(episode.axis) && self.warn_chart(episode.axis));
-        out
     }
 
     /// Merge live open episodes with the latest persisted read for one effective workspace scope.

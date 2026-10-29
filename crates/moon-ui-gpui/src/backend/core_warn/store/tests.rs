@@ -8,8 +8,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use rusqlite::Connection;
 
 use super::{
-    RECENT_CORE_EPISODES_SQL, RECENT_CORE_TIES_SQL, RECENT_SERVER_EPISODES_SQL,
-    RECENT_SERVER_TIES_SQL, WarnStore, read_recent_episodes_for_scope,
+    PersistedWarnSeries, RECENT_CORE_EPISODES_SQL, RECENT_CORE_TIES_SQL,
+    RECENT_SERVER_EPISODES_SQL, RECENT_SERVER_TIES_SQL, WarnSlice, WarnStore, read_episode_series,
+    read_episodes_for_server, read_recent_episodes_for_scope,
 };
 use crate::backend::core_warn::{WarnAxis, WarnEpisode, WarnSnapshot};
 
@@ -23,7 +24,10 @@ fn old_schema_store() -> WarnStore {
     let store = store();
     store
         .conn
-        .execute_batch("DROP INDEX ix_warn_core_time; DROP INDEX ix_warn_server_null_time;")
+        .execute_batch(
+            "DROP INDEX ix_warn_core_time; DROP INDEX ix_warn_server_null_time; \
+             DROP INDEX ix_warn_start_time;",
+        )
         .unwrap();
     store
 }
@@ -44,6 +48,7 @@ fn ordinary_open_keeps_series_index_unchanged() {
     let path = database_path();
     let store = WarnStore::open(&path).unwrap();
     store.insert_series(1, 0, "server", 0, &[(1, 2)]).unwrap();
+    store.flush_writer().unwrap();
     let before: i64 = store
         .conn
         .query_row("PRAGMA schema_version", [], |r| r.get(0))
@@ -54,7 +59,7 @@ fn ordinary_open_keeps_series_index_unchanged() {
         .query_row("PRAGMA schema_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(before, after, "normal startup must perform no index DDL");
-    assert!(reopened.index_maintenance.borrow().is_none());
+    reopened.flush_writer().unwrap();
     assert_eq!(
         reopened.series_for_episode(1, 0, "server").unwrap(),
         Some(vec![(1, 2)])
@@ -77,6 +82,7 @@ fn assert_pending_maintenance_order(rebuild_series: bool) {
     store
         .insert_series(recent, 0, "server", 0, &[(2, 3)])
         .unwrap();
+    store.flush_writer().unwrap();
     if rebuild_series {
         store.conn.execute_batch(
         "DROP INDEX ix_warn_series_unique; CREATE UNIQUE INDEX ix_warn_series_unique ON core_warning_series(episode_id, subject);"
@@ -84,7 +90,10 @@ fn assert_pending_maintenance_order(rebuild_series: bool) {
     } else {
         store
             .conn
-            .execute_batch("DROP INDEX ix_warn_core_time; DROP INDEX ix_warn_server_null_time;")
+            .execute_batch(
+                "DROP INDEX ix_warn_core_time; DROP INDEX ix_warn_server_null_time; \
+                 DROP INDEX ix_warn_start_time;",
+            )
             .unwrap();
     }
     drop(store);
@@ -92,14 +101,12 @@ fn assert_pending_maintenance_order(rebuild_series: bool) {
     assert_eq!(store.series_index_is_current().unwrap(), !rebuild_series);
     let blocker = Connection::open(&path).unwrap();
     blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
-    store
-        .index_maintenance
-        .replace(Some(super::IndexMaintenance::start(
-            path.clone(),
-            rebuild_series,
-            !rebuild_series,
-            std::sync::Arc::clone(&store.revision),
-        )));
+    store.writer.replace(Some(super::WarnWriter::start(
+        path.clone(),
+        rebuild_series,
+        !rebuild_series,
+        std::sync::Arc::clone(&store.revision),
+    )));
     store.insert_series(old, 1, "server", 0, &[(3, 4)]).unwrap();
     assert_eq!(store.prune_slices(5).unwrap(), 0);
     store
@@ -123,9 +130,9 @@ fn assert_pending_maintenance_order(rebuild_series: bool) {
     );
     assert_eq!(store.series_for_episode(recent, 1, "core").unwrap(), None);
     blocker.execute_batch("COMMIT").unwrap();
-    store.finish_index_maintenance().unwrap();
+    store.flush_writer().unwrap();
     assert!(store.series_index_is_current().unwrap());
-    assert!(!store.needs_recent_indexes().unwrap());
+    assert!(!store.needs_read_indexes().unwrap());
     assert_eq!(store.series_for_episode(old, 0, "server").unwrap(), None);
     assert_eq!(store.series_for_episode(old, 1, "server").unwrap(), None);
     assert_eq!(
@@ -187,6 +194,7 @@ fn failed_series_migration_preserves_safe_writes_and_cleanup() {
             3,
         ))
         .unwrap();
+    store.flush_writer().unwrap();
     store
         .conn
         .execute_batch(
@@ -196,28 +204,22 @@ fn failed_series_migration_preserves_safe_writes_and_cleanup() {
         .unwrap();
     let blocker = Connection::open(&path).unwrap();
     blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
-    store
-        .index_maintenance
-        .replace(Some(super::IndexMaintenance::start(
-            path.clone(),
-            true,
-            false,
-            std::sync::Arc::clone(&store.revision),
-        )));
+    store.writer.replace(Some(super::WarnWriter::start(
+        path.clone(),
+        true,
+        false,
+        std::sync::Arc::clone(&store.revision),
+    )));
     let queued = store
-        .insert_episode(&episode(
-            WarnAxis::MemGrowth,
-            [192, 0, 2, 1],
-            Some(1),
-            10,
-            11,
-            4,
-        ))
+        .insert_episode_with_slices(
+            &episode(WarnAxis::MemGrowth, [192, 0, 2, 1], Some(1), 10, 11, 4),
+            vec![WarnSlice::pairs(1, "core", 0, &[(3, 4)])],
+        )
         .unwrap();
     store.insert_series(1, 0, "server", 0, &[(1, 2)]).unwrap();
     assert_eq!(store.prune_slices(5).unwrap(), 0);
     blocker.execute_batch("COMMIT").unwrap();
-    assert!(store.finish_index_maintenance().is_err());
+    assert!(store.flush_writer().is_err());
     assert!(store.insert_series(1, 0, "server", 0, &[(1, 2)]).is_err());
     assert_eq!(store.series_for_episode(1, 0, "server").unwrap(), None);
     assert!(
@@ -251,11 +253,12 @@ fn optional_index_failure_drains_episodes_and_preserves_commit_revisions() {
         ))
         .unwrap();
     store.insert_series(old, 0, "server", 0, &[(1, 2)]).unwrap();
+    store.flush_writer().unwrap();
     store
         .conn
         .execute_batch(
             "DROP INDEX ix_warn_core_time; DROP INDEX ix_warn_server_null_time; \
-         CREATE TABLE ix_warn_core_time(value INTEGER);",
+             DROP INDEX ix_warn_start_time; CREATE TABLE ix_warn_core_time(value INTEGER);",
         )
         .unwrap();
     drop(store);
@@ -264,14 +267,12 @@ fn optional_index_failure_drains_episodes_and_preserves_commit_revisions() {
     let initial_revision = store.revision();
     let blocker = Connection::open(&path).unwrap();
     blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
-    store
-        .index_maintenance
-        .replace(Some(super::IndexMaintenance::start(
-            path.clone(),
-            false,
-            true,
-            std::sync::Arc::clone(&store.revision),
-        )));
+    store.writer.replace(Some(super::WarnWriter::start(
+        path.clone(),
+        false,
+        true,
+        std::sync::Arc::clone(&store.revision),
+    )));
     let first = store
         .insert_episode(&episode(
             WarnAxis::MemGrowth,
@@ -298,10 +299,10 @@ fn optional_index_failure_drains_episodes_and_preserves_commit_revisions() {
     assert_eq!(store.revision(), initial_revision);
     assert_eq!(store.recent_episodes(10).unwrap().len(), 1);
     blocker.execute_batch("COMMIT").unwrap();
-    store.finish_index_maintenance().unwrap();
+    store.flush_writer().unwrap();
     assert_eq!(store.revision(), initial_revision + 2);
     assert!(
-        store.needs_recent_indexes().unwrap(),
+        store.needs_read_indexes().unwrap(),
         "the conflicting table must make optional DDL fail"
     );
     let rows =
@@ -327,6 +328,7 @@ fn optional_index_failure_drains_episodes_and_preserves_commit_revisions() {
         ))
         .unwrap();
     assert!(later > second);
+    store.flush_writer().unwrap();
     assert_eq!(store.revision(), initial_revision + 3);
     assert_eq!(store.forget_core(7).unwrap(), 4);
     assert_eq!(store.series_for_episode(first, 8, "core").unwrap(), None);
@@ -340,6 +342,7 @@ fn queued_slice_error_does_not_disable_later_captures() {
     let path = database_path();
     let store = WarnStore::open(&path).unwrap();
     store.insert_series(1, 0, "server", 0, &[(1, 2)]).unwrap();
+    store.flush_writer().unwrap();
     store
         .conn
         .execute_batch(
@@ -353,18 +356,16 @@ fn queued_slice_error_does_not_disable_later_captures() {
     let store = WarnStore::from_connection(Connection::open(&path).unwrap()).unwrap();
     let blocker = Connection::open(&path).unwrap();
     blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
-    store
-        .index_maintenance
-        .replace(Some(super::IndexMaintenance::start(
-            path.clone(),
-            true,
-            false,
-            std::sync::Arc::clone(&store.revision),
-        )));
+    store.writer.replace(Some(super::WarnWriter::start(
+        path.clone(),
+        true,
+        false,
+        std::sync::Arc::clone(&store.revision),
+    )));
     store.insert_series(1, 1, "reject", 0, &[(3, 4)]).unwrap();
     store.insert_series(1, 1, "core", 0, &[(5, 6)]).unwrap();
     blocker.execute_batch("COMMIT").unwrap();
-    store.finish_index_maintenance().unwrap();
+    store.flush_writer().unwrap();
     assert_eq!(store.series_for_episode(1, 1, "reject").unwrap(), None);
     assert_eq!(
         store.series_for_episode(1, 1, "core").unwrap(),
@@ -373,6 +374,7 @@ fn queued_slice_error_does_not_disable_later_captures() {
     store
         .insert_ping_series(1, 1, "core_ping", 0, &[123])
         .unwrap();
+    store.flush_writer().unwrap();
     assert_eq!(
         store.ping_series_for_episode(1, 1, "core_ping").unwrap(),
         Some(vec![123])
@@ -396,10 +398,7 @@ fn bench_warning_index_startup() {
              DROP INDEX ix_warn_core_time; DROP INDEX ix_warn_server_null_time;"
         )).unwrap();
         let start = std::time::Instant::now();
-        store
-            .conn
-            .execute_batch(super::RECENT_INDEX_SCHEMA)
-            .unwrap();
+        store.conn.execute_batch(super::READ_INDEX_SCHEMA).unwrap();
         let inline = start.elapsed();
         store
             .conn
@@ -409,9 +408,9 @@ fn bench_warning_index_startup() {
         let start = std::time::Instant::now();
         let store = WarnStore::open(&path).unwrap();
         let initialize = start.elapsed();
-        store.finish_index_maintenance().unwrap();
+        store.flush_writer().unwrap();
         let total = start.elapsed();
-        assert!(!store.needs_recent_indexes().unwrap());
+        assert!(!store.needs_read_indexes().unwrap());
         println!(
             "warning_index rows={rows} inline_build_us={} startup_open_us={} background_wait_us={} total_upgrade_us={}",
             inline.as_micros(),
@@ -438,7 +437,7 @@ fn bench_warning_index_startup() {
     let start = std::time::Instant::now();
     let store = WarnStore::open(&path).unwrap();
     let current = start.elapsed();
-    assert!(store.index_maintenance.borrow().is_none());
+    store.flush_writer().unwrap();
     drop(store);
     println!(
         "series_index rows=100000 baseline_rebuild_us={} current_open_us={}",
@@ -478,6 +477,7 @@ fn background_read_snapshot_does_not_block_episode_insert() {
     let store = WarnStore::open(&path).unwrap();
     let row = episode(WarnAxis::SysCpu, [192, 0, 2, 1], None, 1, 2, 3);
     store.insert_episode(&row).unwrap();
+    store.flush_writer().unwrap();
     store.conn.busy_timeout(std::time::Duration::ZERO).unwrap();
     let (held_tx, held_rx) = std::sync::mpsc::sync_channel(0);
     let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
@@ -501,9 +501,11 @@ fn background_read_snapshot_does_not_block_episode_insert() {
         });
         held_rx.recv().unwrap();
         let inserted = store.insert_episode(&row);
-        release_tx.send(()).unwrap();
         inserted.expect("an active background reader must not block the writer's commit");
+        store.flush_writer().unwrap();
+        release_tx.send(()).unwrap();
     });
+    store.flush_writer().unwrap();
     assert_eq!(store.recent_episodes(10).unwrap().len(), 2);
     assert_eq!(
         store
@@ -551,12 +553,12 @@ fn existing_history_reads_before_and_after_deferred_indexes() {
     let ips = HashSet::from([IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1))]);
     let expected = reference_recent_episodes_for_scope(&legacy, &cores, &ips, 5);
     let reopened = WarnStore::from_connection(legacy.conn).unwrap();
-    assert!(reopened.needs_recent_indexes().unwrap());
+    assert!(reopened.needs_read_indexes().unwrap());
     for indexed in [false, true] {
         if indexed {
             reopened
                 .conn
-                .execute_batch(super::RECENT_INDEX_SCHEMA)
+                .execute_batch(super::READ_INDEX_SCHEMA)
                 .unwrap();
         }
         let actual = reopened.recent_episodes_for_scope(&cores, &ips, 5).unwrap();
@@ -565,7 +567,7 @@ fn existing_history_reads_before_and_after_deferred_indexes() {
             expected.iter().map(|row| row.id).collect::<Vec<_>>()
         );
     }
-    assert!(!reopened.needs_recent_indexes().unwrap());
+    assert!(!reopened.needs_read_indexes().unwrap());
 }
 
 /// Build one closed episode; `id` is ignored on insert (the DB assigns the row id).
@@ -909,6 +911,7 @@ fn read_only_scoped_query_matches_writer_side_rows() {
             88,
         ))
         .unwrap();
+    store.flush_writer().unwrap();
     let core_ids = HashSet::new();
     let server_ips = HashSet::from([IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))]);
     let expected = store
@@ -1222,4 +1225,107 @@ fn bench_scoped_recent_episodes_100000() {
         "bench_scoped_recent_episodes_100000 us/read={}",
         start.elapsed().as_micros() / iterations
     );
+}
+
+/// A rejected series must roll back its episode and every earlier series in the same capture.
+#[test]
+fn episode_capture_rolls_back_when_any_slice_fails() {
+    let store = store();
+    store
+        .conn
+        .execute_batch(
+            "CREATE TRIGGER reject_slice BEFORE INSERT ON core_warning_series \
+             WHEN NEW.subject = 'core_exch' BEGIN SELECT RAISE(ABORT, 'synthetic rejection'); END;",
+        )
+        .unwrap();
+    let result = store.insert_episode_with_slices(
+        &episode(WarnAxis::SysCpu, [192, 0, 2, 1], None, 1, 2, 90),
+        vec![
+            WarnSlice::pairs(0, "server", 0, &[(10, 20)]),
+            WarnSlice::ping(1, "core_exch", 0, &[30]),
+        ],
+    );
+    assert!(result.is_err());
+    assert!(store.recent_episodes(10).unwrap().is_empty());
+    assert_eq!(store.series_for_episode(1, 0, "server").unwrap(), None);
+}
+
+/// Opening an old database must add the retention index and use it for the cutoff subquery.
+#[test]
+fn old_database_gains_retention_index_and_query_plan() {
+    let path = database_path();
+    let legacy = WarnStore::from_connection(Connection::open(&path).unwrap()).unwrap();
+    legacy
+        .conn
+        .execute_batch("DROP INDEX ix_warn_start_time")
+        .unwrap();
+    assert!(legacy.needs_read_indexes().unwrap());
+    drop(legacy);
+
+    let store = WarnStore::open(&path).unwrap();
+    store.flush_writer().unwrap();
+    assert!(!store.needs_read_indexes().unwrap());
+    let indexed: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type = 'index' AND name = 'ix_warn_start_time'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexed, 1);
+    let plan = store
+        .conn
+        .prepare(
+            "EXPLAIN QUERY PLAN DELETE FROM core_warning_series WHERE episode_id IN \
+             (SELECT id FROM core_warnings WHERE start_ms < ?1)",
+        )
+        .unwrap()
+        .query_map([43_200_000_i64], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join(" | ");
+    assert!(
+        plan.contains("ix_warn_start_time"),
+        "unindexed plan: {plan}"
+    );
+    drop(store);
+    std::fs::remove_file(path).unwrap();
+}
+
+/// Independent chart and hover readers must return the same committed episode and three series.
+#[test]
+fn background_chart_and_hover_reads_match_committed_rows() {
+    let path = database_path();
+    let store = WarnStore::open(&path).unwrap();
+    let row = episode(WarnAxis::SysCpu, [192, 0, 2, 1], None, 1_000, 2_000, 90);
+    let id = store
+        .insert_episode_with_slices(
+            &row,
+            vec![
+                WarnSlice::pairs(0, "server", 0, &[(10, 20), (30, 40)]),
+                WarnSlice::ping(0, "ping", 0, &[15, 25]),
+                WarnSlice::ping(0, "exch", 0, &[35, 45]),
+            ],
+        )
+        .unwrap();
+    store.flush_writer().unwrap();
+    let ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1));
+    let episodes = read_episodes_for_server(&path, ip, 0, 3_000).unwrap();
+    assert_eq!(episodes.len(), 1);
+    assert_eq!(episodes[0].id, id as u64);
+    assert_eq!(episodes[0].start_ms, 1_000);
+    assert_eq!(episodes[0].peak, 90);
+    assert_eq!(
+        read_episode_series(&path, id as u64).unwrap(),
+        PersistedWarnSeries {
+            server: Some(vec![(10, 20), (30, 40)]),
+            ping: Some(vec![15, 25]),
+            exch: Some(vec![35, 45]),
+        }
+    );
+    drop(store);
+    std::fs::remove_file(path).unwrap();
 }

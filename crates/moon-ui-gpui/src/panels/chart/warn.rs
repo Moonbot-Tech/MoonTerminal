@@ -26,8 +26,10 @@ use moon_core::session::CoreId;
 use moon_core::util::now_unix_ms_i64;
 
 use super::ChartPanel;
-use crate::backend::core_warn::{WarnAxis, WarnEpisode, WarnSnapshot};
+use crate::backend::core_warn::store::PersistedWarnSeries;
+use crate::backend::core_warn::{WarnAxis, WarnEnabled, WarnEpisode, WarnSnapshot};
 use crate::design;
+use crate::load_state::LoadState;
 
 /// How far back warning episodes are collected for a chart; the shader clips whatever is off-plot.
 const WARN_SPAN_MS: i64 = 24 * 3600 * 1000;
@@ -72,11 +74,134 @@ struct WarnCluster {
     snap: WarnSnapshot,
 }
 
+/// Identity of one chart read, including both live and committed warning revisions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WarnChartReadKey {
+    /// Server whose badges are being loaded.
+    ip: IpAddr,
+    /// Live episode and display-preference revision.
+    episode_rev: u64,
+    /// Committed persisted-episode revision, or `None` when persistence is unavailable.
+    store_rev: Option<u64>,
+}
+
+/// Latest chart request generation; completions outside it cannot publish.
+#[derive(Default)]
+struct WarnChartReadCache {
+    /// Request currently represented by the badge cache or in flight.
+    key: Option<WarnChartReadKey>,
+    /// Monotonic request generation.
+    sequence: u64,
+}
+
+impl WarnChartReadCache {
+    /// Start a request only when its server or warning revision changed.
+    fn begin(&mut self, key: WarnChartReadKey) -> Option<u64> {
+        if self.key.as_ref() == Some(&key) {
+            return None;
+        }
+        self.key = Some(key);
+        self.sequence = self.sequence.wrapping_add(1);
+        Some(self.sequence)
+    }
+
+    /// Accept only the latest chart completion.
+    fn apply(&self, sequence: u64) -> bool {
+        sequence == self.sequence
+    }
+
+    /// Make a current failure retryable without letting a stale failure reset a newer request.
+    fn fail(&mut self, sequence: u64) {
+        if sequence == self.sequence {
+            self.key = None;
+        }
+    }
+}
+
+/// One hovered episode's persisted series and its generation-gated load state.
+#[derive(Default)]
+struct WarnSeriesState {
+    /// Episode represented by this load, or `None` when a retry may start or live rings suffice.
+    key: Option<u64>,
+    /// Last requested episode, retained across the single retry to preserve its attempt count.
+    last: Option<u64>,
+    /// Number of failed reads already replaced by a retry.
+    retries: u8,
+    /// Monotonic hover generation.
+    sequence: u64,
+    /// Loading, ready, or completed-absent series.
+    state: LoadState<PersistedWarnSeries>,
+    /// Foreground completion or delayed retry; replacement cancels the previous wait.
+    task: Option<Task<()>>,
+}
+
+impl WarnSeriesState {
+    /// Begin one background read for a newly hovered episode or its single scheduled retry.
+    fn begin(&mut self, episode_id: u64) -> Option<u64> {
+        if self.key == Some(episode_id) {
+            return None;
+        }
+        if self.last != Some(episode_id) {
+            self.retries = 0;
+        }
+        self.last = Some(episode_id);
+        self.key = Some(episode_id);
+        self.sequence = self.sequence.wrapping_add(1);
+        self.state = LoadState::default();
+        self.task = None;
+        Some(self.sequence)
+    }
+
+    /// Invalidate the in-flight result when hover ends or live data makes persistence unnecessary.
+    fn clear(&mut self) {
+        if self.key.is_none() && self.last.is_none() && self.task.is_none() {
+            return;
+        }
+        self.key = None;
+        self.last = None;
+        self.retries = 0;
+        self.sequence = self.sequence.wrapping_add(1);
+        self.state = LoadState::default();
+        self.task = None;
+    }
+
+    /// Publish only the completion belonging to the current hovered episode.
+    fn apply(
+        &mut self,
+        sequence: u64,
+        episode_id: u64,
+        result: Result<PersistedWarnSeries, moon_core::db::ReadFail>,
+    ) -> bool {
+        if sequence != self.sequence || self.key != Some(episode_id) {
+            return false;
+        }
+        self.state.apply(result);
+        true
+    }
+
+    /// Allow one current failure to schedule a retry; the second becomes a completed empty state.
+    fn fail(&mut self, sequence: u64, episode_id: u64) -> bool {
+        if sequence != self.sequence || self.key != Some(episode_id) {
+            return false;
+        }
+        if self.retries == 0 {
+            self.retries = 1;
+            self.key = None;
+            self.state = LoadState::default();
+            self.task = None;
+            true
+        } else {
+            self.state.apply(Err(moon_core::db::ReadFail::NotReady));
+            false
+        }
+    }
+}
+
 /// This chart's warning badges (one per cluster), the card payload, and the hover that drives them.
 #[derive(Default)]
 pub(super) struct WarnState {
-    /// Cluster + gem pairs, oldest first: the cluster backs the card, the gem carries the time.
-    items: Rc<Vec<(WarnCluster, NewsMark)>>,
+    /// Cluster payloads from the latest accepted chart read, oldest first.
+    clusters: Rc<Vec<WarnCluster>>,
     /// The gems alone, shared with the engine's own-pass geometry.
     marks: Rc<Vec<NewsMark>>,
     /// Engine episode revision the marks were built from; `None` means none built yet.
@@ -85,6 +210,12 @@ pub(super) struct WarnState {
     ip: Option<IpAddr>,
     /// Badge colour the gems were built with, so a theme switch rebuilds them.
     amber: Option<u32>,
+    /// Server/revision identity and generation of the background episode read.
+    read: WarnChartReadCache,
+    /// Current background episode-read completion.
+    read_task: Option<Task<()>>,
+    /// Persisted graphs for the currently hovered old episode.
+    series: WarnSeriesState,
     /// Badges under the cursor: the nearest one grows and its cluster fills the card.
     hover: Option<MarkHit>,
     /// Last hit-test point, carrying the Delphi movement threshold the order-line hover uses.
@@ -95,14 +226,14 @@ pub(super) struct WarnState {
 }
 
 impl ChartPanel {
-    /// Rebuild this chart's warning badges when the episode revision, server, or theme moved, and
-    /// publish them to the engine. Returns whether the engine's geometry changed.
+    /// Schedule this chart's warning read when its server or warning revisions move, and restyle the
+    /// cached clusters when only the theme changes. SQLite, sorting, and clustering stay off-thread.
     pub(super) fn sync_warn_marks(&mut self, cx: &mut Context<Self>) -> bool {
         let Some((core, _market)) = self.chart.active_target() else {
             return self.clear_warn(cx);
         };
         let amber = MoonPalette::active(cx).amber;
-        let (ip, rev) = {
+        let (ip, rev, store_rev) = {
             let b = self.backend.read(cx);
             let ip = b
                 .session
@@ -110,35 +241,99 @@ impl ChartPanel {
                 .core(core)
                 .and_then(|core| core.endpoint)
                 .map(|endpoint| endpoint.address);
-            (ip, b.warn.episode_rev())
+            (
+                ip,
+                b.warn.episode_rev(),
+                b.warn_store.as_ref().map(|store| store.revision()),
+            )
         };
         let Some(ip) = ip else {
             return self.clear_warn(cx);
         };
-        if self.warn.sig == Some(rev) && self.warn.ip == Some(ip) && self.warn.amber == Some(amber)
-        {
+        let key = WarnChartReadKey {
+            ip,
+            episode_rev: rev,
+            store_rev,
+        };
+        let read_changed = self.warn.read.key.as_ref() != Some(&key);
+        let server_changed = self.warn.ip != Some(ip);
+        let theme_changed = self.warn.amber != Some(amber);
+        if !read_changed && !server_changed && !theme_changed && self.warn.sig == Some(rev) {
             return false;
         }
         self.warn.sig = Some(rev);
         self.warn.ip = Some(ip);
         self.warn.amber = Some(amber);
+        if server_changed {
+            self.warn.clusters = Rc::new(Vec::new());
+            self.warn.marks = Rc::new(Vec::new());
+            self.warn.hover = None;
+            self.warn.series.clear();
+        }
 
-        let now_ms = now_unix_ms_i64();
-        let episodes = {
-            let b = self.backend.read(cx);
-            b.warn_episodes_for_server(ip, now_ms - WARN_SPAN_MS, now_ms)
+        if let Some(sequence) = self.warn.read.begin(key.clone()) {
+            let now_ms = now_unix_ms_i64();
+            let from_ms = now_ms - WARN_SPAN_MS;
+            let read_persisted = store_rev.is_some();
+            let (open, enabled, params) = {
+                let b = self.backend.read(cx);
+                (b.warn.open_episodes(), b.warn_enabled(), b.warn_params())
+            };
+            self.warn.read_task = Some(cx.spawn(async move |this, cx| {
+                let executor = cx.update(|cx| cx.background_executor().clone());
+                let result = executor
+                    .spawn(async move {
+                        let persisted = if read_persisted {
+                            crate::backend::core_warn::store::read_episodes_for_server(
+                                &moon_core::config::paths::core_warnings_db_path(),
+                                ip,
+                                from_ms,
+                                now_ms,
+                            )?
+                        } else {
+                            Vec::new()
+                        };
+                        Ok::<_, rusqlite::Error>(cluster_chart_episodes(
+                            persisted, open, ip, from_ms, now_ms, enabled, params,
+                        ))
+                    })
+                    .await;
+                let _ = this.update(cx, |this, cx| match result {
+                    Ok(clusters) => {
+                        if this.warn.read.apply(sequence) {
+                            this.warn.clusters = Rc::new(clusters);
+                            this.rebuild_warn_mark_models(cx);
+                            if this.warn.ctrl && this.warn.hover.is_some() {
+                                cx.notify();
+                            }
+                        }
+                    }
+                    Err(_) => this.warn.read.fail(sequence),
+                });
+            }));
+        }
+        if server_changed || theme_changed {
+            return self.rebuild_warn_mark_models(cx);
+        }
+        false
+    }
+
+    /// Rebuild gems from the accepted clusters, revalidate hover, and publish their current style.
+    fn rebuild_warn_mark_models(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(amber) = self.warn.amber else {
+            return false;
         };
-        let items: Vec<(WarnCluster, NewsMark)> = cluster_episodes(episodes)
-            .into_iter()
-            .map(|cluster| {
-                let mark = NewsMark::new(cluster.start_ms, std::iter::once(amber));
-                (cluster, mark)
-            })
-            .collect();
-        self.warn.marks = Rc::new(items.iter().map(|(_, mark)| *mark).collect());
-        self.warn.items = Rc::new(items);
+        self.warn.marks = Rc::new(
+            self.warn
+                .clusters
+                .iter()
+                .map(|cluster| NewsMark::new(cluster.start_ms, std::iter::once(amber)))
+                .collect(),
+        );
         self.warn.probe = None;
-        self.warn.hover = self.warn_hit_at_cursor();
+        let hit = self.warn_hit_at_cursor();
+        self.apply_warn_hover(hit, cx);
+        self.sync_warn_series(cx);
         self.publish_warn_marks(cx)
     }
 
@@ -262,8 +457,76 @@ impl ChartPanel {
             return false;
         }
         self.warn.hover = hit;
+        self.sync_warn_series(cx);
         self.publish_warn_marks(cx);
         self.warn.ctrl
+    }
+
+    /// Fetch a closed hovered episode's three persisted series once, only when a live ring is absent.
+    fn sync_warn_series(&mut self, cx: &mut Context<Self>) {
+        let needed = (|| {
+            if !self.warn.ctrl {
+                return None;
+            }
+            let hover = self.warn.hover.as_ref()?;
+            let cluster = self.warn.clusters.get(hover.nearest)?;
+            if cluster.open {
+                return None;
+            }
+            let ip = self.warn.ip?;
+            let now_ms = now_unix_ms_i64();
+            let b = self.backend.read(cx);
+            let complete_live = b.warn_server_slice(ip, cluster.start_ms, now_ms).is_some()
+                && b.warn_server_ping_slice(ip, cluster.start_ms, now_ms)
+                    .is_some()
+                && b.warn_server_exch_slice(ip, cluster.start_ms, now_ms)
+                    .is_some();
+            (!complete_live).then_some(cluster.id)
+        })();
+        let Some(episode_id) = needed else {
+            self.warn.series.clear();
+            return;
+        };
+        let Some(sequence) = self.warn.series.begin(episode_id) else {
+            return;
+        };
+        self.warn.series.task = Some(cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let result = executor
+                .spawn(async move {
+                    crate::backend::core_warn::store::read_episode_series(
+                        &moon_core::config::paths::core_warnings_db_path(),
+                        episode_id,
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(series) => {
+                    if this.warn.series.apply(sequence, episode_id, Ok(series)) {
+                        cx.notify();
+                    }
+                }
+                Err(_) => {
+                    if this.warn.series.fail(sequence, episode_id) {
+                        cx.notify();
+                        this.warn.series.task = Some(cx.spawn(async move |this, cx| {
+                            let executor = cx.update(|cx| cx.background_executor().clone());
+                            executor.timer(std::time::Duration::from_millis(250)).await;
+                            let _ = this.update(cx, |this, cx| {
+                                if this.warn.series.sequence == sequence
+                                    && this.warn.series.key.is_none()
+                                {
+                                    this.sync_warn_series(cx);
+                                    cx.notify();
+                                }
+                            });
+                        }));
+                    } else {
+                        cx.notify();
+                    }
+                }
+            });
+        }));
     }
 
     /// Track the secondary modifier and repaint when it changes what the card shows.
@@ -273,6 +536,7 @@ impl ChartPanel {
             return;
         }
         self.warn.ctrl = ctrl;
+        self.sync_warn_series(cx);
         // Only a badge under the cursor can produce a card; a bare Ctrl press must not repaint.
         if self.warn.hover.is_some() {
             cx.notify();
@@ -292,7 +556,8 @@ impl ChartPanel {
         }
         let hover = self.warn.hover.as_ref()?;
         let (cursor_x, _) = self.input.cursor?;
-        let (cluster, mark) = self.warn.items.get(hover.nearest)?;
+        let cluster = self.warn.clusters.get(hover.nearest)?;
+        let mark = self.warn.marks.get(hover.nearest)?;
         let sf = sf.max(0.1);
         let slot = self.chart.slot_dev_size();
         let slot_w = slot.0 as f32 / sf;
@@ -311,44 +576,31 @@ impl ChartPanel {
 
         let now_ms = now_unix_ms_i64();
         let core_reading = self.core_reading_at(cluster.start_ms, now_ms, cx);
-        let graph = self
+        let live_graph = self
             .warn
             .ip
-            .and_then(|ip| self.server_slice(ip, cluster.start_ms, now_ms, cx))
-            .or_else(|| {
-                // Older than the live ring: fall back to the slice persisted at capture. Only a
-                // closed cluster has one (an open episode carries an engine id, not a stored row id).
-                (!cluster.open)
-                    .then(|| self.backend.read(cx).warn_series_slice(cluster.id))
-                    .flatten()
-            });
-        // Each ping line rides the same window on its own ms scale (live ring, then persisted slice).
-        let ping_graph = self
-            .warn
-            .ip
-            .and_then(|ip| {
-                self.backend
-                    .read(cx)
-                    .warn_server_ping_slice(ip, cluster.start_ms, now_ms)
-            })
-            .or_else(|| {
-                (!cluster.open)
-                    .then(|| self.backend.read(cx).warn_ping_series_slice(cluster.id))
-                    .flatten()
-            });
-        let exch_graph = self
-            .warn
-            .ip
-            .and_then(|ip| {
-                self.backend
-                    .read(cx)
-                    .warn_server_exch_slice(ip, cluster.start_ms, now_ms)
-            })
-            .or_else(|| {
-                (!cluster.open)
-                    .then(|| self.backend.read(cx).warn_exch_series_slice(cluster.id))
-                    .flatten()
-            });
+            .and_then(|ip| self.server_slice(ip, cluster.start_ms, now_ms, cx));
+        let live_ping = self.warn.ip.and_then(|ip| {
+            self.backend
+                .read(cx)
+                .warn_server_ping_slice(ip, cluster.start_ms, now_ms)
+        });
+        let live_exch = self.warn.ip.and_then(|ip| {
+            self.backend
+                .read(cx)
+                .warn_server_exch_slice(ip, cluster.start_ms, now_ms)
+        });
+        let needs_persisted =
+            !cluster.open && (live_graph.is_none() || live_ping.is_none() || live_exch.is_none());
+        let persisted = (needs_persisted && self.warn.series.key == Some(cluster.id))
+            .then(|| self.warn.series.state.data())
+            .flatten();
+        let series_loading = needs_persisted
+            && (self.warn.series.key != Some(cluster.id)
+                || matches!(self.warn.series.state, LoadState::Loading { .. }));
+        let graph = live_graph.or_else(|| persisted.and_then(|series| series.server.clone()));
+        let ping_graph = live_ping.or_else(|| persisted.and_then(|series| series.ping.clone()));
+        let exch_graph = live_exch.or_else(|| persisted.and_then(|series| series.exch.clone()));
         let body = cluster_card_body(
             cluster,
             mark,
@@ -357,6 +609,7 @@ impl ChartPanel {
             graph,
             ping_graph,
             exch_graph,
+            series_loading,
             self.backend.read(cx),
             palette,
             cx,
@@ -381,6 +634,35 @@ impl ChartPanel {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+/// Merge one background persisted read with the open episodes captured by its requesting generation.
+fn cluster_chart_episodes(
+    mut persisted: Vec<WarnEpisode>,
+    open: Vec<WarnEpisode>,
+    ip: IpAddr,
+    from_ms: i64,
+    to_ms: i64,
+    enabled: WarnEnabled,
+    params: moon_core::config::layout::WarnParams,
+) -> Vec<WarnCluster> {
+    persisted.extend(open.into_iter().filter(|episode| {
+        episode.server_ip == Some(ip) && episode.start_ms >= from_ms && episode.start_ms <= to_ms
+    }));
+    persisted.retain(|episode| enabled.allows(episode.axis) && chart_axis(&params, episode.axis));
+    cluster_episodes(persisted)
+}
+
+/// Whether one axis draws on charts, separately from whether it is detected and recorded.
+fn chart_axis(params: &moon_core::config::layout::WarnParams, axis: WarnAxis) -> bool {
+    match axis {
+        WarnAxis::SysCpu => params.cpu.chart,
+        WarnAxis::MemGrowth => params.mem.chart,
+        WarnAxis::Unreachable => params.conn.chart,
+        WarnAxis::Ping => params.ping.chart,
+        WarnAxis::ExchPing => params.exch.chart,
+        WarnAxis::ApiExpiry | WarnAxis::ApiQuota => false,
     }
 }
 
@@ -459,7 +741,7 @@ fn merge_axis(cluster: &mut WarnCluster, episode: &WarnEpisode) {
             )
         }
         WarnAxis::Unreachable => cluster.conn = true,
-        // Never reaches here: `warn_chart` reports false for this axis, so the chart read path
+        // Never reaches here: `chart_axis` reports false for this axis, so the chart read path
         // filters it out before clustering. An expiring key is a standing state with no per-second
         // history, so it has nothing to draw on a time axis.
         WarnAxis::ApiExpiry | WarnAxis::ApiQuota => {}
@@ -482,6 +764,7 @@ fn cluster_card_body(
     graph: Option<Vec<(u8, u8)>>,
     ping_graph: Option<Vec<u16>>,
     exch_graph: Option<Vec<u16>>,
+    series_loading: bool,
     backend: &crate::Backend,
     p: MoonPalette,
     cx: &App,
@@ -618,6 +901,9 @@ fn cluster_card_body(
         .children(exch_line)
         .when(!cores.is_empty(), |this| {
             this.child(muted_line(cores.join(", "), p, cx))
+        })
+        .when(series_loading, |this| {
+            this.child(muted_line(t!("common.loading").to_string(), p, cx))
         })
         // The ±1 min graph around the warning (system CPU / occupied memory / ping), once the ring
         // covers it. Drawn if either series has enough points.
@@ -792,3 +1078,6 @@ fn core_name(backend: &crate::Backend, id: CoreId) -> Option<String> {
         .find(|server| server.id == id)
         .map(|server| server.name.clone())
 }
+
+#[cfg(test)]
+mod tests;

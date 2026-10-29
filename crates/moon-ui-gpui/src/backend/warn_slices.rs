@@ -100,25 +100,10 @@ pub(super) fn ring_slice<T: Copy>(
     Some(ring.iter().skip(lo).take(hi - lo + 1).copied().collect())
 }
 
-/// Capture and persist one episode's FULL ±30 s topology from the current rings, overwriting any
-/// earlier partial capture (the store uses `INSERT OR REPLACE`). A ring with no data in the window
-/// writes nothing. So any warning — on a core or a server — leaves a self-contained record for
-/// analysis: the server graph (`badge 0`) plus EVERY core on the server (`badge = core id`), each
-/// with its own CPU/memory and both pings. An unknown-endpoint episode has no server ring, so only
-/// its core's slice is written.
-///
-/// Args:
-///     store: The warnings database.
-///     server: Server `(cpu %, mem %)` ring, or `None` for an unknown endpoint.
-///     ping: Server worst client↔core ping ring.
-///     exch: Server worst core→exchange ping ring.
-///     cores: Each core to record with its per-core metrics ring.
-///     episode_id: The `core_warnings` row id these slices belong to.
-///     start_ms: Episode start; the window is `[start - BACK, start + FWD]`.
-///     now_ms: Current time, bounding the forward edge to what has actually accrued.
-#[allow(clippy::too_many_arguments)]
+/// Capture one episode's FULL ±30 s topology as encoded series for one transactional write.
+/// A ring with no data in the window contributes nothing. The server graph (`badge 0`) plus every
+/// core (`badge = core id`) retain their existing CPU/memory and ping formats.
 pub(super) fn capture_topology(
-    store: &crate::backend::core_warn::store::WarnStore,
     server: Option<&std::collections::VecDeque<(u8, u8)>>,
     ping: Option<&std::collections::VecDeque<u16>>,
     exch: Option<&std::collections::VecDeque<u16>>,
@@ -126,43 +111,30 @@ pub(super) fn capture_topology(
         CoreId,
         Option<&std::collections::VecDeque<crate::backend::server_chart::CoreMetrics>>,
     )],
-    episode_id: i64,
     start_ms: i64,
     now_ms: i64,
-) {
+) -> Vec<crate::backend::core_warn::store::WarnSlice> {
     // NOTE for the future timestamped reader: `base_ms` assumes the slice reaches the full back edge.
     // A subject whose ring is shorter than the back window yields a slice whose first sample is NEWER
     // than `base_ms`, so times must be derived from the slice (aligned to `start_ms` and its length),
     // not from `base_ms`. No current reader uses `base_ms`, so this is latent.
     let base_ms = start_ms - WARN_SLICE_BACK_MS;
-    let warn = |what: &str, r: rusqlite::Result<()>| {
-        if let Err(err) = r {
-            log::warn!("core warning {what} slice persist failed: {err}");
-        }
-    };
-    // Server graph (badge 0) + its two worst-ping lines.
-    if let Some(s) = ring_slice(server, start_ms, now_ms) {
-        warn(
-            "server",
-            store.insert_series(episode_id, 0, "server", base_ms, &s),
-        );
+    let mut out = Vec::new();
+    if let Some(samples) = ring_slice(server, start_ms, now_ms) {
+        out.push(crate::backend::core_warn::store::WarnSlice::pairs(
+            0, "server", base_ms, &samples,
+        ));
     }
-    if let Some(p) = ring_slice(ping, start_ms, now_ms) {
-        warn(
-            "ping",
-            store.insert_ping_series(episode_id, 0, "ping", base_ms, &p),
-        );
+    if let Some(samples) = ring_slice(ping, start_ms, now_ms) {
+        out.push(crate::backend::core_warn::store::WarnSlice::ping(
+            0, "ping", base_ms, &samples,
+        ));
     }
-    if let Some(e) = ring_slice(exch, start_ms, now_ms) {
-        warn(
-            "exch",
-            store.insert_ping_series(episode_id, 0, "exch", base_ms, &e),
-        );
+    if let Some(samples) = ring_slice(exch, start_ms, now_ms) {
+        out.push(crate::backend::core_warn::store::WarnSlice::ping(
+            0, "exch", base_ms, &samples,
+        ));
     }
-    // Every core (badge = core id): its own CPU/memory pair and its two pings, split out of the
-    // combined per-core sample so each rides its existing blob format. Distinct subjects from the
-    // server ("core*"/"server"+"ping"/"exch") so a core id of 0 cannot collide with the server
-    // sentinel badge (0) on the shared unique key.
     for (id, ring) in cores {
         let Some(slice) = ring_slice(*ring, start_ms, now_ms) else {
             continue;
@@ -171,19 +143,23 @@ pub(super) fn capture_topology(
         let cm: Vec<(u8, u8)> = slice.iter().map(|m| (m.cpu, m.mem)).collect();
         let pings: Vec<u16> = slice.iter().map(|m| m.ping).collect();
         let exchs: Vec<u16> = slice.iter().map(|m| m.exch).collect();
-        warn(
-            "core",
-            store.insert_series(episode_id, badge, "core", base_ms, &cm),
-        );
-        warn(
-            "core ping",
-            store.insert_ping_series(episode_id, badge, "core_ping", base_ms, &pings),
-        );
-        warn(
-            "core exch",
-            store.insert_ping_series(episode_id, badge, "core_exch", base_ms, &exchs),
-        );
+        out.push(crate::backend::core_warn::store::WarnSlice::pairs(
+            badge, "core", base_ms, &cm,
+        ));
+        out.push(crate::backend::core_warn::store::WarnSlice::ping(
+            badge,
+            "core_ping",
+            base_ms,
+            &pings,
+        ));
+        out.push(crate::backend::core_warn::store::WarnSlice::ping(
+            badge,
+            "core_exch",
+            base_ms,
+            &exchs,
+        ));
     }
+    out
 }
 
 /// Push a pending capture, evicting the oldest if the queue is at its cap.
@@ -193,3 +169,6 @@ pub(super) fn push_pending_slice(queue: &mut Vec<PendingWarnSlice>, item: Pendin
     }
     queue.push(item);
 }
+
+#[cfg(test)]
+mod tests;
