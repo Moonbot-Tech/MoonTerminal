@@ -398,8 +398,16 @@ fn writer_batch_uses_the_ordered_publication_aggregator_once() {
             .count(),
         1
     );
-    assert_eq!(writer.matches("publish_report_commit(").count(), 1);
-    assert!(writer.contains("if let Some(publication) = publication"));
+    assert_eq!(
+        writer.matches("publish_report_commit(").count(),
+        2,
+        "one initialization refresh and one refresh per committed batch"
+    );
+    let per_batch = writer
+        .split_once("if let Some(publication) = publication")
+        .expect("the committed batch has a publication gate")
+        .1;
+    assert_eq!(per_batch.matches("publish_report_commit(").count(), 1);
 }
 
 /// The full-history re-declaration after a replica wipe must be sent AFTER the page
@@ -1540,4 +1548,29 @@ fn attach_databases_attaches_valuation_only_when_requested() {
     drop(all);
     drop(strategies_only);
     test_support::remove_db(&path);
+}
+
+/// Feed start-state reads must wait until asynchronous writer initialization finishes.
+///
+/// Publishing an empty map before `rep::init` would turn an existing replica into a full re-sync.
+#[test]
+fn writer_init_releases_checkpoint_readers_only_after_completion() {
+    let init = Arc::new(WriterInit::default());
+    let waiter_init = init.clone();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        waiter_init.wait();
+        done_tx.send(()).unwrap();
+    });
+
+    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(matches!(
+        done_rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    init.finish();
+    done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    waiter.join().unwrap();
 }

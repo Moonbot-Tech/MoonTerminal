@@ -68,7 +68,7 @@ pub(crate) fn compact_due_at(now_ms: i64) -> anyhow::Result<crate::backups::DueO
                 &crate::config::paths::reports_db_path(),
                 &crate::config::paths::strategies_db_path(),
                 &crate::backups::STRATEGY_MAINTENANCE,
-                super::report_recovery::ensure_access,
+                super::report_recovery::wait_for_write_access,
                 compact_db,
             )
         },

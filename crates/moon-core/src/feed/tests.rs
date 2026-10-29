@@ -207,3 +207,19 @@ fn a_parked_owner_wakes_when_a_feed_token_is_admitted() {
     );
     owner.join().unwrap();
 }
+
+/// Startup staggering must leave one core instant and spread ten initial attempts over 1.5 seconds.
+///
+/// Returning zero for every core restores the connection burst; applying the last core's delay to
+/// the first needlessly slows the common single-core launch.
+#[test]
+fn startup_delay_spreads_only_multi_core_launch() {
+    assert_eq!(super::retry::startup_delay(0, 1), Duration::ZERO);
+    let delays: Vec<u128> = (0..10)
+        .map(|index| super::retry::startup_delay(index, 10).as_millis())
+        .collect();
+    assert_eq!(
+        delays,
+        vec![0, 166, 333, 500, 666, 833, 1000, 1166, 1333, 1500]
+    );
+}

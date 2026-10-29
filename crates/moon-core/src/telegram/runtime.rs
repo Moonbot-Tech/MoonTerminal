@@ -66,6 +66,59 @@ pub enum Response {
 }
 /// In-memory pairing ledger shared by the bot and the Mini App session check.
 pub type SharedAuthorization = Arc<Mutex<Authorization>>;
+
+/// Result of loading the notification document on its owner thread.
+#[derive(Default)]
+struct NotificationLoad {
+    /// Whether loading has either succeeded or failed.
+    done: bool,
+    /// Fully loaded store, or `None` when the document could not be read.
+    store: Option<Arc<Mutex<NotifyStore>>>,
+}
+
+/// Shared handoff that lets service construction finish before notification I/O completes.
+struct NotificationSlot {
+    /// Completed load result.
+    state: Mutex<NotificationLoad>,
+    /// Stable sender wake shared with the store once it loads.
+    wake: Arc<notify::NotifyWake>,
+}
+
+impl NotificationSlot {
+    /// Create a pending result with the wake that shutdown can ring before loading finishes.
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(NotificationLoad::default()),
+            wake: Arc::default(),
+        })
+    }
+
+    /// Build an already-loaded slot for a service fixture with no loader thread.
+    #[cfg(test)]
+    fn loaded(store: Arc<Mutex<NotifyStore>>) -> Arc<Self> {
+        let wake = notify::lock_store(&store).wake.clone();
+        let slot = Arc::new(Self {
+            state: Mutex::new(NotificationLoad::default()),
+            wake,
+        });
+        slot.complete(Some(store));
+        slot
+    }
+
+    /// Publish one terminal load result for later nonblocking host polls.
+    fn complete(&self, store: Option<Arc<Mutex<NotifyStore>>>) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.store = store;
+        state.done = true;
+    }
+
+    /// Return the completed store, or `None` while the owner is still loading or after a failure.
+    fn get(&self) -> Option<Arc<Mutex<NotifyStore>>> {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.done.then(|| state.store.clone()).flatten()
+    }
+}
+
 /// Optional owner constructed only after the saved credential passes the off switch.
 pub struct TelegramService {
     alive: Option<Arc<()>>,
@@ -74,7 +127,7 @@ pub struct TelegramService {
     authorization: SharedAuthorization,
     mini_config: Arc<Mutex<TelegramConfig>>,
     labels: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
-    notifications: Option<Arc<Mutex<NotifyStore>>>,
+    notifications: Option<Arc<NotificationSlot>>,
     /// The sender's wake, rung on stop so it leaves its wait at once.
     notify_wake: Option<Arc<notify::NotifyWake>>,
     /// Causal owner wake shared with every bounded work producer.
@@ -168,29 +221,43 @@ impl TelegramService {
             }));
         }
         let notifications = match notifications_path {
-            Some(path) => match notify::NotifyStore::open(path) {
-                Ok(mut store) => {
-                    if let Err(error) = store.forget_unpaired(&config.authorized_chat_ids) {
-                        log::warn!("telegram notifications kept unpaired chats: {error}");
+            Some(path) => {
+                let slot = NotificationSlot::new();
+                let thread_slot = slot.clone();
+                let store_wake = slot.wake.clone();
+                let authorized = config.authorized_chat_ids.clone();
+                let api = super::api::BotApi::with_flood_wait(config.token.clone(), flood);
+                let alive = Arc::downgrade(&alive);
+                let spawned = thread::Builder::new()
+                    .name("telegram-notify-load".into())
+                    .spawn(move || match notify::NotifyStore::open(path) {
+                        Ok(mut store) => {
+                            if let Err(error) = store.forget_unpaired(&authorized) {
+                                log::warn!("telegram notifications kept unpaired chats: {error}");
+                            }
+                            store.wake = store_wake;
+                            let store = Arc::new(Mutex::new(store));
+                            let sender = notify::spawn_sender(api, alive, Arc::clone(&store));
+                            thread_slot.complete(Some(store));
+                            let _ = sender.join();
+                        }
+                        Err(error) => {
+                            log::warn!("telegram notifications disabled: {error}");
+                            thread_slot.complete(None);
+                        }
+                    });
+                match spawned {
+                    Ok(join) => joins.push(join),
+                    Err(error) => {
+                        log::warn!("telegram notification loader did not start: {error}");
+                        slot.complete(None);
                     }
-                    let store = Arc::new(Mutex::new(store));
-                    joins.push(notify::spawn_sender(
-                        super::api::BotApi::with_flood_wait(config.token.clone(), flood),
-                        Arc::downgrade(&alive),
-                        Arc::clone(&store),
-                    ));
-                    Some(store)
                 }
-                Err(error) => {
-                    log::warn!("telegram notifications disabled: {error}");
-                    None
-                }
-            },
+                Some(slot)
+            }
             None => None,
         };
-        let notify_wake = notifications
-            .as_ref()
-            .map(|store| Arc::clone(&notify::lock_store(store).wake));
+        let notify_wake = notifications.as_ref().map(|slot| Arc::clone(&slot.wake));
         Some(Self {
             alive: Some(alive),
             joins,
@@ -204,13 +271,13 @@ impl TelegramService {
         })
     }
 
-    /// The durable outbox, when `start` was given a notifications path that loaded.
+    /// The durable outbox when the notification owner has finished loading it.
     ///
     /// Returns:
-    ///     The store the moon-tg host edits, or `None` when no path was given or the file
-    ///     failed to load. Callers handle `None`; this method does not panic.
+    ///     The store the moon-tg host edits, or `None` while loading, when no path was given,
+    ///     or after a load failure. This getter never waits on the UI thread.
     pub fn notify_store(&self) -> Option<Arc<Mutex<NotifyStore>>> {
-        self.notifications.clone()
+        self.notifications.as_ref().and_then(|slot| slot.get())
     }
     /// Drain one event without waiting on transport.
     pub fn try_recv(&self) -> Option<Work> {
@@ -259,8 +326,8 @@ impl TelegramService {
         for join in self.joins.drain(..) {
             let _ = join.join();
         }
-        if let Some(store) = &self.notifications {
-            if let Err(error) = notify::lock_store(store).checkpoint() {
+        if let Some(store) = self.notifications.as_ref().and_then(|slot| slot.get()) {
+            if let Err(error) = notify::lock_store(&store).checkpoint() {
                 log::warn!("telegram notify shutdown checkpoint failed: {error}");
             }
         }

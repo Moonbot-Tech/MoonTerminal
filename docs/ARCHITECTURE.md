@@ -181,24 +181,31 @@ Rules that are easy to break unnoticed:
   - Deleting a core does NOT clean its history: the number retires, not the data. An unreadable store
     contributes nothing — the floor only grows, so this is best-effort, not a guarantee.
 - **A damaged report replica is recovered only after the uid-floor and before the writer.**
-  `db::report_recovery::prepare` first takes an inter-process lease, then uses a bounded
-  full `integrity_check`. Confirmed damage is never "repaired" in place:
+  `db::report_recovery::prepare` first takes an inter-process lease, then runs a cheap
+  `quick_check` before the first window. Page damage it confirms is recovered synchronously;
+  a clean or inconclusive cheap result opens read access and starts one bounded full
+  `integrity_check` in the background. Writes and maintenance wait for a conclusive full pass;
+  a timeout or failed check does not authorize them. The writer also waits before opening the
+  database, so index-only damage that `quick_check` cannot see still receives no writes. A
+  read-only WAL anchor held by the permit keeps early read-write preference readers from
+  triggering a last-connection checkpoint before the writer opens.
+  Confirmed damage is never "repaired" in place:
   `reports.sqlite`, `reports.sqlite-wal` and `reports.sqlite-shm` are copied to staging, checked
   by size and SHA-256, given versioned metadata and published by one directory rename into
   `data/damaged-reports/`. Only a published snapshot permits atomically renaming the originals
   into its `originals/` subfolder and creating a clean replica; the source bytes are not deleted. The private
   `ReportWritePermit` does not let `spawn_writer` be called around this order, and the same lease
-  closes access for readers and a manual VACUUM from a second process. Holding the lease itself does not yet
-  grant access: the gate opens only after a `Ready` result or a fully completed
-  `Recovered`, so `Blocked`/`Failed` leave no bypassing read-write path.
+  closes access for readers and a manual VACUUM from a second process. If the full check finds
+  damage, new reads stop before the same copy-first recovery runs in the background.
+  `Blocked`/`Failed` leave no bypassing read-write path.
   - The `finalized` marker makes the original transfer a resumable transaction: after a crash the next
     start finds already-moved members, checks them against the published hashes and finishes
     the operation. A differing file stays saved; the writer stays off.
   - A new confirmed damage within 24 hours after a successful replacement trips the circuit breaker:
     the current set stays in place, so a filesystem or sync problem does not create
     an infinite chain of copies.
-  - The background check remains after start. If it, a reader, or a writer error publishes damage already
-    during the session, a shared barrier does not allow a subsequent ACK to start: the writer stops
+  - If the startup check, a reader, or a writer error publishes damage during the session,
+    a shared barrier does not allow a subsequent ACK to start: the writer stops
     the retry-loop, and the core can send the unacknowledged batch again after a clean recovery.
     Non-corruption persistent errors are also bounded by retry-round count and do not keep the channel
     blocked forever.

@@ -1,4 +1,48 @@
 use super::*;
+use std::sync::{Condvar, Mutex};
+
+/// Latch published after the writer has computed every core's replication start state.
+#[derive(Default)]
+pub(in crate::db) struct WriterInit {
+    /// Whether initialization has either completed or failed.
+    done: Mutex<bool>,
+    /// Wakes feed threads waiting to read their checkpoints.
+    ready: Condvar,
+}
+
+impl WriterInit {
+    /// Wait on the writer thread's initialization result without blocking the UI.
+    pub(in crate::db) fn wait(&self) {
+        let mut done = self.done.lock().unwrap_or_else(|p| p.into_inner());
+        while !*done {
+            done = self.ready.wait(done).unwrap_or_else(|p| p.into_inner());
+        }
+    }
+
+    /// Publish initialization and wake every feed waiting for its start state.
+    pub(in crate::db) fn finish(&self) {
+        let mut done = self.done.lock().unwrap_or_else(|p| p.into_inner());
+        *done = true;
+        self.ready.notify_all();
+    }
+}
+
+/// Fail-safe initializer latch release on an early return or writer panic.
+struct WriterInitCompletion(Arc<WriterInit>);
+
+impl WriterInitCompletion {
+    /// Publish successful initialization before the writer enters its message loop.
+    fn finish(self) {
+        self.0.finish();
+    }
+}
+
+impl Drop for WriterInitCompletion {
+    /// Release waiting feeds even when initialization failed before success was published.
+    fn drop(&mut self) {
+        self.0.finish();
+    }
+}
 
 /// Writer-channel capacity: backpressure instead of OOM.
 ///
@@ -194,33 +238,19 @@ pub(in crate::db) fn passive_wal_checkpoint(
 /// Start the sole report-replica writer and publish each report-changing commit.
 ///
 /// Args:
-///     permit: Private capability proving startup recovery and the process lease succeeded.
+///     permit: Private capability holding writer authorization behind the full integrity check.
 ///
 /// Returns:
-///     The writer handle, or `None` when the database or writer thread cannot be initialized.
-pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<ReportsHandle> {
+///     The writer handle after its thread spawns. Database and schema initialization run on
+///     that thread; an early failure is logged and releases feeds waiting for start states.
+pub fn spawn_writer(permit: report_recovery::ReportWritePermit) -> Option<ReportsHandle> {
     let (tx, rx): (std::sync::mpsc::SyncSender<DbMsg>, Receiver<DbMsg>) =
         std::sync::mpsc::sync_channel(REPORT_QUEUE_CAP);
     let path = paths::reports_db_path();
-    let conn = match Connection::open(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("отчёты: не удалось открыть {}: {e}", path.display());
-            return None;
-        }
-    };
-    if let Err(e) = init_db(&conn) {
-        log::error!("отчёты: init схемы не удался: {e}");
-        return None;
-    }
     let starts = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let mut rep_state = match rep::init(&conn, starts.clone()) {
-        Ok(st) => st,
-        Err(e) => {
-            log::error!("отчёты: init typed-реплики не удался: {e}");
-            return None;
-        }
-    };
+    let writer_starts = starts.clone();
+    let init = Arc::new(WriterInit::default());
+    let writer_init = init.clone();
     let generation = Arc::new(AtomicU64::new(0));
     let gen_writer = generation.clone();
     let immediate_commit_dirty = Arc::new(AtomicBool::new(false));
@@ -230,6 +260,38 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
     if let Err(e) = std::thread::Builder::new()
         .name("reports-db".into())
         .spawn(move || {
+            let init_complete = WriterInitCompletion(writer_init);
+            let (allowed, wal_anchor) = permit.wait();
+            if !allowed || integrity::writes_blocked() {
+                log::error!("reports: writer stopped because startup integrity did not pass");
+                return;
+            }
+            let conn = match Connection::open(&path) {
+                Ok(conn) => conn,
+                Err(error) => {
+                    log::error!("reports: cannot open {}: {error}", path.display());
+                    return;
+                }
+            };
+            if let Err(error) = init_db(&conn) {
+                log::error!("reports: schema initialization failed: {error}");
+                return;
+            }
+            let mut rep_state = match rep::init(&conn, writer_starts.clone()) {
+                Ok(state) => state,
+                Err(error) => {
+                    log::error!("reports: typed replica initialization failed: {error}");
+                    return;
+                }
+            };
+            init_complete.finish();
+            publish_report_commit(
+                &gen_writer,
+                &writer_immediate_dirty,
+                &writer_background_dirty,
+                ReportPublication::Background,
+            );
+            drop(wal_anchor);
             log::info!("отчёты: writer запущен ({})", path.display());
             // WAL path used by the lazy checkpoint based on the ACTUAL file size below.
             let wal_path = paths::reports_db_files()[1].clone();
@@ -504,6 +566,7 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
         tx: ReportSink {
             tx,
             starts,
+            init,
             send_failed: Arc::new(AtomicBool::new(false)),
         },
         generation,

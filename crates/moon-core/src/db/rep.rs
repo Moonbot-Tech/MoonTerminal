@@ -206,6 +206,8 @@ pub enum DbMsg {
 pub struct ReportSink {
     pub(super) tx: SyncSender<DbMsg>,
     pub(super) starts: Arc<Mutex<HashMap<u64, ReportStart>>>,
+    /// Initialization latch that keeps feeds from reading checkpoints before they exist.
+    pub(in crate::db) init: Arc<super::report_writer::WriterInit>,
     /// Coalesces the terminal channel-closed diagnostic if the writer thread panics.
     pub(super) send_failed: Arc<AtomicBool>,
 }
@@ -220,9 +222,11 @@ impl ReportSink {
 
     /// Where this core's replication starts, defaulting to [`ReportStart::Fresh`].
     ///
-    /// A core absent from the map has no local rows, and a poisoned lock has no trustworthy
-    /// answer; both resolve to a full re-sync rather than to a guessed position.
+    /// The feed thread waits for asynchronous writer initialization before reading this map.
+    /// A core absent after initialization has no local rows, and a poisoned lock has no
+    /// trustworthy answer; both resolve to a full re-sync rather than to a guessed position.
     pub(crate) fn next_start(&self, core_uid: u64) -> ReportStart {
+        self.init.wait();
         self.starts
             .lock()
             .ok()
@@ -381,8 +385,8 @@ impl RepIndex {
 /// writer rather than to run without indexes.
 ///
 /// On an existing replica the first pass is a one-off full-table read per missing index, and it
-/// happens here — on the startup thread, before the first window exists. Measured at 0.4 s over
-/// 529 862 rows (458 MB) with `idx_rep_core_close` the only one missing; a cold or bigger
+/// happens on the writer thread while the first window is already available. Measured at 0.4 s
+/// over 529 862 rows (458 MB) with `idx_rep_core_close` the only one missing; a cold or bigger
 /// replica costs more. Nothing else reports that pause, so time the pass and log it when it
 /// actually cost something: a one-off delay with no line in the log is indistinguishable from a
 /// hang.
@@ -500,24 +504,44 @@ pub(super) fn init(
     };
     // Purge rows left after SyncComplete by older terminal versions that still
     // consumed the legacy close-SQL stream; otherwise the merged reader sees duplicates.
-    for uid in st.synced.clone() {
-        purge_legacy(conn, &mut st, uid)?;
-    }
+    purge_legacy_at_init(conn, &mut st)?;
     Ok(st)
+}
+
+/// Remove every synced core's legacy rows and recount the table once after the whole batch.
+fn purge_legacy_at_init(conn: &Connection, st: &mut RepState) -> rusqlite::Result<()> {
+    if !st.legacy_exists {
+        return Ok(());
+    }
+    for uid in st.synced.clone() {
+        delete_legacy_core(conn, uid)?;
+    }
+    drop_legacy_if_empty(conn, st)
 }
 
 /// Purge one core's legacy rows and permanently drop the empty legacy table.
 ///
-/// The `legacy_dropped` marker prevents `init_db` from recreating it. This is the
-/// shared path for `SyncComplete` and initialization cleanup.
+/// The `legacy_dropped` marker prevents `init_db` from recreating it. Live completion checks
+/// after each core; initialization uses [`purge_legacy_at_init`] to avoid repeated full counts.
 fn purge_legacy(conn: &Connection, st: &mut RepState, core_uid: u64) -> rusqlite::Result<()> {
     if !st.legacy_exists {
         return Ok(());
     }
+    delete_legacy_core(conn, core_uid)?;
+    drop_legacy_if_empty(conn, st)
+}
+
+/// Delete one core's rows without inspecting the rest of the legacy table.
+fn delete_legacy_core(conn: &Connection, core_uid: u64) -> rusqlite::Result<()> {
     conn.execute(
         "DELETE FROM closed_sell_reports WHERE core_uid=?1",
         [core_uid as i64],
     )?;
+    Ok(())
+}
+
+/// Drop the legacy table and record its migration only when no rows remain.
+fn drop_legacy_if_empty(conn: &Connection, st: &mut RepState) -> rusqlite::Result<()> {
     let left: i64 = conn.query_row("SELECT COUNT(*) FROM closed_sell_reports", [], |r| r.get(0))?;
     if left == 0 {
         conn.execute("DROP TABLE closed_sell_reports", [])?;

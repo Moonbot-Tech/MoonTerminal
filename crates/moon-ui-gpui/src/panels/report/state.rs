@@ -308,6 +308,9 @@ pub(super) fn schedule_report_preference(cx: &App, write: ReportPreferenceWrite)
             if latest.load(Ordering::Acquire) != request {
                 return;
             }
+            if db::report_recovery::wait_for_write_access().is_err() {
+                return;
+            }
             let Ok(connection) = db::open_reader() else {
                 return;
             };

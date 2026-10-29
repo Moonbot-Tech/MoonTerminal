@@ -180,13 +180,7 @@ pub(in crate::db::valuation::worker) fn spawn_worker_with_source(
     report_tx: ReportTx,
     source: Arc<dyn SpotRateSource>,
 ) -> Option<ValuationHandle> {
-    let initial_store = match crate::db::valuation::open_canonical_store() {
-        Ok(store) => Some(store),
-        Err(error) => {
-            log::error!("valuation: initial cache recovery failed: {error}");
-            None
-        }
-    };
+    crate::db::valuation::begin_store_validation();
     let generation = Arc::new(AtomicU64::new(0));
     let commit_dirty = Arc::new(AtomicBool::new(false));
     let status = Arc::new(RwLock::new(ValuationStatus::default()));
@@ -205,6 +199,16 @@ pub(in crate::db::valuation::worker) fn spawn_worker_with_source(
     let join = std::thread::Builder::new()
         .name("report-valuation".to_string())
         .spawn(move || {
+            let initial_store = match crate::db::valuation::open_canonical_store() {
+                Ok(store) => Some(store),
+                Err(error) => {
+                    log::error!("valuation: initial cache recovery failed: {error}");
+                    None
+                }
+            };
+            if initial_store.is_some() {
+                publish(&thread_generation, &thread_dirty);
+            }
             run_worker(
                 report_tx,
                 source,

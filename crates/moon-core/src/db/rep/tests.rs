@@ -667,3 +667,61 @@ fn a_stale_walk_step_cannot_replace_a_newer_walk() {
     walk.forget(4);
     assert!(!walk.admit(4, Some(&page_one), &page_two));
 }
+
+/// Measure index creation and ten-core legacy cleanup over a synthetic 100000-deal replica.
+#[test]
+#[ignore = "synthetic startup replica scale probe"]
+fn probe_startup_replica_maintenance_100k() {
+    let conn = Connection::open_in_memory().unwrap();
+    init_db(&conn).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+             closedate INTEGER, strategyid INTEGER, buydate INTEGER, coin TEXT, deleted INTEGER,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         WITH RECURSIVE ids(n) AS (
+             SELECT 1 UNION ALL SELECT n + 1 FROM ids WHERE n < 100000
+         )
+         INSERT INTO orders_rep
+         SELECT (n - 1) % 10 + 1, 'CORE_A', (n - 1) / 10 + 1,
+                1700000000 + n, n % 20, 1699990000 + n, 'COIN_A', 0 FROM ids;",
+    )
+    .unwrap();
+    let cols = table_cols_for_init(&conn).unwrap();
+    let mut index_ms = Vec::new();
+    for _ in 0..3 {
+        let started = std::time::Instant::now();
+        assert!(ensure_indexes(&conn, &cols).unwrap());
+        index_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        for index in REP_INDEXES {
+            conn.execute(&format!("DROP INDEX {}", index.name), [])
+                .unwrap();
+        }
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE closed_sell_reports (core_uid INTEGER NOT NULL, db_id INTEGER NOT NULL);
+         INSERT INTO closed_sell_reports SELECT core_uid, newrecid FROM orders_rep;",
+    )
+    .unwrap();
+    let starts = Arc::new(Mutex::new(HashMap::new()));
+    let mut st = RepState {
+        schemas: HashMap::new(),
+        cols,
+        starts,
+        legacy_exists: true,
+        synced: (1..=10).collect(),
+        vacuum_pending: false,
+        indexes_done: true,
+        awaiting_resync: HashMap::new(),
+    };
+    let started = std::time::Instant::now();
+    purge_legacy_at_init(&conn, &mut st).unwrap();
+    let legacy_ms = started.elapsed().as_secs_f64() * 1000.0;
+    index_ms.sort_by(f64::total_cmp);
+    println!(
+        "probe_startup_replica rows=100000 cores=10 indexes_ms={index_ms:?} indexes_median_ms={:.3} legacy_purge_ms={legacy_ms:.3}",
+        index_ms[1]
+    );
+}

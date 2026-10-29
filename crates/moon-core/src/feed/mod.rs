@@ -1066,6 +1066,18 @@ fn retry_can_help(e: &anyhow::Error) -> bool {
         )
 }
 
+thread_local! {
+    /// Delay consumed by the next feed spawned on the session-startup thread.
+    static NEXT_STARTUP_DELAY: std::cell::Cell<Duration> = const {
+        std::cell::Cell::new(Duration::ZERO)
+    };
+}
+
+/// Arm one startup-only feed delay without changing later reconnect spawns.
+pub(crate) fn arm_startup_delay(index: usize, total: usize) {
+    NEXT_STARTUP_DELAY.with(|delay| delay.set(retry::startup_delay(index, total)));
+}
+
 /// Start the live backend for one core, keeping a connection at all times and subscribing on
 /// command. `reports` is the channel to the SQLite writer; `None` means the database is unavailable
 /// and reports are not written.
@@ -1076,6 +1088,7 @@ pub fn spawn(
     wake: Option<FeedWakeTx>,
     market: Option<SharedMarketStore>,
 ) -> FeedHandle {
+    let startup_delay = NEXT_STARTUP_DELAY.with(std::cell::Cell::take);
     let (data_tx, rx) = std::sync::mpsc::channel();
     let tx = FeedTx::new(data_tx, wake);
     let (cmd_data_tx, cmd_rx) = std::sync::mpsc::channel::<QueuedCmd>();
@@ -1101,7 +1114,7 @@ pub fn spawn(
             let mut shared_config_sequence = live::SharedConfigSequence::new();
             let mut market_role = live::MarketRoleState::default();
             let mut chart_text = live::ChartTextWanted::default();
-            retry::run(&server, &tx, &stop_rx, || {
+            retry::run_with_delay(&server, &tx, &stop_rx, startup_delay, || {
                 // A new connection ends every confirmation path from the previous one. The run
                 // also clears the sequence the moment an established connection stops being ready.
                 client_settings_sequence.drop_lost_connection(server.id);

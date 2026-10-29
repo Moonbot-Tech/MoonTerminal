@@ -307,7 +307,8 @@ impl SessionManager {
 
     /// Start sessions for every active server in an active group, preserving config order.
     ///
-    /// The optional report channel is cloned into each feed.
+    /// The optional report channel is cloned into each feed. Initial connection attempts spread
+    /// over 1.5 seconds without delaying the caller; a single core starts immediately.
     pub fn start(
         config: &AppConfig,
         epoch_ms: f64,
@@ -358,11 +359,13 @@ impl SessionManager {
             core_updates: crate::session::core_update::CoreUpdateQueue::default(),
             identity_respawns: Default::default(),
         };
-        for s in config
+        let active: Vec<_> = config
             .servers
             .iter()
             .filter(|s| s.active && config.group(&s.group).active)
-        {
+            .collect();
+        for (index, s) in active.iter().enumerate() {
+            feed::arm_startup_delay(index, active.len());
             mgr.spawn_core(s, conn_sig(s), config.chart_memory_percent, reports);
         }
         if mgr.sessions.is_empty() {

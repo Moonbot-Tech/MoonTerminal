@@ -111,6 +111,10 @@ fn healthy_db_is_ok_and_damaged_db_is_reported() {
         }
         other => panic!("ожидался Damaged, получено {other:?}"),
     }
+    assert!(
+        matches!(quick(&path), Integrity::Damaged(_)),
+        "the cheap startup gate must catch page damage before the first window"
+    );
 
     for suf in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{}", path.display(), suf));
@@ -185,4 +189,61 @@ fn corruption_publication_waits_for_the_ack_section() {
     worker.join().unwrap();
     assert!(writes_blocked());
     reset_test_state();
+}
+
+/// Measure the full and cheap startup checks over the same synthetic 100000-deal replica.
+#[test]
+#[ignore = "synthetic startup integrity scale probe"]
+fn probe_startup_integrity_100k() {
+    let dir = temp_dir("startup-100k");
+    let path = dir.join("reports.sqlite");
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{}", path.display(), suffix));
+    }
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+             closedate INTEGER, strategyid INTEGER, buydate INTEGER, coin TEXT, deleted INTEGER,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         WITH RECURSIVE ids(n) AS (
+             SELECT 1 UNION ALL SELECT n + 1 FROM ids WHERE n < 100000
+         )
+         INSERT INTO orders_rep
+         SELECT (n - 1) % 10 + 1, 'CORE_A', (n - 1) / 10 + 1,
+                1700000000 + n, n % 20, 1699990000 + n, 'COIN_A', 0 FROM ids;
+         CREATE INDEX idx_rep_closedate ON orders_rep(closedate);
+         CREATE INDEX idx_rep_core_close ON orders_rep(core_uid, closedate);
+         CREATE INDEX idx_rep_strat ON orders_rep(core_uid, strategyid, buydate);
+         CREATE INDEX idx_rep_strategy_close ON orders_rep(core_uid, strategyid, closedate);
+         CREATE INDEX idx_rep_open ON orders_rep(core_uid, buydate)
+             WHERE NOT (typeof(closedate) IN ('integer','real') AND closedate > 0);
+         CREATE INDEX idx_rep_coin_close ON orders_rep(coin COLLATE NOCASE, closedate);
+         CREATE INDEX idx_rep_coin_entry ON orders_rep(core_uid, coin COLLATE NOCASE, buydate)
+             WHERE buydate > 0;
+         PRAGMA wal_checkpoint(TRUNCATE);",
+    )
+    .unwrap();
+    drop(conn);
+
+    let mut full_ms = Vec::new();
+    let mut quick_ms = Vec::new();
+    for _ in 0..3 {
+        let started = Instant::now();
+        assert_eq!(run(&path), Integrity::Ok);
+        full_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        let started = Instant::now();
+        assert_eq!(quick(&path), Integrity::Ok);
+        quick_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    full_ms.sort_by(f64::total_cmp);
+    quick_ms.sort_by(f64::total_cmp);
+    println!(
+        "probe_startup_integrity rows=100000 cores=10 full_ms={full_ms:?} quick_ms={quick_ms:?} full_median_ms={:.3} quick_median_ms={:.3}",
+        full_ms[1], quick_ms[1]
+    );
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{}", path.display(), suffix));
+    }
 }

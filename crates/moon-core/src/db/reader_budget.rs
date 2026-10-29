@@ -52,7 +52,7 @@ struct ReaderBudget {
 }
 
 /// Zero-sized permit: dropping it returns one slot to [`BUDGET`].
-pub(super) struct ReaderPermit;
+pub(crate) struct ReaderPermit;
 
 static BUDGET: ReaderBudget = ReaderBudget {
     slots: Mutex::new(READER_BUDGET),
@@ -137,6 +137,24 @@ pub(super) fn acquire_with_cancellation(
         return AcquireOutcome::Permit(ReaderPermit);
     }
     AcquireOutcome::Timeout
+}
+
+/// Wait until every admitted reader has left, then hold all slots through replica recovery.
+///
+/// New opens recheck the read gate after taking a slot, so disabling reads before calling this
+/// prevents a waiter from joining the drained set. A timeout returns no authorization and drops
+/// any slots already taken instead of letting recovery rename files beneath an active reader.
+pub(crate) fn quiesce() -> Option<Vec<ReaderPermit>> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let mut permits = Vec::with_capacity(READER_BUDGET);
+    for _ in 0..READER_BUDGET {
+        let wait = deadline.saturating_duration_since(std::time::Instant::now());
+        match acquire_with_cancellation(wait, &|| false) {
+            AcquireOutcome::Permit(permit) => permits.push(permit),
+            AcquireOutcome::Timeout | AcquireOutcome::Cancelled => return None,
+        }
+    }
+    Some(permits)
 }
 
 /// Report readers holding a slot right now, for the resource line

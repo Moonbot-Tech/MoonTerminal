@@ -608,7 +608,7 @@ fn service_stop_checkpoints_receipts_with_pending_rows() {
         )),
         mini_config: std::sync::Arc::default(),
         labels: std::sync::Arc::default(),
-        notifications: Some(shared),
+        notifications: Some(super::super::NotificationSlot::loaded(shared)),
         notify_wake: None,
         work_waker: std::sync::Arc::default(),
     };
