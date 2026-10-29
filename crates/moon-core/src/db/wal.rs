@@ -1,4 +1,4 @@
-//! The WAL settings every SQLite store in this crate opens with, and the one compaction they share.
+//! Shared WAL settings for core and UI SQLite stores, and the core stores' compaction.
 //!
 //! # Why a size limit
 //!
@@ -30,7 +30,7 @@ pub(crate) const WAL_SIZE_LIMIT_BYTES: i64 = 64 * 1024 * 1024;
 ///
 /// Errors:
 ///     Any SQLite failure setting either pragma.
-pub(crate) fn enable(conn: &Connection) -> rusqlite::Result<()> {
+pub fn enable(conn: &Connection) -> rusqlite::Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT_BYTES)?;
     Ok(())

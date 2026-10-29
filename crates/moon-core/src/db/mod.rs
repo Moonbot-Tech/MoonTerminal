@@ -41,7 +41,7 @@ pub mod trace;
 mod trade_meta;
 pub mod tuner;
 pub mod valuation;
-pub(crate) mod wal;
+pub mod wal;
 
 pub use core_names::CoreNames;
 pub use dates::{fmt_unix, fmt_unix_date, fmt_unix_secs, parse_ymd};
