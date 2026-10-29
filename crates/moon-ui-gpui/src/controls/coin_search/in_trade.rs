@@ -57,6 +57,7 @@ pub(super) fn trading_markets<'a>(
 fn core_markets(b: &Backend, core: CoreId) -> Rc<HashSet<String>> {
     let store = b.session.store();
     let Some(data) = store.core(core) else {
+        CACHE.with(|cache| cache.borrow_mut().remove(&core));
         return Rc::new(HashSet::new());
     };
     let stamp = (data.orders_table_rev, data.assets_rev, data.conn_epoch);
@@ -92,8 +93,15 @@ pub(super) fn mark_hits(hits: &mut [CoinHit], mut trading: impl FnMut(CoreId, &s
     }
 }
 
+/// Drop traded-market sets whose core no longer has a live session.
+fn retain_live_cores(mut live: impl FnMut(CoreId) -> bool) {
+    CACHE.with(|cache| cache.borrow_mut().retain(|core, _| live(*core)));
+}
+
 /// [`mark_hits`] against the live store.
 pub(super) fn mark_live(b: &Backend, hits: &mut [CoinHit]) {
+    let sessions = b.session.sessions();
+    retain_live_cores(|core| sessions.iter().any(|session| session.id == core));
     let mut sets: HashMap<CoreId, Rc<HashSet<String>>> = HashMap::new();
     mark_hits(hits, |core, market| {
         sets.entry(core)

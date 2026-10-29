@@ -596,6 +596,7 @@ impl SessionManager {
     /// coordination state. Dropping the session terminates its feed thread.
     fn drop_core(&mut self, id: CoreId) {
         self.sessions.retain(|s| s.id != id); // Dropping FeedHandle terminates the thread.
+        crate::feed::forget_stop_core(id);
         self.store.remove(id);
         self.market_source.remove_client(id);
         self.clear_core_coordination(id);

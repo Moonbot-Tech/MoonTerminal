@@ -29,21 +29,24 @@ static AXIS_EPOCH: AtomicU64 = AtomicU64::new(0);
 /// margin and long-position window, and the report axis epoch.
 type Generation = (u64, u32, (i64, i64), u64);
 
+/// A report uid is unique only inside its core's report database.
+type RefusalKey = (u64, i64);
+
 /// Station refusals survive unrelated filings, but not changes to their admission inputs.
 #[derive(Default)]
 struct Unfillable {
     generation: Generation,
     revision: u64,
-    uids: HashMap<i64, (String, String)>,
+    uids: HashMap<RefusalKey, (String, String)>,
     /// Each market's revision of its last membership change, for [`refusals_since`].
     changed: HashMap<(String, String), u64>,
     snapshot_revision: u64,
-    snapshot: Arc<HashSet<i64>>,
+    snapshot: Arc<HashSet<RefusalKey>>,
 }
 
 impl Unfillable {
     /// Rebuild membership only after a mutation; every unchanged pass shares the same set.
-    fn snapshot(&mut self) -> (u64, Arc<HashSet<i64>>) {
+    fn snapshot(&mut self) -> (u64, Arc<HashSet<RefusalKey>>) {
         if self.snapshot_revision != self.revision {
             self.snapshot = Arc::new(self.uids.keys().copied().collect());
             self.snapshot_revision = self.revision;
@@ -66,10 +69,10 @@ impl Unfillable {
     }
 
     /// Remember a refusal and invalidate classifications only when membership changes.
-    fn refuse(&mut self, uid: i64, exchange: &str, market: &str) {
+    fn refuse(&mut self, core_uid: u64, uid: i64, exchange: &str, market: &str) {
         if self
             .uids
-            .insert(uid, (exchange.into(), market.into()))
+            .insert((core_uid, uid), (exchange.into(), market.into()))
             .is_none()
         {
             self.mark(exchange, market);
@@ -84,6 +87,25 @@ impl Unfillable {
         if self.uids.len() != before {
             self.mark(exchange, market);
         }
+    }
+
+    /// Drop refusals whose rows left the published sample, and market history nothing references.
+    fn retain(&mut self, live: &HashSet<RefusalKey>, markets: &HashSet<(String, String)>) {
+        let removed: Vec<_> = self
+            .uids
+            .iter()
+            .filter(|(key, _)| !live.contains(*key))
+            .map(|(key, market)| (*key, market.clone()))
+            .collect();
+        if !removed.is_empty() {
+            self.revision += 1;
+            let revision = self.revision;
+            for (key, market) in removed {
+                self.uids.remove(&key);
+                self.changed.insert(market, revision);
+            }
+        }
+        self.changed.retain(|market, _| markets.contains(market));
     }
 
     /// Bump the revision for a membership change on one market.
@@ -147,12 +169,27 @@ pub(in crate::analytics::tuner) fn note_axis(axis: &moon_core::db::ReportAxis) {
 }
 
 /// Whether a station-only row still deserves an automatic request in this generation.
-pub(in crate::analytics::tuner) fn candidate(uid: i64) -> bool {
-    !unfillable().uids.contains_key(&uid)
+pub(in crate::analytics::tuner) fn candidate(core_uid: u64, uid: i64) -> bool {
+    !unfillable().uids.contains_key(&(core_uid, uid))
+}
+
+/// Bind refusal lifetime to the rows in the newly published sample, never to a numeric cap.
+pub(in crate::analytics::tuner) fn retain_rows<'a>(
+    rows: impl IntoIterator<Item = (u64, i64, Option<(&'a str, &'a str)>)>,
+) {
+    let mut live = HashSet::new();
+    let mut markets = HashSet::new();
+    for (core, uid, address) in rows {
+        live.insert((core, uid));
+        if let Some((exchange, market)) = address {
+            markets.insert((exchange.to_string(), market.to_string()));
+        }
+    }
+    unfillable().retain(&live, &markets);
 }
 
 /// One pass's refusal membership and revision, without a global lock for every row.
-pub(in crate::analytics::tuner) fn refusal_snapshot() -> (u64, Arc<HashSet<i64>>) {
+pub(in crate::analytics::tuner) fn refusal_snapshot() -> (u64, Arc<HashSet<RefusalKey>>) {
     unfillable().snapshot()
 }
 
@@ -318,7 +355,7 @@ pub(super) fn prefill_counted(
             };
             let candidates: Vec<_> = rows
                 .iter()
-                .filter(|row| candidate(row.deal.report_uid))
+                .filter(|row| candidate(row.deal.core_uid, row.deal.report_uid))
                 .collect();
             let filled = fill(&candidates, |row| place(row), target, &stop);
             super::autoload::station_answered(filled.unreachable || filled.failed);
@@ -328,7 +365,7 @@ pub(super) fn prefill_counted(
     commit_station_answer(&rows, filled, stopped, judged_under);
     let rows = rows
         .into_iter()
-        .filter(|row| candidate(row.deal.report_uid))
+        .filter(|row| candidate(row.deal.core_uid, row.deal.report_uid))
         .collect();
     (rows, held, from_station)
 }
@@ -375,6 +412,7 @@ fn commit_station_answer(
     let before = refusals.revision;
     for row in refused {
         refusals.refuse(
+            row.deal.core_uid,
             row.deal.report_uid,
             &row.address.exchange_key,
             &row.address.market,

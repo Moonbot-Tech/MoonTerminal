@@ -20,7 +20,7 @@ pub mod strategy_deps;
 pub mod strategy_order;
 pub mod strategy_path;
 pub mod synth;
-mod trade;
+pub(crate) mod trade;
 pub mod trade_sound;
 pub mod types;
 
@@ -1019,13 +1019,17 @@ pub struct FeedHandle {
 }
 
 impl Drop for FeedHandle {
-    /// A replaced or removed core's backlog leaves [`queued_messages`] with it: the backlog of a
-    /// stalled core is exactly what gets respawned.
+    /// A replaced or removed core's backlog leaves [`queued_messages`] with it.
     fn drop(&mut self) {
         while self.rx.try_recv().is_ok() {
             note_drained();
         }
     }
+}
+
+/// Clear order-local manual state when session management removes a core, not on reconnect.
+pub(crate) fn forget_stop_core(server_id: u64) {
+    trade::forget_stop_core(server_id);
 }
 
 /// Initial backoff step and its cap between initial connection attempts.
@@ -1098,11 +1102,9 @@ pub fn spawn(
             let mut market_role = live::MarketRoleState::default();
             let mut chart_text = live::ChartTextWanted::default();
             retry::run(&server, &tx, &stop_rx, || {
-                // A new connection: an order still waiting from the previous one goes, said out
-                // loud (`live::stale`). The run also drops it the moment the connection stops
-                // being operational; this covers a run that ended first.
-                client_settings_sequence.drop_orders_of_lost_connection(server.id);
-                client_settings_sequence.prepare_reconnect();
+                // A new connection ends every confirmation path from the previous one. The run
+                // also clears the sequence the moment an established connection stops being ready.
+                client_settings_sequence.drop_lost_connection(server.id);
                 shared_config_sequence.prepare_reconnect();
                 live::run(
                     &server,

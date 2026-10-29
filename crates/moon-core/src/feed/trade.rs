@@ -978,7 +978,7 @@ fn stop_overrides_map()
 }
 
 /// Records an override when a table toggle or form edit is sent.
-pub(super) fn note_stop_override(server_id: u64, uid: u64, kind: OrderStopKind, on: bool) {
+pub(crate) fn note_stop_override(server_id: u64, uid: u64, kind: OrderStopKind, on: bool) {
     stop_overrides_map()
         .lock()
         .unwrap()
@@ -1007,7 +1007,7 @@ pub(super) fn stop_override(
 }
 
 /// Copies this core's explicit stop choices under one lock for an entire row build.
-pub(super) fn stop_overrides_for(
+pub(crate) fn stop_overrides_for(
     server_id: u64,
 ) -> std::collections::HashMap<u64, [Option<bool>; 3]> {
     let overrides = stop_overrides_map().lock().unwrap();
@@ -1020,10 +1020,43 @@ pub(super) fn stop_overrides_for(
         .collect()
 }
 
+/// Reconcile manual stop state with one complete order snapshot.
+///
+/// Only open orders retain terminal-local overrides and disabled-stop parameters. A terminal row or
+/// an id absent from the complete snapshot can never need that state again; other cores are untouched.
+pub(in crate::feed) fn reconcile_stop_orders(
+    server_id: u64,
+    orders: impl IntoIterator<Item = (u64, bool)>,
+) {
+    let open: std::collections::HashSet<u64> = orders
+        .into_iter()
+        .filter_map(|(uid, done)| (!done).then_some(uid))
+        .collect();
+    stop_overrides_map()
+        .lock()
+        .unwrap()
+        .retain(|(core, uid), _| *core != server_id || open.contains(uid));
+    stop_memory()
+        .lock()
+        .unwrap()
+        .retain(|(core, uid, _), _| *core != server_id || open.contains(uid));
+}
+
+/// Drop every manual stop choice owned by a removed core, without touching another core's orders.
+pub(in crate::feed) fn forget_stop_core(server_id: u64) {
+    stop_overrides_map()
+        .lock()
+        .unwrap()
+        .retain(|(core, _), _| *core != server_id);
+    stop_memory()
+        .lock()
+        .unwrap()
+        .retain(|(core, _, _), _| *core != server_id);
+}
+
 /// Remembers stop parameters erased by disabling. Key: (core, order uid, stop kind) →
-/// (fixed, level, spread|vol). It lives until process exit and holds only a handful of entries
-/// per session because writes occur only when a stop is manually disabled from the order table
-/// or the order-edit form.
+/// (fixed, level, spread|vol). Complete order snapshots and core teardown bound its lifetime to
+/// the order it can re-enable, never to process uptime.
 fn stop_memory()
 -> &'static std::sync::Mutex<std::collections::HashMap<(u64, u64, u8), (bool, f64, f64)>> {
     static MEM: std::sync::OnceLock<

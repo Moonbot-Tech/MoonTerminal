@@ -393,3 +393,90 @@ fn the_caption_wait_is_the_soonest_idle_host() {
         Some(Duration::ZERO)
     );
 }
+
+/// Build the smallest answered row that still has an independently checkable identity.
+fn answer(uid: i64) -> super::super::super::state::DealRow {
+    let deal = moon_core::db::tuner::ticks::Deal {
+        report_uid: uid,
+        ..super::super::tests::synthetic_deal()
+    };
+    super::super::super::state::DealRow {
+        deal,
+        tape: TapeStatus::Missing,
+        verdict: None,
+        address: None,
+        ticks: None,
+        entry_line: None,
+        held: None,
+    }
+}
+
+/// Batching a cluster must reduce channel ownership without dropping or reordering any answer.
+#[test]
+fn one_cluster_event_carries_every_answer_in_order() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut state = super::State {
+        listener: Some(tx),
+        ..Default::default()
+    };
+    state.notify_answers((1..=3).map(answer).collect());
+
+    let super::JobEvent::Rows(rows) = rx.recv().unwrap() else {
+        panic!("expected a batched row event");
+    };
+    let ids: Vec<_> = rows.iter().map(|row| row.deal.report_uid).collect();
+    assert_eq!(ids, [1, 2, 3]);
+    assert!(rx.try_recv().is_err(), "one cluster costs one event");
+}
+
+/// Going idle must leave the final answers already queued for the listener to drain.
+#[test]
+fn final_answers_arrive_before_the_job_goes_idle() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut state = super::State {
+        listener: Some(tx),
+        ..Default::default()
+    };
+    state.in_flight.push(super::InFlight {
+        id: 7,
+        uids: vec![1],
+        market: "XALPHAUSDT".into(),
+        exchange_key: "synthetic".into(),
+        cancel: Default::default(),
+    });
+
+    state.finish_flight(7, vec![answer(1)]);
+
+    assert!(!state.active());
+    let super::JobEvent::Rows(rows) = rx.try_recv().unwrap() else {
+        panic!("the final batch was lost as the job went idle");
+    };
+    assert_eq!(rows.len(), 1);
+}
+
+/// Measure a synthetic day of 100,000 answered rows arriving as one lossless cluster event.
+#[test]
+#[ignore = "manual tuner answer batching scale measurement"]
+fn bench_cluster_answer_batching_day() {
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut state = super::State {
+            listener: Some(tx),
+            ..Default::default()
+        };
+        let start = Instant::now();
+        state.notify_answers((1..=100_000).map(answer).collect());
+        samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+        let super::JobEvent::Rows(rows) = rx.recv().unwrap() else {
+            panic!("expected a batched row event");
+        };
+        assert_eq!(rows.len(), 100_000);
+        assert!(rx.try_recv().is_err());
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] tuner answer channel events=100000 -> 1 rows=100000 send median={:.6} ms",
+        samples[2]
+    );
+}

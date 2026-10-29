@@ -1444,6 +1444,18 @@ impl CoreData {
             }
             FeedMsg::ChartText(rows) => {
                 let mut changed = false;
+                // The relay tracks one selected market per core. Rows from the previous selection
+                // have no reader now; an empty snapshot clears them on deselection.
+                let selected: HashSet<&str> = rows.iter().map(|row| row.market.as_str()).collect();
+                if self
+                    .chart_text
+                    .keys()
+                    .any(|market| !selected.contains(market.as_str()))
+                {
+                    self.chart_text
+                        .retain(|market, _| selected.contains(market.as_str()));
+                    changed = true;
+                }
                 for ChartTextRows {
                     market,
                     filter_lines,

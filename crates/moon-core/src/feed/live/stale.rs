@@ -6,10 +6,9 @@
 //! ago, would fire whenever the core came back, possibly an hour later. So a live action is
 //! delivered only while the connection is operational, only if it was queued after the connection
 //! last became operational, and only while it is younger than [`LIVE_TTL`]. Anything else is
-//! logged and dropped. Manual orders that already passed into the settings sequence are dropped
-//! there when the connection is lost (`ClientSettingsSequence::drop_orders_of_lost_connection`);
-//! a temporary ban that passed is desired state from then on, within the drift the sequence
-//! already tolerates for it (`TEMP_BLACKLIST_DRIFT`). Run switches and Cancel all also
+//! logged and dropped. Orders and settings mutations that already passed into the settings
+//! sequence are dropped there too (`ClientSettingsSequence::drop_lost_connection`), because their
+//! old echo can no longer arrive. Run switches and Cancel all also
 //! refuse a core that is not connected before queueing (`session::run_dispatch`); the other live
 //! actions rely on this gate.
 

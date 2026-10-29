@@ -1,6 +1,6 @@
 use super::{
     ClientSettingsSequence, GroupExitSettings, MAX_EXIT_ATTEMPTS, ManualOrder, ManualOrderKind,
-    SequenceAction, SequenceOp, SettingsMutation, TakeProfitMode, client_settings_from_proto,
+    SequenceAction, TakeProfitMode, client_settings_from_proto,
 };
 use crate::feed::ClientSettingsEdit;
 
@@ -153,23 +153,75 @@ fn a_confirmed_packet_retires_all_mutations_it_composed() {
     ));
 }
 
-/// Regression target: retaining the connection-local echo wait across `live::run` reconnects leaves
-/// queued edits permanently idle because the dropped client can no longer emit their confirmation.
+/// A dropped client cannot confirm its old packet, so reconnect must release the whole queue.
 #[test]
-fn reconnect_retries_unconfirmed_mutations_without_losing_them() {
+fn reconnect_drops_unconfirmed_mutations_and_orders() {
     let base = moonproto::ClientSettingsCommand::default();
-    let exit = exit_settings(12.0, true);
     let mut sequence = ClientSettingsSequence::new();
-    sequence.enqueue_group_exit(exit);
+    sequence.enqueue_order(waiting_order(0.074, 16.0));
 
     let sent = next_settings(&mut sequence, &base);
     sequence.observe_send_success(&sent, 1, Vec::new());
     sequence.prepare_reconnect();
 
-    let retried = next_settings(&mut sequence, &base);
-    assert_eq!(
-        client_settings_from_proto(&retried).group_exit_settings(),
-        exit
+    assert!(sequence.is_idle());
+    assert!(matches!(
+        sequence.next_action(&base, TEST_CORE),
+        SequenceAction::Idle
+    ));
+}
+
+/// A silent connection must spend the retry budget instead of leaving the queue latched forever.
+#[test]
+fn an_echo_that_never_arrives_times_out_and_releases_the_order() {
+    let base = moonproto::ClientSettingsCommand::default();
+    let mut sequence = ClientSettingsSequence::new();
+    sequence.enqueue_order(waiting_order(0.074, 16.0));
+
+    for _ in 0..12 {
+        match sequence.next_action(&base, TEST_CORE) {
+            SequenceAction::Send {
+                settings,
+                mutation_count,
+                temp_expectation,
+            } => {
+                sequence.observe_send_success(&settings, mutation_count, temp_expectation);
+                sequence.waiting_since = Some(
+                    std::time::Instant::now()
+                        .checked_sub(super::ECHO_TIMEOUT)
+                        .unwrap(),
+                );
+            }
+            SequenceAction::Place(order) => {
+                assert_eq!(order.market, "BULLAUSDT");
+                return;
+            }
+            SequenceAction::Idle => panic!("a silent echo must not latch the queue"),
+        }
+    }
+    panic!("the order did not follow the abandoned mutations");
+}
+
+/// Measure a synthetic day of 100,000 stale mutations disappearing on reconnect.
+#[test]
+#[ignore = "manual settings reconnect retention scale measurement"]
+fn bench_settings_reconnect_retention_day() {
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let mut sequence = ClientSettingsSequence::new();
+        for _ in 0..100_000 {
+            sequence.enqueue_edit(ClientSettingsEdit::SignOrders(true));
+        }
+        let before = sequence.queue.len();
+        let start = std::time::Instant::now();
+        sequence.prepare_reconnect();
+        samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+        assert_eq!((before, sequence.queue.len()), (100_000, 0));
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] settings queue retained=100000 -> 0 reconnect median={:.6} ms",
+        samples[2]
     );
 }
 
@@ -723,14 +775,9 @@ fn a_core_restart_forgets_the_orders_queued_for_the_old_process() {
     }
 }
 
-/// Regression target: a manual order queued before a lost connection placed once the core is back,
-/// priced off a chart that may be minutes old. The settings queued beside it, a temporary ban
-/// included, keep their place.
-///
-/// Mutation: make `drop_orders_of_lost_connection` a no-op. The order is then still the next thing
-/// placed after the reconnect.
+/// Losing an established connection must clear both stale prices and old settings generations.
 #[test]
-fn a_lost_connection_drops_waiting_orders_but_keeps_settings() {
+fn a_lost_connection_drops_waiting_orders_and_settings() {
     let core_holds = moonproto::ClientSettingsCommand::default();
     let mut sequence = ClientSettingsSequence::new();
     sequence.enqueue_order(waiting_order(0.074, 16.0));
@@ -740,35 +787,12 @@ fn a_lost_connection_drops_waiting_orders_but_keeps_settings() {
         Vec::new(),
     );
 
-    sequence.drop_orders_of_lost_connection(TEST_CORE);
-    sequence.prepare_reconnect();
+    sequence.drop_lost_connection(TEST_CORE);
 
-    assert!(
-        !sequence
-            .queue
-            .iter()
-            .any(|op| matches!(op, SequenceOp::Order(_))),
-        "no order from the lost connection may stay queued"
-    );
-    assert!(
-        sequence.queue.iter().any(|op| matches!(
-            op,
-            SequenceOp::Mutation(SettingsMutation::TempBlacklist { .. })
-        )),
-        "a temporary ban or lift already in the sequence is desired state and stays queued"
-    );
-    assert!(
-        sequence
-            .queue
-            .iter()
-            .any(|op| matches!(op, SequenceOp::Mutation(SettingsMutation::Blacklist { .. }))),
-        "the blacklist edit must stay queued"
-    );
-    assert!(
-        !matches!(
-            sequence.next_action(&core_holds, TEST_CORE),
-            SequenceAction::Place(_)
-        ),
-        "an order was placed after the reconnect"
-    );
+    assert!(sequence.queue.is_empty());
+    assert!(sequence.is_idle());
+    assert!(matches!(
+        sequence.next_action(&core_holds, TEST_CORE),
+        SequenceAction::Idle
+    ));
 }

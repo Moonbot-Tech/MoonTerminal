@@ -93,6 +93,11 @@ impl<K: Eq + Hash + Copy, V: Copy> ChartHistory<K, V> {
     pub(crate) fn ring(&self, key: K) -> Option<&VecDeque<V>> {
         self.rings.get(&key).map(|(ring, _)| ring)
     }
+
+    /// Keep only subjects that still exist, dropping their rings and last-second stamps together.
+    pub(crate) fn retain(&mut self, mut live: impl FnMut(K) -> bool) {
+        self.rings.retain(|key, _| live(*key));
+    }
 }
 
 /// Rolling per-SERVER round-trip history: one hour at 1 Hz, deduplicated per second, like
@@ -133,6 +138,11 @@ impl ServerPingHistory {
     /// Return a server's round-trip ring, if any has been collected.
     pub(crate) fn ring(&self, ip: IpAddr) -> Option<&VecDeque<u16>> {
         self.rings.get(&ip).map(|(ring, _)| ring)
+    }
+
+    /// Keep only servers that still have a configured core, releasing both ping rings with it.
+    pub(crate) fn retain(&mut self, mut live: impl FnMut(IpAddr) -> bool) {
+        self.rings.retain(|ip, _| live(*ip));
     }
 }
 

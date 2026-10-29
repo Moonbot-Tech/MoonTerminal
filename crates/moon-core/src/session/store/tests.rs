@@ -1356,10 +1356,9 @@ fn the_ban_list_and_one_lookup_read_the_same_deadline() {
     );
 }
 
-/// `store.rs:FeedMsg::ChartText` must replace one market's filter lines without touching another,
-/// and must not bump the revision when the core repeats the same strings.
+/// `store.rs:FeedMsg::ChartText` must drop the previous selection and ignore an identical repeat.
 #[test]
-fn chart_text_replaces_one_market_and_ignores_an_identical_repeat() {
+fn chart_text_tracks_selection_and_ignores_an_identical_repeat() {
     let mut core = CoreData::new();
     core.apply(FeedMsg::ChartText(vec![ChartTextRows {
         market: "ROSEUSDT".into(),
@@ -1376,16 +1375,48 @@ fn chart_text_replaces_one_market_and_ignores_an_identical_repeat() {
         filter_lines: vec!["must have TradFi tag".into()],
     }]));
     assert_eq!(core.chart_text_rev, 2);
-    assert_eq!(core.chart_text.len(), 2);
+    assert_eq!(core.chart_text.len(), 1);
+    assert!(!core.chart_text.contains_key("ROSEUSDT"));
 
     let rev = core.chart_text_rev;
     core.apply(FeedMsg::ChartText(vec![ChartTextRows {
-        market: "ROSEUSDT".into(),
-        filter_lines: vec!["Daily vol. doesnt match".into()],
+        market: "BTCUSDT".into(),
+        filter_lines: vec!["must have TradFi tag".into()],
     }]));
     assert_eq!(
         core.chart_text_rev, rev,
         "identical rows must not wake the chart"
+    );
+
+    core.apply(FeedMsg::ChartText(Vec::new()));
+    assert!(core.chart_text.is_empty());
+    assert_eq!(core.chart_text_rev, rev + 1);
+}
+
+/// Measure a synthetic day of 100,000 former markets disappearing on the next selection.
+#[test]
+#[ignore = "manual chart-text selection retention scale measurement"]
+fn bench_chart_text_selection_day() {
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let mut core = CoreData::new();
+        core.chart_text = (0..100_000)
+            .map(|uid| (format!("XALPHA{uid}USDT"), vec!["stale".to_string()]))
+            .collect();
+        let before = core.chart_text.len();
+        let start = std::time::Instant::now();
+        core.apply(FeedMsg::ChartText(vec![ChartTextRows {
+            market: "XALPHAUSDT".into(),
+            filter_lines: vec!["live".into()],
+        }]));
+        samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+        assert_eq!((before, core.chart_text.len()), (100_000, 1));
+        assert!(core.chart_text.contains_key("XALPHAUSDT"));
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] chart-text markets retained=100000 -> 1 selection median={:.6} ms",
+        samples[2]
     );
 }
 

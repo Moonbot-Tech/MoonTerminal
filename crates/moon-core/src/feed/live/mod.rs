@@ -570,6 +570,7 @@ pub(super) fn run(
         let mut trace_asks = Vec::new();
         let command_drain = drain_commands(
             cmd_rx,
+            tx,
             &client,
             server,
             latest_market_role,
@@ -904,10 +905,10 @@ pub(super) fn run(
             if ready && !is_ready {
                 ready_since = Some(Instant::now());
             } else if !ready {
-                // Lost, including a moonproto reconnect inside this run: what still waits in the
-                // settings sequence would otherwise go out on the next Ready (`stale`).
+                // Lost, including a moonproto reconnect inside this run: no echo or stale price
+                // from the old connection may reach the next Ready.
                 if ready_since.take().is_some() {
-                    client_settings_sequence.drop_orders_of_lost_connection(server.id);
+                    client_settings_sequence.drop_lost_connection(server.id);
                 }
             }
             is_ready = ready;
@@ -1300,7 +1301,7 @@ pub(super) fn run(
                         }
                     }
                 }
-                Event::ChartText(snapshot) => {
+                Event::ChartText(snapshot) if chart_text.accepts(&snapshot.market_name) => {
                     chart_texts.push(ChartTextRows {
                         market: snapshot.market_name.clone(),
                         filter_lines: snapshot.filter_lines.clone(),

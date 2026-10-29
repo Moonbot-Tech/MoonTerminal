@@ -31,6 +31,78 @@ fn batch_stop_overrides_match_individual_reads() {
         .retain(|(server, _), _| *server != core && *server != core + 1);
 }
 
+/// Closing an order or removing its core must release both kinds of manual stop state.
+#[test]
+fn stop_state_ends_with_the_order_and_core() {
+    let core = u64::MAX - 703;
+    let other = core + 2;
+    note_stop_override(core, 1, OrderStopKind::StopLoss, false);
+    note_stop_override(core, 2, OrderStopKind::Trailing, false);
+    note_stop_override(other, 2, OrderStopKind::Trailing, true);
+    remember_stop_params(core, 1, OrderStopKind::StopLoss, false, 4.0, 0.0);
+    remember_stop_params(core, 2, OrderStopKind::Trailing, false, 5.0, 0.0);
+
+    reconcile_stop_orders(core, [(1, false), (2, true)]);
+
+    assert!(stop_override(core, 1, OrderStopKind::StopLoss, false).is_some());
+    assert!(stop_override(core, 2, OrderStopKind::Trailing, false).is_none());
+    assert!(stop_memory_get(core, 1, OrderStopKind::StopLoss).is_some());
+    assert!(stop_memory_get(core, 2, OrderStopKind::Trailing).is_none());
+    assert!(stop_override(other, 2, OrderStopKind::Trailing, true).is_some());
+
+    forget_stop_core(core);
+    assert!(stop_overrides_for(core).is_empty());
+    assert!(stop_memory_get(core, 1, OrderStopKind::StopLoss).is_none());
+    assert!(stop_override(other, 2, OrderStopKind::Trailing, true).is_some());
+    forget_stop_core(other);
+}
+
+/// Replacing a feed must preserve open-order stop memory; only session removal may clear it.
+#[test]
+fn feed_handle_drop_preserves_stop_state() {
+    note_stop_override(0, 77, OrderStopKind::VStop, false);
+    remember_stop_params(0, 77, OrderStopKind::VStop, false, 3.0, 1.0);
+    let (_, feed) = crate::feed::trade_sound_test_feed();
+    drop(feed);
+    assert!(stop_override(0, 77, OrderStopKind::VStop, false).is_some());
+    assert!(stop_memory_get(0, 77, OrderStopKind::VStop).is_some());
+    forget_stop_core(0);
+}
+
+/// Measure a synthetic day of 100,000 edited orders shrinking to the 2,000 still open.
+#[test]
+#[ignore = "manual stop-state retention scale measurement"]
+fn bench_stop_state_retention_day() {
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        for core in 900_000..900_010_u64 {
+            for uid in 1..=10_000_u64 {
+                note_stop_override(core, uid, OrderStopKind::StopLoss, false);
+                remember_stop_params(core, uid, OrderStopKind::StopLoss, false, 4.0, 0.0);
+            }
+        }
+        let before = stop_overrides_map().lock().unwrap().len();
+        let start = std::time::Instant::now();
+        for core in 900_000..900_010_u64 {
+            reconcile_stop_orders(core, (1..=10_000_u64).map(|uid| (uid, uid > 200)));
+        }
+        samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+        assert_eq!(
+            (before, stop_overrides_map().lock().unwrap().len()),
+            (100_000, 2_000)
+        );
+        assert_eq!(stop_memory().lock().unwrap().len(), 2_000);
+        for core in 900_000..900_010_u64 {
+            forget_stop_core(core);
+        }
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] stop overrides retained=100000 -> 2000 reconcile median={:.6} ms",
+        samples[2]
+    );
+}
+
 #[test]
 /// Regression target: deleting `with_market_stop` from `trade::new_order_params` makes a visible
 /// Stop Market selection place a stop-limit order instead.

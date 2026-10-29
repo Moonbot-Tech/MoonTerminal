@@ -326,10 +326,11 @@ pub enum FeedMsg {
         /// Closing row, open row or filed metadata, in that order.
         emulator: Option<bool>,
     },
-    /// Core-built strategy-filter rows for one or more markets, from `Event::ChartText`.
+    /// Core-built strategy-filter rows for the selected market, from `Event::ChartText`.
     ///
     /// These are ready strings, not typed skip codes. The UI paints them; it does not recompute
-    /// volume/EMA/tag matches. A later snapshot for the same market replaces the previous rows.
+    /// volume/EMA/tag matches. A selection change or deselection clears the previous market's rows;
+    /// an empty vector is the explicit deselection snapshot.
     ChartText(Vec<ChartTextRows>),
     /// Core resource telemetry from protocol-v4 `Event::KernelHealth`.
     /// Emitted for every health event; the store gates the Core Status panel with

@@ -7,6 +7,21 @@ use moon_core::session::core_order::CoreOrder;
 use std::time::Duration;
 use std::time::Instant;
 
+type SuggestCache = std::collections::HashMap<
+    (String, Option<moon_core::config::ChartBucket>),
+    crate::controls::coin_search::CoinSuggestEntry,
+>;
+
+/// Drop expired suggestions whenever any search field touches the cache.
+fn prune_expired_suggestions(cache: &mut SuggestCache) {
+    cache.retain(|_, entry| entry.is_recent());
+}
+
+/// Release every cached bucket owned by a group window that just closed.
+pub(super) fn remove_group_suggestions(cache: &mut SuggestCache, group: &str) {
+    cache.retain(|(cached_group, _), _| cached_group != group);
+}
+
 impl Backend {
     /// Refresh the cached fallback ticker from the first canonical live core.
     ///
@@ -162,6 +177,7 @@ impl Backend {
     ) {
         use crate::controls::coin_search;
 
+        prune_expired_suggestions(&mut self.coin_suggest);
         let key = (group.to_string(), bucket.cloned());
         let sig = coin_search::universe_sig(self, group, bucket);
         if self
@@ -273,3 +289,6 @@ impl Backend {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

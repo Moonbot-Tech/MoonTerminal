@@ -321,6 +321,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         last_backend_notify: None,
         core_chart_hist: Default::default(),
         core_line_hist: Default::default(),
+        core_endpoint_ips: HashMap::new(),
         server_ping_hist: Default::default(),
         server_exch_hist: Default::default(),
         warn: Default::default(),

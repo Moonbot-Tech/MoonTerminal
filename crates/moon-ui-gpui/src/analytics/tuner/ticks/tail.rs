@@ -82,7 +82,7 @@ pub(in crate::analytics::tuner) fn fillable_at(
     trail_ms: i64,
     now_ms: i64,
 ) -> bool {
-    if !super::fetch::station::candidate(uid) {
+    if !super::fetch::station::candidate(address.core_uid, uid) {
         return false;
     }
     source_fillable_at(address, close_ms, trail_ms, now_ms)
@@ -93,7 +93,7 @@ pub(in crate::analytics::tuner) struct Admission {
     pub min_s: u32,
     pub now_ms: i64,
     pub refusal_revision: u64,
-    refused: std::sync::Arc<std::collections::HashSet<i64>>,
+    refused: std::sync::Arc<std::collections::HashSet<(u64, i64)>>,
 }
 
 impl Admission {
@@ -120,15 +120,15 @@ impl Admission {
 
     /// Whether this pass can extend a row without reading process globals per row.
     pub fn fillable(&self, row: &super::state::DealRow, trail: i64) -> bool {
-        self.candidate(row.deal.report_uid)
+        self.candidate(row.deal.core_uid, row.deal.report_uid)
             && row.address.as_ref().is_some_and(|address| {
                 source_fillable_at(address, row.deal.close_ms, trail, self.now_ms)
             })
     }
 
     /// Whether this pass has no latched station refusal for a row.
-    pub fn candidate(&self, uid: i64) -> bool {
-        !self.refused.contains(&uid)
+    pub fn candidate(&self, core_uid: u64, uid: i64) -> bool {
+        !self.refused.contains(&(core_uid, uid))
     }
 }
 

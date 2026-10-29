@@ -297,3 +297,42 @@ fn a_queued_invalidation_withholds_the_knowledge_revision_until_applied() {
     let _ = cores();
     assert!(with_pending(|queue| queue.is_empty()));
 }
+
+/// Repeated catch-ups coalesce per core, and a replica wipe remains the stronger invalidation.
+#[test]
+fn pending_invalidations_coalesce_without_weakening_a_wipe() {
+    with_pending(|queue| queue.clear());
+    for _ in 0..100 {
+        reexamine_core(77);
+    }
+    assert_eq!(with_pending(|queue| queue.len()), 1);
+    forget_core(77);
+    reexamine_core(77);
+    assert!(with_pending(|queue| {
+        matches!(queue.get(&77), Some(Invalidation::Forget(77))) && queue.len() == 1
+    }));
+    with_pending(|queue| queue.clear());
+}
+
+/// Measure one million synthetic invalidations coalescing to the ten cores they describe.
+#[test]
+#[ignore = "manual COIN-M invalidation scale measurement"]
+fn bench_invalidation_coalescing_day() {
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        with_pending(|queue| queue.clear());
+        let start = std::time::Instant::now();
+        for core in 1..=10_u64 {
+            for _ in 0..100_000 {
+                reexamine_core(core);
+            }
+        }
+        samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+        assert_eq!(with_pending(|queue| queue.len()), 10);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] COIN-M invalidations queued=1000000 -> 10 coalesce median={:.6} ms",
+        samples[2]
+    );
+}

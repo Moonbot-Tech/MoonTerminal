@@ -4,7 +4,7 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use super::{CAP, ServerChartHistory};
+use super::{CAP, ServerChartHistory, ServerPingHistory};
 
 /// A throwaway loopback address to key one ring under.
 fn ip() -> IpAddr {
@@ -61,4 +61,48 @@ fn ring_is_capped_to_one_hour() {
 fn unseen_key_has_no_ring() {
     let hist = ServerChartHistory::default();
     assert!(hist.ring(ip()).is_none());
+}
+
+/// Removing a core releases its samples and last-second stamp; unrelated server history survives.
+#[test]
+fn removed_subjects_leave_every_history_ring() {
+    let other = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+    let mut hist = ServerChartHistory::default();
+    let mut ping = ServerPingHistory::default();
+    hist.record(other, 100, (10, 20));
+    ping.record(other, 100, 30);
+
+    hist.retain(|key| key == ip());
+    ping.retain(|key| key == ip());
+
+    assert!(hist.ring(other).is_none());
+    assert!(ping.ring(other).is_none());
+}
+
+/// Measure a synthetic day of 100,000 historical server keys shrinking to the ten still configured.
+#[test]
+#[ignore = "manual chart-history key retention scale measurement"]
+fn bench_chart_history_key_retention_day() {
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let mut hist = ServerChartHistory::default();
+        for key in 0..100_000_u32 {
+            hist.record(IpAddr::V4(Ipv4Addr::from(key)), 100, (10, 20));
+        }
+        let before = (0..100_000_u32)
+            .filter(|key| hist.ring(IpAddr::V4(Ipv4Addr::from(*key))).is_some())
+            .count();
+        let start = std::time::Instant::now();
+        hist.retain(|key| matches!(key, IpAddr::V4(ip) if u32::from(ip) < 10));
+        samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+        let after = (0..100_000_u32)
+            .filter(|key| hist.ring(IpAddr::V4(Ipv4Addr::from(*key))).is_some())
+            .count();
+        assert_eq!((before, after), (100_000, 10));
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] chart-history keys retained=100000 -> 10 prune median={:.6} ms",
+        samples[2]
+    );
 }

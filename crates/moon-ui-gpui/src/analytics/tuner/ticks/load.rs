@@ -556,6 +556,15 @@ impl AnalyticsView {
                 }
                 this.ticks.dirty =
                     report_result_is_stale(report_req, this.current_report_generation(), false);
+                super::fetch::station::retain_rows(data.rows.iter().map(|row| {
+                    (
+                        row.deal.core_uid,
+                        row.deal.report_uid,
+                        row.address.as_deref().map(|address| {
+                            (address.exchange_key.as_str(), address.market.as_str())
+                        }),
+                    )
+                }));
                 this.ticks.publish(Ok(data), false);
                 this.ticks.loaded_period = Some(period);
                 // The rows just published are judged once their tape stage folds.
