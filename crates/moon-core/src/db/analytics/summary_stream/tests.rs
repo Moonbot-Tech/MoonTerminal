@@ -746,7 +746,7 @@ fn former_full_tuple_sql(src: &str, true_time: &str) -> String {
                 CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
                 COALESCE(o.isshort,0), o.profitbtc, o.spentbtc, o.basecurrency,
                 CASE typeof(o.strategyid) WHEN 'blob' THEN 0 WHEN 'integer' THEN 1
-                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END
+                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END, {true_time}
          FROM {src}
          WHERE {true_time} >= ?3 AND {true_time} < ?4
          ORDER BY {true_time},
@@ -902,13 +902,14 @@ fn summary_figures(rows: Vec<TradeRow>, axis: &crate::db::ReportAxis) -> String 
         out.sort();
         out
     };
+    let strategies = flatten_strategies(std::mem::take(&mut accumulator.strategies));
     format!(
         "{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
         accumulator.stats,
         accumulator.days,
         accumulator.hours,
         cores,
-        groups(&accumulator.strategies),
+        groups(&strategies),
         groups(&accumulator.coins),
         accumulator.best_rows,
         accumulator.worst_rows,
@@ -922,7 +923,7 @@ fn summary_figures(rows: Vec<TradeRow>, axis: &crate::db::ReportAxis) -> String 
 /// synthetic data from a replica-shaped and a legacy-shaped source, on a zero-offset and on a
 /// shifted axis.
 #[test]
-fn five_term_key_with_tie_runs_streams_the_former_full_tuple_order() {
+fn time_key_with_tie_runs_streams_the_former_full_tuple_order() {
     let conn = Connection::open_in_memory().expect("in-memory database");
     seed_tie_heavy_sources(&conn, 4_000);
     let shifted = crate::db::ReportAxis::from_measured(
@@ -984,11 +985,11 @@ fn five_term_key_with_tie_runs_streams_the_former_full_tuple_order() {
     }
 }
 
-/// Synthetic timing of the former full-tuple sort against the five-term key plus tie runs, over
+/// Synthetic timing of the former full-tuple sort against the time-index key plus tie runs, over
 /// a 200k-row two-source fixture. Run with `--ignored --nocapture`; prints milliseconds.
 #[test]
 #[ignore = "timing probe, not a regression"]
-fn five_term_key_timing_probe() {
+fn time_key_timing_probe() {
     let conn = Connection::open_in_memory().expect("in-memory database");
     seed_tie_heavy_sources(&conn, 100_000);
     let (from, to) = (0, 1_000_000_000);
@@ -1015,8 +1016,227 @@ fn five_term_key_timing_probe() {
         let current_ms = started.elapsed().as_millis();
         assert_eq!(former.len(), current.len());
         println!(
-            "[timing] round {round}: rows {} former {former_ms} ms -> five-term {current_ms} ms",
+            "[timing] round {round}: rows {} former {former_ms} ms -> time-index {current_ms} ms",
             former.len()
         );
+    }
+}
+
+/// Separate SQL decode/sort cost from complete Summary aggregation on 100000 synthetic rows.
+#[test]
+#[ignore = "synthetic reader timing probe"]
+fn summary_refresh_scale_probe() {
+    let conn = Connection::open_in_memory().unwrap();
+    seed_tie_heavy_sources(&conn, 50_000);
+    for table in ["tie_rep", "tie_legacy"] {
+        conn.execute_batch(&format!(
+            "UPDATE {table} SET
+            buydate=100000+(closedate-100000)%604800-(closedate-buydate),
+            closedate=100000+(closedate-100000)%604800,
+            core_uid=1+rowid%10;"
+        ))
+        .unwrap();
+    }
+    let q = Query {
+        from: 100_000,
+        to: 704_800,
+        ..Default::default()
+    };
+    for round in 0..6 {
+        let former = round % 2 == 0;
+        let sql = if former {
+            former_five_term_sql(
+                TIE_SOURCE,
+                "o.closedate",
+                "o.profitbtc, o.spentbtc, o.basecurrency",
+            )
+        } else {
+            current_stream_sql(
+                TIE_SOURCE,
+                "o.closedate",
+                "o.profitbtc, o.spentbtc, o.basecurrency",
+            )
+        };
+        let start = std::time::Instant::now();
+        let rows = stream_rows(&conn, &sql, q.from, q.to);
+        let sql_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let start = std::time::Instant::now();
+        let rows = through_tie_runs(rows);
+        std::hint::black_box(summary_figures(rows, &q.axis));
+        println!(
+            "reader_refresh summary former={former}: sql={sql_ms:.3} ms aggregate={:.3} ms",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    for _ in 0..3 {
+        let start = std::time::Instant::now();
+        std::hint::black_box(read(&conn, TIE_SOURCE, None, &q, &q.axis, 3_600, false).unwrap());
+        println!(
+            "reader_refresh summary full: {:.3} ms",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
+
+/// Frozen five-term statement used before timestamp-index streaming.
+fn former_five_term_sql(src: &str, true_time: &str, inline_raw: &str) -> String {
+    format!(
+        "SELECT o.closedate, COALESCE(o.buydate, o.closedate), o.pnl,
+                o.core_uid, o.core_name, COALESCE(o.coin,''),
+                CAST(o.strategyid AS TEXT),
+                CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
+                COALESCE(o.isshort,0), {inline_raw},
+                CASE typeof(o.strategyid) WHEN 'blob' THEN 0 WHEN 'integer' THEN 1
+                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END, {true_time}
+         FROM {src}
+         WHERE {true_time} >= ?3 AND {true_time} < ?4
+         ORDER BY {true_time}, o.closedate, o.core_uid, o.pnl IS NULL, o.pnl"
+    )
+}
+
+/// Frozen sort-and-truncate implementation of the bounded top-five lists.
+fn former_push_top_row(rows: &mut Vec<TradeRow>, row: TradeRow, best: bool) {
+    rows.push(row);
+    rows.sort_by(|left, right| {
+        let left = left.pnl.unwrap_or(0.0);
+        let right = right.pnl.unwrap_or(0.0);
+        if best {
+            right.total_cmp(&left)
+        } else {
+            left.total_cmp(&right)
+        }
+    });
+    rows.truncate(5);
+}
+
+/// Restoring a secondary SQL key reintroduces a temporary sort over every indexed report row.
+#[test]
+fn time_index_stream_avoids_the_identity_axis_sort() {
+    let conn = Connection::open_in_memory().unwrap();
+    seed_tie_heavy_sources(&conn, 8);
+    let sql = current_stream_sql(
+        TIE_SOURCE,
+        "o.closedate",
+        "o.profitbtc, o.spentbtc, o.basecurrency",
+    );
+    let mut statement = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+    let plans = statement
+        .query_map(rusqlite::params![0, 1_000_000, 0, 1_000_000], |row| {
+            row.get::<_, String>(3)
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join(" | ");
+    assert!(
+        plans.contains("tie_rep_closedate") && plans.contains("tie_legacy_closedate"),
+        "{plans}"
+    );
+    assert!(!plans.contains("TEMP B-TREE"), "{plans}");
+}
+
+/// Avoiding candidate clones must preserve stable ties, signed zero, and both top-five rankings.
+#[test]
+fn bounded_top_candidates_match_the_former_sort_and_truncate() {
+    let conn = Connection::open_in_memory().unwrap();
+    seed_tie_heavy_sources(&conn, 40);
+    let rows = through_tie_runs(stream_rows(
+        &conn,
+        &current_stream_sql(
+            TIE_SOURCE,
+            "o.closedate",
+            "o.profitbtc, o.spentbtc, o.basecurrency",
+        ),
+        0,
+        1_000_000,
+    ));
+    for best in [false, true] {
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for (index, row) in rows.iter().filter(|row| row.pnl.is_some()).enumerate() {
+            let mut row = row.clone();
+            if index % 9 == 0 {
+                row.pnl = Some(-0.0);
+            }
+            if index % 9 == 1 {
+                row.pnl = Some(0.0);
+            }
+            former_push_top_row(&mut old, row.clone(), best);
+            push_top_row(&mut new, &row, best);
+            assert_eq!(format!("{new:?}"), format!("{old:?}"));
+        }
+    }
+}
+
+/// Frozen allocating strategy/coin lookup used before borrowed-key group updates.
+fn former_group_push(
+    strategies: &mut HashMap<String, GroupAccumulator>,
+    coins: &mut HashMap<String, GroupAccumulator>,
+    row: &TradeRow,
+    include_inline_raw: bool,
+) -> rusqlite::Result<()> {
+    let strategy_key = match (&row.strategy_text, row.core_uid) {
+        (Some(strategy_text), Some(core_uid)) => format!("{strategy_text}@{core_uid}"),
+        _ => {
+            return Err(rusqlite::Error::InvalidColumnType(
+                6,
+                "strategyid/core_uid".to_string(),
+                rusqlite::types::Type::Null,
+            ));
+        }
+    };
+    let strategy = strategies.entry(strategy_key).or_default();
+    if strategy.n == 0 {
+        strategy.strategy_id = row.strategy_id;
+        strategy.strategy_core = row.core_uid;
+    } else if strategy.strategy_id != row.strategy_id {
+        strategy.strategy_id = None;
+    }
+    strategy.push(row, include_inline_raw);
+    coins
+        .entry(row.coin.clone())
+        .or_default()
+        .push(row, include_inline_raw);
+    Ok(())
+}
+
+/// Borrowed lookups must preserve every group field, including textual identities and raw quote coverage.
+#[test]
+fn group_lookups_match_the_former_allocating_keys() {
+    let conn = Connection::open_in_memory().unwrap();
+    seed_tie_heavy_sources(&conn, 200);
+    let rows = stream_rows(
+        &conn,
+        &former_full_tuple_sql(TIE_SOURCE, "o.closedate"),
+        0,
+        1_000_000,
+    );
+    let snapshot = |groups: HashMap<String, GroupAccumulator>| {
+        let mut out = groups
+            .into_iter()
+            .map(|(key, mut group)| {
+                let mut cores = group.cores.iter().copied().collect::<Vec<_>>();
+                cores.sort_unstable();
+                group.cores.clear();
+                format!("{key}:{group:?}:{cores:?}")
+            })
+            .collect::<Vec<_>>();
+        out.sort();
+        out
+    };
+    for raw in [false, true] {
+        let mut former_strategies = HashMap::new();
+        let mut former_coins = HashMap::new();
+        let mut current = Accumulator::default();
+        let axis = Query::default().axis;
+        for row in rows.clone() {
+            former_group_push(&mut former_strategies, &mut former_coins, &row, raw).unwrap();
+            current.push(row, 3600, raw, &axis).unwrap();
+        }
+        assert_eq!(
+            snapshot(flatten_strategies(current.strategies)),
+            snapshot(former_strategies)
+        );
+        assert_eq!(snapshot(current.coins), snapshot(former_coins));
     }
 }

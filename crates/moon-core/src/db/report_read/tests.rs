@@ -3684,6 +3684,6 @@ fn a_wordless_mask_needs_no_metadata_but_a_real_query_fails_closed() {
     }
 }
 
-mod seeks;
+pub(super) mod seeks;
 
 mod scale;

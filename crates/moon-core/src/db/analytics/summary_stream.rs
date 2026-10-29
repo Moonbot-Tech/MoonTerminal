@@ -15,7 +15,7 @@ use crate::db::read_fail::{read_fail, read_fail_on};
 use crate::db::report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS};
 use crate::db::{QuoteScope, ReadResult};
 
-/// Maximum true-UTC span SQLite may sort for one current-period Summary statement.
+/// Maximum true-UTC span read by one current-period Summary statement.
 const QUERY_WINDOW_SECS: i64 = 7 * 86_400;
 /// Ceiling on how many bounded SQL windows one current-period read may execute. The span cap
 /// alone bounds the dense grid's memory, but not the hang: without this, a 40-year period would
@@ -151,6 +151,8 @@ impl GroupAccumulator {
 /// One chronological active-lens row projected by the unified source.
 #[derive(Clone, Debug)]
 struct TradeRow {
+    /// Primary SQL key, retained so Rust can order every equal-time row without another SQL sort.
+    utc: i64,
     closedate: i64,
     buydate: i64,
     pnl: Option<f64>,
@@ -196,7 +198,7 @@ struct Accumulator {
     current_losses: i64,
     duration_seconds: i64,
     cores: HashMap<u64, CoreAccumulator>,
-    strategies: HashMap<String, GroupAccumulator>,
+    strategies: HashMap<i64, HashMap<String, GroupAccumulator>>,
     coins: HashMap<String, GroupAccumulator>,
     best_rows: Vec<TradeRow>,
     worst_rows: Vec<TradeRow>,
@@ -297,8 +299,8 @@ impl Accumulator {
             core.loss_sum -= profit;
         }
 
-        let strategy_key = match (&row.strategy_text, row.core_uid) {
-            (Some(strategy_text), Some(core_uid)) => format!("{strategy_text}@{core_uid}"),
+        let (strategy_text, core_uid) = match (&row.strategy_text, row.core_uid) {
+            (Some(strategy_text), Some(core_uid)) => (strategy_text, core_uid),
             _ => {
                 return Err(rusqlite::Error::InvalidColumnType(
                     6,
@@ -307,21 +309,33 @@ impl Accumulator {
                 ));
             }
         };
-        let strategy = self.strategies.entry(strategy_key).or_default();
-        if strategy.n == 0 {
-            strategy.strategy_id = row.strategy_id;
-            strategy.strategy_core = row.core_uid;
-        } else if strategy.strategy_id != row.strategy_id {
-            strategy.strategy_id = None;
+        let groups = self.strategies.entry(core_uid).or_default();
+        let push_strategy = |strategy: &mut GroupAccumulator| {
+            if strategy.n == 0 {
+                strategy.strategy_id = row.strategy_id;
+                strategy.strategy_core = row.core_uid;
+            } else if strategy.strategy_id != row.strategy_id {
+                strategy.strategy_id = None;
+            }
+            strategy.push(&row, include_inline_raw);
+        };
+        if let Some(strategy) = groups.get_mut(strategy_text.as_str()) {
+            push_strategy(strategy);
+        } else {
+            let mut strategy = GroupAccumulator::default();
+            push_strategy(&mut strategy);
+            groups.insert(strategy_text.clone(), strategy);
         }
-        strategy.push(&row, include_inline_raw);
-        self.coins
-            .entry(row.coin.clone())
-            .or_default()
-            .push(&row, include_inline_raw);
+        if let Some(coin) = self.coins.get_mut(row.coin.as_str()) {
+            coin.push(&row, include_inline_raw);
+        } else {
+            let mut coin = GroupAccumulator::default();
+            coin.push(&row, include_inline_raw);
+            self.coins.insert(row.coin.clone(), coin);
+        }
         if row.pnl.is_some() {
-            push_top_row(&mut self.best_rows, row.clone(), true);
-            push_top_row(&mut self.worst_rows, row, false);
+            push_top_row(&mut self.best_rows, &row, true);
+            push_top_row(&mut self.worst_rows, &row, false);
         }
         Ok(())
     }
@@ -390,13 +404,14 @@ impl TradeRow {
     /// Map one row of [`current_stream_sql`] into its typed form.
     ///
     /// Args:
-    ///     row: Statement row with the thirteen projected columns.
+    ///     row: Statement row with the fourteen projected columns, including its UTC order key.
     ///
     /// Returns:
     ///     The typed row, or the column conversion error.
     fn from_stream(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         let short_key = row.get::<_, i64>(8)?;
         Ok(Self {
+            utc: row.get(13)?,
             closedate: row.get(0)?,
             buydate: row.get(1)?,
             pnl: row.get(2)?,
@@ -416,9 +431,8 @@ impl TradeRow {
 
     /// Whether two consecutive stream rows share the SQL order key and form one tie run.
     ///
-    /// The statement orders by true UTC, `closedate`, `core_uid` and `pnl` only. True UTC is a
-    /// function of `closedate` and `core_uid`, so equality on those three fields is equality on
-    /// the whole SQL key, compared as SQLite compares them (`-0.0 == 0.0`, NULL with NULL).
+    /// The statement orders only by true UTC. Retaining that exact SQL value lets Rust order
+    /// every equal-time row by the former tuple, including differently shifted core clocks.
     ///
     /// Args:
     ///     other: The row the run started with.
@@ -426,17 +440,14 @@ impl TradeRow {
     /// Returns:
     ///     Whether `self` belongs to the same tie run as `other`.
     fn same_order_key(&self, other: &TradeRow) -> bool {
-        self.closedate == other.closedate
-            && self.core_uid == other.core_uid
-            && self.pnl == other.pnl
+        self.utc == other.utc
     }
 
     /// Order two rows of one tie run by every remaining value the [`Accumulator`] can observe.
     ///
-    /// This is the tail the SQL statement used to sort EVERY row on. Ties on the SQL key are rare
-    /// (one core, one second, one profit), so ordering them here keeps the streamed sequence
-    /// identical — top-row picks and float summation order included — while SQLite's sorter
-    /// carries only the five-term key. Each step mirrors the SQL term it replaces: NULL last,
+    /// Ordering only equal-UTC rows here keeps the streamed sequence identical, including
+    /// top-row picks and float summation order, while an identity axis streams the date index
+    /// directly. Each step mirrors the SQL term it replaces: NULL last for money,
     /// text by BINARY bytes, `typeof` by the text order of its name.
     ///
     /// Args:
@@ -445,8 +456,11 @@ impl TradeRow {
     /// Returns:
     ///     The order the former SQL tail produced for these two rows.
     fn tie_cmp(&self, rhs: &TradeRow) -> std::cmp::Ordering {
-        self.buydate
-            .cmp(&rhs.buydate)
+        self.closedate
+            .cmp(&rhs.closedate)
+            .then_with(|| self.core_uid.cmp(&rhs.core_uid))
+            .then_with(|| sql_num_cmp(self.pnl, rhs.pnl))
+            .then_with(|| self.buydate.cmp(&rhs.buydate))
             .then_with(|| {
                 (self.core_name.is_none(), &self.core_name)
                     .cmp(&(rhs.core_name.is_none(), &rhs.core_name))
@@ -542,8 +556,16 @@ fn flush_run(
 ///     rows: Existing bounded ranking in display order.
 ///     row: New chronological trade candidate.
 ///     best: Whether larger profit ranks first.
-fn push_top_row(rows: &mut Vec<TradeRow>, row: TradeRow, best: bool) {
-    rows.push(row);
+fn push_top_row(rows: &mut Vec<TradeRow>, row: &TradeRow, best: bool) {
+    if rows.len() == 5 {
+        let candidate = row.pnl.unwrap_or(0.0);
+        let last = rows[4].pnl.unwrap_or(0.0);
+        let order = candidate.total_cmp(&last);
+        if (best && !order.is_gt()) || (!best && !order.is_lt()) {
+            return;
+        }
+    }
+    rows.push(row.clone());
     rows.sort_by(|left, right| {
         let left = left.pnl.unwrap_or(0.0);
         let right = right.pnl.unwrap_or(0.0);
@@ -584,11 +606,11 @@ fn inner_window_bounds(axis: &crate::db::ReportAxis, outer_from: i64, outer_to: 
 
 /// Build the prepared current-stream SQL shared by production and plan-contract tests.
 ///
-/// SQLite sorts on the five-term key `true time, closedate, core_uid, pnl` only. Rows tied on it
-/// are put in the former full-tuple order by [`flush_run`], which covers every value observable
+/// SQLite orders only by true time, which streams the date index on an identity axis. Rows tied
+/// on it are put in the former full-tuple order by [`flush_run`], covering every value observable
 /// by [`Accumulator`], so the stream stays sequence-equivalent for streaks, drawdown, aggregates
 /// and displayed top rows even when SQLite changes UNION branch or index traversal order — while
-/// the sorter no longer evaluates and stores twelve tail expressions per row.
+/// the statement no longer sorts the full identity-axis period on secondary keys.
 ///
 /// Args:
 ///     src: Unified filtered source retaining its inner `?1`/`?2` range.
@@ -605,10 +627,10 @@ fn current_stream_sql(src: &str, true_time: &str, inline_raw: &str) -> String {
                 CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
                 COALESCE(o.isshort,0), {inline_raw},
                 CASE typeof(o.strategyid) WHEN 'blob' THEN 0 WHEN 'integer' THEN 1
-                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END
+                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END, {true_time}
          FROM {src}
          WHERE {true_time} >= ?3 AND {true_time} < ?4
-         ORDER BY {true_time}, o.closedate, o.core_uid, o.pnl IS NULL, o.pnl"
+         ORDER BY {true_time}"
     )
 }
 
@@ -665,7 +687,7 @@ struct StreamReadConfig {
     bucket: i64,
     /// Whether the attached strategy database can enrich labels.
     has_names: bool,
-    /// Positive maximum true-UTC span sorted by one statement execution.
+    /// Positive maximum true-UTC span read by one statement execution.
     query_window_secs: i64,
 }
 
@@ -778,6 +800,7 @@ fn read_with_window(
     let pairs = accumulator
         .strategies
         .values()
+        .flat_map(|groups| groups.values())
         .filter_map(|group| group.strategy_id.zip(group.strategy_core))
         .collect::<HashSet<_>>();
     // `names_read` is NOT `has_names`: an attached database whose head query FAILED leaves an
@@ -807,7 +830,7 @@ fn read_with_window(
         .map(|(hour, (profit, trades))| (hour as u32, *profit, *trades));
     let core_days = finish_cores(&accumulator.cores, &accumulator.days);
     let strategies = finish_groups(
-        accumulator.strategies,
+        flatten_strategies(accumulator.strategies),
         (!raw_strategies.is_empty()).then_some(&raw_strategies),
         metadata.groups.as_ref(),
         true,
@@ -871,20 +894,34 @@ fn read_raw_groups(
             ))
         })
         .map_err(|error| read_fail_on(conn, CTX, error))?;
-    let mut strategies = HashMap::<String, RawGroup>::new();
+    let mut strategies = HashMap::<i64, HashMap<String, RawGroup>>::new();
     let mut coins = HashMap::<String, RawGroup>::new();
     for row in rows {
         let (strategy_text, core_uid, coin, profit, spent, quote) =
             row.map_err(|error| read_fail_on(conn, CTX, error))?;
         if let (Some(strategy_text), Some(core_uid)) = (strategy_text, core_uid) {
             strategies
-                .entry(format!("{strategy_text}@{core_uid}"))
+                .entry(core_uid)
+                .or_default()
+                .entry(strategy_text)
                 .or_default()
                 .push(profit, spent, &quote);
         }
         coins.entry(coin).or_default().push(profit, spent, &quote);
     }
-    Ok((strategies, coins))
+    Ok((flatten_strategies(strategies), coins))
+}
+
+/// Build display identities once per strategy group instead of allocating one per trade.
+fn flatten_strategies<T>(groups: HashMap<i64, HashMap<String, T>>) -> HashMap<String, T> {
+    groups
+        .into_iter()
+        .flat_map(|(core, groups)| {
+            groups
+                .into_iter()
+                .map(move |(strategy, group)| (format!("{strategy}@{core}"), group))
+        })
+        .collect()
 }
 
 /// Align each core's sparse buckets to the already-filled Summary time grid.

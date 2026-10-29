@@ -239,12 +239,8 @@ pub fn distinct_cores(conn: &Connection) -> ReadResult<Vec<(u64, String)>> {
 /// strategy predicates are deliberately removed so an active checkbox or name mask does not hide
 /// alternative strategies that match every other Report filter.
 ///
-/// Split into a normal-strategy arm and a liquidation arm when the two differ. What the split
-/// buys is NOT an index-only scan — `deleted` sits in no index, so both arms still read table
-/// rows to apply the deletion predicate. It buys keeping the liquidation-attribution CASE and
-/// its two correlated subqueries off the rows that can never satisfy it, which on the 600k-row
-/// measurement fixture is 599 696 of 600 000. Measured there: 2057 ms as one statement,
-/// 1236 ms as two arms.
+/// Raw identities are discovered in core/strategy index order, and each ordinary identity
+/// needs only its first scoped match. Only Manual rows require per-row liquidation attribution.
 ///
 /// Args:
 ///     conn: Open report reader or snapshot with optional strategy attachment.
@@ -297,38 +293,39 @@ pub fn distinct_strategies(
             &src.cols,
             &StrategyMeta::without_mask(has_strategy_names),
         );
-        // `COALESCE(r."strategyid",0)` never yields NULL, so `<> 0` / `= 0` partition every row
-        // with no third case, and identity is set equality (this function sorts its whole output
-        // in Rust below, so SQL row order never matters). When `strategy_id` is already the plain
-        // column, both arms would be identical and the split would buy nothing — keep the single
-        // statement in that case.
-        //
-        // `UNION`, not `UNION ALL`, and this is MEASURED rather than reasoned. The arms are
-        // disjoint by construction and the caller below dedups every pair through `seen`, so
-        // `UNION ALL` looks like the free choice — it is the opposite. `UNION` lets SQLite
-        // dedup the compound ONCE, and its left arm then needs no `DISTINCT` of its own;
-        // `UNION ALL` makes each arm materialise its own `USE TEMP B-TREE FOR DISTINCT`.
-        // On the 600k-row measurement fixture: 2057 ms before this split, 1236 ms with `UNION`,
-        // 6599 ms with `UNION ALL` — three times WORSE than doing nothing at all.
-        //
-        // ONE `build_where`, its parameters bound TWICE. Calling it a second time would re-read
-        // the wall clock — `append_row_scope` resolves "does this window still reach the
-        // present" against `now`, and its own doc says that must be ONE reading for the whole
-        // predicate — so two calls can straddle a second boundary and scope the two arms to
-        // genuinely different row states. Binding the same vector twice also keeps the bound
-        // parameter count where it was instead of doubling it.
+        // Discover raw identities through the core/strategy index, then stop at the first
+        // scoped row for each identity. Wide table rows are no longer revisited just to
+        // rediscover the same pair. The manual identity may resolve to several liquidation
+        // owners, so only that small partition needs a complete row pass.
         let two_arms = strategy_id != "r.\"strategyid\"";
+        let identities = format!(
+            "WITH identities AS MATERIALIZED (
+                 SELECT DISTINCT core_uid, strategyid FROM {}
+             )",
+            src.table
+        );
+        let exists = format!(
+            "EXISTS (SELECT 1 FROM {} r{where_sql}
+                     AND r.core_uid IS c.core_uid AND r.strategyid IS c.strategyid)",
+            src.table
+        );
         let sql = if two_arms {
             format!(
-                "SELECT DISTINCT r.core_uid, COALESCE(r.\"strategyid\",0) FROM {table} r{where_sql} AND COALESCE(r.\"strategyid\",0) <> 0 \
-                 UNION \
-                 SELECT DISTINCT r.core_uid, COALESCE({strategy_id}, 0) FROM {table} r{where_sql} AND COALESCE(r.\"strategyid\",0) = 0",
+                "{identities}
+                 SELECT c.core_uid, c.strategyid FROM identities c
+                 WHERE COALESCE(c.strategyid,0) <> 0 AND {exists}
+                 UNION
+                 SELECT r.core_uid, COALESCE({strategy_id},0)
+                 FROM identities c CROSS JOIN {table} r{where_sql}
+                 AND COALESCE(c.strategyid,0) = 0
+                 AND r.core_uid IS c.core_uid AND r.strategyid IS c.strategyid",
                 table = src.table,
             )
         } else {
             format!(
-                "SELECT DISTINCT r.core_uid, COALESCE({strategy_id}, 0) FROM {} r{where_sql}",
-                src.table,
+                "{identities}
+                 SELECT c.core_uid, COALESCE(c.strategyid,0)
+                 FROM identities c WHERE {exists}"
             )
         };
         let mut refs: Vec<&dyn rusqlite::types::ToSql> =

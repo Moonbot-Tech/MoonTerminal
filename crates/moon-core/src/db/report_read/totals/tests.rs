@@ -337,3 +337,212 @@ fn one_pass(
     let meta = super::super::report_strategy_meta(conn, base).expect("strategy meta");
     super::sliced_attempt(conn, base, slices, &sources, &meta, false, now).expect("single pass")
 }
+
+use super::*;
+
+/// One slice's admission test over the base pass's rows.
+struct FormerSlicePlan {
+    /// Cores admitted, `None` for every core the base admits.
+    cores: Option<HashSet<i64>>,
+    date_from: Option<i64>,
+    date_to: Option<i64>,
+}
+
+impl FormerSlicePlan {
+    fn new(slice: &TotalsSlice) -> Self {
+        Self {
+            // Inlined the way `build_where` inlines them, so the comparison is the SQL's own.
+            cores: slice
+                .core_uids
+                .as_ref()
+                .filter(|cores| !cores.is_empty())
+                .map(|cores| cores.iter().map(|&uid| uid as i64).collect()),
+            date_from: slice.date_from,
+            date_to: slice.date_to,
+        }
+    }
+
+    /// Whether this slice's own statement would admit a row the base pass returned.
+    ///
+    /// The base pass already applied everything the slice shares with it; what is left is the
+    /// slice's core list and its window, shifted onto the core's clock exactly as
+    /// `append_row_scope` shifts it.
+    ///
+    /// Args:
+    ///     core: The row's `core_uid`.
+    ///     close: The row's `closedate`, `None` on a source without the column (its statement
+    ///         applies no window at all).
+    ///     offset: The core's clock offset at the read's instant.
+    ///
+    /// Returns:
+    ///     `None` when the close date is not a number this test can compare exactly.
+    fn admits(&self, core: i64, close: Option<&Value>, offset: i32) -> Option<bool> {
+        if self
+            .cores
+            .as_ref()
+            .is_some_and(|cores| !cores.contains(&core))
+        {
+            return Some(false);
+        }
+        let Some(close) = close else {
+            return Some(true);
+        };
+        let at_least =
+            |bound: i64| compare(close, ReportAxis::shift_bound(bound, offset)).map(|o| o.is_ge());
+        let at_most =
+            |bound: i64| compare(close, ReportAxis::shift_bound(bound, offset)).map(|o| o.is_le());
+        let from_ok = match self.date_from {
+            Some(bound) => at_least(bound)?,
+            None => true,
+        };
+        let to_ok = match self.date_to {
+            Some(bound) => at_most(bound)?,
+            None => true,
+        };
+        Some(from_ok && to_ok)
+    }
+}
+
+/// Frozen complete per-row fold before indexed slice admission.
+fn former_sliced_attempt(
+    conn: &Connection,
+    base: &ReportFilter,
+    slices: &[TotalsSlice],
+    sources: &[ReadSource],
+    meta: &StrategyMeta,
+    include_valuation: bool,
+    now: i64,
+) -> rusqlite::Result<Option<Vec<Option<ReportTotals>>>> {
+    let valuation_present = base.valuation == ValuationMode::Current || include_valuation;
+    let plans = slices.iter().map(FormerSlicePlan::new).collect::<Vec<_>>();
+    let passes = sources
+        .iter()
+        .map(|src| ClosedPass::new(src, base, include_valuation, meta))
+        .collect::<Vec<_>>();
+    let mut offsets: HashMap<i64, i32> = HashMap::new();
+    // slice -> source -> quote key -> one fold per column
+    let mut folds: Vec<Vec<BTreeMap<GroupKey, Vec<SqliteSum>>>> =
+        vec![vec![BTreeMap::new(); passes.len()]; plans.len()];
+    // A slice one of whose sums the fold refused; its own statement answers it instead.
+    let mut refused = vec![false; plans.len()];
+    // Same gate as the grouped read: only an empty core list has no cardinality of its own.
+    let count_cores: Vec<bool> = slices
+        .iter()
+        .map(|slice| slice.filter(base).core_uids.is_empty())
+        .collect();
+    let mut counted_cores: Vec<HashSet<i64>> = vec![HashSet::new(); plans.len()];
+    for (source, pass) in passes.iter().enumerate() {
+        let has_close = pass.src.cols.contains("closedate");
+        let mut stmt = conn.prepare(&pass.row_sql())?;
+        let mut rows = stmt.query(pass.refs().as_slice())?;
+        let width = pass.columns.len();
+        let mut values = Vec::with_capacity(width);
+        while let Some(row) = rows.next()? {
+            let Some(key) = GroupKey::of(&row.get::<_, Value>(0)?) else {
+                return Ok(None);
+            };
+            let Value::Integer(core) = row.get::<_, Value>(1)? else {
+                return Ok(None);
+            };
+            let close = row.get::<_, Value>(2)?;
+            values.clear();
+            for index in 0..width {
+                values.push(row.get::<_, Value>(3 + index)?);
+            }
+            let offset = *offsets
+                .entry(core)
+                .or_insert_with(|| core_offset(&base.axis, core, now));
+            for (index, ((plan, slice_folds), refused)) in plans
+                .iter()
+                .zip(folds.iter_mut())
+                .zip(refused.iter_mut())
+                .enumerate()
+            {
+                match plan.admits(core, has_close.then_some(&close), offset) {
+                    Some(true) => {}
+                    Some(false) => continue,
+                    None => return Ok(None),
+                }
+                if *refused {
+                    continue;
+                }
+                let sums = slice_folds[source]
+                    .entry(key)
+                    .or_insert_with(|| vec![SqliteSum::default(); width]);
+                let failed = sums
+                    .iter_mut()
+                    .zip(&values)
+                    .any(|(sum, value)| sum.step(value).is_err());
+                *refused = failed;
+                // A refused slice is answered by its own statement, so its set is discarded.
+                if !failed && count_cores[index] && row_counted(pass, &values) {
+                    counted_cores[index].insert(core);
+                }
+            }
+        }
+    }
+    // Each statement of the base pass read the clock on its own. Had any measured core's offset
+    // moved between this read's instant and now -- a core with rows or one whose rows it shifted
+    // out -- the base pass and the slices could disagree about its window. An unmeasured core is
+    // the identity at every instant.
+    let later = crate::util::now_unix_ms_i64().div_euclid(1_000);
+    if base.axis.measured_cores().into_iter().any(|core| {
+        core_offset(&base.axis, core as i64, now) != core_offset(&base.axis, core as i64, later)
+    }) {
+        return Ok(None);
+    }
+    let mut totals = Vec::with_capacity(folds.len());
+    for ((slice_folds, refused), cores) in folds.into_iter().zip(refused).zip(counted_cores) {
+        totals.push(if refused {
+            None
+        } else {
+            finish_slice(&passes, slice_folds, valuation_present, cores.len() as u64)?
+        });
+    }
+    Ok(Some(totals))
+}
+
+/// Compare both complete folds on the exact same fixture, avoiding feature or machine-load confounds.
+#[test]
+#[ignore = "synthetic reader timing probe"]
+fn sliced_refresh_scale_probe() {
+    use crate::db::report_read::tests::seeks::{replica, seed};
+    let conn = replica();
+    seed(&conn, 100_000, 10, 60, 1_000, 8);
+    let base = ReportFilter {
+        rows: RowScope::Closed,
+        ..Default::default()
+    };
+    let slices = std::iter::once(TotalsSlice {
+        core_uids: None,
+        date_from: None,
+        date_to: None,
+    })
+    .chain((0..31).map(|day| TotalsSlice {
+        core_uids: None,
+        date_from: Some(1_700_000_000 + day * DAY),
+        date_to: Some(1_700_000_000 + (day + 1) * DAY - 1),
+    }))
+    .collect::<Vec<_>>();
+    let sources = super::read_sources_res(&conn).unwrap();
+    let meta = super::super::report_strategy_meta(&conn, &base).unwrap();
+    let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
+    let old = former_sliced_attempt(&conn, &base, &slices, &sources, &meta, false, now).unwrap();
+    let new = super::sliced_attempt(&conn, &base, &slices, &sources, &meta, false, now).unwrap();
+    assert_eq!(format!("{old:?}"), format!("{new:?}"));
+    for round in 0..6 {
+        let before = round % 2 == 0;
+        let start = std::time::Instant::now();
+        let value = if before {
+            former_sliced_attempt(&conn, &base, &slices, &sources, &meta, false, now)
+        } else {
+            super::sliced_attempt(&conn, &base, &slices, &sources, &meta, false, now)
+        }
+        .unwrap();
+        std::hint::black_box(value);
+        println!(
+            "reader_refresh sliced former={before}: {:.3} ms",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}

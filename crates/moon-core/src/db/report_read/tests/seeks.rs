@@ -31,7 +31,8 @@ fn capture(event: rusqlite::trace::TraceEvent<'_>) {
     };
     if sql.to_ascii_uppercase().contains("ORDERS_REP")
         && (sql.trim_start().starts_with("SELECT")
-            || sql.trim_start().starts_with("WITH chosen_report_rows"))
+            || sql.trim_start().starts_with("WITH chosen_report_rows")
+            || sql.trim_start().starts_with("WITH identities"))
     {
         CAPTURED.with(|slot| slot.borrow_mut().push(sql));
     }
@@ -87,7 +88,7 @@ fn assert_seeks(plan: &str, sql: &str, index: &str, what: &str) {
 const OPEN_TEXT: &str = "(NOT (typeof(";
 
 /// The replica schema the core sends, with the production indexes `rep::init` creates.
-pub(super) fn replica() -> Connection {
+pub(in crate::db::report_read) fn replica() -> Connection {
     let conn = Connection::open_in_memory().expect("open replica");
     crate::db::init_db(&conn).expect("init report database");
     replica_columns(&conn);
@@ -120,7 +121,7 @@ fn replica_columns(conn: &Connection) {
 
 /// Fill the replica with `rows` trades over `cores` cores and `coins` coins, one in `open_every`
 /// still open, then attach `strategies` strategies per core.
-pub(super) fn seed(
+pub(in crate::db::report_read) fn seed(
     conn: &Connection,
     rows: i64,
     cores: i64,
