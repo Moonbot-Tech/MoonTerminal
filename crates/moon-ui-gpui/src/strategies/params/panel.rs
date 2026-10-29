@@ -340,7 +340,7 @@ impl StrategiesView {
     /// notice can never suppress another core's still-unseen one.
     fn edit_state_banner(
         &mut self,
-        row_pairs: &[(Key, StrategyRow)],
+        row_pairs: &[(Key, Arc<StrategyRow>)],
         pending: &HashMap<Key, StrategyEditRow>,
         edit_notes: &[(CoreId, StrategyEditNote)],
         cx: &mut Context<Self>,

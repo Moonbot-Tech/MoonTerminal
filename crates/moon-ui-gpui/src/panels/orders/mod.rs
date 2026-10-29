@@ -23,11 +23,12 @@ mod view;
 mod tests;
 
 pub(crate) use sort::executed;
-use sort::{apply_main_lift, sort_entries};
+use sort::{apply_main_lift, sort_or_reuse_entries};
 use view::{ALL_COLUMNS_MASK, MainOnTop, OrdCol, OrderKind, OrdersViewState, PrimarySort};
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
@@ -54,12 +55,29 @@ use moon_core::session::core_order::{CoreOrder, OrderedCores};
 ///
 /// No quote asset is stored here; the token cell renders `OrderRow::coin`, which the feed resolved
 /// with the core's own exchange rules.
-/// The owned row stays at one address while sorting moves only the core identity and a pointer.
+/// Rows and their PnL sort keys are shared; sorting moves only core identity and `Arc` handles.
 #[derive(Clone)]
 pub(super) struct OrderEntry {
     pub(super) core: CoreId,
     pub(super) core_name: String,
-    pub(super) row: Box<OrderRow>,
+    pub(super) row: Arc<OrderRow>,
+    pub(super) pnl: Option<f64>,
+    pub(super) pnl_pct: Option<f64>,
+    pub(super) pnl_tp: Option<f64>,
+}
+
+impl OrderEntry {
+    /// Associate one shared row with its source and precompute every PnL comparator key once.
+    fn new(core: CoreId, core_name: &str, row: Arc<OrderRow>) -> Self {
+        Self {
+            core,
+            core_name: core_name.to_owned(),
+            pnl: moon_core::feed::order_math::order_pnl(&row),
+            pnl_pct: moon_core::feed::order_math::order_pnl_pct(&row),
+            pnl_tp: moon_core::feed::order_math::order_pnl_at_tp(&row),
+            row,
+        }
+    }
 }
 
 /// Complete identity of the cached Orders rows and their presentation-sensitive ordering.
@@ -103,24 +121,94 @@ impl OrdersCacheKey {
     }
 }
 
-/// Clone only retained rows while preserving session-then-row order and their source names.
+/// Collect retained rows without a previous publication to share.
+#[cfg(test)]
 fn collect_scoped<'a>(
     cores: impl Iterator<Item = (CoreId, &'a str, &'a [OrderRow])>,
     keep: impl Fn(CoreId, &OrderRow) -> bool,
 ) -> Vec<OrderEntry> {
+    collect_scoped_shared(
+        cores,
+        keep,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+    )
+}
+
+/// Share rows by per-core revision, comparing contents only when that core published a change.
+fn collect_scoped_shared<'a>(
+    cores: impl Iterator<Item = (CoreId, &'a str, &'a [OrderRow])>,
+    keep: impl Fn(CoreId, &OrderRow) -> bool,
+    previous: &HashMap<(CoreId, u64), Arc<OrderRow>>,
+    revisions: &HashMap<CoreId, u64>,
+    previous_revisions: &HashMap<CoreId, u64>,
+) -> Vec<OrderEntry> {
     let mut entries = Vec::new();
     for (core, name, rows) in cores {
+        let unchanged_core = revisions
+            .get(&core)
+            .is_some_and(|revision| previous_revisions.get(&core) == Some(revision));
         for row in rows {
-            if keep(core, row) {
-                entries.push(OrderEntry {
-                    core,
-                    core_name: name.to_owned(),
-                    row: Box::new(row.clone()),
-                });
+            if !keep(core, row) {
+                continue;
             }
+            let row = previous
+                .get(&(core, row.uid))
+                .filter(|old| unchanged_core || order_rows_equal(old, row))
+                .cloned()
+                .unwrap_or_else(|| Arc::new(row.clone()));
+            entries.push(OrderEntry::new(core, name, row));
         }
     }
     entries
+}
+
+/// Compare every order field so a changed core clones only rows that actually changed.
+fn order_rows_equal(left: &OrderRow, right: &OrderRow) -> bool {
+    left.market == right.market
+        && left.market_display == right.market_display
+        && left.coin == right.coin
+        && left.quote == right.quote
+        && left.is_short == right.is_short
+        && left.size == right.size
+        && left.remaining_size == right.remaining_size
+        && left.sl_on == right.sl_on
+        && left.ts_on == right.ts_on
+        && left.vstop_on == right.vstop_on
+        && left.sl_fixed == right.sl_fixed
+        && left.ts_fixed == right.ts_fixed
+        && left.vstop_fixed == right.vstop_fixed
+        && left.vstop_level == right.vstop_level
+        && left.vstop_vol == right.vstop_vol
+        && left.buy_price == right.buy_price
+        && left.sell_price == right.sell_price
+        && left.create_time_ms == right.create_time_ms
+        && left.sell_create_time_ms == right.sell_create_time_ms
+        && left.entry_fill_time_ms == right.entry_fill_time_ms
+        && left.price == right.price
+        && left.fill_pct == right.fill_pct
+        && left.strat == right.strat
+        && left.strat_name == right.strat_name
+        && left.strat_id == right.strat_id
+        && left.status == right.status
+        && left.uid == right.uid
+        && left.emulator == right.emulator
+        && left.job_is_done == right.job_is_done
+        && left.pending == right.pending
+        && left.filled == right.filled
+        && left.stop_loss == right.stop_loss
+        && left.trailing == right.trailing
+        && left.take_profit == right.take_profit
+        && left.vstop == right.vstop
+        && left.pending_cond == right.pending_cond
+        && left.liq == right.liq
+        && left.panic_sell == right.panic_sell
+        && left.is_moon_shot == right.is_moon_shot
+        && left.corridor_price_down == right.corridor_price_down
+        && left.corridor_price_up == right.corridor_price_up
+        && left.buy_trace == right.buy_trace
+        && left.sell_trace == right.sell_trace
 }
 
 /// Mark only the first base-order row for each Main-open core/market pair.
@@ -206,12 +294,14 @@ fn orders_observe_step(
     (action, key)
 }
 
-/// Count filtered real/emulated rows before kind filtering, then sort the surviving kinds.
+/// Count filtered kinds, then reuse the old permutation or sort changed keys/row membership.
 fn prepare_entries(
     mut entries: Vec<OrderEntry>,
     view: &OrdersViewState,
     stop_overlay: &HashMap<(CoreId, u64, u8), (bool, Instant)>,
-) -> (Vec<OrderEntry>, usize, usize) {
+    previous: &[OrderEntry],
+    previous_signature: Option<u64>,
+) -> (Vec<OrderEntry>, usize, usize, u64) {
     let count_real = entries.iter().filter(|entry| !entry.row.emulator).count();
     let count_emu = entries.len() - count_real;
     entries.retain(|entry| match view.kind {
@@ -219,8 +309,14 @@ fn prepare_entries(
         OrderKind::Real => !entry.row.emulator,
         OrderKind::Emu => entry.row.emulator,
     });
-    sort_entries(&mut entries, view, stop_overlay);
-    (entries, count_real, count_emu)
+    let signature = sort_or_reuse_entries(
+        &mut entries,
+        previous,
+        previous_signature,
+        view,
+        stop_overlay,
+    );
+    (entries, count_real, count_emu, signature)
 }
 
 /// Panel displaying open orders for one core group.
@@ -243,6 +339,12 @@ pub struct OrdersPanel {
     gate: RenderGate,
     cache_key: Option<OrdersCacheKey>,
     cached_entries: Rc<Vec<OrderEntry>>,
+    /// Comparator order before Main-on-top presentation lifting, used by the next revision.
+    cached_base_entries: Rc<Vec<OrderEntry>>,
+    /// Active comparator signature of `cached_base_entries`, reused by the next revision.
+    cached_sort_signature: Option<u64>,
+    /// Per-core order publication revisions backing `cached_entries`.
+    order_revisions: HashMap<CoreId, u64>,
     /// Retained table state containing column order and widths.
     ///
     /// Owning it here allows initialization from `docks.json` and persistence after header drag
@@ -406,6 +508,9 @@ impl OrdersPanel {
             gate: RenderGate::default(),
             cache_key: None,
             cached_entries: Rc::new(Vec::new()),
+            cached_base_entries: Rc::new(Vec::new()),
+            cached_sort_signature: None,
+            order_revisions: HashMap::new(),
             table_state,
             widths_id,
             col_order_cache: Vec::new(),
@@ -652,15 +757,16 @@ impl OrdersPanel {
 
     /// Collect, filter, and base-sort rows.
     ///
-    /// Return `(rows, real_count, emulated_count)`. Counts apply the core, current-market and coin
-    /// filters but precede the all/real/emulated kind filter, matching the footer totals.
+    /// Return `(rows, real_count, emulated_count, sort_signature)`. Counts apply the core,
+    /// current-market and coin filters but precede the kind filter, matching the footer totals.
     fn build_entries(
         &self,
         b: &Backend,
         scope: &EffectiveCoreScope,
         view: &OrdersViewState,
         current: &Option<(CoreId, String)>,
-    ) -> (Vec<OrderEntry>, usize, usize) {
+        revisions: &HashMap<CoreId, u64>,
+    ) -> (Vec<OrderEntry>, usize, usize, u64) {
         let store = b.session.store();
         let cores = b
             .session
@@ -674,17 +780,34 @@ impl OrdersPanel {
             });
         // Apply the effective Classic or Auto core scope, the current-market filter and the coin
         // filter before the order-kind filter, so the footer counts what the table shows.
-        let entries = collect_scoped(cores, |core, row| {
-            let by_source = scope.contains(core);
-            by_source
-                && (!view.only_current_market
-                    || match current {
-                        Some((c, m)) => core == *c && &row.market == m,
-                        None => true,
-                    })
-                && coin_filter::matches_coin(&row.coin, &self.coin_query)
-        });
-        prepare_entries(entries, view, &self.stop_overlay)
+        let previous: HashMap<_, _> = self
+            .cached_entries
+            .iter()
+            .map(|entry| ((entry.core, entry.row.uid), entry.row.clone()))
+            .collect();
+        let entries = collect_scoped_shared(
+            cores,
+            |core, row| {
+                let by_source = scope.contains(core);
+                by_source
+                    && (!view.only_current_market
+                        || match current {
+                            Some((c, m)) => core == *c && &row.market == m,
+                            None => true,
+                        })
+                    && coin_filter::matches_coin(&row.coin, &self.coin_query)
+            },
+            &previous,
+            revisions,
+            &self.order_revisions,
+        );
+        prepare_entries(
+            entries,
+            view,
+            &self.stop_overlay,
+            &self.cached_base_entries,
+            self.cached_sort_signature,
+        )
     }
 
     /// Resolve cache inputs once for explicit UI rebuilds, preserving all existing callers.
@@ -700,11 +823,26 @@ impl OrdersPanel {
     /// Rebuild rows using the observer's resolved scope and owned key without resolving again.
     fn rebuild_cache_with(&mut self, b: &Backend, scope: &EffectiveCoreScope, key: OrdersCacheKey) {
         self.main_open = Rc::new(key.main_open.iter().cloned().collect());
+        let order_revisions = {
+            let store = b.session.store();
+            b.session
+                .sessions()
+                .iter()
+                .filter_map(|session| {
+                    store
+                        .core(session.id)
+                        .map(|data| (session.id, data.orders_table_rev))
+                })
+                .collect()
+        };
         // Build the primary plus newest/oldest base order and the real/emulated footer counts.
-        let (mut entries, count_real, count_emu) =
-            self.build_entries(b, scope, &key.view, &key.current);
+        let (mut entries, count_real, count_emu, sort_signature) =
+            self.build_entries(b, scope, &key.view, &key.current, &order_revisions);
         self.count_real = count_real;
         self.count_emu = count_emu;
+        self.cached_sort_signature = Some(sort_signature);
+        self.cached_base_entries = Rc::new(entries.clone());
+        self.order_revisions = order_revisions;
         // Highlight the first row in base order for each Main-open `(core, market)` pair, not every
         // order for that market.
         let highlight = main_highlights(&entries, &self.main_open);

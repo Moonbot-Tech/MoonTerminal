@@ -38,51 +38,81 @@ impl AnalyticsView {
         })
     }
 
-    /// Build the report, copy it, save it, and say where it went.
+    /// Snapshot the report inputs, then build and save off the UI thread.
     ///
-    /// The write is a few kilobytes on a press, not on a frame, so it runs here: a background
-    /// task would only move the notice a frame later.
+    /// Only the generation that requested the report may copy it and publish the completion notice.
     fn ticks_make_report(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = self.ticks_report_text(cx) else {
+        let Some(data) = self.ticks.data.data().cloned() else {
             return;
         };
-        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-        let note = match save(&text) {
-            Ok(path) => MoonNotification::success(
-                t!(
-                    "analytics.ticks.report_done",
-                    path = path.display().to_string()
-                )
-                .to_string(),
-            ),
-            Err(error) => MoonNotification::warning(
-                t!("analytics.ticks.report_copied_only", error = error).to_string(),
-            ),
-        };
-        window.push_notification(note, cx);
-    }
-
-    /// The report's text over the loaded rows; `None` before a load.
-    fn ticks_report_text(&self, cx: &App) -> Option<String> {
-        let data = self.ticks.data.data()?;
         // UTC seconds; `to` is exclusive and `from` negative for an open period.
         let period_days = self
             .ticks
             .loaded_period
             .filter(|&(from, to)| from >= 0 && to > from)
             .map(|(from, to)| (to - from) as f64 / 86_400.0);
-        let input = ReportInput {
-            build: build_label(),
-            period_days,
-            without_ms: data.without_ms,
-            service: data.service,
-            untunable: data.untunable,
-            rows: data.rows.iter().map(|row| report_row(row, data)).collect(),
-            cores: core_facts(&data.rows, self, cx),
-            model: super::model_cfg::current(),
-        };
-        Some(diag::render(&input))
+        let cores = core_facts(self, cx);
+        let model = super::model_cfg::current();
+        let generation = (self.ticks.seq, self.ticks.rows_rev);
+        let window_handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let (text, saved) = cx
+                .background_spawn(async move {
+                    let text = report_text(&data, period_days, cores, model);
+                    let saved = save(&text);
+                    (text, saved)
+                })
+                .await;
+            cx.update(|cx| {
+                let current = this
+                    .update(cx, |this, _| (this.ticks.seq, this.ticks.rows_rev))
+                    .ok();
+                if current != Some(generation) {
+                    return;
+                }
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    let note = match saved {
+                        Ok(path) => MoonNotification::success(
+                            t!(
+                                "analytics.ticks.report_done",
+                                path = path.display().to_string()
+                            )
+                            .to_string(),
+                        ),
+                        Err(error) => MoonNotification::warning(
+                            t!("analytics.ticks.report_copied_only", error = error).to_string(),
+                        ),
+                    };
+                    window.push_notification(note, cx);
+                });
+            });
+        })
+        .detach();
     }
+}
+
+/// Render one diagnostic snapshot off the UI thread with the model captured at the click.
+fn report_text(
+    data: &TicksData,
+    period_days: Option<f64>,
+    mut cores: HashMap<u64, CoreFacts>,
+    model: moon_core::db::tuner::ticks::ModelSettings,
+) -> String {
+    let present: std::collections::HashSet<_> =
+        data.rows.iter().map(|row| row.deal.core_uid).collect();
+    cores.retain(|core, _| present.contains(core));
+    let input = ReportInput {
+        build: build_label(),
+        period_days,
+        without_ms: data.without_ms,
+        service: data.service,
+        untunable: data.untunable,
+        rows: data.rows.iter().map(|row| report_row(row, data)).collect(),
+        cores,
+        model,
+    };
+    diag::render(&input)
 }
 
 /// One table row as the report reads it.
@@ -156,21 +186,13 @@ fn venue_name(venue: Option<moon_core::venue::Venue>, exchange_key: &str) -> Str
 
 /// Each core's build and time zone, as the session holds them now. A core the session does not
 /// hold is left out, and the report says it is not connected.
-fn core_facts<'a>(
-    rows: impl IntoIterator<Item = &'a DealRow>,
-    view: &AnalyticsView,
-    cx: &App,
-) -> HashMap<u64, CoreFacts> {
+fn core_facts(view: &AnalyticsView, cx: &App) -> HashMap<u64, CoreFacts> {
     let backend = view.backend.read(cx);
     let store = backend.session.store();
-    let mut out = HashMap::new();
-    for row in rows {
-        let uid = row.deal.core_uid;
-        if out.contains_key(&uid) {
-            continue;
-        }
-        if let Some(core) = store.core(uid) {
-            out.insert(
+    store
+        .cores()
+        .map(|(uid, core)| {
+            (
                 uid,
                 CoreFacts {
                     // The store keeps a configured core while it is offline, and drops its
@@ -180,10 +202,9 @@ fn core_facts<'a>(
                     version_suffix: core.server_version_suffix.clone(),
                     tz_offset_secs: core.time_offset.offset_secs,
                 },
-            );
-        }
-    }
-    out
+            )
+        })
+        .collect()
 }
 
 /// The terminal's build as the status bar's tooltip states it: the release base and the commit.

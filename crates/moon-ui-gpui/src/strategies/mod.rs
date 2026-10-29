@@ -152,6 +152,8 @@ pub struct StrategiesView {
     /// Staged checkbox values keyed by core and strategy id.
     /// Sent with Start/Stop Checked and cleared after successful application.
     staged: HashMap<Key, bool>,
+    /// Per-core strategy-list indices and shared selected rows, rebuilt on `strategies_rev`.
+    row_cache: std::cell::RefCell<HashMap<CoreId, StrategyRowCache>>,
     /// Draft field edits mapping core, strategy id, and field name to the new UI string.
     field_edits: HashMap<FieldEditKey, String>,
     /// Highest `StrategyEditNote::seq` acknowledged in the Adjusted/Superseded banner, per

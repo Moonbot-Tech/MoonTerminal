@@ -276,6 +276,8 @@ pub(in crate::analytics::tuner) struct TicksData {
     pub(in crate::analytics::tuner) all: VarStats,
     /// Chronological by close, as `read_deals` orders them.
     pub(in crate::analytics::tuner) rows: super::snapshots::SnapshotRows<DealRow>,
+    /// Report uid to chronological row position, built once when the publication lands.
+    pub(in crate::analytics::tuner) row_index: Arc<HashMap<i64, usize>>,
     /// Scope rows without millisecond stamps — in the Fact column, not in the table.
     pub(in crate::analytics::tuner) without_ms: usize,
     /// Service rows with stamps the axis never takes (funding, liquidations, joined sells, no
@@ -336,6 +338,25 @@ pub(in crate::analytics::tuner) struct TapeBudget {
 pub(in crate::analytics::tuner) type OwnValues = HashMap<(i64, u64), Arc<HashMap<String, String>>>;
 
 impl TicksData {
+    /// Build the report-uid index for a newly published row set.
+    pub(in crate::analytics::tuner) fn rebuild_row_index(&mut self) {
+        self.row_index = Arc::new(
+            self.rows
+                .iter()
+                .enumerate()
+                .map(|(index, row)| (row.deal.report_uid, index))
+                .collect(),
+        );
+    }
+
+    /// Return the persistent index, lazily initializing synthetic or test publications.
+    fn row_index(&mut self) -> &Arc<HashMap<i64, usize>> {
+        if self.row_index.is_empty() && !self.rows.is_empty() {
+            self.rebuild_row_index();
+        }
+        &self.row_index
+    }
+
     /// Rows whose window the tape covers.
     pub(in crate::analytics::tuner) fn covered(&self) -> usize {
         self.rows
@@ -1137,15 +1158,14 @@ impl TicksState {
         &mut self,
         edits: impl IntoIterator<Item = (i64, RowEdit)>,
     ) {
+        let mut edits = edits.into_iter().peekable();
+        if edits.peek().is_none() {
+            return;
+        }
         let Some(data) = self.data.data_mut() else {
             return;
         };
-        let index: HashMap<i64, usize> = data
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(i, r)| (r.deal.report_uid, i))
-            .collect();
+        let index = Arc::clone(data.row_index());
         let mut touched = false;
         let mut replayed = false;
         for (uid, edit) in edits {
@@ -1198,12 +1218,7 @@ impl TicksState {
         let Some(data) = self.data.data_mut() else {
             return;
         };
-        let index: HashMap<i64, usize> = data
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(i, r)| (r.deal.report_uid, i))
-            .collect();
+        let index = Arc::clone(data.row_index());
         for answer in answers {
             let Some(&i) = index.get(&answer.deal.report_uid) else {
                 continue;
@@ -1271,6 +1286,13 @@ impl TicksState {
         result: Result<TicksData, moon_core::db::ReadFail>,
         keep_on_failure: bool,
     ) {
+        let mut result = result;
+        if let Ok(data) = &mut result
+            && data.row_index.is_empty()
+            && !data.rows.is_empty()
+        {
+            data.rebuild_row_index();
+        }
         let kpi = result.as_ref().map(|d| d.kpi.clone()).map_err(Clone::clone);
         self.kpi.apply_or_keep(kpi, keep_on_failure);
         self.data.apply_or_keep(result, keep_on_failure);

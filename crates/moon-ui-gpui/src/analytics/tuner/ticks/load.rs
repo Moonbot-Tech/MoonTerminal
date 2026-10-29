@@ -521,9 +521,16 @@ impl AnalyticsView {
                 let mut kinds: Vec<String> = rows.iter().map(|r| r.deal.kind.clone()).collect();
                 kinds.sort();
                 kinds.dedup();
+                let row_index = Arc::new(
+                    rows.iter()
+                        .enumerate()
+                        .map(|(index, row)| (row.deal.report_uid, index))
+                        .collect(),
+                );
                 let mut data = TicksData {
                     all: read.all,
                     rows: rows.into(),
+                    row_index,
                     without_ms: read.without_ms,
                     service: read.service,
                     untunable: read.untunable,

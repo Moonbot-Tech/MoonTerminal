@@ -5,14 +5,14 @@ use std::collections::{HashMap, HashSet};
 use moon_core::feed::OrderRow;
 
 use super::{apply_main_lift, sort_entries};
-use crate::panels::orders::{OrdCol, OrderEntry, OrdersViewState};
+use crate::panels::orders::{OrdCol, OrderEntry, OrdersViewState, prepare_entries};
 
 /// Build one sortable order with only the fields relevant to these comparator tests varied later.
 fn entry(core: u64, uid: u64, coin: &str, size: f64) -> OrderEntry {
-    OrderEntry {
+    OrderEntry::new(
         core,
-        core_name: format!("Core {core}"),
-        row: Box::new(OrderRow {
+        &format!("Core {core}"),
+        std::sync::Arc::new(OrderRow {
             market: format!("{coin}USDT"),
             market_display: format!("{coin}USDT"),
             coin: coin.to_string(),
@@ -57,7 +57,7 @@ fn entry(core: u64, uid: u64, coin: &str, size: f64) -> OrderEntry {
             buy_trace: None,
             sell_trace: None,
         }),
-    }
+    )
 }
 
 /// `orders/sort.rs:sort_entries` must apply both directions to the selected numeric column.
@@ -98,9 +98,9 @@ fn text_header_sort_uses_the_displayed_token() {
         ..OrdersViewState::default()
     };
     let mut first = entry(1, 1, "ZED", 1.0);
-    first.row.market = "@1".to_string();
+    std::sync::Arc::make_mut(&mut first.row).market = "@1".to_string();
     let mut second = entry(1, 2, "ALPHA", 1.0);
-    second.row.market = "ZZZUSDT".to_string();
+    std::sync::Arc::make_mut(&mut second.row).market = "ZZZUSDT".to_string();
     let mut rows = [first, second];
 
     sort_entries(&mut rows, &view, &overlays);
@@ -121,7 +121,7 @@ fn text_header_sort_uses_the_displayed_token() {
 fn missing_header_values_stay_last_in_both_directions() {
     let overlays = HashMap::new();
     let mut named = entry(1, 1, "AAA", 1.0);
-    named.row.strat_name = "Trend".to_string();
+    std::sync::Arc::make_mut(&mut named.row).strat_name = "Trend".to_string();
     let unnamed = entry(1, 2, "BBB", 1.0);
     let mut rows = [unnamed, named];
     for ascending in [true, false] {
@@ -142,7 +142,7 @@ fn missing_header_values_stay_last_in_both_directions() {
 #[test]
 fn stop_sort_uses_the_optimistic_display_value() {
     let mut baked_on = entry(1, 1, "AAA", 1.0);
-    baked_on.row.sl_on = true;
+    std::sync::Arc::make_mut(&mut baked_on.row).sl_on = true;
     let baked_off = entry(1, 2, "BBB", 1.0);
     let mut overlays = HashMap::new();
     overlays.insert((1, 1, 0), (false, std::time::Instant::now()));
@@ -190,8 +190,9 @@ fn missing_header_override_keeps_the_legacy_default() {
     let overlays = HashMap::new();
     let executed = entry(1, 1, "AAA", 1.0);
     let mut pending = entry(1, 2, "BBB", 1.0);
-    pending.row.status.clear();
-    pending.row.filled = false;
+    let pending_row = std::sync::Arc::make_mut(&mut pending.row);
+    pending_row.status.clear();
+    pending_row.filled = false;
     let mut rows = [pending, executed];
 
     sort_entries(&mut rows, &OrdersViewState::default(), &overlays);
@@ -242,6 +243,62 @@ fn explicit_header_sort_outranks_the_main_lift() {
             .iter()
             .map(|row| row.row.uid)
             .collect::<Vec<_>>(),
+        vec![2, 1]
+    );
+}
+
+/// Precomputed PnL keys must equal the original order-math calls for every comparator.
+#[test]
+fn precomputed_pnl_keys_match_order_math() {
+    for mut row in [
+        entry(1, 1, "AAA", 2.0),
+        entry(2, 2, "BBB", 0.5),
+        entry(3, 3, "CCC", 4.0),
+    ] {
+        {
+            let inner = std::sync::Arc::make_mut(&mut row.row);
+            inner.sell_price = 0.0;
+            inner.status = "SellSet".into();
+        }
+        let pnl = moon_core::feed::order_math::order_pnl(&row.row);
+        let pnl_pct = moon_core::feed::order_math::order_pnl_pct(&row.row);
+        let pnl_tp = moon_core::feed::order_math::order_pnl_at_tp(&row.row);
+        let rebuilt = OrderEntry::new(row.core, &row.core_name, row.row.clone());
+        assert_eq!(rebuilt.pnl, pnl);
+        assert_eq!(rebuilt.pnl_pct, pnl_pct);
+        assert_eq!(rebuilt.pnl_tp, pnl_tp);
+    }
+}
+
+/// Swapping numeric keys between row IDs must invalidate the cached permutation.
+#[test]
+fn numeric_key_swap_does_not_reuse_a_colliding_permutation() {
+    let view = OrdersViewState {
+        kind: super::OrderKind::All,
+        header_sort: Some((OrdCol::CurP, true)),
+        ..OrdersViewState::default()
+    };
+    let priced = |uid, price| {
+        let mut row = entry(1, uid, "AAA", 1.0);
+        std::sync::Arc::make_mut(&mut row.row).price = price;
+        row
+    };
+    let first = prepare_entries(
+        vec![priced(1, 10.0), priced(2, 11.0)],
+        &view,
+        &HashMap::new(),
+        &[],
+        None,
+    );
+    let second = prepare_entries(
+        vec![priced(1, 11.0), priced(2, 10.0)],
+        &view,
+        &HashMap::new(),
+        &first.0,
+        Some(first.3),
+    );
+    assert_eq!(
+        second.0.iter().map(|row| row.row.uid).collect::<Vec<_>>(),
         vec![2, 1]
     );
 }

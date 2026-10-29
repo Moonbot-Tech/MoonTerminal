@@ -122,8 +122,7 @@ pub(super) fn ordered_siblings<'node, 'row>(
 ///     folders: Open-folder paths for the core.
 ///     prefix: Current canonical path, extended during recursion.
 ///     view: Strategies state that owns selection and staged checkbox state.
-///     strategies: Live strategies used for checkbox coverage.
-///     filter: Prepared predicate shared by the complete tree build.
+///     checks: Pre-aggregated displayed checkbox totals for every folder.
 ///     searching: Whether a text query forces child folders open.
 ///     engine: Confirmed global-engine state copied onto folder headings.
 ///     out: Output rows for this subtree.
@@ -146,8 +145,7 @@ pub(super) fn convert_node(
     folders: &FolderSets<'_>,
     prefix: &mut Vec<String>,
     view: &StrategiesView,
-    strategies: &[StrategyRow],
-    filter: &PreparedFilter,
+    checks: &FolderChecks,
     searching: bool,
     engine: Option<bool>,
     out: &mut Vec<MoonTreeItem>,
@@ -163,12 +161,7 @@ pub(super) fn convert_node(
                 prefix.push(name.to_string());
                 let fid = id_folder(core, &path);
                 let fopen = searching || folders.open.contains(path.as_str());
-                // Read before `path` is moved into the selection comparison below.
-                let fchecked = subtree_displayed_all_checked(
-                    &subtree_check_targets(strategies, prefix, filter),
-                    &view.staged,
-                    core,
-                );
+                let fchecked = checks.for_path(&path);
                 let (active, total) = counts.for_path(&path);
                 // Asked of the COUNTS, not of `total`, which the kind and direction filters narrow: a
                 // folder whose strategies are all filtered away is not an empty folder, and drawing it as
@@ -197,8 +190,7 @@ pub(super) fn convert_node(
                         folders,
                         prefix,
                         view,
-                        strategies,
-                        filter,
+                        checks,
                         searching,
                         engine,
                         &mut fchildren,

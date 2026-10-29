@@ -300,7 +300,7 @@ impl StrategiesView {
         // (`MoonVirtualList` requires a `'static` closure). Borrowing here would clone each of
         // them a second time on every frame of a monitor-rate repaint.
         values: Values,
-        row_pairs: Vec<(Key, StrategyRow)>,
+        row_pairs: Vec<(Key, Arc<StrategyRow>)>,
         pending: HashMap<Key, StrategyEditRow>,
         // Unused: `MoonVirtualList` gives its `render_item` closure a fresh `Window` per call,
         // which is what compact rows actually build against (they never create a retained editor

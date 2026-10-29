@@ -60,7 +60,7 @@ pub(super) enum ParamsPanelModel {
         /// Prepared per-section or full-mode body for the current selection.
         body: ParamsBody,
         values: Values,
-        row_pairs: Vec<(Key, StrategyRow)>,
+        row_pairs: Vec<(Key, Arc<StrategyRow>)>,
         multi: bool,
         common: Option<HashSet<String>>,
         differ: bool,

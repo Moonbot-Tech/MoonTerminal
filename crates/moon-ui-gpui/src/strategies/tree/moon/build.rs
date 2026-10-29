@@ -297,11 +297,13 @@ pub(super) fn build_core_root(
     } else {
         FolderCounts::totals_only()
     };
+    let mut checks = FolderChecks::default();
     let mut matched: Vec<&StrategyRow> = Vec::new();
     let mut row_ranks = HashMap::new();
     let mut any_matched = false;
     for (at, row) in cd.strategies.iter().enumerate() {
         counts.add(row, filter, at);
+        checks.add(row, filter, &view.staged, core);
         if filter.matches(row) {
             any_matched = true;
             if core_open {
@@ -361,6 +363,7 @@ pub(super) fn build_core_root(
             searching,
             engine,
             &counts,
+            &checks,
             &row_ranks,
             &matched,
             &empty_folders,
@@ -382,11 +385,7 @@ pub(super) fn build_core_root(
             open_orders: open_orders_total,
             selected: view.folder_sel.contains(&(core, String::new())),
             // Filter-aware coverage, including when this core is collapsed and `matched` is empty.
-            checked: subtree_displayed_all_checked(
-                &subtree_check_targets(&cd.strategies, &[], filter),
-                &view.staged,
-                core,
-            ),
+            checked: checks.root(),
             engine,
         },
     );
@@ -500,6 +499,7 @@ pub(super) fn retained_empty_folder_paths(
 ///     searching: Whether a text query forces child folders open.
 ///     engine: Confirmed global-engine state copied onto folder headings.
 ///     counts: Filter-aware totals and folder ranks for the displayed rows.
+///     checks: Displayed checkbox totals aggregated during the same core scan.
 ///     row_ranks: Display rank for each strategy, including a pending reorder overlay.
 ///     matched: Visible live strategies in their displayed order.
 ///     empty_folders: Empty folders retained by the UI or confirmed by the core.
@@ -520,6 +520,7 @@ pub(super) fn build_core_subtree(
     searching: bool,
     engine: Option<bool>,
     counts: &FolderCounts,
+    checks: &FolderChecks,
     row_ranks: &HashMap<u64, usize>,
     matched: &[&StrategyRow],
     empty_folders: &[Vec<String>],
@@ -573,8 +574,7 @@ pub(super) fn build_core_subtree(
         &folders,
         &mut prefix,
         view,
-        &cd.strategies,
-        filter,
+        checks,
         searching,
         engine,
         children,
