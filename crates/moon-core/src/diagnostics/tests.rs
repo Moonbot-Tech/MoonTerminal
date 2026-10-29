@@ -6,6 +6,9 @@
 
 use super::*;
 
+mod lifecycle;
+mod scale;
+
 #[test]
 fn a_file_that_cannot_be_read_is_never_written_over() {
     // The case that costs a user their configuration: an existing file that `read_to_string`

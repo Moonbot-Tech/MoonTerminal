@@ -1,5 +1,8 @@
 use super::*;
 
+mod queue;
+mod scale;
+
 /// Build an isolated recorder whose reads and writes share one in-memory cache queue.
 fn chart_recorder() -> Recorder {
     let now = Instant::now();
@@ -17,6 +20,8 @@ fn chart_recorder() -> Recorder {
         compares: Vec::new(),
         closed: peek::ClosedTrades::default(),
         pending_bytes: Arc::default(),
+        live: HashMap::new(),
+        live_revisions: HashMap::new(),
     }
 }
 
@@ -235,6 +240,8 @@ fn emulator_known_only_at_close_is_closed_and_dropped() {
         compares: Vec::new(),
         closed: peek::ClosedTrades::default(),
         pending_bytes: Arc::default(),
+        live: HashMap::new(),
+        live_revisions: HashMap::new(),
     };
     let id = TradeId { core: 9, rec_id: 1 };
     let key = ("SYNTHETIC".to_string(), "SYNUSDT".to_string());
@@ -309,6 +316,8 @@ fn recorder_drops_emulator_tasks_when_turned_off() {
         compares: Vec::new(),
         closed: peek::ClosedTrades::default(),
         pending_bytes: Arc::default(),
+        live: HashMap::new(),
+        live_revisions: HashMap::new(),
     };
     let emu = TradeId { core: 1, rec_id: 1 };
     let plain = TradeId { core: 1, rec_id: 2 };
@@ -448,6 +457,8 @@ fn a_close_on_an_unknown_venue_is_recorded_and_known_to_catchup() {
         compares: Vec::new(),
         closed: peek::ClosedTrades::default(),
         pending_bytes: Arc::default(),
+        live: HashMap::new(),
+        live_revisions: HashMap::new(),
     };
     let unknown = TradeId { core: 9, rec_id: 1 };
     let known = TradeId { core: 8, rec_id: 2 };
@@ -545,4 +556,59 @@ fn a_listed_trade_is_peeked_through_the_protection_set() {
     );
     recorder.apply(Cmd::Catchup(vec![listed]), now_ms);
     assert_eq!(window(&recorder).ok(), Some((key.0, key.1, 1500, 2500)));
+}
+
+/// Incremental live coverage must equal a full rebuild after every mutation, while an unchanged
+/// tick keeps the existing allocation instead of cloning every market and span again.
+#[test]
+fn live_cache_matches_full_rebuild_only_after_changes() {
+    let key: Key = ("CORE_A".into(), "XALPHA".into());
+    let shape = catchup::Shape {
+        margin_ms: 30_000,
+        long_ms: 60_000,
+        tail_ms: 60_000,
+    };
+    let id = TradeId { core: 7, rec_id: 9 };
+    let mut task = KeyTask::new();
+    task.opened(id, 100_000, &shape, Some(false));
+    let mut tasks = HashMap::from([(key.clone(), task)]);
+    let mut live = HashMap::new();
+    let mut revisions = HashMap::new();
+    let expected = |tasks: &HashMap<Key, KeyTask>| {
+        tasks
+            .iter()
+            .map(|(key, task)| (key.clone(), task.real_needed()))
+            .collect::<HashMap<_, _>>()
+    };
+    sync_live(&tasks, &mut revisions, &mut live);
+    assert_eq!(live, expected(&tasks));
+    let allocation = live[&key].spans().as_ptr();
+    sync_live(&tasks, &mut revisions, &mut live);
+    assert_eq!(live[&key].spans().as_ptr(), allocation);
+
+    tasks
+        .get_mut(&key)
+        .unwrap()
+        .closed(id, 100_000, 200_000, &shape, Some(false));
+    sync_live(&tasks, &mut revisions, &mut live);
+    assert_eq!(live, expected(&tasks));
+    tasks.get_mut(&key).unwrap().watch(50_000, 250_000);
+    sync_live(&tasks, &mut revisions, &mut live);
+    assert_eq!(live, expected(&tasks));
+    tasks.get_mut(&key).unwrap().expire_watch(250_000);
+    sync_live(&tasks, &mut revisions, &mut live);
+    assert_eq!(live, expected(&tasks));
+    let version = revisions[&key];
+    tasks.get_mut(&key).unwrap().discard_emulator();
+    sync_live(&tasks, &mut revisions, &mut live);
+    assert_eq!(revisions[&key], version);
+    tasks.insert(key.clone(), KeyTask::new());
+    sync_live(&tasks, &mut revisions, &mut live);
+    assert!(
+        live[&key].is_empty(),
+        "a recycled key must not inherit coverage"
+    );
+    tasks.clear();
+    sync_live(&tasks, &mut revisions, &mut live);
+    assert!(live.is_empty() && revisions.is_empty());
 }

@@ -130,9 +130,14 @@ struct Watch {
     until_ms: i64,
 }
 
+/// Unique identities prevent a recycled market key from inheriting another task's live coverage.
+static NEXT_TASK_INSTANCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// The plan of one key.
 #[derive(Clone, Debug)]
 pub(super) struct KeyTask {
+    /// Process-unique identity of this recording, independent of its needed-window revision.
+    instance_id: u64,
     watch: Option<Watch>,
     trades: Vec<Trade>,
     /// Written this session — or before it, for a trade taken up again ([`Self::filed_before`]).
@@ -143,12 +148,15 @@ pub(super) struct KeyTask {
     seed: Option<Seed>,
     /// Drained prints newer than `through_ms`, waiting for the frontier.
     buffer: Vec<Tick>,
+    /// Changes whenever watched or plain-trade coverage can differ from the last cached value.
+    needed_revision: u64,
 }
 
 impl KeyTask {
     /// Start a key with neither trade nor sheet demand.
     pub(super) fn new() -> Self {
         Self {
+            instance_id: NEXT_TASK_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             watch: None,
             trades: Vec::new(),
             filed: Coverage::none(),
@@ -156,12 +164,29 @@ impl KeyTask {
             live: None,
             seed: None,
             buffer: Vec::new(),
+            needed_revision: 0,
         }
+    }
+
+    /// The process-unique identity of this recording.
+    pub(super) fn instance_id(&self) -> u64 {
+        self.instance_id
+    }
+
+    /// The version a cached live-coverage entry was computed from.
+    pub(super) fn needed_revision(&self) -> u64 {
+        self.needed_revision
+    }
+
+    /// Mark the next live-coverage read for recomputation.
+    fn note_needed_changed(&mut self) {
+        self.needed_revision = self.needed_revision.wrapping_add(1);
     }
 
     /// Renew a sheet's rolling history window and its expiry-based eviction priority.
     pub(super) fn watch(&mut self, from_ms: i64, until_ms: i64) {
         self.watch = Some(Watch { from_ms, until_ms });
+        self.note_needed_changed();
     }
 
     /// The lease expiry used by the recorder's bounded watch set.
@@ -172,6 +197,7 @@ impl KeyTask {
     /// Release an expired or evicted watch while retaining any independent trade demand.
     pub(super) fn clear_watch(&mut self) {
         self.watch = None;
+        self.note_needed_changed();
     }
 
     /// Expire sheet demand on the recorder's clock before selection and flushing.
@@ -223,6 +249,7 @@ impl KeyTask {
                 emulator,
             });
         }
+        self.note_needed_changed();
     }
 
     /// A trade closed: its window is reshaped around both ends.
@@ -259,6 +286,7 @@ impl KeyTask {
             Some(index) => self.trades[index] = trade,
             None => self.trades.push(trade),
         }
+        self.note_needed_changed();
     }
 
     /// Everything the key's trades and active sheet watch need.
@@ -292,6 +320,7 @@ impl KeyTask {
     /// Drop emulator-only needs and buffered prints; shared plain-trade windows survive.
     pub(super) fn discard_emulator(&mut self) {
         self.trades.retain(|trade| trade.emulator != Some(true));
+        // Emulator-only rows never contribute to real_needed, so this does not dirty the live cache.
         let needed = self.needed();
         self.buffer
             .retain(|tick| needed.contains_ms(tick.time_ms as i64));
@@ -577,7 +606,11 @@ impl KeyTask {
         let before = self.trades.len();
         self.trades
             .retain(|t| t.close_ms.is_some() || t.open_ms >= horizon_ms);
-        before - self.trades.len()
+        let forgotten = before - self.trades.len();
+        if forgotten > 0 {
+            self.note_needed_changed();
+        }
+        forgotten
     }
 }
 

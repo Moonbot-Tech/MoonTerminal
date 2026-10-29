@@ -44,27 +44,18 @@ impl Coverage {
         if from > to {
             return;
         }
-        let mut merged = Vec::with_capacity(self.spans.len() + 1);
-        let mut placed = false;
-        for &(s_from, s_to) in &self.spans {
-            let touches = s_from <= to.saturating_add(1) && s_to >= from.saturating_sub(1);
-            if touches {
-                from = from.min(s_from);
-                to = to.max(s_to);
-            } else if s_to < from {
-                merged.push((s_from, s_to));
-            } else {
-                if !placed {
-                    merged.push((from, to));
-                    placed = true;
-                }
-                merged.push((s_from, s_to));
-            }
+        let first = self
+            .spans
+            .partition_point(|&(_, s_to)| s_to.saturating_add(1) < from);
+        let last = first
+            + self.spans[first..].partition_point(|&(s_from, _)| s_from <= to.saturating_add(1));
+        if let Some(&(first_from, _)) = self.spans.get(first) {
+            from = from.min(first_from);
         }
-        if !placed {
-            merged.push((from, to));
+        if last > first {
+            to = to.max(self.spans[last - 1].1);
         }
-        self.spans = merged;
+        self.spans.splice(first..last, [(from, to)]);
     }
 
     /// The spans, ascending and disjoint.
@@ -122,17 +113,22 @@ impl Coverage {
     /// `(6, 9)`).
     pub fn minus(&self, other: &Coverage) -> Coverage {
         let mut out = Self::none();
+        let mut cut = 0;
         for &(from, to) in &self.spans {
+            while other.spans.get(cut).is_some_and(|&(_, o_to)| o_to < from) {
+                cut += 1;
+            }
             let mut cursor = from;
-            for &(o_from, o_to) in &other.spans {
-                if o_to < cursor || o_from > to {
-                    continue;
+            while let Some(&(o_from, o_to)) = other.spans.get(cut) {
+                if o_from > to {
+                    break;
                 }
                 out.add((cursor, o_from.saturating_sub(1)));
-                cursor = o_to.saturating_add(1);
+                cursor = cursor.max(o_to.saturating_add(1));
                 if cursor > to {
                     break;
                 }
+                cut += 1;
             }
             out.add((cursor, to));
         }

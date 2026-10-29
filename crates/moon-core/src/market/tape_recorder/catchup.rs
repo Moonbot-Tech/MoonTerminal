@@ -5,6 +5,7 @@ mod known;
 mod pacing;
 mod state;
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
@@ -114,6 +115,8 @@ pub(crate) struct CatchupPlan {
     pub(crate) no_route: u32,
     pub(crate) out_of_reach: u32,
     pub(crate) too_fresh: u32,
+    /// Fresh tails wait for their exact recording deadline without another coverage read.
+    pub(crate) too_fresh_ids: Vec<(TradeId, i64)>,
     /// IDs let the recorder settle a whole planning batch without planning each row again.
     pub(crate) complete_ids: Vec<TradeId>,
     pub(crate) permanent_ids: Vec<TradeId>,
@@ -125,6 +128,8 @@ pub(crate) struct CatchupPlan {
 pub(crate) enum Latch {
     Permanent,
     RetryAfter(i64),
+    /// A live tail is not fetchable until its recording deadline; settings changes clear this latch.
+    Fresh(i64),
 }
 
 /// Exercise the production fetch pipeline through page and archive function seams.
@@ -474,6 +479,7 @@ pub(super) fn needed(trade: &CatchupTrade, shape: &Shape) -> Coverage {
 }
 
 /// Prefer expiring REST-only tape, omit held or latched rows, and leave live tails alone.
+#[cfg(test)]
 pub(super) fn plan(
     trades: &[CatchupTrade],
     held: impl Fn(&CatchupTrade) -> Coverage,
@@ -484,7 +490,8 @@ pub(super) fn plan(
     plan_with(trades, held, latched, now_ms, shape, true)
 }
 
-/// Plan against the archive choice captured for this recorder pass, leaving REST unchanged.
+/// Plan an owned slice for tests and callers that already hold one.
+#[cfg(test)]
 pub(super) fn plan_with(
     trades: &[CatchupTrade],
     held: impl Fn(&CatchupTrade) -> Coverage,
@@ -493,15 +500,28 @@ pub(super) fn plan_with(
     shape: &Shape,
     archives: bool,
 ) -> CatchupPlan {
+    let borrowed: Vec<_> = trades.iter().collect();
+    plan_refs(&borrowed, held, latched, now_ms, shape, archives)
+}
+
+/// Plan borrowed rows against shared coverage and the archive choice captured for this pass.
+pub(super) fn plan_refs<H: Borrow<Coverage>>(
+    trades: &[&CatchupTrade],
+    held: impl Fn(&CatchupTrade) -> H,
+    latched: &HashMap<TradeId, Latch>,
+    now_ms: i64,
+    shape: &Shape,
+    archives: bool,
+) -> CatchupPlan {
     let mut result = CatchupPlan::default();
     let edge = edge_ms(now_ms);
-    for trade in trades {
+    for &trade in trades {
         if skipped(trade) {
             continue;
         }
         if latched.get(&trade.id).is_some_and(|latch| match latch {
             Latch::Permanent => true,
-            Latch::RetryAfter(at) => now_ms < *at,
+            Latch::RetryAfter(at) | Latch::Fresh(at) => now_ms < *at,
         }) {
             continue;
         }
@@ -511,7 +531,7 @@ pub(super) fn plan_with(
             continue;
         }
         let focus = needed(trade, shape).clip(&Coverage::one((edge, i64::MAX)));
-        let mut missing = focus.minus(&held(trade));
+        let mut missing = focus.minus(held(trade).borrow());
         if missing.is_empty() {
             result.complete += 1;
             result.complete_ids.push(trade.id);
@@ -519,13 +539,13 @@ pub(super) fn plan_with(
         }
         let tail_start_ms = trade.close_ms.saturating_add(shape.margin_ms.max(0));
         let tail_only = state::tail_only(&missing, tail_start_ms);
-        if trade
+        let fetch_at = trade
             .close_ms
             .saturating_add(shape.margin_ms.max(shape.tail_ms).max(0))
-            .saturating_add(super::plan::GIVE_UP_MS)
-            > now_ms
-        {
+            .saturating_add(super::plan::GIVE_UP_MS);
+        if fetch_at > now_ms {
             result.too_fresh += 1;
+            result.too_fresh_ids.push((trade.id, fetch_at));
             continue;
         }
         let Some((from, to)) = focus.hull() else {

@@ -1,6 +1,9 @@
 use super::*;
 use std::io::{Cursor, Write};
 
+mod lifecycle;
+mod scale;
+
 /// A successful retry cannot renew a day's allowance before the failure cooldown expires.
 #[test]
 fn barrier_b6_success_does_not_reset_failed_day_attempts() {
