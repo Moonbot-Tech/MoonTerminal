@@ -385,3 +385,185 @@ fn strategy_attribution_refresh_scale_probe() {
         })
     );
 }
+
+/// Use production replica or legacy indexes, with many identities spread over 36 days.
+/// A smaller row count lets the same fixture check plans in the ordinary suite.
+fn strategy_window_fixture(legacy: bool, rows: i64) -> Connection {
+    let conn = replica();
+    seed(&conn, rows, 10, 60, 1_000, 1_000);
+    conn.execute_batch(&format!(
+        "ALTER TABLE orders_rep ADD COLUMN channelname TEXT;
+        ALTER TABLE orders_rep ADD COLUMN signaltype TEXT;
+        ALTER TABLE orders_rep ADD COLUMN comment TEXT;
+        UPDATE orders_rep SET closedate=1700000000+newrecid*3100000/{rows},
+            buydate=1700000000+newrecid*3100000/{rows}-60;
+        UPDATE strat.strategies SET name='UNIT_01' WHERE strategy_id=1;
+        UPDATE orders_rep SET strategyid=0, channelname='LIQUIDATION',
+            signaltype='UNIT_01 (Synthetic)' WHERE newrecid%997=0;
+        UPDATE orders_rep SET strategyid=NULL WHERE newrecid%2111=0;"
+    ))
+    .unwrap();
+    if legacy {
+        conn.execute_batch(
+            "CREATE TABLE closed_sell_reports (
+                core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, db_id INTEGER NOT NULL,
+                closedate INTEGER, buydate INTEGER, profitbtc REAL, spentbtc REAL,
+                coin TEXT, strategyid INTEGER, isshort INTEGER, emulator INTEGER,
+                deleted INTEGER, basecurrency INTEGER, channelname TEXT, signaltype TEXT,
+                comment TEXT, PRIMARY KEY(core_uid,db_id));
+            INSERT INTO closed_sell_reports SELECT core_uid,core_name,newrecid,
+                closedate,buydate,profitbtc,spentbtc,coin,strategyid,isshort,emulator,
+                deleted,basecurrency,channelname,signaltype,comment FROM orders_rep;
+            DELETE FROM orders_rep;",
+        )
+        .unwrap();
+        crate::db::init_db(&conn).unwrap();
+    }
+    conn.execute_batch("ANALYZE").unwrap();
+    conn
+}
+
+/// The real scope builder must preserve indexable bounds even when cores have different clocks.
+fn strategy_window_filter(days: i64, shifted: bool) -> ReportFilter {
+    let mut filter = ReportFilter {
+        rows: RowScope::Closed,
+        date_from: Some(1_700_000_000),
+        date_to: Some(1_700_000_000 + days * 86_400 - 1),
+        ..Default::default()
+    };
+    if shifted {
+        filter.axis = crate::db::ReportAxis::from_measured(
+            std::collections::HashMap::from([
+                (
+                    1,
+                    vec![crate::db::OffsetSegment {
+                        from_utc: 0,
+                        offset_secs: -14_400,
+                    }],
+                ),
+                (
+                    2,
+                    vec![crate::db::OffsetSegment {
+                        from_utc: 0,
+                        offset_secs: 10_800,
+                    }],
+                ),
+            ]),
+            chrono_tz::UTC,
+        );
+    }
+    filter
+}
+
+/// Compare complete sorted choices and paired timings over 100000 deals on both real schemas.
+/// This probe diagnoses window regressions without a machine-dependent CI timing threshold.
+#[test]
+#[ignore = "100000-deal paired strategy-discovery timing probe"]
+fn strategy_window_scale_probe() {
+    for legacy in [false, true] {
+        let conn = strategy_window_fixture(legacy, 100_000);
+        for shifted in [false, true] {
+            for days in [1, 30] {
+                let filter = strategy_window_filter(days, shifted);
+                let old = former_distinct_strategies(&conn, &filter).unwrap();
+                let new = distinct_strategies(&conn, &filter).unwrap();
+                assert!(!old.is_empty());
+                assert_eq!(new, old);
+                for (sql, plan) in plans_of(&conn, || {
+                    distinct_strategies(&conn, &filter).unwrap();
+                }) {
+                    if sql.contains("WITH identities")
+                        || sql.starts_with("SELECT r.core_uid")
+                        || sql.starts_with("SELECT DISTINCT r.core_uid")
+                    {
+                        println!(
+                            "window_plan legacy={legacy} days={days} shifted={shifted}: {plan}"
+                        );
+                    }
+                }
+                let mut before = Vec::new();
+                let mut after = Vec::new();
+                for pair in 0..9 {
+                    for old in if pair % 2 == 0 {
+                        [true, false]
+                    } else {
+                        [false, true]
+                    } {
+                        let start = Instant::now();
+                        if old {
+                            std::hint::black_box(
+                                former_distinct_strategies(&conn, &filter).unwrap(),
+                            );
+                            before.push(start.elapsed().as_secs_f64() * 1000.0);
+                        } else {
+                            std::hint::black_box(distinct_strategies(&conn, &filter).unwrap());
+                            after.push(start.elapsed().as_secs_f64() * 1000.0);
+                        }
+                    }
+                }
+                before.sort_by(f64::total_cmp);
+                after.sort_by(f64::total_cmp);
+                println!(
+                    "strategy_window legacy={legacy} days={days} shifted={shifted} choices={} former={:.3} ms current={:.3} ms",
+                    new.len(),
+                    before[4],
+                    after[4]
+                );
+            }
+        }
+    }
+}
+
+/// A day read must seek its period directly; a month keeps date-seeking identity probes.
+#[test]
+fn strategy_window_discovery_seeks_the_scoped_period() {
+    for legacy in [false, true] {
+        let conn = strategy_window_fixture(legacy, 1200);
+        let table = if legacy {
+            "closed_sell_reports"
+        } else {
+            "orders_rep"
+        };
+        for shifted in [false, true] {
+            for days in [1, 30] {
+                let filter = strategy_window_filter(days, shifted);
+                assert_eq!(
+                    distinct_strategies(&conn, &filter).unwrap(),
+                    former_distinct_strategies(&conn, &filter).unwrap()
+                );
+                let plans = plans_of(&conn, || {
+                    distinct_strategies(&conn, &filter).unwrap();
+                });
+                let (sql, plan) = plans
+                    .iter()
+                    .find(|(sql, _)| {
+                        (sql.starts_with("WITH identities")
+                            || sql.starts_with("SELECT r.core_uid")
+                            || sql.starts_with("SELECT DISTINCT r.core_uid"))
+                            && sql.contains(&format!("FROM {table} r"))
+                    })
+                    .expect("strategy query for the populated source");
+                if days == 1 {
+                    assert!(!sql.contains("WITH identities"), "{sql}");
+                    // SQLite may choose a global date index or a core/date skip-scan.
+                    // Both must seek the actual window, rather than walk the whole history.
+                    assert!(
+                        plan.split(" | ")
+                            .any(|step| step.starts_with("SEARCH r USING INDEX idx_")
+                                && step.contains("closedate>? AND closedate<?)")),
+                        "{plan}"
+                    );
+                    assert!(!plan.contains("SCAN r "), "{plan}");
+                } else {
+                    assert!(sql.contains("WITH identities"), "{sql}");
+                    assert!(
+                        plan.contains(
+                            "(core_uid=? AND strategyid=? AND closedate>? AND closedate<?)"
+                        ),
+                        "{plan}"
+                    );
+                }
+            }
+        }
+    }
+}

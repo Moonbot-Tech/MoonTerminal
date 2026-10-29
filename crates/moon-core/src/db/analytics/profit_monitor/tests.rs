@@ -437,7 +437,12 @@ fn former_latest_trade_on(
                 row.get::<_, Option<i64>>(0)?.unwrap_or(0).max(0) as u64,
                 (
                     row.get::<_, Option<f64>>(1)?,
-                    row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    // The SQL is frozen; decode its maximum independently so the oracle also
+                    // covers the pre-existing non-integer timestamp read failure.
+                    match row.get::<_, rusqlite::types::Value>(2)? {
+                        rusqlite::types::Value::Integer(close) => close,
+                        _ => 0,
+                    },
                 ),
             ))
         })
@@ -488,7 +493,7 @@ fn one_pass_matches_the_former_two_pass_monitor() {
     }
 }
 
-/// Rounding timestamps through f64 would choose a different name above the exact integer range.
+/// Rejecting nonnumeric dates, rounding integers, or changing NULL/tie handling changes names.
 #[test]
 fn latest_name_matches_sqlite_numeric_dates_and_first_ties() {
     let conn = Connection::open_in_memory().unwrap();
@@ -506,7 +511,14 @@ fn latest_name_matches_sqlite_numeric_dates_and_first_ties() {
         (1,'CORE_C',9007199254740993),(2,'CORE_A',100),(2,'CORE_R',100.5),
         (2,'CORE_B',100.5),(3,'CORE_A',9223372036854775807),
         (3,'CORE_R',9223372036854775808.0),
-        (4,'CORE_A',-9223372036854775808),(4,'CORE_R',-9223372036854775808.0);",
+        (4,'CORE_A',-9223372036854775808),(4,'CORE_R',-9223372036854775808.0),
+        (5,'CORE_A',NULL),(5,'CORE_B',NULL),
+        (6,'CORE_A',100),(6,'CORE_B','9'),(6,'CORE_C','A'),(6,'CORE_D','A'),
+        (7,'CORE_A','z'),(7,'CORE_B',X'00'),(7,'CORE_C',X'0001'),
+        (7,'CORE_D',X'0001'),(7,'CORE_E',NULL),
+        (8,'CORE_A',NULL),(8,'CORE_B',-1.5),(8,'CORE_C',-1),
+        (9,'CORE_A','a'),(9,'CORE_B','Z'),
+        (10,'CORE_A',CAST(X'610062' AS TEXT)),(10,'CORE_B',CAST(X'610063' AS TEXT));",
     )
     .unwrap();
     let mut old = conn
@@ -526,4 +538,49 @@ fn latest_name_matches_sqlite_numeric_dates_and_first_ties() {
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
     assert_eq!(actual, expected);
+}
+
+/// Strict integer decoding must not fail a whole monitor group on a REAL, TEXT or BLOB maximum.
+/// The frozen two-pass SQL independently chooses the latest name and profit, including NULL ties.
+#[test]
+fn storage_class_dates_match_the_former_two_pass_monitor() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE monitor_rows(core_uid, core_name, closedate, pnl, spentbtc);
+        INSERT INTO monitor_rows VALUES
+        (1,'CORE_A',100,1.0,10.0),(1,'CORE_B',100.5,2.0,20.0),
+        (1,'CORE_C',100.5,3.0,30.0),(1,'',101.5,4.0,40.0),
+        (2,'CORE_A',NULL,1.0,10.0),(2,'CORE_B',NULL,2.0,20.0),
+        (3,'CORE_A',9007199254740993,1.0,10.0),
+        (3,'CORE_B',9007199254740992.0,2.0,20.0),
+        (4,'CORE_A',100,1.0,10.0),(4,'CORE_B','a',2.0,20.0),
+        (4,'CORE_C','Z',3.0,30.0),(4,'CORE_D','a',4.0,40.0),
+        (5,'CORE_A','z',1.0,10.0),(5,'CORE_B',X'00',2.0,20.0),
+        (5,'CORE_C',X'0001',3.0,30.0),(5,'CORE_D',X'0001',4.0,40.0),
+        (6,'CORE_A',NULL,1.0,10.0),(6,'  ',NULL,2.0,20.0),
+        (7,'CORE_A',125.0,1.0,10.0),(8,'CORE_A','125',1.0,10.0);",
+    )
+    .unwrap();
+    let q = query(0, 200);
+    let source = "(SELECT * FROM monitor_rows WHERE ?1=0 AND ?2=200) o";
+    for indexed in [false, true] {
+        if indexed {
+            conn.execute_batch("CREATE INDEX monitor_dates ON monitor_rows(core_uid, closedate)")
+                .unwrap();
+        }
+        let expected = former_aggregate_on(&conn, &q, source).unwrap();
+        let actual = super::aggregate_on(&conn, &q, source).unwrap();
+        assert_eq!(actual, expected, "indexed={indexed}");
+        assert_eq!(actual.cores[0].last_close, 0);
+        assert_eq!(actual.cores[0].last_profit, Some(4.0));
+        assert_eq!(actual.cores[2].last_close, 9_007_199_254_740_993);
+    }
+    let conn = fixture();
+    conn.execute("UPDATE orders_rep SET closedate=140.5 WHERE core_uid=2", [])
+        .unwrap();
+    let ProfitScope::Comparable { data, .. } = profit_monitor_on(&conn, &q).unwrap() else {
+        panic!("single currency");
+    };
+    assert_eq!(data.cores[1].last_close, 0);
+    assert_eq!(data.cores[1].last_profit, Some(-5.0));
 }

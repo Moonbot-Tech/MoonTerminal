@@ -37,7 +37,7 @@ pub struct ProfitMonitorCore {
     /// wraps in `COALESCE`. It stays an option rather than becoming zero because a displayed
     /// `(+0)` is a claim about a trade, and a trade whose profit is unknown made no such claim.
     pub last_profit: Option<f64>,
-    /// Close date of the newest trade, or zero when the period holds none for this core.
+    /// Close date of the newest trade, or zero when absent or not stored as integer seconds.
     ///
     /// Grouping merges cores by taking the largest of these, and the monitor's arrival highlight
     /// fires on this value CHANGING — an authoritative timestamp rather than a guess from a count.
@@ -230,7 +230,12 @@ fn aggregate_on(conn: &Connection, q: &Query, source: &str) -> ReadResult<Profit
                 positive_spent: row.get::<_, f64>(5)?,
                 positive_orders: row.get::<_, i64>(6)?,
                 last_profit: row.get(7)?,
-                last_close: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                // Only stored integer seconds can drive the arrival timestamp. Other SQLite
+                // storage classes still select the last profit but carry no usable timestamp.
+                last_close: match row.get_ref(8)? {
+                    rusqlite::types::ValueRef::Integer(close) => close,
+                    _ => 0,
+                },
             })
         })
         .map_err(|error| read_fail_on(conn, CTX, error))?;

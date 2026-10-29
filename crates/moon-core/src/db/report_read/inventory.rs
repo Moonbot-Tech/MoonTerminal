@@ -239,8 +239,9 @@ pub fn distinct_cores(conn: &Connection) -> ReadResult<Vec<(u64, String)>> {
 /// strategy predicates are deliberately removed so an active checkbox or name mask does not hide
 /// alternative strategies that match every other Report filter.
 ///
-/// Raw identities are discovered in core/strategy index order, and each ordinary identity
-/// needs only its first scoped match. Only Manual rows require per-row liquidation attribution.
+/// Day-sized periods discover identities directly from scoped rows. Longer or unbounded reads
+/// walk the covering identity index and stop at each identity's first match. Only Manual rows
+/// need per-row liquidation attribution.
 ///
 /// Args:
 ///     conn: Open report reader or snapshot with optional strategy attachment.
@@ -293,25 +294,44 @@ pub fn distinct_strategies(
             &src.cols,
             &StrategyMeta::without_mask(has_strategy_names),
         );
-        // Discover raw identities through the core/strategy index, then stop at the first
-        // scoped row for each identity. Wide table rows are no longer revisited just to
-        // rediscover the same pair. The manual identity may resolve to several liquidation
-        // owners, so only that small partition needs a complete row pass.
+        // Discovering all historical identities doubled a one-day read on 100000 deals,
+        // even though EXISTS sought both date bounds. Direct discovery wins for day-sized
+        // windows; longer periods retain the covering scan and first-match probes.
         let two_arms = strategy_id != "r.\"strategyid\"";
-        let identities = format!(
-            "WITH identities AS MATERIALIZED (
-                 SELECT DISTINCT core_uid, strategyid FROM {}
-             )",
-            src.table
-        );
-        let exists = format!(
-            "EXISTS (SELECT 1 FROM {} r{where_sql}
-                     AND r.core_uid IS c.core_uid AND r.strategyid IS c.strategyid)",
-            src.table
-        );
-        let sql = if two_arms {
+        let short_period = scope
+            .date_from
+            .zip(scope.date_to)
+            .is_some_and(|(from, to)| to.saturating_sub(from) < 86_400);
+        let sql = if short_period && two_arms {
+            // UNION deduplicates both arms; per-arm DISTINCT would build redundant sets.
             format!(
-                "{identities}
+                "SELECT r.core_uid, COALESCE(r.\"strategyid\",0)
+                 FROM {table} r{where_sql} AND COALESCE(r.\"strategyid\",0) <> 0
+                 UNION
+                 SELECT r.core_uid, COALESCE({strategy_id},0)
+                 FROM {table} r{where_sql} AND COALESCE(r.\"strategyid\",0) = 0",
+                table = src.table,
+            )
+        } else if short_period {
+            format!(
+                "SELECT DISTINCT r.core_uid, COALESCE({strategy_id},0) FROM {} r{where_sql}",
+                src.table,
+            )
+        } else {
+            let identities = format!(
+                "WITH identities AS MATERIALIZED (
+                     SELECT DISTINCT core_uid, strategyid FROM {}
+                 )",
+                src.table
+            );
+            let exists = format!(
+                "EXISTS (SELECT 1 FROM {} r{where_sql}
+                         AND r.core_uid IS c.core_uid AND r.strategyid IS c.strategyid)",
+                src.table
+            );
+            if two_arms {
+                format!(
+                    "{identities}
                  SELECT c.core_uid, c.strategyid FROM identities c
                  WHERE COALESCE(c.strategyid,0) <> 0 AND {exists}
                  UNION
@@ -319,14 +339,15 @@ pub fn distinct_strategies(
                  FROM identities c CROSS JOIN {table} r{where_sql}
                  AND COALESCE(c.strategyid,0) = 0
                  AND r.core_uid IS c.core_uid AND r.strategyid IS c.strategyid",
-                table = src.table,
-            )
-        } else {
-            format!(
-                "{identities}
+                    table = src.table,
+                )
+            } else {
+                format!(
+                    "{identities}
                  SELECT c.core_uid, COALESCE(c.strategyid,0)
                  FROM identities c WHERE {exists}"
-            )
+                )
+            }
         };
         let mut refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|value| value.as_ref()).collect();

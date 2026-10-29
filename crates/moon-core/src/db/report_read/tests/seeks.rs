@@ -21,7 +21,7 @@ thread_local! {
     static CAPTURED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Keep every expanded statement that reads `orders_rep`.
+/// Keep expanded report SELECTs from either physical source.
 fn capture(event: rusqlite::trace::TraceEvent<'_>) {
     let rusqlite::trace::TraceEvent::Stmt(statement, _) = event else {
         return;
@@ -29,7 +29,8 @@ fn capture(event: rusqlite::trace::TraceEvent<'_>) {
     let Some(sql) = statement.expanded_sql() else {
         return;
     };
-    if sql.to_ascii_uppercase().contains("ORDERS_REP")
+    let upper = sql.to_ascii_uppercase();
+    if (upper.contains("ORDERS_REP") || upper.contains("CLOSED_SELL_REPORTS"))
         && (sql.trim_start().starts_with("SELECT")
             || sql.trim_start().starts_with("WITH chosen_report_rows")
             || sql.trim_start().starts_with("WITH identities"))
@@ -38,7 +39,7 @@ fn capture(event: rusqlite::trace::TraceEvent<'_>) {
     }
 }
 
-/// Run `read` and return every captured `orders_rep` SELECT with its query plan.
+/// Run `read` and return every captured report SELECT with its query plan.
 pub(super) fn plans_of(conn: &Connection, read: impl FnOnce()) -> Vec<(String, String)> {
     CAPTURED.with(|slot| slot.borrow_mut().clear());
     conn.trace_v2(

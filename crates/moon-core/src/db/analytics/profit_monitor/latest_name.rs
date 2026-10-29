@@ -2,20 +2,21 @@
 
 use rusqlite::functions::{Aggregate, Context};
 
-/// Numeric SQLite close dates retain integers exactly, including values above 2^53.
-#[derive(Clone, Copy)]
+/// Non-NULL SQLite dates retain their storage class and exact BINARY comparison bytes.
 enum CloseDate {
     Integer(i64),
     Real(f64),
+    Text(Vec<u8>),
+    Blob(Vec<u8>),
 }
 
 impl CloseDate {
     /// Compare integers and reals as SQLite does, without rounding integer timestamps.
-    fn cmp(self, other: Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match (self, other) {
-            (Self::Integer(left), Self::Integer(right)) => left.cmp(&right),
-            (Self::Integer(left), Self::Real(right)) => integer_real_cmp(left, right),
-            (Self::Real(left), Self::Integer(right)) => integer_real_cmp(right, left).reverse(),
+            (Self::Integer(left), Self::Integer(right)) => left.cmp(right),
+            (Self::Integer(left), Self::Real(right)) => integer_real_cmp(*left, *right),
+            (Self::Real(left), Self::Integer(right)) => integer_real_cmp(*right, *left).reverse(),
             (Self::Real(left), Self::Real(right)) => {
                 if left < right {
                     std::cmp::Ordering::Less
@@ -24,6 +25,15 @@ impl CloseDate {
                 } else {
                     std::cmp::Ordering::Equal
                 }
+            }
+            (Self::Text(left), Self::Text(right)) | (Self::Blob(left), Self::Blob(right)) => {
+                left.cmp(right)
+            }
+            (Self::Blob(_), _) | (Self::Text(_), Self::Integer(_) | Self::Real(_)) => {
+                std::cmp::Ordering::Greater
+            }
+            (_, Self::Blob(_)) | (Self::Integer(_) | Self::Real(_), Self::Text(_)) => {
+                std::cmp::Ordering::Less
             }
         }
     }
@@ -68,20 +78,25 @@ impl Aggregate<LatestName, Option<rusqlite::types::Value>> for LatestNameAggrega
         Ok(LatestName::default())
     }
 
-    /// Copy a name only when its date advances the group's latest named trade.
+    /// Retain MAX's first non-NULL tie, or its last visited row if every date is NULL.
     fn step(&self, ctx: &mut Context<'_>, acc: &mut LatestName) -> rusqlite::Result<()> {
         let close = match ctx.get_raw(0) {
-            rusqlite::types::ValueRef::Null => return Ok(()),
+            rusqlite::types::ValueRef::Null => {
+                if acc.close.is_none() {
+                    acc.name = Some(ctx.get(1)?);
+                }
+                return Ok(());
+            }
             rusqlite::types::ValueRef::Integer(value) => CloseDate::Integer(value),
             rusqlite::types::ValueRef::Real(value) => CloseDate::Real(value),
-            other => {
-                return Err(rusqlite::Error::InvalidFunctionParameterType(
-                    0,
-                    other.data_type(),
-                ));
-            }
+            rusqlite::types::ValueRef::Text(value) => CloseDate::Text(value.to_vec()),
+            rusqlite::types::ValueRef::Blob(value) => CloseDate::Blob(value.to_vec()),
         };
-        if acc.close.is_none_or(|previous| close.cmp(previous).is_gt()) {
+        if acc
+            .close
+            .as_ref()
+            .is_none_or(|previous| close.cmp(previous).is_gt())
+        {
             acc.close = Some(close);
             acc.name = Some(ctx.get(1)?);
         }
