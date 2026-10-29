@@ -478,6 +478,8 @@ pub struct OrderLineStore {
     /// Groups orders with no close time by market in retained-map iteration order. Membership and
     /// map-layout changes rebuild it; price and trace edits reuse it without a history scan.
     open_by_market: HashMap<String, Vec<u64>>,
+    /// Markets with at least one open order whose panic-sell flag is armed.
+    open_panic_markets: HashSet<String>,
     /// Retained-map length at the last draw-index rebuild. Archived appends can grow the map
     /// outside live ingest and rehash open UIDs; the next changed batch must preserve that order.
     draw_index_len: usize,
@@ -511,6 +513,7 @@ impl Default for OrderLineStore {
             closed_keep_loaded: keep,
             open_uids: Vec::new(),
             open_by_market: HashMap::new(),
+            open_panic_markets: HashSet::new(),
             draw_index_len: 0,
             auto_fit_ranges: BTreeMap::new(),
             rev: 0,
@@ -540,7 +543,8 @@ impl OrderLineStore {
 
     /// Applies corrected rows, checking absent UIDs only for a complete snapshot. Reuses draw
     /// membership until insertion, closure or revival can change its contents or iteration order.
-    /// Auto-fit ranges refresh only when open membership or a contributing line changes.
+    /// Auto-fit ranges refresh when open membership or a contributing line changes; panic-market
+    /// membership refreshes when open membership or a panic flag changes.
     fn update_rows(&mut self, rows: &[OrderRow], skew_generation: u64, complete: bool) -> bool {
         let now_ms = now_unix_ms();
         self.update_generation = self.update_generation.wrapping_add(1);
@@ -551,6 +555,7 @@ impl OrderLineStore {
         // Insertions can rehash even when the new order is already terminal, so they invalidate
         // the index too. Rebuilding on those transitions preserves the historical draw order.
         let mut draw_membership_changed = self.draw_index_len != self.orders.len();
+        let mut panic_membership_changed = false;
         // UIDs closed by an explicit `job_is_done` flag in this update are remembered after the
         // loop because the loop holds a mutable borrow of `self.orders` through its entry.
         // Revived UIDs leave the closed queues in that same gap: the queue update needs
@@ -679,6 +684,7 @@ impl OrderLineStore {
                 order.fill_pct = r.fill_pct;
                 changed = true;
             }
+            panic_membership_changed |= order.panic_sell != r.panic_sell;
             if order.panic_sell != r.panic_sell
                 || order.is_moon_shot != r.is_moon_shot
                 || order.corridor_price_down != r.corridor_price_down
@@ -890,6 +896,15 @@ impl OrderLineStore {
                         .push(order.uid);
                 }
                 self.draw_index_len = self.orders.len();
+            }
+            if draw_membership_changed || panic_membership_changed {
+                self.open_panic_markets = self
+                    .open_uids
+                    .iter()
+                    .filter_map(|uid| self.orders.get(uid))
+                    .filter(|order| order.panic_sell)
+                    .map(|order| order.market.clone())
+                    .collect();
             }
         }
         changed
@@ -1179,6 +1194,11 @@ impl OrderLineStore {
         self.orders
             .get(&uid)
             .is_some_and(|o| o.closed_ms.is_none() && o.panic_sell)
+    }
+
+    /// Returns whether any open retained order on this market has panic sell armed.
+    pub fn market_panic_sell(&self, market: &str) -> bool {
+        self.open_panic_markets.contains(market)
     }
 
     pub fn order_state(&self, uid: u64) -> Option<OrderLineState> {

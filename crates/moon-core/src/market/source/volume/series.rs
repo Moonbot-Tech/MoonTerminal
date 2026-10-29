@@ -35,8 +35,12 @@
 //! coin-denominated series would be unknown over most of its length; the chart band is monetary
 //! either way, like the candle band beside it.
 
+use super::prepare::HistoryKey;
 use moonproto::MoonTime;
 use moonproto::state::{MiniCandle, SeqRingCursor, SeqRingReader, TradeHistoryRow};
+
+mod prepare;
+pub(super) use prepare::SeriesCache;
 
 /// Width of one native slot, milliseconds: a second, so a trade keeps its own second and a
 /// two-second interval can be summed honestly. Mini-candles (five-second aggregates) fill one
@@ -96,24 +100,21 @@ pub(super) struct SideSeries {
     cursor: SeqRingCursor,
     /// Whether the slots have been filled at all.
     seeded: bool,
-    /// `MarketRevisions::archive` the slots were seeded under; a different one is a rebuild.
-    archive_rev: u64,
+    /// Retained source identity the slots were seeded under; a different one is a rebuild.
+    source_key: HistoryKey,
     /// Reusable drain buffer, so an advance that folds in forty trades allocates nothing.
     rows: Vec<TradeHistoryRow>,
-    /// When this series was last read, for the prune that drops markets nobody charts any more.
-    pub(super) used_ms: i64,
 }
 
 impl SideSeries {
     /// An empty series, before it has been seeded.
-    pub(super) fn new(now: i64) -> Self {
+    pub(super) fn new() -> Self {
         Self {
             slots: Vec::new(),
             cursor: SeqRingCursor::default(),
             seeded: false,
-            archive_rev: 0,
+            source_key: HistoryKey::default(),
             rows: Vec::new(),
-            used_ms: now,
         }
     }
 
@@ -122,28 +123,31 @@ impl SideSeries {
     /// Args:
     ///     trades: The market's raw trade ring, if it has one.
     ///     minis: Its five-second aggregates, if it has any.
-    ///     archive_rev: The market's `MarketRevisions::archive`; a change rebuilds the series.
-    ///     now: Current unix time in milliseconds.
+    ///     source_key: Provider, client, catalog and archive identity; a change rebuilds the series.
     pub(super) fn advance(
         &mut self,
         trades: Option<&SeqRingReader<TradeHistoryRow>>,
         minis: Option<&SeqRingReader<MiniCandle>>,
-        archive_rev: u64,
-        now: i64,
+        source_key: HistoryKey,
     ) {
-        self.used_ms = now;
-        if self.seeded && self.archive_rev != archive_rev {
-            // The archive merged rows behind the cursor; only a rebuild sees them.
+        if !self.advance_live(trades, source_key) {
             self.slots.clear();
-            self.seeded = false;
-        }
-        self.archive_rev = archive_rev;
-        if !self.seeded {
+            self.source_key = source_key;
             self.seed(trades, minis);
-            return;
+        }
+    }
+
+    /// Fold a bounded live batch, returning false when a retained seed is needed off-thread.
+    fn advance_live(
+        &mut self,
+        trades: Option<&SeqRingReader<TradeHistoryRow>>,
+        source_key: HistoryKey,
+    ) -> bool {
+        if !self.seeded || self.source_key != source_key {
+            return false;
         }
         let Some(reader) = trades else {
-            return;
+            return true;
         };
         let mut rows = std::mem::take(&mut self.rows);
         rows.clear();
@@ -152,15 +156,15 @@ impl SideSeries {
             // The ring moved past the cursor: the rows between are mini-candles now, and only a
             // rebuild sees them. Cheaper than a hole the band would draw as a quiet stretch.
             self.rows = rows;
-            self.slots.clear();
-            self.seed(trades, minis);
-            return;
+            self.seeded = false;
+            return false;
         }
         for row in &rows {
             self.add_trade(*row);
         }
         self.rows = rows;
         self.trim();
+        true
     }
 
     /// Drop the oldest slots past [`MAX_SLOTS`]; see there.
@@ -181,13 +185,12 @@ impl SideSeries {
         let mut newest_mini = i64::MIN;
         if let Some(reader) = minis {
             let cursor = reader.cursor_from_oldest();
-            reader.with_from_cursor(cursor, reader.capacity().max(1), |view| {
-                view.for_each(|row| {
-                    let at = row.time.unix_millis();
-                    newest_mini = newest_mini.max(at);
-                    self.add_mini(*row);
-                });
-            });
+            let mut rows = Vec::new();
+            reader.copy_from_cursor(cursor, reader.capacity().max(1), &mut rows);
+            for row in rows {
+                newest_mini = newest_mini.max(row.time.unix_millis());
+                self.add_mini(row);
+            }
         }
         let Some(reader) = trades else {
             return;

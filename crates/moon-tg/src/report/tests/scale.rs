@@ -13,7 +13,21 @@ const ROUNDS: u32 = 5;
 /// A report source with the replica's indexes and `deals` rows inside both period bases across
 /// [`CORES`], so a table scan or an out-of-period entry cannot distort the measured workload.
 fn source(deals: i64, from: i64, to: i64) -> rusqlite::Connection {
-    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    source_on(
+        rusqlite::Connection::open_in_memory().unwrap(),
+        deals,
+        from,
+        to,
+    )
+}
+
+/// Populate either an in-memory report source or the isolated end-to-end replica.
+pub(super) fn source_on(
+    conn: rusqlite::Connection,
+    deals: i64,
+    from: i64,
+    to: i64,
+) -> rusqlite::Connection {
     conn.execute_batch(
         "CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT,
             buydate INTEGER, closedate INTEGER, channelname TEXT, emulator INTEGER,
@@ -30,10 +44,9 @@ fn source(deals: i64, from: i64, to: i64) -> rusqlite::Connection {
                 "INSERT INTO orders_rep VALUES (?1, ?2, ?3, 'XALPHA', ?4, ?5, '', 0, 1.0, 1.01, ?6, 100, 0)",
             )
             .unwrap();
-        let step = ((to - from) / deals).max(1);
         for deal in 0..deals {
             let core = deal % CORES + 1;
-            let close = from + 30 + deal * step;
+            let close = from + 30 + deal * (to - from - 31) / deals;
             insert
                 .execute(rusqlite::params![
                     core,
@@ -150,4 +163,51 @@ fn probe_report_totals() {
             );
         }
     }
+}
+
+/// Time the actual read and render at the interactive workload, retaining every deal in totals.
+#[test]
+#[ignore = "100000-deal interactive scale probe"]
+fn probe_interactive_report() {
+    let _locale = crate::test_locale::force("en");
+    let from = 1_700_000_000_i64;
+    let to = from + 30 * 86_400;
+    let conn = source(100_000, from, to);
+    let mut reads = Vec::new();
+    let mut renders = Vec::new();
+    for _ in 0..20 {
+        let start = Instant::now();
+        let page = super::super::read_page_on(
+            &conn,
+            ReportRequest::preset(Period::Today),
+            from,
+            to,
+            chrono_tz::UTC,
+            ReportBasis::Close,
+            &Default::default(),
+            |_| (Default::default(), TelegramReportAccess::Owner),
+        )
+        .unwrap();
+        reads.push(start.elapsed().as_secs_f64() * 1000.0);
+        assert_eq!(page.total.orders, 100_000);
+        let start = Instant::now();
+        let response = super::super::render::render(
+            &page,
+            crate::HostKind::Station,
+            moon_core::telegram::api::ReplyMarkup::Inline(
+                moon_core::telegram::api::InlineKeyboardMarkup::from_rows(vec![]),
+            ),
+        );
+        assert!(matches!(
+            response,
+            moon_core::telegram::runtime::Response::Rich { .. }
+        ));
+        renders.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    reads.sort_by(f64::total_cmp);
+    renders.sort_by(f64::total_cmp);
+    eprintln!(
+        "interactive 100000 deals / 10 cores: read p50={:.3} p95={:.3} ms; render p50={:.3} p95={:.3} ms",
+        reads[9], reads[18], renders[9], renders[18]
+    );
 }

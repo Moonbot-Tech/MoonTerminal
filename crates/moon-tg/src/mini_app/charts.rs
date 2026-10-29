@@ -88,6 +88,7 @@ impl ChartJobs {
 /// A previously listed order supplies identity after the session removes the row.
 #[derive(Clone)]
 pub(crate) struct OrderSnapshot {
+    pub(super) uid: u64,
     pub(super) coin: String,
     market: String,
     entry_ms: i64,
@@ -96,12 +97,31 @@ pub(crate) struct OrderSnapshot {
     pub(super) at: Instant,
 }
 
-/// Preserve at most 64 recently observed orders, expiring identity after one day.
-pub(super) fn remember_order(state: &mut TelegramState, core: u64, order: &OrderRow) {
+impl OrderSnapshot {
+    /// Capture only the fields a closing chart can need after the live row disappears.
+    pub(super) fn new(order: &OrderRow) -> Self {
+        Self {
+            uid: order.uid,
+            coin: order.coin.clone(),
+            market: order.market.clone(),
+            entry_ms: order.entry_fill_time_ms as i64,
+            buy_price: order.buy_price,
+            levels: live_levels(order),
+            at: Instant::now(),
+        }
+    }
+}
+
+/// Drop expired identities once before a single observation or a whole Orders batch.
+fn prune_order_snapshots(state: &mut TelegramState) {
     state
         .mini_order_snapshots
         .retain(|_, row| row.at.elapsed() < Duration::from_secs(86400));
-    let key = (core, order.uid);
+}
+
+/// Insert one captured order, evicting the oldest identity above the 64-row bound.
+fn insert_order_snapshot(state: &mut TelegramState, core: u64, snapshot: OrderSnapshot) {
+    let key = (core, snapshot.uid);
     if !state.mini_order_snapshots.contains_key(&key)
         && state.mini_order_snapshots.len() >= 64
         && let Some(oldest) = state
@@ -112,17 +132,25 @@ pub(super) fn remember_order(state: &mut TelegramState, core: u64, order: &Order
     {
         state.mini_order_snapshots.remove(&oldest);
     }
-    state.mini_order_snapshots.insert(
-        key,
-        OrderSnapshot {
-            coin: order.coin.clone(),
-            market: order.market.clone(),
-            entry_ms: order.entry_fill_time_ms as i64,
-            buy_price: order.buy_price,
-            levels: live_levels(order),
-            at: Instant::now(),
-        },
-    );
+    state.mini_order_snapshots.insert(key, snapshot);
+}
+
+/// Preserve at most 64 recently observed orders, expiring identity after one day.
+pub(super) fn remember_order(state: &mut TelegramState, core: u64, order: &OrderRow) {
+    prune_order_snapshots(state);
+    insert_order_snapshot(state, core, OrderSnapshot::new(order));
+}
+
+/// Preserve a whole Orders response without rescanning the expiry map for every row.
+pub(super) fn remember_order_snapshots(
+    state: &mut TelegramState,
+    snapshots: impl IntoIterator<Item = (u64, OrderSnapshot)>,
+) {
+    prune_order_snapshots(state);
+    for (core, mut snapshot) in snapshots {
+        snapshot.at = Instant::now();
+        insert_order_snapshot(state, core, snapshot);
+    }
 }
 
 /// Admission and Finish both require the current grant and visible core.

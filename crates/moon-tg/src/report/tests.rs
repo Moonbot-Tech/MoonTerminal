@@ -1,5 +1,6 @@
 //! Money presentation must stay honest when valuation or currency identity is incomplete.
 
+mod interactive;
 mod scale;
 use super::paging;
 use super::render::{profit, render};
@@ -3230,6 +3231,10 @@ fn chat_report_sliced_reads_match_per_row_totals() {
                     .unwrap();
                     assert_eq!(report_html(&page), report_html(&reference));
                     assert_eq!(page.drilldowns, reference.drilldowns);
+                    assert_eq!(
+                        super::render::keyboard(&page),
+                        super::render::keyboard(&reference)
+                    );
                     assert_eq!(page.pages, reference.pages);
                 }
             }

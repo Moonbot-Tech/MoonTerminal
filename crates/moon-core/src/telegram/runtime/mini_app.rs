@@ -14,6 +14,9 @@ use crate::config::Secret;
 use crate::telegram::tunnel::TunnelProcess;
 use crate::telegram::web::{MiniAppApiRequest, MiniAppServer, MiniAppServerConfig};
 
+/// Identical in-flight reads share one bounded Work item.
+mod poll;
+
 /// First wait after a Mini App acquisition, start, or tunnel-exit failure.
 const MINI_APP_RETRY_INITIAL: Duration = Duration::from_secs(1);
 /// Cap for Mini App restart backoff on unchanged desired configuration.
@@ -262,7 +265,7 @@ pub(super) fn run_service(
     labels: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
     menu: super::menu::SharedMenu,
     alive: Weak<()>,
-    tx: SyncSender<super::Work>,
+    tx: super::WorkSender,
 ) {
     let mut owner = MiniAppOwner::new();
     let mut previous: Option<(bool, Vec<i64>)> = None;
@@ -270,7 +273,9 @@ pub(super) fn run_service(
     let mut last_status = MiniAppStatus::Stopped;
     let mut retry_at: Option<Instant> = None;
     let mut retry_failures: u32 = 0;
+    let mut polls = poll::MiniAppPolls::default();
     while alive.upgrade().is_some() {
+        polls.drain();
         // Only what the loop compares is taken under the lock; the whole config (token included)
         // is copied only on the rare pass that starts the listener.
         let Ok((desired, has_token)) = config.lock().map(|cfg| {
@@ -383,17 +388,21 @@ pub(super) fn run_service(
         }
         if owner.status() != last_status {
             let status = owner.status();
-            if tx.try_send(super::Work::MiniStatus(status.clone())).is_ok() {
+            if tx.try_send(super::Work::MiniStatus(status.clone())) {
                 last_status = status;
             }
         }
-        let idle = idle_interval(desired.0, owner.api_rx.is_some(), retry_at.is_some());
+        let idle = polls.idle_interval(idle_interval(
+            desired.0,
+            owner.api_rx.is_some(),
+            retry_at.is_some(),
+        ));
         match owner.api_rx.as_ref().map(|rx| (rx.recv_timeout(idle), rx)) {
             // A request ends the wait at once; the burst behind it is drained without waiting.
             Some((Ok(first), rx)) => {
-                let _ = tx.try_send(super::Work::MiniApp(first));
+                polls.relay(&tx, first);
                 for request in rx.try_iter().take(63) {
-                    let _ = tx.try_send(super::Work::MiniApp(request));
+                    polls.relay(&tx, request);
                 }
             }
             Some((Err(std::sync::mpsc::RecvTimeoutError::Timeout), _)) => {}
@@ -463,7 +472,7 @@ fn start_desired(
     current_labels: &std::collections::BTreeMap<String, String>,
     config: &Arc<Mutex<crate::config::TelegramConfig>>,
     alive: &Weak<()>,
-    tx: &SyncSender<super::Work>,
+    tx: &super::WorkSender,
 ) -> StartOutcome {
     let _ = tx.try_send(super::Work::MiniStatus(MiniAppStatus::Starting));
     match crate::telegram::cloudflared::ensure_verified_cloudflared() {

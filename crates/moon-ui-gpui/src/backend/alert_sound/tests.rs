@@ -91,3 +91,111 @@ fn another_order_crossing_is_its_own_announcement() {
     let near = set(&[(1, AlertLeg::Exit), (2, AlertLeg::Exit)]);
     assert_eq!(leg_to_announce(&near, &was, both), Some(AlertLeg::Exit));
 }
+
+/// Time the near-band rebuild at ten cores of 200 open orders, the pass the UI thread runs when
+/// either order revision of a core moves.
+///
+/// The price lock is not in this probe: each order already has its market's price, which is what
+/// a per-pass cache leaves the arithmetic. The revision gate that skips an unchanged core is in
+/// `play_price_alert_sounds` and is not re-entered here.
+#[test]
+#[ignore = "manual heavy-user timing probe"]
+fn bench_goal_e_price_alert_scan() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    use moon_core::feed::OrderRow;
+    use moon_core::feed::order_math::{pct_to_entry, pct_to_exit};
+
+    fn row(uid: u64, market: &str, filled: bool) -> OrderRow {
+        OrderRow {
+            market_display: market.to_owned(),
+            coin: "XALPHA".into(),
+            market: market.to_owned(),
+            quote: "USDT".into(),
+            is_short: false,
+            size: 1.0,
+            remaining_size: 1.0,
+            sl_on: false,
+            ts_on: false,
+            vstop_on: false,
+            sl_fixed: false,
+            ts_fixed: false,
+            vstop_fixed: false,
+            vstop_level: 0.0,
+            vstop_vol: 0.0,
+            buy_price: 10.0,
+            sell_price: 12.0,
+            create_time_ms: 1_000.0,
+            sell_create_time_ms: 0.0,
+            entry_fill_time_ms: 0.0,
+            price: 11.0,
+            fill_pct: if filled { 100.0 } else { 0.0 },
+            strat: "UNIT_01".into(),
+            strat_name: String::new(),
+            strat_id: 0,
+            status: String::new(),
+            uid,
+            emulator: false,
+            job_is_done: false,
+            pending: false,
+            filled,
+            stop_loss: None,
+            trailing: None,
+            take_profit: None,
+            vstop: None,
+            pending_cond: None,
+            liq: None,
+            panic_sell: false,
+            is_moon_shot: false,
+            corridor_price_down: 0.0,
+            corridor_price_up: 0.0,
+            buy_trace: None,
+            sell_trace: None,
+        }
+    }
+
+    let cores: Vec<Vec<OrderRow>> = (0..10)
+        .map(|core| {
+            (0..200)
+                .map(|i| {
+                    row(
+                        core * 1_000 + i,
+                        if i % 2 == 0 {
+                            "XALPHAUSDT"
+                        } else {
+                            "EX-XXUSDT"
+                        },
+                        i % 3 == 0,
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    let start = Instant::now();
+    for _ in 0..30 {
+        let mut total = 0usize;
+        for orders in &cores {
+            let mut price_of: std::collections::HashMap<&str, f64> =
+                std::collections::HashMap::new();
+            let mut near: HashSet<(u64, AlertLeg)> = HashSet::new();
+            for order in orders {
+                let last = *price_of.entry(order.market.as_str()).or_insert(11.0);
+                if order.filled && pct_to_exit(order, last).is_some_and(|left| left <= 1.0) {
+                    near.insert((order.uid, AlertLeg::Exit));
+                }
+                if order.fill_pct < 100.0
+                    && pct_to_entry(order, last).is_some_and(|left| left <= 1.0)
+                {
+                    near.insert((order.uid, AlertLeg::Entry));
+                }
+            }
+            total += near.len();
+        }
+        black_box(total);
+    }
+    println!(
+        "goal_e_alert_scan_10x200: {} ns/iter",
+        start.elapsed().as_nanos() / 30
+    );
+}

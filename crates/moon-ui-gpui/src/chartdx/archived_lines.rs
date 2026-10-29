@@ -90,10 +90,11 @@ impl ChartDataState {
     ///     record: The trade.
     ///     drawn: On a frozen viewer, the close instants of the trades its store draws; on a live
     ///         chart, the live twins — which this reads only through the caller's own twin test.
+    ///         Sorted once for the refresh.
     pub(super) fn archived_line_ends(
         &self,
         record: &ChartTradeRecord,
-        drawn: &[f64],
+        drawn: &LiveTwinIndex,
     ) -> (bool, bool) {
         // The same predicate `orders::sync` picks its frozen branch by, so the two passes agree
         // on which rule applies — a store not yet built is still a frozen viewer, whose exits are
@@ -205,9 +206,13 @@ impl ChartDataState {
 
     /// Whether a record's close sits within [`LIVE_TWIN_TOLERANCE_MS`] of a live closed order's:
     /// the same trade, drawn — both lines — by the live store.
-    pub(super) fn is_live_twin(&self, record: &ChartTradeRecord, live_closed_ms: &[f64]) -> bool {
+    ///
+    /// Args:
+    ///     record: One durable row.
+    ///     twins: The pane's live closes, sorted once for this refresh.
+    pub(super) fn is_live_twin(&self, record: &ChartTradeRecord, twins: &LiveTwinIndex) -> bool {
         let (_, close_ms) = record_utc_ms(record, &self.report_axis);
-        is_live_twin(close_ms, live_closed_ms)
+        twins.contains(close_ms)
     }
 }
 
@@ -259,11 +264,50 @@ pub(super) fn twins_signature(live_closed_ms: &[f64]) -> u64 {
     })
 }
 
-/// See [`ChartDataState::is_live_twin`].
-fn is_live_twin(close_ms: i64, live_closed_ms: &[f64]) -> bool {
-    live_closed_ms
-        .iter()
-        .any(|live| (live - close_ms as f64).abs() <= LIVE_TWIN_TOLERANCE_MS)
+/// Sorted close instants of the live store, so each durable row is one lookup.
+///
+/// A hash of the raw instants cannot answer [`LIVE_TWIN_TOLERANCE_MS`]: two stamps of the same
+/// trade differ by up to that window. Non-finite instants never pass the absolute-difference
+/// test, so they are dropped while the index is built.
+pub(super) struct LiveTwinIndex {
+    sorted: Vec<f64>,
+}
+
+impl LiveTwinIndex {
+    /// Sort one refresh's closed instants. Call once, then [`Self::contains`] per row.
+    ///
+    /// Args:
+    ///     live_closed_ms: Close instants of the live store's closed orders, in any order.
+    pub(super) fn from_closes(live_closed_ms: &[f64]) -> Self {
+        let mut sorted: Vec<f64> = live_closed_ms
+            .iter()
+            .copied()
+            .filter(|instant| instant.is_finite())
+            .collect();
+        sorted.sort_by(|left, right| left.total_cmp(right));
+        Self { sorted }
+    }
+
+    /// Whether `close_ms` sits within [`LIVE_TWIN_TOLERANCE_MS`] of any retained close.
+    ///
+    /// Args:
+    ///     close_ms: The row's close, already lifted onto the chart's UTC.
+    ///
+    /// Returns:
+    ///     `true` when the linear scan of the same instants would have matched.
+    pub(super) fn contains(&self, close_ms: i64) -> bool {
+        let close = close_ms as f64;
+        if !close.is_finite() {
+            return false;
+        }
+        // Sorted finite instants are partitioned into "strictly below the window" and then
+        // everything else. The first instant that is not strictly below is inside the window
+        // or past it; one absolute-difference check tells those apart.
+        let at = self.sorted.partition_point(|live| {
+            (*live - close).abs() > LIVE_TWIN_TOLERANCE_MS && *live < close
+        });
+        at < self.sorted.len() && (self.sorted[at] - close).abs() <= LIVE_TWIN_TOLERANCE_MS
+    }
 }
 
 /// How far apart a report row's close and a live closed order's close may sit and still be one
@@ -357,12 +401,13 @@ fn archived_store(
 ) -> Option<OrderLineStore> {
     let mut store = OrderLineStore::default();
     let mut drawn = 0usize;
+    let twins = LiveTwinIndex::from_closes(live_closed_ms);
     for record in records {
         if record.core_uid != core || !trade_kind_visible(graphics, record.emulator) {
             continue;
         }
         let (buy_ms, close_ms) = record_utc_ms(record, axis);
-        if is_live_twin(close_ms, live_closed_ms) {
+        if twins.contains(close_ms) {
             continue;
         }
         // No answer yet, or an empty one: the builder still draws the row's own exit line.

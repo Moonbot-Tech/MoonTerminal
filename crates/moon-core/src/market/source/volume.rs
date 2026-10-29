@@ -50,6 +50,7 @@ use crate::util::time::now_unix_ms_i64;
 use super::MarketDataSource;
 
 mod liq;
+mod prepare;
 mod profile;
 mod series;
 mod track;
@@ -314,6 +315,8 @@ struct SpanEntry {
 /// The read-once-per-`(market, span)` cache behind [`MarketDataSource::market_volume_span`].
 #[derive(Default)]
 pub(super) struct VolumeBook {
+    /// Completion edge for visible charts, including a quiet market with no further feed event.
+    prepared_revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Keyed by the PROVIDER and the span; the inner map by market name, so a lookup borrows the
     /// name instead of allocating one.
     spans: HashMap<(CoreId, VolumeSpan, VolumeAt), HashMap<String, SpanEntry>>,
@@ -329,13 +332,13 @@ pub(super) struct VolumeBook {
     tracks: HashMap<(CoreId, String), MarketTrack>,
     /// Ordered five-second buckets per market, as deep as the retained history, for the chart's
     /// sides band. Its own map beside `tracks`: a track is an hour's ring, this is the whole tail.
-    series: HashMap<(CoreId, String), series::SideSeries>,
+    series: HashMap<(CoreId, String), series::SeriesCache>,
     /// Turnover by PRICE over a trailing window, for the chart's horizontal volumes. Keyed by the
     /// REQUEST as well as the market: two panes on one coin with different windows or row widths
     /// (a tab and a torn-off window, each with its own settings) each keep a profile, rather
-    /// than rebuilding one shared entry on every alternate ask. Rebuilt on its own slow clock;
+    /// than rebuilding one shared entry on every alternate ask. Advanced on its own slow clock;
     /// see [`profile`].
-    profiles: HashMap<ProfileKey, profile::PriceProfile>,
+    profiles: HashMap<ProfileKey, profile::ProfileCache>,
 }
 
 impl VolumeBook {
@@ -377,6 +380,49 @@ impl VolumeBook {
 }
 
 impl MarketDataSource {
+    /// Capture revisions before the matching client snapshot so a racing replacement is retried.
+    fn volume_history(
+        &self,
+        core: CoreId,
+        market: &str,
+    ) -> Option<(
+        CoreId,
+        prepare::HistoryKey,
+        moonproto::state::MarketHistoryReaders,
+    )> {
+        let revisions = self.market_revisions(core, market)?;
+        let (client, client_epoch, catalog_rev) = {
+            let inner = self.inner.read().ok()?;
+            let slot = inner.clients.get(&revisions.provider)?;
+            // Read before the client/snapshot: a later catalog stamp invalidates this fold.
+            let (_, catalog_rev) = slot.catalog_revision()?;
+            let (client, client_epoch) = slot.get_with_epoch()?;
+            (client, client_epoch, catalog_rev)
+        };
+        let readers = client
+            .snapshot_versioned()?
+            .market_history_readers(market)?;
+        Some((
+            revisions.provider,
+            prepare::HistoryKey {
+                generation: revisions.generation,
+                client_epoch,
+                catalog_rev,
+                archive_rev: revisions.archive,
+            },
+            readers,
+        ))
+    }
+
+    /// Reader completions wake chart pulls without changing feed/archive revision semantics.
+    pub fn volume_prepared_revision(&self) -> u64 {
+        self.volume_book()
+            .lock()
+            .expect("volume book poisoned")
+            .prepared_revision
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Return what was bought and sold on one market over one span.
     ///
     /// Reads the cheapest source that can answer — see the module docs — and states whether the
@@ -485,7 +531,7 @@ impl MarketDataSource {
     /// Returns:
     ///     `None` when the provider, its client, its snapshot or this market's retained history
     ///     is unavailable — which is NOT the same as a market that did not trade, and leaves `out`
-    ///     empty.
+    ///     empty. `Some(false)` means a retained seed is pending: keep the resident band and retry.
     pub fn side_volume_buckets(
         &self,
         core: CoreId,
@@ -494,7 +540,7 @@ impl MarketDataSource {
         step_ms: i64,
         window: (i64, i64),
         out: &mut Vec<SideVolumeBucket>,
-    ) -> Option<()> {
+    ) -> Option<bool> {
         out.clear();
         // Bench first, exactly as `read_chart_history_into` does: a bench process has no client,
         // and the band it draws is the synthetic split — see `synthetic_sides`.
@@ -515,41 +561,33 @@ impl MarketDataSource {
                 let from = window.0.max(window.1 - BENCH_SPLIT_DEPTH_MS);
                 let candles = fixture.candles(&cache, 60_000, from - tf_ms.max(60_000), window.1);
                 *out = synthetic_sides(&candles, tf_ms, step_ms, from, window.1);
-                return Some(());
+                return Some(true);
             }
         }
-        let provider = self.provider_of(core)?;
-        // The archive revision, read BEFORE the snapshot: a merge landing between the two would
-        // then be seen as a change on the next call and rebuild against a snapshot that has it,
-        // rather than be missed for the life of the series.
-        let archive_rev = self.market_revisions(core, market)?.archive;
+        let (provider, source_key, readers) = self.volume_history(core, market)?;
         let now = now_unix_ms_i64();
-        let snapshot = self.core_client(provider)?.snapshot_versioned()?;
-        let readers = snapshot.market_history_readers(market)?;
         let trades = readers.futures_trades.or(readers.spot_trades);
         let handle = self.volume_book();
         let mut book = handle.lock().ok()?;
+        let completed = book.prepared_revision.clone();
         let series = book
             .series
             .entry((provider, market.to_string()))
-            .or_insert_with(|| series::SideSeries::new(now));
-        series.advance(
-            trades.as_ref(),
-            readers.mini_candles.as_ref(),
-            archive_rev,
-            now,
-        );
+            .or_insert_with(|| series::SeriesCache::new(now, completed));
+        if !series.advance(trades, readers.mini_candles, source_key, now) {
+            return Some(false);
+        }
         series.rolling_into(tf_ms, step_ms, window.0, window.1, out);
-        Some(())
+        Some(true)
     }
 
     /// Fill `out` with one market's bought/sold turnover by PRICE over a trailing window, for the
     /// chart's horizontal volumes — but only when the profile moved since `seen`.
     ///
-    /// The profile behind it is rebuilt from the retained history on its own slow clock (see
-    /// [`profile`]); a call inside that clock is a lock and a revision compare. The rows are copied
-    /// only when the revision differs from `seen`, so a chart that holds the last one pays nothing
-    /// for an unchanged profile — not even the copy.
+    /// The profile drains retained cursors on background readers on its own slow clock (see
+    /// [`profile`]). The last complete rows stay resident while work runs; completion wakes a chart
+    /// pull independently of feed revisions. Rows are copied only when the revision differs from
+    /// `seen`, so an unchanged profile costs no copy or GPU upload.
     ///
     /// Args:
     ///     core: Consumer core whose pane is drawn; its PROVIDER owns the history.
@@ -561,8 +599,8 @@ impl MarketDataSource {
     ///
     /// Returns:
     ///     The current revision, or `None` when the provider, its client, its snapshot or this
-    ///     market's retained history is unavailable — which is NOT the same as a market that did
-    ///     not trade, and leaves `out` untouched.
+    ///     market's retained history is unavailable, or its first seed is pending. This is not the
+    ///     same as a market that did not trade, and leaves `out` untouched.
     pub fn price_profile(
         &self,
         core: CoreId,
@@ -596,13 +634,8 @@ impl MarketDataSource {
                 return Some(revision);
             }
         }
-        let provider = self.provider_of(core)?;
-        // The archive revision, read BEFORE the snapshot, for the reason `side_volume_buckets`
-        // gives.
-        let archive_rev = self.market_revisions(core, market)?.archive;
+        let (provider, source_key, readers) = self.volume_history(core, market)?;
         let now = now_unix_ms_i64();
-        let snapshot = self.core_client(provider)?.snapshot_versioned()?;
-        let readers = snapshot.market_history_readers(market)?;
         let trades = readers.futures_trades.or(readers.spot_trades);
         let handle = self.volume_book();
         let mut book = handle.lock().ok()?;
@@ -610,24 +643,23 @@ impl MarketDataSource {
         // entry of its own (each five-percent move of the reference price, each slider step),
         // and a chart with no volume caption configured never reaches the other prune.
         book.prune(now);
+        let completed = book.prepared_revision.clone();
         let profile = book
             .profiles
             .entry((provider, market.to_string(), window, row_width.to_bits()))
-            .or_insert_with(|| profile::PriceProfile::new(now));
-        profile.refresh(
-            trades.as_ref(),
-            readers.mini_candles.as_ref(),
-            window,
-            row_width,
-            archive_rev,
-            now,
-        );
-        let revision = profile.revision();
-        if revision != seen {
-            out.clear();
-            out.extend_from_slice(profile.rows());
-        }
-        Some(revision)
+            .or_insert_with(|| profile::ProfileCache::new(now, completed));
+        profile.read(
+            trades,
+            readers.mini_candles,
+            profile::ProfileRequest {
+                window,
+                row_width,
+                source_key,
+                now,
+            },
+            seen,
+            out,
+        )
     }
 
     /// A cached entry still inside its TTL.

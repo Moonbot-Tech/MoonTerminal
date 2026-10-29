@@ -441,30 +441,25 @@ impl Backend {
         out
     }
 
-    /// Warning episodes for one effective workspace scope, filtered before the persisted limit.
-    ///
-    /// Open episodes are filtered in memory. Persisted episodes are filtered in SQLite before its
-    /// `ORDER BY` and `LIMIT`, so unrelated cores cannot crowd the selected workspace out.
+    /// Merge live open episodes with the latest persisted read for one effective workspace scope.
     ///
     /// Args:
     ///     core_ids: Effective core identities accepted by core-specific warning axes.
     ///     server_ips: Effective server identities accepted by server-wide warning axes.
+    ///     persisted: Closed episodes loaded independently of the UI thread.
     ///     limit: Maximum rows to return after merging open and persisted episodes.
     ///
     /// Returns:
     ///     Still-open episodes first, then closed ones newest first, capped once to `limit`.
-    pub(crate) fn warn_episodes_recent_for_scope(
+    pub(crate) fn warn_episodes_recent_with_persisted(
         &self,
         core_ids: &HashSet<CoreId>,
         server_ips: &HashSet<IpAddr>,
+        persisted: &[crate::backend::core_warn::WarnEpisode],
         limit: usize,
     ) -> Vec<crate::backend::core_warn::WarnEpisode> {
         let mut all = self.warn.open_episodes();
-        if let Some(store) = &self.warn_store
-            && let Ok(closed) = store.recent_episodes_for_scope(core_ids, server_ips, limit)
-        {
-            all.extend(closed);
-        }
+        all.extend(persisted.iter().cloned());
         finalize_recent_warning_episodes(all, self.warn_enabled(), core_ids, server_ips, limit)
     }
 }

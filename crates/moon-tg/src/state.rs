@@ -15,10 +15,12 @@ use moon_core::telegram::{TelegramService, TelegramStatus};
 
 use crate::HostKind;
 use crate::labels::telegram_labels;
-use crate::mini_app::cache::{CachedReport, CachedTrades};
+use crate::mini_app::cache::{CachedOrders, CachedReport, CachedStrategies, CachedTrades};
 
 /// Process-only service state; no credential is rendered by Debug.
 pub struct TelegramState {
+    /// Host wake retained across service replacement so a restarted poller stays event-driven.
+    work_waker: Option<moon_core::telegram::runtime::WorkWaker>,
     /// Chart reads remain admitted until their Finish callback rechecks the grant.
     pub(crate) mini_chart_pending: usize,
     /// Live chart reads have a separate four-reader cap.
@@ -103,6 +105,10 @@ pub struct TelegramState {
     /// Same lifetime rules as `mini_report_last`: served only to the same grant, cleared on
     /// service restart.
     pub(crate) mini_trades_last: Option<CachedTrades>,
+    /// Last Orders response, reused only while its exact live inputs are unchanged.
+    pub(crate) mini_orders_last: Option<CachedOrders>,
+    /// Last Strategies response, reused only while its exact live inputs are unchanged.
+    pub(crate) mini_strategies_last: Option<CachedStrategies>,
     /// Unconfirmed Mini App strategy toggles by `(core, strategy id)`.
     ///
     /// Value: `(wanted, sent_at, strategies_ack_rev before, strategies_rev before)`. Cleared on
@@ -190,6 +196,7 @@ impl TelegramState {
             TelegramStatus::Unavailable
         };
         Self {
+            work_waker: None,
             mini_chart_pending: 0,
             mini_live_pending: 0,
             mini_chart_jobs: Arc::default(),
@@ -220,6 +227,8 @@ impl TelegramState {
             visible_override: None,
             injected_reads: None,
             mini_trades_last: None,
+            mini_orders_last: None,
+            mini_strategies_last: None,
             mini_strategy_wanted: HashMap::new(),
             run_wanted: HashMap::new(),
             control_redraws: HashMap::new(),
@@ -257,7 +266,11 @@ impl TelegramState {
         let notify_busy = self.notify_busy;
         let auto_busy = self.auto_busy;
         let notifications_path = self.notifications_path.clone();
+        let work_waker = self.work_waker.clone();
         *self = Self::new_with_menu_cleanup(config, self.kind, retired, notifications_path);
+        if let Some(waker) = work_waker {
+            self.set_work_waker(waker);
+        }
         self.report_pending = report_pending;
         self.mini_report_pending = mini_report_pending;
         self.mini_trades_pending = mini_trades_pending;
@@ -300,6 +313,14 @@ impl TelegramState {
         self.status = TelegramStatus::Stopped;
         self.mini_status = MiniAppStatus::Stopped;
         self.pairing = None;
+    }
+
+    /// Bind new transport work to the host's owner wake, including future service restarts.
+    pub fn set_work_waker(&mut self, waker: moon_core::telegram::runtime::WorkWaker) {
+        if let Some(service) = &self.service {
+            service.set_work_waker(waker.clone());
+        }
+        self.work_waker = Some(waker);
     }
 
     /// Revoke liveness without joining, so a caller can do useful work while transports wind down.
@@ -381,6 +402,8 @@ impl TelegramState {
         self.mini_order_snapshots.clear();
         self.mini_report_last = None;
         self.mini_trades_last = None;
+        self.mini_orders_last = None;
+        self.mini_strategies_last = None;
         self.mini_strategy_wanted.clear();
         self.run_wanted.clear();
         self.control_redraws.clear();

@@ -1,6 +1,59 @@
 use super::*;
 use crate::market::trade_replay::venue_caps::TickValue;
 
+/// Measure the seed's fold separately from its retained-reader copies.
+#[test]
+#[ignore = "scale probe: prints timings"]
+fn chart_market_scale_series() {
+    let minis: Vec<_> = (0..20_000).map(|i| mini(i * 5000, 77.0, 33.0)).collect();
+    let trades: Vec<_> = (0..100_000)
+        .map(|i| trade(100_000_000 + i * 10, 100.0, 1.5))
+        .collect();
+    let mut samples = Vec::new();
+    for _ in 0..11 {
+        let start = std::time::Instant::now();
+        let mut s = SideSeries::new();
+        for row in &minis {
+            s.add_mini(*row);
+        }
+        for row in &trades {
+            s.add_trade(*row);
+        }
+        std::hint::black_box(&s.slots);
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "chart_market side seed fold 20000 minis + 100000 trades: {:.3} ms",
+        samples[5]
+    );
+    let mut samples = Vec::new();
+    for _ in 0..11 {
+        let minis = minis.clone();
+        let trades = trades.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let start = std::time::Instant::now();
+        super::super::prepare::dispatch(move || {
+            let mut s = SideSeries::new();
+            for row in minis {
+                s.add_mini(row);
+            }
+            for row in trades {
+                s.add_trade(row);
+            }
+            tx.send(s).unwrap();
+        });
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        let s = rx.recv().unwrap();
+        assert_eq!(s.slots.len(), 21_000);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "chart_market background side seed submission: {:.3} ms",
+        samples[5]
+    );
+}
+
 /// A trade as the retained ring holds one: a SELL is spelled by the quantity's sign bit.
 fn trade(ms: i64, price: f32, qty: f32) -> TradeHistoryRow {
     TradeHistoryRow {
@@ -22,7 +75,7 @@ fn mini(ms: i64, buy: f32, sell: f32) -> MiniCandle {
 }
 
 fn series() -> SideSeries {
-    let mut s = SideSeries::new(0);
+    let mut s = SideSeries::new();
     s.seeded = true;
     s
 }
@@ -211,21 +264,83 @@ fn rolling_of_an_inverted_window_is_empty() {
 /// by what happens to the slots, not by what a ring would refill.
 #[test]
 fn a_changed_archive_revision_rebuilds_the_series() {
-    let mut s = SideSeries::new(0);
-    s.advance(None, None, 1, 0);
+    let mut s = SideSeries::new();
+    s.advance(
+        None,
+        None,
+        HistoryKey {
+            archive_rev: 1,
+            ..HistoryKey::default()
+        },
+    );
     assert!(s.seeded);
     s.add(10, 1.0, 0.0);
     // Same revision: the slots survive.
-    s.advance(None, None, 1, 5_000);
+    s.advance(
+        None,
+        None,
+        HistoryKey {
+            archive_rev: 1,
+            ..HistoryKey::default()
+        },
+    );
     assert_eq!(s.slots.len(), 1);
     // A merged archive: the series starts over (and, with rings, would reseed from them).
-    s.advance(None, None, 2, 10_000);
+    s.advance(
+        None,
+        None,
+        HistoryKey {
+            archive_rev: 2,
+            ..HistoryKey::default()
+        },
+    );
     assert!(s.slots.is_empty());
     assert!(
         s.seeded,
         "re-seeded under the new revision, even from nothing"
     );
-    assert_eq!(s.archive_rev, 2);
+    assert_eq!(s.source_key.archive_rev, 2);
+}
+
+/// Reader replacement resets the cursor even if no archive merge changed its revision.
+#[test]
+fn chart_market_series_reseeds_on_retained_source_replacement() {
+    let mut series = SideSeries::new();
+    let mut key = HistoryKey::default();
+    for next in [
+        HistoryKey {
+            client_epoch: 1,
+            ..key
+        },
+        HistoryKey {
+            generation: 1,
+            client_epoch: 1,
+            ..key
+        },
+        HistoryKey {
+            generation: 1,
+            client_epoch: 1,
+            catalog_rev: 1,
+            ..key
+        },
+    ] {
+        series.advance(None, None, key);
+        series.add_trade(TradeHistoryRow {
+            time: MoonTime::from_unix_millis(1000),
+            price: 10.0,
+            qty: 2.0,
+        });
+        series.advance(None, None, key);
+        let mut before = Vec::new();
+        series.rolling_into(5000, 5000, 0, 5000, &mut before);
+        assert!(before.iter().any(|row| row.buy_quote == 20.0));
+        assert!(!series.advance_live(None, next));
+        series.advance(None, None, next);
+        let mut after = Vec::new();
+        series.rolling_into(5000, 5000, 0, 5000, &mut after);
+        assert!(after.iter().all(|row| row.buy_quote == 0.0));
+        key = next;
+    }
 }
 
 /// A series never outgrows its cap: the oldest slots go, the newest stay, and the order holds.

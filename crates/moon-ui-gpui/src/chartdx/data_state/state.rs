@@ -90,6 +90,7 @@ impl ChartDataState {
             last_order_sig: u64::MAX,
             last_prepared_market_sig: u64::MAX,
             last_source_market_sig: u64::MAX,
+            last_volume_prepared_rev: 0,
             last_countdown_check: None,
             view_dirty: true,
         }
@@ -596,7 +597,7 @@ impl ChartDataState {
         true
     }
 
-    /// Pull source/view changes and due replay demand without waking the parent window.
+    /// Pull source/view changes, completed volume readers and due replay demand without a window wake.
     pub(crate) fn pull_market_source_if_visible(&mut self) -> bool {
         if !self.scene_visible {
             return false;
@@ -606,12 +607,13 @@ impl ChartDataState {
         };
         let source_sig = self.source_market_signature(&source);
         let now = Instant::now();
-        let retry_due = self.render.borrow().panes.iter().any(|pane| {
-            pane.active
-                && ((self.trade_replay.is_some()
-                    && super::market::replay_price_retry_due(pane.replay_prices_retry_at, now))
-                    || super::clusters::refold_due(pane, now))
-        });
+        let retry_due = source.volume_prepared_revision() != self.last_volume_prepared_rev
+            || self.render.borrow().panes.iter().any(|pane| {
+                pane.active
+                    && ((self.trade_replay.is_some()
+                        && super::market::replay_price_retry_due(pane.replay_prices_retry_at, now))
+                        || super::clusters::refold_due(pane, now))
+            });
         if !self.view_dirty && source_sig == self.last_source_market_sig && !retry_due {
             return false;
         }

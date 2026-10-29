@@ -10,6 +10,8 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+mod slice_index;
+
 use rusqlite::Connection;
 use rusqlite::types::{FromSql, FromSqlError, Value, ValueRef};
 
@@ -429,69 +431,6 @@ fn one_pass_serves(base: &ReportFilter, slices: &[TotalsSlice]) -> bool {
     })
 }
 
-/// One slice's admission test over the base pass's rows.
-struct SlicePlan {
-    /// Cores admitted, `None` for every core the base admits.
-    cores: Option<HashSet<i64>>,
-    date_from: Option<i64>,
-    date_to: Option<i64>,
-}
-
-impl SlicePlan {
-    fn new(slice: &TotalsSlice) -> Self {
-        Self {
-            // Inlined the way `build_where` inlines them, so the comparison is the SQL's own.
-            cores: slice
-                .core_uids
-                .as_ref()
-                .filter(|cores| !cores.is_empty())
-                .map(|cores| cores.iter().map(|&uid| uid as i64).collect()),
-            date_from: slice.date_from,
-            date_to: slice.date_to,
-        }
-    }
-
-    /// Whether this slice's own statement would admit a row the base pass returned.
-    ///
-    /// The base pass already applied everything the slice shares with it; what is left is the
-    /// slice's core list and its window, shifted onto the core's clock exactly as
-    /// `append_row_scope` shifts it.
-    ///
-    /// Args:
-    ///     core: The row's `core_uid`.
-    ///     close: The row's `closedate`, `None` on a source without the column (its statement
-    ///         applies no window at all).
-    ///     offset: The core's clock offset at the read's instant.
-    ///
-    /// Returns:
-    ///     `None` when the close date is not a number this test can compare exactly.
-    fn admits(&self, core: i64, close: Option<&Value>, offset: i32) -> Option<bool> {
-        if self
-            .cores
-            .as_ref()
-            .is_some_and(|cores| !cores.contains(&core))
-        {
-            return Some(false);
-        }
-        let Some(close) = close else {
-            return Some(true);
-        };
-        let at_least =
-            |bound: i64| compare(close, ReportAxis::shift_bound(bound, offset)).map(|o| o.is_ge());
-        let at_most =
-            |bound: i64| compare(close, ReportAxis::shift_bound(bound, offset)).map(|o| o.is_le());
-        let from_ok = match self.date_from {
-            Some(bound) => at_least(bound)?,
-            None => true,
-        };
-        let to_ok = match self.date_to {
-            Some(bound) => at_most(bound)?,
-            None => true,
-        };
-        Some(from_ok && to_ok)
-    }
-}
-
 /// SQLite's numeric comparison of a close date with an integer bound, where it is exact.
 fn compare(close: &Value, bound: i64) -> Option<std::cmp::Ordering> {
     match *close {
@@ -519,23 +458,23 @@ fn sliced_attempt(
     now: i64,
 ) -> rusqlite::Result<Option<Vec<Option<ReportTotals>>>> {
     let valuation_present = base.valuation == ValuationMode::Current || include_valuation;
-    let plans = slices.iter().map(SlicePlan::new).collect::<Vec<_>>();
     let passes = sources
         .iter()
         .map(|src| ClosedPass::new(src, base, include_valuation, meta))
         .collect::<Vec<_>>();
-    let mut offsets: HashMap<i64, i32> = HashMap::new();
+    let mut indices: HashMap<i64, slice_index::SliceIndex> = HashMap::new();
+    let mut matching = Vec::new();
     // slice -> source -> quote key -> one fold per column
     let mut folds: Vec<Vec<BTreeMap<GroupKey, Vec<SqliteSum>>>> =
-        vec![vec![BTreeMap::new(); passes.len()]; plans.len()];
+        vec![vec![BTreeMap::new(); passes.len()]; slices.len()];
     // A slice one of whose sums the fold refused; its own statement answers it instead.
-    let mut refused = vec![false; plans.len()];
+    let mut refused = vec![false; slices.len()];
     // Same gate as the grouped read: only an empty core list has no cardinality of its own.
     let count_cores: Vec<bool> = slices
         .iter()
         .map(|slice| slice.filter(base).core_uids.is_empty())
         .collect();
-    let mut counted_cores: Vec<HashSet<i64>> = vec![HashSet::new(); plans.len()];
+    let mut counted_cores: Vec<HashSet<i64>> = vec![HashSet::new(); slices.len()];
     for (source, pass) in passes.iter().enumerate() {
         let has_close = pass.src.cols.contains("closedate");
         let mut stmt = conn.prepare(&pass.row_sql())?;
@@ -554,20 +493,18 @@ fn sliced_attempt(
             for index in 0..width {
                 values.push(row.get::<_, Value>(3 + index)?);
             }
-            let offset = *offsets
-                .entry(core)
-                .or_insert_with(|| core_offset(&base.axis, core, now));
-            for (index, ((plan, slice_folds), refused)) in plans
-                .iter()
-                .zip(folds.iter_mut())
-                .zip(refused.iter_mut())
-                .enumerate()
+            let index = indices.entry(core).or_insert_with(|| {
+                slice_index::SliceIndex::new(slices, core, core_offset(&base.axis, core, now))
+            });
+            if index
+                .matching(has_close.then_some(&close), &mut matching)
+                .is_none()
             {
-                match plan.admits(core, has_close.then_some(&close), offset) {
-                    Some(true) => {}
-                    Some(false) => continue,
-                    None => return Ok(None),
-                }
+                return Ok(None);
+            }
+            for &index in &matching {
+                let slice_folds = &mut folds[index];
+                let refused = &mut refused[index];
                 if *refused {
                     continue;
                 }

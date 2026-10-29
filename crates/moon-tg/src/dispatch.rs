@@ -93,15 +93,18 @@ pub fn tick(host: &mut dyn TgHost) {
         host.repaint();
     }
     if host.state().service.is_some() {
-        drain_service(host);
+        drain_work(host);
     }
     crate::menu::control_tick(host);
     let now_utc = i64::try_from(moon_core::util::time::now_unix_secs()).unwrap_or(i64::MAX);
     crate::notify::tick::run(host, now_utc);
 }
 
-/// Apply queued transport work while a service is running.
-fn drain_service(host: &mut dyn TgHost) {
+/// Apply queued transport work on a causal owner wake, independently of notification ticks.
+pub fn drain_work(host: &mut dyn TgHost) {
+    if host.state().service.is_none() {
+        return;
+    }
     if host.state().configuration_pending {
         let saved = host.config().telegram.clone();
         let state = host.state_mut();
@@ -209,7 +212,7 @@ fn pair(host: &mut dyn TgHost, chat_id: i64, reply: SyncSender<Response>) {
 }
 
 /// Answer paired-chat commands; station status and updates require the current owner grant.
-fn run_command(
+pub(crate) fn run_command(
     host: &mut dyn TgHost,
     chat_id: i64,
     command: ParsedCommand,

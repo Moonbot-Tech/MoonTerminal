@@ -1019,6 +1019,11 @@ pub fn telegram_notifications() -> PathBuf {
     telegram_dir().join("notifications.json")
 }
 
+/// Delivery receipts beside a host's notification snapshot, including isolated station roots.
+pub fn telegram_notify_receipts(notifications: &Path) -> PathBuf {
+    notifications.with_extension("receipts")
+}
+
 /// Legacy combined encrypted config for one-time migration. Read from beside the executable,
 /// where older builds left it.
 pub fn legacy_enc_path() -> PathBuf {

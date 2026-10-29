@@ -319,9 +319,14 @@ impl DetectViewFile {
         toml_io::load_or_default(&paths::detects_view_path(), "detects_view.toml", |_| {})
     }
 
-    pub fn save(&self) {
-        if let Err(e) = toml_io::save(&paths::detects_view_path(), self, "detects_view.toml") {
-            log::warn!("не записал detects_view.toml: {e:#}");
+    /// Persist the complete file atomically, reporting failure so the background writer can retry.
+    pub fn save(&self) -> bool {
+        match toml_io::save(&paths::detects_view_path(), self, "detects_view.toml") {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("could not write detects_view.toml: {error:#}");
+                false
+            }
         }
     }
 

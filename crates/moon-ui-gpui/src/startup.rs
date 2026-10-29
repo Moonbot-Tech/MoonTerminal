@@ -41,6 +41,9 @@ fn apply_persistence_ack(backend: &mut Backend, acknowledgement: PersistenceAck)
     if failed.auto {
         backend.auto_dock_dirty = true;
     }
+    if failed.detects {
+        backend.detects_view_dirty = true;
+    }
 }
 
 /// Poll the serial worker and enqueue at most one immutable live persistence snapshot.
@@ -69,6 +72,7 @@ fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut Persistenc
     }
 
     let save_layout = backend.layout_dirty;
+    let save_detects = backend.detects_view_dirty;
     let save_classic = backend.dock_dirty || backend.detached_dirty;
     let auto_topology = (backend.auto_dock_dirty
         && backend.auto_dock_automatic_persistence_allowed)
@@ -78,6 +82,9 @@ fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut Persistenc
     let mut snapshot = PersistenceSnapshot::empty();
     if save_layout {
         snapshot = snapshot.with_layout(backend.layout.clone());
+    }
+    if save_detects {
+        snapshot = snapshot.with_detects(backend.detects_view.clone());
     }
     if save_classic {
         snapshot = snapshot.with_classic(backend.dock_states.clone(), backend.detached.clone());
@@ -92,6 +99,9 @@ fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut Persistenc
     if save_layout {
         backend.layout_dirty = false;
     }
+    if save_detects {
+        backend.detects_view_dirty = false;
+    }
     if save_classic {
         backend.dock_dirty = false;
         backend.detached_dirty = false;
@@ -102,6 +112,9 @@ fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut Persistenc
     if !coordinator.dispatch(snapshot) {
         if save_layout {
             backend.layout_dirty = true;
+        }
+        if save_detects {
+            backend.detects_view_dirty = true;
         }
         if save_classic {
             backend.dock_dirty = true;

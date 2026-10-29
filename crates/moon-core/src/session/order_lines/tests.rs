@@ -147,9 +147,14 @@ fn reference_market_draw_orders<'a>(
     out
 }
 
-/// Compares draw order against the original map scan and closed-ring traversal.
+/// Compares draw order and panic membership against the original retained-map scans.
 fn assert_market_draw_reference(store: &OrderLineStore) {
     for market in ["SYN000", "SYN001", "SYN002", "absent"] {
+        let expected_panic = store
+            .orders
+            .values()
+            .any(|order| order.market == market && order.closed_ms.is_none() && order.panic_sell);
+        assert_eq!(store.market_panic_sell(market), expected_panic, "{market}");
         for cap in [0, 1, 50, CLOSED_RING_CAP + 1] {
             let actual = store.market_draw_orders(market, cap);
             let expected = reference_market_draw_orders(store, market, cap);
@@ -273,11 +278,13 @@ fn auto_fit_tracks_current_prices_without_using_trace_or_label_values() {
     assert_eq!(store.auto_fit_range(&row.market), Some((100.0, 120.0)));
 }
 
-/// Missing index maintenance on insertion, closure, or revival would hide or duplicate chart lines.
+/// Missing index maintenance on insertion, closure, or revival would hide chart lines or stale panic state.
 #[test]
 fn market_draw_orders_matches_reference() {
     let mut store = OrderLineStore::default();
     let mut rows = bench_rows(12, 3);
+    rows[0].panic_sell = true;
+    rows[1].panic_sell = true;
     rows[0].job_is_done = true;
     store.update(&rows, 0);
     assert_market_draw_reference(&store);

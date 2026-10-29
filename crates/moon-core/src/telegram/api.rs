@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::config::Secret;
 
+mod flood;
 mod photo;
+pub(crate) use flood::FloodWait;
 pub use photo::CAPTION_UTF16_LIMIT;
 
 /// How one request's body goes on the wire: JSON for every method but `sendPhoto`, whose upload
@@ -72,6 +74,8 @@ pub struct BotApi {
     /// can redeliver an unaccepted update.
     offset: i64,
     retry: RetryState,
+    /// Telegram's explicit flood deadline shared with this service's other API client.
+    flood: FloodWait,
 }
 
 /// Capped exponential retry bookkeeping, overwritten by Telegram `retry_after` when present.
@@ -357,6 +361,11 @@ impl BotApi {
     /// Returns:
     ///     A client with offset 0 and a fresh retry state.
     pub fn new(token: Secret) -> Self {
+        Self::with_flood_wait(token, FloodWait::default())
+    }
+
+    /// Build an independent transport sharing only its bot's explicit Telegram flood deadline.
+    pub(crate) fn with_flood_wait(token: Secret, flood: FloodWait) -> Self {
         Self {
             error_observer: None,
             liveness: None,
@@ -365,6 +374,7 @@ impl BotApi {
             long_poll_agent: build_agent(LONG_POLL_TIMEOUT),
             offset: 0,
             retry: RetryState::new(),
+            flood,
         }
     }
 
@@ -413,7 +423,10 @@ impl BotApi {
         &mut self,
         commands: &[(String, String)],
     ) -> Result<Option<bool>, ApiError> {
-        if !self.running() || self.retry.pending.is_some() {
+        if !self.running()
+            || self.retry.pending.is_some()
+            || self.flood.remaining(std::time::Instant::now()).is_some()
+        {
             return Ok(None);
         }
         let commands: Vec<_> = commands
@@ -570,7 +583,10 @@ impl BotApi {
     /// Returns:
     ///     `Ok(false)` when skipped; Telegram's answer otherwise.
     pub fn tidy_message(&mut self, chat: i64, message: i64) -> Result<bool, ApiError> {
-        if !self.running() || self.retry.pending.is_some() {
+        if !self.running()
+            || self.retry.pending.is_some()
+            || self.flood.remaining(std::time::Instant::now()).is_some()
+        {
             return Ok(false);
         }
         let body = serde_json::json!({"chat_id": chat, "message_id": message});
@@ -601,7 +617,7 @@ impl BotApi {
         self.post_with(method, long_poll, &|request| request.send_json(body))
     }
 
-    /// [`Self::post`] for a body `send` puts on the wire.
+    /// Honor local retry backoff and the shared flood deadline before putting each body on the wire.
     fn post_with<T>(
         &mut self,
         method: &str,
@@ -626,6 +642,12 @@ impl BotApi {
                         (wait - start.elapsed().min(wait)).min(Duration::from_millis(100)),
                     );
                 }
+            }
+            while let Some(wait) = self.flood.remaining(std::time::Instant::now()) {
+                if !self.running() {
+                    return Err(ApiError::Transport);
+                }
+                std::thread::sleep(wait.min(Duration::from_millis(100)));
             }
             let result = self.post_once(method, long_poll, send);
             if let (Err(failure), Some(observer)) = (&result, &self.error_observer) {
@@ -663,7 +685,7 @@ impl BotApi {
         Err(last_error)
     }
 
-    /// Send one bounded request without sleeping or changing retry state.
+    /// Send one bounded request without sleeping, publishing explicit flood deadlines for peers.
     fn post_once<T>(
         &self,
         method: &str,
@@ -712,10 +734,9 @@ impl BotApi {
                     self.token.expose(),
                 );
                 let retry_after_secs = envelope.parameters.and_then(|p| p.retry_after);
-                Err(AttemptError {
-                    error: refusal(status, description, retry_after_secs),
-                    http_retry,
-                })
+                let error = refusal(status, description, retry_after_secs);
+                self.flood.observe(&error, std::time::Instant::now());
+                Err(AttemptError { error, http_retry })
             }
             Err(_) if http_retry => Err(AttemptError {
                 error: ApiError::Transport,

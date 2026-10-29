@@ -154,6 +154,8 @@ pub(super) struct ReportData {
 
 /// One completed background batch with optional selector-metadata refresh.
 struct ReportRead {
+    /// Exact content identities prepared off the UI thread for incremental width measurement.
+    width_rows: Vec<Arc<widths::RowIdentity>>,
     cores: Option<Vec<(u64, String)>>,
     /// Canonical non-strategy scope and its choices from this exact snapshot.
     strategy_metadata: Option<(ReportFilter, Vec<ReportStrategy>)>,
@@ -270,6 +272,7 @@ fn run_report_query(
     let table = db::query_reports(&snap, &filter, &sort_key, sort_desc, MAX_REPORT_ROWS)?;
     let totals = db::query_totals(&snap, &filter)?;
     let row_keys = selection::row_keys(&table.cols, &table.rows, &table.core_uids, &table.rec_ids);
+    let width_rows = widths::row_identities(&table.rows, &table.core_uids);
     // Log measured query latency so slow refreshes are visible; the panel controls their frequency.
     let ms = started.elapsed().as_millis();
     if ms > 250 {
@@ -284,6 +287,7 @@ fn run_report_query(
         log::debug!("отчёты: query {ms}ms (rows={})", table.rows.len());
     }
     Ok(ReportRead {
+        width_rows,
         cores,
         strategy_metadata,
         cols: table.cols,
@@ -469,6 +473,7 @@ impl ReportPanel {
                     match result {
                         Ok(read) => {
                             let ReportRead {
+                                width_rows,
                                 cores,
                                 strategy_metadata,
                                 cols,
@@ -496,9 +501,9 @@ impl ReportPanel {
                                 this.queue_strategy_select_sync(true, cx);
                             }
                             let cols_changed = *this.cols != cols;
+                            this.natural_widths.publish(width_rows, cols_changed);
                             this.cols = Rc::new(cols);
                             this.data.apply(Ok(data));
-                            this.natural_widths.clear();
                             // Complete the width map when schema membership changes
                             // so new columns stay stable while neighbors resize. A
                             // double-click reset intentionally removes one entry.

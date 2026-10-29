@@ -1,0 +1,440 @@
+//! Which closed trades a chat should hear about.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::db::QuoteCurrency;
+use crate::telegram::notify::{
+    ChartLedger, ChartRule, CoreScope, NotifyLedger, QuoteThresholds, TradeRule, prune_closes,
+};
+
+/// How long an announced close stays in the ledger, in seconds.
+pub const SEEN_WINDOW_SECS: i64 = 72 * 3600;
+
+/// How long a close waits for its dollar value when a threshold needs one, in seconds. After
+/// that it is sent with a note that its thresholds were not checked.
+pub const HOLD_SECS: i64 = 300;
+
+/// One closed trade the report reader hands to [`decide`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClosedTrade {
+    /// Core that closed the trade.
+    pub core: u64,
+    /// Report row id. Unique per core.
+    pub rec_id: i64,
+    /// Close time, UTC Unix seconds.
+    pub close_utc: i64,
+    /// Market symbol.
+    pub coin: String,
+    /// Configured core name.
+    pub core_name: String,
+    /// Strategy name stored on the row.
+    pub strategy: String,
+    /// Entry notional in USDT through the Report's valuation; absent when unusable or unvalued.
+    pub volume_usd: Option<f64>,
+    /// Report-valued profit in USDT; absent when unvalued.
+    pub profit_usd: Option<f64>,
+    /// Profit percent already scaled by 100, absent when the row cannot evidence it.
+    pub profit_pct: Option<f64>,
+    /// The currency the trade's own money is in; absent when the row's quote is unknown.
+    pub quote: Option<QuoteCurrency>,
+    /// Settled profit in [`Self::quote`], without any valuation.
+    pub profit_native: Option<f64>,
+    /// Entry notional in [`Self::quote`], where the Report's volume gates prove it.
+    pub volume_native: Option<f64>,
+    /// Open time, UTC Unix seconds, for the card's holding duration.
+    pub open_utc: i64,
+    /// Entry price, as the row stored it.
+    pub buy_price: Option<f64>,
+    /// Exit price, as the row stored it.
+    pub sell_price: Option<f64>,
+    /// A short position.
+    pub short: bool,
+    /// The row's `ReportUID`, which its order traces are filed under; absent on a row without it.
+    pub report_uid: Option<i64>,
+}
+
+impl ClosedTrade {
+    /// Whether the trade's own currency is a USD stablecoin, taken 1:1 with the dollar for the
+    /// rule thresholds (LinKvo 03.10) — the stablecoin list the Assets panel uses.
+    pub fn stable_quote(&self) -> bool {
+        self.quote
+            .is_some_and(|quote| crate::symbol::is_usd_stable(quote.ticker()))
+    }
+
+    /// Profit in dollars for the thresholds: the valuation's, else the stablecoin amount itself.
+    pub fn rule_profit_usd(&self) -> Option<f64> {
+        self.profit_usd
+            .or_else(|| self.profit_native.filter(|_| self.stable_quote()))
+    }
+
+    /// Entry notional in dollars for the volume floor, by the same rule as
+    /// [`Self::rule_profit_usd`].
+    pub fn rule_volume_usd(&self) -> Option<f64> {
+        self.volume_usd
+            .or_else(|| self.volume_native.filter(|_| self.stable_quote()))
+    }
+
+    /// The trade's key in the ledger.
+    pub fn key(&self) -> crate::telegram::notify::CardKey {
+        crate::telegram::notify::CardKey {
+            core: self.core,
+            rec_id: self.rec_id,
+        }
+    }
+}
+
+/// One trade [`decide`] announces.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Announced {
+    pub trade: ClosedTrade,
+    /// A threshold needed the trade's dollar value and it never came within [`HOLD_SECS`]: the
+    /// card is sent anyway and says its thresholds were not checked.
+    pub unchecked: bool,
+}
+
+/// How a trade fares against the rule's thresholds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+    Pass,
+    Fail,
+    /// A threshold needs a dollar figure the trade does not have yet.
+    Unknown,
+}
+
+/// Earliest close time `decide` may consider.
+///
+/// Args:
+///     ledger: Announce-once state. Only `trades_enabled_utc` is read.
+///     now_utc: Current UTC Unix seconds.
+///
+/// Returns:
+///     `None` when the trade rule has never been enabled. Otherwise the later
+///     of the enable moment and the 72-hour window edge. The subtraction
+///     saturates at `i64::MIN`.
+pub fn read_from_utc(ledger: &NotifyLedger, now_utc: i64) -> Option<i64> {
+    floor_from(ledger.trades_enabled_utc, now_utc)
+}
+
+/// [`read_from_utc`] for any rule's enable moment.
+pub fn floor_from(enabled_utc: Option<i64>, now_utc: i64) -> Option<i64> {
+    Some(enabled_utc?.max(now_utc.saturating_sub(SEEN_WINDOW_SECS)))
+}
+
+/// When the earliest held close stops waiting for its dollar value, if any close is held.
+///
+/// Args:
+///     ledger: Announce-once state. Only `held` is read.
+///
+/// Returns:
+///     UTC seconds; a read at or after it sends that close unchecked.
+pub fn hold_until(ledger: &NotifyLedger) -> Option<i64> {
+    held_until(&ledger.held)
+}
+
+/// [`hold_until`] over any rule's held closes.
+pub fn held_until(held: &BTreeMap<u64, BTreeMap<i64, i64>>) -> Option<i64> {
+    held.values()
+        .flat_map(|rows| rows.values())
+        .min()
+        .map(|first| first.saturating_add(HOLD_SECS))
+}
+
+/// Trades to announce now, oldest close first.
+///
+/// A trade outside the enable floor, the visible cores, or `rule.cores` is
+/// left unmarked. A trade a threshold cannot judge yet — no dollar figure for
+/// it — is held in `ledger.held`, unmarked, for [`HOLD_SECS`] from the first
+/// read that saw it; once that passes it is announced unchecked. Anything else
+/// is stored in `ledger.seen` even when a volume or profit filter suppresses
+/// the card, so a later tick does not reconsider it. `rule.on == false` forgets
+/// `seen` and `held` and announces nothing.
+///
+/// Args:
+///     rule: The chat's trade card rule.
+///     ledger: Announce-once state. `seen` and `held` are updated in place.
+///     visible: Core ids this chat may see.
+///     trades: Closed rows from the report. Order does not matter.
+///     now_utc: Current UTC Unix seconds.
+///
+/// Returns:
+///     The trades that pass the filters, sorted by `close_utc` then `rec_id`.
+///     Empty when the rule is off, the enable moment is missing, or nothing
+///     qualifies. No length cap.
+pub fn decide(
+    rule: &TradeRule,
+    ledger: &mut NotifyLedger,
+    visible: &[u64],
+    trades: &[ClosedTrade],
+    now_utc: i64,
+) -> Vec<Announced> {
+    let gate = Gate {
+        on: rule.on,
+        cores: &rule.cores,
+        min_volume_usd: rule.min_volume_usd,
+        profit_at_least_usd: rule.profit_at_least_usd,
+        loss_at_least_usd: rule.loss_at_least_usd,
+        by_quote: &rule.by_quote,
+        needs_usd: false,
+    };
+    let book = Book {
+        enabled_utc: ledger.trades_enabled_utc,
+        seen: &mut ledger.seen,
+        held: &mut ledger.held,
+    };
+    decide_gate(&gate, book, visible, trades, now_utc)
+}
+
+/// The deal chart rule's [`decide`]: the trades whose picture is due, with their dollar value.
+///
+/// The picture waits for the dollar value whatever the thresholds are — its caption is in dollars
+/// (LinKvo 04.10) — and a trade still unvalued after [`HOLD_SECS`] gets none. A trade whose
+/// currency has a row in [`ChartRule::by_quote`] waits for nothing: it is judged in its own money,
+/// and its picture is captioned in it while no dollar value exists.
+pub fn decide_charts(
+    rule: &ChartRule,
+    ledger: &mut ChartLedger,
+    visible: &[u64],
+    trades: &[ClosedTrade],
+    now_utc: i64,
+) -> Vec<ClosedTrade> {
+    let gate = Gate {
+        on: rule.on,
+        cores: &CoreScope::All,
+        min_volume_usd: None,
+        profit_at_least_usd: rule.profit_at_least_usd,
+        loss_at_least_usd: rule.loss_at_least_usd,
+        by_quote: &rule.by_quote,
+        needs_usd: true,
+    };
+    let book = Book {
+        enabled_utc: ledger.enabled_utc,
+        seen: &mut ledger.seen,
+        held: &mut ledger.held,
+    };
+    decide_gate(&gate, book, visible, trades, now_utc)
+        .into_iter()
+        .filter(|announced| !announced.unchecked)
+        .map(|announced| announced.trade)
+        .collect()
+}
+
+/// What a rule asks of a closed trade.
+struct Gate<'a> {
+    on: bool,
+    cores: &'a CoreScope,
+    min_volume_usd: Option<f64>,
+    profit_at_least_usd: Option<f64>,
+    loss_at_least_usd: Option<f64>,
+    /// Per-currency rows that judge a trade in its own money instead of the dollar fields.
+    by_quote: &'a [QuoteThresholds],
+    /// The trade's dollar profit is needed even with no profit threshold set — or, for a trade a
+    /// [`Self::by_quote`] row judges, its own profit.
+    needs_usd: bool,
+}
+
+/// A rule's part of the ledger.
+struct Book<'a> {
+    enabled_utc: Option<i64>,
+    seen: &'a mut BTreeMap<u64, BTreeMap<i64, i64>>,
+    held: &'a mut BTreeMap<u64, BTreeMap<i64, i64>>,
+}
+
+/// [`decide`] for any rule and its part of the ledger.
+fn decide_gate(
+    rule: &Gate<'_>,
+    ledger: Book<'_>,
+    visible: &[u64],
+    trades: &[ClosedTrade],
+    now_utc: i64,
+) -> Vec<Announced> {
+    if !rule.on {
+        ledger.seen.clear();
+        ledger.held.clear();
+        return Vec::new();
+    }
+    let Some(read_from) = floor_from(ledger.enabled_utc, now_utc) else {
+        prune_closes(ledger.seen, now_utc.saturating_sub(SEEN_WINDOW_SECS));
+        return Vec::new();
+    };
+    let mut announced = Vec::new();
+    // Only held closes need an offered marker. Remembering every already-decided close would
+    // rebuild the entire 72-hour key set for each chat even when nothing new arrived.
+    let mut offered: BTreeSet<(u64, i64)> = BTreeSet::new();
+    for trade in trades {
+        if trade.close_utc < read_from || !core_selected(rule, visible, trade.core) {
+            continue;
+        }
+        if ledger
+            .held
+            .get(&trade.core)
+            .is_some_and(|rows| rows.contains_key(&trade.rec_id))
+        {
+            offered.insert((trade.core, trade.rec_id));
+        }
+        if ledger
+            .seen
+            .get(&trade.core)
+            .is_some_and(|rows| rows.contains_key(&trade.rec_id))
+        {
+            continue;
+        }
+        let verdict = verdict(rule, trade);
+        if verdict == Verdict::Unknown {
+            let first = *ledger
+                .held
+                .entry(trade.core)
+                .or_default()
+                .entry(trade.rec_id)
+                .or_insert(now_utc);
+            if now_utc < first.saturating_add(HOLD_SECS) {
+                offered.insert((trade.core, trade.rec_id));
+                continue;
+            }
+        }
+        unhold(ledger.held, trade);
+        ledger
+            .seen
+            .entry(trade.core)
+            .or_default()
+            .insert(trade.rec_id, trade.close_utc);
+        if verdict != Verdict::Fail {
+            announced.push(Announced {
+                trade: trade.clone(),
+                unchecked: verdict == Verdict::Unknown,
+            });
+        }
+    }
+    announced.sort_by(|left, right| {
+        left.trade
+            .close_utc
+            .cmp(&right.trade.close_utc)
+            .then(left.trade.rec_id.cmp(&right.trade.rec_id))
+    });
+    let window_edge = now_utc.saturating_sub(SEEN_WINDOW_SECS);
+    prune_closes(ledger.seen, window_edge);
+    ledger.held.retain(|core, rows| {
+        rows.retain(|rec_id, _| offered.contains(&(*core, *rec_id)));
+        !rows.is_empty()
+    });
+    announced
+}
+
+/// Drop `trade` from `held`, and its core when that empties it.
+fn unhold(held: &mut BTreeMap<u64, BTreeMap<i64, i64>>, trade: &ClosedTrade) {
+    if let Some(rows) = held.get_mut(&trade.core) {
+        rows.remove(&trade.rec_id);
+        if rows.is_empty() {
+            held.remove(&trade.core);
+        }
+    }
+}
+
+/// `true` when `core` is both visible to the chat and selected by the rule.
+fn core_selected(rule: &Gate<'_>, visible: &[u64], core: u64) -> bool {
+    if !visible.contains(&core) {
+        return false;
+    }
+    match rule.cores {
+        CoreScope::All => true,
+        CoreScope::Only(ids) => ids.contains(&core),
+    }
+}
+
+/// Volume floor and profit/loss floor. Both must pass; one known failure fails the trade even
+/// while the other is still unknown.
+///
+/// Only a figure the valuation can still supply is worth waiting for: the trade's own amount
+/// exists and is just not in dollars yet. A figure the row cannot evidence in any currency — a
+/// volume the Report's gates cannot prove, a profit the row does not carry — fails a set
+/// threshold at once, as it always did.
+///
+/// A rule that needs the dollar profit itself waits for it like for a threshold, and fails a row
+/// that carries no profit at all.
+///
+/// A trade whose currency has a row in `rule.by_quote` goes to [`quote_verdict`] instead.
+fn verdict(rule: &Gate<'_>, trade: &ClosedTrade) -> Verdict {
+    if let Some(row) = rule
+        .by_quote
+        .iter()
+        .find(|row| trade.quote.is_some() && row.currency() == trade.quote)
+    {
+        return quote_verdict(rule, row, trade);
+    }
+    let volume = volume_passes(
+        rule.min_volume_usd,
+        trade.rule_volume_usd(),
+        trade.volume_native.is_some(),
+    );
+    let profit = profit_passes(
+        rule.profit_at_least_usd,
+        rule.loss_at_least_usd,
+        trade.rule_profit_usd(),
+        trade.profit_native.is_some(),
+    );
+    let dollars = if rule.needs_usd && trade.rule_profit_usd().is_none() {
+        trade.profit_native.is_none().then_some(false)
+    } else {
+        Some(true)
+    };
+    match (volume, profit, dollars) {
+        (Some(false), _, _) | (_, Some(false), _) | (_, _, Some(false)) => Verdict::Fail,
+        (Some(true), Some(true), Some(true)) => Verdict::Pass,
+        _ => Verdict::Unknown,
+    }
+}
+
+/// A trade judged by its currency's row: its own volume and profit against the row's thresholds.
+/// Nothing is waited for — the amounts are the row's own, no valuation can bring them later — so a
+/// threshold the row sets on an amount the trade does not carry fails it, and a rule that needs
+/// the result fails a trade without its own profit.
+fn quote_verdict(rule: &Gate<'_>, row: &QuoteThresholds, trade: &ClosedTrade) -> Verdict {
+    let volume = volume_passes(row.min_volume, trade.volume_native, false);
+    let profit = profit_passes(
+        row.profit_at_least,
+        row.loss_at_least,
+        trade.profit_native,
+        false,
+    );
+    let result = !rule.needs_usd || trade.profit_native.is_some();
+    match (volume, profit) {
+        (Some(true), Some(true)) if result => Verdict::Pass,
+        _ => Verdict::Fail,
+    }
+}
+
+/// `None` minimum applies no floor. A set minimum requires a volume at or above it; `None` when
+/// the volume exists but is not known in dollars yet (`pending`), a failure when it does not
+/// exist at all.
+fn volume_passes(minimum: Option<f64>, volume: Option<f64>, pending: bool) -> Option<bool> {
+    match (minimum, volume) {
+        (None, _) => Some(true),
+        (Some(minimum), Some(volume)) => Some(volume >= minimum),
+        (Some(_), None) => (!pending).then_some(false),
+    }
+}
+
+/// Both thresholds unset accepts every row, including one without a dollar profit.
+///
+/// Otherwise the row passes when its profit is at least `profit_at_least` or
+/// its loss (`-profit`) is at least `loss_at_least`; `None` when the profit
+/// exists but is not known in dollars yet (`pending`), a failure when it does
+/// not exist at all.
+fn profit_passes(
+    profit_at_least: Option<f64>,
+    loss_at_least: Option<f64>,
+    profit: Option<f64>,
+    pending: bool,
+) -> Option<bool> {
+    if profit_at_least.is_none() && loss_at_least.is_none() {
+        return Some(true);
+    }
+    let Some(profit) = profit else {
+        return (!pending).then_some(false);
+    };
+    let profit_hit = profit_at_least.is_some_and(|floor| profit >= floor);
+    let loss_hit = loss_at_least.is_some_and(|floor| -profit >= floor);
+    Some(profit_hit || loss_hit)
+}
+
+#[cfg(test)]
+mod tests;

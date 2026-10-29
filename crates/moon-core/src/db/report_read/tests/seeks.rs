@@ -21,7 +21,7 @@ thread_local! {
     static CAPTURED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Keep every expanded statement that reads `orders_rep`.
+/// Keep expanded report SELECTs from either physical source.
 fn capture(event: rusqlite::trace::TraceEvent<'_>) {
     let rusqlite::trace::TraceEvent::Stmt(statement, _) = event else {
         return;
@@ -29,15 +29,17 @@ fn capture(event: rusqlite::trace::TraceEvent<'_>) {
     let Some(sql) = statement.expanded_sql() else {
         return;
     };
-    if sql.to_ascii_uppercase().contains("ORDERS_REP")
+    let upper = sql.to_ascii_uppercase();
+    if (upper.contains("ORDERS_REP") || upper.contains("CLOSED_SELL_REPORTS"))
         && (sql.trim_start().starts_with("SELECT")
-            || sql.trim_start().starts_with("WITH chosen_report_rows"))
+            || sql.trim_start().starts_with("WITH chosen_report_rows")
+            || sql.trim_start().starts_with("WITH identities"))
     {
         CAPTURED.with(|slot| slot.borrow_mut().push(sql));
     }
 }
 
-/// Run `read` and return every captured `orders_rep` SELECT with its query plan.
+/// Run `read` and return every captured report SELECT with its query plan.
 pub(super) fn plans_of(conn: &Connection, read: impl FnOnce()) -> Vec<(String, String)> {
     CAPTURED.with(|slot| slot.borrow_mut().clear());
     conn.trace_v2(
@@ -87,7 +89,7 @@ fn assert_seeks(plan: &str, sql: &str, index: &str, what: &str) {
 const OPEN_TEXT: &str = "(NOT (typeof(";
 
 /// The replica schema the core sends, with the production indexes `rep::init` creates.
-pub(super) fn replica() -> Connection {
+pub(in crate::db::report_read) fn replica() -> Connection {
     let conn = Connection::open_in_memory().expect("open replica");
     crate::db::init_db(&conn).expect("init report database");
     replica_columns(&conn);
@@ -120,7 +122,7 @@ fn replica_columns(conn: &Connection) {
 
 /// Fill the replica with `rows` trades over `cores` cores and `coins` coins, one in `open_every`
 /// still open, then attach `strategies` strategies per core.
-pub(super) fn seed(
+pub(in crate::db::report_read) fn seed(
     conn: &Connection,
     rows: i64,
     cores: i64,

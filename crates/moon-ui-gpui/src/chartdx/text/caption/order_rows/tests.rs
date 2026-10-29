@@ -197,3 +197,204 @@ fn protected_sizes_reserve_rows_before_protected_numbers() {
     assert_eq!(top(&captions, 2, false), Some(102.0));
     assert_eq!(top(&captions, 1, false), Some(82.0));
 }
+
+/// The placement scan this file replaced: each candidate walks the accepted prefix.
+fn competes_linear(a: &OrderCaption, b: &OrderCaption) -> bool {
+    !(a.uid == b.uid && a.book != b.book) && a.x[0] < b.x[1] && b.x[0] < a.x[1]
+}
+
+fn occupied_linear(caption: &OrderCaption, top: f32, accepted: &[OrderCaption]) -> bool {
+    accepted.iter().any(|other| {
+        other.top.is_some_and(|y| {
+            competes_linear(caption, other) && top < y + other.height && y < top + caption.height
+        })
+    })
+}
+
+fn layout_linear(captions: &mut [OrderCaption], visible: [f32; 2]) {
+    captions.sort_unstable_by(|a, b| {
+        let rank = |c: &OrderCaption| {
+            if c.pinned {
+                0
+            } else if c.interacting && c.secondary {
+                1
+            } else if c.interacting {
+                2
+            } else if !c.secondary {
+                3
+            } else {
+                4
+            }
+        };
+        rank(a)
+            .cmp(&rank(b))
+            .then_with(|| a.distance.total_cmp(&b.distance))
+            .then_with(|| a.uid.cmp(&b.uid))
+            .then_with(|| a.book.cmp(&b.book))
+            .then_with(|| a.source.cmp(&b.source))
+    });
+    for i in 0..captions.len() {
+        let (accepted, rest) = captions.split_at_mut(i);
+        let caption = &mut rest[0];
+        let Some(top) = caption.top else { continue };
+        if caption.pinned || !occupied_linear(caption, top, accepted) {
+            continue;
+        }
+        if caption.secondary {
+            if !caption.interacting {
+                caption.top = None;
+            }
+            continue;
+        }
+        let mut best = None;
+        let mut distance = f32::INFINITY;
+        let mut best_inside = None;
+        let mut distance_inside = f32::INFINITY;
+        for other in accepted
+            .iter()
+            .filter(|other| competes_linear(caption, other))
+        {
+            let Some(y) = other.top else { continue };
+            for candidate in [y - caption.height, y + other.height] {
+                let delta = (candidate - top).abs();
+                if delta < distance && !occupied_linear(caption, candidate, accepted) {
+                    best = Some(candidate);
+                    distance = delta;
+                }
+                if candidate >= visible[0]
+                    && candidate + caption.height <= visible[1]
+                    && delta < distance_inside
+                    && !occupied_linear(caption, candidate, accepted)
+                {
+                    best_inside = Some(candidate);
+                    distance_inside = delta;
+                }
+            }
+        }
+        caption.top = best_inside.or(best).or(Some(top));
+    }
+}
+
+fn caption_seed(count: usize, gap: f32) -> Vec<OrderCaption> {
+    (0..count)
+        .map(|i| {
+            let mut row = caption(i as u64, 40.0 + i as f32 * gap, i % 4 == 0, i % 5 == 0);
+            row.distance = (count - i) as f32;
+            row.height = 16.0 + (i % 3) as f32 * 4.0;
+            row.x = if i % 5 == 0 {
+                [220.0, 280.0]
+            } else {
+                [0.0, 90.0]
+            };
+            if i % 11 == 0 {
+                row.pinned = true;
+            }
+            if i % 13 == 0 {
+                row.interacting = true;
+            }
+            if i % 17 == 0 {
+                row.top = None;
+            }
+            row
+        })
+        .collect()
+}
+
+/// Replacing the prefix scan must not move, hide, or reorder a caption.
+///
+/// Breakage: a merged-band edge that is not the slot the old scan picked covers a price label
+/// or leaves a hole the user used to see the number in.
+#[test]
+fn caption_placement_matches_the_prefix_scan() {
+    let mut state = 0x1234_5678u32;
+    let mut next = || {
+        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+        state
+    };
+    for count in [0, 1, 2, 8, 40] {
+        let mut seed = caption_seed(count, 0.0);
+        for row in &mut seed {
+            let n = next();
+            row.top = Some((n % 80) as f32);
+            row.distance = (n % 50) as f32;
+            row.height = 10.0 + (n % 7) as f32;
+            row.secondary = n % 3 == 0;
+            row.book = n % 5 == 0;
+            row.pinned = n % 19 == 0;
+            row.interacting = n % 11 == 0;
+            row.x = [0.0, 40.0 + (n % 30) as f32];
+            if n % 23 == 0 {
+                row.top = None;
+            }
+        }
+        let mut linear = seed.clone();
+        let mut current = seed;
+        let visible = [0.0, 120.0];
+        layout_linear(&mut linear, visible);
+        layout_order_captions(&mut current, visible);
+        assert_eq!(current.len(), linear.len());
+        for (got, want) in current.iter().zip(linear.iter()) {
+            assert_eq!(got.source, want.source);
+            assert_eq!(got.uid, want.uid);
+            assert_eq!(got.book, want.book);
+            assert_eq!(got.top, want.top);
+        }
+    }
+}
+
+/// Time caption placement for hundreds of order labels on one presented frame.
+///
+/// Spread labels do not overlap. Piled labels share one row, so each number is displaced along
+/// that row. Both run on the UI thread for every frame that draws order captions. The larger
+/// counts check that a right-edge pile stays linear.
+#[test]
+#[ignore = "manual heavy-user timing probe"]
+fn bench_goal_e_order_captions() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    fn time(seed: &[OrderCaption], iters: u32, linear: bool) -> u128 {
+        let start = Instant::now();
+        for _ in 0..iters {
+            let mut batch = seed.to_vec();
+            if linear {
+                layout_linear(black_box(&mut batch), [0.0, 20_000.0]);
+            } else {
+                layout_order_captions(black_box(&mut batch), [0.0, 20_000.0]);
+            }
+            black_box(batch.len());
+        }
+        start.elapsed().as_nanos() / u128::from(iters)
+    }
+
+    let spread = caption_seed(400, 40.0);
+    let piled = caption_seed(400, 0.0);
+    println!(
+        "goal_e_captions_400_spread_linear: {} ns/iter",
+        time(&spread, 5, true)
+    );
+    println!(
+        "goal_e_captions_400_spread: {} ns/iter",
+        time(&spread, 20, false)
+    );
+    println!(
+        "goal_e_captions_400_piled_linear: {} ns/iter",
+        time(&piled, 1, true)
+    );
+    println!(
+        "goal_e_captions_400_piled: {} ns/iter",
+        time(&piled, 20, false)
+    );
+    for count in [800, 1600] {
+        let piled_n = caption_seed(count, 0.0);
+        let spread_n = caption_seed(count, 40.0);
+        println!(
+            "goal_e_captions_{count}_piled: {} ns/iter",
+            time(&piled_n, 10, false)
+        );
+        println!(
+            "goal_e_captions_{count}_spread: {} ns/iter",
+            time(&spread_n, 10, false)
+        );
+    }
+}

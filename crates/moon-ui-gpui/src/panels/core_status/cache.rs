@@ -14,6 +14,7 @@ use super::model::{self, CoreStatusRow, ServerKey, ServerStatusGroup, aggregate_
 use super::ordering::{self, assign_server_names, compare_flat_rows, natural_cmp};
 use super::{CoreStatusView, table, uniform, warnings};
 use crate::Backend;
+use crate::backend::core_warn::WarnEpisode;
 use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreStartupStatus, CoreSysStatus};
 
@@ -359,6 +360,104 @@ fn replace_snapshots(
     *generation = generation.wrapping_add(1);
 }
 
+/// Persisted-read identity: store revision plus a deterministic effective scope.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct WarnReadKey {
+    revision: Option<u64>,
+    core_ids: Vec<CoreId>,
+    server_ips: Vec<IpAddr>,
+}
+
+impl WarnReadKey {
+    /// Build a stable key from unordered scope sets.
+    ///
+    /// Args:
+    ///     revision: Current persistence revision, or `None` when persistence is unavailable.
+    ///     core_ids: Effective core scope.
+    ///     server_ips: Effective server scope.
+    ///
+    /// Returns:
+    ///     A key whose equality does not depend on hash iteration order.
+    pub(super) fn new(
+        revision: Option<u64>,
+        core_ids: &HashSet<CoreId>,
+        server_ips: &HashSet<IpAddr>,
+    ) -> Self {
+        let mut core_ids: Vec<_> = core_ids.iter().copied().collect();
+        core_ids.sort_unstable();
+        let mut server_ips: Vec<_> = server_ips.iter().copied().collect();
+        server_ips.sort_unstable();
+        Self {
+            revision,
+            core_ids,
+            server_ips,
+        }
+    }
+}
+
+/// Last persisted warning rows and the sequence that owns the next publication.
+#[derive(Default)]
+pub(super) struct WarnReadCache {
+    key: Option<WarnReadKey>,
+    sequence: u64,
+    persisted: Rc<Vec<WarnEpisode>>,
+}
+
+impl WarnReadCache {
+    /// Start a read only when the store revision or scope changed.
+    ///
+    /// Args:
+    ///     key: Persistence revision and effective scope to fetch.
+    ///
+    /// Returns:
+    ///     The new sequence and owned key, or `None` for a cache hit.
+    pub(super) fn begin(&mut self, key: WarnReadKey) -> Option<(u64, WarnReadKey)> {
+        if self.key.as_ref() == Some(&key) {
+            return None;
+        }
+        self.key = Some(key.clone());
+        self.sequence = self.sequence.wrapping_add(1);
+        Some((self.sequence, key))
+    }
+
+    /// Make a failed current read eligible for the next normal rebuild; stale failures do nothing.
+    ///
+    /// Args:
+    ///     sequence: Failed read's generation.
+    ///
+    /// Returns:
+    ///     Nothing. Only a current failure clears the cached key.
+    pub(super) fn fail(&mut self, sequence: u64) {
+        if sequence == self.sequence {
+            self.key = None;
+        }
+    }
+
+    /// Publish only the latest completion.
+    ///
+    /// Args:
+    ///     sequence: Completed read's generation.
+    ///     episodes: Persisted rows produced by that read.
+    ///
+    /// Returns:
+    ///     Whether the completion was current and its rows were accepted.
+    pub(super) fn apply(&mut self, sequence: u64, episodes: Vec<WarnEpisode>) -> bool {
+        if sequence != self.sequence {
+            return false;
+        }
+        self.persisted = Rc::new(episodes);
+        true
+    }
+
+    /// Return the last completed persisted snapshot.
+    ///
+    /// Returns:
+    ///     Shared rows from the latest accepted read, empty before the first one.
+    pub(super) fn persisted(&self) -> Rc<Vec<WarnEpisode>> {
+        self.persisted.clone()
+    }
+}
+
 impl CoreStatusView {
     /// Collect filtered core rows for the group scope in canonical order.
     ///
@@ -461,19 +560,74 @@ impl CoreStatusView {
         out
     }
 
-    /// Rebuild flat and grouped snapshots, tag warnings, sort, then reconcile MoonTree items.
+    /// Refresh persisted warnings off-thread only when their revision or effective scope changes.
+    ///
+    /// Args:
+    ///     cx: View context used to schedule and publish the read.
+    ///     core_ids: Effective core scope captured by the current rebuild.
+    ///     server_ips: Effective server scope captured by the current rebuild.
+    ///
+    /// Returns:
+    ///     Nothing. A current completion rebuilds the panel; stale completions change nothing.
+    fn sync_warn_read(
+        &mut self,
+        cx: &mut Context<Self>,
+        core_ids: &HashSet<CoreId>,
+        server_ips: &HashSet<IpAddr>,
+    ) {
+        let revision = self
+            .backend
+            .read(cx)
+            .warn_store
+            .as_ref()
+            .map(|store| store.revision());
+        let key = WarnReadKey::new(revision, core_ids, server_ips);
+        let Some((sequence, key)) = self.warn_reads.begin(key) else {
+            return;
+        };
+        if key.revision.is_none() {
+            self.warn_reads.apply(sequence, Vec::new());
+            return;
+        }
+        self.warn_read_task = Some(cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let result = executor
+                .spawn(async move {
+                    let core_ids = key.core_ids.iter().copied().collect();
+                    let server_ips = key.server_ips.iter().copied().collect();
+                    crate::backend::core_warn::store::read_recent_episodes_for_scope(
+                        &moon_core::config::paths::core_warnings_db_path(),
+                        &core_ids,
+                        &server_ips,
+                        WARN_LIST_LIMIT,
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(episodes) => {
+                    if this.warn_reads.apply(sequence, episodes) {
+                        this.rebuild_cache(cx);
+                        cx.notify();
+                    }
+                }
+                Err(_) => this.warn_reads.fail(sequence),
+            });
+        }));
+    }
+
+    /// Rebuild live snapshots from the latest completed warning read and schedule stale reads.
     ///
     /// Args:
     ///     cx: View context used to read the backend and update tree state.
     ///
     /// Returns:
-    ///     Nothing; all render caches are replaced atomically.
+    ///     Nothing; live caches are replaced atomically and a current warning completion repaints.
     pub(super) fn rebuild_cache(&mut self, cx: &mut Context<Self>) {
         let backend = self.backend.clone();
         // Recounted with the rest of the cache, not inside `title_suffix`: the dock asks that on a
         // per-frame path, and it must read a field rather than walk the fleet's findings.
         self.unseen_problems = self.count_unseen_problems(backend.read(cx));
-        let (groups, rows, alarm_starts, alarms) = {
+        let (groups, rows, alarm_starts, alarms, core_ids, server_addresses) = {
             let b = backend.read(cx);
             // From the STORE, not the (possibly scoped) collected rows: a panel scoped to a subset
             // of the fleet must not compute a lower maximum and silently flag nothing, and two Core
@@ -502,12 +656,14 @@ impl CoreStatusView {
             let core_ids: HashSet<CoreId> = scope.ids().iter().copied().collect();
             let server_addresses: HashSet<IpAddr> =
                 groups.iter().filter_map(|group| group.address).collect();
-            // The one query for the list the Warnings view draws, capped once. The strip counts
-            // starts inside 24 hours; an episode that is still open but started earlier does not
-            // count. Resolved here rather than in `render`, which runs on every row hover
-            // transition and scroll tick.
-            let episodes =
-                b.warn_episodes_recent_for_scope(&core_ids, &server_addresses, WARN_LIST_LIMIT);
+            // Merge live warnings with the last completed persisted read. The strip counts starts
+            // inside 24 hours; an episode that is still open but started earlier does not count.
+            let episodes = b.warn_episodes_recent_with_persisted(
+                &core_ids,
+                &server_addresses,
+                self.warn_reads.persisted().as_slice(),
+                WARN_LIST_LIMIT,
+            );
             let alarm_starts: Vec<i64> = episodes.iter().map(|episode| episode.start_ms).collect();
             let core_names: HashMap<CoreId, String> = b
                 .config
@@ -521,8 +677,16 @@ impl CoreStatusView {
                 &b.layout.core_server_names,
                 core_names,
             );
-            (groups, rows, alarm_starts, alarms)
+            (
+                groups,
+                rows,
+                alarm_starts,
+                alarms,
+                core_ids,
+                server_addresses,
+            )
         };
+        self.sync_warn_read(cx, &core_ids, &server_addresses);
         self.alarms = alarms;
         self.has_warn = groups.iter().any(|group| group.has_warn());
         replace_snapshots(

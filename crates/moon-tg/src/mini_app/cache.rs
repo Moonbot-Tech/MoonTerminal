@@ -1,11 +1,11 @@
-//! When a finished Mini App report or trades read may answer again without reading.
+//! Finished Mini App responses and the exact inputs that permit reusing them.
 //!
-//! A finished read answers the same chat and grant for [`REPORT_CACHE_TTL`], as it always has. After
-//! that it answers again only while every input the read was computed from is unchanged — the
-//! data's revision ([`ReportRevision`]), the period's window, the zone, the language and the cores'
-//! names, exchanges and order — because a read of the same inputs returns the same answer; the
-//! answer is then built again from the rows as read, as a new read would build it. A host that
-//! cannot name the revision ([`TgHost::report_revision`] is `None`) keeps the plain TTL.
+//! A finished report or trades read answers the same chat and grant for [`REPORT_CACHE_TTL`], as it
+//! always has. After that it answers again only while every input is unchanged — the data's revision
+//! ([`ReportRevision`]), the period's window, the zone, the language and the cores' names, exchanges
+//! and order. A host that cannot name the revision keeps the plain TTL. Orders and Strategies have no
+//! TTL: their cached DTOs answer only while order and strategy revisions, live rates, panic state,
+//! visibility and pending-toggle timing all remain equal.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -15,7 +15,9 @@ use chrono_tz::Tz;
 use moon_core::config::telegram_access::TelegramReportAccess;
 use moon_core::db::CoreNames;
 use moon_core::session::core_order::CoreOrder;
-use moon_core::telegram::web::dto::{ReportDto, ReportPeriodDto, TradesDto};
+use moon_core::telegram::web::dto::{
+    OrdersDto, ReportDto, ReportPeriodDto, StrategiesDto, TradesDto,
+};
 use moon_core::venue::CoreVenue;
 
 #[cfg(doc)]
@@ -94,6 +96,74 @@ pub(crate) struct TradesInputs {
     pub(super) revision: ReportRevision,
     pub(super) zone: Tz,
     pub(super) names: CoreNames,
+}
+
+/// Live values that can change one core's Orders response without moving its order revision.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OrderValueInputs {
+    pub(super) usd_rate: Option<f64>,
+    pub(super) panic_armed: bool,
+}
+
+/// One visible core's contribution to the Orders cache key.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OrderCoreInputs {
+    pub(super) core: u64,
+    pub(super) name: String,
+    pub(super) exchange: String,
+    pub(super) revision: u64,
+    pub(super) values: Vec<OrderValueInputs>,
+}
+
+/// Everything an Orders response is computed from besides its chat and grant.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OrdersInputs {
+    pub(super) cores: Vec<OrderCoreInputs>,
+}
+
+/// The last finished Mini App Orders response.
+pub(crate) struct CachedOrders {
+    pub(super) chat: i64,
+    pub(super) access: TelegramReportAccess,
+    pub(super) inputs: OrdersInputs,
+    pub(super) dto: OrdersDto,
+    /// Bounded closing-chart identities refreshed on every cache hit, as a full read would do.
+    pub(super) snapshots: Vec<(u64, super::charts::OrderSnapshot)>,
+}
+
+/// One visible core's revisions and display fields in the Strategies cache key.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StrategyCoreInputs {
+    pub(super) core: u64,
+    pub(super) name: String,
+    pub(super) exchange: String,
+    pub(super) orders_revision: u64,
+    pub(super) strategies_revision: u64,
+    pub(super) acknowledgement_revision: u64,
+}
+
+/// One pending toggle and whether its display has crossed the confirmation deadline.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StrategyWaitInputs {
+    pub(super) core: u64,
+    pub(super) strategy: u64,
+    pub(super) entry: (bool, Instant, u64, u64),
+    pub(super) timed_out: bool,
+}
+
+/// Everything a Strategies response is computed from besides its chat and grant.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StrategiesInputs {
+    pub(super) cores: Vec<StrategyCoreInputs>,
+    pub(super) wanted: Vec<StrategyWaitInputs>,
+}
+
+/// The last finished Mini App Strategies response.
+pub(crate) struct CachedStrategies {
+    pub(super) chat: i64,
+    pub(super) access: TelegramReportAccess,
+    pub(super) inputs: StrategiesInputs,
+    pub(super) dto: StrategiesDto,
 }
 
 /// The last finished Mini App report.

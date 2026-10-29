@@ -412,10 +412,11 @@ pub struct OrderDto {
     pub panic_armed: bool,
 }
 
-/// Open orders, plus whether this chat may send money commands.
+/// Open orders, plus whether this chat may send money commands. The shared row allocation keeps
+/// cached responses and coalesced replies cheap to clone; serialization remains the same JSON array.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct OrdersDto {
-    pub orders: Vec<OrderDto>,
+    pub orders: std::sync::Arc<[OrderDto]>,
     pub can_control: bool,
 }
 
@@ -633,3 +634,6 @@ pub mod id_text {
         text.parse().map_err(serde::de::Error::custom)
     }
 }
+
+#[cfg(test)]
+mod tests;

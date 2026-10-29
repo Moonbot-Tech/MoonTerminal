@@ -13,6 +13,125 @@ use super::InjectedReads;
 use crate::notify::down::Link;
 use crate::notify::test_host::{CHAT, DuringJob, TempRoot, TickHost};
 use crate::notify::trades::ClosedTrade;
+
+/// Projecting only scalars must keep the old cloned snapshot's chart/trade union and grants.
+#[test]
+fn read_floors_match_the_frozen_snapshot_projection() {
+    let root = TempRoot::new("shot-parity");
+    let mut host = TickHost::open(root.notifications());
+    host.admit(CHAT);
+    host.config.telegram.authorized_chat_ids.push(8);
+    host.config.telegram.chat_profile_mut(8).core_uids = vec![3, 1];
+    host.edit(|file| {
+        for chat in [CHAT, 8, 9] {
+            let mut entry = ChatNotify {
+                revision: 7,
+                ..Default::default()
+            };
+            entry.settings.trades.on = chat != 8;
+            entry.settings.charts.on = true;
+            entry.ledger.trades_enabled_utc = Some(1_000);
+            entry.ledger.charts.enabled_utc = Some(500);
+            file.chats.insert(chat, entry);
+        }
+    });
+    let file = host.file();
+    let expected: Vec<_> = file
+        .chats
+        .iter()
+        .filter_map(|(&chat, entry)| {
+            if !host.config.telegram.authorized_chat_ids.contains(&chat)
+                || !(entry.settings.trades.on || entry.settings.charts.on)
+            {
+                return None;
+            }
+            let settings = entry.settings.clone();
+            let ledger = entry.ledger.clone();
+            let access = host.config.telegram.report_access(chat)?;
+            let trades = settings
+                .trades
+                .on
+                .then(|| super::read_from_utc(&ledger, 2_000))
+                .flatten();
+            let charts = settings
+                .charts
+                .on
+                .then(|| super::floor_from(ledger.charts.enabled_utc, 2_000))
+                .flatten();
+            Some((
+                chat,
+                entry.revision,
+                access,
+                trades.into_iter().chain(charts).min(),
+            ))
+        })
+        .collect();
+    let store = host.state.notify_store_override.clone().unwrap();
+    let actual: Vec<_> = super::notification_shots(&host, &store, 2_000)
+        .into_iter()
+        .map(|shot| (shot.chat, shot.revision, shot.access, shot.read_from))
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+/// Time admission and revocation at ten cores, 5000 closes per chat and 10000 queued cards.
+/// The complete population prevents a cheaper partial fixture from hiding ledger clones.
+#[test]
+#[ignore = "scale probe"]
+fn probe_notify_hot_tick() {
+    let root = TempRoot::new("scale-tick");
+    let mut host = TickHost::open(root.notifications());
+    host.admit(CHAT);
+    host.state.visible_override = Some((1..=10).collect());
+    host.edit(|file| {
+        for chat in 1..=10 {
+            let mut entry = ChatNotify::default();
+            entry.settings.trades.on = true;
+            entry.ledger.trades_enabled_utc = Some(1_000);
+            for id in 0..5_000 {
+                entry
+                    .ledger
+                    .seen
+                    .entry(id as u64 % 10 + 1)
+                    .or_default()
+                    .insert(id, 2_000);
+            }
+            file.chats.insert(chat, entry);
+        }
+        for id in 0..10_000 {
+            file.outbox.push(Pending {
+                id,
+                chat: CHAT,
+                html: "XALPHA ".repeat(64),
+                cores: Some(vec![1]),
+                ..Default::default()
+            });
+        }
+        file.next_id = 10_000;
+    });
+    host.config.telegram.authorized_chat_ids.extend(1..=10);
+    host.state.last_notify_run = Some(std::time::Instant::now());
+    let store = host.state.notify_store_override.clone().unwrap();
+    let start = std::time::Instant::now();
+    for _ in 0..100 {
+        super::maybe_spawn(&mut host, &store, 3_000);
+    }
+    eprintln!(
+        "probe admission: {:.6} ms",
+        start.elapsed().as_secs_f64() * 10.0
+    );
+    super::purge_revoked_rows(&host, &store);
+    let start = std::time::Instant::now();
+    for _ in 0..100 {
+        super::purge_revoked_rows(&host, &store);
+    }
+    eprintln!(
+        "probe unchanged purge: {:.6} ms",
+        start.elapsed().as_secs_f64() * 10.0
+    );
+    assert_eq!(host.jobs, 0);
+    assert_eq!(store.lock().unwrap().file.outbox.len(), 10_000);
+}
 /// No rows. Installed so a mistaken job does not open the report database.
 fn empty_reads() -> InjectedReads {
     InjectedReads { trades: Vec::new() }
@@ -348,7 +467,8 @@ fn seed_mixed_outbox(host: &TickHost) {
             queued(1, Some(vec![7])),
             queued(2, Some(vec![8])),
             queued(3, None),
-        ];
+        ]
+        .into();
         file.next_id = 4;
         file.chats.insert(CHAT, ChatNotify::default());
     });

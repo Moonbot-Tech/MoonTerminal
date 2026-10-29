@@ -189,7 +189,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
 
     // Read station presence and ownership before the constructor can start saved transport.
     let station = crate::backend::station::StationJobs::load();
-    let telegram = if !station.allows_terminal_bot() {
+    let mut telegram = if !station.allows_terminal_bot() {
         let mut state = moon_tg::TelegramState::new(
             &moon_core::config::TelegramConfig::default(),
             moon_tg::HostKind::Terminal,
@@ -199,6 +199,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     } else {
         moon_tg::TelegramState::new(&cfg.telegram, moon_tg::HostKind::Terminal)
     };
+    let telegram_wake = feed_wake_tx.clone();
+    telegram.set_work_waker(std::sync::Arc::new(move || telegram_wake.notify()));
     let backend = cx.new(|_| Backend {
         telegram,
         station,
@@ -269,6 +271,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         coin_suggest: HashMap::new(),
         ui_session: UiSessionState::default(),
         detects_view: moon_core::config::DetectViewFile::load(),
+        detects_view_dirty: false,
         news_tag_settings: moon_core::config::NewsTagSettings::load(),
         arb_view: std::rc::Rc::new(moon_core::config::ArbViewCfg::load()),
         tab_badges: moon_core::config::TabBadgeSettings::load(),
@@ -606,6 +609,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             // can race the same atomic temp paths during shutdown.
             let mut snapshot = PersistenceSnapshot::empty()
                 .with_layout(b.layout.clone())
+                .with_detects(b.detects_view.clone())
                 .with_classic(b.dock_states.clone(), b.detached.clone());
             if b.auto_dock_automatic_persistence_allowed
                 && let Some(topology) = b.auto_dock_topology.clone()
@@ -654,6 +658,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             cx.update(|cx| {
                 data_backend.update(cx, |b, cx| {
                     let drain = b.session.drain();
+                    b.drain_telegram_work(cx);
                     if !drain.any {
                         return;
                     }

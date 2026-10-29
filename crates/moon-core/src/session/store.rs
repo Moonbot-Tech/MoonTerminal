@@ -26,12 +26,15 @@ use crate::util::{now_unix_ms, now_unix_ms_i64};
 mod core_store;
 /// Snapshot trust accessors for retained core state.
 mod freshness;
+/// Per-core strategy and quote indexes derived from each order batch.
+mod order_index;
 /// Bounded disposal of consumed order batches outside the UI drain.
 mod order_retirement;
 /// Retained row models and per-core capacity limits.
 mod rows;
 
 pub use core_store::*;
+pub use order_index::*;
 pub use rows::*;
 use rows::{
     MAX_DETECTS, MAX_ENGINE_ACTIONS, MAX_LOG, MAX_REPORT_TRACES, MAX_SERVER_LOG_RAW, MAX_TG_EVENTS,
@@ -46,6 +49,8 @@ pub struct CoreData {
     /// A live batch starts from the open-order snapshot and can briefly include captured terminal
     /// event rows that disappeared before the application drained the feed queue.
     pub orders: Vec<OrderRow>,
+    /// Strategy membership and quote/market pairs derived from `orders` on every table revision.
+    pub order_index: OrderIndex,
     /// Retained chart order-line store, including history and up to 5000 closed orders per core.
     pub order_lines: OrderLineStore,
     /// Per-core clock-skew estimate, applied to every order-row batch before it reaches
@@ -522,6 +527,7 @@ impl CoreData {
         Self {
             status: ConnStatus::Connecting,
             orders: Vec::new(),
+            order_index: OrderIndex::default(),
             order_lines: OrderLineStore::default(),
             clock_skew: CoreClockSkew::default(),
             detects: VecDeque::new(),
@@ -987,6 +993,7 @@ impl CoreData {
                     rows: std::mem::replace(&mut self.orders, payload.rows),
                     captured_turns: payload.captured_turns,
                 };
+                self.order_index = OrderIndex::new(&self.orders);
                 self.orders_table_rev = self.orders_table_rev.wrapping_add(1);
                 if changed {
                     self.order_lines_rev = self.order_lines_rev.wrapping_add(1);

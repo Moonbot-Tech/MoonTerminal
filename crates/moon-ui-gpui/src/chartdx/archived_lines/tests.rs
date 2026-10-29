@@ -270,3 +270,144 @@ fn a_frozen_viewer_keeps_both_arrows_for_a_trade_its_store_does_not_hold() {
     // The live rule is untouched: the row's exit price alone lines the exit there.
     assert_eq!(line_ends(&unasked, &map, false), (false, true));
 }
+
+/// Time the live-twin scan and the lines ranking at the chart's history cap.
+///
+/// A chart keeps 1000 durable rows and up to 500 closed orders. The twin test used to walk every
+/// closed instant for every row, and the ranking sorted every askable row to keep thirty. Both
+/// run on the UI thread; this probe is how those two stays are re-measured.
+#[test]
+#[ignore = "manual heavy-user timing probe"]
+fn bench_goal_e_archived_lines() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    const ROWS: i64 = 1_000;
+    const CLOSED: usize = 500;
+    let live: Vec<f64> = (0..CLOSED)
+        .map(|i| 1_800_000_000_000.0 + i as f64 * 30_000.0)
+        .collect();
+    let closes: Vec<i64> = (0..ROWS).map(|i| 1_700_000_000_000 + i * 60_000).collect();
+    let start = Instant::now();
+    for _ in 0..20 {
+        let mut hits = 0u32;
+        for close in &closes {
+            if live
+                .iter()
+                .any(|instant| (instant - *close as f64).abs() <= super::LIVE_TWIN_TOLERANCE_MS)
+            {
+                hits += 1;
+            }
+        }
+        black_box(hits);
+    }
+    println!(
+        "goal_e_live_twin_linear_1000x500: {} ns/iter",
+        start.elapsed().as_nanos() / 20
+    );
+    let index = super::LiveTwinIndex::from_closes(&live);
+    let start = Instant::now();
+    for _ in 0..50 {
+        let mut hits = 0u32;
+        for close in &closes {
+            if index.contains(*close) {
+                hits += 1;
+            }
+        }
+        black_box(hits);
+    }
+    println!(
+        "goal_e_live_twin_index_1000x500: {} ns/iter",
+        start.elapsed().as_nanos() / 50
+    );
+
+    let axis = ReportAxis::identity_core_local();
+    let graphics = ChartGraphicsCfg::default();
+    let records: Vec<_> = (0..ROWS)
+        .map(|i| record(i, 1, 1_700_000_000 + i * 60, Some(i + 1), false))
+        .collect();
+    // The helper above stamps coin ADAUSDT. Rebuild with the neutral market the probe owns.
+    let records: Vec<_> = records
+        .into_iter()
+        .map(|mut row| {
+            row.coin = "XALPHAUSDT".into();
+            row
+        })
+        .collect();
+    let edge = 1_700_000_000_000.0 + (ROWS as f64) * 60_000.0;
+    let start = Instant::now();
+    for _ in 0..50 {
+        black_box(rank_wanted(
+            black_box(&records),
+            &[(1, edge)],
+            &graphics,
+            &axis,
+            30,
+        ));
+    }
+    println!(
+        "goal_e_rank_wanted_1000: {} ns/iter",
+        start.elapsed().as_nanos() / 50
+    );
+    let start = Instant::now();
+    for _ in 0..20 {
+        black_box(archived_store(
+            black_box(&records),
+            &HashMap::new(),
+            1,
+            "XALPHAUSDT",
+            &live,
+            &graphics,
+            &axis,
+        ));
+    }
+    println!(
+        "goal_e_archived_store_1000x500: {} ns/iter",
+        start.elapsed().as_nanos() / 20
+    );
+}
+
+/// The sorted index must accept a close exactly when the linear scan would.
+///
+/// Breakage: a binary search that rounds the 15 s window differently hides a live closed order's
+/// twin, so the archive draws a second copy of a trade the session store already drew.
+#[test]
+fn live_twin_index_matches_the_linear_scan() {
+    fn linear(close: i64, live: &[f64]) -> bool {
+        let close = close as f64;
+        live.iter()
+            .any(|instant| (instant - close).abs() <= super::LIVE_TWIN_TOLERANCE_MS)
+    }
+
+    let live = vec![
+        f64::NAN,
+        f64::INFINITY,
+        15_000.0,
+        0.0,
+        -15_000.0,
+        1.7e12,
+        1.7e12 + 20_000.0,
+        f64::NEG_INFINITY,
+    ];
+    let index = super::LiveTwinIndex::from_closes(&live);
+    let queries = [
+        0,
+        15_000,
+        -15_000,
+        15_001,
+        -15_001,
+        30_000,
+        30_001,
+        1,
+        -1,
+        1_700_000_000_000,
+        1_700_000_015_000,
+        1_700_000_015_001,
+        1_700_000_020_000,
+        1_700_000_035_000,
+        1_700_000_035_001,
+    ];
+    for close in queries {
+        assert_eq!(index.contains(close), linear(close, &live), "close {close}");
+    }
+}

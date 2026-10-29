@@ -7,15 +7,21 @@
 //! Kept separate from `reports.sqlite` on purpose: warning history is the only copy and must survive
 //! a report-replica reset (see `paths::core_warnings_db_path`).
 
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use moon_core::session::CoreId;
 use rusqlite::types::Value;
-use rusqlite::{Connection, Row, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 
 use super::{WarnAxis, WarnEpisode, WarnSnapshot};
+
+mod maintenance;
+use maintenance::{IndexMaintenance, SERIES_INDEX_SQL, WarnWrite, rebuild_series_index};
 
 /// Schema: closed episodes, plus the (initially empty) per-badge series-slice table.
 ///
@@ -48,19 +54,61 @@ CREATE TABLE IF NOT EXISTS core_warning_series (
     blob       BLOB    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_warn_series_ep ON core_warning_series(episode_id);
--- `badge` identifies the slice owner: 0 = the whole server, otherwise the core id. So one episode
--- keeps the server graph AND one graph per core, each under (episode_id, badge, subject).
-CREATE UNIQUE INDEX IF NOT EXISTS ix_warn_series_unique ON core_warning_series(episode_id, badge, subject);
+";
+
+/// Optional read accelerators: existing history is indexed only by the maintenance thread.
+const RECENT_INDEX_SCHEMA: &str = "
+CREATE INDEX IF NOT EXISTS ix_warn_core_time ON core_warnings(core_id, start_ms);
+CREATE INDEX IF NOT EXISTS ix_warn_server_null_time ON core_warnings(server_ip, start_ms) WHERE core_id IS NULL;
+";
+
+/// Index-ordered top-N start read for one core. A separate statement per core avoids SQLite's
+/// IN/ORDER BY temporary sort.
+const RECENT_CORE_EPISODES_SQL: &str =
+    "SELECT start_ms FROM core_warnings WHERE core_id = ?1 ORDER BY start_ms DESC LIMIT ?2";
+/// Index-ordered top-N start read for server-wide episodes at one address.
+const RECENT_SERVER_EPISODES_SQL: &str = "SELECT start_ms FROM core_warnings WHERE server_ip = ?1 AND core_id IS NULL ORDER BY start_ms DESC LIMIT ?2";
+/// Boundary-inclusive candidate read for one core, including every row tied at the cutoff.
+const RECENT_CORE_TIES_SQL: &str =
+    "SELECT id FROM core_warnings WHERE core_id = ?1 AND start_ms >= ?2 ORDER BY start_ms DESC";
+/// Boundary-inclusive candidate read for server-wide episodes at one address.
+const RECENT_SERVER_TIES_SQL: &str = "SELECT id FROM core_warnings WHERE server_ip = ?1 AND core_id IS NULL AND start_ms >= ?2 ORDER BY start_ms DESC";
+/// Connection-local candidate stores. The full candidate table uses the episode id as its rowid so a
+/// scan preserves the original table's tie input order.
+const RECENT_CANDIDATE_SCHEMA: &str = "
+CREATE TEMP TABLE IF NOT EXISTS recent_warn_candidate_ids (id INTEGER PRIMARY KEY);
+CREATE TEMP TABLE IF NOT EXISTS recent_warn_candidates (
+    id           INTEGER PRIMARY KEY,
+    axis         TEXT    NOT NULL,
+    server_ip    TEXT,
+    core_id      INTEGER,
+    start_ms     INTEGER NOT NULL,
+    end_ms       INTEGER,
+    peak         INTEGER NOT NULL,
+    sys_cpu      INTEGER NOT NULL,
+    occ_mem      INTEGER NOT NULL,
+    free_mb      INTEGER NOT NULL,
+    used_mb      INTEGER NOT NULL,
+    logical_cpus INTEGER NOT NULL,
+    rtt_ms       INTEGER NOT NULL,
+    order_ms     INTEGER NOT NULL
+);
 ";
 
 /// SQLite-backed episode log.
 pub(crate) struct WarnStore {
     /// Open connection to the warnings database.
     conn: Connection,
+    /// Episode-log mutation counter used by presentation caches.
+    revision: Arc<AtomicU64>,
+    /// Highest id allocated by this writer, including episodes queued ahead of their captures.
+    episode_id: Cell<i64>,
+    /// One-time index work; episodes, captures and startup pruning queue on its worker.
+    index_maintenance: RefCell<Option<IndexMaintenance>>,
 }
 
 impl WarnStore {
-    /// Open (creating if needed) the warnings database at `path` and ensure its schema.
+    /// Open the warning log, scheduling expensive read-index creation off the startup thread.
     ///
     /// Args:
     ///     path: Filesystem path to the SQLite database.
@@ -68,16 +116,25 @@ impl WarnStore {
     /// Returns:
     ///     A ready store, or a SQLite error if the file or schema could not be prepared.
     pub(crate) fn open(path: &Path) -> rusqlite::Result<Self> {
-        Self::from_connection(Connection::open(path)?)
+        let store = Self::from_connection(Connection::open(path)?)?;
+        let rebuild_series = !store.series_index_is_current()?;
+        let build_recent = store.needs_recent_indexes()?;
+        if rebuild_series || build_recent {
+            store
+                .index_maintenance
+                .replace(Some(IndexMaintenance::start(
+                    path.to_owned(),
+                    rebuild_series,
+                    build_recent,
+                    Arc::clone(&store.revision),
+                )));
+        }
+        Ok(store)
     }
 
-    /// Wrap a connection and apply the schema.
+    /// Apply tables and existing indexes; build missing read/series indexes inline only when empty.
     fn from_connection(conn: Connection) -> rusqlite::Result<Self> {
-        // Migrate a pre-existing series index from (episode_id, subject) to (episode_id, badge,
-        // subject) — drop it first so the schema below recreates it with the badge column, letting
-        // per-core slices (badge = core id) coexist with the server slice (badge 0). A fresh database
-        // has no old index, so the drop is a harmless no-op.
-        let _ = conn.execute("DROP INDEX IF EXISTS ix_warn_series_unique", []);
+        moon_core::db::wal::enable(&conn)?;
         conn.execute_batch(SCHEMA)?;
         // Add the detection-snapshot columns to a pre-existing database; a fresh one already has
         // them from the schema, so a "duplicate column" error here is expected and ignored.
@@ -97,7 +154,84 @@ impl WarnStore {
                 [],
             );
         }
-        Ok(Self { conn })
+        let has_history: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM core_warnings LIMIT 1)",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_history {
+            conn.execute_batch(RECENT_INDEX_SCHEMA)?;
+        }
+        let episode_id = conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM core_warnings",
+            [],
+            |row| row.get(0),
+        )?;
+        let store = Self {
+            conn,
+            revision: Arc::new(AtomicU64::new(0)),
+            episode_id: Cell::new(episode_id),
+            index_maintenance: RefCell::new(None),
+        };
+        let has_series: bool = store.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM core_warning_series LIMIT 1)",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_series && !store.series_index_is_current()? {
+            rebuild_series_index(&store.conn)?;
+        }
+        Ok(store)
+    }
+
+    /// Compare stored SQL so ordinary opens never drop and rebuild an already-current index.
+    fn series_index_is_current(&self) -> rusqlite::Result<bool> {
+        let sql: Option<String> = self.conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ix_warn_series_unique'",
+            [], |row| row.get(0),
+        ).optional()?;
+        Ok(sql.as_deref() == Some(SERIES_INDEX_SQL))
+    }
+
+    /// Complete ordered warning writes before an explicit Storage deletion preserves its row count.
+    fn finish_index_maintenance(&self) -> rusqlite::Result<()> {
+        let mut state = self.index_maintenance.borrow_mut();
+        if let Some(migration) = state.as_mut() {
+            migration.finish()?;
+        }
+        *state = None;
+        Ok(())
+    }
+
+    /// Queue warning mutations during index maintenance, or execute after its queue closes.
+    /// Queued mutations return zero immediately; the worker publishes committed episode revisions.
+    fn write(&self, write: WarnWrite) -> rusqlite::Result<usize> {
+        let write = {
+            let state = self.index_maintenance.borrow();
+            match state.as_ref() {
+                Some(migration) => match migration.submit(write)? {
+                    None => return Ok(0),
+                    Some(write) => write,
+                },
+                None => return write.execute(&self.conn, &self.revision),
+            }
+        };
+        write.execute(&self.conn, &self.revision)
+    }
+
+    /// Detect missing read accelerators using schema metadata rather than scanning the log.
+    fn needs_recent_indexes(&self) -> rusqlite::Result<bool> {
+        self.conn.query_row(
+            "SELECT COUNT(*) != 2 FROM sqlite_master WHERE type = 'index' \
+             AND name IN ('ix_warn_core_time', 'ix_warn_server_null_time')",
+            [],
+            |row| row.get(0),
+        )
+    }
+
+    /// Return the episode-log mutation counter. Series-only writes do not advance it.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Acquire)
     }
 
     /// Append one closed episode and return its database row id.
@@ -109,29 +243,21 @@ impl WarnStore {
     ///     episode: A resolved episode (its `end_ms` is normally set).
     ///
     /// Returns:
-    ///     The inserted row id, or the SQLite error if the insert failed.
+    ///     A stable row id after insertion or maintenance-queue acceptance, or a SQLite error.
+    ///     Queued episodes publish their revision only after the worker commits the row.
     pub(crate) fn insert_episode(&self, episode: &WarnEpisode) -> rusqlite::Result<i64> {
-        self.conn.execute(
-            "INSERT INTO core_warnings \
-             (axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, used_mb, logical_cpus, rtt_ms, order_ms) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                axis_str(episode.axis),
-                episode.server_ip.map(|ip| ip.to_string()),
-                episode.core_id.map(|id| id as i64),
-                episode.start_ms,
-                episode.end_ms,
-                i64::from(episode.peak),
-                i64::from(episode.snap.sys_cpu),
-                i64::from(episode.snap.occ_mem),
-                i64::from(episode.snap.free_mb),
-                i64::from(episode.snap.used_mb),
-                i64::from(episode.snap.logical_cpus),
-                i64::from(episode.snap.round_trip_ms),
-                i64::from(episode.snap.order_api_latency_ms),
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        let id = self.episode_id.get().checked_add(1).ok_or_else(|| {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+                Some("warning episode ids exhausted".into()),
+            )
+        })?;
+        self.write(WarnWrite::Episode {
+            id,
+            episode: episode.clone(),
+        })?;
+        self.episode_id.set(id);
+        Ok(id)
     }
 
     /// Return a server's episodes that started within `[from_ms, to_ms]`, oldest first.
@@ -178,10 +304,11 @@ impl WarnStore {
 
     /// Return recent persisted episodes inside one effective core/server scope.
     ///
-    /// Filtering happens in SQLite before ordering and limiting. A busy foreign core therefore
-    /// cannot occupy the global newest rows and crowd an older in-scope warning out of the panel.
-    /// Core-specific episodes match `core_ids`; server-wide episodes match `server_ips` only when
-    /// their `core_id` is null. An empty scope or zero limit returns without preparing a statement.
+    /// Each core and server gets an index-ordered top-`limit` read, avoiding SQLite's temporary
+    /// sort for `IN (...) ORDER BY start_ms DESC`. Every episode tied at an identity's cutoff joins
+    /// the candidates, so the bound cannot discard a row the old full scan would keep. The original
+    /// OR query runs only over a rowid-ordered temporary table of those candidates, preserving its
+    /// exact row and tie semantics without scanning or sorting the retained history again.
     ///
     /// Args:
     ///     core_ids: Effective core identities accepted by the panel.
@@ -199,6 +326,112 @@ impl WarnStore {
         if limit == 0 || (core_ids.is_empty() && server_ips.is_empty()) {
             return Ok(Vec::new());
         }
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut candidates = Vec::new();
+        let mut ids: Vec<_> = core_ids.iter().copied().collect();
+        ids.sort_unstable();
+        for core in ids {
+            self.collect_recent_candidates(
+                RECENT_CORE_EPISODES_SQL,
+                RECENT_CORE_TIES_SQL,
+                Value::Integer(core as i64),
+                limit,
+                &mut candidates,
+            )?;
+        }
+        let mut ips: Vec<_> = server_ips.iter().copied().collect();
+        ips.sort_unstable();
+        for ip in ips {
+            self.collect_recent_candidates(
+                RECENT_SERVER_EPISODES_SQL,
+                RECENT_SERVER_TIES_SQL,
+                Value::Text(ip.to_string()),
+                limit,
+                &mut candidates,
+            )?;
+        }
+        self.merge_recent_candidates(core_ids, server_ips, limit, &candidates)
+    }
+
+    /// Collect one identity's top-`limit` candidates and every episode tied at its cutoff.
+    ///
+    /// Args:
+    ///     recent_sql: Index-ordered statement returning the identity's cutoff start times.
+    ///     ties_sql: Index-ordered statement returning every candidate at or above that cutoff.
+    ///     identity: Core id or server address bound to both statements.
+    ///     limit: Maximum rows that can survive the final merge.
+    ///     candidates: Destination for candidate database ids.
+    ///
+    /// Returns:
+    ///     Unit, or the SQLite error from either read.
+    fn collect_recent_candidates(
+        &self,
+        recent_sql: &str,
+        ties_sql: &str,
+        identity: Value,
+        limit: i64,
+        candidates: &mut Vec<i64>,
+    ) -> rusqlite::Result<()> {
+        let starts = self
+            .conn
+            .prepare(recent_sql)?
+            .query_map(params![&identity, limit], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let Some(cutoff) = starts.last().copied() else {
+            return Ok(());
+        };
+        let mut statement = self.conn.prepare(ties_sql)?;
+        let rows = statement.query_map(params![&identity, cutoff], |row| row.get::<_, i64>(0))?;
+        candidates.extend(rows.collect::<rusqlite::Result<Vec<_>>>()?);
+        Ok(())
+    }
+
+    /// Order candidates with the pre-optimization OR query, never with the retained history table.
+    ///
+    /// Candidate ids are staged in bounded batches because a large fleet can exceed SQLite's
+    /// positional-parameter limit. Both temporary tables are connection-local and reset every read.
+    ///
+    /// Args:
+    ///     core_ids: Effective core identities accepted by the original OR arm.
+    ///     server_ips: Effective server identities accepted by the original OR arm.
+    ///     limit: Maximum merged rows to return.
+    ///     candidates: Top rows and boundary ties collected from the indexes.
+    ///
+    /// Returns:
+    ///     Exactly the old query's rows over the candidate set, or a SQLite error.
+    fn merge_recent_candidates(
+        &self,
+        core_ids: &HashSet<CoreId>,
+        server_ips: &HashSet<IpAddr>,
+        limit: i64,
+        candidates: &[i64],
+    ) -> rusqlite::Result<Vec<WarnEpisode>> {
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.conn.execute_batch(RECENT_CANDIDATE_SCHEMA)?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM temp.recent_warn_candidate_ids", [])?;
+        tx.execute("DELETE FROM temp.recent_warn_candidates", [])?;
+        for chunk in candidates.chunks(500) {
+            let placeholders = std::iter::repeat_n("(?)", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            tx.execute(
+                &format!(
+                    "INSERT OR IGNORE INTO temp.recent_warn_candidate_ids (id) VALUES {placeholders}"
+                ),
+                params_from_iter(chunk.iter()),
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO temp.recent_warn_candidates \
+             SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, \
+             used_mb, logical_cpus, rtt_ms, order_ms FROM core_warnings \
+             WHERE id IN (SELECT id FROM temp.recent_warn_candidate_ids)",
+            [],
+        )?;
+        tx.commit()?;
 
         let mut clauses = Vec::with_capacity(2);
         let mut values = Vec::with_capacity(core_ids.len() + server_ips.len() + 1);
@@ -220,11 +453,10 @@ impl WarnStore {
             ));
             values.extend(server_ips.iter().map(|ip| Value::Text(ip.to_string())));
         }
-        values.push(Value::Integer(i64::try_from(limit).unwrap_or(i64::MAX)));
-
+        values.push(Value::Integer(limit));
         let sql = format!(
             "SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, \
-             used_mb, logical_cpus, rtt_ms, order_ms FROM core_warnings \
+             used_mb, logical_cpus, rtt_ms, order_ms FROM temp.recent_warn_candidates \
              WHERE ({}) ORDER BY start_ms DESC LIMIT ?",
             clauses.join(" OR ")
         );
@@ -248,7 +480,7 @@ impl WarnStore {
     ///     samples: 1 Hz `(cpu %, mem %)` pairs across the window.
     ///
     /// Returns:
-    ///     Unit, or the SQLite error if the insert failed.
+    ///     Unit after persistence or ordered migration-queue acceptance, or a SQLite error.
     pub(crate) fn insert_series(
         &self,
         episode_id: i64,
@@ -258,11 +490,12 @@ impl WarnStore {
         samples: &[(u8, u8)],
     ) -> rusqlite::Result<()> {
         let blob = encode_series(base_ms, samples);
-        self.conn.execute(
-            "INSERT OR REPLACE INTO core_warning_series (episode_id, badge, subject, blob) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![episode_id, badge, subject, blob],
-        )?;
+        self.write(WarnWrite::Slice {
+            episode_id,
+            badge,
+            subject: subject.to_owned(),
+            blob,
+        })?;
         Ok(())
     }
 
@@ -305,7 +538,7 @@ impl WarnStore {
     ///     samples: 1 Hz round-trip samples (ms) across the window.
     ///
     /// Returns:
-    ///     Unit, or the SQLite error if the insert failed.
+    ///     Unit after persistence or ordered migration-queue acceptance, or a SQLite error.
     pub(crate) fn insert_ping_series(
         &self,
         episode_id: i64,
@@ -315,11 +548,12 @@ impl WarnStore {
         samples: &[u16],
     ) -> rusqlite::Result<()> {
         let blob = encode_u16_series(base_ms, samples);
-        self.conn.execute(
-            "INSERT OR REPLACE INTO core_warning_series (episode_id, badge, subject, blob) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![episode_id, badge, subject, blob],
-        )?;
+        self.write(WarnWrite::Slice {
+            episode_id,
+            badge,
+            subject: subject.to_owned(),
+            blob,
+        })?;
         Ok(())
     }
 
@@ -359,13 +593,9 @@ impl WarnStore {
     ///     cutoff_ms: Episodes with `start_ms` below this lose their slices.
     ///
     /// Returns:
-    ///     The number of slice rows deleted, or the SQLite error.
+    ///     Rows deleted immediately, zero when queued behind migration, or a SQLite error.
     pub(crate) fn prune_slices(&self, cutoff_ms: i64) -> rusqlite::Result<usize> {
-        self.conn.execute(
-            "DELETE FROM core_warning_series WHERE episode_id IN \
-             (SELECT id FROM core_warnings WHERE start_ms < ?1)",
-            params![cutoff_ms],
-        )
+        self.write(WarnWrite::Prune { cutoff_ms })
     }
 
     /// Delete one core's warning history (Settings → Storage).
@@ -380,6 +610,11 @@ impl WarnStore {
     /// Returns:
     ///     How many of the core's own episodes were deleted.
     pub(crate) fn forget_core(&self, core: CoreId) -> rusqlite::Result<usize> {
+        if let Err(error) = self.finish_index_maintenance() {
+            // Deletion needs no series uniqueness constraint; an index failure must not prevent
+            // cleanup after all queued writes have completed (or individually reported failure).
+            log::warn!("core warnings maintenance before deletion failed: {error}");
+        }
         let core = core as i64;
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
@@ -391,8 +626,65 @@ impl WarnStore {
             params![core],
         )?;
         tx.commit()?;
+        if episodes > 0 {
+            self.revision.fetch_add(1, Ordering::Release);
+        }
         Ok(episodes)
     }
+}
+
+/// Write an episode with its reserved id on either the UI connection or the maintenance worker.
+fn insert_episode_row(
+    conn: &Connection,
+    id: i64,
+    episode: &WarnEpisode,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "INSERT INTO core_warnings \
+         (id, axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, used_mb, logical_cpus, rtt_ms, order_ms) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![
+            id, axis_str(episode.axis), episode.server_ip.map(|ip| ip.to_string()),
+            episode.core_id.map(|id| id as i64), episode.start_ms, episode.end_ms,
+            i64::from(episode.peak), i64::from(episode.snap.sys_cpu), i64::from(episode.snap.occ_mem),
+            i64::from(episode.snap.free_mb), i64::from(episode.snap.used_mb), i64::from(episode.snap.logical_cpus),
+            i64::from(episode.snap.round_trip_ms), i64::from(episode.snap.order_api_latency_ms),
+        ],
+    )
+}
+
+/// Read recent episodes at `path` on an independent read-only connection.
+///
+/// Args:
+///     path: Warning database already initialized by the backend writer.
+///     core_ids: Effective core identities accepted by the panel.
+///     server_ips: Effective server identities accepted for server-wide warnings.
+///     limit: Maximum merged rows to return.
+///
+/// Returns:
+///     The same scoped list as the writer-side reader, an empty list for a missing file, or a SQLite
+///     error. The connection is confined to the calling background worker.
+pub(crate) fn read_recent_episodes_for_scope(
+    path: &Path,
+    core_ids: &HashSet<CoreId>,
+    server_ips: &HashSet<IpAddr>,
+    limit: usize,
+) -> rusqlite::Result<Vec<WarnEpisode>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
+    let store = WarnStore {
+        conn,
+        revision: Arc::new(AtomicU64::new(0)),
+        episode_id: Cell::new(0),
+        index_maintenance: RefCell::new(None),
+    };
+    store.recent_episodes_for_scope(core_ids, server_ips, limit)
 }
 
 /// Episodes per core in the warnings database at `path`, read on a read-only connection so the

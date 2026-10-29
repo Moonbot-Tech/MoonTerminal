@@ -46,8 +46,8 @@ fn columns() -> Vec<MoonDataTableColumn> {
 /// Alarms list inputs, resolved once per panel cache rebuild rather than on every repaint.
 ///
 /// The panel repaints on every row hover transition and every scroll tick (GPUI notifies the
-/// view that built a `.hover()` row), so nothing here may be derived in `render`: the episodes
-/// come from a SQLite query, and the name maps scan every server.
+/// view that built a `.hover()` row), so nothing here may be derived in `render`: persisted episodes
+/// arrive from a background read, and the name maps scan every server.
 #[derive(Default)]
 pub(super) struct AlarmsList {
     /// Episodes in display order (open first, then newest), capped at `WARN_LIST_LIMIT`.
@@ -59,7 +59,7 @@ pub(super) struct AlarmsList {
 }
 
 impl AlarmsList {
-    /// Resolve display names for a freshly queried episode list.
+    /// Resolve display names for a freshly merged episode list.
     ///
     /// Args:
     ///     episodes: Episodes in display order.

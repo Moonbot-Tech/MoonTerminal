@@ -1,10 +1,10 @@
 //! Synthetic equivalence and performance checks for flat-row snapshots.
 
 use super::{
-    FlatViewCache, card_matches_query, project_rows, projection_uniform, replace_snapshots,
-    sort_flat_rows,
+    FlatViewCache, WarnReadCache, WarnReadKey, card_matches_query, project_rows,
+    projection_uniform, replace_snapshots, sort_flat_rows,
 };
-use crate::backend::core_warn::LatencySeverity;
+use crate::backend::core_warn::{LatencySeverity, WarnAxis, WarnEpisode, WarnSnapshot};
 use crate::panels::core_status::health::HealthFilter;
 use crate::panels::core_status::model::{
     ApiKeyState, CoreStatusRow, ServerKey, ServerStatusGroup, aggregate_servers, ordered_flat_rows,
@@ -13,6 +13,73 @@ use crate::panels::core_status::ordering::{FlatLine, flat_lines, natural_cmp};
 use moon_core::feed::ConnStatus;
 use moon_core::feed::CoreEndpoint;
 use std::collections::HashMap;
+
+/// Build one closed warning for persisted-read publication tests.
+fn warning(id: u64) -> WarnEpisode {
+    WarnEpisode {
+        id,
+        axis: WarnAxis::SysCpu,
+        server_ip: Some("10.0.0.1".parse().unwrap()),
+        core_id: None,
+        start_ms: id as i64,
+        end_ms: Some(id as i64 + 1),
+        peak: 1,
+        snap: WarnSnapshot::default(),
+    }
+}
+
+/// Build a persisted-read key with one server and the requested cores.
+fn warn_key(revision: u64, cores: &[u64]) -> WarnReadKey {
+    WarnReadKey::new(
+        Some(revision),
+        &cores.iter().copied().collect(),
+        &std::collections::HashSet::from(["10.0.0.1".parse().unwrap()]),
+    )
+}
+
+/// An unchanged key must not requery; a revision or effective-scope change must start a new read.
+#[test]
+fn warning_reads_start_only_for_revision_or_scope_changes() {
+    let mut cache = WarnReadCache::default();
+    let key = warn_key(4, &[2, 1]);
+    assert_eq!(key, warn_key(4, &[1, 2]));
+    assert!(cache.begin(key.clone()).is_some());
+    assert!(cache.begin(key).is_none());
+    assert!(cache.begin(warn_key(5, &[1, 2])).is_some());
+    assert!(cache.begin(warn_key(5, &[1, 2, 3])).is_some());
+}
+
+/// An older SQLite completion must not replace rows loaded for a newer revision or scope.
+#[test]
+fn out_of_order_warning_reads_keep_the_newest_snapshot() {
+    let mut cache = WarnReadCache::default();
+    let (older, _) = cache.begin(warn_key(1, &[1])).unwrap();
+    let (newer, _) = cache.begin(warn_key(2, &[1])).unwrap();
+    assert!(!cache.apply(older, vec![warning(1)]));
+    assert!(cache.persisted().is_empty());
+    assert!(cache.apply(newer, vec![warning(2)]));
+    assert_eq!(
+        cache
+            .persisted()
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        vec![2]
+    );
+}
+
+/// A failed current read must not suppress retries forever; a stale failure must not reset the new key.
+#[test]
+fn failed_warning_read_retries_only_the_current_sequence() {
+    let mut cache = WarnReadCache::default();
+    let key = warn_key(1, &[1]);
+    let (older, _) = cache.begin(key.clone()).unwrap();
+    let (newer, _) = cache.begin(warn_key(2, &[1])).unwrap();
+    cache.fail(older);
+    assert!(cache.begin(warn_key(2, &[1])).is_none());
+    cache.fail(newer);
+    assert!(cache.begin(warn_key(2, &[1])).is_some());
+}
 
 /// Omitting the publish generation bump keeps stale sorted rows after a telemetry rebuild.
 #[test]

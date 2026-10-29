@@ -15,6 +15,687 @@ use crate::telegram::reply::{TELEGRAM_MESSAGE_UTF16_LIMIT, utf16_len};
 
 static TEST_SEQ: AtomicU32 = AtomicU32::new(0);
 
+/// Keeping a short already-checkpointed prefix would make the next durable ack look like a
+/// sequence gap on restart and resend that card, including when corruption shortened the prefix.
+#[test]
+fn checkpointed_short_receipt_prefix_cannot_poison_the_next_append() {
+    use std::io::Write;
+    for tail in [b"".as_slice(), b"corrupt\n".as_slice()] {
+        let root = TempRoot::new("receipt-short-prefix");
+        let path = root.path("notifications.json");
+        let mut store = NotifyStore::open(path.clone()).unwrap();
+        store.enqueue(7, "XALPHA".into(), None, 1).unwrap();
+        store.file.ack_sequence = 5;
+        store.file.save(&path).unwrap();
+        super::receipts::append(
+            &path,
+            0,
+            &super::receipts::Receipt {
+                sequence: 1,
+                id: 99,
+                chat: 7,
+                replaced: None,
+                card: None,
+            },
+        )
+        .unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(crate::config::paths::telegram_notify_receipts(&path))
+            .unwrap()
+            .write_all(tail)
+            .unwrap();
+        let mut loaded = NotifyStore::open(path.clone()).unwrap();
+        loaded.ack(0, 7, None, None).unwrap();
+        let restarted = NotifyStore::open(path).unwrap();
+        assert!(restarted.file.outbox.is_empty());
+        assert_eq!(restarted.file.ack_sequence, 6);
+    }
+}
+
+/// Forgetting a still-queued accepted id resends it; retaining a removed id leaks sender state.
+#[test]
+fn delivered_retention_keeps_only_queued_accepted_ids() {
+    let root = TempRoot::new("delivered-retain");
+    let mut store = NotifyStore::open(root.path("notifications.json")).unwrap();
+    store.enqueue(7, "XALPHA".into(), None, 1).unwrap();
+    store.enqueue(7, "UNIT_01".into(), None, 1).unwrap();
+    store.ack(0, 7, None, None).unwrap();
+    let mut delivered = std::collections::HashMap::from([
+        (0, super::Accepted::default()),
+        (1, super::Accepted::default()),
+        (99, super::Accepted::default()),
+    ]);
+    super::retain_delivered(&Mutex::new(store), &mut delivered);
+    assert_eq!(delivered.keys().copied().collect::<Vec<_>>(), vec![1]);
+}
+
+/// Paired lock-scope measurement at 10000 remembered ids, where per-id locking scales badly.
+#[test]
+#[ignore = "scale probe"]
+fn probe_delivered_retention() {
+    let root = TempRoot::new("delivered-probe");
+    let mut store = NotifyStore::open(root.path("notifications.json")).unwrap();
+    for id in 0..10_000 {
+        store.file.outbox.push(crate::telegram::notify::Pending {
+            id,
+            chat: 7,
+            ..Default::default()
+        });
+    }
+    let store = Mutex::new(store);
+    let initial: std::collections::HashMap<_, _> = (0..10_000)
+        .map(|id| (id, super::Accepted::default()))
+        .collect();
+    let mut current = initial.clone();
+    let mut per_id = initial;
+    let mut current_time = std::time::Duration::ZERO;
+    let mut per_id_time = std::time::Duration::ZERO;
+    for round in 0..200 {
+        let mut measure_current = || {
+            let start = std::time::Instant::now();
+            super::retain_delivered(&store, &mut current);
+            current_time += start.elapsed();
+        };
+        let mut measure_per_id = || {
+            let start = std::time::Instant::now();
+            // Frozen pre-fix control: reacquire the document mutex for every remembered id.
+            per_id.retain(|id, _| super::lock_store(&store).file.outbox.by_id(*id).is_some());
+            per_id_time += start.elapsed();
+        };
+        if round % 2 == 0 {
+            measure_current();
+            measure_per_id();
+        } else {
+            measure_per_id();
+            measure_current();
+        }
+    }
+    assert_eq!(current.len(), 10_000);
+    assert_eq!(per_id.len(), 10_000);
+    eprintln!(
+        "delivered retain ms/pass: current={:.3}, per-id-lock={:.3}",
+        current_time.as_secs_f64() * 5.0,
+        per_id_time.as_secs_f64() * 5.0
+    );
+}
+
+/// A replayed photo receipt must clean up fresh files immediately, while a shared photo stays
+/// until its final queued row is acknowledged. The age-based startup sweep cannot prove this.
+#[test]
+fn receipt_replay_deletes_only_photos_without_a_queued_owner() {
+    let root = TempRoot::new("receipt-photos");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    let dir = super::chart_spool_dir(&path);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("single.png"), b"fixture").unwrap();
+    std::fs::write(dir.join("shared.png"), b"fixture").unwrap();
+    store
+        .update(|file| {
+            for photo in ["single.png", "shared.png", "shared.png"] {
+                super::push_photo(file, 7, "XALPHA".into(), None, photo.into(), 1);
+            }
+        })
+        .unwrap();
+    let mut length = 0;
+    for id in 0..2 {
+        length = super::receipts::append(
+            &path,
+            length,
+            &super::receipts::Receipt {
+                sequence: id + 1,
+                id,
+                chat: 7,
+                replaced: None,
+                card: None,
+            },
+        )
+        .unwrap();
+    }
+    let loaded = NotifyFile::load(&path).unwrap();
+    assert_eq!(
+        loaded.outbox.iter().map(|row| row.id).collect::<Vec<_>>(),
+        vec![2]
+    );
+    assert!(!dir.join("single.png").exists());
+    assert!(dir.join("shared.png").exists());
+    super::receipts::append(
+        &path,
+        length,
+        &super::receipts::Receipt {
+            sequence: 3,
+            id: 2,
+            chat: 7,
+            replaced: None,
+            card: None,
+        },
+    )
+    .unwrap();
+    assert!(NotifyStore::open(path).unwrap().file.outbox.is_empty());
+    assert!(!dir.join("shared.png").exists());
+}
+
+/// A downgrade drops the cursor but keeps newer report slots; stale receipts must not roll
+/// those slots back or remove a newly queued row that reused an old id.
+#[test]
+fn downgrade_snapshot_discards_a_journal_ahead_of_its_cursor() {
+    use crate::telegram::notify::AutoReport;
+    let root = TempRoot::new("receipt-downgrade");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    store
+        .update(|file| {
+            let mut chat = ChatNotify::default();
+            chat.settings.reports.today = true;
+            chat.ledger.reports.today.message = Some(200);
+            file.chats.insert(7, chat);
+            push_outbox(file, 7, "XALPHA".into(), None, 1);
+        })
+        .unwrap();
+    let mut snapshot = serde_json::to_value(&store.file).unwrap();
+    snapshot.as_object_mut().unwrap().remove("ack_sequence");
+    std::fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+    super::receipts::append(
+        &path,
+        0,
+        &super::receipts::Receipt {
+            sequence: 4,
+            id: 0,
+            chat: 7,
+            replaced: Some((AutoReport::Today, 100)),
+            card: None,
+        },
+    )
+    .unwrap();
+    let loaded = NotifyStore::open(path.clone()).unwrap();
+    assert_eq!(loaded.file, store.file);
+    assert!(
+        std::fs::read(crate::config::paths::telegram_notify_receipts(&path))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A later sequence gap proves the whole journal stale, including its seemingly valid prefix.
+#[test]
+fn discontinuous_receipts_do_not_partially_mutate_the_snapshot() {
+    let root = TempRoot::new("receipt-gap");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    store.enqueue(7, "XALPHA".into(), None, 1).unwrap();
+    let receipt = |sequence| super::receipts::Receipt {
+        sequence,
+        id: 0,
+        chat: 7,
+        replaced: None,
+        card: None,
+    };
+    let bytes = super::receipts::append(&path, 0, &receipt(1)).unwrap();
+    super::receipts::append(&path, bytes, &receipt(3)).unwrap();
+    assert_eq!(NotifyStore::open(path).unwrap().file, store.file);
+}
+
+/// A corrupt complete middle line must leave notifications available and preserve only the
+/// accepted prefix; the next append must replace the corrupt line and everything after it.
+#[test]
+fn corrupt_receipt_middle_replays_prefix_and_is_overwritten() {
+    use std::io::Write;
+    let root = TempRoot::new("receipt-corrupt");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    store
+        .update(|file| {
+            for body in ["XALPHA", "UNIT_01", "CORE_A"] {
+                push_outbox(file, 7, body.into(), None, 1);
+            }
+        })
+        .unwrap();
+    store.ack(0, 7, None, None).unwrap();
+    let journal_path = crate::config::paths::telegram_notify_receipts(&path);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&journal_path)
+        .unwrap()
+        .write_all(
+            b"corrupt\n{\"sequence\":3,\"id\":2,\"chat\":7,\"replaced\":null,\"card\":null}\n",
+        )
+        .unwrap();
+    let mut loaded = NotifyStore::open(path.clone()).unwrap();
+    assert_eq!(
+        loaded
+            .file
+            .outbox
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    loaded.ack(1, 7, None, None).unwrap();
+    let restarted = NotifyStore::open(path).unwrap();
+    assert_eq!(
+        restarted
+            .file
+            .outbox
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        vec![2]
+    );
+    assert_eq!(restarted.file.ack_sequence, 2);
+    assert!(
+        !String::from_utf8(std::fs::read(journal_path).unwrap())
+            .unwrap()
+            .contains("corrupt")
+    );
+}
+
+/// Both hosts join this service on clean exit. Even a nonempty queue must checkpoint after
+/// the last sender joins, so a normal binary downgrade cannot resend journal-only deliveries.
+#[test]
+fn service_stop_checkpoints_receipts_with_pending_rows() {
+    let root = TempRoot::new("receipt-stop");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    store
+        .update(|file| {
+            push_outbox(file, 7, "XALPHA".into(), None, 1);
+            push_outbox(file, 7, "UNIT_01".into(), None, 1);
+        })
+        .unwrap();
+    let shared = std::sync::Arc::new(Mutex::new(store));
+    let sender = shared.clone();
+    let join = std::thread::spawn(move || {
+        super::durable_ack(&sender, 0, 7, None, None).unwrap();
+    });
+    let (_, events) = std::sync::mpsc::sync_channel(1);
+    let mut service = super::super::TelegramService {
+        alive: None,
+        joins: vec![join],
+        events,
+        authorization: std::sync::Arc::new(Mutex::new(
+            crate::telegram::auth::Authorization::from_authorized_chats(vec![]),
+        )),
+        mini_config: std::sync::Arc::default(),
+        labels: std::sync::Arc::default(),
+        notifications: Some(shared),
+        notify_wake: None,
+        work_waker: std::sync::Arc::default(),
+    };
+    service.stop();
+    assert!(
+        std::fs::read(crate::config::paths::telegram_notify_receipts(&path))
+            .unwrap()
+            .is_empty()
+    );
+    let snapshot = NotifyFile::load_snapshot(&path).unwrap();
+    assert_eq!(snapshot.ack_sequence, 1);
+    assert_eq!(
+        snapshot.outbox.iter().map(|row| row.id).collect::<Vec<_>>(),
+        vec![1]
+    );
+}
+
+impl NotifyStore {
+    /// Adapt existing single-owner fixtures to the production two-phase receipt transaction,
+    /// moving rather than copying the document into its shared-store mutex.
+    fn ack(
+        &mut self,
+        id: u64,
+        chat: i64,
+        replaced: Option<(crate::telegram::notify::AutoReport, i64)>,
+        card: Option<(crate::telegram::notify::CardKey, i64)>,
+    ) -> anyhow::Result<Option<i64>> {
+        let placeholder = NotifyStore {
+            path: self.path.clone(),
+            file: Default::default(),
+            allowed: None,
+            wake: self.wake.clone(),
+            journal: self.journal.clone(),
+            purged: None,
+        };
+        let shared = Mutex::new(std::mem::replace(self, placeholder));
+        let result = super::durable_ack(&shared, id, chat, replaced, card);
+        *self = shared
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        result
+    }
+}
+
+/// A slow receipt flush must not block owner ticks, and an overlapping settings save must not
+/// truncate an as-yet-uncommitted receipt. Channels pause at the exact I/O boundary without sleeps.
+#[test]
+fn receipt_io_releases_the_store_and_survives_an_overlapping_save() {
+    let root = TempRoot::new("receipt-overlap");
+    let path = root.path("notifications.json");
+    let mut original = NotifyStore::open(path.clone()).unwrap();
+    original.enqueue(7, "XALPHA".into(), None, 1).unwrap();
+    let shared = std::sync::Arc::new(Mutex::new(original));
+    let writer = shared.clone();
+    let (entered, entered_rx) = std::sync::mpsc::channel();
+    let (resume, resume_rx) = std::sync::mpsc::channel();
+    let task = std::thread::spawn(move || {
+        super::ack_with(&writer, 0, 7, None, None, |path, bytes, receipt| {
+            let length = super::receipts::append(path, bytes, receipt)?;
+            entered.send(()).unwrap();
+            resume_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            Ok(length)
+        })
+    });
+    entered_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    {
+        let mut guard = shared.try_lock().expect("owner blocked by receipt I/O");
+        assert_eq!(
+            guard.file.outbox.len(),
+            1,
+            "publish only after receipt completion"
+        );
+        guard
+            .update(|file| {
+                file.chats.insert(8, ChatNotify::default());
+            })
+            .unwrap();
+    }
+    resume.send(()).unwrap();
+    task.join().unwrap().unwrap();
+    let loaded = NotifyFile::load(&path).unwrap();
+    assert!(
+        loaded.outbox.is_empty(),
+        "overlapping save discarded the durable receipt"
+    );
+    assert!(loaded.chats.contains_key(&8));
+}
+
+/// A replaced queue or changed disclosure must be scanned, but removals and ledger-only saves
+/// must not invalidate a previously completed revocation scan.
+#[test]
+fn revocation_cache_tracks_appends_replacements_and_grants() {
+    let root = TempRoot::new("purge-cache");
+    let mut store = NotifyStore::open(root.path("notifications.json")).unwrap();
+    store.enqueue(7, "XALPHA".into(), Some(vec![1]), 1).unwrap();
+    let plans = BTreeMap::from([(7, (BTreeSet::from([1]), false))]);
+    assert_eq!(store.purge_disallowed(plans.clone()).unwrap(), 0);
+    let stamp = store.purged.as_ref().unwrap().revision;
+    store
+        .update(|file| {
+            file.chats.insert(7, ChatNotify::default());
+        })
+        .unwrap();
+    assert_eq!(store.file.outbox.revision(), stamp);
+    assert_eq!(store.purge_disallowed(plans.clone()).unwrap(), 0);
+    store
+        .enqueue(7, "UNIT_01".into(), Some(vec![2]), 1)
+        .unwrap();
+    assert_eq!(store.purge_disallowed(plans.clone()).unwrap(), 1);
+    store
+        .update(|file| {
+            file.outbox[0].cores = Some(vec![2]);
+        })
+        .unwrap();
+    assert_eq!(store.purge_disallowed(plans.clone()).unwrap(), 1);
+    store
+        .update(|file| {
+            file.outbox = vec![crate::telegram::notify::Pending {
+                id: 99,
+                chat: 7,
+                cores: Some(vec![2]),
+                ..Default::default()
+            }]
+            .into();
+        })
+        .unwrap();
+    assert_eq!(store.purge_disallowed(plans).unwrap(), 1);
+    store.enqueue(7, "XALPHA".into(), Some(vec![1]), 1).unwrap();
+    assert_eq!(
+        store
+            .purge_disallowed(BTreeMap::from([(7, (BTreeSet::new(), false))]))
+            .unwrap(),
+        1
+    );
+}
+
+/// Frozen clone/retain/ledger portion of the original acknowledgement; persistence is tested
+/// separately by restart tests, while this oracle pins every surviving value and row order.
+fn frozen_ack(
+    file: &mut NotifyFile,
+    id: u64,
+    chat: i64,
+    replaced: Option<(crate::telegram::notify::AutoReport, i64)>,
+    card: Option<(crate::telegram::notify::CardKey, i64)>,
+) -> Option<i64> {
+    let replaced = replaced.filter(|(kind, _)| kind.replaces_previous());
+    let mut next = file.clone();
+    next.outbox.retain(|row| row.id != id);
+    if let Some((key, message)) = card {
+        let wait = next
+            .chats
+            .get_mut(&chat)
+            .and_then(|entry| entry.ledger.cards.get_mut(&key.core))
+            .and_then(|rows| rows.get_mut(&key.rec_id));
+        if let Some(wait) = wait {
+            wait.message = Some(message);
+        }
+    }
+    let previous = replaced.and_then(|(kind, message)| {
+        let entry = next.chats.get_mut(&chat)?;
+        if !entry.settings.reports.on(kind) {
+            return None;
+        }
+        let slot = entry.ledger.reports.slot_mut(kind);
+        slot.message.replace(message).filter(|old| *old != message)
+    });
+    *file = next;
+    previous
+}
+
+/// Receipts must preserve missing-row acks, disabled reports, repeated message ids and card fills.
+#[test]
+fn receipt_ledger_and_fifo_match_the_frozen_ack() {
+    use crate::telegram::notify::{AutoReport, CardKey, CardWait};
+    let root = TempRoot::new("ack-parity");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    let key = CardKey { core: 1, rec_id: 4 };
+    store
+        .update(|file| {
+            let mut entry = ChatNotify::default();
+            entry.settings.reports.today = true;
+            entry
+                .ledger
+                .cards
+                .entry(1)
+                .or_default()
+                .insert(4, CardWait::default());
+            file.chats.insert(7, entry);
+            for id in 0..4 {
+                push_outbox(file, 7, format!("XALPHA {id}"), None, 1);
+            }
+        })
+        .unwrap();
+    let mut old = store.file.clone();
+    for (id, kind, message, card) in [
+        (2, AutoReport::Today, 100, Some((key, 200))),
+        (0, AutoReport::Today, 101, None),
+        (99, AutoReport::Today, 101, None),
+        (1, AutoReport::Hourly, 300, None),
+        (3, AutoReport::Month, 400, None),
+    ] {
+        let expected = frozen_ack(&mut old, id, 7, Some((kind, message)), card);
+        assert_eq!(
+            store.ack(id, 7, Some((kind, message)), card).unwrap(),
+            expected
+        );
+        assert_eq!(store.file.chats, old.chats);
+        assert_eq!(store.file.outbox, old.outbox);
+        let loaded = NotifyFile::load(&path).unwrap();
+        assert_eq!(loaded.chats, old.chats);
+        assert_eq!(loaded.outbox, old.outbox);
+        assert_eq!(loaded.next_id, old.next_id);
+    }
+}
+
+/// Losing an accepted row before the full checkpoint must not replay it after a crash.
+#[test]
+fn receipts_recover_acks_before_the_coalesced_checkpoint() {
+    let root = TempRoot::new("receipt-recover");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    store
+        .update(|file| {
+            push_outbox(file, 7, "XALPHA".into(), None, 1);
+            push_outbox(file, 8, "UNIT_01".into(), None, 1);
+        })
+        .unwrap();
+    let snapshot = std::fs::read(&path).unwrap();
+    store.ack(0, 7, None, None).unwrap();
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        snapshot,
+        "acks must not rewrite the full document"
+    );
+    let recovered = NotifyStore::open(path.clone()).unwrap();
+    assert_eq!(
+        recovered
+            .file
+            .outbox
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+    assert_eq!(recovered.file, store.file);
+    store.ack(1, 8, None, None).unwrap();
+    store.checkpoint().unwrap();
+    assert!(NotifyFile::load(&path).unwrap().outbox.is_empty());
+    assert!(
+        std::fs::read(crate::config::paths::telegram_notify_receipts(&path))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A torn unconfirmed receipt is overwritten on retry, rather than poisoning later valid acks.
+#[test]
+fn a_torn_receipt_tail_is_replaced_without_losing_complete_receipts() {
+    use std::io::Write;
+    let root = TempRoot::new("receipt-tail");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    store
+        .update(|file| {
+            push_outbox(file, 7, "XALPHA".into(), None, 1);
+            push_outbox(file, 7, "UNIT_01".into(), None, 1);
+        })
+        .unwrap();
+    store.ack(0, 7, None, None).unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(crate::config::paths::telegram_notify_receipts(&path))
+        .unwrap()
+        .write_all(b"{\"sequence\":")
+        .unwrap();
+    let mut restarted = NotifyStore::open(path.clone()).unwrap();
+    assert_eq!(restarted.file.outbox.len(), 1);
+    restarted.ack(1, 7, None, None).unwrap();
+    assert!(NotifyFile::load(&path).unwrap().outbox.is_empty());
+}
+
+/// A snapshot published just before a crash must not apply its old receipts twice.
+#[test]
+fn checkpoint_cursor_makes_old_receipts_idempotent() {
+    let root = TempRoot::new("receipt-cursor");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    store.enqueue(7, "XALPHA".into(), None, 1).unwrap();
+    store.ack(0, 7, None, None).unwrap();
+    store.file.save(&path).unwrap();
+    let mut restarted = NotifyStore::open(path.clone()).unwrap();
+    assert_eq!(restarted.file, store.file);
+    restarted.enqueue(7, "UNIT_01".into(), None, 2).unwrap();
+    restarted.ack(1, 7, None, None).unwrap();
+    assert!(NotifyFile::load(&path).unwrap().outbox.is_empty());
+    assert_eq!(restarted.file.ack_sequence, 2);
+}
+
+/// A failed receipt write leaves the row and its ledger untouched for the existing ack retry.
+#[test]
+fn a_failed_receipt_does_not_advance_memory() {
+    let root = TempRoot::new("receipt-fail");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    store.enqueue(7, "XALPHA".into(), None, 1).unwrap();
+    let before = store.file.clone();
+    std::fs::create_dir(crate::config::paths::telegram_notify_receipts(&path)).unwrap();
+    assert!(store.ack(0, 7, None, None).is_err());
+    assert_eq!(store.file, before);
+}
+
+/// Time sender bookkeeping and durable acknowledgements at 10000 unbounded synthetic cards.
+#[test]
+#[ignore = "scale probe"]
+fn probe_notify_outbox() {
+    let root = TempRoot::new("scale");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path).unwrap();
+    store
+        .update(|file| {
+            for id in 0..10_000 {
+                file.outbox.push(crate::telegram::notify::Pending {
+                    id,
+                    chat: id as i64 % 10 + 1,
+                    html: "XALPHA ".repeat(64),
+                    cores: Some(vec![1]),
+                    ..Default::default()
+                });
+            }
+            file.next_id = 10_000;
+        })
+        .unwrap();
+    store.publish_allowed((1..=10).map(|chat| (chat, None)).collect());
+    let store = Mutex::new(store);
+    let start = std::time::Instant::now();
+    for _ in 0..10 {
+        std::hint::black_box(super::snapshot(&store));
+    }
+    eprintln!(
+        "probe snapshot: {:.3} ms",
+        start.elapsed().as_secs_f64() * 100.0
+    );
+    let start = std::time::Instant::now();
+    for id in 9_000..10_000 {
+        std::hint::black_box(super::hold(&store, id, id as i64 % 10 + 1));
+    }
+    eprintln!("probe hold: {:.6} ms", start.elapsed().as_secs_f64());
+    let start = std::time::Instant::now();
+    for id in 0..10 {
+        store
+            .lock()
+            .unwrap()
+            .ack(id, id as i64 % 10 + 1, None, None)
+            .unwrap();
+    }
+    eprintln!("probe ack: {:.3} ms", start.elapsed().as_secs_f64() * 100.0);
+    let guard = store.lock().unwrap();
+    let bytes = std::mem::size_of_val(&guard.file.outbox)
+        + guard
+            .file
+            .outbox
+            .iter()
+            .map(|row| {
+                std::mem::size_of_val(row)
+                    + row.html.capacity()
+                    + row.cores.as_ref().map_or(0, |ids| ids.capacity() * 8)
+            })
+            .sum::<usize>();
+    eprintln!("probe queued card payload memory (10000): {bytes} bytes");
+    assert_eq!(guard.file.outbox.len(), 9_990);
+}
+
 /// Isolated temp root. Removed when the test drops it, including on panic.
 struct TempRoot(PathBuf);
 

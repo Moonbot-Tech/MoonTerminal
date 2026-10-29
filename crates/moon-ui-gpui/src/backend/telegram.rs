@@ -172,6 +172,11 @@ impl TgHost for GuiTgHost<'_, '_> {
 }
 
 impl Backend {
+    /// Answer transport work on its causal feed-channel wake without running a notification tick.
+    pub(crate) fn drain_telegram_work(&mut self, cx: &mut Context<Self>) {
+        self.gate_terminal_telegram();
+        moon_tg::drain_work(&mut GuiTgHost { backend: self, cx });
+    }
     /// Revoke local transport when station presence or durable ownership forbids it.
     pub(crate) fn gate_terminal_telegram(&mut self) {
         if !self.station.allows_terminal_bot() && !self.telegram.suspended() {

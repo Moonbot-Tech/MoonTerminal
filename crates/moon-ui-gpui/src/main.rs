@@ -246,8 +246,10 @@ struct Backend {
     /// Process-lifetime window state that survives view replacement but is never serialized.
     ui_session: UiSessionState,
     /// Per-group detect-strip presentation: dimensions, chart, rail, and size slots.
-    /// Stored in the portable `detects_view.toml` and saved immediately because the file is small.
+    /// Stored in the portable `detects_view.toml` through the serial background persistence worker.
     detects_view: moon_core::config::DetectViewFile,
+    /// A changed detection display authority still awaiting a successful enqueue or retry.
+    detects_view_dirty: bool,
     /// Global News-panel tag settings: per-tag colours + the tag-visibility filter. Stored in the
     /// small portable `news_tags.json` and saved immediately on change.
     news_tag_settings: moon_core::config::NewsTagSettings,
@@ -490,8 +492,8 @@ struct Backend {
     /// NOT gate anything that bypasses the dirty-flag mechanism: the report DB writer, `strat_db`,
     /// `AppConfig::load`'s own uid save and schema-upgrade backup, `applog::purge_old`, the
     /// one-shot chart-id remap that runs before this struct exists, the direct `config.save()` in
-    /// `shell/init.rs`, or panels that write straight through (`detects_view`,
-    /// `news_tag_settings`, the Settings window's snapshot save). `order-cancel-lag` in particular
+    /// `shell/init.rs`, or panels that write straight through (`news_tag_settings`, the Settings
+    /// window's snapshot save). `order-cancel-lag` in particular
     /// places a real order that lands permanently in the developer's `reports.sqlite`. Those are
     /// separate holes; closing them needs a different mechanism.
     persist_allowed: bool,

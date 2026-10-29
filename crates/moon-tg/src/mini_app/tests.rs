@@ -1,5 +1,7 @@
 //! Unit regressions for Mini App targeting, ordering and safe entry-notional display.
 
+mod scale;
+
 /// Dropping peer or market filtering leaks levels from another market or an invisible core.
 #[test]
 fn coin_chart_two_core_overlays_exclude_other_markets_and_venues() {
@@ -467,10 +469,28 @@ fn coin_chart_empty_source_and_busy_admission() {
     assert_eq!(pending, 4);
 }
 
-/// Strategy coins must deduplicate active rows without including completed or other-core orders.
+/// Strategy coins must match the frozen active-row scan without including completed or other cores.
 #[test]
 fn strategies_coin_index_is_per_core_sorted_and_live_only() {
     use moon_core::telegram::web::dto::CoinRefDto;
+
+    /// Frozen pre-index implementation used as the independent row-set and ordering oracle.
+    fn frozen(orders: &[OrderRow]) -> HashMap<u64, Vec<CoinRefDto>> {
+        let mut coins: HashMap<u64, Vec<CoinRefDto>> = HashMap::new();
+        for order in orders.iter().filter(|order| !order.job_is_done) {
+            coins.entry(order.strat_id).or_default().push(CoinRefDto {
+                coin: order.coin.clone(),
+                market: order.market.clone(),
+            });
+        }
+        for values in coins.values_mut() {
+            values.sort_by(|a, b| a.market.cmp(&b.market).then(a.coin.cmp(&b.coin)));
+            values.dedup_by(|a, b| a.market == b.market);
+            values.sort_by(|a, b| a.coin.cmp(&b.coin).then(a.market.cmp(&b.market)));
+        }
+        coins
+    }
+
     let mut store = moon_core::session::CoreStore::default();
     store.ensure(1);
     store.ensure(2);
@@ -478,20 +498,26 @@ fn strategies_coin_index_is_per_core_sorted_and_live_only() {
     row.strat_id = 7;
     row.coin = "XBETA".into();
     row.market = "XBETAUSDT".into();
-    store.core_mut(1).unwrap().orders.push(row.clone());
+    let beta = row.clone();
     row.coin = "XALPHA".into();
     row.market = "XALPHAUSDT".into();
+    let alpha = row.clone();
+    row.coin = "XGAMMA".into();
+    row.job_is_done = true;
     store
         .core_mut(1)
         .unwrap()
-        .orders
-        .extend([row.clone(), row.clone()]);
-    row.coin = "XGAMMA".into();
-    row.job_is_done = true;
-    store.core_mut(1).unwrap().orders.push(row.clone());
+        .apply(moon_core::feed::FeedMsg::Orders(
+            vec![beta, alpha.clone(), alpha, row.clone()].into(),
+        ));
     row.job_is_done = false;
-    store.core_mut(2).unwrap().orders.push(row);
-    let coins = super::reads::strategy_coins(&store.core(1).unwrap().orders);
+    store
+        .core_mut(2)
+        .unwrap()
+        .apply(moon_core::feed::FeedMsg::Orders(vec![row].into()));
+    let data = store.core(1).unwrap();
+    let coins = super::reads::strategy_coins(data);
+    assert_eq!(coins, frozen(&data.orders));
     assert_eq!(
         coins[&7],
         vec![
@@ -506,7 +532,99 @@ fn strategies_coin_index_is_per_core_sorted_and_live_only() {
         ]
     );
     assert!(!coins.contains_key(&8));
-    assert!(super::reads::strategy_coins(&[]).is_empty());
+    assert!(super::reads::strategy_coins(&moon_core::session::store::CoreData::new()).is_empty());
+}
+
+/// Replacing linear folder searches with a map must preserve first-folder and strategy order.
+#[test]
+fn strategies_folder_map_matches_frozen_linear_grouping() {
+    let mut store = moon_core::session::CoreStore::default();
+    store.ensure(1);
+    store.core_mut(1).unwrap().strategies = ["B", "A", "B", "C", "A"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, folder_path)| moon_core::feed::StrategyRow {
+            id: index as u64 + 1,
+            name: format!("UNIT_{index:02}"),
+            kind: String::new(),
+            kind_ordinal: 0,
+            folder_path: folder_path.into(),
+            checked: true,
+            is_short: false,
+            fields: Vec::new(),
+        })
+        .collect();
+    let data = store.core(1).unwrap();
+    let mut expected = Vec::new();
+    for row in &data.strategies {
+        let path = moon_core::feed::strategy_path::split_path(&row.folder_path).join("/");
+        let strategy = moon_core::telegram::web::dto::StrategyDto {
+            id: row.id,
+            name: row.name.clone(),
+            checked: row.checked,
+            wanted: None,
+            pending: None,
+            coins: Vec::new(),
+        };
+        match expected.iter_mut().find(
+            |folder: &&mut moon_core::telegram::web::dto::StrategyFolderDto| folder.path == path,
+        ) {
+            Some(folder) => folder.strategies.push(strategy),
+            None => expected.push(moon_core::telegram::web::dto::StrategyFolderDto {
+                path,
+                strategies: vec![strategy],
+            }),
+        }
+    }
+    let listed = vec![(1, "CORE_A".into(), "EX-XX".into())];
+    let actual =
+        super::reads::build_strategies(&store, &listed, &HashMap::new(), true, Instant::now());
+    assert_eq!(actual.cores[0].folders, expected);
+}
+
+/// Omitting a rate, panic flag or order revision from the cache key would serve stale order rows.
+#[test]
+fn orders_cache_inputs_track_live_values_and_order_revision() {
+    let mut store = moon_core::session::CoreStore::default();
+    store.ensure(1);
+    let order = resting_order(100.0, 101.0);
+    store
+        .core_mut(1)
+        .unwrap()
+        .apply(moon_core::feed::FeedMsg::Orders(vec![order.clone()].into()));
+    let listed = vec![(1, "CORE_A".into(), "EX-XX".into())];
+    let inputs = |rate, panic| {
+        super::reads::orders_inputs(&store, &listed, move |_, _| Some(rate), move |_, _| panic)
+    };
+    let base = inputs(1.0, false);
+    assert_eq!(base, inputs(1.0, false));
+    assert_ne!(base, inputs(2.0, false));
+    assert_ne!(base, inputs(1.0, true));
+    store
+        .core_mut(1)
+        .unwrap()
+        .apply(moon_core::feed::FeedMsg::Orders(vec![order].into()));
+    let revised = super::reads::orders_inputs(&store, &listed, |_, _| Some(1.0), |_, _| false);
+    assert_ne!(base, revised);
+}
+
+/// A cached pending chip must not remain Pending after its 45-second confirmation window.
+#[test]
+fn strategies_cache_inputs_cross_the_pending_deadline() {
+    let store = moon_core::session::CoreStore::default();
+    let listed = vec![(1, "CORE_A".into(), "EX-XX".into())];
+    let sent = Instant::now();
+    let wanted = HashMap::from([((1, 7), (true, sent, 0, 0))]);
+    let at = |seconds| sent + Duration::from_secs(seconds);
+    let base = super::reads::strategies_inputs(&store, &listed, &wanted, at(10));
+    assert_eq!(
+        base,
+        super::reads::strategies_inputs(&store, &listed, &wanted, at(44))
+    );
+    assert_ne!(
+        base,
+        super::reads::strategies_inputs(&store, &listed, &wanted, at(45))
+    );
 }
 
 /// A panicking read maps to ReadFailed, so control returns to Finish instead of unwinding.
@@ -871,6 +989,19 @@ fn chart_order_snapshots_are_bounded_and_expire() {
     super::charts::remember_order(&mut state, 1, &row);
     assert!(!state.mini_order_snapshots.contains_key(&(1, 1)));
     assert_eq!(state.mini_order_snapshots[&(1, 64)].coin, "XALPHA");
+    let mut cached = state.mini_order_snapshots[&(1, 64)].clone();
+    cached.at = Instant::now() - Duration::from_secs(86401);
+    super::charts::remember_order_snapshots(&mut state, [(1, cached)]);
+    assert!(state.mini_order_snapshots[&(1, 64)].at.elapsed() < Duration::from_secs(1));
+    row.uid = 999;
+    super::charts::remember_order(&mut state, 1, &row);
+    state.mini_order_snapshots.get_mut(&(1, 999)).unwrap().at =
+        Instant::now() - Duration::from_secs(86401);
+    let current = vec![(1, state.mini_order_snapshots[&(1, 64)].clone())];
+    let cached = super::reads::current_order_snapshots(&state, &current);
+    assert!(cached.iter().all(|(_, snapshot)| snapshot.uid == 64));
+    super::charts::remember_order_snapshots(&mut state, cached);
+    assert!(!state.mini_order_snapshots.contains_key(&(1, 999)));
 }
 
 /// The first chat's displayed id must resolve after a different chat replaces the list cache.
@@ -1960,13 +2091,9 @@ impl Drop for NotifyTemp {
     }
 }
 
+/// Open an isolated store through the same receipt recovery path as production.
 fn empty_store(path: PathBuf) -> NotifyStore {
-    NotifyStore {
-        path,
-        file: NotifyFile::default(),
-        allowed: None,
-        wake: Default::default(),
-    }
+    NotifyStore::open(path).expect("open notifications")
 }
 
 /// Initial rules must record an enable boundary once and preserve even an empty stored row.

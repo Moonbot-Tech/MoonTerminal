@@ -142,12 +142,7 @@ fn forget_unpaired_removes_the_chat_and_keeps_its_outbox_row() {
 
     let root = TempRoot::new("unpair");
     let path = root.0.join("notifications.json");
-    let mut store = NotifyStore {
-        path: path.clone(),
-        file: NotifyFile::default(),
-        allowed: None,
-        wake: Default::default(),
-    };
+    let mut store = NotifyStore::open(path.clone()).expect("open notifications");
     store
         .update(|file| {
             file.chats.insert(

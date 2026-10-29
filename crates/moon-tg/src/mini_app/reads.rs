@@ -24,12 +24,16 @@ use moon_core::telegram::web::dto::{
 use moon_core::util::fmt;
 
 use super::dto::{
-    balance_state_dto, balance_text, conn_of, core_quotes, order_dto, report_dto, report_period,
-    strategy_pending, trade_dto,
+    STRATEGY_CONFIRM_WINDOW, balance_state_dto, balance_text, conn_of, core_quotes, order_dto,
+    order_quote, report_dto, report_period, strategy_pending, trade_dto,
 };
 use super::{mini_access, visible_cores};
 
-use super::cache::{CachedReport, CachedTrades, ReportInputs, Reuse, TradesInputs, Window, reuse};
+use super::cache::{
+    CachedOrders, CachedReport, CachedStrategies, CachedTrades, OrderCoreInputs, OrderValueInputs,
+    OrdersInputs, ReportInputs, Reuse, StrategiesInputs, StrategyCoreInputs, StrategyWaitInputs,
+    TradesInputs, Window, reuse,
+};
 use crate::TgHost;
 use crate::labels::section_label;
 
@@ -273,27 +277,57 @@ fn trades_dto(
     }
 }
 
-/// Strategies of the chat's cores, grouped by folder, with active coins and pending toggles.
-///
-/// Confirmed, vanished and settled toggle entries are dropped from the pending map first.
-pub(super) fn mini_strategies(
-    host: &mut dyn TgHost,
-    chat_id: i64,
-) -> Result<StrategiesDto, MiniAppApiError> {
-    let access = mini_access(host, chat_id).ok_or(MiniAppApiError::Rejected)?;
-    let can_control = matches!(access, TelegramReportAccess::Owner);
-    prune_mini_strategy_wanted(host);
-    let listed = visible_cores(host, &access);
-    let store = host.session().store();
-    let now = Instant::now();
+/// Capture every display and revision input of a Strategies response.
+pub(super) fn strategies_inputs(
+    store: &moon_core::session::CoreStore,
+    listed: &[(u64, String, String)],
+    wanted: &HashMap<(u64, u64), (bool, Instant, u64, u64)>,
+    now: Instant,
+) -> StrategiesInputs {
+    let cores = listed
+        .iter()
+        .map(|(id, name, exchange)| {
+            let data = store.core(*id);
+            StrategyCoreInputs {
+                core: *id,
+                name: name.clone(),
+                exchange: exchange.clone(),
+                orders_revision: data.map_or(0, |data| data.orders_table_rev),
+                strategies_revision: data.map_or(0, |data| data.strategies_rev),
+                acknowledgement_revision: data.map_or(0, |data| data.strategies_ack_rev),
+            }
+        })
+        .collect();
+    let mut wanted: Vec<_> = wanted
+        .iter()
+        .map(|(&(core, strategy), entry)| StrategyWaitInputs {
+            core,
+            strategy,
+            entry: *entry,
+            timed_out: now.saturating_duration_since(entry.1) >= STRATEGY_CONFIRM_WINDOW,
+        })
+        .collect();
+    wanted.sort_by_key(|entry| (entry.core, entry.strategy));
+    StrategiesInputs { cores, wanted }
+}
+
+/// Build Strategies in the existing row order, using a map only for folder membership.
+pub(super) fn build_strategies(
+    store: &moon_core::session::CoreStore,
+    listed: &[(u64, String, String)],
+    wanted: &HashMap<(u64, u64), (bool, Instant, u64, u64)>,
+    can_control: bool,
+    now: Instant,
+) -> StrategiesDto {
     let mut cores = Vec::with_capacity(listed.len());
     for (id, name, exchange) in listed {
         let mut folders: Vec<StrategyFolderDto> = Vec::new();
-        if let Some(data) = store.core(id) {
-            let coins = strategy_coins(&data.orders);
+        if let Some(data) = store.core(*id) {
+            let coins = strategy_coins(data);
+            let mut folder_slots: HashMap<String, usize> = HashMap::new();
             for row in &data.strategies {
                 let path = moon_core::feed::strategy_path::split_path(&row.folder_path).join("/");
-                let entry = host.state().mini_strategy_wanted.get(&(id, row.id));
+                let entry = wanted.get(&(*id, row.id));
                 let pending = entry.and_then(|entry| {
                     strategy_pending(
                         *entry,
@@ -311,35 +345,85 @@ pub(super) fn mini_strategies(
                     pending,
                     coins: coins.get(&row.id).cloned().unwrap_or_default(),
                 };
-                match folders.iter_mut().find(|folder| folder.path == path) {
-                    Some(folder) => folder.strategies.push(strategy),
-                    None => folders.push(StrategyFolderDto {
+                if let Some(&slot) = folder_slots.get(&path) {
+                    folders[slot].strategies.push(strategy);
+                } else {
+                    folder_slots.insert(path.clone(), folders.len());
+                    folders.push(StrategyFolderDto {
                         path,
                         strategies: vec![strategy],
-                    }),
+                    });
                 }
             }
         }
         cores.push(CoreStrategiesDto {
-            core: id,
-            core_name: name,
-            exchange,
+            core: *id,
+            core_name: name.clone(),
+            exchange: exchange.clone(),
             folders,
         });
     }
-    Ok(StrategiesDto { cores, can_control })
+    StrategiesDto { cores, can_control }
 }
 
-/// Index only this core's active orders, keeping strategy coin lists stable and unique.
-pub(super) fn strategy_coins(
-    orders: &[moon_core::feed::OrderRow],
-) -> HashMap<u64, Vec<CoinRefDto>> {
+/// Strategies of the chat's cores, grouped by folder, with active coins and pending toggles.
+///
+/// Confirmed, vanished and settled toggle entries are dropped from the pending map first. An
+/// unchanged poll answers from the cached DTO, including the pending-to-timed-out time boundary.
+pub(super) fn mini_strategies(
+    host: &mut dyn TgHost,
+    chat_id: i64,
+) -> Result<StrategiesDto, MiniAppApiError> {
+    let access = mini_access(host, chat_id).ok_or(MiniAppApiError::Rejected)?;
+    let can_control = matches!(access, TelegramReportAccess::Owner);
+    prune_mini_strategy_wanted(host);
+    let listed = visible_cores(host, &access);
+    let now = Instant::now();
+    let inputs = strategies_inputs(
+        host.session().store(),
+        &listed,
+        &host.state().mini_strategy_wanted,
+        now,
+    );
+    if let Some(dto) = host
+        .state()
+        .mini_strategies_last
+        .as_ref()
+        .and_then(|cached| {
+            (cached.chat == chat_id && cached.access == access && cached.inputs == inputs)
+                .then(|| cached.dto.clone())
+        })
+    {
+        return Ok(dto);
+    }
+    let dto = build_strategies(
+        host.session().store(),
+        &listed,
+        &host.state().mini_strategy_wanted,
+        can_control,
+        now,
+    );
+    host.state_mut().mini_strategies_last = Some(CachedStrategies {
+        chat: chat_id,
+        access,
+        inputs,
+        dto: dto.clone(),
+    });
+    Ok(dto)
+}
+
+/// Format this core's indexed active orders, keeping strategy coin lists stable and unique.
+pub(super) fn strategy_coins(data: &CoreData) -> HashMap<u64, Vec<CoinRefDto>> {
     let mut coins: HashMap<u64, Vec<CoinRefDto>> = HashMap::new();
-    for order in orders.iter().filter(|order| !order.job_is_done) {
-        coins.entry(order.strat_id).or_default().push(CoinRefDto {
-            coin: order.coin.clone(),
-            market: order.market.clone(),
-        });
+    for (strategy, positions) in data.order_index.strategies() {
+        let values = coins.entry(strategy).or_default();
+        values.extend(positions.iter().map(|&position| {
+            let order = &data.orders[position];
+            CoinRefDto {
+                coin: order.coin.clone(),
+                market: order.market.clone(),
+            }
+        }));
     }
     for values in coins.values_mut() {
         values.sort_by(|a, b| a.market.cmp(&b.market).then(a.coin.cmp(&b.coin)));
@@ -701,6 +785,80 @@ pub(super) fn coin_rows(
     rows
 }
 
+/// Capture order revisions, display fields, conversion rates and panic state without walking rows.
+pub(super) fn orders_inputs(
+    store: &moon_core::session::CoreStore,
+    listed: &[(u64, String, String)],
+    mut usd_rate: impl FnMut(u64, &str) -> Option<f64>,
+    mut panic_armed: impl FnMut(u64, &str) -> bool,
+) -> OrdersInputs {
+    let cores = listed
+        .iter()
+        .map(|(id, name, exchange)| {
+            let data = store.core(*id);
+            let values = data
+                .into_iter()
+                .flat_map(|data| data.order_index.quote_markets())
+                .map(|(quote, market)| OrderValueInputs {
+                    usd_rate: usd_rate(*id, &order_quote(quote, market)),
+                    panic_armed: panic_armed(*id, market),
+                })
+                .collect();
+            OrderCoreInputs {
+                core: *id,
+                name: name.clone(),
+                exchange: exchange.clone(),
+                revision: data.map_or(0, |data| data.orders_table_rev),
+                values,
+            }
+        })
+        .collect();
+    OrdersInputs { cores }
+}
+
+/// Format a changed Orders response and capture closing-chart identities without cloning full rows.
+pub(super) fn build_orders(
+    host: &dyn TgHost,
+    store: &moon_core::session::CoreStore,
+    listed: &[(u64, String, String)],
+    can_control: bool,
+) -> (OrdersDto, Vec<(u64, super::charts::OrderSnapshot)>) {
+    let mut snapshots = Vec::new();
+    let mut orders = Vec::new();
+    for (id, name, exchange) in listed {
+        if let Some(data) = store.core(*id) {
+            for order in &data.orders {
+                snapshots.push((*id, super::charts::OrderSnapshot::new(order)));
+                orders.push(order_dto(host, *id, name.clone(), exchange.clone(), order));
+            }
+        }
+    }
+    (
+        OrdersDto {
+            orders: orders.into(),
+            can_control,
+        },
+        snapshots,
+    )
+}
+
+/// Keep only retained identities captured by the current Orders build, not older unrelated rows.
+pub(super) fn current_order_snapshots(
+    state: &crate::TelegramState,
+    current: &[(u64, super::charts::OrderSnapshot)],
+) -> Vec<(u64, super::charts::OrderSnapshot)> {
+    let keys: HashSet<(u64, u64)> = current
+        .iter()
+        .map(|(core, snapshot)| (*core, snapshot.uid))
+        .collect();
+    state
+        .mini_order_snapshots
+        .iter()
+        .filter(|(key, _)| keys.contains(key))
+        .map(|(key, snapshot)| (key.0, snapshot.clone()))
+        .collect()
+}
+
 /// Open orders for the chat's cores. `can_control` is true only for the owner.
 pub(super) fn mini_orders(
     host: &mut dyn TgHost,
@@ -708,26 +866,30 @@ pub(super) fn mini_orders(
 ) -> Result<OrdersDto, MiniAppApiError> {
     let access = mini_access(host, chat_id).ok_or(MiniAppApiError::Rejected)?;
     let can_control = matches!(access, TelegramReportAccess::Owner);
-    let cores = visible_cores(host, &access);
-    let staged = {
-        let store = host.session().store();
-        let mut staged = Vec::new();
-        for (id, name, exchange) in &cores {
-            if let Some(data) = store.core(*id) {
-                for order in &data.orders {
-                    staged.push((*id, name.clone(), exchange.clone(), order.clone()));
-                }
-            }
-        }
-        staged
-    };
-    let mut orders = Vec::with_capacity(staged.len());
-    for (id, name, exchange, order) in staged {
-        super::charts::remember_order(host.state_mut(), id, &order);
-        orders.push(order_dto(host, id, name, exchange, &order));
+    let listed = visible_cores(host, &access);
+    let source = host.session().market_source();
+    let inputs = orders_inputs(
+        host.session().store(),
+        &listed,
+        |core, quote| source.currency_usd_rate(core, quote),
+        |core, market| host.is_panic_armed(core, market),
+    );
+    if let Some((dto, snapshots)) = host.state().mini_orders_last.as_ref().and_then(|cached| {
+        (cached.chat == chat_id && cached.access == access && cached.inputs == inputs)
+            .then(|| (cached.dto.clone(), cached.snapshots.clone()))
+    }) {
+        super::charts::remember_order_snapshots(host.state_mut(), snapshots);
+        return Ok(dto);
     }
-    Ok(OrdersDto {
-        orders,
-        can_control,
-    })
+    let (dto, snapshots) = build_orders(&*host, host.session().store(), &listed, can_control);
+    let cached_snapshots = current_order_snapshots(host.state(), &snapshots);
+    super::charts::remember_order_snapshots(host.state_mut(), snapshots);
+    host.state_mut().mini_orders_last = Some(CachedOrders {
+        chat: chat_id,
+        access,
+        inputs,
+        dto: dto.clone(),
+        snapshots: cached_snapshots,
+    });
+    Ok(dto)
 }

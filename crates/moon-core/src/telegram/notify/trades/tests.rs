@@ -1,8 +1,218 @@
 //! Pins for trade announcement. Each test names the edit that would break it.
 
-use moon_core::telegram::notify::{CoreScope, NotifyLedger, TradeRule};
+use crate::telegram::notify::{CoreScope, NotifyLedger, TradeRule};
 
 use super::*;
+
+/// Freeze the original offered-set walk so changing held-row cleanup cannot alter cards.
+fn frozen_decide_gate(
+    rule: &Gate<'_>,
+    ledger: Book<'_>,
+    visible: &[u64],
+    trades: &[ClosedTrade],
+    now_utc: i64,
+) -> Vec<Announced> {
+    if !rule.on {
+        ledger.seen.clear();
+        ledger.held.clear();
+        return Vec::new();
+    }
+    let Some(read_from) = floor_from(ledger.enabled_utc, now_utc) else {
+        prune_closes(ledger.seen, now_utc.saturating_sub(SEEN_WINDOW_SECS));
+        return Vec::new();
+    };
+    let mut announced = Vec::new();
+    // Held closes this read still offers; any other is let go below, so a close whose core left
+    // the chat, or whose row is gone, cannot keep forcing reads until the window drops it.
+    let mut offered: BTreeSet<(u64, i64)> = BTreeSet::new();
+    for trade in trades {
+        if trade.close_utc < read_from || !core_selected(rule, visible, trade.core) {
+            continue;
+        }
+        offered.insert((trade.core, trade.rec_id));
+        if ledger
+            .seen
+            .get(&trade.core)
+            .is_some_and(|rows| rows.contains_key(&trade.rec_id))
+        {
+            continue;
+        }
+        let verdict = verdict(rule, trade);
+        if verdict == Verdict::Unknown {
+            let first = *ledger
+                .held
+                .entry(trade.core)
+                .or_default()
+                .entry(trade.rec_id)
+                .or_insert(now_utc);
+            if now_utc < first.saturating_add(HOLD_SECS) {
+                continue;
+            }
+        }
+        unhold(ledger.held, trade);
+        ledger
+            .seen
+            .entry(trade.core)
+            .or_default()
+            .insert(trade.rec_id, trade.close_utc);
+        if verdict != Verdict::Fail {
+            announced.push(Announced {
+                trade: trade.clone(),
+                unchecked: verdict == Verdict::Unknown,
+            });
+        }
+    }
+    announced.sort_by(|left, right| {
+        left.trade
+            .close_utc
+            .cmp(&right.trade.close_utc)
+            .then(left.trade.rec_id.cmp(&right.trade.rec_id))
+    });
+    let window_edge = now_utc.saturating_sub(SEEN_WINDOW_SECS);
+    prune_closes(ledger.seen, window_edge);
+    ledger.held.retain(|core, rows| {
+        rows.retain(|rec_id, _| offered.contains(&(*core, *rec_id)));
+        !rows.is_empty()
+    });
+    announced
+}
+
+/// A full decision must preserve held clocks, filtered rows and stable tied-close ordering.
+#[test]
+fn decision_matches_frozen_gate_across_rechecks() {
+    let mut rows: Vec<_> = (0..30)
+        .map(|id| ClosedTrade {
+            core: id as u64 % 3 + 1,
+            rec_id: id,
+            close_utc: 1_000 + id / 2,
+            coin: "XALPHA".into(),
+            core_name: "CORE_A".into(),
+            strategy: "UNIT_01".into(),
+            profit_usd: (id % 4 != 0).then_some(id as f64 - 15.0),
+            profit_native: Some(1.0),
+            volume_usd: Some(100.0),
+            ..Default::default()
+        })
+        .collect();
+    rows.reverse();
+    rows.push(rows[3].clone());
+    for mode in 0..8 {
+        let rule = TradeRule {
+            on: mode != 0,
+            profit_at_least_usd: Some(3.0),
+            loss_at_least_usd: Some(4.0),
+            ..Default::default()
+        };
+        let mut old = NotifyLedger {
+            trades_enabled_utc: (mode != 1).then_some(999),
+            ..Default::default()
+        };
+        old.seen.entry(1).or_default().insert(0, 1_000);
+        old.held.entry(1).or_default().insert(0, 1_000);
+        old.held.entry(9).or_default().insert(999, 1_000);
+        let mut new = old.clone();
+        for now in [1_100, 1_200, 1_500, 300_000] {
+            let gate = Gate {
+                on: rule.on,
+                cores: &rule.cores,
+                min_volume_usd: None,
+                profit_at_least_usd: rule.profit_at_least_usd,
+                loss_at_least_usd: rule.loss_at_least_usd,
+                by_quote: &rule.by_quote,
+                needs_usd: mode == 2,
+            };
+            let expected = frozen_decide_gate(
+                &gate,
+                Book {
+                    enabled_utc: old.trades_enabled_utc,
+                    seen: &mut old.seen,
+                    held: &mut old.held,
+                },
+                &[1, 2],
+                &rows,
+                now,
+            );
+            let actual = decide_gate(
+                &gate,
+                Book {
+                    enabled_utc: new.trades_enabled_utc,
+                    seen: &mut new.seen,
+                    held: &mut new.held,
+                },
+                &[1, 2],
+                &rows,
+                now,
+            );
+            assert_eq!(actual, expected, "mode={mode} now={now}");
+            assert_eq!(new, old, "mode={mode} now={now}");
+        }
+    }
+}
+
+/// Time every retained close at 5000 deals per core; rebuilding keys for seen cards is the regression.
+#[test]
+#[ignore = "scale probe"]
+fn probe_notify_seen_scale() {
+    let rows: Vec<_> = (0..50_000)
+        .map(|id| ClosedTrade {
+            core: id as u64 % 10 + 1,
+            rec_id: id,
+            close_utc: 1_000,
+            coin: "XALPHA".into(),
+            ..Default::default()
+        })
+        .collect();
+    let rule = TradeRule {
+        on: true,
+        ..Default::default()
+    };
+    let gate = Gate {
+        on: true,
+        cores: &rule.cores,
+        min_volume_usd: None,
+        profit_at_least_usd: None,
+        loss_at_least_usd: None,
+        by_quote: &[],
+        needs_usd: false,
+    };
+    let mut old = NotifyLedger {
+        trades_enabled_utc: Some(999),
+        ..Default::default()
+    };
+    for row in &rows {
+        old.seen
+            .entry(row.core)
+            .or_default()
+            .insert(row.rec_id, row.close_utc);
+    }
+    let mut new = old.clone();
+    let visible: Vec<_> = (1..=10).collect();
+    let start = std::time::Instant::now();
+    for _ in 0..5 {
+        assert!(
+            frozen_decide_gate(
+                &gate,
+                Book {
+                    enabled_utc: old.trades_enabled_utc,
+                    seen: &mut old.seen,
+                    held: &mut old.held
+                },
+                &visible,
+                &rows,
+                2_000
+            )
+            .is_empty()
+        );
+    }
+    let before = start.elapsed().as_secs_f64() * 200.0;
+    let start = std::time::Instant::now();
+    for _ in 0..5 {
+        assert!(decide(&rule, &mut new, &visible, &rows, 2_000).is_empty());
+    }
+    let after = start.elapsed().as_secs_f64() * 200.0;
+    eprintln!("probe seen 50000: {before:.3} -> {after:.3} ms");
+    assert_eq!(old, new);
+}
 
 fn trade(core: u64, rec_id: i64, close_utc: i64) -> ClosedTrade {
     ClosedTrade {
@@ -153,7 +363,7 @@ fn filter_boundaries_send_the_exact_figure() {
 /// A BTC-quoted close with its own amounts and no valuation yet.
 fn btc_trade(rec_id: i64, close_utc: i64) -> ClosedTrade {
     let mut row = trade(1, rec_id, close_utc);
-    row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(0);
+    row.quote = crate::db::QuoteCurrency::from_report_ordinal(0);
     row.profit_native = Some(0.0001);
     row.volume_native = Some(0.01);
     row
@@ -288,7 +498,7 @@ fn a_stablecoin_amount_counts_one_to_one() {
     let mut row = trade(1, 1, now - 10);
     row.profit_usd = None;
     row.volume_usd = None;
-    row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(8);
+    row.quote = crate::db::QuoteCurrency::from_report_ordinal(8);
     row.profit_native = Some(3.3);
     row.volume_native = Some(150.0);
     assert_eq!(judged(&rule, &row, now), (true, true));
@@ -296,7 +506,7 @@ fn a_stablecoin_amount_counts_one_to_one() {
     row.profit_native = Some(2.0);
     assert_eq!(judged(&rule, &row, now), (false, true));
     row.rec_id = 3;
-    row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(0);
+    row.quote = crate::db::QuoteCurrency::from_report_ordinal(0);
     row.profit_native = Some(0.5);
     assert_eq!(judged(&rule, &row, now), (false, false));
 }
@@ -401,7 +611,7 @@ fn judged(rule: &TradeRule, row: &ClosedTrade, now: i64) -> (bool, bool) {
 /// A RUB close with its own amounts and no valuation — none exists for RUB.
 fn rub_trade(rec_id: i64, close_utc: i64, profit: f64, volume: f64) -> ClosedTrade {
     let mut row = trade(1, rec_id, close_utc);
-    row.quote = moon_core::db::QuoteCurrency::from_ticker("RUB");
+    row.quote = crate::db::QuoteCurrency::from_ticker("RUB");
     row.profit_usd = None;
     row.volume_usd = None;
     row.profit_native = Some(profit);
@@ -410,11 +620,11 @@ fn rub_trade(rec_id: i64, close_utc: i64, profit: f64, volume: f64) -> ClosedTra
 }
 
 /// A rule with a RUB row: the dollar thresholds stay set and must not touch a RUB trade.
-fn rub_rule(row: moon_core::telegram::notify::QuoteThresholds) -> TradeRule {
+fn rub_rule(row: crate::telegram::notify::QuoteThresholds) -> TradeRule {
     let mut rule = on_rule();
     rule.min_volume_usd = Some(1_000_000.0);
     rule.profit_at_least_usd = Some(1_000_000.0);
-    rule.by_quote = vec![moon_core::telegram::notify::QuoteThresholds {
+    rule.by_quote = vec![crate::telegram::notify::QuoteThresholds {
         quote: "RUB".to_string(),
         ..row
     }];
@@ -426,7 +636,7 @@ fn rub_rule(row: moon_core::telegram::notify::QuoteThresholds) -> TradeRule {
 /// profit, its own volume, the row's floors — and never marked unchecked.
 #[test]
 fn a_currency_row_judges_the_trade_in_its_own_money_at_once() {
-    use moon_core::telegram::notify::QuoteThresholds;
+    use crate::telegram::notify::QuoteThresholds;
     let now = 1_700_000_000;
     let rule = rub_rule(QuoteThresholds {
         min_volume: Some(1_000.0),
@@ -453,7 +663,7 @@ fn a_currency_row_judges_the_trade_in_its_own_money_at_once() {
 #[test]
 fn an_empty_currency_row_sends_every_trade_in_it() {
     let now = 1_700_000_000;
-    let rule = rub_rule(moon_core::telegram::notify::QuoteThresholds::default());
+    let rule = rub_rule(crate::telegram::notify::QuoteThresholds::default());
     assert_eq!(
         judged(&rule, &rub_trade(1, now - 10, -0.5, 10.0), now),
         (true, true)
@@ -464,7 +674,7 @@ fn an_empty_currency_row_sends_every_trade_in_it() {
 /// bring a ruble amount later, so holding it would only send it unchecked five minutes on.
 #[test]
 fn a_currency_row_fails_a_missing_amount_at_once() {
-    use moon_core::telegram::notify::QuoteThresholds;
+    use crate::telegram::notify::QuoteThresholds;
     let now = 1_700_000_000;
     let rule = rub_rule(QuoteThresholds {
         min_volume: Some(1_000.0),
@@ -479,7 +689,7 @@ fn a_currency_row_fails_a_missing_amount_at_once() {
 #[test]
 fn a_currency_row_leaves_other_currencies_to_the_dollars() {
     let now = 1_700_000_000;
-    let rule = rub_rule(moon_core::telegram::notify::QuoteThresholds::default());
+    let rule = rub_rule(crate::telegram::notify::QuoteThresholds::default());
     // Unvalued in both figures: a known dollar volume would fail the rule's floor at once.
     let mut row = btc_trade(1, now - 10);
     row.profit_usd = None;

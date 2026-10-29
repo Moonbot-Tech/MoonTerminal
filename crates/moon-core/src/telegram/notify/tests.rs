@@ -247,8 +247,10 @@ fn sample_file() -> NotifyFile {
                 photo: Some("7-98.png".to_string()),
                 ..Pending::default()
             },
-        ],
+        ]
+        .into(),
         next_id: 3,
+        ack_sequence: 0,
     }
 }
 

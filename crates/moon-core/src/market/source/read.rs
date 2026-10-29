@@ -1160,206 +1160,47 @@ impl MarketDataSource {
         })
     }
 
-    /// Build a frozen snapshot for a detection card.
+    /// Capture a card's provider identity and clock without reading history or waiting on disk.
     ///
-    /// The snapshot contains the latest `bars` 5-minute OHLC candles, ordered oldest to newest,
-    /// plus the exchange name and type. History combines the provider's retained 5-minute snapshot,
-    /// the local kline cache populated for every market by the background recorder, and the live
-    /// trade-ring tail. None of these sources calls the exchange API here. Data belongs to the
-    /// exchange's deduplicated provider and is shared by cores on the same exchange and market.
-    /// Build this once when the detection occurs and retain it in the card. Missing provider,
-    /// client, or snapshot yields the empty default. Missing history leaves `bars` and `line` empty
-    /// while exchange metadata can remain populated.
-    pub fn detect_snapshot(&self, core: CoreId, market: &str, bars: usize) -> DetectSnapshot {
-        let t0 = std::time::Instant::now();
-        let (client, kline_cache, exchange_key) = {
-            let inner = self.inner.read().expect("market source poisoned");
-            let Some(provider) = inner.core_provider.get(&core).copied() else {
-                return DetectSnapshot::default();
-            };
-            let Some(client) = inner.clients.get(&provider).and_then(SharedMoonClient::get) else {
-                return DetectSnapshot::default();
-            };
-            // Use the provider's stable exchange key for the kline cache, as in
-            // read_chart_history_into.
-            let exchange_key = inner
-                .provider_exchange
-                .get(&provider)
-                .map(|e| format!("{}:{:08x}", e.code, e.dex));
-            (client, inner.kline_cache.clone(), exchange_key)
-        };
-        let Some(snapshot) = client.snapshot_versioned() else {
-            return DetectSnapshot::default();
-        };
-        let mut out = DetectSnapshot::default();
-        // Read the venue and the connection type from the identity BaseCheck supplied. The venue
-        // comes from the platform CODE, as everywhere else; the reported name rides along only for
-        // an ordinal this build cannot name, and the type mask is a separate axis — it states which
-        // wallets the connection can trade, which is not the same question as which venue it is.
-        let info = snapshot.server_info();
-        out.venue = info
-            .exchange_code
-            .map(|code| {
-                crate::venue::CoreVenue::identify(
-                    code.stable_id(),
-                    info.dex_name.as_deref().unwrap_or_default(),
-                    info.exchange_name.as_deref(),
-                )
-            })
-            .filter(crate::venue::CoreVenue::is_nameable);
-        out.exchange_kind = exchange_kind_label(info);
-
-        let tf_ms: i64 = 300_000; // 5 minutes
+    /// The returned request must be built on a background executor. Capturing the immutable
+    /// client snapshot here prevents a later provider election from changing the card's venue.
+    pub fn prepare_detect_snapshot(
+        &self,
+        core: CoreId,
+        market: &str,
+        bars: usize,
+    ) -> super::DetectSnapshotRequest {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
-        // Candle mode takes its latest `bars` buckets, roughly two hours, from a 24-hour window;
-        // line mode uses every close in that window. `line_cap` is the maximum number of 5-minute
-        // buckets in 24 hours: 288.
-        let from_ms = now_ms - 24 * 3_600_000;
-        let line_cap = (24 * 3_600_000 / tf_ms) as usize;
-
-        // Build 5-minute candle buckets keyed by `t_open`, floored to the timeframe so sources
-        // align. Base 1 is the core's retained 5-minute startup snapshot, which supplies depth;
-        // base 2 is the local kline cache with real OHLC and overrides the snapshot; the trade ring
-        // is the live tail and overrides recent buckets. Insertion order defines freshness priority:
-        // snapshot < cache < ring. The snapshot used to be only an empty-data fallback, so the ring
-        // always supplied a few bars and caused the snapshot's depth to be ignored.
-        let mut buckets: std::collections::BTreeMap<i64, (f32, f32, f32, f32)> =
-            std::collections::BTreeMap::new();
-        let bucket_key = |t_ms: i64| (t_ms.max(0) / tf_ms) * tf_ms;
-        let mut snap5_n = 0usize;
-        let mut cache_n = 0usize;
-
-        if let Some(readers) = snapshot.market_history_readers(market) {
-            // Base 1 is the core's 5-minute snapshot. It carries only high and low, represented as
-            // open == high and close == low, so the body spans the range. Rows are stamped at the
-            // end of the period; shift them back one timeframe to align their open with the cache.
-            // As in the chart, normalize_ohlc and orient_range_rows orient these range-only candles
-            // by the average-price trend. Otherwise body-only rendering would color the entire
-            // history in one direction because close < open.
-            if let Some(candles) = readers.candles_5m {
-                let mut snap: Vec<ChartCandle> = Vec::new();
-                candles.with_last(line_cap, |view| {
-                    view.for_each(|c| {
-                        let (o, h, l, cl) = crate::market::candles::normalize_ohlc(
-                            c.open(),
-                            c.high(),
-                            c.low(),
-                            c.close(),
-                        );
-                        if h.is_finite() && l.is_finite() && h > 0.0 {
-                            snap.push(ChartCandle {
-                                t_open_ms: (c.time().unix_millis() - tf_ms) as f64,
-                                open: o,
-                                high: h,
-                                low: l,
-                                close: cl,
-                                volume: 0.0,
-                                quote_volume: 0.0,
-                            });
-                        }
-                    });
-                });
-                crate::market::candles::orient_range_rows(&mut snap);
-                for c in &snap {
-                    buckets.insert(
-                        bucket_key(c.t_open_ms as i64),
-                        (c.open, c.high, c.low, c.close),
-                    );
-                }
-                snap5_n = buckets.len();
-            }
-            // Base 2 is the kline cache: real OHLC from prior minutes and sessions at kind_min 5.
-            if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref()) {
-                for c in cache
-                    .read_range(ex, market, 5, from_ms, now_ms)
-                    .unwrap_or_default()
-                {
-                    if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
-                        buckets.insert(
-                            bucket_key(c.t_open_ms as i64),
-                            (c.open, c.high, c.low, c.close),
-                        );
-                    }
-                }
-            }
-            cache_n = buckets.len();
-            // Aggregate the provider trade-ring tail into 5-minute candles that override recent
-            // buckets.
-            if let Some(reader) = readers.futures_trades.or(readers.spot_trades) {
-                let from_t = moonproto::MoonTime::from_unix_millis(from_ms);
-                let to_t = moonproto::MoonTime::from_unix_millis(now_ms);
-                let mut rows = Vec::new();
-                reader.copy_time_range(from_t, to_t, reader.capacity(), &mut rows);
-                let mut ticks = Vec::new();
-                rows_to_ticks(&rows, &mut ticks);
-                let mut candles = Vec::new();
-                crate::market::candles::aggregate_trades(&ticks, tf_ms, &mut candles);
-                for c in &candles {
-                    if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
-                        buckets.insert(
-                            bucket_key(c.t_open_ms as i64),
-                            (c.open, c.high, c.low, c.close),
-                        );
-                    }
-                }
-            }
+        let address = {
+            let inner = self.inner.read().expect("market source poisoned");
+            inner.core_provider.get(&core).and_then(|provider| {
+                inner
+                    .clients
+                    .get(provider)
+                    .and_then(SharedMoonClient::get)
+                    .map(|client| {
+                        let exchange_key = inner
+                            .provider_exchange
+                            .get(provider)
+                            .map(|e| format!("{}:{:08x}", e.code, e.dex));
+                        (client, inner.kline_cache.clone(), exchange_key)
+                    })
+            })
+        };
+        let (snapshot, kline_cache, exchange_key) = match address {
+            Some((client, cache, exchange)) => (client.snapshot_versioned(), cache, exchange),
+            None => (None, None, None),
+        };
+        super::DetectSnapshotRequest {
+            snapshot,
+            kline_cache,
+            exchange_key,
+            market: market.to_string(),
+            bars,
+            now_ms,
         }
-
-        // With the detect channel on, report actual bucket structure: candle count, total span, maximum
-        // time gap, and price range. Index-based rendering hides time gaps, but they reveal sparse
-        // data; a price outlier explains flattening. This avoids guessing about discontinuities.
-        if crate::detect_diag::enabled() {
-            let keys: Vec<i64> = buckets.keys().copied().collect();
-            let max_gap = keys.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
-            let (mut pmin, mut pmax) = (f32::INFINITY, f32::NEG_INFINITY);
-            for &(_, bh, bl, _) in buckets.values() {
-                pmax = pmax.max(bh);
-                pmin = pmin.min(bl);
-            }
-            let span_ms = keys.last().copied().unwrap_or(0) - keys.first().copied().unwrap_or(0);
-            log::info!(
-                "detect_thumb {market}: n={} (snap5={} cache+={} ex_key={}) span_ms={} \
-                 max_gap_ms={} (tf={}) price=[{:.6},{:.6}] data={:.1}мкс",
-                keys.len(),
-                snap5_n,
-                cache_n.saturating_sub(snap5_n),
-                exchange_key.as_deref().unwrap_or("<none>"),
-                span_ms,
-                max_gap,
-                tf_ms,
-                pmin,
-                pmax,
-                t0.elapsed().as_nanos() as f64 / 1000.0
-            );
-        }
-
-        // Line mode uses every close in the 24-hour window, ordered oldest to newest.
-        out.line = buckets.values().map(|&(_, _, _, c)| c).collect();
-        // Candle mode uses the latest `bars` buckets, roughly two hours, oldest to newest.
-        let start = buckets.len().saturating_sub(bars);
-        out.bars = buckets.values().skip(start).copied().collect();
-        // Derive actual 1-hour and 24-hour price changes from our buckets by comparing now with the
-        // earlier price, so the deltas match the line's movement. MoonProto's coin_*_delta measures
-        // deviation from the period average instead and remains the header ticker metric.
-        if let Some((_, &(_, _, _, last))) = buckets.iter().next_back() {
-            let close_at = |ago_ms: i64| -> Option<f32> {
-                let target = now_ms - ago_ms;
-                buckets
-                    .range(..=target)
-                    .next_back()
-                    .map(|(_, &(_, _, _, c))| c)
-                    .or_else(|| buckets.values().next().map(|&(_, _, _, c)| c))
-            };
-            if let Some(c1) = close_at(3_600_000).filter(|v| *v > 0.0) {
-                out.delta_1h = (last - c1) / c1 * 100.0;
-            }
-            if let Some(c24) = close_at(24 * 3_600_000).filter(|v| *v > 0.0) {
-                out.delta_24h = (last - c24) / c24 * 100.0;
-            }
-        }
-        out
     }
 
     /// Write one core's catalog spellings for the coins the naming channel follows.
@@ -1538,3 +1379,206 @@ impl MarketDataSource {
             .map(|view| (&view.book, view.book_rev)))
     }
 }
+
+impl super::DetectSnapshotRequest {
+    /// Assemble the frozen chart and price changes; may wait on the cache, so never call on GPUI.
+    pub fn build(self) -> DetectSnapshot {
+        let t0 = std::time::Instant::now();
+        let Self {
+            snapshot,
+            kline_cache,
+            exchange_key,
+            market,
+            bars,
+            now_ms,
+        } = self;
+        let Some(snapshot) = snapshot else {
+            return DetectSnapshot::default();
+        };
+        let market = market.as_str();
+        let mut out = DetectSnapshot::default();
+        // Read the venue and the connection type from the identity BaseCheck supplied. The venue
+        // comes from the platform CODE, as everywhere else; the reported name rides along only for
+        // an ordinal this build cannot name, and the type mask is a separate axis — it states which
+        // wallets the connection can trade, which is not the same question as which venue it is.
+        let info = snapshot.server_info();
+        out.venue = info
+            .exchange_code
+            .map(|code| {
+                crate::venue::CoreVenue::identify(
+                    code.stable_id(),
+                    info.dex_name.as_deref().unwrap_or_default(),
+                    info.exchange_name.as_deref(),
+                )
+            })
+            .filter(crate::venue::CoreVenue::is_nameable);
+        out.exchange_kind = exchange_kind_label(info);
+
+        let tf_ms: i64 = 300_000; // 5 minutes
+        // Candle mode takes its latest `bars` buckets, roughly two hours, from a 24-hour window;
+        // line mode uses every close in that window. `line_cap` is the maximum number of 5-minute
+        // buckets in 24 hours: 288.
+        let from_ms = now_ms - 24 * 3_600_000;
+        let line_cap = (24 * 3_600_000 / tf_ms) as usize;
+
+        // Build 5-minute candle buckets keyed by `t_open`, floored to the timeframe so sources
+        // align. Base 1 is the core's retained 5-minute startup snapshot, which supplies depth;
+        // base 2 is the local kline cache with real OHLC and overrides the snapshot; the trade ring
+        // is the live tail and overrides recent buckets. Insertion order defines freshness priority:
+        // snapshot < cache < ring. The snapshot used to be only an empty-data fallback, so the ring
+        // always supplied a few bars and caused the snapshot's depth to be ignored.
+        let mut buckets: std::collections::BTreeMap<i64, (f32, f32, f32, f32)> =
+            std::collections::BTreeMap::new();
+        let bucket_key = |t_ms: i64| (t_ms.max(0) / tf_ms) * tf_ms;
+        let mut snap5_n = 0usize;
+        let mut cache_n = 0usize;
+
+        if let Some(readers) = snapshot.market_history_readers(market) {
+            // Base 1 is the core's 5-minute snapshot. It carries only high and low, represented as
+            // open == high and close == low, so the body spans the range. Rows are stamped at the
+            // end of the period; shift them back one timeframe to align their open with the cache.
+            // As in the chart, normalize_ohlc and orient_range_rows orient these range-only candles
+            // by the average-price trend. Otherwise body-only rendering would color the entire
+            // history in one direction because close < open.
+            if let Some(candles) = readers.candles_5m {
+                let mut snap: Vec<ChartCandle> = Vec::new();
+                candles.with_last(line_cap, |view| {
+                    view.for_each(|c| {
+                        let (o, h, l, cl) = crate::market::candles::normalize_ohlc(
+                            c.open(),
+                            c.high(),
+                            c.low(),
+                            c.close(),
+                        );
+                        if h.is_finite() && l.is_finite() && h > 0.0 {
+                            snap.push(ChartCandle {
+                                t_open_ms: (c.time().unix_millis() - tf_ms) as f64,
+                                open: o,
+                                high: h,
+                                low: l,
+                                close: cl,
+                                volume: 0.0,
+                                quote_volume: 0.0,
+                            });
+                        }
+                    });
+                });
+                crate::market::candles::orient_range_rows(&mut snap);
+                for c in &snap {
+                    buckets.insert(
+                        bucket_key(c.t_open_ms as i64),
+                        (c.open, c.high, c.low, c.close),
+                    );
+                }
+                snap5_n = buckets.len();
+            }
+            // Base 2 is the kline cache: real OHLC from prior minutes and sessions at kind_min 5.
+            if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref()) {
+                for c in cache
+                    .read_range(ex, market, 5, from_ms, now_ms)
+                    .unwrap_or_default()
+                {
+                    if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
+                        buckets.insert(
+                            bucket_key(c.t_open_ms as i64),
+                            (c.open, c.high, c.low, c.close),
+                        );
+                    }
+                }
+            }
+            cache_n = buckets.len();
+            // Aggregate the provider trade-ring tail into 5-minute candles that override recent
+            // buckets.
+            if let Some(reader) = readers.futures_trades.or(readers.spot_trades) {
+                // Keep the ring's exact time predicate, including late resends, without
+                // reserving capacity for prints outside the thumbnail's 24-hour window.
+                let cursor =
+                    reader.cursor_at_or_after_time(moonproto::MoonTime::from_unix_millis(from_ms));
+                let rows = reader.with_from_cursor(cursor, usize::MAX, |view| {
+                    let (first, second) = view.as_slices();
+                    detect_trade_rows(first.iter().chain(second.iter()), from_ms, now_ms)
+                });
+                let mut ticks = Vec::new();
+                rows_to_ticks(&rows, &mut ticks);
+                let mut candles = Vec::new();
+                crate::market::candles::aggregate_trades(&ticks, tf_ms, &mut candles);
+                for c in &candles {
+                    if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
+                        buckets.insert(
+                            bucket_key(c.t_open_ms as i64),
+                            (c.open, c.high, c.low, c.close),
+                        );
+                    }
+                }
+            }
+        }
+
+        // With the detect channel on, report actual bucket structure: candle count, total span, maximum
+        // time gap, and price range. Index-based rendering hides time gaps, but they reveal sparse
+        // data; a price outlier explains flattening. This avoids guessing about discontinuities.
+        if crate::detect_diag::enabled() {
+            let keys: Vec<i64> = buckets.keys().copied().collect();
+            let max_gap = keys.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
+            let (mut pmin, mut pmax) = (f32::INFINITY, f32::NEG_INFINITY);
+            for &(_, bh, bl, _) in buckets.values() {
+                pmax = pmax.max(bh);
+                pmin = pmin.min(bl);
+            }
+            let span_ms = keys.last().copied().unwrap_or(0) - keys.first().copied().unwrap_or(0);
+            log::info!(
+                "detect_thumb {market}: n={} (snap5={} cache+={} ex_key={}) span_ms={} \
+                 max_gap_ms={} (tf={}) price=[{:.6},{:.6}] data={:.1}мкс",
+                keys.len(),
+                snap5_n,
+                cache_n.saturating_sub(snap5_n),
+                exchange_key.as_deref().unwrap_or("<none>"),
+                span_ms,
+                max_gap,
+                tf_ms,
+                pmin,
+                pmax,
+                t0.elapsed().as_nanos() as f64 / 1000.0
+            );
+        }
+
+        // Line mode uses every close in the 24-hour window, ordered oldest to newest.
+        out.line = buckets.values().map(|&(_, _, _, c)| c).collect();
+        // Candle mode uses the latest `bars` buckets, roughly two hours, oldest to newest.
+        let start = buckets.len().saturating_sub(bars);
+        out.bars = buckets.values().skip(start).copied().collect();
+        // Derive actual 1-hour and 24-hour price changes from our buckets by comparing now with the
+        // earlier price, so the deltas match the line's movement. MoonProto's coin_*_delta measures
+        // deviation from the period average instead and remains the header ticker metric.
+        if let Some((_, &(_, _, _, last))) = buckets.iter().next_back() {
+            let close_at = |ago_ms: i64| -> Option<f32> {
+                let target = now_ms - ago_ms;
+                buckets
+                    .range(..=target)
+                    .next_back()
+                    .map(|(_, &(_, _, _, c))| c)
+                    .or_else(|| buckets.values().next().map(|&(_, _, _, c)| c))
+            };
+            if let Some(c1) = close_at(3_600_000).filter(|v| *v > 0.0) {
+                out.delta_1h = (last - c1) / c1 * 100.0;
+            }
+            if let Some(c24) = close_at(24 * 3_600_000).filter(|v| *v > 0.0) {
+                out.delta_24h = (last - c24) / c24 * 100.0;
+            }
+        }
+        out
+    }
+}
+
+/// Copy the frozen thumbnail window without reserving the provider ring's whole capacity.
+fn detect_trade_rows<'a>(
+    rows: impl Iterator<Item = &'a moonproto::state::TradeHistoryRow>,
+    from_ms: i64,
+    now_ms: i64,
+) -> Vec<moonproto::state::TradeHistoryRow> {
+    rows.filter(|row| row.unix_millis() >= from_ms && row.unix_millis() < now_ms)
+        .copied()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests;

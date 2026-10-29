@@ -147,7 +147,7 @@ impl TickHost {
     /// Returns:
     ///     The pending rows stored for every chat.
     pub(crate) fn outbox(&self) -> Vec<Pending> {
-        self.file().outbox
+        self.file().outbox.into_iter().collect()
     }
 
     /// HTML bodies in send order.

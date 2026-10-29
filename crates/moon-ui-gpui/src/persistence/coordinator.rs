@@ -1,10 +1,10 @@
-//! Serial background persistence for layout and Classic window ownership snapshots.
+//! Serial background persistence for window ownership and detection display preferences.
 
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use moon_core::config::WindowLayout;
+use moon_core::config::{DetectViewFile, WindowLayout};
 use moon_ui::DockTopologyByName;
 
 use crate::persistence::dock_persist::DockMap;
@@ -22,18 +22,21 @@ pub(crate) struct PersistenceSnapshot {
     classic: Option<(DockMap, Vec<DetachedSpec>)>,
     /// Complete shared Auto topology when its persistence authority was dirty.
     auto: Option<DockTopologyByName>,
+    /// Complete detection display authority when a popup control changed.
+    detects: Option<DetectViewFile>,
 }
 
 impl PersistenceSnapshot {
     /// Build an empty request that performs no file writes.
     ///
     /// Returns:
-    ///     A snapshot with neither persistence class selected.
+    ///     A snapshot with no persistence class selected.
     pub(crate) fn empty() -> Self {
         Self {
             layout: None,
             classic: None,
             auto: None,
+            detects: None,
         }
     }
 
@@ -74,12 +77,21 @@ impl PersistenceSnapshot {
         self
     }
 
+    /// Attach the complete detection display authority for the serial settings writer.
+    pub(crate) fn with_detects(mut self, detects: DetectViewFile) -> Self {
+        self.detects = Some(detects);
+        self
+    }
+
     /// Return whether this request contains no selected persistence class.
     ///
     /// Returns:
     ///     `true` when dispatching the snapshot would perform no work.
     pub(crate) fn is_empty(&self) -> bool {
-        self.layout.is_none() && self.classic.is_none() && self.auto.is_none()
+        self.layout.is_none()
+            && self.classic.is_none()
+            && self.auto.is_none()
+            && self.detects.is_none()
     }
 
     /// Describe the persistence classes selected by this snapshot.
@@ -91,6 +103,7 @@ impl PersistenceSnapshot {
             layout: self.layout.is_some(),
             classic: self.classic.is_some(),
             auto: self.auto.is_some(),
+            detects: self.detects.is_some(),
         }
     }
 
@@ -111,6 +124,9 @@ impl PersistenceSnapshot {
         if !classes.auto {
             self.auto = None;
         }
+        if !classes.detects {
+            self.detects = None;
+        }
         self
     }
 }
@@ -124,6 +140,8 @@ pub(crate) struct PersistenceClasses {
     pub(crate) classic: bool,
     /// Whether the shared Auto topology belongs to the request.
     pub(crate) auto: bool,
+    /// Whether detection display preferences belong to the request.
+    pub(crate) detects: bool,
 }
 
 /// Result of one serial persistence request.
@@ -145,6 +163,7 @@ impl PersistenceAck {
             layout: self.classes.layout && !self.succeeded.layout,
             classic: self.classes.classic && !self.succeeded.classic,
             auto: self.classes.auto && !self.succeeded.auto,
+            detects: self.classes.detects && !self.succeeded.detects,
         }
     }
 }
@@ -178,6 +197,9 @@ trait PersistenceSink: Send + 'static {
     /// Returns:
     ///     `true` only when the atomic write succeeds.
     fn save_auto(&mut self, topology: &DockTopologyByName) -> bool;
+
+    /// Persist complete detection display preferences; false retains the authority for retry.
+    fn save_detects(&mut self, detects: &DetectViewFile) -> bool;
 }
 
 /// Production sink that performs the existing atomic file writes.
@@ -210,6 +232,11 @@ impl PersistenceSink for FilePersistenceSink {
     /// Persist `auto_dock.json` through its canonical atomic writer.
     fn save_auto(&mut self, topology: &DockTopologyByName) -> bool {
         super::auto_dock_persist::save(topology)
+    }
+
+    /// Use the canonical atomic writer on the existing serial persistence thread.
+    fn save_detects(&mut self, detects: &DetectViewFile) -> bool {
+        detects.save()
     }
 }
 
@@ -358,7 +385,7 @@ impl PersistenceCoordinator {
     /// Queue the latest full snapshot behind prior work, then join at the final durability boundary.
     ///
     /// Args:
-    ///     snapshot: Latest complete layout and Classic authorities captured during quit.
+    ///     snapshot: Latest complete persistence authorities captured during quit.
     ///
     /// Returns:
     ///     Result of the final snapshot, independent of any superseded in-flight acknowledgement.
@@ -433,12 +460,17 @@ fn persist_snapshot(
         .auto
         .as_ref()
         .is_some_and(|topology| sink.save_auto(topology));
+    let detects = snapshot
+        .detects
+        .as_ref()
+        .is_some_and(|detects| sink.save_detects(detects));
     PersistenceAck {
         classes,
         succeeded: PersistenceClasses {
             layout,
             classic,
             auto,
+            detects,
         },
     }
 }
