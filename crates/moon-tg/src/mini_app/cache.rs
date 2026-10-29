@@ -118,6 +118,7 @@ pub(crate) struct OrderCoreInputs {
 /// Everything an Orders response is computed from besides its chat and grant.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct OrdersInputs {
+    pub(super) epoch: u64,
     pub(super) cores: Vec<OrderCoreInputs>,
 }
 

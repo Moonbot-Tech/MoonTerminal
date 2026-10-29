@@ -1,6 +1,6 @@
 //! Bounded chart reads; blocking tape and report work stays outside the host owner loop.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{
@@ -30,9 +30,12 @@ use moon_core::telegram::web::dto::{
 use moon_core::util::fmt;
 
 use super::dto::{core_quotes, order_at_mark, order_quote, pnl_sign, pnl_text, trade_dto};
+use super::order_handoff::{
+    begin_order_handoff, finish_order_handoff, order_snapshot, remember_order,
+};
 use super::{mini_access, visible_cores};
+use crate::TgHost;
 use crate::report::MiniTrade;
-use crate::{TelegramState, TgHost};
 
 /// A replay remains owned until its receiver is evicted or the service restarts.
 pub(crate) struct ChartJob {
@@ -85,95 +88,6 @@ impl ChartJobs {
     }
 }
 
-/// A previously listed order supplies identity after the session removes the row.
-#[derive(Clone)]
-pub(crate) struct OrderSnapshot {
-    pub(super) uid: u64,
-    pub(super) coin: String,
-    market: String,
-    entry_ms: i64,
-    buy_price: f64,
-    levels: Vec<LevelDto>,
-}
-
-impl OrderSnapshot {
-    /// Capture only the fields a closing chart can need after the live row disappears.
-    pub(super) fn new(order: &OrderRow) -> Self {
-        Self {
-            uid: order.uid,
-            coin: order.coin.clone(),
-            market: order.market.clone(),
-            entry_ms: order.entry_fill_time_ms as i64,
-            buy_price: order.buy_price,
-            levels: live_levels(order),
-        }
-    }
-}
-
-/// Keep live orders and unresolved closing handoffs, independently of fleet size or age.
-/// A successful handoff releases its identity; service replacement clears the whole live set.
-fn insert_order_snapshot(state: &mut TelegramState, core: u64, snapshot: OrderSnapshot) {
-    let key = (core, snapshot.uid);
-    if state
-        .mini_order_handoffs
-        .get(&key)
-        .is_some_and(|entry| *entry != snapshot.entry_ms)
-    {
-        state.mini_order_handoffs.remove(&key);
-    }
-    state.mini_order_snapshots.insert(key, snapshot);
-}
-
-/// Preserve a chart's observed identity until its closing handoff resolves.
-pub(super) fn remember_order(state: &mut TelegramState, core: u64, order: &OrderRow) {
-    insert_order_snapshot(state, core, OrderSnapshot::new(order));
-}
-
-/// Pin only an execution actually observed by a chart, rather than every Orders-list row.
-pub(super) fn begin_order_handoff(state: &mut TelegramState, core: u64, uid: u64) {
-    if let Some(row) = state.mini_order_snapshots.get(&(core, uid))
-        && row.entry_ms > 0
-    {
-        state.mini_order_handoffs.insert((core, uid), row.entry_ms);
-    }
-}
-
-/// Reconcile observed cores' current identities and chart-observed unresolved executions.
-/// Ordinary unviewed closes leave with the live set; no history-sized or magic-cap cache remains.
-pub(super) fn remember_order_snapshots(
-    state: &mut TelegramState,
-    cores: &[u64],
-    snapshots: impl IntoIterator<Item = (u64, OrderSnapshot)>,
-) {
-    let snapshots: Vec<_> = snapshots.into_iter().collect();
-    let live: HashSet<_> = snapshots
-        .iter()
-        .map(|(core, row)| (*core, row.uid))
-        .collect();
-    state.mini_order_snapshots.retain(|key, row| {
-        !cores.contains(&key.0)
-            || live.contains(key)
-            || state.mini_order_handoffs.get(key) == Some(&row.entry_ms)
-    });
-    for (core, snapshot) in snapshots {
-        insert_order_snapshot(state, core, snapshot);
-    }
-}
-
-/// Release only the identity this completed read captured; a reused UID belongs to its new entry.
-pub(super) fn finish_order_handoff(state: &mut TelegramState, core: u64, uid: u64, entry_ms: i64) {
-    if state.mini_order_handoffs.get(&(core, uid)) == Some(&entry_ms) {
-        state.mini_order_handoffs.remove(&(core, uid));
-    }
-    if state
-        .mini_order_snapshots
-        .get(&(core, uid))
-        .is_some_and(|row| row.entry_ms == entry_ms)
-    {
-        state.mini_order_snapshots.remove(&(core, uid));
-    }
-}
-
 /// Admission and Finish both require the current grant and visible core.
 fn authorize(
     host: &dyn TgHost,
@@ -213,6 +127,19 @@ pub(super) fn claim_pending(count: &mut usize, limit: usize) -> bool {
         *count += 1;
         true
     }
+}
+
+/// Finish one live reader whose admission count is preserved across service replacement.
+pub(super) fn finish_live_read(
+    state: &mut crate::TelegramState,
+    service: &Arc<Mutex<ChartJobs>>,
+) -> Result<(), MiniAppApiError> {
+    // start_saved transfers in-flight counts, so a retired reader still owns one slot.
+    state.mini_live_pending = state.mini_live_pending.saturating_sub(1);
+    if !Arc::ptr_eq(service, &state.mini_chart_jobs) {
+        return Err(MiniAppApiError::Rejected);
+    }
+    Ok(())
 }
 
 /// Keep Finish reachable on unwind so it can release admission and recheck the grant.
@@ -802,7 +729,7 @@ pub(super) fn mini_order_ticks(
     if let Some(row) = &live {
         remember_order(host.state_mut(), core, row);
     }
-    let snapshot = host.state().mini_order_snapshots.get(&(core, uid)).cloned();
+    let snapshot = order_snapshot(host.state(), core, uid).cloned();
     begin_order_handoff(host.state_mut(), core, uid);
     let closing = order_closing(live.as_ref());
     let source = host.session().market_source();
@@ -813,6 +740,7 @@ pub(super) fn mini_order_ticks(
         .find(|(id, _, _)| *id == core)
         .map(|(_, _, exchange)| exchange)
         .unwrap_or_default();
+    let service = Arc::clone(&host.state().mini_chart_jobs);
     host.spawn(Box::new(move || {
         let started = Instant::now();
         let now = moon_core::util::now_unix_ms_i64();
@@ -876,7 +804,10 @@ pub(super) fn mini_order_ticks(
             started.elapsed().as_millis()
         );
         Box::new(move |host: &mut dyn TgHost| {
-            host.state_mut().mini_live_pending = host.state().mini_live_pending.saturating_sub(1);
+            if let Err(error) = finish_live_read(host.state_mut(), &service) {
+                let _ = reply.try_send(Err(error));
+                return;
+            }
             let current = mini_access(host, chat);
             let visible = current.as_ref().is_some_and(|grant| {
                 visible_cores(host, grant)
@@ -901,7 +832,7 @@ pub(super) fn mini_order_ticks(
     }));
 }
 
-/// Admit a market read with all permitted overlays captured before leaving the owner thread.
+/// Admit shared core revisions; matching overlays are projected on the executor.
 pub(super) fn mini_coin_ticks(
     host: &mut dyn TgHost,
     chat: i64,
@@ -930,31 +861,30 @@ pub(super) fn mini_coin_ticks(
         .find(|(id, _, _)| *id == core)
         .map(|(_, _, exchange)| exchange.clone())
         .unwrap_or_default();
-    let CoinSnapshot { ids, orders } = coin_snapshot(
+    let mut captures = std::mem::take(&mut host.state_mut().mini_order_captures);
+    let captured = coin_snapshot(
+        &mut captures,
         host.session().store(),
         &listed,
         host.session().core_venues(),
         core,
-        &market,
     );
-    let market_display = orders
-        .first()
-        .map(|(_, _, row)| row.market_display.clone())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| market.clone());
-    let coin = orders
-        .first()
-        .map(|(_, _, row)| row.coin.clone())
-        .unwrap_or_else(|| source.market_label(core, &market).coin);
+    host.state_mut().mini_order_captures = captures;
     let deal_ids = coin_deal_cores(
-        &ids,
+        &captured.ids,
         &core_quotes(&host.config().servers),
         &order_quote(&source.market_label(core, &market).quote, &market),
     );
     let zone = host.report_zone();
     let names = CoreNames::from_servers(&host.config().servers);
+    let service = Arc::clone(&host.state().mini_chart_jobs);
     host.spawn(Box::new(move || {
         let started = Instant::now();
+        let CoinSnapshot { ids, orders } = captured.project(&market);
+        let market_display = orders.first().map(|(_, _, row)| row.market_display.clone())
+            .filter(|name| !name.is_empty()).unwrap_or_else(|| market.clone());
+        let coin = orders.first().map(|(_, _, row)| row.coin.clone())
+            .unwrap_or_else(|| source.market_label(core, &market).coin);
         let now = moon_core::util::now_unix_ms_i64();
         let mut stage = "handoff";
         let result = chart_read(|| {
@@ -1013,7 +943,10 @@ pub(super) fn mini_coin_ticks(
             result.as_ref().map_or_else(|error| format!("{error:?}"), |dto| format!("{:?}", dto.state)),
             started.elapsed().as_millis());
         Box::new(move |host: &mut dyn TgHost| {
-            host.state_mut().mini_live_pending = host.state().mini_live_pending.saturating_sub(1);
+            if let Err(error) = finish_live_read(host.state_mut(), &service) {
+                let _ = reply.try_send(Err(error));
+                return;
+            }
             let current = mini_access(host, chat);
             let visible = current.as_ref().is_some_and(|grant| {
                 let visible = visible_cores(host, grant);
@@ -1049,6 +982,32 @@ pub(super) struct CoinSnapshot {
     pub orders: Vec<(u64, String, CoinOrder)>,
 }
 
+/// Cheap venue-scoped handles captured by the owner, without any order-level projection.
+pub(super) struct CoinCapture {
+    pub ids: Vec<u64>,
+    cores: Vec<super::order_capture::CoreOrders>,
+}
+
+impl CoinCapture {
+    /// Build matching overlays only after the immutable handles have reached the executor.
+    pub(super) fn project(self, market: &str) -> CoinSnapshot {
+        let orders = self
+            .cores
+            .iter()
+            .flat_map(|core| {
+                core.rows
+                    .iter()
+                    .filter(|row| !row.job_is_done && row.market == market)
+                    .map(|row| (core.core, core.name.clone(), CoinOrder::new(row)))
+            })
+            .collect();
+        CoinSnapshot {
+            ids: self.ids,
+            orders,
+        }
+    }
+}
+
 /// Only the fields consumed by a coin overlay; order traces never leave the owner with it.
 pub(super) struct CoinOrder {
     coin: String,
@@ -1068,8 +1027,8 @@ pub(super) struct CoinOrder {
 }
 
 impl CoinOrder {
-    /// Project the canonical position gate and level prices before leaving the session owner.
-    fn new(row: &OrderRow) -> Self {
+    /// Project the canonical position gate and levels from a frozen row on the executor.
+    pub(super) fn new(row: &OrderRow) -> Self {
         Self {
             coin: row.coin.clone(),
             market: row.market.clone(),
@@ -1089,14 +1048,14 @@ impl CoinOrder {
     }
 }
 
-/// Keep overlays within visible cores on the source venue and the exact market key.
+/// Capture visible core revisions on the source venue; the executor selects the market.
 pub(super) fn coin_snapshot(
+    captures: &mut super::order_capture::OrderCaptures,
     store: &moon_core::session::CoreStore,
     listed: &[(u64, String, String)],
     venues: &std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
     core: u64,
-    market: &str,
-) -> CoinSnapshot {
+) -> CoinCapture {
     let venue = venues.get(&core);
     let peers: Vec<_> = listed
         .iter()
@@ -1104,20 +1063,11 @@ pub(super) fn coin_snapshot(
             *id == core
                 || venue.is_some_and(|venue| venues.get(id).is_some_and(|peer| peer.id == venue.id))
         })
+        .cloned()
         .collect();
     let ids = peers.iter().map(|(id, _, _)| *id).collect();
-    let orders = peers
-        .into_iter()
-        .flat_map(|(id, name, _)| {
-            store
-                .core(*id)
-                .into_iter()
-                .flat_map(|data| data.orders.iter())
-                .filter(|row| !row.job_is_done && row.market == market)
-                .map(|row| (*id, name.clone(), CoinOrder::new(row)))
-        })
-        .collect();
-    CoinSnapshot { ids, orders }
+    let cores = captures.capture(store, &peers);
+    CoinCapture { ids, cores }
 }
 
 /// Tag existing level prices and position arithmetic with their originating core.

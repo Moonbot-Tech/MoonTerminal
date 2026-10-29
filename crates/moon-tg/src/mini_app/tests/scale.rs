@@ -128,13 +128,39 @@ fn mini_app_chart_snapshot_scale() {
         assert_eq!(old.len(), 2000);
         black_box(old);
     });
-    measure("chart snapshot", || {
+    measure("chart frozen compact snapshot", || {
+        let rows: Vec<_> = listed
+            .iter()
+            .flat_map(|(id, name, _)| {
+                store
+                    .core(*id)
+                    .into_iter()
+                    .flat_map(|data| data.orders.iter())
+                    .filter(|row| !row.job_is_done && row.market == "XALPHAUSDT")
+                    .map(|row| (*id, name.clone(), super::super::charts::CoinOrder::new(row)))
+            })
+            .collect();
+        assert_eq!(rows.len(), 2000);
+        black_box(rows);
+    });
+    let mut captures = super::super::order_capture::OrderCaptures::default();
+    measure("chart warm owner capture", || {
         black_box(super::super::charts::coin_snapshot(
+            &mut captures,
             &store,
             &listed,
             &venues,
             1,
-            "XALPHAUSDT",
+        ));
+    });
+    measure("chart changed revision owner capture", || {
+        let mut captures = super::super::order_capture::OrderCaptures::default();
+        black_box(super::super::charts::coin_snapshot(
+            &mut captures,
+            &store,
+            &listed,
+            &venues,
+            1,
         ));
     });
 }
@@ -384,9 +410,15 @@ fn orders_worker_preserves_rows_and_rejects_old_service_completions() {
                 row.filled = filled;
                 row.pending = !filled;
                 let expected = frozen_order_dto(&host, &row);
-                let actual =
-                    super::super::dto::order_draft(&host, 1, "CORE_A".into(), "EX-XX".into(), &row)
-                        .render();
+                let actual = super::super::dto::order_draft(
+                    1,
+                    "CORE_A".into(),
+                    "EX-XX".into(),
+                    &row,
+                    |quote| host.session.market_source().currency_usd_rate(1, quote),
+                    false,
+                )
+                .render();
                 assert_eq!(actual, expected);
             }
         }
@@ -394,8 +426,8 @@ fn orders_worker_preserves_rows_and_rejects_old_service_completions() {
     let (reply, old) = std::sync::mpsc::sync_channel(1);
     super::super::reads::mini_orders(&mut host, 7, reply);
     let finish_old = host.job.take().unwrap()();
-    host.state.mini_orders_generation += 1;
-    host.state.mini_orders_pending = false;
+    // A completed restart reconstructs state and can reuse the old numeric generation.
+    host.state = TelegramState::new(&host.config.telegram, HostKind::Station);
     let (reply, new) = std::sync::mpsc::sync_channel(1);
     super::super::reads::mini_orders(&mut host, 7, reply);
     let finish_new = host.job.take().unwrap()();
@@ -459,7 +491,8 @@ fn mini_app_orders_projection_scale() {
             black_box(dto);
             return;
         }
-        let (drafts, snapshots) = super::super::reads::capture_orders(&host, &store, &listed);
+        let captures = host.state.mini_order_captures.capture(&store, &listed);
+        let (drafts, snapshots) = super::super::reads::project_orders(&captures, &inputs);
         let dto = moon_core::telegram::web::dto::OrdersDto {
             orders: drafts
                 .into_iter()
@@ -467,7 +500,7 @@ fn mini_app_orders_projection_scale() {
                 .collect(),
             can_control: true,
         };
-        super::super::charts::remember_order_snapshots(
+        super::super::order_handoff::remember_order_snapshots(
             host.state_mut(),
             &(1..=CORES).collect::<Vec<_>>(),
             snapshots,
@@ -489,9 +522,74 @@ fn mini_app_orders_projection_scale() {
             |core, market| host.is_panic_armed(core, market),
         ));
     });
-    measure("orders owner capture", || {
-        black_box(super::super::reads::capture_orders(&host, &store, &listed));
+    measure("orders frozen owner capture", || {
+        black_box(frozen_capture_orders(&host, &store, &listed));
     });
+    let mut frozen_identities = std::collections::BTreeMap::new();
+    measure(
+        "orders frozen full owner admission including identities",
+        || {
+            let source = host.session().market_source();
+            black_box(super::super::reads::orders_inputs(
+                &store,
+                &listed,
+                |core, quote| source.currency_usd_rate(core, quote),
+                |core, market| host.is_panic_armed(core, market),
+            ));
+            let (drafts, snapshots) = frozen_capture_orders(&host, &store, &listed);
+            frozen_remember_order_snapshots(
+                &mut frozen_identities,
+                &(1..=CORES).collect::<Vec<_>>(),
+                snapshots,
+            );
+            black_box(drafts);
+        },
+    );
+    for changed in [false, true] {
+        measure(
+            if changed {
+                "orders changed revision owner admission"
+            } else {
+                "orders warm owner admission"
+            },
+            || {
+                let source = host.session().market_source();
+                black_box(super::super::reads::orders_inputs(
+                    &store,
+                    &listed,
+                    |core, quote| source.currency_usd_rate(core, quote),
+                    |core, market| host.is_panic_armed(core, market),
+                ));
+                if changed {
+                    host.state.mini_order_captures = Default::default();
+                }
+                black_box(host.state.mini_order_captures.capture(&store, &listed));
+            },
+        );
+    }
+    let mut publication = Vec::new();
+    for _ in 0..POLLS {
+        let source = host.session().market_source();
+        let inputs = super::super::reads::orders_inputs(
+            &store,
+            &listed,
+            |core, quote| source.currency_usd_rate(core, quote),
+            |core, market| host.is_panic_armed(core, market),
+        );
+        let captures = host.state.mini_order_captures.capture(&store, &listed);
+        // Preparing the indexes and destroying the previous wave are executor work.
+        drop(std::mem::take(&mut host.state.mini_order_retired));
+        let (_, identities) = super::super::reads::project_orders(&captures, &inputs);
+        let cores: Vec<_> = (1..=CORES).collect();
+        let started = Instant::now();
+        super::super::order_handoff::remember_order_snapshots(host.state_mut(), &cores, identities);
+        publication.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    publication.sort_by(f64::total_cmp);
+    println!(
+        "[scale] orders owner identity publication: {:.3} ms/poll",
+        publication[POLLS / 2]
+    );
     measure("orders cached dto clone", || {
         black_box(
             host.state()
@@ -502,4 +600,51 @@ fn mini_app_orders_projection_scale() {
                 .clone(),
         );
     });
+}
+
+/// Frozen round-one owner work, including identity construction and raw draft allocation.
+fn frozen_capture_orders(
+    host: &ScaleHost,
+    store: &CoreStore,
+    listed: &[(u64, String, String)],
+) -> (
+    Vec<super::super::dto::OrderDraft>,
+    Vec<(u64, super::super::order_handoff::OrderSnapshot)>,
+) {
+    let mut snapshots = Vec::new();
+    let mut drafts = Vec::new();
+    for (core, name, exchange) in listed {
+        if let Some(data) = store.core(*core) {
+            for row in &data.orders {
+                snapshots.push((*core, super::super::order_handoff::OrderSnapshot::new(row)));
+                let source = host.session().market_source();
+                drafts.push(super::super::dto::order_draft(
+                    *core,
+                    name.clone(),
+                    exchange.clone(),
+                    row,
+                    |quote| source.currency_usd_rate(*core, quote),
+                    host.is_panic_armed(*core, &row.market),
+                ));
+            }
+        }
+    }
+    (drafts, snapshots)
+}
+
+/// Frozen round-one reconciliation for the probe's current fleet, which has no chart viewers.
+/// Unlike production publication, it builds the fleet's hash set and inserts every identity.
+fn frozen_remember_order_snapshots(
+    cache: &mut std::collections::BTreeMap<(u64, u64), super::super::order_handoff::OrderSnapshot>,
+    cores: &[u64],
+    snapshots: Vec<(u64, super::super::order_handoff::OrderSnapshot)>,
+) {
+    let live: std::collections::HashSet<_> = snapshots
+        .iter()
+        .map(|(core, row)| (*core, row.uid))
+        .collect();
+    cache.retain(|key, _| !cores.contains(&key.0) || live.contains(key));
+    for (core, row) in snapshots {
+        cache.insert((core, row.uid), row);
+    }
 }

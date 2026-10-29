@@ -130,7 +130,15 @@ pub(crate) fn run(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_ut
 /// at once.
 fn finish(host: &mut dyn TgHost, store: &Mutex<NotifyStore>, outcome: Outcome, now_utc: i64) {
     let mut guard = lock_store(store);
-    let queued = guard.update_notifications(|file| {
+    let chats: Vec<_> = outcome
+        .drawn
+        .iter()
+        .flat_map(|drawn| drawn.chats.iter().copied())
+        .collect();
+    let mut batch =
+        moon_core::telegram::notify::NotificationBatch::new(&guard.file, &chats, &[], None);
+    let queued = {
+        let file = &mut batch.file;
         let mut taken = Vec::new();
         for drawn in &outcome.drawn {
             for &chat in &drawn.chats {
@@ -150,11 +158,14 @@ fn finish(host: &mut dyn TgHost, store: &Mutex<NotifyStore>, outcome: Outcome, n
             }
         }
         taken.len()
-    });
-    let queued = queued.unwrap_or_else(|error| {
-        log::warn!("telegram charts not queued: {error}");
-        0
-    });
+    };
+    let queued = guard
+        .update_notifications(batch.finish())
+        .map(|()| queued)
+        .unwrap_or_else(|error| {
+            log::warn!("telegram charts not queued: {error}");
+            0
+        });
     for drawn in &outcome.drawn {
         guard.drop_chart(&drawn.file);
     }

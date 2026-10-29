@@ -20,6 +20,8 @@ pub(crate) mod cache;
 pub(crate) mod charts;
 mod commands;
 pub(crate) mod dto;
+pub(crate) mod order_capture;
+pub(crate) mod order_handoff;
 mod reads;
 mod settings;
 

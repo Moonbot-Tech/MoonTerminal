@@ -49,8 +49,9 @@ fn redraw_outlived(row: &Pending, now_utc: u64) -> bool {
 /// it returns.
 ///
 /// `file` is public so a host can edit paired chats on this same document. A chat edit is
-/// persisted by [`Self::update`] before that call returns. Enqueues use clone-save-commit;
-/// delivery receipts are synchronized individually and folded into the next full snapshot.
+/// persisted by [`Self::update`] before that call returns. Direct enqueues use clone-save-commit;
+/// notification batches and delivery receipts append typed journal records and are folded into
+/// the next full snapshot.
 /// `allowed` is process memory only: [`NotifyFile::save`] does not write it.
 pub struct NotifyStore {
     /// On-disk document. Missing until the first successful save.
@@ -228,18 +229,16 @@ impl NotifyStore {
         Ok(result)
     }
 
-    /// Persist one notification batch as changed ledger leaves and queue payloads.
-    /// Settings continue using `update`. Every accepted batch is synchronized before publication;
-    /// a failed append leaves memory unchanged. A busy receipt writer falls back to a snapshot
-    /// rather than waiting under the store mutex (the writer needs that mutex to commit its ack).
-    pub fn update_notifications<R>(
+    /// Synchronize the caller's typed notification patch, then apply it in place.
+    /// Normal updates neither clone nor diff the stored document. During receipt contention,
+    /// preserve the existing snapshot fallback rather than waiting for a writer that needs this
+    /// store mutex to publish its receipt. Failed writes leave the document unchanged.
+    pub fn update_notifications(
         &mut self,
-        edit: impl FnOnce(&mut NotifyFile) -> R,
-    ) -> anyhow::Result<R> {
-        let mut next = self.file.clone();
-        let result = edit(&mut next);
-        if next == self.file {
-            return Ok(result);
+        update: crate::telegram::notify::NotificationUpdate,
+    ) -> anyhow::Result<()> {
+        if update.is_empty() {
+            return Ok(());
         }
         let journal = Arc::clone(&self.journal);
         let guard = match journal.try_lock() {
@@ -247,34 +246,25 @@ impl NotifyStore {
             Err(std::sync::TryLockError::Poisoned(error)) => Some(error.into_inner()),
             Err(std::sync::TryLockError::WouldBlock) => None,
         };
-        // The size checkpoint bounds recovery work without discarding any pending message.
-        let checkpointed;
-        if let Some(mut guard) = guard.filter(|guard| {
-            self.path.is_file()
-                && guard.bytes < 1_048_576
-                && self.checkpoint_at.elapsed() < Duration::from_secs(60)
-        }) {
+        if let Some(mut guard) = guard {
             let sequence = guard
                 .sequence
                 .checked_add(1)
                 .ok_or_else(|| anyhow::anyhow!("notification journal sequence exhausted"))?;
-            let update = crate::telegram::notify::updates::Update::between(&self.file, &next);
             guard.bytes = receipts::append_update(&self.path, guard.bytes, sequence, &update)?;
             guard.sequence = sequence;
-            next.ack_sequence = sequence;
-            checkpointed = false;
+            update.apply(&mut self.file)?;
+            self.file.ack_sequence = sequence;
         } else {
+            let mut next = self.file.clone();
+            update.apply(&mut next)?;
             next.save(&self.path)?;
+            self.file = next;
             self.checkpoint_at = Instant::now();
-            checkpointed = true;
-        }
-        self.file = next;
-        // Clear only a snapshot checkpoint, never records not yet represented by that snapshot.
-        if checkpointed {
             self.clear_receipts();
         }
         self.wake.bump();
-        Ok(result)
+        Ok(())
     }
 
     /// Scan disclosures only after pairing, grants or queued payloads changed. A failed save
@@ -792,7 +782,14 @@ fn run_sender(mut api: BotApi, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) 
     while alive.upgrade().is_some() {
         {
             let mut guard = lock_store(&store);
-            if guard.checkpoint_at.elapsed() >= Duration::from_secs(60) {
+            let large = match guard.journal.try_lock() {
+                Ok(journal) => journal.bytes >= 1_048_576,
+                Err(std::sync::TryLockError::Poisoned(error)) => {
+                    error.into_inner().bytes >= 1_048_576
+                }
+                Err(std::sync::TryLockError::WouldBlock) => false,
+            };
+            if guard.checkpoint_at.elapsed() >= Duration::from_secs(60) || large {
                 if let Err(error) = guard.checkpoint() {
                     log::warn!("telegram notify checkpoint deferred: {error}");
                 }

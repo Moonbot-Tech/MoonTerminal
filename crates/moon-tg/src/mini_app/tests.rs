@@ -2,6 +2,41 @@
 
 mod scale;
 
+/// Old chart jobs must release their transferred slots without accepting a stale response or
+/// releasing the new service's still-running reader when completions interleave.
+#[test]
+fn retired_live_chart_jobs_release_preserved_admission() {
+    use super::charts::{claim_pending, finish_live_read};
+    use moon_core::telegram::web::MiniAppApiError;
+    let config = moon_core::config::TelegramConfig::default();
+    let mut state = crate::TelegramState::new(&config, crate::HostKind::Station);
+    let old = state.mini_chart_jobs.clone();
+    for _ in 0..4 {
+        assert!(claim_pending(&mut state.mini_live_pending, 4));
+    }
+    state.restart();
+    state.start_saved(&config);
+    assert_eq!(state.mini_live_pending, 4);
+    assert!(matches!(
+        finish_live_read(&mut state, &old),
+        Err(MiniAppApiError::Rejected)
+    ));
+    assert!(claim_pending(&mut state.mini_live_pending, 4));
+    let current = state.mini_chart_jobs.clone();
+    for _ in 0..3 {
+        assert!(matches!(
+            finish_live_read(&mut state, &old),
+            Err(MiniAppApiError::Rejected)
+        ));
+    }
+    assert_eq!(state.mini_live_pending, 1);
+    assert!(finish_live_read(&mut state, &current).is_ok());
+    assert_eq!(state.mini_live_pending, 0);
+    for _ in 0..4 {
+        assert!(claim_pending(&mut state.mini_live_pending, 4));
+    }
+}
+
 /// Dropping peer or market filtering leaks levels from another market or an invisible core.
 #[test]
 fn coin_chart_two_core_overlays_exclude_other_markets_and_venues() {
@@ -47,7 +82,9 @@ fn coin_chart_two_core_overlays_exclude_other_markets_and_venues() {
         (2, "CORE_B".into(), String::new()),
         (3, "CORE_C".into(), String::new()),
     ];
-    let snapshot = super::charts::coin_snapshot(&store, &listed, &venues, 1, "XALPHAUSDT");
+    let snapshot =
+        super::charts::coin_snapshot(&mut Default::default(), &store, &listed, &venues, 1)
+            .project("XALPHAUSDT");
     assert_eq!(snapshot.ids, vec![1, 2]);
     assert_eq!(snapshot.orders.len(), 2);
     let source =
@@ -1030,77 +1067,6 @@ fn chart_live_cursor_freshness_levels_and_mark_are_independent() {
     );
 }
 
-/// Evicting identities by count loses closing charts for the first orders in a loaded fleet.
-#[test]
-fn chart_order_snapshots_keep_the_whole_live_fleet() {
-    let config = moon_core::config::TelegramConfig::default();
-    let mut state = crate::TelegramState::new(&config, crate::HostKind::Station);
-    let mut row = resting_order(100.0, 101.0);
-    for core in 1..=10 {
-        for uid in 0..200 {
-            row.uid = uid;
-            super::charts::remember_order(&mut state, core, &row);
-        }
-    }
-    assert_eq!(state.mini_order_snapshots.len(), 2000);
-    assert!(state.mini_order_snapshots.contains_key(&(1, 0)));
-    super::charts::finish_order_handoff(&mut state, 1, 0, 0);
-    assert!(!state.mini_order_snapshots.contains_key(&(1, 0)));
-    row.uid = 1;
-    row.entry_fill_time_ms = 5000.0;
-    super::charts::remember_order(&mut state, 1, &row);
-    super::charts::begin_order_handoff(&mut state, 1, 1);
-    super::charts::finish_order_handoff(&mut state, 1, 1, 0);
-    assert!(state.mini_order_snapshots.contains_key(&(1, 1)));
-    assert_eq!(state.mini_order_handoffs.get(&(1, 1)), Some(&5000));
-}
-
-/// A list refresh must preserve unresolved handoffs, including other cores and older orders.
-#[test]
-fn chart_order_snapshots_keep_unresolved_handoffs() {
-    let config = moon_core::config::TelegramConfig::default();
-    let mut state = crate::TelegramState::new(&config, crate::HostKind::Station);
-    let mut row = resting_order(100.0, 101.0);
-    row.entry_fill_time_ms = 100000.0;
-    row.market = "XALPHAUSDT".into();
-    row.coin = "XALPHA".into();
-    for uid in 0..65 {
-        row.uid = uid;
-        super::charts::remember_order(&mut state, 1, &row);
-    }
-    assert_eq!(state.mini_order_snapshots.len(), 65);
-    assert!(state.mini_order_snapshots.contains_key(&(1, 0)));
-    assert_eq!(state.mini_order_snapshots[&(1, 64)].coin, "XALPHA");
-    let cached = state.mini_order_snapshots[&(1, 64)].clone();
-    super::charts::remember_order_snapshots(&mut state, &[2], [(2, cached)]);
-    row.uid = 999;
-    super::charts::remember_order(&mut state, 1, &row);
-    super::charts::begin_order_handoff(&mut state, 1, 999);
-    let current = vec![(1, state.mini_order_snapshots[&(1, 64)].clone())];
-    row.uid = 1001;
-    row.entry_fill_time_ms = 0.0;
-    super::charts::remember_order(&mut state, 1, &row);
-    super::charts::remember_order_snapshots(&mut state, &[1], current);
-    assert!(state.mini_order_snapshots.contains_key(&(1, 999)));
-    assert!(!state.mini_order_snapshots.contains_key(&(1, 0)));
-    assert!(state.mini_order_snapshots.contains_key(&(2, 64)));
-    assert!(!state.mini_order_snapshots.contains_key(&(1, 1001)));
-    assert_eq!(state.mini_order_snapshots.len(), 3);
-    // Routine turnover never grows history: only the current fleet and the selected handoff stay.
-    for batch in 0..10 {
-        let rows = (0..200).map(|index| {
-            row.uid = 2000 + batch * 200 + index;
-            row.entry_fill_time_ms = 100000.0;
-            (1, super::charts::OrderSnapshot::new(&row))
-        });
-        super::charts::remember_order_snapshots(&mut state, &[1], rows);
-        assert_eq!(state.mini_order_snapshots.len(), 202);
-    }
-    super::charts::finish_order_handoff(&mut state, 1, 999, 100000);
-    assert!(state.mini_order_handoffs.is_empty());
-    assert_eq!(state.mini_order_snapshots.len(), 201);
-}
-
 /// The first chat's displayed id must resolve after a different chat replaces the list cache.
 #[test]
 fn chart_report_lookup_uses_display_id_and_carries_recorder_identity() {
@@ -1471,7 +1437,7 @@ fn strategy_pending_times_out_until_row_agrees_or_list_moves() {
 }
 
 /// Build a resting long entry at `entry` with the mark at `mark`, no fill yet.
-fn resting_order(entry: f64, mark: f32) -> OrderRow {
+pub(super) fn resting_order(entry: f64, mark: f32) -> OrderRow {
     OrderRow {
         market: "LINKUSDT".into(),
         market_display: "LINKUSDT".into(),

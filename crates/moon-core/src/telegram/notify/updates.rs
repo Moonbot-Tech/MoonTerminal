@@ -4,25 +4,37 @@ use super::{CardWait, ChatNotify, NotifyFile, NotifyLedger, Outbox, Pending};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-/// Absolute assignments make a checkpointed transaction harmless when replayed again.
+/// Changed map leaves use absolute assignments; the journal cursor skips checkpointed records.
 type Changes<K, V> = Vec<(K, Option<V>)>;
 /// A core can disappear, or have individual remembered trades assigned or removed.
-type Trades<V> = Changes<u64, Changes<i64, V>>;
+pub(super) type Trades<V> = Changes<u64, Changes<i64, V>>;
 
 /// One chat's small settings/state plus changes to its potentially large trade maps.
 #[derive(Debug, Deserialize, Serialize)]
-struct ChatUpdate {
+pub(super) struct ChatUpdate {
     state: ChatNotify,
-    seen: Trades<i64>,
+    pub(super) seen: Trades<i64>,
     held: Trades<i64>,
     cards: Trades<CardWait>,
-    chart_seen: Trades<i64>,
+    pub(super) chart_seen: Trades<i64>,
     chart_held: Trades<i64>,
+    #[serde(default)]
+    pub(super) prune_empty_seen: bool,
 }
 
-/// Changed queue payloads and their exact resulting order. Legacy duplicate ids use a full array.
+/// A pure retention operation, ordered with its candidate-leaf assignments in the journal.
 #[derive(Debug, Deserialize, Serialize)]
-enum QueueUpdate {
+pub(super) struct SeenPrune {
+    pub chat: i64,
+    pub charts: bool,
+    pub before: Option<i64>,
+}
+
+/// Notification appends, or legacy arbitrary queue edits with their exact resulting order.
+/// Legacy duplicate ids use a full array.
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) enum QueueUpdate {
+    Append(Vec<Pending>),
     Ordered {
         order: Vec<u64>,
         changed: Vec<Pending>,
@@ -32,10 +44,12 @@ enum QueueUpdate {
 
 /// A durable owner transaction sharing the delivery journal's contiguous sequence.
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct Update {
-    chats: Changes<i64, ChatUpdate>,
-    queue: Option<QueueUpdate>,
+pub struct Update {
+    pub(super) chats: Changes<i64, ChatUpdate>,
+    pub(super) queue: Option<QueueUpdate>,
     next_id: u64,
+    #[serde(default)]
+    pub(super) prunes: Vec<SeenPrune>,
 }
 
 /// Compare sorted maps without serializing or cloning their unchanged values.
@@ -119,6 +133,7 @@ impl ChatUpdate {
             cards: trades(&old.ledger.cards, &new.ledger.cards),
             chart_seen: trades(&old.ledger.charts.seen, &new.ledger.charts.seen),
             chart_held: trades(&old.ledger.charts.held, &new.ledger.charts.held),
+            prune_empty_seen: false,
         }
     }
 
@@ -141,6 +156,10 @@ impl ChatUpdate {
         apply_trades(&mut state.ledger.cards, self.cards);
         apply_trades(&mut state.ledger.charts.seen, self.chart_seen);
         apply_trades(&mut state.ledger.charts.held, self.chart_held);
+        if self.prune_empty_seen {
+            state.ledger.seen.retain(|_, rows| !rows.is_empty());
+            state.ledger.charts.seen.retain(|_, rows| !rows.is_empty());
+        }
         *target = state;
     }
 }
@@ -189,13 +208,36 @@ impl Update {
             chats,
             queue,
             next_id: new.next_id,
+            prunes: Vec::new(),
         }
+    }
+
+    /// Empty drafts must not append a cursor or wake the sender.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.chats.is_empty() && self.queue.is_none() && self.prunes.is_empty()
     }
 
     /// Apply a validated transaction before its sequence cursor is advanced by the journal.
     pub(crate) fn apply(self, file: &mut NotifyFile) -> anyhow::Result<()> {
-        if let Some(queue) = self.queue {
+        if let Some(QueueUpdate::Append(rows)) = self.queue {
+            for row in rows {
+                if let Some(auto) = &row.auto {
+                    if auto.kind.replaces_previous() {
+                        file.outbox.retain(|old| {
+                            old.chat != row.chat
+                                || old.auto.as_ref().is_none_or(|old| old.kind != auto.kind)
+                        });
+                    }
+                } else if row.card.is_none() && row.photo.is_none() && row.redraw.is_none() {
+                    if let Some(message) = row.edit {
+                        file.outbox.supersede_edit(row.chat, message);
+                    }
+                }
+                file.outbox.push(row);
+            }
+        } else if let Some(queue) = self.queue {
             file.outbox = match queue {
+                QueueUpdate::Append(_) => unreachable!("append handled above"),
                 QueueUpdate::Legacy(rows) => *rows,
                 QueueUpdate::Ordered { order, changed } => {
                     let mut rows: HashMap<_, _> = std::mem::take(&mut file.outbox)
@@ -220,6 +262,20 @@ impl Update {
                 update.apply(file.chats.entry(chat).or_default());
             } else {
                 file.chats.remove(&chat);
+            }
+        }
+        for prune in self.prunes {
+            if let Some(chat) = file.chats.get_mut(&prune.chat) {
+                let seen = if prune.charts {
+                    &mut chat.ledger.charts.seen
+                } else {
+                    &mut chat.ledger.seen
+                };
+                if let Some(edge) = prune.before {
+                    super::prune_closes(seen, edge);
+                } else {
+                    seen.clear();
+                }
             }
         }
         file.next_id = self.next_id;

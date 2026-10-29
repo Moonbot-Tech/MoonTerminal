@@ -254,8 +254,12 @@ fn finish(host: &mut dyn TgHost, store_ptr: usize, due: Vec<Due>, reads: Vec<Rea
     if current.iter().all(|(_, read)| read.is_err()) {
         return;
     }
-    let saved =
-        lock_store(&store).update_notifications(|file| queue_reports(file, current, now_utc));
+    let mut guard = lock_store(&store);
+    let chats: Vec<_> = current.iter().map(|(item, _)| item.chat).collect();
+    let mut batch =
+        moon_core::telegram::notify::NotificationBatch::new(&guard.file, &chats, &[], None);
+    queue_reports(&mut batch.file, current, now_utc);
+    let saved = guard.update_notifications(batch.finish());
     if let Err(error) = saved {
         log::warn!("telegram auto reports not queued: {error}");
     }

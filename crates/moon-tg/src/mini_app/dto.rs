@@ -32,18 +32,18 @@ pub(super) struct OrderDraft {
     mark: f64,
 }
 
-/// Capture exact display inputs without copying traces or formatting numbers on the owner.
+/// Project a frozen row with the conversion rate and panic state captured at admission.
 pub(super) fn order_draft(
-    host: &dyn TgHost,
     id: u64,
     name: String,
     exchange: String,
     order: &OrderRow,
+    usd_rate: impl FnOnce(&str) -> Option<f64>,
+    panic_armed: bool,
 ) -> OrderDraft {
     let (pnl, change) = order_at_mark(order, order.price);
     let quote = order_quote(&order.quote, &order.market);
     let quote = quote.as_str();
-    let market_source = host.session().market_source();
     let to_entry = order_to_entry_pct(order);
     let row = OrderDto {
         core: id,
@@ -59,17 +59,13 @@ pub(super) fn order_draft(
         pnl,
         pnl_text: None,
         pnl_sign: 0,
-        pnl_usd: pnl.and_then(|value| {
-            pnl_usd(value, quote, |currency| {
-                market_source.currency_usd_rate(id, currency)
-            })
-        }),
+        pnl_usd: pnl.and_then(|value| pnl_usd(value, quote, usd_rate)),
         emulator: order.emulator,
         change_pct: change,
         change_text: None,
         to_entry_pct: to_entry,
         to_entry_text: None,
-        panic_armed: host.is_panic_armed(id, &order.market),
+        panic_armed,
     };
     OrderDraft {
         row,

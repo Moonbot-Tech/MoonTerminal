@@ -28,9 +28,17 @@ pub struct TelegramState {
     /// Bounded replay receivers shared only with background chart jobs.
     pub(crate) mini_chart_jobs: Arc<Mutex<crate::mini_app::charts::ChartJobs>>,
     /// Previously observed orders permit truthful handoff after removal from the store.
-    pub(crate) mini_order_snapshots: BTreeMap<(u64, u64), crate::mini_app::charts::OrderSnapshot>,
+    pub(crate) mini_order_snapshots:
+        BTreeMap<(u64, u64), crate::mini_app::order_handoff::OrderSnapshot>,
     /// Only chart-observed executions may outlive their current Orders membership.
-    pub(crate) mini_order_handoffs: BTreeMap<(u64, u64), i64>,
+    pub(crate) mini_order_handoffs:
+        BTreeMap<(u64, u64), crate::mini_app::order_handoff::OrderHandoff>,
+    /// Current list identities survive viewer expiry until the next list reconciles that core.
+    pub(crate) mini_order_listed: BTreeMap<u64, crate::mini_app::order_handoff::CoreSnapshots>,
+    /// One publication wave, drained by the next admitted Orders job and destroyed off-thread.
+    pub(crate) mini_order_retired: Vec<crate::mini_app::order_handoff::CoreSnapshots>,
+    /// Latest trace-free rows per core revision, shared by background Mini App readers.
+    pub(crate) mini_order_captures: crate::mini_app::order_capture::OrderCaptures,
     /// At most one database report is computed at a time, including timed-out requests.
     pub(crate) report_pending: bool,
     /// At most one Mini App report is computed at a time, including timed-out requests.
@@ -207,6 +215,9 @@ impl TelegramState {
             mini_chart_jobs: Arc::default(),
             mini_order_snapshots: BTreeMap::new(),
             mini_order_handoffs: BTreeMap::new(),
+            mini_order_listed: BTreeMap::new(),
+            mini_order_retired: Vec::new(),
+            mini_order_captures: Default::default(),
             report_pending: false,
             mini_report_pending: false,
             mini_report_last: None,
@@ -409,6 +420,9 @@ impl TelegramState {
         self.mini_chart_jobs = Arc::default();
         self.mini_order_snapshots.clear();
         self.mini_order_handoffs.clear();
+        self.mini_order_listed.clear();
+        self.mini_order_retired.clear();
+        self.mini_order_captures = Default::default();
         self.mini_report_last = None;
         self.mini_trades_last = None;
         self.mini_orders_last = None;

@@ -154,19 +154,22 @@ pub(crate) fn run(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_ut
         return;
     }
     let stuck_before = now_utc.saturating_sub(STUCK_SECS);
-    let saved = super::tick::lock_store(store).update_notifications(|file| {
-        for (chat, html, cores) in messages {
-            let stuck = file
-                .outbox
-                .iter()
-                .any(|row| row.chat == chat && row.created_utc < stuck_before);
-            if stuck {
-                log::debug!("telegram core events for chat {chat} dropped: its outbox is stuck");
-                continue;
-            }
-            push_outbox(file, chat, html, Some(cores), now_utc);
+    let mut guard = super::tick::lock_store(store);
+    let mut batch =
+        moon_core::telegram::notify::NotificationBatch::new(&guard.file, &[], &[], None);
+    for (chat, html, cores) in messages {
+        let stuck = guard
+            .file
+            .outbox
+            .iter()
+            .any(|row| row.chat == chat && row.created_utc < stuck_before);
+        if stuck {
+            log::debug!("telegram core events for chat {chat} dropped: its outbox is stuck");
+            continue;
         }
-    });
+        push_outbox(&mut batch.file, chat, html, Some(cores), now_utc);
+    }
+    let saved = guard.update_notifications(batch.finish());
     if let Err(error) = saved {
         log::warn!("telegram core events not queued: {error}");
     }

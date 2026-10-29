@@ -98,7 +98,7 @@ fn notification_transactions_replay_with_receipts_and_checkpoint() {
         })
         .unwrap();
     store
-        .update_notifications(|file| {
+        .edit_notifications(|file| {
             file.chats
                 .get_mut(&7)
                 .unwrap()
@@ -111,7 +111,7 @@ fn notification_transactions_replay_with_receipts_and_checkpoint() {
         .unwrap();
     store.ack(0, 7, None, None).unwrap();
     store
-        .update_notifications(|file| {
+        .edit_notifications(|file| {
             file.chats
                 .get_mut(&7)
                 .unwrap()
@@ -150,7 +150,7 @@ fn notification_transaction_failure_leaves_the_document_unchanged() {
     std::fs::create_dir(crate::config::paths::telegram_notify_receipts(&path)).unwrap();
     assert!(
         store
-            .update_notifications(|file| {
+            .edit_notifications(|file| {
                 file.chats
                     .get_mut(&7)
                     .unwrap()
@@ -210,12 +210,19 @@ fn probe_owner_notify_updates() {
         };
         let mut old = || {
             let start = std::time::Instant::now();
-            control.update(edit).unwrap();
+            control.frozen_notify_update(edit).unwrap();
             before.push(start.elapsed().as_secs_f64() * 1000.0);
         };
         let mut new = || {
             let start = std::time::Instant::now();
-            store.update_notifications(edit).unwrap();
+            let mut batch = crate::telegram::notify::NotificationBatch::new(
+                &store.file,
+                &[7],
+                &[crate::telegram::notify::CardKey { core: 1, rec_id: 0 }],
+                None,
+            );
+            edit(&mut batch.file);
+            store.update_notifications(batch.finish()).unwrap();
             after.push(start.elapsed().as_secs_f64() * 1000.0);
         };
         if round % 2 == 0 {
@@ -620,6 +627,50 @@ fn service_stop_checkpoints_receipts_with_pending_rows() {
 }
 
 impl NotifyStore {
+    /// Frozen round-one clone/diff/append path for the paired residual-budget measurement.
+    fn frozen_notify_update(&mut self, edit: impl FnOnce(&mut NotifyFile)) -> anyhow::Result<()> {
+        let mut next = self.file.clone();
+        edit(&mut next);
+        if next == self.file {
+            return Ok(());
+        }
+        let mut journal = self.journal.try_lock().unwrap();
+        let sequence = journal.sequence + 1;
+        let update = crate::telegram::notify::updates::Update::between(&self.file, &next);
+        journal.bytes =
+            super::receipts::append_update(&self.path, journal.bytes, sequence, &update)?;
+        journal.sequence = sequence;
+        next.ack_sequence = sequence;
+        self.file = next;
+        Ok(())
+    }
+
+    /// Build explicit candidate patches for legacy fixture edits, leaving the queue out of drafts.
+    fn edit_notifications<R>(
+        &mut self,
+        edit: impl FnOnce(&mut NotifyFile) -> R,
+    ) -> anyhow::Result<R> {
+        let chats: Vec<_> = self.file.chats.keys().copied().collect();
+        let candidates: Vec<_> = self
+            .file
+            .chats
+            .values()
+            .flat_map(|chat| {
+                chat.ledger.seen.iter().flat_map(|(core, rows)| {
+                    rows.keys().map(|rec_id| crate::telegram::notify::CardKey {
+                        core: *core,
+                        rec_id: *rec_id,
+                    })
+                })
+            })
+            .collect();
+        let mut batch =
+            crate::telegram::notify::NotificationBatch::new(&self.file, &chats, &candidates, None);
+        let result = edit(&mut batch.file);
+        self.update_notifications(batch.finish())?;
+        Ok(result)
+    }
+
     /// Adapt existing single-owner fixtures to the production two-phase receipt transaction,
     /// moving rather than copying the document into its shared-store mutex.
     fn ack(
@@ -685,7 +736,7 @@ fn receipt_io_releases_the_store_and_survives_an_overlapping_save() {
             })
             .unwrap();
         guard
-            .update_notifications(|file| {
+            .edit_notifications(|file| {
                 file.chats
                     .get_mut(&8)
                     .unwrap()

@@ -1,7 +1,8 @@
 //! The Mini App's reads: report, trades, strategies, core status and its balances, open orders.
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 use std::time::Instant;
 
@@ -813,37 +814,49 @@ pub(super) fn orders_inputs(
             }
         })
         .collect();
-    OrdersInputs { cores }
+    OrdersInputs {
+        epoch: store.time_offset_epoch(),
+        cores,
+    }
 }
 
-/// Capture a changed Orders response and closing identities without traces or number formatting.
-pub(super) fn capture_orders(
-    host: &dyn TgHost,
-    store: &moon_core::session::CoreStore,
-    listed: &[(u64, String, String)],
+/// Build drafts and closing identities from shared captures on the background executor.
+pub(super) fn project_orders(
+    captured: &[super::order_capture::CoreOrders],
+    inputs: &OrdersInputs,
 ) -> (
     Vec<super::dto::OrderDraft>,
-    Vec<(u64, super::charts::OrderSnapshot)>,
+    super::order_handoff::PreparedSnapshots,
 ) {
     let mut snapshots = Vec::new();
     let mut orders = Vec::new();
-    for (id, name, exchange) in listed {
-        if let Some(data) = store.core(*id) {
-            for order in &data.orders {
+    for core in captured {
+        if let Some(input) = inputs.cores.iter().find(|input| input.core == core.core) {
+            // OrderIndex captures these same distinct raw pairs in BTree order. Reconstruct
+            // their lookup on the executor instead of allocating two strings per owner key.
+            let keys: BTreeSet<_> = core
+                .rows
+                .iter()
+                .map(|row| (row.quote.as_str(), row.market.as_str()))
+                .collect();
+            let values: HashMap<_, _> = keys.into_iter().zip(&input.values).collect();
+            for order in core.rows.iter() {
                 // Completed turns can remain in the current Orders response briefly; they are
                 // still clickable and need the same closing identity as an open row.
-                snapshots.push((*id, super::charts::OrderSnapshot::new(order)));
+                snapshots.push((core.core, super::order_handoff::OrderSnapshot::new(order)));
+                let value = values.get(&(order.quote.as_str(), order.market.as_str()));
                 orders.push(order_draft(
-                    host,
-                    *id,
-                    name.clone(),
-                    exchange.clone(),
+                    core.core,
+                    core.name.clone(),
+                    core.exchange.clone(),
                     order,
+                    |_| value.and_then(|value| value.usd_rate),
+                    value.is_some_and(|value| value.panic_armed),
                 ));
             }
         }
     }
-    (orders, snapshots)
+    (orders, snapshots.into_iter().collect())
 }
 
 /// Open orders for the chat's cores. `can_control` is true only for the owner.
@@ -876,13 +889,20 @@ pub(super) fn mini_orders(
         let _ = reply.try_send(Err(MiniAppApiError::Busy));
         return;
     }
-    let (drafts, snapshots) = capture_orders(&*host, host.session().store(), &listed);
+    let mut captures = std::mem::take(&mut host.state_mut().mini_order_captures);
+    let captured = captures.capture(host.session().store(), &listed);
+    host.state_mut().mini_order_captures = captures;
     let observed: Vec<_> = listed.iter().map(|(core, ..)| *core).collect();
-    super::charts::remember_order_snapshots(host.state_mut(), &observed, snapshots);
     host.state_mut().mini_orders_pending = true;
     host.state_mut().mini_orders_generation = host.state().mini_orders_generation.wrapping_add(1);
     let generation = host.state().mini_orders_generation;
+    let service = Arc::clone(&host.state().mini_chart_jobs);
+    // Each admission drains the previous publication's retired handles. With one pending
+    // Orders job, at most one completed response waits here; destruction runs on its executor.
+    let retired = std::mem::take(&mut host.state_mut().mini_order_retired);
     host.spawn(Box::new(move || {
+        drop(retired);
+        let (drafts, snapshots) = project_orders(&captured, &inputs);
         let dto = OrdersDto {
             orders: drafts
                 .into_iter()
@@ -891,7 +911,9 @@ pub(super) fn mini_orders(
             can_control,
         };
         Box::new(move |host: &mut dyn TgHost| {
-            if host.state().mini_orders_generation != generation {
+            if !Arc::ptr_eq(&service, &host.state().mini_chart_jobs)
+                || host.state().mini_orders_generation != generation
+            {
                 let _ = reply.try_send(Err(MiniAppApiError::Rejected));
                 return;
             }
@@ -900,6 +922,7 @@ pub(super) fn mini_orders(
                 let _ = reply.try_send(Err(MiniAppApiError::Rejected));
                 return;
             }
+            super::order_handoff::remember_order_snapshots(host.state_mut(), &observed, snapshots);
             let listed = visible_cores(host, &access);
             let source = host.session().market_source();
             let current = orders_inputs(

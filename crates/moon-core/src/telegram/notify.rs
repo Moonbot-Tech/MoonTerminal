@@ -12,8 +12,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::QuoteCurrency;
 
+mod batch;
 mod outbox;
+pub use batch::NotificationBatch;
 pub use outbox::Outbox;
+pub use updates::Update as NotificationUpdate;
 pub(crate) mod receipts;
 pub mod trades;
 pub(crate) mod updates;
