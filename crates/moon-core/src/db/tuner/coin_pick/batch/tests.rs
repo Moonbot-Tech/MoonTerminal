@@ -1,5 +1,6 @@
 //! Synthetic regressions for the batch auto-pick: grouping, per-strategy lists, cancellation.
 use super::*;
+use crate::db::tuner::coin_pick::coin_pick_from_rows;
 
 /// Settings with a blacklist search and a thirty-percent fresh share.
 fn settings() -> PickSettings {

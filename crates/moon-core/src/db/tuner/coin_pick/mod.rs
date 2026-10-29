@@ -31,7 +31,7 @@ pub const MIN_HOLDOUT_TOUCHED: usize = 5;
 /// Minimum absolute standardized mean for a candidate.
 pub const T_GATE: f64 = 1.0;
 /// Maximum candidates in either suggested list.
-pub const MAX_PICK: usize = 30;
+pub const MAX_PICK: usize = 50;
 /// Absolute Fact-profit share used as the minimum meaningful gain.
 pub const NOISE_ABS_SHARE: f64 = 0.05;
 
@@ -147,6 +147,11 @@ fn tally(rows: &[CoinTrade], keep: impl Fn(&CoinTrade) -> bool) -> Tally {
 
 /// Fit only on older rows; list edits never change the validation time interval.
 pub fn coin_pick_from_rows(rows: &[CoinTrade], p: &CoinPickParams) -> CoinPick {
+    fit_with_cap(rows, p, MAX_PICK)
+}
+
+/// Use the production fit with an explicit cap for paired diagnostic comparisons.
+fn fit_with_cap(rows: &[CoinTrade], p: &CoinPickParams, cap: usize) -> CoinPick {
     let mut rows = rows.to_vec();
     for row in &mut rows {
         row.token = coin_match_key(&row.token);
@@ -214,7 +219,7 @@ pub fn coin_pick_from_rows(rows: &[CoinTrade], p: &CoinPickParams) -> CoinPick {
         });
         picked
             .into_iter()
-            .take(MAX_PICK)
+            .take(cap)
             .map(|(token, _)| token.clone())
             .collect::<HashSet<_>>()
     };
