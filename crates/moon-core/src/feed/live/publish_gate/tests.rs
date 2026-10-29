@@ -85,3 +85,44 @@ fn a_server_restart_withholds_only_the_server_info_it_observed() {
         "a same-process reconnect has no restart mark and must republish"
     );
 }
+
+/// Dropping the station gate would send a station the 50 ms line copies again, twice the tables'
+/// count; dropping the table debt would leave a trace-only turn's captured rows waiting for an
+/// unrelated table event.
+#[test]
+fn a_station_line_event_owes_the_table_and_no_line_copy() {
+    assert_eq!(
+        OrderDebts::of_turn(true, false, true),
+        OrderDebts {
+            table: true,
+            lines: false
+        }
+    );
+}
+
+/// The terminal's chart keeps its line copies, and a trace point alone does not republish the
+/// table there.
+#[test]
+fn a_terminal_trace_point_owes_only_the_line_copies() {
+    assert_eq!(
+        OrderDebts::of_turn(false, false, true),
+        OrderDebts {
+            table: false,
+            lines: true
+        }
+    );
+}
+
+/// A table event owes the table everywhere; the station gate must not swallow it, and the
+/// terminal keeps the copy beside it.
+#[test]
+fn a_table_event_owes_the_table_on_both_hosts() {
+    assert!(OrderDebts::of_turn(true, true, true).table);
+    assert_eq!(
+        OrderDebts::of_turn(false, true, true),
+        OrderDebts {
+            table: true,
+            lines: true
+        }
+    );
+}
