@@ -127,8 +127,6 @@ pub(crate) struct CachedOrders {
     pub(super) access: TelegramReportAccess,
     pub(super) inputs: OrdersInputs,
     pub(super) dto: OrdersDto,
-    /// Bounded closing-chart identities refreshed on every cache hit, as a full read would do.
-    pub(super) snapshots: Vec<(u64, super::charts::OrderSnapshot)>,
 }
 
 /// One visible core's revisions and display fields in the Strategies cache key.

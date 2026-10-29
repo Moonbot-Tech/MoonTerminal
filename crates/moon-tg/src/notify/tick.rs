@@ -427,18 +427,24 @@ fn step_one_down(
     }
 }
 
-/// Copy the down rule and ledger for `chat`.
+/// Copy only the down rule and announced cores; trade history is not an input to down tracking.
 ///
 /// Args:
 ///     store: Notifications file.
 ///     chat: Chat being stepped.
 ///
 /// Returns:
-///     The rule and a clone of the ledger, or `None` when the chat is gone.
+///     The rule and a ledger containing only down state, or `None` when the chat is gone.
 fn chat_down_snapshot(store: &Mutex<NotifyStore>, chat: i64) -> Option<(DownRule, NotifyLedger)> {
     let guard = lock_store(store);
     let entry = guard.file.chats.get(&chat)?;
-    Some((entry.settings.down, entry.ledger.clone()))
+    Some((
+        entry.settings.down,
+        NotifyLedger {
+            down_announced: entry.ledger.down_announced.clone(),
+            ..Default::default()
+        },
+    ))
 }
 
 /// Write `down_announced` from the stepped ledger and any notices in one save.
@@ -468,7 +474,7 @@ fn write_down(
     now_utc: i64,
 ) -> Result<bool, SaveMiss> {
     lock_store(store)
-        .update(|file| {
+        .update_notifications(|file| {
             let Some(entry) = file.chats.get_mut(&chat) else {
                 return false;
             };
@@ -993,7 +999,7 @@ fn save_applies(
     now_utc: i64,
 ) -> Result<(Vec<i64>, Vec<(i64, ClosedTrade)>), SaveMiss> {
     lock_store(store)
-        .update(|file| apply_messages(file, applies, loaded, now_utc))
+        .update_notifications(|file| apply_messages(file, applies, loaded, now_utc))
         .map_err(|_| SaveMiss)
 }
 

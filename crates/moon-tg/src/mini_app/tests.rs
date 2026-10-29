@@ -56,6 +56,15 @@ fn coin_chart_two_core_overlays_exclude_other_markets_and_venues() {
     for (id, name, row) in snapshot.orders {
         super::charts::coin_overlays(&source, id, &name, &row, 110.0, &mut dto);
     }
+    let mut frozen = CoinTicksDto::default();
+    for (id, name) in [(1, "CORE_A"), (2, "CORE_B")] {
+        for row in &store.core(id).unwrap().orders {
+            if !row.job_is_done && row.market == "XALPHAUSDT" {
+                frozen_coin_overlays(&source, id, name, row, 110.0, &mut frozen);
+            }
+        }
+    }
+    assert_eq!(format!("{dto:?}"), format!("{frozen:?}"));
     assert_eq!(
         dto.levels
             .iter()
@@ -75,6 +84,57 @@ fn coin_chart_two_core_overlays_exclude_other_markets_and_venues() {
             .collect::<Vec<_>>(),
         vec![("CORE_A", false), ("CORE_B", true)]
     );
+}
+
+/// Frozen pre-projection overlay mapping catches omitted levels, quantity gates and quote fields.
+fn frozen_coin_overlays(
+    source: &moon_core::market::MarketDataSource,
+    core: u64,
+    name: &str,
+    row: &moon_core::feed::OrderRow,
+    mark: f64,
+    dto: &mut moon_core::telegram::web::dto::CoinTicksDto,
+) {
+    use moon_core::telegram::web::dto::{CoinLevelDto, CoinPositionDto, LevelKindDto};
+    dto.levels.extend(
+        super::charts::live_levels(row)
+            .into_iter()
+            .map(|level| CoinLevelDto {
+                kind: if row.pending && level.kind == LevelKindDto::Entry {
+                    LevelKindDto::Buy
+                } else {
+                    level.kind
+                },
+                price: level.price,
+                core: core.to_string(),
+                core_name: name.to_string(),
+                is_short: row.is_short,
+                pending: row.pending,
+            }),
+    );
+    let volume = source
+        .currency_usd_rate(core, &super::dto::order_quote(&row.quote, &row.market))
+        .map(|rate| row.size * row.buy_price * rate)
+        .filter(|value| value.is_finite() && *value > 0.0);
+    let mut marked = row.clone();
+    marked.price = mark as f32;
+    let pnl_pct = if row.pending {
+        moon_core::feed::order_math::pct_to_entry(row, mark)
+    } else {
+        moon_core::feed::order_math::order_pnl_pct(&marked).filter(|value| value.is_finite())
+    };
+    dto.positions.push(CoinPositionDto {
+        core: core.to_string(),
+        core_name: name.to_string(),
+        is_short: row.is_short,
+        pending: row.pending,
+        entry: row.buy_price,
+        take: row.take_profit,
+        stop: row.stop_loss,
+        strategy: row.strat_name.clone(),
+        volume_usd: volume,
+        pnl_pct,
+    });
 }
 
 /// Building a delta-only candle or resampling with the wrong bucket loses OHLCV history.
@@ -970,38 +1030,75 @@ fn chart_live_cursor_freshness_levels_and_mark_are_independent() {
     );
 }
 
-/// Losing retained identities or omitting their TTL can match an unrelated later report row.
+/// Evicting identities by count loses closing charts for the first orders in a loaded fleet.
 #[test]
-fn chart_order_snapshots_are_bounded_and_expire() {
+fn chart_order_snapshots_keep_the_whole_live_fleet() {
     let config = moon_core::config::TelegramConfig::default();
     let mut state = crate::TelegramState::new(&config, crate::HostKind::Station);
     let mut row = resting_order(100.0, 101.0);
+    for core in 1..=10 {
+        for uid in 0..200 {
+            row.uid = uid;
+            super::charts::remember_order(&mut state, core, &row);
+        }
+    }
+    assert_eq!(state.mini_order_snapshots.len(), 2000);
+    assert!(state.mini_order_snapshots.contains_key(&(1, 0)));
+    super::charts::finish_order_handoff(&mut state, 1, 0, 0);
+    assert!(!state.mini_order_snapshots.contains_key(&(1, 0)));
+    row.uid = 1;
+    row.entry_fill_time_ms = 5000.0;
+    super::charts::remember_order(&mut state, 1, &row);
+    super::charts::begin_order_handoff(&mut state, 1, 1);
+    super::charts::finish_order_handoff(&mut state, 1, 1, 0);
+    assert!(state.mini_order_snapshots.contains_key(&(1, 1)));
+    assert_eq!(state.mini_order_handoffs.get(&(1, 1)), Some(&5000));
+}
+
+/// A list refresh must preserve unresolved handoffs, including other cores and older orders.
+#[test]
+fn chart_order_snapshots_keep_unresolved_handoffs() {
+    let config = moon_core::config::TelegramConfig::default();
+    let mut state = crate::TelegramState::new(&config, crate::HostKind::Station);
+    let mut row = resting_order(100.0, 101.0);
+    row.entry_fill_time_ms = 100000.0;
     row.market = "XALPHAUSDT".into();
     row.coin = "XALPHA".into();
     for uid in 0..65 {
         row.uid = uid;
         super::charts::remember_order(&mut state, 1, &row);
     }
-    assert_eq!(state.mini_order_snapshots.len(), 64);
-    assert!(!state.mini_order_snapshots.contains_key(&(1, 0)));
-    state.mini_order_snapshots.get_mut(&(1, 1)).unwrap().at =
-        Instant::now() - Duration::from_secs(86401);
-    super::charts::remember_order(&mut state, 1, &row);
-    assert!(!state.mini_order_snapshots.contains_key(&(1, 1)));
+    assert_eq!(state.mini_order_snapshots.len(), 65);
+    assert!(state.mini_order_snapshots.contains_key(&(1, 0)));
     assert_eq!(state.mini_order_snapshots[&(1, 64)].coin, "XALPHA");
-    let mut cached = state.mini_order_snapshots[&(1, 64)].clone();
-    cached.at = Instant::now() - Duration::from_secs(86401);
-    super::charts::remember_order_snapshots(&mut state, [(1, cached)]);
-    assert!(state.mini_order_snapshots[&(1, 64)].at.elapsed() < Duration::from_secs(1));
+    let cached = state.mini_order_snapshots[&(1, 64)].clone();
+    super::charts::remember_order_snapshots(&mut state, &[2], [(2, cached)]);
     row.uid = 999;
     super::charts::remember_order(&mut state, 1, &row);
-    state.mini_order_snapshots.get_mut(&(1, 999)).unwrap().at =
-        Instant::now() - Duration::from_secs(86401);
+    super::charts::begin_order_handoff(&mut state, 1, 999);
     let current = vec![(1, state.mini_order_snapshots[&(1, 64)].clone())];
-    let cached = super::reads::current_order_snapshots(&state, &current);
-    assert!(cached.iter().all(|(_, snapshot)| snapshot.uid == 64));
-    super::charts::remember_order_snapshots(&mut state, cached);
-    assert!(!state.mini_order_snapshots.contains_key(&(1, 999)));
+    row.uid = 1001;
+    row.entry_fill_time_ms = 0.0;
+    super::charts::remember_order(&mut state, 1, &row);
+    super::charts::remember_order_snapshots(&mut state, &[1], current);
+    assert!(state.mini_order_snapshots.contains_key(&(1, 999)));
+    assert!(!state.mini_order_snapshots.contains_key(&(1, 0)));
+    assert!(state.mini_order_snapshots.contains_key(&(2, 64)));
+    assert!(!state.mini_order_snapshots.contains_key(&(1, 1001)));
+    assert_eq!(state.mini_order_snapshots.len(), 3);
+    // Routine turnover never grows history: only the current fleet and the selected handoff stay.
+    for batch in 0..10 {
+        let rows = (0..200).map(|index| {
+            row.uid = 2000 + batch * 200 + index;
+            row.entry_fill_time_ms = 100000.0;
+            (1, super::charts::OrderSnapshot::new(&row))
+        });
+        super::charts::remember_order_snapshots(&mut state, &[1], rows);
+        assert_eq!(state.mini_order_snapshots.len(), 202);
+    }
+    super::charts::finish_order_handoff(&mut state, 1, 999, 100000);
+    assert!(state.mini_order_handoffs.is_empty());
+    assert_eq!(state.mini_order_snapshots.len(), 201);
 }
 
 /// The first chat's displayed id must resolve after a different chat replaces the list cache.
@@ -1078,12 +1175,23 @@ fn chart_report_lookup_uses_display_id_and_carries_recorder_identity() {
         60.0
     );
     assert!(read(9, Ok(display(11))).is_none());
-    assert!(read(7, Err(("XALPHA".into(), 100000))).is_none());
+    assert_eq!(read(7, Err(("XALPHA".into(), 100000))).unwrap().rec_id, 11);
     assert!(read(7, Err(("XALPHA".into(), 300000))).is_none());
     let closed = read(7, Err(("XALPHA".into(), 200000))).unwrap();
     assert_eq!(closed.rec_id, 12);
     assert!(read(7, Err(("XALPHA".into(), 500000))).is_none());
     assert!(read(7, Err(("XALPHA".into(), 0))).is_none());
+    assert_eq!(read(7, Err(("XALPHA".into(), 100500))).unwrap().rec_id, 11);
+    conn.execute_batch("UPDATE orders_rep SET buydate=101.9, closedate=200.9 WHERE newrecid=901")
+        .unwrap();
+    assert_eq!(read(7, Err(("XALPHA".into(), 100000))).unwrap().rec_id, 11);
+    conn.execute_batch("CREATE TABLE core_time_offset (core_uid INTEGER, from_utc INTEGER, offset_secs INTEGER, observed_at INTEGER, source TEXT);
+        INSERT INTO core_time_offset VALUES (7, 0, 3600, 0, 'fixture')").unwrap();
+    conn.execute_batch(
+        "UPDATE orders_rep SET buydate=buydate+3600, closedate=closedate+3600 WHERE core_uid=7",
+    )
+    .unwrap();
+    assert_eq!(read(7, Err(("XALPHA".into(), 100000))).unwrap().rec_id, 11);
 }
 
 /// A station replica has no displayed `id` column, so its list rows carry `rec_id` 0. If the

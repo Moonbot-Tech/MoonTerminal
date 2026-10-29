@@ -10,6 +10,80 @@ use moon_core::telegram::report::{Period, ReportRequest};
 const CORES: i64 = 10;
 const ROUNDS: u32 = 5;
 
+thread_local! {
+    static CLOSING_SQL: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Capture the production handoff SELECT, so its plan cannot be confused with a smaller surrogate.
+fn capture_closing_statement(event: rusqlite::trace::TraceEvent<'_>) {
+    if let rusqlite::trace::TraceEvent::Stmt(statement, _) = event
+        && let Some(sql) = statement.expanded_sql()
+        && sql.contains("mt_chart_entry_matches(")
+    {
+        CLOSING_SQL.with(|rows| rows.borrow_mut().push(sql));
+    }
+}
+
+/// Time an older same-coin closing identity among 100000 trades, including the full projection.
+#[test]
+#[ignore = "manual closing identity scale measurement"]
+fn probe_closing_identity() {
+    let conn = source(100_000, 1_700_000_000, 1_700_200_000);
+    let indexing = Instant::now();
+    conn.execute_batch(
+        "CREATE INDEX idx_rep_coin_entry ON orders_rep(core_uid, coin COLLATE NOCASE, buydate) WHERE buydate > 0",
+    )
+    .unwrap();
+    println!(
+        "[scale] closing identity index build (100000 rows): {:.3} ms",
+        indexing.elapsed().as_secs_f64() * 1000.0
+    );
+    CLOSING_SQL.with(|rows| rows.borrow_mut().clear());
+    conn.trace_v2(
+        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+        Some(capture_closing_statement),
+    );
+    super::super::read_mini_chart_trade_on(
+        &conn,
+        chrono_tz::UTC,
+        moon_core::db::CoreNames::default(),
+        1,
+        Err(("XALPHA".into(), 1_700_000_000_000)),
+    )
+    .unwrap();
+    conn.trace_v2(rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT, None);
+    let statements = CLOSING_SQL.with(|rows| rows.borrow().clone());
+    assert!(!statements.is_empty());
+    for sql in statements {
+        let plan = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(plan.contains("idx_rep_coin_entry"), "{plan}");
+        println!("[scale] production closing identity plan: {plan}");
+    }
+    let mut samples = Vec::new();
+    for _ in 0..7 {
+        let start = Instant::now();
+        let result = super::super::read_mini_chart_trade_on(
+            &conn,
+            chrono_tz::UTC,
+            moon_core::db::CoreNames::default(),
+            1,
+            Err(("XALPHA".into(), 1_700_000_000_000)),
+        )
+        .unwrap();
+        assert!(result.is_some(), "an older same-coin trade must resolve");
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!("[scale] closing identity median: {:.3} ms", samples[3]);
+}
+
 /// A report source with the replica's indexes and `deals` rows inside both period bases across
 /// [`CORES`], so a table scan or an out-of-period entry cannot distort the measured workload.
 fn source(deals: i64, from: i64, to: i64) -> rusqlite::Connection {

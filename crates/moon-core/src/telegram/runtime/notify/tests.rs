@@ -15,6 +15,289 @@ use crate::telegram::reply::{TELEGRAM_MESSAGE_UTF16_LIMIT, utf16_len};
 
 static TEST_SEQ: AtomicU32 = AtomicU32::new(0);
 
+/// Supersession must preserve mandatory cards, unrelated targets and the last valid edit.
+#[test]
+fn pending_edits_are_bounded_by_the_messages_they_replace() {
+    let mut file = NotifyFile::default();
+    push_outbox(&mut file, 7, "mandatory".into(), None, 1);
+    super::push_edit(&mut file, 8, 10, "other chat".into(), None, 1);
+    super::push_edit(&mut file, 7, 11, "other message".into(), None, 1);
+    for id in 0..100 {
+        super::push_edit(&mut file, 7, 10, format!("state {id}"), None, id);
+    }
+    assert_eq!(
+        file.outbox
+            .iter()
+            .map(|row| row.html.as_str())
+            .collect::<Vec<_>>(),
+        vec!["mandatory", "other chat", "other message", "state 99"]
+    );
+    assert!(!super::push_edit(
+        &mut file,
+        7,
+        10,
+        "x".repeat(4097),
+        None,
+        101
+    ));
+    assert_eq!(file.outbox.last().unwrap().html, "state 99");
+}
+
+/// A blocked chat keeps every distinct card but at most one pending edit per target message.
+#[test]
+#[ignore = "manual blocked-chat queue scale measurement"]
+fn probe_blocked_chat_supersession() {
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for _ in 0..5 {
+        let mut original = NotifyFile::default();
+        for id in 0..2000 {
+            push_outbox(&mut original, 7, format!("card {id}"), None, id);
+        }
+        let mut current = original.clone();
+        let start = std::time::Instant::now();
+        for id in 0..5000 {
+            super::push_row(&mut original, 7, format!("state {id}"), None, None, id);
+            original.outbox.last_mut().unwrap().edit = Some(42);
+        }
+        before.push(start.elapsed().as_secs_f64() * 1000.0 / 5000.0);
+        let start = std::time::Instant::now();
+        for id in 0..5000 {
+            super::push_edit(&mut current, 7, 42, format!("state {id}"), None, id);
+        }
+        after.push(start.elapsed().as_secs_f64() * 1000.0 / 5000.0);
+        assert_eq!(original.outbox.len(), 7000);
+        assert_eq!(current.outbox.len(), 2001);
+        assert_eq!(
+            current
+                .outbox
+                .iter()
+                .filter(|row| row.edit.is_none())
+                .count(),
+            2000
+        );
+    }
+    before.sort_by(f64::total_cmp);
+    after.sort_by(f64::total_cmp);
+    println!(
+        "[scale] blocked chat: 7000 -> 2001 rows; enqueue {:.6} -> {:.6} ms/edit",
+        before[2], after[2]
+    );
+}
+
+/// Mixed owner transactions and delivery receipts must replay in order, including after a
+/// checkpoint whose old journal has not yet been cleared.
+#[test]
+fn notification_transactions_replay_with_receipts_and_checkpoint() {
+    let root = TempRoot::new("transactions");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    store
+        .update(|file| {
+            file.chats.insert(7, ChatNotify::default());
+        })
+        .unwrap();
+    store
+        .update_notifications(|file| {
+            file.chats
+                .get_mut(&7)
+                .unwrap()
+                .ledger
+                .seen
+                .insert(1, BTreeMap::from([(4, 40)]));
+            push_outbox(file, 7, "first".into(), None, 1);
+            push_outbox(file, 7, "second".into(), None, 1);
+        })
+        .unwrap();
+    store.ack(0, 7, None, None).unwrap();
+    store
+        .update_notifications(|file| {
+            file.chats
+                .get_mut(&7)
+                .unwrap()
+                .ledger
+                .down_announced
+                .insert(1);
+            push_outbox(file, 7, "third".into(), None, 2);
+        })
+        .unwrap();
+    assert_eq!(NotifyFile::load(&path).unwrap(), store.file);
+    store.file.save(&path).unwrap();
+    assert_eq!(NotifyFile::load(&path).unwrap(), store.file);
+    let mut restarted = NotifyStore::open(path.clone()).unwrap();
+    restarted.ack(1, 7, None, None).unwrap();
+    assert_eq!(NotifyFile::load(&path).unwrap(), restarted.file);
+    restarted.checkpoint().unwrap();
+    assert!(
+        std::fs::read(crate::config::paths::telegram_notify_receipts(&path))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A failed incremental append must not publish either its ledger or its queued notification.
+#[test]
+fn notification_transaction_failure_leaves_the_document_unchanged() {
+    let root = TempRoot::new("transaction-fail");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).unwrap();
+    store
+        .update(|file| {
+            file.chats.insert(7, ChatNotify::default());
+        })
+        .unwrap();
+    let before = store.file.clone();
+    std::fs::create_dir(crate::config::paths::telegram_notify_receipts(&path)).unwrap();
+    assert!(
+        store
+            .update_notifications(|file| {
+                file.chats
+                    .get_mut(&7)
+                    .unwrap()
+                    .ledger
+                    .down_announced
+                    .insert(1);
+                push_outbox(file, 7, "unsaved".into(), None, 1);
+            })
+            .is_err()
+    );
+    assert_eq!(store.file, before);
+    assert_eq!(NotifyFile::load_snapshot(&path).unwrap(), before);
+}
+
+/// Measure owner updates and down snapshots with a 72-hour ledger and a slow-chat backlog.
+#[test]
+#[ignore = "manual synthetic notification persistence scale measurement"]
+fn probe_owner_notify_updates() {
+    let root = TempRoot::new("owner-scale");
+    let mut store = NotifyStore::open(root.path("notifications.json")).unwrap();
+    store
+        .update(|file| {
+            let mut chat = ChatNotify::default();
+            for core in 1..=10 {
+                chat.ledger
+                    .seen
+                    .insert(core, (0..5000).map(|id| (id, 100)).collect());
+            }
+            file.chats.insert(7, chat);
+            for id in 0..2000 {
+                file.outbox.push(crate::telegram::notify::Pending {
+                    id,
+                    chat: 7,
+                    html: "XALPHA ".repeat(64),
+                    ..Default::default()
+                });
+            }
+            file.next_id = 2000;
+        })
+        .unwrap();
+    let mut control = NotifyStore::open(root.path("control.json")).unwrap();
+    control.file = store.file.clone();
+    control.file.save(&control.path).unwrap();
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for round in 0..8 {
+        let edit = |file: &mut NotifyFile| {
+            file.chats
+                .get_mut(&7)
+                .unwrap()
+                .ledger
+                .seen
+                .get_mut(&1)
+                .unwrap()
+                .insert(0, 100 + round);
+            push_outbox(file, 7, "new close".into(), None, round);
+        };
+        let mut old = || {
+            let start = std::time::Instant::now();
+            control.update(edit).unwrap();
+            before.push(start.elapsed().as_secs_f64() * 1000.0);
+        };
+        let mut new = || {
+            let start = std::time::Instant::now();
+            store.update_notifications(edit).unwrap();
+            after.push(start.elapsed().as_secs_f64() * 1000.0);
+        };
+        if round % 2 == 0 {
+            old();
+            new();
+        } else {
+            new();
+            old();
+        }
+        let mut expected = control.file.clone();
+        expected.ack_sequence = store.file.ack_sequence;
+        assert_eq!(store.file, expected);
+        assert_eq!(NotifyFile::load(&store.path).unwrap(), store.file);
+    }
+    before.sort_by(f64::total_cmp);
+    after.sort_by(f64::total_cmp);
+    println!(
+        "[scale] dirty owner update median: {:.3} -> {:.3} ms",
+        before[4], after[4]
+    );
+    let mut next = store.file.clone();
+    next.chats
+        .get_mut(&7)
+        .unwrap()
+        .ledger
+        .seen
+        .get_mut(&1)
+        .unwrap()
+        .insert(0, 999);
+    push_outbox(&mut next, 7, "another close".into(), None, 999);
+    let delta = crate::telegram::notify::updates::Update::between(&store.file, &next);
+    component_median("document clone", || {
+        std::hint::black_box(store.file.clone());
+    });
+    component_median("transaction diff", || {
+        std::hint::black_box(crate::telegram::notify::updates::Update::between(
+            &store.file,
+            &next,
+        ));
+    });
+    component_median("transaction encode", || {
+        std::hint::black_box(serde_json::to_vec(&delta).unwrap());
+    });
+    let mut bytes = 0;
+    let mut sequence = 0;
+    component_median("transaction append and sync", || {
+        sequence += 1;
+        bytes =
+            super::receipts::append_update(&root.path("component.json"), bytes, sequence, &delta)
+                .unwrap();
+    });
+    let ledger = &store.file.chats[&7].ledger;
+    let start = std::time::Instant::now();
+    for _ in 0..100 {
+        std::hint::black_box(ledger.clone());
+    }
+    println!(
+        "[scale] whole down ledger clone: {:.3} ms",
+        start.elapsed().as_secs_f64() * 10.0
+    );
+    let start = std::time::Instant::now();
+    for _ in 0..100 {
+        std::hint::black_box(ledger.down_announced.clone());
+    }
+    println!(
+        "[scale] down bits clone: {:.6} ms",
+        start.elapsed().as_secs_f64() * 10.0
+    );
+}
+
+/// Separate CPU preparation from durable I/O instead of attributing a whole save to cloning.
+fn component_median(label: &str, mut run: impl FnMut()) {
+    let mut samples = Vec::new();
+    for _ in 0..7 {
+        let start = std::time::Instant::now();
+        run();
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!("[scale] {label}: {:.3} ms", samples[3]);
+}
+
 /// Keeping a short already-checkpointed prefix would make the next durable ack look like a
 /// sequence gap on restart and resend that card, including when corruption shortened the prefix.
 #[test]
@@ -353,6 +636,7 @@ impl NotifyStore {
             wake: self.wake.clone(),
             journal: self.journal.clone(),
             purged: None,
+            checkpoint_at: self.checkpoint_at,
         };
         let shared = Mutex::new(std::mem::replace(self, placeholder));
         let result = super::durable_ack(&shared, id, chat, replaced, card);
@@ -400,6 +684,16 @@ fn receipt_io_releases_the_store_and_survives_an_overlapping_save() {
                 file.chats.insert(8, ChatNotify::default());
             })
             .unwrap();
+        guard
+            .update_notifications(|file| {
+                file.chats
+                    .get_mut(&8)
+                    .unwrap()
+                    .ledger
+                    .down_announced
+                    .insert(1);
+            })
+            .unwrap();
     }
     resume.send(()).unwrap();
     task.join().unwrap().unwrap();
@@ -409,6 +703,7 @@ fn receipt_io_releases_the_store_and_survives_an_overlapping_save() {
         "overlapping save discarded the durable receipt"
     );
     assert!(loaded.chats.contains_key(&8));
+    assert!(loaded.chats[&8].ledger.down_announced.contains(&1));
 }
 
 /// A replaced queue or changed disclosure must be scanned, but removals and ledger-only saves

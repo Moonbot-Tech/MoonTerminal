@@ -67,15 +67,15 @@ pub fn pct_to_exit(r: &OrderRow, last: f64) -> Option<f64> {
 /// The direction flips once more. A long's entry waits BELOW the market and a short's ABOVE it, so
 /// what counts down is `last - entry` for the one and `entry - last` for the other.
 pub fn pct_to_entry(r: &OrderRow, last: f64) -> Option<f64> {
-    let entry = r.buy_price;
+    entry_distance_pct(r.buy_price, last, r.is_short)
+}
+
+/// Evaluate the entry distance from captured scalar inputs without copying an order's traces.
+pub fn entry_distance_pct(entry: f64, last: f64, is_short: bool) -> Option<f64> {
     if !usable_price(last) || !usable_price(entry) {
         return None;
     }
-    let left = if r.is_short {
-        entry - last
-    } else {
-        last - entry
-    };
+    let left = if is_short { entry - last } else { last - entry };
     Some(left / entry * 100.0)
 }
 
@@ -115,19 +115,35 @@ pub fn position_qty(r: &OrderRow) -> Option<f64> {
 /// short entry previously calculated PnL from the exit price and diverged from Assets, for example
 /// VELVET showed -3.96 from `sell_price` versus about zero from the resolved entry.
 pub fn order_pnl(r: &OrderRow) -> Option<f64> {
-    let qty = position_qty(r)?;
-    let entry = r.buy_price;
-    let mark = r.price as f64;
+    pnl_at_mark(r.buy_price, r.price, position_qty(r), r.is_short).0
+}
+
+/// Compute the canonical open PnL amount and percent from an immutable mark projection.
+/// Quantity retains `position_qty`'s gate; mark keeps the wire's f32 precision. This lets
+/// background Telegram reads capture only scalars, without cloning the order's chart traces.
+pub fn pnl_at_mark(
+    entry: f64,
+    mark: f32,
+    quantity: Option<f64>,
+    is_short: bool,
+) -> (Option<f64>, Option<f64>) {
+    let Some(qty) = quantity else {
+        return (None, None);
+    };
+    let mark = f64::from(mark);
     // Gated through [`usable_price`], not `<= 0.0`: every comparison against NaN is false, so a
     // naive `entry <= 0.0 || mark <= 0.0` lets a NaN price through and this returns `Some(NaN)`.
     // That value then reaches the Orders sort, where `partial_cmp` answers `None` for it and the
     // comparator degenerates into a non-total order — which aborts the process rather than merely
     // mis-sorting.
     if !usable_price(entry) || !usable_price(mark) {
-        return None;
+        return (None, None);
     }
-    let dir = if r.is_short { -1.0 } else { 1.0 };
-    Some((mark - entry) * qty * dir)
+    let dir = if is_short { -1.0 } else { 1.0 };
+    (
+        Some((mark - entry) * qty * dir),
+        Some((mark - entry) / entry * dir * 100.0),
+    )
 }
 
 /// Estimate PnL if the position closes at its take-profit price (`sell_price`).
@@ -154,17 +170,7 @@ pub fn order_pnl_at_tp(r: &OrderRow) -> Option<f64> {
 /// Return `None` under the same conditions as [`order_pnl`]. `buy_price` is the entry for both
 /// directions.
 pub fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
-    position_qty(r)?; // Apply the same in-position gate as `order_pnl`.
-    let entry = r.buy_price;
-    let mark = r.price as f64;
-    // Gated through [`usable_price`] for the NaN reason spelled out in [`order_pnl`]. The division
-    // adds nothing to that argument: `entry` is already known non-zero here, so the guard it needs
-    // is the same one, not a weaker `!= 0.0`.
-    if !usable_price(entry) || !usable_price(mark) {
-        return None;
-    }
-    let dir = if r.is_short { -1.0 } else { 1.0 };
-    Some((mark - entry) / entry * dir * 100.0)
+    pnl_at_mark(r.buy_price, r.price, position_qty(r), r.is_short).1
 }
 
 #[cfg(test)]

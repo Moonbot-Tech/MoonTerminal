@@ -221,7 +221,35 @@ fn run_row_pass(
     let mut merged: Vec<(u64, i64, Vec<Value>)> = Vec::new();
     for src in pass.sources {
         let (mut where_sql, mut params) = build_where(&scoped, &src.cols, pass.meta);
-        if let Some(key) = pass.row_key {
+        if let Some(RowKey::Entry(entry_ms)) = pass.row_key {
+            if !src.cols.contains("buydate") || !src.cols.contains("closedate") {
+                continue;
+            }
+            // Keep the raw column indexable. The residual uses the row's own offset segment,
+            // including an adoption between entry and close; a guessed offset at now loses it.
+            let (low_offset, high_offset) = if scoped.axis.is_utc_identity() {
+                (0, 0)
+            } else {
+                (
+                    crate::db::report_axis::MIN_OFFSET_SECS,
+                    crate::db::report_axis::MAX_OFFSET_SECS,
+                )
+            };
+            where_sql.push_str(" AND r.buydate > 0 AND typeof(r.buydate) IN ('integer','real') AND r.buydate >= ? AND r.buydate <= ? AND mt_chart_entry_matches(CAST(r.buydate AS INTEGER), CAST(r.closedate AS INTEGER), r.core_uid)");
+            params.push(Box::new(
+                entry_ms
+                    .saturating_sub(1000)
+                    .div_euclid(1000)
+                    .saturating_add(i64::from(low_offset)),
+            ));
+            params.push(Box::new(
+                entry_ms
+                    .saturating_add(1000)
+                    .div_euclid(1000)
+                    .saturating_add(i64::from(high_offset))
+                    .saturating_add(1),
+            ));
+        } else if let Some(key) = pass.row_key {
             let (column, id) = match key {
                 RowKey::Display(id) if src.legacy && src.cols.contains("db_id") => ("db_id", id),
                 RowKey::Display(id) if src.cols.contains("id") => ("id", id),
@@ -438,6 +466,40 @@ impl ReportFilter {
         self.mini_trade_table_by(conn, RowKey::Recorder(new_rec_id))
     }
 
+    /// Find a closing order before LIMIT, preserving the existing one-second entry tolerance.
+    /// The caller must constrain the authorized core and exact coin. Missing timestamps fail
+    /// closed; the per-row axis predicate also rejects closes preceding the requested entry.
+    pub fn mini_trade_table_by_entry(
+        &self,
+        conn: &Connection,
+        entry_ms: i64,
+    ) -> ReadResult<ReportTable> {
+        let axis = self.axis.clone();
+        conn.create_scalar_function(
+            "mt_chart_entry_matches",
+            3,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8
+                | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            move |ctx| {
+                let buy: Option<i64> = ctx.get(0)?;
+                let close: Option<i64> = ctx.get(1)?;
+                let core = ctx.get::<i64>(2)? as u64;
+                Ok(buy
+                    .filter(|buy| *buy > 0)
+                    .zip(close)
+                    .is_some_and(|(buy, close)| {
+                        axis.to_utc(buy, core)
+                            .saturating_mul(1000)
+                            .abs_diff(entry_ms)
+                            <= 1000
+                            && axis.to_utc(close, core).saturating_mul(1000) >= entry_ms
+                    }))
+            },
+        )
+        .map_err(|error| read_fail("Mini App closing identity", error))?;
+        self.mini_trade_table_by(conn, RowKey::Entry(entry_ms))
+    }
+
     /// Shared projection of the two exact Mini App trade reads.
     fn mini_trade_table_by(&self, conn: &Connection, key: RowKey) -> ReadResult<ReportTable> {
         let mut cols = display_columns(conn)?;
@@ -461,6 +523,8 @@ enum RowKey {
     Display(i64),
     /// The typed replica's immutable `newrecid`.
     Recorder(i64),
+    /// Previously observed entry execution in true UTC milliseconds.
+    Entry(i64),
 }
 
 /// [`query_mini_trades`] plus each trade's own money: its settled profit, its entry notional and

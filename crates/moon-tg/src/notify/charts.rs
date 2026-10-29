@@ -130,7 +130,7 @@ pub(crate) fn run(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_ut
 /// at once.
 fn finish(host: &mut dyn TgHost, store: &Mutex<NotifyStore>, outcome: Outcome, now_utc: i64) {
     let mut guard = lock_store(store);
-    let queued = guard.update(|file| {
+    let queued = guard.update_notifications(|file| {
         let mut taken = Vec::new();
         for drawn in &outcome.drawn {
             for &chat in &drawn.chats {

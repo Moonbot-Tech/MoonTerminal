@@ -1,6 +1,6 @@
 //! Bounded chart reads; blocking tape and report work stays outside the host owner loop.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{
@@ -94,7 +94,6 @@ pub(crate) struct OrderSnapshot {
     entry_ms: i64,
     buy_price: f64,
     levels: Vec<LevelDto>,
-    pub(super) at: Instant,
 }
 
 impl OrderSnapshot {
@@ -107,49 +106,71 @@ impl OrderSnapshot {
             entry_ms: order.entry_fill_time_ms as i64,
             buy_price: order.buy_price,
             levels: live_levels(order),
-            at: Instant::now(),
         }
     }
 }
 
-/// Drop expired identities once before a single observation or a whole Orders batch.
-fn prune_order_snapshots(state: &mut TelegramState) {
-    state
-        .mini_order_snapshots
-        .retain(|_, row| row.at.elapsed() < Duration::from_secs(86400));
-}
-
-/// Insert one captured order, evicting the oldest identity above the 64-row bound.
+/// Keep live orders and unresolved closing handoffs, independently of fleet size or age.
+/// A successful handoff releases its identity; service replacement clears the whole live set.
 fn insert_order_snapshot(state: &mut TelegramState, core: u64, snapshot: OrderSnapshot) {
     let key = (core, snapshot.uid);
-    if !state.mini_order_snapshots.contains_key(&key)
-        && state.mini_order_snapshots.len() >= 64
-        && let Some(oldest) = state
-            .mini_order_snapshots
-            .iter()
-            .min_by_key(|(_, row)| row.at)
-            .map(|(key, _)| *key)
+    if state
+        .mini_order_handoffs
+        .get(&key)
+        .is_some_and(|entry| *entry != snapshot.entry_ms)
     {
-        state.mini_order_snapshots.remove(&oldest);
+        state.mini_order_handoffs.remove(&key);
     }
     state.mini_order_snapshots.insert(key, snapshot);
 }
 
-/// Preserve at most 64 recently observed orders, expiring identity after one day.
+/// Preserve a chart's observed identity until its closing handoff resolves.
 pub(super) fn remember_order(state: &mut TelegramState, core: u64, order: &OrderRow) {
-    prune_order_snapshots(state);
     insert_order_snapshot(state, core, OrderSnapshot::new(order));
 }
 
-/// Preserve a whole Orders response without rescanning the expiry map for every row.
+/// Pin only an execution actually observed by a chart, rather than every Orders-list row.
+pub(super) fn begin_order_handoff(state: &mut TelegramState, core: u64, uid: u64) {
+    if let Some(row) = state.mini_order_snapshots.get(&(core, uid))
+        && row.entry_ms > 0
+    {
+        state.mini_order_handoffs.insert((core, uid), row.entry_ms);
+    }
+}
+
+/// Reconcile observed cores' current identities and chart-observed unresolved executions.
+/// Ordinary unviewed closes leave with the live set; no history-sized or magic-cap cache remains.
 pub(super) fn remember_order_snapshots(
     state: &mut TelegramState,
+    cores: &[u64],
     snapshots: impl IntoIterator<Item = (u64, OrderSnapshot)>,
 ) {
-    prune_order_snapshots(state);
-    for (core, mut snapshot) in snapshots {
-        snapshot.at = Instant::now();
+    let snapshots: Vec<_> = snapshots.into_iter().collect();
+    let live: HashSet<_> = snapshots
+        .iter()
+        .map(|(core, row)| (*core, row.uid))
+        .collect();
+    state.mini_order_snapshots.retain(|key, row| {
+        !cores.contains(&key.0)
+            || live.contains(key)
+            || state.mini_order_handoffs.get(key) == Some(&row.entry_ms)
+    });
+    for (core, snapshot) in snapshots {
         insert_order_snapshot(state, core, snapshot);
+    }
+}
+
+/// Release only the identity this completed read captured; a reused UID belongs to its new entry.
+pub(super) fn finish_order_handoff(state: &mut TelegramState, core: u64, uid: u64, entry_ms: i64) {
+    if state.mini_order_handoffs.get(&(core, uid)) == Some(&entry_ms) {
+        state.mini_order_handoffs.remove(&(core, uid));
+    }
+    if state
+        .mini_order_snapshots
+        .get(&(core, uid))
+        .is_some_and(|row| row.entry_ms == entry_ms)
+    {
+        state.mini_order_snapshots.remove(&(core, uid));
     }
 }
 
@@ -781,10 +802,8 @@ pub(super) fn mini_order_ticks(
     if let Some(row) = &live {
         remember_order(host.state_mut(), core, row);
     }
-    host.state_mut()
-        .mini_order_snapshots
-        .retain(|_, row| row.at.elapsed() < Duration::from_secs(86400));
     let snapshot = host.state().mini_order_snapshots.get(&(core, uid)).cloned();
+    begin_order_handoff(host.state_mut(), core, uid);
     let closing = order_closing(live.as_ref());
     let source = host.session().market_source();
     let zone = host.report_zone();
@@ -867,6 +886,10 @@ pub(super) fn mini_order_ticks(
             let permitted = finish_grant(&access, current, visible);
             let result = permitted.and_then(|()| {
                 result.map(|(mut dto, trade)| {
+                    if let Some(snapshot) = &snapshot
+                        && (trade.is_some() || (closing && snapshot.entry_ms <= 0)) {
+                        finish_order_handoff(host.state_mut(), core, uid, snapshot.entry_ms);
+                    }
                     dto.trade = trade
                         .as_ref()
                         .map(|trade| trade_dto(host, &core_quotes(&host.config().servers), &mut Default::default(), zone, now / 1000, trade));
@@ -1023,7 +1046,47 @@ pub(super) fn coin_deal_cores(
 /// Owned overlay rows and the exact venue-scoped history grant captured at admission.
 pub(super) struct CoinSnapshot {
     pub ids: Vec<u64>,
-    pub orders: Vec<(u64, String, OrderRow)>,
+    pub orders: Vec<(u64, String, CoinOrder)>,
+}
+
+/// Only the fields consumed by a coin overlay; order traces never leave the owner with it.
+pub(super) struct CoinOrder {
+    coin: String,
+    market: String,
+    market_display: String,
+    quote: String,
+    price: f32,
+    buy_price: f64,
+    size: f64,
+    quantity: Option<f64>,
+    pending: bool,
+    is_short: bool,
+    strat_name: String,
+    take_profit: Option<f64>,
+    stop_loss: Option<f64>,
+    levels: Vec<LevelDto>,
+}
+
+impl CoinOrder {
+    /// Project the canonical position gate and level prices before leaving the session owner.
+    fn new(row: &OrderRow) -> Self {
+        Self {
+            coin: row.coin.clone(),
+            market: row.market.clone(),
+            market_display: row.market_display.clone(),
+            quote: row.quote.clone(),
+            price: row.price,
+            buy_price: row.buy_price,
+            size: row.size,
+            quantity: moon_core::feed::order_math::position_qty(row),
+            pending: row.pending,
+            is_short: row.is_short,
+            strat_name: row.strat_name.clone(),
+            take_profit: row.take_profit,
+            stop_loss: row.stop_loss,
+            levels: live_levels(row),
+        }
+    }
 }
 
 /// Keep overlays within visible cores on the source venue and the exact market key.
@@ -1051,7 +1114,7 @@ pub(super) fn coin_snapshot(
                 .into_iter()
                 .flat_map(|data| data.orders.iter())
                 .filter(|row| !row.job_is_done && row.market == market)
-                .map(|row| (*id, name.clone(), row.clone()))
+                .map(|row| (*id, name.clone(), CoinOrder::new(row)))
         })
         .collect();
     CoinSnapshot { ids, orders }
@@ -1062,12 +1125,12 @@ pub(super) fn coin_overlays(
     source: &MarketDataSource,
     core: u64,
     name: &str,
-    row: &OrderRow,
+    row: &CoinOrder,
     mark: f64,
     dto: &mut CoinTicksDto,
 ) {
     dto.levels
-        .extend(live_levels(row).into_iter().map(|level| CoinLevelDto {
+        .extend(row.levels.iter().map(|level| CoinLevelDto {
             kind: if row.pending && level.kind == LevelKindDto::Entry {
                 LevelKindDto::Buy
             } else {
@@ -1084,9 +1147,16 @@ pub(super) fn coin_overlays(
         .map(|rate| row.size * row.buy_price * rate)
         .filter(|value| value.is_finite() && *value > 0.0);
     let pnl_pct = if row.pending {
-        moon_core::feed::order_math::pct_to_entry(row, mark)
+        moon_core::feed::order_math::entry_distance_pct(row.buy_price, mark, row.is_short)
     } else {
-        order_at_mark(row, mark as f32).1
+        moon_core::feed::order_math::pnl_at_mark(
+            row.buy_price,
+            mark as f32,
+            row.quantity,
+            row.is_short,
+        )
+        .1
+        .filter(|value| value.is_finite())
     };
     dto.positions.push(CoinPositionDto {
         core: core.to_string(),

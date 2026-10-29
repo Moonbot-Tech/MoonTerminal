@@ -154,7 +154,7 @@ pub(crate) fn run(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_ut
         return;
     }
     let stuck_before = now_utc.saturating_sub(STUCK_SECS);
-    let saved = super::tick::lock_store(store).update(|file| {
+    let saved = super::tick::lock_store(store).update_notifications(|file| {
         for (chat, html, cores) in messages {
             let stuck = file
                 .outbox

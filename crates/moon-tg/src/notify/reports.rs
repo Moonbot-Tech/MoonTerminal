@@ -254,7 +254,8 @@ fn finish(host: &mut dyn TgHost, store_ptr: usize, due: Vec<Due>, reads: Vec<Rea
     if current.iter().all(|(_, read)| read.is_err()) {
         return;
     }
-    let saved = lock_store(&store).update(|file| queue_reports(file, current, now_utc));
+    let saved =
+        lock_store(&store).update_notifications(|file| queue_reports(file, current, now_utc));
     if let Err(error) = saved {
         log::warn!("telegram auto reports not queued: {error}");
     }

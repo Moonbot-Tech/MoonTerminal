@@ -24,7 +24,7 @@ use moon_core::telegram::web::dto::{
 use moon_core::util::fmt;
 
 use super::dto::{
-    STRATEGY_CONFIRM_WINDOW, balance_state_dto, balance_text, conn_of, core_quotes, order_dto,
+    STRATEGY_CONFIRM_WINDOW, balance_state_dto, balance_text, conn_of, core_quotes, order_draft,
     order_quote, report_dto, report_period, strategy_pending, trade_dto,
 };
 use super::{mini_access, visible_cores};
@@ -816,55 +816,46 @@ pub(super) fn orders_inputs(
     OrdersInputs { cores }
 }
 
-/// Format a changed Orders response and capture closing-chart identities without cloning full rows.
-pub(super) fn build_orders(
+/// Capture a changed Orders response and closing identities without traces or number formatting.
+pub(super) fn capture_orders(
     host: &dyn TgHost,
     store: &moon_core::session::CoreStore,
     listed: &[(u64, String, String)],
-    can_control: bool,
-) -> (OrdersDto, Vec<(u64, super::charts::OrderSnapshot)>) {
+) -> (
+    Vec<super::dto::OrderDraft>,
+    Vec<(u64, super::charts::OrderSnapshot)>,
+) {
     let mut snapshots = Vec::new();
     let mut orders = Vec::new();
     for (id, name, exchange) in listed {
         if let Some(data) = store.core(*id) {
             for order in &data.orders {
+                // Completed turns can remain in the current Orders response briefly; they are
+                // still clickable and need the same closing identity as an open row.
                 snapshots.push((*id, super::charts::OrderSnapshot::new(order)));
-                orders.push(order_dto(host, *id, name.clone(), exchange.clone(), order));
+                orders.push(order_draft(
+                    host,
+                    *id,
+                    name.clone(),
+                    exchange.clone(),
+                    order,
+                ));
             }
         }
     }
-    (
-        OrdersDto {
-            orders: orders.into(),
-            can_control,
-        },
-        snapshots,
-    )
-}
-
-/// Keep only retained identities captured by the current Orders build, not older unrelated rows.
-pub(super) fn current_order_snapshots(
-    state: &crate::TelegramState,
-    current: &[(u64, super::charts::OrderSnapshot)],
-) -> Vec<(u64, super::charts::OrderSnapshot)> {
-    let keys: HashSet<(u64, u64)> = current
-        .iter()
-        .map(|(core, snapshot)| (*core, snapshot.uid))
-        .collect();
-    state
-        .mini_order_snapshots
-        .iter()
-        .filter(|(key, _)| keys.contains(key))
-        .map(|(key, snapshot)| (key.0, snapshot.clone()))
-        .collect()
+    (orders, snapshots)
 }
 
 /// Open orders for the chat's cores. `can_control` is true only for the owner.
 pub(super) fn mini_orders(
     host: &mut dyn TgHost,
     chat_id: i64,
-) -> Result<OrdersDto, MiniAppApiError> {
-    let access = mini_access(host, chat_id).ok_or(MiniAppApiError::Rejected)?;
+    reply: SyncSender<Result<OrdersDto, MiniAppApiError>>,
+) {
+    let Some(access) = mini_access(host, chat_id) else {
+        let _ = reply.try_send(Err(MiniAppApiError::Rejected));
+        return;
+    };
     let can_control = matches!(access, TelegramReportAccess::Owner);
     let listed = visible_cores(host, &access);
     let source = host.session().market_source();
@@ -874,22 +865,60 @@ pub(super) fn mini_orders(
         |core, quote| source.currency_usd_rate(core, quote),
         |core, market| host.is_panic_armed(core, market),
     );
-    if let Some((dto, snapshots)) = host.state().mini_orders_last.as_ref().and_then(|cached| {
+    if let Some(dto) = host.state().mini_orders_last.as_ref().and_then(|cached| {
         (cached.chat == chat_id && cached.access == access && cached.inputs == inputs)
-            .then(|| (cached.dto.clone(), cached.snapshots.clone()))
+            .then(|| cached.dto.clone())
     }) {
-        super::charts::remember_order_snapshots(host.state_mut(), snapshots);
-        return Ok(dto);
+        let _ = reply.try_send(Ok(dto));
+        return;
     }
-    let (dto, snapshots) = build_orders(&*host, host.session().store(), &listed, can_control);
-    let cached_snapshots = current_order_snapshots(host.state(), &snapshots);
-    super::charts::remember_order_snapshots(host.state_mut(), snapshots);
-    host.state_mut().mini_orders_last = Some(CachedOrders {
-        chat: chat_id,
-        access,
-        inputs,
-        dto: dto.clone(),
-        snapshots: cached_snapshots,
-    });
-    Ok(dto)
+    if host.state().mini_orders_pending {
+        let _ = reply.try_send(Err(MiniAppApiError::Busy));
+        return;
+    }
+    let (drafts, snapshots) = capture_orders(&*host, host.session().store(), &listed);
+    let observed: Vec<_> = listed.iter().map(|(core, ..)| *core).collect();
+    super::charts::remember_order_snapshots(host.state_mut(), &observed, snapshots);
+    host.state_mut().mini_orders_pending = true;
+    host.state_mut().mini_orders_generation = host.state().mini_orders_generation.wrapping_add(1);
+    let generation = host.state().mini_orders_generation;
+    host.spawn(Box::new(move || {
+        let dto = OrdersDto {
+            orders: drafts
+                .into_iter()
+                .map(super::dto::OrderDraft::render)
+                .collect(),
+            can_control,
+        };
+        Box::new(move |host: &mut dyn TgHost| {
+            if host.state().mini_orders_generation != generation {
+                let _ = reply.try_send(Err(MiniAppApiError::Rejected));
+                return;
+            }
+            host.state_mut().mini_orders_pending = false;
+            if mini_access(host, chat_id).as_ref() != Some(&access) {
+                let _ = reply.try_send(Err(MiniAppApiError::Rejected));
+                return;
+            }
+            let listed = visible_cores(host, &access);
+            let source = host.session().market_source();
+            let current = orders_inputs(
+                host.session().store(),
+                &listed,
+                |core, quote| source.currency_usd_rate(core, quote),
+                |core, market| host.is_panic_armed(core, market),
+            );
+            // The reply is a valid snapshot of admission. A moving feed must not starve it;
+            // only unchanged inputs permit caching it for the next poll.
+            if current == inputs {
+                host.state_mut().mini_orders_last = Some(CachedOrders {
+                    chat: chat_id,
+                    access,
+                    inputs,
+                    dto: dto.clone(),
+                });
+            }
+            let _ = reply.try_send(Ok(dto));
+        })
+    }));
 }

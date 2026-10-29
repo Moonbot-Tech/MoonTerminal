@@ -29,6 +29,8 @@ pub struct TelegramState {
     pub(crate) mini_chart_jobs: Arc<Mutex<crate::mini_app::charts::ChartJobs>>,
     /// Previously observed orders permit truthful handoff after removal from the store.
     pub(crate) mini_order_snapshots: BTreeMap<(u64, u64), crate::mini_app::charts::OrderSnapshot>,
+    /// Only chart-observed executions may outlive their current Orders membership.
+    pub(crate) mini_order_handoffs: BTreeMap<(u64, u64), i64>,
     /// At most one database report is computed at a time, including timed-out requests.
     pub(crate) report_pending: bool,
     /// At most one Mini App report is computed at a time, including timed-out requests.
@@ -107,6 +109,9 @@ pub struct TelegramState {
     pub(crate) mini_trades_last: Option<CachedTrades>,
     /// Last Orders response, reused only while its exact live inputs are unchanged.
     pub(crate) mini_orders_last: Option<CachedOrders>,
+    /// One formatting job at a time; the generation also rejects work from a retired service.
+    pub(crate) mini_orders_pending: bool,
+    pub(crate) mini_orders_generation: u64,
     /// Last Strategies response, reused only while its exact live inputs are unchanged.
     pub(crate) mini_strategies_last: Option<CachedStrategies>,
     /// Unconfirmed Mini App strategy toggles by `(core, strategy id)`.
@@ -201,6 +206,7 @@ impl TelegramState {
             mini_live_pending: 0,
             mini_chart_jobs: Arc::default(),
             mini_order_snapshots: BTreeMap::new(),
+            mini_order_handoffs: BTreeMap::new(),
             report_pending: false,
             mini_report_pending: false,
             mini_report_last: None,
@@ -228,6 +234,8 @@ impl TelegramState {
             injected_reads: None,
             mini_trades_last: None,
             mini_orders_last: None,
+            mini_orders_pending: false,
+            mini_orders_generation: 0,
             mini_strategies_last: None,
             mini_strategy_wanted: HashMap::new(),
             run_wanted: HashMap::new(),
@@ -400,9 +408,12 @@ impl TelegramState {
     pub(crate) fn restart(&mut self) {
         self.mini_chart_jobs = Arc::default();
         self.mini_order_snapshots.clear();
+        self.mini_order_handoffs.clear();
         self.mini_report_last = None;
         self.mini_trades_last = None;
         self.mini_orders_last = None;
+        self.mini_orders_pending = false;
+        self.mini_orders_generation = self.mini_orders_generation.wrapping_add(1);
         self.mini_strategies_last = None;
         self.mini_strategy_wanted.clear();
         self.run_wanted.clear();

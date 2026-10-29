@@ -14,12 +14,12 @@ use super::resting_order;
 use crate::{HostKind, TelegramState, TgHost};
 
 const CORES: u64 = 10;
-const ORDERS_PER_CORE: usize = 500;
+const ORDERS_PER_CORE: usize = 5200;
 const STRATEGIES_PER_CORE: u64 = 50;
 const POLLS: usize = 20;
 
-/// Build the specified fleet with fifty matching chart rows and thousands of nonmatching rows.
-fn scale_store() -> CoreStore {
+/// Build 200 live orders and 5000 retained closed orders per core, all with synthetic traces.
+fn scale_store(matching: usize) -> CoreStore {
     let mut store = CoreStore::default();
     for core in 1..=CORES {
         store.ensure(core);
@@ -29,7 +29,22 @@ fn scale_store() -> CoreStore {
                 let mut row = resting_order(100.0 + index as f64, 101.0 + index as f32);
                 row.uid = core * 10_000 + index as u64;
                 row.strat_id = index as u64 % STRATEGIES_PER_CORE + 1;
-                if index < 5 {
+                row.job_is_done = index >= 200;
+                row.pending = false;
+                row.filled = true;
+                row.entry_fill_time_ms = 1_700_000_000_000.0 + index as f64 * 1000.0;
+                row.create_time_ms = row.entry_fill_time_ms - 1000.0;
+                row.sell_create_time_ms = row.entry_fill_time_ms + 1000.0;
+                row.sell_trace = Some(moon_core::feed::OrderTrace {
+                    points: (0..200)
+                        .map(|point| moon_core::feed::OrderTracePoint {
+                            time_ms: point as f64 * 1000.0,
+                            price: 100.0,
+                        })
+                        .collect(),
+                    ..Default::default()
+                });
+                if index < matching {
                     row.coin = "XALPHA".into();
                     row.market = "XALPHAUSDT".into();
                 } else {
@@ -40,7 +55,18 @@ fn scale_store() -> CoreStore {
                 row
             })
             .collect();
+        let live: Vec<_> = orders
+            .iter()
+            .filter(|row| !row.job_is_done)
+            .cloned()
+            .collect();
         data.apply(moon_core::feed::FeedMsg::Orders(orders.into()));
+        data.apply(moon_core::feed::FeedMsg::Orders(live.into()));
+        assert_eq!(data.orders.len(), 200);
+        assert!(
+            (200..ORDERS_PER_CORE)
+                .all(|index| data.order_lines.knows(core * 10_000 + index as u64))
+        );
         data.strategies = (1..=STRATEGIES_PER_CORE)
             .map(|id| StrategyRow {
                 id,
@@ -64,14 +90,17 @@ fn listed() -> Vec<(u64, String, String)> {
         .collect()
 }
 
-/// Time one owner-thread projection and print its mean milliseconds per poll.
+/// Time one owner-thread projection and print the median milliseconds per poll.
 fn measure(label: &str, mut poll: impl FnMut()) {
     poll();
-    let started = Instant::now();
+    let mut samples = Vec::new();
     for _ in 0..POLLS {
+        let started = Instant::now();
         poll();
+        samples.push(started.elapsed().as_secs_f64() * 1000.0);
     }
-    let millis = started.elapsed().as_secs_f64() * 1000.0 / POLLS as f64;
+    samples.sort_by(f64::total_cmp);
+    let millis = samples[POLLS / 2];
     println!("[scale] {label}: {millis:.3} ms/poll");
 }
 
@@ -79,11 +108,26 @@ fn measure(label: &str, mut poll: impl FnMut()) {
 #[test]
 #[ignore = "manual ten-core Mini App chart scale measurement"]
 fn mini_app_chart_snapshot_scale() {
-    let store = scale_store();
+    let store = scale_store(200);
     let listed = listed();
     let venues: HashMap<_, _> = (1..=CORES)
         .map(|core| (core, CoreVenue::identify(1, "", None)))
         .collect();
+    measure("chart frozen full-row snapshot", || {
+        let old: Vec<_> = listed
+            .iter()
+            .flat_map(|(id, name, _)| {
+                store
+                    .core(*id)
+                    .into_iter()
+                    .flat_map(|data| data.orders.iter())
+                    .filter(|row| !row.job_is_done && row.market == "XALPHAUSDT")
+                    .map(|row| (*id, name.clone(), row.clone()))
+            })
+            .collect();
+        assert_eq!(old.len(), 2000);
+        black_box(old);
+    });
     measure("chart snapshot", || {
         black_box(super::super::charts::coin_snapshot(
             &store,
@@ -99,7 +143,7 @@ fn mini_app_chart_snapshot_scale() {
 #[test]
 #[ignore = "manual ten-core Mini App strategies scale measurement"]
 fn mini_app_strategies_projection_scale() {
-    let store = scale_store();
+    let store = scale_store(5);
     let listed = listed();
     let wanted = HashMap::new();
     let access = moon_core::config::telegram_access::TelegramReportAccess::Owner;
@@ -132,6 +176,7 @@ struct ScaleHost {
     session: SessionManager,
     state: TelegramState,
     root: PathBuf,
+    job: Option<crate::Job>,
 }
 
 impl ScaleHost {
@@ -159,6 +204,7 @@ impl ScaleHost {
             session,
             state,
             root,
+            job: None,
         }
     }
 }
@@ -241,13 +287,139 @@ impl TgHost for ScaleHost {
         unreachable!()
     }
 
-    /// Background reads are outside this probe.
-    fn spawn(&mut self, _: crate::Job) {
-        unreachable!()
+    /// Retain work so regressions can deliberately finish an older service's response last.
+    fn spawn(&mut self, job: crate::Job) {
+        assert!(self.job.is_none());
+        self.job = Some(job);
     }
 
     /// No UI exists in this fixture.
     fn repaint(&mut self) {}
+}
+
+/// Frozen pre-change mapping, including the original full-row clone for a mark calculation.
+fn frozen_order_dto(
+    host: &ScaleHost,
+    row: &moon_core::feed::OrderRow,
+) -> moon_core::telegram::web::dto::OrderDto {
+    use super::super::dto::*;
+    use moon_core::util::fmt;
+    let mut marked = row.clone();
+    marked.price = row.price;
+    let pnl = moon_core::feed::order_math::order_pnl(&marked).filter(|value| value.is_finite());
+    let change =
+        moon_core::feed::order_math::order_pnl_pct(&marked).filter(|value| value.is_finite());
+    let quote = order_quote(&row.quote, &row.market);
+    let distance = order_to_entry_pct(row);
+    let price = |value: f64| (value.is_finite() && value > 0.0).then(|| fmt::adaptive(value));
+    moon_core::telegram::web::dto::OrderDto {
+        core: 1,
+        core_name: "CORE_A".into(),
+        exchange: "EX-XX".into(),
+        uid: row.uid,
+        coin: row.coin.clone(),
+        market: row.market.clone(),
+        side: if row.is_short { "sell" } else { "buy" }.into(),
+        volume_text: entry_volume_text(row.size, row.buy_price, 1.0, &row.quote),
+        entry_text: price(row.buy_price),
+        mark_text: price(f64::from(row.price)),
+        pnl,
+        pnl_text: pnl.and_then(|value| pnl_text(value, &quote)),
+        pnl_sign: pnl.map_or(0, |value| pnl_sign(value, &quote)),
+        pnl_usd: pnl.and_then(|value| {
+            pnl_usd(value, &quote, |currency| {
+                host.session.market_source().currency_usd_rate(1, currency)
+            })
+        }),
+        emulator: row.emulator,
+        change_pct: change,
+        change_text: change.and_then(|value| fmt::signed_pct(value, 2).map(|(text, _)| text)),
+        to_entry_pct: distance,
+        to_entry_text: distance.and_then(distance_text),
+        panic_armed: false,
+    }
+}
+
+/// Frozen rendering must survive the worker split; stale and revoked jobs cannot populate a new
+/// service's response cache or clear its pending admission.
+#[test]
+fn orders_worker_preserves_rows_and_rejects_old_service_completions() {
+    use moon_core::telegram::web::MiniAppApiError;
+    // paths uses a permanent OnceLock override; isolate it from the parallel test process.
+    const CHILD: &str = "MOON_TG_ORDERS_FIXTURE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "mini_app::tests::scale::orders_worker_preserves_rows_and_rejects_old_service_completions",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .expect("isolated Orders fixture process");
+        assert!(
+            output.status.success(),
+            "child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
+            "the exact child selector must execute the fixture"
+        );
+        return;
+    }
+    let mut host = ScaleHost::new();
+    for quote in ["USDT", "BTC", ""] {
+        for (entry, mark) in [
+            (100.0, 101.0),
+            (1000.4, 1001.5),
+            (0.0, 0.0),
+            (f64::NAN, f32::NAN),
+        ] {
+            for (short, filled) in [(false, false), (false, true), (true, true)] {
+                let mut row = resting_order(entry, mark);
+                row.quote = quote.into();
+                row.is_short = short;
+                row.filled = filled;
+                row.pending = !filled;
+                let expected = frozen_order_dto(&host, &row);
+                let actual =
+                    super::super::dto::order_draft(&host, 1, "CORE_A".into(), "EX-XX".into(), &row)
+                        .render();
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+    let (reply, old) = std::sync::mpsc::sync_channel(1);
+    super::super::reads::mini_orders(&mut host, 7, reply);
+    let finish_old = host.job.take().unwrap()();
+    host.state.mini_orders_generation += 1;
+    host.state.mini_orders_pending = false;
+    let (reply, new) = std::sync::mpsc::sync_channel(1);
+    super::super::reads::mini_orders(&mut host, 7, reply);
+    let finish_new = host.job.take().unwrap()();
+    finish_old(&mut host);
+    assert!(matches!(
+        old.try_recv().unwrap(),
+        Err(MiniAppApiError::Rejected)
+    ));
+    assert!(host.state.mini_orders_pending);
+    assert!(host.state.mini_orders_last.is_none());
+    finish_new(&mut host);
+    assert!(new.try_recv().unwrap().is_ok());
+    assert!(!host.state.mini_orders_pending);
+    host.state.mini_orders_last = None;
+    let (reply, revoked) = std::sync::mpsc::sync_channel(1);
+    super::super::reads::mini_orders(&mut host, 7, reply);
+    let finish = host.job.take().unwrap()();
+    host.config.telegram.authorized_chat_ids.clear();
+    finish(&mut host);
+    assert!(matches!(
+        revoked.try_recv().unwrap(),
+        Err(MiniAppApiError::Rejected)
+    ));
+    assert!(host.state.mini_orders_last.is_none());
 }
 
 /// Unchanged Orders polls must reuse the response instead of recloning and formatting the fleet.
@@ -255,9 +427,23 @@ impl TgHost for ScaleHost {
 #[ignore = "manual ten-core Mini App orders scale measurement"]
 fn mini_app_orders_projection_scale() {
     let mut host = ScaleHost::new();
-    let store = scale_store();
+    let store = scale_store(5);
     let listed = listed();
     let access = moon_core::config::telegram_access::TelegramReportAccess::Owner;
+    measure("orders frozen synchronous rebuild", || {
+        let old: Vec<_> = listed
+            .iter()
+            .flat_map(|(id, _, _)| {
+                store
+                    .core(*id)
+                    .into_iter()
+                    .flat_map(|data| data.orders.iter())
+            })
+            .map(|row| frozen_order_dto(&host, row))
+            .collect();
+        assert_eq!(old.len(), 2000);
+        black_box(old);
+    });
     measure("orders cached poll", || {
         let source = host.session().market_source();
         let inputs = super::super::reads::orders_inputs(
@@ -266,24 +452,31 @@ fn mini_app_orders_projection_scale() {
             |core, quote| source.currency_usd_rate(core, quote),
             |core, market| host.is_panic_armed(core, market),
         );
-        if let Some((dto, snapshots)) = host.state().mini_orders_last.as_ref().and_then(|cached| {
+        if let Some(dto) = host.state().mini_orders_last.as_ref().and_then(|cached| {
             (cached.chat == 7 && cached.access == access && cached.inputs == inputs)
-                .then(|| (cached.dto.clone(), cached.snapshots.clone()))
+                .then(|| cached.dto.clone())
         }) {
-            super::super::charts::remember_order_snapshots(host.state_mut(), snapshots);
             black_box(dto);
             return;
         }
-        let (dto, snapshots) = super::super::reads::build_orders(&host, &store, &listed, true);
-        let cached_snapshots =
-            super::super::reads::current_order_snapshots(host.state(), &snapshots);
-        super::super::charts::remember_order_snapshots(host.state_mut(), snapshots);
+        let (drafts, snapshots) = super::super::reads::capture_orders(&host, &store, &listed);
+        let dto = moon_core::telegram::web::dto::OrdersDto {
+            orders: drafts
+                .into_iter()
+                .map(super::super::dto::OrderDraft::render)
+                .collect(),
+            can_control: true,
+        };
+        super::super::charts::remember_order_snapshots(
+            host.state_mut(),
+            &(1..=CORES).collect::<Vec<_>>(),
+            snapshots,
+        );
         host.state_mut().mini_orders_last = Some(super::super::cache::CachedOrders {
             chat: 7,
             access: access.clone(),
             inputs,
             dto: dto.clone(),
-            snapshots: cached_snapshots,
         });
         black_box(dto);
     });
@@ -296,6 +489,9 @@ fn mini_app_orders_projection_scale() {
             |core, market| host.is_panic_armed(core, market),
         ));
     });
+    measure("orders owner capture", || {
+        black_box(super::super::reads::capture_orders(&host, &store, &listed));
+    });
     measure("orders cached dto clone", || {
         black_box(
             host.state()
@@ -305,15 +501,5 @@ fn mini_app_orders_projection_scale() {
                 .dto
                 .clone(),
         );
-    });
-    measure("orders snapshot refresh", || {
-        let snapshots = host
-            .state()
-            .mini_orders_last
-            .as_ref()
-            .expect("warmed cache")
-            .snapshots
-            .clone();
-        super::super::charts::remember_order_snapshots(host.state_mut(), snapshots);
     });
 }

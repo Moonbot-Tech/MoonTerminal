@@ -69,6 +69,8 @@ pub struct NotifyStore {
     journal: Arc<Mutex<receipts::Journal>>,
     /// Disclosure scan already completed for this queue revision and visibility map.
     purged: Option<PurgeStamp>,
+    /// Full snapshots are coalesced while incremental owner and delivery records remain durable.
+    checkpoint_at: Instant,
 }
 
 /// Pairing, grants and queued-row changes are the only inputs to the revocation scan.
@@ -147,6 +149,7 @@ impl NotifyStore {
             wake: Arc::default(),
             journal,
             purged: None,
+            checkpoint_at: Instant::now(),
         };
         store.sweep_charts();
         Ok(store)
@@ -225,6 +228,55 @@ impl NotifyStore {
         Ok(result)
     }
 
+    /// Persist one notification batch as changed ledger leaves and queue payloads.
+    /// Settings continue using `update`. Every accepted batch is synchronized before publication;
+    /// a failed append leaves memory unchanged. A busy receipt writer falls back to a snapshot
+    /// rather than waiting under the store mutex (the writer needs that mutex to commit its ack).
+    pub fn update_notifications<R>(
+        &mut self,
+        edit: impl FnOnce(&mut NotifyFile) -> R,
+    ) -> anyhow::Result<R> {
+        let mut next = self.file.clone();
+        let result = edit(&mut next);
+        if next == self.file {
+            return Ok(result);
+        }
+        let journal = Arc::clone(&self.journal);
+        let guard = match journal.try_lock() {
+            Ok(guard) => Some(guard),
+            Err(std::sync::TryLockError::Poisoned(error)) => Some(error.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        };
+        // The size checkpoint bounds recovery work without discarding any pending message.
+        let checkpointed;
+        if let Some(mut guard) = guard.filter(|guard| {
+            self.path.is_file()
+                && guard.bytes < 1_048_576
+                && self.checkpoint_at.elapsed() < Duration::from_secs(60)
+        }) {
+            let sequence = guard
+                .sequence
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("notification journal sequence exhausted"))?;
+            let update = crate::telegram::notify::updates::Update::between(&self.file, &next);
+            guard.bytes = receipts::append_update(&self.path, guard.bytes, sequence, &update)?;
+            guard.sequence = sequence;
+            next.ack_sequence = sequence;
+            checkpointed = false;
+        } else {
+            next.save(&self.path)?;
+            self.checkpoint_at = Instant::now();
+            checkpointed = true;
+        }
+        self.file = next;
+        // Clear only a snapshot checkpoint, never records not yet represented by that snapshot.
+        if checkpointed {
+            self.clear_receipts();
+        }
+        self.wake.bump();
+        Ok(result)
+    }
+
     /// Scan disclosures only after pairing, grants or queued payloads changed. A failed save
     /// leaves the previous stamp so the owner retries the purge on its next tick.
     pub fn purge_disallowed(
@@ -259,6 +311,7 @@ impl NotifyStore {
         };
         if dirty {
             self.file.save(&self.path)?;
+            self.checkpoint_at = Instant::now();
             self.clear_receipts();
         }
         Ok(())
@@ -381,6 +434,10 @@ pub fn push_edit(
     cores: Option<Vec<u64>>,
     now_utc: i64,
 ) -> bool {
+    // Validate before removing the previous edit: refusal must preserve its pending message.
+    if utf16_len(&html) <= TELEGRAM_MESSAGE_UTF16_LIMIT {
+        file.outbox.supersede_edit(chat, message);
+    }
     let pushed = push_row(file, chat, html, cores, None, now_utc);
     if let Some(row) = file.outbox.last_mut().filter(|_| pushed) {
         row.edit = Some(message);
@@ -733,6 +790,14 @@ fn run_sender(mut api: BotApi, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) 
     let mut stale: Vec<(i64, i64)> = Vec::new();
 
     while alive.upgrade().is_some() {
+        {
+            let mut guard = lock_store(&store);
+            if guard.checkpoint_at.elapsed() >= Duration::from_secs(60) {
+                if let Err(error) = guard.checkpoint() {
+                    log::warn!("telegram notify checkpoint deferred: {error}");
+                }
+            }
+        }
         // Read before the snapshot: a change after this point moves it and cuts the wait short.
         let seen = wake.generation();
         let pending = snapshot(&store);
