@@ -16,6 +16,7 @@ mod history;
 mod menu;
 pub mod mini_app;
 mod notify;
+pub(crate) use notify::drop_chart;
 pub use notify::{
     NotifyStore, chart_spool_dir, cores_kept, drop_redraws, purge_outbox, purge_outbox_where,
     push_auto_report, push_edit, push_outbox, push_photo, push_redraw, push_trade_card,
@@ -232,11 +233,16 @@ impl TelegramService {
         *current = labels;
         true
     }
-    /// Revoke liveness and join every transport before application owners disappear.
+    /// Revoke liveness, join every transport, and checkpoint receipts before owners disappear.
     pub fn stop(&mut self) {
         self.request_stop();
         for join in self.joins.drain(..) {
             let _ = join.join();
+        }
+        if let Some(store) = &self.notifications {
+            if let Err(error) = notify::lock_store(store).checkpoint() {
+                log::warn!("telegram notify shutdown checkpoint failed: {error}");
+            }
         }
     }
 

@@ -20,6 +20,7 @@ use crate::telegram::notify::{AutoReport, AutoRow, CardKey, NotifyFile, Pending}
 use crate::telegram::reply::{TELEGRAM_MESSAGE_UTF16_LIMIT, utf16_len};
 
 mod photo;
+pub(crate) use photo::drop_chart;
 pub use photo::{chart_spool_dir, push_photo};
 
 /// Minimum gap between two successful sends to one private chat.
@@ -251,7 +252,7 @@ impl NotifyStore {
 
     /// Coalesce a drained batch into one snapshot. Until this succeeds, receipts alone retain
     /// every ack durably; retrying a failed checkpoint never sends accepted bodies again.
-    fn checkpoint(&mut self) -> anyhow::Result<()> {
+    pub(super) fn checkpoint(&mut self) -> anyhow::Result<()> {
         let dirty = match self.journal.try_lock() {
             Ok(journal) => journal.bytes != 0,
             Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner().bytes != 0,
@@ -752,7 +753,7 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
         last_sent.retain(|chat, _| live.contains(chat));
         ready_at.retain(|chat, _| live.contains(chat));
         backoff.retain(|chat, _| live.contains(chat));
-        delivered.retain(|id, _| lock_store(&store).file.outbox.by_id(*id).is_some());
+        retain_delivered(&store, &mut delivered);
 
         let mut progressed = false;
         let mut hit_global_cap = false;
@@ -924,6 +925,12 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
             wait_while_alive(&alive, &wake, seen, WAIT_SLICE);
         }
     }
+}
+
+/// Forget accepted ids no longer queued, preserving ack retries for ids still present.
+fn retain_delivered(store: &Mutex<NotifyStore>, delivered: &mut HashMap<u64, Accepted>) {
+    let guard = lock_store(store);
+    delivered.retain(|id, _| guard.file.outbox.by_id(*id).is_some());
 }
 
 /// Copy only each chat's first row in file order, independently of the remaining queue length.

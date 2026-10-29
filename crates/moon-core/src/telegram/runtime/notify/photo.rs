@@ -146,16 +146,22 @@ impl NotifyStore {
     /// Delete the picture of a row that just left the outbox, or of one never queued. A file
     /// another row still names stays.
     pub fn drop_chart(&self, photo: &str) {
-        if self.file.outbox.names_photo(photo) {
-            return;
+        drop_chart(&self.path, &self.file, photo);
+    }
+}
+
+/// Remove a delivered photo during live acknowledgement or receipt replay, preserving shared
+/// photos until their last queued owner is removed.
+pub(crate) fn drop_chart(store_path: &Path, file: &NotifyFile, photo: &str) {
+    if file.outbox.names_photo(photo) {
+        return;
+    }
+    let path = chart_spool_dir(store_path).join(photo);
+    match std::fs::remove_file(&path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            log::debug!("telegram chart {photo} not deleted: {error}");
         }
-        let path = chart_spool_dir(&self.path).join(photo);
-        match std::fs::remove_file(&path) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                log::debug!("telegram chart {photo} not deleted: {error}");
-            }
-            _ => {}
-        }
+        _ => {}
     }
 }
 
