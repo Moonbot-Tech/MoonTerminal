@@ -3,6 +3,57 @@ use moon_core::config::ChartGraphicsCfg;
 use moon_core::feed::{OrderRow, OrderTrace, OrderTracePoint};
 use moon_core::util::time::now_unix_ms;
 
+/// Measures geometry for the knot count of a day at one reprice per 5 seconds. Updates are
+/// delivered immediately; geometry visits the same 17,281 knots regardless of their spacing.
+#[test]
+#[ignore = "manual day-long order history geometry measurement"]
+fn bench_day_of_order_reprices_geometry() {
+    let mut row = scale_probe_order(1, "COIN_A".into(), false, 0);
+    row.buy_trace = None;
+    let mut store = OrderLineStore::default();
+    for step in 0..=17_280 {
+        row.buy_price = 100.0 + (step % 2) as f64;
+        assert!(store.update(std::slice::from_ref(&row), 0));
+    }
+    let order = store.iter_market("COIN_A").next().unwrap();
+    assert_eq!(order.lines[0].steps.len(), 17_281);
+    let now = now_unix_ms();
+    let (mut zones, mut lines, mut segs, mut markers) = Default::default();
+    let mut samples = Vec::new();
+    for _ in 0..31 {
+        let start = std::time::Instant::now();
+        build_order_geometry(
+            &store,
+            &[],
+            None,
+            "COIN_A",
+            &OrdersStyle::default(),
+            &ChartGraphicsCfg::default(),
+            1.0,
+            None,
+            None,
+            now - 86_400_000.0,
+            now,
+            0.0,
+            86_400_000.0,
+            86_400_000.0,
+            &mut zones,
+            &mut lines,
+            &mut segs,
+            &mut markers,
+        );
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        std::hint::black_box((&segs, &markers));
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] 24h reprice geometry one line: median {:.3} ms segments={} markers={}",
+        samples[15],
+        segs.len(),
+        markers.len()
+    );
+}
+
 /// Build neutral scale-probe rows independently of the older market-specific regression fixture.
 fn scale_probe_order(uid: u64, market: String, closed: bool, points: usize) -> OrderRow {
     OrderRow {

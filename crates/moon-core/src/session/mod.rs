@@ -170,6 +170,8 @@ pub struct SessionManager {
     /// Refreshed by every path that can insert a session.
     config_order: Vec<CoreId>,
     feed_wake: Option<FeedWakeTx>,
+    /// At most one consumed order batch waiting for nonblocking disposal admission.
+    order_retirement: store::order_retirement::DeferredRetirement,
     /// Account plane: per-core status, orders, detects, and strategies. External callers have
     /// read-only access through [`SessionManager::store`]; only the manager mutates it.
     store: CoreStore,

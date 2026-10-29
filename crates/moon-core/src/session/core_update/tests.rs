@@ -61,6 +61,7 @@ fn manager() -> SessionManager {
         sessions: Vec::new(),
         config_order: Vec::new(),
         feed_wake: None,
+        order_retirement: Default::default(),
         store: CoreStore::default(),
         market,
         market_source,

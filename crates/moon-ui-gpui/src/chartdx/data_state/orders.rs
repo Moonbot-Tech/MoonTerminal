@@ -653,10 +653,7 @@ fn build_order_labels(
 ) {
     out.clear();
     book_out.clear();
-    let mut orders: Vec<_> = store
-        .iter_market(market)
-        .filter(|o| o.closed_ms.is_none())
-        .collect();
+    let mut orders: Vec<_> = store.iter_open_market(market).collect();
     orders.sort_by_key(|o| o.seq);
     for o in orders {
         let preview = drag_preview

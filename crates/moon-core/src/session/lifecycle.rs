@@ -340,6 +340,7 @@ impl SessionManager {
             sessions: Vec::new(),
             config_order: config.servers.iter().map(|s| s.id).collect(),
             feed_wake,
+            order_retirement: Default::default(),
             store: CoreStore::default(),
             market,
             market_source,
@@ -632,11 +633,15 @@ impl SessionManager {
     /// read model or `MarketStore` and send only a lightweight `MarketDataChanged` wake-up here.
     /// Identity messages populate `core_venue`. This event-driven drain is independent of the
     /// coordination loop that calls `set_open`; the result separates general UI state from data
-    /// that can change chart pixels.
+    /// that can change chart pixels. Saturated order disposal retains one batch and stops feed
+    /// consumption until the worker's next wake, without blocking or replaying publication.
     pub fn drain(&mut self) -> DrainStats {
         let mut stats = DrainStats::default();
+        if !self.order_retirement.retry(self.feed_wake.clone()) {
+            return stats;
+        }
         let mut synced = HashSet::new();
-        for sess in &self.sessions {
+        'feed: for sess in &self.sessions {
             while let Ok(msg) = sess.handle.rx.try_recv() {
                 crate::feed::note_drained();
                 stats.any = true;
@@ -732,18 +737,32 @@ impl SessionManager {
                     FeedMsg::Orders(orders) => {
                         if let Some(core) = self.store.core_mut(sess.id) {
                             let before = core.order_lines_rev;
-                            core.apply(FeedMsg::Orders(orders));
+                            let admitted = core.apply_for_drain(
+                                FeedMsg::Orders(orders),
+                                &mut self.order_retirement,
+                                self.feed_wake.clone(),
+                            );
                             stats.order_lines_data |= core.order_lines_rev != before;
                             stats.ui_state = true;
+                            if !admitted {
+                                break 'feed;
+                            }
                         }
                     }
                     FeedMsg::OrderLines(orders) => {
                         if let Some(core) = self.store.core_mut(sess.id) {
                             let before = core.order_lines_rev;
-                            core.apply(FeedMsg::OrderLines(orders));
+                            let admitted = core.apply_for_drain(
+                                FeedMsg::OrderLines(orders),
+                                &mut self.order_retirement,
+                                self.feed_wake.clone(),
+                            );
                             let changed = core.order_lines_rev != before;
                             stats.order_lines_data |= changed;
                             stats.ui_state |= changed;
+                            if !admitted {
+                                break 'feed;
+                            }
                         }
                     }
                     FeedMsg::Problems(problems) => {
