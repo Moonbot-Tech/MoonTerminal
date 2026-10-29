@@ -20,6 +20,7 @@ use super::{
     conn_sig, orderbook_kind_for_exchange,
 };
 
+mod catchup_markets;
 mod listing_slots;
 
 pub(crate) use listing_slots::load as tape_listings;
@@ -901,6 +902,7 @@ impl SessionManager {
             let (mut rows, mut submitted) = (0_usize, 0_usize);
             let mut after = None;
             let mut sql = None;
+            let mut markets = catchup_markets::CoinMarkets::default();
             loop {
                 let page = match (|| {
                     // The listing reads `orders_rep` alone: the valuation cache stays detached.
@@ -950,7 +952,18 @@ impl SessionManager {
                     let Some((open_ms, close_ms)) = catchup_stamps(row, &axis, core, now_ms) else {
                         continue;
                     };
-                    let Some(market) = source.resolve_market(core, &quote, &row.coin) else {
+                    let resolved = markets.resolve(
+                        || {
+                            (
+                                source.catalog_revision(core),
+                                source.traded_quote(core),
+                                source.exchange_of(core),
+                            )
+                        },
+                        &row.coin,
+                        || source.resolve_market(core, &quote, &row.coin),
+                    );
+                    let Some(market) = resolved else {
                         if source.tradable_coins(core).is_none() {
                             unresolved += 1;
                         }
@@ -990,8 +1003,10 @@ impl SessionManager {
                 }
             }
             log::info!(
-                "tape catch-up core={core}: listed {rows} rows ({submitted} resolved) in {:.1} s, after {:.1} s waiting for a listing slot, {}",
+                "tape catch-up core={core}: listed {rows} rows ({submitted} resolved) in {:.1} s ({} market searches, {:.2} s resolving), after {:.1} s waiting for a listing slot, {}",
                 started.elapsed().as_secs_f64(),
+                markets.searched,
+                markets.spent.as_secs_f64(),
                 started.duration_since(queued).as_secs_f64(),
                 crate::metrics::memory_now()
             );
