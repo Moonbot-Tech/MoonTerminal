@@ -25,14 +25,14 @@ use crate::session::CoreId;
 pub use candles::{CandleViewCfg, ChartCandle};
 pub use screener::{ScreenerRow, SharedScreenerRow};
 pub use source::{
-    ArbQuote, ArbVenue, CORE_ARCHIVE_RETENTION_MS, CandleReadParams, ChartHistoryBuffers,
-    ChartHistoryCursor, ChartHistoryRead, CoinTag, DetectSnapshot, LatestPriceError,
-    LiqSpanReadout, LiveTicks, MarketContextReadout, MarketDataSource, MarketFiguresReadout,
-    MarketLabel, MarketLimits, MarketQuantityUnit, MarketRevisions, MarketTickerReadout,
-    MarketWindowsReadout, MaxOrder, MaxOrderSource, OrderSizeRules, PathPrefixRows,
-    PriceLineUpdate, PriceProfileRow, ProfileWindow, ReplayAddress, ReplayAddressError,
-    ReplayPriceLinesRead, SIDE_BUCKET_MS, SideVolumeBucket, VolumeAt, VolumeSpan,
-    VolumeSpanReadout, WindowFigures, pick_market_for_coin, pick_market_for_identity,
+    ArbQuote, ArbVenue, CORE_ARCHIVE_RETENTION_MS, CandleReadParams, CatalogLookup,
+    ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, CoinTag, DetectSnapshot,
+    LatestPriceError, LiqSpanReadout, LiveTicks, MarketContextReadout, MarketDataSource,
+    MarketFiguresReadout, MarketLabel, MarketLimits, MarketQuantityUnit, MarketRevisions,
+    MarketTickerReadout, MarketWindowsReadout, MaxOrder, MaxOrderSource, OrderSizeRules,
+    PathPrefixRows, PriceLineUpdate, PriceProfileRow, ProfileWindow, ReplayAddress,
+    ReplayAddressError, ReplayPriceLinesRead, SIDE_BUCKET_MS, SideVolumeBucket, VolumeAt,
+    VolumeSpan, VolumeSpanReadout, WindowFigures, pick_market_for_coin, pick_market_for_identity,
     side_slots_of_ticks,
 };
 

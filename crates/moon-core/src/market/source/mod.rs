@@ -2,11 +2,13 @@
 
 mod arb;
 mod archive;
+mod catalog_lookup;
 pub(crate) use archive::ARCHIVE_WAIT;
 /// How far back a core's chart archive serves trade prints.
 pub const CORE_ARCHIVE_RETENTION_MS: i64 = 48 * 3_600_000;
 mod history;
 mod open_path;
+pub use catalog_lookup::CatalogLookup;
 pub use open_path::PathPrefixRows;
 #[cfg(test)]
 mod label_tests;
