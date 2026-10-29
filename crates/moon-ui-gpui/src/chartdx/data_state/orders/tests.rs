@@ -102,3 +102,58 @@ fn bench_goal_b_order_labels_revision() {
         start.elapsed().as_nanos() / 30
     );
 }
+
+/// Time one sell-line depth pass over a deep book and hundreds of open orders.
+///
+/// Each label used to scan the whole book. The chart asks for this on a book revision, on the UI
+/// thread, once per frame while an order line is dragged.
+#[test]
+#[ignore = "manual heavy-user timing probe"]
+fn bench_goal_e_orderbook_notionals() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    use moon_core::data::OrderBookModel;
+    use moon_core::feed::{Level, OrderBook};
+
+    use crate::chartdx::hits::OrderBookLabel;
+
+    let book = OrderBook {
+        bids: (0..500)
+            .map(|i| Level {
+                price: 100.0 - i as f32 * 0.01,
+                qty: 1.0 + (i % 7) as f32,
+            })
+            .collect(),
+        asks: (0..500)
+            .map(|i| Level {
+                price: 100.05 + i as f32 * 0.01,
+                qty: if i == 10 {
+                    f32::NAN
+                } else {
+                    1.0 + (i % 5) as f32
+                },
+            })
+            .collect(),
+    };
+    let mut model = OrderBookModel::default();
+    model.update(&book);
+    let mut labels: Vec<OrderBookLabel> = (0..200)
+        .map(|i| OrderBookLabel {
+            uid: i,
+            interacting: false,
+            price: 99.0 + i as f32 * 0.02,
+            short: i % 2 == 0,
+            notional: None,
+        })
+        .collect();
+    let start = Instant::now();
+    for _ in 0..50 {
+        super::refresh_orderbook_label_notionals(black_box(&mut labels), black_box(&model));
+        black_box(&labels);
+    }
+    println!(
+        "goal_e_notionals_200_labels_1000_levels: {} ns/iter",
+        start.elapsed().as_nanos() / 50
+    );
+}

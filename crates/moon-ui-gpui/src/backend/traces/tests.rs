@@ -178,3 +178,41 @@ fn pulled_lines_land_on_rows_settled_without_them() {
     // The core's later empty answer for 3 is no longer awaited: the pending set lost it.
     assert!(!r.adopt_all(&CoreStore::default()));
 }
+
+/// Time the chart's trace-wake walk: every durable row is stamped and every answered trace cloned.
+///
+/// A chart holds up to 1000 rows. One core revision — a single filed answer — currently rebuilds
+/// the whole map on the UI thread.
+#[test]
+#[ignore = "manual heavy-user timing probe"]
+fn bench_goal_e_trace_walk() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    const ROWS: i64 = 1_000;
+    let uids: Vec<i64> = (1..=ROWS).collect();
+    let mut resolver = TraceResolver::default();
+    let requested = resolver.begin_read(1, &uids);
+    let read: HashMap<_, _> = uids
+        .iter()
+        .map(|uid| (*uid, TraceEntry::Lines(lines())))
+        .collect();
+    resolver.apply_read(1, &read, &requested, 0, 0, (1, 1));
+    let start = Instant::now();
+    for _ in 0..50 {
+        let mut sig = 0u64;
+        let mut map: HashMap<i64, Arc<[ArchivedOrderTrace]>> = HashMap::new();
+        for uid in &uids {
+            let (state, stamp) = resolver.stamped(1, *uid);
+            sig = sig.wrapping_mul(31).wrapping_add(stamp);
+            if let Some(answered) = state.lines().filter(|lines| !lines.is_empty()) {
+                map.insert(*uid, answered.clone());
+            }
+        }
+        black_box((sig, map.len()));
+    }
+    println!(
+        "goal_e_trace_walk_1000: {} ns/iter",
+        start.elapsed().as_nanos() / 50
+    );
+}

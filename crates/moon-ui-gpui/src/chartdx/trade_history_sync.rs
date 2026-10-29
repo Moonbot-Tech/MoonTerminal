@@ -578,6 +578,11 @@ impl ChartDataState {
     /// Returns:
     ///     The pane's retained trade source.
     fn trade_source(&self, core: CoreId, lines_drawn: Option<&[f64]>, key: u64) -> TradeSource {
+        // One sort for the whole history. The twin test used to scan every retained close for
+        // every row, on the UI thread, each time this source was rebuilt. The frozen viewer
+        // answers the same window against the store's own closes.
+        let drawn_index = lines_drawn.map(super::archived_lines::LiveTwinIndex::from_closes);
+        let live_twins = drawn_index.as_ref().filter(|_| self.draws_live_market());
         // When the order pass draws the closed trades as lines, an END drawn as a line loses its
         // arrow, which would sit on top of it: one or the other, per end. For the pane's OWN core
         // the EXIT is a line — from the archive or from the row itself — so its arrow never draws
@@ -606,14 +611,15 @@ impl ChartDataState {
                 // pane admits but does not own never reaches that: it keeps both arrows.
                 let owned = record.core_uid == core;
                 let (entry_lined, exit_lined) = if owned {
-                    match lines_drawn {
-                        Some(twins)
-                            if self.draws_live_market() && self.is_live_twin(record, twins) =>
-                        {
-                            (true, true)
-                        }
-                        Some(drawn) => self.archived_line_ends(record, drawn),
-                        None => (false, false),
+                    if live_twins
+                        .as_ref()
+                        .is_some_and(|twins| self.is_live_twin(record, twins))
+                    {
+                        (true, true)
+                    } else if let Some(drawn) = drawn_index.as_ref() {
+                        self.archived_line_ends(record, drawn)
+                    } else {
+                        (false, false)
                     }
                 } else {
                     (false, false)
