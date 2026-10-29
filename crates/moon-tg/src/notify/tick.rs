@@ -3,7 +3,7 @@
 //! `decide` and `DownTracker::step` stay pure. This module reads the
 //! report replica and writes the durable outbox.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -13,11 +13,9 @@ use moon_core::config::telegram_layout::CardLayout;
 use moon_core::db::CoreNames;
 use moon_core::telegram::TelegramService;
 use moon_core::telegram::notify::{
-    CardKey, CardWait, ChatNotify, DownRule, NotifyFile, NotifyLedger, NotifySettings,
+    CardKey, CardWait, ChatNotify, DownRule, NotifyFile, NotifyLedger,
 };
-use moon_core::telegram::runtime::{
-    NotifyStore, cores_kept, purge_outbox_where, push_edit, push_outbox, push_trade_card,
-};
+use moon_core::telegram::runtime::{NotifyStore, push_edit, push_outbox, push_trade_card};
 
 use crate::notify::charts::Due;
 use crate::notify::down::{DownEvent, Link, link_of};
@@ -66,14 +64,6 @@ struct ChatShot {
     revision: u64,
     access: TelegramReportAccess,
     read_from: Option<i64>,
-}
-
-/// Settings and ledger copied out of the store before admission is checked.
-struct ChatSnap {
-    chat: i64,
-    revision: u64,
-    settings: NotifySettings,
-    ledger: NotifyLedger,
 }
 
 /// A chat whose grant still matches, with visible cores and the owner's captured card layout.
@@ -136,6 +126,7 @@ pub(crate) fn run(host: &mut dyn TgHost, now_utc: i64) {
 }
 
 /// Drop queued rows that name a core the chat can no longer see.
+/// The row scan is reused until queued payloads, pairing or visible cores change.
 ///
 /// The allow map is published first, including when the outbox is empty, and
 /// replaced only when it changed. An empty outbox then returns before any
@@ -151,30 +142,16 @@ fn purge_revoked_rows(host: &dyn TgHost, store: &Mutex<NotifyStore>) {
     if lock_store(store).file.outbox.is_empty() {
         return;
     }
-    let chats = outbox_chats(store);
-    let mut plans = Vec::new();
-    for chat in chats {
+    let mut plans = BTreeMap::new();
+    for &chat in &host.config().telegram.authorized_chat_ids {
         let Some(access) = host.config().telegram.report_access(chat) else {
             continue;
         };
         let keep_unknown = matches!(access, TelegramReportAccess::Owner);
-        let visible: BTreeSet<u64> = visible_ids(host, &access).into_iter().collect();
-        plans.push((chat, visible, keep_unknown));
+        let visible = visible_ids(host, &access).into_iter().collect();
+        plans.insert(chat, (visible, keep_unknown));
     }
-    if plans.is_empty() {
-        return;
-    }
-    let saved = {
-        let mut guard = lock_store(store);
-        purge_outbox_where(&mut guard, |row| {
-            let Some((_, visible, keep_unknown)) =
-                plans.iter().find(|(chat, _, _)| *chat == row.chat)
-            else {
-                return true;
-            };
-            cores_kept(&row.cores, visible, *keep_unknown)
-        })
-    };
+    let saved = lock_store(store).purge_disallowed(plans);
     if let Err(error) = saved {
         log::warn!("telegram notify kept a row for a core the chat can no longer see: {error}");
     }
@@ -205,24 +182,6 @@ fn publish_allowed(host: &dyn TgHost, store: &Mutex<NotifyStore>) {
         next.insert(chat, grant);
     }
     lock_store(store).publish_allowed(next);
-}
-
-/// Distinct chats that still have an outbox row, in first-seen order.
-///
-/// Args:
-///     store: Notifications file.
-///
-/// Returns:
-///     Chat ids. The lock is not held after this returns.
-fn outbox_chats(store: &Mutex<NotifyStore>) -> Vec<i64> {
-    let guard = lock_store(store);
-    let mut chats = Vec::new();
-    for row in &guard.file.outbox {
-        if !chats.contains(&row.chat) {
-            chats.push(row.chat);
-        }
-    }
-    chats
 }
 
 /// The service store, or the test override when no service is running.
@@ -593,131 +552,72 @@ fn link_name(links: &[(u64, String, Link)], core: u64) -> &str {
 ///     store: Notifications file. The job does not lock it; finish does.
 ///     now_utc: Current UTC Unix seconds.
 fn maybe_spawn(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_utc: i64) {
-    if host.state().notify_busy {
+    if host.state().notify_busy
+        || host
+            .state()
+            .last_notify_run
+            .is_some_and(|at| at.elapsed() < NOTIFY_INTERVAL)
+    {
         return;
     }
-    let shots = notification_shots(host, store, now_utc);
-    if shots.is_empty() {
+    // Reject the all-unpaired case before walking held rows; the old paired snapshot did so
+    // implicitly. Admission here reads only switch bits, never the retained ledgers.
+    let authorized = &host.config().telegram.authorized_chat_ids;
+    if !lock_store(store).file.chats.iter().any(|(chat, entry)| {
+        authorized.contains(chat) && (entry.settings.trades.on || entry.settings.charts.on)
+    }) {
         return;
     }
     let forced = waits_are_due(host, store, now_utc);
     if !reads_are_due(host, forced) {
         return;
     }
+    let shots = notification_shots(host, store, now_utc);
+    if shots.is_empty() {
+        return;
+    }
     let plan = read_plan(host, shots, now_utc);
     arm_and_spawn(host, store, plan);
 }
 
-/// Chats that need a trade read on this tick.
-///
-/// Args:
-///     host: Pairing. Admission is checked after the store lock drops.
-///     store: Notifications file.
-///     now_utc: Current UTC Unix seconds.
-///
-/// Returns:
-///     One shot per paired chat that has trades on.
-///     Unpaired chats and `report_access` of `None` are left out.
+/// Capture only the read floor and revision of each admitted, enabled chat.
+/// Large seen, held and card ledgers stay in the store; the background read needs none of them.
 fn notification_shots(
     host: &dyn TgHost,
     store: &Mutex<NotifyStore>,
     now_utc: i64,
 ) -> Vec<ChatShot> {
-    let snaps = paired_snapshots(host, store);
-    shots_from(host, snaps, now_utc)
-}
-
-/// Copy paired chats that have trades switched on.
-///
-/// Args:
-///     host: Saved `authorized_chat_ids`.
-///     store: Notifications file. The guard ends before this returns.
-///
-/// Returns:
-///     Snapshots. The lock is not held.
-fn paired_snapshots(host: &dyn TgHost, store: &Mutex<NotifyStore>) -> Vec<ChatSnap> {
-    let authorized = &host.config().telegram.authorized_chat_ids;
-    lock_store(store)
+    let telegram = &host.config().telegram;
+    let guard = lock_store(store);
+    guard
         .file
         .chats
         .iter()
-        .filter_map(|(&chat, entry)| snap_if_reading(authorized, chat, entry))
+        .filter_map(|(&chat, entry)| {
+            if !(entry.settings.trades.on || entry.settings.charts.on) {
+                return None;
+            }
+            let access = telegram.report_access(chat)?;
+            let trades = entry
+                .settings
+                .trades
+                .on
+                .then(|| read_from_utc(&entry.ledger, now_utc))
+                .flatten();
+            let charts = entry
+                .settings
+                .charts
+                .on
+                .then(|| floor_from(entry.ledger.charts.enabled_utc, now_utc))
+                .flatten();
+            Some(ChatShot {
+                chat,
+                revision: entry.revision,
+                access,
+                read_from: trades.into_iter().chain(charts).min(),
+            })
+        })
         .collect()
-}
-
-/// Snapshot `entry` when it is paired and reads trades.
-///
-/// Args:
-///     authorized: Paired chat ids.
-///     chat: Chat id.
-///     entry: Stored settings and ledger.
-///
-/// Returns:
-///     `None` when the chat is unpaired or both the trade and the chart rule are off. Chats
-///     without either are not read from the replica.
-fn snap_if_reading(authorized: &[i64], chat: i64, entry: &ChatNotify) -> Option<ChatSnap> {
-    let settings = &entry.settings;
-    if !authorized.contains(&chat) || !(settings.trades.on || settings.charts.on) {
-        return None;
-    }
-    Some(ChatSnap {
-        chat,
-        revision: entry.revision,
-        settings: entry.settings.clone(),
-        ledger: entry.ledger.clone(),
-    })
-}
-
-/// Turn snapshots into shots, dropping chats that are no longer admitted.
-///
-/// Args:
-///     host: Current pairing and grants.
-///     snaps: Chats copied under the lock, each with trades on.
-///     now_utc: Current UTC Unix seconds.
-///
-/// Returns:
-///     Shots for chats `report_access` still admits. `read_from` stays `None` when the trade
-///     rule has never been enabled.
-fn shots_from(host: &dyn TgHost, snaps: Vec<ChatSnap>, now_utc: i64) -> Vec<ChatShot> {
-    let mut shots = Vec::new();
-    for snap in snaps {
-        let Some(access) = host.config().telegram.report_access(snap.chat) else {
-            continue;
-        };
-        shots.push(shot_for(snap, access, now_utc));
-    }
-    shots
-}
-
-/// One shot. The trade floor is recorded only while the trade rule is on.
-///
-/// Args:
-///     snap: Settings captured under the lock.
-///     access: Grant at spawn. Finish compares it again.
-///     now_utc: Current UTC Unix seconds.
-///
-/// Returns:
-///     The shot. `read_from` is `None` when trades are off or were never enabled.
-fn shot_for(snap: ChatSnap, access: TelegramReportAccess, now_utc: i64) -> ChatShot {
-    let trades = snap
-        .settings
-        .trades
-        .on
-        .then(|| read_from_utc(&snap.ledger, now_utc))
-        .flatten();
-    let charts = snap
-        .settings
-        .charts
-        .on
-        .then(|| floor_from(snap.ledger.charts.enabled_utc, now_utc))
-        .flatten();
-    let read_from = trades.into_iter().chain(charts).min();
-    ChatShot {
-        chat: snap.chat,
-        revision: snap.revision,
-        access,
-        read_from,
-    }
 }
 
 /// Whether this tick may start a read.

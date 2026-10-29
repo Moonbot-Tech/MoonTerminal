@@ -146,12 +146,7 @@ impl NotifyStore {
     /// Delete the picture of a row that just left the outbox, or of one never queued. A file
     /// another row still names stays.
     pub fn drop_chart(&self, photo: &str) {
-        if self
-            .file
-            .outbox
-            .iter()
-            .any(|row| row.photo.as_deref() == Some(photo))
-        {
+        if self.file.outbox.names_photo(photo) {
             return;
         }
         let path = chart_spool_dir(&self.path).join(photo);

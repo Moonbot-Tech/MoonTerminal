@@ -1960,13 +1960,9 @@ impl Drop for NotifyTemp {
     }
 }
 
+/// Open an isolated store through the same receipt recovery path as production.
 fn empty_store(path: PathBuf) -> NotifyStore {
-    NotifyStore {
-        path,
-        file: NotifyFile::default(),
-        allowed: None,
-        wake: Default::default(),
-    }
+    NotifyStore::open(path).expect("open notifications")
 }
 
 /// Initial rules must record an enable boundary once and preserve even an empty stored row.

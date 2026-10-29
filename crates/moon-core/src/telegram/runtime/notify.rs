@@ -4,8 +4,8 @@
 //! polling. A message stays in the on-disk outbox until Telegram accepts it, or until the sender
 //! drops it for a reason that will not change on retry. A timeout or a transport error is retried:
 //! a rare duplicate is preferred to a lost notification. After `send_html` returns `Ok`, this
-//! process does not send that id again; only the ack save is retried. A restart can still replay
-//! a row whose ack never landed.
+//! process does not send that id again; only the durable receipt is retried. A restart can still
+//! replay a row whose receipt never landed. Full snapshots are coalesced across the drain.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::Secret;
 use crate::telegram::api::{BotApi, is_permanent_bad_request, is_unreachable_chat};
+use crate::telegram::notify::receipts;
 use crate::telegram::notify::{AutoReport, AutoRow, CardKey, NotifyFile, Pending};
 use crate::telegram::reply::{TELEGRAM_MESSAGE_UTF16_LIMIT, utf16_len};
 
@@ -48,9 +49,9 @@ fn redraw_outlived(row: &Pending, now_utc: u64) -> bool {
 /// it returns.
 ///
 /// `file` is public so a host can edit paired chats on this same document. A chat edit is
-/// persisted by [`Self::update`] before that call returns. Enqueue and ack use the same
-/// clone-save-commit order. `allowed` is process memory only: [`NotifyFile::save`] does not
-/// write it.
+/// persisted by [`Self::update`] before that call returns. Enqueues use clone-save-commit;
+/// delivery receipts are synchronized individually and folded into the next full snapshot.
+/// `allowed` is process memory only: [`NotifyFile::save`] does not write it.
 pub struct NotifyStore {
     /// On-disk document. Missing until the first successful save.
     pub path: PathBuf,
@@ -64,6 +65,17 @@ pub struct NotifyStore {
     pub allowed: Option<BTreeMap<i64, Option<BTreeSet<u64>>>>,
     /// Rung after every saved change so the sender drains it at once instead of on its next poll.
     pub wake: Arc<NotifyWake>,
+    /// Receipt writes serialize separately from the owner-thread document.
+    journal: Arc<Mutex<receipts::Journal>>,
+    /// Disclosure scan already completed for this queue revision and visibility map.
+    purged: Option<PurgeStamp>,
+}
+
+/// Pairing, grants and queued-row changes are the only inputs to the revocation scan.
+#[derive(PartialEq, Eq)]
+struct PurgeStamp {
+    revision: u64,
+    plans: BTreeMap<i64, (BTreeSet<u64>, bool)>,
 }
 
 /// Wakes the sender thread: a generation counter bumped on every outbox change and on stop.
@@ -122,12 +134,19 @@ impl NotifyStore {
     /// Errors:
     ///     The path is unreadable, or the body is not a [`NotifyFile`]. The file is left as it was.
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
-        let file = NotifyFile::load(&path)?;
+        let mut file = NotifyFile::load_snapshot(&path)?;
+        let receipt_bytes = receipts::replay(&path, &mut file)?;
+        let journal = Arc::new(Mutex::new(receipts::Journal {
+            bytes: receipt_bytes,
+            sequence: file.ack_sequence,
+        }));
         let store = Self {
             path,
             file,
             allowed: None,
             wake: Arc::default(),
+            journal,
+            purged: None,
         };
         store.sweep_charts();
         Ok(store)
@@ -181,73 +200,9 @@ impl NotifyStore {
         }
         next.save(&self.path)?;
         self.file = next;
+        self.clear_receipts();
         self.wake.bump();
         Ok(())
-    }
-
-    /// Remove `id` and save. A missing id is success and does not rewrite the file.
-    ///
-    /// An automatic report Telegram accepted, of a kind that replaces its previous one, is
-    /// recorded as its kind's message in the chat's ledger in the same save, even when the row is
-    /// already gone, and the message it replaces comes back for deletion. A trade card the chat
-    /// waits to fill in with dollars gets its message recorded the same way.
-    ///
-    /// Args:
-    ///     id: [`Pending::id`] Telegram has accepted, or that the sender is dropping.
-    ///     chat: Chat that owns the row.
-    ///     replaced: The accepted automatic report's kind and message id, if it is one.
-    ///     card: The accepted trade card's trade and message id, if it is one.
-    ///
-    /// Returns:
-    ///     The chat's previous message of that kind, to delete.
-    ///
-    /// Errors:
-    ///     The save failed. The in-memory outbox still contains `id`.
-    fn ack(
-        &mut self,
-        id: u64,
-        chat: i64,
-        replaced: Option<(AutoReport, i64)>,
-        card: Option<(CardKey, i64)>,
-    ) -> anyhow::Result<Option<i64>> {
-        let replaced = replaced.filter(|(kind, _)| kind.replaces_previous());
-        if replaced.is_none() && card.is_none() && !self.file.outbox.iter().any(|row| row.id == id)
-        {
-            return Ok(None);
-        }
-        let mut next = self.file.clone();
-        let photo = next
-            .outbox
-            .iter()
-            .find(|row| row.id == id)
-            .and_then(|row| row.photo.clone());
-        next.outbox.retain(|row| row.id != id);
-        // A card the chat stopped waiting for meanwhile has no entry and is not recorded.
-        if let Some((key, message)) = card {
-            let wait = next
-                .chats
-                .get_mut(&chat)
-                .and_then(|entry| entry.ledger.cards.get_mut(&key.core))
-                .and_then(|rows| rows.get_mut(&key.rec_id));
-            if let Some(wait) = wait {
-                wait.message = Some(message);
-            }
-        }
-        // A report switched off meanwhile is not recorded: a later run must not delete it.
-        let previous = replaced.and_then(|(kind, message)| {
-            let entry = next.chats.get_mut(&chat)?;
-            if !entry.settings.reports.on(kind) {
-                return None;
-            }
-            let slot = entry.ledger.reports.slot_mut(kind);
-            slot.message.replace(message).filter(|old| *old != message)
-        });
-        next.save(&self.path)?;
-        self.file = next;
-        if let Some(photo) = photo {
-            self.drop_chart(&photo);
-        }
-        Ok(previous)
     }
 
     /// Apply `edit` to a clone and save it before the in-memory file changes.
@@ -265,8 +220,67 @@ impl NotifyStore {
         let result = edit(&mut next);
         next.save(&self.path)?;
         self.file = next;
+        self.clear_receipts();
         self.wake.bump();
         Ok(result)
+    }
+
+    /// Scan disclosures only after pairing, grants or queued payloads changed. A failed save
+    /// leaves the previous stamp so the owner retries the purge on its next tick.
+    pub fn purge_disallowed(
+        &mut self,
+        plans: BTreeMap<i64, (BTreeSet<u64>, bool)>,
+    ) -> anyhow::Result<usize> {
+        let next = PurgeStamp {
+            revision: self.file.outbox.revision(),
+            plans,
+        };
+        if self.purged.as_ref() == Some(&next) {
+            return Ok(0);
+        }
+        let removed = purge_outbox_where(self, |row| {
+            next.plans
+                .get(&row.chat)
+                .is_none_or(|(visible, keep_unknown)| {
+                    cores_kept(&row.cores, visible, *keep_unknown)
+                })
+        })?;
+        self.purged = Some(next);
+        Ok(removed)
+    }
+
+    /// Coalesce a drained batch into one snapshot. Until this succeeds, receipts alone retain
+    /// every ack durably; retrying a failed checkpoint never sends accepted bodies again.
+    fn checkpoint(&mut self) -> anyhow::Result<()> {
+        let dirty = match self.journal.try_lock() {
+            Ok(journal) => journal.bytes != 0,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner().bytes != 0,
+            Err(std::sync::TryLockError::WouldBlock) => false,
+        };
+        if dirty {
+            self.file.save(&self.path)?;
+            self.clear_receipts();
+        }
+        Ok(())
+    }
+
+    /// Clear the journal only after publishing a snapshot with its receipt cursor. A failed
+    /// cleanup is harmless: replay skips its prefix, and later edits retry the cleanup.
+    fn clear_receipts(&mut self) {
+        // Never wait for receipt I/O under the store lock: the writer takes that lock only
+        // after its fsync, while still owning the journal to commit receipts in sequence.
+        let mut journal = match self.journal.try_lock() {
+            Ok(journal) => journal,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return,
+        };
+        if journal.bytes == 0 || journal.sequence > self.file.ack_sequence {
+            return;
+        }
+        match receipts::clear(&self.path) {
+            Ok(()) => journal.bytes = 0,
+            Err(error) => log::warn!("telegram receipt cleanup deferred: {error}"),
+        }
     }
 
     /// Drop chats that are no longer paired. Outbox rows stay so the sender can ack them.
@@ -576,6 +590,59 @@ pub fn purge_outbox_where(
     Ok(removed)
 }
 
+/// Synchronize one receipt outside the document mutex, then publish its ledger and row removal.
+/// The journal lock spans both phases so concurrent receipts cannot commit out of sequence.
+fn durable_ack(
+    store: &Mutex<NotifyStore>,
+    id: u64,
+    chat: i64,
+    replaced: Option<(AutoReport, i64)>,
+    card: Option<(CardKey, i64)>,
+) -> anyhow::Result<Option<i64>> {
+    ack_with(store, id, chat, replaced, card, receipts::append)
+}
+
+/// The receipt transaction with an injectable writer, allowing tests to pause exactly at disk
+/// I/O and prove that owner ticks and settings saves remain independent of that I/O.
+fn ack_with(
+    store: &Mutex<NotifyStore>,
+    id: u64,
+    chat: i64,
+    replaced: Option<(AutoReport, i64)>,
+    card: Option<(CardKey, i64)>,
+    write: impl FnOnce(&Path, u64, &receipts::Receipt) -> anyhow::Result<u64>,
+) -> anyhow::Result<Option<i64>> {
+    let replaced = replaced.filter(|(kind, _)| kind.replaces_previous());
+    let (path, journal) = {
+        let guard = lock_store(store);
+        if replaced.is_none() && card.is_none() && guard.file.outbox.by_id(id).is_none() {
+            return Ok(None);
+        }
+        (guard.path.clone(), Arc::clone(&guard.journal))
+    };
+    let mut journal = journal
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let receipt = receipts::Receipt {
+        sequence: journal
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("notification receipt sequence exhausted"))?,
+        id,
+        chat,
+        replaced,
+        card,
+    };
+    journal.bytes = write(&path, journal.bytes, &receipt)?;
+    journal.sequence = receipt.sequence;
+    let mut guard = lock_store(store);
+    let (previous, photo) = receipt.apply(&mut guard.file);
+    if let Some(photo) = photo {
+        guard.drop_chart(&photo);
+    }
+    Ok(previous)
+}
+
 /// Accept `html` when it fits the Bot API text limit.
 ///
 /// Args:
@@ -671,6 +738,9 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
         let seen = wake.generation();
         let pending = snapshot(&store);
         if pending.is_empty() {
+            if let Err(error) = lock_store(&store).checkpoint() {
+                log::warn!("telegram notify checkpoint deferred: {error}");
+            }
             last_sent.clear();
             ready_at.clear();
             backoff.clear();
@@ -682,8 +752,7 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
         last_sent.retain(|chat, _| live.contains(chat));
         ready_at.retain(|chat, _| live.contains(chat));
         backoff.retain(|chat, _| live.contains(chat));
-        let live_ids: HashSet<u64> = pending.iter().map(|row| row.id).collect();
-        delivered.retain(|id, _| live_ids.contains(id));
+        delivered.retain(|id, _| lock_store(&store).file.outbox.by_id(*id).is_some());
 
         let mut progressed = false;
         let mut hit_global_cap = false;
@@ -857,9 +926,16 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
     }
 }
 
-/// Copy the outbox in file order. The lock is not held across the network call.
+/// Copy only each chat's first row in file order, independently of the remaining queue length.
+/// The lock is not held across the network call; pacing and grants are checked again by `hold`.
 fn snapshot(store: &Mutex<NotifyStore>) -> Vec<Pending> {
-    lock_store(store).file.outbox.clone()
+    lock_store(store)
+        .file
+        .outbox
+        .heads()
+        .into_iter()
+        .cloned()
+        .collect()
 }
 
 /// Re-read one row so a concurrent ack is not sent again.
@@ -870,7 +946,7 @@ fn snapshot(store: &Mutex<NotifyStore>) -> Vec<Pending> {
 /// `Some([])` is allowed for every viewer.
 fn hold(store: &Mutex<NotifyStore>, id: u64, chat: i64) -> Held {
     let guard = lock_store(store);
-    let Some(row) = guard.file.outbox.iter().find(|row| row.id == id) else {
+    let Some(row) = guard.file.outbox.by_id(id) else {
         return Held::Missing;
     };
     let Some(allowed) = guard.allowed.as_ref() else {
@@ -956,7 +1032,7 @@ fn finish_ack(
     ready_at: &mut HashMap<i64, Instant>,
     backoff: &mut HashMap<i64, Duration>,
 ) -> Option<Option<i64>> {
-    match lock_store(store).ack(id, chat, accepted.auto, accepted.card) {
+    match durable_ack(store, id, chat, accepted.auto, accepted.card) {
         Ok(previous) => Some(previous),
         Err(error) => {
             log::warn!("telegram notification ack failed for id {id}: {error}");

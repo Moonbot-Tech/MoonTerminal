@@ -1,6 +1,6 @@
 //! Per-chat Telegram notification settings, the announce-once ledger, and the durable outbox.
 //!
-//! This module is the file shape only. Nothing here sends a message or reads a trade.
+//! This module owns the file shape and pure trade decisions; it sends no messages or reads.
 //! A missing file is a fresh all-off document. A present file that cannot be parsed is an error,
 //! so a bad read never replaces a chat's settings with the defaults.
 
@@ -11,6 +11,11 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::db::QuoteCurrency;
+
+mod outbox;
+pub use outbox::Outbox;
+pub(crate) mod receipts;
+pub mod trades;
 
 /// Which cores a trade notification applies to.
 ///
@@ -675,9 +680,11 @@ pub struct NotifyFile {
     /// Chat id to that chat's settings and ledger.
     pub chats: BTreeMap<i64, ChatNotify>,
     /// Messages accepted into the file and not yet confirmed sent.
-    pub outbox: Vec<Pending>,
+    pub outbox: Outbox,
     /// Next [`Pending::id`]. Callers allocate it; load and save only keep the number.
     pub next_id: u64,
+    /// Last durable delivery receipt included in this snapshot; independent of chat revisions.
+    pub ack_sequence: u64,
 }
 
 impl NotifyFile {
@@ -690,6 +697,14 @@ impl NotifyFile {
     ///
     /// I/O failures other than not-found, and JSON that does not match [`NotifyFile`].
     pub fn load(path: &Path) -> anyhow::Result<Self> {
+        let mut file = Self::load_snapshot(path)?;
+        receipts::replay(path, &mut file)?;
+        Ok(file)
+    }
+
+    /// Read only the coalesced snapshot; the store separately replays receipts and tracks their
+    /// complete byte length so a failed append's torn tail can be overwritten on retry.
+    pub(crate) fn load_snapshot(path: &Path) -> anyhow::Result<Self> {
         match std::fs::read_to_string(path) {
             Ok(text) => {
                 serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))

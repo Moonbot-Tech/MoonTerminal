@@ -8,13 +8,9 @@ fn temp_dir(tag: &str) -> PathBuf {
     dir
 }
 
+/// Open an isolated photo store with its receipt and outbox indexes initialized.
 fn store_in(dir: &Path) -> NotifyStore {
-    NotifyStore {
-        path: dir.join("telegram_notifications.json"),
-        file: NotifyFile::default(),
-        allowed: None,
-        wake: Default::default(),
-    }
+    NotifyStore::open(dir.join("telegram_notifications.json")).expect("open notifications")
 }
 
 /// A picture file in the store's charts folder, written `age` ago.
