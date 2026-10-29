@@ -11,7 +11,7 @@ use crate::feed::{
     self, ConnStatus, CoreTgEvent, CoreTimeOffsetStatus, EngineActionResult, ExchangeId,
     FeedHandle, FeedMsg, FeedWakeTx,
 };
-use crate::market::{MarketDataMode, MarketDataSource, MarketStore};
+use crate::market::{CatalogLookup, MarketDataMode, MarketDataSource, MarketStore};
 use crate::session::core_time_offset::OffsetSource;
 use crate::venue::CoreVenue;
 
@@ -952,16 +952,27 @@ impl SessionManager {
                     let Some((open_ms, close_ms)) = catchup_stamps(row, &axis, core, now_ms) else {
                         continue;
                     };
+                    // One snapshot answers the row and versions the answer (`CoinMarkets`).
+                    // Reading it is paid on every row, hits too, so it counts as resolving.
+                    let reading = Instant::now();
+                    let lookup = source.catalog_lookup(core);
+                    let traded_quote = source.traded_quote(core);
+                    markets.spent += reading.elapsed();
                     let resolved = markets.resolve(
                         || {
                             (
+                                lookup.as_ref().map(CatalogLookup::markets_version),
                                 source.catalog_revision(core),
-                                source.traded_quote(core),
+                                traded_quote.clone(),
                                 source.exchange_of(core),
                             )
                         },
                         &row.coin,
-                        || source.resolve_market(core, &quote, &row.coin),
+                        || {
+                            lookup.as_ref().and_then(|lookup| {
+                                lookup.resolve_market(&quote, traded_quote.clone(), &row.coin)
+                            })
+                        },
                     );
                     let Some(market) = resolved else {
                         if source.tradable_coins(core).is_none() {

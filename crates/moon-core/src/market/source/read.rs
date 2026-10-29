@@ -442,41 +442,9 @@ impl MarketDataSource {
     /// Returns:
     ///     Catalog-verified market, or `None` while the core cannot resolve it.
     pub fn resolve_market(&self, core: CoreId, quote: &str, coin: &str) -> Option<String> {
-        let exchange = self.exchange_of(core);
-        let quote = crate::symbol::resolve_quote_on(quote, exchange);
-        // A complete market is one carrying a HIP-3 DEX prefix or THIS CORE'S quote. Deliberately
-        // not "carries any recognized quote": a coin whose own name ends in one — `WBTC`,
-        // `STETH`, `PYUSD` — would then be taken for a finished market and never get its quote
-        // appended.
-        let parsed = crate::symbol::parse::split_market(coin, exchange);
-        let already_full = parsed.dex.is_some()
-            || (!quote.is_empty() && parsed.quote.eq_ignore_ascii_case(&quote));
-        let candidate = if already_full || quote.is_empty() {
-            coin.to_string()
-        } else {
-            crate::symbol::parse::market_names_for(coin, &quote, exchange)
-                .next()
-                .unwrap_or_else(|| coin.to_string())
-        };
-        let universe = self.search_markets(core, coin, 32);
-        if universe.is_empty() {
-            return None;
-        }
-        let refs: Vec<&str> = universe.iter().map(String::as_str).collect();
-        let labelled: Vec<(String, crate::market::MarketLabel)> = universe
-            .iter()
-            .cloned()
-            .zip(self.market_labels(core, &refs))
-            .collect();
-        let traded_quote = self.traded_quote(core).unwrap_or_else(|| quote.clone());
-        if let Some(name) = crate::market::pick_market_for_coin(&labelled, coin, &traded_quote) {
-            return Some(name.to_string());
-        }
-        // The historical format where the stored value is already a full market name.
-        universe
-            .iter()
-            .find(|market| market.eq_ignore_ascii_case(&candidate))
-            .cloned()
+        // One snapshot answers the search and the labels: `CatalogLookup` holds it.
+        self.catalog_lookup(core)?
+            .resolve_market(quote, self.traded_quote(core), coin)
     }
 
     /// The quote currency `core` trades in — its account currency from BaseCheck
@@ -541,45 +509,7 @@ impl MarketDataSource {
         let catalog = snapshot.as_ref().map(|snapshot| snapshot.markets());
         markets
             .iter()
-            .map(|market| {
-                catalog
-                    .as_ref()
-                    .and_then(|catalog| catalog.get(market))
-                    .and_then(|handle| {
-                        handle.with(|m| {
-                            let coin = m.market_currency.trim();
-                            (!coin.is_empty()).then(|| {
-                                let quote = m.base_currency.trim().to_ascii_uppercase();
-                                // What the NAME alone says, read ONCE: both fields below fall back
-                                // to it, and this runs per market of a search result.
-                                let from_name = MarketLabel::from_name(market, exchange);
-                                MarketLabel {
-                                    coin: coin.to_string(),
-                                    // The core's own cross-exchange identity, carried whole. See
-                                    // `MarketLabel::canonic` for why it is not derived here.
-                                    canonic: m.market_currency_canonic.trim().to_string(),
-                                    // A COIN-M contract reports no base currency at all, so its
-                                    // quote comes from the name (`BTCUSD_PERP` → `USD`); without
-                                    // this the pair collapses to a bare coin.
-                                    quote: match quote.is_empty() {
-                                        true => from_name.quote,
-                                        false => quote,
-                                    },
-                                    // The expiry the NAME carries, which the token often does not:
-                                    // Bybit's dated contract is the market `BTCUSDT-25SEP26` whose
-                                    // token is a flat `BTCUSDT25SEP`, and reading only the token
-                                    // made every one of its ten expiries look like a perpetual.
-                                    // COIN-M spells it inside the token (`BTC_0925`) and answers
-                                    // from there, so this fills a gap rather than competing.
-                                    contract: from_name.contract,
-                                }
-                            })
-                        })
-                    })
-                    // A market the catalog does not hold — delisted under an open order, or a
-                    // core that has not sent its list yet.
-                    .unwrap_or_else(|| MarketLabel::from_name(market, exchange))
-            })
+            .map(|market| super::catalog_lookup::label_in(catalog, market, exchange))
             .collect()
     }
 
