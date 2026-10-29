@@ -8,8 +8,8 @@ use rusqlite::Connection;
 mod latest_name;
 
 use super::{
-    Query, ScopeDecision, min_closedate, scope_decision_with_quote_reader_on, scoped,
-    unified_from_mode,
+    Query, ScopeDecision, min_closedate, read_core_scope, scope_decision_with_quote_reader_on,
+    scoped, unified_from_mode,
 };
 use crate::db::read_fail::read_fail_on;
 use crate::db::{ProfitScope, QuoteCurrency, ReadFail, ReadResult};
@@ -96,16 +96,52 @@ pub struct ProfitMonitorSnapshot {
 }
 
 /// Read monitor rows without withholding native partitions during conversion outages.
+///
+/// Args:
+///     q: Period, filters, and configured core scope.
+///
+/// Returns:
+///     Comparable or split native monitor rows from one pinned report snapshot.
 pub fn profit_monitor_snapshot(q: &Query) -> ReadResult<ProfitMonitorSnapshot> {
+    profit_monitor_snapshot_with_replica_scope(q, None)
+}
+
+/// Read monitor rows with optional first-result discovery of replica-only cores.
+///
+/// Args:
+///     q: Period, filters, and configured fallback core scope.
+///     replica_hidden: Hidden configured ids when the active preset narrows an implicit All;
+///         `None` leaves `q.cores` untouched.
+///
+/// Returns:
+///     Comparable or split native monitor rows from one pinned report snapshot, with replica
+///     discovery applied before aggregation.
+pub fn profit_monitor_snapshot_with_replica_scope(
+    q: &Query,
+    replica_hidden: Option<&[u64]>,
+) -> ReadResult<ProfitMonitorSnapshot> {
     let conn = super::super::open_reader()?;
     let _rates = super::super::valuation::pin_current_rates();
     let snapshot = super::super::read_snapshot(&conn)?;
-    snapshot_on(&snapshot, q)
+    snapshot_on(&snapshot, q, replica_hidden)
 }
 
 /// Keep every currency partition under the same period, filters, and SQLite snapshot.
-fn snapshot_on(conn: &Connection, q: &Query) -> ReadResult<ProfitMonitorSnapshot> {
-    let mut q = q.clone();
+///
+/// Args:
+///     conn: Existing report reader or pinned snapshot.
+///     q: Period, filters, and configured fallback core scope.
+///     replica_hidden: Hidden configured ids for first-read replica discovery.
+///
+/// Returns:
+///     Comparable or split native monitor rows with identical scope across every partition.
+fn snapshot_on(
+    conn: &Connection,
+    q: &Query,
+    replica_hidden: Option<&[u64]>,
+) -> ReadResult<ProfitMonitorSnapshot> {
+    let scope = read_core_scope(conn, q, false, replica_hidden);
+    let mut q = scope.query(q).into_owned();
     if q.from < 0 {
         q.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
     }

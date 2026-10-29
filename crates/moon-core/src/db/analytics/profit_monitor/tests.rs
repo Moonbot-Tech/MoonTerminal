@@ -78,6 +78,74 @@ fn fixture() -> Connection {
     connection
 }
 
+/// Opening under a hiding preset must include a replica-only core in the first monitor result.
+/// Using only the configured inclusion list produces 5 instead of 12 until a later read, while
+/// dropping the hidden-id subtraction would incorrectly add core 2's 1000.
+#[test]
+fn profit_monitor_first_scoped_read_includes_replica_only_core() {
+    let path = crate::db::test_support::temp_db("monitor-first-scoped-replica-core");
+    let conn = crate::db::test_support::build_replica_multi_core(
+        &path,
+        &[
+            (1, 1_700_000_000, 5.0, "XALPHA"),
+            (2, 1_700_000_001, 1_000.0, "XALPHA"),
+            (99, 1_700_000_002, 7.0, "XALPHA"),
+        ],
+    );
+    let mut scoped_query = query(1_699_999_999, 1_700_000_010);
+    scoped_query.cores = vec![1];
+
+    let snapshot =
+        super::snapshot_on(&conn, &scoped_query, Some(&[2])).expect("first scoped monitor read");
+    let ProfitScope::Comparable { data, .. } = snapshot.scope else {
+        panic!("single-quote fixture must be comparable");
+    };
+    assert_eq!(
+        data.cores.len(),
+        2,
+        "cores 1 and 99 remain; hidden core 2 does not"
+    );
+    assert_eq!(data.cores.iter().map(|core| core.profit).sum::<f64>(), 12.0);
+}
+
+/// Measure the first complete monitor result at ten cores and 100000 synthetic deals.
+#[test]
+#[ignore = "synthetic first-read timing probe"]
+fn profit_monitor_first_scoped_read_scale_probe() {
+    let path = crate::db::test_support::temp_db("monitor-first-scoped-read-scale");
+    let conn = crate::db::test_support::build_replica_multi_core(
+        &path,
+        &[
+            (11, 1_700_100_000, 1_000.0, "XALPHA"),
+            (99, 1_700_100_001, 7.0, "XALPHA"),
+        ],
+    );
+    conn.execute_batch(
+        "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000)
+         INSERT INTO orders_rep (core_uid, core_name, newrecid, closedate, buydate,
+             profitbtc, spentbtc, coin, strategyid, isshort, emulator, deleted, basecurrency)
+         SELECT x%10+1, 'CORE_A', x, 1700000000+x, 1700000000+x-300,
+             (x%7)-3.0, 100.0, 'XALPHA', 7, 0, 0, 0, 1 FROM n;",
+    )
+    .expect("seed heavy first-read fixture");
+    let mut scoped_query = query(1_700_000_000, 1_700_100_010);
+    scoped_query.cores = (1..=10).collect();
+    let mut samples = Vec::new();
+    for _ in 0..6 {
+        let started = std::time::Instant::now();
+        let scope = super::super::read_core_scope(&conn, &scoped_query, false, Some(&[11]));
+        let scoped_query = scope.query(&scoped_query);
+        std::hint::black_box(profit_monitor_on(&conn, scoped_query.as_ref()).unwrap());
+        std::hint::black_box(scope.cores.unwrap().unwrap());
+        samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[timing] profit_monitor open_to_first_result: {:.3} ms",
+        samples[samples.len() / 2]
+    );
+}
+
 /// `profit_monitor.rs:profit_monitor_on` must count only positive spends in the average-order
 /// denominator; changing its conditional SQL `COUNT` to `COUNT(*)` makes the named average-order
 /// assertion red and shows a false order size in the desktop widget.
@@ -285,7 +353,7 @@ fn split_snapshot_keeps_native_core_rows() {
         UPDATE orders_rep SET basecurrency=NULL WHERE closedate=130;",
         )
         .expect("mixed core");
-    let snapshot = super::snapshot_on(&connection, &query(0, 200)).expect("snapshot");
+    let snapshot = super::snapshot_on(&connection, &query(0, 200), None).expect("snapshot");
     assert!(matches!(snapshot.scope, ProfitScope::Split(_)));
     assert_eq!(snapshot.currencies.len(), 3);
     assert_eq!(
@@ -313,7 +381,7 @@ fn split_snapshot_keeps_native_core_rows() {
     assert_eq!(unknown.data.cores[0].positive_orders, 0);
     let mut narrowed = query(0, 115);
     narrowed.cores = vec![2];
-    let snapshot = super::snapshot_on(&connection, &narrowed).expect("filtered");
+    let snapshot = super::snapshot_on(&connection, &narrowed, None).expect("filtered");
     assert!(snapshot.currencies.is_empty());
     let ProfitScope::Comparable { data, .. } = snapshot.scope else {
         panic!("single quote");

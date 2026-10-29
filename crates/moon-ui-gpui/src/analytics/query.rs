@@ -104,6 +104,26 @@ impl AnalyticsView {
             .map_or(&[], |s| s.configured_core_ids.as_slice())
     }
 
+    /// Own the Classic-hidden ids when a compound read must resolve an implicit All on its replica
+    /// snapshot. Explicit selections and Auto pins keep their existing bounded queries, and reads
+    /// outside the core-metadata cadence do no extra discovery.
+    ///
+    /// Args:
+    ///     read_cores: Whether this compound read includes the shared core metadata scan.
+    ///
+    /// Returns:
+    ///     Hidden configured ids for the background read, or `None` when no replica expansion is
+    ///     authorized. The vector is owned so it can cross the background-task boundary.
+    pub(super) fn replica_hidden_core_ids(&self, read_cores: bool) -> Option<Vec<u64>> {
+        toolbar::replica_hidden_core_ids(
+            &self.sel_cores,
+            self.read_core_ids(),
+            self.hidden_core_ids(),
+            read_cores,
+        )
+        .map(<[u64]>::to_vec)
+    }
+
     /// The scope marker the Summary states, from whichever authority narrowed the read.
     /// The two are mutually exclusive by construction (`analytics_display_scope`).
     pub(super) fn summary_scope_marker(

@@ -172,11 +172,18 @@ impl AnalyticsView {
         self.data_range = active_range;
         let q = self.query();
         let read_cores = self.core_metadata_due(cx);
+        let replica_hidden = self.replica_hidden_core_ids(read_cores);
         self.spawn_latest_db(
             &[bg::ReadLane::Summary],
             show_overlay,
             cx,
-            move || moon_core::db::analytics::summary_data(&q, read_cores),
+            move || {
+                moon_core::db::analytics::summary_data_with_replica_scope(
+                    &q,
+                    read_cores,
+                    replica_hidden.as_deref(),
+                )
+            },
             move |this, result, cx| {
                 if this.seq != req {
                     return; // The period or filters have already changed.
@@ -261,11 +268,18 @@ impl AnalyticsView {
         self.strategy_data_period = self.strat_period;
         let q = self.query_for(self.strat_period);
         let read_cores = self.core_metadata_due(cx);
+        let replica_hidden = self.replica_hidden_core_ids(read_cores);
         self.spawn_latest_db(
             &[bg::ReadLane::StrategyBase],
             show_overlay,
             cx,
-            move || moon_core::db::analytics::strategy_base_data(&q, read_cores),
+            move || {
+                moon_core::db::analytics::strategy_base_data_with_replica_scope(
+                    &q,
+                    read_cores,
+                    replica_hidden.as_deref(),
+                )
+            },
             move |this, result, cx| {
                 if this.seq != req {
                     return;

@@ -1767,14 +1767,13 @@ fn calendar_refresh_keeps_visible_metadata_in_one_snapshot() {
             .join("mod.rs"),
     )
     .unwrap();
-    let calendar_data = fn_body(&core_analytics, "pub fn calendar_data(");
+    let calendar_data = fn_body(&core_analytics, "pub fn calendar_data_with_replica_scope(");
 
     assert!(
-        calendar.contains("moon_core::db::analytics::calendar_data(")
+        calendar.contains("moon_core::db::analytics::calendar_data_with_replica_scope(")
             && !calendar.contains("fn reload_report_metadata(")
-            && calendar_data
-                .contains("period: calendar::calendar_period_from(snapshot, q, previous, hourly)")
-            && calendar_data.contains("undated: undated_closes_on(snapshot, q)"),
+            && calendar_data.contains("period: calendar::calendar_period_from(")
+            && calendar_data.contains("undated: undated_closes_on(snapshot, q.as_ref())"),
         "Calendar cells and undated metadata must be derived from the same read snapshot"
     );
 }
@@ -1834,19 +1833,22 @@ fn analytics_core_metadata_is_throttled_across_tabs() {
             .join("mod.rs"),
     )
     .unwrap();
-    let summary_read = fn_body(&core_analytics, "pub fn summary_data(");
-    let strategy_read = fn_body(&core_analytics, "pub fn strategy_base_data(");
+    let summary_read = fn_body(&core_analytics, "fn summary_data_on(");
+    let strategy_read = fn_body(
+        &core_analytics,
+        "pub fn strategy_base_data_with_replica_scope(",
+    );
     let strategy_base = fn_body(&core_analytics, "fn strategy_base_on(");
     let summary = fn_body(&core_analytics, "pub(super) fn summary_on(");
 
     assert!(
-        analytics_ui.contains("moon_core::db::analytics::summary_data(&q, read_cores)")
+        analytics_ui.contains("moon_core::db::analytics::summary_data_with_replica_scope(")
             && analytics_ui
-                .contains("moon_core::db::analytics::strategy_base_data(&q, read_cores)")
+                .contains("moon_core::db::analytics::strategy_base_data_with_replica_scope(")
             && calendar_ui.contains("let refresh_cores = self.core_metadata_due(cx);")
             && analytics_ui.contains("fn core_metadata_due(")
-            && summary_read.contains("cores: read_cores.then(")
-            && strategy_read.contains("cores: read_cores.then(")
+            && summary_read.contains("cores: scope.cores")
+            && strategy_read.contains("cores: scope.cores")
             && !strategy_base.contains("distinct_cores")
             && summary.contains("cores: if read_cores {"),
         "Summary, Strategies, and Calendar must use the shared throttled core metadata path"

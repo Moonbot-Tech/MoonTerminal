@@ -276,6 +276,74 @@ fn q(from: i64, to: i64) -> Query {
     }
 }
 
+/// A fresh hiding-preset read must discover core 99 before aggregation, not after publishing a
+/// configured-only total. Resolving scope from `q.cores` alone keeps the old 5 instead of 12 and
+/// also wrongly admits the deliberately hidden configured core if the hidden ids are ignored.
+#[test]
+fn analytics_first_scoped_read_includes_replica_only_core() {
+    let path = temp_db("first-scoped-replica-core");
+    let conn = build_replica_multi_core(
+        &path,
+        &[
+            (1, 1_700_000_000, 5.0, "XALPHA"),
+            (2, 1_700_000_001, 1_000.0, "XALPHA"),
+            (99, 1_700_000_002, 7.0, "XALPHA"),
+        ],
+    );
+    let mut query = q(1_699_999_999, 1_700_000_010);
+    query.cores = vec![1];
+
+    let result =
+        summary_data_on(&conn, &query, true, Some(&[2])).expect("first scoped Analytics read");
+    let Ok(ProfitScope::Comparable { data, .. }) = result.data else {
+        panic!("single-quote fixture must be comparable");
+    };
+    assert_eq!(
+        data.cur.n, 2,
+        "hidden core 2 stays out; replica core 99 belongs"
+    );
+    assert_eq!(data.cur.profit, 12.0);
+}
+
+/// Measure the complete first compound Summary read at ten cores and 100000 synthetic deals.
+#[test]
+#[ignore = "synthetic first-read timing probe"]
+fn analytics_first_scoped_read_scale_probe() {
+    let path = temp_db("first-scoped-read-scale");
+    let conn = build_replica_multi_core(
+        &path,
+        &[
+            (11, 1_700_100_000, 1_000.0, "XALPHA"),
+            (99, 1_700_100_001, 7.0, "XALPHA"),
+        ],
+    );
+    conn.execute_batch(
+        "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000)
+         INSERT INTO orders_rep (core_uid, core_name, newrecid, closedate, buydate,
+             profitbtc, spentbtc, coin, strategyid, isshort, emulator, deleted, basecurrency)
+         SELECT x%10+1, 'CORE_A', x, 1700000000+x, 1700000000+x-300,
+             (x%7)-3.0, 100.0, 'XALPHA', 7, 0, 0, 0, 1 FROM n;",
+    )
+    .expect("seed heavy first-read fixture");
+    let mut query = q(1_700_000_000, 1_700_100_010);
+    query.cores = (1..=10).collect();
+    let mut samples = Vec::new();
+    for _ in 0..6 {
+        let started = std::time::Instant::now();
+        let scope = read_core_scope(&conn, &query, true, Some(&[11]));
+        let query = scope.query(&query);
+        std::hint::black_box(summary_on(&conn, query.as_ref(), false, false).unwrap());
+        std::hint::black_box(undated_closes_on(&conn, query.as_ref()).unwrap());
+        std::hint::black_box(scope.cores.unwrap().unwrap());
+        samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[timing] analytics open_to_first_result: {:.3} ms",
+        samples[samples.len() / 2]
+    );
+}
+
 /// A single-day period switches the series grid to HOURS with no holes, so the bottom pane of
 /// the profit chart draws hourly bars.
 #[test]

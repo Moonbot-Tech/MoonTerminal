@@ -71,7 +71,7 @@ use format::{ColumnFloor, ProfitColumn};
 use model::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn, context_change,
     duration_until_period_refresh, duration_until_wall_clock_boundary, next_sort,
-    retain_last_known_venues, scoped_query_core_ids, sort_rows,
+    replica_hidden_core_ids, retain_last_known_venues, scoped_query_core_ids, sort_rows,
 };
 use moon_core::session::core_order::CoreOrder;
 use rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
@@ -112,21 +112,6 @@ pub(crate) struct ProfitMonitorView {
     days_data: super::LoadState<days_model::DayReport>,
     /// Native partitions published atomically with a split-currency snapshot.
     currencies: Vec<ProfitMonitorCurrency>,
-    /// Cores the last SUCCESSFUL read actually named, kept apart from [`Self::data`].
-    ///
-    /// [`super::model::scoped_query_core_ids`] needs the previous read's core list to keep a
-    /// data-only core — one absent from `config.servers`, which membership therefore has no
-    /// authority to hide — inside a scoped query. Reading that list from `data` cannot work:
-    /// `reload` resets `data` to `Loading` BEFORE building the replacement query, and
-    /// `ProfitLoadState::data` also answers `None` for `Split` and `Failed`. Either way the
-    /// carry-forward would arrive empty exactly when it is needed, the narrowed result would
-    /// become the next read's universe, and the core's money would be gone for good rather than
-    /// for one cycle.
-    ///
-    /// The sibling `analytics::toolbar::analytics_core_filter_ids` does not need this because its
-    /// universe comes from `db::distinct_cores`, independent of any view state. This field is that
-    /// independence, held locally: written only when a read applies, never cleared by `reload`.
-    seen_data_cores: Vec<CoreId>,
     refresh_error: Option<ReadFail>,
     /// Run-state token of every configured core, folded with the pending-intent register.
     ///
@@ -323,7 +308,6 @@ impl ProfitMonitorView {
             days_month: days_model::current_month(now_utc(), zone),
             days_data: super::LoadState::default(),
             currencies: Vec::new(),
-            seen_data_cores: Vec::new(),
             refresh_error: None,
             // Left at zero: the first backend notification fills it, and `sync_run_state` already
             // owns the "skip while the column is off" rule.

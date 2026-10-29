@@ -160,8 +160,9 @@ impl ProfitMonitorView {
     /// Returns:
     ///     Quote-profit query for the selected period and global valuation mode. `cores` is
     ///     unfiltered exactly as an absent scope has always meant when the active preset hides no
-    ///     configured core; otherwise it is [`scoped_query_core_ids`]'s inclusion list, built from
-    ///     `self.live` and the previous successful read's own core set.
+    ///     configured core; otherwise it is [`scoped_query_core_ids`]'s configured-only fallback.
+    ///     The background read adds replica-only cores before aggregation, so no earlier successful
+    ///     read is required to name them.
     pub(super) fn query(&self) -> Query {
         // The window resolves in THIS monitor's own selected zone. Under Phase 1 it could not:
         // the bounds went straight onto a core-local column, so computing "today" in the user's
@@ -174,11 +175,9 @@ impl ProfitMonitorView {
         // loads them inside its own pinned snapshot.
         let axis = moon_core::db::ReportAxis::from_measured(Default::default(), self.zone);
         let (from, to) = self.period.range_at(now_utc(), axis.zone());
-        // Read from `seen_data_cores`, NEVER from `self.data`: `reload` clears `data` to `Loading`
-        // before this runs, so deriving the carry-forward from it would hand every scope-narrowing
-        // read an empty list — and since that read's own result becomes the next universe, a
-        // data-only core would be dropped permanently rather than for one cycle.
-        let cores = scoped_query_core_ids(&self.live, &self.seen_data_cores);
+        // This is only the configured fallback. The background snapshot read discovers replica-only
+        // cores and applies the same hidden-id boundary before it aggregates the first result.
+        let cores = scoped_query_core_ids(&self.live);
         Query {
             axis,
             previous_period_basis: PreviousPeriodBasis::Civil,
@@ -248,12 +247,16 @@ impl ProfitMonitorView {
         self.refresh
             .refresh_started(started_generation, std::time::Instant::now());
         let query = self.query();
+        let replica_hidden = replica_hidden_core_ids(&self.live);
         self.db_active = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    moon_core::db::analytics::profit_monitor_snapshot(&query)
+                    moon_core::db::analytics::profit_monitor_snapshot_with_replica_scope(
+                        &query,
+                        replica_hidden.as_deref(),
+                    )
                 })
                 .await;
             cx.update(|cx| {
@@ -266,29 +269,6 @@ impl ProfitMonitorView {
                                 this.currencies = snapshot.currencies;
                                 snapshot.scope
                             }));
-                            // Widen the carry-forward universe with what this read named, and only
-                            // from a successful one: a failed or split read names no cores, and
-                            // adopting its emptiness would discard the list a later scoped query
-                            // needs. It ACCUMULATES rather than replaces, because a period holding
-                            // no trade for a data-only core would otherwise forget that core and
-                            // reintroduce the decay this field exists to stop. A core that has
-                            // gone for good simply stops matching rows on later reads.
-                            if let Some(data) = this.data.data() {
-                                for core in &data.cores {
-                                    if !this.seen_data_cores.contains(&core.core_uid) {
-                                        this.seen_data_cores.push(core.core_uid);
-                                    }
-                                }
-                            }
-                            if matches!(this.data, ProfitLoadState::Split(_)) {
-                                for partition in &this.currencies {
-                                    for core in &partition.data.cores {
-                                        if !this.seen_data_cores.contains(&core.core_uid) {
-                                            this.seen_data_cores.push(core.core_uid);
-                                        }
-                                    }
-                                }
-                            }
                             this.observe_arrivals(cx);
                             this.invalidate_content(cx);
                         }
