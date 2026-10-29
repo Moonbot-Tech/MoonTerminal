@@ -81,11 +81,9 @@ pub fn panic_local_settled(want: bool, age: Duration, snapshot_armed: bool) -> b
 /// Returns:
 ///     `true` when an open retained order line has panic sell armed.
 pub fn panic_snapshot_armed(store: &CoreStore, core: CoreId, market: &str) -> bool {
-    store.core(core).is_some_and(|data| {
-        data.order_lines
-            .iter_market(market)
-            .any(|order| order.closed_ms.is_none() && order.panic_sell)
-    })
+    store
+        .core(core)
+        .is_some_and(|data| data.order_lines.market_panic_sell(market))
 }
 
 #[cfg(test)]

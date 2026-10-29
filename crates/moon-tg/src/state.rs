@@ -15,7 +15,7 @@ use moon_core::telegram::{TelegramService, TelegramStatus};
 
 use crate::HostKind;
 use crate::labels::telegram_labels;
-use crate::mini_app::cache::{CachedReport, CachedTrades};
+use crate::mini_app::cache::{CachedOrders, CachedReport, CachedStrategies, CachedTrades};
 
 /// Process-only service state; no credential is rendered by Debug.
 pub struct TelegramState {
@@ -103,6 +103,10 @@ pub struct TelegramState {
     /// Same lifetime rules as `mini_report_last`: served only to the same grant, cleared on
     /// service restart.
     pub(crate) mini_trades_last: Option<CachedTrades>,
+    /// Last Orders response, reused only while its exact live inputs are unchanged.
+    pub(crate) mini_orders_last: Option<CachedOrders>,
+    /// Last Strategies response, reused only while its exact live inputs are unchanged.
+    pub(crate) mini_strategies_last: Option<CachedStrategies>,
     /// Unconfirmed Mini App strategy toggles by `(core, strategy id)`.
     ///
     /// Value: `(wanted, sent_at, strategies_ack_rev before, strategies_rev before)`. Cleared on
@@ -220,6 +224,8 @@ impl TelegramState {
             visible_override: None,
             injected_reads: None,
             mini_trades_last: None,
+            mini_orders_last: None,
+            mini_strategies_last: None,
             mini_strategy_wanted: HashMap::new(),
             run_wanted: HashMap::new(),
             control_redraws: HashMap::new(),
@@ -381,6 +387,8 @@ impl TelegramState {
         self.mini_order_snapshots.clear();
         self.mini_report_last = None;
         self.mini_trades_last = None;
+        self.mini_orders_last = None;
+        self.mini_strategies_last = None;
         self.mini_strategy_wanted.clear();
         self.run_wanted.clear();
         self.control_redraws.clear();
