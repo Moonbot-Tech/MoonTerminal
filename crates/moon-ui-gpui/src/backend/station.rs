@@ -34,6 +34,7 @@ use crate::Backend;
 pub(crate) mod cores_sync;
 pub(crate) mod groups_sync;
 pub(crate) mod job;
+pub(crate) mod prices_pull;
 pub(crate) mod pull;
 mod recovery;
 pub(crate) mod text;

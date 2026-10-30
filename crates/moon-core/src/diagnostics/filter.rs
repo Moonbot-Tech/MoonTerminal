@@ -38,9 +38,12 @@ use super::config::DiagCfg;
 /// strategy toggle, an order action) are rare, and each is exactly the line a support case needs.
 /// [`CORE_MOVE_TARGET`] is the fourth: a core moved to a server logs a few dozen lines per move,
 /// and once its window is closed they are the only account of what the move did.
+/// [`PRICE_PULL_TARGET`] is the fifth: the price pull from the station writes one line per run,
+/// the only sign it ran and what it filed.
 pub const DEFAULT_BASE_FILTER: &str = "warn,moonterminal::panels::chart=info,\
     moonterminal::analytics::tuner::ticks=info,moon_tg=info,\
-    moonterminal::backend::core_move=info,moon_gpui=info,moon_core=info";
+    moonterminal::backend::core_move=info,\
+    moonterminal::backend::station::prices_pull=info,moon_gpui=info,moon_core=info";
 
 /// Module prefix carrying balance-repair tracing (`feed::live` and its children).
 const BALANCES_TARGET: &str = "moon_core::feed::live";
@@ -164,3 +167,8 @@ pub const TELEGRAM_TARGET: &str = "moon_tg";
 /// raised to `info` by [`DEFAULT_BASE_FILTER`]. Named beside the directive for the reason
 /// [`TICKS_AXIS_TARGET`] is: the binary's `warn` baseline mutes a target the two disagree on.
 pub const CORE_MOVE_TARGET: &str = "moonterminal::backend::core_move";
+
+/// Explicit `target:` of the terminal's price pull from its station — its outcome once per run —
+/// raised to `info` by [`DEFAULT_BASE_FILTER`]. Named beside the directive for the reason
+/// [`TICKS_AXIS_TARGET`] is.
+pub const PRICE_PULL_TARGET: &str = "moonterminal::backend::station::prices_pull";

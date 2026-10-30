@@ -1,12 +1,13 @@
-//! The terminal's pull from its station (STATION.md §4.9): the tape around closed trades and their
-//! order traces, what the station holds of what the terminal lacks. Each request is one `ctl`
+//! The terminal's pull from its station (STATION.md §4.9): the tape around closed trades, their
+//! order traces and the market-list prices around them, what the station holds of what the
+//! terminal lacks. Each request is one `ctl`
 //! on the shared administrator session; an idle pull does not keep its login open.
 
 use moon_core::feed::types::Tick;
 use moon_core::market::trade_replay::trade_cache::decode_prints;
 use moon_core::station_api::{
-    Answer, MAX_TAPE_ITEMS, MAX_TAPE_SPANS, MAX_TRACE_UIDS, Request, TapeResume, TapeWant,
-    TradeTraces,
+    Answer, MAX_TAPE_ITEMS, MAX_TAPE_SPANS, MAX_TRACE_UIDS, PriceHeld, PriceKey, PricePiece,
+    Request, TapeResume, TapeWant, TradeTraces,
 };
 
 use super::api::call;
@@ -124,6 +125,110 @@ impl Pull {
         }
         Ok(())
     }
+}
+
+impl Pull {
+    /// Whether the station answers the price requests: its status says so. An older station
+    /// would refuse them unparsed, so it is never sent one.
+    pub fn prices_supported(&self) -> anyhow::Result<bool> {
+        match call(&self.conn, &Request::Status)? {
+            Answer::Status(status) => Ok(status.prices_pull),
+            other => anyhow::bail!("the station answered {other:?} to a status request"),
+        }
+    }
+
+    /// Every stretch of prices the station holds that ends at or after `since_ms`, all pages.
+    pub fn price_index(
+        &self,
+        since_ms: i64,
+        stop: impl Fn() -> bool,
+    ) -> anyhow::Result<Vec<PriceHeld>> {
+        let mut held = Vec::new();
+        let mut after: Option<PriceKey> = None;
+        loop {
+            if stop() {
+                anyhow::bail!("stopped while listing the station's prices");
+            }
+            let index = match call(
+                &self.conn,
+                &Request::PricesIndex {
+                    since_ms,
+                    after: after.clone(),
+                },
+            )? {
+                Answer::PriceIndex(index) => index,
+                other => anyhow::bail!("the station answered {other:?} to a price listing"),
+            };
+            held.extend(index.markets);
+            let Some(resume) = index.resume else {
+                return Ok(held);
+            };
+            // A station that stops without getting further would loop this forever.
+            anyhow::ensure!(
+                after.as_ref().is_none_or(|was| resume > *was),
+                "the station's price listing did not get further ({resume:?})"
+            );
+            after = Some(resume);
+        }
+    }
+
+    /// Ask the station for `wants` of its prices and hand every piece to `file`, as
+    /// [`Pull::tape`] does for prints.
+    pub fn prices(
+        &self,
+        wants: Vec<TapeWant>,
+        stop: impl Fn() -> bool,
+        mut file: impl FnMut(&TapeWant, &PricePiece) -> anyhow::Result<()>,
+    ) -> anyhow::Result<PriceCount> {
+        let mut count = PriceCount::default();
+        for chunk in bounded(wants).chunks(MAX_TAPE_ITEMS) {
+            let mut items = chunk.to_vec();
+            loop {
+                if stop() {
+                    count.stopped = true;
+                    return Ok(count);
+                }
+                count.requests += 1;
+                let prices = match call(
+                    &self.conn,
+                    &Request::PricesFetch {
+                        items: items.clone(),
+                    },
+                )? {
+                    Answer::Prices(prices) => prices,
+                    other => anyhow::bail!("the station answered {other:?} to a price request"),
+                };
+                for piece in &prices.pieces {
+                    let want = items
+                        .get(piece.item as usize)
+                        .ok_or_else(|| anyhow::anyhow!("a piece for item {}", piece.item))?;
+                    count.pieces += 1;
+                    file(want, piece)?;
+                }
+                let Some(resume) = prices.resume else {
+                    break;
+                };
+                let next = resume_from(&items, &resume);
+                anyhow::ensure!(
+                    next != items && !next.is_empty(),
+                    "the station's price answer did not get further ({resume:?})"
+                );
+                items = next;
+            }
+        }
+        Ok(count)
+    }
+}
+
+/// What a price pull brought.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PriceCount {
+    /// Pieces handed on.
+    pub pieces: usize,
+    /// Requests it took.
+    pub requests: usize,
+    /// Ended by its `stop` before everything was asked.
+    pub stopped: bool,
 }
 
 /// Split every want past [`MAX_TAPE_SPANS`] stretches into several of the same market; empty

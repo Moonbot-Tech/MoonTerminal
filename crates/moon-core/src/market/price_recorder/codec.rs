@@ -231,5 +231,63 @@ pub(super) fn decode(from_ms: i64, data: &[u8]) -> Result<Vec<Decoded>, DecodeEr
     Ok(out)
 }
 
+/// Re-encode the part of a blob, filed for a segment that starts at `seg_from`, that speaks for
+/// `[from_ms, to_ms]`, as a segment of its own: its first record is the state in force at
+/// `from_ms`, stamped there, so the cut opens with every price as a segment must.
+///
+/// Returns:
+///     The cut's bytes, with the moment it actually starts — later than `from_ms` only if the
+///     blob's first record is — or `None` for a blob with no record or nothing up to `to_ms`.
+pub(super) fn cut(
+    seg_from: i64,
+    data: &[u8],
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<Option<(i64, Vec<u8>)>, DecodeError> {
+    let records = decode(seg_from, data)?;
+    let opening = records.partition_point(|r| r.t_ms <= from_ms);
+    let (start, state, rest) = match opening.checked_sub(1) {
+        Some(at) => (from_ms, records[at], &records[opening..]),
+        None => match records.first() {
+            Some(&first) => (first.t_ms, first, &records[1..]),
+            None => return Ok(None),
+        },
+    };
+    if start > to_ms {
+        return Ok(None);
+    }
+    let kept = rest.iter().take_while(|r| r.t_ms <= to_ms);
+    let records: Vec<Decoded> = std::iter::once(Decoded {
+        t_ms: start,
+        ..state
+    })
+    .chain(kept.copied())
+    .collect();
+    let segment = Segment {
+        from_ms: start,
+        to_ms,
+        points: records
+            .iter()
+            .map(|r| super::ring::Point {
+                t_ms: r.t_ms,
+                bid: r.bid,
+                ask: r.ask,
+                mark: r.mark,
+            })
+            .collect(),
+        funding: records
+            .iter()
+            .filter_map(|r| {
+                r.funding.map(|(rate, next_ms)| super::ring::Funding {
+                    t_ms: r.t_ms,
+                    rate,
+                    next_ms,
+                })
+            })
+            .collect(),
+    };
+    Ok(Some((start, encode(&segment))))
+}
+
 #[cfg(test)]
 mod tests;

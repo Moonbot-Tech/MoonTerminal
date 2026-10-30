@@ -1,16 +1,17 @@
 //! What a terminal pulls from the station (STATION.md §4.9): the recorder's tape around closed
-//! trades, and the order traces archived at each close.
+//! trades, the order traces archived at each close, and the market-list prices around trades.
 //!
-//! Both are reads of the station's own files and need nothing of the main loop, so the API's
-//! thread answers them itself ([`answer_directly`]): a terminal pulling a month of tape does not
-//! hold up the cores' drain. An answer never outgrows a frame — the tape stops at
-//! [`TAPE_REPLY_BUDGET`] and says where to go on.
+//! All of them are reads of the station's own files and need nothing of the main loop, so the
+//! API's thread answers them itself ([`answer_directly`]): a terminal pulling a month of tape does
+//! not hold up the cores' drain. An answer never outgrows a frame — the tape and the prices stop
+//! at [`TAPE_REPLY_BUDGET`], the price listing at [`PRICE_INDEX_BUDGET`], and say where to go on.
 
 use moon_core::db::order_traces::TraceEntry;
+use moon_core::market::price_recorder::remote as prices;
 use moon_core::market::trade_replay::trade_cache::{StoredSpan, TapeFile, encode_prints};
 use moon_core::station_api::{
-    Answer, MAX_TAPE_ITEMS, MAX_TAPE_SPANS, MAX_TRACE_UIDS, Reply, Request, TAPE_REPLY_BUDGET,
-    Tape, TapePiece, TapeResume, TapeWant, Traces, TradeTraces,
+    Answer, MAX_TAPE_ITEMS, MAX_TAPE_SPANS, MAX_TRACE_UIDS, PRICE_INDEX_BUDGET, Reply, Request,
+    TAPE_REPLY_BUDGET, Tape, TapePiece, TapeResume, TapeWant, Traces, TradeTraces,
 };
 
 /// JSON around one piece's prints: its item, bounds and field names.
@@ -25,6 +26,16 @@ pub fn answer_directly(request: &Request) -> Option<Reply> {
                 core_uid,
                 report_uids,
             } => traces(*core_uid, report_uids),
+            Request::PricesIndex { since_ms, after } => {
+                prices::index(*since_ms, after.as_ref(), PRICE_INDEX_BUDGET)
+                    .map(Answer::PriceIndex)
+                    .map_err(|e| format!("list the prices: {e}"))
+            }
+            Request::PricesFetch { items } => check_wants(items).and_then(|()| {
+                prices::fetch(items, TAPE_REPLY_BUDGET)
+                    .map(Answer::Prices)
+                    .map_err(|e| format!("read the prices: {e}"))
+            }),
             _ => return None,
         }
         .into(),

@@ -148,3 +148,95 @@ fn a_missing_file_reads_as_nothing() {
     );
     assert!(!path.exists(), "a read never creates the file");
 }
+
+#[test]
+fn a_size_trim_takes_old_segments_first_even_when_they_were_filed_last() {
+    let mut store = Store::in_memory().unwrap();
+    // This host's own recording, recent.
+    let own: Vec<_> = (0..200)
+        .map(|i| {
+            segment(
+                1_000_000 + i * 1_000,
+                1_000_999 + i * 1_000,
+                &[(1_000_000 + i * 1_000, 1.0)],
+            )
+        })
+        .collect();
+    store.write(&own).unwrap();
+    // A station's old segments of another market, filed after it.
+    let old: Vec<_> = (0..200)
+        .map(|i| {
+            let from = i * 1_000;
+            Packed {
+                exchange: "ex:00000000".to_owned(),
+                market: "OLDUSDT".to_owned(),
+                from_ms: from,
+                to_ms: from + 999,
+                data: codec::encode(&segment(from, from + 999, &[(from, 2.0)]).segment),
+            }
+        })
+        .collect();
+    assert_eq!(store.insert_packed(&old).unwrap(), 200);
+    let ends = |store: &Store| -> Vec<i64> {
+        let mut stmt = store.conn().prepare("SELECT to_ms FROM segments").unwrap();
+        let ends = stmt.query_map([], |r| r.get(0)).unwrap();
+        ends.collect::<rusqlite::Result<_>>().unwrap()
+    };
+    let before = ends(&store);
+    let ceiling = store.used_bytes().unwrap() / 2;
+    store.trim(None, ceiling).unwrap();
+    let after = ends(&store);
+    assert!(after.len() < before.len());
+    // Every segment left ends after every one deleted: the pulled old ones went first, though
+    // they were filed last.
+    let deleted_last = before.iter().filter(|e| !after.contains(e)).max().unwrap();
+    assert!(after.iter().all(|e| e > deleted_last));
+    assert!(
+        after.contains(&1_199_999),
+        "the newest of this host's own stays"
+    );
+}
+
+#[test]
+fn the_tapes_keep_map_drops_and_cuts_segments_outside_it() {
+    let mut store = Store::in_memory().unwrap();
+    store
+        .write(&[
+            segment(1_000, 1_999, &[(1_000, 1.0), (1_200, 1.1)]),
+            segment(2_000, 2_999, &[(2_000, 1.1), (2_800, 1.2)]),
+            segment(3_000, 3_999, &[(3_000, 1.3)]),
+            segment(5_000, 5_999, &[(5_000, 1.4)]),
+        ])
+        .unwrap();
+    // An emulator trade's ground, 1 500..2 500 and 3 000..3 999, is not kept.
+    let keep = Coverage::from_spans([(0, 1_499), (2_501, 2_999), (4_000, i64::MAX)]);
+    assert_eq!(
+        store
+            .keep_only("ex:00000000", "XUSDT", &keep, 10_000)
+            .unwrap(),
+        3
+    );
+    let spans = read_conn(store.conn(), "ex:00000000", "XUSDT", 0, 10_000).unwrap();
+    let shape: Vec<_> = spans
+        .iter()
+        .map(|s| {
+            (
+                s.from_ms,
+                s.to_ms,
+                s.samples
+                    .iter()
+                    .map(|p| (p.t_ms, p.bid))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        vec![
+            (1_000, 1_499, vec![(1_000, 1.0), (1_200, 1.1)]),
+            // The cut opens with the state in force at its start.
+            (2_501, 2_999, vec![(2_501, 1.1), (2_800, 1.2)]),
+            (5_000, 5_999, vec![(5_000, 1.4)]),
+        ]
+    );
+}

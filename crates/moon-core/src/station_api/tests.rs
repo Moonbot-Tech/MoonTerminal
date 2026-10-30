@@ -194,6 +194,7 @@ fn a_status_reads_back_whole() {
         last_update: Some("2026-09-30T14:02Z health=ok".into()),
         auto_update: Some(false),
         core_uid_high_water: Some(12),
+        prices_pull: false,
         cores: Some(vec![ListedCore {
             endpoint_override: None,
             uid: 3,

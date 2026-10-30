@@ -303,6 +303,25 @@ fn core_move_lines_pass_the_base_filter() {
     );
 }
 
+/// The price pull logs with `PRICE_PULL_TARGET` as its explicit target; its once-per-run line must
+/// pass the base filter while the rest of the station backend stays at `warn`.
+#[test]
+fn price_pull_lines_pass_the_base_filter() {
+    let spec = compose(&DiagCfg::default(), None);
+    assert!(
+        allows(&spec, PRICE_PULL_TARGET, log::Level::Info),
+        "the pull's info line must reach the log: {spec}"
+    );
+    assert!(
+        !allows(
+            &spec,
+            "moonterminal::backend::station::pull",
+            log::Level::Info
+        ),
+        "and only the price pull's: {spec}"
+    );
+}
+
 /// The Mini App's owner commands log at `info` under the Telegram crate; the default
 /// base filter must let them through while the rest of the binary stays at `warn`.
 #[test]

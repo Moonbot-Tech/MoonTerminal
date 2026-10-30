@@ -454,6 +454,7 @@ fn tape_min_tail_job_changes_only_the_supported_floor() {
             auto_update: None,
             cores: None,
             core_uid_high_water: None,
+            prices_pull: false,
         })),
     };
     let Some(job::Job::Tape {
@@ -894,6 +895,7 @@ fn bot_reads_without_station_status_preserve_the_last_core_listing() {
     bot.station = Some(Box::new(moon_core::station_api::Status {
         station_version: "synthetic".into(),
         core_uid_high_water: Some(7),
+        prices_pull: false,
         cores_total: 0,
         cores_ready: 0,
         cores: Some(Vec::new()),
@@ -914,6 +916,7 @@ fn bot_reads_without_station_status_preserve_the_last_core_listing() {
     bot.station = Some(Box::new(moon_core::station_api::Status {
         station_version: "old".into(),
         core_uid_high_water: None,
+        prices_pull: false,
         cores_total: 0,
         cores_ready: 0,
         cores: None,
@@ -1070,6 +1073,7 @@ fn synthetic_station_answer() -> job::Done {
         station: Some(Box::new(moon_core::station_api::Status {
             station_version: "synthetic".into(),
             core_uid_high_water: Some(1),
+            prices_pull: false,
             cores_total: 1,
             cores_ready: 1,
             cores: Some(vec![moon_core::station_api::ListedCore {

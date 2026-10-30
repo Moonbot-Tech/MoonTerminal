@@ -178,3 +178,15 @@ fn the_ring_keeps_no_more_than_its_depth() {
         "{points} points held, at most {most}"
     );
 }
+
+#[test]
+fn the_file_grows_until_the_disk_reaches_the_shared_reserve() {
+    const GB: u64 = 1024 * 1024 * 1024;
+    // 100 GB disk: the reserve is 10 GB. 30 GB free leaves 20 GB to grow by.
+    assert_eq!(ceiling(5 * GB, Some((30 * GB, 100 * GB))), 25 * GB);
+    // 7 GB free is 3 GB under the reserve: the ceiling falls 3 GB under what is held.
+    assert_eq!(ceiling(5 * GB, Some((7 * GB, 100 * GB))), 2 * GB);
+    // A disk that cannot be measured, or one that reports no size, imposes nothing.
+    assert_eq!(ceiling(5 * GB, None), u64::MAX);
+    assert_eq!(ceiling(5 * GB, Some((0, 0))), u64::MAX);
+}

@@ -1099,6 +1099,7 @@ impl SessionManager {
             crate::market::tape_recorder::TradeId { core, rec_id },
             open_ms,
             close_ms,
+            emulator,
         );
         // Recording and core catch-up use exchange identity even without a public venue route.
         crate::market::tape_recorder::trade_closed(
@@ -1178,6 +1179,7 @@ impl SessionManager {
                 &market,
                 trade,
                 open_ms,
+                emulator,
             );
         }
         if tape {
