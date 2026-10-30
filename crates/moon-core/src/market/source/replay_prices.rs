@@ -2,6 +2,7 @@
 
 use super::{ChartHistoryBuffers, ChartHistoryCursor, MarketDataSource, price_rows_to_points};
 use crate::feed::PricePoint;
+use crate::market::price_recorder::StoredPriceLines;
 use crate::session::CoreId;
 use std::time::Instant;
 
@@ -72,6 +73,62 @@ impl MarketDataSource {
             capacity: prepare_replay_price_lines(window, out),
             retry_at,
         })
+    }
+}
+
+/// Lay the price file's recorded lines over what the provider's rings gave a replay read.
+///
+/// Inside each recorded stretch the file is the whole truth and replaces the ring points there:
+/// the rings start empty after every restart, so for a trade older than the run they hold nothing,
+/// and where they do overlap the file holds the same list the rings were fed from. Outside every
+/// stretch the ring points stay as they are. Each stretch is clipped to `window` and opens with the
+/// value in force at its clipped start and closes with the value held to its clipped end, so a line
+/// covers the stretch edge to edge rather than starting at its first change inside the window.
+///
+/// Bounds are inclusive UTC milliseconds, the same `window` the ring read took. Returns the
+/// capacity either line needs, as [`MarketDataSource::read_replay_price_lines`] does.
+pub fn overlay_stored_price_lines(
+    window: (i64, i64),
+    stored: &StoredPriceLines,
+    out: &mut ChartHistoryBuffers,
+) -> usize {
+    for span in &stored.spans {
+        let lo = span.from_ms.max(window.0);
+        let hi = span.to_ms.min(window.1);
+        if lo > hi {
+            continue;
+        }
+        for (points, recorded) in [
+            (&mut out.last_points, &span.last),
+            (&mut out.mark_points, &span.mark),
+        ] {
+            points.retain(|p| p.time_ms < lo as f64 || p.time_ms > hi as f64);
+            clip_recorded(recorded, lo, hi, points);
+        }
+    }
+    prepare_replay_price_lines(window, out)
+}
+
+/// Append the part of one recorded line that speaks for `[lo, hi]`, held at both edges.
+fn clip_recorded(recorded: &[PricePoint], lo: i64, hi: i64, out: &mut Vec<PricePoint>) {
+    let (lo, hi) = (lo as f64, hi as f64);
+    let start = recorded.partition_point(|p| p.time_ms <= lo);
+    let mut held = start.checked_sub(1).map(|i| recorded[i]);
+    if let Some(p) = held {
+        out.push(PricePoint {
+            time_ms: lo,
+            price: p.price,
+        });
+    }
+    for p in recorded[start..].iter().take_while(|p| p.time_ms <= hi) {
+        out.push(*p);
+        held = Some(*p);
+    }
+    if let Some(p) = held.filter(|p| p.time_ms < hi) {
+        out.push(PricePoint {
+            time_ms: hi,
+            price: p.price,
+        });
     }
 }
 

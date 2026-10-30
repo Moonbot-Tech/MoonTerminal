@@ -48,6 +48,7 @@ mod hotkeys;
 pub(crate) mod open_record;
 mod render;
 mod settings;
+mod stored_prices;
 mod strategy;
 #[cfg(test)]
 mod tests;
@@ -980,6 +981,7 @@ impl TradeWindowView {
         let sequence = self.sequence;
         self.state = TradeWindowState::Loading;
         self.framed_this_sequence = false;
+        self.request_stored_prices(address.exchange_key.clone(), &window, sequence, cx);
         cx.notify();
 
         // Share the core's contract valuation across every replay consumer.

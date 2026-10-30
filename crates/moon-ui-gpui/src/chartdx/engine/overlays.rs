@@ -134,6 +134,19 @@ impl ChartEngine {
         self.data.borrow_mut().set_trade_replay(series);
     }
 
+    /// Lay the price file's recorded Last and Mark lines over the replay's.
+    ///
+    /// Only the trade window calls this, on the engine it owns, beside `set_trade_replay`.
+    ///
+    /// Args:
+    ///     lines: The recorded lines, or `None` for the provider's rings alone.
+    pub(crate) fn set_stored_prices(
+        &mut self,
+        lines: Option<std::rc::Rc<moon_core::market::price_recorder::StoredPriceLines>>,
+    ) {
+        self.data.borrow_mut().set_stored_prices(lines);
+    }
+
     /// Draw a closed trade's archived order lines instead of the live order store.
     ///
     /// Only the trade window calls this, on the engine it owns; see `ChartDataState::frozen_orders`.
