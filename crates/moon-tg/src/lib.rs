@@ -6,10 +6,15 @@
 //! and the service's lifecycle. Two hosts run it, the desktop terminal and the station, each
 //! through [`TgHost`]; nothing here knows which.
 //!
-//! Translations are the terminal's own `locales/<lang>/*.yml` files, read by this crate's `i18n!`:
-//! the same files, one locale per process (`rust_i18n` keeps a single current locale for every crate).
+//! Translations are the terminal's own `locales/<lang>/*.yml` files, read by this crate's `i18n`
+//! module: the same files, one locale per process (`rust_i18n` keeps one current locale per crate).
 
-rust_i18n::i18n!("../../locales", fallback = "en");
+mod i18n;
+pub(crate) use i18n::_rust_i18n_t;
+pub use i18n::{
+    _rust_i18n_available_locales, _rust_i18n_backend, _rust_i18n_extend,
+    _rust_i18n_lookup_fallback, _rust_i18n_translate, _rust_i18n_try_translate,
+};
 
 mod control;
 mod deal_chart;
@@ -52,18 +57,18 @@ pub use units::size_text;
 /// Initialize this crate's dictionary once on a joined thread with an 8 MiB stack.
 ///
 /// The seven-locale dictionary outgrows a default spawned thread's stack, so the initializing
-/// lookup runs on this larger stack rather than the caller's. Concurrent calls wait for
+/// lookups run on this larger stack rather than the caller's. Concurrent calls wait for
 /// initialization; after it succeeds, later calls reuse the completed `Once`.
 ///
 /// Hosts call this at startup, and the crate-local [`t`] macro calls it before every lookup.
-/// A successful return means the dictionary is ready, including when the first wrapped lookup
-/// is reached deep inside a request.
+/// A successful return means every per-language dictionary is ready, including when the first
+/// wrapped lookup is reached deep inside a request.
 ///
-/// The initializing lookup uses `rust_i18n::t!` directly to avoid recursively entering [`t`].
+/// The initializing lookups use `rust_i18n::t!` directly to avoid recursively entering [`t`].
 ///
 /// # Panics
 ///
-/// Panics if the thread cannot be spawned, its lookup panics, or an earlier initialization
+/// Panics if the thread cannot be spawned, a lookup panics, or an earlier initialization
 /// attempt poisoned the `Once`.
 pub fn warm_locales() {
     static ONCE: std::sync::Once = std::sync::Once::new();
@@ -71,7 +76,9 @@ pub fn warm_locales() {
         std::thread::Builder::new()
             .stack_size(8 * 1024 * 1024)
             .spawn(|| {
-                let _ = rust_i18n::t!("common.loading");
+                for language in moon_core::config::Language::ALL {
+                    let _ = rust_i18n::t!("common.loading", locale = language.code());
+                }
             })
             .expect("locale dictionary thread")
             .join()
