@@ -520,23 +520,35 @@ impl ChartDataState {
                             candle_params_opt,
                             &mut pr.history_buffers,
                         );
+                        let price_window = (
+                            series
+                                .window
+                                .from_ms
+                                .max((epoch_ms + f64::from(history_from)).round() as i64),
+                            series
+                                .window
+                                .to_ms
+                                .min((epoch_ms + f64::from(history_to)).round() as i64),
+                        );
                         let price_read = source.read_replay_price_lines(
                             pane.core,
                             &pane.market,
-                            (
-                                series
-                                    .window
-                                    .from_ms
-                                    .max((epoch_ms + f64::from(history_from)).round() as i64),
-                                series
-                                    .window
-                                    .to_ms
-                                    .min((epoch_ms + f64::from(history_to)).round() as i64),
-                            ),
+                            price_window,
                             &mut pr.history_buffers,
                             &mut pr.history_cursor,
                         );
                         read.price_line_capacity = price_read.map_or(1, |read| read.capacity);
+                        // The rings start empty on every run; the price file is what gives a
+                        // trade older than this run its lines.
+                        if let Some(stored) = self.stored_prices.as_deref() {
+                            read.price_line_capacity = read.price_line_capacity.max(
+                                moon_core::market::overlay_stored_price_lines(
+                                    price_window,
+                                    stored,
+                                    &mut pr.history_buffers,
+                                ),
+                            );
+                        }
                         pr.replay_prices_retry_at = next_replay_price_retry(price_read, retry_now);
                         Some(read)
                     }

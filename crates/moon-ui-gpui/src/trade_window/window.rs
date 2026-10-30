@@ -467,6 +467,7 @@ fn new_view(
         // only to look at the past.
         this.panel.update(app, |panel, pcx| {
             panel.attach_trade_replay(None, pcx);
+            panel.attach_stored_prices(None, pcx);
             panel.release_market_refs(pcx);
         });
         let Host::Window {

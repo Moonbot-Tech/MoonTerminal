@@ -77,6 +77,7 @@ impl ChartDataState {
             warn_hovered: None,
             market_source: None,
             trade_replay: None,
+            stored_prices: None,
             frozen_orders: None,
             frozen_fit_range: None,
             frozen_overlay: None,
@@ -260,6 +261,30 @@ impl ChartDataState {
         series: Option<std::rc::Rc<moon_core::market::trade_replay::TradeReplaySeries>>,
     ) {
         self.trade_replay = series;
+        self.force_history_reread();
+    }
+
+    /// Lay the price file's recorded lines over the replay's, or take them away.
+    ///
+    /// They are read in the background after the series is requested, so they usually land on a
+    /// picture already drawn; the same full re-read `set_trade_replay` forces is what makes the
+    /// next frame pick them up.
+    ///
+    /// Args:
+    ///     lines: The recorded lines over the replay's window, or `None` for the rings alone.
+    pub(crate) fn set_stored_prices(
+        &mut self,
+        lines: Option<std::rc::Rc<moon_core::market::price_recorder::StoredPriceLines>>,
+    ) {
+        self.stored_prices = lines;
+        self.force_history_reread();
+    }
+
+    /// Make every pane re-read its whole history window on the next frame.
+    ///
+    /// `resident_left_rel` set to NaN is the mechanism a device loss and a source-generation
+    /// change already use; without it a pane keeps its coverage mark and never reads what arrived.
+    fn force_history_reread(&mut self) {
         let mut render = self.render.borrow_mut();
         for pane in &mut render.panes {
             pane.resident_left_rel = f32::NAN;

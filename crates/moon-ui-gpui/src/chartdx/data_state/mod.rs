@@ -135,6 +135,11 @@ pub(in crate::chartdx) struct ChartDataState {
     /// is process-wide by design.
     pub(in crate::chartdx) trade_replay:
         Option<Rc<moon_core::market::trade_replay::TradeReplaySeries>>,
+    /// The Last and Mark lines the price file recorded over the replay's window, laid over the
+    /// provider's rings on every replay read. Same ownership as `trade_replay`: only the trade
+    /// window sets it, and it arrives later than the series, from its own background read.
+    pub(in crate::chartdx) stored_prices:
+        Option<Rc<moon_core::market::price_recorder::StoredPriceLines>>,
     /// The archived order lines of the trade a frozen viewer shows, drawn INSTEAD of the session's
     /// live order store — which that viewer empties, since it holds what is open right now.
     ///

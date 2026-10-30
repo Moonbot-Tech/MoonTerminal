@@ -27,6 +27,24 @@ impl ChartPanel {
         cx.notify();
     }
 
+    /// Hand this panel the price file's recorded Last and Mark lines for the replay it draws, or
+    /// take them away.
+    ///
+    /// Used only by the trade-detail window, beside `attach_trade_replay`.
+    ///
+    /// Args:
+    ///     lines: The recorded lines over the replay's window, or `None` for the rings alone.
+    ///     cx: Panel context.
+    pub(crate) fn attach_stored_prices(
+        &mut self,
+        lines: Option<std::rc::Rc<moon_core::market::price_recorder::StoredPriceLines>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart.set_stored_prices(lines);
+        self.view_dirty = true;
+        cx.notify();
+    }
+
     /// Hand this panel the archived order lines of the trade it shows, or take them away.
     ///
     /// The window's third publication beside the replay and the trade history, reaching the engine

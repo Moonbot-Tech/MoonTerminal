@@ -42,12 +42,14 @@
 //! own file lacks and files the answer beside its own segments ([`remote`]).
 
 mod codec;
+mod lines;
 mod plan;
 pub mod remote;
 mod ring;
 mod source;
 mod store;
 
+pub use lines::{StoredPriceLines, StoredPriceSpan, load_lines};
 pub use store::{FundingRate, PriceSample, PriceSpan, read};
 
 use std::collections::HashMap;

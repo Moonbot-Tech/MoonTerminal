@@ -76,7 +76,7 @@ pub(crate) use limits::{
     market_quantity_unit, max_order_notional, min_order_floor, position_cap, session_base_rate,
     session_to_usdt, session_usdt,
 };
-pub use replay_prices::ReplayPriceLinesRead;
+pub use replay_prices::{ReplayPriceLinesRead, overlay_stored_price_lines};
 pub use ring_helpers::MarketDataSource;
 use ring_helpers::{
     cadence_phase_ms, cadence_slot, drain_price_line, moon_time_from_rel_ms, price_rows_to_points,
