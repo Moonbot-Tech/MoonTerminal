@@ -664,6 +664,29 @@ exists anywhere.
 - Point prices are stored as `f64` (the wire docs forbid a downcast on save); they narrow to the chart's `f32`
   only when building `LineTrace`.
 
+### Market-list prices around trades (`market_prices.sqlite`)
+
+The core's market list (`UpdateMarketsList`, about every two seconds) carries per market the bid,
+the ask, the mark price with a flag saying the core has one, and funding. The client keeps only the
+latest list, so a closed trade's mark exists nowhere unless it was held when the trade ran.
+`market::price_recorder` holds it, on the terminal and on an `Account` station alike (a `Reports`
+station builds its clients without the periodic list and records nothing).
+
+- **One source per exchange** (`source.rs`): the first core whose list arrives owns its exchange
+  while its lists keep coming; one silent for five seconds is replaced by the next that delivers.
+  The rows are read on the feed thread right after the list was applied, before the station's
+  event filter, from `MarketHandle::price` alone. Only markets with a mark are kept.
+- **A ring per market** (`ring.rs`): changes only, cut by time at the tape margin (at most ten
+  minutes) plus a minute. Whether lists were arriving is kept per exchange: a run of lists
+  vouches for eight seconds past its last one, and a later list starts a new run.
+- **Windows like the tape's** (`plan.rs`): entry − margin through exit + the tape's tail; a long
+  position as its two ends. Trades of one market from any core share one key, and ground a done
+  key filed is not filed again by the next trade.
+- **Segments** (`store.rs`, `codec.rs`): one row per stretch the lists vouch for, flushed every
+  30 seconds; a gap ends a segment and nothing is drawn across it. Values are `f64` as sent.
+  The file stops at 512 MB, oldest first; a station also drops what is past its tape's age.
+  `price_recorder::read` returns the unbroken stretches of one market over a time range.
+
 ## USDT valuation: two modes
 
 Report and Analytics can show quoted money in USDT in two ways. The mode is one for the whole

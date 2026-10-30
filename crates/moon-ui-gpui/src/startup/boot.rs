@@ -626,6 +626,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             // still inside a blocking long poll can no longer delay the save behind it.
             b.telegram.stop();
         });
+        // What the open trades' prices hold since the last 30-second flush; a few milliseconds.
+        if !moon_core::market::price_recorder::shutdown(std::time::Duration::from_secs(2)) {
+            log::warn!("the price recorder did not finish its last writes in time");
+        }
         async move {}
     })
     .detach();

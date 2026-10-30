@@ -10,7 +10,10 @@
 //!   `tape_recorder.sqlite`: the pair subscribed for the trade's lifetime, seeded once with the
 //!   core's chart archive; a trade open across a restart is taken up again, what the file holds
 //!   of it not recorded twice. The file keeps everything while the disk has room; short of the
-//!   reserve, the oldest tape goes — and only the tape (`storage.rs`).
+//!   reserve, the oldest tape goes — and only the tape (`storage.rs`);
+//! - with the `Account` profile, whose clients receive the market list, files bid, ask, mark and
+//!   funding around every trade into `market_prices.sqlite` (`market::price_recorder`, the
+//!   terminal's own mechanism), capped at its own ceiling and the tape's age limit.
 //!
 //! Public archive day files used for tape catch-up are transient, deleted after extraction,
 //! and share the tape's disk reserve.
@@ -222,6 +225,9 @@ fn main() -> anyhow::Result<()> {
             }
             if !moon_core::market::tape_recorder::shutdown(STOP_WAIT) {
                 log::warn!("the tape recorder did not finish its last writes in time");
+            }
+            if !moon_core::market::price_recorder::shutdown(STOP_WAIT) {
+                log::warn!("the price recorder did not finish its last writes in time");
             }
             if let Some(bot) = bot.as_mut() {
                 bot.stop();
