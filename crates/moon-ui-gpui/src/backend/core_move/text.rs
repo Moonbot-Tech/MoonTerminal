@@ -22,6 +22,7 @@ pub(super) fn step(step: &MoveStep) -> String {
         MoveStep::ReportDb {
             rows, open_rows, ..
         } => t!("core_move.step.report_db", rows = rows, open = open_rows),
+        MoveStep::ReportDbSkipped => t!("core_move.step.report_db_skipped"),
         MoveStep::OldStrategies {
             strategies,
             folders,

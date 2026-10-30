@@ -202,7 +202,7 @@ impl Plan {
             (None, None) => None,
         };
         let db_file = match (uid, request.report_db) {
-            (Some(uid), true) => Some(rebuild_db(uid, say)?),
+            (Some(uid), true) => rebuild_db(uid, say)?,
             _ => None,
         };
         let composed = archive::compose(
@@ -474,20 +474,27 @@ impl Drop for TempDb {
 }
 
 /// Rebuild core `uid`'s report database from the replica of the data root.
-fn rebuild_db(uid: u64, say: &mut dyn FnMut(MoveStep)) -> anyhow::Result<TempDb> {
+///
+/// `None`, said as [`MoveStep::ReportDbSkipped`], when this terminal holds no report row of the
+/// core — no replica file, or none of its rows: there is nothing to rebuild from, so the move goes
+/// on without a rebuilt file. The history stays in the old core's database on the old machine;
+/// refusing the move would not bring it here.
+fn rebuild_db(uid: u64, say: &mut dyn FnMut(MoveStep)) -> anyhow::Result<Option<TempDb>> {
     let replica = moon_core::config::paths::reports_db_path_no_create();
-    anyhow::ensure!(
-        replica.exists(),
-        "no report replica at {}: move without the report database",
-        replica.display()
-    );
+    if !replica.exists() {
+        say(MoveStep::ReportDbSkipped);
+        return Ok(None);
+    }
     let path = std::env::temp_dir().join(format!("moon-core-move-{}-{uid}.db", std::process::id()));
     let file = TempDb { path };
-    let summary = report_db::build(&replica, uid, &file.path)?;
+    let Some(summary) = report_db::build(&replica, uid, &file.path)? else {
+        say(MoveStep::ReportDbSkipped);
+        return Ok(None);
+    };
     say(MoveStep::ReportDb {
         rows: summary.rows,
         open_rows: summary.open_rows,
         epoch: summary.epoch,
     });
-    Ok(file)
+    Ok(Some(file))
 }

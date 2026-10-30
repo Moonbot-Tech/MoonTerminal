@@ -64,6 +64,7 @@ core_move.step.snapshot: "Settings taken from the core: %{size} MB, exchange %{e
 core_move.step.composed: "Settings archive ready for %{exchange}."
 core_move.step.composed_db: "Settings archive ready for %{exchange}, with the report database."
 core_move.step.report_db: "Report database rebuilt: %{rows} rows, %{open} open."
+core_move.step.report_db_skipped: "This terminal holds no trades of this core: there is nothing to rebuild the report database from."
 core_move.step.strategies_read: "Strategies read: %{n}, folders: %{folders}."
 core_move.step.checked: "The server can run MoonBot; the port is free."
 core_move.step.uploaded: "Settings uploaded."

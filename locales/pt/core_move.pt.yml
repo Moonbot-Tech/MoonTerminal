@@ -64,6 +64,7 @@ core_move.step.snapshot: "Configurações obtidas do núcleo: %{size} MB, corret
 core_move.step.composed: "Arquivo de configurações pronto para %{exchange}."
 core_move.step.composed_db: "Arquivo de configurações pronto para %{exchange}, com a base de relatórios."
 core_move.step.report_db: "Base de relatórios reconstruída: %{rows} linhas, %{open} abertas."
+core_move.step.report_db_skipped: "Este terminal não tem operações deste núcleo: não há de onde reconstruir a base de relatórios."
 core_move.step.strategies_read: "Estratégias lidas: %{n}, pastas: %{folders}."
 core_move.step.checked: "O servidor pode rodar o MoonBot; a porta está livre."
 core_move.step.uploaded: "Configurações enviadas."

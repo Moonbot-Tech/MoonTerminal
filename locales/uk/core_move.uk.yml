@@ -64,6 +64,7 @@ core_move.step.snapshot: "Налаштування взято з ядра: %{siz
 core_move.step.composed: "Архів налаштувань готовий для %{exchange}."
 core_move.step.composed_db: "Архів налаштувань готовий для %{exchange}, разом із базою звітів."
 core_move.step.report_db: "Базу звітів зібрано: рядків %{rows}, відкритих %{open}."
+core_move.step.report_db_skipped: "У терміналі немає угод цього ядра: збирати базу звітів нема з чого."
 core_move.step.strategies_read: "Стратегії прочитано: %{n}, тек: %{folders}."
 core_move.step.checked: "Сервер підходить для MoonBot, порт вільний."
 core_move.step.uploaded: "Налаштування завантажено."

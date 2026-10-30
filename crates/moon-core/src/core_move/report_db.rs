@@ -10,6 +10,11 @@
 //! The file is written in the layout the cores' own files show: `MainInfo`, `Channels` and
 //! `Orders` keyed by `ID`. Column names keep the replica's lowercase spelling; SQLite matches
 //! column names without regard to case.
+//!
+//! `ID` is the core's local row id, and most cores never send it: their schema leaves it out, so
+//! the replica has no `id` column at all, or — once another core added one — a column that stays
+//! empty for them. Such a core's `ID` is minted from `newRecID`, which is unique per core; the
+//! original id was never on the wire and cannot be restored.
 
 use std::path::Path;
 
@@ -39,10 +44,11 @@ pub struct CoreDbSummary {
 
 /// Rebuild core `core_uid`'s report database from the replica at `replica` into a new file `out`.
 ///
-/// Fails when `out` already exists, when the replica holds no row of that core, or when the
-/// replica lacks the `id`/`newrecid` columns a core database is keyed by. A failure removes the
-/// half-written file.
-pub fn build(replica: &Path, core_uid: u64, out: &Path) -> anyhow::Result<CoreDbSummary> {
+/// `None`, with no file written, when the replica holds no row of that core: there is nothing to
+/// carry, and the moved core starts its own database. Fails when `out` already exists or when the
+/// replica lacks the `newrecid` column every row is keyed by. A failure removes the half-written
+/// file.
+pub fn build(replica: &Path, core_uid: u64, out: &Path) -> anyhow::Result<Option<CoreDbSummary>> {
     anyhow::ensure!(
         !out.exists(),
         "{} already exists: the rebuild never overwrites a file",
@@ -56,13 +62,15 @@ pub fn build(replica: &Path, core_uid: u64, out: &Path) -> anyhow::Result<CoreDb
 }
 
 /// [`build`] without the cleanup.
-fn write(replica: &Path, core_uid: u64, out: &Path) -> anyhow::Result<CoreDbSummary> {
+fn write(replica: &Path, core_uid: u64, out: &Path) -> anyhow::Result<Option<CoreDbSummary>> {
     let src = Connection::open_with_flags(
         replica,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .with_context(|| format!("open {}", replica.display()))?;
-    let columns = replica_columns(&src)?;
+    let Some((columns, has_id)) = replica_columns(&src)? else {
+        return Ok(None);
+    };
     let uid = i64::try_from(core_uid).context("core uid out of range")?;
     let (rows, max_rec): (i64, Option<i64>) = src.query_row(
         "SELECT COUNT(*), MAX(newrecid) FROM orders_rep WHERE core_uid=?1",
@@ -70,10 +78,10 @@ fn write(replica: &Path, core_uid: u64, out: &Path) -> anyhow::Result<CoreDbSumm
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     let rows = rows.unsigned_abs();
-    anyhow::ensure!(
-        rows > 0,
-        "the replica holds no report row of core {core_uid}"
-    );
+    if rows == 0 {
+        return Ok(None);
+    }
+    let id_source = id_source(&src, has_id, uid, rows)?;
     let epoch = meta_i64(&src, &format!("rep_epoch_{core_uid}"))?
         .and_then(|e| i32::try_from(e).ok())
         .filter(|e| *e != 0);
@@ -108,7 +116,7 @@ fn write(replica: &Path, core_uid: u64, out: &Path) -> anyhow::Result<CoreDbSumm
     let tx = db.transaction()?;
     tx.execute(
         &format!(
-            "INSERT INTO Orders ({names}) SELECT {names} FROM src.orders_rep \
+            "INSERT INTO Orders (ID, {names}) SELECT {id_source}, {names} FROM src.orders_rep \
              WHERE core_uid=?1 ORDER BY newrecid"
         ),
         [uid],
@@ -140,44 +148,74 @@ fn write(replica: &Path, core_uid: u64, out: &Path) -> anyhow::Result<CoreDbSumm
         "wrote {written} of {rows} rows of core {core_uid}"
     );
     db.close().map_err(|(_, e)| e)?;
-    Ok(CoreDbSummary {
+    Ok(Some(CoreDbSummary {
         rows,
         open_rows,
         epoch,
         high_water,
-    })
+    }))
 }
 
-/// The replica's core columns with their declared types, in table order.
-fn replica_columns(src: &Connection) -> anyhow::Result<Vec<(String, String)>> {
+/// The replica's core columns with their declared types, in table order, without `id` — the
+/// rebuild writes `ID` itself, from [`id_source`] — and whether the replica has an `id` column.
+/// `None` when the replica has no `orders_rep` table: the writer never created one, so it holds no
+/// row of any core.
+fn replica_columns(src: &Connection) -> anyhow::Result<Option<(Vec<(String, String)>, bool)>> {
     let mut stmt = src.prepare("PRAGMA table_info(orders_rep)")?;
     let columns: Vec<(String, String)> = stmt
         .query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
         .collect::<Result<_, _>>()?;
-    anyhow::ensure!(!columns.is_empty(), "the replica has no orders_rep table");
+    if columns.is_empty() {
+        return Ok(None);
+    }
     let has = |name: &str| columns.iter().any(|(c, _)| c.eq_ignore_ascii_case(name));
     anyhow::ensure!(
-        has("id") && has("newrecid"),
-        "the replica lacks the id/newrecid columns a core database is keyed by"
+        has("newrecid"),
+        "the replica lacks the newrecid column its rows are keyed by"
     );
-    Ok(columns
+    let has_id = has("id");
+    let columns = columns
         .into_iter()
-        .filter(|(name, _)| !LOCAL_COLUMNS.iter().any(|l| l.eq_ignore_ascii_case(name)))
-        .collect())
+        .filter(|(name, _)| {
+            !name.eq_ignore_ascii_case("id")
+                && !LOCAL_COLUMNS.iter().any(|l| l.eq_ignore_ascii_case(name))
+        })
+        .collect();
+    Ok(Some((columns, has_id)))
 }
 
-/// `CREATE TABLE Orders`: `id` becomes the integer primary key, every other column keeps the type
-/// the replica declared.
+/// The replica column `Orders.ID` is filled from for core `uid`, which holds `rows` rows.
+///
+/// The core's own `id` only when the replica has the column and this core filled it on every row
+/// with a distinct integer — anything else would not fit `ID INTEGER PRIMARY KEY`; otherwise
+/// `newrecid`, for every row. The two are never mixed: a core that began sending `ID` after an
+/// update fills it only on its newer rows, and those ids can equal the `newRecID` of an older row.
+fn id_source(src: &Connection, has_id: bool, uid: i64, rows: u64) -> anyhow::Result<&'static str> {
+    if !has_id {
+        return Ok("newrecid");
+    }
+    let distinct: i64 = src.query_row(
+        "SELECT COUNT(DISTINCT CASE WHEN typeof(id)='integer' THEN id END) \
+         FROM orders_rep WHERE core_uid=?1",
+        [uid],
+        |r| r.get(0),
+    )?;
+    Ok(if distinct.unsigned_abs() == rows {
+        "id"
+    } else {
+        "newrecid"
+    })
+}
+
+/// `CREATE TABLE Orders`: `ID` first as the integer primary key, as in the cores' own files, then
+/// every replica column with the type the replica declared.
 fn orders_ddl(columns: &[(String, String)]) -> String {
-    let body = columns
-        .iter()
-        .map(|(name, kind)| {
-            if name.eq_ignore_ascii_case("id") {
-                "ID INTEGER PRIMARY KEY".to_owned()
-            } else {
-                format!("{} {kind}", quote(name)).trim_end().to_owned()
-            }
-        })
+    let body = std::iter::once("ID INTEGER PRIMARY KEY".to_owned())
+        .chain(
+            columns
+                .iter()
+                .map(|(name, kind)| format!("{} {kind}", quote(name)).trim_end().to_owned()),
+        )
         .collect::<Vec<_>>()
         .join(", ");
     format!("CREATE TABLE Orders ({body})")

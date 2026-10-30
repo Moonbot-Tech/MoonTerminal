@@ -64,6 +64,7 @@ core_move.step.snapshot: "Đã lấy cài đặt từ lõi: %{size} MB, sàn %{e
 core_move.step.composed: "Kho cài đặt đã sẵn sàng cho %{exchange}."
 core_move.step.composed_db: "Kho cài đặt đã sẵn sàng cho %{exchange}, kèm cơ sở dữ liệu báo cáo."
 core_move.step.report_db: "Đã dựng lại cơ sở dữ liệu báo cáo: %{rows} dòng, %{open} đang mở."
+core_move.step.report_db_skipped: "Terminal này không có giao dịch nào của lõi này: không có gì để dựng lại cơ sở dữ liệu báo cáo."
 core_move.step.strategies_read: "Đã đọc chiến lược: %{n}, thư mục: %{folders}."
 core_move.step.checked: "Máy chủ chạy được MoonBot; cổng còn trống."
 core_move.step.uploaded: "Đã tải lên cài đặt."
