@@ -384,13 +384,13 @@ fn merge_dedups_and_read_filters() {
     let cache = KlineCache::open(path.clone()).expect("open cache");
     let day = (now_unix_ms() / DAY_MS) * DAY_MS;
     // Two overlapping writes: the second one updates the candle at t=day.
-    cache.merge(
+    let _ = cache.merge(
         "7:0".into(),
         "BTCUSDT".into(),
         1,
         vec![candle(day as f64, 5.0), candle((day + 60_000) as f64, 6.0)],
     );
-    cache.merge(
+    let _ = cache.merge(
         "7:0".into(),
         "BTCUSDT".into(),
         1,
@@ -504,77 +504,40 @@ fn the_merge_trace_stays_below_the_default_filter() {
     );
 }
 
-/// The helpers are worth nothing unless both merge arms go through them, and a test that exercises
-/// them in isolation stays green while the call sites are deleted.
-///
-/// Positions rather than a fixed window: slicing a byte window out of a file that holds Cyrillic
-/// can land mid-character and panic, and a window wide enough to be robust eventually reaches an
-/// unrelated macro. Comparing the offsets of the nearest preceding items says the same thing
-/// exactly, and `find`/`rfind` always return char boundaries.
+/// Coalesced and direct batch writes must share the same trace and commit helpers.
 #[test]
-fn both_merge_arms_trace_and_announce_through_the_helpers() {
+fn both_write_paths_share_batch_trace_and_announce_helpers() {
     let source = include_str!("../kline_cache.rs");
-
-    for message in [
-        "kline cache: first rows {exchange}/{market}/kind{kind_min}: {}",
-        "kline cache: first rows {}/{}/kind{}: {}",
-    ] {
-        let at = source
-            .find(message)
-            .unwrap_or_else(|| panic!("the merge trace `{message}` is gone"));
-        let head = &source[..at];
-        let emit = head
-            .rfind("log::log!")
-            .unwrap_or_else(|| panic!("`{message}` must be emitted through log::log!"));
-        for fixed in ["log::info!", "log::warn!", "log::error!"] {
-            if let Some(other) = head.rfind(fixed) {
-                assert!(
-                    other < emit,
-                    "`{message}` is emitted with {fixed}, which the default filter admits"
-                );
-            }
+    let message = "kline cache: first rows {}/{}/kind{}: {}";
+    let at = source
+        .find(message)
+        .unwrap_or_else(|| panic!("the merge trace `{message}` is gone"));
+    let head = &source[..at];
+    let emit = head
+        .rfind("log::log!")
+        .unwrap_or_else(|| panic!("`{message}` must be emitted through log::log!"));
+    for fixed in ["log::info!", "log::warn!", "log::error!"] {
+        if let Some(other) = head.rfind(fixed) {
+            assert!(
+                other < emit,
+                "`{message}` is emitted with {fixed}, which the default filter admits"
+            );
         }
-        let level = head
-            .rfind("MERGE_TRACE_LEVEL")
-            .expect("the level constant must reach this emit");
-        assert!(
-            level > emit,
-            "`{message}` must take its level from the constant, not a literal"
-        );
     }
+    let level = head
+        .rfind("MERGE_TRACE_LEVEL")
+        .expect("the level constant must reach this emit");
+    assert!(level > emit, "the trace must use MERGE_TRACE_LEVEL");
+    assert_eq!(source.matches("write_batch(&conn").count(), 2);
+    assert_eq!(source.matches("trace_first_merge(").count(), 2);
+    assert_eq!(source.matches("log_active_once(").count(), 2);
 
-    // Definition plus both call sites, for each helper.
-    assert_eq!(
-        source.matches("trace_first_merge(").count(),
-        3,
-        "both arms must bound the trace to the first merge per key"
-    );
-    assert_eq!(
-        source.matches("log_active_once(").count(),
-        3,
-        "both arms must announce through the one-shot helper"
-    );
-
-    // The batch arm announces inside the commit's Ok arm, the single arm inside `if wrote`.
     let batch_commit = source
         .find("match tx.commit()")
-        .expect("the batch arm gates its announcement on the commit");
+        .expect("the batch writer gates its announcement on the commit");
     assert!(
         source[batch_commit..].find("log_active_once(").is_some(),
         "the batch announcement must follow its commit"
-    );
-    let single_ok = source
-        .find("Ok(wrote) => {")
-        .expect("the single arm gates on what upsert_one reported");
-    let wrote_gate = source[single_ok..]
-        .find("if wrote {")
-        .expect("the single arm must check that something was written");
-    let single_announce = source[single_ok..]
-        .find("log_active_once(")
-        .expect("the single arm announces");
-    assert!(
-        single_announce > wrote_gate,
-        "an empty merge must not announce the cache as active"
     );
 }
 
@@ -593,7 +556,7 @@ fn kline_expired_read_runs_no_query() {
         1,
     )
     .expect("seed candle");
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(OP_QUEUE_CAP);
     let pruned = Arc::new((Mutex::new(false), Condvar::new()));
     let worker_pruned = Arc::clone(&pruned);
     let worker = std::thread::spawn(move || {
@@ -725,6 +688,91 @@ fn kline_merge_equivalence() {
     drop(cache);
 }
 
+/// Coalescing must preserve the producer order on both sides of a direct background batch.
+#[test]
+fn direct_batches_and_chart_merges_keep_fifo_order() {
+    for direct_first in [true, false] {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("schema");
+        let (tx, rx) = mpsc::sync_channel(OP_QUEUE_CAP);
+        let pruned = Arc::new((Mutex::new(false), Condvar::new()));
+        let worker_pruned = Arc::clone(&pruned);
+        let worker = std::thread::spawn(move || run(conn, rx, worker_pruned));
+        let cache = KlineCache { tx, pruned };
+        let day = now_unix_ms() / DAY_MS * DAY_MS;
+        let direct = || MergeItem {
+            exchange: "synx".into(),
+            market: "COIN_A".into(),
+            kind_min: 1,
+            rows: vec![candle(day as f64, 10.0)],
+        };
+        let chart = |price: f32, offset: i64| {
+            let _ = cache.merge(
+                "synx".into(),
+                "COIN_A".into(),
+                1,
+                vec![candle((day + offset) as f64, price)],
+            );
+        };
+        if direct_first {
+            chart(20.0, 0);
+            cache.merge_batch(vec![direct()]);
+            chart(30.0, 60_000);
+        } else {
+            chart(30.0, 60_000);
+            cache.merge_batch(vec![direct()]);
+            chart(20.0, 0);
+        }
+        let rows = cache
+            .read_range("synx", "COIN_A", 1, day, day + 60_000)
+            .expect("ordered read");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].open, if direct_first { 10.0 } else { 20.0 });
+        assert_eq!(rows[1].open, 30.0);
+        drop(cache);
+        worker.join().expect("worker shutdown");
+    }
+}
+
+/// A full queue must return chart rows to their cursor instead of dropping or reordering them.
+#[test]
+fn full_queue_merge_returns_rows_for_chart_retry() {
+    let (cache, _ops) = KlineCache::stalled_for_tests();
+    let day = now_unix_ms() / DAY_MS * DAY_MS;
+    for index in 0..OP_QUEUE_CAP {
+        let _ = cache.merge(
+            "synx".into(),
+            "COIN_A".into(),
+            1,
+            vec![candle(day as f64, 10.0 + index as f32)],
+        );
+    }
+    let expected = candle(day as f64, 99.0);
+    let rejected = cache
+        .merge("synx".into(), "COIN_A".into(), 1, vec![expected])
+        .expect_err("the full queue must return its rows");
+    assert_eq!(rejected, vec![expected]);
+}
+
+/// A full queue must fail a synchronous read instead of blocking beyond its response deadline.
+#[test]
+fn full_queue_read_returns_without_waiting_for_recv_timeout() {
+    let (cache, _ops) = KlineCache::stalled_for_tests();
+    let day = now_unix_ms() / DAY_MS * DAY_MS;
+    for index in 0..OP_QUEUE_CAP {
+        let _ = cache.merge(
+            "synx".into(),
+            "COIN_A".into(),
+            1,
+            vec![candle(day as f64, 10.0 + index as f32)],
+        );
+    }
+    let started = std::time::Instant::now();
+    let rows = cache.read_range("synx", "COIN_A", 1, day, day);
+    assert!(rows.is_none());
+    assert!(started.elapsed() < Duration::from_millis(200));
+}
+
 /// Starting the reply timeout before startup retention completes loses a valid first-read answer.
 #[test]
 fn kline_read_during_prune_waits_for_rows() {
@@ -780,4 +828,37 @@ fn prune_flag_guard_releases_on_panic() {
     });
     assert!(result.is_err());
     assert!(*pruned.0.lock().expect("startup flag"));
+}
+
+/// Measure queued candle ownership when chart producers outrun a stalled cache worker.
+#[test]
+#[ignore = "synthetic kline queue ownership probe"]
+fn kline_merge_backlog_scale_probe() {
+    let (cache, ops) = KlineCache::stalled_for_tests();
+    let day = now_unix_ms() / DAY_MS * DAY_MS;
+    let rows: Vec<_> = (0..500)
+        .map(|index| candle((day + index * 60_000) as f64, 10.0))
+        .collect();
+    let mut sends = Vec::new();
+    for _ in 0..1_000 {
+        let start = std::time::Instant::now();
+        let _ = cache.merge("synx".into(), "COIN_A".into(), 1, rows.clone());
+        sends.push(start.elapsed().as_secs_f64() * 1_000.0);
+    }
+    let queued: Vec<_> = ops.try_iter().collect();
+    let queued_rows: usize = queued
+        .iter()
+        .map(|op| match op {
+            Op::Merge { rows, .. } => rows.len(),
+            Op::MergeBatch { items, .. } => items.iter().map(|item| item.rows.len()).sum(),
+            _ => 0,
+        })
+        .sum();
+    sends.sort_by(f64::total_cmp);
+    println!(
+        "[bench] kline_merge_backlog submissions=1000 unique_rows=500 queued_ops={} queued_rows={} send_median_ms={:.6}",
+        queued.len(),
+        queued_rows,
+        sends[500]
+    );
 }

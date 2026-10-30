@@ -145,6 +145,8 @@ pub struct ChartHistoryCursor {
     /// When the O(N) internal-gap scan last ran; it runs at most every 30 s whether or not a
     /// warning fired.
     pub(super) last_gap_scan: Option<Instant>,
+    /// A chart merge rejected by a full cache queue, retried and coalesced on a later frame.
+    pub(super) cache_write_retry: Option<(String, u32, Vec<ChartCandle>)>,
     /// Equivalent signature for rows of the panel's native kind.
     ///
     /// These rows are produced by native backfill attempts when the core's effective kind is finer

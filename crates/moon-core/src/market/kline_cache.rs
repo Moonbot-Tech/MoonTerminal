@@ -43,7 +43,8 @@
 //! Database open and schema creation run synchronously. Startup retention and queued reads
 //! and writes run on a dedicated worker because `Connection` is not `Sync`. Retention runs
 //! before the first queued operation. Synchronous reads wait for startup retention before
-//! starting their reply timeout; expired queued reads then skip the query. Writes stay nonblocking.
+//! starting their reply timeout; expired queued reads then skip the query. Chart merges coalesce
+//! without blocking, while background batch writers use bounded backpressure instead of dropping rows.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -167,6 +168,9 @@ impl PendingPrefixRead {
     }
 }
 
+/// Bounded operation queue; chart merges additionally coalesce outside it.
+const OP_QUEUE_CAP: usize = 64;
+
 /// Queued cache operations; a synchronous read carries its caller's useful-response deadline.
 pub(crate) enum Op {
     Merge {
@@ -178,7 +182,7 @@ pub(crate) enum Op {
     MergeBatch {
         items: Vec<MergeItem>,
         /// Signalled after the transaction settles, so a producer can wait for one chunk before
-        /// queueing the next. `None` leaves the write fully nonblocking.
+        /// queueing the next. `None` means backpressure without a completion acknowledgement.
         done: Option<mpsc::Sender<()>>,
     },
     Read {
@@ -232,7 +236,7 @@ impl Drop for PrunedOnDrop {
 /// Cheaply cloneable cache handle that sends queued reads and writes to the database worker.
 #[derive(Clone)]
 pub struct KlineCache {
-    tx: mpsc::Sender<Op>,
+    tx: mpsc::SyncSender<Op>,
     /// Shared startup completion, so the first read's timeout excludes retention work.
     pruned: Arc<(Mutex<bool>, Condvar)>,
 }
@@ -256,11 +260,10 @@ impl KlineCache {
             log::warn!("kline cache schema failed {}: {e}", path.display());
             return None;
         }
-        // This one connection also serves `Op::Merge`/`Op::MergeBatch` on the worker thread
-        // below, so a hook installed here captures background WRITE timings too, mixed in with
-        // the `Op::Read` ones — unlike every other call site, which only ever opens a reader.
+        // This one connection also serves `Op::Merge`/`Op::MergeBatch` on the worker thread below,
+        // so a hook installed here captures background WRITE timings too, mixed in with reads.
         crate::db::trace::install_on(&conn);
-        let (tx, rx) = mpsc::channel::<Op>();
+        let (tx, rx) = mpsc::sync_channel::<Op>(OP_QUEUE_CAP);
         let pruned = Arc::new((Mutex::new(false), Condvar::new()));
         let worker_pruned = Arc::clone(&pruned);
         #[cfg(test)]
@@ -280,42 +283,50 @@ impl KlineCache {
     /// A handle whose queue is handed back instead of served: nothing it is asked ever answers.
     #[cfg(test)]
     pub(crate) fn stalled_for_tests() -> (Self, mpsc::Receiver<Op>) {
-        let (tx, rx) = mpsc::channel::<Op>();
+        let (tx, rx) = mpsc::sync_channel::<Op>(OP_QUEUE_CAP);
         let pruned = Arc::new((Mutex::new(true), Condvar::new()));
         (Self { tx, pruned }, rx)
     }
 
     /// Queues one chart's whole prefix read and returns at once.
     ///
-    /// `None` only when the worker is gone and the request could not be queued.
+    /// `None` when the bounded queue is full or the worker is gone. The caller retains its previous
+    /// rows and retries later, so a busy writer never turns into a blocking frame read.
     pub fn request_prefix(&self, req: PrefixReadRequest) -> Option<PendingPrefixRead> {
         let (reply, rx) = mpsc::channel();
-        self.tx.send(Op::ReadPrefix { req, reply }).ok()?;
+        self.tx.try_send(Op::ReadPrefix { req, reply }).ok()?;
         Some(PendingPrefixRead { rx })
     }
 
-    /// Enqueues a nonblocking row merge.
-    ///
-    /// Incoming rows override stored rows so newer server OHLC wins. Empty input is not
-    /// queued; the worker skips rows with a non-finite or non-positive timestamp, or a
-    /// `high` value that is not positive.
-    pub fn merge(&self, exchange: String, market: String, kind_min: u32, rows: Vec<ChartCandle>) {
+    /// Queue one chart merge without blocking, returning its rows to the caller for retry when full.
+    pub fn merge(
+        &self,
+        exchange: String,
+        market: String,
+        kind_min: u32,
+        rows: Vec<ChartCandle>,
+    ) -> Result<(), Vec<ChartCandle>> {
         if rows.is_empty() {
-            return;
+            return Ok(());
         }
-        let _ = self.tx.send(Op::Merge {
-            exchange,
-            market,
-            kind_min,
-            rows,
-        });
+        self.tx
+            .try_send(Op::Merge {
+                exchange,
+                market,
+                kind_min,
+                rows,
+            })
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(Op::Merge { rows, .. })
+                | mpsc::TrySendError::Disconnected(Op::Merge { rows, .. }) => rows,
+                _ => unreachable!("merge error must contain merge rows"),
+            })
     }
 
     /// Enqueues rows for MANY exchange/market/kind groups in one transaction.
     ///
-    /// Empty batches are not queued. For each queued item, the worker writes only rows that
-    /// pass the same timestamp and `high` validation as `merge`; no database write occurs
-    /// when none remain. This call is nonblocking.
+    /// Empty batches are not queued. For BACKGROUND writers only: a full bounded queue blocks the
+    /// producer without dropping any item.
     pub fn merge_batch(&self, items: Vec<MergeItem>) {
         if items.is_empty() {
             return;
@@ -325,12 +336,9 @@ impl KlineCache {
 
     /// Same as [`Self::merge_batch`], but returns only once the worker has settled the transaction.
     ///
-    /// Reads and writes share ONE worker thread and ONE FIFO queue, and a read gives up after
-    /// [`READ_TIMEOUT`]. A producer that queues many chunks back to back therefore parks every
-    /// chart read behind ALL of them — the recorder's first pass after a restart covers thousands
-    /// of markets at once, which is exactly when charts are being opened. Waiting per chunk keeps
-    /// at most one transaction ahead of any read, and gives the unbounded queue the backpressure it
-    /// otherwise has none of.
+    /// Reads and writes share ONE worker thread and ONE bounded FIFO queue, and a read gives up
+    /// after [`READ_TIMEOUT`]. Waiting per chunk keeps at most one recorder transaction ahead of a
+    /// chart read and applies backpressure during the cold-start pass over thousands of markets.
     ///
     /// For BACKGROUND writers only: it blocks the caller until the write lands.
     pub fn merge_batch_blocking(&self, items: Vec<MergeItem>) {
@@ -357,12 +365,8 @@ impl KlineCache {
     /// Waits, unbounded, for the worker's one-time startup retention (work `open` used to do
     /// before returning), then at most [`READ_TIMEOUT`] for the reply.
     ///
-    /// `None` means the worker was gone or the answer did not arrive in time, as opposed to
-    /// `Some(vec![])`, which is an authoritative "the cache holds nothing there".
-    ///
-    /// The distinction is load-bearing for the caller, which CACHES this result and only rereads
-    /// when the timeframe or left edge changes. Folding a timeout into an empty vector let one busy
-    /// moment stick as an empty history prefix for as long as the user did not pan.
+    /// `None` means the worker was gone, the bounded queue was full, or the answer did not arrive
+    /// in time, as opposed to `Some(vec![])`, which is an authoritative empty range.
     pub fn read_range(
         &self,
         exchange: &str,
@@ -384,7 +388,7 @@ impl KlineCache {
         let (reply, rx) = mpsc::channel();
         if self
             .tx
-            .send(Op::Read {
+            .try_send(Op::Read {
                 exchange: exchange.to_string(),
                 market: market.to_string(),
                 kind_min,
@@ -529,7 +533,67 @@ fn trace_first_merge(
 /// Exchange, market and kind identifying one cache key for the trace.
 type TraceKey<'a> = (&'a str, &'a str, u32);
 
-/// Publishes startup retention completion even on unwind, then serves FIFO and skips expired reads.
+/// Write one batch and preserve the existing per-item failure and trace behavior.
+fn write_batch(
+    conn: &rusqlite::Connection,
+    items: Vec<MergeItem>,
+    announced: &mut bool,
+    seen: &mut std::collections::HashSet<(String, String, u32)>,
+) {
+    if items.is_empty() {
+        return;
+    }
+    let now = now_unix_ms();
+    let tx = match conn.unchecked_transaction() {
+        Ok(tx) => tx,
+        Err(e) => {
+            log::warn!("kline cache batch tx failed ({} items): {e}", items.len());
+            return;
+        }
+    };
+    // An item failure does not abort the SQLite transaction. Log it, write the remaining items,
+    // then commit the entire cycle once.
+    let enabled = log::log_enabled!(MERGE_TRACE_LEVEL);
+    let mut merged_any = false;
+    for it in &items {
+        match upsert_one(&tx, &it.exchange, &it.market, it.kind_min, &it.rows, now) {
+            Ok(wrote) => {
+                merged_any |= wrote;
+                let key = (it.exchange.as_str(), it.market.as_str(), it.kind_min);
+                if wrote && trace_first_merge(seen, key, enabled) {
+                    log::log!(
+                        MERGE_TRACE_LEVEL,
+                        "kline cache: first rows {}/{}/kind{}: {}",
+                        it.exchange,
+                        it.market,
+                        it.kind_min,
+                        it.rows.len()
+                    );
+                }
+            }
+            Err(e) => log::warn!(
+                "kline cache batch merge {}/{}/{}: {e}",
+                it.exchange,
+                it.market,
+                it.kind_min
+            ),
+        }
+    }
+    // Announce only after a successful commit, and only when at least one item stored rows.
+    match tx.commit() {
+        Ok(()) => {
+            if merged_any {
+                let _ = log_active_once(announced);
+            }
+        }
+        Err(e) => log::warn!(
+            "kline cache batch commit failed ({} items): {e}",
+            items.len()
+        ),
+    }
+}
+
+/// Publishes startup retention completion and serves the bounded FIFO.
 fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, pruned: Arc<(Mutex<bool>, Condvar)>) {
     let pruned = PrunedOnDrop::new(pruned);
     #[cfg(test)]
@@ -540,12 +604,6 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, pruned: Arc<(Mutex<bo
     }
     prune_expired(&conn);
     drop(pruned);
-    // One INFO line per writer says data is reaching the cache; the per-key detail is a trace whose
-    // deduplication set stays EMPTY unless that trace is on.
-    //
-    // The batch arm marks keys traced inside the loop, before its commit: a rolled-back cycle
-    // therefore loses those "first rows" lines rather than repeating them. Acceptable for a
-    // debug-only breadcrumb on a path that already warns about the failed commit.
     let mut announced = false;
     let mut seen: std::collections::HashSet<(String, String, u32)> =
         std::collections::HashSet::new();
@@ -557,94 +615,18 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, pruned: Arc<(Mutex<bo
                 kind_min,
                 rows,
             } => {
-                let now = now_unix_ms();
-                let res = conn.unchecked_transaction().and_then(|tx| {
-                    let wrote = upsert_one(&tx, &exchange, &market, kind_min, &rows, now)?;
-                    tx.commit()?;
-                    Ok(wrote)
-                });
-                match res {
-                    Err(e) => {
-                        log::warn!("kline cache merge failed {exchange}/{market}/{kind_min}: {e}");
-                    }
-                    // Committed AND non-empty. A merge whose rows were all filtered out stored
-                    // nothing, and announcing it would burn the one-shot latch on a write that
-                    // never happened.
-                    Ok(wrote) => {
-                        if wrote {
-                            let _ = log_active_once(&mut announced);
-                            let enabled = log::log_enabled!(MERGE_TRACE_LEVEL);
-                            let key = (exchange.as_str(), market.as_str(), kind_min);
-                            if trace_first_merge(&mut seen, key, enabled) {
-                                log::log!(
-                                    MERGE_TRACE_LEVEL,
-                                    "kline cache: first rows {exchange}/{market}/kind{kind_min}: {}",
-                                    rows.len()
-                                );
-                            }
-                        }
-                    }
-                }
+                let item = MergeItem {
+                    exchange,
+                    market,
+                    kind_min,
+                    rows,
+                };
+                write_batch(&conn, vec![item], &mut announced, &mut seen);
             }
             Op::MergeBatch { items, done } => {
-                // Released however this arm ends, including the early `continue` below, so a
-                // blocking producer is never parked by a transaction that failed to open.
+                // Released however this arm ends, so a blocking producer is never parked.
                 let _settled = done.map(SettledOnDrop);
-                let now = now_unix_ms();
-                let tx = match conn.unchecked_transaction() {
-                    Ok(tx) => tx,
-                    Err(e) => {
-                        log::warn!("kline cache batch tx failed ({} items): {e}", items.len());
-                        continue;
-                    }
-                };
-                // An item failure does not abort the SQLite transaction. Log it, write the
-                // remaining items, then commit the entire cycle once.
-                let enabled = log::log_enabled!(MERGE_TRACE_LEVEL);
-                let mut merged_any = false;
-                for it in &items {
-                    match upsert_one(&tx, &it.exchange, &it.market, it.kind_min, &it.rows, now) {
-                        Ok(wrote) => {
-                            merged_any |= wrote;
-                            let key = (it.exchange.as_str(), it.market.as_str(), it.kind_min);
-                            if wrote && trace_first_merge(&mut seen, key, enabled) {
-                                log::log!(
-                                    MERGE_TRACE_LEVEL,
-                                    "kline cache: first rows {}/{}/kind{}: {}",
-                                    it.exchange,
-                                    it.market,
-                                    it.kind_min,
-                                    it.rows.len()
-                                );
-                            }
-                        }
-                        Err(e) => log::warn!(
-                            "kline cache batch merge {}/{}/{}: {e}",
-                            it.exchange,
-                            it.market,
-                            it.kind_min
-                        ),
-                    }
-                }
-                // Announced only AFTER the commit succeeds. Announcing beside the loop would claim
-                // a write for a cycle a failed commit rolled back — and, because the latch is
-                // one-shot, would then stay silent for the first cycle that really landed.
-                //
-                // `merged_any` follows the items that reported a write. An item that errors partway
-                // through its days has already written the earlier ones into this transaction and
-                // is not counted, so a cycle can commit rows without announcing; the latch is only
-                // ever SET on success, so the next clean cycle says it instead.
-                match tx.commit() {
-                    Ok(()) => {
-                        if merged_any {
-                            let _ = log_active_once(&mut announced);
-                        }
-                    }
-                    Err(e) => log::warn!(
-                        "kline cache batch commit failed ({} items): {e}",
-                        items.len()
-                    ),
-                }
+                write_batch(&conn, items, &mut announced, &mut seen);
             }
             Op::Read {
                 exchange,

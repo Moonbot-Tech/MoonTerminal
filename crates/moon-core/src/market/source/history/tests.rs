@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use super::*;
+use crate::market::source::CandleSubState;
 
 /// Liquidations share the pane's cross ring with the trades: a ring sized to the trades alone lost
 /// one trade per liquidation, and a cascade's worth of them opened a gap before the oldest cross.
@@ -409,4 +410,152 @@ fn pans_inside_the_retained_span_never_rebuild_the_series() {
         "one pan past the floor rebuilds once"
     );
     assert_eq!(next, floor - 1 - span);
+}
+
+/// Time provider-wide stale-subscription discovery against the registry's current lookup.
+#[test]
+#[ignore = "synthetic candle registry timing probe"]
+fn candle_registry_scale_probe() {
+    fn former_stale(
+        subs: &HashMap<(CoreId, String), CandleSubState>,
+        provider: CoreId,
+        now: Instant,
+    ) -> Vec<String> {
+        subs.iter()
+            .filter(|((p, _), state)| {
+                *p == provider
+                    && state.subscribed
+                    && now.duration_since(state.last_want) > Duration::from_secs(60)
+            })
+            .map(|((_, market), _)| market.clone())
+            .collect()
+    }
+
+    let now = Instant::now();
+    let mut subs = HashMap::new();
+    for index in 0..5_500 {
+        subs.insert(
+            (1, format!("COIN_{index:04}USDT")),
+            CandleSubState {
+                kind_min: 1,
+                last_want: now,
+                subscribed: true,
+            },
+        );
+    }
+    let mut current_subs: HashMap<CoreId, HashMap<String, CandleSubState>> = HashMap::new();
+    current_subs.insert(
+        1,
+        subs.iter()
+            .map(|((_, market), state)| {
+                (
+                    market.clone(),
+                    CandleSubState {
+                        kind_min: state.kind_min,
+                        last_want: state.last_want,
+                        subscribed: state.subscribed,
+                    },
+                )
+            })
+            .collect(),
+    );
+    let mut former = Vec::new();
+    let mut current = Vec::new();
+    for _ in 0..7 {
+        let start = Instant::now();
+        std::hint::black_box(former_stale(&subs, 1, now));
+        former.push(start.elapsed().as_secs_f64() * 1_000.0);
+        let start = Instant::now();
+        std::hint::black_box(
+            current_subs
+                .get(&1)
+                .and_then(|markets| markets.get("COIN_0000USDT")),
+        );
+        current.push(start.elapsed().as_secs_f64() * 1_000.0);
+    }
+    former.sort_by(f64::total_cmp);
+    current.sort_by(f64::total_cmp);
+    println!(
+        "[bench] candle_registry markets=5500 before_ms={:.6} after_ms={:.6}",
+        former[3], current[3]
+    );
+}
+
+/// Chart release bounds the deep-request registry instead of retaining every market forever.
+#[test]
+fn deep_request_entries_expire_and_release_with_their_market() {
+    let now = Instant::now();
+    let key = (1, "COIN_A".to_string(), 1);
+    let mut gate = HashMap::from([(key.clone(), now)]);
+    assert!(!deep_request_open(&mut gate, key.clone(), now));
+    assert!(deep_request_open(
+        &mut gate,
+        key.clone(),
+        now + Duration::from_secs(30)
+    ));
+    forget_deep_requests(&mut gate, 1, "COIN_A");
+    assert!(gate.is_empty());
+}
+
+/// A rejected chart merge keeps every row and coalesces the next response by bucket.
+#[test]
+fn cache_write_retry_coalesces_without_losing_rows() {
+    let (cache, _ops) = crate::market::kline_cache::KlineCache::stalled_for_tests();
+    let row = |time, price| ChartCandle {
+        t_open_ms: time,
+        open: price,
+        high: price,
+        low: price,
+        close: price,
+        volume: 1.0,
+        quote_volume: price,
+    };
+    // Fill the queue with one-row chart merges.
+    for index in 0..64 {
+        let _ = cache.merge(
+            "synx".into(),
+            "COIN_A".into(),
+            1,
+            vec![row(index as f64, 10.0)],
+        );
+    }
+    let mut cursor = ChartHistoryCursor::default();
+    merge_cache_write(
+        &mut cursor,
+        &cache,
+        "synx",
+        "COIN_A",
+        1,
+        vec![row(0.0, 20.0)],
+    );
+    merge_cache_write(
+        &mut cursor,
+        &cache,
+        "synx",
+        "COIN_A",
+        1,
+        vec![row(0.0, 30.0), row(60_000.0, 40.0)],
+    );
+    let (_, _, rows) = cursor.cache_write_retry.expect("retry rows");
+    assert_eq!(rows, vec![row(0.0, 30.0), row(60_000.0, 40.0)]);
+}
+
+/// Measure retained request keys before and after catalog-sized chart release.
+#[test]
+#[ignore = "synthetic deep-request lifecycle probe"]
+fn deep_request_lifecycle_scale_probe() {
+    let now = Instant::now();
+    let mut gate = HashMap::new();
+    for index in 0..5_500 {
+        gate.insert((1, format!("COIN_{index:04}"), 1), now);
+    }
+    let before = gate.len();
+    for index in 0..5_500 {
+        forget_deep_requests(&mut gate, 1, &format!("COIN_{index:04}"));
+    }
+    println!(
+        "[bench] deep_request_lifecycle before_entries={before} after_entries={}",
+        gate.len()
+    );
+    assert!(gate.is_empty());
 }

@@ -335,6 +335,16 @@ pub(super) const REP_INDEXES: &[RepIndex] = &[
         key_sql: "core_uid, coin COLLATE NOCASE, buydate",
         where_sql: Some("buydate > 0"),
     },
+    RepIndex::plain(
+        "idx_rep_coin_close_record",
+        &["coin", "closedate", "newrecid"],
+        "coin COLLATE NOCASE, closedate, COALESCE(NULLIF(newrecid, 0), 0, 0)",
+    ),
+    RepIndex::plain(
+        "idx_rep_coin_close_record_id",
+        &["coin", "closedate", "newrecid", "id"],
+        "coin COLLATE NOCASE, closedate, COALESCE(NULLIF(newrecid, 0), id, 0)",
+    ),
 ];
 
 /// The open-rows index's `WHERE`: `NOT` of [`super::report_read::closed_test_sql`] over the

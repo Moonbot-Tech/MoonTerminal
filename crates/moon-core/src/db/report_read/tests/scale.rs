@@ -567,3 +567,31 @@ fn strategy_window_discovery_seeks_the_scoped_period() {
         }
     }
 }
+
+/// Measure newest-page chart reads when every row of one hot coin ties on close time.
+#[test]
+#[ignore = "100000-row tied chart-history timing probe"]
+fn chart_history_tied_scale_probe() {
+    let conn = replica();
+    seed(&conn, 100_000, 10, 1, 1_000_000, 8);
+    conn.execute_batch(
+        "UPDATE orders_rep SET closedate=1700000000, buydate=1699999900,
+         buyprice=10.0, sellprice=11.0, quantity=1.0; ANALYZE;",
+    )
+    .expect("tie every synthetic close");
+    let cores: Vec<u64> = (1..=10).collect();
+    let coins = ["C0USDT".to_string()];
+    let elapsed = median_ms(7, || {
+        std::hint::black_box(
+            query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 1_000)
+                .expect("chart history"),
+        );
+    });
+    for (sql, plan) in plans_of(&conn, || {
+        query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 1_000)
+            .expect("chart history plan");
+    }) {
+        println!("chart_tied_plan: {plan}; SQL: {sql}");
+    }
+    println!("chart_history_tied rows=100000 median_ms={elapsed:.6}");
+}

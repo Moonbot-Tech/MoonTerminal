@@ -414,6 +414,7 @@ fn replica_indexes_are_idempotent_and_wait_for_their_columns() {
             "idx_rep_open",
             "idx_rep_coin_close",
             "idx_rep_coin_entry",
+            "idx_rep_coin_close_record",
         ]
         .map(String::from),
     );
@@ -437,6 +438,7 @@ fn replica_indexes_are_idempotent_and_wait_for_their_columns() {
     let mut expected = all.clone();
     expected.remove("idx_rep_coin_close");
     expected.remove("idx_rep_coin_entry");
+    expected.remove("idx_rep_coin_close_record");
     assert_eq!(names(&no_coin), expected);
     no_coin
         .execute_batch("ALTER TABLE orders_rep ADD COLUMN coin TEXT")
@@ -832,4 +834,105 @@ fn seek_timing_200k() {
     reads("BEFORE", true);
     drop(conn);
     crate::db::test_support::remove_db(&path);
+}
+
+/// Adding the record-id tie-break to the coin index must not change tied chart rows or their order.
+#[test]
+fn chart_history_tied_rows_match_the_narrow_coin_index() {
+    let conn = replica();
+    seed(&conn, 2_000, 10, 1, 1_000_000, 8);
+    conn.execute_batch(
+        "UPDATE orders_rep SET closedate=1700000000, buydate=1699999900,
+         buyprice=10.0, sellprice=11.0, quantity=1.0;",
+    )
+    .expect("tie every synthetic close");
+    let cores: Vec<u64> = (1..=10).collect();
+    let coins = ["C0USDT".to_string()];
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS idx_rep_coin_close_record;
+         DROP INDEX IF EXISTS idx_rep_coin_close_record_id;",
+    )
+    .expect("remove optimized indexes for the narrow baseline");
+    let expected = query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 2_000)
+        .expect("indexed chart history");
+    conn.execute_batch(
+        "DROP INDEX idx_rep_coin_close;
+         CREATE INDEX idx_rep_coin_close ON orders_rep(coin COLLATE NOCASE, closedate);",
+    )
+    .expect("restore the former narrow index");
+    let narrow = query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 2_000)
+        .expect("narrow-index chart history");
+    crate::db::test_support::rep_init(&conn);
+    let actual = query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 2_000)
+        .expect("migrated chart history");
+    assert_eq!(actual, expected);
+    assert_eq!(actual, narrow);
+    for (_, plan) in plans_of(&conn, || {
+        query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 1_000)
+            .expect("chart history plan");
+    }) {
+        assert!(!plan.contains("TEMP B-TREE FOR ORDER BY"), "{plan}");
+    }
+}
+
+/// The chart-only index must also match record identity when a replica carries legacy `id`.
+#[test]
+fn chart_history_id_schema_uses_the_matching_record_index() {
+    let conn = replica();
+    seed(&conn, 2_000, 10, 1, 1_000_000, 8);
+    conn.execute_batch(
+        "ALTER TABLE orders_rep ADD COLUMN id INTEGER;
+         UPDATE orders_rep SET id=newrecid, closedate=1700000000, buydate=1699999900,
+         buyprice=10.0, sellprice=11.0, quantity=1.0;
+         DROP INDEX IF EXISTS idx_rep_coin_close_record;
+         DROP INDEX IF EXISTS idx_rep_coin_close_record_id;",
+    )
+    .expect("seed id-bearing tied chart rows");
+    let cores: Vec<u64> = (1..=10).collect();
+    let coins = ["C0USDT".to_string()];
+    let expected = query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 2_000)
+        .expect("unindexed chart history");
+    crate::db::test_support::rep_init(&conn);
+    let actual = query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 2_000)
+        .expect("id-indexed chart history");
+    assert_eq!(actual, expected);
+    for (_, plan) in plans_of(&conn, || {
+        query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 1_000)
+            .expect("chart history plan");
+    }) {
+        assert!(plan.contains("idx_rep_coin_close_record_id"), "{plan}");
+        assert!(!plan.contains("TEMP B-TREE FOR ORDER BY"), "{plan}");
+    }
+}
+
+/// Chart-only indexes must not reorder ordinary ascending Report ties at the limit boundary.
+#[test]
+fn report_ascending_ties_keep_their_narrow_index_order() {
+    let conn = replica();
+    conn.execute_batch("DELETE FROM orders_rep;").unwrap();
+    for id in [9, 2, 8, 1, 7, 3] {
+        conn.execute(
+            "INSERT INTO orders_rep (core_uid, core_name, newrecid, closedate, buydate,
+             profitbtc, spentbtc, coin, strategyid, isshort, emulator, deleted, basecurrency)
+             VALUES (1, 'CORE_A', ?1, 1700000000, 1699999900, 1.0, 10.0,
+                     'C0USDT', 1, 0, 0, 0, 1)",
+            [id],
+        )
+        .expect("seed tied Report row");
+    }
+    let filter = ReportFilter {
+        rows: RowScope::Closed,
+        exact_coins: Some(vec!["C0USDT".to_string()]),
+        ..ReportFilter::default()
+    };
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS idx_rep_coin_close_record;
+         DROP INDEX IF EXISTS idx_rep_coin_close_record_id;",
+    )
+    .unwrap();
+    let before = query_reports(&conn, &filter, "closedate", false, 3).expect("narrow read");
+    crate::db::test_support::rep_init(&conn);
+    let after = query_reports(&conn, &filter, "closedate", false, 3).expect("chart-indexed read");
+    assert_eq!(before.rec_ids, [1, 2, 3]);
+    assert_eq!(after.rec_ids, before.rec_ids);
 }

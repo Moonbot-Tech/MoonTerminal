@@ -115,13 +115,12 @@ struct MarketDataSourceInner {
     /// divide into the chain `1|5|30|60|240|1440`; coarser panels resample the finer base at the
     /// cost of depth. A demand entry remains live for 30 seconds.
     deep_kind_wants: Mutex<HashMap<CoreId, HashMap<u32, Instant>>>,
-    /// Live timeframe-bar subscriptions keyed by `(provider, market)`.
+    /// Live timeframe-bar subscriptions indexed by provider and then market.
     ///
     /// A subscription is global to the client and the most recent kind wins, so per-panel control
-    /// repeatedly disturbed the core. Panels now only refresh demand. Entries stale for more than
-    /// 60 seconds, such as closed panels or sub-minute timeframes, are unsubscribed during the next
-    /// candle read for that provider.
-    candle_subs: Mutex<HashMap<(CoreId, String), CandleSubState>>,
+    /// repeatedly disturbed the core. Panels only refresh their own market; chart release removes
+    /// the entry and unsubscribes after the coordinator's linger expires.
+    candle_subs: Mutex<HashMap<CoreId, HashMap<String, CandleSubState>>>,
     /// Local kline cache in `klines.sqlite`; `None` until the terminal supplies its path.
     kline_cache: Option<crate::market::kline_cache::KlineCache>,
     /// Exchange identity used to share kline-cache rows across cores on the same exchange and to
