@@ -97,7 +97,7 @@ impl AnalyticsView {
 
     /// One numeric setting's input: a valid value commits and is persisted on every change;
     /// text that is not one is ignored, and the field is put back to the value in force when
-    /// it is left or Enter is pressed.
+    /// it is left or Enter is pressed. A changed pick setting retires its previous result.
     ///
     /// Args:
     ///     placeholder: Hint shown in an empty field.
@@ -139,7 +139,11 @@ impl AnalyticsView {
                 if let Some(v) = parse(st.read(cx).value().trim())
                     && v != get(&this.coins)
                 {
+                    let pick_cfg = this.coins.pick_cfg;
                     set(&mut this.coins, v);
+                    if pick_cfg != this.coins.pick_cfg {
+                        this.reset_coin_pick(cx);
+                    }
                     this.persist_coins_settings(cx);
                     cx.notify();
                 }
@@ -338,7 +342,7 @@ impl AnalyticsView {
             )
     }
 
-    /// The coin table card — sits UNDER the strategy list.
+    /// The coin table sits under the strategy list and asks for a read-visible selection.
     pub(in crate::analytics::tuner) fn coins_card(
         &mut self,
         p: MoonPalette,
@@ -368,7 +372,7 @@ impl AnalyticsView {
             (Err(note), _) | (Ok(_), Err(note)) => Err(note),
             (Ok(base), Ok(scoped)) => Ok((base.clone(), scoped.clone())),
         };
-        let selected = self.sel_strategy.is_some();
+        let selected = self.visible_target_count(self.read_core_ids()) > 0;
         let (body, counts, total) = match (selected, ready) {
             // No strategy: the table asks for one rather than listing every coin of every
             // strategy, which is not a list anyone edits.
@@ -519,14 +523,16 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    /// Fact / Manual / Auto for the coin axis — the SHARED matrix: Manual is the working lists, Auto adds the pick's suggestion.
+    /// Fact / Manual / Auto for the read-visible coin selection; hidden retained rows keep the empty state.
     pub(in crate::analytics::tuner) fn coins_kpi(
         &self,
         p: MoonPalette,
         cx: &Context<Self>,
     ) -> AnyElement {
         // No strategy: the matrix says so instead of scoring every strategy's trades.
-        if coins_body(self.sel_strategy.is_some(), true, 1) == CoinsBody::NoStrategy {
+        if coins_body(self.visible_target_count(self.read_core_ids()) > 0, true, 1)
+            == CoinsBody::NoStrategy
+        {
             return super::shared::card(
                 t!("analytics.tuner.kpi_title").to_string(),
                 String::new(),

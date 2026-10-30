@@ -2,14 +2,14 @@
 //!
 //! One scan reads the period's trades for all strategies, grouped per strategy-list row key
 //! (`strategyid@core_uid`) in memory, and each group is fitted with the very same
-//! [`coin_pick_from_rows`] the per-strategy card runs. No second algorithm and no thresholds of
+//! [`super::coin_pick_from_rows`] the per-strategy card runs. No second algorithm and no thresholds of
 //! its own: a batch verdict is, by construction, what pressing "Pick" on that one strategy with
 //! its saved lists would say.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use super::{CoinPick, CoinPickParams, CoinTrade, coin_pick_from_rows};
+use super::{CoinPick, CoinPickParams, CoinTrade};
 use rusqlite::types::Value;
 
 use crate::db::analytics::Query;
@@ -92,7 +92,7 @@ impl BatchProgress {
 
 /// Fit every strategy's trades with its own lists.
 ///
-/// Rows are grouped by key in their input order; [`coin_pick_from_rows`] sorts each group
+/// Rows are grouped by key in their input order; [`super::coin_pick_from_rows`] sorts each group
 /// itself, so the grouping cannot change any answer.
 ///
 /// Args:
@@ -109,6 +109,17 @@ pub fn coin_picks_from_rows(
     settings: PickSettings,
     progress: &BatchProgress,
 ) -> Option<HashMap<String, CoinPick>> {
+    fit_batch_with_cap(rows, lists, settings, progress, super::MAX_PICK)
+}
+
+/// Keep diagnostic cap comparisons on exactly the production grouping and fit path.
+pub(super) fn fit_batch_with_cap(
+    rows: Vec<KeyedTrade>,
+    lists: &HashMap<String, ManualLists>,
+    settings: PickSettings,
+    progress: &BatchProgress,
+    cap: usize,
+) -> Option<HashMap<String, CoinPick>> {
     let mut groups: BTreeMap<String, Vec<CoinTrade>> = BTreeMap::new();
     for row in rows {
         groups.entry(row.key).or_default().push(row.trade);
@@ -119,7 +130,7 @@ pub fn coin_picks_from_rows(
         if progress.is_cancelled() {
             return None;
         }
-        let pick = coin_pick_from_rows(&trades, &settings.params_for(lists.get(&key)));
+        let pick = super::fit_with_cap(&trades, &settings.params_for(lists.get(&key)), cap);
         out.insert(key, pick);
         progress.done.fetch_add(1, Ordering::Relaxed);
     }
@@ -157,7 +168,7 @@ pub fn suggest_coins_by_strategy(
 /// Returns:
 ///     The keyed trades and the lists, or the read failure (a failed list read included: a
 ///     verdict against an invented empty baseline would pass for a real one).
-fn read_keyed(
+pub(super) fn read_keyed(
     conn: &rusqlite::Connection,
     q: &Query,
     src: &str,

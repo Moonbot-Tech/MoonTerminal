@@ -99,7 +99,7 @@ impl ListFieldModel {
         let more = chips.len().saturating_sub(MAX_CHIPS);
         chips.truncate(MAX_CHIPS);
         let empty = if !selected {
-            Some(t!("analytics.coins.no_strategy").to_string())
+            Some(t!("analytics.coins.lists_need_strategy").to_string())
         } else if chips.is_empty() {
             Some(t!("analytics.coins.field_empty").to_string())
         } else {
@@ -188,7 +188,7 @@ pub(in crate::analytics::tuner) fn pending_text(d: &PendingDelta) -> Option<Stri
 }
 
 /// One field: header with title, parameter key + count, Copy and Clear; the chip well with
-/// its typing input; the legend.
+/// its typing input; the legend. Without a strategy only the title and scope placeholder render.
 ///
 /// Args:
 ///     m: The field's model.
@@ -207,6 +207,32 @@ pub(in crate::analytics::tuner) fn list_field_el(
     cx: &App,
 ) -> AnyElement {
     let side = if m.black { "bl" } else { "wl" };
+    if m.count.is_none() {
+        return v_flex()
+            .debug_selector(move || format!("an-coin-{side}-field"))
+            .w_full()
+            .min_w_0()
+            .flex_none()
+            .px(design::ui_px(cx, 12.0))
+            .py(design::ui_px(cx, 10.0))
+            .gap(design::ui_px(cx, 6.0))
+            .when(!m.black, |el| el.border_t_1().border_color(moon(p.border)))
+            .font_family(design::ui_font())
+            .child(
+                div()
+                    .debug_selector(move || format!("an-coin-{side}-title"))
+                    .text_size(design::t_body(cx))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(m.title.clone()),
+            )
+            .child(list_hint_el(
+                m.empty.as_deref().unwrap_or_default(),
+                side,
+                p,
+                cx,
+            ))
+            .into_any_element();
+    }
     let key = match m.count {
         Some(n) => format!("{} · {n}", m.key),
         None => m.key.to_string(),

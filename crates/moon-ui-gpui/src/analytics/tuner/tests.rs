@@ -51,7 +51,9 @@ fn the_auto_column_is_drawn_on_by_coin_only() {
 }
 
 /// Routing `tuner/mod.rs:selected_targets` through the read authority would keep a stale owner
-/// strategy writable after the singleton Auto workspace moves to another core.
+/// strategy writable after the singleton Auto workspace moves to another core. The By-coin
+/// renderer wiring is pinned independently of that selector: the binary-only crate's cards
+/// must agree on placeholders when the retained anchor is hidden by the read scope.
 #[test]
 fn stale_owner_strategy_selection_is_hidden_without_erasing_classic_state() {
     let retained = "41@11";
@@ -76,6 +78,23 @@ fn stale_owner_strategy_selection_is_hidden_without_erasing_classic_state() {
         .and_then(|tail| tail.split("\n    }").next())
         .expect("selected_targets must exist");
     assert!(selected.contains("self.action_core_ids()"));
+
+    for (source, renderer) in [
+        (include_str!("coins/mod.rs"), "fn coins_card("),
+        (include_str!("coins/mod.rs"), "fn coins_kpi("),
+        (include_str!("coins/picker.rs"), "fn coins_lists_card("),
+        (include_str!("coins/auto.rs"), "fn coins_auto_card("),
+    ] {
+        let render = source
+            .split(renderer)
+            .nth(1)
+            .and_then(|tail| tail.split("\n    }").next())
+            .expect("coin renderer must exist");
+        assert!(
+            render.contains("self.visible_target_count(self.read_core_ids()) > 0"),
+            "{renderer} must share the side gate's read-visible selection"
+        );
+    }
 
     let save = include_str!("save.rs");
     assert!(save.contains("if !self.save_target_in_workspace(target)"));

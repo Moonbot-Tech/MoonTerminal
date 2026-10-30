@@ -96,6 +96,7 @@ pub(in crate::analytics::tuner) struct SuggestionChip {
 
 /// Which face the card shows.
 pub(in crate::analytics::tuner) enum AutoView {
+    NoStrategy { strategies: usize },
     Settings,
     Running { line: String },
     Result(ResultModel),
@@ -108,7 +109,7 @@ pub(in crate::analytics::tuner) struct AutoCardModel {
     pub(in crate::analytics::tuner) cfg: PickCfg,
     /// A strategy is selected, so a pick has something to score.
     pub(in crate::analytics::tuner) enabled: bool,
-    /// A sentence above the body: no strategy, or several scored as one.
+    /// A sentence above the body when several strategies are scored as one.
     pub(in crate::analytics::tuner) hint: Option<String>,
     /// Why the finished pick no longer matches its inputs. `None` while the pick is current.
     /// Lists wins when both the lists and the report moved.
@@ -117,7 +118,6 @@ pub(in crate::analytics::tuner) struct AutoCardModel {
     /// score against lists that are about to change.
     pub(in crate::analytics::tuner) loaded: bool,
     pub(in crate::analytics::tuner) pending: Option<String>,
-    pub(in crate::analytics::tuner) summary: String,
 }
 
 impl AutoCardModel {
@@ -128,6 +128,7 @@ impl AutoCardModel {
     ///     selected: A strategy is selected.
     ///     multi: Several strategies are selected.
     ///     loaded: The coin statistics and saved lists are read and no reload is running.
+    ///     strategies: All strategy rows covered by the batch, before list-only filters.
     ///
     /// Returns:
     ///     The model for the current pick state.
@@ -136,45 +137,48 @@ impl AutoCardModel {
         selected: bool,
         multi: bool,
         loaded: bool,
+        strategies: usize,
     ) -> Self {
-        let view = match &s.pick {
-            PickState::Idle => AutoView::Settings,
-            PickState::Running { .. } => AutoView::Running {
-                line: t!("analytics.coins.running", pct = s.pick_cfg.holdout_pct).to_string(),
-            },
-            PickState::Done {
-                pick,
-                holdout_pct,
-                adopted,
-                ..
-            } => AutoView::Result(ResultModel {
-                line: verdict_line(pick, *holdout_pct),
-                useful: pick.verdict == PickVerdict::Useful,
-                black: pick
-                    .black
-                    .iter()
-                    .map(|c| SuggestionChip {
-                        token: c.token.clone(),
-                        text: tag_line(c),
-                        excluded: s.excluded(true, &c.token),
-                    })
-                    .collect(),
-                white: pick
-                    .white
-                    .iter()
-                    .map(|c| SuggestionChip {
-                        token: c.token.clone(),
-                        text: tag_line(c),
-                        excluded: s.excluded(false, &c.token),
-                    })
-                    .collect(),
-                adopted: *adopted,
-            }),
-            PickState::Failed(e) => AutoView::Failed(e.clone()),
+        let view = if !selected {
+            AutoView::NoStrategy { strategies }
+        } else {
+            match &s.pick {
+                PickState::Idle => AutoView::Settings,
+                PickState::Running { .. } => AutoView::Running {
+                    line: t!("analytics.coins.running", pct = s.pick_cfg.holdout_pct).to_string(),
+                },
+                PickState::Done {
+                    pick,
+                    holdout_pct,
+                    adopted,
+                    ..
+                } => AutoView::Result(ResultModel {
+                    line: verdict_line(pick, *holdout_pct),
+                    useful: pick.verdict == PickVerdict::Useful,
+                    black: pick
+                        .black
+                        .iter()
+                        .map(|c| SuggestionChip {
+                            token: c.token.clone(),
+                            text: tag_line(c),
+                            excluded: s.excluded(true, &c.token),
+                        })
+                        .collect(),
+                    white: pick
+                        .white
+                        .iter()
+                        .map(|c| SuggestionChip {
+                            token: c.token.clone(),
+                            text: tag_line(c),
+                            excluded: s.excluded(false, &c.token),
+                        })
+                        .collect(),
+                    adopted: *adopted,
+                }),
+                PickState::Failed(e) => AutoView::Failed(e.clone()),
+            }
         };
-        let hint = if !selected {
-            Some(t!("analytics.coins.pick_needs_strategy").to_string())
-        } else if multi {
+        let hint = if selected && multi {
             Some(t!("analytics.coins.multi_note").to_string())
         } else {
             None
@@ -187,7 +191,6 @@ impl AutoCardModel {
             stale: s.pick_stale_cause(),
             loaded,
             pending: super::fields::pending_text(&s.pending_delta()),
-            summary: settings_summary(s.pick_cfg),
         }
     }
 
@@ -220,27 +223,6 @@ pub(in crate::analytics::tuner) fn add_and_save(add: Act, save: Act) -> Act {
     })
 }
 
-/// Compact live settings with the locale's trade-count plural form.
-fn settings_summary(cfg: PickCfg) -> String {
-    let unit = plural_key("analytics.coins.summary_unit", cfg.min_trades as usize);
-    let sides = [
-        cfg.black.then(|| t!("analytics.coins.black").to_string()),
-        cfg.white.then(|| t!("analytics.coins.white").to_string()),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(", ");
-    t!(
-        "analytics.coins.summary",
-        n = cfg.min_trades,
-        unit = t!(unit.as_str()),
-        pct = cfg.holdout_pct,
-        sides = sides
-    )
-    .to_string()
-}
-
 /// A small text button with a tooltip.
 fn btn(
     id: &'static str,
@@ -267,7 +249,7 @@ fn btn(
     super::layout::tagged(id, button).into_any_element()
 }
 
-/// The card, bounded by its host while prose wraps and the collapsed summary truncates.
+/// Keep live settings above every pick state, with prose and actions bounded by the host.
 ///
 /// Args:
 ///     m: The card's model.
@@ -309,39 +291,19 @@ pub(in crate::analytics::tuner) fn auto_card_el(
         .when_some(m.hint.clone(), |el, hint| {
             el.child(caption("an-pick-hint", hint, p.text_muted))
         });
-    if matches!(m.view, AutoView::Result(_)) {
-        body = body.child(
-            h_flex()
-                .debug_selector(|| "an-pick-summary-row".into())
-                .w_full()
-                .min_w_0()
-                .items_center()
-                .gap(design::ui_px(cx, 8.0))
-                .child(
-                    div()
-                        .id("an-pick-summary")
-                        .debug_selector(|| "an-pick-summary".into())
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .tooltip(crate::panels::common::text_tooltip(m.summary.clone()))
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text_muted))
-                        .child(m.summary.clone()),
-                )
-                .child(btn(
-                    "an-pick-settings",
-                    t!("analytics.coins.settings").to_string(),
-                    t!("analytics.coins.tip_settings").to_string(),
-                    MoonButtonVariant::Bare,
-                    true,
-                    acts.on_reset.clone(),
-                )),
-        );
-    } else {
-        body = body.child(settings_el(m, inputs, acts, cx));
-    }
+    body = body.child(settings_el(m, inputs, acts, cx));
     body = match &m.view {
+        AutoView::NoStrategy { strategies } => body.child(
+            caption(
+                "an-pick-scope",
+                t!("analytics.coins.batch_scope", n = strategies).to_string(),
+                p.text_muted,
+            )
+            .px(design::ui_px(cx, 10.0))
+            .py(design::ui_px(cx, 6.0))
+            .rounded(design::ui_px(cx, 4.0))
+            .bg(moon(p.shell_high)),
+        ),
         AutoView::Settings => body,
         AutoView::Running { line } => body
             .child(caption("an-pick-running", line.clone(), p.text_soft))
@@ -376,6 +338,30 @@ pub(in crate::analytics::tuner) fn auto_card_el(
             cx,
         )),
     };
+    if matches!(
+        m.view,
+        AutoView::NoStrategy { .. } | AutoView::Settings | AutoView::Failed(_)
+    ) {
+        body = body.child(
+            h_flex()
+                .w_full()
+                .flex_wrap()
+                .justify_end()
+                .debug_selector(|| "tuner-run-c".into())
+                .child(btn(
+                    "an-pick-run",
+                    t!("analytics.coins.pick_btn").to_string(),
+                    t!("analytics.coins.tip_pick_btn").to_string(),
+                    if m.pending.is_some() {
+                        MoonButtonVariant::Soft
+                    } else {
+                        MoonButtonVariant::Blue
+                    },
+                    m.can_pick(),
+                    acts.on_pick.clone(),
+                )),
+        );
+    }
     if let Some(text) = &m.pending {
         body = body.child(super::fields::pending_band_el(
             text.clone(),
@@ -397,14 +383,14 @@ fn note_of(e: &moon_core::db::ReadFail) -> Note {
     }
 }
 
-/// The settings face: whole controls wrap within the column, above the Pick action.
+/// Settings stay editable without a strategy and after results; only a running pick locks them.
 fn settings_el(
     m: &AutoCardModel,
     inputs: Option<(&Entity<MoonInputState>, &Entity<MoonInputState>)>,
     acts: &AutoCardActs,
     cx: &App,
 ) -> AnyElement {
-    let enabled = m.enabled && !matches!(m.view, AutoView::Running { .. });
+    let enabled = !matches!(m.view, AutoView::Running { .. });
     let field = |id: &'static str,
                  lead: String,
                  unit: String,
@@ -510,28 +496,6 @@ fn settings_el(
                     m.cfg.white,
                     acts.on_white.clone(),
                 )),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .flex_wrap()
-                .justify_end()
-                .debug_selector(|| "tuner-run-c".into())
-                .gap(design::ui_px(cx, 6.0))
-                .when(!matches!(m.view, AutoView::Running { .. }), |el| {
-                    el.child(btn(
-                        "an-pick-run",
-                        t!("analytics.coins.pick_btn").to_string(),
-                        t!("analytics.coins.tip_pick_btn").to_string(),
-                        if m.pending.is_some() {
-                            MoonButtonVariant::Soft
-                        } else {
-                            MoonButtonVariant::Blue
-                        },
-                        m.can_pick() && enabled,
-                        acts.on_pick.clone(),
-                    ))
-                }),
         )
         .into_any_element()
 }
@@ -641,17 +605,25 @@ fn result_el(
                     .text_color(moon(p.text_muted))
                     .child(adopted_hint(r)),
             )
+            .child(h_flex().w_full().justify_end().child(btn(
+                "an-pick-rerun",
+                t!("analytics.coins.rerun").to_string(),
+                t!("analytics.coins.tip_pick_btn").to_string(),
+                MoonButtonVariant::Bare,
+                m.can_pick(),
+                acts.on_pick.clone(),
+            )))
             .into_any_element();
     }
     if !has_pick {
         return body
             .child(h_flex().w_full().justify_end().child(btn(
-                "an-pick-change",
-                t!("analytics.coins.change_settings").to_string(),
-                t!("analytics.coins.tip_settings").to_string(),
+                "an-pick-rerun",
+                t!("analytics.coins.rerun").to_string(),
+                t!("analytics.coins.tip_pick_btn").to_string(),
                 primary,
-                true,
-                acts.on_reset.clone(),
+                m.can_pick(),
+                acts.on_pick.clone(),
             )))
             .into_any_element();
     }
@@ -854,7 +826,7 @@ impl AnalyticsView {
         state
     }
 
-    /// The Auto-pick card, fed from this view's state.
+    /// Render the current strategy's pick, or editable batch settings without a selection.
     pub(in crate::analytics::tuner) fn coins_auto_card(
         &mut self,
         p: MoonPalette,
@@ -874,9 +846,10 @@ impl AnalyticsView {
         self.adopt_auto_pick(loaded, cx);
         let model = AutoCardModel::new(
             &self.coins,
-            self.sel_strategy.is_some(),
+            self.visible_target_count(self.read_core_ids()) > 0,
             self.is_multi(),
             loaded,
+            self.strategy_data.data().map_or(0, |d| d.strategies.len()),
         );
         let view = cx.entity();
         let act = |f: fn(&mut AnalyticsView, &mut Context<AnalyticsView>)| -> Act {
@@ -918,12 +891,18 @@ impl AnalyticsView {
                 }
             }),
             on_black: flag(|this, on, cx| {
-                this.coins.pick_cfg.black = on;
+                if this.coins.pick_cfg.black != on {
+                    this.coins.pick_cfg.black = on;
+                    this.reset_coin_pick(cx);
+                }
                 this.persist_coins_settings(cx);
                 cx.notify();
             }),
             on_white: flag(|this, on, cx| {
-                this.coins.pick_cfg.white = on;
+                if this.coins.pick_cfg.white != on {
+                    this.coins.pick_cfg.white = on;
+                    this.reset_coin_pick(cx);
+                }
                 this.persist_coins_settings(cx);
                 cx.notify();
             }),

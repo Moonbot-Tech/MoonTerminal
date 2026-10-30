@@ -1,6 +1,39 @@
 //! Synthetic regressions for fitting isolation, list precedence and fresh-trade assessment.
 use super::*;
 
+mod real_data;
+mod whitelist;
+
+/// A smaller cap silently truncates both independently fitted lists before fifty entries.
+#[test]
+fn both_lists_allow_fifty_candidates() {
+    let rows: Vec<_> = (0..1_000)
+        .map(|i| CoinTrade {
+            token: format!("COIN_{:02}", i % 60),
+            close: i,
+            profit: -1.0,
+        })
+        .collect();
+    let black = coin_pick_from_rows(&rows, &params());
+    assert_eq!(black.black.len(), 50);
+    let mut rows = rows;
+    for row in &mut rows {
+        row.profit = 1.0;
+    }
+    // An unqualified loser makes restricting to the fifty winners improve train profit.
+    rows.extend((0..700).map(|i| CoinTrade {
+        token: "COIN_LOSS".into(),
+        close: i,
+        profit: -10.0,
+    }));
+    let mut p = params();
+    p.black = false;
+    p.white = true;
+    let white = coin_pick_from_rows(&rows, &p);
+    assert_eq!(white.white.len(), 50);
+    assert_eq!(fit_with_cap(&rows, &p, 30).white.len(), 30);
+}
+
 /// Default fixture settings reserve exactly thirty of one hundred trades.
 fn params() -> CoinPickParams {
     CoinPickParams {

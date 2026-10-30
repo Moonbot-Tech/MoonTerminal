@@ -13,6 +13,7 @@ use crate::symbol::{CoinMask, coin_match_key};
 
 /// The same pick for every strategy of the list at once.
 mod batch;
+mod whitelist;
 pub use batch::{
     BatchProgress, KeyedTrade, ManualLists, PickSettings, coin_picks_from_rows,
     suggest_coins_by_strategy,
@@ -28,10 +29,10 @@ pub const DEFAULT_MIN_TRADES: u32 = 5;
 pub const MIN_HOLDOUT_TRADES: usize = 20;
 /// Minimum validation observations removed by a suggestion.
 pub const MIN_HOLDOUT_TOUCHED: usize = 5;
-/// Minimum absolute standardized mean for a candidate.
+/// Minimum absolute standardized mean for the legacy gated candidates.
 pub const T_GATE: f64 = 1.0;
 /// Maximum candidates in either suggested list.
-pub const MAX_PICK: usize = 30;
+pub const MAX_PICK: usize = 50;
 /// Absolute Fact-profit share used as the minimum meaningful gain.
 pub const NOISE_ABS_SHARE: f64 = 0.05;
 
@@ -145,8 +146,61 @@ fn tally(rows: &[CoinTrade], keep: impl Fn(&CoinTrade) -> bool) -> Tally {
     out
 }
 
-/// Fit only on older rows; list edits never change the validation time interval.
+/// Accumulate fitting moments only for trades admitted by the manual lists.
+fn score_rows(
+    rows: &[CoinTrade],
+    manual: impl Fn(&CoinTrade) -> bool,
+) -> BTreeMap<String, Moments> {
+    let mut scores: BTreeMap<String, Moments> = BTreeMap::new();
+    for row in rows.iter().filter(|r| manual(r)) {
+        scores
+            .entry(row.token.clone())
+            .or_default()
+            .push(row.profit);
+    }
+    scores
+}
+
+/// Keep the existing count, sign, t-score and ranking rules for either direction.
+fn gated_candidates(
+    scores: &BTreeMap<String, Moments>,
+    p: &CoinPickParams,
+    black: bool,
+    cap: usize,
+) -> HashSet<String> {
+    let mut picked: Vec<_> = scores
+        .iter()
+        .filter(|(_, s)| {
+            s.n >= p.min_trades.max(1) as usize
+                && if black {
+                    s.sum < 0.0 && s.score() <= -T_GATE
+                } else {
+                    s.sum > 0.0 && s.score() >= T_GATE
+                }
+        })
+        .collect();
+    picked.sort_by(|(a, x), (b, y)| {
+        let order = if black {
+            x.sum.total_cmp(&y.sum)
+        } else {
+            y.sum.total_cmp(&x.sum)
+        };
+        order.then_with(|| a.cmp(b))
+    });
+    picked
+        .into_iter()
+        .take(cap)
+        .map(|(token, _)| token.clone())
+        .collect()
+}
+
+/// Fit only on older rows; preserve existing lists before trying a fixed top-20 whitelist.
 pub fn coin_pick_from_rows(rows: &[CoinTrade], p: &CoinPickParams) -> CoinPick {
+    fit_with_cap(rows, p, MAX_PICK)
+}
+
+/// Use the production fit with an explicit cap for paired diagnostic comparisons.
+fn fit_with_cap(rows: &[CoinTrade], p: &CoinPickParams, cap: usize) -> CoinPick {
     let mut rows = rows.to_vec();
     for row in &mut rows {
         row.token = coin_match_key(&row.token);
@@ -181,60 +235,22 @@ pub fn coin_pick_from_rows(rows: &[CoinTrade], p: &CoinPickParams) -> CoinPick {
     if train_n == 0 || holdout.len() < MIN_HOLDOUT_TRADES {
         return out;
     }
-    let mut scores: BTreeMap<String, Moments> = BTreeMap::new();
+    let scores = score_rows(train, manual);
     let mut full: BTreeMap<String, Moments> = BTreeMap::new();
     for row in &rows {
         full.entry(row.token.clone()).or_default().push(row.profit);
     }
-    for row in train.iter().filter(|r| manual(r)) {
-        scores
-            .entry(row.token.clone())
-            .or_default()
-            .push(row.profit);
-    }
-    let candidates = |black: bool| {
-        let mut picked: Vec<_> = scores
-            .iter()
-            .filter(|(_, s)| {
-                s.n >= p.min_trades.max(1) as usize
-                    && if black {
-                        s.sum < 0.0 && s.score() <= -T_GATE
-                    } else {
-                        s.sum > 0.0 && s.score() >= T_GATE
-                    }
-            })
-            .collect();
-        picked.sort_by(|(a, x), (b, y)| {
-            let order = if black {
-                x.sum.total_cmp(&y.sum)
-            } else {
-                y.sum.total_cmp(&x.sum)
-            };
-            order.then_with(|| a.cmp(b))
-        });
-        picked
-            .into_iter()
-            .take(MAX_PICK)
-            .map(|(token, _)| token.clone())
-            .collect::<HashSet<_>>()
-    };
     let black = if p.black {
-        candidates(true)
+        gated_candidates(&scores, p, true, cap)
     } else {
         HashSet::new()
     };
-    let mut white = if p.white {
-        candidates(false)
+    let white = if p.white {
+        whitelist::fit(train, &scores, p, &black, cap)
     } else {
         HashSet::new()
     };
     let after_black = |r: &CoinTrade| manual(r) && !black.contains(&r.token);
-    if !white.is_empty()
-        && tally(train, |r| after_black(r) && white.contains(&r.token)).profit
-            <= tally(train, after_black).profit
-    {
-        white.clear();
-    }
     let pick = |r: &CoinTrade| after_black(r) && (white.is_empty() || white.contains(&r.token));
     out.pick_holdout = tally(holdout, pick);
     let tags = |tokens: &HashSet<String>, descending: bool| {
