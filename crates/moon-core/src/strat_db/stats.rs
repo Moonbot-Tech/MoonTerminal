@@ -57,7 +57,7 @@ fn open_rw() -> Option<Connection> {
 /// Returns:
 ///     `true` after a successful attachment, otherwise `false`.
 fn attach_reports(conn: &Connection) -> bool {
-    if crate::db::report_recovery::ensure_access().is_err() {
+    if crate::db::report_recovery::ensure_read_access().is_err() {
         return false;
     }
     let rep = paths::reports_db_path();

@@ -237,8 +237,10 @@ fn ready_event_batches_preserve_mutation_barriers_and_last_observation() {
             spent_quote: None,
         }));
     }
+    let row_inputs = loaded.iter().flatten().cloned().collect::<Vec<_>>();
+    let prefetched = prefetch_rates(&store, &NoNetwork, &axis(), &row_inputs).unwrap();
     let turn = commit_batch(&store, || {
-        apply_loaded_events(&store, &NoNetwork, &axis(), &events, &loaded)
+        apply_loaded_events(&store, &axis(), &events, &loaded, prefetched)
     })
     .unwrap();
     assert!(turn.fault.is_none());
@@ -940,7 +942,6 @@ fn partition_events_delete_only_the_named_source_and_core() {
     }
     let reset = process_event(
         &store,
-        &NoNetwork,
         &axis(),
         OutboxEvent {
             seq: 1,
@@ -950,7 +951,7 @@ fn partition_events_delete_only_the_named_source_and_core() {
             action: OutboxAction::RescanCore,
         },
         None,
-        &BTreeSet::new(),
+        &PrefetchOutcome::default(),
     );
     assert!(matches!(reset, PrepareResult::Complete { changed: true }));
     assert!(!deferred_snapshot(&store).contains_key(&(TradeSource::Typed.code(), 1, 10)));
@@ -975,7 +976,6 @@ fn partition_events_delete_only_the_named_source_and_core() {
 
     let purge = process_event(
         &store,
-        &NoNetwork,
         &axis(),
         OutboxEvent {
             seq: 2,
@@ -985,7 +985,7 @@ fn partition_events_delete_only_the_named_source_and_core() {
             action: OutboxAction::PurgeLegacy,
         },
         None,
-        &BTreeSet::new(),
+        &PrefetchOutcome::default(),
     );
     assert!(matches!(purge, PrepareResult::Complete { changed: true }));
     assert_eq!(
@@ -1007,7 +1007,6 @@ fn hard_delete_removes_one_exact_prepared_identity() {
     seed_value(&store, TradeSource::Typed, 1, 11);
     let deleted = process_event(
         &store,
-        &NoNetwork,
         &axis(),
         OutboxEvent {
             seq: 1,
@@ -1017,7 +1016,7 @@ fn hard_delete_removes_one_exact_prepared_identity() {
             action: OutboxAction::Delete,
         },
         None,
-        &BTreeSet::new(),
+        &PrefetchOutcome::default(),
     );
 
     assert!(matches!(deleted, PrepareResult::Complete { changed: true }));
@@ -1056,10 +1055,14 @@ fn row_event_replaces_a_stale_deferred_copy() {
         spent_quote: None,
     };
     defer_trade(&store, &axis(), &stale).unwrap();
+    let loaded = load_trade(&reports, TradeSource::Typed, 1, 10)
+        .expect("load the row observed by its outbox event")
+        .expect("the staged row remains eligible");
+    let prefetched = prefetch_rates(&store, &NoNetwork, &axis(), std::slice::from_ref(&loaded))
+        .expect("resolve the current identity rate");
 
     let result = process_event(
         &store,
-        &NoNetwork,
         &axis(),
         OutboxEvent {
             seq: 1,
@@ -1068,12 +1071,8 @@ fn row_event_replaces_a_stale_deferred_copy() {
             row_id: 10,
             action: OutboxAction::Row,
         },
-        Some(
-            load_trade(&reports, TradeSource::Typed, 1, 10)
-                .expect("load the row observed by its outbox event")
-                .expect("the staged row remains eligible"),
-        ),
-        &BTreeSet::new(),
+        Some(loaded),
+        &prefetched,
     );
 
     assert!(matches!(result, PrepareResult::Complete { changed: true }));
@@ -1120,6 +1119,7 @@ fn partition_invalidation_restarts_idle_and_running_reconciliation_only() {
                 Some(ReconcileState {
                     source_index,
                     after: Some((120, 7, 10)),
+                    reader: None,
                 }),
             ] {
                 rearm_reconciliation_for_outbox(&mut state, &[OutboxEvent { action, ..rescan }]);
@@ -1143,6 +1143,7 @@ fn partition_invalidation_restarts_idle_and_running_reconciliation_only() {
         let mut running = Some(ReconcileState {
             source_index: 1,
             after: Some((120, 7, 10)),
+            reader: None,
         });
         rearm_reconciliation_for_outbox(&mut running, &events);
         let running = running.unwrap();
@@ -1176,7 +1177,13 @@ fn mid_walk_rescan_revalues_rows_already_passed_by_the_cursor() {
     };
     rearm_reconciliation_for_outbox(&mut reconciliation, &[rescan]);
     let turn = commit_batch(&store, || {
-        apply_loaded_events(&store, &NoNetwork, &axis(), &[rescan], &[None])
+        apply_loaded_events(
+            &store,
+            &axis(),
+            &[rescan],
+            &[None],
+            PrefetchOutcome::default(),
+        )
     })
     .unwrap();
     assert!(turn.fault.is_none());
@@ -1258,16 +1265,11 @@ fn a_later_missing_row_observation_deletes_the_earlier_prepared_value() {
         second.is_none(),
         "fixture must provide a later missing observation"
     );
+    let prefetched = prefetch_rates(&store, &NoNetwork, &axis(), std::slice::from_ref(&first))
+        .expect("resolve the first identity rate");
 
     assert!(matches!(
-        process_event(
-            &store,
-            &NoNetwork,
-            &axis(),
-            event,
-            Some(first),
-            &BTreeSet::new(),
-        ),
+        process_event(&store, &axis(), event, Some(first), &prefetched),
         PrepareResult::Complete { changed: true }
     ));
     assert_eq!(
@@ -1281,11 +1283,10 @@ fn a_later_missing_row_observation_deletes_the_earlier_prepared_value() {
     assert!(matches!(
         process_event(
             &store,
-            &NoNetwork,
             &axis(),
             OutboxEvent { seq: 2, ..event },
             second,
-            &BTreeSet::new(),
+            &PrefetchOutcome::default(),
         ),
         PrepareResult::Complete { changed: true }
     ));
@@ -1656,14 +1657,17 @@ fn recovery_resets_the_full_reconciliation_cursor() {
     let replacement = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
     let mut reconciliation = None;
     let mut pending_ack = Some(512);
+    let mut outbox_reader = None;
 
-    reset_after_recovery(&mut reconciliation, &mut pending_ack);
+    reset_after_recovery(&mut reconciliation, &mut pending_ack, &mut outbox_reader);
 
     assert!(!has_deferred(&replacement));
     let state = reconciliation.expect("full reconciliation must restart");
     assert_eq!(state.source_index, 0);
     assert_eq!(state.after, None);
+    assert!(state.reader.is_none());
     assert_eq!(pending_ack, None);
+    assert!(outbox_reader.is_none());
 }
 
 /// Changing `worker/stage.rs:unacknowledged_events` to return the full batch would process and enqueue
@@ -2901,4 +2905,225 @@ fn valuation_batch_timing() {
     drop((single, batched));
     std::fs::remove_dir_all(&single_dir).expect("remove single fixture");
     std::fs::remove_dir_all(&batched_dir).expect("remove batched fixture");
+}
+
+/// Reopening a reader for every 256-row or 512-event step repeats connection and ATTACH work;
+/// reusing it beyond the pass would instead retain a descriptor and its budget slot unnecessarily.
+#[test]
+fn pass_reader_reuses_one_connection_only_within_the_pass() {
+    let opens = AtomicU64::new(0);
+    let open = || {
+        opens.fetch_add(1, Ordering::Relaxed);
+        Ok(Connection::open_in_memory().unwrap())
+    };
+    let mut slot = None;
+    let first = pass_reader(&mut slot, open).unwrap() as *const Connection;
+    let second = pass_reader(&mut slot, open).unwrap() as *const Connection;
+    assert_eq!(first, second);
+    assert_eq!(opens.load(Ordering::Relaxed), 1);
+    slot = None;
+    let _ = pass_reader(&mut slot, open).unwrap();
+    assert_eq!(opens.load(Ordering::Relaxed), 2);
+}
+
+/// A provider request issued after `BEGIN` holds the valuation write transaction across network
+/// latency; the SQL and provider event order must prove the entire batch prefetch happens first.
+#[test]
+fn provider_batch_prefetch_precedes_the_write_transaction() {
+    thread_local! {
+        /// Provider and SQL events from this test thread only.
+        static EVENTS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    /// Synthetic provider that misses exact routes and answers only successor requests.
+    struct EventSource {
+        calls: AtomicU64,
+    }
+    impl SpotRateSource for EventSource {
+        /// Record each call, miss the initial batch and exact routes, then return successors.
+        fn candles(
+            &self,
+            _provider: &'static str,
+            symbol: &str,
+            start: i64,
+            end: i64,
+        ) -> Result<Vec<super::super::provider::SpotCandle>, FetchFailure> {
+            EVENTS.with_borrow_mut(|events| events.push("provider"));
+            if self.calls.fetch_add(1, Ordering::Relaxed) == 0
+                || start == end
+                || symbol != "USDCUSDT"
+            {
+                return Err(FetchFailure::Missing);
+            }
+            Ok((start..=end)
+                .step_by(60)
+                .map(|minute| super::super::provider::SpotCandle {
+                    open_ms: minute * 1_000,
+                    close_ms: minute * 1_000 + 59_999,
+                    open: 1.001,
+                    close: 1.001,
+                })
+                .collect())
+        }
+    }
+    /// Record transaction boundaries without capturing test state in the SQLite callback.
+    fn trace(event: rusqlite::trace::TraceEvent<'_>) {
+        if let rusqlite::trace::TraceEvent::Stmt(statement, _) = event {
+            let sql = statement.expanded_sql().unwrap();
+            let label = if sql.starts_with("BEGIN") {
+                Some("BEGIN")
+            } else if sql.starts_with("COMMIT") {
+                Some("COMMIT")
+            } else {
+                None
+            };
+            if let Some(label) = label {
+                EVENTS.with_borrow_mut(|events| events.push(label));
+            }
+        }
+    }
+
+    EVENTS.with_borrow_mut(Vec::clear);
+    let source = EventSource {
+        calls: AtomicU64::new(0),
+    };
+    let store = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
+    store.trace_v2(
+        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+        Some(trace),
+    );
+    let first_minute = current_minute_utc() - 600;
+    let inputs = (0..8)
+        .map(|row_id| TradeInput {
+            source: TradeSource::Typed,
+            core_uid: 1,
+            row_id,
+            closedate: first_minute + row_id * 60,
+            quote_ordinal: 8,
+            profit_quote: 1.0,
+            spent_quote: Some(10.0),
+        })
+        .collect::<Vec<_>>();
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+    let turn = commit_prefetched(
+        &store,
+        &source,
+        &axis(),
+        &inputs,
+        &generation,
+        &dirty,
+        |prefetched| {
+            let (ready, changed) = prepare_ready_trades(&store, &axis(), &inputs).unwrap();
+            assert_eq!(ready.len(), inputs.len());
+            BatchTurn {
+                changed: prefetched.changed || changed,
+                ..BatchTurn::default()
+            }
+        },
+    )
+    .unwrap();
+    assert!(turn.fault.is_none());
+    let events = EVENTS.with_borrow(|events| events.clone());
+    let provider = events
+        .iter()
+        .position(|event| *event == "provider")
+        .unwrap();
+    let begin = events.iter().position(|event| *event == "BEGIN").unwrap();
+    let commit = events.iter().position(|event| *event == "COMMIT").unwrap();
+    assert!(provider < begin && begin < commit, "events: {events:?}");
+    assert_eq!(events.iter().filter(|event| **event == "BEGIN").count(), 1);
+    assert_eq!(events.iter().filter(|event| **event == "COMMIT").count(), 1);
+}
+
+/// The indexed transient membership must return exactly the former linear scan's unresolved minutes.
+#[test]
+fn transient_ready_membership_matches_the_linear_reference() {
+    let minutes = (0..1_000).map(|index| index * 60).collect::<Vec<_>>();
+    let ready = minutes[..500]
+        .iter()
+        .map(|minute| super::super::identity_rate(8, *minute))
+        .collect::<Vec<_>>();
+    let expected = minutes
+        .iter()
+        .copied()
+        .filter(|minute| !ready.iter().any(|rate| rate.minute_utc == *minute))
+        .collect::<Vec<_>>();
+    assert_eq!(minutes_without_ready(&minutes, &ready), expected);
+}
+
+/// Measure 391 report opens with valuation ATTACH against one reader reused for the same pass.
+#[test]
+#[ignore = "synthetic 391-step reader-open timing probe"]
+fn valuation_reader_pass_scale_probe() {
+    let dir = std::env::temp_dir().join(format!(
+        "moonterminal-reader-pass-{}-{}",
+        std::process::id(),
+        now_unix_ms_i64()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let reports = dir.join("reports.sqlite");
+    let valuation = dir.join("valuation.sqlite");
+    Connection::open(&reports).unwrap();
+    drop(super::super::open_store(&valuation).unwrap());
+    let opens = AtomicU64::new(0);
+    let open = || {
+        opens.fetch_add(1, Ordering::Relaxed);
+        let conn = Connection::open(&reports).unwrap();
+        assert!(super::super::attach_store(&conn, &valuation).unwrap());
+        Ok(conn)
+    };
+    for _ in 0..3 {
+        opens.store(0, Ordering::Relaxed);
+        let started = std::time::Instant::now();
+        for _ in 0..391 {
+            drop(open().unwrap());
+        }
+        let reopened = started.elapsed();
+        assert_eq!(opens.load(Ordering::Relaxed), 391);
+
+        opens.store(0, Ordering::Relaxed);
+        let mut slot = None;
+        let started = std::time::Instant::now();
+        for _ in 0..391 {
+            let _ = pass_reader(&mut slot, open).unwrap();
+        }
+        let reused = started.elapsed();
+        assert_eq!(opens.load(Ordering::Relaxed), 1);
+        eprintln!(
+            "reader pass 391 steps: reopened {:.3} ms, reused {:.3} ms",
+            reopened.as_secs_f64() * 1000.0,
+            reused.as_secs_f64() * 1000.0
+        );
+        drop(slot);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Measure the former linear transient-ready scan against the indexed helper on 1,000 minutes.
+#[test]
+#[ignore = "synthetic 1000-minute transient membership timing probe"]
+fn transient_ready_membership_scale_probe() {
+    let minutes = (0..1_000).map(|index| index * 60).collect::<Vec<_>>();
+    let ready = minutes[..500]
+        .iter()
+        .map(|minute| super::super::identity_rate(8, *minute))
+        .collect::<Vec<_>>();
+    for _ in 0..3 {
+        let started = std::time::Instant::now();
+        let linear = minutes
+            .iter()
+            .copied()
+            .filter(|minute| !ready.iter().any(|rate| rate.minute_utc == *minute))
+            .collect::<Vec<_>>();
+        let linear_time = started.elapsed();
+        let started = std::time::Instant::now();
+        let indexed = minutes_without_ready(&minutes, &ready);
+        let indexed_time = started.elapsed();
+        assert_eq!(indexed, linear);
+        eprintln!(
+            "transient membership 1000 minutes: linear {:.4} ms, indexed {:.4} ms",
+            linear_time.as_secs_f64() * 1000.0,
+            indexed_time.as_secs_f64() * 1000.0
+        );
+    }
 }

@@ -449,6 +449,7 @@ impl Backend {
             .map(|(group, _)| group.clone())?;
         self.group_windows.remove(&group)?;
         self.opening_group_windows.remove(&group);
+        super::header_coins::remove_group_suggestions(&mut self.coin_suggest, &group);
         crate::workspace::close_workspace_owner(&mut self.workspace_focus, &group);
         self.publish_workspace_revision(cx);
         Some((group, self.group_windows.is_empty()))

@@ -437,3 +437,43 @@ fn report_hashing_fits_the_windows_startup_stack() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// The writer permit must not open the replica before the full-integrity verdict arrives.
+///
+/// Resolving the gate before `wait` would let schema writes and index builds land on a replica
+/// whose index-only damage the cheap gate could not see.
+#[test]
+fn writer_permit_waits_for_the_full_verdict() {
+    let gate = StartupGate::pending();
+    let permit = ReportWritePermit {
+        gate: gate.clone(),
+        anchor: Arc::new(Mutex::new(None)),
+    };
+    let (allowed_tx, allowed_rx) = std::sync::mpsc::channel();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        allowed_tx.send(permit.wait().0).unwrap();
+    });
+
+    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(matches!(
+        allowed_rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    gate.finish(true);
+    assert!(allowed_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    waiter.join().unwrap();
+}
+
+/// Writer authorization must require a conclusive full check, not merely the absence of damage.
+///
+/// Treating a timeout, setup failure, or size-limit skip as a pass would let schema and index
+/// writes reach a replica that was never fully checked.
+#[test]
+fn inconclusive_full_verdicts_do_not_pass_the_write_gate() {
+    assert!(conclusive(&Integrity::Ok));
+    assert!(conclusive(&Integrity::NotPresent));
+    assert!(!conclusive(&Integrity::TimeLimitExceeded));
+    assert!(!conclusive(&Integrity::CheckFailed("fixture".into())));
+}

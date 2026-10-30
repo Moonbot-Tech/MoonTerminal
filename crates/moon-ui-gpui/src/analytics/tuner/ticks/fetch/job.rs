@@ -157,8 +157,8 @@ pub(in crate::analytics::tuner) enum JobEvent {
     StationFilled,
     /// A request went out for this row.
     Started(i64),
-    /// A row's answer: what the row became, tape and verdict included.
-    Row(Box<DealRow>),
+    /// Every answer from one cluster: tape and verdicts included, with no row dropped.
+    Rows(Vec<DealRow>),
     /// Progress moved without a row answer — a deferral, a resume, the end of the batch.
     Progress,
     /// The autoload switch dropped this in-flight row, so the fetching mark comes off now.
@@ -238,6 +238,19 @@ impl State {
         {
             self.listener = None;
         }
+    }
+
+    /// Send one channel event for a completed cluster while retaining every answered row.
+    fn notify_answers(&mut self, answers: Vec<DealRow>) {
+        if !answers.is_empty() {
+            self.notify(JobEvent::Rows(answers));
+        }
+    }
+
+    /// Publish the last batch before marking the flight idle, while the listener lock is held.
+    fn finish_flight(&mut self, id: u64, answers: Vec<DealRow>) {
+        self.notify_answers(answers);
+        self.detach_flight(id);
     }
 
     /// Set aside `row` and every pending row on the same exchange key until `wait` is out;
@@ -934,6 +947,7 @@ fn serve_cluster(
     let admission = super::super::tail::Admission::current();
     // One read of the strategies for the cluster, shared by its rows.
     let reads = super::super::PassReads::new();
+    let mut answers = Vec::with_capacity(cluster);
     for (position, mut row) in rows.into_iter().enumerate() {
         let uid = row.deal.report_uid;
         let replayed_at = Instant::now();
@@ -1020,9 +1034,6 @@ fn serve_cluster(
                 st.done += 1;
                 st.finished.push((uid, Instant::now()));
             }
-            if position + 1 == cluster {
-                st.detach_flight(flight_id);
-            }
         }
         // One line per row, so a batch that looks stuck can be read instead of guessed: what
         // the worker answered for the cluster, how long the walk took, and what the row
@@ -1038,7 +1049,10 @@ fn serve_cluster(
             answered.as_millis(),
         );
         if still {
-            st.notify(JobEvent::Row(Box::new(answer)));
+            answers.push(answer);
+            if position + 1 == cluster {
+                st.finish_flight(flight_id, std::mem::take(&mut answers));
+            }
         }
         drop(st);
     }

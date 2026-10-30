@@ -47,6 +47,32 @@ fn backoff_explicit_reconnect_stops_the_old_retry_loop() {
     drop(manager);
 }
 
+/// Configuration-driven removal clears stop overrides, while reconnect keeps the same core alive.
+#[test]
+fn reconcile_removal_forgets_stop_overrides() {
+    let server: crate::config::ServerConfig = serde_json::from_str(
+        r#"{"id":91004,"uid":91004,"name":"removal fixture","synthetic":true}"#,
+    )
+    .unwrap();
+    let config = crate::config::AppConfig::headless(vec![server.clone()]);
+    let (_, handle) = crate::feed::trade_sound_test_feed();
+    let mut manager = manager();
+    manager.sessions.push(crate::session::CoreSession {
+        id: server.id,
+        name: server.name.clone(),
+        group: server.group.clone(),
+        conn_sig: crate::session::conn_sig(&server),
+        handle,
+    });
+    crate::feed::trade::note_stop_override(server.id, 77, crate::feed::OrderStopKind::VStop, false);
+
+    assert!(manager.reconnect(server.id, &config, None));
+    assert!(!crate::feed::trade::stop_overrides_for(server.id).is_empty());
+    manager.reconcile(&crate::config::AppConfig::headless(Vec::new()), None);
+
+    assert!(crate::feed::trade::stop_overrides_for(server.id).is_empty());
+}
+
 /// Build a manager with no feed threads, so queue transitions can be driven by retained store data.
 fn manager() -> SessionManager {
     let market = MarketStore::shared(0.0);

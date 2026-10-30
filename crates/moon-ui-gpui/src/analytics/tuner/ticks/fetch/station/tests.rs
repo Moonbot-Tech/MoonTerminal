@@ -13,11 +13,45 @@ fn window_growth_invalidates_station_refusals() {
     let _window = crate::test_support::SharedWindowGuard::take();
     let _refusals = UNFILLABLE_TEST.lock().unwrap_or_else(|p| p.into_inner());
     moon_core::market::trade_replay::set_margin_s(180);
-    super::unfillable().refuse(-94_001, "synthetic", "XALPHA");
+    super::unfillable().refuse(1, -94_001, "synthetic", "XALPHA");
     moon_core::market::trade_replay::set_margin_s(600);
-    let retry = super::candidate(-94_001);
+    let retry = super::candidate(1, -94_001);
     forget(-94_001);
     assert!(retry, "the wider window must get a fresh station attempt");
+}
+
+/// Reusing a report uid on another core must not suppress that core's station request.
+#[test]
+fn station_refusals_are_scoped_to_their_core() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let _guard = UNFILLABLE_TEST.lock().unwrap_or_else(|p| p.into_inner());
+    let first = queued_unservable(-94_004);
+    let uid = first.deal.report_uid;
+    forget(uid);
+    let second_address = Arc::new(super::super::super::state::RowAddress {
+        core_uid: 2,
+        ..(*first.address).clone()
+    });
+    let close_ms = first.window.close_ms;
+    let generation = super::unfillable().generation;
+    super::commit_station_answer(
+        &[first],
+        Filled {
+            markets: 1,
+            ..Default::default()
+        },
+        false,
+        generation,
+    );
+    let retry = super::super::super::tail::fillable_at(
+        &second_address,
+        uid,
+        close_ms,
+        30_000,
+        close_ms + 3_600_000,
+    );
+    forget(uid);
+    assert!(retry, "core 2 has not received a refusal for its own row");
 }
 
 /// The request must use the captured row margin, not a newer process-wide setting.
@@ -161,10 +195,10 @@ fn a_fill_evicted_by_the_injected_cap_is_not_requested_again() {
     );
     let now_generation = super::unfillable().generation;
     super::commit_station_answer(&rows, filled, false, now_generation);
-    assert!(!super::candidate(uid));
+    assert!(!super::candidate(1, uid));
     let next_requests = rows
         .iter()
-        .filter(|row| super::candidate(row.deal.report_uid))
+        .filter(|row| super::candidate(1, row.deal.report_uid))
         .count();
     forget(uid);
     assert_eq!(next_requests, 0);
@@ -189,7 +223,7 @@ fn partial_pull_failure_does_not_latch_unanswered_rows() {
         false,
         now_generation,
     );
-    let retry = super::candidate(uid);
+    let retry = super::candidate(1, uid);
     forget(uid);
     assert!(retry, "transport/persistence failures must stay retryable");
 }
@@ -197,7 +231,7 @@ fn partial_pull_failure_does_not_latch_unanswered_rows() {
 /// Drop a fixture refusal while preserving the store's snapshot invalidation invariant.
 fn forget(uid: i64) {
     let mut rows = super::unfillable();
-    if rows.uids.remove(&uid).is_some() {
+    if rows.uids.remove(&(1, uid)).is_some() {
         rows.revision += 1;
     }
 }
@@ -208,12 +242,12 @@ fn refusal_snapshots_share_an_arc_until_membership_changes() {
     let mut rows = Unfillable::default();
     let (_, empty) = rows.snapshot();
     assert!(Arc::ptr_eq(&empty, &rows.snapshot().1));
-    rows.refuse(91, "synthetic", "XALPHA");
+    rows.refuse(1, 91, "synthetic", "XALPHA");
     let (revision, refused) = rows.snapshot();
     assert!(!Arc::ptr_eq(&empty, &refused));
-    assert!(refused.contains(&91));
-    assert!(!empty.contains(&91));
-    rows.refuse(91, "synthetic", "XALPHA");
+    assert!(refused.contains(&(1, 91)));
+    assert!(!empty.contains(&(1, 91)));
+    rows.refuse(1, 91, "synthetic", "XALPHA");
     rows.filed("synthetic", "XBETA");
     let (same_revision, same) = rows.snapshot();
     assert_eq!(same_revision, revision);
@@ -223,7 +257,7 @@ fn refusal_snapshots_share_an_arc_until_membership_changes() {
     assert!(!Arc::ptr_eq(&refused, &cleared));
     assert!(cleared.is_empty());
     assert!(
-        refused.contains(&91),
+        refused.contains(&(1, 91)),
         "an in-progress pass keeps its captured membership"
     );
 }
@@ -234,16 +268,16 @@ fn refusal_snapshots_share_an_arc_until_membership_changes() {
 fn refusals_since_names_only_the_markets_that_changed() {
     let mut rows = Unfillable::default();
     let start = rows.since(0).0;
-    rows.refuse(91, "EX-XX", "XALPHAUSDT");
+    rows.refuse(1, 91, "EX-XX", "XALPHAUSDT");
     let (after_alpha, changed) = rows.since(start);
     assert_eq!(
         changed,
         [("EX-XX".to_string(), "XALPHAUSDT".to_string())].into()
     );
-    rows.refuse(91, "EX-XX", "XALPHAUSDT");
+    rows.refuse(1, 91, "EX-XX", "XALPHAUSDT");
     rows.filed("EX-XX", "XBETAUSDT");
     assert!(rows.since(after_alpha).1.is_empty(), "no membership change");
-    rows.refuse(92, "EX-XX", "XBETAUSDT");
+    rows.refuse(1, 92, "EX-XX", "XBETAUSDT");
     let (after_beta, changed) = rows.since(after_alpha);
     assert_eq!(
         changed,
@@ -339,7 +373,7 @@ fn refusal_refreshes_cached_classification_until_its_market_is_filed() {
     assert_eq!(rows::population_at(&state, 60, now).fit, 0);
     assert!(rows::order_for(&mut state, 60, now).is_empty());
     assert!(!state.data.data().unwrap().rows[0].fit_with(&tail::Admission::at(60, now)));
-    assert!(!super::unfillable().uids.contains_key(&uid));
+    assert!(!super::unfillable().uids.contains_key(&(1, uid)));
 
     // A clamped request must agree at its boundary in disk skipping and sample admission.
     let cap_ms = moon_core::db::tuner::ticks::tail::floor_ms(u32::MAX);
@@ -377,7 +411,7 @@ fn station_final_tail_no_longer_waits_for_a_source() {
         30_000,
         now
     ));
-    super::unfillable().refuse(row.deal.report_uid, "synthetic", "XALPHAUSDT");
+    super::unfillable().refuse(1, row.deal.report_uid, "synthetic", "XALPHAUSDT");
     let fillable = super::super::super::tail::fillable_at(
         &row.address,
         row.deal.report_uid,
@@ -411,11 +445,11 @@ fn already_held_rows_do_not_bump_the_station_filing_generation() {
 fn station_misses_survive_unrelated_filings() {
     let mut refused = Unfillable::default();
     refused.refresh((7, 60, (180_000, 300_000), 0));
-    refused.refuse(91, "synthetic", "XALPHA");
+    refused.refuse(1, 91, "synthetic", "XALPHA");
     let revision = refused.revision;
     refused.filed("synthetic", "XBETA");
     refused.filed("other", "XALPHA");
-    assert!(refused.uids.contains_key(&91));
+    assert!(refused.uids.contains_key(&(1, 91)));
     assert_eq!(refused.revision, revision);
     refused.filed("synthetic", "XALPHA");
     assert!(refused.uids.is_empty());
@@ -427,12 +461,72 @@ fn station_misses_survive_unrelated_filings() {
         (8, 120, (600_000, 1_800_000), 0),
         (8, 120, (600_000, 1_800_000), 1),
     ] {
-        refused.refuse(91, "synthetic", "XALPHA");
+        refused.refuse(1, 91, "synthetic", "XALPHA");
         let revision = refused.revision;
         refused.refresh(generation);
         assert!(refused.uids.is_empty());
         assert_ne!(refused.revision, revision);
     }
+}
+
+/// Publishing a smaller sample must forget its departed rows and their unreferenced market history.
+#[test]
+fn refusals_leave_with_their_rows() {
+    let mut refused = Unfillable::default();
+    refused.refuse(1, 91, "synthetic", "XALPHA");
+    refused.refuse(1, 92, "synthetic", "XALPHA");
+    refused.refuse(2, 91, "synthetic", "XBETA");
+    let live = std::collections::HashSet::from([(1, 92)]);
+    let markets =
+        std::collections::HashSet::from([("synthetic".to_string(), "XALPHA".to_string())]);
+
+    refused.retain(&live, &markets);
+
+    assert_eq!(refused.uids.len(), 1);
+    assert!(refused.uids.contains_key(&(1, 92)));
+    assert!(!refused.uids.contains_key(&(2, 91)));
+    assert!(
+        refused
+            .changed
+            .contains_key(&("synthetic".to_string(), "XALPHA".to_string()))
+    );
+    assert!(
+        !refused
+            .changed
+            .contains_key(&("synthetic".to_string(), "XBETA".to_string()))
+    );
+}
+
+/// Measure a synthetic day of 100,000 refusals shrinking to the 2,000 rows still published.
+#[test]
+#[ignore = "manual refusal retention scale measurement"]
+fn bench_refusal_retention_day() {
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let mut refused = Unfillable::default();
+        let mut live = std::collections::HashSet::new();
+        let mut markets = std::collections::HashSet::new();
+        for core in 1..=10_u64 {
+            for uid in 1..=10_000_i64 {
+                let market = format!("XALPHA{}", uid % 1_000);
+                refused.refuse(core, uid, "synthetic", &market);
+                markets.insert(("synthetic".to_string(), market));
+                if uid <= 200 {
+                    live.insert((core, uid));
+                }
+            }
+        }
+        let before = refused.uids.len();
+        let start = std::time::Instant::now();
+        refused.retain(&live, &markets);
+        samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+        assert_eq!((before, refused.uids.len()), (100_000, 2_000));
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[bench] station refusals retained=100000 -> 2000 prune median={:.6} ms",
+        samples[2]
+    );
 }
 
 /// A refused station-only row drops out of the footer and the next automatic prefill.
@@ -507,7 +601,7 @@ fn an_unservable_row_is_not_offered_or_counted_again() {
         &row,
         &super::super::super::tail::Admission::at(60, now)
     ));
-    super::unfillable().refuse(row.deal.report_uid, "synthetic", "XALPHAUSDT");
+    super::unfillable().refuse(1, row.deal.report_uid, "synthetic", "XALPHAUSDT");
     assert!(!super::super::station_load_candidate(
         &row,
         &super::super::super::tail::Admission::at(60, now)
@@ -570,7 +664,7 @@ fn empty_station_answer_is_remembered_when_nothing_else_can_fetch() {
     let now_generation = super::unfillable().generation;
     super::commit_station_answer(&rows, filled, false, now_generation);
     assert!(
-        super::unfillable().uids.contains_key(&uid),
+        super::unfillable().uids.contains_key(&(1, uid)),
         "an empty station answer must remember a row nothing else can fetch"
     );
     forget(uid);

@@ -195,6 +195,52 @@ pub(in crate::db::valuation::worker) fn prepare_trade(
     }
 }
 
+/// Prepare one trade from a completed resolution without crossing the provider boundary.
+///
+/// Args:
+///     store: Transactional valuation writer connection.
+///     axis: Per-core time axis rate minutes are resolved against.
+///     input: Current report input.
+///     prefetched: Complete exact/successor resolution persisted by this batch.
+///
+/// Returns:
+///     Completed, deferred, or transient-retry result using only cache and recorded outcomes.
+pub(in crate::db::valuation::worker) fn prepare_prefetched_trade(
+    store: &Connection,
+    axis: &ReportAxis,
+    input: &TradeInput,
+    prefetched: &PrefetchOutcome,
+) -> PrepareResult {
+    let minute = valuation_minute(axis, input);
+    if minute >= current_minute_utc() {
+        return PrepareResult::Deferred { changed: false };
+    }
+    if crate::db::QuoteCurrency::from_report_ordinal(input.quote_ordinal).is_none() {
+        return delete_trade(store, input.source, input.core_uid, input.row_id);
+    }
+    match crate::db::valuation::cached_rate(store, input.quote_ordinal, minute) {
+        Ok(Some(rate)) => {
+            match crate::db::valuation::store_trade_value(store, input, &rate, now_unix_ms_i64()) {
+                Ok(changed) => PrepareResult::Complete {
+                    changed: changed > 0,
+                },
+                Err(error) => PrepareResult::Retry(crate::db::valuation::store_fault(error)),
+            }
+        }
+        Ok(None) => match prefetched.unresolved.get(&(input.quote_ordinal, minute)) {
+            Some(UnresolvedRate::Missing) => {
+                match delete_trade(store, input.source, input.core_uid, input.row_id) {
+                    PrepareResult::Complete { changed } => PrepareResult::Deferred { changed },
+                    result => result,
+                }
+            }
+            Some(UnresolvedRate::Provider(error)) => PrepareResult::Retry(error.clone()),
+            Some(UnresolvedRate::Deferred) | None => PrepareResult::Deferred { changed: false },
+        },
+        Err(error) => PrepareResult::Retry(crate::db::valuation::store_fault(error)),
+    }
+}
+
 /// Persist outage pacing without claiming any minute was searched, then retire stale row values.
 pub(in crate::db::valuation::worker) fn defer_provider_trade(
     store: &Connection,
@@ -220,6 +266,29 @@ pub(in crate::db::valuation::worker) fn defer_provider_trade(
     }
 }
 
+/// Return requested minutes lacking a ready provider rate, indexed for constant-time membership.
+///
+/// Args:
+///     minutes: Requested closed UTC minute starts.
+///     ready: Rates returned before a transient provider failure.
+///
+/// Returns:
+///     Requested minutes that still need durable outage pacing, in request order.
+pub(in crate::db::valuation::worker) fn minutes_without_ready(
+    minutes: &[i64],
+    ready: &[super::super::ResolvedRate],
+) -> Vec<i64> {
+    let ready_minutes = ready
+        .iter()
+        .map(|rate| rate.minute_utc)
+        .collect::<std::collections::HashSet<_>>();
+    minutes
+        .iter()
+        .copied()
+        .filter(|minute| !ready_minutes.contains(minute))
+        .collect()
+}
+
 /// Populate every uncached closed rate needed by one report-row batch.
 ///
 /// Requests are grouped by quote and bounded to provider windows of at most 1,000 minutes. Sparse
@@ -240,10 +309,35 @@ pub(in crate::db::valuation::worker) fn prefetch_rates(
     axis: &ReportAxis,
     inputs: &[TradeInput],
 ) -> Result<PrefetchOutcome, PrefetchError> {
+    let mut outcome = resolve_rates(store, source, axis, inputs)?;
+    persist_prefetched(store, &mut outcome)?;
+    Ok(outcome)
+}
+
+/// Resolve every uncached exact, successor, and two-leg rate without writing to the store.
+///
+/// Args:
+///     store: Valuation cache read connection, outside any write transaction.
+///     source: Historical closed-candle boundary.
+///     axis: Per-core time axis rate minutes are resolved against.
+///     inputs: Current report inputs about to be prepared.
+///
+/// Returns:
+///     Complete rates, unresolved outcomes, and retry schedules to persist as one batch.
+///
+/// Errors:
+///     Cache read failures or an invalid unclosed exact-provider response.
+pub(in crate::db::valuation::worker) fn resolve_rates(
+    store: &Connection,
+    source: &dyn SpotRateSource,
+    axis: &ReportAxis,
+    inputs: &[TradeInput],
+) -> Result<PrefetchOutcome, PrefetchError> {
     let current = current_minute_utc();
-    let mut groups: BTreeMap<(i64, &'static str), BTreeSet<i64>> = BTreeMap::new();
+    let latest_closed = current.saturating_sub(60);
+    let mut groups: BTreeMap<(i64, &'static str), BTreeMap<i64, i64>> = BTreeMap::new();
+    let mut outcome = PrefetchOutcome::default();
     let mut seen = BTreeSet::new();
-    let mut changed = false;
     let keys = inputs
         .iter()
         .filter(|input| {
@@ -261,90 +355,80 @@ pub(in crate::db::valuation::worker) fn prefetch_rates(
         })?;
     for input in inputs {
         let minute = valuation_minute(axis, input);
-        if !seen.insert((input.quote_ordinal, minute)) {
-            continue;
-        }
-        if minute >= current {
+        if !seen.insert((input.quote_ordinal, minute)) || minute >= current {
             continue;
         }
         let Some(currency) = crate::db::QuoteCurrency::from_report_ordinal(input.quote_ordinal)
         else {
             continue;
         };
-        match cached.get(&(input.quote_ordinal, minute)) {
-            Some(_) => continue,
-            None => {
-                match crate::db::valuation::covering_successor_rate(
-                    store,
-                    input.quote_ordinal,
-                    minute,
-                ) {
-                    Ok(Some(rate)) => {
-                        match crate::db::valuation::store_rate(store, &rate, now_unix_ms_i64()) {
-                            Ok(stored) => changed |= stored > 0,
-                            Err(error) => {
-                                return Err(PrefetchError {
-                                    fault: crate::db::valuation::store_fault(error),
-                                    changed,
-                                });
-                            }
-                        }
-                        continue;
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        return Err(PrefetchError {
-                            fault: crate::db::valuation::store_fault(error),
-                            changed,
-                        });
-                    }
-                }
-                match crate::db::valuation::rate_search_start(
-                    store,
-                    input.quote_ordinal,
-                    minute,
-                    now_unix_ms_i64(),
-                ) {
-                    Ok(None) => continue,
-                    Ok(Some(search_start)) if search_start > minute => continue,
-                    Ok(Some(_)) => {}
-                    Err(error) => {
-                        return Err(PrefetchError {
-                            fault: crate::db::valuation::store_fault(error),
-                            changed,
-                        });
-                    }
-                }
+        if cached.contains_key(&(input.quote_ordinal, minute)) {
+            continue;
+        }
+        match crate::db::valuation::covering_successor_rate(store, input.quote_ordinal, minute) {
+            Ok(Some(rate)) => {
+                outcome.rates.push(rate);
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return Err(PrefetchError {
+                    fault: crate::db::valuation::store_fault(error),
+                    changed: false,
+                });
+            }
+        }
+        match crate::db::valuation::rate_search_start(
+            store,
+            input.quote_ordinal,
+            minute,
+            now_unix_ms_i64(),
+        ) {
+            Ok(None) => {
+                outcome
+                    .unresolved
+                    .insert((input.quote_ordinal, minute), UnresolvedRate::Missing);
+            }
+            Ok(Some(search_start)) => {
                 groups
                     .entry((input.quote_ordinal, currency.ticker()))
                     .or_default()
-                    .insert(minute);
+                    .insert(minute, search_start);
+            }
+            Err(error) => {
+                return Err(PrefetchError {
+                    fault: crate::db::valuation::store_fault(error),
+                    changed: false,
+                });
             }
         }
     }
-    let mut canonical_exact_missing = BTreeSet::new();
-    let mut provider_fault = None;
     for ((quote_ordinal, ticker), minutes) in groups {
-        let minutes = minutes.into_iter().collect::<Vec<_>>();
+        let exact = minutes
+            .iter()
+            .filter(|(minute, search_start)| **search_start <= **minute)
+            .map(|(minute, _)| *minute)
+            .collect::<Vec<_>>();
+        let mut ready = BTreeSet::new();
         let mut start = 0;
-        while start < minutes.len() {
-            let first = minutes[start];
+        while start < exact.len() {
+            let first = exact[start];
             let mut end = start + 1;
-            while end < minutes.len()
+            while end < exact.len()
                 && end - start < 1_000
-                && minutes[end].saturating_sub(first) <= 999 * 60
+                && exact[end].saturating_sub(first) <= 999 * 60
             {
                 end += 1;
             }
-            let batch = resolve_rate_batch(source, quote_ordinal, ticker, &minutes[start..end]);
+            let batch = resolve_rate_batch(source, quote_ordinal, ticker, &exact[start..end]);
             if batch.transient.is_none() {
                 debug_assert_eq!(batch.ready.len() + batch.missing.len(), end - start);
             }
-            let fetched_at = now_unix_ms_i64();
-            canonical_exact_missing
+            outcome
+                .canonical_exact_missing
                 .extend(batch.missing.iter().map(|minute| (quote_ordinal, *minute)));
             for rate in &batch.ready {
-                if rate.candle_close_ms >= fetched_at {
+                if rate.candle_close_ms >= now_unix_ms_i64() {
                     return Err(PrefetchError {
                         fault: FaultCause::new(
                             FailureKind::Provider,
@@ -353,47 +437,128 @@ pub(in crate::db::valuation::worker) fn prefetch_rates(
                                 rate.provider, rate.symbol, rate.minute_utc
                             ),
                         ),
-                        changed,
+                        changed: false,
                     });
                 }
-                match crate::db::valuation::store_rate(store, rate, fetched_at) {
-                    Ok(stored) => changed |= stored > 0,
-                    Err(error) => {
-                        return Err(PrefetchError {
-                            fault: crate::db::valuation::store_fault(error),
-                            changed,
-                        });
-                    }
-                }
+                ready.insert(rate.minute_utc);
+                outcome.rates.push(rate.clone());
             }
             if let Some(error) = batch.transient {
-                for minute in &minutes[start..end] {
-                    if batch.ready.iter().any(|rate| rate.minute_utc == *minute) {
-                        continue;
-                    }
-                    crate::db::valuation::store_rate_search(
-                        store,
+                for minute in minutes_without_ready(&exact[start..end], &batch.ready) {
+                    outcome.searches.push(PendingRateSearch {
                         quote_ordinal,
-                        *minute,
-                        minute.saturating_sub(60),
-                        fetched_at,
-                        false,
-                    )
-                    .map_err(|error| PrefetchError {
-                        fault: crate::db::valuation::store_fault(error),
-                        changed,
-                    })?;
+                        minute_utc: minute,
+                        searched_through_minute: minute.saturating_sub(60),
+                        now_ms: now_unix_ms_i64(),
+                        grow: false,
+                    });
                 }
-                provider_fault.get_or_insert_with(|| FaultCause::new(FailureKind::Provider, error));
+                outcome
+                    .provider_fault
+                    .get_or_insert_with(|| FaultCause::new(FailureKind::Provider, error));
             }
             start = end;
         }
+        for (minute, search_start) in minutes {
+            if ready.contains(&minute) {
+                continue;
+            }
+            let canonical_exact_prefetched = outcome
+                .canonical_exact_missing
+                .contains(&(quote_ordinal, minute));
+            let resolved = resolve_historical_rate(
+                source,
+                crate::db::QuoteCurrency::from_report_ordinal(quote_ordinal)
+                    .expect("grouped quote is known"),
+                minute,
+                search_start,
+                latest_closed,
+                canonical_exact_prefetched,
+            );
+            record_resolution(&mut outcome, quote_ordinal, minute, latest_closed, resolved);
+        }
     }
-    Ok(PrefetchOutcome {
-        provider_fault,
-        changed,
-        canonical_exact_missing,
-    })
+    Ok(outcome)
+}
+
+/// Record one fully resolved provider outcome and the retry schedule it implies.
+fn record_resolution(
+    outcome: &mut PrefetchOutcome,
+    quote_ordinal: i64,
+    minute: i64,
+    latest_closed: i64,
+    resolved: Result<super::super::ResolvedRate, FetchFailure>,
+) {
+    let key = (quote_ordinal, minute);
+    match resolved {
+        Ok(rate) if rate.candle_close_ms >= now_unix_ms_i64() => {
+            outcome.unresolved.insert(key, UnresolvedRate::Deferred);
+        }
+        Ok(rate) => outcome.rates.push(rate),
+        Err(FetchFailure::Missing) => {
+            outcome.searches.push(PendingRateSearch {
+                quote_ordinal,
+                minute_utc: minute,
+                searched_through_minute: latest_closed,
+                now_ms: now_unix_ms_i64(),
+                grow: true,
+            });
+            outcome.unresolved.insert(key, UnresolvedRate::Missing);
+        }
+        Err(FetchFailure::Transient(error) | FetchFailure::Unavailable(error)) => {
+            let fault = FaultCause::new(FailureKind::Provider, error);
+            outcome.searches.push(PendingRateSearch {
+                quote_ordinal,
+                minute_utc: minute,
+                searched_through_minute: minute.saturating_sub(60),
+                now_ms: now_unix_ms_i64(),
+                grow: false,
+            });
+            outcome
+                .unresolved
+                .insert(key, UnresolvedRate::Provider(fault.clone()));
+            outcome.provider_fault.get_or_insert(fault);
+        }
+    }
+}
+
+/// Persist a completed resolution inside the caller's batch transaction.
+///
+/// Returns:
+///     `Ok(())` after all rates and schedules are written, with `outcome.changed` updated.
+///
+/// Errors:
+///     Any SQLite write failure, carrying changes made earlier in this transaction.
+pub(in crate::db::valuation::worker) fn persist_prefetched(
+    store: &Connection,
+    outcome: &mut PrefetchOutcome,
+) -> Result<(), PrefetchError> {
+    for rate in &outcome.rates {
+        match crate::db::valuation::store_rate(store, rate, now_unix_ms_i64()) {
+            Ok(stored) => outcome.changed |= stored > 0,
+            Err(error) => {
+                return Err(PrefetchError {
+                    fault: crate::db::valuation::store_fault(error),
+                    changed: outcome.changed,
+                });
+            }
+        }
+    }
+    for search in &outcome.searches {
+        crate::db::valuation::store_rate_search(
+            store,
+            search.quote_ordinal,
+            search.minute_utc,
+            search.searched_through_minute,
+            search.now_ms,
+            search.grow,
+        )
+        .map_err(|error| PrefetchError {
+            fault: crate::db::valuation::store_fault(error),
+            changed: outcome.changed,
+        })?;
+    }
+    Ok(())
 }
 
 /// Publish durable prefetch progress even when a later request in the batch must retry.

@@ -62,7 +62,7 @@ pub(super) fn station_load_candidate(
         to,
         row.deal.close_ms,
         admission.now_ms,
-    ) || admission.candidate(row.deal.report_uid)
+    ) || admission.candidate(row.deal.core_uid, row.deal.report_uid)
 }
 
 /// How long one blocking receive holds a background-pool thread before checking back.
@@ -436,22 +436,27 @@ impl AnalyticsView {
         let active = job::progress().active;
         let mut answered = false;
         let mut station_filled = false;
-        let edits: Vec<(i64, RowEdit)> = events
-            .into_iter()
-            .filter_map(|event| match event {
-                job::JobEvent::StationFilled => {
-                    station_filled = true;
-                    None
+        let mut edits = Vec::new();
+        for event in events {
+            match event {
+                job::JobEvent::StationFilled => station_filled = true,
+                job::JobEvent::Started(uid) if active => {
+                    edits.push((uid, RowEdit::MarkFetching));
                 }
-                job::JobEvent::Started(uid) if active => Some((uid, RowEdit::MarkFetching)),
-                job::JobEvent::Released(uid) => Some((uid, RowEdit::UnmarkFetching)),
-                job::JobEvent::Row(answer) => {
+                job::JobEvent::Released(uid) => {
+                    edits.push((uid, RowEdit::UnmarkFetching));
+                }
+                job::JobEvent::Rows(answers) => {
                     answered = true;
-                    Some((answer.deal.report_uid, RowEdit::Replay(answer)))
+                    edits.extend(
+                        answers.into_iter().map(|answer| {
+                            (answer.deal.report_uid, RowEdit::Replay(Box::new(answer)))
+                        }),
+                    );
                 }
-                job::JobEvent::Started(_) | job::JobEvent::Progress => None,
-            })
-            .collect();
+                job::JobEvent::Started(_) | job::JobEvent::Progress => {}
+            }
+        }
         self.ticks.edit_rows(edits);
         if station_filled {
             self.refresh_station_tape(cx);

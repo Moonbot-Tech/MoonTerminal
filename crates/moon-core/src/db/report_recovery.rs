@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -44,18 +44,79 @@ static STAGING_SEQ: AtomicU32 = AtomicU32::new(0);
 /// Process-lifetime lease connection. The open exclusive transaction releases on process exit.
 static LEASE: OnceLock<Mutex<Connection>> = OnceLock::new();
 
-/// Access becomes live only after the lease-owned recovery preflight succeeds.
+/// Write and maintenance access becomes live only after the full recovery preflight succeeds.
 static ACCESS_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Read access opens after the cheap gate, before the full check completes.
+static READ_ACCESS_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Process-lifetime recovery notice consumed by Report and Analytics.
 static NOTICE: OnceLock<RecoveryNotice> = OnceLock::new();
 
 /// Private capability required to start the reports writer.
 ///
-/// Only [`prepare`] can construct this value, after the lease and startup recovery have both
-/// succeeded.
+/// Only [`prepare`] can construct this value. Its wait gate keeps every database write behind
+/// the background full-integrity verdict without delaying the first window.
 pub struct ReportWritePermit {
-    _private: (),
+    /// Shared startup verdict signaled exactly once by recovery.
+    gate: Arc<StartupGate>,
+    /// Shared read-only connection dropped before recovery and held through writer initialization.
+    anchor: Arc<Mutex<Option<Connection>>>,
+}
+
+/// Writer authorization published by the synchronous cheap gate or background full check.
+struct StartupGate {
+    /// `None` while the full check runs; `Some` is whether the writer may open the replica.
+    allowed: Mutex<Option<bool>>,
+    /// Wakes the writer when `allowed` becomes final.
+    ready: Condvar,
+}
+
+/// Process-wide write verdict awaited by maintenance and Report preference persistence.
+static WRITE_ACCESS: StartupGate = StartupGate {
+    allowed: Mutex::new(None),
+    ready: Condvar::new(),
+};
+
+impl StartupGate {
+    /// Create a permit gate that the background full check must resolve.
+    fn pending() -> Arc<Self> {
+        Arc::new(Self {
+            allowed: Mutex::new(None),
+            ready: Condvar::new(),
+        })
+    }
+
+    /// Create an already-resolved gate after synchronous recovery.
+    fn resolved(allowed: bool) -> Arc<Self> {
+        let gate = Self::pending();
+        gate.finish(allowed);
+        gate
+    }
+
+    /// Publish the final writer authorization and wake its thread.
+    fn finish(&self, allowed: bool) {
+        let mut slot = self.allowed.lock().unwrap_or_else(|p| p.into_inner());
+        *slot = Some(allowed);
+        self.ready.notify_all();
+    }
+
+    /// Wait without holding the UI thread, then return whether writes may begin.
+    fn wait(&self) -> bool {
+        let mut allowed = self.allowed.lock().unwrap_or_else(|p| p.into_inner());
+        while allowed.is_none() {
+            allowed = self.ready.wait(allowed).unwrap_or_else(|p| p.into_inner());
+        }
+        allowed.unwrap_or(false)
+    }
+}
+
+impl ReportWritePermit {
+    /// Wait for the full verdict and hand the writer its WAL anchor and authorization.
+    pub(crate) fn wait(self) -> (bool, Arc<Mutex<Option<Connection>>>) {
+        let allowed = self.gate.wait();
+        (allowed, self.anchor)
+    }
 }
 
 /// User-facing startup recovery state.
@@ -139,35 +200,72 @@ pub fn status() -> Option<&'static RecoveryNotice> {
     NOTICE.get()
 }
 
-/// Return whether this process owns the reports-replica lease.
-///
-/// Readers and maintenance operations use this gate as well as the writer so a second current
-/// process cannot mutate or checkpoint the portable replica after recovery preflight rejected it.
+/// Return whether this process owns the reports-replica lease and may write or checkpoint it.
 ///
 /// Returns:
-///     `true` only after this process acquired the lease and its preflight authorized access.
+///     `true` only after the full integrity check authorized write and maintenance access.
 pub(super) fn access_permitted() -> bool {
     LEASE.get().is_some() && ACCESS_ENABLED.load(Ordering::Acquire)
 }
 
-/// Require this process to own the reports-replica lease.
-///
-/// Returns:
-///     Success for the sole current owner, or a fail-closed coordination error.
+/// Require full write and maintenance authorization.
+#[cfg(test)]
 pub(crate) fn ensure_access() -> anyhow::Result<()> {
     anyhow::ensure!(
         access_permitted(),
-        "reports replica access requires the process lease"
+        "reports replica access requires the process lease and completed integrity check"
     );
     Ok(())
 }
 
-/// Acquire the process lease, recover confirmed corruption, and authorize the writer.
+/// Wait on a background writer thread until the full check authorizes replica writes.
+pub fn wait_for_write_access() -> anyhow::Result<()> {
+    anyhow::ensure!(
+        WRITE_ACCESS.wait(),
+        "reports replica writes require a conclusive full integrity check"
+    );
+    Ok(())
+}
+
+/// Require the cheap read gate while writes remain behind the full integrity check.
+pub(crate) fn ensure_read_access() -> anyhow::Result<()> {
+    anyhow::ensure!(
+        LEASE.get().is_some() && READ_ACCESS_ENABLED.load(Ordering::Acquire),
+        "reports replica reads require the process lease and cheap integrity gate"
+    );
+    Ok(())
+}
+
+/// Hold a read-only WAL connection until the asynchronous writer has initialized.
+///
+/// Early report preference reads still need read-write connections. Keeping this anchor alive
+/// prevents their close from becoming SQLite's last-connection checkpoint on the UI thread.
+fn startup_read_anchor(path: &Path) -> anyhow::Result<Option<Connection>> {
+    match std::fs::metadata(path) {
+        Ok(_) => {
+            let conn =
+                Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .with_context(|| format!("open read-only WAL anchor {}", path.display()))?;
+            conn.query_row("PRAGMA main.schema_version", [], |row| row.get::<_, i64>(0))
+                .context("initialize WAL anchor read")?;
+            Ok(Some(conn))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => {
+            Err(error).with_context(|| format!("inspect WAL anchor path {}", path.display()))
+        }
+    }
+}
+
+/// Acquire the process lease, run the cheap recovery gate, and start one full check.
 ///
 /// A lease failure publishes its own notice because recovery has not started in that case.
+/// Confirmed page damage is still recovered synchronously. A cheap pass enables readers and the
+/// first window immediately, while the returned permit keeps the writer closed until the
+/// background full check and any recovery it requires have finished.
 ///
 /// Returns:
-///     A private writer permit only when the reports paths are safe to open for writing.
+///     A private writer permit after the cheap gate, or `None` on a fail-closed decision.
 pub fn prepare() -> Option<ReportWritePermit> {
     let lease = match acquire_lease(&paths::reports_recovery_lease_path()) {
         Ok(lease) => lease,
@@ -175,6 +273,7 @@ pub fn prepare() -> Option<ReportWritePermit> {
             let detail = format!("reports replica lease unavailable: {error:#}");
             log::error!("{detail}");
             let _ = NOTICE.set(RecoveryNotice::LeaseUnavailable { detail });
+            WRITE_ACCESS.finish(false);
             return None;
         }
     };
@@ -182,30 +281,92 @@ pub fn prepare() -> Option<ReportWritePermit> {
         let detail = "reports recovery preflight was invoked more than once".to_string();
         log::error!("{detail}");
         let _ = NOTICE.set(RecoveryNotice::Failed { detail });
+        WRITE_ACCESS.finish(false);
         return None;
     }
 
     let files = paths::reports_db_files();
-    let decision = prepare_at(&files, &paths::damaged_reports_dir(), now_unix_ms_i64());
+    let recovery_root = paths::damaged_reports_dir();
+    let decision = prepare_at(&files, &recovery_root, now_unix_ms_i64());
     match decision {
         Decision::Ready => {
-            ACCESS_ENABLED.store(true, Ordering::Release);
-            Some(ReportWritePermit { _private: () })
+            let anchor = match startup_read_anchor(&files[0]) {
+                Ok(anchor) => anchor,
+                Err(error) => {
+                    let detail = format!("reports WAL startup anchor failed: {error:#}");
+                    log::error!("{detail}");
+                    let _ = NOTICE.set(RecoveryNotice::Failed { detail });
+                    WRITE_ACCESS.finish(false);
+                    return None;
+                }
+            };
+            let anchor = Arc::new(Mutex::new(anchor));
+            let thread_anchor = anchor.clone();
+            ACCESS_ENABLED.store(false, Ordering::Release);
+            READ_ACCESS_ENABLED.store(true, Ordering::Release);
+            let gate = StartupGate::pending();
+            let thread_gate = gate.clone();
+            let spawned = std::thread::Builder::new()
+                .name("reports-integrity".into())
+                .spawn(move || {
+                    let verdict = integrity::run(&files[0]);
+                    let _readers = if matches!(verdict, Integrity::Damaged(_)) {
+                        thread_anchor
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .take();
+                        ACCESS_ENABLED.store(false, Ordering::Release);
+                        READ_ACCESS_ENABLED.store(false, Ordering::Release);
+                        match super::reader_budget::quiesce() {
+                            Some(readers) => Some(readers),
+                            None => {
+                                integrity::publish(verdict.clone());
+                                thread_gate.finish(false);
+                                WRITE_ACCESS.finish(false);
+                                let detail =
+                                    "readers did not drain for report recovery".to_string();
+                                log::error!("{detail}");
+                                let _ = NOTICE.set(RecoveryNotice::Failed { detail });
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    let decision = decide_integrity(
+                        &files,
+                        &recovery_root,
+                        now_unix_ms_i64(),
+                        verdict.clone(),
+                    );
+                    thread_gate.finish(finish_background(decision, verdict));
+                });
+            match spawned {
+                Ok(_) => Some(ReportWritePermit { gate, anchor }),
+                Err(error) => {
+                    ACCESS_ENABLED.store(false, Ordering::Release);
+                    READ_ACCESS_ENABLED.store(false, Ordering::Release);
+                    gate.finish(false);
+                    WRITE_ACCESS.finish(false);
+                    let detail = format!("reports integrity thread did not start: {error}");
+                    log::error!("{detail}");
+                    let _ = NOTICE.set(RecoveryNotice::Failed { detail });
+                    None
+                }
+            }
         }
-        Decision::Recovered(snapshot_dir) => {
-            integrity::clear_after_recovery();
-            ACCESS_ENABLED.store(true, Ordering::Release);
-            log::warn!(
-                "reports: damaged replica preserved in {}; starting a fresh replica",
-                snapshot_dir.display()
-            );
-            let _ = NOTICE.set(RecoveryNotice::Recovered { snapshot_dir });
-            Some(ReportWritePermit { _private: () })
+        Decision::Recovered(_) => {
+            let allowed = finish_background(decision, Integrity::NotPresent);
+            Some(ReportWritePermit {
+                gate: StartupGate::resolved(allowed),
+                anchor: Arc::new(Mutex::new(None)),
+            })
         }
         Decision::Blocked {
             detail,
             snapshot_dir,
         } => {
+            WRITE_ACCESS.finish(false);
             log::error!("reports: automatic recovery blocked: {detail}");
             let _ = NOTICE.set(RecoveryNotice::Blocked {
                 detail,
@@ -214,11 +375,73 @@ pub fn prepare() -> Option<ReportWritePermit> {
             None
         }
         Decision::Failed(detail) => {
+            WRITE_ACCESS.finish(false);
             log::error!("reports: automatic recovery failed closed: {detail}");
             let _ = NOTICE.set(RecoveryNotice::Failed { detail });
             None
         }
     }
+}
+
+/// Return whether the full check completed conclusively rather than skipping or timing out.
+fn conclusive(verdict: &Integrity) -> bool {
+    matches!(verdict, Integrity::Ok | Integrity::NotPresent)
+}
+
+/// Apply the background full-check decision and publish its final writer authorization.
+///
+/// Args:
+///     decision: Recovery result after the one full scan.
+///     verdict: Full-scan diagnostics retained for status and write blocking.
+///
+/// Returns:
+///     `true` only after a conclusive pass or completed recovery with no damage latched.
+fn finish_background(decision: Decision, verdict: Integrity) -> bool {
+    let allowed = match decision {
+        Decision::Ready => {
+            let allowed = conclusive(&verdict) && !integrity::writes_blocked();
+            integrity::publish(verdict);
+            ACCESS_ENABLED.store(allowed, Ordering::Release);
+            READ_ACCESS_ENABLED.store(allowed, Ordering::Release);
+            allowed
+        }
+        Decision::Recovered(snapshot_dir) => {
+            integrity::clear_after_recovery();
+            integrity::publish(Integrity::NotPresent);
+            ACCESS_ENABLED.store(true, Ordering::Release);
+            READ_ACCESS_ENABLED.store(true, Ordering::Release);
+            log::warn!(
+                "reports: damaged replica preserved in {}; starting a fresh replica",
+                snapshot_dir.display()
+            );
+            let _ = NOTICE.set(RecoveryNotice::Recovered { snapshot_dir });
+            true
+        }
+        Decision::Blocked {
+            detail,
+            snapshot_dir,
+        } => {
+            ACCESS_ENABLED.store(false, Ordering::Release);
+            READ_ACCESS_ENABLED.store(false, Ordering::Release);
+            integrity::publish(verdict);
+            log::error!("reports: automatic recovery blocked: {detail}");
+            let _ = NOTICE.set(RecoveryNotice::Blocked {
+                detail,
+                snapshot_dir,
+            });
+            false
+        }
+        Decision::Failed(detail) => {
+            ACCESS_ENABLED.store(false, Ordering::Release);
+            READ_ACCESS_ENABLED.store(false, Ordering::Release);
+            integrity::publish(verdict);
+            log::error!("reports: automatic recovery failed closed: {detail}");
+            let _ = NOTICE.set(RecoveryNotice::Failed { detail });
+            false
+        }
+    };
+    WRITE_ACCESS.finish(allowed);
+    allowed
 }
 
 /// Open the coordination database and begin an exclusive process-lifetime transaction.
@@ -261,7 +484,7 @@ fn prepare_at(files: &[PathBuf; 3], recovery_root: &Path, now_ms: i64) -> Decisi
         Err(error) => return Decision::Failed(format!("{error:#}")),
     }
 
-    let verdict = integrity::active_damage().unwrap_or_else(|| integrity::run(&files[0]));
+    let verdict = integrity::active_damage().unwrap_or_else(|| integrity::quick(&files[0]));
     decide_integrity(files, recovery_root, now_ms, verdict)
 }
 

@@ -412,6 +412,8 @@ struct Backend {
     /// Shared per-core process CPU/memory history, overlaid on the Core Status chart as a line pair
     /// per core. Same lifetime rationale as `core_chart_hist`.
     core_line_hist: crate::backend::server_chart::CoreChartHistory,
+    /// Last known server address per configured core, retained through reconnects for ring pruning.
+    core_endpoint_ips: HashMap<CoreId, std::net::IpAddr>,
     /// Shared per-server client↔core round-trip history (ms), for the Core Status chart's core-ping
     /// line and the badge card. Recorded backend-always like the CPU/memory rings.
     server_ping_hist: crate::backend::server_chart::ServerPingHistory,

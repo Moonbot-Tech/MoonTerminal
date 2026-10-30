@@ -820,6 +820,12 @@ pub(in crate::feed::live) fn build_snapshot_rows(
     server_id: u64,
     snap: &moonproto::MoonStateSnapshot,
 ) -> Vec<OrderRow> {
+    crate::feed::trade::reconcile_stop_orders(
+        server_id,
+        snap.orders()
+            .iter()
+            .map(|order| (order.uid, order.job_is_done)),
+    );
     let mut strat_flags = HashMap::new();
     let stop_overrides = crate::feed::trade::stop_overrides_for(server_id);
     let mut order_rows = Vec::with_capacity(snap.orders().len());

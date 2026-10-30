@@ -171,7 +171,7 @@ impl DealWhy {
     ) -> Self {
         if matches!(row.tape, TapeStatus::Missing | TapeStatus::Refused(_))
             && crate::backend::station::known_cached()
-            && !admission.candidate(row.deal.report_uid)
+            && !admission.candidate(row.deal.core_uid, row.deal.report_uid)
         {
             return Self::StationMissing;
         }

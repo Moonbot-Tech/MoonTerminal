@@ -176,10 +176,17 @@ enum SequenceAction {
 /// leaving the trader with a chart click that silently does nothing.
 const MAX_EXIT_ATTEMPTS: u8 = 3;
 
+/// How long one connection may withhold an echo before its send counts as unconfirmed.
+///
+/// The deadline spends the existing retry budget instead of dropping live state blindly: after
+/// three silent round trips the head mutation is abandoned and the queue advances.
+const ECHO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Per-core serializer for every complete ClientSettings write and gated manual order.
 pub(in crate::feed) struct ClientSettingsSequence {
     queue: VecDeque<SequenceOp>,
     waiting_for_echo: bool,
+    waiting_since: Option<std::time::Instant>,
     pending_confirmation: Option<(crate::feed::ClientSettings, TempExpectation, usize)>,
     /// Consecutive sends of the head mutation that came back unconfirmed; see
     /// [`MAX_EXIT_ATTEMPTS`]. Cleared whenever the queue actually advances.
@@ -192,45 +199,42 @@ impl ClientSettingsSequence {
         Self {
             queue: VecDeque::new(),
             waiting_for_echo: false,
+            waiting_since: None,
             pending_confirmation: None,
             attempts: 0,
         }
     }
 
-    /// Retain queued work but forget connection-local send state before a reconnect attempt.
+    /// Drop work whose echo belonged to the old connection before a reconnect attempt.
     ///
-    /// The retry budget deliberately SURVIVES: `feed::live::run` prepares a reconnect on every
-    /// iteration, so resetting attempts here would let a flapping link refill the budget forever
-    /// and an order behind a generation the core will not hold would never be released.
+    /// Neither an unsent mutation nor an order priced from the old link has a confirmation path
+    /// now. The next user action starts a fresh generation instead of growing a queue behind a
+    /// packet the dropped client can never answer.
     pub(in crate::feed) fn prepare_reconnect(&mut self) {
+        self.queue.clear();
         self.waiting_for_echo = false;
+        self.waiting_since = None;
         self.pending_confirmation = None;
+        self.attempts = 0;
     }
 
-    /// Drop the manual orders still queued when a connection was lost. Settings, temporary bans
-    /// included, are desired state and keep their place and their retry budget.
+    /// Drop every order and mutation whose confirmation path ended with the lost connection.
     ///
-    /// Called whenever the connection stops being operational, a moonproto reconnect inside one
-    /// run as well as a new run. An order waiting from before was priced off a chart that may be
-    /// minutes old: the late live action `live::stale` refuses at the command queue.
-    ///
-    /// Removing an order invalidates a confirmation in flight: it pops a COUNT of leading
-    /// mutations, and an order removed from between two runs of mutations would let it pop into
-    /// the second. So that confirmation is forgotten; mutations the core already reflects still
-    /// leave the queue by the snapshot comparison. `waiting_for_echo` is deliberately kept: clearing
-    /// it while the link is down would rebuild a packet from settings retained before the outage
-    /// and could revert what the core already applied.
-    pub(in crate::feed) fn drop_orders_of_lost_connection(&mut self, server_id: u64) {
-        let before = self.queue.len();
-        self.queue.retain(|op| !matches!(op, SequenceOp::Order(_)));
-        let dropped = before - self.queue.len();
-        if dropped > 0 {
-            self.pending_confirmation = None;
+    /// Called for an in-loop reconnect as well as a new run. Keeping either kind of work would let a
+    /// stale price or a settings generation built from the old snapshot reach the replacement link.
+    pub(in crate::feed) fn drop_lost_connection(&mut self, server_id: u64) {
+        let orders = self
+            .queue
+            .iter()
+            .filter(|op| matches!(op, SequenceOp::Order(_)))
+            .count();
+        if orders > 0 {
             log::warn!(
-                "core {} lost its connection: dropping {dropped} queued manual order(s)",
+                "core {} lost its connection: dropping {orders} queued manual order(s)",
                 crate::feed::core_label(server_id),
             );
         }
+        self.prepare_reconnect();
     }
 
     /// Drop everything queued for a core process that is going away.
@@ -329,6 +333,7 @@ impl ClientSettingsSequence {
         temp_expectation: TempExpectation,
     ) {
         self.waiting_for_echo = true;
+        self.waiting_since = Some(std::time::Instant::now());
         self.pending_confirmation = Some((
             client_settings_from_proto(settings),
             temp_expectation,
@@ -341,13 +346,8 @@ impl ClientSettingsSequence {
     ///
     /// The safe-share sequence beside this one asks before sending: `build_shared_config` overlays
     /// the RETAINED compact snapshot, so a full-config packet built while a compact edit is still
-    /// in flight carries that edit's pre-change values and reverts it on arrival.
-    ///
-    /// KNOWN LIMIT: a mutation is abandoned after [`MAX_EXIT_ATTEMPTS`] unconfirmed sends, but an
-    /// echo that never ARRIVES at all leaves `waiting_for_echo` latched, and no attempt is counted
-    /// while it is: that keeps the gate shut for the rest of the connection and safe-share writes
-    /// queue up behind it. Reverting a trading control the user just set is the worse failure of
-    /// the two, which is why the gate is strict; a timeout belongs here rather than in the caller.
+    /// in flight carries that edit's pre-change values and reverts it on arrival. A silent echo
+    /// spends the retry budget after [`ECHO_TIMEOUT`], so this gate cannot hold the queue forever.
     ///
     /// The gate is deliberately ONE-WAY. A compact write issued while a safe-share packet is still
     /// unechoed can revert the fields the two channels share (`g_take_profit`, `trailing_drop`,
@@ -362,6 +362,7 @@ impl ClientSettingsSequence {
     /// Allow the next plan after a ClientSettingsUpdated echo.
     pub(super) fn observe_update(&mut self) {
         self.waiting_for_echo = false;
+        self.waiting_since = None;
     }
 
     /// Drive queued settings and orders against the client's retained snapshot.
@@ -435,14 +436,22 @@ impl ClientSettingsSequence {
         }
     }
 
-    /// Select the next deterministic action and discard mutations already reflected by the core.
+    /// Select the next action, expiring a silent echo before discarding confirmed mutations.
     fn next_action(
         &mut self,
         settings: &moonproto::ClientSettingsCommand,
         server_id: u64,
     ) -> SequenceAction {
         if self.waiting_for_echo {
-            return SequenceAction::Idle;
+            if self
+                .waiting_since
+                .is_some_and(|sent| sent.elapsed() < ECHO_TIMEOUT)
+            {
+                return SequenceAction::Idle;
+            }
+            self.waiting_for_echo = false;
+            self.waiting_since = None;
+            self.pending_confirmation = None;
         }
         if let Some((expected, expected_temp, mutation_count)) = self.pending_confirmation.take() {
             // Two halves, because the packet carries two kinds of state: everything the projection

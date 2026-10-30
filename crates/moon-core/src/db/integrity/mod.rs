@@ -1,12 +1,12 @@
-//! Background SQLite integrity check of the reports replica.
+//! SQLite integrity checks of the reports replica.
 //!
 //! Individual reads only detect damage on pages they touch, so narrow period
-//! windows can succeed while wider ones fail. This module attempts one bounded
-//! full-replica check per process off the UI thread and publishes a pollable
-//! verdict, including setup, size-limit, and timeout failures.
+//! windows can succeed while wider ones fail. Startup uses one cheap `quick_check`
+//! gate, then one bounded full `integrity_check` off the UI thread and publishes a
+//! pollable verdict, including setup, size-limit, and timeout failures.
 //!
-//! `integrity_check` and NOT `quick_check`: the faster pragma skips the
-//! index-vs-table content comparison, so a replica whose index row counts have
+//! The full check remains mandatory before the writer opens: `quick_check` skips
+//! the index-vs-table content comparison, so a replica whose index row counts have
 //! drifted out of step with the table would pass it. (Both catch outright page
 //! damage — that part is not the differentiator.)
 
@@ -18,7 +18,6 @@ use std::time::{Duration, Instant};
 use rusqlite::{Connection, OpenFlags};
 
 use super::FailKind;
-use crate::config::paths;
 
 /// Verdict of the replica integrity check.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,9 +45,8 @@ const MAX_PROBLEM_ROWS: usize = 20;
 /// bound, not a measurement.
 const MAX_CHECK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
-/// Delay before scanning, so the check does not contend with the initial sync
-/// burst right after startup.
-const START_DELAY: Duration = Duration::from_secs(20);
+/// Poll interval while the background full check is still running.
+const POLL_HINT: Duration = Duration::from_millis(500);
 
 /// Hard ceiling on the scan itself. The reader must let go of its WAL snapshot
 /// even on a pathological file, or the writer's checkpoint never completes.
@@ -57,7 +55,6 @@ const MAX_SCAN_TIME: Duration = Duration::from_secs(120);
 static RESULT: OnceLock<Integrity> = OnceLock::new();
 static LIVE_DAMAGE: OnceLock<Integrity> = OnceLock::new();
 static LIVE_DAMAGE_ACTIVE: AtomicBool = AtomicBool::new(false);
-static STARTED: AtomicBool = AtomicBool::new(false);
 pub(super) static WRITES_BLOCKED: AtomicBool = AtomicBool::new(false);
 static WRITE_BARRIER: RwLock<()> = RwLock::new(());
 #[cfg(test)]
@@ -83,48 +80,17 @@ pub fn status() -> Option<&'static Integrity> {
 
 /// How long a poller should wait before asking [`status`] again.
 ///
-/// A normal worker cannot finish before the startup delay, so polling more often
-/// only forces pointless repaints. Callers must still accept an immediate
-/// `CheckFailed` verdict when the worker thread cannot start.
+/// The full check starts immediately, so a short interval notices its verdict without
+/// delaying damage visibility behind the old fixed startup delay.
 pub fn poll_hint() -> Duration {
-    START_DELAY
-}
-
-/// Start the one-shot check. Idempotent: later calls are no-ops.
-///
-/// The function returns immediately after spawning, or after publishing a setup failure.
-pub fn spawn_check() {
-    if STARTED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    if !super::report_recovery::access_permitted() {
-        publish(Integrity::CheckFailed(
-            "reports replica access is disabled because this process does not own the lease"
-                .to_string(),
-        ));
-        return;
-    }
-    let path = paths::reports_db_path();
-    let spawned = std::thread::Builder::new()
-        .name("reports-integrity".into())
-        .spawn(move || {
-            std::thread::sleep(START_DELAY);
-            publish(run(&path));
-        });
-    if let Err(e) = spawned {
-        // A thread we could not start must not leave `status()` at `Running`
-        // forever — that would read as "still checking" for the whole session.
-        publish(Integrity::CheckFailed(format!(
-            "поток проверки не запустился: {e}"
-        )));
-    }
+    POLL_HINT
 }
 
 /// Publish the first terminal verdict and block future writes after confirmed damage.
 ///
 /// Args:
 ///     verdict: Completed integrity-check outcome.
-fn publish(verdict: Integrity) {
+pub(super) fn publish(verdict: Integrity) {
     if matches!(verdict, Integrity::Damaged(_)) {
         let _barrier = WRITE_BARRIER.write().unwrap_or_else(|p| p.into_inner());
         WRITES_BLOCKED.store(true, Ordering::Release);
@@ -311,6 +277,47 @@ pub(crate) fn run(path: &Path) -> Integrity {
         // Severe corruption can abort the pragma instead of producing diagnostic
         // rows, so corruption-class errors still map to `Damaged`.
         Err(e) => classify_scan_error(e, timed_out.load(Ordering::Acquire)),
+    }
+}
+
+/// Run the cheap startup gate without comparing every index entry to its table row.
+///
+/// Args:
+///     path: Reports replica to inspect read-only before the first window opens.
+///
+/// Returns:
+///     Page-corruption verdict used by synchronous recovery; an inconclusive result
+///     leaves the later full check responsible for authorizing the writer.
+pub(crate) fn quick(path: &Path) -> Integrity {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.len() > MAX_CHECK_BYTES => {
+            return Integrity::CheckFailed("replica is too large for startup validation".into());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Integrity::NotPresent;
+        }
+        Err(error) => return Integrity::CheckFailed(format!("replica is unavailable: {error}")),
+    }
+    let conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(conn) => conn,
+        Err(error) => return classify_pragma_error(error, "quick open"),
+    };
+    let _ = conn.busy_timeout(Duration::from_secs(30));
+    super::trace::install_on(&conn);
+    match conn.query_row("PRAGMA main.quick_check(1)", [], |row| {
+        row.get::<_, String>(0)
+    }) {
+        Ok(result) if result.trim() == "ok" => Integrity::Ok,
+        Ok(result) => Integrity::Damaged(
+            result
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect(),
+        ),
+        Err(error) => classify_pragma_error(error, "quick check"),
     }
 }
 

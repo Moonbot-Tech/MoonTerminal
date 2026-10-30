@@ -23,6 +23,19 @@ fn replacing_the_client_keeps_the_wanted_chart_text_market() {
     assert!(!wanted.applied);
 }
 
+/// A reply queued before deselection or a market switch must not restore the old overlay.
+#[test]
+fn chart_text_replies_match_only_the_current_selection() {
+    let mut wanted = ChartTextWanted::default();
+    wanted.wants("ROSEUSDT".into(), true, std::time::Instant::now());
+    assert!(wanted.accepts("ROSEUSDT"));
+    wanted.wants("BTCUSDT".into(), true, std::time::Instant::now());
+    assert!(!wanted.accepts("ROSEUSDT"));
+    assert!(wanted.accepts("BTCUSDT"));
+    wanted.wants(String::new(), false, std::time::Instant::now());
+    assert!(!wanted.accepts("BTCUSDT"));
+}
+
 /// An anchor is honoured only on the core it names.
 ///
 /// Plausible edit this catches: the core is dropped from the anchor "because the caller already

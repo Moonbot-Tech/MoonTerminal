@@ -111,6 +111,7 @@ fn run_worker(
     let mut axis = ReportAxis::identity_core_local();
     let mut reconciliation = Some(ReconcileState::new());
     let mut pending_ack = None;
+    let mut outbox_reader = None;
     let mut status = ValuationStatus::default();
     let mut current = CurrentRateState::default();
     'worker: loop {
@@ -152,6 +153,11 @@ fn run_worker(
             record_progress(&mut status, &mut sink, ValuationStage::CurrentRates, now_ms);
         }
         if store.is_none() || !super::cache_is_healthy() {
+            // Windows cannot quarantine an attached valuation file while either pass retains it.
+            if let Some(state) = reconciliation.as_mut() {
+                state.reader = None;
+            }
+            outbox_reader = None;
             drop(store.take());
             // Deliberately NOT gated by `ValuationStatus::wait_for` through `attempt`.
             // `wake_for_recovery` unparks this thread when corruption is detected; refusing the
@@ -160,7 +166,7 @@ fn run_worker(
             match super::open_canonical_store() {
                 Ok(recovered) => {
                     store = Some(recovered);
-                    reset_after_recovery(&mut reconciliation, &mut pending_ack);
+                    reset_after_recovery(&mut reconciliation, &mut pending_ack, &mut outbox_reader);
                     // Clear only cache-caused runs; provider and report-read failures remain valid
                     // after the derived cache is replaced.
                     status.record_recovery();
@@ -231,6 +237,7 @@ fn run_worker(
                     &dirty,
                     &mut pending_ack,
                     &mut reconciliation,
+                    &mut outbox_reader,
                 )
             },
         ) {

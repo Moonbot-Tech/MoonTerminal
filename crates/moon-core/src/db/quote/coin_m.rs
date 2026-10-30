@@ -140,9 +140,9 @@ enum Invalidation {
 /// on a reader's scan would stall the catch-up page ACKs — and the corruption barrier behind them
 /// — for the length of that scan. Nothing here ever holds this lock across SQL.
 #[cfg(not(test))]
-fn with_pending<R>(act: impl FnOnce(&mut Vec<Invalidation>) -> R) -> R {
+fn with_pending<R>(act: impl FnOnce(&mut BTreeMap<i64, Invalidation>) -> R) -> R {
     use std::sync::{Mutex, OnceLock};
-    static PENDING: OnceLock<Mutex<Vec<Invalidation>>> = OnceLock::new();
+    static PENDING: OnceLock<Mutex<BTreeMap<i64, Invalidation>>> = OnceLock::new();
     let mut queue = PENDING
         .get_or_init(Default::default)
         .lock()
@@ -152,10 +152,11 @@ fn with_pending<R>(act: impl FnOnce(&mut Vec<Invalidation>) -> R) -> R {
 
 /// Per-thread queue, for the same reason [`with`] is per-thread in test builds.
 #[cfg(test)]
-fn with_pending<R>(act: impl FnOnce(&mut Vec<Invalidation>) -> R) -> R {
+fn with_pending<R>(act: impl FnOnce(&mut BTreeMap<i64, Invalidation>) -> R) -> R {
     use std::cell::RefCell;
     thread_local! {
-        static PENDING: RefCell<Vec<Invalidation>> = const { RefCell::new(Vec::new()) };
+        static PENDING: RefCell<BTreeMap<i64, Invalidation>> =
+            const { RefCell::new(BTreeMap::new()) };
     }
     PENDING.with(|queue| act(&mut queue.borrow_mut()))
 }
@@ -169,7 +170,7 @@ fn with_pending<R>(act: impl FnOnce(&mut Vec<Invalidation>) -> R) -> R {
 ///     known: Knowledge to update.
 fn drain_pending(known: &mut Knowledge) {
     let queue = with_pending(std::mem::take);
-    for entry in queue {
+    for entry in queue.into_values() {
         match entry {
             Invalidation::Forget(core) => {
                 known.examined.remove(&core);
@@ -194,7 +195,10 @@ fn drain_pending(known: &mut Knowledge) {
 /// Args:
 ///     core: Core whose replica was recreated.
 pub(in crate::db) fn forget_core(core: u64) {
-    with_pending(|queue| queue.push(Invalidation::Forget(core as i64)));
+    // One pending action per core: a wipe supersedes every earlier catch-up signal.
+    with_pending(|queue| {
+        queue.insert(core as i64, Invalidation::Forget(core as i64));
+    });
 }
 
 /// Re-examine one core after a catch-up settled.
@@ -205,12 +209,17 @@ pub(in crate::db) fn forget_core(core: u64) {
 /// span alone would never look at them — which is why the writer says so explicitly instead.
 ///
 /// The proof is kept: a core that owned COIN-M rows still owns them in history, and re-proving it
-/// would put the scan back on the path this module took it off.
+/// would put the scan back on the path this module took it off. Repeated signals coalesce per core,
+/// and an existing wipe stays authoritative.
 ///
 /// Args:
 ///     core: Core whose sync just completed.
 pub(in crate::db) fn reexamine_core(core: u64) {
-    with_pending(|queue| queue.push(Invalidation::Reexamine(core as i64)));
+    with_pending(|queue| {
+        queue
+            .entry(core as i64)
+            .or_insert(Invalidation::Reexamine(core as i64));
+    });
 }
 
 /// Cores currently known to own COIN-M rows.

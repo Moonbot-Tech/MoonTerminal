@@ -136,7 +136,7 @@ pub(in crate::db) fn attach_databases(conn: &Connection, attach: AttachSet) -> R
 ///     Tuned report connection whose descriptors are held under the reader budget.
 pub fn open_reader_with(attach: AttachSet) -> ReadResult<ReportReader> {
     let path = paths::reports_db_path();
-    report_recovery::ensure_access().map_err(|error| {
+    report_recovery::ensure_read_access().map_err(|error| {
         ReadFail::failed(
             FailKind::ReplicaAccessDenied,
             error.to_string(),
@@ -160,6 +160,15 @@ pub fn open_reader_with(attach: AttachSet) -> ReadResult<ReportReader> {
             return Err(read_fail::budget_fail("reports: reader budget"));
         }
     };
+    report_recovery::ensure_read_access().map_err(|error| {
+        ReadFail::failed(
+            FailKind::ReplicaAccessDenied,
+            error.to_string(),
+            &path,
+            "reports: access after reader budget wait",
+            FailCode::None,
+        )
+    })?;
     let conn =
         Connection::open(&path).map_err(|e| read_fail::read_fail_at("отчёты(reader)", &path, e))?;
     // Before the ATTACH below: `cache_size` applies to one schema, and `main` is the

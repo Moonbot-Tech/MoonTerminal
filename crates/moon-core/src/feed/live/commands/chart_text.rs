@@ -38,6 +38,11 @@ impl ChartTextWanted {
         self.due(now)
     }
 
+    /// Whether a reply belongs to the currently selected overlay, not a queued older selection.
+    pub(in crate::feed::live) fn accepts(&self, market: &str) -> bool {
+        self.need_filters && self.market == market
+    }
+
     /// Pending requests retry immediately; successful requests wait for the repair heartbeat.
     pub(super) fn due(&self, now: Instant) -> bool {
         !self.applied || self.repair_wait(now).is_some_and(|wait| wait.is_zero())

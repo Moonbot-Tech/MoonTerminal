@@ -15,8 +15,8 @@ use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fields_from_text, fv_from_str, strat_kind_name};
 use crate::feed::{
-    CoreCmd, CoreConfigEditEvent, LatestMarketRole, MarketRoleAssignment, UpdateTarget, order_edit,
-    trade,
+    CoreCmd, CoreConfigEditEvent, FeedMsg, FeedTx, LatestMarketRole, MarketRoleAssignment,
+    UpdateTarget, order_edit, trade,
 };
 use crate::util::now_unix_ms as now_ms;
 
@@ -411,6 +411,7 @@ fn rebuild_sync(
 /// same as the events an event-batch-driven `SharedConfigSequence::drive` produces.
 pub(super) fn drain_commands(
     cmd_rx: &Receiver<crate::feed::QueuedCmd>,
+    tx: &FeedTx,
     client: &MoonClient,
     server: &ServerConfig,
     latest_market_role: &LatestMarketRole,
@@ -976,6 +977,12 @@ pub(super) fn drain_commands(
                 market,
                 need_filters,
             }) => {
+                let selection_changed =
+                    chart_text.market != market || chart_text.need_filters != need_filters;
+                if selection_changed {
+                    // One market is selected per core; clear the old store rows before its answer.
+                    let _ = tx.send(FeedMsg::ChartText(Vec::new()));
+                }
                 if chart_text.wants(market, need_filters, std::time::Instant::now()) {
                     chart_text.send(client, server.id);
                 }

@@ -206,6 +206,8 @@ pub enum DbMsg {
 pub struct ReportSink {
     pub(super) tx: SyncSender<DbMsg>,
     pub(super) starts: Arc<Mutex<HashMap<u64, ReportStart>>>,
+    /// Initialization latch that keeps feeds from reading checkpoints before they exist.
+    pub(in crate::db) init: Arc<super::report_writer::WriterInit>,
     /// Coalesces the terminal channel-closed diagnostic if the writer thread panics.
     pub(super) send_failed: Arc<AtomicBool>,
 }
@@ -220,9 +222,11 @@ impl ReportSink {
 
     /// Where this core's replication starts, defaulting to [`ReportStart::Fresh`].
     ///
-    /// A core absent from the map has no local rows, and a poisoned lock has no trustworthy
-    /// answer; both resolve to a full re-sync rather than to a guessed position.
+    /// The feed thread waits for asynchronous writer initialization before reading this map.
+    /// A core absent after initialization has no local rows, and a poisoned lock has no
+    /// trustworthy answer; both resolve to a full re-sync rather than to a guessed position.
     pub(crate) fn next_start(&self, core_uid: u64) -> ReportStart {
+        self.init.wait();
         self.starts
             .lock()
             .ok()
@@ -391,8 +395,8 @@ impl RepIndex {
 /// writer rather than to run without indexes.
 ///
 /// On an existing replica the first pass is a one-off full-table read per missing index, and it
-/// happens here — on the startup thread, before the first window exists. Measured at 0.4 s over
-/// 529 862 rows (458 MB) with `idx_rep_core_close` the only one missing; a cold or bigger
+/// happens on the writer thread while the first window is already available. Measured at 0.4 s
+/// over 529 862 rows (458 MB) with `idx_rep_core_close` the only one missing; a cold or bigger
 /// replica costs more. Nothing else reports that pause, so time the pass and log it when it
 /// actually cost something: a one-off delay with no line in the log is indistinguishable from a
 /// hang.
@@ -510,24 +514,44 @@ pub(super) fn init(
     };
     // Purge rows left after SyncComplete by older terminal versions that still
     // consumed the legacy close-SQL stream; otherwise the merged reader sees duplicates.
-    for uid in st.synced.clone() {
-        purge_legacy(conn, &mut st, uid)?;
-    }
+    purge_legacy_at_init(conn, &mut st)?;
     Ok(st)
+}
+
+/// Remove every synced core's legacy rows and recount the table once after the whole batch.
+fn purge_legacy_at_init(conn: &Connection, st: &mut RepState) -> rusqlite::Result<()> {
+    if !st.legacy_exists {
+        return Ok(());
+    }
+    for uid in st.synced.clone() {
+        delete_legacy_core(conn, uid)?;
+    }
+    drop_legacy_if_empty(conn, st)
 }
 
 /// Purge one core's legacy rows and permanently drop the empty legacy table.
 ///
-/// The `legacy_dropped` marker prevents `init_db` from recreating it. This is the
-/// shared path for `SyncComplete` and initialization cleanup.
+/// The `legacy_dropped` marker prevents `init_db` from recreating it. Live completion checks
+/// after each core; initialization uses [`purge_legacy_at_init`] to avoid repeated full counts.
 fn purge_legacy(conn: &Connection, st: &mut RepState, core_uid: u64) -> rusqlite::Result<()> {
     if !st.legacy_exists {
         return Ok(());
     }
+    delete_legacy_core(conn, core_uid)?;
+    drop_legacy_if_empty(conn, st)
+}
+
+/// Delete one core's rows without inspecting the rest of the legacy table.
+fn delete_legacy_core(conn: &Connection, core_uid: u64) -> rusqlite::Result<()> {
     conn.execute(
         "DELETE FROM closed_sell_reports WHERE core_uid=?1",
         [core_uid as i64],
     )?;
+    Ok(())
+}
+
+/// Drop the legacy table and record its migration only when no rows remain.
+fn drop_legacy_if_empty(conn: &Connection, st: &mut RepState) -> rusqlite::Result<()> {
     let left: i64 = conn.query_row("SELECT COUNT(*) FROM closed_sell_reports", [], |r| r.get(0))?;
     if left == 0 {
         conn.execute("DROP TABLE closed_sell_reports", [])?;
@@ -985,26 +1009,110 @@ impl DisagreementRanges {
     }
 }
 
-/// Apply an alive map's visibility and write its checkpoint alongside the row changes.
+/// Owned result of an alive-map read, independent of the map and its source rows.
+#[derive(Clone)]
+pub(super) struct AliveMapScan {
+    /// Local covered rows inspected by the scan.
+    inspected: i64,
+    /// Inclusive ranges to hide.
+    hide: Vec<(i64, i64)>,
+    /// Inclusive ranges to reveal.
+    reveal: Vec<(i64, i64)>,
+}
+
+/// Read an alive map's local disagreements outside the writer transaction when ordering permits.
 ///
-/// The caller's surrounding transaction commits both atomically.
+/// The scan selects only `newrecid` and `deleted` from this core's covered local rows, using the
+/// primary key for filter and order. Only coalesced disagreement ranges are retained.
 ///
-/// `is_alive` is the map's bit lookup, taken abstractly because `ReportAliveMapComplete` has no
-/// public constructor and could not otherwise be exercised by a test.
+/// Args:
+///     conn: Sole writer connection outside the subsequent write transaction.
+///     st: Last committed replica state.
+///     core_uid: Core whose map is applied.
+///     covered_up_to: Highest core-side record id covered by the map.
+///     is_alive: Map bit lookup, abstracted because the wire type has no public constructor.
 ///
-/// The scan is bounded by this core's LOCAL rows, never by `covered_up_to`, which is a core-side
-/// high-water in the millions: the primary key `(core_uid, newrecid)` serves both the filter and
-/// the ordering, so no sort, no temporary b-tree, and no additional index is needed — and
-/// [`REP_INDEXES`] documents why another index is not free. Only disagreements are collected, so
-/// the steady state after the first pass costs one index scan and no writes.
+/// Returns:
+///     Owned scan ranges, or `None` when no `deleted` column can hold visibility.
 ///
-/// Without the `deleted` column there is nowhere to record visibility, so the checkpoint is NOT
-/// stored: recording an alive map as applied while its clear bits went nowhere would leave rows
-/// the core has dropped visible forever. Such a core stays on its previous start state and
-/// reconciles again next session.
+/// Errors:
+///     Any SQLite prepare, query, or row-decode failure.
+pub(super) fn scan_alive_map(
+    conn: &Connection,
+    st: &RepState,
+    core_uid: u64,
+    covered_up_to: i64,
+    is_alive: impl Fn(i64) -> Option<bool>,
+) -> rusqlite::Result<Option<AliveMapScan>> {
+    if !st.cols.contains(DELETED_COL) {
+        log::warn!(
+            "отчёты(rep): у ядра {core_uid} нет колонки `deleted` — карта живых строк не \
+             применена, чекпойнт не сохранён"
+        );
+        return Ok(None);
+    }
+    let mut scan = AliveMapScan {
+        inspected: 0,
+        hide: Vec::new(),
+        reveal: Vec::new(),
+    };
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT newrecid, COALESCE(deleted,0) FROM {TABLE} \
+         WHERE core_uid=?1 AND newrecid>0 AND newrecid<=?2 ORDER BY newrecid"
+    ))?;
+    let mut rows = stmt.query(rusqlite::params![core_uid as i64, covered_up_to])?;
+    let mut ranges = DisagreementRanges::default();
+    while let Some(row) = rows.next()? {
+        let rec_id: i64 = row.get(0)?;
+        let deleted: i64 = row.get(1)?;
+        scan.inspected += 1;
+        ranges.push(rec_id, deleted != 0, is_alive(rec_id));
+    }
+    (scan.hide, scan.reveal) = ranges.finish();
+    Ok(Some(scan))
+}
+
+/// Apply an owned alive-map scan and its checkpoint in the caller's write transaction.
 ///
-/// Nothing is staged into the valuation outbox, matching [`apply_set_deleted`] — hiding a row
-/// changes no trade's value, and the valuation worker does not read the flag.
+/// Args:
+///     conn: Active writer transaction.
+///     core_uid: Core whose visibility is updated.
+///     checkpoint: Checkpoint made durable by the same transaction.
+///     scan: Previously read disagreement ranges.
+///
+/// Returns:
+///     Inspection and visibility-change counts for post-commit publication.
+///
+/// Errors:
+///     Any visibility update or checkpoint write failure; the surrounding batch rolls back.
+pub(super) fn apply_alive_map_scan(
+    conn: &Connection,
+    core_uid: u64,
+    checkpoint: ReportSyncCheckpoint,
+    scan: AliveMapScan,
+) -> rusqlite::Result<AliveMapApplied> {
+    let mut applied = AliveMapApplied {
+        inspected: scan.inspected,
+        ..AliveMapApplied::default()
+    };
+    let uid = core_uid as i64;
+    let mut stmt = conn.prepare_cached(&set_deleted_range_sql())?;
+    for (flag, ranges, counter) in [
+        (1i64, &scan.hide, &mut applied.hidden),
+        (0i64, &scan.reveal, &mut applied.revealed),
+    ] {
+        for &(from, to) in ranges {
+            *counter += stmt.execute(rusqlite::params![flag, uid, from, to])? as i64;
+        }
+    }
+    store_checkpoint(conn, core_uid, checkpoint)?;
+    Ok(applied)
+}
+
+/// Scan and apply an alive map when no earlier same-core batch work requires a pre-scan.
+///
+/// The caller's surrounding transaction commits visibility and checkpoint atomically. Without the
+/// `deleted` column no checkpoint is stored, and visibility changes stage no valuation outbox.
 pub(super) fn apply_alive_map(
     conn: &Connection,
     st: &RepState,
@@ -1013,43 +1121,10 @@ pub(super) fn apply_alive_map(
     is_alive: impl Fn(i64) -> Option<bool>,
     checkpoint: ReportSyncCheckpoint,
 ) -> rusqlite::Result<Option<AliveMapApplied>> {
-    if !st.cols.contains(DELETED_COL) {
-        log::warn!(
-            "отчёты(rep): у ядра {core_uid} нет колонки `deleted` — карта живых строк не \
-             применена, чекпойнт не сохранён"
-        );
+    let Some(scan) = scan_alive_map(conn, st, core_uid, covered_up_to, is_alive)? else {
         return Ok(None);
-    }
-    let mut applied = AliveMapApplied::default();
-    let uid = core_uid as i64;
-    let (hide, reveal) = {
-        let mut stmt = conn.prepare_cached(&format!(
-            "SELECT newrecid, COALESCE(deleted,0) FROM {TABLE} \
-             WHERE core_uid=?1 AND newrecid>0 AND newrecid<=?2 ORDER BY newrecid"
-        ))?;
-        let mut rows = stmt.query(rusqlite::params![uid, covered_up_to])?;
-        let mut ranges = DisagreementRanges::default();
-        while let Some(row) = rows.next()? {
-            let rec_id: i64 = row.get(0)?;
-            let deleted: i64 = row.get(1)?;
-            applied.inspected += 1;
-            ranges.push(rec_id, deleted != 0, is_alive(rec_id));
-        }
-        ranges.finish()
     };
-    // The scan statement is dropped above: an UPDATE must not interleave with an open cursor
-    // over the same table on this connection.
-    let mut stmt = conn.prepare_cached(&set_deleted_range_sql())?;
-    for (flag, ranges, counter) in [
-        (1i64, &hide, &mut applied.hidden),
-        (0i64, &reveal, &mut applied.revealed),
-    ] {
-        for &(from, to) in ranges {
-            *counter += stmt.execute(rusqlite::params![flag, uid, from, to])? as i64;
-        }
-    }
-    store_checkpoint(conn, core_uid, checkpoint)?;
-    Ok(Some(applied))
+    apply_alive_map_scan(conn, core_uid, checkpoint, scan).map(Some)
 }
 
 /// Publish the in-memory half of a committed alive map.

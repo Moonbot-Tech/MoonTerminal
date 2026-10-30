@@ -20,7 +20,7 @@ pub mod strategy_deps;
 pub mod strategy_order;
 pub mod strategy_path;
 pub mod synth;
-mod trade;
+pub(crate) mod trade;
 pub mod trade_sound;
 pub mod types;
 
@@ -1018,14 +1018,50 @@ pub struct FeedHandle {
     _join: std::thread::JoinHandle<()>,
 }
 
-impl Drop for FeedHandle {
-    /// A replaced or removed core's backlog leaves [`queued_messages`] with it: the backlog of a
-    /// stalled core is exactly what gets respawned.
+/// Feed messages destroyed by background retirement, used to isolate parallel tests.
+#[cfg(test)]
+static RETIRED_FOR_TEST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// Total messages destroyed by retired handles, independent of other tests' live queues.
+#[cfg(test)]
+pub(crate) fn retired_for_test() -> i64 {
+    RETIRED_FOR_TEST.load(Ordering::Relaxed)
+}
+
+/// Owned feed receiver destroyed away from the session/UI thread.
+struct FeedBacklog {
+    rx: FeedRx,
+}
+
+impl Drop for FeedBacklog {
+    /// Account for every queued message discarded with a replaced or removed core.
     fn drop(&mut self) {
         while self.rx.try_recv().is_ok() {
             note_drained();
+            #[cfg(test)]
+            RETIRED_FOR_TEST.fetch_add(1, Ordering::Relaxed);
         }
     }
+}
+
+impl Drop for FeedHandle {
+    /// Hand the old core's FIFO to a named background thread instead of draining it on the caller.
+    fn drop(&mut self) {
+        let (_, replacement) = std::sync::mpsc::channel();
+        let backlog = FeedBacklog {
+            rx: std::mem::replace(&mut self.rx, replacement),
+        };
+        // If thread creation fails, dropping the closure destroys `backlog` here with the same
+        // accounting, so a resource failure cannot leave `queued_messages` permanently inflated.
+        let _ = std::thread::Builder::new()
+            .name("feed-retirement".into())
+            .spawn(move || drop(backlog));
+    }
+}
+
+/// Clear order-local manual state when session management removes a core, not on reconnect.
+pub(crate) fn forget_stop_core(server_id: u64) {
+    trade::forget_stop_core(server_id);
 }
 
 /// Initial backoff step and its cap between initial connection attempts.
@@ -1062,6 +1098,18 @@ fn retry_can_help(e: &anyhow::Error) -> bool {
         )
 }
 
+thread_local! {
+    /// Delay consumed by the next feed spawned on the session-startup thread.
+    static NEXT_STARTUP_DELAY: std::cell::Cell<Duration> = const {
+        std::cell::Cell::new(Duration::ZERO)
+    };
+}
+
+/// Arm one startup-only feed delay without changing later reconnect spawns.
+pub(crate) fn arm_startup_delay(index: usize, total: usize) {
+    NEXT_STARTUP_DELAY.with(|delay| delay.set(retry::startup_delay(index, total)));
+}
+
 /// Start the live backend for one core, keeping a connection at all times and subscribing on
 /// command. `reports` is the channel to the SQLite writer; `None` means the database is unavailable
 /// and reports are not written.
@@ -1072,6 +1120,7 @@ pub fn spawn(
     wake: Option<FeedWakeTx>,
     market: Option<SharedMarketStore>,
 ) -> FeedHandle {
+    let startup_delay = NEXT_STARTUP_DELAY.with(std::cell::Cell::take);
     let (data_tx, rx) = std::sync::mpsc::channel();
     let tx = FeedTx::new(data_tx, wake);
     let (cmd_data_tx, cmd_rx) = std::sync::mpsc::channel::<QueuedCmd>();
@@ -1097,12 +1146,10 @@ pub fn spawn(
             let mut shared_config_sequence = live::SharedConfigSequence::new();
             let mut market_role = live::MarketRoleState::default();
             let mut chart_text = live::ChartTextWanted::default();
-            retry::run(&server, &tx, &stop_rx, || {
-                // A new connection: an order still waiting from the previous one goes, said out
-                // loud (`live::stale`). The run also drops it the moment the connection stops
-                // being operational; this covers a run that ended first.
-                client_settings_sequence.drop_orders_of_lost_connection(server.id);
-                client_settings_sequence.prepare_reconnect();
+            retry::run_with_delay(&server, &tx, &stop_rx, startup_delay, || {
+                // A new connection ends every confirmation path from the previous one. The run
+                // also clears the sequence the moment an established connection stops being ready.
+                client_settings_sequence.drop_lost_connection(server.id);
                 shared_config_sequence.prepare_reconnect();
                 live::run(
                     &server,

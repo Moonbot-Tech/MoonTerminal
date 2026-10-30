@@ -181,9 +181,6 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     crate::chartdx::axes::set_display_zone(moon_core::util::display_time::zone_or_utc(
         layout.header_clock_zone.as_deref(),
     ));
-    // Check the complete replica once because individual reads only detect
-    // damage on pages reached by their query.
-    moon_core::db::integrity::spawn_check();
     let (feed_wake_tx, feed_wake_rx) = moon_core::feed::feed_wake_pair();
     let updater = cx.new(|_| crate::update::UpdateController::new());
 
@@ -321,6 +318,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         last_backend_notify: None,
         core_chart_hist: Default::default(),
         core_line_hist: Default::default(),
+        core_endpoint_ips: HashMap::new(),
         server_ping_hist: Default::default(),
         server_exch_hist: Default::default(),
         warn: Default::default(),

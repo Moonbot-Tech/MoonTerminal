@@ -291,12 +291,10 @@ fn read_sources_res(conn: &Connection) -> ReadResult<Vec<ReadSource>> {
 ///
 /// Not budgeted: this runs before the writer exists as a single pre-window probe.
 ///
-/// [`open_reader`] opens read-WRITE despite its name, which is harmless for its own callers
-/// because the writer connection is alive by then. A probe that runs BEFORE `spawn_writer` would
-/// instead be the only connection, and closing the last read-write connection makes SQLite run
-/// its final WAL checkpoint and delete `-wal`/`-shm` — a WAL left by a killed run reaches
-/// hundreds of MB, so that would land as a synchronous copy on the pre-window startup path. A
-/// read-only last connection does not perform that close-time checkpoint or cleanup.
+/// [`open_reader`] stays read-write for Report preference metadata. Before the asynchronous
+/// writer opens, `ReportWritePermit` holds this same kind of read-only anchor so a closing reader
+/// is never the last connection. Otherwise SQLite would checkpoint and delete `-wal`/`-shm` on
+/// the UI thread, copying a WAL that can reach hundreds of MB after a killed run.
 pub fn open_readonly() -> ReadResult<Connection> {
     let path = paths::reports_db_path();
     // Same reasoning as `open_reader`: only a genuine absence may report `NotReady`.

@@ -807,3 +807,40 @@ fn attach_epoch_moves_with_every_health_change() {
     let again = attach_epoch().expect("healthy again");
     assert!(again > healthy, "the round trip must not read as unchanged");
 }
+
+/// Measure canonical cache validation over a synthetic 100000-row derived store.
+#[test]
+#[ignore = "synthetic startup valuation scale probe"]
+fn probe_startup_valuation_validation_100k() {
+    let (root, files, damage_root, pending) = recovery_fixture("startup-100k");
+    let conn = open_store(&files[0]).unwrap();
+    conn.execute_batch(
+        "WITH RECURSIVE ids(n) AS (
+             SELECT 1 UNION ALL SELECT n + 1 FROM ids WHERE n < 100000
+         )
+         INSERT INTO trade_values (
+             source_kind, core_uid, row_id, algorithm_version, closedate, quote_ordinal,
+             profit_quote, spent_quote, rate_minute_utc, rate_usdt, profit_usdt, spent_usdt,
+             valued_at_ms
+         )
+         SELECT 0, (n - 1) % 10 + 1, (n - 1) / 10 + 1, 2, 1700000000 + n, 8,
+                1.0, 2.0, 1700000000, 1.0, 1.0, 2.0, 1700000000000 FROM ids;
+         PRAGMA wal_checkpoint(TRUNCATE);",
+    )
+    .unwrap();
+    drop(conn);
+
+    let mut validation_ms = Vec::new();
+    for _ in 0..3 {
+        let started = std::time::Instant::now();
+        let conn = open_recoverable_store(files.clone(), &damage_root, &pending).unwrap();
+        validation_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        drop(conn);
+    }
+    validation_ms.sort_by(f64::total_cmp);
+    println!(
+        "probe_startup_valuation rows=100000 cores=10 validation_ms={validation_ms:?} median_ms={:.3}",
+        validation_ms[1]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

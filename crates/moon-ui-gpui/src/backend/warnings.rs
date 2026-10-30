@@ -11,8 +11,23 @@ use super::warn_slices::ring_slice;
 use crate::Backend;
 use crate::backend::core_warn::axis_has_series;
 use moon_core::session::CoreId;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
+
+/// Reconcile last-known server ownership and return the IPs whose cores are still configured.
+///
+/// Observations update the map even across reconnects; only configured cores remain in it, so an
+/// unresolved endpoint cannot preserve a removed core's history or block another core's eviction.
+fn reconcile_endpoint_owners(
+    owners: &mut HashMap<CoreId, IpAddr>,
+    configured: impl IntoIterator<Item = CoreId>,
+    observed: impl IntoIterator<Item = (CoreId, IpAddr)>,
+) -> HashSet<IpAddr> {
+    owners.extend(observed);
+    let configured: HashSet<CoreId> = configured.into_iter().collect();
+    owners.retain(|core, _| configured.contains(core));
+    owners.values().copied().collect()
+}
 
 impl Backend {
     /// Advance the backend warning engine one tick from the current core telemetry.
@@ -98,6 +113,20 @@ impl Backend {
             self.server_ping_hist.record(*ip, sec, *link);
             self.server_exch_hist.record(*ip, sec, *exch);
         }
+        let configured = &self.config.servers;
+        self.core_line_hist
+            .retain(|core| configured.iter().any(|server| server.id == core));
+        let store = self.session.store();
+        let live_ips = reconcile_endpoint_owners(
+            &mut self.core_endpoint_ips,
+            configured.iter().map(|server| server.id),
+            self.session.sessions().iter().filter_map(|session| {
+                Some((session.id, store.core(session.id)?.endpoint?.address))
+            }),
+        );
+        self.core_chart_hist.retain(|ip| live_ips.contains(&ip));
+        self.server_ping_hist.retain(|ip| live_ips.contains(&ip));
+        self.server_exch_hist.retain(|ip| live_ips.contains(&ip));
         // Retention prune: drop the graph slices of episodes older than 30 days (the episode rows
         // themselves stay forever), so the per-core blobs cannot grow the file without bound. Repeated
         // once a day rather than only at startup, so a session outliving the retention window keeps
@@ -383,3 +412,6 @@ impl Backend {
         finalize_recent_warning_episodes(all, self.warn_enabled(), core_ids, server_ips, limit)
     }
 }
+
+#[cfg(test)]
+mod tests;

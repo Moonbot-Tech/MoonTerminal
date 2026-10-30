@@ -667,3 +667,215 @@ fn a_stale_walk_step_cannot_replace_a_newer_walk() {
     walk.forget(4);
     assert!(!walk.admit(4, Some(&page_one), &page_two));
 }
+
+/// Measure index creation and ten-core legacy cleanup over a synthetic 100000-deal replica.
+#[test]
+#[ignore = "synthetic startup replica scale probe"]
+fn probe_startup_replica_maintenance_100k() {
+    let conn = Connection::open_in_memory().unwrap();
+    init_db(&conn).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+             closedate INTEGER, strategyid INTEGER, buydate INTEGER, coin TEXT, deleted INTEGER,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         WITH RECURSIVE ids(n) AS (
+             SELECT 1 UNION ALL SELECT n + 1 FROM ids WHERE n < 100000
+         )
+         INSERT INTO orders_rep
+         SELECT (n - 1) % 10 + 1, 'CORE_A', (n - 1) / 10 + 1,
+                1700000000 + n, n % 20, 1699990000 + n, 'COIN_A', 0 FROM ids;",
+    )
+    .unwrap();
+    let cols = table_cols_for_init(&conn).unwrap();
+    let mut index_ms = Vec::new();
+    for _ in 0..3 {
+        let started = std::time::Instant::now();
+        assert!(ensure_indexes(&conn, &cols).unwrap());
+        index_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        for index in REP_INDEXES {
+            conn.execute(&format!("DROP INDEX {}", index.name), [])
+                .unwrap();
+        }
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE closed_sell_reports (core_uid INTEGER NOT NULL, db_id INTEGER NOT NULL);
+         INSERT INTO closed_sell_reports SELECT core_uid, newrecid FROM orders_rep;",
+    )
+    .unwrap();
+    let starts = Arc::new(Mutex::new(HashMap::new()));
+    let mut st = RepState {
+        schemas: HashMap::new(),
+        cols,
+        starts,
+        legacy_exists: true,
+        synced: (1..=10).collect(),
+        vacuum_pending: false,
+        indexes_done: true,
+        awaiting_resync: HashMap::new(),
+    };
+    let started = std::time::Instant::now();
+    purge_legacy_at_init(&conn, &mut st).unwrap();
+    let legacy_ms = started.elapsed().as_secs_f64() * 1000.0;
+    index_ms.sort_by(f64::total_cmp);
+    println!(
+        "probe_startup_replica rows=100000 cores=10 indexes_ms={index_ms:?} indexes_median_ms={:.3} legacy_purge_ms={legacy_ms:.3}",
+        index_ms[1]
+    );
+}
+
+/// Frozen pre-split alive-map implementation used only as the split path's independent oracle.
+fn combined_alive_map_reference(
+    conn: &Connection,
+    st: &RepState,
+    core_uid: u64,
+    covered_up_to: i64,
+    is_alive: impl Fn(i64) -> Option<bool>,
+    checkpoint: ReportSyncCheckpoint,
+) -> rusqlite::Result<Option<AliveMapApplied>> {
+    if !st.cols.contains(DELETED_COL) {
+        return Ok(None);
+    }
+    let mut applied = AliveMapApplied::default();
+    let uid = core_uid as i64;
+    let (hide, reveal) = {
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT newrecid, COALESCE(deleted,0) FROM {TABLE} \
+             WHERE core_uid=?1 AND newrecid>0 AND newrecid<=?2 ORDER BY newrecid"
+        ))?;
+        let mut rows = stmt.query(rusqlite::params![uid, covered_up_to])?;
+        let mut ranges = DisagreementRanges::default();
+        while let Some(row) = rows.next()? {
+            let rec_id: i64 = row.get(0)?;
+            let deleted: i64 = row.get(1)?;
+            applied.inspected += 1;
+            ranges.push(rec_id, deleted != 0, is_alive(rec_id));
+        }
+        ranges.finish()
+    };
+    let mut stmt = conn.prepare_cached(&set_deleted_range_sql())?;
+    for (flag, ranges, counter) in [
+        (1i64, &hide, &mut applied.hidden),
+        (0i64, &reveal, &mut applied.revealed),
+    ] {
+        for &(from, to) in ranges {
+            *counter += stmt.execute(rusqlite::params![flag, uid, from, to])? as i64;
+        }
+    }
+    store_checkpoint(conn, core_uid, checkpoint)?;
+    Ok(Some(applied))
+}
+
+/// Applying a pre-scan must hide, reveal, and checkpoint exactly like the frozen combined path;
+/// a divergence would make reconnect ordering change which trades the user sees.
+#[test]
+fn pre_scanned_alive_map_matches_the_combined_path() {
+    let (combined, combined_st, _) = replica_with_deleted();
+    let (split, split_st, _) = replica_with_deleted();
+    for conn in [&combined, &split] {
+        seed_rows(conn, 2, 10);
+        conn.execute(
+            "UPDATE orders_rep SET deleted=1 WHERE core_uid=2 AND newrecid=5",
+            [],
+        )
+        .unwrap();
+    }
+    let checkpoint = ReportSyncCheckpoint {
+        epoch: 91,
+        next_from_rec_id: 11,
+    };
+    let expected = combined_alive_map_reference(
+        &combined,
+        &combined_st,
+        2,
+        10,
+        |rec| Some(rec != 3 && rec != 7),
+        checkpoint,
+    )
+    .unwrap()
+    .unwrap();
+    let scan = scan_alive_map(&split, &split_st, 2, 10, |rec| Some(rec != 3 && rec != 7))
+        .unwrap()
+        .unwrap();
+    let actual = apply_alive_map_scan(&split, 2, checkpoint, scan).unwrap();
+    assert_eq!(actual, expected);
+    for rec in 1..=10 {
+        assert_eq!(deleted_of(&split, 2, rec), deleted_of(&combined, 2, rec));
+    }
+    assert_eq!(load_checkpoint(&split, 2), load_checkpoint(&combined, 2));
+}
+
+/// Measure the sole writer's steady-state alive-map work over 100,000 covered local rows on ten
+/// cores. The map agrees everywhere, so this isolates the mandatory row decode from update cost.
+#[test]
+#[ignore = "synthetic 100000-row alive-map timing probe"]
+fn alive_map_scale_probe() {
+    let (conn, st, _starts) = replica_with_deleted();
+    {
+        let tx = conn.unchecked_transaction().unwrap();
+        for core in 1..=10 {
+            seed_rows(&tx, core, 10_000);
+        }
+        tx.commit().unwrap();
+    }
+    for run in 0..3 {
+        let started = std::time::Instant::now();
+        let mut inspected = 0;
+        for core in 1..=10 {
+            let applied = apply_alive_map(
+                &conn,
+                &st,
+                core,
+                10_000,
+                |_| Some(true),
+                ReportSyncCheckpoint {
+                    epoch: run + 1,
+                    next_from_rec_id: 10_001,
+                },
+            )
+            .unwrap()
+            .unwrap();
+            inspected += applied.inspected;
+        }
+        assert_eq!(inspected, 100_000);
+        let inside_transaction = started.elapsed();
+
+        let started = std::time::Instant::now();
+        let scans = (1..=10)
+            .map(|core| {
+                let scan = scan_alive_map(&conn, &st, core, 10_000, |_| Some(true))
+                    .unwrap()
+                    .unwrap();
+                (core, scan)
+            })
+            .collect::<Vec<_>>();
+        let pre_scan = started.elapsed();
+        let started = std::time::Instant::now();
+        let tx = conn.unchecked_transaction().unwrap();
+        let mut inspected = 0;
+        for (core, scan) in scans {
+            inspected += apply_alive_map_scan(
+                &tx,
+                core,
+                ReportSyncCheckpoint {
+                    epoch: run + 11,
+                    next_from_rec_id: 10_001,
+                },
+                scan,
+            )
+            .unwrap()
+            .inspected;
+        }
+        tx.commit().unwrap();
+        assert_eq!(inspected, 100_000);
+        let writer = started.elapsed();
+        eprintln!(
+            "alive maps 100000 rows / 10 cores: inside {:.3} ms, pre-scan {:.3} ms, writer {:.3} ms",
+            inside_transaction.as_secs_f64() * 1000.0,
+            pre_scan.as_secs_f64() * 1000.0,
+            writer.as_secs_f64() * 1000.0
+        );
+    }
+}

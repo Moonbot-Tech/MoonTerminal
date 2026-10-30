@@ -1,6 +1,6 @@
 //! Embedded-asset loaders: coin, exchange and UI icon textures, and sound playback.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -43,18 +43,35 @@ pub(crate) fn asset_dir(name: &str) -> PathBuf {
     relative
 }
 
-/// A process-wide texture cache: decoded images by key, including the decodes that produced nothing.
-///
-/// Caching the misses matters as much as caching the hits — a symbol with no icon must not probe
-/// the disk again on every rendered row.
-pub(crate) type TextureCache<K> = Mutex<HashMap<K, Option<Arc<RenderImage>>>>;
+/// Negative results are unbounded by user input, so only the most recent 1,024 stay cached.
+const MISS_CAP: usize = 1_024;
+
+/// Decoded hits for real assets, plus a bounded LRU of symbols known to have no usable image.
+pub(crate) struct TextureEntries<K> {
+    hits: HashMap<K, Arc<RenderImage>>,
+    misses: VecDeque<K>,
+}
+
+impl<K> Default for TextureEntries<K> {
+    /// Create an empty cache without requiring the key type to implement `Default`.
+    fn default() -> Self {
+        Self {
+            hits: HashMap::new(),
+            misses: VecDeque::new(),
+        }
+    }
+}
+
+/// A process-wide texture cache. Hits live for the process; misses are bounded by [`MISS_CAP`].
+pub(crate) type TextureCache<K> = Mutex<TextureEntries<K>>;
 
 /// Return a cached texture, decoding it once on the first miss.
 ///
 /// The decode runs OUTSIDE the lock. Holding a process-global mutex across a disk read and an image
 /// decode blocks every other caller behind it, and these callers are render passes — that is a
 /// stall on the frame loop, not a slow lookup. Two threads racing the same miss both decode and
-/// then agree, which is the cheaper trade.
+/// then agree, which is the cheaper trade. A cache hit never expires; a negative hit moves to the
+/// back of the miss LRU, and inserting past [`MISS_CAP`] evicts only the oldest negative result.
 ///
 /// Args:
 ///     cache: The caller's own `OnceLock` cache slot.
@@ -68,7 +85,7 @@ pub(crate) fn cached<K: Eq + Hash>(
     key: K,
     load: impl FnOnce(&K) -> Option<Arc<RenderImage>>,
 ) -> Option<Arc<RenderImage>> {
-    let cache = cache.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = cache.get_or_init(Default::default);
     // A poisoned lock means some other caller panicked mid-insert; the map itself is still a valid
     // cache, and refusing to draw an icon over it would be the worse answer.
     let lock = || {
@@ -76,12 +93,31 @@ pub(crate) fn cached<K: Eq + Hash>(
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     };
-    if let Some(hit) = lock().get(&key) {
-        return hit.clone();
+    if let Some(hit) = lock().hits.get(&key) {
+        return Some(hit.clone());
+    }
+    {
+        let mut entries = lock();
+        if let Some(position) = entries.misses.iter().position(|miss| *miss == key) {
+            let recent = entries.misses.remove(position).unwrap();
+            entries.misses.push_back(recent);
+            return None;
+        }
     }
     let texture = load(&key);
-    lock().insert(key, texture.clone());
-    texture
+    let mut entries = lock();
+    if let Some(texture) = texture {
+        entries.misses.retain(|miss| *miss != key);
+        entries.hits.insert(key, texture.clone());
+        Some(texture)
+    } else {
+        entries.misses.retain(|miss| *miss != key);
+        entries.misses.push_back(key);
+        while entries.misses.len() > MISS_CAP {
+            entries.misses.pop_front();
+        }
+        None
+    }
 }
 
 /// Wrap straight-alpha BGRA bytes as the single-frame image GPUI's `img()` draws.
