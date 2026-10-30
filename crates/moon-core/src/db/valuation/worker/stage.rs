@@ -19,15 +19,42 @@ pub(in crate::db::valuation::worker) struct PrefetchError {
     pub(in crate::db::valuation::worker) changed: bool,
 }
 
-/// Successful exact-rate prefetch state consumed by the following per-row preparation pass.
-#[derive(Debug, PartialEq)]
+/// Provider outcome for a quote/minute that has no exact cached rate after resolution.
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::db::valuation::worker) enum UnresolvedRate {
+    /// No route exists through the persisted search horizon.
+    Missing,
+    /// The requested or provider-returned candle is not closed yet.
+    Deferred,
+    /// A transient provider failure must retain outage pacing.
+    Provider(FaultCause),
+}
+
+/// One durable rate-search schedule produced before the write transaction.
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::db::valuation::worker) struct PendingRateSearch {
+    pub(in crate::db::valuation::worker) quote_ordinal: i64,
+    pub(in crate::db::valuation::worker) minute_utc: i64,
+    pub(in crate::db::valuation::worker) searched_through_minute: i64,
+    pub(in crate::db::valuation::worker) now_ms: i64,
+    pub(in crate::db::valuation::worker) grow: bool,
+}
+
+/// Complete provider resolution and durable effects consumed by one valuation batch.
+#[derive(Default, Debug, PartialEq)]
 pub(in crate::db::valuation::worker) struct PrefetchOutcome {
     /// Provider fault retained after independent rows have been processed.
     pub(in crate::db::valuation::worker) provider_fault: Option<FaultCause>,
-    /// Whether prefetch changed durable rate coverage.
+    /// Whether persisting resolved rates changed durable coverage.
     pub(in crate::db::valuation::worker) changed: bool,
     /// Quote/minute keys whose canonical Binance/Bybit exact routes were all absent.
     pub(in crate::db::valuation::worker) canonical_exact_missing: BTreeSet<(i64, i64)>,
+    /// Fully resolved exact or successor rates to persist in the batch transaction.
+    pub(in crate::db::valuation::worker) rates: Vec<super::super::ResolvedRate>,
+    /// Permanent, deferred, or transient outcome for keys without a ready rate.
+    pub(in crate::db::valuation::worker) unresolved: BTreeMap<(i64, i64), UnresolvedRate>,
+    /// Retry schedules to persist beside the resolved rates.
+    pub(in crate::db::valuation::worker) searches: Vec<PendingRateSearch>,
 }
 
 /// Wait between polls while the report replica has not been created yet.
@@ -85,14 +112,15 @@ pub(in crate::db::valuation::worker) fn report_fault(error: ReadFail) -> FaultCa
 /// visible while reading. Make it a newtype if that stops being enough.
 pub(in crate::db::valuation::worker) type ReconcileCursor = (i64, i64, i64);
 
-/// Incremental startup reconciliation cursor shared across worker-loop turns.
+/// Incremental startup reconciliation cursor and its pass-scoped report reader.
 pub(in crate::db::valuation::worker) struct ReconcileState {
     pub(in crate::db::valuation::worker) source_index: usize,
     pub(in crate::db::valuation::worker) after: Option<ReconcileCursor>,
+    pub(in crate::db::valuation::worker) reader: Option<crate::db::ReportReader>,
 }
 
 impl ReconcileState {
-    /// Start at the typed source above its newest key.
+    /// Start at the typed source above its newest key, with no reader opened yet.
     ///
     /// Returns:
     ///     Fresh incremental reconciliation cursor.
@@ -100,8 +128,30 @@ impl ReconcileState {
         Self {
             source_index: 0,
             after: None,
+            reader: None,
         }
     }
+}
+
+/// Reuse one report reader throughout a contiguous reconciliation or outbox pass.
+///
+/// Args:
+///     slot: Reader retained between bounded steps, empty before the first step.
+///     open: Production reader opener, or a counted synthetic opener in tests.
+///
+/// Returns:
+///     The already-open or newly opened reader.
+///
+/// Errors:
+///     The opener's classified readiness or read failure; the slot stays empty for a later retry.
+pub(in crate::db::valuation::worker) fn pass_reader<T>(
+    slot: &mut Option<T>,
+    open: impl FnOnce() -> ReadResult<T>,
+) -> ReadResult<&T> {
+    if slot.is_none() {
+        *slot = Some(open()?);
+    }
+    Ok(slot.as_ref().expect("reader installed above"))
 }
 
 /// Reset volatile worker state after the derived store is replaced.
@@ -109,12 +159,15 @@ impl ReconcileState {
 /// Args:
 ///     reconciliation: Startup cursor that must restart from the first physical source.
 ///     pending_ack: In-flight outbox boundary tied to the retired worker state.
+///     outbox_reader: Reader whose valuation attachment belongs to the retired store.
 pub(in crate::db::valuation::worker) fn reset_after_recovery(
     reconciliation: &mut Option<ReconcileState>,
     pending_ack: &mut Option<i64>,
+    outbox_reader: &mut Option<crate::db::ReportReader>,
 ) {
     *reconciliation = Some(ReconcileState::new());
     *pending_ack = None;
+    *outbox_reader = None;
 }
 
 /// Exclude the locally acknowledged prefix until the report writer deletes it durably.

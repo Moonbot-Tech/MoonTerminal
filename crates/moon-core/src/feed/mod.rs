@@ -1018,12 +1018,44 @@ pub struct FeedHandle {
     _join: std::thread::JoinHandle<()>,
 }
 
-impl Drop for FeedHandle {
-    /// A replaced or removed core's backlog leaves [`queued_messages`] with it.
+/// Feed messages destroyed by background retirement, used to isolate parallel tests.
+#[cfg(test)]
+static RETIRED_FOR_TEST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// Total messages destroyed by retired handles, independent of other tests' live queues.
+#[cfg(test)]
+pub(crate) fn retired_for_test() -> i64 {
+    RETIRED_FOR_TEST.load(Ordering::Relaxed)
+}
+
+/// Owned feed receiver destroyed away from the session/UI thread.
+struct FeedBacklog {
+    rx: FeedRx,
+}
+
+impl Drop for FeedBacklog {
+    /// Account for every queued message discarded with a replaced or removed core.
     fn drop(&mut self) {
         while self.rx.try_recv().is_ok() {
             note_drained();
+            #[cfg(test)]
+            RETIRED_FOR_TEST.fetch_add(1, Ordering::Relaxed);
         }
+    }
+}
+
+impl Drop for FeedHandle {
+    /// Hand the old core's FIFO to a named background thread instead of draining it on the caller.
+    fn drop(&mut self) {
+        let (_, replacement) = std::sync::mpsc::channel();
+        let backlog = FeedBacklog {
+            rx: std::mem::replace(&mut self.rx, replacement),
+        };
+        // If thread creation fails, dropping the closure destroys `backlog` here with the same
+        // accounting, so a resource failure cannot leave `queued_messages` permanently inflated.
+        let _ = std::thread::Builder::new()
+            .name("feed-retirement".into())
+            .spawn(move || drop(backlog));
     }
 }
 

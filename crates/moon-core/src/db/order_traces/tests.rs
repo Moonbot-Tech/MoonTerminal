@@ -407,3 +407,120 @@ fn an_empty_answer_keeps_filed_lines() {
     };
     assert_eq!(&kept[..], &lines[..]);
 }
+
+/// A full writer queue must backpressure an archived answer instead of losing it before the next
+/// backfill, when the core may already have expired the only remaining copy.
+#[test]
+fn full_queue_answer_waits_for_writer() {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let (wake, _wake_rx) = std::sync::mpsc::channel();
+    let (ask, _ask_rx) = AskSink::new(wake);
+    tx.try_send(TraceDbMsg::Backfill { core_uid: 1, ask })
+        .unwrap();
+    let sink = TraceSink {
+        tx,
+        generation: Arc::new(AtomicU64::new(0)),
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let sender = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        sink.send(TraceDbMsg::Answer {
+            core_uid: 2,
+            report_uid: 77,
+            lines: Arc::from([]),
+        });
+        done_tx.send(()).unwrap();
+    });
+    started_rx.recv().unwrap();
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        "the answer returned while the queue was still full"
+    );
+    assert!(matches!(
+        rx.recv_timeout(Duration::from_secs(1)),
+        Ok(TraceDbMsg::Backfill { core_uid: 1, .. })
+    ));
+    done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    let answer = rx.recv_timeout(Duration::from_secs(1));
+    sender.join().unwrap();
+    assert!(matches!(
+        answer,
+        Ok(TraceDbMsg::Answer {
+            core_uid: 2,
+            report_uid: 77,
+            ..
+        })
+    ));
+}
+
+/// A failed answer in a shared commit must roll back only itself, leaving its siblings durable and
+/// retryable independently exactly as they were with one transaction per answer.
+#[test]
+fn answer_batch_isolates_one_failed_answer() {
+    let (_path, conn) = store("batch-failure");
+    conn.execute_batch(
+        "CREATE TEMP TRIGGER fail_answer BEFORE INSERT ON trace_answers
+         WHEN NEW.report_uid=2 BEGIN SELECT RAISE(ABORT,'synthetic answer failure'); END;",
+    )
+    .unwrap();
+    let lines: Arc<[ArchivedOrderTrace]> =
+        Arc::from(vec![line(true, ArchivedLineKind::Entry, &[(1.0, 2.0)])]);
+    let answers = vec![(1, 1, lines.clone()), (1, 2, lines.clone()), (1, 3, lines)];
+    let errors = store_answers(&conn, &answers, 123).unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].0, 1);
+    let kept = read_many_on(&conn, 1, &[1, 2, 3]).unwrap();
+    assert_eq!(kept.len(), 2);
+    assert!(!kept.contains_key(&2));
+    conn.execute_batch("DROP TRIGGER fail_answer").unwrap();
+    assert!(
+        store_answers(&conn, &answers[1..2], 124)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(read_many_on(&conn, 1, &[1, 2, 3]).unwrap().len(), 3);
+}
+
+/// Measure 4,000 archived answers across ten cores using identical synthetic rows in the former
+/// per-answer and current per-drain transaction shapes, with read-back parity as the oracle.
+#[test]
+#[ignore = "synthetic 4000-answer writer timing probe"]
+fn trace_answer_commit_scale_probe() {
+    let expected = [line(
+        true,
+        ArchivedLineKind::Entry,
+        &[(1.0, 1.23456789012345)],
+    )];
+    let mut answers: Vec<(u64, i64, Arc<[ArchivedOrderTrace]>)> = Vec::new();
+    for core in 1..=10 {
+        for uid in 1..=400 {
+            answers.push((core, uid, Arc::from(expected.to_vec())));
+        }
+    }
+    let uids = (1..=400).collect::<Vec<_>>();
+    for run in 0..3 {
+        let (_baseline_path, baseline) = store(&format!("commit-baseline-{run}"));
+        let started = std::time::Instant::now();
+        for (core, uid, lines) in &answers {
+            store_answer(&baseline, *core, *uid, lines, 123).unwrap();
+        }
+        let per_answer = started.elapsed();
+
+        let (_batched_path, batched) = store(&format!("commit-batched-{run}"));
+        let started = std::time::Instant::now();
+        assert!(store_answers(&batched, &answers, 123).unwrap().is_empty());
+        let per_drain = started.elapsed();
+        eprintln!(
+            "trace answers 4000: per-answer {:.3} ms, per-drain {:.3} ms",
+            per_answer.as_secs_f64() * 1000.0,
+            per_drain.as_secs_f64() * 1000.0
+        );
+        for core in 1..=10 {
+            assert_eq!(
+                read_many_on(&baseline, core, &uids).unwrap(),
+                read_many_on(&batched, core, &uids).unwrap()
+            );
+        }
+    }
+}

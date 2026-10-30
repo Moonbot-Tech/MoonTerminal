@@ -69,8 +69,8 @@ pub const BACKFILL_LIMIT: usize = 400;
 /// day covers any time zone plus the ping offset, and costs nothing but a few more candidates.
 const CLOCK_SLACK: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Bound on queued writer messages. A closed trade is one message and a backfill is one message,
-/// so the queue only ever holds a burst of closes; past it the feed drops the message and logs.
+/// Bound on queued writer messages. Reconstructable close/backfill messages drop and log at the
+/// cap; an archived answer applies backpressure because its only remaining copy may be expiring.
 const QUEUE_CAP: usize = 1024;
 
 /// Bound on queued asks travelling back to one feed. Per core, and a backfill is the only sender
@@ -190,15 +190,21 @@ pub struct TraceSink {
 }
 
 impl TraceSink {
-    /// Queue one message for the writer without blocking the feed.
+    /// Queue one message, applying backpressure to an archived answer's producer when full.
     ///
-    /// A full queue drops the message with a warning rather than stalling the feed thread behind
-    /// disk: an answer lost this way is asked for again by the next backfill, and a close hook
-    /// lost this way is covered the same way.
+    /// An answer may be the last surviving copy of a core-expired archive, so it waits for queue
+    /// room instead of being dropped. Close hooks and backfill requests remain nonblocking because
+    /// a later backfill can reconstruct them.
     ///
     /// Args:
     ///     msg: The message.
     pub fn send(&self, msg: TraceDbMsg) {
+        if matches!(&msg, TraceDbMsg::Answer { .. }) {
+            if self.tx.send(msg).is_err() {
+                log::warn!("[x] order traces: answer dropped (writer gone)");
+            }
+            return;
+        }
         if let Err(error) = self.tx.try_send(msg) {
             let what = match error {
                 TrySendError::Full(_) => "queue full",
@@ -311,21 +317,53 @@ fn spawn_writer() -> Option<TraceSink> {
         .spawn(move || {
             log::info!("order traces: writer started ({})", path.display());
             let traces_path = path.clone();
-            while let Ok(msg) = rx.recv() {
+            let mut pending = None;
+            loop {
+                let msg = match pending.take() {
+                    Some(msg) => msg,
+                    None => match rx.recv() {
+                        Ok(msg) => msg,
+                        Err(_) => break,
+                    },
+                };
                 match msg {
                     TraceDbMsg::Answer {
                         core_uid,
                         report_uid,
                         lines,
-                    } => match store_answer(&conn, core_uid, report_uid, &lines, now_unix_ms_i64())
-                    {
-                        Ok(()) => {
-                            gen_writer.fetch_add(1, Ordering::Relaxed);
+                    } => {
+                        let mut answers = vec![(core_uid, report_uid, lines)];
+                        while let Ok(msg) = rx.try_recv() {
+                            match msg {
+                                TraceDbMsg::Answer {
+                                    core_uid,
+                                    report_uid,
+                                    lines,
+                                } => answers.push((core_uid, report_uid, lines)),
+                                other => {
+                                    pending = Some(other);
+                                    break;
+                                }
+                            }
                         }
-                        Err(e) => log::error!(
-                            "[x] order traces: core {core_uid} uid={report_uid} not written: {e}"
-                        ),
-                    },
+                        match store_answers(&conn, &answers, now_unix_ms_i64()) {
+                            Ok(errors) => {
+                                gen_writer.fetch_add(
+                                    (answers.len() - errors.len()) as u64,
+                                    Ordering::Relaxed,
+                                );
+                                for (index, error) in errors {
+                                    let (core_uid, report_uid, _) = &answers[index];
+                                    log::error!(
+                                        "[x] order traces: core {core_uid} uid={report_uid} not written: {error}"
+                                    );
+                                }
+                            }
+                            Err(error) => log::error!(
+                                "[x] order traces: answer batch not written: {error}"
+                            ),
+                        }
+                    }
                     TraceDbMsg::RowClosed {
                         core_uid,
                         report_uid,
@@ -392,6 +430,7 @@ fn spawn_writer() -> Option<TraceSink> {
 ///
 /// Errors:
 ///     Any SQLite failure; the transaction is rolled back.
+#[cfg(test)]
 fn store_answer(
     conn: &Connection,
     core_uid: u64,
@@ -399,10 +438,68 @@ fn store_answer(
     lines: &[ArchivedOrderTrace],
     now_ms: i64,
 ) -> rusqlite::Result<()> {
-    let core = core_uid as i64;
     let tx = conn.unchecked_transaction()?;
+    store_answer_in(&tx, core_uid, report_uid, lines, now_ms)?;
+    tx.commit()
+}
+
+/// File one drained answer batch in a single commit, isolating each answer's failure.
+///
+/// Args:
+///     conn: Write connection outside a transaction.
+///     answers: Core, report uid, and archived lines for each drained answer.
+///     now_ms: Check timestamp shared by this writer drain.
+///
+/// Returns:
+///     Indexes and errors of answers rolled back by their own savepoints. Other answers commit.
+///
+/// Errors:
+///     A transaction, savepoint, or commit failure that prevented the batch from settling.
+fn store_answers(
+    conn: &Connection,
+    answers: &[(u64, i64, Arc<[ArchivedOrderTrace]>)],
+    now_ms: i64,
+) -> rusqlite::Result<Vec<(usize, rusqlite::Error)>> {
+    let tx = conn.unchecked_transaction()?;
+    let mut errors = Vec::new();
+    for (index, (core_uid, report_uid, lines)) in answers.iter().enumerate() {
+        tx.execute_batch("SAVEPOINT trace_answer")?;
+        match store_answer_in(&tx, *core_uid, *report_uid, lines, now_ms) {
+            Ok(()) => tx.execute_batch("RELEASE trace_answer")?,
+            Err(error) => {
+                tx.execute_batch("ROLLBACK TO trace_answer; RELEASE trace_answer")?;
+                errors.push((index, error));
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(errors)
+}
+
+/// Apply one answer inside the caller's transaction or savepoint.
+///
+/// Args:
+///     conn: Transactional write connection.
+///     core_uid: Core that recorded the trade.
+///     report_uid: Report identity whose answer is replaced.
+///     lines: Archived lines, or empty for a dated no-archive answer.
+///     now_ms: Terminal wall clock, Unix ms.
+///
+/// Returns:
+///     `Ok(())` after applying the answer or retaining already-filed lines.
+///
+/// Errors:
+///     Any SQLite failure; the caller rolls back the enclosing transaction or savepoint.
+fn store_answer_in(
+    conn: &Connection,
+    core_uid: u64,
+    report_uid: i64,
+    lines: &[ArchivedOrderTrace],
+    now_ms: i64,
+) -> rusqlite::Result<()> {
+    let core = core_uid as i64;
     if lines.is_empty() {
-        let filed: Option<i64> = tx
+        let filed: Option<i64> = conn
             .query_row(
                 "SELECT line_count FROM trace_answers WHERE core_uid=?1 AND report_uid=?2",
                 params![core, report_uid],
@@ -413,12 +510,12 @@ fn store_answer(
             return Ok(());
         }
     }
-    tx.execute(
+    conn.execute(
         "DELETE FROM trace_lines WHERE core_uid=?1 AND report_uid=?2",
         params![core, report_uid],
     )?;
     {
-        let mut insert = tx.prepare_cached(
+        let mut insert = conn.prepare_cached(
             "INSERT INTO trace_lines (core_uid, report_uid, seq, own, kind, stop_price, \
              stop_time_ms, points) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
@@ -439,14 +536,14 @@ fn store_answer(
             ])?;
         }
     }
-    tx.execute(
+    conn.execute(
         "INSERT INTO trace_answers (core_uid, report_uid, checked_at_ms, line_count) \
          VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT(core_uid, report_uid) DO UPDATE SET \
          checked_at_ms=excluded.checked_at_ms, line_count=excluded.line_count",
         params![core, report_uid, now_ms, lines.len() as i64],
     )?;
-    tx.commit()
+    Ok(())
 }
 
 /// Whether a just-closed row should be asked about: nothing filed, or an empty answer past its

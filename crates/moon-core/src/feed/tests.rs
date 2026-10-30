@@ -223,3 +223,48 @@ fn startup_delay_spreads_only_multi_core_launch() {
         vec![0, 166, 333, 500, 666, 833, 1000, 1166, 1333, 1500]
     );
 }
+
+/// Background destruction must release exactly the queue count owned by the retired handle;
+/// losing that accounting would make an idle terminal report a permanent feed backlog.
+#[test]
+fn retired_feed_backlog_releases_all_queue_accounting() {
+    let queued_before = super::queued_messages();
+    let (tx, handle) = super::trade_sound_test_feed();
+    for _ in 0..1_000 {
+        tx.send(super::FeedMsg::Status(super::ConnStatus::Connecting))
+            .unwrap();
+    }
+    let before = super::retired_for_test();
+    drop(handle);
+    while super::retired_for_test() < before + 1_000 {
+        std::thread::yield_now();
+    }
+    assert!(super::retired_for_test() >= before + 1_000);
+    assert!(super::queued_messages() <= queued_before);
+}
+
+/// Measure caller-thread teardown of a full feed FIFO. The post-change probe also waits for the
+/// background drain so its two timings distinguish handoff latency from total disposal work.
+#[test]
+#[ignore = "synthetic 100000-message feed-drop timing probe"]
+fn feed_handle_drop_scale_probe() {
+    for _ in 0..3 {
+        let (tx, handle) = super::trade_sound_test_feed();
+        for _ in 0..100_000 {
+            tx.send(super::FeedMsg::Status(super::ConnStatus::Connecting))
+                .unwrap();
+        }
+        let before = super::retired_for_test();
+        let started = Instant::now();
+        drop(handle);
+        let caller = started.elapsed();
+        while super::retired_for_test() < before + 100_000 {
+            std::thread::yield_now();
+        }
+        eprintln!(
+            "feed drop 100000 messages: caller {:.3} ms, total {:.3} ms",
+            caller.as_secs_f64() * 1000.0,
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}

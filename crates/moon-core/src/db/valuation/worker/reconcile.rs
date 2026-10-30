@@ -38,12 +38,15 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
     let sources = [TradeSource::Typed, TradeSource::Legacy];
     while state.source_index < sources.len() {
         let trade_source = sources[state.source_index];
-        let conn = match crate::db::open_reader() {
+        let conn = match pass_reader(&mut state.reader, crate::db::open_reader) {
             Ok(conn) => conn,
             Err(ReadFail::NotReady) => return Ok(StageTurn::AwaitingReplica),
             Err(error) => return Err(report_fault(error)),
         };
-        refresh_axis(&conn, axis)?;
+        if let Err(error) = refresh_axis(conn, axis) {
+            state.reader = None;
+            return Err(error);
+        }
         // `None` means this source's schema has not finished delivering the columns this walk
         // needs (a matched-but-incomplete layout, or a table not yet carrying `closedate`/
         // `basecurrency`/`profitbtc`) — a healthy startup state, never "this source is drained".
@@ -58,88 +61,84 @@ pub(in crate::db::valuation::worker) fn reconcile_step(
         //
         // A cache-attachment failure is a THIRD, different fact, and is never routed through
         // `StageTurn` here at all — `reconciliation_batch` reports it as a genuine `Err`, which
-        // the `?` below sends through the normal failure/cache-recovery path instead.
-        let Some(inputs) = reconciliation_batch(&conn, trade_source, state.after, RECONCILE_BATCH)
-            .map_err(report_fault)?
-        else {
-            return Ok(StageTurn::AwaitingInputs);
+        // the error arm below sends through the normal failure/cache-recovery path instead.
+        let inputs = match reconciliation_batch(conn, trade_source, state.after, RECONCILE_BATCH) {
+            Ok(Some(inputs)) => inputs,
+            Ok(None) => return Ok(StageTurn::AwaitingInputs),
+            Err(error) => {
+                state.reader = None;
+                return Err(report_fault(error));
+            }
         };
         if inputs.is_empty() {
             state.source_index += 1;
             state.after = None;
             continue;
         }
-        let turn = commit_batch(store, || {
-            let mut turn = BatchTurn::default();
-            let prefetched = match prefetch_rates(store, source, axis, &inputs) {
-                Ok(prefetched) => prefetched,
-                Err(error) => {
-                    turn.changed = error.changed;
-                    turn.fault = Some(error.fault);
-                    return turn;
-                }
-            };
-            turn.changed = prefetched.changed;
-            let mut provider_fault = prefetched.provider_fault;
-            let ready = match prepare_ready_trades(store, axis, &inputs) {
-                Ok((ready, changed)) => {
-                    turn.changed |= changed;
-                    ready
-                }
-                Err(error) => {
-                    turn.fault = Some(error);
-                    return turn;
-                }
-            };
-            for input in &inputs {
-                if ready.contains(&trade_key(input)) {
-                    continue;
-                }
-                let minute = valuation_minute(axis, input);
-                match prepare_trade(
-                    store,
-                    source,
-                    axis,
-                    input,
-                    prefetched
-                        .canonical_exact_missing
-                        .contains(&(input.quote_ordinal, minute)),
-                ) {
-                    PrepareResult::Complete {
-                        changed: input_changed,
-                    } => turn.changed |= input_changed,
-                    PrepareResult::Deferred {
-                        changed: input_changed,
-                    } => {
-                        turn.changed |= input_changed;
-                        if let Err(error) = defer_trade(store, axis, input) {
-                            turn.fault = Some(error);
-                            return turn;
-                        }
+        let turn = commit_prefetched(
+            store,
+            source,
+            axis,
+            &inputs,
+            generation,
+            dirty,
+            |prefetched| {
+                let mut turn = BatchTurn {
+                    changed: prefetched.changed,
+                    ..BatchTurn::default()
+                };
+                let mut provider_fault = prefetched.provider_fault.clone();
+                let ready = match prepare_ready_trades(store, axis, &inputs) {
+                    Ok((ready, changed)) => {
+                        turn.changed |= changed;
+                        ready
                     }
-                    PrepareResult::Retry(error) if error.kind == FailureKind::Provider => {
-                        match defer_provider_trade(store, axis, input) {
-                            Ok(input_changed) => turn.changed |= input_changed,
-                            Err(error) => {
+                    Err(error) => {
+                        turn.fault = Some(error);
+                        return turn;
+                    }
+                };
+                for input in &inputs {
+                    if ready.contains(&trade_key(input)) {
+                        continue;
+                    }
+                    match prepare_prefetched_trade(store, axis, input, &prefetched) {
+                        PrepareResult::Complete {
+                            changed: input_changed,
+                        } => turn.changed |= input_changed,
+                        PrepareResult::Deferred {
+                            changed: input_changed,
+                        } => {
+                            turn.changed |= input_changed;
+                            if let Err(error) = defer_trade(store, axis, input) {
                                 turn.fault = Some(error);
                                 return turn;
                             }
                         }
-                        if let Err(error) = defer_trade(store, axis, input) {
+                        PrepareResult::Retry(error) if error.kind == FailureKind::Provider => {
+                            match defer_provider_trade(store, axis, input) {
+                                Ok(input_changed) => turn.changed |= input_changed,
+                                Err(error) => {
+                                    turn.fault = Some(error);
+                                    return turn;
+                                }
+                            }
+                            if let Err(error) = defer_trade(store, axis, input) {
+                                turn.fault = Some(error);
+                                return turn;
+                            }
+                            provider_fault.get_or_insert(error);
+                        }
+                        PrepareResult::Retry(error) => {
                             turn.fault = Some(error);
                             return turn;
                         }
-                        provider_fault.get_or_insert(error);
-                    }
-                    PrepareResult::Retry(error) => {
-                        turn.fault = Some(error);
-                        return turn;
                     }
                 }
-            }
-            turn.provider_fault = provider_fault;
-            turn
-        })?;
+                turn.provider_fault = provider_fault;
+                turn
+            },
+        )?;
         if turn.changed {
             publish(generation, dirty);
         }
@@ -235,6 +234,7 @@ pub(in crate::db::valuation::worker) fn rearm_reconciliation_for_outbox(
 ///     pending_ack: Highest sequence sent to the report writer but not yet observed deleted.
 ///     reconciliation: Startup/backfill reconciliation cursor, reset here when this turn's
 ///         durable activity invalidates a partition.
+///     reader: Report reader retained across full batches and released when this pass drains.
 ///
 /// Returns:
 ///     Whether another full outbox batch may already be waiting, or that the replica is absent.
@@ -247,17 +247,28 @@ pub(in crate::db::valuation::worker) fn consume_outbox(
     dirty: &AtomicBool,
     pending_ack: &mut Option<i64>,
     reconciliation: &mut Option<ReconcileState>,
+    reader: &mut Option<crate::db::ReportReader>,
 ) -> Result<StageTurn, FaultCause> {
-    let conn = match crate::db::open_reader() {
+    let conn = match pass_reader(reader, crate::db::open_reader) {
         Ok(conn) => conn,
         Err(ReadFail::NotReady) => return Ok(StageTurn::AwaitingReplica),
         Err(error) => return Err(report_fault(error)),
     };
-    refresh_axis(&conn, axis)?;
-    let batch = crate::db::valuation::read_outbox(&conn, OUTBOX_BATCH).map_err(report_fault)?;
+    if let Err(error) = refresh_axis(conn, axis) {
+        *reader = None;
+        return Err(error);
+    }
+    let batch = match crate::db::valuation::read_outbox(conn, OUTBOX_BATCH).map_err(report_fault) {
+        Ok(batch) => batch,
+        Err(error) => {
+            *reader = None;
+            return Err(error);
+        }
+    };
     let batch_was_full = batch.len() == OUTBOX_BATCH;
     let events = unacknowledged_events(&batch, pending_ack);
     if events.is_empty() {
+        *reader = None;
         return Ok(StageTurn::Ran { more: false });
     }
     rearm_reconciliation_for_outbox(reconciliation, events);
@@ -266,10 +277,23 @@ pub(in crate::db::valuation::worker) fn consume_outbox(
     // a shared map entry: a later `None` correctly overrides an earlier `Some` in pass 2 rather
     // than being lost behind it. It also lets pass 2 take ownership of each `TradeInput` by
     // value without collapsing a missing-row slot behind an earlier observation.
-    let loaded = load_trades(&conn, events).map_err(report_fault)?;
-    let turn = commit_batch(store, || {
-        apply_loaded_events(store, source, axis, events, &loaded)
-    })?;
+    let loaded = match load_trades(conn, events).map_err(report_fault) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            *reader = None;
+            return Err(error);
+        }
+    };
+    let row_inputs = loaded.iter().flatten().cloned().collect::<Vec<_>>();
+    let turn = commit_prefetched(
+        store,
+        source,
+        axis,
+        &row_inputs,
+        generation,
+        dirty,
+        |prefetched| apply_loaded_events(store, axis, events, &loaded, prefetched),
+    )?;
     // Acknowledge and publish only what the batch transaction made durable.
     if let Some(through_seq) = turn.acknowledged {
         send_ack(report_tx, pending_ack, through_seq);
@@ -280,6 +304,9 @@ pub(in crate::db::valuation::worker) fn consume_outbox(
     if let Some(error) = turn.fault.or(turn.provider_fault) {
         return Err(error);
     }
+    if !batch_was_full {
+        *reader = None;
+    }
     Ok(StageTurn::Ran {
         more: batch_was_full,
     })
@@ -288,25 +315,28 @@ pub(in crate::db::valuation::worker) fn consume_outbox(
 /// Apply loaded outbox slots in order, batching only distinct rows between mutation barriers.
 ///
 /// The caller owns the cache transaction and acknowledges the returned prefix after commit.
+///
+/// Args:
+///     store: Transactional valuation writer connection.
+///     axis: Per-core time axis rate minutes are resolved against.
+///     events: Ordered durable outbox events.
+///     loaded: Event-aligned current report observations.
+///     prefetched: Exact-rate outcome completed before this transaction began.
+///
+/// Returns:
+///     Durable change, acknowledgement, and fault effects for the caller to settle after commit.
 pub(in crate::db::valuation::worker) fn apply_loaded_events(
     store: &Connection,
-    source: &dyn SpotRateSource,
     axis: &ReportAxis,
     events: &[OutboxEvent],
     loaded: &[Option<TradeInput>],
+    prefetched: PrefetchOutcome,
 ) -> BatchTurn {
-    let row_inputs = loaded.iter().flatten().cloned().collect::<Vec<_>>();
-    let mut turn = BatchTurn::default();
-    let prefetched = match prefetch_rates(store, source, axis, &row_inputs) {
-        Ok(prefetched) => prefetched,
-        Err(error) => {
-            turn.changed = error.changed;
-            turn.fault = Some(error.fault);
-            return turn;
-        }
+    let mut turn = BatchTurn {
+        changed: prefetched.changed,
+        ..BatchTurn::default()
     };
-    turn.changed = prefetched.changed;
-    let mut provider_fault = prefetched.provider_fault;
+    let mut provider_fault = prefetched.provider_fault.clone();
     let mut start = 0;
     while start < events.len() {
         let mut end = start;
@@ -350,14 +380,7 @@ pub(in crate::db::valuation::worker) fn apply_loaded_events(
             {
                 PrepareResult::Complete { changed: false }
             } else {
-                process_event(
-                    store,
-                    source,
-                    axis,
-                    *event,
-                    input.clone(),
-                    &prefetched.canonical_exact_missing,
-                )
+                process_event(store, axis, *event, input.clone(), &prefetched)
             };
             match result {
                 PrepareResult::Complete {
@@ -412,6 +435,48 @@ pub(in crate::db::valuation::worker) struct BatchTurn {
     pub(in crate::db::valuation::worker) provider_fault: Option<FaultCause>,
 }
 
+/// Prefetch a batch's provider rates before opening its valuation-store transaction.
+///
+/// Args:
+///     store: Open valuation writer connection, outside any transaction.
+///     source: Historical closed-candle boundary.
+///     axis: Per-core time axis rate minutes are resolved against.
+///     inputs: Report rows whose uncached exact rates are prefetched.
+///     generation: Monotonic valuation publication counter.
+///     dirty: Coalescing UI wake edge.
+///     body: Writes that consume the completed prefetch inside one transaction.
+///
+/// Returns:
+///     The body outcome after its transaction commits.
+///
+/// Errors:
+///     A classified prefetch or transaction failure. Earlier prefetch progress is still published.
+pub(in crate::db::valuation::worker) fn commit_prefetched(
+    store: &Connection,
+    source: &dyn SpotRateSource,
+    axis: &ReportAxis,
+    inputs: &[TradeInput],
+    generation: &AtomicU64,
+    dirty: &AtomicBool,
+    body: impl FnOnce(PrefetchOutcome) -> BatchTurn,
+) -> Result<BatchTurn, FaultCause> {
+    let mut prefetched = settle_prefetch(
+        resolve_rates(store, source, axis, inputs),
+        generation,
+        dirty,
+    )?;
+    commit_batch(store, || {
+        if let Err(error) = persist_prefetched(store, &mut prefetched) {
+            return BatchTurn {
+                changed: error.changed,
+                fault: Some(error.fault),
+                ..BatchTurn::default()
+            };
+        }
+        body(prefetched)
+    })
+}
+
 /// Run one batch of valuation-store writes as a single transaction.
 ///
 /// The store is a rebuildable cache with this worker as its only writer, so one commit per batch
@@ -460,22 +525,20 @@ pub(in crate::db::valuation::worker) fn commit_batch<T>(
 ///
 /// Args:
 ///     store: Open valuation writer connection.
-///     source: Historical closed-candle boundary.
 ///     axis: Per-core time axis rate minutes are resolved against.
 ///     event: Ordered durable outbox event.
 ///     loaded: This event's own pass-1 load outcome, `Some` for a `Row` event whose trade was
 ///         found, `None` otherwise.
-///     canonical_exact_missing: Keys already proven absent on canonical exact routes.
+///     prefetched: Complete provider outcome consumed without further network requests.
 ///
 /// Returns:
 ///     Completed, deferred, or transient-retry result.
 pub(in crate::db::valuation::worker) fn process_event(
     store: &Connection,
-    source: &dyn SpotRateSource,
     axis: &ReportAxis,
     event: OutboxEvent,
     loaded: Option<TradeInput>,
-    canonical_exact_missing: &BTreeSet<(i64, i64)>,
+    prefetched: &PrefetchOutcome,
 ) -> PrepareResult {
     match event.action {
         OutboxAction::Row => {
@@ -486,24 +549,13 @@ pub(in crate::db::valuation::worker) fn process_event(
                 return PrepareResult::Retry(error);
             }
             match loaded {
-                Some(input) => {
-                    let minute = valuation_minute(axis, &input);
-                    match prepare_trade(
-                        store,
-                        source,
-                        axis,
-                        &input,
-                        canonical_exact_missing.contains(&(input.quote_ordinal, minute)),
-                    ) {
-                        PrepareResult::Deferred { changed } => {
-                            match defer_trade(store, axis, &input) {
-                                Ok(()) => PrepareResult::Deferred { changed },
-                                Err(error) => PrepareResult::Retry(error),
-                            }
-                        }
-                        result => result,
-                    }
-                }
+                Some(input) => match prepare_prefetched_trade(store, axis, &input, prefetched) {
+                    PrepareResult::Deferred { changed } => match defer_trade(store, axis, &input) {
+                        Ok(()) => PrepareResult::Deferred { changed },
+                        Err(error) => PrepareResult::Retry(error),
+                    },
+                    result => result,
+                },
                 None => delete_trade(store, event.source, event.core_uid, event.row_id),
             }
         }

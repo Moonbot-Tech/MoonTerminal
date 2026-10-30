@@ -187,17 +187,50 @@ pub(in crate::db) fn commit_stateful_batch<S: Clone, T>(
 ///
 /// Returns:
 ///     Committed effects, or the last error after fail-closed termination.
+#[cfg(test)]
 pub(in crate::db) fn commit_stateful_batch_until_success<S: Clone, T>(
     conn: &Connection,
     state: &mut S,
     mut apply: impl FnMut(&Connection, &mut S) -> rusqlite::Result<T>,
+    should_abort: impl FnMut(&rusqlite::Error) -> bool,
+    wait: impl FnMut(u32, &rusqlite::Error),
+) -> rusqlite::Result<T> {
+    commit_stateful_batch_until_success_prepared(
+        conn,
+        state,
+        |_, _| Ok(()),
+        |transaction, candidate, ()| apply(transaction, candidate),
+        should_abort,
+        wait,
+    )
+}
+
+/// Precompute owned read results outside each transaction, then retry the batch fail-closed.
+///
+/// Args:
+///     conn: Sole writer connection.
+///     state: Last committed in-memory replica state.
+///     prepare: Reads any safe batch inputs before `BEGIN`, rerunning for each retry round.
+///     apply: Consumes prepared data while rebuilding candidate state inside the transaction.
+///     should_abort: Classifies a failed round that must stop immediately.
+///     wait: Applies backoff after an exhausted retry round.
+///
+/// Returns:
+///     Committed effects, or the last preparation/transaction error after fail-closed termination.
+pub(in crate::db) fn commit_stateful_batch_until_success_prepared<S: Clone, P: Clone, T>(
+    conn: &Connection,
+    state: &mut S,
+    mut prepare: impl FnMut(&Connection, &S) -> rusqlite::Result<P>,
+    mut apply: impl FnMut(&Connection, &mut S, P) -> rusqlite::Result<T>,
     mut should_abort: impl FnMut(&rusqlite::Error) -> bool,
     mut wait: impl FnMut(u32, &rusqlite::Error),
 ) -> rusqlite::Result<T> {
     let mut failed_rounds = 0u32;
     loop {
-        match commit_stateful_batch(conn, state, |transaction, candidate| {
-            apply(transaction, candidate)
+        match prepare(conn, state).and_then(|prepared| {
+            commit_stateful_batch(conn, state, |transaction, candidate| {
+                apply(transaction, candidate, prepared.clone())
+            })
         }) {
             Ok(effects) => return Ok(effects),
             Err(error) => {
@@ -338,17 +371,23 @@ pub fn spawn_writer(permit: report_recovery::ReportWritePermit) -> Option<Report
                 // Keep the owned batch until one whole attempt commits. ACK indices are
                 // recreated per attempt and become observable only after that commit.
                 let (ack_indices, publication, post_commit) =
-                    match commit_stateful_batch_until_success(
+                    match commit_stateful_batch_until_success_prepared(
                         &conn,
                         &mut rep_state,
-                        |transaction, candidate| {
+                        |conn, candidate| prepare_alive_map_scans(conn, candidate, &batch),
+                        |transaction, candidate, mut alive_scans| {
                             let mut ack_indices = Vec::new();
                             let mut publication = None;
                             // Ordered publications, recreated per attempt like the ACK indices
                             // and observable only after the attempt that commits.
                             let mut post_commit = Vec::new();
                             for (index, msg) in batch.iter().enumerate() {
-                                let effect = apply_msg(transaction, candidate, msg)?;
+                                let effect = apply_msg_prepared(
+                                    transaction,
+                                    candidate,
+                                    msg,
+                                    alive_scans[index].take(),
+                                )?;
                                 publication =
                                     merge_report_publication(publication, effect.publication);
                                 if effect.page_ack {
@@ -694,6 +733,53 @@ impl ApplyEffect {
     }
 }
 
+/// Read alive maps before `BEGIN` only when earlier batch messages cannot change their inputs.
+///
+/// Args:
+///     conn: Sole writer connection outside the subsequent transaction.
+///     rep_state: Last committed replica state.
+///     batch: Ordered messages whose same-core writes and schema changes gate every scan.
+///
+/// Returns:
+///     Message-indexed optional owned scans; unsafe or blocked maps fall back to in-transaction
+///     scanning.
+///
+/// Errors:
+///     Any SQLite scan failure, handled by the writer's normal retry policy.
+fn prepare_alive_map_scans(
+    conn: &Connection,
+    rep_state: &rep::RepState,
+    batch: &[DbMsg],
+) -> rusqlite::Result<Vec<Option<rep::AliveMapScan>>> {
+    let mut scans = (0..batch.len()).map(|_| None).collect::<Vec<_>>();
+    let mut rows_changed = std::collections::HashSet::new();
+    for (index, msg) in batch.iter().enumerate() {
+        if let DbMsg::AliveMap { core_uid, map, .. } = msg {
+            if !rows_changed.contains(core_uid) && !rep::alive_map_blocked(rep_state, *core_uid) {
+                scans[index] =
+                    rep::scan_alive_map(conn, rep_state, *core_uid, map.covered_up_to, |rec_id| {
+                        map.is_alive(rec_id)
+                    })?;
+            }
+        }
+        let changed_core = match msg {
+            DbMsg::Schema { core_uid, .. }
+            | DbMsg::Upsert { core_uid, .. }
+            | DbMsg::Delete { core_uid, .. }
+            | DbMsg::SetDeleted { core_uid, .. }
+            | DbMsg::Page { core_uid, .. }
+            | DbMsg::AliveMap { core_uid, .. }
+            | DbMsg::ReplicaRecreated { core_uid, .. }
+            | DbMsg::ForgetCore { core_uid, .. } => Some(*core_uid),
+            _ => None,
+        };
+        if let Some(core_uid) = changed_core {
+            rows_changed.insert(core_uid);
+        }
+    }
+    Ok(scans)
+}
+
 /// Apply one typed-replica writer message and stage its durable valuation change.
 ///
 /// Args:
@@ -704,10 +790,31 @@ impl ApplyEffect {
 /// Returns:
 ///     Effect describing report publication and page acknowledgement after the surrounding
 ///     transaction commits.
+#[cfg(test)]
 pub(in crate::db) fn apply_msg(
     conn: &Connection,
     rep_state: &mut rep::RepState,
     msg: &DbMsg,
+) -> rusqlite::Result<ApplyEffect> {
+    apply_msg_prepared(conn, rep_state, msg, None)
+}
+
+/// Apply one writer message, consuming its optional alive-map pre-scan if present.
+///
+/// Args:
+///     conn: Active transaction receiving the message and valuation outbox mutation.
+///     rep_state: Candidate replication state committed with the transaction.
+///     msg: Typed replication or valuation-maintenance message to apply.
+///     alive_scan: Owned scan prepared outside the transaction, or `None` for the fallback path.
+///
+/// Returns:
+///     Effect describing report publication and page acknowledgement after the surrounding
+///     transaction commits.
+fn apply_msg_prepared(
+    conn: &Connection,
+    rep_state: &mut rep::RepState,
+    msg: &DbMsg,
+    alive_scan: Option<rep::AliveMapScan>,
 ) -> rusqlite::Result<ApplyEffect> {
     match msg {
         DbMsg::Schema { core_uid, schema } => {
@@ -837,14 +944,18 @@ pub(in crate::db) fn apply_msg(
                 );
                 return Ok(ApplyEffect::maintenance());
             }
-            let applied = rep::apply_alive_map(
-                conn,
-                rep_state,
-                *core_uid,
-                map.covered_up_to,
-                |rec_id| map.is_alive(rec_id),
-                *checkpoint,
-            )?;
+            let applied = if let Some(scan) = alive_scan {
+                rep::apply_alive_map_scan(conn, *core_uid, *checkpoint, scan).map(Some)?
+            } else {
+                rep::apply_alive_map(
+                    conn,
+                    rep_state,
+                    *core_uid,
+                    map.covered_up_to,
+                    |rec_id| map.is_alive(rec_id),
+                    *checkpoint,
+                )?
+            };
             // `None` means the replica has no `deleted` column, so nothing was written and no
             // checkpoint may be published.
             let Some(applied) = applied else {
