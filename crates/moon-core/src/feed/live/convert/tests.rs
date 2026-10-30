@@ -917,6 +917,13 @@ fn conn_fault_names_both_schema_spellings_and_leaves_an_unknown_step_unnamed() {
             "TStratSchemaRequest".to_string()
         )
     );
+    assert_eq!(
+        named("CoreStartupState"),
+        (
+            Some(CoreInitStep::CoreStartupState),
+            "CoreStartupState".to_string()
+        )
+    );
     assert_eq!(named("NotARealStep"), (None, "NotARealStep".to_string()));
     assert_eq!(named("basecheck"), (None, "basecheck".to_string()));
 }

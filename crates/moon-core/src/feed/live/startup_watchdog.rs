@@ -1,7 +1,8 @@
 //! The give-up clock for a core whose FIRST startup stops making progress.
 //!
 //! MoonProto's init spine has no terminal failure of its own. The three heavy steps re-send
-//! themselves forever on their 45 s timeout (`client/init/machine.rs`), and the phases that wait for
+//! themselves forever on their 45 s timeout, and so does the core-startup-state request on its 12 s
+//! one (`client/init/machine.rs`); the phases that wait for
 //! authorization park indefinitely on `!client.is_authorized()`. Neither path returns an error, so
 //! `live::run` is never told to rebuild the client and the app-level reconnect in `feed::spawn` never
 //! starts. A core can therefore sit half-initialized — authorized, no market list, no strategies,

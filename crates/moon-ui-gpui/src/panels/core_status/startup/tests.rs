@@ -60,10 +60,10 @@ fn connecting_with_no_completed_steps_still_shows_progress() {
 fn the_denominator_clamps_up_to_the_observed_completed_count() {
     let s = CoreStartupStatus {
         state: CoreStartupState::Initializing,
-        completed_mask: 0b1_1111_1111, // 9 bits set
+        completed_mask: 0b11_1111_1111, // 10 bits set, one past the known total
         ..Default::default()
     };
-    assert_eq!(s.progress_pair(), (9, 9));
+    assert_eq!(s.progress_pair(), (10, 10));
 }
 
 /// `progress_pair`: a normal in-progress count stays under the fixed total.

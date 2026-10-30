@@ -158,5 +158,5 @@ fn the_error_names_where_it_stopped() {
     })
     .to_string();
     assert!(text.contains("GetMarketsList"), "{text}");
-    assert!(text.contains("2/8"), "{text}");
+    assert!(text.contains("2/9"), "{text}");
 }
