@@ -49,16 +49,58 @@ pub(super) fn paths(
     Ok(Paths { file, part })
 }
 
+type DayLocks = Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>;
+static KEYS: OnceLock<DayLocks> = OnceLock::new();
+
+/// One same-day lock user; the map entry leaves with the last user instead of the archive file.
+pub(super) struct InFlight {
+    path: PathBuf,
+    key: Arc<Mutex<()>>,
+}
+
+impl InFlight {
+    /// Serialize this caller with other current users of the same archive day.
+    pub(super) fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.key.lock().unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+impl Drop for InFlight {
+    /// Remove only the final reference: current and waiting users keep their shared lock alive.
+    fn drop(&mut self) {
+        let mut keys = KEYS
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        // A new user cannot clone between this count and removal while the map lock is held.
+        if Arc::strong_count(&self.key) == 2 {
+            keys.remove(&self.path);
+        }
+    }
+}
+
 /// Serialize callers for the same day even after its disposable file has been extracted.
-pub(super) fn in_flight(path: &Path) -> Arc<Mutex<()>> {
-    type DayLocks = Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>;
-    static KEYS: OnceLock<DayLocks> = OnceLock::new();
-    KEYS.get_or_init(Mutex::default)
+pub(super) fn in_flight(path: &Path) -> InFlight {
+    let key = KEYS
+        .get_or_init(Mutex::default)
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .entry(path.to_owned())
         .or_default()
-        .clone()
+        .clone();
+    InFlight {
+        path: path.to_owned(),
+        key,
+    }
+}
+
+#[cfg(test)]
+/// Whether this archive day still has a process-global lock entry.
+pub(super) fn contains_key(path: &Path) -> bool {
+    KEYS.get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .contains_key(path)
 }
 
 /// Remove disposable files on every success and failure exit.

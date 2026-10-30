@@ -62,33 +62,43 @@ pub(super) fn keep_map<'a>(
     incomplete: &HashSet<Key>,
     policy: KeepPolicy,
 ) -> KeepMap {
-    let mut grouped = HashMap::<Key, Vec<&catchup::CatchupTrade>>::new();
+    let mut grouped = HashMap::<(&str, &str), Vec<&catchup::CatchupTrade>>::new();
     for trade in trades {
         grouped
-            .entry((trade.exchange.clone(), trade.market.clone()))
+            .entry((trade.exchange.as_str(), trade.market.as_str()))
             .or_default()
             .push(trade);
+    }
+    /// Borrow an owned map key without giving the two strings independent lifetimes.
+    fn named(key: &Key) -> (&str, &str) {
+        (key.0.as_str(), key.1.as_str())
     }
     let keys: HashSet<_> = inventory
         .keys
         .iter()
-        .cloned()
-        .chain(live.keys().cloned())
-        .chain(grouped.keys().cloned())
+        .map(named)
+        .chain(live.keys().map(named))
+        .chain(grouped.keys().copied())
         .collect();
-    keys.iter()
+    let live_by_name: HashMap<_, _> = live.iter().map(|(key, held)| (named(key), held)).collect();
+    let incomplete_by_name: HashSet<_> = incomplete.iter().map(named).collect();
+    keys.into_iter()
         .map(|key| {
-            let edge = if incomplete.contains(key) {
+            let is_incomplete = incomplete_by_name.contains(&key);
+            let edge = if is_incomplete {
                 i64::MIN
             } else {
                 policy.edge.unwrap_or(i64::MIN)
             };
             let mut keep = Coverage::one((edge, i64::MAX));
-            let mut real = live.get(key).cloned().unwrap_or_default();
+            let mut real = live_by_name
+                .get(&key)
+                .map(|held| (*held).clone())
+                .unwrap_or_default();
             let mut emulated = Coverage::none();
             let mut untunable = Coverage::none();
             let mut recorded = Coverage::none();
-            for trade in grouped.get(key).into_iter().flatten() {
+            for trade in grouped.get(&key).into_iter().flatten() {
                 let focus = catchup::needed(trade, &policy.shape);
                 let drop_untunable = policy.tuner_only && !trade.tunable;
                 if trade.emulator || drop_untunable {
@@ -123,15 +133,15 @@ pub(super) fn keep_map<'a>(
             for &span in real.spans() {
                 keep.add(span);
             }
-            if !policy.record_emulator && !incomplete.contains(key) {
+            if !policy.record_emulator && !is_incomplete {
                 keep = keep.minus(&emulated.minus(&real));
             }
             // Tape only trades the tuner cannot replay need goes; a tunable trade's (a recorded
             // emulator one included) or a live window's tape survives even where it overlaps.
-            if policy.tuner_only && !incomplete.contains(key) {
+            if policy.tuner_only && !is_incomplete {
                 keep = keep.minus(&untunable.minus(&real).minus(&recorded));
             }
-            (key.clone(), keep)
+            ((key.0.to_owned(), key.1.to_owned()), keep)
         })
         .collect()
 }

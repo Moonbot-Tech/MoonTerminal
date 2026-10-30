@@ -1,8 +1,8 @@
 //! Session startup, reconciliation, reconnects, feed draining, closed-trade recovery and status.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::config::{AppConfig, ServerConfig};
@@ -212,14 +212,15 @@ fn tuner_can_replay(row: &CatchupRow) -> bool {
     crate::db::tuner::ticks::deals::has_ms_stamps(ms(row.buy), ms(row.close))
 }
 
-/// Count an unknown coin once only after both the venue and its non-empty catalog are known.
+/// Count a distinct core/coin once after its venue and catalog are known, independently of deals.
+/// This diagnostic latch never vetoes resolution: a later catalog may resolve the same coin.
 fn latch_unknown(
-    latched: &mut HashSet<crate::market::tape_recorder::TradeId>,
-    id: crate::market::tape_recorder::TradeId,
+    latched: &mut HashSet<String>,
+    coin: &str,
     catalog_ready: bool,
     venue_ready: bool,
 ) -> bool {
-    catalog_ready && venue_ready && latched.insert(id)
+    catalog_ready && venue_ready && latched.insert(coin.to_owned())
 }
 
 /// Oldest entry, in milliseconds, still announced to Telegram as one happening now.
@@ -335,7 +336,7 @@ impl SessionManager {
             trade_sounds: Vec::new(),
             trade_sound_epochs: HashMap::new(),
             catchup_last: HashMap::new(),
-            catchup_unknown: Arc::new(Mutex::new(HashSet::new())),
+            catchup_unknown: HashMap::new(),
             catchup_running: HashMap::new(),
             sessions: Vec::new(),
             config_order: config.servers.iter().map(|s| s.id).collect(),
@@ -446,6 +447,8 @@ impl SessionManager {
     /// this state absent.
     fn clear_core_coordination(&mut self, id: CoreId) {
         self.catchup_last.remove(&id);
+        // An in-flight listing may finish after removal; its old diagnostic set cannot rejoin.
+        self.catchup_unknown.remove(&id);
         self.trade_sound_epochs.remove(&id);
         self.trade_sounds.retain(|(core, _, _)| *core != id);
         self.core_venue.remove(&id);
@@ -905,7 +908,7 @@ impl SessionManager {
             core,
         );
         let source = self.market_source.clone();
-        let unknown = self.catchup_unknown.clone();
+        let unknown = self.catchup_unknown.entry(core).or_default().clone();
         let running = self.catchup_running.entry(core).or_default().clone();
         let spawned = spawn_catchup(running, move || {
             let queued = Instant::now();
@@ -961,13 +964,6 @@ impl SessionManager {
                         core,
                         rec_id: row.rec_id,
                     };
-                    if unknown
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .contains(&id)
-                    {
-                        continue;
-                    }
                     let Some((open_ms, close_ms)) = catchup_stamps(row, &axis, core, now_ms) else {
                         continue;
                     };
@@ -999,7 +995,7 @@ impl SessionManager {
                         }
                         if latch_unknown(
                             &mut unknown.lock().unwrap_or_else(|error| error.into_inner()),
-                            id,
+                            &row.coin,
                             source.tradable_coins(core).is_some(),
                             source.replay_address(core).is_ok(),
                         ) {

@@ -270,7 +270,7 @@ fn data_files(root: &Path) -> Vec<DataFile> {
         return Vec::new();
     };
     for entry in entries.flatten() {
-        let Ok(meta) = entry.path().symlink_metadata() else {
+        let Ok(meta) = entry.metadata() else {
             continue;
         };
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -308,7 +308,8 @@ fn tree_size(dir: &Path) -> u64 {
     entries
         .flatten()
         .filter_map(|entry| {
-            let meta = entry.path().symlink_metadata().ok()?;
+            // DirEntry metadata does not follow links; Windows reuses the directory result.
+            let meta = entry.metadata().ok()?;
             Some(match meta.is_dir() {
                 true => tree_size(&entry.path()),
                 false => meta.len(),

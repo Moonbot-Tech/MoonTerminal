@@ -3,7 +3,6 @@
 use super::*;
 use crate::db::{ReportAxis, ReportStamp};
 use crate::feed::{ConnStatus, FeedMsg, MarketDirty, MarketDirtyFlags};
-use crate::market::tape_recorder::TradeId;
 
 /// A later resolved or empty page must not erase the protecting identity skipped earlier.
 #[test]
@@ -88,9 +87,8 @@ fn mapping_excludes_open_and_old_rows() {
 #[test]
 fn catalog_pending_does_not_latch_unknown() {
     let mut latched = HashSet::new();
-    let id = TradeId { core: 1, rec_id: 5 };
-    assert!(!latch_unknown(&mut latched, id, false, true));
-    assert!(!latch_unknown(&mut latched, id, true, false));
+    assert!(!latch_unknown(&mut latched, "COIN_A", false, true));
+    assert!(!latch_unknown(&mut latched, "COIN_A", true, false));
     assert!(latched.is_empty());
 }
 
@@ -98,10 +96,38 @@ fn catalog_pending_does_not_latch_unknown() {
 #[test]
 fn ready_unknown_coin_latches_once() {
     let mut latched = HashSet::new();
-    let id = TradeId { core: 1, rec_id: 5 };
-    assert!(latch_unknown(&mut latched, id, true, true));
-    assert!(!latch_unknown(&mut latched, id, true, true));
+    assert!(latch_unknown(&mut latched, "COIN_A", true, true));
+    assert!(!latch_unknown(&mut latched, "COIN_A", true, true));
     assert_eq!(latched.len(), 1);
+}
+
+/// Repeated unresolved trades of one coin must retain one diagnostic key, not every trade ID.
+#[test]
+fn station_unknown_coin_retention_is_independent_of_deal_count() {
+    let mut latched = HashSet::new();
+    let started = Instant::now();
+    for _ in 0..100_000 {
+        latch_unknown(&mut latched, "COIN_A", true, true);
+    }
+    println!(
+        "unknown 100000: {:.3} ms, keys={}",
+        started.elapsed().as_secs_f64() * 1_000.0,
+        latched.len()
+    );
+    assert_eq!(latched.len(), 1);
+}
+
+/// An old worker completing after reconnect must not retain a removed core's diagnostic keys.
+#[test]
+fn retired_unknown_coin_latches_cannot_rejoin_the_session() {
+    let (mut session, _tx) = super::trade_sound_tests::fixture();
+    let old_listing = session.catchup_unknown.entry(1).or_default().clone();
+    session.clear_core_coordination(1);
+    latch_unknown(&mut old_listing.lock().unwrap(), "COIN_A", true, true);
+    assert!(!session.catchup_unknown.contains_key(&1));
+    let new_listing = session.catchup_unknown.entry(1).or_default().clone();
+    assert!(!Arc::ptr_eq(&old_listing, &new_listing));
+    assert!(new_listing.lock().unwrap().is_empty());
 }
 
 /// Equal close times must not starve the rows after the first thousand replica IDs.

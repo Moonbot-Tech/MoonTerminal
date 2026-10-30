@@ -110,7 +110,12 @@ pub fn hl_limit() -> bool {
 /// channel writes and belongs here rather than in each of them.
 pub fn stamped_line(file: &str, msg: &str) {
     let (date, hms) = crate::applog::split_unix_ms(crate::util::time::now_unix_ms_i64());
-    channel_line(file, &format!("{date} {hms} {msg}"));
+    let rotate = (file == "tape_recorder.log").then_some(date.as_str());
+    channel_lines_at(
+        file,
+        rotate,
+        std::slice::from_ref(&format!("{date} {hms} {msg}")),
+    );
 }
 
 /// ClientSettings snapshot channel (`logs/settings_diag.log`).
@@ -119,7 +124,7 @@ pub fn settings() -> bool {
     SETTINGS.load(Ordering::Relaxed)
 }
 
-/// Tape recorder (`logs/tape_recorder.log`, `tape_recorder.sqlite`) — see
+/// Tape recorder (`logs/<date>_tape_recorder.log`, `tape_recorder.sqlite`) — see
 /// `crate::market::tape_recorder`.
 #[inline]
 pub fn tape_recorder() -> bool {
@@ -190,56 +195,109 @@ pub fn market_trace_min_interval() -> Duration {
 fn channel_dir() -> &'static std::path::PathBuf {
     static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
     // The NON-logging resolver. No channel writes from inside a log record today, but this is the
-    // same shape as the `DatedWriter::open` self-deadlock, and the creation this would have done
-    // for us already happens in `channel_line`'s retry.
+    // same shape as the `DatedWriter::open` self-deadlock; ChannelWriter creates the directory
+    // only when its first open fails, never while holding the application logger's mutex.
     DIR.get_or_init(paths::logs_dir_no_create)
 }
 
+/// One buffered channel handle; dated channels reopen only when their UTC day changes.
+struct ChannelWriter {
+    file: String,
+    date: Option<String>,
+    handle: Option<std::io::BufWriter<std::fs::File>>,
+}
+
+impl ChannelWriter {
+    /// Start a channel with no open file; the first write performs admission.
+    fn new(file: &str) -> Self {
+        Self {
+            file: file.to_owned(),
+            date: None,
+            handle: None,
+        }
+    }
+
+    /// Open the current file, migrating an undated tape log by rename when that is atomic.
+    fn open(&mut self, dir: &std::path::Path, date: Option<&str>) -> bool {
+        self.handle = None;
+        self.date = date.map(str::to_owned);
+        let name = match (date, self.file.strip_suffix(".log")) {
+            (Some(date), Some(label)) => crate::applog::file_name(date, label),
+            _ => self.file.clone(),
+        };
+        let path = dir.join(name);
+        if date.is_some() {
+            let legacy = dir.join(&self.file);
+            if legacy != path && legacy.exists() && !path.exists() {
+                let _ = std::fs::rename(legacy, &path);
+            }
+        }
+        let open = || {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+        };
+        let handle = open().or_else(|_| {
+            let _ = std::fs::create_dir_all(dir);
+            open()
+        });
+        let Ok(file) = handle else {
+            return false;
+        };
+        self.handle = Some(std::io::BufWriter::new(file));
+        true
+    }
+
+    /// Append and flush one batch, closing a failed handle so the next call can retry cleanly.
+    fn write_lines(&mut self, dir: &std::path::Path, date: Option<&str>, lines: &[String]) -> bool {
+        use std::io::Write;
+        if (self.handle.is_none() || self.date.as_deref() != date) && !self.open(dir, date) {
+            return false;
+        }
+        let mut body = String::new();
+        for line in lines {
+            body.push_str(line);
+            body.push('\n');
+        }
+        let written = self.handle.as_mut().is_some_and(|handle| {
+            handle
+                .write_all(body.as_bytes())
+                .and_then(|_| handle.flush())
+                .is_ok()
+        });
+        if !written {
+            self.handle = None;
+        }
+        written
+    }
+}
+
+/// Process-wide channel writers; the finite set of named channels shares no per-line file opens.
+static CHANNEL_WRITERS: OnceLock<Mutex<std::collections::HashMap<String, ChannelWriter>>> =
+    OnceLock::new();
+
 /// Append one line to a channel's own file under `logs/`.
-///
-/// Every channel writes through here so the location is decided once. Historically each opened its
-/// file by RELATIVE path, which put it in the process working directory — the folder the terminal
-/// was started from, not the one holding the executable. The two differ whenever the app is
-/// launched from a terminal, and reading the stale copy from the other folder has cost real
-/// debugging time. Now they sit beside the application's own logs.
-///
-/// Note that `applog::purge_old` does NOT sweep these: it ages files by a leading `YYYY-MM-DD` in
-/// the name, which channel files do not carry. They grow until deleted by hand, exactly as they did
-/// in the working directory — being in `logs/` makes them findable, not self-limiting.
 pub fn channel_line(file: &str, line: &str) {
     channel_lines(file, std::slice::from_ref(&line.to_string()));
 }
 
-/// Append several lines to a channel's file under ONE open, reporting whether they landed.
-///
-/// A channel that writes a table rather than an event uses this: one open per row put thousands of
-/// blocking syscalls on the main thread the moment a switch was saved. The boolean exists for the
-/// same kind of channel — one that must know whether to try again, rather than mark the subject
-/// written and never return to it.
+/// Append several lines through the channel's retained buffered writer and report whether they
+/// landed. A false result leaves the next call free to reopen and retry.
 pub fn channel_lines(file: &str, lines: &[String]) -> bool {
-    use std::io::Write;
-    let path = channel_dir().join(file);
-    let open = || {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-    };
-    // The ordinary path is one open. Creating the directory is the RECOVERY, attempted only when
-    // that fails, so a channel left on all day does not pay a directory syscall per line.
-    let handle = open().or_else(|_| {
-        let _ = std::fs::create_dir_all(channel_dir());
-        open()
-    });
-    let Ok(mut f) = handle else {
-        return false;
-    };
-    let mut body = String::new();
-    for line in lines {
-        body.push_str(line);
-        body.push('\n');
-    }
-    f.write_all(body.as_bytes()).is_ok()
+    channel_lines_at(file, None, lines)
+}
+
+/// Write through one shared channel handle, with a UTC date only for channels that rotate.
+fn channel_lines_at(file: &str, date: Option<&str>, lines: &[String]) -> bool {
+    let mut writers = CHANNEL_WRITERS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    writers
+        .entry(file.to_owned())
+        .or_insert_with(|| ChannelWriter::new(file))
+        .write_lines(channel_dir(), date, lines)
 }
 
 /// Read the file and the environment, publish the result, and return it.

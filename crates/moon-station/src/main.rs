@@ -61,6 +61,7 @@ mod signals;
 mod storage;
 mod tg;
 mod uid_history;
+mod wake;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -69,8 +70,8 @@ use std::time::{Duration, Instant};
 use moon_core::session::SessionManager;
 use moon_core::station_api::{Answer, BotStatus, ListedCore, Reply, Request, Status};
 
-/// How often the feeds' channels are drained — the terminal's own coordination cadence.
-const DRAIN_EVERY: Duration = Duration::from_millis(100);
+/// Telegram maintenance cadence; feed messages wake the owner independently.
+const BOT_TICK_EVERY: Duration = Duration::from_millis(100);
 /// How often the diagnostics file is re-read.
 const DIAG_POLL_EVERY: Duration = Duration::from_secs(1);
 /// How often the connection summary is checked; it is logged only when it changed.
@@ -171,8 +172,9 @@ fn main() -> anyhow::Result<()> {
     // cards and reports read it as much as the Mini App does.
     let valuation = moon_core::db::valuation::spawn_worker(reports.tx.clone());
     let epoch = moon_core::util::now_unix_ms_i64() as f64;
+    let (feed_wake, feed_wakes) = wake::feeds();
     let mut session =
-        moon_core::session::SessionManager::start(&cfg, epoch, Some(&reports.tx), None);
+        moon_core::session::SessionManager::start(&cfg, epoch, Some(&reports.tx), Some(feed_wake));
     // What the terminal gets from electing providers for its open charts — a catalog to resolve
     // a trade's market in and the core's exchange to address it by — the station gets without
     // the election, and so without any core's exchange-wide trade stream. Once now, before the
@@ -255,6 +257,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         let pass_started = Instant::now();
+        wake::before_drain(&feed_wakes);
         if session.drain().identity {
             session.map_cores_to_themselves();
         }
@@ -328,7 +331,18 @@ fn main() -> anyhow::Result<()> {
                 moon_core::feed::queued_messages()
             );
         }
-        std::thread::park_timeout(DRAIN_EVERY);
+        // Without a bot only diagnostics, host sampling and committed-report flags need polling.
+        // Keep the bot's maintenance cadence; its work and completed reads also wake the owner.
+        let cadence = if bot.is_some() {
+            BOT_TICK_EVERY
+        } else {
+            DIAG_POLL_EVERY
+        };
+        // A blocking operation can consume a park permit; a retained feed token still vetoes
+        // sleeping. Messages queued between this check and park retain their new park permit.
+        if feed_wakes.try_recv().is_err() {
+            std::thread::park_timeout(cadence);
+        }
     }
 }
 

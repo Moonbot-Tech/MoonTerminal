@@ -29,8 +29,9 @@
 //! # Threading
 //!
 //! Exactly [`crate::market::kline_cache`]'s design: the connection is not `Sync`, so one worker
-//! thread owns it and every call is a queued op. Writes are nonblocking; a read waits at most
-//! [`READ_TIMEOUT`] and answers `None` for a timeout, which the caller treats as "nothing known"
+//! thread owns it and every call is a queued op. Background writes wait when the bounded queue is
+//! full; reads use nonblocking admission and wait at most [`READ_TIMEOUT`], answering `None` for a
+//! timeout, which the caller treats as "nothing known"
 //! — a fetch it could have avoided, never a wrong answer.
 //!
 //! # Layout: two tables
@@ -140,6 +141,9 @@ impl Table {
 /// compaction after the last batch — once per file, 0.3 s on the same file, since it rewrites the
 /// packed result rather than the legacy bytes.
 const REPACK_BATCH_BYTES: i64 = 4 * 1024 * 1024;
+
+/// Operations admitted before background producers wait; one oversized span remains lossless.
+const OP_QUEUE: usize = 256;
 
 /// How long a read waits for the worker before answering `None`.
 const READ_TIMEOUT: Duration = Duration::from_millis(250);
@@ -270,6 +274,8 @@ enum Op {
         ticks: Vec<Tick>,
         source: TileSource,
     },
+    /// Consecutive inserts drained from one worker wake and committed together.
+    InsertBatch(Vec<Op>),
     Read {
         exchange: String,
         market: String,
@@ -318,7 +324,7 @@ enum Op {
 /// Cheaply cloneable handle to the one worker.
 #[derive(Clone)]
 pub struct TradeCache {
-    tx: mpsc::Sender<Op>,
+    tx: mpsc::SyncSender<Op>,
 }
 
 impl TradeCache {
@@ -364,7 +370,7 @@ impl TradeCache {
         shrinkable: bool,
         disk: Option<DiskProbe>,
     ) -> Option<Self> {
-        let (tx, rx) = mpsc::channel::<Op>();
+        let (tx, rx) = mpsc::sync_channel::<Op>(OP_QUEUE);
         std::thread::Builder::new()
             .name("trade-cache".into())
             .spawn(move || {
@@ -410,8 +416,8 @@ impl TradeCache {
         Some(Self { tx })
     }
 
-    /// Queue one answered span. Nonblocking; the worker files only the stretches of it not yet
-    /// held, exactly as the tile store does, so a re-fetch never doubles a print.
+    /// Queue one answered span. A background producer waits for room rather than losing tape;
+    /// the worker files only stretches not yet held, so a re-fetch never doubles a print.
     pub fn insert(
         &self,
         exchange: &str,
@@ -447,7 +453,7 @@ impl TradeCache {
     ) -> Option<Vec<StoredSpan>> {
         let (reply, rx) = mpsc::channel();
         self.tx
-            .send(Op::Read {
+            .try_send(Op::Read {
                 exchange: exchange.to_string(),
                 market: market.to_string(),
                 from_ms,
@@ -484,7 +490,7 @@ impl TradeCache {
             .ok()
     }
 
-    /// Queue a coverage read without stalling the recorder behind maintenance.
+    /// Queue a coverage read; a background recorder waits for room instead of losing the answer.
     pub fn held_spans_start(
         &self,
         exchange: &str,
@@ -505,7 +511,7 @@ impl TradeCache {
 
     /// Drop the spans written longest ago until `bytes` packed bytes are gone, and give the pages
     /// back to the disk — for a file opened with [`Self::open_evictable`]; another file keeps its
-    /// length. Nonblocking; the worker logs what it freed.
+    /// length. A background caller waits for queue room; the worker logs what it freed.
     pub fn evict_oldest(&self, bytes: i64) {
         if bytes > 0 {
             let _ = self.tx.send(Op::Evict { bytes });
@@ -559,8 +565,11 @@ impl TradeCache {
     ) -> Result<Result<(), CompactFail>, mpsc::RecvTimeoutError> {
         let (reply, rx) = mpsc::channel();
         self.tx
-            .send(Op::CompactFull { reply })
-            .map_err(|_| mpsc::RecvTimeoutError::Disconnected)?;
+            .try_send(Op::CompactFull { reply })
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => mpsc::RecvTimeoutError::Timeout,
+                mpsc::TrySendError::Disconnected(_) => mpsc::RecvTimeoutError::Disconnected,
+            })?;
         rx.recv_timeout(timeout)
     }
 
@@ -586,13 +595,29 @@ impl TradeCache {
     ///     Whether the worker got there in time.
     pub fn sync(&self, timeout: Duration) -> bool {
         let (reply, rx) = mpsc::channel();
-        self.tx
-            .send(Op::Sync {
-                reply,
-                reservation: None,
-            })
-            .is_ok()
-            && rx.recv_timeout(timeout).is_ok()
+        let deadline = Instant::now() + timeout;
+        let mut op = Op::Sync {
+            reply,
+            reservation: None,
+        };
+        loop {
+            match self.tx.try_send(op) {
+                Ok(()) => {
+                    return rx
+                        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                        .is_ok();
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => return false,
+                Err(mpsc::TrySendError::Full(returned)) => {
+                    op = returned;
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return false;
+                    }
+                    std::thread::park_timeout(remaining.min(Duration::from_millis(5)));
+                }
+            }
+        }
     }
 
     /// Keep a reservation alive through the existing queue barrier, including writer failures.
@@ -957,11 +982,42 @@ fn run(
                 Err(_) => return,
             }
         };
+        let op = batch_inserts(op, &rx, &mut deferred);
         let snapshot = held;
         compacting = serve(&conn, op, &mut held, || {
             resolved_ceiling(&mut disk, Some(snapshot), ceiling)
         })
         .0;
+    }
+}
+
+/// Largest insert drain committed by one worker wake; a read never waits behind an unbounded batch.
+const INSERT_BATCH: usize = 256;
+
+/// Collect only consecutive inserts, leaving the first other operation ahead of later queue items.
+fn batch_inserts(
+    first: Op,
+    rx: &mpsc::Receiver<Op>,
+    deferred: &mut std::collections::VecDeque<Op>,
+) -> Op {
+    if !matches!(first, Op::Insert { .. }) {
+        return first;
+    }
+    let mut ops = vec![first];
+    while ops.len() < INSERT_BATCH {
+        match rx.try_recv() {
+            Ok(op @ Op::Insert { .. }) => ops.push(op),
+            Ok(op) => {
+                deferred.push_back(op);
+                break;
+            }
+            Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => break,
+        }
+    }
+    if ops.len() == 1 {
+        ops.pop().expect("one insert")
+    } else {
+        Op::InsertBatch(ops)
     }
 }
 
@@ -973,41 +1029,67 @@ fn serve(
     mut ceiling: impl FnMut() -> Option<i64>,
 ) -> Served {
     match op {
-        Op::Insert {
-            exchange,
-            market,
-            from_ms,
-            to_ms,
-            ticks,
-            source,
-        } => {
+        op @ Op::Insert { .. } => {
             let limit = ceiling();
+            serve_insert(conn, op, held, limit);
+        }
+        Op::InsertBatch(ops) => {
             let now = crate::util::time::now_unix_ms_i64();
             let res = conn.unchecked_transaction().and_then(|tx| {
-                let wrote =
-                    insert_span(&tx, &exchange, &market, from_ms, to_ms, &ticks, source, now)?;
+                let mut batch_held = *held;
+                let mut written = Vec::with_capacity(ops.len());
+                for op in &ops {
+                    let Op::Insert {
+                        exchange,
+                        market,
+                        from_ms,
+                        to_ms,
+                        ticks,
+                        source,
+                    } = op
+                    else {
+                        unreachable!("insert batch contains only inserts")
+                    };
+                    let limit = ceiling();
+                    let wrote =
+                        insert_span(&tx, exchange, market, *from_ms, *to_ms, ticks, *source, now)?;
+                    written.push(wrote);
+                    batch_held += wrote;
+                    // Per-insert eviction order matches independent commits; a later overlap must
+                    // see the same gaps instead of reviving a span that batch-end trimming removed.
+                    loop {
+                        let after = trim_to_ceiling(&tx, batch_held, limit, Some(TRIM_CHUNK))?;
+                        if after == batch_held {
+                            break;
+                        }
+                        batch_held = after;
+                    }
+                }
                 tx.commit()?;
-                Ok(wrote)
+                Ok((written, batch_held))
             });
             match res {
-                Ok(wrote) => {
-                    // A reader that judged this market's rows unservable asks again
-                    // (`filed::filed_since`); a span already held whole wrote nothing.
-                    if wrote > 0 {
-                        filed::note(&exchange, &market);
-                    }
-                    *held += wrote;
-                    match trim_in_chunks(conn, *held, limit) {
-                        Ok(now_held) => *held = now_held,
-                        Err(e) => {
-                            // The failed chunk rolled back; re-count as a guard rather than
-                            // trust the carried figure after earlier chunks committed.
-                            log::warn!("trade cache ceiling failed: {e}");
-                            *held = held_bytes(conn).unwrap_or(*held);
+                Ok((written, batch_held)) => {
+                    *held = batch_held;
+                    for (op, wrote) in ops.iter().zip(written) {
+                        let Op::Insert {
+                            exchange, market, ..
+                        } = op
+                        else {
+                            unreachable!()
+                        };
+                        if wrote > 0 {
+                            filed::note(exchange, market);
                         }
                     }
                 }
-                Err(e) => log::warn!("trade cache insert failed {exchange}/{market}: {e}"),
+                Err(_) => {
+                    // The batch rolled back: isolate any bad row instead of losing its valid neighbours.
+                    for op in ops {
+                        let limit = ceiling();
+                        serve_insert(conn, op, held, limit);
+                    }
+                }
             }
         }
         Op::Read {
@@ -1128,6 +1210,45 @@ fn serve(
         }
     }
     Served(None)
+}
+
+/// Commit one insert and enforce its ceiling without recursively instantiating the operation server.
+fn serve_insert(conn: &rusqlite::Connection, op: Op, held: &mut i64, limit: Option<i64>) {
+    let Op::Insert {
+        exchange,
+        market,
+        from_ms,
+        to_ms,
+        ticks,
+        source,
+    } = op
+    else {
+        unreachable!("single-insert helper received another operation")
+    };
+    let now = crate::util::time::now_unix_ms_i64();
+    let res = conn.unchecked_transaction().and_then(|tx| {
+        let wrote = insert_span(&tx, &exchange, &market, from_ms, to_ms, &ticks, source, now)?;
+        tx.commit()?;
+        Ok(wrote)
+    });
+    match res {
+        Ok(wrote) => {
+            // A reader that judged this market's rows unservable asks again once new tape lands.
+            if wrote > 0 {
+                filed::note(&exchange, &market);
+            }
+            *held += wrote;
+            match trim_in_chunks(conn, *held, limit) {
+                Ok(now_held) => *held = now_held,
+                Err(e) => {
+                    // The failed chunk rolled back; earlier committed chunks require a true count.
+                    log::warn!("trade cache ceiling failed: {e}");
+                    *held = held_bytes(conn).unwrap_or(*held);
+                }
+            }
+        }
+        Err(e) => log::warn!("trade cache insert failed {exchange}/{market}: {e}"),
+    }
 }
 
 /// Whether the legacy table still holds a row to move.

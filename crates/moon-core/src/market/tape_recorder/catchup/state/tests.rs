@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 mod queue;
 mod recount;
+mod scale;
 
 /// The (exchange, market) key a trade's tape is filed under.
 fn market(trade: &CatchupTrade) -> (String, String) {
@@ -275,6 +276,8 @@ fn review_terminal_closes_do_not_accumulate_retention_rows() {
         compares: Vec::new(),
         closed: peek::ClosedTrades::default(),
         pending_bytes: Arc::default(),
+        live: HashMap::new(),
+        live_revisions: HashMap::new(),
     };
     let trade = row();
     for enabled in [false, true] {
@@ -493,6 +496,8 @@ fn real_trade_closed_after_listing_protects_shared_emulator_tape() {
         compares: Vec::new(),
         closed: peek::ClosedTrades::default(),
         pending_bytes: Arc::default(),
+        live: HashMap::new(),
+        live_revisions: HashMap::new(),
     };
     recorder.catchup.submit(vec![emu]);
     recorder.apply(

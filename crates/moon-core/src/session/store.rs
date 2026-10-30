@@ -63,9 +63,9 @@ pub struct CoreData {
     ///
     /// An index rather than a search: the caption is resolved per pane on an order revision, and
     /// finding the newest detect for one market means walking the ring — two thousand string
-    /// compares — for the common case of a market that never had one. One entry per market that
-    /// HAS fired, which is a fraction of the ring and never larger than it. The `Arc` is the same
-    /// allocation as that row in [`Self::detects`].
+    /// compares — for the common case of a market that never had one. One entry per market with
+    /// a detect still retained in the ring, never larger than the ring itself. The `Arc` is the
+    /// same allocation as that row in [`Self::detects`].
     pub latest_detect: HashMap<String, Arc<DetectRow>>,
     /// Last number handed to this core's detects, held for it by [`super::CoreStore`].
     ///
@@ -1057,7 +1057,15 @@ impl CoreData {
                     }
                     if self.detects.len() > MAX_DETECTS {
                         while self.detects.len() > MAX_DETECTS {
-                            self.detects.pop_front();
+                            if let Some(evicted) = self.detects.pop_front() {
+                                // Only the final retained row for a market owns its index entry.
+                                // An older row must never remove a newer detect of the same market.
+                                if self.latest_detect.get(&evicted.market).is_some_and(|latest| {
+                                    Arc::ptr_eq(latest, &evicted)
+                                }) {
+                                    self.latest_detect.remove(&evicted.market);
+                                }
+                            }
                         }
                     }
                     self.detects_rev = self.detects_rev.wrapping_add(1);

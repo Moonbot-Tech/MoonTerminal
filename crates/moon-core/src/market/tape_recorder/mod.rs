@@ -29,7 +29,7 @@
 //!
 //! There is no cap on pairs and no cancelled recording. Each flush lands in
 //! `tape_recorder.sqlite` — the layout of `trades.sqlite`, a second [`TradeCache`] on its own
-//! file — and is logged to `logs/tape_recorder.log`, with a summary line every minute.
+//! file — and is logged to `logs/<date>_tape_recorder.log`, with a summary line every minute.
 //!
 //! # A station's restart and its disk
 //!
@@ -90,7 +90,7 @@ use crate::market::trade_replay::tick_tiles::TileSource;
 use crate::market::trade_replay::trade_cache::TradeCache;
 use crate::session::CoreId;
 
-/// The recorder's log file under `logs/`.
+/// The recorder's undated base name, rotated by diagnostics into dated purgeable log files.
 const LOG_FILE: &str = "tape_recorder.log";
 /// How often the running recorder looks at its donors and its schedule.
 const TICK: Duration = Duration::from_millis(250);
@@ -147,8 +147,28 @@ struct Core {
 
 /// Every running core, whether or not the recorder is on: switching it on must find them.
 static CORES: Mutex<Vec<Core>> = Mutex::new(Vec::new());
-/// The recorder thread's queue, started by the first event that finds the switch on.
-static TX: OnceLock<Option<Sender<Cmd>>> = OnceLock::new();
+/// Tick-bearing backfills admitted at once; producers wait only on the catch-up thread.
+const BACKFILL_QUEUE: usize = 64;
+
+/// Small deal-rate events and bounded tick-vector recovery traffic use separate queues.
+#[derive(Clone)]
+struct RecorderTx {
+    events: mpsc::Sender<Cmd>,
+    backfills: mpsc::SyncSender<Cmd>,
+}
+
+impl RecorderTx {
+    /// Send losslessly; only a backfill producer can wait, never the UI or station main loop.
+    fn send(&self, cmd: Cmd) -> Result<(), mpsc::SendError<Cmd>> {
+        match cmd {
+            cmd @ Cmd::Backfilled { .. } => self.backfills.send(cmd),
+            cmd => self.events.send(cmd),
+        }
+    }
+}
+
+/// The recorder thread's queues, started by the first event that finds the switch on.
+static TX: OnceLock<Option<RecorderTx>> = OnceLock::new();
 
 /// Live events and off-thread recovery results, applied by the recorder's single cache owner.
 enum Cmd {
@@ -337,13 +357,14 @@ fn notify(cmd: Cmd) {
 /// Send, starting the thread on first use.
 fn send(cmd: Cmd) {
     let tx = TX.get_or_init(|| {
-        let (tx, rx) = mpsc::channel();
+        let (events, rx) = mpsc::channel();
+        let (backfills, backfill_rx) = mpsc::sync_channel(BACKFILL_QUEUE);
         std::thread::Builder::new()
             .name("tape-recorder".into())
-            .spawn(move || run(&rx))
+            .spawn(move || run(&rx, &backfill_rx))
             .map_err(|e| log::warn!("tape recorder thread not started: {e}"))
             .ok()?;
-        Some(tx)
+        Some(RecorderTx { events, backfills })
     });
     if let Some(tx) = tx {
         let _ = tx.send(cmd);
@@ -354,10 +375,17 @@ fn line(msg: &str) {
     crate::diagnostics::stamped_line(LOG_FILE, msg);
 }
 
-fn run(rx: &Receiver<Cmd>) {
+/// Keep every backfill ahead of settlement and lifecycle commands without reordering either group.
+fn backfills_first(pending: &mut [Cmd]) {
+    pending.sort_by_key(|cmd| !matches!(cmd, Cmd::Backfilled { .. }));
+}
+
+/// Drain bounded backfills before the settlement event their producer sends afterwards.
+fn run(rx: &Receiver<Cmd>, backfill_rx: &Receiver<Cmd>) {
     let mut recorder: Option<Recorder> = None;
     let mut pending = Vec::new();
     loop {
+        pending.extend(backfill_rx.try_iter());
         let wait = if recorder.is_some() { TICK } else { IDLE_TICK };
         match rx.recv_timeout(wait) {
             Ok(cmd) => pending.push(cmd),
@@ -365,6 +393,9 @@ fn run(rx: &Receiver<Cmd>) {
             Err(RecvTimeoutError::Disconnected) => return,
         }
         pending.extend(rx.try_iter());
+        // CatchupDone is sent after every Backfilled command; application order must match it.
+        pending.extend(backfill_rx.try_iter());
+        backfills_first(&mut pending);
         if let Some(at) = pending.iter().position(|c| matches!(c, Cmd::Shutdown(_))) {
             let Cmd::Shutdown(reply) = pending.remove(at) else {
                 return;
@@ -467,6 +498,10 @@ struct Recorder {
     closed: peek::ClosedTrades,
     /// Outstanding backfill bytes remain reserved until the cache queue confirms their writes.
     pending_bytes: Arc<AtomicU64>,
+    /// Live protection, recomputed only when a task's needed-window revision changes.
+    live: HashMap<Key, Coverage>,
+    /// Task identity and needed-window revision each entry of [`Self::live`] was built from.
+    live_revisions: HashMap<Key, (u64, u64)>,
 }
 
 /// Account one backfill batch until the writer drops its queue barrier token.
@@ -562,6 +597,8 @@ impl Recorder {
             compares: Vec::new(),
             closed: peek::ClosedTrades::default(),
             pending_bytes: Arc::default(),
+            live: HashMap::new(),
+            live_revisions: HashMap::new(),
         })
     }
 
@@ -768,15 +805,11 @@ impl Recorder {
     fn tick(&mut self, now: Instant, now_ms: i64) {
         self.expire_watches(now_ms);
         self.drop_emulator_tasks();
-        let live = self
-            .tasks
-            .iter()
-            .map(|(key, task)| (key.clone(), task.real_needed()))
-            .collect();
+        sync_live(&self.tasks, &mut self.live_revisions, &mut self.live);
         let shape = catchup::Shape::current();
         let purging = self
             .catchup
-            .retention_tick(&self.cache, now_ms, &live, &shape);
+            .retention_tick(&self.cache, now_ms, &self.live, &shape);
         if !purging {
             self.catchup.tick(&self.cache, now_ms, &shape);
         }
@@ -1385,6 +1418,24 @@ fn flatten(
     }
     ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
     (covered, ticks)
+}
+
+/// Refresh only changed live windows, retaining exact coverage and key ownership between ticks.
+fn sync_live(
+    tasks: &HashMap<Key, KeyTask>,
+    revisions: &mut HashMap<Key, (u64, u64)>,
+    live: &mut HashMap<Key, Coverage>,
+) {
+    revisions.retain(|key, _| tasks.contains_key(key));
+    live.retain(|key, _| tasks.contains_key(key));
+    for (key, task) in tasks {
+        let version = (task.instance_id(), task.needed_revision());
+        if revisions.get(key) == Some(&version) {
+            continue;
+        }
+        live.insert(key.clone(), task.real_needed());
+        revisions.insert(key.clone(), version);
+    }
 }
 
 /// The prints of an ascending run inside `[from_ms, to_ms]`.

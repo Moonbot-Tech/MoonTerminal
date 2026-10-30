@@ -1,4 +1,6 @@
 use super::*;
+
+mod scale;
 use crate::market::tape_recorder::TradeId;
 use crate::venue::{Brand, MarketKind, Venue};
 

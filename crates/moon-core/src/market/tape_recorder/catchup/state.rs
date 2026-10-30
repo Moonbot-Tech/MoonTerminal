@@ -631,11 +631,34 @@ impl RecorderCatchup {
         self.publish_pending();
     }
 
-    /// Plan on the recorder thread, reading held spans through its own cache queue only.
-    /// `archives` comes from the caller's switch snapshot, so one tick never mixes generations.
+    /// Plan borrowed pending rows with a coverage answer owned by each test or caller.
+    #[cfg(test)]
     pub(super) fn prepare(
         &mut self,
         held: impl Fn(&CatchupTrade) -> Coverage,
+        now_ms: i64,
+        shape: &super::Shape,
+        archives: bool,
+    ) -> CatchupPlan {
+        self.prepare_with(held, now_ms, shape, archives)
+    }
+
+    /// Plan with reference-counted coverage shared by every trade of one market.
+    pub(super) fn prepare_shared(
+        &mut self,
+        held: impl Fn(&CatchupTrade) -> std::rc::Rc<Coverage>,
+        now_ms: i64,
+        shape: &super::Shape,
+        archives: bool,
+    ) -> CatchupPlan {
+        self.prepare_with(held, now_ms, shape, archives)
+    }
+
+    /// Apply one plan and its freshness/completion settlements without cloning pending rows.
+    /// `archives` comes from the caller's switch snapshot, so one tick never mixes generations.
+    fn prepare_with<H: std::borrow::Borrow<Coverage>>(
+        &mut self,
+        held: impl Fn(&CatchupTrade) -> H,
         now_ms: i64,
         shape: &super::Shape,
         archives: bool,
@@ -646,13 +669,15 @@ impl RecorderCatchup {
             .pending
             .iter()
             .filter_map(|(id, entry)| queued(&self.known, id, entry))
-            .cloned()
             .collect();
         let batch = if archives {
-            super::plan(&ready, held, &self.latched, now_ms, shape)
+            super::plan_refs(&ready, held, &self.latched, now_ms, shape, true)
         } else {
-            super::plan_with(&ready, held, &self.latched, now_ms, shape, false)
+            super::plan_refs(&ready, held, &self.latched, now_ms, shape, false)
         };
+        for &(id, retry_at) in &batch.too_fresh_ids {
+            self.latched.insert(id, Latch::Fresh(retry_at));
+        }
         for &id in &batch.permanent_ids {
             self.latched.insert(id, Latch::Permanent);
             self.pending.remove(&id);
@@ -686,7 +711,8 @@ impl RecorderCatchup {
     fn sync_switches(&mut self) -> (bool, bool) {
         let (generation, auto, archives) = super::switches();
         if self.switch_gen != generation {
-            self.latched.retain(|_, latch| *latch != Latch::Permanent);
+            self.latched
+                .retain(|_, latch| matches!(latch, Latch::RetryAfter(_)));
             self.complete.clear();
             self.tape_complete.clear();
             self.core_gap_tries.clear();
@@ -769,6 +795,56 @@ impl RecorderCatchup {
         }
     }
 
+    /// Read one shared coverage answer per market with work eligible for this planning pass.
+    fn market_coverages(
+        &self,
+        cache: &TradeCache,
+        now_ms: i64,
+        shape: &super::Shape,
+    ) -> Vec<(String, String, std::rc::Rc<Coverage>)> {
+        let edge = super::edge_ms(now_ms);
+        let mut bounds = HashMap::<(&str, &str), (i64, i64)>::new();
+        for (id, entry) in &self.pending {
+            let Some(trade) = queued(&self.known, id, entry) else {
+                continue;
+            };
+            if super::skipped(trade)
+                || trade.close_ms < edge
+                || self.latched.get(id).is_some_and(|latch| match latch {
+                    Latch::Permanent => true,
+                    Latch::RetryAfter(at) | Latch::Fresh(at) => now_ms < *at,
+                })
+            {
+                continue;
+            }
+            let Some((from, to)) = super::needed(trade, shape).hull() else {
+                continue;
+            };
+            bounds
+                .entry((trade.exchange.as_str(), trade.market.as_str()))
+                .and_modify(|held| {
+                    held.0 = held.0.min(from);
+                    held.1 = held.1.max(to);
+                })
+                .or_insert((from, to));
+        }
+        let mut bounds: Vec<_> = bounds.into_iter().collect();
+        bounds.sort_by_key(|(key, _)| *key);
+        bounds
+            .into_iter()
+            .map(|((exchange, market), (from, to))| {
+                let held = cache
+                    .held_spans(exchange, market, from, to)
+                    .unwrap_or_default();
+                (
+                    exchange.to_owned(),
+                    market.to_owned(),
+                    std::rc::Rc::new(Coverage::from_spans(held)),
+                )
+            })
+            .collect()
+    }
+
     /// Lazily start one fetch thread and submit work only after the prior pass settled.
     pub(crate) fn tick(&mut self, cache: &TradeCache, now_ms: i64, shape: &super::Shape) {
         self.prune(now_ms);
@@ -779,17 +855,16 @@ impl RecorderCatchup {
         if !auto || self.pending.is_empty() {
             return;
         }
-        let batch = self.prepare(
+        let coverage = self.market_coverages(cache, now_ms, shape);
+        let batch = self.prepare_shared(
             |trade| {
-                let focus = super::needed(trade, shape);
-                let Some((from, to)) = focus.hull() else {
-                    return Coverage::none();
-                };
-                Coverage::from_spans(
-                    cache
-                        .held_spans(&trade.exchange, &trade.market, from, to)
-                        .unwrap_or_default(),
-                )
+                let key = (trade.exchange.as_str(), trade.market.as_str());
+                coverage
+                    .binary_search_by(|(exchange, market, _)| {
+                        (exchange.as_str(), market.as_str()).cmp(&key)
+                    })
+                    .map(|index| coverage[index].2.clone())
+                    .unwrap_or_else(|_| std::rc::Rc::new(Coverage::none()))
             },
             now_ms,
             shape,

@@ -120,7 +120,7 @@ pub(crate) fn answer_tape<I: Iterator<Item = Result<StoredSpan, String>>>(
                     continue;
                 }
                 let room = budget.saturating_sub(used + PIECE_OVERHEAD);
-                match fitting_prefix(&ticks, room, tape.pieces.is_empty()) {
+                match fitting_prefix(&ticks, room, tape.pieces.is_empty(), prints.len()) {
                     Some((cut_ms, prints)) => {
                         tape.pieces.push(TapePiece {
                             item,
@@ -144,36 +144,43 @@ pub(crate) fn answer_tape<I: Iterator<Item = Result<StoredSpan, String>>>(
     Ok(tape)
 }
 
-/// The longest run of whole milliseconds from the start of `ticks` whose packing fits `room`:
-/// the last millisecond it covers and the packing. `None` when not even the first millisecond
-/// fits — unless `forced`, when the first millisecond goes out whatever its size.
+/// A budgeted run of whole milliseconds from `ticks`, estimated from the already packed span.
+/// Verify the actual packing and shrink on overshoot: compression is not additive per print.
+/// Page cuts may leave headroom, but every covered millisecond remains complete. The first
+/// millisecond still goes out when forced, so repeated pulls always make progress.
 fn fitting_prefix(
     ticks: &[moon_core::feed::types::Tick],
     room: usize,
     forced: bool,
+    whole_bytes: usize,
 ) -> Option<(i64, String)> {
-    // Every index where a new millisecond starts, and the end: a prefix ends at one of them.
-    let mut ends: Vec<usize> = (1..ticks.len())
-        .filter(|&i| ticks[i].time_ms as i64 != ticks[i - 1].time_ms as i64)
-        .collect();
-    ends.push(ticks.len());
-    let packed = |end: usize| encode_prints(&ticks[..end]);
-    // The largest end whose packing fits, by bisection: the packing grows with every print.
-    let (mut lo, mut hi) = (0usize, ends.len());
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if packed(ends[mid]).len() <= room {
-            lo = mid + 1;
-        } else {
-            hi = mid;
+    let first = ticks.first()?.time_ms as i64;
+    let first_end = ticks.partition_point(|tick| tick.time_ms as i64 == first);
+    let estimate = ticks.len().saturating_mul(room) / whole_bytes.max(1);
+    let mut end = (estimate.saturating_mul(95) / 100).clamp(first_end, ticks.len());
+    // Round down without splitting a millisecond; the very first group is the progress floor.
+    while end > first_end
+        && end < ticks.len()
+        && ticks[end - 1].time_ms as i64 == ticks[end].time_ms as i64
+    {
+        end -= 1;
+    }
+    loop {
+        let prints = encode_prints(&ticks[..end]);
+        if prints.len() <= room || (forced && end == first_end) {
+            return Some((ticks[end - 1].time_ms as i64, prints));
+        }
+        if end == first_end {
+            return None;
+        }
+        let estimate = end.saturating_mul(room) / prints.len();
+        end = (estimate.saturating_mul(95) / 100)
+            .max(first_end)
+            .min(end - 1);
+        while end > first_end && ticks[end - 1].time_ms as i64 == ticks[end].time_ms as i64 {
+            end -= 1;
         }
     }
-    let end = match lo {
-        0 if forced && !ticks.is_empty() => ends[0],
-        0 => return None,
-        n => ends[n - 1],
-    };
-    Some((ticks[end - 1].time_ms as i64, packed(end)))
 }
 
 /// The archived traces of these trades of one core; a trade without lines is left out.

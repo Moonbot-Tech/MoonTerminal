@@ -3,6 +3,10 @@ use super::*;
 use crate::feed::types::Side;
 use std::sync::atomic::Ordering;
 
+mod parity;
+mod queue;
+mod scale;
+
 /// Full compaction must stay in the writer queue so inserts on either side remain durable.
 #[test]
 fn full_compaction_preserves_queued_inserts() {
@@ -24,7 +28,7 @@ fn full_compaction_preserves_queued_inserts() {
 /// A live worker's late reply must differ from a dead queue or a dropped reply sender.
 #[test]
 fn full_compaction_distinguishes_timeout_from_dead_worker() {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(256);
     let cache = TradeCache { tx };
     assert_eq!(
         cache.compact_full_with_timeout(Duration::ZERO),
@@ -41,7 +45,7 @@ fn full_compaction_distinguishes_timeout_from_dead_worker() {
         Err(mpsc::RecvTimeoutError::Disconnected)
     );
 
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(256);
     let worker = std::thread::spawn(move || drop(rx.recv().unwrap()));
     assert_eq!(
         TradeCache { tx }.compact_full(),
@@ -66,7 +70,7 @@ fn disk_limited_worker(probe: DiskProbe, cap: fn() -> Option<i64>, retained: usi
     disk.interval = Duration::MAX;
     let limit = disk.limit(held, cap());
     let held = prune(&conn, limit).unwrap();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(256);
     let worker = std::thread::spawn(move || run(conn, rx, held, cap, Some(disk)));
     let cache = TradeCache { tx };
     for i in 4..24 {
@@ -125,7 +129,7 @@ fn disk_drop_below_reserve_discards_previous_roomy_limit() {
     disk.interval = Duration::ZERO;
     assert_eq!(disk.limit(held, max_bytes()), max_bytes());
     disk.probe = |_| Some((0, 20 * 1024_u64.pow(3)));
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(256);
     let cache = TradeCache { tx };
     for i in 4..24 {
         cache.insert("x", "M", i, i, vec![], TileSource::Venue);
@@ -454,7 +458,7 @@ fn trim_start_reports_compaction() {
         1,
     )
     .unwrap();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(256);
     let cache = TradeCache { tx };
     let progress = Arc::new(TrimProgress::default());
     let done = cache.trim_start(
@@ -505,7 +509,7 @@ fn trim_start_reports_compaction() {
     .unwrap();
     let reader = rusqlite::Connection::open(&path).unwrap();
     reader.execute_batch("BEGIN; SELECT * FROM packs;").unwrap();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(256);
     let cache = TradeCache { tx };
     let done = cache.trim_start(Arc::new(KeepMap::new()), Compact::Incremental, None);
     let mut held = held_bytes(&writer).unwrap();
@@ -529,7 +533,7 @@ fn queued_reservation_releases_after_writer_barrier() {
         }
     }
     let pending = Arc::new(std::sync::atomic::AtomicU64::new(9));
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(256);
     let cache = TradeCache { tx };
     cache.insert("synthetic", "SYNUSDT", 1, 2, Vec::new(), TileSource::Venue);
     cache.release_after_writes(Reservation(pending.clone()));
@@ -1882,7 +1886,7 @@ fn disk_resampling_with_unequal_packs_preserves_budget() {
     let mut disk = DiskCeiling::new(path, |_| Some((0, 20 * 1024 * 1024 * 1024)));
     disk.interval = Duration::ZERO;
     let original = disk.limit(held, max_bytes());
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(256);
     let cache = TradeCache { tx };
     cache.insert("x", "M", 3, 3, vec![], TileSource::Venue);
     let snapshot = held;
@@ -1914,7 +1918,7 @@ fn empty_cleanup_skips_full_vacuum() {
         .query_row("PRAGMA schema_version", [], |r| r.get(0))
         .unwrap();
     let mut held = 0;
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(256);
     let cache = TradeCache { tx };
     let result = cache.trim_start(Arc::new(KeepMap::new()), Compact::Full, None);
     serve(&conn, rx.recv().unwrap(), &mut held, || None);

@@ -161,3 +161,64 @@ fn prune_hands_over_the_rows_it_drops() {
     assert!(state.take_expired().is_empty());
     assert!(state.known_trade(&queued.id).is_some());
 }
+
+/// Borrowed preparation must match the former owned ready slice, and a fresh latch must expire
+/// exactly when its tail becomes fetchable rather than suppressing or repeating later work.
+#[test]
+fn borrowed_prepare_matches_owned_plan_and_fresh_latch_expires() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let shape = catchup::Shape {
+        margin_ms: 30_000,
+        long_ms: DAY,
+        tail_ms: 60_000,
+    };
+    let mut fresh = row();
+    fresh.id.rec_id -= 1;
+    fresh.close_ms = NOW - 1_000;
+    fresh.open_ms = fresh.close_ms - 60_000;
+    let ready = row();
+    let mut complete = row();
+    complete.id.rec_id += 1;
+    let rows = vec![fresh.clone(), ready.clone(), complete.clone()];
+    let held = |trade: &CatchupTrade| {
+        if trade.id == complete.id {
+            catchup::needed(trade, &shape)
+        } else {
+            Coverage::none()
+        }
+    };
+    let mut state = RecorderCatchup::default();
+    state.submit(rows);
+    let actual = state.prepare(held, NOW, &shape, true);
+    // Independent expected values, not another call into the planner being checked.
+    assert_eq!(actual.jobs.len(), 1);
+    let job = &actual.jobs[0];
+    assert_eq!(job.trade.id, ready.id);
+    assert_eq!(job.missing, catchup::needed(&ready, &shape));
+    assert_eq!(job.expires_at_ms, i64::MAX);
+    assert_eq!(format!("{:?}", job.source), "Archive(BybitTradingDaily)");
+    assert_eq!(actual.complete_ids, vec![complete.id]);
+    assert_eq!(
+        actual.too_fresh_ids,
+        vec![(fresh.id, fresh.close_ms + 60_000 + 120_000)]
+    );
+
+    let mut fresh_only = RecorderCatchup::default();
+    fresh_only.submit(vec![fresh.clone()]);
+    let first = fresh_only.prepare(|_| Coverage::none(), NOW, &shape, true);
+    let retry_at = first.too_fresh_ids[0].1;
+    fresh_only.prepare(
+        |_| panic!("fresh row reread before its fetch deadline"),
+        retry_at - 1,
+        &shape,
+        true,
+    );
+    assert_eq!(
+        fresh_only
+            .prepare(|_| Coverage::none(), retry_at, &shape, true)
+            .jobs
+            .len(),
+        1
+    );
+}

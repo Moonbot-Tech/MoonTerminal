@@ -187,3 +187,23 @@ fn wake_latch_coalesces_until_clear_and_keeps_the_next_send() {
     assert!(rx.try_recv().is_ok());
     assert!(rx.try_recv().is_err());
 }
+
+/// Removing the parked-owner wake leaves a queued token unread until the housekeeping timer.
+#[test]
+fn a_parked_owner_wakes_when_a_feed_token_is_admitted() {
+    let (ready, sender) = std::sync::mpsc::channel();
+    let (done, awakened) = std::sync::mpsc::channel();
+    let owner = std::thread::spawn(move || {
+        let (tx, rx) = super::feed_wake_pair_for_thread(std::thread::current());
+        ready.send(tx).unwrap();
+        std::thread::park_timeout(std::time::Duration::from_secs(5));
+        done.send(rx.try_recv().is_ok()).unwrap();
+    });
+    sender.recv().unwrap().notify();
+    assert!(
+        awakened
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap()
+    );
+    owner.join().unwrap();
+}

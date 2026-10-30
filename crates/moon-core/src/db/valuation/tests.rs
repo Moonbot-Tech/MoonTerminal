@@ -2,6 +2,27 @@
 
 use super::*;
 
+/// Quantify staging overhead alone; an open row can still invalidate a previous closed value.
+#[test]
+#[ignore = "synthetic station valuation staging measurement"]
+fn station_open_valuation_staging_measurement() {
+    for _ in 0..5 {
+        let conn = Connection::open_in_memory().unwrap();
+        init_report_outbox(&conn).unwrap();
+        let transaction = conn.unchecked_transaction().unwrap();
+        let started = std::time::Instant::now();
+        for id in 0..10_000 {
+            stage_row(&transaction, TradeSource::Typed, 1, id).unwrap();
+        }
+        println!(
+            "valuation staging 10000: {:.3} ms",
+            started.elapsed().as_secs_f64() * 1_000.0
+        );
+        transaction.commit().unwrap();
+        assert_eq!(read_outbox(&conn, 10_001).unwrap().len(), 10_000);
+    }
+}
+
 /// Build an isolated valuation family and quarantine layout for one filesystem test.
 ///
 /// Args:

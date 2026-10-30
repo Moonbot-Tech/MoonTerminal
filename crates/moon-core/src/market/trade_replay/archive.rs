@@ -33,9 +33,59 @@ enum DayLatch {
 struct DayFailures {
     attempts: u8,
     latched: Option<DayLatch>,
+    /// Deadline after which this resolved path and its preserved retry allowance both expire.
+    resolved: Option<Instant>,
 }
 
-static DAY_FAILURES: OnceLock<Mutex<HashMap<PathBuf, DayFailures>>> = OnceLock::new();
+/// Per-day retry state plus a time-ordered index of resolutions awaiting bounded retention.
+#[derive(Default)]
+struct FailureBook {
+    days: HashMap<PathBuf, DayFailures>,
+    resolved: std::collections::BTreeMap<Instant, std::collections::HashSet<PathBuf>>,
+}
+
+static DAY_FAILURES: OnceLock<Mutex<FailureBook>> = OnceLock::new();
+
+/// Remove a path's old resolution index without touching its retry allowance.
+fn unindex_resolution(book: &mut FailureBook, path: &std::path::Path) {
+    let Some(expiry) = book.days.get(path).and_then(|day| day.resolved) else {
+        return;
+    };
+    let remove = book.resolved.get_mut(&expiry).is_some_and(|paths| {
+        paths.remove(path);
+        paths.is_empty()
+    });
+    if remove {
+        book.resolved.remove(&expiry);
+    }
+}
+
+/// Return a failure entry with any previous resolution cleared, preserving its attempt count.
+fn failure_mut<'a>(book: &'a mut FailureBook, path: &std::path::Path) -> &'a mut DayFailures {
+    unindex_resolution(book, path);
+    let day = book.days.entry(path.to_owned()).or_default();
+    day.resolved = None;
+    day
+}
+
+/// Expire only resolutions whose 24-hour retry-preservation deadline has passed.
+fn expire_resolved(book: &mut FailureBook, now: Instant) {
+    while let Some((&expiry, _)) = book.resolved.first_key_value() {
+        if expiry > now {
+            break;
+        }
+        let paths = book.resolved.remove(&expiry).unwrap_or_default();
+        for path in paths {
+            if book
+                .days
+                .get(&path)
+                .is_some_and(|day| day.resolved == Some(expiry))
+            {
+                book.days.remove(&path);
+            }
+        }
+    }
+}
 
 /// Retry failed bodies after a cooldown or after the disk budget has grown.
 fn day_refusal(
@@ -43,26 +93,28 @@ fn day_refusal(
     guard: &impl Fn() -> Option<u64>,
     now: Instant,
 ) -> Option<ArchiveError> {
-    let mut days = DAY_FAILURES
+    let mut book = DAY_FAILURES
         .get_or_init(Mutex::default)
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let day = days.get_mut(path)?;
-    let (error, retry, reset_attempts) = match day.latched.as_ref()? {
+    expire_resolved(&mut book, now);
+    let day = book.days.get_mut(path)?;
+    let (error, retry) = match day.latched.as_ref()? {
         DayLatch::Missing => return Some(ArchiveError::UnknownSymbol),
         DayLatch::Disk { available } => (
             ArchiveError::NoRoom,
             guard().is_some_and(|room| room > *available),
-            false,
         ),
-        DayLatch::Transfer { error, until } => (error.clone(), now >= *until, true),
+        DayLatch::Transfer { error, until } => (error.clone(), now >= *until),
     };
     if !retry {
         return Some(error);
     }
-    day.latched = None;
-    if reset_attempts {
-        day.attempts = 0;
+    if matches!(day.latched, Some(DayLatch::Transfer { .. })) {
+        book.days.remove(path);
+    } else {
+        // More disk room releases the latch but never renews the failed-body allowance.
+        day.latched = None;
     }
     None
 }
@@ -75,24 +127,35 @@ fn note_day_result(
     available: Option<u64>,
     now: Instant,
 ) {
-    let mut days = DAY_FAILURES
+    let mut book = DAY_FAILURES
         .get_or_init(Mutex::default)
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    expire_resolved(&mut book, now);
+    if result.is_ok() {
+        // Success resolves the path but does not renew its failed-body allowance.
+        unindex_resolution(&mut book, &path);
+        let expiry = now + Duration::from_secs(24 * 60 * 60);
+        if let Some(day) = book.days.get_mut(&path) {
+            day.resolved = Some(expiry);
+            book.resolved.entry(expiry).or_default().insert(path);
+        }
+        return;
+    }
     let Err(error) = result else {
         return;
     };
     match error {
         ArchiveError::UnknownSymbol => {
-            days.entry(path).or_default().latched = Some(DayLatch::Missing);
+            failure_mut(&mut book, &path).latched = Some(DayLatch::Missing);
         }
         ArchiveError::NoRoom if received > 0 => {
             if let Some(available) = available {
-                days.entry(path).or_default().latched = Some(DayLatch::Disk { available });
+                failure_mut(&mut book, &path).latched = Some(DayLatch::Disk { available });
             }
         }
         ArchiveError::Transient(_) | ArchiveError::Corrupt(_) if received > 0 => {
-            let day = days.entry(path).or_default();
+            let day = failure_mut(&mut book, &path);
             day.attempts = day.attempts.saturating_add(1);
             if day.attempts >= 3 {
                 day.latched = Some(DayLatch::Transfer {
@@ -369,7 +432,7 @@ fn fill_at(
         let paths = day_cache::paths(root, route, market, day)?;
         let day_path = paths.file.clone();
         let key = day_cache::in_flight(&day_path);
-        let _key = key.lock().unwrap_or_else(|error| error.into_inner());
+        let _key = key.lock();
         let result = (|| {
             if let Some(error) = day_refusal(&paths.file, &guard, now()) {
                 latched = true;

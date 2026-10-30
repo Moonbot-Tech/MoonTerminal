@@ -1,5 +1,8 @@
 use super::*;
 
+mod parity;
+mod scale;
+
 #[test]
 fn one_drops_an_inverted_span() {
     assert!(Coverage::one((10, 5)).is_empty());
