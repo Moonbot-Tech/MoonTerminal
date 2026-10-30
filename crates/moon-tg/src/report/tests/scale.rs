@@ -285,3 +285,39 @@ fn probe_interactive_report() {
         reads[9], reads[18], renders[9], renders[18]
     );
 }
+
+/// Measure the exact Mini App top-N read over 100000 deals on ten differently shifted cores.
+#[test]
+#[ignore = "synthetic reader timing probe"]
+fn mini_app_utc_top_n_scale_probe() {
+    let conn = source(100_000, 1_700_000_000, 1_700_200_000);
+    conn.execute_batch(
+        "CREATE TABLE core_time_offset (
+            core_uid INTEGER, from_utc INTEGER, offset_secs INTEGER,
+            observed_at INTEGER, source TEXT
+        );
+        INSERT INTO core_time_offset
+            SELECT core_uid, 0, (core_uid%5-2)*900, 0, 'fixture' FROM orders_rep
+            GROUP BY core_uid;
+        ANALYZE;",
+    )
+    .unwrap();
+    let mut samples = Vec::new();
+    for _ in 0..8 {
+        let started = Instant::now();
+        let trades = super::super::read_mini_trades_on(
+            &conn,
+            chrono_tz::UTC,
+            TelegramReportAccess::Owner,
+            Default::default(),
+            50,
+            None,
+        )
+        .unwrap();
+        assert_eq!(trades.len(), 50);
+        std::hint::black_box(trades);
+        samples.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!("mini_app utc top-n 100000 deals: {:.3} ms", samples[4]);
+}

@@ -106,19 +106,12 @@ pub(in crate::db) const FEE_ROW: &str = "CASE WHEN o.prices_in_money_quote
                            - o.profitbtc
                         END";
 
-/// Funding rows, deduplicated across cores and bucketed like the cells they belong to.
+/// Funding rows, deduplicated within each core and bucketed like the cells they belong to.
 ///
-/// MoonBot delivers a funding record to EVERY bot running on the account, and its own report
-/// warns about exactly that ("снимайте галку, чтобы записи не дублировались"). The replica keys
-/// rows by `(core_uid, newrecid)`, so two bots on one account store the same accrual twice and
-/// both copies would land in profit.
-///
-/// The duplicate is recognised by what a redelivery cannot change: the coin, the minute, the
-/// amount and the position size. Two DIFFERENT accounts are charged in the same second — funding
-/// fires on a fixed schedule — but for different positions, so their amounts differ: measured on
-/// the live replica, 82 same-coin-same-minute pairs across two venues produced ZERO amount
-/// matches. The account id the protocol carries (`AuthCheckResponse`) would make this exact
-/// rather than near-certain, but the terminal does not read it yet.
+/// A redelivery inside one core is recognised by coin, minute, amount and position size. Core
+/// identity is part of the partition: the protocol's account id is not retained in the replica,
+/// so collapsing equal tuples across different cores could erase genuine accruals from different
+/// accounts. A minute bucket avoids a self-join while preserving each core's independent funding.
 ///
 /// A minute bucket rather than a ±5 s window: funding accrues every eight hours, so no honest
 /// pair sits inside one minute of another, while a sliding window would need a self-join to
@@ -156,7 +149,7 @@ fn funding_by_bucket(
              SELECT mt_local_bucket(o.closedate, {bucket_secs}, o.core_uid) AS bucket,
                     o.profitbtc AS amount,
                     ROW_NUMBER() OVER (
-                        PARTITION BY o.coin, o.closedate / 60,
+                        PARTITION BY o.core_uid, o.coin, o.closedate / 60,
                                      ROUND(o.profitbtc, 12), ROUND(o.boughtq, 12)
                         ORDER BY o.core_uid
                     ) AS copy

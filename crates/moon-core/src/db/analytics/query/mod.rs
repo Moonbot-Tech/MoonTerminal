@@ -230,10 +230,9 @@ impl Query {
     /// [`resolved_axis`](Self::resolved_axis) result governs every part of the statement it is
     /// building — a second read of the stale field here would put two axes in one query.
     ///
-    /// Cores are grouped by the offset applying at this window's own upper bound rather than at
-    /// "now": there is no present-tense question here, only which instants the stored values
-    /// represent, so the window's own instant is the honest one to resolve against. A fleet with
-    /// nothing measured produces exactly the single ungrouped predicate this method replaced.
+    /// Cores are grouped by each historical offset segment, and the raw segment bounds select the
+    /// same offset as [`ReportAxis::to_utc`] for every row. Consecutive equal-offset segments
+    /// coalesce, so an unchanged history keeps the former single-branch shape and index path.
     ///
     /// `?1` and `?2` stay bound to the raw true-UTC bounds at every one of the two dozen call
     /// sites that bind them, so nothing about the parameter plumbing moves.
@@ -246,44 +245,51 @@ impl Query {
     ///     A complete boolean expression, already parenthesised where it needs to be.
     pub(in crate::db) fn period_predicate_on(&self, axis: &ReportAxis, alias: &str) -> String {
         let column = format!("{alias}.closedate");
-        let window = |offset: i32| {
-            if offset == 0 {
+        let window = |offset: i32, local_from: Option<i64>, local_to: Option<i64>| {
+            let mut terms = vec![if offset == 0 {
                 format!("{column} >= ?1 AND {column} < ?2")
             } else {
                 let offset = i64::from(offset);
                 format!("{column} >= ?1 + {offset} AND {column} < ?2 + {offset}")
+            }];
+            if let Some(bound) = local_from {
+                terms.push(format!("{column} >= {bound}"));
             }
+            if let Some(bound) = local_to {
+                terms.push(format!("{column} < {bound}"));
+            }
+            terms.join(" AND ")
         };
         let mut branches: Vec<String> = Vec::new();
         if self.cores.is_empty() {
-            for (offset, cores) in axis.measured_groups(self.to) {
-                let list = core_list(&cores);
+            for group in axis.measured_row_groups() {
+                let list = core_list(&group.cores);
                 branches.push(format!(
                     "({alias}.core_uid IN ({list}) AND {})",
-                    window(offset)
+                    window(group.offset_secs, group.local_from, group.local_to)
                 ));
             }
             let measured = axis.measured_cores();
             if measured.is_empty() {
-                branches.push(window(0));
+                branches.push(window(0, None, None));
             } else {
                 let list = core_list(&measured);
                 branches.push(format!(
                     "({alias}.core_uid NOT IN ({list}) AND {})",
-                    window(0)
+                    window(0, None, None)
                 ));
             }
         } else {
-            for (offset, cores) in axis.groups(&self.cores, self.to) {
-                let list = core_list(&cores);
+            for group in axis.row_groups(&self.cores) {
+                let list = core_list(&group.cores);
                 branches.push(format!(
                     "({alias}.core_uid IN ({list}) AND {})",
-                    window(offset)
+                    window(group.offset_secs, group.local_from, group.local_to)
                 ));
             }
         }
         let window = match branches.len() {
-            0 => window(0),
+            0 => window(0, None, None),
             1 => branches.remove(0),
             _ => format!("({})", branches.join(" OR ")),
         };
@@ -495,6 +501,7 @@ impl Query {
 /// omitted from the projection and make its SQL fail silently.
 const UNIFIED_COLS: &[&str] = &[
     "core_uid",
+    "newrecid",
     "core_name",
     "coin",
     "isshort",
@@ -523,6 +530,7 @@ const UNIFIED_COLS: &[&str] = &[
     // Entry/Exit tuner replays the tape around each row and keys the archive by `reportuid`.
     // NULL on a replica that predates the columns, which that axis then counts as "no stamp".
     "reportuid",
+    "db_id",
     "buydatems",
     "closedatems",
     // The entry order's creation and the corridor the core last saved for it — the same tuner

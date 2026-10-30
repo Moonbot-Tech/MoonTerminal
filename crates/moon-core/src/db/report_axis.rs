@@ -483,6 +483,89 @@ impl ReportAxis {
             .filter_map(|offset| by_offset.remove(&offset).map(|cores| (offset, cores)))
             .collect()
     }
+
+    /// Group selected cores by the offset and raw-timestamp range of each historical segment.
+    ///
+    /// Consecutive segments with the same offset coalesce, so a history whose correction never
+    /// changes keeps the same single branch as the former point-in-time grouping.
+    ///
+    /// Args:
+    ///     cores: Core uids in the read's scope.
+    ///
+    /// Returns:
+    ///     Deterministic indexable groups covering every selected core exactly once per segment.
+    pub fn row_groups(&self, cores: &[u64]) -> Vec<RowOffsetGroup> {
+        self.row_groups_from(cores.iter().copied())
+    }
+
+    /// [`row_groups`](Self::row_groups) for every measured core, used by an unbounded read.
+    ///
+    /// Returns:
+    ///     Deterministic indexable groups for all cores with retained measurements.
+    pub fn measured_row_groups(&self) -> Vec<RowOffsetGroup> {
+        self.row_groups_from(self.segments.keys().copied())
+    }
+
+    /// Expand each core's retained segments and merge matching branches deterministically.
+    ///
+    /// Args:
+    ///     cores: Core uids to expand, supplied by either scoped or unbounded callers.
+    ///
+    /// Returns:
+    ///     One group per distinct offset and raw segment-bound tuple.
+    fn row_groups_from(&self, cores: impl Iterator<Item = u64>) -> Vec<RowOffsetGroup> {
+        let mut grouped =
+            std::collections::BTreeMap::<(i32, Option<i64>, Option<i64>), Vec<u64>>::new();
+        for core_uid in cores {
+            let Some(segments) = self.segments.get(&core_uid) else {
+                grouped.entry((0, None, None)).or_default().push(core_uid);
+                continue;
+            };
+            let mut run_start = 0;
+            for run_end in 0..segments.len() {
+                if segments
+                    .get(run_end + 1)
+                    .is_some_and(|next| next.offset_secs == segments[run_start].offset_secs)
+                {
+                    continue;
+                }
+                let segment = segments[run_start];
+                let local_from = (run_start > 0).then_some(segment.from_utc);
+                let local_to = segments.get(run_end + 1).map(|next| next.from_utc);
+                grouped
+                    .entry((segment.offset_secs, local_from, local_to))
+                    .or_default()
+                    .push(core_uid);
+                run_start = run_end + 1;
+            }
+        }
+        grouped
+            .into_iter()
+            .map(|((offset_secs, local_from, local_to), mut cores)| {
+                cores.sort_unstable();
+                cores.dedup();
+                RowOffsetGroup {
+                    offset_secs,
+                    cores,
+                    local_from,
+                    local_to,
+                }
+            })
+            .collect()
+    }
+}
+
+/// One indexable branch of a historical report-axis predicate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RowOffsetGroup {
+    /// Offset shared by every row in the branch.
+    pub offset_secs: i32,
+    /// Cores sharing the offset and raw segment bounds.
+    pub cores: Vec<u64>,
+    /// Inclusive raw local-timestamp start; the earliest segment is unbounded below.
+    pub local_from: Option<i64>,
+    /// Exclusive raw local-timestamp end; the latest segment is unbounded above.
+    pub local_to: Option<i64>,
 }
 
 #[cfg(test)]

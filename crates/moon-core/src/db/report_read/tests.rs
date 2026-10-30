@@ -3686,4 +3686,7 @@ fn a_wordless_mask_needs_no_metadata_but_a_real_query_fails_closed() {
 
 pub(super) mod seeks;
 
+mod ascending_ties;
+mod historical_axis;
 mod scale;
+mod sqlite_merge;

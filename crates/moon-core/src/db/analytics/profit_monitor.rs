@@ -6,6 +6,7 @@ mod tests;
 use rusqlite::Connection;
 
 mod latest_name;
+mod latest_trade;
 
 use super::{
     Query, ScopeDecision, min_closedate, read_core_scope, scope_decision_with_quote_reader_on,
@@ -233,8 +234,15 @@ fn aggregate_on(conn: &Connection, q: &Query, source: &str) -> ReadResult<Profit
         latest_name::LatestNameAggregate,
     )
     .map_err(|error| read_fail_on(conn, CTX, error))?;
-    // SQLite keeps ownership of all money sums. The custom name aggregate frees the one
-    // built-in MAX to select the newest trade's bare pnl in this same grouped pass.
+    conn.create_aggregate_function(
+        "mt_latest_report_trade",
+        4,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+        latest_trade::LatestTradeAggregate,
+    )
+    .map_err(|error| read_fail_on(conn, CTX, error))?;
+    // Both latest-row choices are explicit aggregates in the same grouped pass: no bare column
+    // depends on SQLite's arbitrary choice among equal MAX dates.
     let sql = format!(
         "SELECT o.core_uid,
                 mt_latest_report_name(CASE WHEN TRIM(COALESCE(o.core_name, '')) <> '' THEN o.closedate END, o.core_name),
@@ -243,7 +251,13 @@ fn aggregate_on(conn: &Connection, q: &Query, source: &str) -> ReadResult<Profit
                 COUNT(CASE WHEN o.pnl > 0.0 THEN 1 END),
                 COALESCE(SUM(CASE WHEN o.spentbtc > 0.0 THEN o.spentbtc ELSE 0.0 END), 0.0),
                 COUNT(CASE WHEN o.spentbtc > 0.0 THEN 1 END),
-                o.pnl, MAX(o.closedate)
+                mt_latest_report_trade(
+                    o.closedate,
+                    CASE WHEN o.closedatems > 0 THEN o.closedatems ELSE o.closedate * 1000 END,
+                    COALESCE(o.newrecid, o.db_id, o.reportuid),
+                    o.pnl
+                ),
+                MAX(o.closedate)
          FROM {source}
          GROUP BY o.core_uid
          ORDER BY o.core_uid"

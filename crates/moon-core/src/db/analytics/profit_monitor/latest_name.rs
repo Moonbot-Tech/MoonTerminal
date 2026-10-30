@@ -2,8 +2,10 @@
 
 use rusqlite::functions::{Aggregate, Context};
 
+use crate::db::sqlite_order::integer_real_cmp;
+
 /// Non-NULL SQLite dates retain their storage class and exact BINARY comparison bytes.
-enum CloseDate {
+pub(super) enum CloseDate {
     Integer(i64),
     Real(f64),
     Text(Vec<u8>),
@@ -12,7 +14,7 @@ enum CloseDate {
 
 impl CloseDate {
     /// Compare integers and reals as SQLite does, without rounding integer timestamps.
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    pub(super) fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match (self, other) {
             (Self::Integer(left), Self::Integer(right)) => left.cmp(right),
             (Self::Integer(left), Self::Real(right)) => integer_real_cmp(*left, *right),
@@ -36,29 +38,6 @@ impl CloseDate {
                 std::cmp::Ordering::Less
             }
         }
-    }
-}
-
-/// Mirror SQLite's exact integer/real comparison, including the two i64 limits.
-fn integer_real_cmp(integer: i64, real: f64) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    if real < i64::MIN as f64 {
-        return Ordering::Greater;
-    }
-    if real >= -(i64::MIN as f64) {
-        return Ordering::Less;
-    }
-    let whole = real as i64;
-    let order = integer.cmp(&whole);
-    if !order.is_eq() {
-        return order;
-    }
-    if (integer as f64) < real {
-        Ordering::Less
-    } else if (integer as f64) > real {
-        Ordering::Greater
-    } else {
-        Ordering::Equal
     }
 }
 

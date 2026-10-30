@@ -1045,8 +1045,9 @@ pub(crate) struct MiniTrade {
 ///
 /// Scope follows [`read_mini_report`]: the owner reads every core, a viewer only granted cores,
 /// and a viewer with no granted core in the snapshot reads [`moon_core::config::NO_MATCH_CORE_UID`].
-/// Lists over-read by 25 rows because SQL sorts by core-local close date; rows are then
-/// re-sorted on UTC and cut to `limit`. Coin windows apply their exact bounds before that read.
+/// Each core/offset segment contributes its own SQL top N, where raw close order equals UTC order.
+/// The merged rows are then re-sorted on UTC and cut to `limit`, so no fixed over-read can lose a
+/// newer trade. Coin windows apply their exact bounds before each segment's LIMIT.
 ///
 /// Args:
 ///     zone: Display zone for the report axis.
@@ -1089,15 +1090,13 @@ fn read_mini_trades_on(
     if let TelegramReportAccess::Viewer(allowed) = &access {
         cores.retain(|(id, _)| allowed.contains(id));
     }
-    let scoped_ids = if access == TelegramReportAccess::Owner {
-        Vec::new()
-    } else if cores.is_empty() {
+    let scoped_ids = if cores.is_empty() && access != TelegramReportAccess::Owner {
         vec![moon_core::config::NO_MATCH_CORE_UID]
     } else {
         cores.iter().map(|(id, _)| *id).collect()
     };
     let filter = ReportFilter {
-        core_uids: scoped_ids,
+        core_uids: scoped_ids.clone(),
         exact_coins: window.as_ref().map(|window| vec![window.coin.clone()]),
         date_from: window.as_ref().map(|window| window.from),
         date_to: window.as_ref().map(|window| window.to),
@@ -1107,8 +1106,70 @@ fn read_mini_trades_on(
         core_names: names,
         ..Default::default()
     };
-    let table = db::query_mini_trades(&snap, &filter, limit.saturating_add(25))?;
+    let Some(table) = query_mini_trade_segments(&snap, &filter, &scoped_ids, limit)? else {
+        return Ok(Vec::new());
+    };
     Ok(mini_trade_rows(table, &filter, limit))
+}
+
+/// Read up to `limit` rows per core/offset segment and merge them without a whole-period UTC sort.
+///
+/// A global top N cannot need a row below a segment's own first N: at least N rows in that segment
+/// would be newer. Each segment query therefore uses the raw close-date index, while the caller's
+/// full axis performs the final exact UTC merge.
+fn query_mini_trade_segments(
+    snap: &rusqlite::Transaction<'_>,
+    filter: &ReportFilter,
+    cores: &[u64],
+    limit: usize,
+) -> db::ReadResult<Option<db::ReportTable>> {
+    let mut merged: Option<db::ReportTable> = None;
+    for group in filter.axis.row_groups(cores) {
+        let mut scoped = filter.clone();
+        scoped.core_uids = group.cores.clone();
+        scoped.axis = db::ReportAxis::from_measured(
+            group
+                .cores
+                .iter()
+                .map(|core| {
+                    (
+                        *core,
+                        vec![db::OffsetSegment {
+                            from_utc: 0,
+                            offset_secs: group.offset_secs,
+                        }],
+                    )
+                })
+                .collect(),
+            filter.axis.zone(),
+        );
+        if let Some(local_from) = group.local_from {
+            let bound = local_from.saturating_sub(i64::from(group.offset_secs));
+            scoped.date_from = Some(scoped.date_from.map_or(bound, |current| current.max(bound)));
+        }
+        if let Some(local_to) = group.local_to {
+            let bound = local_to
+                .saturating_sub(i64::from(group.offset_secs))
+                .saturating_sub(1);
+            scoped.date_to = Some(scoped.date_to.map_or(bound, |current| current.min(bound)));
+        }
+        if scoped
+            .date_from
+            .zip(scoped.date_to)
+            .is_some_and(|(from, to)| from > to)
+        {
+            continue;
+        }
+        let table = db::query_mini_trades(snap, &scoped, limit)?;
+        if let Some(merged) = &mut merged {
+            merged.rows.extend(table.rows);
+            merged.core_uids.extend(table.core_uids);
+            merged.rec_ids.extend(table.rec_ids);
+        } else {
+            merged = Some(table);
+        }
+    }
+    Ok(merged)
 }
 
 /// Identity of one closed Mini App trade as its list row carries it.

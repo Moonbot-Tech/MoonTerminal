@@ -979,11 +979,10 @@ fn a_trade_without_an_exit_price_contributes_no_cost() {
     );
 }
 
-/// MoonBot delivers one funding accrual to EVERY bot on the account, and its own report warns
-/// about the duplication. The replica keys rows per core, so both copies are stored — counting
-/// both would inflate the day's profit by the whole accrual.
+/// Equal funding tuples on different core identities are separate accruals, while a redelivery
+/// inside one core still collapses. Omitting core identity from the partition erases real money.
 #[test]
-fn a_funding_accrual_delivered_to_two_bots_is_counted_once() {
+fn correctness_7_funding_identity_separates_cores_and_dedupes_within_one() {
     let accrual = Exec {
         profit: 2.5,
         spent: 350.0,
@@ -995,7 +994,10 @@ fn a_funding_accrual_delivered_to_two_bots_is_counted_once() {
         ..Default::default()
     };
     let c = seed_exec(&[
-        // The same accrual as two cores saw it, seconds apart, plus one ordinary trade.
+        Exec {
+            core: 1,
+            ..accrual.clone()
+        },
         Exec {
             core: 1,
             ..accrual.clone()
@@ -1009,15 +1011,48 @@ fn a_funding_accrual_delivered_to_two_bots_is_counted_once() {
     ]);
     let totals = one_day(&c, ProjectionMode::Native);
 
-    assert_eq!(totals.funding, Some(2.5), "the redelivered copy is dropped");
+    assert_eq!(totals.funding, Some(5.0));
     let traded = charged(100.0, 10.0, 11.0, 0.0004).profit;
     assert!(
-        (totals.profit - (traded + 2.5)).abs() < 1e-9,
+        (totals.profit - (traded + 5.0)).abs() < 1e-9,
         "profit={} expected={}",
         totals.profit,
-        traded + 2.5
+        traded + 5.0
     );
-    assert_eq!(totals.trades, 1, "neither copy is a trade");
+    assert_eq!(totals.trades, 1, "neither funding copy is a trade");
+}
+
+/// Measure funding deduplication over 100000 equal accruals on ten core identities.
+#[test]
+#[ignore = "synthetic reader timing probe"]
+fn correctness_7_funding_identity_scale_probe() {
+    let conn = seed_exec(&[]);
+    conn.execute_batch(&format!(
+        "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000)
+         INSERT INTO orders_rep (
+            closedate,buydate,core_uid,profitbtc,spentbtc,boughtq,buyprice,sellprice,
+            lev,isshort,sellreason,basecurrency,deleted,coin,fname
+         ) SELECT {D0},{D0},x%10+1,2.5,350.0,350.0,0.5,0.5,1,0,
+            'Funding',1,0,'BNB','Pump_USDT-BNB_x' FROM n;
+         ANALYZE;"
+    ))
+    .expect("seed funding scale report");
+    let query = Query {
+        from: D0,
+        to: D0 + 86_400,
+        ..Default::default()
+    };
+    let mut samples = Vec::new();
+    for _ in 0..6 {
+        let started = std::time::Instant::now();
+        let funding = funding_by_bucket(&conn, &query, ProjectionMode::Native, 86_400)
+            .expect("funding scale read");
+        assert_eq!(funding.len(), 1);
+        std::hint::black_box(funding);
+        samples.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!("analytics funding identity 100000: {:.3} ms", samples[3]);
 }
 
 /// Two ACCOUNTS are charged in the same second — funding fires on a fixed schedule — but for

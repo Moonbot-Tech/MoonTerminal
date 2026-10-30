@@ -179,23 +179,10 @@ pub(super) fn corrected_column_expression(
     (settled != format!("r.\"{col}\"")).then_some(settled)
 }
 
-/// Compare values while merging sorted sources: numbers as `f64`, text
-/// lexicographically. The caller handles NULL and always places it last.
+/// Compare values with SQLite's exact numeric and storage-class ordering while merging sources.
+/// The caller handles NULL and always places it last, matching the Report's display contract.
 pub(super) fn cmp_values(a: &Value, b: &Value) -> std::cmp::Ordering {
-    fn num(v: &Value) -> Option<f64> {
-        match v {
-            Value::Integer(i) => Some(*i as f64),
-            Value::Real(r) => Some(*r),
-            _ => None,
-        }
-    }
-    match (num(a), num(b)) {
-        (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-        _ => match (a, b) {
-            (Value::Text(x), Value::Text(y)) => x.cmp(y),
-            _ => std::cmp::Ordering::Equal,
-        },
-    }
+    crate::db::sqlite_order::compare(a, b)
 }
 
 /// Validate the sort key against runtime columns to prevent injection.
