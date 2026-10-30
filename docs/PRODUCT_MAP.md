@@ -49,10 +49,12 @@ feature — a row in the map, a new user word — a row in the dictionary.
   not the request. The open ask is #496, Moonbot's HMap — large-trade dots under the
   bottom volumes. Do not confuse either with the
   **order book on the chart** — that exists: cumulative bid/ask walls on the sides of
-  the chart + thin lines of individual levels on top (Settings → Interface →
-  Order book; drawn by the shaders, the same in DX11/native/Metal); per tab the book can
-  instead be a price ladder — one row per tick step with its volume and price (Chart
-  graphics → Book style: Bars/Ladder). The word “heatmap”
+  the chart + thin lines of individual levels on top (colours and level lines: Settings →
+  Theme and colors → Order book; drawn by the shaders, the same in DX11/native/Metal); per tab the
+  book is shown or hidden, gets its width, and can instead be a price ladder — one row per
+  price step (1, 2, 4, 10… ticks, picked by zoom so every row fits its text) with its volume
+  and price (Chart graphics → Order book: Show the order book,
+  Width, Book style: Bars/Ladder). The word “heatmap”
   in the code is only about Analytics (profit).
 - **«Превью графиков»** (“chart previews”) = Moonbot charts: small detect chart-cards
   that open into the main chart on click.
@@ -97,7 +99,7 @@ percentages. Clusters with dividers; on a narrow window it compresses in a casca
 
 **Chart**: tick trail + candles with TF, history is pulled from the core's
 archives, a “trades only” zone, the order book on the sides (walls + level lines,
-or a price ladder per tab), trades as crosses or bubbles per tab,
+or a price ladder per tab; shown or hidden and sized per tab), trades as crosses or bubbles per tab,
 volumes at the bottom (in quote currency), horizontal volumes by price beside the
 plot (Moonbot's HVol), bought/sold volume by the chart,
 volume measure around the cursor, liquidation count, news marks (gems by
