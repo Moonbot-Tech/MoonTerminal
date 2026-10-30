@@ -276,6 +276,74 @@ fn q(from: i64, to: i64) -> Query {
     }
 }
 
+/// A fresh hiding-preset read must discover core 99 before aggregation, not after publishing a
+/// configured-only total. Resolving scope from `q.cores` alone keeps the old 5 instead of 12 and
+/// also wrongly admits the deliberately hidden configured core if the hidden ids are ignored.
+#[test]
+fn analytics_first_scoped_read_includes_replica_only_core() {
+    let path = temp_db("first-scoped-replica-core");
+    let conn = build_replica_multi_core(
+        &path,
+        &[
+            (1, 1_700_000_000, 5.0, "XALPHA"),
+            (2, 1_700_000_001, 1_000.0, "XALPHA"),
+            (99, 1_700_000_002, 7.0, "XALPHA"),
+        ],
+    );
+    let mut query = q(1_699_999_999, 1_700_000_010);
+    query.cores = vec![1];
+
+    let result =
+        summary_data_on(&conn, &query, true, Some(&[2])).expect("first scoped Analytics read");
+    let Ok(ProfitScope::Comparable { data, .. }) = result.data else {
+        panic!("single-quote fixture must be comparable");
+    };
+    assert_eq!(
+        data.cur.n, 2,
+        "hidden core 2 stays out; replica core 99 belongs"
+    );
+    assert_eq!(data.cur.profit, 12.0);
+}
+
+/// Measure the complete first compound Summary read at ten cores and 100000 synthetic deals.
+#[test]
+#[ignore = "synthetic first-read timing probe"]
+fn analytics_first_scoped_read_scale_probe() {
+    let path = temp_db("first-scoped-read-scale");
+    let conn = build_replica_multi_core(
+        &path,
+        &[
+            (11, 1_700_100_000, 1_000.0, "XALPHA"),
+            (99, 1_700_100_001, 7.0, "XALPHA"),
+        ],
+    );
+    conn.execute_batch(
+        "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000)
+         INSERT INTO orders_rep (core_uid, core_name, newrecid, closedate, buydate,
+             profitbtc, spentbtc, coin, strategyid, isshort, emulator, deleted, basecurrency)
+         SELECT x%10+1, 'CORE_A', x, 1700000000+x, 1700000000+x-300,
+             (x%7)-3.0, 100.0, 'XALPHA', 7, 0, 0, 0, 1 FROM n;",
+    )
+    .expect("seed heavy first-read fixture");
+    let mut query = q(1_700_000_000, 1_700_100_010);
+    query.cores = (1..=10).collect();
+    let mut samples = Vec::new();
+    for _ in 0..6 {
+        let started = std::time::Instant::now();
+        let scope = read_core_scope(&conn, &query, true, Some(&[11]));
+        let query = scope.query(&query);
+        std::hint::black_box(summary_on(&conn, query.as_ref(), false, false).unwrap());
+        std::hint::black_box(undated_closes_on(&conn, query.as_ref()).unwrap());
+        std::hint::black_box(scope.cores.unwrap().unwrap());
+        samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[timing] analytics open_to_first_result: {:.3} ms",
+        samples[samples.len() / 2]
+    );
+}
+
 /// A single-day period switches the series grid to HOURS with no holes, so the bottom pane of
 /// the profit chart draws hourly bars.
 #[test]
@@ -1603,4 +1671,90 @@ fn min_closedate_per_core_seek_matches_the_grouped_minimum() {
     );
     drop(conn);
     remove_db(&path);
+}
+
+/// Previous Summary must order cross-core profits by true UTC and use the freshly resolved axis.
+/// Raw order -6,-6,+5,+20 yields drawdown 12 and loss streak 2; true order +5,-6,+20,-6 yields 6/1.
+#[test]
+fn correctness_3_previous_summary_orders_true_utc() {
+    let conn = Connection::open_in_memory().expect("in-memory previous Summary fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+            core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT,
+            buydate INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL,
+            basecurrency INTEGER, strategyid INTEGER, emulator INTEGER
+        );
+        CREATE TABLE core_time_offset (
+            core_uid INTEGER, from_utc INTEGER, offset_secs INTEGER,
+            observed_at INTEGER, source TEXT
+        );
+        INSERT INTO core_time_offset VALUES
+            (1,0,3600,0,'fixture'),(2,0,0,0,'fixture');
+        INSERT INTO orders_rep VALUES
+            (1,'CORE_A',1,'XALPHA',1050,4700,5.0,100.0,1,1,0),
+            (2,'CORE_B',2,'XALPHA',1150,1200,-6.0,100.0,1,1,0),
+            (1,'CORE_A',3,'XALPHA',1250,4900,20.0,100.0,1,1,0),
+            (2,'CORE_B',4,'XALPHA',1350,1400,-6.0,100.0,1,1,0),
+            (2,'CORE_B',5,'XALPHA',2450,2500,1.0,100.0,1,1,0);",
+    )
+    .expect("seed previous Summary sequence");
+    let scoped = summary_on(&conn, &q(2000, 3000), false, false)
+        .expect("read previous Summary")
+        .data()
+        .expect("single-quote Summary")
+        .clone();
+    let previous = scoped.prev.expect("compatible previous period");
+    assert_eq!(previous.max_dd, 6.0);
+    assert_eq!(previous.loss_streak, 1);
+}
+
+/// Measure current and previous Summary aggregation over 100000 previous-period deals.
+#[test]
+#[ignore = "synthetic reader timing probe"]
+fn correctness_3_previous_summary_scale_probe() {
+    let conn = Connection::open_in_memory().expect("in-memory previous Summary scale report");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+            core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT,
+            buydate INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL,
+            basecurrency INTEGER, strategyid INTEGER, emulator INTEGER
+        );
+        CREATE INDEX idx_rep_core_close ON orders_rep(core_uid, closedate);
+        CREATE TABLE core_time_offset (
+            core_uid INTEGER, from_utc INTEGER, offset_secs INTEGER,
+            observed_at INTEGER, source TEXT
+        );
+        INSERT INTO core_time_offset VALUES
+            (1,0,3600,0,'fixture'),(2,0,0,0,'fixture');
+        WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000)
+        INSERT INTO orders_rep
+            SELECT x%2+1, 'CORE_A', x, 'XALPHA', 1000+x%900-60,
+                1000+x%900+CASE WHEN x%2=0 THEN 3600 ELSE 0 END,
+                (x%7)-3.0, 100.0, 1, 1, 0 FROM n;
+        INSERT INTO orders_rep VALUES
+            (2,'CORE_B',100001,'XALPHA',2450,2500,1.0,100.0,1,1,0);
+        ANALYZE;",
+    )
+    .expect("seed previous Summary scale report");
+    let query = q(2000, 3000);
+    let axis = query.resolved_axis(&conn).expect("scale axis");
+    let source = unified_from(&conn, &query)
+        .expect("scale source")
+        .expect("scale source exists");
+    let direct =
+        scan_period(&conn, &source, 1000, 2000, 3600, &axis).expect("direct previous scale scan");
+    assert_eq!(direct.0.n, 100_000);
+    let mut samples = Vec::new();
+    for _ in 0..6 {
+        let started = std::time::Instant::now();
+        let scoped = summary_on(&conn, &query, false, false).expect("scale Summary");
+        let data = scoped.data().expect("single-quote scale Summary");
+        assert_eq!(data.cur.n, 1);
+        let previous_n = data.prev.as_ref().map(|previous| previous.n);
+        std::hint::black_box(data);
+        samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        println!("previous Summary rows: {previous_n:?}");
+    }
+    samples.sort_by(f64::total_cmp);
+    println!("analytics previous Summary 100000: {:.3} ms", samples[3]);
 }

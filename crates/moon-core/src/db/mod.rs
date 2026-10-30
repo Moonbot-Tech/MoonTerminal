@@ -33,6 +33,7 @@ pub mod report_axis;
 mod report_read;
 pub mod report_recovery;
 mod sql_sum;
+mod sqlite_order;
 mod strategy_name_match;
 pub mod tape_owners;
 #[cfg(test)]

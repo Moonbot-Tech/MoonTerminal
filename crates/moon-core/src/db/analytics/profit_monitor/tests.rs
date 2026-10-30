@@ -78,6 +78,74 @@ fn fixture() -> Connection {
     connection
 }
 
+/// Opening under a hiding preset must include a replica-only core in the first monitor result.
+/// Using only the configured inclusion list produces 5 instead of 12 until a later read, while
+/// dropping the hidden-id subtraction would incorrectly add core 2's 1000.
+#[test]
+fn profit_monitor_first_scoped_read_includes_replica_only_core() {
+    let path = crate::db::test_support::temp_db("monitor-first-scoped-replica-core");
+    let conn = crate::db::test_support::build_replica_multi_core(
+        &path,
+        &[
+            (1, 1_700_000_000, 5.0, "XALPHA"),
+            (2, 1_700_000_001, 1_000.0, "XALPHA"),
+            (99, 1_700_000_002, 7.0, "XALPHA"),
+        ],
+    );
+    let mut scoped_query = query(1_699_999_999, 1_700_000_010);
+    scoped_query.cores = vec![1];
+
+    let snapshot =
+        super::snapshot_on(&conn, &scoped_query, Some(&[2])).expect("first scoped monitor read");
+    let ProfitScope::Comparable { data, .. } = snapshot.scope else {
+        panic!("single-quote fixture must be comparable");
+    };
+    assert_eq!(
+        data.cores.len(),
+        2,
+        "cores 1 and 99 remain; hidden core 2 does not"
+    );
+    assert_eq!(data.cores.iter().map(|core| core.profit).sum::<f64>(), 12.0);
+}
+
+/// Measure the first complete monitor result at ten cores and 100000 synthetic deals.
+#[test]
+#[ignore = "synthetic first-read timing probe"]
+fn profit_monitor_first_scoped_read_scale_probe() {
+    let path = crate::db::test_support::temp_db("monitor-first-scoped-read-scale");
+    let conn = crate::db::test_support::build_replica_multi_core(
+        &path,
+        &[
+            (11, 1_700_100_000, 1_000.0, "XALPHA"),
+            (99, 1_700_100_001, 7.0, "XALPHA"),
+        ],
+    );
+    conn.execute_batch(
+        "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000)
+         INSERT INTO orders_rep (core_uid, core_name, newrecid, closedate, buydate,
+             profitbtc, spentbtc, coin, strategyid, isshort, emulator, deleted, basecurrency)
+         SELECT x%10+1, 'CORE_A', x, 1700000000+x, 1700000000+x-300,
+             (x%7)-3.0, 100.0, 'XALPHA', 7, 0, 0, 0, 1 FROM n;",
+    )
+    .expect("seed heavy first-read fixture");
+    let mut scoped_query = query(1_700_000_000, 1_700_100_010);
+    scoped_query.cores = (1..=10).collect();
+    let mut samples = Vec::new();
+    for _ in 0..6 {
+        let started = std::time::Instant::now();
+        let scope = super::super::read_core_scope(&conn, &scoped_query, false, Some(&[11]));
+        let scoped_query = scope.query(&scoped_query);
+        std::hint::black_box(profit_monitor_on(&conn, scoped_query.as_ref()).unwrap());
+        std::hint::black_box(scope.cores.unwrap().unwrap());
+        samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "[timing] profit_monitor open_to_first_result: {:.3} ms",
+        samples[samples.len() / 2]
+    );
+}
+
 /// `profit_monitor.rs:profit_monitor_on` must count only positive spends in the average-order
 /// denominator; changing its conditional SQL `COUNT` to `COUNT(*)` makes the named average-order
 /// assertion red and shows a false order size in the desktop widget.
@@ -285,7 +353,7 @@ fn split_snapshot_keeps_native_core_rows() {
         UPDATE orders_rep SET basecurrency=NULL WHERE closedate=130;",
         )
         .expect("mixed core");
-    let snapshot = super::snapshot_on(&connection, &query(0, 200)).expect("snapshot");
+    let snapshot = super::snapshot_on(&connection, &query(0, 200), None).expect("snapshot");
     assert!(matches!(snapshot.scope, ProfitScope::Split(_)));
     assert_eq!(snapshot.currencies.len(), 3);
     assert_eq!(
@@ -313,7 +381,7 @@ fn split_snapshot_keeps_native_core_rows() {
     assert_eq!(unknown.data.cores[0].positive_orders, 0);
     let mut narrowed = query(0, 115);
     narrowed.cores = vec![2];
-    let snapshot = super::snapshot_on(&connection, &narrowed).expect("filtered");
+    let snapshot = super::snapshot_on(&connection, &narrowed, None).expect("filtered");
     assert!(snapshot.currencies.is_empty());
     let ProfitScope::Comparable { data, .. } = snapshot.scope else {
         panic!("single quote");
@@ -562,7 +630,7 @@ fn storage_class_dates_match_the_former_two_pass_monitor() {
     )
     .unwrap();
     let q = query(0, 200);
-    let source = "(SELECT * FROM monitor_rows WHERE ?1=0 AND ?2=200) o";
+    let source = "(SELECT *, NULL AS closedatems, NULL AS newrecid, NULL AS db_id, NULL AS reportuid FROM monitor_rows WHERE ?1=0 AND ?2=200) o";
     for indexed in [false, true] {
         if indexed {
             conn.execute_batch("CREATE INDEX monitor_dates ON monitor_rows(core_uid, closedate)")
@@ -583,4 +651,101 @@ fn storage_class_dates_match_the_former_two_pass_monitor() {
     };
     assert_eq!(data.cores[1].last_close, 0);
     assert_eq!(data.cores[1].last_profit, Some(-5.0));
+}
+
+/// Milliseconds and then recorder identity decide the newest profit inside one close second.
+#[test]
+fn correctness_6_latest_profit_uses_milliseconds_and_identity() {
+    let connection = fixture();
+    connection
+        .execute_batch(
+            "ALTER TABLE orders_rep ADD COLUMN newrecid INTEGER;
+             ALTER TABLE orders_rep ADD COLUMN closedatems INTEGER;
+             INSERT INTO orders_rep VALUES
+                (1,'CORE_A','XALPHA',0,90,100,-7.0,1,0,100.0,1,1,100100),
+                (1,'CORE_A','XALPHA',0,91,100,5.0,1,0,100.0,1,2,100900),
+                (1,'CORE_A','XALPHA',0,92,100,9.0,1,0,100.0,1,3,100900);",
+        )
+        .expect("seed same-second latest-profit rows");
+    let scoped = profit_monitor_on(&connection, &query(0, 105)).expect("latest-profit monitor");
+    let ProfitScope::Comparable { data, .. } = scoped else {
+        panic!("single-quote latest-profit fixture");
+    };
+    assert_eq!(data.cores[0].last_close, 100);
+    assert_eq!(data.cores[0].last_profit, Some(9.0));
+}
+
+/// Measure latest-profit selection in the complete monitor aggregate over 100000 deals.
+#[test]
+#[ignore = "synthetic reader timing probe"]
+fn correctness_6_latest_profit_scale_probe() {
+    let conn = Connection::open_in_memory().expect("in-memory latest-profit scale report");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep(
+            core_uid INTEGER, core_name TEXT, coin TEXT, isshort INTEGER,
+            buydate INTEGER, closedate INTEGER, profitbtc REAL, strategyid INTEGER,
+            emulator INTEGER, spentbtc REAL, basecurrency INTEGER,
+            newrecid INTEGER, closedatems INTEGER
+        );
+        WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000)
+         INSERT INTO orders_rep (
+            core_uid,core_name,coin,isshort,buydate,closedate,profitbtc,strategyid,
+            emulator,spentbtc,basecurrency,newrecid,closedatems
+         ) SELECT x%10+1,'CORE_A','XALPHA',0,1700000000+x-60,1700000000+x,
+            (x%7)-3.0,x%8,0,100.0,1,x,(1700000000+x)*1000+(x%10)*100 FROM n;
+         ANALYZE;",
+    )
+    .expect("seed latest-profit scale report");
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM orders_rep", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("raw latest-profit scale count"),
+        100_000
+    );
+    let q = query(0, 2_000_000_000);
+    let mut samples = Vec::new();
+    for _ in 0..6 {
+        let started = std::time::Instant::now();
+        let scoped = profit_monitor_on(&conn, &q).expect("latest-profit scale monitor");
+        let ProfitScope::Comparable { data, .. } = scoped else {
+            panic!("single-quote latest-profit scale fixture");
+        };
+        assert_eq!(
+            data.cores.iter().map(|core| core.trades).sum::<i64>(),
+            100_000
+        );
+        std::hint::black_box(data);
+        samples.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "analytics latest-profit monitor 100000: {:.3} ms",
+        samples[3]
+    );
+}
+
+/// Legacy report rows need `db_id` as their identity tie-break when close and milliseconds tie.
+#[test]
+fn review_latest_profit_uses_legacy_db_id() {
+    let connection = Connection::open_in_memory().expect("in-memory legacy latest-profit fixture");
+    connection
+        .execute_batch(
+            "CREATE TABLE closed_sell_reports (
+                core_uid INTEGER, core_name TEXT, db_id INTEGER, coin TEXT, isshort INTEGER,
+                buydate INTEGER, closedate INTEGER, profitbtc REAL, strategyid INTEGER,
+                emulator INTEGER, spentbtc REAL, basecurrency INTEGER, closedatems INTEGER
+            );
+            INSERT INTO closed_sell_reports VALUES
+                (1,'CORE_A',1,'XALPHA',0,90,100,-7.0,1,0,100.0,1,100100),
+                (1,'CORE_A',2,'XALPHA',0,91,100,5.0,1,0,100.0,1,100100);",
+        )
+        .expect("seed legacy latest-profit rows");
+    let scoped =
+        profit_monitor_on(&connection, &query(0, 105)).expect("legacy latest-profit monitor");
+    let ProfitScope::Comparable { data, .. } = scoped else {
+        panic!("single-quote legacy latest-profit fixture");
+    };
+    assert_eq!(data.cores[0].last_close, 100);
+    assert_eq!(data.cores[0].last_profit, Some(5.0));
 }

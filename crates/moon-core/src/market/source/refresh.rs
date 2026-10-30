@@ -16,6 +16,26 @@ use super::{
     market_diag_enabled, market_diag_floor,
 };
 
+/// Convert and fold one retained trade row into the recorder's five-minute candles.
+fn aggregate_recorder_trade(
+    row: &moonproto::state::TradeHistoryRow,
+    tf_ms: i64,
+    candles: &mut Vec<crate::market::candles::ChartCandle>,
+) {
+    let time_ms = row.unix_millis();
+    let tick = crate::feed::Tick {
+        time_ms: time_ms as f64,
+        price: row.price,
+        qty: row.quantity(),
+        side: if row.is_buy() {
+            crate::feed::Side::Buy
+        } else {
+            crate::feed::Side::Sell
+        },
+    };
+    crate::market::candles::aggregate_trade(&tick, tf_ms, candles);
+}
+
 impl MarketDataSource {
     pub fn new(store: SharedMarketStore) -> Self {
         Self {
@@ -119,7 +139,6 @@ impl MarketDataSource {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
         let cur_bucket = (now_ms / TF) * TF;
-        let mut ticks: Vec<crate::feed::Tick> = Vec::new();
         let mut candles: Vec<crate::market::candles::ChartCandle> = Vec::new();
         // Accumulate items so a run of markets reaches the cache in ONE transaction instead of one
         // per market. The run is capped at `MERGE_CHUNK_MARKETS` rather than covering the whole
@@ -156,20 +175,30 @@ impl MarketDataSource {
                 if from_ms >= cur_bucket {
                     continue;
                 }
-                let mut trade_rows = Vec::new();
-                reader.copy_time_range(
-                    moonproto::MoonTime::from_unix_millis(from_ms),
-                    moonproto::MoonTime::from_unix_millis(cur_bucket - 1),
+                // Fold borrowed ring rows directly into candles. No full trade-ring or tick copy is
+                // owned by this pass; only simple CPU aggregation runs under the ring's read lock.
+                candles.clear();
+                let cursor =
+                    reader.cursor_at_or_after_time(moonproto::MoonTime::from_unix_millis(from_ms));
+                let ((trade_count, oldest, _), _) = reader.scan_from_cursor(
+                    cursor,
                     reader.capacity(),
-                    &mut trade_rows,
+                    (0usize, f64::INFINITY, &mut candles),
+                    |(count, oldest, candles), row| {
+                        let time_ms = row.unix_millis();
+                        if time_ms >= from_ms && time_ms < cur_bucket {
+                            aggregate_recorder_trade(row, TF, candles);
+                            (count + 1, oldest.min(time_ms as f64), candles)
+                        } else {
+                            (count, oldest, candles)
+                        }
+                    },
                 );
                 // Advance the cursor even without trades so quiet coins are not reread forever.
                 last_written.insert(key, cur_bucket - TF);
-                if trade_rows.is_empty() {
+                if trade_count == 0 {
                     continue;
                 }
-                super::rows_to_ticks(&trade_rows, &mut ticks);
-                crate::market::candles::aggregate_trades(&ticks, TF, &mut candles);
                 // Do not write the current unsealed bucket; the next pass will complete it.
                 candles.retain(|c| (c.t_open_ms as i64) < cur_bucket);
                 if first_pass {
@@ -185,10 +214,6 @@ impl MarketDataSource {
                     // Reading the front row instead would let one straggler place the boundary too
                     // early, keeping a sparse leading bucket — and since the cursor advances
                     // unconditionally below, no later pass would ever revisit and repair it.
-                    let oldest = ticks
-                        .iter()
-                        .map(|t| t.time_ms)
-                        .fold(f64::INFINITY, f64::min);
                     if oldest.is_finite() {
                         let sealed_from = crate::market::candles::first_full_bucket_ms(oldest, TF);
                         candles.retain(|c| (c.t_open_ms as i64) >= sealed_from);
@@ -249,6 +274,21 @@ impl MarketDataSource {
         // WITHIN one slot; replacing the slot has to drop them.
         inner.archive.forget_provider(core);
         inner.native_backfill.forget_provider(core);
+        inner
+            .candle_subs
+            .lock()
+            .expect("candle subs poisoned")
+            .remove(&core);
+        inner
+            .deep_req_gate
+            .lock()
+            .expect("deep req gate poisoned")
+            .retain(|(provider, _, _), _| *provider != core);
+        inner
+            .deep_kind_wants
+            .lock()
+            .expect("deep kind wants poisoned")
+            .remove(&core);
         // A new client slot is a new market universe: its arbitrage quotes, and the answers about
         // which market carries which coin on it, are about the slot that just went away.
         inner
@@ -280,6 +320,21 @@ impl MarketDataSource {
         inner.core_venue.remove(&core);
         inner.archive.forget_provider(core);
         inner.native_backfill.forget_provider(core);
+        inner
+            .candle_subs
+            .lock()
+            .expect("candle subs poisoned")
+            .remove(&core);
+        inner
+            .deep_req_gate
+            .lock()
+            .expect("deep req gate poisoned")
+            .retain(|(provider, _, _), _| *provider != core);
+        inner
+            .deep_kind_wants
+            .lock()
+            .expect("deep kind wants poisoned")
+            .remove(&core);
         inner
             .arb_book
             .lock()
@@ -367,7 +422,37 @@ impl MarketDataSource {
             .reset(provider, market);
     }
 
+    /// Release one chart's live candle subscription and all of its deep-request gate entries.
+    fn release_chart_history(&self, provider: CoreId, market: &str) {
+        let (client, subscription) = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let client = inner.clients.get(&provider).and_then(SharedMoonClient::get);
+            let mut subs = inner.candle_subs.lock().expect("candle subs poisoned");
+            let subscription = subs
+                .get_mut(&provider)
+                .and_then(|markets| markets.remove(market));
+            if subs
+                .get(&provider)
+                .is_some_and(|markets| markets.is_empty())
+            {
+                subs.remove(&provider);
+            }
+            super::history::forget_deep_requests(
+                &mut inner.deep_req_gate.lock().expect("deep req gate poisoned"),
+                provider,
+                market,
+            );
+            (client, subscription)
+        };
+        if let (Some(client), Some(subscription)) = (client, subscription) {
+            if subscription.subscribed {
+                let _ = client.streams().unsubscribe_candles([market]);
+            }
+        }
+    }
+
     pub fn drop_market(&self, provider: CoreId, market: &str) {
+        self.release_chart_history(provider, market);
         let store = self.invalidate_market(provider, market);
         // Symmetric with `reset_market`: this was the only market-lifecycle path that invalidated
         // silently, which made it the hardest one to rule out when reading a log.
@@ -379,6 +464,34 @@ impl MarketDataSource {
     }
 
     pub fn drop_provider(&self, provider: CoreId) {
+        let (client, subscriptions) = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let client = inner.clients.get(&provider).and_then(SharedMoonClient::get);
+            let subscriptions = inner
+                .candle_subs
+                .lock()
+                .expect("candle subs poisoned")
+                .remove(&provider)
+                .unwrap_or_default();
+            inner
+                .deep_req_gate
+                .lock()
+                .expect("deep req gate poisoned")
+                .retain(|(p, _, _), _| *p != provider);
+            inner
+                .deep_kind_wants
+                .lock()
+                .expect("deep kind wants poisoned")
+                .remove(&provider);
+            (client, subscriptions)
+        };
+        if let Some(client) = client {
+            for (market, state) in subscriptions {
+                if state.subscribed {
+                    let _ = client.streams().unsubscribe_candles([market.as_str()]);
+                }
+            }
+        }
         let store = {
             let mut inner = self.inner.write().expect("market source poisoned");
             inner.cursors.retain(|(p, _), _| *p != provider);
@@ -405,6 +518,21 @@ impl MarketDataSource {
             inner.provider_orderbook_kind.clear();
             inner.archive.clear();
             inner.native_backfill.clear();
+            inner
+                .candle_subs
+                .lock()
+                .expect("candle subs poisoned")
+                .clear();
+            inner
+                .deep_req_gate
+                .lock()
+                .expect("deep req gate poisoned")
+                .clear();
+            inner
+                .deep_kind_wants
+                .lock()
+                .expect("deep kind wants poisoned")
+                .clear();
             inner.store.clone()
         };
         store.write().expect("market store poisoned").clear();
@@ -645,3 +773,6 @@ impl MarketDataSource {
         changed
     }
 }
+
+#[cfg(test)]
+mod tests;

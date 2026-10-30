@@ -152,7 +152,8 @@ fn strategies_refresh_uses_the_compact_base() {
     let analytics = read_unsplit("analytics/mod.rs");
     assert!(
         analytics.contains("self.reload_strategy_base(true, true, show_overlay, cx)")
-            && analytics.contains("moon_core::db::analytics::strategy_base_data(&q, read_cores)"),
+            && analytics
+                .contains("moon_core::db::analytics::strategy_base_data_with_replica_scope(",),
         "Strategies refresh must not pay for the full Summary surface"
     );
 }

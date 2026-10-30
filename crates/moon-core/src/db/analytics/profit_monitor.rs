@@ -6,10 +6,11 @@ mod tests;
 use rusqlite::Connection;
 
 mod latest_name;
+mod latest_trade;
 
 use super::{
-    Query, ScopeDecision, min_closedate, scope_decision_with_quote_reader_on, scoped,
-    unified_from_mode,
+    Query, ScopeDecision, min_closedate, read_core_scope, scope_decision_with_quote_reader_on,
+    scoped, unified_from_mode,
 };
 use crate::db::read_fail::read_fail_on;
 use crate::db::{ProfitScope, QuoteCurrency, ReadFail, ReadResult};
@@ -96,16 +97,52 @@ pub struct ProfitMonitorSnapshot {
 }
 
 /// Read monitor rows without withholding native partitions during conversion outages.
+///
+/// Args:
+///     q: Period, filters, and configured core scope.
+///
+/// Returns:
+///     Comparable or split native monitor rows from one pinned report snapshot.
 pub fn profit_monitor_snapshot(q: &Query) -> ReadResult<ProfitMonitorSnapshot> {
+    profit_monitor_snapshot_with_replica_scope(q, None)
+}
+
+/// Read monitor rows with optional first-result discovery of replica-only cores.
+///
+/// Args:
+///     q: Period, filters, and configured fallback core scope.
+///     replica_hidden: Hidden configured ids when the active preset narrows an implicit All;
+///         `None` leaves `q.cores` untouched.
+///
+/// Returns:
+///     Comparable or split native monitor rows from one pinned report snapshot, with replica
+///     discovery applied before aggregation.
+pub fn profit_monitor_snapshot_with_replica_scope(
+    q: &Query,
+    replica_hidden: Option<&[u64]>,
+) -> ReadResult<ProfitMonitorSnapshot> {
     let conn = super::super::open_reader()?;
     let _rates = super::super::valuation::pin_current_rates();
     let snapshot = super::super::read_snapshot(&conn)?;
-    snapshot_on(&snapshot, q)
+    snapshot_on(&snapshot, q, replica_hidden)
 }
 
 /// Keep every currency partition under the same period, filters, and SQLite snapshot.
-fn snapshot_on(conn: &Connection, q: &Query) -> ReadResult<ProfitMonitorSnapshot> {
-    let mut q = q.clone();
+///
+/// Args:
+///     conn: Existing report reader or pinned snapshot.
+///     q: Period, filters, and configured fallback core scope.
+///     replica_hidden: Hidden configured ids for first-read replica discovery.
+///
+/// Returns:
+///     Comparable or split native monitor rows with identical scope across every partition.
+fn snapshot_on(
+    conn: &Connection,
+    q: &Query,
+    replica_hidden: Option<&[u64]>,
+) -> ReadResult<ProfitMonitorSnapshot> {
+    let scope = read_core_scope(conn, q, false, replica_hidden);
+    let mut q = scope.query(q).into_owned();
     if q.from < 0 {
         q.from = min_closedate(conn, &q.resolved_axis(conn)?)?;
     }
@@ -197,8 +234,15 @@ fn aggregate_on(conn: &Connection, q: &Query, source: &str) -> ReadResult<Profit
         latest_name::LatestNameAggregate,
     )
     .map_err(|error| read_fail_on(conn, CTX, error))?;
-    // SQLite keeps ownership of all money sums. The custom name aggregate frees the one
-    // built-in MAX to select the newest trade's bare pnl in this same grouped pass.
+    conn.create_aggregate_function(
+        "mt_latest_report_trade",
+        4,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+        latest_trade::LatestTradeAggregate,
+    )
+    .map_err(|error| read_fail_on(conn, CTX, error))?;
+    // Both latest-row choices are explicit aggregates in the same grouped pass: no bare column
+    // depends on SQLite's arbitrary choice among equal MAX dates.
     let sql = format!(
         "SELECT o.core_uid,
                 mt_latest_report_name(CASE WHEN TRIM(COALESCE(o.core_name, '')) <> '' THEN o.closedate END, o.core_name),
@@ -207,7 +251,13 @@ fn aggregate_on(conn: &Connection, q: &Query, source: &str) -> ReadResult<Profit
                 COUNT(CASE WHEN o.pnl > 0.0 THEN 1 END),
                 COALESCE(SUM(CASE WHEN o.spentbtc > 0.0 THEN o.spentbtc ELSE 0.0 END), 0.0),
                 COUNT(CASE WHEN o.spentbtc > 0.0 THEN 1 END),
-                o.pnl, MAX(o.closedate)
+                mt_latest_report_trade(
+                    o.closedate,
+                    CASE WHEN o.closedatems > 0 THEN o.closedatems ELSE o.closedate * 1000 END,
+                    COALESCE(o.newrecid, o.db_id, o.reportuid),
+                    o.pnl
+                ),
+                MAX(o.closedate)
          FROM {source}
          GROUP BY o.core_uid
          ORDER BY o.core_uid"

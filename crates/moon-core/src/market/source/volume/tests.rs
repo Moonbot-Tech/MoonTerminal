@@ -193,3 +193,52 @@ fn the_deep_total_answers_where_the_sides_fall_short() {
     };
     assert_eq!(bare.total_quote_stated(), (500.0, false));
 }
+
+/// Time cache maintenance in the read path over a catalog-sized synthetic book.
+#[test]
+#[ignore = "synthetic volume pruning timing probe"]
+fn volume_prune_scale_probe() {
+    let now = SPAN_KEEP_MS * 2;
+    let mut book = VolumeBook::default();
+    let span = VolumeSpan::Millis(60_000);
+    for index in 0..5_500 {
+        let market = format!("COIN_{index:04}USDT");
+        book.spans
+            .entry((1, span, VolumeAt::Now))
+            .or_default()
+            .insert(
+                market.clone(),
+                SpanEntry {
+                    read_ms: now,
+                    readout: VolumeSpanReadout::default(),
+                },
+            );
+        book.liqs
+            .entry((1, span, VolumeAt::Now))
+            .or_default()
+            .insert(
+                market,
+                LiqEntry {
+                    read_ms: now,
+                    readout: LiqSpanReadout::default(),
+                },
+            );
+    }
+    book.prune(now);
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for _ in 0..7 {
+        let start = std::time::Instant::now();
+        book.prune(now);
+        before.push(start.elapsed().as_secs_f64() * 1_000.0);
+        let start = std::time::Instant::now();
+        book.prune(now);
+        after.push(start.elapsed().as_secs_f64() * 1_000.0);
+    }
+    before.sort_by(f64::total_cmp);
+    after.sort_by(f64::total_cmp);
+    println!(
+        "[bench] volume_prune markets=5500 before_ms={:.6} after_ms={:.6}",
+        before[3], after[3]
+    );
+}

@@ -522,21 +522,22 @@ impl MarketDataSource {
             }
             // Subscribe to the core's live timeframe bars. Event::LiveCandle appends or replaces
             // the last retained tf_candles row. Without it, deep rows freeze at response time and
-            // coarse-timeframe series can lag by hours. The subscription is global to the client
-            // and the most recent kind wins, so a shared `(provider, market)` registry lets panels
-            // refresh demand while entries stale for more than 60 seconds are unsubscribed.
+            // coarse-timeframe series can lag by hours. The provider-indexed registry touches only
+            // this market; `drop_market` releases it after the chart coordinator's linger expires.
             {
                 let inner = self.inner.read().expect("market source poisoned");
                 let mut subs = inner.candle_subs.lock().expect("candle subs poisoned");
                 let now_i = Instant::now();
                 if use_deep {
-                    let entry = subs.entry((provider, market.to_string())).or_insert(
-                        super::CandleSubState {
+                    let entry = subs
+                        .entry(provider)
+                        .or_default()
+                        .entry(market.to_string())
+                        .or_insert(super::CandleSubState {
                             kind_min: deep_kind_min,
                             last_want: now_i,
                             subscribed: false,
-                        },
-                    );
+                        });
                     if (!entry.subscribed || entry.kind_min != deep_kind_min)
                         && client
                             .streams()
@@ -547,20 +548,22 @@ impl MarketDataSource {
                         entry.kind_min = deep_kind_min;
                     }
                     entry.last_want = now_i;
-                }
-                // Remove stale subscriptions for this provider while its client is available.
-                let stale: Vec<String> = subs
-                    .iter()
-                    .filter(|((p, _), s)| {
-                        *p == provider
-                            && s.subscribed
-                            && now_i.duration_since(s.last_want) > Duration::from_secs(60)
-                    })
-                    .map(|((_, m), _)| m.clone())
-                    .collect();
-                for m in stale {
-                    let _ = client.streams().unsubscribe_candles([m.as_str()]);
-                    subs.remove(&(provider, m));
+                } else {
+                    // Candles may be disabled while this market remains open for trade crosses.
+                    // Release its now-unused subscription immediately instead of waiting for close.
+                    let removed = subs
+                        .get_mut(&provider)
+                        .and_then(|markets| markets.remove(market));
+                    if let Some(state) = removed {
+                        if state.subscribed {
+                            let _ = client.streams().unsubscribe_candles([market]);
+                        }
+                    }
+                    super::history::forget_deep_requests(
+                        &mut inner.deep_req_gate.lock().expect("deep req gate poisoned"),
+                        provider,
+                        market,
+                    );
                 }
             }
             // Load authoritative native klines from prior sessions as a local-cache prefix. Read
@@ -648,9 +651,11 @@ impl MarketDataSource {
                                 ^ (rows.last().map_or(0, |r| r.unix_millis()) as u64);
                             if sig != cursor.cache_written_native_sig {
                                 cursor.cache_written_native_sig = sig;
-                                cache.merge(
-                                    ex.clone(),
-                                    market.to_string(),
+                                merge_cache_write(
+                                    cursor,
+                                    cache,
+                                    ex,
+                                    market,
                                     native_kind_min,
                                     rows.iter()
                                         .map(|r| deep_row_candle(r, deep_quote))
@@ -704,13 +709,7 @@ impl MarketDataSource {
                         let mut gate = inner.deep_req_gate.lock().expect("deep req gate poisoned");
                         let key = (provider, market.to_string(), deep_kind_min);
                         let now_i = Instant::now();
-                        match gate.get(&key) {
-                            Some(t) if now_i.duration_since(*t) < Duration::from_secs(30) => false,
-                            _ => {
-                                gate.insert(key, now_i);
-                                true
-                            }
-                        }
+                        deep_request_open(&mut gate, key, now_i)
                     };
                     if gate_open {
                         cursor.deep_retry_delay_s = history_retry_next_delay_s(
@@ -879,7 +878,7 @@ impl MarketDataSource {
                                 .iter()
                                 .map(|r| deep_row_candle(r, deep_quote))
                                 .collect();
-                            cache.merge(ex.clone(), market.to_string(), deep_kind_min, tail);
+                            merge_cache_write(cursor, cache, ex, market, deep_kind_min, tail);
                             cursor.cache_written_key = Some((ex.clone(), deep_kind_min));
                             cursor.cache_written_first_ms =
                                 times.first().copied().unwrap_or(i64::MIN);
@@ -1167,6 +1166,63 @@ impl MarketDataSource {
 
         read.last_price = cursor.last_price;
         Some(read)
+    }
+}
+
+/// Queue a chart merge, retaining rejected rows in this cursor for a later retry.
+fn merge_cache_write(
+    cursor: &mut ChartHistoryCursor,
+    cache: &crate::market::kline_cache::KlineCache,
+    exchange: &str,
+    market: &str,
+    kind_min: u32,
+    rows: Vec<ChartCandle>,
+) {
+    let mut rows = match cursor.cache_write_retry.take() {
+        Some((_, _, mut pending)) => {
+            pending.extend(rows);
+            pending
+        }
+        None => rows,
+    };
+    // A later response supersedes the same bucket without duplicating retained history.
+    rows.sort_by(|a, b| a.t_open_ms.total_cmp(&b.t_open_ms));
+    rows.dedup_by(|later, earlier| {
+        if later.t_open_ms != earlier.t_open_ms {
+            return false;
+        }
+        *earlier = *later;
+        true
+    });
+    if let Err(rows) = cache.merge(exchange.to_string(), market.to_string(), kind_min, rows) {
+        cursor.cache_write_retry = Some((exchange.to_string(), kind_min, rows));
+    }
+}
+
+/// Admit one deep-history request per key inside its 30-second gate, expiring the touched entry.
+fn deep_request_open(
+    gate: &mut HashMap<(CoreId, String, u32), Instant>,
+    key: (CoreId, String, u32),
+    now: Instant,
+) -> bool {
+    if gate
+        .get(&key)
+        .is_some_and(|sent| now.duration_since(*sent) < Duration::from_secs(30))
+    {
+        return false;
+    }
+    gate.insert(key, now);
+    true
+}
+
+/// Remove every supported deep-request kind for a released chart market.
+pub(super) fn forget_deep_requests(
+    gate: &mut HashMap<(CoreId, String, u32), Instant>,
+    provider: CoreId,
+    market: &str,
+) {
+    for kind in crate::market::candles::CANDLE_TF_CHOICES_MIN {
+        gate.remove(&(provider, market.to_string(), kind));
     }
 }
 

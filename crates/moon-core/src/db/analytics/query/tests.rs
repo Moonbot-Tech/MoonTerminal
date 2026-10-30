@@ -558,3 +558,135 @@ fn the_current_rate_mode_emits_its_own_projection() {
         "the current-rate projection must carry the rate CASE, got {current}"
     );
 }
+
+/// Applying the period-end offset to every row drops an in-period close stored before an offset
+/// adoption. Keeping one offset per core, rather than one per historical segment, reintroduces
+/// that wrong row set in every Analytics figure. Raw 1999 stays outside because `ReportAxis`
+/// selects the new segment at that raw value; raw 1400 is the independently valid in-period row.
+#[test]
+fn period_uses_the_offset_in_force_at_each_row() {
+    let connection = Connection::open_in_memory().expect("in-memory report");
+    connection
+        .execute_batch(
+            "CREATE TABLE orders_rep (
+                core_uid INTEGER, newrecid INTEGER, closedate INTEGER,
+                profitbtc REAL, basecurrency INTEGER
+            );
+            CREATE TABLE core_time_offset (
+                core_uid INTEGER, from_utc INTEGER, offset_secs INTEGER,
+                observed_at INTEGER, source TEXT
+            );
+            INSERT INTO core_time_offset VALUES
+                (1, 0, 0, 0, 'fixture'), (1, 1500, 3600, 1500, 'fixture');
+            INSERT INTO orders_rep VALUES
+                (1, 1, 1400, 7.0, 1), (1, 2, 1999, 99.0, 1);",
+        )
+        .expect("offset transition fixture");
+    let query = Query {
+        from: 1000,
+        to: 2000,
+        ..q()
+    };
+    let source = unified_from(&connection, &query)
+        .expect("build transition source")
+        .expect("report table exists");
+
+    let (rows, profit) = connection
+        .query_row(
+            &format!("SELECT COUNT(*), COALESCE(SUM(o.pnl), 0.0) FROM {source}"),
+            rusqlite::params![query.from, query.to],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
+        )
+        .expect("read transition source");
+    assert_eq!((rows, profit), (1, 7.0));
+}
+
+/// Measure the corrected period predicate on a ten-core 100000-deal shifted history.
+#[test]
+#[ignore = "synthetic reader timing probe"]
+fn analytics_period_scale_probe() {
+    let connection = Connection::open_in_memory().expect("in-memory report");
+    connection
+        .execute_batch(
+            "CREATE TABLE orders_rep (
+                core_uid INTEGER, core_name TEXT, newrecid INTEGER, closedate INTEGER,
+                buydate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER,
+                emulator INTEGER, PRIMARY KEY (core_uid, newrecid)
+            );
+            CREATE INDEX idx_rep_core_close ON orders_rep(core_uid, closedate);
+            CREATE TABLE core_time_offset (
+                core_uid INTEGER, from_utc INTEGER, offset_secs INTEGER,
+                observed_at INTEGER, source TEXT
+            );
+            WITH RECURSIVE n(x) AS (
+                VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000
+            )
+            INSERT INTO orders_rep
+                SELECT x%10+1, 'CORE_A', x, 1700060000+x%40000,
+                       1700060000+x%40000-60, (x%7)-3.0, 100.0, 1, 0 FROM n;
+            INSERT INTO core_time_offset
+                SELECT core_uid, 0, 0, 0, 'fixture' FROM orders_rep GROUP BY core_uid;
+            INSERT INTO core_time_offset
+                SELECT core_uid, 1700050000, 3600, 1700050000, 'fixture'
+                FROM orders_rep GROUP BY core_uid;
+            ANALYZE;",
+        )
+        .expect("seed scale report");
+    let query = Query {
+        from: 1_700_000_000,
+        to: 1_700_100_000,
+        emulator: Some(false),
+        ..q()
+    };
+    let current = unified_from(&connection, &query)
+        .expect("build current source")
+        .expect("report table exists");
+    connection
+        .execute("DELETE FROM core_time_offset WHERE from_utc = 0", [])
+        .expect("leave only the former upper-bound segment");
+    let former = unified_from(&connection, &query)
+        .expect("build former single-segment source")
+        .expect("report table exists");
+    connection
+        .execute(
+            "INSERT INTO core_time_offset
+             SELECT core_uid, 0, 0, 0, 'fixture' FROM orders_rep GROUP BY core_uid",
+            [],
+        )
+        .expect("restore historical segments");
+    let read = |source: &str| {
+        let rows = connection
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {source}"),
+                rusqlite::params![query.from, query.to],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("read scale source");
+        assert_eq!(rows, 100_000);
+        std::hint::black_box(rows);
+    };
+    let mut former_samples = Vec::new();
+    let mut current_samples = Vec::new();
+    for pair in 0..10 {
+        for old in if pair % 2 == 0 {
+            [true, false]
+        } else {
+            [false, true]
+        } {
+            let started = std::time::Instant::now();
+            read(if old { &former } else { &current });
+            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+            if old {
+                former_samples.push(elapsed);
+            } else {
+                current_samples.push(elapsed);
+            }
+        }
+    }
+    former_samples.sort_by(f64::total_cmp);
+    current_samples.sort_by(f64::total_cmp);
+    println!(
+        "reader_refresh analytics shifted period former: {:.3} ms; current: {:.3} ms",
+        former_samples[5], current_samples[5]
+    );
+}

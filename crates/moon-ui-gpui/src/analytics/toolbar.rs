@@ -326,6 +326,30 @@ pub(super) fn sole_core_name<'a>(
     live.next().is_none().then_some(name.as_str())
 }
 
+/// Select when a compound read may expand an implicit All from the replica before aggregation.
+///
+/// Args:
+///     selected: Retained explicit core ids; empty represents the unpinned All row.
+///     workspace: Concrete Auto-workspace ids when a selected rail core pins Analytics.
+///     hidden: Configured cores the Classic viewing preset hides.
+///     read_cores: Whether this compound read includes the shared core metadata scan.
+///
+/// Returns:
+///     The hidden ids only for a due, unpinned, implicit-All read. Every other scope keeps its
+///     existing query and pays no additional core discovery.
+pub(super) fn replica_hidden_core_ids<'a>(
+    selected: &HashSet<u64>,
+    workspace: Option<&[u64]>,
+    hidden: Option<&'a [u64]>,
+    read_cores: bool,
+) -> Option<&'a [u64]> {
+    if read_cores && workspace.is_none() && selected.is_empty() {
+        hidden
+    } else {
+        None
+    }
+}
+
 /// Convert the effective Analytics selection into database filter ids.
 ///
 /// Args:
@@ -356,20 +380,12 @@ pub(super) fn sole_core_name<'a>(
 ///     A scope that hides NOTHING never reaches this branch: it is `None` and returns unfiltered
 ///     above, which is what keeps a still-loading unhidden window showing everything.
 ///
-///     KNOWN LIMITATION, stated exactly rather than optimistically. A REPLICA core absent from
-///     the config — a deleted server whose rows survive — is not in `configured`, so a hiding
-///     preset excludes it from the first query. `moon_core::db::analytics::summary_data` does
-///     read `distinct_cores` UNFILTERED whatever the query's core list says, so that core reaches
-///     `AnalyticsView::cores` and every SUBSEQUENT query names it again — but nothing here starts
-///     a subsequent query: the metadata result only repaints (`analytics::mod`'s summary
-///     completion), and `core_metadata_due` arms no timer on the first read. **So an untouched
-///     window keeps that core out of its figures until something else reloads it.** Two things
-///     bound the cost. It is an UNDER-report of a core no longer configured, where the shape it
-///     replaces was an over-report across the entire hidden fleet; and it needs a hiding preset
-///     to happen at all, since a scope that hides nothing returns unfiltered above and names every
-///     replica core. Closing it properly needs a config-independent universe read on construction,
-///     which is a full-table walk added to a window-open path — deliberately not done here, and
-///     the honest comment is worth more than a hurried read.
+///     When the compound read includes core metadata, its replica-scope variant resolves this same
+///     implicit All again on the pinned snapshot BEFORE aggregation. That adds cores present only
+///     in the replica to the first result without weakening the configured-hidden subtraction or
+///     requiring a second UI reload. Explicit selections and pinned Auto scopes never take that
+///     path, and the configured fallback above remains in force when metadata is not due or its
+///     read fails.
 pub(super) fn analytics_core_filter_ids(
     selected: &HashSet<u64>,
     workspace: Option<&[u64]>,

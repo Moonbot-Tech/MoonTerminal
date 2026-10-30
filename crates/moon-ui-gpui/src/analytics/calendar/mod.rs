@@ -770,12 +770,19 @@ impl AnalyticsView {
         // "Day" loads HOURLY cells (a 24×N grid); the other modes load daily.
         let hourly = self.cal_mode == CalMode::Day;
         let refresh_cores = self.core_metadata_due(cx);
+        let replica_hidden = self.replica_hidden_core_ids(refresh_cores);
         self.spawn_latest_db(
             &[super::bg::ReadLane::Calendar],
             show_overlay,
             cx,
             move || {
-                moon_core::db::analytics::calendar_data(&q, q_prev.as_ref(), hourly, refresh_cores)
+                moon_core::db::analytics::calendar_data_with_replica_scope(
+                    &q,
+                    q_prev.as_ref(),
+                    hourly,
+                    refresh_cores,
+                    replica_hidden.as_deref(),
+                )
             },
             move |this, data, cx| {
                 if this.cal_seq != req {

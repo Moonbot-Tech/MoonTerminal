@@ -88,10 +88,7 @@ fn content_hash_matches_previous_encoding() {
         HashSet::from(["Comment".into(), "StrategyName".into()]),
     ] {
         for fields in &cases {
-            assert_eq!(
-                old_hash_of(fields, &ignore),
-                hash_of(&strip(fields, &ignore))
-            );
+            assert_eq!(old_hash_of(fields, &ignore), hash_of(fields, &ignore));
             assert_eq!(
                 serde_json::to_string(fields).unwrap(),
                 serde_json::to_string(&Value::Object(fields.clone())).unwrap()

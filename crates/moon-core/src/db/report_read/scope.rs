@@ -168,32 +168,43 @@ pub(super) fn append_row_scope(
     // filter: two branches resolving "does this window still reach the present" against two
     // different instants would be a difference nothing on screen could explain.
     let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
-    let groups = offset_groups(f, now);
+    let groups = if f.rows == RowScope::OpenIfCurrent {
+        current_offset_groups(f, now)
+    } else {
+        historical_offset_groups(f)
+    };
     let mut parts: Vec<GroupPredicate> = Vec::new();
-    for (offset, cores) in &groups {
-        let Some(guard) = group_guard(cores, f) else {
+    for group in &groups {
+        let Some(guard) = group_guard(&group.cores, f) else {
             continue;
         };
         // The bounds are true-UTC instants and the column is core-local, so the group's offset is
         // added to the BOUND. Converting the column instead would be the same arithmetic and would
-        // cost the index.
+        // cost the index. Raw segment bounds select the same offset as `ReportAxis::to_utc`.
         let mut window = String::new();
         let mut bounds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let mut shifted_from: Option<i64> = None;
         let mut shifted_to: Option<i64> = None;
         if let Some(from) = f.date_from {
-            let shifted = crate::db::ReportAxis::shift_bound(from, *offset);
+            let shifted = crate::db::ReportAxis::shift_bound(from, group.offset_secs);
             window.push_str(&format!(" AND {CLOSEDATE} >= ?"));
             bounds.push(Box::new(shifted));
             shifted_from = Some(shifted);
         }
         if let Some(to) = f.date_to {
-            let shifted = crate::db::ReportAxis::shift_bound(to, *offset);
+            let shifted = crate::db::ReportAxis::shift_bound(to, group.offset_secs);
             window.push_str(&format!(" AND {CLOSEDATE} <= ?"));
             bounds.push(Box::new(shifted));
             shifted_to = Some(shifted);
         }
-        let current = open_rows_for_bound(f.date_to, now, *offset) == RowScope::ClosedAndOpen;
+        if let Some(bound) = group.local_from {
+            window.push_str(&format!(" AND {CLOSEDATE} >= {bound}"));
+        }
+        if let Some(bound) = group.local_to {
+            window.push_str(&format!(" AND {CLOSEDATE} < {bound}"));
+        }
+        let current =
+            open_rows_for_bound(f.date_to, now, group.offset_secs) == RowScope::ClosedAndOpen;
         if f.rows == RowScope::OpenIfCurrent {
             // A group whose window has already ended contributes NO open rows, so it contributes
             // no branch at all. Dropping the branch rather than emitting a false one is what lets
@@ -208,9 +219,15 @@ pub(super) fn append_row_scope(
             });
             continue;
         }
+        // Open positions have no historical close segment. Only the latest segment may contribute
+        // them, while closed rows use every segment in force during the requested period.
+        let latest_segment = group.local_to.is_none();
         let resolved = match f.rows {
-            RowScope::ClosedAndOpenIfCurrent if current => RowScope::ClosedAndOpen,
+            RowScope::ClosedAndOpenIfCurrent if latest_segment && current => {
+                RowScope::ClosedAndOpen
+            }
             RowScope::ClosedAndOpenIfCurrent => RowScope::Closed,
+            RowScope::ClosedAndOpen if !latest_segment => RowScope::Closed,
             other => other,
         };
         let mut part = GroupPredicate {
@@ -363,7 +380,7 @@ fn group_guard(cores: &Option<Vec<u64>>, f: &ReportFilter) -> Option<String> {
 /// Every row, open or closed, enters the window by its open time, so the "window still reaches
 /// the present" resolution never applies and no coarse `closedate` range is factored out. A
 /// source without `buydate` cannot place any row in the period and fails closed.
-/// The clock is read only to group cores by UTC offset; no bound is derived from it.
+/// Historical segment bounds select each row's own offset; no wall-clock reading is needed.
 ///
 /// Args:
 ///     sql: Predicate buffer being built.
@@ -380,7 +397,6 @@ pub(super) fn append_open_basis_scope(
         sql.push_str(" AND 1=0");
         return;
     }
-    let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
     let resolved = match f.rows {
         RowScope::ClosedAndOpenIfCurrent => RowScope::ClosedAndOpen,
         RowScope::OpenIfCurrent => RowScope::Open,
@@ -394,19 +410,31 @@ pub(super) fn append_open_basis_scope(
         }
     }
     let mut branches: Vec<String> = Vec::new();
-    for (offset, cores) in &offset_groups(f, now) {
-        let Some(guard) = group_guard(cores, f) else {
+    for group in historical_offset_groups(f) {
+        let Some(guard) = group_guard(&group.cores, f) else {
             continue;
         };
         // Same core-local axis as `closedate`, so the offset moves onto the bound the same way.
         let mut window = String::new();
         if let Some(from) = f.date_from {
             window.push_str(" AND r.\"buydate\" >= ?");
-            params.push(Box::new(crate::db::ReportAxis::shift_bound(from, *offset)));
+            params.push(Box::new(crate::db::ReportAxis::shift_bound(
+                from,
+                group.offset_secs,
+            )));
         }
         if let Some(to) = f.date_to {
             window.push_str(" AND r.\"buydate\" <= ?");
-            params.push(Box::new(crate::db::ReportAxis::shift_bound(to, *offset)));
+            params.push(Box::new(crate::db::ReportAxis::shift_bound(
+                to,
+                group.offset_secs,
+            )));
+        }
+        if let Some(bound) = group.local_from {
+            window.push_str(&format!(" AND r.\"buydate\" >= {bound}"));
+        }
+        if let Some(bound) = group.local_to {
+            window.push_str(&format!(" AND r.\"buydate\" < {bound}"));
         }
         let state = match resolved {
             RowScope::Closed => Some(closed_row_predicate(cols).unwrap_or_else(|| "1=0".into())),
@@ -494,47 +522,83 @@ fn coarse_range(parts: &[GroupPredicate]) -> Option<(i64, i64)> {
     Some((from, to))
 }
 
-/// Resolve which offset groups this filter's rows fall into.
+/// One offset branch in a Report period predicate.
+struct ScopeGroup {
+    /// Seconds east of UTC shared by the branch's cores and historical segment.
+    offset_secs: i32,
+    /// Scoped cores, or `None` for the unmeasured catch-all.
+    cores: Option<Vec<u64>>,
+    /// Inclusive raw local-timestamp start; the earliest segment is unbounded below.
+    local_from: Option<i64>,
+    /// Exclusive raw local-timestamp end; the latest segment is unbounded above.
+    local_to: Option<i64>,
+}
+
+/// Resolve every historical offset segment a dated row may occupy.
 ///
-/// A scoped read names its cores and groups exactly those. An UNBOUNDED read cannot name them, so
-/// it takes one branch per MEASURED offset plus a catch-all carrying `None` -- every core with no
-/// measurement, which converts as the identity.
-///
-/// # Known limitation: grouped at ONE instant
-///
-/// A core is placed in the group its offset occupies at `now`, and that single offset then shifts
-/// BOTH bounds. A period spanning an offset transition therefore has its far bound shifted by the
-/// wrong segment, so trades within one delta of that edge can be admitted or dropped. Bounded by
-/// the delta -- an hour across DST -- and only ever at the edge.
-///
-/// The alternative is a sub-branch per segment per core, which multiplies the disjunction the
-/// coarse range in [`append_row_scope`] exists to keep cheap. Left deliberately, recorded here so
-/// the next reader does not mistake it for an oversight.
-///
-/// Args:
-///     f: Complete Report filter.
-///     now: Current Unix timestamp in seconds, on this machine's true UTC.
-///
-/// Returns:
-///     Offset and the cores it applies to, or `None` for the unbounded catch-all. A fleet with no
-///     measurements at all collapses to a single identity group, which reproduces the predicate
-///     this function had before offsets existed.
-fn offset_groups(f: &ReportFilter, now: i64) -> Vec<(i32, Option<Vec<u64>>)> {
-    if !f.core_uids.is_empty() {
-        return f
-            .axis
+/// Scoped reads expand only their selected cores. Unbounded reads add an identity catch-all for
+/// cores with no measurement. Consecutive equal-offset segments are already coalesced by the
+/// shared report-axis grouper, preserving the old single-branch shape when history does not change.
+fn historical_offset_groups(f: &ReportFilter) -> Vec<ScopeGroup> {
+    let map = |group: crate::db::report_axis::RowOffsetGroup| ScopeGroup {
+        offset_secs: group.offset_secs,
+        cores: Some(group.cores),
+        local_from: group.local_from,
+        local_to: group.local_to,
+    };
+    let mut groups = if f.core_uids.is_empty() {
+        f.axis
+            .measured_row_groups()
+            .into_iter()
+            .map(map)
+            .collect::<Vec<_>>()
+    } else {
+        f.axis
+            .row_groups(&f.core_uids)
+            .into_iter()
+            .map(map)
+            .collect()
+    };
+    if f.core_uids.is_empty() {
+        groups.push(ScopeGroup {
+            offset_secs: 0,
+            cores: None,
+            local_from: None,
+            local_to: None,
+        });
+    }
+    groups
+}
+
+/// Resolve current offsets for open positions, which have no historical close segment.
+fn current_offset_groups(f: &ReportFilter, now: i64) -> Vec<ScopeGroup> {
+    let map = |(offset_secs, cores): (i32, Vec<u64>)| ScopeGroup {
+        offset_secs,
+        cores: Some(cores),
+        local_from: None,
+        local_to: None,
+    };
+    let mut groups = if f.core_uids.is_empty() {
+        f.axis
+            .measured_groups(now)
+            .into_iter()
+            .map(map)
+            .collect::<Vec<_>>()
+    } else {
+        f.axis
             .groups(&f.core_uids, now)
             .into_iter()
-            .map(|(offset, cores)| (offset, Some(cores)))
-            .collect();
+            .map(map)
+            .collect()
+    };
+    if f.core_uids.is_empty() {
+        groups.push(ScopeGroup {
+            offset_secs: 0,
+            cores: None,
+            local_from: None,
+            local_to: None,
+        });
     }
-    let mut groups: Vec<(i32, Option<Vec<u64>>)> = f
-        .axis
-        .measured_groups(now)
-        .into_iter()
-        .map(|(offset, cores)| (offset, Some(cores)))
-        .collect();
-    groups.push((0, None));
     groups
 }
 

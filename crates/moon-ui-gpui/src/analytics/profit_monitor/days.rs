@@ -66,6 +66,7 @@ impl ProfitMonitorView {
         self.refresh
             .refresh_started(generation, std::time::Instant::now());
         let query = self.query();
+        let replica_hidden = replica_hidden_core_ids(&self.live);
         let filter = ReportFilter {
             core_uids: query.cores,
             emulator: Some(false),
@@ -81,7 +82,15 @@ impl ProfitMonitorView {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { days_model::read_days(filter, month, now, zone) })
+                .background_spawn(async move {
+                    days_model::read_days_with_replica_scope(
+                        filter,
+                        month,
+                        now,
+                        zone,
+                        replica_hidden.as_deref(),
+                    )
+                })
                 .await;
             cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -122,9 +131,10 @@ impl ProfitMonitorView {
             .map_or_else(now_utc, |report| report.refreshed);
         let mut ids = self.live.core_order.clone();
         ids.extend(
-            self.seen_data_cores
-                .iter()
-                .copied()
+            self.days_data
+                .data()
+                .into_iter()
+                .flat_map(|report| report.core_uids.iter().copied())
                 .filter(|core| !self.live.configured_core_ids.contains(core)),
         );
         ids.sort_unstable();

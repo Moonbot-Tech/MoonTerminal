@@ -13,7 +13,8 @@ use moon_core::db::{QuoteBreakdown, QuoteCurrency, QuoteTotal, ReadFail};
 use super::super::AnalyticsSessionState;
 use super::{
     CoreSelectionCaption, KIND_TRIGGER_W, METRIC_TRIGGER_W, SIDE_TRIGGER_W, UndatedBanner,
-    analytics_core_filter_ids, presets_row_fits, sole_core_name, undated_banner_state,
+    analytics_core_filter_ids, presets_row_fits, replica_hidden_core_ids, sole_core_name,
+    undated_banner_state,
 };
 use super::{MetricChoice, chip_is_set, compare_label, summary_counter, whole_days};
 
@@ -479,6 +480,44 @@ fn a_fresh_partially_hidden_implicit_all_query_uses_only_visible_configured_core
         actual, expected,
         "a fresh partial scope must query exactly the configured cores it still shows"
     );
+}
+
+/// Replica discovery is only for an implicit All whose metadata is being read. Broadening this
+/// helper to explicit selections or an Auto pin would query cores the user did not select, while
+/// running it on every refresh would pay the core scan outside the shared metadata cadence.
+#[test]
+fn replica_discovery_only_expands_the_due_implicit_all_scope() {
+    let hidden = [303, 911];
+    assert_eq!(
+        replica_hidden_core_ids(&HashSet::new(), None, Some(&hidden), true),
+        Some(hidden.as_slice())
+    );
+    for (selected, workspace, read_cores, why) in [
+        (
+            HashSet::from([101]),
+            None,
+            true,
+            "an explicit selection stays bounded",
+        ),
+        (
+            HashSet::new(),
+            Some(&[11][..]),
+            true,
+            "an Auto pin keeps its own scope",
+        ),
+        (
+            HashSet::new(),
+            None,
+            false,
+            "metadata cadence still throttles discovery",
+        ),
+    ] {
+        assert_eq!(
+            replica_hidden_core_ids(&selected, workspace, Some(&hidden), read_cores),
+            None,
+            "{why}"
+        );
+    }
 }
 
 /// A default filter must not light up as a set chip, and every changed one must.

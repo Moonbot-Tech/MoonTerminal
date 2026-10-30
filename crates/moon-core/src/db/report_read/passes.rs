@@ -327,14 +327,26 @@ fn run_row_pass(
                 }
                 order
             }
-            Some(expression) => format!("({expression}) IS NULL, {expression} {dir}"),
+            Some(expression) => {
+                // ASC applies LIMIT per source too, so equal keys need the same total order as DESC.
+                let mut order = format!("({expression}) IS NULL, {expression} {dir}");
+                if src.cols.contains("core_uid") {
+                    order.push_str(&format!(", r.core_uid {dir}"));
+                }
+                if src.cols.contains("newrecid") {
+                    order.push_str(&format!(", r.newrecid {dir}"));
+                } else if src.legacy && src.cols.contains("db_id") {
+                    order.push_str(&format!(", r.\"db_id\" {dir}"));
+                }
+                order
+            }
             None => "1".to_string(),
         };
         // Keep the existing indexes: widening the date index silently reorders ASC ties.
         // The narrow key pass avoids sorting every display column over a broad date read.
         // Coin seeks already bound the candidate set and keep their existing query shape.
         // Materialize the same source-local top N before fetching their full projection;
-        // the total DESC tie-break and the one source limit remain exactly the original ones.
+        // the total direction-aware tie-break and the one source limit remain exactly the original ones.
         let sql = if desc
             && sort_col == "closedate"
             && src.cols.contains("closedate")

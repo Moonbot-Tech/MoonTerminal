@@ -15,7 +15,7 @@ use super::format::{
     ColumnFloor, ColumnMetrics, ProfitFloor, ProfitForm, ProfitLen, format_profit,
     plan_profit_column,
 };
-use super::model::scoped_query_core_ids;
+use super::model::{replica_hidden_core_ids, scoped_query_core_ids};
 use super::rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
 use super::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn,
@@ -1431,11 +1431,11 @@ fn one_fold_serves_the_total_and_every_subtotal() {
     assert_eq!(fold_total(&[]).trades, 0, "an empty fold is all zeroes");
 }
 
-/// `profit_monitor/model.rs:scoped_query_core_ids` must retain only data-only previously seen
-/// cores, and keep an unhidden preset unfiltered: inverting its configured-core filter or returning
-/// `core_order` when nothing is hidden silently removes real core money from the monitor total.
+/// The monitor's configured fallback must stay bounded and its hidden-id list must exactly match
+/// the preset. Returning visible cores when nothing is hidden, omitting the no-match sentinel, or
+/// deriving hidden ids from a previous read reintroduces missing or unauthorized core money.
 #[test]
-fn a_data_only_core_keeps_its_money_inside_a_scoped_read() {
+fn scoped_read_inputs_separate_visible_fallback_from_hidden_membership() {
     let unhidden = LiveContext {
         preset: Some(moon_core::config::WorkspaceMode::AutoTrading),
         core_order: vec![1, 2],
@@ -1444,10 +1444,11 @@ fn a_data_only_core_keeps_its_money_inside_a_scoped_read() {
         ..LiveContext::default()
     };
     assert_eq!(
-        scoped_query_core_ids(&unhidden, &[99]),
+        scoped_query_core_ids(&unhidden),
         Vec::<u64>::new(),
         "an unhidden preset must leave the database read unfiltered"
     );
+    assert_eq!(replica_hidden_core_ids(&unhidden), None);
 
     let hidden = LiveContext {
         preset: Some(moon_core::config::WorkspaceMode::AutoTrading),
@@ -1457,14 +1458,14 @@ fn a_data_only_core_keeps_its_money_inside_a_scoped_read() {
         ..LiveContext::default()
     };
     assert_eq!(
-        scoped_query_core_ids(&hidden, &[99]),
-        vec![1, 99],
-        "a previously observed core outside config.servers is data-only and must keep its money"
+        scoped_query_core_ids(&hidden),
+        vec![1],
+        "the fallback names only visible configured cores before replica discovery"
     );
     assert_eq!(
-        scoped_query_core_ids(&hidden, &[2]),
-        vec![1],
-        "a configured-but-hidden core is intentionally excluded by core_order"
+        replica_hidden_core_ids(&hidden),
+        Some(vec![2]),
+        "a configured-but-hidden core stays out of the discovered read"
     );
 
     let hides_every_configured_core = LiveContext {
@@ -1474,9 +1475,13 @@ fn a_data_only_core_keeps_its_money_inside_a_scoped_read() {
         ..hidden
     };
     assert_eq!(
-        scoped_query_core_ids(&hides_every_configured_core, &[1, 2]),
+        scoped_query_core_ids(&hides_every_configured_core),
         vec![moon_core::config::NO_MATCH_CORE_UID],
         "a present scope that resolves empty must fail closed instead of broadening to every core"
+    );
+    assert_eq!(
+        replica_hidden_core_ids(&hides_every_configured_core),
+        Some(vec![1, 2])
     );
 }
 

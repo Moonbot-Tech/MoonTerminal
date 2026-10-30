@@ -2013,3 +2013,97 @@ fn cache_compose_preparation_timing() {
         );
     }
 }
+
+/// Frozen backward-scan aggregation used as the parity oracle for late trade resends.
+fn former_aggregate_trades(trades: &[Tick], tf_ms: i64, out: &mut Vec<ChartCandle>) {
+    out.clear();
+    for trade in trades {
+        if !(trade.price.is_finite() && trade.price > 0.0) {
+            continue;
+        }
+        let open_ms = bucket_open_ms(trade.time_ms, tf_ms);
+        match out.last_mut() {
+            Some(last) if last.t_open_ms == open_ms => {
+                last.high = last.high.max(trade.price);
+                last.low = last.low.min(trade.price);
+                last.close = trade.price;
+                last.volume += trade.qty.max(0.0);
+                last.quote_volume += trade.price * trade.qty.max(0.0);
+            }
+            Some(last) if open_ms > last.t_open_ms => out.push(candle_from_tick(open_ms, trade)),
+            None => out.push(candle_from_tick(open_ms, trade)),
+            _ => {
+                if let Some(candle) = out.iter_mut().rev().find(|c| c.t_open_ms == open_ms) {
+                    candle.high = candle.high.max(trade.price);
+                    candle.low = candle.low.min(trade.price);
+                    candle.volume += trade.qty.max(0.0);
+                    candle.quote_volume += trade.price * trade.qty.max(0.0);
+                } else if open_ms > out[0].t_open_ms {
+                    let at = out.partition_point(|c| c.t_open_ms < open_ms);
+                    out.insert(at, candle_from_tick(open_ms, trade));
+                }
+            }
+        }
+    }
+}
+
+/// Binary bucket lookup must preserve every late-resend OHLC and turnover update.
+#[test]
+fn aggregate_late_resends_match_frozen_backward_scan() {
+    let mut trades: Vec<_> = (0..4_096)
+        .map(|index| tick(index as f64 * M, 10.0 + (index % 31) as f32, 1.0))
+        .collect();
+    for index in (1..4_096).step_by(3) {
+        trades.push(tick(index as f64 * M, 50.0 + (index % 17) as f32, 2.0));
+    }
+    trades.push(tick(1_000.0 * M, 75.0, 3.0));
+    trades.push(tick(-M, 90.0, 4.0));
+    trades.push(tick(f64::NAN, 95.0, 5.0));
+    let mut expected = Vec::new();
+    let mut actual = Vec::new();
+    former_aggregate_trades(&trades, TF5, &mut expected);
+    aggregate_trades(&trades, TF5, &mut actual);
+    assert_eq!(actual, expected);
+}
+
+/// Measure distant late resends over thousands of retained buckets.
+#[test]
+#[ignore = "synthetic late-trade aggregation timing probe"]
+fn aggregate_late_resend_scale_probe() {
+    let mut trades: Vec<_> = (0..2_000)
+        .map(|index| tick(index as f64 * M, 10.0, 1.0))
+        .collect();
+    for index in 0..2_000 {
+        trades.push(tick(index as f64 * M, 20.0 + (index % 13) as f32, 2.0));
+    }
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for repetition in 0..7 {
+        for old in if repetition % 2 == 0 {
+            [true, false]
+        } else {
+            [false, true]
+        } {
+            let start = Instant::now();
+            let mut out = Vec::new();
+            if old {
+                former_aggregate_trades(&trades, TF5, &mut out);
+            } else {
+                aggregate_trades(&trades, TF5, &mut out);
+            }
+            std::hint::black_box(&out);
+            let elapsed = start.elapsed().as_secs_f64() * 1_000.0;
+            if old {
+                before.push(elapsed);
+            } else {
+                after.push(elapsed);
+            }
+        }
+    }
+    before.sort_by(f64::total_cmp);
+    after.sort_by(f64::total_cmp);
+    println!(
+        "[bench] aggregate_late_resend buckets=2000 late=2000 before_ms={:.6} after_ms={:.6}",
+        before[3], after[3]
+    );
+}

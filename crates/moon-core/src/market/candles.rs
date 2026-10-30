@@ -743,38 +743,40 @@ pub fn normalize_ohlc(o: f32, h: f32, l: f32, c: f32) -> (f32, f32, f32, f32) {
 /// Empty buckets are omitted, producing a sparse series like the trade stream itself.
 pub fn aggregate_trades(trades: &[Tick], tf_ms: i64, out: &mut Vec<ChartCandle>) {
     out.clear();
-    for t in trades {
-        if !(t.price.is_finite() && t.price > 0.0) {
-            continue;
+    for trade in trades {
+        aggregate_trade(trade, tf_ms, out);
+    }
+}
+
+/// Fold one trade into an ascending sparse candle series.
+pub(crate) fn aggregate_trade(trade: &Tick, tf_ms: i64, out: &mut Vec<ChartCandle>) {
+    if !(trade.price.is_finite() && trade.price > 0.0) {
+        return;
+    }
+    let open_ms = bucket_open_ms(trade.time_ms, tf_ms);
+    match out.last_mut() {
+        Some(last) if last.t_open_ms == open_ms => {
+            last.high = last.high.max(trade.price);
+            last.low = last.low.min(trade.price);
+            last.close = trade.price;
+            last.volume += trade.qty.max(0.0);
+            last.quote_volume += trade.price * trade.qty.max(0.0);
         }
-        let open_ms = bucket_open_ms(t.time_ms, tf_ms);
-        match out.last_mut() {
-            Some(last) if last.t_open_ms == open_ms => {
-                last.high = last.high.max(t.price);
-                last.low = last.low.min(t.price);
-                last.close = t.price;
-                last.volume += t.qty.max(0.0);
-                last.quote_volume += t.price * t.qty.max(0.0);
+        Some(last) if open_ms > last.t_open_ms => {
+            out.push(candle_from_tick(open_ms, trade));
+        }
+        None => out.push(candle_from_tick(open_ms, trade)),
+        _ => {
+            if let Some(c) = out.iter_mut().rev().find(|c| c.t_open_ms == open_ms) {
+                c.high = c.high.max(trade.price);
+                c.low = c.low.min(trade.price);
+                c.volume += trade.qty.max(0.0);
+                c.quote_volume += trade.price * trade.qty.max(0.0);
+            } else if open_ms > out[0].t_open_ms {
+                let at = out.partition_point(|c| c.t_open_ms < open_ms);
+                out.insert(at, candle_from_tick(open_ms, trade));
             }
-            Some(last) if open_ms > last.t_open_ms => {
-                out.push(candle_from_tick(open_ms, t));
-            }
-            None => out.push(candle_from_tick(open_ms, t)),
-            _ => {
-                // Search backward for a late resend's old bucket, which is usually nearby.
-                if let Some(c) = out.iter_mut().rev().find(|c| c.t_open_ms == open_ms) {
-                    c.high = c.high.max(t.price);
-                    c.low = c.low.min(t.price);
-                    c.volume += t.qty.max(0.0);
-                    c.quote_volume += t.price * t.qty.max(0.0);
-                } else if open_ms > out[0].t_open_ms {
-                    // The resend is the only trade of a bucket between two the series holds:
-                    // that bucket is not empty, so it gets its own candle, in time order.
-                    let at = out.partition_point(|c| c.t_open_ms < open_ms);
-                    out.insert(at, candle_from_tick(open_ms, t));
-                }
-                // Ignore a trade older than the entire series because its window has moved on.
-            }
+            // Ignore a trade older than the entire series because its window has moved on.
         }
     }
 }

@@ -37,7 +37,7 @@ pub use calendar::{
 pub use groups::{GroupStat, TopTrade, coin_groups, strategies_for_coins};
 pub use profit_monitor::{
     ProfitMonitorCore, ProfitMonitorCurrency, ProfitMonitorSnapshot, ProfitMonitorSummary,
-    profit_monitor, profit_monitor_snapshot,
+    profit_monitor, profit_monitor_snapshot, profit_monitor_snapshot_with_replica_scope,
 };
 pub use query::{ANALYTICS_HORIZON_SECS, ANALYTICS_MAX_SPAN_SECS, PreviousPeriodBasis, Query};
 
@@ -297,6 +297,112 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
     })
 }
 
+/// Core metadata and the optional resolved inclusion list discovered on one report snapshot.
+struct ReadCoreScope {
+    /// Throttled core-selector payload, including its independent read failure.
+    cores: Option<ReadResult<Vec<(u64, String)>>>,
+    /// Inclusion list for an implicit All under a hiding preset, absent for every other query.
+    core_ids: Option<Vec<u64>>,
+}
+
+impl ReadCoreScope {
+    /// Apply discovered ids when present, borrowing the original query in every other case.
+    ///
+    /// Args:
+    ///     q: Configured fallback query supplied by the caller.
+    ///
+    /// Returns:
+    ///     The original query when discovery was not requested or failed, or one owned query with
+    ///     the resolved inclusion list.
+    fn query<'a>(&self, q: &'a Query) -> std::borrow::Cow<'a, Query> {
+        let Some(core_ids) = &self.core_ids else {
+            return std::borrow::Cow::Borrowed(q);
+        };
+        let mut resolved = q.clone();
+        resolved.cores = core_ids.clone();
+        std::borrow::Cow::Owned(resolved)
+    }
+}
+
+/// Append newly discovered non-hidden cores to a configured fallback scope.
+///
+/// Args:
+///     configured: Existing configured-only inclusion list, including a possible no-match sentinel.
+///     hidden: Configured ids the active preset deliberately excludes.
+///     discovered: Every core named by the report replica.
+///
+/// Returns:
+///     Existing ids in their original order followed by new replica-only ids, or the no-match
+///     sentinel when no visible or data-only core remains.
+fn with_replica_cores(
+    configured: &[u64],
+    hidden: &[u64],
+    discovered: &[(u64, String)],
+) -> Vec<u64> {
+    let mut ids: Vec<u64> = configured
+        .iter()
+        .copied()
+        .filter(|core| !hidden.contains(core))
+        .collect();
+    for core in discovered.iter().map(|(core, _)| *core) {
+        if !hidden.contains(&core) && !ids.contains(&core) {
+            ids.push(core);
+        }
+    }
+    if ids.is_empty() {
+        ids.push(crate::config::NO_MATCH_CORE_UID);
+    }
+    ids
+}
+
+/// Resolve a scoped read's inclusion list from the replica before its first aggregation.
+///
+/// Args:
+///     conn: Existing report reader or pinned snapshot.
+///     configured: Existing configured-only inclusion list.
+///     hidden: Configured ids the active preset deliberately excludes.
+///
+/// Returns:
+///     The configured scope plus every non-hidden replica-only core, or a classified read failure.
+pub fn replica_core_ids(
+    conn: &Connection,
+    configured: &[u64],
+    hidden: &[u64],
+) -> ReadResult<Vec<u64>> {
+    let discovered = super::distinct_cores(conn)?;
+    Ok(with_replica_cores(configured, hidden, &discovered))
+}
+
+/// Discover replica cores before an implicit-All scoped read without weakening preset hiding.
+///
+/// Existing ids retain their configured order; newly discovered non-hidden ids append after them.
+/// A failed metadata read leaves the configured fallback unchanged. The no-match sentinel preserves
+/// a present-but-empty scope rather than letting an empty vector mean unfiltered.
+///
+/// Args:
+///     conn: Existing report reader or pinned snapshot.
+///     q: Configured fallback query whose inclusion order should be preserved.
+///     read_cores: Whether the shared core-selector metadata is due.
+///     replica_hidden: Hidden configured ids when the caller owns an implicit-All scoped read.
+///
+/// Returns:
+///     Optional core-selector metadata and the resolved inclusion list when discovery succeeded.
+fn read_core_scope(
+    conn: &Connection,
+    q: &Query,
+    read_cores: bool,
+    replica_hidden: Option<&[u64]>,
+) -> ReadCoreScope {
+    let cores = (read_cores || replica_hidden.is_some()).then(|| super::distinct_cores(conn));
+    let core_ids = match (replica_hidden, cores.as_ref()) {
+        (Some(hidden), Some(Ok(discovered))) => {
+            Some(with_replica_cores(&q.cores, hidden, discovered))
+        }
+        _ => None,
+    };
+    ReadCoreScope { cores, core_ids }
+}
+
 /// Read Summary and its undated-close warning from one committed snapshot.
 ///
 /// Args:
@@ -306,16 +412,27 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
 /// Returns:
 ///     Independently classified visible results from one snapshot.
 pub fn summary_data(q: &Query, read_cores: bool) -> AnalyticsRead<ProfitScope<Summary>> {
-    let compound = super::open_reader().and_then(|conn| {
-        let has_strat_names = strategies_attached(&conn);
-        super::with_read_snapshot(&conn, |snapshot| {
-            Ok(AnalyticsRead {
-                data: summary_on(snapshot, q, has_strat_names, false),
-                undated: undated_closes_on(snapshot, q),
-                cores: read_cores.then(|| super::distinct_cores(snapshot)),
-            })
-        })
-    });
+    summary_data_with_replica_scope(q, read_cores, None)
+}
+
+/// Read Summary with optional first-result discovery of replica-only cores.
+///
+/// Args:
+///     q: Summary scope and period, carrying the configured fallback inclusion list.
+///     read_cores: Whether the shared core-selector cadence is due.
+///     replica_hidden: Hidden configured ids when `q` represents an implicit All under a hiding
+///         preset; `None` leaves its inclusion list untouched.
+///
+/// Returns:
+///     Independently classified visible results from one snapshot, with implicit-All discovery
+///     applied before both the Summary and undated-close reads.
+pub fn summary_data_with_replica_scope(
+    q: &Query,
+    read_cores: bool,
+    replica_hidden: Option<&[u64]>,
+) -> AnalyticsRead<ProfitScope<Summary>> {
+    let compound =
+        super::open_reader().and_then(|conn| summary_data_on(&conn, q, read_cores, replica_hidden));
     match compound {
         Ok(data) => data,
         Err(error) => AnalyticsRead {
@@ -324,6 +441,34 @@ pub fn summary_data(q: &Query, read_cores: bool) -> AnalyticsRead<ProfitScope<Su
             cores: read_cores.then_some(Err(error)),
         },
     }
+}
+
+/// Read compound Summary data on an existing connection for tests and the public entry points.
+///
+/// Args:
+///     conn: Existing report connection used to pin one snapshot.
+///     q: Summary scope and period, carrying the configured fallback inclusion list.
+///     read_cores: Whether to return core-selector metadata.
+///     replica_hidden: Hidden configured ids for an implicit-All scoped read.
+///
+/// Returns:
+///     Summary, undated closes, and optional core metadata derived from one pinned snapshot.
+fn summary_data_on(
+    conn: &Connection,
+    q: &Query,
+    read_cores: bool,
+    replica_hidden: Option<&[u64]>,
+) -> ReadResult<AnalyticsRead<ProfitScope<Summary>>> {
+    let has_strat_names = strategies_attached(conn);
+    super::with_read_snapshot(conn, |snapshot| {
+        let scope = read_core_scope(snapshot, q, read_cores, replica_hidden);
+        let q = scope.query(q);
+        Ok(AnalyticsRead {
+            data: summary_on(snapshot, q.as_ref(), has_strat_names, false),
+            undated: undated_closes_on(snapshot, q.as_ref()),
+            cores: scope.cores,
+        })
+    })
 }
 
 /// Read only the list/coin base needed by Strategies, plus its undated warning.
@@ -335,13 +480,34 @@ pub fn summary_data(q: &Query, read_cores: bool) -> AnalyticsRead<ProfitScope<Su
 /// Returns:
 ///     Independently classified visible results from one snapshot.
 pub fn strategy_base_data(q: &Query, read_cores: bool) -> AnalyticsRead<ProfitScope<StrategyBase>> {
+    strategy_base_data_with_replica_scope(q, read_cores, None)
+}
+
+/// Read the Strategies base with optional first-result discovery of replica-only cores.
+///
+/// Args:
+///     q: Strategies scope and period, carrying the configured fallback inclusion list.
+///     read_cores: Whether the shared core-selector cadence is due.
+///     replica_hidden: Hidden configured ids when `q` represents an implicit All under a hiding
+///         preset; `None` leaves its inclusion list untouched.
+///
+/// Returns:
+///     Independently classified visible results from one snapshot, with implicit-All discovery
+///     applied before both the strategy-base and undated-close reads.
+pub fn strategy_base_data_with_replica_scope(
+    q: &Query,
+    read_cores: bool,
+    replica_hidden: Option<&[u64]>,
+) -> AnalyticsRead<ProfitScope<StrategyBase>> {
     let compound = super::open_reader().and_then(|conn| {
         let has_strat_names = strategies_attached(&conn);
         super::with_read_snapshot(&conn, |snapshot| {
+            let scope = read_core_scope(snapshot, q, read_cores, replica_hidden);
+            let q = scope.query(q);
             Ok(AnalyticsRead {
-                data: strategy_base_on(snapshot, q, has_strat_names),
-                undated: undated_closes_on(snapshot, q),
-                cores: read_cores.then(|| super::distinct_cores(snapshot)),
+                data: strategy_base_on(snapshot, q.as_ref(), has_strat_names),
+                undated: undated_closes_on(snapshot, q.as_ref()),
+                cores: scope.cores,
             })
         })
     });
@@ -371,12 +537,42 @@ pub fn calendar_data(
     hourly: bool,
     read_cores: bool,
 ) -> CalendarRead {
+    calendar_data_with_replica_scope(q, previous, hourly, read_cores, None)
+}
+
+/// Read Calendar with optional first-result discovery of replica-only cores.
+///
+/// Args:
+///     q: Visible Calendar scope and time range, carrying the configured fallback inclusion list.
+///     previous: Optional comparison scope, resolved from the same discovered universe.
+///     hourly: Whether Calendar renders hour buckets.
+///     read_cores: Whether the throttled core selector is due for refresh.
+///     replica_hidden: Hidden configured ids when `q` represents an implicit All under a hiding
+///         preset; `None` leaves current and comparison inclusion lists untouched.
+///
+/// Returns:
+///     Independently classified Calendar, undated, and optional core results from one snapshot.
+pub fn calendar_data_with_replica_scope(
+    q: &Query,
+    previous: Option<&Query>,
+    hourly: bool,
+    read_cores: bool,
+    replica_hidden: Option<&[u64]>,
+) -> CalendarRead {
     let compound = super::open_reader().and_then(|conn| {
         super::with_read_snapshot(&conn, |snapshot| {
+            let scope = read_core_scope(snapshot, q, read_cores, replica_hidden);
+            let q = scope.query(q);
+            let previous = previous.map(|previous| scope.query(previous));
             Ok(CalendarRead {
-                period: calendar::calendar_period_from(snapshot, q, previous, hourly),
-                undated: undated_closes_on(snapshot, q),
-                cores: read_cores.then(|| super::distinct_cores(snapshot)),
+                period: calendar::calendar_period_from(
+                    snapshot,
+                    q.as_ref(),
+                    previous.as_ref().map(|previous| previous.as_ref()),
+                    hourly,
+                ),
+                undated: undated_closes_on(snapshot, q.as_ref()),
+                cores: scope.cores,
             })
         })
     });
@@ -728,13 +924,13 @@ pub(super) fn summary_on(
         86_400
     };
 
+    // ONE resolution for this whole Summary read: the period floor above, the comparison, the
+    // ordering, the bucketing and the sequence metrics all describe the same measured world.
+    let axis = q.resolved_axis(conn)?;
     // The comparison is best-effort because it must not hide a readable current
     // period; see `Summary::prev`.
-    let prev = previous_stats(conn, &src, &q, len, bucket, &decision);
+    let prev = previous_stats(conn, &src, &q, len, bucket, &decision, &axis);
     let raw_src = groups::raw_source(conn, &q)?;
-    // ONE resolution for this whole Summary read: the period floor above, the ordering, the
-    // bucketing and the sequence metrics all have to describe the same measured world.
-    let axis = q.resolved_axis(conn)?;
     let parts = summary_stream::read(
         conn,
         &src,
@@ -775,6 +971,7 @@ pub(super) fn summary_on(
 ///     len: Current period length in seconds.
 ///     bucket: Series bucket size.
 ///     current: Current-period comparability decision.
+///     axis: Fresh report axis shared with the current-period read.
 ///
 /// Returns:
 ///     Comparable previous stats, or `None` when the read fails or quote identity differs.
@@ -785,6 +982,7 @@ fn previous_stats(
     len: i64,
     bucket: i64,
     current: &ScopeDecision,
+    axis: &crate::db::ReportAxis,
 ) -> Option<PeriodStats> {
     let previous_from = previous_period_start(q, len);
     if q.metric == ProfitMetric::Quote {
@@ -817,7 +1015,7 @@ fn previous_stats(
             return None;
         }
     }
-    scan_period(conn, src, previous_from, q.from, bucket, &q.axis)
+    scan_period(conn, src, previous_from, q.from, bucket, axis)
         .map(|(stats, _, _)| stats)
         .ok()
 }
@@ -921,10 +1119,11 @@ fn min_closedate(conn: &Connection, axis: &crate::db::ReportAxis) -> ReadResult<
     Ok(if min == i64::MAX { 1 } else { min })
 }
 
-/// Scan period trades by `closedate` into sequence metrics and selected-zone buckets.
+/// Scan period trades in true-UTC close order into sequence metrics and selected-zone buckets.
 ///
 /// `src` is the filtered source built by [`unified_from`]. Any query or
-/// row-conversion failure aborts the complete aggregation.
+/// row-conversion failure aborts the complete aggregation. An identity axis retains the former
+/// raw-date index order; a shifted axis orders on the same `mt_to_utc` scalar as the current stream.
 ///
 /// Args:
 ///     conn: Open report connection or pinned snapshot.
@@ -956,9 +1155,17 @@ fn scan_period(
     let mut st = PeriodStats::default();
     let mut days: Vec<DayPoint> = Vec::new();
     let mut hours = [(0.0f64, 0i64); 24];
+    let order = if axis.is_utc_identity() {
+        "o.closedate".to_string()
+    } else {
+        time_zone::install(conn, axis).map_err(|error| read_fail_on(conn, CTX, error))?;
+        "mt_to_utc(o.closedate, o.core_uid), o.closedate, o.core_uid, \
+         o.pnl IS NULL, o.pnl, COALESCE(o.buydate, o.closedate)"
+            .to_string()
+    };
     let sql = format!(
         "SELECT o.closedate, COALESCE(o.buydate, o.closedate), COALESCE(o.pnl, 0), o.core_uid
-         FROM {src} ORDER BY o.closedate"
+         FROM {src} ORDER BY {order}"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt

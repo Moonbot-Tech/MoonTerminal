@@ -249,8 +249,7 @@ pub(super) fn apply_full_set(
     for d in dumps {
         present.insert(d.strategy_id);
         let key = (uid, d.strategy_id);
-        let stripped = strip(&d.fields, &st.ignore);
-        let content_hash = hash_of(&stripped);
+        let content_hash = hash_of(&d.fields, &st.ignore);
         let head_hash = head_hash_of(d);
         let origin: Option<&str> = if initial {
             None // First set after a (re)connect: the edit may have occurred while offline.
@@ -304,6 +303,7 @@ pub(super) fn apply_full_set(
         };
 
         if need_version {
+            let stripped = strip(&d.fields, &st.ignore);
             let raw_json = serde_json::to_string(&Value::Object(d.fields.clone()))?;
             // Diff against the latest version's content, excluding all configured `ignore_fields`
             // and `__` metadata. A `created` version without a previous dump keeps `changed_json`
@@ -484,10 +484,32 @@ fn strip(m: &Map<String, Value>, ignore: &HashSet<String>) -> Map<String, Value>
         .collect()
 }
 
-/// Computes a canonical content hash. `serde_json::Map` uses a `BTreeMap`, so serialization is
-/// key-sorted and stable across runs.
-fn hash_of(stripped: &Map<String, Value>) -> i64 {
-    let s = serde_json::to_string(&Value::Object(stripped.clone())).unwrap_or_default();
+/// Borrowed strategy fields serialized without ignored keys or any cloned field map.
+struct FilteredFields<'a> {
+    fields: &'a Map<String, Value>,
+    ignore: &'a HashSet<String>,
+}
+
+impl serde::Serialize for FilteredFields<'_> {
+    /// Serialize the same key-sorted object as the former cloned `Value::Object`.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap as _;
+        let mut map = serializer.serialize_map(None)?;
+        for (key, value) in self.fields {
+            if !key.starts_with("__") && !self.ignore.contains(key.as_str()) {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        map.end()
+    }
+}
+
+/// Computes a canonical content hash without cloning or stripping the source fields.
+fn hash_of(fields: &Map<String, Value>, ignore: &HashSet<String>) -> i64 {
+    let s = serde_json::to_string(&FilteredFields { fields, ignore }).unwrap_or_default();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut h);
     h.finish() as i64

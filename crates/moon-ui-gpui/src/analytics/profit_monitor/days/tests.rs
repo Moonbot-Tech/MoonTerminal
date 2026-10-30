@@ -53,6 +53,7 @@ fn total_cells_use_the_approved_caption_instead_of_a_raw_translation_key() {
 fn current_and_past_months_display_newest_first_without_changing_money() {
     for dates in [["2024-03-01", "2024-03-10"], ["2024-02-01", "2024-02-29"]] {
         let report = DayReport {
+            core_uids: Vec::new(),
             refreshed: Utc.with_ymd_and_hms(2024, 3, 10, 17, 16, 0).unwrap(),
             rows: dates
                 .iter()
@@ -83,6 +84,7 @@ fn current_and_past_months_display_newest_first_without_changing_money() {
 #[test]
 fn background_read_retains_figures_but_navigation_and_failure_withhold_them() {
     let report = DayReport {
+        core_uids: Vec::new(),
         refreshed: Utc.with_ymd_and_hms(2024, 3, 10, 17, 16, 0).unwrap(),
         rows: vec![DayRow {
             date: NaiveDate::from_ymd_opt(2024, 3, 10).unwrap(),
@@ -210,6 +212,7 @@ fn every_locale_lays_out_the_header_and_cells_inside_the_default_window(
         for zoom in [1.0, 1.25] {
             for viewport in [720.0, 400.0] {
                 let report = DayReport {
+                    core_uids: Vec::new(),
                     refreshed: Utc.with_ymd_and_hms(2024, 3, 10, 17, 16, 0).unwrap(),
                     rows: vec![DayRow {
                         date: NaiveDate::from_ymd_opt(2024, 3, 10).unwrap(),

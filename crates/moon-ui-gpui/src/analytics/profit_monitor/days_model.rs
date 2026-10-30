@@ -21,6 +21,8 @@ pub(super) struct DayReport {
     pub rows: Vec<DayRow>,
     /// Complete-scope total read on the same snapshot, never summing unlike currencies.
     pub total: QuoteBreakdown,
+    /// Exact core scope represented by this report after optional replica discovery.
+    pub core_uids: Vec<u64>,
     /// Refresh instant used for the current-month period label.
     pub refreshed: DateTime<Utc>,
 }
@@ -116,17 +118,60 @@ pub(super) fn active_rows(
         .collect()
 }
 
-/// Read the bot's actual aggregation with the monitor's scope, valuation and loaded report axis.
+/// Resolve the daily query filter and the actual core identities its header should count.
 ///
-/// Returns a classified failure; absence or a failed statement never becomes an empty month.
-pub(super) fn read_days(
-    filter: ReportFilter,
+/// Args:
+///     conn: Pinned report snapshot used for both discovery and totals.
+///     filter: Configured fallback filter, mutated only when a hiding preset requires discovery.
+///     replica_hidden: Hidden configured ids, or `None` for an unfiltered read.
+///
+/// Returns:
+///     Non-hidden replica ids for a scoped read, or every replica id for an unfiltered read. The
+///     no-match sentinel remains in `filter.core_uids` only and never becomes a displayed core.
+fn discover_day_core_scope(
+    conn: &rusqlite::Connection,
+    filter: &mut ReportFilter,
+    replica_hidden: Option<&[u64]>,
+) -> db::ReadResult<Vec<u64>> {
+    let mut scope = match replica_hidden {
+        Some(hidden) => {
+            filter.core_uids = db::analytics::replica_core_ids(conn, &filter.core_uids, hidden)?;
+            filter.core_uids.clone()
+        }
+        None => db::distinct_cores(conn)?
+            .into_iter()
+            .map(|(core, _)| core)
+            .collect(),
+    };
+    scope.retain(|core| *core != moon_core::config::NO_MATCH_CORE_UID);
+    Ok(scope)
+}
+
+/// Read civil-day totals with optional first-result discovery of replica-only cores.
+///
+/// Args:
+///     filter: Configured fallback report scope and money projection.
+///     month: Civil month to read.
+///     now: Current UTC instant used to clip the current month.
+///     zone: Selected display zone.
+///     replica_hidden: Hidden configured ids when the active preset narrows the read.
+///
+/// Returns:
+///     One pinned day report whose scope was resolved before its totals read, or a classified
+///     failure.
+pub(super) fn read_days_with_replica_scope(
+    mut filter: ReportFilter,
     month: NaiveDate,
     now: DateTime<Utc>,
     zone: Tz,
+    replica_hidden: Option<&[u64]>,
 ) -> db::ReadResult<DayReport> {
     let conn = db::open_reader()?;
-    read_days_on(&conn, filter, month, now, zone)
+    let snapshot = db::read_snapshot(&conn)?;
+    let core_uids = discover_day_core_scope(&snapshot, &mut filter, replica_hidden)?;
+    let mut report = read_days_on_snapshot(&snapshot, filter, month, now, zone)?;
+    report.core_uids = core_uids;
+    Ok(report)
 }
 
 /// Select Slavic one/few/many nouns, or singular/plural nouns for the other shipped languages.
@@ -154,7 +199,40 @@ pub(super) fn core_count_key(count: usize, locale: &str) -> &'static str {
 }
 
 /// Connection-injected production read so synthetic fixtures verify scope, totals and failures.
+///
+/// Args:
+///     conn: Existing report connection used to pin one snapshot.
+///     filter: Exact report scope and money projection.
+///     month: Civil month to read.
+///     now: Current UTC instant used to clip the current month.
+///     zone: Selected display zone.
+///
+/// Returns:
+///     One pinned day report, or a classified scope, axis, or totals read failure.
+#[cfg(test)]
 pub(super) fn read_days_on(
+    conn: &rusqlite::Connection,
+    filter: ReportFilter,
+    month: NaiveDate,
+    now: DateTime<Utc>,
+    zone: Tz,
+) -> db::ReadResult<DayReport> {
+    let snapshot = db::read_snapshot(conn)?;
+    read_days_on_snapshot(&snapshot, filter, month, now, zone)
+}
+
+/// Read daily totals on an already pinned snapshot.
+///
+/// Args:
+///     conn: Pinned report snapshot shared with any preceding scope discovery.
+///     filter: Exact report scope and money projection.
+///     month: Civil month to read.
+///     now: Current UTC instant used to clip the current month.
+///     zone: Selected display zone.
+///
+/// Returns:
+///     One day report whose axis, complete total, and per-day slices share one snapshot.
+fn read_days_on_snapshot(
     conn: &rusqlite::Connection,
     mut filter: ReportFilter,
     month: NaiveDate,
@@ -163,8 +241,7 @@ pub(super) fn read_days_on(
 ) -> db::ReadResult<DayReport> {
     // Fallback slices must see the same current-rate generation as the complete-period total.
     let _rates = db::valuation::pin_current_rates();
-    let snap = db::read_snapshot(conn)?;
-    filter.axis = db::ReportAxis::load(&snap, zone)?;
+    filter.axis = db::ReportAxis::load(conn, zone)?;
     let (from, to) = month_range(month, now, zone);
     filter.date_from = Some(from);
     filter.date_to = Some(to);
@@ -175,7 +252,7 @@ pub(super) fn read_days_on(
         date_to: Some(to),
     }];
     slices.extend(dates.iter().map(|(_, slice)| slice.clone()));
-    let mut totals = db::query_totals_sliced(&snap, &filter, &slices)?.into_iter();
+    let mut totals = db::query_totals_sliced(conn, &filter, &slices)?.into_iter();
     let total = totals
         .next()
         .expect("shared reader returns one total per slice")
@@ -189,6 +266,7 @@ pub(super) fn read_days_on(
     Ok(DayReport {
         rows,
         total,
+        core_uids: filter.core_uids,
         refreshed: now,
     })
 }

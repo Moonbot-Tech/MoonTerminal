@@ -1,7 +1,8 @@
 //! Synthetic civil-month and activity-rule regressions.
 
 use super::{
-    active_rows, current_month, day_slices, month_range, period_label, read_days_on, step_month,
+    active_rows, current_month, day_slices, discover_day_core_scope, month_range, period_label,
+    read_days_on, step_month,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use moon_core::db::QuoteBreakdown;
@@ -196,5 +197,69 @@ fn shared_reader_scopes_corrected_days_and_total_on_one_synthetic_snapshot() {
         )
         .is_err(),
         "an axis read failure must not become an empty month"
+    );
+}
+
+/// Skipping first-read discovery drops replica-only core 99 from daily totals, while ignoring the
+/// hidden list wrongly admits configured core 2. The report must carry the resolved scope too, or
+/// the daily header cannot state which cores its figures cover.
+#[test]
+fn first_scoped_day_read_discovers_replica_only_core() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER, core_name TEXT, newrecid INTEGER, closedate INTEGER,
+             profitbtc REAL, spentbtc REAL, basecurrency INTEGER, sellreason TEXT
+         );
+         CREATE TABLE core_time_offset (
+             core_uid INTEGER, from_utc INTEGER, offset_secs INTEGER, observed_at INTEGER, source TEXT
+         );
+         INSERT INTO orders_rep VALUES
+             (1, 'CORE_A', 1, 1709500000, 5.0, 100.0, 1, ''),
+             (2, 'CORE_B', 2, 1709500001, 1000.0, 100.0, 1, ''),
+             (99, 'CORE_R', 3, 1709500002, 7.0, 100.0, 1, '');",
+    )
+    .unwrap();
+    let mut filter = moon_core::db::ReportFilter {
+        core_uids: vec![1],
+        rows: moon_core::db::RowScope::Closed,
+        emulator: Some(false),
+        ..Default::default()
+    };
+    let core_uids = discover_day_core_scope(&conn, &mut filter, Some(&[2]))
+        .expect("discover replica-only core before daily read");
+    assert_eq!(core_uids, vec![1, 99]);
+    assert_eq!(filter.core_uids, vec![1, 99]);
+
+    let report = read_days_on(
+        &conn,
+        filter,
+        date("2024-03-01"),
+        instant("2024-03-10T17:16:00Z"),
+        chrono_tz::UTC,
+    )
+    .expect("read daily totals with discovered scope");
+    assert_eq!(report.total.orders, 2);
+    assert_eq!(report.total.totals[0].profit, 12.0);
+    assert_eq!(report.core_uids, vec![1, 99]);
+
+    let mut unhidden = moon_core::db::ReportFilter::default();
+    let mut universe = discover_day_core_scope(&conn, &mut unhidden, None)
+        .expect("unhidden reads also need their display universe");
+    universe.sort_unstable();
+    assert_eq!(universe, vec![1, 2, 99]);
+    assert!(unhidden.core_uids.is_empty(), "unfiltered stays unfiltered");
+
+    let mut no_match = moon_core::db::ReportFilter {
+        core_uids: vec![moon_core::config::NO_MATCH_CORE_UID],
+        ..Default::default()
+    };
+    let empty = discover_day_core_scope(&conn, &mut no_match, Some(&[1, 2, 99]))
+        .expect("a no-match query has no display cores");
+    assert!(empty.is_empty(), "the sentinel is not a core identity");
+    assert_eq!(
+        no_match.core_uids,
+        vec![moon_core::config::NO_MATCH_CORE_UID],
+        "the query keeps its closed scope"
     );
 }

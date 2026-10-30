@@ -3374,3 +3374,49 @@ fn paged_details_preserve_distinct_archived_cores_with_the_same_name() {
         "fixture must put the two distinct core uids on one production page"
     );
 }
+
+/// A fixed 25-row over-read is insufficient when 75 locally newer rows precede a newer-UTC peer.
+/// Selecting the top 50 independently inside each core/offset segment keeps that peer without
+/// sorting the whole replica on a corrected timestamp.
+#[test]
+fn mini_app_utc_top_n_segment_merge() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+            core_uid INTEGER, core_name TEXT, id INTEGER, newrecid INTEGER, coin TEXT,
+            buydate INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL,
+            basecurrency INTEGER, emulator INTEGER
+        );
+        CREATE TABLE core_time_offset (
+            core_uid INTEGER, from_utc INTEGER, offset_secs INTEGER,
+            observed_at INTEGER, source TEXT
+        );
+        INSERT INTO core_time_offset VALUES
+            (1,0,3600,0,'fixture'),(2,0,0,0,'fixture');
+        INSERT INTO orders_rep VALUES
+            (2,'CORE_B',100,100,'XALPHA',8900,9000,1,100,1,0);",
+    )
+    .unwrap();
+    for index in 0..75_i64 {
+        conn.execute(
+            "INSERT INTO orders_rep VALUES
+             (1,'CORE_A',?1,?1,'XALPHA',11000,?2,1,100,1,0)",
+            (index + 1, 12000 + index),
+        )
+        .unwrap();
+    }
+
+    let trades = super::read_mini_trades_on(
+        &conn,
+        chrono_tz::UTC,
+        super::TelegramReportAccess::Viewer(vec![1, 2]),
+        Default::default(),
+        50,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(trades.len(), 50);
+    assert_eq!((trades[0].core_uid, trades[0].close_utc), (2, 9000));
+    assert_eq!(trades.last().unwrap().close_utc, 8426);
+}
