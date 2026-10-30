@@ -120,6 +120,13 @@ pub(super) struct StrategyEditWatch {
     pub(super) submitted: std::time::Instant,
 }
 
+/// Strategy metric measurements belong to both a font scale and translated headings.
+struct StratMetricWidths {
+    scale: f32,
+    locale: String,
+    widths: std::sync::Arc<[f32]>,
+}
+
 /// State of the Analytics window.
 pub struct AnalyticsView {
     backend: Entity<Backend>,
@@ -325,12 +332,12 @@ pub struct AnalyticsView {
     /// scaling a width that assumed the old base.
     strat_core_w: Option<(f32, f32)>,
     /// Content-measured pixel widths of the strategy list's numeric columns as
-    /// `(font_scale_it_was_measured_under, widths)` (`tuner::list::table::metric_col_widths`).
+    /// Font scale, locale and widths from `tuner::list::table::metric_col_widths`.
     /// Filled lazily on render like `strat_core_w`; the measurement formats every loaded group
     /// once per column, which is thousands of strings at 53 cores and far too much to repay on
     /// an idle repaint of a window that has no repaint throttle. Cleared whenever a published
-    /// base replaces the group set, and recomputed when the font scale moved.
-    strat_metric_w: Option<(f32, std::sync::Arc<[f32]>)>,
+    /// base replaces the group set, and recomputed when the font scale or locale moved.
+    strat_metric_w: Option<StratMetricWidths>,
     /// Memoized strategy-list row order, with the filter inputs it was built for.
     ///
     /// The filter-and-sort pass runs over every group the replica holds — thousands at 53 cores.

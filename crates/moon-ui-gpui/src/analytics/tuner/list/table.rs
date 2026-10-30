@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use super::super::super::AnalyticsView;
 use super::super::auto_picks::{AutoClass, AutoEmpty, AutoFilter, cell_tip};
-use super::super::columns::fixed_metric_cell;
+use super::super::columns::strategy_metric_cell;
 use super::super::ready::ReadyFilter;
 use super::super::{
     AUTO_MIN_W, AUTO_W, COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, COL_BIT_READY,
@@ -45,12 +45,29 @@ fn strat_row_h(cx: &App) -> f32 {
 const COLUMN_GAP: f32 = 8.0;
 
 /// Share the fixed-column spacing between the header, rows and rendered geometry probe.
-fn fixed_columns(cx: &App) -> Div {
+fn fixed_columns(cx: &App, with_core: bool) -> Div {
     h_flex()
+        // Share spare width with the name only when the core cell can consume it.
+        .flex_grow(if with_core { 1.0 } else { 0.0 })
         .flex_shrink_1()
         .min_w_0()
         .gap(design::ui_px(cx, COLUMN_GAP))
         .items_center()
+}
+
+/// Apply one sizing policy to body identities, sortable headings and geometry probes.
+fn column_width<T: Styled>(column: T, key: &str, width: Option<(f32, f32)>, cx: &App) -> T {
+    match width {
+        Some((width, min)) => column
+            .w(design::font_w_px(cx, width))
+            .min_w(design::font_w_px(cx, min))
+            .flex_grow(if key == SORT_CORE { 1.0 } else { 0.0 })
+            .flex_shrink_1(),
+        None => column
+            .flex_1()
+            .flex_basis(design::font_w_px(cx, STRAT_NAME_MIN_W))
+            .min_w_0(),
+    }
 }
 
 /// Give the left-aligned date the same font-scaled gutter as numeric neighbours.
@@ -80,19 +97,13 @@ impl AnalyticsView {
         let scale = design::font_scale(cx);
         // The numeric columns' content-measured widths, cached exactly like `core_w` below:
         // `strat_metric_w` documents the cache and its invalidation; this match is only its read.
-        let metric_widths: Arc<[f32]> = match &self.strat_metric_w {
-            Some((s, w)) if *s == scale => w.clone(),
-            _ => {
-                let w: Arc<[f32]> = self
-                    .strategy_data
-                    .data()
-                    .map(|data| metric_col_widths(&data.strategies, cx))
-                    .unwrap_or_else(|| vec![0.0; METRIC_COLS.len()])
-                    .into();
-                self.strat_metric_w = Some((scale, w.clone()));
-                w
-            }
-        };
+        let metric_widths = cached_metric_widths(
+            &mut self.strat_metric_w,
+            self.strategy_data
+                .data()
+                .map(|data| data.strategies.as_slice()),
+            cx,
+        );
         // The core column's content-measured width, computed once here and handed to both the
         // header and every row so they cannot disagree within a frame. `strat_core_w` documents
         // the cache and how it is invalidated; this match is only its read.
@@ -414,7 +425,7 @@ fn strat_list_frame(
 ///     g: Strategy aggregate represented by the row.
 ///     p: Active palette.
 ///     core_w: Shared measured core-column width.
-///     metric_widths: Shared fixed widths of the formatted numeric values.
+///     metric_widths: Shared preferred widths of the formatted numeric values.
 ///     cx: Application context used for live gating and sizing.
 ///
 /// Returns:
@@ -476,9 +487,8 @@ fn strategy_row(
     let core_text = core_label(g);
     // Cloned before the column consumes it: the context menu names the same core the row shows.
     let menu_core_name = core_text.clone();
-    // Name on the left (flexible, truncated), all fixed columns in one rigid
-    // cluster on the right (justify_between): when flex distribution glitches on
-    // resize, the columns do not drift out of alignment between rows.
+    // The name and core share spare width; measured numeric cells keep their compact widths.
+    // The header uses the same two flex groups to keep every column aligned on resize.
     let mut row = h_flex()
         .id(SharedString::from(format!("an-strat-{}", g.key)))
         .w_full()
@@ -493,10 +503,7 @@ fn strategy_row(
         .border_t_1()
         .border_color(moon_alpha(p.border, 0.6))
         .child(
-            h_flex()
-                .flex_1()
-                .flex_basis(design::font_w_px(cx, STRAT_NAME_MIN_W))
-                .min_w_0()
+            column_width(h_flex(), SORT_NAME, None, cx)
                 .gap(design::ui_px(cx, 6.0))
                 .items_center()
                 .children(strategy_button)
@@ -520,7 +527,7 @@ fn strategy_row(
                 }),
         )
         .child(
-            fixed_columns(cx)
+            fixed_columns(cx, view.col_shown(COL_BIT_CORE))
                 // Shrinkable, not rigid: the columns inside carry their own floors, so the
                 // row squeezes them evenly and only overflows once every one is at its
                 // floor — instead of sliding off the edge at full width.
@@ -537,10 +544,7 @@ fn strategy_row(
                         .child(g.kind.clone())
                 }))
                 .children(view.col_shown(COL_BIT_CORE).then(|| {
-                    div()
-                        .w(design::font_w_px(cx, core_w))
-                        .min_w(design::font_w_px(cx, CORE_MIN_W))
-                        .flex_shrink_1()
+                    column_width(div(), SORT_CORE, Some((core_w, CORE_MIN_W)), cx)
                         .truncate()
                         .text_color(moon(p.text_soft))
                         .child(core_text)
@@ -550,7 +554,7 @@ fn strategy_row(
                         .iter()
                         .enumerate()
                         .filter(|(i, _)| view.col_shown(metric_bit(*i)))
-                        .map(|(i, c)| fixed_metric_cell(c, g, p, metric_widths[i])),
+                        .map(|(i, c)| strategy_metric_cell(c, g, p, metric_widths[i])),
                 )
                 .children(view.col_shown(COL_BIT_LASTEDIT).then(|| {
                     lastedit_spacing(div(), cx)
@@ -691,18 +695,10 @@ impl AnalyticsView {
             if key == SORT_LASTEDIT {
                 d = lastedit_spacing(d, cx);
             }
-            if let Some(tooltip) = tooltip {
-                d = d.tooltip(crate::panels::common::text_tooltip(tooltip));
-            }
-            match w {
-                // Shrinks exactly like the body cell under it, floor included, or the
-                // heading drifts off the column it labels the moment space runs short.
-                Some((w, min)) => d.w(px(w * scale)).min_w(px(min * scale)).flex_shrink_1(),
-                None => d
-                    .flex_1()
-                    .flex_basis(px(STRAT_NAME_MIN_W * scale))
-                    .min_w_0(),
-            }
+            d = d.tooltip(crate::panels::common::text_tooltip(
+                tooltip.unwrap_or(title),
+            ));
+            column_width(d, key, w, cx)
         };
         h_flex()
             .w_full()
@@ -724,9 +720,9 @@ impl AnalyticsView {
                 false,
                 Some(t!("analytics.strat.hint").to_string()),
             ))
-            // Cluster of fixed columns — mirrors the rows (justify_between).
+            // The core absorbs this group's share of spare width, just as in the rows.
             .child(
-                fixed_columns(cx)
+                fixed_columns(cx, self.col_shown(COL_BIT_CORE))
                     .children(self.col_shown(COL_BIT_KIND).then(|| {
                         sortable(
                             "an-hdr-kind".into(),
@@ -757,7 +753,7 @@ impl AnalyticsView {
                                     c.key.into(),
                                     t!(c.key).to_string(),
                                     c.key,
-                                    Some((metric_widths[i] / scale, metric_widths[i] / scale)),
+                                    Some((metric_widths[i] / scale, 0.0)),
                                     true,
                                     super::super::columns::metric_header_tooltip(c.key),
                                 )
@@ -1086,10 +1082,12 @@ pub(in crate::analytics::tuner) fn auto_cell_el(
             _ => (p.text_muted, 0.0, p.text_muted),
         };
         let mut el = div()
-            .flex_none()
+            .min_w_0()
+            .flex_shrink_1()
+            .truncate()
             .debug_selector(move || txt_sel)
             .text_color(moon(fg))
-            .child(text);
+            .child(text.clone());
         if chip {
             el = el
                 .px(design::ui_px(cx, 5.0))
@@ -1097,6 +1095,9 @@ pub(in crate::analytics::tuner) fn auto_cell_el(
                 .bg(moon_alpha(bg, alpha));
         }
         cell = cell.child(el);
+        if tip.is_none() {
+            cell = cell.tooltip(crate::panels::common::text_tooltip_value(text));
+        }
     }
     match tip {
         Some(tip) => cell
@@ -1157,6 +1158,32 @@ fn core_col_w(groups: &[GroupStat], scale: f32, cx: &App) -> f32 {
 
 /// Font-scaled gutter added to every numeric column so neighbouring figures never touch.
 const METRIC_COL_GUTTER: f32 = 12.0;
+
+/// Reuse measured values until data, font scale or translated headings change.
+fn cached_metric_widths(
+    cache: &mut Option<crate::analytics::StratMetricWidths>,
+    groups: Option<&[GroupStat]>,
+    cx: &App,
+) -> Arc<[f32]> {
+    let scale = design::font_scale(cx);
+    let locale = rust_i18n::locale();
+    if let Some(cached) = cache
+        && cached.scale == scale
+        && cached.locale == *locale
+    {
+        return cached.widths.clone();
+    }
+    let widths: Arc<[f32]> = groups
+        .map(|groups| metric_col_widths(groups, cx))
+        .unwrap_or_else(|| vec![0.0; METRIC_COLS.len()])
+        .into();
+    *cache = Some(crate::analytics::StratMetricWidths {
+        scale,
+        locale: locale.to_string(),
+        widths: widths.clone(),
+    });
+    widths
+}
 
 /// Fixed pixel widths of the strategy table's numeric columns.
 ///

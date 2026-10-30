@@ -129,10 +129,12 @@ pub(in crate::analytics::tuner) fn ready_cell_el(
             _ => p.text_muted,
         };
         let mut el = div()
-            .flex_none()
+            .min_w_0()
+            .flex_shrink_1()
+            .truncate()
             .debug_selector(move || txt_sel)
             .text_color(moon(fg))
-            .child(text);
+            .child(text.clone());
         if chip {
             el = el
                 .px(design::ui_px(cx, 5.0))
@@ -140,6 +142,9 @@ pub(in crate::analytics::tuner) fn ready_cell_el(
                 .bg(moon_alpha(p.green, 0.16));
         }
         cell = cell.child(el);
+        if tip.is_none() {
+            cell = cell.tooltip(crate::panels::common::text_tooltip_value(text));
+        }
     }
     match tip {
         Some(tip) => cell

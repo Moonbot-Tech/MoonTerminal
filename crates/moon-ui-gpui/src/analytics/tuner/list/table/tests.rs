@@ -21,6 +21,388 @@ use super::{
 };
 use crate::design;
 
+/// Exercise the production column sizing with long core labels and the screenshot's metric set.
+struct IdentityWidthProbe {
+    with_core: bool,
+    all_metrics: bool,
+}
+
+/// Stable synthetic values cover grouped money, signs, large tails and coin-list counts.
+fn strategy_geometry_group() -> moon_core::db::analytics::GroupStat {
+    moon_core::db::analytics::GroupStat {
+        core: "CORE_A / VENUE_A / ACCOUNT_ALPHA / INSTRUMENTS".into(),
+        name: "ALPHA LONG / MEDIUM VOLUME".into(),
+        n: 173,
+        profit: 819.13,
+        avg_order: 3174.67,
+        quote: moon_core::db::QuoteScope::Single(moon_core::db::QuoteCurrency::usdt()),
+        best: 12345.67,
+        worst: -12345.67,
+        bl: 999,
+        wl: 999,
+        pf: 1.16,
+        ..Default::default()
+    }
+}
+
+impl Render for IdentityWidthProbe {
+    /// Draw the same width owners as the sortable header and the strategy body.
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let group = strategy_geometry_group();
+        let scale = design::font_scale(cx);
+        let core_w = super::core_col_w(std::slice::from_ref(&group), scale, cx);
+        let widths = super::metric_col_widths(std::slice::from_ref(&group), cx);
+        let p = MoonPalette::active(cx);
+        v_flex()
+            .w_full()
+            .font_family(design::mono())
+            .text_size(design::t_body(cx))
+            .children([true, false].map(|header| {
+                let prefix = if header {
+                    "identity-header"
+                } else {
+                    "identity-row"
+                };
+                let mut columns = super::fixed_columns(cx, self.with_core);
+                if self.with_core {
+                    columns = columns.child(
+                        super::column_width(
+                            div(),
+                            super::SORT_CORE,
+                            Some((core_w, super::CORE_MIN_W)),
+                            cx,
+                        )
+                        .debug_selector(move || format!("{prefix}-core"))
+                        .truncate()
+                        .child(if header {
+                            t!("analytics.col.core").to_string()
+                        } else {
+                            group.core.clone()
+                        }),
+                    );
+                }
+                h_flex()
+                    .debug_selector(move || format!("{prefix}-bounds"))
+                    .w_full()
+                    .pl(design::ui_px(cx, 8.0))
+                    .pr(design::ui_px(cx, moon_ui::MOON_SCROLLBAR_TRACK + 8.0))
+                    .gap(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        super::column_width(div(), super::SORT_NAME, None, cx)
+                            .debug_selector(move || format!("{prefix}-name"))
+                            .truncate()
+                            .child(if header {
+                                t!("analytics.col.strategy").to_string()
+                            } else {
+                                group.name.clone()
+                            }),
+                    )
+                    .child(
+                        columns.children(
+                            (0..super::METRIC_COLS.len())
+                                .filter(|i| self.all_metrics || [0, 1, 2, 3, 5, 6].contains(i))
+                                .map(|i| {
+                                    let cell = if header {
+                                        super::column_width(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "{prefix}-metric-{i}"
+                                                )))
+                                                .flex_none(),
+                                            super::METRIC_COLS[i].key,
+                                            Some((widths[i] / scale, 0.0)),
+                                            cx,
+                                        )
+                                        .truncate()
+                                        .text_right()
+                                        .child(t!(super::METRIC_COLS[i].key).to_string())
+                                    } else {
+                                        super::strategy_metric_cell(
+                                            &super::METRIC_COLS[i],
+                                            &group,
+                                            p,
+                                            widths[i],
+                                        )
+                                    };
+                                    cell.debug_selector(move || format!("{prefix}-metric-{i}"))
+                                }),
+                        ),
+                    )
+            }))
+    }
+}
+
+/// A long core must not truncate beside a mostly empty name column on a wide table.
+#[gpui::test]
+fn strategy_and_core_share_spare_width_without_stretching_metrics(cx: &mut gpui::TestAppContext) {
+    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+                cx,
+            )
+        });
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            for zoom in [1.0, 1.25] {
+                for with_core in [true, false] {
+                    let mut narrow_name = px(0.0);
+                    let mut narrow_core = px(0.0);
+                    for width in [740.0, 2000.0] {
+                        let window =
+                            cx.open_window(gpui::size(px(width * zoom), px(150.0)), |_, _| {
+                                IdentityWidthProbe {
+                                    with_core,
+                                    all_metrics: false,
+                                }
+                            });
+                        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+                        visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                        for _ in 0..3 {
+                            visual.update(|window, cx| {
+                                let _ = window.draw(cx);
+                            });
+                        }
+                        let name = visual.debug_bounds("identity-row-name").expect("name");
+                        let row = visual.debug_bounds("identity-row-bounds").expect("row");
+                        for i in [0, 1, 2, 3, 5, 6] {
+                            let cell = visual
+                                .debug_bounds(leak(format!("identity-row-metric-{i}")))
+                                .expect("metric");
+                            let header = visual
+                                .debug_bounds(leak(format!("identity-header-metric-{i}")))
+                                .expect("heading");
+                            assert!(
+                                (cell.left() - header.left()).abs() <= px(0.5),
+                                "header drift: {language:?} {theme:?} width {width}"
+                            );
+                            assert!(
+                                cell.right() <= row.right(),
+                                "metric escaped: {language:?} {theme:?} width {width}"
+                            );
+                        }
+                        if with_core {
+                            let core = visual.debug_bounds("identity-row-core").expect("core");
+                            assert!(name.right() <= core.left(), "identity columns overlap");
+                            if width == 740.0 {
+                                narrow_name = name.size.width;
+                                narrow_core = core.size.width;
+                            } else {
+                                // Both labels must receive the extra space instead of reserving
+                                // almost half the wide table for a short strategy name.
+                                assert!(core.size.width - narrow_core >= px(400.0));
+                                assert!(name.size.width - narrow_name >= px(400.0));
+                                assert!(name.size.width < row.size.width * 0.4);
+                                let required = visual.update(|_, cx| {
+                                    design::mono_body_text_width(
+                                        cx,
+                                        "CORE_A / VENUE_A / ACCOUNT_ALPHA / INSTRUMENTS",
+                                        400.0,
+                                    )
+                                });
+                                assert!(
+                                    f32::from(core.size.width) >= required,
+                                    "core still clipped beside spare space"
+                                );
+                            }
+                        } else {
+                            let first = visual
+                                .debug_bounds("identity-row-metric-0")
+                                .expect("first metric");
+                            assert!(
+                                (first.left() - name.right() - px(8.0)).abs() <= px(0.5),
+                                "hidden core left an empty column"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Translated headings must invalidate cached numeric widths without a report reload.
+#[gpui::test]
+fn strategy_metric_width_cache_follows_language_changes(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Light, 1.0),
+            cx,
+        )
+    });
+    let groups = [moon_core::db::analytics::GroupStat::default()];
+    let mut cache = None;
+    let english = {
+        let _locale = crate::test_locale::force("en");
+        let first = cx.update(|cx| super::cached_metric_widths(&mut cache, Some(&groups), cx));
+        let again = cx.update(|cx| super::cached_metric_widths(&mut cache, Some(&groups), cx));
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &again),
+            "idle renders must reuse glyph measurements"
+        );
+        first
+    };
+    let _locale = crate::test_locale::force("pt");
+    let portuguese = cx.update(|cx| super::cached_metric_widths(&mut cache, Some(&groups), cx));
+    assert!(!std::sync::Arc::ptr_eq(&english, &portuguese));
+    assert!(
+        portuguese[5] > english[5],
+        "Taxa de acerto must have room after switching from English"
+    );
+    cx.update(|cx| {
+        for (i, column) in super::METRIC_COLS.iter().enumerate() {
+            let heading = format!("{} · ▼", t!(column.key));
+            let required = design::mono_body_text_width(cx, &heading, 400.0);
+            assert!(
+                portuguese[i] >= required,
+                "translated heading clipped: {}",
+                column.key
+            );
+        }
+    });
+}
+
+/// Every numeric column must retain header alignment and fit its full value on a wide host.
+#[gpui::test]
+fn all_strategy_metrics_fit_and_align(cx: &mut gpui::TestAppContext) {
+    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+                cx,
+            )
+        });
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            let window = cx.open_window(gpui::size(px(2600.0), px(150.0)), |_, _| {
+                IdentityWidthProbe {
+                    with_core: true,
+                    all_metrics: true,
+                }
+            });
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            let mut previous = visual.debug_bounds("identity-row-core").expect("core");
+            for (i, column) in super::METRIC_COLS.iter().enumerate() {
+                let row = visual
+                    .debug_bounds(leak(format!("identity-row-metric-{i}")))
+                    .expect("metric");
+                let header = visual
+                    .debug_bounds(leak(format!("identity-header-metric-{i}")))
+                    .expect("heading");
+                assert!((row.left() - header.left()).abs() <= px(0.5));
+                assert!((row.size.width - header.size.width).abs() <= px(0.5));
+                assert!(
+                    previous.right() <= row.left(),
+                    "columns overlap: {}",
+                    column.key
+                );
+                let required = visual.update(|_, cx| {
+                    let value = (column.text)(&strategy_geometry_group());
+                    let heading = format!("{} · ▼", t!(column.key));
+                    design::mono_body_text_width(cx, &value, 400.0)
+                        .max(design::mono_body_text_width(cx, &heading, 400.0))
+                });
+                assert!(
+                    f32::from(row.size.width) >= required,
+                    "value or heading clipped on a wide host: {}",
+                    column.key
+                );
+                let gutter = visual.update(|_, cx| f32::from(design::font_w_px(cx, 12.0)));
+                assert!(
+                    f32::from(row.size.width) <= required + gutter + 1.0,
+                    "numeric column absorbed spare row space: {}",
+                    column.key
+                );
+                previous = row;
+            }
+        }
+    }
+}
+
+/// Force status cells to the floors reached beside many visible strategy columns.
+struct StatusFloorProbe;
+
+impl Render for StatusFloorProbe {
+    /// Render production chips in the same mono face as the strategy table.
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        v_flex()
+            .font_family(design::mono())
+            .child(
+                h_flex()
+                    .w(design::font_w_px(cx, super::AUTO_MIN_W))
+                    .child(auto_cell_el(
+                        "floor-auto".into(),
+                        AutoClass::Useful { n: 50, white: true },
+                        None,
+                        p,
+                        cx,
+                    )),
+            )
+            .children(
+                [
+                    ReadyClass::Can { fit: usize::MAX },
+                    ReadyClass::Few { fit: 10 },
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(i, class)| {
+                    h_flex()
+                        .w(design::font_w_px(cx, super::READY_MIN_W))
+                        .child(ready_cell_el(
+                            format!("floor-ready-{i}").into(),
+                            class,
+                            None,
+                            p,
+                            cx,
+                        ))
+                }),
+            )
+    }
+}
+
+/// Long localized status labels must never paint into the preceding numeric column.
+#[gpui::test]
+fn strategy_status_chips_stay_inside_compressed_columns(cx: &mut gpui::TestAppContext) {
+    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+        cx.update(|cx| {
+            MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(theme, 1.0),
+                cx,
+            )
+        });
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            let window = cx.open_window(gpui::size(px(300.0), px(150.0)), |_, _| StatusFloorProbe);
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            for id in ["floor-auto", "floor-ready-0", "floor-ready-1"] {
+                let cell = visual
+                    .debug_bounds(leak(format!("{id}-cell")))
+                    .expect("cell");
+                let text = visual
+                    .debug_bounds(leak(format!("{id}-txt")))
+                    .expect("text");
+                assert!(
+                    text.left() >= cell.left() - px(0.5) && text.right() <= cell.right() + px(0.5),
+                    "{id} overlaps its neighbour: {language:?} {theme:?}"
+                );
+            }
+        }
+    }
+}
+
 /// Exercise the production fixed-column cluster and date inset for both text alignments.
 struct ColumnSpacingProbe {
     mode: StratMode,
@@ -47,7 +429,7 @@ impl Render for ColumnSpacingProbe {
                     "spacing-row"
                 };
                 h_flex().w_full().child(div().flex_1().min_w_0()).child(
-                    super::fixed_columns(cx)
+                    super::fixed_columns(cx, false)
                         .children(
                             super::METRIC_COLS
                                 .iter()
@@ -64,7 +446,7 @@ impl Render for ColumnSpacingProbe {
                                     if header {
                                         cell.child(t!(column.key).to_string()).into_any_element()
                                     } else {
-                                        cell.child(super::fixed_metric_cell(
+                                        cell.child(super::strategy_metric_cell(
                                             column, &group, p, widths[i],
                                         ))
                                         .into_any_element()
