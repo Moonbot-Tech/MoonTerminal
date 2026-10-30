@@ -222,7 +222,7 @@ jobs:
 
   macos-probe:
     name: macOS probe (arm64 build, x86_64 check) — diagnostic
-    runs-on: macos-14
+    runs-on: macos-15
     if: github.event_name != 'schedule'
     env:
       # The floor release.yml builds both slices against, so the probe type-checks the Intel

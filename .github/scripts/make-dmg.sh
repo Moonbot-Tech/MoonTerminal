@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Package the macOS release binaries into a UNIVERSAL MoonTerminal.app and a distributable .dmg.
-# Runs on the macos-14 runner (native tools: sips, iconutil, codesign, hdiutil, lipo).
+# Runs on the macos-15 runner (native tools: sips, iconutil, codesign, hdiutil, lipo).
 #
 # Expects BOTH slices to be staged already: release.yml compiles them in a per-architecture matrix
 # job and this job downloads the two artifacts into `stage/`. They are joined here so Apple Silicon
