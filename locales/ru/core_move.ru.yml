@@ -64,6 +64,7 @@ core_move.step.snapshot: "Настройки взяты с ядра: %{size} М�
 core_move.step.composed: "Архив настроек готов для %{exchange}."
 core_move.step.composed_db: "Архив настроек готов для %{exchange}, вместе с базой отчётов."
 core_move.step.report_db: "База отчётов собрана: строк %{rows}, открытых %{open}."
+core_move.step.report_db_skipped: "В терминале нет сделок этого ядра: собирать базу отчётов не из чего."
 core_move.step.strategies_read: "Стратегии прочитаны: %{n}, папок: %{folders}."
 core_move.step.checked: "Сервер подходит для MoonBot, порт свободен."
 core_move.step.uploaded: "Настройки загружены."

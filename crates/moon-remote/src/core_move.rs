@@ -56,6 +56,10 @@ pub enum MoveStep {
         /// The epoch terminals resume by; `None` makes them download the history again.
         epoch: Option<i32>,
     },
+    /// The report database was asked for, but this terminal holds no report row of the core, so
+    /// there is nothing to rebuild it from. Whether the archive still carries one — the snapshot's
+    /// own — is told by [`MoveStep::Composed`].
+    ReportDbSkipped,
     /// The old core's strategy set was read.
     OldStrategies { strategies: usize, folders: usize },
     /// The server can run MoonBot and the UDP port is free.
