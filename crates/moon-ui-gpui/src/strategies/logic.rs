@@ -128,6 +128,106 @@ pub(crate) fn row(store: &CoreStore, core: CoreId, id: u64) -> Option<&StrategyR
     store.core(core)?.strategies.iter().find(|s| s.id == id)
 }
 
+/// Revision-keyed lookup and shared ownership for one core's selected strategy rows.
+///
+/// The index preserves the store's first-match behavior for duplicate ids. Shared rows are cloned
+/// lazily, once per strategy revision, so parameter renderers can own a selection without copying
+/// its field vectors on every frame.
+#[derive(Default)]
+pub(super) struct StrategyRowCache {
+    revision: u64,
+    ready: bool,
+    rows_addr: usize,
+    rows_len: usize,
+    indices: HashMap<u64, usize>,
+    shared: HashMap<u64, std::sync::Arc<StrategyRow>>,
+}
+
+impl StrategyRowCache {
+    /// Refresh after a new revision or a replacement allocation with the same revision.
+    fn sync(&mut self, core: &moon_core::session::store::CoreData) {
+        let rows_addr = core.strategies.as_ptr() as usize;
+        let rows_len = core.strategies.len();
+        if self.ready
+            && self.revision == core.strategies_rev
+            && self.rows_addr == rows_addr
+            && self.rows_len == rows_len
+        {
+            return;
+        }
+        self.revision = core.strategies_rev;
+        self.rows_addr = rows_addr;
+        self.rows_len = rows_len;
+        self.indices = core
+            .strategies
+            .iter()
+            .enumerate()
+            .map(|(index, row)| (row.id, index))
+            .fold(HashMap::new(), |mut indices, (id, index)| {
+                indices.entry(id).or_insert(index);
+                indices
+            });
+        self.shared.clear();
+        self.ready = true;
+    }
+
+    /// Resolve a row by id in constant expected time after one index build per revision.
+    fn row<'a>(
+        &mut self,
+        core: &'a moon_core::session::store::CoreData,
+        id: u64,
+    ) -> Option<&'a StrategyRow> {
+        self.sync(core);
+        core.strategies.get(*self.indices.get(&id)?)
+    }
+
+    /// Resolve a row for a retained renderer, cloning its contents only on the first request.
+    fn shared_row(
+        &mut self,
+        core: &moon_core::session::store::CoreData,
+        id: u64,
+    ) -> Option<std::sync::Arc<StrategyRow>> {
+        self.sync(core);
+        let row = core.strategies.get(*self.indices.get(&id)?)?;
+        Some(
+            self.shared
+                .entry(id)
+                .or_insert_with(|| std::sync::Arc::new(row.clone()))
+                .clone(),
+        )
+    }
+}
+
+/// Find a selected live row through the window's revision-keyed index.
+fn selection_row<'a>(
+    st: &StrategiesView,
+    store: &'a CoreStore,
+    core: CoreId,
+    id: u64,
+) -> Option<&'a StrategyRow> {
+    let data = store.core(core)?;
+    st.row_cache
+        .borrow_mut()
+        .entry(core)
+        .or_default()
+        .row(data, id)
+}
+
+/// Find a selected live row for a renderer that must own it beyond the store borrow.
+fn selection_shared_row(
+    st: &StrategiesView,
+    store: &CoreStore,
+    core: CoreId,
+    id: u64,
+) -> Option<std::sync::Arc<StrategyRow>> {
+    let data = store.core(core)?;
+    st.row_cache
+        .borrow_mut()
+        .entry(core)
+        .or_default()
+        .shared_row(data, id)
+}
+
 /// Return the primary selected strategy row.
 /// When the Versions panel selects a persisted read-only snapshot, returns its synthetic row built
 /// from `raw_json` so the sections and parameters panels display that snapshot instead of live mode.
@@ -152,6 +252,7 @@ pub(super) fn selected_keys(st: &StrategiesView) -> Vec<Key> {
     visible_strategy_keys(retained, st.workspace_cores.as_deref())
 }
 
+/// Resolve every selected row through the window's per-revision indices.
 pub(super) fn multi_row_pairs<'a>(
     st: &'a StrategiesView,
     store: &'a CoreStore,
@@ -162,7 +263,23 @@ pub(super) fn multi_row_pairs<'a>(
     }
     selected_keys(st)
         .iter()
-        .filter_map(|(c, id)| row(store, *c, *id).map(|row| ((*c, *id), row)))
+        .filter_map(|(c, id)| selection_row(st, store, *c, *id).map(|row| ((*c, *id), row)))
+        .collect()
+}
+
+/// Share every selected row with the parameter renderer without cloning field vectors per frame.
+pub(super) fn multi_row_pairs_shared(
+    st: &StrategiesView,
+    store: &CoreStore,
+) -> Vec<(Key, std::sync::Arc<StrategyRow>)> {
+    if let Some((key, row)) = st.version_override() {
+        return vec![(key, std::sync::Arc::new(row.clone()))];
+    }
+    selected_keys(st)
+        .into_iter()
+        .filter_map(|(core, id)| {
+            selection_shared_row(st, store, core, id).map(|row| ((core, id), row))
+        })
         .collect()
 }
 
@@ -170,7 +287,7 @@ pub(super) fn multi_row_pairs<'a>(
 pub(super) fn kinds_differ(st: &StrategiesView, store: &CoreStore) -> bool {
     let mut kind: Option<u8> = None;
     for (c, id) in selected_keys(st) {
-        if let Some(r) = row(store, c, id) {
+        if let Some(r) = selection_row(st, store, c, id) {
             match kind {
                 None => kind = Some(r.kind_ordinal),
                 Some(k) if k != r.kind_ordinal => return true,
@@ -218,7 +335,9 @@ pub(super) fn common_fields(st: &StrategiesView, store: &CoreStore) -> Option<Ha
     let mut by_kind: HashMap<(CoreId, u8), HashSet<String>> = HashMap::new();
     let mut acc: Option<HashSet<String>> = None;
     for (c, id) in keys {
-        let Some(r) = row(store, c, id) else { continue };
+        let Some(r) = selection_row(st, store, c, id) else {
+            continue;
+        };
         let set = by_kind
             .entry((c, r.kind_ordinal))
             .or_insert_with(|| kind_field_set(store, c, r.kind_ordinal));
@@ -284,9 +403,10 @@ pub(super) fn selected_sections<'a>(
     Some(&kind.sections)
 }
 
+/// Return the shared displayed value, or `None` when selected rows disagree.
 pub(super) fn merged_value_for_owned(
     st: &StrategiesView,
-    rows: &[(Key, StrategyRow)],
+    rows: &[(Key, std::sync::Arc<StrategyRow>)],
     f: &SchemaField,
     pending: &HashMap<Key, StrategyEditRow>,
 ) -> Option<String> {
@@ -410,7 +530,7 @@ fn resolved_field(fields: &[(String, String)], f: &SchemaField) -> String {
 /// across the given rows (`TimedOut` outranks `Pending`) — used only to pick the marker's tone in
 /// `field_row`; value resolution goes through [`edited_field_value`] instead.
 pub(super) fn field_pending_phase(
-    rows: &[(Key, StrategyRow)],
+    rows: &[(Key, std::sync::Arc<StrategyRow>)],
     pending: &HashMap<Key, StrategyEditRow>,
     f: &SchemaField,
 ) -> Option<StrategyEditPhase> {
@@ -935,6 +1055,58 @@ impl FolderCounts {
     /// Returns `(active, total)` over every counted strategy, which is the core's own caption.
     pub(super) fn root(&self) -> (usize, usize) {
         self.root
+    }
+}
+
+/// Displayed checkbox totals for the core root and every folder prefix.
+///
+/// One strategy contributes to each of its prefixes, so a complete tree build no longer rescans
+/// the core for every folder. Empty coverage and mixed coverage both display unchecked.
+#[derive(Default)]
+pub(super) struct FolderChecks {
+    by_path: HashMap<String, (usize, usize)>,
+    root: (usize, usize),
+}
+
+impl FolderChecks {
+    /// Add one row to the root and its folder chain using the displayed staged/server value.
+    pub(super) fn add(
+        &mut self,
+        row: &StrategyRow,
+        filter: &PreparedFilter,
+        staged: &HashMap<Key, bool>,
+        core: CoreId,
+    ) {
+        if !filter.matches(row) {
+            return;
+        }
+        let checked = staged.get(&(core, row.id)).copied().unwrap_or(row.checked);
+        let increment = |(total, unchecked): &mut (usize, usize)| {
+            *total += 1;
+            *unchecked += usize::from(!checked);
+        };
+        increment(&mut self.root);
+        let mut key = String::new();
+        for segment in path_segments(&row.folder_path) {
+            if !key.is_empty() {
+                key.push('/');
+            }
+            key.push_str(segment);
+            increment(self.by_path.entry(key.clone()).or_default());
+        }
+    }
+
+    /// Return whether the folder has visible coverage and every displayed child is checked.
+    pub(super) fn for_path(&self, path: &str) -> bool {
+        self.by_path
+            .get(path)
+            .is_some_and(|&(total, unchecked)| total > 0 && unchecked == 0)
+    }
+
+    /// Return whether the core root has visible coverage and every displayed row is checked.
+    pub(super) fn root(&self) -> bool {
+        let (total, unchecked) = self.root;
+        total > 0 && unchecked == 0
     }
 }
 

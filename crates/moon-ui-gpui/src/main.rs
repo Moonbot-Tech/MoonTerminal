@@ -432,6 +432,9 @@ struct Backend {
     /// Re-pruned once per `WARN_PRUNE_INTERVAL_MS` so a session outliving the retention window keeps
     /// bounding the file instead of pruning only once at startup.
     warn_last_prune_ms: i64,
+    /// Last committed warning-store revision observed by the coordination loop.
+    /// A change wakes chart readers whose earlier generation raced the asynchronous close write.
+    warn_persisted_rev: u64,
     /// Core reconnect requests from the Connections button, drained into `session.reconnect`.
     /// Ported from egui's `SettingsActions.reconnect`.
     reconnect_request: Vec<CoreId>,

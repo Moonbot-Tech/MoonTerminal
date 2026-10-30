@@ -14,7 +14,6 @@ mod backend;
 pub mod background;
 #[cfg(windows)]
 mod base;
-#[cfg(any(windows, target_os = "macos"))]
 mod candle_window;
 #[cfg(windows)]
 pub mod candles;
@@ -32,6 +31,7 @@ mod hits;
 pub mod input;
 mod pane_layout;
 mod pane_render;
+mod userdata_diff;
 use filter_headers::{ColumnBand, FilterHeaderHit, FilterLineHit};
 mod archived_lines;
 mod figures_sync;

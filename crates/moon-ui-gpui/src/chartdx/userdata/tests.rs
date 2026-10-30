@@ -110,3 +110,122 @@ fn patched_hover_equals_a_full_rebuild() {
     assert!(!layer.patch_markers(&[(cold.len() as u32, hot)]));
     assert_eq!(pending(&layer), gpu(&hot_second));
 }
+
+/// Breakage: `UserDataLayer::set` keeps a hover patch when the caller hands the resting union
+/// back. Consequence: the arrow stays enlarged after the geometry sync that replaced the patch.
+#[test]
+fn set_after_a_patch_restores_the_unpatched_markers() {
+    let marks = marks();
+    let (mut markers, mut segs) = (Vec::new(), Vec::new());
+    let clusters = trade_marks::build_trade_geometry(&marks, &ctx(None), &mut markers, &mut segs);
+    let mut layer = UserDataLayer::new();
+    layer.set(&[], &[], &[], &markers);
+    let hot = Some((1, true));
+    let ix = clusters
+        .iter()
+        .position(|c| trade_marks::cluster_is_hot(c, hot))
+        .unwrap() as u32;
+    assert!(layer.patch_markers(&[(
+        ix,
+        trade_marks::trade_marker(&clusters[ix as usize], &ctx(None), true)
+    )]));
+    layer.set(&[], &[], &[], &markers);
+    let pending = layer.pending.as_ref().expect("pending union");
+    assert_eq!(
+        pending
+            .mk
+            .iter()
+            .map(|m| bytemuck::cast(*m))
+            .collect::<Vec<[u8; 48]>>(),
+        gpu(&markers)
+    );
+}
+
+/// Breakage: a one-marker edit remaps every marker. Consequence: the CPU cost follows the whole
+/// trade-arrow union instead of the edit.
+#[test]
+fn a_tail_edit_keeps_the_other_marker_bytes() {
+    let marks = marks();
+    let (mut markers, mut segs) = (Vec::new(), Vec::new());
+    trade_marks::build_trade_geometry(&marks, &ctx(None), &mut markers, &mut segs);
+    let mut layer = UserDataLayer::new();
+    layer.set(&[], &[], &[], &markers);
+    let before = layer.pending.as_ref().unwrap().mk.clone();
+    let mut edited = markers.clone();
+    edited[0].t_rel += 3.0;
+    layer.set(&[], &[], &[], &edited);
+    let after = &layer.pending.as_ref().unwrap().mk;
+    assert_eq!(after.len(), before.len());
+    assert_ne!(
+        bytemuck::bytes_of(&after[0]),
+        bytemuck::bytes_of(&before[0])
+    );
+    for (left, right) in after.iter().zip(before.iter()).skip(1) {
+        assert_eq!(bytemuck::bytes_of(left), bytemuck::bytes_of(right));
+    }
+}
+
+/// Scale probe: rebuilding every segment and marker versus the same call again.
+/// Ignored: it allocates the unions and prints timings. The decision to skip unchanged
+/// layers is taken from these medians.
+#[test]
+#[ignore = "scale probe: userdata set at 20k and 100k"]
+fn userdata_set_scale_probe() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(userdata_set_scale_probe_body)
+        .expect("userdata probe thread")
+        .join()
+        .expect("userdata probe thread");
+}
+
+fn userdata_set_scale_probe_body() {
+    use bytemuck::Zeroable;
+    use moon_chart::layers::{MarkerInstance, SegInstance};
+
+    fn median(mut samples: Vec<f64>) -> f64 {
+        samples.sort_by(|a, b| a.total_cmp(b));
+        samples[samples.len() / 2]
+    }
+
+    fn time_n(n: usize) -> (f64, f64) {
+        const RUNS: usize = 7;
+        let segs: Vec<SegInstance> = (0..n)
+            .map(|i| {
+                let mut seg = SegInstance::zeroed();
+                seg.t0_rel = i as f32;
+                seg
+            })
+            .collect();
+        let markers: Vec<MarkerInstance> = (0..n)
+            .map(|i| {
+                let mut marker = MarkerInstance::zeroed();
+                marker.t_rel = i as f32;
+                marker
+            })
+            .collect();
+        let mut layer = UserDataLayer::new();
+        layer.set(&[], &[], &segs, &markers);
+        let mut mutate_ms = Vec::with_capacity(RUNS);
+        let mut repeat_ms = Vec::with_capacity(RUNS);
+        for i in 0..RUNS {
+            let mut changed = segs.clone();
+            changed[n - 1].p0 = 1.0 + i as f32;
+            let start = std::time::Instant::now();
+            layer.set(&[], &[], &changed, &markers);
+            std::hint::black_box(layer.pending.as_ref().map(|p| p.seg.len() + p.mk.len()));
+            mutate_ms.push(start.elapsed().as_secs_f64() * 1_000.0);
+
+            let start = std::time::Instant::now();
+            layer.set(&[], &[], &changed, &markers);
+            std::hint::black_box(layer.pending.as_ref().map(|p| p.seg.len() + p.mk.len()));
+            repeat_ms.push(start.elapsed().as_secs_f64() * 1_000.0);
+        }
+        (median(mutate_ms), median(repeat_ms))
+    }
+
+    for n in [20_000, 100_000] {
+        let (mutate_ms, repeat_ms) = time_n(n);
+        println!("userdata_set_scale n {n} mutate_ms {mutate_ms:.3} repeat_ms {repeat_ms:.3}");
+    }
+}

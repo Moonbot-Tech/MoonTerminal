@@ -47,6 +47,80 @@ pub(super) fn candles_disabled() -> bool {
 /// reference terminal repaints the same column and far slower than a busy coin's revisions.
 pub(super) const ARB_READ_PERIOD_MS: i64 = 250;
 
+/// Whether a retained-history caption may read the source again.
+///
+/// The same clock as the arbitrage column and the volume captions: a busy coin revises several
+/// times a second, and the derived snapshot walks retained trade buckets and the 5-minute candle
+/// ring. A different market reads at once, so a switched coin does not keep the previous figures
+/// for the rest of the period.
+///
+/// Args:
+///     last_read_ms: Unix milliseconds of the previous read. Zero means never.
+///     now_ms: Unix milliseconds of this sync.
+///     last_market: Market the previous read was for.
+///     market: Market this pane is showing.
+///
+/// Returns:
+///     Whether the caller should call the source.
+pub(super) fn retained_caption_due(
+    last_read_ms: i64,
+    now_ms: i64,
+    last_market: &str,
+    market: &str,
+) -> bool {
+    last_market != market || now_ms.saturating_sub(last_read_ms) >= ARB_READ_PERIOD_MS
+}
+
+/// One pane's window-delta read this sync.
+pub(super) enum WindowPull<T> {
+    /// The caption is off. Drop whatever the pane stored.
+    Off,
+    /// Inside the read period, on the same market. Keep the stored figures.
+    Hold,
+    /// A read just happened. `None` means the source had no snapshot.
+    Read { market: String, value: Option<T> },
+}
+
+/// Store one window-delta pull.
+///
+/// A read replaces the stored figures, and a missing snapshot clears them even
+/// when the market name did not change. Holding that `None` would leave the
+/// previous percentages up after the provider dropped the coin. `Hold` is the
+/// only arm that keeps the previous read.
+///
+/// Args:
+///     figures: Stored readout. Cleared on `Off` and on a `None` read.
+///     read_ms: Unix milliseconds of the previous read.
+///     stored_market: Market that previous read was for.
+///     pull: What this sync decided.
+///     now_ms: Unix milliseconds of this sync.
+pub(super) fn apply_window_pull<T>(
+    figures: &mut Option<T>,
+    read_ms: &mut i64,
+    stored_market: &mut String,
+    pull: WindowPull<T>,
+    now_ms: i64,
+) {
+    match pull {
+        WindowPull::Off => {
+            if figures.is_some() || !stored_market.is_empty() {
+                *figures = None;
+                *read_ms = 0;
+                stored_market.clear();
+            }
+        }
+        WindowPull::Hold => {}
+        WindowPull::Read { market, value } => {
+            *figures = value;
+            *read_ms = now_ms;
+            *stored_market = market;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
+
 /// How often a pane asks the source for its horizontal-volume profile when nothing else moved.
 ///
 /// The profile's window ends NOW, so on a quiet market rows slide out of it with no trade to

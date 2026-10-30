@@ -13,8 +13,8 @@ use moon_core::strat_db::stats::HeadRow;
 use moon_core::venue::CoreVenue;
 
 use super::{
-    FolderCounts, filter_hidden_keys, subtree_check_targets, subtree_displayed_all_checked,
-    subtree_folder_paths, visible_strategy_keys,
+    FolderChecks, FolderCounts, StrategyRowCache, filter_hidden_keys, subtree_check_targets,
+    subtree_displayed_all_checked, subtree_folder_paths, visible_strategy_keys,
 };
 use crate::strategies::filter::{PreparedFilter, StrategyFilter};
 use moon_core::feed::strategy_path::path_segments;
@@ -949,4 +949,184 @@ fn a_deleted_strategy_is_hidden_by_name_only() {
     narrowed.active_only = true;
     let accepted = filter_hidden_keys([(1, 50)], &store, &narrowed, &HashMap::new(), &deleted);
     assert!(accepted.is_empty());
+}
+
+/// Return the median of several synthetic timing samples in milliseconds.
+fn median_ms(mut samples: Vec<f64>) -> f64 {
+    samples.sort_by(f64::total_cmp);
+    samples[samples.len() / 2]
+}
+
+/// Time one closure repeatedly without letting the optimizer remove its result.
+fn sample_ms<T>(iterations: usize, mut work: impl FnMut() -> T) -> Vec<f64> {
+    (0..iterations)
+        .map(|_| {
+            let started = std::time::Instant::now();
+            std::hint::black_box(work());
+            started.elapsed().as_secs_f64() * 1_000.0
+        })
+        .collect()
+}
+
+/// Build ten cores of 1,700 field-bearing strategies and select every row.
+fn heavy_selection() -> (CoreStore, Vec<(CoreId, u64)>) {
+    let mut store = CoreStore::default();
+    let mut selected = Vec::new();
+    for core in 1..=10u64 {
+        let rows = (1..=1_700u64)
+            .map(|id| StrategyRow {
+                id,
+                name: format!("Synthetic {id}"),
+                kind: "MoonShot".into(),
+                kind_ordinal: (id % 3) as u8,
+                folder_path: format!("Folder{id}"),
+                checked: id % 2 == 0,
+                is_short: false,
+                fields: (0..16)
+                    .map(|field| (format!("Field{field}"), format!("{}", id + field)))
+                    .collect(),
+            })
+            .collect();
+        selected.extend((1..=1_700).map(|id| (core, id)));
+        store.ensure(core);
+        store.core_mut(core).expect("ensured core").strategies = rows;
+    }
+    (store, selected)
+}
+
+/// Cached lookups must keep first-match semantics and share rows until the list revision moves.
+#[test]
+fn strategy_row_cache_preserves_identity_and_revision_invalidation() {
+    let mut store = store_with(
+        1,
+        vec![
+            named_row(7, "first", "Folder"),
+            named_row(7, "duplicate", "Folder"),
+        ],
+    );
+    let mut cache = StrategyRowCache::default();
+    let core = store.core_mut(1).expect("core");
+    assert_eq!(cache.row(core, 7).expect("row").name, "first");
+    let shared = cache.shared_row(core, 7).expect("shared");
+    let again = cache.shared_row(core, 7).expect("shared");
+    assert!(std::sync::Arc::ptr_eq(&shared, &again));
+    core.strategies[0].name = "updated".into();
+    core.strategies_rev += 1;
+    let updated = cache.shared_row(core, 7).expect("updated");
+    assert_eq!(updated.name, "updated");
+    assert!(!std::sync::Arc::ptr_eq(&shared, &updated));
+
+    core.strategies = vec![named_row(7, "recreated", "Folder")];
+    let recreated = cache.shared_row(core, 7).expect("recreated");
+    assert_eq!(recreated.name, "recreated");
+    assert!(!std::sync::Arc::ptr_eq(&updated, &recreated));
+}
+
+/// Aggregated folder boxes must match the original subtree scan under filters and staged edits.
+#[test]
+fn folder_checks_agree_with_the_naive_scan() {
+    let rows = corpus();
+    let core = 11u64;
+    let mut staged = HashMap::new();
+    staged.insert((core, 2), false);
+    staged.insert((core, 3), true);
+    for f in [
+        filter("", None, None, false),
+        filter("s4", None, None, false),
+        filter("", Some(0), None, false),
+        filter("", None, Some(true), false),
+        filter("", None, None, true),
+    ] {
+        let mut checks = FolderChecks::default();
+        for row in &rows {
+            checks.add(row, &f, &staged, core);
+        }
+        for prefix in prefixes() {
+            let expected = subtree_displayed_all_checked(
+                &subtree_check_targets(&rows, &prefix, &f),
+                &staged,
+                core,
+            );
+            let actual = if prefix.is_empty() {
+                checks.root()
+            } else {
+                checks.for_path(&prefix.join("/"))
+            };
+            assert_eq!(actual, expected, "prefix {prefix:?}");
+        }
+    }
+}
+
+/// Measure selected-row lookup and ownership work at the heavy Strategies selection size.
+#[test]
+#[ignore = "scale probe: run by hand with --ignored --nocapture"]
+fn scale_probe_strategy_selection_17k() {
+    let (store, selected) = heavy_selection();
+    let naive = median_ms(sample_ms(3, || {
+        for &(core, id) in &selected {
+            std::hint::black_box(super::row(&store, core, id));
+        }
+    }));
+    let naive_owned = median_ms(sample_ms(3, || {
+        selected
+            .iter()
+            .filter_map(|&(core, id)| {
+                super::row(&store, core, id).map(|row| ((core, id), row.clone()))
+            })
+            .collect::<Vec<_>>()
+    }));
+    let mut caches: HashMap<CoreId, StrategyRowCache> = HashMap::new();
+    let lookups = median_ms(sample_ms(3, || {
+        for &(core, id) in &selected {
+            let data = store.core(core).expect("core");
+            std::hint::black_box(caches.entry(core).or_default().row(data, id));
+        }
+    }));
+    let shared = median_ms(sample_ms(3, || {
+        selected
+            .iter()
+            .map(|&(core, id)| {
+                let data = store.core(core).expect("core");
+                (
+                    (core, id),
+                    caches.entry(core).or_default().shared_row(data, id),
+                )
+            })
+            .collect::<Vec<_>>()
+    }));
+    println!(
+        "[probe] strategies_select=17000 naive_lookups={naive:.3}ms cached_lookups={lookups:.6}ms naive_lookup_and_clone={naive_owned:.3}ms cached_shared={shared:.6}ms"
+    );
+}
+
+/// Measure folder-checkbox aggregation over 1,700 single-strategy folders in each of ten cores.
+#[test]
+#[ignore = "scale probe: run by hand with --ignored --nocapture"]
+fn scale_probe_folder_checks_1700_per_core() {
+    let (store, _) = heavy_selection();
+    let filter = filter("", None, None, false);
+    let staged = HashMap::new();
+    let naive = median_ms(sample_ms(3, || {
+        for core in 1..=10u64 {
+            let rows = &store.core(core).expect("core").strategies;
+            for row in rows {
+                let path = vec![row.folder_path.clone()];
+                let targets = subtree_check_targets(rows, &path, &filter);
+                std::hint::black_box(subtree_displayed_all_checked(&targets, &staged, core));
+            }
+        }
+    }));
+    let aggregated = median_ms(sample_ms(3, || {
+        for core in 1..=10u64 {
+            let rows = &store.core(core).expect("core").strategies;
+            let mut checks = FolderChecks::default();
+            for row in rows {
+                checks.add(row, &filter, &staged, core);
+            }
+            for row in rows {
+                std::hint::black_box(checks.for_path(&row.folder_path));
+            }
+        }
+    }));
+    println!("[probe] folder_checks=10x1700 naive={naive:.3}ms aggregated={aggregated:.3}ms");
 }

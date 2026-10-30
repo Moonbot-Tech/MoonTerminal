@@ -133,6 +133,13 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) label_figures: Option<moon_core::market::MarketFiguresReadout>,
     /// Retained-history movement per window, gated separately because it costs more.
     pub(in crate::chartdx) label_windows: Option<moon_core::market::MarketWindowsReadout>,
+    /// When `label_windows` was last read, in Unix milliseconds. Zero means never.
+    ///
+    /// The derived snapshot walks retained trade buckets, so the chart reads it on the same
+    /// clock as the volume captions rather than on every market revision.
+    pub(in crate::chartdx) label_windows_read_ms: i64,
+    /// Market those windows were read for. A pane that just switched coins reads again at once.
+    pub(in crate::chartdx) label_windows_market: String,
     /// What was liquidated over the same periods, for the captions that print it.
     pub(in crate::chartdx) label_liquidations: Vec<(
         (moon_core::market::VolumeSpan, moon_core::market::VolumeAt),
@@ -515,6 +522,12 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) cluster_generation: u64,
     /// Published discs, kept visible while the next fold or zoom layout runs in the background.
     pub(in crate::chartdx) cluster_discs: Vec<moon_chart::clusters::PrintDisc>,
+    /// Bumped every time `cluster_discs` is replaced, so bubble labels rebuild once per publication.
+    pub(in crate::chartdx) cluster_pubs: u64,
+    /// Camera and publication the current bubble-label plan was built for.
+    pub(in crate::chartdx) cluster_label_key: Option<super::text::ClusterLabelKey>,
+    /// Labels kept from that plan: slot key, logical position, volume. Drawn until the key changes.
+    pub(in crate::chartdx) cluster_label_plan: Vec<super::text::PlannedClusterLabel>,
     /// New trades reached the pane since the last background snapshot was captured.
     pub(in crate::chartdx) cluster_dirty: bool,
     /// When the last data snapshot was queued, for the data throttle.
@@ -639,6 +652,8 @@ impl PaneRender {
             label_context: None,
             label_figures: None,
             label_windows: None,
+            label_windows_read_ms: 0,
+            label_windows_market: String::new(),
             label_volumes: Vec::new(),
             label_liquidations: Vec::new(),
             label_cursor_ms: None,
@@ -779,6 +794,9 @@ impl PaneRender {
             cluster_pending: None,
             cluster_generation: 0,
             cluster_discs: Vec::new(),
+            cluster_pubs: 0,
+            cluster_label_key: None,
+            cluster_label_plan: Vec::new(),
             cluster_dirty: true,
             cluster_built_at: None,
             cluster_uploaded: false,

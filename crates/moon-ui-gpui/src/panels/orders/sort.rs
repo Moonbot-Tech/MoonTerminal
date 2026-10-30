@@ -1,7 +1,6 @@
 //! Row execution predicates, the sort comparator, and the table change-signature.
 
 use super::*;
-use moon_core::feed::order_math;
 
 /// Return whether the entry has executed, using the authoritative worker status rather than a
 /// leg's `fill_pct`.
@@ -113,21 +112,9 @@ pub(super) fn sort_entries(
                     f64::from(b.row.fill_pct),
                     ascending,
                 ),
-                OrdCol::Pnl => optional_f64_order(
-                    order_math::order_pnl(&a.row),
-                    order_math::order_pnl(&b.row),
-                    ascending,
-                ),
-                OrdCol::PnlPct => optional_f64_order(
-                    order_math::order_pnl_pct(&a.row),
-                    order_math::order_pnl_pct(&b.row),
-                    ascending,
-                ),
-                OrdCol::PnlTp => optional_f64_order(
-                    order_math::order_pnl_at_tp(&a.row),
-                    order_math::order_pnl_at_tp(&b.row),
-                    ascending,
-                ),
+                OrdCol::Pnl => optional_f64_order(a.pnl, b.pnl, ascending),
+                OrdCol::PnlPct => optional_f64_order(a.pnl_pct, b.pnl_pct, ascending),
+                OrdCol::PnlTp => optional_f64_order(a.pnl_tp, b.pnl_tp, ascending),
                 OrdCol::Sl | OrdCol::Ts | OrdCol::Vstop => {
                     let kind = match column {
                         OrdCol::Sl => moon_core::feed::OrderStopKind::StopLoss,
@@ -168,8 +155,8 @@ pub(super) fn sort_entries(
     // last, with UID as the newest/oldest tie-breaker just like the other modes.
     if view.primary == PrimarySort::ProfitFirst {
         entries.sort_by(|a, b| {
-            let pa = order_math::order_pnl(&a.row);
-            let pb = order_math::order_pnl(&b.row);
+            let pa = a.pnl;
+            let pb = b.pnl;
             // Treat `None` as negative infinity so it sorts at the bottom.
             let key = |v: Option<f64>| v.unwrap_or(f64::NEG_INFINITY);
             key(pb)
@@ -193,6 +180,160 @@ pub(super) fn sort_entries(
             })
             .then_with(|| a.core.cmp(&b.core))
     });
+}
+
+/// Reuse the previous permutation when row membership and the active sort keys are unchanged.
+/// Return the new rows' signature for the next revision without hashing the old rows again.
+pub(super) fn sort_or_reuse_entries(
+    entries: &mut Vec<OrderEntry>,
+    previous: &[OrderEntry],
+    previous_signature: Option<u64>,
+    view: &OrdersViewState,
+    stop_overlay: &std::collections::HashMap<(CoreId, u64, u8), (bool, std::time::Instant)>,
+) -> u64 {
+    let signature = sort_signature(entries, view, stop_overlay);
+    if !previous.is_empty() && previous_signature == Some(signature) {
+        let expected = entries.len();
+        let mut by_id: HashMap<_, _> = entries
+            .drain(..)
+            .map(|entry| ((entry.core, entry.row.uid), entry))
+            .collect();
+        let mut reordered = Vec::with_capacity(expected);
+        for old in previous {
+            if let Some(entry) = by_id.remove(&(old.core, old.row.uid)) {
+                reordered.push(entry);
+            }
+        }
+        if reordered.len() == expected && by_id.is_empty() {
+            *entries = reordered;
+            return signature;
+        }
+        reordered.extend(by_id.into_values());
+        *entries = reordered;
+    }
+    sort_entries(entries, view, stop_overlay);
+    signature
+}
+
+/// Small FNV-style hash for scalar sort keys, avoiding two SipHash instances per row.
+struct RowHasher(u64);
+
+impl RowHasher {
+    /// Start with the standard FNV-1a offset basis.
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl std::hash::Hasher for RowHasher {
+    /// Fold bytes without allocating or retaining row data.
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    /// Fold one machine word in one step.
+    fn write_u64(&mut self, value: u64) {
+        self.0 ^= value;
+        self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+
+    /// Fold one smaller integer in one step.
+    fn write_u32(&mut self, value: u32) {
+        self.write_u64(u64::from(value));
+    }
+
+    /// Fold one byte in one step.
+    fn write_u8(&mut self, value: u8) {
+        self.write_u64(u64::from(value));
+    }
+
+    /// Return the mixed scalar signature.
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// Hash row membership and only the values consulted by the active comparator.
+///
+/// Per-row hashes are summed so a harmless input permutation does not force another sort.
+fn sort_signature(
+    entries: &[OrderEntry],
+    view: &OrdersViewState,
+    stop_overlay: &std::collections::HashMap<(CoreId, u64, u8), (bool, std::time::Instant)>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    fn optional_hash(value: Option<f64>, h: &mut impl Hasher) {
+        value
+            .filter(|value| value.is_finite())
+            .map(f64::to_bits)
+            .hash(h);
+    }
+
+    let mut view_hash = RowHasher::new();
+    view.header_sort
+        .map(|(column, ascending)| (column.key(), ascending))
+        .hash(&mut view_hash);
+    view.primary.to_u8().hash(&mut view_hash);
+    view.newest_first.hash(&mut view_hash);
+    let mut rows = 0u64;
+    let mut squares = 0u64;
+    let mut count = 0u64;
+    for entry in entries {
+        let mut h = RowHasher::new();
+        entry.core.hash(&mut h);
+        entry.row.uid.hash(&mut h);
+        if let Some((column, _)) = view.header_sort {
+            match column {
+                OrdCol::Core => entry.core_name.hash(&mut h),
+                OrdCol::Side => side_sort_key(&entry.row).hash(&mut h),
+                OrdCol::Token => entry.row.coin.hash(&mut h),
+                OrdCol::Size => entry.row.size.to_bits().hash(&mut h),
+                OrdCol::Buy => entry.row.buy_price.to_bits().hash(&mut h),
+                OrdCol::CurP => entry.row.price.to_bits().hash(&mut h),
+                OrdCol::TpPrice => optional_hash(
+                    (entry.row.sell_price > 0.0).then_some(entry.row.sell_price),
+                    &mut h,
+                ),
+                OrdCol::Fill => entry.row.fill_pct.to_bits().hash(&mut h),
+                OrdCol::Pnl => optional_hash(entry.pnl, &mut h),
+                OrdCol::PnlPct => optional_hash(entry.pnl_pct, &mut h),
+                OrdCol::PnlTp => optional_hash(entry.pnl_tp, &mut h),
+                OrdCol::Sl | OrdCol::Ts | OrdCol::Vstop => {
+                    let kind = match column {
+                        OrdCol::Sl => moon_core::feed::OrderStopKind::StopLoss,
+                        OrdCol::Ts => moon_core::feed::OrderStopKind::Trailing,
+                        OrdCol::Vstop => moon_core::feed::OrderStopKind::VStop,
+                        _ => unreachable!(),
+                    };
+                    table::effective_stop_value(
+                        entry,
+                        kind,
+                        stop_overlay
+                            .get(&(entry.core, entry.row.uid, table::stop_tag(kind)))
+                            .map(|(value, _)| *value),
+                    )
+                    .hash(&mut h);
+                }
+                OrdCol::Strat => entry.row.strat.hash(&mut h),
+                OrdCol::StratName => (entry.row.strat_id != 0 && !entry.row.strat_name.is_empty())
+                    .then_some(&entry.row.strat_name)
+                    .hash(&mut h),
+            }
+        } else if view.primary == PrimarySort::ProfitFirst {
+            entry.pnl.map(f64::to_bits).hash(&mut h);
+        } else {
+            primary_key(view.primary, &entry.row).hash(&mut h);
+        }
+        let hash = h.finish();
+        rows = rows.wrapping_add(hash);
+        squares = squares.wrapping_add(hash.wrapping_mul(hash));
+        count += 1;
+    }
+    view_hash.finish() ^ rows.rotate_left(17) ^ squares.rotate_left(41) ^ count.wrapping_mul(31)
 }
 
 /// Stably lift Main-associated rows over the comparator order unless an explicit header sort

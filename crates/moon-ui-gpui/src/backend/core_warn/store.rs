@@ -21,7 +21,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use super::{WarnAxis, WarnEpisode, WarnSnapshot};
 
 mod maintenance;
-use maintenance::{IndexMaintenance, SERIES_INDEX_SQL, WarnWrite, rebuild_series_index};
+use maintenance::{SERIES_INDEX_SQL, WarnWrite, WarnWriter, rebuild_series_index};
 
 /// Schema: closed episodes, plus the (initially empty) per-badge series-slice table.
 ///
@@ -56,10 +56,11 @@ CREATE TABLE IF NOT EXISTS core_warning_series (
 CREATE INDEX IF NOT EXISTS ix_warn_series_ep ON core_warning_series(episode_id);
 ";
 
-/// Optional read accelerators: existing history is indexed only by the maintenance thread.
-const RECENT_INDEX_SCHEMA: &str = "
+/// Optional read and retention accelerators: existing history is indexed only by the writer thread.
+const READ_INDEX_SCHEMA: &str = "
 CREATE INDEX IF NOT EXISTS ix_warn_core_time ON core_warnings(core_id, start_ms);
 CREATE INDEX IF NOT EXISTS ix_warn_server_null_time ON core_warnings(server_ip, start_ms) WHERE core_id IS NULL;
+CREATE INDEX IF NOT EXISTS ix_warn_start_time ON core_warnings(start_ms);
 ";
 
 /// Index-ordered top-N start read for one core. A separate statement per core avoids SQLite's
@@ -95,20 +96,61 @@ CREATE TEMP TABLE IF NOT EXISTS recent_warn_candidates (
 );
 ";
 
+/// One encoded topology series, grouped with other series from the same episode capture.
+pub(crate) struct WarnSlice {
+    /// Slice owner: zero for the server, otherwise the core id.
+    badge: i64,
+    /// Persisted series kind.
+    subject: String,
+    /// Encoded samples and their base timestamp.
+    blob: Vec<u8>,
+}
+
+impl WarnSlice {
+    /// Encode a CPU/memory series for a later transactional capture.
+    pub(crate) fn pairs(badge: i64, subject: &str, base_ms: i64, samples: &[(u8, u8)]) -> Self {
+        Self {
+            badge,
+            subject: subject.to_owned(),
+            blob: encode_series(base_ms, samples),
+        }
+    }
+
+    /// Encode a ping series for a later transactional capture.
+    pub(crate) fn ping(badge: i64, subject: &str, base_ms: i64, samples: &[u16]) -> Self {
+        Self {
+            badge,
+            subject: subject.to_owned(),
+            blob: encode_u16_series(base_ms, samples),
+        }
+    }
+}
+
+/// All server series displayed by one old-warning hover card.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PersistedWarnSeries {
+    /// Server CPU/memory samples, if captured.
+    pub(crate) server: Option<Vec<(u8, u8)>>,
+    /// Server client-to-core ping samples, if captured.
+    pub(crate) ping: Option<Vec<u16>>,
+    /// Server core-to-exchange ping samples, if captured.
+    pub(crate) exch: Option<Vec<u16>>,
+}
+
 /// SQLite-backed episode log.
 pub(crate) struct WarnStore {
-    /// Open connection to the warnings database.
+    /// Owner-side connection for explicit deletion and synchronous test/read helpers.
     conn: Connection,
     /// Episode-log mutation counter used by presentation caches.
     revision: Arc<AtomicU64>,
     /// Highest id allocated by this writer, including episodes queued ahead of their captures.
     episode_id: Cell<i64>,
-    /// One-time index work; episodes, captures and startup pruning queue on its worker.
-    index_maintenance: RefCell<Option<IndexMaintenance>>,
+    /// Dedicated writer for every production mutation and one-time index work.
+    writer: RefCell<Option<WarnWriter>>,
 }
 
 impl WarnStore {
-    /// Open the warning log, scheduling expensive read-index creation off the startup thread.
+    /// Open the warning log and start the background writer for mutations and index upgrades.
     ///
     /// Args:
     ///     path: Filesystem path to the SQLite database.
@@ -118,17 +160,13 @@ impl WarnStore {
     pub(crate) fn open(path: &Path) -> rusqlite::Result<Self> {
         let store = Self::from_connection(Connection::open(path)?)?;
         let rebuild_series = !store.series_index_is_current()?;
-        let build_recent = store.needs_recent_indexes()?;
-        if rebuild_series || build_recent {
-            store
-                .index_maintenance
-                .replace(Some(IndexMaintenance::start(
-                    path.to_owned(),
-                    rebuild_series,
-                    build_recent,
-                    Arc::clone(&store.revision),
-                )));
-        }
+        let build_read = store.needs_read_indexes()?;
+        store.writer.replace(Some(WarnWriter::start(
+            path.to_owned(),
+            rebuild_series,
+            build_read,
+            Arc::clone(&store.revision),
+        )));
         Ok(store)
     }
 
@@ -160,7 +198,7 @@ impl WarnStore {
             |row| row.get(0),
         )?;
         if !has_history {
-            conn.execute_batch(RECENT_INDEX_SCHEMA)?;
+            conn.execute_batch(READ_INDEX_SCHEMA)?;
         }
         let episode_id = conn.query_row(
             "SELECT COALESCE(MAX(id), 0) FROM core_warnings",
@@ -171,7 +209,7 @@ impl WarnStore {
             conn,
             revision: Arc::new(AtomicU64::new(0)),
             episode_id: Cell::new(episode_id),
-            index_maintenance: RefCell::new(None),
+            writer: RefCell::new(None),
         };
         let has_series: bool = store.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM core_warning_series LIMIT 1)",
@@ -193,37 +231,33 @@ impl WarnStore {
         Ok(sql.as_deref() == Some(SERIES_INDEX_SQL))
     }
 
-    /// Complete ordered warning writes before an explicit Storage deletion preserves its row count.
-    fn finish_index_maintenance(&self) -> rusqlite::Result<()> {
-        let mut state = self.index_maintenance.borrow_mut();
-        if let Some(migration) = state.as_mut() {
-            migration.finish()?;
+    /// Complete ordered warning writes before an explicit deletion or a timing probe reads them.
+    pub(crate) fn flush_writer(&self) -> rusqlite::Result<()> {
+        let state = self.writer.borrow();
+        match state.as_ref() {
+            Some(writer) => writer.flush(),
+            None => Ok(()),
         }
-        *state = None;
-        Ok(())
     }
 
-    /// Queue warning mutations during index maintenance, or execute after its queue closes.
+    /// Queue every production mutation; in-memory test stores execute directly on their connection.
     /// Queued mutations return zero immediately; the worker publishes committed episode revisions.
     fn write(&self, write: WarnWrite) -> rusqlite::Result<usize> {
-        let write = {
-            let state = self.index_maintenance.borrow();
-            match state.as_ref() {
-                Some(migration) => match migration.submit(write)? {
-                    None => return Ok(0),
-                    Some(write) => write,
-                },
-                None => return write.execute(&self.conn, &self.revision),
+        {
+            let state = self.writer.borrow();
+            if let Some(writer) = state.as_ref() {
+                writer.submit(write)?;
+                return Ok(0);
             }
-        };
+        }
         write.execute(&self.conn, &self.revision)
     }
 
-    /// Detect missing read accelerators using schema metadata rather than scanning the log.
-    fn needs_recent_indexes(&self) -> rusqlite::Result<bool> {
+    /// Detect missing read and retention accelerators without scanning the episode log.
+    fn needs_read_indexes(&self) -> rusqlite::Result<bool> {
         self.conn.query_row(
-            "SELECT COUNT(*) != 2 FROM sqlite_master WHERE type = 'index' \
-             AND name IN ('ix_warn_core_time', 'ix_warn_server_null_time')",
+            "SELECT COUNT(*) != 3 FROM sqlite_master WHERE type = 'index' \
+             AND name IN ('ix_warn_core_time', 'ix_warn_server_null_time', 'ix_warn_start_time')",
             [],
             |row| row.get(0),
         )
@@ -234,18 +268,26 @@ impl WarnStore {
         self.revision.load(Ordering::Acquire)
     }
 
-    /// Append one closed episode and return its database row id.
-    ///
-    /// The row id keys this episode's persisted history slice (`core_warning_series.episode_id`), so
-    /// the caller keeps it to capture that slice.
+    /// Append one closed episode without a topology capture and return its reserved row id.
+    #[cfg(test)]
+    pub(crate) fn insert_episode(&self, episode: &WarnEpisode) -> rusqlite::Result<i64> {
+        self.insert_episode_with_slices(episode, Vec::new())
+    }
+
+    /// Append one closed episode and its initial capture in one writer transaction.
     ///
     /// Args:
     ///     episode: A resolved episode (its `end_ms` is normally set).
+    ///     slices: Encoded server and per-core series captured at close.
     ///
     /// Returns:
-    ///     A stable row id after insertion or maintenance-queue acceptance, or a SQLite error.
-    ///     Queued episodes publish their revision only after the worker commits the row.
-    pub(crate) fn insert_episode(&self, episode: &WarnEpisode) -> rusqlite::Result<i64> {
+    ///     A stable row id after insertion or writer acceptance, or a SQLite error. Queued episodes
+    ///     publish their revision only after the transaction commits.
+    pub(crate) fn insert_episode_with_slices(
+        &self,
+        episode: &WarnEpisode,
+        slices: Vec<WarnSlice>,
+    ) -> rusqlite::Result<i64> {
         let id = self.episode_id.get().checked_add(1).ok_or_else(|| {
             rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
@@ -255,6 +297,7 @@ impl WarnStore {
         self.write(WarnWrite::Episode {
             id,
             episode: episode.clone(),
+            slices,
         })?;
         self.episode_id.set(id);
         Ok(id)
@@ -480,7 +523,8 @@ impl WarnStore {
     ///     samples: 1 Hz `(cpu %, mem %)` pairs across the window.
     ///
     /// Returns:
-    ///     Unit after persistence or ordered migration-queue acceptance, or a SQLite error.
+    ///     Unit after persistence or writer acceptance, or a SQLite error.
+    #[cfg(test)]
     pub(crate) fn insert_series(
         &self,
         episode_id: i64,
@@ -489,13 +533,22 @@ impl WarnStore {
         base_ms: i64,
         samples: &[(u8, u8)],
     ) -> rusqlite::Result<()> {
-        let blob = encode_series(base_ms, samples);
-        self.write(WarnWrite::Slice {
+        self.insert_slices(
             episode_id,
-            badge,
-            subject: subject.to_owned(),
-            blob,
-        })?;
+            vec![WarnSlice::pairs(badge, subject, base_ms, samples)],
+        )
+    }
+
+    /// Persist one complete episode recapture in a single writer transaction.
+    pub(crate) fn insert_slices(
+        &self,
+        episode_id: i64,
+        slices: Vec<WarnSlice>,
+    ) -> rusqlite::Result<()> {
+        if slices.is_empty() {
+            return Ok(());
+        }
+        self.write(WarnWrite::Capture { episode_id, slices })?;
         Ok(())
     }
 
@@ -538,7 +591,8 @@ impl WarnStore {
     ///     samples: 1 Hz round-trip samples (ms) across the window.
     ///
     /// Returns:
-    ///     Unit after persistence or ordered migration-queue acceptance, or a SQLite error.
+    ///     Unit after persistence or writer acceptance, or a SQLite error.
+    #[cfg(test)]
     pub(crate) fn insert_ping_series(
         &self,
         episode_id: i64,
@@ -547,14 +601,10 @@ impl WarnStore {
         base_ms: i64,
         samples: &[u16],
     ) -> rusqlite::Result<()> {
-        let blob = encode_u16_series(base_ms, samples);
-        self.write(WarnWrite::Slice {
+        self.insert_slices(
             episode_id,
-            badge,
-            subject: subject.to_owned(),
-            blob,
-        })?;
-        Ok(())
+            vec![WarnSlice::ping(badge, subject, base_ms, samples)],
+        )
     }
 
     /// Read back one episode's persisted ping slice under `subject`, if captured.
@@ -610,10 +660,10 @@ impl WarnStore {
     /// Returns:
     ///     How many of the core's own episodes were deleted.
     pub(crate) fn forget_core(&self, core: CoreId) -> rusqlite::Result<usize> {
-        if let Err(error) = self.finish_index_maintenance() {
+        if let Err(error) = self.flush_writer() {
             // Deletion needs no series uniqueness constraint; an index failure must not prevent
             // cleanup after all queued writes have completed (or individually reported failure).
-            log::warn!("core warnings maintenance before deletion failed: {error}");
+            log::warn!("core warnings writer flush before deletion failed: {error}");
         }
         let core = core as i64;
         let tx = self.conn.unchecked_transaction()?;
@@ -633,7 +683,7 @@ impl WarnStore {
     }
 }
 
-/// Write an episode with its reserved id on either the UI connection or the maintenance worker.
+/// Write an episode with its reserved id on either the test connection or the background writer.
 fn insert_episode_row(
     conn: &Connection,
     id: i64,
@@ -650,6 +700,19 @@ fn insert_episode_row(
             i64::from(episode.snap.free_mb), i64::from(episode.snap.used_mb), i64::from(episode.snap.logical_cpus),
             i64::from(episode.snap.round_trip_ms), i64::from(episode.snap.order_api_latency_ms),
         ],
+    )
+}
+
+/// Write one already-encoded series inside its episode's capture transaction.
+fn insert_slice_row(
+    conn: &Connection,
+    episode_id: i64,
+    slice: &WarnSlice,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "INSERT OR REPLACE INTO core_warning_series (episode_id, badge, subject, blob) \
+         VALUES (?1, ?2, ?3, ?4)",
+        params![episode_id, slice.badge, slice.subject, slice.blob],
     )
 }
 
@@ -670,21 +733,57 @@ pub(crate) fn read_recent_episodes_for_scope(
     server_ips: &HashSet<IpAddr>,
     limit: usize,
 ) -> rusqlite::Result<Vec<WarnEpisode>> {
-    if !path.exists() {
+    let Some(store) = open_read_only_store(path)? else {
         return Ok(Vec::new());
+    };
+    store.recent_episodes_for_scope(core_ids, server_ips, limit)
+}
+
+/// Read one server's chart episodes at `path` on the caller's independent read-only connection.
+pub(crate) fn read_episodes_for_server(
+    path: &Path,
+    ip: IpAddr,
+    from_ms: i64,
+    to_ms: i64,
+) -> rusqlite::Result<Vec<WarnEpisode>> {
+    let Some(store) = open_read_only_store(path)? else {
+        return Ok(Vec::new());
+    };
+    store.episodes_for_server(ip, from_ms, to_ms)
+}
+
+/// Read all three persisted server series for one hovered episode on a background connection.
+pub(crate) fn read_episode_series(
+    path: &Path,
+    episode_id: u64,
+) -> rusqlite::Result<PersistedWarnSeries> {
+    let Some(store) = open_read_only_store(path)? else {
+        return Ok(PersistedWarnSeries::default());
+    };
+    let id = episode_id as i64;
+    Ok(PersistedWarnSeries {
+        server: store.series_for_episode(id, 0, "server")?,
+        ping: store.ping_series_for_episode(id, 0, "ping")?,
+        exch: store.ping_series_for_episode(id, 0, "exch")?,
+    })
+}
+
+/// Open a store confined to one background reader, returning `None` for an absent database.
+fn open_read_only_store(path: &Path) -> rusqlite::Result<Option<WarnStore>> {
+    if !path.exists() {
+        return Ok(None);
     }
     let conn = Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
-    let store = WarnStore {
+    Ok(Some(WarnStore {
         conn,
         revision: Arc::new(AtomicU64::new(0)),
         episode_id: Cell::new(0),
-        index_maintenance: RefCell::new(None),
-    };
-    store.recent_episodes_for_scope(core_ids, server_ips, limit)
+        writer: RefCell::new(None),
+    }))
 }
 
 /// Episodes per core in the warnings database at `path`, read on a read-only connection so the

@@ -292,8 +292,12 @@ impl OrderLineStore {
         }
     }
 
-    /// File one closed order where `market_draw_orders` will find it: the map AND the closed ring.
+    /// Files one archived order in the map, closure ring, and per-market draw index.
     fn insert_closed(&mut self, order: RetainedOrder) {
+        self.closed_draw_per_market
+            .entry(order.market.clone())
+            .or_default()
+            .push_back(order.uid);
         self.closed_ring.push_back(order.uid);
         self.orders.insert(order.uid, order);
     }

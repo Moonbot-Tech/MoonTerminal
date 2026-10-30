@@ -1,6 +1,7 @@
 //! Uniform/storage-buffer uploads and bind-group preparation for `WgpuLayers`.
 
 use super::*;
+use crate::chartdx::candle_window::{CandleUpload, CandleWindow};
 
 impl WgpuLayers {
     /// Uploads shared geometry and styles, refreshing bindings when buffers are recreated.
@@ -160,42 +161,38 @@ impl WgpuLayers {
             );
             self.book_buffer_dirty = false;
         }
-        if self.userdata_buffers_dirty
-            || self.zone_buffer.buffer.is_none()
-            || self.hline_buffer.buffer.is_none()
-            || self.seg_buffer.buffer.is_none()
-            || self.marker_buffer.buffer.is_none()
-        {
-            binds_dirty |= self.zone_buffer.write(
-                device,
-                queue,
-                "moon_chart_zones",
-                wgpu::BufferUsages::STORAGE,
-                &self.zones,
-            );
-            binds_dirty |= self.hline_buffer.write(
-                device,
-                queue,
-                "moon_chart_hlines",
-                wgpu::BufferUsages::STORAGE,
-                &self.hlines,
-            );
-            binds_dirty |= self.seg_buffer.write(
-                device,
-                queue,
-                "moon_chart_segs",
-                wgpu::BufferUsages::STORAGE,
-                &self.segs,
-            );
-            binds_dirty |= self.marker_buffer.write(
-                device,
-                queue,
-                "moon_chart_markers",
-                wgpu::BufferUsages::STORAGE,
-                &self.markers,
-            );
-            self.userdata_buffers_dirty = false;
-        }
+        binds_dirty |= Self::upload_flagged(
+            &mut self.zones_dirty,
+            &mut self.zone_buffer,
+            device,
+            queue,
+            "moon_chart_zones",
+            &self.zones,
+        );
+        binds_dirty |= Self::upload_flagged(
+            &mut self.hlines_dirty,
+            &mut self.hline_buffer,
+            device,
+            queue,
+            "moon_chart_hlines",
+            &self.hlines,
+        );
+        binds_dirty |= Self::upload_flagged(
+            &mut self.segs_dirty,
+            &mut self.seg_buffer,
+            device,
+            queue,
+            "moon_chart_segs",
+            &self.segs,
+        );
+        binds_dirty |= Self::upload_flagged(
+            &mut self.markers_dirty,
+            &mut self.marker_buffer,
+            device,
+            queue,
+            "moon_chart_markers",
+            &self.markers,
+        );
         if self.clusters_dirty || self.cluster_buffer.buffer.is_none() {
             binds_dirty |= self.cluster_buffer.write(
                 device,
@@ -206,18 +203,17 @@ impl WgpuLayers {
             );
             self.clusters_dirty = false;
         }
+        binds_dirty |= Self::upload_candle_window(
+            &mut self.candles,
+            &mut self.candle_buffer,
+            device,
+            queue,
+            "moon_chart_candles",
+        );
         if self.candle_buffers_dirty
-            || self.candle_buffer.buffer.is_none()
             || self.candle_style_uniform.buffer.is_none()
             || self.volume_style_uniform.buffer.is_none()
         {
-            binds_dirty |= self.candle_buffer.write(
-                device,
-                queue,
-                "moon_chart_candles",
-                wgpu::BufferUsages::STORAGE,
-                &self.candles,
-            );
             binds_dirty |= self.candle_style_uniform.write(
                 device,
                 queue,
@@ -234,17 +230,14 @@ impl WgpuLayers {
             );
             self.candle_buffers_dirty = false;
         }
-        if self.path_buffers_dirty
-            || self.path_buffer.buffer.is_none()
-            || self.path_style_uniform.buffer.is_none()
-        {
-            binds_dirty |= self.path_buffer.write(
-                device,
-                queue,
-                "moon_chart_path",
-                wgpu::BufferUsages::STORAGE,
-                &self.path_candles,
-            );
+        binds_dirty |= Self::upload_candle_window(
+            &mut self.path_candles,
+            &mut self.path_buffer,
+            device,
+            queue,
+            "moon_chart_path",
+        );
+        if self.path_buffers_dirty || self.path_style_uniform.buffer.is_none() {
             binds_dirty |= self.path_style_uniform.write(
                 device,
                 queue,
@@ -286,6 +279,86 @@ impl WgpuLayers {
         }
         if binds_dirty {
             self.prepared_binds = None;
+        }
+    }
+
+    /// Uploads one userdata buffer when its flag is set or the GPU buffer does not exist yet.
+    ///
+    /// Args:
+    ///     dirty: Set by `set_userdata` for this layer. Cleared once the bytes are queued.
+    ///     slot: The GPU buffer for that layer.
+    ///     data: The CPU mirror `set_userdata` kept.
+    ///
+    /// Returns:
+    ///     Whether the GPU buffer was recreated, so bind groups must be rebuilt.
+    fn upload_flagged<T: bytemuck::Pod>(
+        dirty: &mut bool,
+        slot: &mut BufferSlot,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        label: &str,
+        data: &[T],
+    ) -> bool {
+        if !*dirty && slot.buffer.is_some() {
+            return false;
+        }
+        let recreated = slot.write(device, queue, label, wgpu::BufferUsages::STORAGE, data);
+        *dirty = false;
+        recreated
+    }
+
+    /// Uploads the candle window's pending range. A lost buffer rewrites every retained row.
+    ///
+    /// Args:
+    ///     window: CPU mirror that knows which slots a tail patch dirtied.
+    ///     slot: The GPU storage buffer those rows live in.
+    ///
+    /// Returns:
+    ///     Whether the GPU buffer was recreated.
+    fn upload_candle_window(
+        window: &mut CandleWindow,
+        slot: &mut BufferSlot,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        label: &str,
+    ) -> bool {
+        if slot.buffer.is_none() {
+            window.invalidate_gpu();
+        }
+        let (upload, rows, _dropped) = window.take_upload();
+        match upload {
+            CandleUpload::None => {
+                if slot.buffer.is_none() {
+                    slot.write(device, queue, label, wgpu::BufferUsages::STORAGE, rows)
+                } else {
+                    false
+                }
+            }
+            CandleUpload::Full => {
+                slot.write(device, queue, label, wgpu::BufferUsages::STORAGE, rows)
+            }
+            CandleUpload::Range { first, len } => {
+                let end = first.saturating_add(len).min(rows.len());
+                let recreated = if first < end {
+                    slot.write_range(
+                        device,
+                        queue,
+                        label,
+                        wgpu::BufferUsages::STORAGE,
+                        first,
+                        &rows[first..end],
+                        rows.len(),
+                    )
+                } else {
+                    slot.buffer.is_none()
+                };
+                if recreated {
+                    slot.write(device, queue, label, wgpu::BufferUsages::STORAGE, rows);
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 

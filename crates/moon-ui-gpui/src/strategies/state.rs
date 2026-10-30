@@ -613,6 +613,7 @@ impl StrategiesView {
             tree_state,
             selected_section: session.as_ref().map(|s| s.selected_section).unwrap_or(0),
             staged: HashMap::new(),
+            row_cache: Default::default(),
             field_edits: HashMap::new(),
             last_edit_note_seq: HashMap::new(),
             field_inputs: HashMap::new(),

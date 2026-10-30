@@ -108,6 +108,7 @@ pub(in crate::chartdx) fn sync_clusters(
                 pr.cluster_request = Some(result.request);
                 let old_fold = pr.cluster_folded.replace(result.folded);
                 let old_discs = std::mem::replace(&mut pr.cluster_discs, result.discs);
+                super::super::text::note_cluster_discs_published(pr);
                 let old_markers = pr.layers.set_clusters(result.markers);
                 worker::release_later((old_fold, old_discs, old_markers));
                 pr.cluster_on = true;
@@ -185,6 +186,7 @@ fn clear(pr: &mut PaneRender) -> bool {
     let old_fold = pr.cluster_folded.take();
     pr.cluster_request = None;
     let old_discs = std::mem::take(&mut pr.cluster_discs);
+    super::super::text::note_cluster_discs_published(pr);
     pr.cluster_dirty = true;
     if !pr.cluster_uploaded {
         return false;

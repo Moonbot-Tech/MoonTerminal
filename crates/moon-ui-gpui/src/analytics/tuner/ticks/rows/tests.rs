@@ -1242,6 +1242,27 @@ fn scale_probe_snapshot_updates() {
     }
 }
 
+/// Empty listener hops must not rebuild an index or summaries over the whole deal table.
+#[test]
+#[ignore = "scale probe: run by hand with --ignored --nocapture"]
+fn scale_probe_empty_fetch_hops_100k() {
+    let mut state = TicksState::default();
+    state.data.apply(Ok(TicksData {
+        rows: heavy_rows(100_000).into(),
+        ..Default::default()
+    }));
+    let revision = state.rows_rev;
+    let mut samples = Vec::new();
+    for _ in 0..7 {
+        let started = std::time::Instant::now();
+        state.edit_rows(std::iter::empty());
+        samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+        assert_eq!(state.rows_rev, revision);
+    }
+    samples.sort_by(f64::total_cmp);
+    println!("[probe] tape_empty_hop=100000 median={:.6}ms", samples[3]);
+}
+
 /// Compaction must retain every kind/strategy/core combination and the grid's full row layout.
 #[test]
 fn compact_grid_scope_preserves_kinds_pairs_and_grid_rows() {

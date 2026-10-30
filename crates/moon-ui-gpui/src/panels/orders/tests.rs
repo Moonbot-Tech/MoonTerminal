@@ -9,7 +9,8 @@ use moon_core::feed::OrderRow;
 use super::sort::orders_signatures_from;
 use super::{
     ObserveAction, OrderEntry, OrdersCacheKey, OrdersInputs, OrdersViewState, apply_main_lift,
-    collect_scoped, main_highlights, orders_observe_action, orders_observe_step, prepare_entries,
+    collect_scoped, collect_scoped_shared, main_highlights, orders_observe_action,
+    orders_observe_step, prepare_entries,
 };
 
 /// Measure a complete revision with 10 cores and 200 traced open orders per core.
@@ -59,6 +60,8 @@ fn bench_goal_b_orders_revision() {
                 ),
                 &view,
                 &HashMap::new(),
+                &[],
+                None,
             )
         });
     }
@@ -77,9 +80,34 @@ fn bench_goal_b_orders_revision() {
             ),
             &view,
             &HashMap::new(),
+            &[],
+            None,
         )
-        .0
     };
+    let previous = current();
+    let previous_rows: HashMap<_, _> = previous
+        .0
+        .iter()
+        .map(|entry| ((entry.core, entry.row.uid), entry.row.clone()))
+        .collect();
+    let revisions: HashMap<_, _> = (1..=10).map(|core| (core, 0)).collect();
+    measure("goal_b_orders_reused_revision", 100, || {
+        prepare_entries(
+            collect_scoped_shared(
+                cores
+                    .iter()
+                    .map(|(id, name, rows)| (*id, name.as_str(), rows.as_slice())),
+                |_, _| true,
+                &previous_rows,
+                &revisions,
+                &revisions,
+            ),
+            &view,
+            &HashMap::new(),
+            &previous.0,
+            Some(previous.3),
+        )
+    });
     // Frozen pre-change inline-row layout and Token comparator, including source-order ties.
     let original = || {
         let mut entries: Vec<_> = cores
@@ -96,7 +124,7 @@ fn bench_goal_b_orders_revision() {
         });
         entries
     };
-    let actual = current();
+    let actual = current().0;
     let expected = original();
     assert_eq!(
         actual.len(),
@@ -213,11 +241,11 @@ fn reference_collect(cores: &[(u64, String, Vec<OrderRow>)]) -> Vec<OrderEntry> 
     let mut entries = Vec::new();
     for (core, name, rows) in cores {
         for row in rows {
-            entries.push(OrderEntry {
-                core: *core,
-                core_name: name.clone(),
-                row: Box::new(row.clone()),
-            });
+            entries.push(OrderEntry::new(
+                *core,
+                name,
+                std::sync::Arc::new(row.clone()),
+            ));
         }
     }
     entries
@@ -508,8 +536,13 @@ fn bench_orders_rebuild_5k() {
         .map(|core| (core, "TOKEN1USDT".to_string()))
         .collect();
     measure("bench_orders_rebuild_5k", 200, || {
-        let (mut entries, real, emu) =
-            prepare_entries(reference_collect(black_box(&cores)), &view, &overlays);
+        let (mut entries, real, emu, _) = prepare_entries(
+            reference_collect(black_box(&cores)),
+            &view,
+            &overlays,
+            &[],
+            None,
+        );
         let highlights = reference_highlights(&entries, &main_open);
         apply_main_lift(&mut entries, &view, &highlights, &main_open);
         black_box((real, emu, highlights));
@@ -609,4 +642,73 @@ fn bench_orders_highlight_5k() {
     measure("bench_orders_highlight_5k", 2_000, || {
         main_highlights(black_box(&entries), black_box(&main_open))
     });
+}
+
+/// One changed core does not force clones elsewhere, and its unchanged rows stay shared too.
+#[test]
+fn shared_collect_tracks_each_core_revision() {
+    let cores = fixture();
+    let revisions: HashMap<_, _> = cores.iter().map(|(core, _, _)| (*core, 0)).collect();
+    let collect = |rows: &[(u64, String, Vec<OrderRow>)], previous, current| {
+        collect_scoped_shared(
+            rows.iter()
+                .map(|(core, name, rows)| (*core, name.as_str(), rows.as_slice())),
+            |_, _| true,
+            previous,
+            current,
+            &revisions,
+        )
+    };
+    let empty = HashMap::new();
+    let initial = collect(&cores, &empty, &revisions);
+    let previous: HashMap<_, _> = initial
+        .iter()
+        .map(|entry| ((entry.core, entry.row.uid), entry.row.clone()))
+        .collect();
+    let shared = collect(&cores, &previous, &revisions);
+    assert!(std::sync::Arc::ptr_eq(&initial[0].row, &shared[0].row));
+
+    let mut updated = cores.clone();
+    updated[0].2[0].price += 1.0;
+    let mut changed_revisions = revisions.clone();
+    changed_revisions.insert(updated[0].0, 1);
+    let fresh = collect(&updated, &previous, &changed_revisions);
+    assert!(!std::sync::Arc::ptr_eq(&initial[0].row, &fresh[0].row));
+    assert!(std::sync::Arc::ptr_eq(&initial[1].row, &fresh[1].row));
+    assert_eq!(fresh[0].row.price, updated[0].2[0].price);
+}
+
+/// Equal active keys reuse the old permutation even when the source sequence is reversed.
+#[test]
+fn unchanged_sort_keys_reuse_the_previous_permutation() {
+    let cores = fixture();
+    let view = OrdersViewState {
+        kind: super::OrderKind::All,
+        header_sort: Some((super::OrdCol::Token, true)),
+        ..Default::default()
+    };
+    let collect = |rows: &[(u64, String, Vec<OrderRow>)]| {
+        collect_scoped(
+            rows.iter()
+                .map(|(core, name, rows)| (*core, name.as_str(), rows.as_slice())),
+            |_, _| true,
+        )
+    };
+    let first = prepare_entries(collect(&cores), &view, &HashMap::new(), &[], None);
+    let reversed: Vec<_> = cores.iter().rev().cloned().collect();
+    let second = prepare_entries(
+        collect(&reversed),
+        &view,
+        &HashMap::new(),
+        &first.0,
+        Some(first.3),
+    )
+    .0;
+    let ids = |entries: &[OrderEntry]| {
+        entries
+            .iter()
+            .map(|entry| (entry.core, entry.row.uid))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&second), ids(&first.0));
 }

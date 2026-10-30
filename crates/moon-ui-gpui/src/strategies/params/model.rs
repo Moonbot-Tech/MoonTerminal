@@ -29,10 +29,7 @@ impl StrategiesView {
         // `multi` / `common` / `differ` are computed before the body so a full-mode flatten can
         // consume them; the per-section path below applies the same three filters at render time
         // in `params_panel`, unchanged from before this move.
-        let row_pairs: Vec<(Key, StrategyRow)> = multi_row_pairs(self, store)
-            .into_iter()
-            .map(|(key, row)| (key, row.clone()))
-            .collect();
+        let row_pairs = multi_row_pairs_shared(self, store);
         let multi = row_pairs.len() > 1;
         let common = common_fields(self, store);
         let differ = kinds_differ(self, store);

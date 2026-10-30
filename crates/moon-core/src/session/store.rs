@@ -29,7 +29,7 @@ mod freshness;
 /// Per-core strategy and quote indexes derived from each order batch.
 mod order_index;
 /// Bounded disposal of consumed order batches outside the UI drain.
-mod order_retirement;
+pub(super) mod order_retirement;
 /// Retained row models and per-core capacity limits.
 mod rows;
 
@@ -907,6 +907,30 @@ impl CoreData {
     ///     Nothing; retained state and the relevant revision counter update in place. Consumed
     ///     order batches transfer their allocation teardown to the retirement worker.
     pub fn apply(&mut self, msg: FeedMsg) {
+        self.apply_with_retirement(msg, &mut order_retirement::retire);
+    }
+
+    /// Applies one UI-drained message, returning false when disposal needs the next drain.
+    /// The manager retains that one batch and stops consuming until a disposal wake.
+    pub(super) fn apply_for_drain(
+        &mut self,
+        msg: FeedMsg,
+        retirement: &mut order_retirement::DeferredRetirement,
+        mut wake: Option<crate::feed::FeedWakeTx>,
+    ) -> bool {
+        let mut admitted = true;
+        self.apply_with_retirement(msg, &mut |rows| {
+            admitted = retirement.enqueue(rows, wake.take())
+        });
+        admitted
+    }
+
+    /// Shares state publication between standalone application and nonblocking session drains.
+    fn apply_with_retirement(
+        &mut self,
+        msg: FeedMsg,
+        retire: &mut dyn FnMut(crate::feed::OrderRows),
+    ) {
         match msg {
             FeedMsg::TimeOffset(status) => {
                 // Compare before bumping, the same way every other polled counter here does: this
@@ -999,7 +1023,7 @@ impl CoreData {
                     self.order_lines_rev = self.order_lines_rev.wrapping_add(1);
                     self.order_lines_rev_ms = now_unix_ms_i64();
                 }
-                order_retirement::retire(retired);
+                retire(retired);
             }
             FeedMsg::OrderLines(mut payload) => {
                 let mut changed = self.ingest_captured_turns(&mut payload.captured_turns);
@@ -1008,7 +1032,7 @@ impl CoreData {
                     self.order_lines_rev = self.order_lines_rev.wrapping_add(1);
                     self.order_lines_rev_ms = now_unix_ms_i64();
                 }
-                order_retirement::retire(payload);
+                retire(payload);
             }
             FeedMsg::Detects(detects) => {
                 if !detects.is_empty() {

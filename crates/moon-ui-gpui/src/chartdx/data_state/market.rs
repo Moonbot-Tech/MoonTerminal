@@ -18,8 +18,9 @@ pub(crate) use candle_apply::{CandleApply, apply_candle_read, apply_price_line};
 pub(in crate::chartdx) use spans::read_volume_sets;
 use spans::{merge_readouts, resolve_span_keys, same_period_set, volume_sample_timeframe_bound};
 use window::{
-    ARB_READ_PERIOD_MS, HVOL_RECHECK_MS, book_instances_stale, candles_disabled,
-    chart_history_floor_ms, hide_start_rel, price_fit_window_changed,
+    ARB_READ_PERIOD_MS, HVOL_RECHECK_MS, WindowPull, apply_window_pull, book_instances_stale,
+    candles_disabled, chart_history_floor_ms, hide_start_rel, price_fit_window_changed,
+    retained_caption_due,
 };
 
 impl ChartDataState {
@@ -2006,8 +2007,8 @@ impl ChartDataState {
                     sell: [sell[0], sell[1], sell[2]],
                 }
             };
-            // The userdata layer draws over the base, so new discs ask for a present and no rebake
-            // (wgpu and Metal, which keep the layer in their base cache, invalidate it themselves).
+            // The userdata layer draws over the base on every backend, so new discs ask for a
+            // present and no rebake.
             if super::clusters::sync_clusters(pr, &cluster_input, retry_now) {
                 pr.gpu_prepare_dirty = true;
                 text_changed = true;
@@ -2154,10 +2155,34 @@ impl ChartDataState {
                 .as_ref()
                 .filter(|_| wants_figures)
                 .and_then(|(core, market)| source.market_figures(*core, market, wants_session));
-            let windows = target
-                .as_ref()
-                .filter(|_| wants_windows)
-                .and_then(|(core, market)| source.market_windows(*core, market));
+            // Same clock as the volume captions below: `market_windows` walks retained buckets,
+            // and a busy coin revises several times a second. Hold the last readout inside the
+            // period; a new market reads immediately.
+            let windows = if !wants_windows {
+                WindowPull::Off
+            } else if let Some((core, market)) = target.as_ref() {
+                let due = st.panes.get(*idx).is_none_or(|pr| {
+                    retained_caption_due(
+                        pr.label_windows_read_ms,
+                        arb_now_ms,
+                        &pr.label_windows_market,
+                        market,
+                    )
+                });
+                if due {
+                    WindowPull::Read {
+                        market: market.clone(),
+                        value: source.market_windows(*core, market),
+                    }
+                } else {
+                    WindowPull::Hold
+                }
+            } else {
+                WindowPull::Read {
+                    market: String::new(),
+                    value: None,
+                }
+            };
             // The pointer's own moment on THIS pane, quantized so a pixel of mouse travel is not a
             // new period. `None` on every pane the pointer is not over, which is what makes a
             // measuring caption there print its dash.
@@ -2243,7 +2268,13 @@ impl ChartDataState {
                 pr.delta_24h = readout.map(|r| r.delta_24h_pct);
                 pr.label_context = context;
                 pr.label_figures = figures;
-                pr.label_windows = windows;
+                apply_window_pull(
+                    &mut pr.label_windows,
+                    &mut pr.label_windows_read_ms,
+                    &mut pr.label_windows_market,
+                    windows,
+                    arb_now_ms,
+                );
                 pr.label_now_ms = countdown_now_ms;
             }
             // Captions are formatted HERE, on a revision. The frame path formats them too, but

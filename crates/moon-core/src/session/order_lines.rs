@@ -222,6 +222,8 @@ impl LineTrace {
         changed || rebased
     }
 
+    /// Synchronizes arbitrary server edits while reusing the unchanged prefix and allocation.
+    /// No append-only protocol assumption is made: corrections and truncations replace the tail.
     fn update_server(&mut self, trace: Option<&OrderTrace>) -> bool {
         let Some(trace) = trace else {
             let changed = !self.server_points.is_empty()
@@ -239,20 +241,25 @@ impl LineTrace {
         let tmp = trace.tmp_point.map(|p| (p.time_ms, p.price));
         let stop_price = trace.stop_price;
         let stop_time = trace.stop_time_ms;
-        // Compared in place: every batch carries every order's trace, and an unchanged one must
-        // not cost a fresh vector just to be found equal.
-        let same_points = self.server_points.len() == trace.points.len()
-            && self
-                .server_points
-                .iter()
-                .zip(&trace.points)
-                .all(|(held, p)| *held == (p.time_ms, p.price));
+        // Rows contain complete traces without a trusted prefix revision. Inspect the prefix
+        // even on append, so an earlier correction can never be mistaken for an unchanged tail.
+        let prefix = self
+            .server_points
+            .iter()
+            .zip(&trace.points)
+            .position(|(held, p)| *held != (p.time_ms, p.price))
+            .unwrap_or(self.server_points.len().min(trace.points.len()));
+        let same_points = prefix == self.server_points.len() && prefix == trace.points.len();
         let changed = !same_points
             || self.tmp_point != tmp
             || self.server_stop_price != stop_price
             || self.server_stop_time_ms != stop_time;
         if changed {
-            self.server_points = trace.points.iter().map(|p| (p.time_ms, p.price)).collect();
+            if !same_points {
+                self.server_points.truncate(prefix);
+                self.server_points
+                    .extend(trace.points[prefix..].iter().map(|p| (p.time_ms, p.price)));
+            }
             self.tmp_point = tmp;
             self.server_stop_price = stop_price;
             self.server_stop_time_ms = stop_time;
@@ -458,6 +465,9 @@ pub struct OrderLineStore {
     /// `market_draw_orders` caps each market, so the retain cap does too. An empty queue is
     /// removed. A uid that closes again is dropped from this queue first, so it occupies one slot.
     closed_per_market: HashMap<String, VecDeque<u64>>,
+    /// Draw-order index for both live-retained and archived lines. Archived lines intentionally
+    /// bypass live retention caps, so their draw membership is separate from the eviction queues.
+    closed_draw_per_market: HashMap<String, VecDeque<u64>>,
     /// Membership of the market queues, allowing first closes to skip queue and ring scans.
     closed_queued: HashSet<u64>,
     /// Evicted UIDs still in the ring; detects UID reuse before a later batch compacts them.
@@ -475,14 +485,11 @@ pub struct OrderLineStore {
     /// Closure removes an entry and revival adds it back, so update-time backstop and auto-fit work
     /// scales with live orders instead of the retained closed-history cap.
     open_uids: Vec<u64>,
-    /// Groups orders with no close time by market in retained-map iteration order. Membership and
-    /// map-layout changes rebuild it; price and trace edits reuse it without a history scan.
+    /// Groups orders with no close time by market. Consumers sort the open prefix by arrival
+    /// before painting; insertion, closure and revival maintain membership without a history scan.
     open_by_market: HashMap<String, Vec<u64>>,
     /// Markets with at least one open order whose panic-sell flag is armed.
     open_panic_markets: HashSet<String>,
-    /// Retained-map length at the last draw-index rebuild. Archived appends can grow the map
-    /// outside live ingest and rehash open UIDs; the next changed batch must preserve that order.
-    draw_index_len: usize,
     /// Cached per-market price range for auto-Y over open-order buy/sell lines and active protective
     /// stops of filled orders. Stop, trailing, and VStop prices exist only after fill. The cache is
     /// rebuilt only when membership or a contributing current price changes, rather than on every
@@ -507,6 +514,7 @@ impl Default for OrderLineStore {
             orders: HashMap::new(),
             closed_ring: VecDeque::new(),
             closed_per_market: HashMap::new(),
+            closed_draw_per_market: HashMap::new(),
             closed_queued: HashSet::new(),
             closed_dead: HashSet::new(),
             closed_keep: keep,
@@ -514,7 +522,6 @@ impl Default for OrderLineStore {
             open_uids: Vec::new(),
             open_by_market: HashMap::new(),
             open_panic_markets: HashSet::new(),
-            draw_index_len: 0,
             auto_fit_ranges: BTreeMap::new(),
             rev: 0,
             seq_counter: 0,
@@ -541,8 +548,8 @@ impl OrderLineStore {
         self.update_rows(rows, skew_generation, true)
     }
 
-    /// Applies corrected rows, checking absent UIDs only for a complete snapshot. Reuses draw
-    /// membership until insertion, closure or revival can change its contents or iteration order.
+    /// Applies corrected rows, checking absent UIDs only for a complete snapshot. Updates draw
+    /// membership only for the UIDs whose final open state changes.
     /// Auto-fit ranges refresh when open membership or a contributing line changes; panic-market
     /// membership refreshes when open membership or a panic flag changes.
     fn update_rows(&mut self, rows: &[OrderRow], skew_generation: u64, complete: bool) -> bool {
@@ -551,10 +558,7 @@ impl OrderLineStore {
         let generation = self.update_generation;
         let mut changed = false;
         let mut range_changed = false;
-        // Reprices and trace edits cannot change draw membership or HashMap iteration order.
-        // Insertions can rehash even when the new order is already terminal, so they invalidate
-        // the index too. Rebuilding on those transitions preserves the historical draw order.
-        let mut draw_membership_changed = self.draw_index_len != self.orders.len();
+        let mut draw_membership_changed = false;
         let mut panic_membership_changed = false;
         // UIDs closed by an explicit `job_is_done` flag in this update are remembered after the
         // loop because the loop holds a mutable borrow of `self.orders` through its entry.
@@ -603,8 +607,11 @@ impl OrderLineStore {
 
         for r in rows {
             let mut became_open = false;
-            let order = match self.orders.entry(r.uid) {
-                Entry::Occupied(entry) => entry.into_mut(),
+            let (order, was_open) = match self.orders.entry(r.uid) {
+                Entry::Occupied(entry) => {
+                    let was_open = entry.get().closed_ms.is_none();
+                    (entry.into_mut(), was_open)
+                }
                 Entry::Vacant(entry) => {
                     range_changed = true;
                     draw_membership_changed = true;
@@ -614,7 +621,7 @@ impl OrderLineStore {
                     let mut ro = RetainedOrder::new(r, now_ms, seq, skew_generation);
                     ro.chart_num = new_nums.get(&r.uid).copied().unwrap_or(0);
                     became_open = true;
-                    entry.insert(ro)
+                    (entry.insert(ro), false)
                 }
             };
             order.last_seen_ms = now_ms;
@@ -627,7 +634,7 @@ impl OrderLineStore {
             // against a leading core clock). `entry_fill_ms`'s recompute below joins this same
             // catch-up, and so does each line's FIRST STEP, rebased from its freshly derived start
             // by the `stale_correction` flag handed to `LineTrace::update`. `server_points` need no
-            // catch-up at all: `update_server` overwrites them wholesale from the corrected row.
+            // catch-up at all: `update_server` synchronizes every corrected point from the row.
             //
             // An order absent from this batch keeps its old start until it appears again — a
             // closed line therefore stays where the previous estimate put it, which is the honest
@@ -821,12 +828,24 @@ impl OrderLineStore {
             if index_open {
                 self.open_uids.push(r.uid);
             }
+            let is_open = order.closed_ms.is_none();
+            if is_open != was_open {
+                if is_open {
+                    self.open_by_market
+                        .entry(order.market.clone())
+                        .or_default()
+                        .push(r.uid);
+                } else {
+                    Self::remove_open_uid(&mut self.open_by_market, &order.market, r.uid);
+                }
+            }
         }
 
         // Untrack before recording closes. A uid that revives and closes again in this
         // batch is in both lists; dropping it first is what lets the new close count once
         // instead of being removed by a later untrack.
         for uid in reopened {
+            self.untrack_draw_closed(uid);
             self.untrack_closed_uid(uid);
         }
 
@@ -853,6 +872,7 @@ impl OrderLineStore {
                 ord.closed_ms = Some(ord.last_seen_ms);
                 ord.closed_reason = Some(OrderCloseReason::BackstopMissing);
                 ord.closed_store_ms = Some(now_ms);
+                Self::remove_open_uid(&mut self.open_by_market, &ord.market, uid);
                 newly_closed.push(uid);
                 closed_this_update.push(uid);
                 changed = true;
@@ -886,17 +906,6 @@ impl OrderLineStore {
             if range_changed {
                 self.rebuild_auto_fit_ranges();
             }
-            if draw_membership_changed {
-                // Draw membership follows retained close state independently of the bookkeeping index.
-                self.open_by_market.clear();
-                for order in self.orders.values().filter(|o| o.closed_ms.is_none()) {
-                    self.open_by_market
-                        .entry(order.market.clone())
-                        .or_default()
-                        .push(order.uid);
-                }
-                self.draw_index_len = self.orders.len();
-            }
             if draw_membership_changed || panic_membership_changed {
                 self.open_panic_markets = self
                     .open_uids
@@ -908,6 +917,35 @@ impl OrderLineStore {
             }
         }
         changed
+    }
+
+    /// Removes one open UID and its empty market bucket without scanning retained history.
+    fn remove_open_uid(index: &mut HashMap<String, Vec<u64>>, market: &str, uid: u64) {
+        if let Some(uids) = index.get_mut(market) {
+            uids.retain(|held| *held != uid);
+            if uids.is_empty() {
+                index.remove(market);
+            }
+        }
+    }
+
+    /// Unlinks a closed draw entry before revival, reclosure, or eviction. FIFO eviction normally
+    /// pops the market's front; a revival can remove an arbitrary entry from that market only.
+    fn untrack_draw_closed(&mut self, uid: u64) {
+        let Some(order) = self.orders.get(&uid) else {
+            return;
+        };
+        let market = &order.market;
+        if let Some(queue) = self.closed_draw_per_market.get_mut(market) {
+            if queue.front() == Some(&uid) {
+                queue.pop_front();
+            } else {
+                queue.retain(|held| *held != uid);
+            }
+            if queue.is_empty() {
+                self.closed_draw_per_market.remove(market);
+            }
+        }
     }
 
     /// Rebuilds per-market auto-fit ranges from the compact open-order index.
@@ -966,6 +1004,9 @@ impl OrderLineStore {
         self.adopt_closed_keep();
         // Drop the previous close before pushing. Otherwise a re-close counts twice and the
         // market queue evicts a line the chart still has room to draw.
+        if self.closed_queued.contains(&uid) {
+            self.untrack_draw_closed(uid);
+        }
         self.untrack_closed_uid(uid);
         if let Some(market) = self
             .orders
@@ -973,6 +1014,10 @@ impl OrderLineStore {
             .filter(|order| order.closed_ms.is_some())
             .map(|order| order.market.clone())
         {
+            self.closed_draw_per_market
+                .entry(market.clone())
+                .or_default()
+                .push_back(uid);
             self.closed_per_market
                 .entry(market.clone())
                 .or_default()
@@ -1087,6 +1132,7 @@ impl OrderLineStore {
             self.closed_queued.remove(&old);
             self.closed_dead.insert(old);
             if self.is_closed(old) {
+                self.untrack_draw_closed(old);
                 self.orders.remove(&old);
             }
         }
@@ -1102,6 +1148,15 @@ impl OrderLineStore {
 
     /// Removes dead ring entries by queue membership, including UIDs reused later in this batch.
     fn prune_dead_ring(&mut self) {
+        let removed: Vec<_> = self
+            .closed_ring
+            .iter()
+            .filter(|uid| !self.closed_queued.contains(uid))
+            .copied()
+            .collect();
+        for uid in removed {
+            self.untrack_draw_closed(uid);
+        }
         let queued = &self.closed_queued;
         self.closed_ring.retain(|uid| queued.contains(uid));
         self.closed_dead.clear();
@@ -1120,9 +1175,11 @@ impl OrderLineStore {
             };
             self.closed_dead.remove(&old);
             if !self.closed_queued.contains(&old) {
+                self.untrack_draw_closed(old);
                 continue;
             }
             self.unlink_from_market_queue(old);
+            self.untrack_draw_closed(old);
             self.orders.remove(&old);
         }
     }
@@ -1133,6 +1190,18 @@ impl OrderLineStore {
         market: &'a str,
     ) -> impl Iterator<Item = &'a RetainedOrder> + 'a {
         self.orders.values().filter(move |o| o.market == market)
+    }
+
+    /// Iterates only active orders on a market, using the incrementally maintained open index.
+    pub fn iter_open_market<'a>(
+        &'a self,
+        market: &str,
+    ) -> impl Iterator<Item = &'a RetainedOrder> + 'a {
+        self.open_by_market
+            .get(market)
+            .into_iter()
+            .flatten()
+            .filter_map(|uid| self.orders.get(uid))
     }
 
     /// Returns orders to draw for a market: every open order, followed by at most `max_closed`
@@ -1158,24 +1227,15 @@ impl OrderLineStore {
             .filter_map(|uid| self.orders.get(uid))
             .filter(|o| o.closed_ms.is_none())
             .collect();
-        let mut taken = 0usize;
-        let mut seen: HashSet<u64> = HashSet::new();
-        for uid in self.closed_ring.iter().rev() {
-            if taken >= max_closed {
-                break;
-            }
-            // `remember_closed` drops a previous entry before a re-close. A duplicate that
-            // remains is still ignored, so it cannot take a second draw slot.
-            if !seen.insert(*uid) {
-                continue;
-            }
-            if let Some(o) = self.orders.get(uid) {
-                if o.closed_ms.is_some() && o.market == market {
-                    out.push(o);
-                    taken += 1;
-                }
-            }
-        }
+        out.extend(
+            self.closed_draw_per_market
+                .get(market)
+                .into_iter()
+                .flatten()
+                .rev()
+                .take(max_closed)
+                .filter_map(|uid| self.orders.get(uid)),
+        );
         out
     }
 

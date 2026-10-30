@@ -1,6 +1,85 @@
 use super::*;
 use crate::feed::OrderTracePoint;
 
+/// Measures residual paths on ten synthetic cores, including long-lived line histories.
+#[test]
+#[ignore = "manual residual order-line scale measurement"]
+fn bench_order_line_residuals() {
+    let mut cores: Vec<_> = (0..10).map(|_| heavy_core_store()).collect();
+    for (store, rows) in &mut cores {
+        for row in rows {
+            let line = &mut store.orders.get_mut(&row.uid).unwrap().lines[0];
+            line.steps = (0..10_000)
+                .map(|i| (1000.0 + i as f64, 100.0 + (i % 2) as f32))
+                .collect();
+            let trace = row.buy_trace.as_mut().unwrap();
+            trace.points = (0..10_000)
+                .map(|i| OrderTracePoint {
+                    time_ms: 1000.0 + i as f64,
+                    price: 100.0 + (i % 2) as f32,
+                })
+                .collect();
+            line.update_server(Some(trace));
+        }
+    }
+    for mode in [
+        "membership",
+        "labels",
+        "draw",
+        "trace unchanged",
+        "trace temporary",
+    ] {
+        let mut samples = Vec::new();
+        for iteration in 0..31 {
+            let start = std::time::Instant::now();
+            for (store, rows) in &mut cores {
+                match mode {
+                    "membership" => {
+                        rows[0].job_is_done = iteration % 2 == 0;
+                        std::hint::black_box(store.update(rows, 0));
+                    }
+                    "labels" => {
+                        std::hint::black_box(
+                            store
+                                .iter_market("SYN007")
+                                .filter(|o| o.closed_ms.is_none())
+                                .count(),
+                        );
+                    }
+                    "draw" => {
+                        for market in 0..40 {
+                            std::hint::black_box(
+                                store.market_draw_orders(&format!("SYN{market:03}"), 50),
+                            );
+                        }
+                    }
+                    _ => {
+                        for row in rows {
+                            let trace = row.buy_trace.as_mut().unwrap();
+                            if mode == "trace temporary" {
+                                trace.tmp_point = Some(OrderTracePoint {
+                                    time_ms: 100_000.0 + iteration as f64,
+                                    price: 105.0,
+                                });
+                            }
+                            std::hint::black_box(
+                                store.orders.get_mut(&row.uid).unwrap().lines[0]
+                                    .update_server(Some(trace)),
+                            );
+                        }
+                    }
+                }
+            }
+            samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "[bench] ten-core residual {mode}: median {:.3} ms",
+            samples[15]
+        );
+    }
+}
+
 /// Preserves the old restart-at-one assignment as an independent chart-label oracle.
 fn reference_chart_numbers(store: &OrderLineStore, rows: &[OrderRow]) -> HashMap<u64, u32> {
     let mut new_nums = HashMap::new();
@@ -158,11 +237,8 @@ fn assert_market_draw_reference(store: &OrderLineStore) {
         for cap in [0, 1, 50, CLOSED_RING_CAP + 1] {
             let actual = store.market_draw_orders(market, cap);
             let expected = reference_market_draw_orders(store, market, cap);
-            assert_eq!(
-                actual.iter().map(|order| order.uid).collect::<Vec<_>>(),
-                expected.iter().map(|order| order.uid).collect::<Vec<_>>(),
-                "draw order for {market}, cap {cap}"
-            );
+            // Open map order is incidental: geometry and captions sort it by arrival before
+            // drawing. Closed order is painter order and remains exact below.
             let open = |orders: &[&RetainedOrder]| {
                 let mut ids: Vec<_> = orders
                     .iter()
@@ -202,7 +278,7 @@ fn assert_market_draw_reference(store: &OrderLineStore) {
 }
 
 /// Appended closed lines can rehash live UIDs without changing their membership. The next
-/// reprice must draw those UIDs in the same order as the original retained-map scan.
+/// reprice must preserve the sorted painter order and the exact closed prefix.
 #[test]
 fn market_draw_order_survives_archived_appends_before_a_reprice() {
     let mut store = OrderLineStore::default();
@@ -228,6 +304,288 @@ fn market_draw_order_survives_archived_appends_before_a_reprice() {
         rows[0].buy_price += 1.0;
         assert!(store.update(&rows, 0));
         assert_market_draw_reference(&store);
+    }
+}
+
+/// Live retention pruning must also remove archived draw entries the old ring no longer visits.
+#[test]
+fn closed_draw_index_matches_ring_when_archives_and_live_evictions_mix() {
+    for markets in [3, 40] {
+        let mut store = OrderLineStore {
+            closed_keep: 1000,
+            ..Default::default()
+        };
+        store.append_archived(
+            ArchivedOrdersInput {
+                market: "SYN000",
+                is_short: false,
+                quantity: 1.0,
+                entry_fill_ms: None,
+                close_ms: 2000.0,
+                exit: Some(ReportExit {
+                    price: 100.0,
+                    set_ms: 1000.0,
+                }),
+                entry: None,
+                bright: false,
+            },
+            &[],
+        );
+        let mut rows = bench_rows(6500, markets);
+        for row in &mut rows {
+            row.uid += 100;
+            row.job_is_done = true;
+        }
+        store.update(&rows, 0);
+        assert_market_draw_reference(&store);
+        assert_eq!(
+            store
+                .closed_draw_per_market
+                .values()
+                .map(VecDeque::len)
+                .sum::<usize>(),
+            store.closed_queued.len()
+        );
+    }
+}
+
+/// The open-only query must never return a terminal row or miss a reopened order's labels.
+#[test]
+fn open_market_query_matches_retained_scan_across_transitions() {
+    let (mut store, mut rows) = heavy_core_store();
+    for step in 0..5 {
+        rows[step].job_is_done = true;
+        rows[0].job_is_done = step % 2 == 0;
+        store.update(&rows, 0);
+        for market in ["SYN000", "SYN001", "absent"] {
+            let mut expected: Vec<_> = store
+                .iter_market(market)
+                .filter(|o| o.closed_ms.is_none())
+                .map(|o| o.uid)
+                .collect();
+            let mut actual: Vec<_> = store.iter_open_market(market).map(|o| o.uid).collect();
+            expected.sort_unstable();
+            actual.sort_unstable();
+            assert_eq!(actual, expected);
+        }
+    }
+}
+
+/// Frozen pre-change synchronization, including metadata changes that copied every point.
+fn reference_update_server(line: &mut LineTrace, trace: Option<&OrderTrace>) -> bool {
+    let Some(trace) = trace else {
+        let changed = !line.server_points.is_empty()
+            || line.tmp_point.is_some()
+            || line.server_stop_price.is_some()
+            || line.server_stop_time_ms.is_some();
+        if changed {
+            line.server_points.clear();
+            line.tmp_point = None;
+            line.server_stop_price = None;
+            line.server_stop_time_ms = None;
+        }
+        return changed;
+    };
+    let tmp = trace.tmp_point.map(|p| (p.time_ms, p.price));
+    let same_points = line.server_points.len() == trace.points.len()
+        && line
+            .server_points
+            .iter()
+            .zip(&trace.points)
+            .all(|(held, p)| *held == (p.time_ms, p.price));
+    let changed = !same_points
+        || line.tmp_point != tmp
+        || line.server_stop_price != trace.stop_price
+        || line.server_stop_time_ms != trace.stop_time_ms;
+    if changed {
+        line.server_points = trace.points.iter().map(|p| (p.time_ms, p.price)).collect();
+        line.tmp_point = tmp;
+        line.server_stop_price = trace.stop_price;
+        line.server_stop_time_ms = trace.stop_time_ms;
+    }
+    changed
+}
+
+/// Assuming a committed prefix can never change would miss corrected points, shrinking traces,
+/// and clock rebases. Metadata-only changes must still publish the same revision and values.
+#[test]
+fn server_tail_sync_matches_frozen_full_copy() {
+    let mut held = LineTrace::default();
+    let mut reference = LineTrace::default();
+    let mut trace = OrderTrace::default();
+    for step in 0..30 {
+        match step % 7 {
+            0 | 1 => trace.points.push(OrderTracePoint {
+                time_ms: 1000.0 + step as f64,
+                price: 100.0 + step as f32,
+            }),
+            2 => {
+                trace.tmp_point = Some(OrderTracePoint {
+                    time_ms: 2000.0 + step as f64,
+                    price: 102.0,
+                })
+            }
+            3 => trace.points[0].time_ms += 15.0,
+            4 => {
+                trace.stop_price = Some(99.0);
+                trace.stop_time_ms = Some(1800.0 + step as f64);
+            }
+            5 => {
+                trace.points.pop();
+            }
+            _ => {}
+        }
+        for input in [Some(&trace), Some(&trace), None, Some(&trace)] {
+            assert_eq!(
+                held.update_server(input),
+                reference_update_server(&mut reference, input)
+            );
+            assert_eq!(held.server_points, reference.server_points);
+            assert_eq!(held.tmp_point, reference.tmp_point);
+            assert_eq!(held.server_stop_price, reference.server_stop_price);
+            assert_eq!(held.server_stop_time_ms, reference.server_stop_time_ms);
+        }
+    }
+}
+
+/// A 24-hour line at one reprice every 5 seconds has 17,281 distinct knots. Equal and
+/// jitter-only updates already compact losslessly; genuine knots remain drawable after a pan.
+#[test]
+#[ignore = "manual retained-history memory measurement"]
+fn bench_day_of_order_reprices() {
+    let mut line = LineTrace::default();
+    for step in 0..=17_280 {
+        let price = 100.0 + (step % 2) as f32;
+        let time = 1000.0 + step as f64 * 5000.0;
+        assert!(line.update(Some(price), 1000.0, time, false));
+        assert!(!line.update(Some(price), 1000.0, time, false));
+    }
+    assert_eq!(line.steps.len(), 17_281);
+    println!(
+        "[bench] 24h reprice line: steps={} logical_bytes={} allocated_bytes={} seven_lines_bytes={}",
+        line.steps.len(),
+        line.steps.len() * std::mem::size_of::<(f64, f32)>(),
+        line.steps.capacity() * std::mem::size_of::<(f64, f32)>(),
+        7 * line.steps.capacity() * std::mem::size_of::<(f64, f32)>()
+    );
+}
+
+/// Counterbalanced same-store controls isolate query and trace-copy gains from machine load.
+#[test]
+#[ignore = "manual paired residual measurement"]
+fn bench_order_line_paired_controls() {
+    let (mut store, _) = heavy_core_store();
+    let trace = OrderTrace {
+        points: (0..17_281)
+            .map(|step| OrderTracePoint {
+                time_ms: 1000.0 + step as f64 * 5000.0,
+                price: 100.0 + (step % 2) as f32,
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let mut lines = [LineTrace::default(), LineTrace::default()];
+    for line in &mut lines {
+        line.update_server(Some(&trace));
+    }
+    for mode in [
+        "index membership",
+        "draw",
+        "labels",
+        "trace temporary",
+        "trace append",
+    ] {
+        let mut samples: [Vec<f64>; 2] = Default::default();
+        let mut traces = [trace.clone(), trace.clone()];
+        for iteration in 0..31 {
+            for pass in 0..2 {
+                let legacy = (iteration + pass) % 2;
+                traces[legacy].tmp_point = Some(OrderTracePoint {
+                    time_ms: 90_000_000.0 + iteration as f64,
+                    price: 102.0,
+                });
+                if mode == "trace append" {
+                    traces[legacy].points.push(OrderTracePoint {
+                        time_ms: 90_000_000.0 + iteration as f64,
+                        price: 103.0,
+                    });
+                }
+                let start = std::time::Instant::now();
+                for _ in 0..10 {
+                    match mode {
+                        "index membership" => {
+                            if legacy == 1 {
+                                store.open_by_market.clear();
+                                for order in store.orders.values().filter(|o| o.closed_ms.is_none())
+                                {
+                                    store
+                                        .open_by_market
+                                        .entry(order.market.clone())
+                                        .or_default()
+                                        .push(order.uid);
+                                }
+                            } else {
+                                // A remove plus reinsert is conservative: either individual
+                                // closure or revival needs only one of these operations.
+                                OrderLineStore::remove_open_uid(
+                                    &mut store.open_by_market,
+                                    "SYN007",
+                                    7,
+                                );
+                                store.open_by_market.get_mut("SYN007").unwrap().push(7);
+                            }
+                        }
+                        "draw" => {
+                            for market in 0..40 {
+                                let name = format!("SYN{market:03}");
+                                if legacy == 1 {
+                                    std::hint::black_box(reference_market_draw_orders(
+                                        &store, &name, 50,
+                                    ));
+                                } else {
+                                    std::hint::black_box(store.market_draw_orders(&name, 50));
+                                }
+                            }
+                        }
+                        "labels" => {
+                            for _ in 0..40 {
+                                if legacy == 1 {
+                                    std::hint::black_box(
+                                        store
+                                            .iter_market("SYN007")
+                                            .filter(|o| o.closed_ms.is_none())
+                                            .count(),
+                                    );
+                                } else {
+                                    std::hint::black_box(store.iter_open_market("SYN007").count());
+                                }
+                            }
+                        }
+                        _ => {
+                            traces[legacy].tmp_point.as_mut().unwrap().time_ms += 1.0;
+                            if legacy == 1 {
+                                std::hint::black_box(reference_update_server(
+                                    &mut lines[legacy],
+                                    Some(&traces[legacy]),
+                                ));
+                            } else {
+                                std::hint::black_box(
+                                    lines[legacy].update_server(Some(&traces[legacy])),
+                                );
+                            }
+                        }
+                    }
+                }
+                samples[legacy].push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        for arm in &mut samples {
+            arm.sort_by(f64::total_cmp);
+        }
+        println!(
+            "[bench] paired {mode}: before {:.3} ms after {:.3} ms",
+            samples[1][15], samples[0][15]
+        );
     }
 }
 

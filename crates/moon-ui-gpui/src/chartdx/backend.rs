@@ -297,7 +297,7 @@ impl PlatformLayers {
         #[cfg(windows)]
         self.candles.set(data);
         #[cfg(target_os = "linux")]
-        self.wgpu.set_candles(data.to_vec());
+        self.wgpu.set_candles(data);
         #[cfg(target_os = "macos")]
         self.metal.set_candles(data);
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
@@ -306,14 +306,16 @@ impl PlatformLayers {
         }
     }
 
-    /// Re-applies the whole composed list's tail from `from` on. DX11 and Metal upload only those
-    /// slots; wgpu takes the whole list, exactly as a full set.
+    /// Re-applies the whole composed list's tail from `from` on. Every backend uploads only those
+    /// slots; a window that moved falls back to a full set inside the backend.
     pub fn patch_candles(&mut self, from: usize, full: &[CandleGpu]) {
         #[cfg(windows)]
         self.candles.patch(from, full);
+        #[cfg(target_os = "linux")]
+        self.wgpu.patch_candles(from, full);
         #[cfg(target_os = "macos")]
         self.metal.patch_candles(from, full);
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = from;
             self.set_candles(full);
@@ -325,7 +327,7 @@ impl PlatformLayers {
         #[cfg(windows)]
         self.path_candles.set(data);
         #[cfg(target_os = "linux")]
-        self.wgpu.set_path_candles(data.to_vec());
+        self.wgpu.set_path_candles(data);
         #[cfg(target_os = "macos")]
         self.metal.set_path_candles(data);
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
@@ -338,9 +340,11 @@ impl PlatformLayers {
     pub fn patch_path_candles(&mut self, from: usize, full: &[CandleGpu]) {
         #[cfg(windows)]
         self.path_candles.patch(from, full);
+        #[cfg(target_os = "linux")]
+        self.wgpu.patch_path_candles(from, full);
         #[cfg(target_os = "macos")]
         self.metal.patch_path_candles(from, full);
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = from;
             self.set_path_candles(full);

@@ -8,8 +8,9 @@ use gpui::RawGpuAccess;
 use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
 use moon_core::data::{LevelInstance, PriceLinePoint};
 
+use super::candle_window::CandleWindow;
 use super::types::{
-    BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
+    BackgroundParams, BookStyle, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
     GridParams, HLineGpu, HvolRowGpu, HvolStyleGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu,
     SideVolumeGpu, TickStyleGpu, VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_append_ranges,
     cross_volume_max, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring, ranges_have_entries,
@@ -382,12 +383,13 @@ pub struct WgpuLayers {
     mark_line: Vec<PriceLinePoint>,
     combo_capacity: usize,
     price_line_capacity: usize,
-    /// Complete stored candle series, replaced as a unit when its revision changes.
-    candles: Vec<CandleGpu>,
+    /// Newest candle rows. A live tail rewrites only the slots that moved; the window is uncapped
+    /// so Linux still draws every row DX11 would have kept before its 4096 cap.
+    candles: CandleWindow,
     candle_style: CandleStyleGpu,
     /// The open candle's five-second path: a second candle set on the same pipeline, its own
-    /// style, no volume band.
-    path_candles: Vec<CandleGpu>,
+    /// style, no volume band. Patched at the tail the same way as `candles`.
+    path_candles: CandleWindow,
     path_style: CandleStyleGpu,
     /// The sides band's buckets, replaced as a unit when its series is re-read.
     sides: Vec<SideVolumeGpu>,
@@ -439,7 +441,14 @@ pub struct WgpuLayers {
     combo_buffers_dirty: bool,
     price_line_buffers_dirty: bool,
     book_buffer_dirty: bool,
-    userdata_buffers_dirty: bool,
+    /// Zone buffer owes an upload. Only a zone change stales the baked base.
+    zones_dirty: bool,
+    /// Horizontal-line buffer owes an upload. Drawn over the blit.
+    hlines_dirty: bool,
+    /// Segment buffer owes an upload. Drawn over the blit.
+    segs_dirty: bool,
+    /// Marker buffer owes an upload. Drawn over the blit.
+    markers_dirty: bool,
     candle_buffers_dirty: bool,
     path_buffers_dirty: bool,
     side_buffer_dirty: bool,

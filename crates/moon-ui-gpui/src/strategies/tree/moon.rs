@@ -52,8 +52,7 @@ use moon_ui::{
 
 use super::super::filter::{PreparedFilter, QuickFilter};
 use super::super::logic::{
-    FolderCounts, build_node, ensure_folder, strategy_core_is_visible, subtree_check_targets,
-    subtree_displayed_all_checked, toggle,
+    FolderChecks, FolderCounts, build_node, ensure_folder, strategy_core_is_visible, toggle,
 };
 use super::super::{Key, StrategiesView, moon_alpha};
 use super::checks;

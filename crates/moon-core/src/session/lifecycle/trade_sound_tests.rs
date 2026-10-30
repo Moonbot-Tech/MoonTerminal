@@ -31,6 +31,7 @@ pub(super) fn fixture() -> (SessionManager, FeedTx) {
         }],
         config_order: vec![1],
         feed_wake: None,
+        order_retirement: Default::default(),
         store,
         market_source: MarketDataSource::new(market.clone()),
         market,
@@ -48,6 +49,41 @@ pub(super) fn fixture() -> (SessionManager, FeedTx) {
         identity_respawns: Default::default(),
     };
     (session, tx)
+}
+
+/// Saturation must stop feed consumption after publishing one batch; a subsequent drain retries
+/// disposal first and resumes later messages without replaying that publication.
+#[test]
+fn saturated_disposal_defers_the_next_feed_message_without_replaying_orders() {
+    let (mut session, tx) = fixture();
+    let (wake, wakes) = crate::feed::feed_wake_pair();
+    session.feed_wake = Some(wake.clone());
+    let (retirement, mut release) =
+        crate::session::store::order_retirement::tests::blocked_retirement(Some(wake));
+    session.order_retirement = retirement;
+    tx.send(FeedMsg::Orders(crate::feed::OrderRows {
+        rows: Vec::new(),
+        captured_turns: vec![Vec::new()],
+    }))
+    .unwrap();
+    tx.send(FeedMsg::Status(ConnStatus::Ready)).unwrap();
+    assert!(session.drain().any);
+    assert_eq!(session.store.core(1).unwrap().orders_table_rev, 1);
+    assert!(!matches!(
+        session.store.core(1).unwrap().status,
+        ConnStatus::Ready
+    ));
+    assert!(!session.drain().any);
+    release();
+    assert!(wakes.try_recv().is_ok());
+    wakes.clear();
+    assert!(session.drain().any);
+    assert!(matches!(
+        session.store.core(1).unwrap().status,
+        ConnStatus::Ready
+    ));
+    assert_eq!(session.store.core(1).unwrap().orders_table_rev, 1);
+    release();
 }
 
 /// Same venue identity is intentional: a reconnect cannot be detected by venue comparison alone.
