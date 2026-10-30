@@ -46,6 +46,15 @@ fn outer(layout: Layout) -> Option<(Layout, usize)> {
         .map(|outer| (outer, align))
 }
 
+/// Recover metadata or the System block using the backing allocation's exposed provenance.
+///
+/// The global allocator boundary gives `user` the caller's allocation extent, which excludes
+/// our prefix. Deriving an in-bounds pointer backwards from it lets release LTO treat a header
+/// read as undefined. `tracked` and `realloc` expose the complete System allocation instead.
+fn backing_at(user: *mut u8, offset: usize) -> *mut u8 {
+    std::ptr::with_exposed_provenance_mut(user.addr().wrapping_sub(offset))
+}
+
 /// Write the exposed address of the block's owner record into its header.
 ///
 /// # Safety
@@ -53,7 +62,7 @@ fn outer(layout: Layout) -> Option<(Layout, usize)> {
 unsafe fn stamp(user: *mut u8, account: usize) {
     // SAFETY: the eight bytes before `user` are inside the header and 8-aligned, since `user` is
     // aligned to at least 16.
-    unsafe { user.sub(8).cast::<u64>().write(account as u64) }
+    unsafe { backing_at(user, 8).cast::<u64>().write(account as u64) }
 }
 
 /// The exposed owner-record address written by [`stamp`].
@@ -62,7 +71,7 @@ unsafe fn stamp(user: *mut u8, account: usize) {
 /// As for [`stamp`], and the block has been stamped.
 unsafe fn owner(user: *mut u8) -> usize {
     // SAFETY: see `stamp`.
-    unsafe { user.sub(8).cast::<u64>().read() as usize }
+    unsafe { backing_at(user, 8).cast::<u64>().read() as usize }
 }
 
 /// Allocate through `raw` with the header in front, and charge the calling thread.
@@ -77,6 +86,8 @@ unsafe fn tracked(layout: Layout, raw: impl FnOnce(Layout) -> *mut u8) -> *mut u
     if base.is_null() {
         return base;
     }
+    // Preserve access to the prefix after the global allocator boundary narrows `user`.
+    let _ = base.expose_provenance();
     let account = current_owner();
     // SAFETY: `base` holds `pad + layout.size()` bytes, so `user` and its header are inside it.
     let user = unsafe { base.add(pad) };
@@ -107,7 +118,7 @@ unsafe impl GlobalAlloc for Tracking {
         // SAFETY: `ptr` came from `tracked`, which stamped it `pad` bytes into `System`'s block.
         unsafe {
             charge(owner(ptr), -(layout.size() as i64), -1);
-            System.dealloc(ptr.sub(pad), full);
+            System.dealloc(backing_at(ptr, pad), full);
         }
     }
 
@@ -126,10 +137,12 @@ unsafe impl GlobalAlloc for Tracking {
         // same alignment, so the same offset holds in the new block.
         unsafe {
             let previous = owner(ptr);
-            let base = System.realloc(ptr.sub(pad), full, new_full);
+            let base = System.realloc(backing_at(ptr, pad), full, new_full);
             if base.is_null() {
                 return base;
             }
+            // Reallocation may replace the backing allocation and its provenance.
+            let _ = base.expose_provenance();
             let user = base.add(pad);
             let account = current_owner();
             stamp(user, account);

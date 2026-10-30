@@ -1,6 +1,58 @@
 use super::*;
 use std::sync::atomic::Ordering;
 
+/// Release LTO must not turn an optimized temporary's prefix into an undefined owner pointer.
+/// Direct Tracking calls miss this: the temporary must cross the global allocator boundary.
+#[test]
+fn optimized_temporary_strings_keep_their_owner_header() {
+    for (currency, stable) in [("usdt", true), ("unit", false), ("usd", true), ("", false)] {
+        assert_eq!(
+            moon_core::symbol::is_usd_stable(std::hint::black_box(currency)),
+            stable
+        );
+    }
+}
+
+/// Prefix recovery must survive zeroing, growth, shrinking and frees after many producers exit.
+/// Sixteen concurrent owners stress retirement while consumers keep their blocks alive.
+#[test]
+fn allocator_blocks_survive_thread_churn_and_cross_thread_reallocation() {
+    let producers: Vec<_> = (0..16)
+        .map(|seed| {
+            std::thread::spawn(move || {
+                (0..16)
+                    .map(|index| {
+                        let mut bytes = vec![0u8; 32 + index];
+                        assert!(bytes.iter().all(|&byte| byte == 0));
+                        bytes.fill(seed);
+                        bytes
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    let consumers: Vec<_> = producers
+        .into_iter()
+        .enumerate()
+        .map(|(seed, producer)| {
+            let blocks = producer.join().unwrap();
+            std::thread::spawn(move || {
+                for mut bytes in blocks {
+                    assert!(bytes.iter().all(|&byte| byte == seed as u8));
+                    bytes.resize(4096, seed as u8);
+                    assert!(bytes.iter().all(|&byte| byte == seed as u8));
+                    bytes.truncate(17);
+                    bytes.shrink_to_fit();
+                    assert_eq!(bytes, vec![seed as u8; 17]);
+                }
+            })
+        })
+        .collect();
+    for consumer in consumers {
+        consumer.join().unwrap();
+    }
+}
+
 /// Measure record reuse and report cost after synthetic short-lived threads exit.
 #[test]
 #[ignore = "synthetic station heap thread churn measurement"]
