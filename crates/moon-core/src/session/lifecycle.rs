@@ -432,6 +432,8 @@ impl SessionManager {
         let id = server.id;
         // Registered whether or not the recorder is on: switching it on must find every core.
         crate::market::tape_recorder::core_up(&server);
+        // A new client may be on another exchange: it is no source until it names one.
+        crate::market::price_recorder::core_down(id);
         let handle = feed::spawn(
             server,
             mem,
@@ -609,6 +611,7 @@ impl SessionManager {
         self.pending_ob_drop.retain(|(core, _), _| *core != id);
         self.identity_respawns.forget(id);
         crate::market::tape_recorder::core_down(id);
+        crate::market::price_recorder::core_down(id);
         log::info!("session down: core={}", crate::feed::core_label(id));
         // Release the name AFTER the line above, so the last line still names the core; a later id
         // reuse must not inherit it.
@@ -693,11 +696,10 @@ impl SessionManager {
                         // venue cannot leave the previous caption or DEX name behind.
                         let venue = CoreVenue::identify(id.code, &dex, Some(&reported));
                         // The replay address's spelling (`MarketDataSource::replay_address`),
-                        // which the recorder's keys and donors are matched by.
-                        crate::market::tape_recorder::core_exchange(
-                            sess.id,
-                            format!("{}:{:08x}", venue.id.code, venue.id.dex),
-                        );
+                        // which the recorders' keys and donors are matched by.
+                        let exchange_key = format!("{}:{:08x}", venue.id.code, venue.id.dex);
+                        crate::market::price_recorder::core_exchange(sess.id, &exchange_key);
+                        crate::market::tape_recorder::core_exchange(sess.id, exchange_key);
                         self.core_venue.insert(sess.id, venue);
                         stats.identity = true;
                         self.market_source
@@ -808,7 +810,7 @@ impl SessionManager {
                         buy,
                         emulator,
                     } => {
-                        // Not `ui_state` either: only the tape recorder listens.
+                        // Not `ui_state` either: only the tape and price recorders listen.
                         self.record_opened_trade(sess.id, rec_id, &coin, &quote, buy, emulator);
                     }
                     FeedMsg::TradeClosed {
@@ -1091,6 +1093,13 @@ impl SessionManager {
         if open_ms <= 0 || close_ms < open_ms {
             return;
         }
+        crate::market::price_recorder::trade_closed(
+            &address.exchange_key,
+            &market,
+            crate::market::tape_recorder::TradeId { core, rec_id },
+            open_ms,
+            close_ms,
+        );
         // Recording and core catch-up use exchange identity even without a public venue route.
         crate::market::tape_recorder::trade_closed(
             &address.exchange_key,
@@ -1122,9 +1131,9 @@ impl SessionManager {
         );
     }
 
-    /// Hand a just-opened trade to the tape recorder, resolved the way
-    /// [`Self::capture_closed_trade`] resolves a close. Nothing is resolved while the recorder
-    /// is off.
+    /// Hand a just-opened trade to the tape and price recorders, resolved the way
+    /// [`Self::capture_closed_trade`] resolves a close. Nothing is resolved while both recorders
+    /// are off.
     ///
     /// Args:
     ///     core: The core that opened the trade.
@@ -1142,31 +1151,44 @@ impl SessionManager {
         buy: crate::db::ReportStamp,
         emulator: Option<bool>,
     ) {
-        if !crate::market::tape_recorder::enabled() {
+        let tape = crate::market::tape_recorder::enabled();
+        let prices = crate::market::price_recorder::enabled();
+        if !tape && !prices {
             return;
         }
         let Some(market) = self.market_source.resolve_market(core, quote, coin) else {
-            log::debug!("[x] tape recorder: open of {coin} resolves to no market on core {core}");
+            log::debug!("[x] recorders: open of {coin} resolves to no market on core {core}");
             return;
         };
         // A venue the exchange directory does not know resolves too (`venue: None`) and is
         // recorded like any other.
         let Ok(address) = self.market_source.replay_address(core) else {
-            log::debug!("[x] tape recorder: core {core} has no replay address yet");
+            log::debug!("[x] recorders: core {core} has no replay address yet");
             return;
         };
         let open_ms = self.true_utc_axis(core).stamp_to_utc_ms(buy, core);
         if open_ms <= 0 {
-            log::debug!("[x] tape recorder: open of {coin} on core {core} has no usable stamp");
+            log::debug!("[x] recorders: open of {coin} on core {core} has no usable stamp");
             return;
         }
-        crate::market::tape_recorder::trade_opened(
-            &address.exchange_key,
-            &market,
-            crate::market::tape_recorder::TradeId { core, rec_id },
-            open_ms,
-            emulator,
-        );
+        let trade = crate::market::tape_recorder::TradeId { core, rec_id };
+        if prices {
+            crate::market::price_recorder::trade_opened(
+                &address.exchange_key,
+                &market,
+                trade,
+                open_ms,
+            );
+        }
+        if tape {
+            crate::market::tape_recorder::trade_opened(
+                &address.exchange_key,
+                &market,
+                trade,
+                open_ms,
+                emulator,
+            );
+        }
     }
 
     /// The time axis that lifts `core`'s report stamps onto true UTC through its measured clock

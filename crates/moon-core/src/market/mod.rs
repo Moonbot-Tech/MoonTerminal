@@ -8,6 +8,7 @@
 
 pub mod candles;
 pub mod kline_cache;
+pub mod price_recorder;
 mod screener;
 mod source;
 pub mod tape_recorder;

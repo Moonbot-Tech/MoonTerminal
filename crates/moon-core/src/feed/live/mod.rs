@@ -1052,10 +1052,18 @@ pub(super) fn run(
         // exchange switch shows only as a refresh that adds most of a new venue's universe.
         let mut list_applied = false;
         let mut catalog_changed = false;
+        // `Some(included_funding)` once a market-list price update was applied in this batch.
+        let mut prices_applied: Option<bool> = None;
         for ev in &events {
             let Event::Markets(markets_ev) = ev else {
                 continue;
             };
+            if let moonproto::state::MarketsEvent::PricesUpdated {
+                included_funding, ..
+            } = markets_ev
+            {
+                prices_applied = Some(prices_applied.unwrap_or(false) | *included_funding);
+            }
             list_applied |= matches!(
                 markets_ev,
                 moonproto::state::MarketsEvent::MarketsListReplaced { .. }
@@ -1078,6 +1086,10 @@ pub(super) fn run(
             }
         }
         turnover_armed |= list_applied;
+        // The station's filter below drops market events; the price recorder reads the list here.
+        if let Some(included_funding) = prices_applied {
+            crate::market::price_recorder::on_prices_updated(server.id, included_funding, &client);
+        }
         if catalog_changed {
             client_slot.note_catalog_change();
         }

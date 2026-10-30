@@ -785,6 +785,13 @@ pub fn tape_recorder_db_path() -> PathBuf {
     db_dir().join("tape_recorder.sqlite")
 }
 
+/// SQLite database the price recorder files into (see `market::price_recorder`): bid, ask, mark
+/// and funding from the core's market list around every trade. One file on a terminal and on a
+/// station alike, apart from either tape file, because the module that writes it is one.
+pub fn market_prices_db_path() -> PathBuf {
+    db_dir().join("market_prices.sqlite")
+}
+
 /// SQLite database for historical quote-to-USDT rates and prepared report valuations.
 ///
 /// The file is deliberately separate from `reports.sqlite`: reports are a recoverable replica,
