@@ -285,33 +285,42 @@ pub(super) fn metric_cell(
     num_cell(scale, col, (col.text)(g), color)
 }
 
-/// Body cell of a strategy metric at a content-measured fixed width.
+/// Body cell of a strategy metric at a content-measured preferred width.
 ///
 /// The strategy table measures its current formatted values once per render and passes the same
 /// widths to its rows and header. The coin table keeps using [`metric_cell`] because its separate
 /// layout contract still permits proportional shrinking from descriptor widths.
+/// Narrow hosts truncate with a full-value tooltip rather than pushing later columns offscreen.
 ///
 /// Args:
 ///     col: Metric descriptor supplying text and sign colour.
 ///     group: Aggregate rendered in this row.
 ///     palette: Active palette used for sign-aware text colour.
 ///     width: Width of the longest currently rendered value in this metric column, in pixels.
-pub(super) fn fixed_metric_cell(
+pub(super) fn strategy_metric_cell(
     col: &MetricCol,
     group: &GroupStat,
     palette: MoonPalette,
     width: f32,
-) -> impl IntoElement {
+) -> Stateful<Div> {
     let color = match col.signed {
         Some(value) => sign_color(palette, value(group)),
         None => palette.text_soft,
     };
+    let text = (col.text)(group);
     div()
+        .id(SharedString::from(format!(
+            "an-strategy-metric-{}-{}",
+            group.key, col.key
+        )))
         .w(px(width))
-        .flex_none()
+        .min_w_0()
+        .flex_shrink_1()
+        .truncate()
         .text_right()
         .text_color(moon(color))
-        .child((col.text)(group))
+        .tooltip(crate::panels::common::text_tooltip_value(text.clone()))
+        .child(text)
 }
 
 /// Render one right-aligned numeric cell using a caller-hoisted font `scale`.
