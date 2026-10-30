@@ -184,6 +184,7 @@ fn init_step_from_proto(step: moonproto::InitStep) -> Option<CoreInitStep> {
         moonproto::InitStep::PostInitFlush => CoreInitStep::PostInitFlush,
         moonproto::InitStep::StartupSnapshot => CoreInitStep::StartupSnapshot,
         moonproto::InitStep::StartupEvents => CoreInitStep::StartupEvents,
+        moonproto::InitStep::CoreStartupState => CoreInitStep::CoreStartupState,
         _ => return None,
     })
 }
@@ -236,7 +237,7 @@ pub(in crate::feed::live) fn startup_status_from_proto(
 ///
 /// `InitError` names the step as a `&'static str` rather than as the `InitStep` enum
 /// [`init_step_from_proto`] converts, so this is the only bridge between the two. The match is
-/// EXACT and total over the eight steps this build recognises; the strategy-schema step accepts its
+/// EXACT and total over the nine steps this build recognises; the strategy-schema step accepts its
 /// two wire spellings. Anything else returns `None` and the caller keeps the raw name. A step
 /// renamed upstream therefore degrades to "we cannot name this stage" rather than to a confidently
 /// wrong one — the same `#[non_exhaustive]` discipline [`init_step_from_proto`] applies, expressed
@@ -260,6 +261,7 @@ pub(super) fn init_step_by_name(raw: &str) -> Option<CoreInitStep> {
         "PostInitFlush" => CoreInitStep::PostInitFlush,
         "StartupSnapshot" => CoreInitStep::StartupSnapshot,
         "StartupEvents" => CoreInitStep::StartupEvents,
+        "CoreStartupState" => CoreInitStep::CoreStartupState,
         _ => return None,
     })
 }

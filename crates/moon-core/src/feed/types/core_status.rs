@@ -194,7 +194,8 @@ impl CoreStartupState {
 
 /// One step of the mandatory startup sequence, mirrored from moonproto's `InitStep`.
 ///
-/// The variants are ordered as the core runs them; [`INIT_STEPS`] is that order as an array.
+/// The discriminants are moonproto's own values, which is what the completed-step bitmask is keyed
+/// by. [`INIT_STEPS`] holds the order the core runs them in, which differs for the last-added step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CoreInitStep {
@@ -214,17 +215,25 @@ pub enum CoreInitStep {
     StartupSnapshot = 6,
     /// Publish startup events queued with that snapshot.
     StartupEvents = 7,
+    /// Recover the core's initial runtime, license, profit and strategy-running states. Runs
+    /// right after the strategy schema, and only on a core that advertises the capability.
+    CoreStartupState = 8,
 }
 
 /// Every startup step, in the order the core runs them. Private: it exists to derive
 /// [`INIT_STEPS_TOTAL`] from ONE list rather than a hand-written number, and nothing outside this
 /// module needs the order itself.
-const INIT_STEPS: [CoreInitStep; 8] = [
+///
+/// [`CoreInitStep::CoreStartupState`] is counted although an older core skips it: progress is
+/// shown only while a core starts, so such a core reaches `Ready` at one step short of the total,
+/// whereas leaving it out would show a capable core's run as complete one step early.
+const INIT_STEPS: [CoreInitStep; 9] = [
     CoreInitStep::BaseCheck,
     CoreInitStep::AuthCheck,
     CoreInitStep::GetMarketsList,
     CoreInitStep::UpdateMarketsList,
     CoreInitStep::StrategySchema,
+    CoreInitStep::CoreStartupState,
     CoreInitStep::PostInitFlush,
     CoreInitStep::StartupSnapshot,
     CoreInitStep::StartupEvents,
@@ -233,7 +242,7 @@ const INIT_STEPS: [CoreInitStep; 8] = [
 /// How many steps a full startup runs — the denominator of the progress figure.
 ///
 /// This is OUR constant because MoonProto exposes no readable one: both `InitStep::COUNT` and
-/// `InitStep::ALL` are private to that crate. So a MoonProto that grows a ninth step leaves this
+/// `InitStep::ALL` are private to that crate. So a MoonProto that grows another step leaves this
 /// stale with nothing to detect it, which is why the UI clamps the denominator up to the observed
 /// completed count instead of trusting this number alone.
 pub const INIT_STEPS_TOTAL: u8 = INIT_STEPS.len() as u8;
@@ -374,8 +383,8 @@ impl CoreStartupStatus {
     ///
     /// The total is clamped UP to what was actually observed. MoonProto exposes no readable step
     /// count — both `InitStep::COUNT` and `InitStep::ALL` are private to that crate — so
-    /// [`INIT_STEPS_TOTAL`] is OUR constant, and a MoonProto that grows a ninth step would leave it
-    /// stale with nothing to detect it. The clamp guarantees the pair can never read `9/8`, nor
+    /// [`INIT_STEPS_TOTAL`] is OUR constant, and a MoonProto that grows another step would leave it
+    /// stale with nothing to detect it. The clamp guarantees the pair can never read `10/9`, nor
     /// claim completion while work visibly continues.
     ///
     /// ONE owner on purpose: the Core Status startup cell, its hover, and the connection verdict all

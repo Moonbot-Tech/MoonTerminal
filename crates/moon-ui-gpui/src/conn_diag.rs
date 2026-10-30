@@ -120,7 +120,7 @@ pub(crate) fn bytes(value: u64) -> String {
 
 /// Localized name of one startup step.
 ///
-/// The verdict and the Core Status startup hover both name these eight steps: a second translated
+/// The verdict and the Core Status startup hover both name these nine steps: a second translated
 /// set would drift, and one step would end up called two things on two surfaces the user reads side
 /// by side.
 ///
@@ -139,6 +139,7 @@ pub(crate) fn step_label(step: CoreInitStep) -> String {
         CoreInitStep::PostInitFlush => t!("core_status.startup.step.post_init_flush"),
         CoreInitStep::StartupSnapshot => t!("core_status.startup.step.snapshot"),
         CoreInitStep::StartupEvents => t!("core_status.startup.step.events"),
+        CoreInitStep::CoreStartupState => t!("core_status.startup.step.core_state"),
     }
     .to_string()
 }

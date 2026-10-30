@@ -421,7 +421,7 @@ fn problem_hover_keeps_connection_stage_and_complete_startup_diagnostics() {
     let tooltip = workspace_core_tooltip(&row);
 
     assert!(tooltip.contains("authentication refused"));
-    assert!(tooltip.contains("(1/8)"));
+    assert!(tooltip.contains("(1/9)"));
     assert!(tooltip.contains("MTU: 1400"));
 }
 
