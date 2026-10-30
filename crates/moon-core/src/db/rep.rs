@@ -327,6 +327,14 @@ pub(super) const REP_INDEXES: &[RepIndex] = &[
         &["coin", "closedate"],
         "coin COLLATE NOCASE, closedate",
     ),
+    // The explicit positive-entry predicate confines this index to the handoff read, keeping
+    // other report queries' existing equal-date traversal order unchanged.
+    RepIndex {
+        name: "idx_rep_coin_entry",
+        needs: &["core_uid", "coin", "buydate"],
+        key_sql: "core_uid, coin COLLATE NOCASE, buydate",
+        where_sql: Some("buydate > 0"),
+    },
 ];
 
 /// The open-rows index's `WHERE`: `NOT` of [`super::report_read::closed_test_sql`] over the

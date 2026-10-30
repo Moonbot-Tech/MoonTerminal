@@ -20,6 +20,8 @@ pub(crate) mod cache;
 pub(crate) mod charts;
 mod commands;
 pub(crate) mod dto;
+pub(crate) mod order_capture;
+pub(crate) mod order_handoff;
 mod reads;
 mod settings;
 
@@ -72,8 +74,7 @@ pub(crate) fn dispatch(host: &mut dyn TgHost, request: MiniAppApiRequest) {
             let _ = reply.try_send(reads::mini_cores(host, chat_id));
         }
         MiniAppApiRequest::Orders { chat_id, reply, .. } => {
-            let result = reads::mini_orders(host, chat_id);
-            let _ = reply.try_send(result);
+            reads::mini_orders(host, chat_id, reply);
         }
         MiniAppApiRequest::CancelOrder {
             chat_id,

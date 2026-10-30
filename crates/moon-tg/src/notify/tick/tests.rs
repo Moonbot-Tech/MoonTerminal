@@ -14,6 +14,198 @@ use crate::notify::down::Link;
 use crate::notify::test_host::{CHAT, DuringJob, TempRoot, TickHost};
 use crate::notify::trades::ClosedTrade;
 
+/// Filtering decided rows must preserve complete documents, including waits, expiry and revocation.
+#[test]
+fn candidate_updates_match_full_document_decisions() {
+    use moon_core::telegram::notify::{CardWait, CoreScope};
+    for mode in 0..6 {
+        let root = TempRoot::new(&format!("candidate-parity-{mode}"));
+        let mut file = NotifyFile::default();
+        let mut entry = ChatNotify {
+            revision: 7,
+            ..Default::default()
+        };
+        entry.settings.trades.on = mode != 1;
+        entry.settings.charts.on = mode != 2;
+        entry.settings.trades.cores = CoreScope::Only(vec![7]);
+        entry.settings.trades.profit_at_least_usd = Some(1.0);
+        entry.ledger.trades_enabled_utc = (mode != 3).then_some(1_000);
+        entry.ledger.charts.enabled_utc = (mode != 4).then_some(1_000);
+        for id in 0..30 {
+            entry.ledger.seen.entry(7).or_default().insert(id, 1_500);
+            entry
+                .ledger
+                .charts
+                .seen
+                .entry(7)
+                .or_default()
+                .insert(id, 1_500);
+        }
+        entry.ledger.seen.entry(8).or_default().insert(-1, -300_000);
+        entry
+            .ledger
+            .charts
+            .seen
+            .entry(8)
+            .or_default()
+            .insert(-1, -300_000);
+        for id in [30, 31, 90] {
+            entry.ledger.held.entry(7).or_default().insert(id, 1_300);
+            entry
+                .ledger
+                .charts
+                .held
+                .entry(7)
+                .or_default()
+                .insert(id, 1_300);
+        }
+        for id in [0, 32, 91] {
+            entry.ledger.cards.entry(7).or_default().insert(
+                id,
+                CardWait {
+                    queued_utc: 1_500,
+                    message: Some(id + 100),
+                    unchecked: false,
+                },
+            );
+        }
+        file.chats.insert(CHAT, entry);
+        file.next_id = 4;
+        file.outbox.push(Pending {
+            id: 3,
+            chat: CHAT,
+            html: "existing card".into(),
+            ..Default::default()
+        });
+        let loaded = super::Loaded {
+            trades: (0..35)
+                .map(|id| {
+                    let mut row = closed_trade(
+                        id,
+                        if id == 34 { 900 } else { 1_500 },
+                        "XALPHA",
+                        (id != 31).then_some(2.0),
+                    );
+                    row.profit_native = Some(2.0);
+                    row
+                })
+                .collect(),
+        };
+        let applies = [super::ChatApply {
+            chat: CHAT,
+            revision: if mode == 5 { 6 } else { 7 },
+            visible: if mode == 4 { vec![8] } else { vec![7] },
+            layout: Default::default(),
+        }];
+        let mut expected = file.clone();
+        let (messages, due) =
+            super::messages_for(&mut expected, &applies[0], &loaded, 2_000).unwrap_or_default();
+        super::enqueue_all(&mut expected, CHAT, messages, 2_000);
+        let mut store = NotifyStore::open(root.notifications()).unwrap();
+        store.update(|stored| *stored = file).unwrap();
+        let (patch, (skipped, charts)) =
+            super::notification_update(&store.file, &applies, &loaded, 2_000);
+        store.update_notifications(patch).unwrap();
+        expected.ack_sequence = store.file.ack_sequence;
+        assert_eq!(store.file, expected, "mode {mode}");
+        assert_eq!(skipped, if mode == 5 { vec![CHAT] } else { vec![] });
+        assert_eq!(
+            charts.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
+            due
+        );
+    }
+}
+
+/// Measure a full offered window after almost every close has already been decided.
+#[test]
+#[ignore = "scale probe"]
+fn probe_full_window_notification_planning() {
+    use std::hint::black_box;
+    use std::time::Instant;
+    let mut file = NotifyFile::default();
+    let mut entry = ChatNotify::default();
+    entry.settings.trades.on = true;
+    entry.ledger.trades_enabled_utc = Some(1_000);
+    for id in 0..50_000 {
+        entry.ledger.seen.entry(7).or_default().insert(id, 1_500);
+    }
+    file.chats.insert(CHAT, entry);
+    for id in 0..2_000 {
+        file.outbox.push(Pending {
+            id,
+            chat: CHAT,
+            html: "XALPHA ".repeat(64),
+            ..Default::default()
+        });
+    }
+    file.next_id = 2_000;
+    let loaded = super::Loaded {
+        trades: (0..50_003)
+            .map(|id| closed_trade(id, 1_500, "XALPHA", Some(2.0)))
+            .collect(),
+    };
+    let applies = [super::ChatApply {
+        chat: CHAT,
+        revision: 0,
+        visible: vec![7],
+        layout: Default::default(),
+    }];
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    let start = Instant::now();
+    let candidates: Vec<_> = moon_core::telegram::notify::NotificationBatch::trade_candidates(
+        &file.chats[&CHAT],
+        &applies[0].visible,
+        &loaded.trades,
+        2_000,
+    )
+    .iter()
+    .map(ClosedTrade::key)
+    .collect();
+    eprintln!(
+        "probe full-window filtering {:.3} ms, {} candidate leaves",
+        start.elapsed().as_secs_f64() * 1000.0,
+        candidates.len()
+    );
+    let start = Instant::now();
+    black_box(
+        moon_core::telegram::notify::NotificationBatch::new(
+            &file,
+            &[CHAT],
+            &candidates,
+            Some(2_000 - moon_core::telegram::notify::trades::SEEN_WINDOW_SECS),
+        )
+        .finish(),
+    );
+    eprintln!(
+        "probe full-window batch preparation {:.3} ms",
+        start.elapsed().as_secs_f64() * 1000.0
+    );
+    for round in 0..20 {
+        for arm in [round % 2, 1 - round % 2] {
+            if arm == 0 {
+                let start = Instant::now();
+                let mut copy = file.clone();
+                let (messages, charts) =
+                    super::messages_for(&mut copy, &applies[0], &loaded, 2_000).unwrap();
+                super::enqueue_all(&mut copy, CHAT, messages, 2_000);
+                black_box((&copy, charts));
+                before.push(start.elapsed().as_secs_f64() * 1000.0);
+            } else {
+                let start = Instant::now();
+                black_box(super::notification_update(&file, &applies, &loaded, 2_000));
+                after.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+    }
+    before.sort_by(f64::total_cmp);
+    after.sort_by(f64::total_cmp);
+    eprintln!(
+        "probe full-window planning clone+decision {:.3} ms -> candidate+patch {:.3} ms (50003 rows, no journal I/O)",
+        before[10], after[10]
+    );
+}
+
 /// Projecting only scalars must keep the old cloned snapshot's chart/trade union and grants.
 #[test]
 fn read_floors_match_the_frozen_snapshot_projection() {

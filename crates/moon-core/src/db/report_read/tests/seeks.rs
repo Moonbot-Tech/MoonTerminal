@@ -413,6 +413,7 @@ fn replica_indexes_are_idempotent_and_wait_for_their_columns() {
             "idx_rep_strategy_close",
             "idx_rep_open",
             "idx_rep_coin_close",
+            "idx_rep_coin_entry",
         ]
         .map(String::from),
     );
@@ -435,7 +436,17 @@ fn replica_indexes_are_idempotent_and_wait_for_their_columns() {
     crate::db::test_support::rep_init(&no_coin);
     let mut expected = all.clone();
     expected.remove("idx_rep_coin_close");
+    expected.remove("idx_rep_coin_entry");
     assert_eq!(names(&no_coin), expected);
+    no_coin
+        .execute_batch("ALTER TABLE orders_rep ADD COLUMN coin TEXT")
+        .unwrap();
+    crate::db::test_support::rep_init(&no_coin);
+    assert_eq!(
+        names(&no_coin),
+        all,
+        "both coin indexes appear after the column arrives"
+    );
 }
 
 /// A date-order optimization must not widen shared indexes and change ASC tie order, nor change

@@ -12,10 +12,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::QuoteCurrency;
 
+mod batch;
 mod outbox;
+pub use batch::NotificationBatch;
 pub use outbox::Outbox;
+pub use updates::Update as NotificationUpdate;
 pub(crate) mod receipts;
 pub mod trades;
+pub(crate) mod updates;
 
 /// Which cores a trade notification applies to.
 ///
@@ -683,7 +687,8 @@ pub struct NotifyFile {
     pub outbox: Outbox,
     /// Next [`Pending::id`]. Callers allocate it; load and save only keep the number.
     pub next_id: u64,
-    /// Last durable delivery receipt included in this snapshot; independent of chat revisions.
+    /// Last durable notification transaction or delivery receipt in this snapshot, independent
+    /// of chat revisions. The shared cursor preserves replay order across both record kinds.
     pub ack_sequence: u64,
 }
 

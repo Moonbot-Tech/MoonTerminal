@@ -529,21 +529,27 @@ fn mini_balance_figures_stay_masked_until_revealed() {
 
 /// The order row's entry-to-mark percent must be the desktop table's figure.
 ///
-/// Mutation: bypass `order_at_mark` in `order_dto`, replace `order_pnl_pct` in
-/// the helper, or stop formatting `change_text` with `fmt::signed_pct`. The row
-/// would lose the desktop table's percent arithmetic or signed formatting.
+/// Mutation: bypass `order_at_mark` in `order_draft`, replace `pnl_at_mark` in
+/// the helper, or stop formatting `change_text` with `fmt::signed_pct` in
+/// `OrderDraft::render`. The row would lose the desktop table's percent
+/// arithmetic or signed formatting.
 #[test]
 fn mini_order_change_percent_matches_the_desktop_table() {
     let source = read_tg_src("mini_app/dto.rs");
-    let body = braced_body(&source, "fn order_dto(");
+    let body = braced_body(&source, "fn order_draft(");
     assert!(
-        body.contains("order_at_mark(") && body.contains("fmt::signed_pct("),
-        "Mini App change percent must use order_at_mark and signed_pct"
+        body.contains("order_at_mark("),
+        "Mini App change percent must use order_at_mark"
+    );
+    let render = braced_body(&source, "fn render(");
+    assert!(
+        render.contains("change_text") && render.contains("fmt::signed_pct("),
+        "the draft must format change_text with signed_pct"
     );
     let at_mark = braced_body(&source, "fn order_at_mark(");
     assert!(
-        at_mark.contains("order_pnl_pct("),
-        "the shared mark helper must use the desktop table's order_pnl_pct"
+        at_mark.contains("pnl_at_mark("),
+        "the shared mark helper must use pnl_at_mark, the arithmetic behind the desktop table's order_pnl_pct"
     );
     assert!(
         body.contains("change_text:"),

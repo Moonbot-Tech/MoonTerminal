@@ -94,6 +94,9 @@ struct ReadMiss;
 /// The notifications file could not be saved.
 struct SaveMiss;
 
+/// Skipped chats and chart decisions returned by one durable notification batch.
+type NotificationResult = (Vec<i64>, Vec<(i64, ClosedTrade)>);
+
 /// Run down/back notices, then at most one closed-trade read, then at most one automatic-report
 /// read.
 ///
@@ -427,18 +430,24 @@ fn step_one_down(
     }
 }
 
-/// Copy the down rule and ledger for `chat`.
+/// Copy only the down rule and announced cores; trade history is not an input to down tracking.
 ///
 /// Args:
 ///     store: Notifications file.
 ///     chat: Chat being stepped.
 ///
 /// Returns:
-///     The rule and a clone of the ledger, or `None` when the chat is gone.
+///     The rule and a ledger containing only down state, or `None` when the chat is gone.
 fn chat_down_snapshot(store: &Mutex<NotifyStore>, chat: i64) -> Option<(DownRule, NotifyLedger)> {
     let guard = lock_store(store);
     let entry = guard.file.chats.get(&chat)?;
-    Some((entry.settings.down, entry.ledger.clone()))
+    Some((
+        entry.settings.down,
+        NotifyLedger {
+            down_announced: entry.ledger.down_announced.clone(),
+            ..Default::default()
+        },
+    ))
 }
 
 /// Write `down_announced` from the stepped ledger and any notices in one save.
@@ -467,19 +476,21 @@ fn write_down(
     messages: Vec<(String, Option<Vec<u64>>)>,
     now_utc: i64,
 ) -> Result<bool, SaveMiss> {
-    lock_store(store)
-        .update(|file| {
-            let Some(entry) = file.chats.get_mut(&chat) else {
-                return false;
-            };
-            entry.ledger.down_announced = ledger.down_announced;
-            let rows = messages
-                .into_iter()
-                .map(|(html, cores)| Outgoing::Plain(html, cores))
-                .collect();
-            enqueue_all(file, chat, rows, now_utc);
-            true
-        })
+    let mut guard = lock_store(store);
+    let mut batch =
+        moon_core::telegram::notify::NotificationBatch::new(&guard.file, &[chat], &[], None);
+    let Some(entry) = batch.file.chats.get_mut(&chat) else {
+        return Ok(false);
+    };
+    entry.ledger.down_announced = ledger.down_announced;
+    let rows = messages
+        .into_iter()
+        .map(|(html, cores)| Outgoing::Plain(html, cores))
+        .collect();
+    enqueue_all(&mut batch.file, chat, rows, now_utc);
+    guard
+        .update_notifications(batch.finish())
+        .map(|()| true)
         .map_err(|_| SaveMiss)
 }
 
@@ -991,18 +1002,75 @@ fn save_applies(
     applies: &[ChatApply],
     loaded: &Loaded,
     now_utc: i64,
-) -> Result<(Vec<i64>, Vec<(i64, ClosedTrade)>), SaveMiss> {
-    lock_store(store)
-        .update(|file| apply_messages(file, applies, loaded, now_utc))
+) -> Result<NotificationResult, SaveMiss> {
+    let mut guard = lock_store(store);
+    let (update, result) = notification_update(&guard.file, applies, loaded, now_utc);
+    guard
+        .update_notifications(update)
+        .map(|()| result)
         .map_err(|_| SaveMiss)
+}
+
+/// Describe only undecided rows and unresolved waits, leaving the full seen history in place.
+fn notification_update(
+    file: &NotifyFile,
+    applies: &[ChatApply],
+    loaded: &Loaded,
+    now_utc: i64,
+) -> (
+    moon_core::telegram::notify::NotificationUpdate,
+    NotificationResult,
+) {
+    let chats: Vec<_> = applies
+        .iter()
+        .filter(|apply| {
+            file.chats
+                .get(&apply.chat)
+                .is_some_and(|entry| entry.revision == apply.revision)
+        })
+        .map(|apply| apply.chat)
+        .collect();
+    let reads: Vec<_> = applies
+        .iter()
+        .map(|apply| Loaded {
+            trades: file
+                .chats
+                .get(&apply.chat)
+                .filter(|entry| entry.revision == apply.revision)
+                .into_iter()
+                .flat_map(|entry| {
+                    moon_core::telegram::notify::NotificationBatch::trade_candidates(
+                        entry,
+                        &apply.visible,
+                        &loaded.trades,
+                        now_utc,
+                    )
+                })
+                .collect(),
+        })
+        .collect();
+    let mut candidates: Vec<_> = reads
+        .iter()
+        .flat_map(|loaded| loaded.trades.iter().map(ClosedTrade::key))
+        .collect();
+    candidates.sort_unstable();
+    candidates.dedup();
+    let mut batch = moon_core::telegram::notify::NotificationBatch::new(
+        file,
+        &chats,
+        &candidates,
+        Some(now_utc.saturating_sub(moon_core::telegram::notify::trades::SEEN_WINDOW_SECS)),
+    );
+    let result = apply_messages(&mut batch.file, applies, &reads, now_utc);
+    (batch.finish(), result)
 }
 
 /// Render each chat and push its messages. A revision mismatch is returned, not logged.
 ///
 /// Args:
-///     file: Document clone `update` will save.
+///     file: Candidate-only notification draft; unchanged history stays in the store.
 ///     applies: Chats whose grant matched.
-///     loaded: Trades.
+///     loaded: Each chat's undecided trades and unresolved waits, in apply order.
 ///     now_utc: UTC Unix seconds for `decide` and the outbox.
 ///
 /// Returns:
@@ -1011,12 +1079,12 @@ fn save_applies(
 fn apply_messages(
     file: &mut NotifyFile,
     applies: &[ChatApply],
-    loaded: &Loaded,
+    loaded: &[Loaded],
     now_utc: i64,
-) -> (Vec<i64>, Vec<(i64, ClosedTrade)>) {
+) -> NotificationResult {
     let mut skipped = Vec::new();
     let mut charts = Vec::new();
-    for apply in applies {
+    for (apply, loaded) in applies.iter().zip(loaded) {
         match messages_for(file, apply, loaded, now_utc) {
             Some((messages, due)) => {
                 enqueue_all(file, apply.chat, messages, now_utc);

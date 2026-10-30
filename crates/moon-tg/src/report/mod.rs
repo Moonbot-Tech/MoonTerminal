@@ -1188,7 +1188,10 @@ pub(crate) fn read_mini_chart_trade_on(
         ),
         Err((coin, entry_ms)) => {
             filter.exact_coins = Some(vec![coin]);
-            (db::query_mini_trades(&snap, &filter, 1)?, Some(entry_ms))
+            (
+                filter.mini_trade_table_by_entry(&snap, entry_ms)?,
+                Some(entry_ms),
+            )
         }
     };
     Ok(mini_trade_rows(table, &filter, 1).pop().filter(|trade| {

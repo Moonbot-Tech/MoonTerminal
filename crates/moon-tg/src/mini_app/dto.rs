@@ -2,9 +2,7 @@
 
 use chrono_tz::Tz;
 use moon_core::db::QuoteBreakdown;
-use moon_core::feed::order_math::{
-    MONEY_DECIMALS, order_pnl, order_pnl_pct, pct_to_entry, position_qty,
-};
+use moon_core::feed::order_math::{MONEY_DECIMALS, pct_to_entry, pnl_at_mark, position_qty};
 use moon_core::feed::{ConnStatus, OrderRow};
 use moon_core::session::BalanceState;
 use moon_core::telegram::report::Period;
@@ -24,24 +22,30 @@ use crate::report::{MiniReport, MiniTrade};
 /// How long a strategy toggle stays `Pending` before it is reported as `TimedOut`.
 pub(crate) const STRATEGY_CONFIRM_WINDOW: Duration = Duration::from_secs(45);
 
-/// Map a stored order into the Mini App row.
-///
-/// The change percent uses the desktop orders table's arithmetic and precision.
-/// Adaptive price text cannot be parsed back into that percent.
-/// Entry volume uses the market quote and is absent for unusable entry inputs.
-pub(super) fn order_dto(
-    host: &dyn TgHost,
+/// Raw display inputs captured on the owner; expensive text formatting runs in the worker.
+pub(super) struct OrderDraft {
+    row: OrderDto,
+    quote: String,
+    volume_quote: String,
+    size: f64,
+    entry: f64,
+    mark: f64,
+}
+
+/// Project a frozen row with the conversion rate and panic state captured at admission.
+pub(super) fn order_draft(
     id: u64,
     name: String,
     exchange: String,
     order: &OrderRow,
-) -> OrderDto {
+    usd_rate: impl FnOnce(&str) -> Option<f64>,
+    panic_armed: bool,
+) -> OrderDraft {
     let (pnl, change) = order_at_mark(order, order.price);
     let quote = order_quote(&order.quote, &order.market);
     let quote = quote.as_str();
-    let market_source = host.session().market_source();
     let to_entry = order_to_entry_pct(order);
-    OrderDto {
+    let row = OrderDto {
         core: id,
         core_name: name,
         exchange,
@@ -49,34 +53,53 @@ pub(super) fn order_dto(
         coin: order.coin.clone(),
         market: order.market.clone(),
         side: if order.is_short { "sell" } else { "buy" }.to_string(),
-        volume_text: entry_volume_text(order.size, order.buy_price, 1.0, &order.quote),
-        entry_text: price_text(order.buy_price),
-        mark_text: price_text(f64::from(order.price)),
+        volume_text: None,
+        entry_text: None,
+        mark_text: None,
         pnl,
-        pnl_text: pnl.and_then(|value| pnl_text(value, quote)),
-        pnl_sign: pnl.map_or(0, |value| pnl_sign(value, quote)),
-        pnl_usd: pnl.and_then(|value| {
-            pnl_usd(value, quote, |currency| {
-                market_source.currency_usd_rate(id, currency)
-            })
-        }),
+        pnl_text: None,
+        pnl_sign: 0,
+        pnl_usd: pnl.and_then(|value| pnl_usd(value, quote, usd_rate)),
         emulator: order.emulator,
         change_pct: change,
-        change_text: change
-            .and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS).map(|(text, _)| text)),
+        change_text: None,
         to_entry_pct: to_entry,
-        to_entry_text: to_entry.and_then(distance_text),
-        panic_armed: host.is_panic_armed(id, &order.market),
+        to_entry_text: None,
+        panic_armed,
+    };
+    OrderDraft {
+        row,
+        quote: quote.to_owned(),
+        volume_quote: order.quote.clone(),
+        size: order.size,
+        entry: order.buy_price,
+        mark: f64::from(order.price),
+    }
+}
+
+impl OrderDraft {
+    /// Render the frozen order inputs with the existing text, precision and rounding contracts.
+    pub(super) fn render(mut self) -> OrderDto {
+        self.row.volume_text = entry_volume_text(self.size, self.entry, 1.0, &self.volume_quote);
+        self.row.entry_text = price_text(self.entry);
+        self.row.mark_text = price_text(self.mark);
+        self.row.pnl_text = self.row.pnl.and_then(|value| pnl_text(value, &self.quote));
+        self.row.pnl_sign = self.row.pnl.map_or(0, |value| pnl_sign(value, &self.quote));
+        self.row.change_text = self
+            .row
+            .change_pct
+            .and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS).map(|(text, _)| text));
+        self.row.to_entry_text = self.row.to_entry_pct.and_then(distance_text);
+        self.row
     }
 }
 
 /// Share order-row arithmetic with live charts using the source's fresh mark.
 pub(super) fn order_at_mark(order: &OrderRow, mark: f32) -> (Option<f64>, Option<f64>) {
-    let mut marked = order.clone();
-    marked.price = mark;
+    let (amount, percent) = pnl_at_mark(order.buy_price, mark, position_qty(order), order.is_short);
     (
-        order_pnl(&marked).filter(|v| v.is_finite()),
-        order_pnl_pct(&marked).filter(|v| v.is_finite()),
+        amount.filter(|v| v.is_finite()),
+        percent.filter(|v| v.is_finite()),
     )
 }
 

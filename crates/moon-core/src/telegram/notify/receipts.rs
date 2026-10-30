@@ -9,6 +9,41 @@ use serde::{Deserialize, Serialize};
 
 use super::{AutoReport, CardKey, NotifyFile};
 
+/// New owner transactions and legacy delivery receipts share one ordered durable cursor.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Entry {
+    Update {
+        sequence: u64,
+        update: super::updates::Update,
+    },
+    Receipt(Receipt),
+}
+
+impl Entry {
+    /// Read the cursor independently of the transaction's payload kind.
+    fn sequence(&self) -> u64 {
+        match self {
+            Self::Update { sequence, .. } => *sequence,
+            Self::Receipt(row) => row.sequence,
+        }
+    }
+
+    /// Apply only entries newer than the published checkpoint.
+    fn apply(self, file: &mut NotifyFile) -> anyhow::Result<Option<String>> {
+        match self {
+            Self::Update { sequence, update } => {
+                if sequence > file.ack_sequence {
+                    update.apply(file)?;
+                    file.ack_sequence = sequence;
+                }
+                Ok(None)
+            }
+            Self::Receipt(receipt) => Ok(receipt.apply(file).1),
+        }
+    }
+}
+
 /// Receipt I/O has its own mutex, so flushing a delivered card never holds the owner store.
 #[derive(Debug)]
 pub(crate) struct Journal {
@@ -74,13 +109,13 @@ pub(crate) fn replay(path: &Path, file: &mut NotifyFile) -> anyhow::Result<u64> 
         Err(error) => return Err(error.into()),
     };
     let mut length = 0;
-    let mut receipts: Vec<Receipt> = Vec::new();
+    let mut receipts: Vec<Entry> = Vec::new();
     for line in bytes.split_inclusive(|byte| *byte == b'\n') {
         if line.last() != Some(&b'\n') {
             log::warn!("telegram receipts: ignoring torn tail at byte {length}");
             break;
         }
-        let receipt: Receipt = match serde_json::from_slice(line) {
+        let receipt: Entry = match serde_json::from_slice(line) {
             Ok(receipt) => receipt,
             Err(error) => {
                 log::warn!("telegram receipts: ignoring corrupt tail at byte {length}: {error}");
@@ -88,9 +123,9 @@ pub(crate) fn replay(path: &Path, file: &mut NotifyFile) -> anyhow::Result<u64> 
             }
         };
         let contiguous = match receipts.last() {
-            Some(previous) => previous.sequence.checked_add(1) == Some(receipt.sequence),
+            Some(previous) => previous.sequence().checked_add(1) == Some(receipt.sequence()),
             None => {
-                receipt.sequence != 0 && receipt.sequence <= file.ack_sequence.saturating_add(1)
+                receipt.sequence() != 0 && receipt.sequence() <= file.ack_sequence.saturating_add(1)
             }
         };
         if !contiguous {
@@ -105,13 +140,13 @@ pub(crate) fn replay(path: &Path, file: &mut NotifyFile) -> anyhow::Result<u64> 
     // starts at the snapshot cursor. This also covers corruption inside that old prefix.
     if receipts
         .last()
-        .is_some_and(|receipt| receipt.sequence < file.ack_sequence)
+        .is_some_and(|receipt| receipt.sequence() < file.ack_sequence)
     {
         clear(path)?;
         return Ok(0);
     }
     for receipt in receipts {
-        let (_, photo) = receipt.apply(file);
+        let photo = receipt.apply(file)?;
         if let Some(photo) = photo {
             crate::telegram::runtime::drop_chart(path, file, &photo);
         }
@@ -129,7 +164,7 @@ pub(crate) fn append(path: &Path, length: u64, receipt: &Receipt) -> anyhow::Res
 fn append_with(
     path: &Path,
     length: u64,
-    receipt: &Receipt,
+    receipt: &impl Serialize,
     sync_directory: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> anyhow::Result<u64> {
     let path = crate::config::paths::telegram_notify_receipts(path);
@@ -152,6 +187,22 @@ fn append_with(
         sync_directory(&path)?;
     }
     Ok(length + bytes.len() as u64)
+}
+
+/// Synchronize one atomic owner mutation using the same torn-tail recovery as delivery receipts.
+pub(crate) fn append_update(
+    path: &Path,
+    length: u64,
+    sequence: u64,
+    update: &super::updates::Update,
+) -> anyhow::Result<u64> {
+    /// Borrowed envelope avoids copying a notification delta during its durable append.
+    #[derive(Serialize)]
+    struct Transaction<'a> {
+        sequence: u64,
+        update: &'a super::updates::Update,
+    }
+    append_with(path, length, &Transaction { sequence, update }, sync_parent)
 }
 
 /// Persist the journal's directory entry on Unix; other platforms need no directory handle.

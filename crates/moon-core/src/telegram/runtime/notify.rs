@@ -49,8 +49,9 @@ fn redraw_outlived(row: &Pending, now_utc: u64) -> bool {
 /// it returns.
 ///
 /// `file` is public so a host can edit paired chats on this same document. A chat edit is
-/// persisted by [`Self::update`] before that call returns. Enqueues use clone-save-commit;
-/// delivery receipts are synchronized individually and folded into the next full snapshot.
+/// persisted by [`Self::update`] before that call returns. Direct enqueues use clone-save-commit;
+/// notification batches and delivery receipts append typed journal records and are folded into
+/// the next full snapshot.
 /// `allowed` is process memory only: [`NotifyFile::save`] does not write it.
 pub struct NotifyStore {
     /// On-disk document. Missing until the first successful save.
@@ -69,6 +70,8 @@ pub struct NotifyStore {
     journal: Arc<Mutex<receipts::Journal>>,
     /// Disclosure scan already completed for this queue revision and visibility map.
     purged: Option<PurgeStamp>,
+    /// Full snapshots are coalesced while incremental owner and delivery records remain durable.
+    checkpoint_at: Instant,
 }
 
 /// Pairing, grants and queued-row changes are the only inputs to the revocation scan.
@@ -147,6 +150,7 @@ impl NotifyStore {
             wake: Arc::default(),
             journal,
             purged: None,
+            checkpoint_at: Instant::now(),
         };
         store.sweep_charts();
         Ok(store)
@@ -225,6 +229,44 @@ impl NotifyStore {
         Ok(result)
     }
 
+    /// Synchronize the caller's typed notification patch, then apply it in place.
+    /// Normal updates neither clone nor diff the stored document. During receipt contention,
+    /// preserve the existing snapshot fallback rather than waiting for a writer that needs this
+    /// store mutex to publish its receipt. Failed writes leave the document unchanged.
+    pub fn update_notifications(
+        &mut self,
+        update: crate::telegram::notify::NotificationUpdate,
+    ) -> anyhow::Result<()> {
+        if update.is_empty() {
+            return Ok(());
+        }
+        let journal = Arc::clone(&self.journal);
+        let guard = match journal.try_lock() {
+            Ok(guard) => Some(guard),
+            Err(std::sync::TryLockError::Poisoned(error)) => Some(error.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        };
+        if let Some(mut guard) = guard {
+            let sequence = guard
+                .sequence
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("notification journal sequence exhausted"))?;
+            guard.bytes = receipts::append_update(&self.path, guard.bytes, sequence, &update)?;
+            guard.sequence = sequence;
+            update.apply(&mut self.file)?;
+            self.file.ack_sequence = sequence;
+        } else {
+            let mut next = self.file.clone();
+            update.apply(&mut next)?;
+            next.save(&self.path)?;
+            self.file = next;
+            self.checkpoint_at = Instant::now();
+            self.clear_receipts();
+        }
+        self.wake.bump();
+        Ok(())
+    }
+
     /// Scan disclosures only after pairing, grants or queued payloads changed. A failed save
     /// leaves the previous stamp so the owner retries the purge on its next tick.
     pub fn purge_disallowed(
@@ -259,6 +301,7 @@ impl NotifyStore {
         };
         if dirty {
             self.file.save(&self.path)?;
+            self.checkpoint_at = Instant::now();
             self.clear_receipts();
         }
         Ok(())
@@ -381,6 +424,10 @@ pub fn push_edit(
     cores: Option<Vec<u64>>,
     now_utc: i64,
 ) -> bool {
+    // Validate before removing the previous edit: refusal must preserve its pending message.
+    if utf16_len(&html) <= TELEGRAM_MESSAGE_UTF16_LIMIT {
+        file.outbox.supersede_edit(chat, message);
+    }
     let pushed = push_row(file, chat, html, cores, None, now_utc);
     if let Some(row) = file.outbox.last_mut().filter(|_| pushed) {
         row.edit = Some(message);
@@ -733,6 +780,21 @@ fn run_sender(mut api: BotApi, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) 
     let mut stale: Vec<(i64, i64)> = Vec::new();
 
     while alive.upgrade().is_some() {
+        {
+            let mut guard = lock_store(&store);
+            let large = match guard.journal.try_lock() {
+                Ok(journal) => journal.bytes >= 1_048_576,
+                Err(std::sync::TryLockError::Poisoned(error)) => {
+                    error.into_inner().bytes >= 1_048_576
+                }
+                Err(std::sync::TryLockError::WouldBlock) => false,
+            };
+            if guard.checkpoint_at.elapsed() >= Duration::from_secs(60) || large {
+                if let Err(error) = guard.checkpoint() {
+                    log::warn!("telegram notify checkpoint deferred: {error}");
+                }
+            }
+        }
         // Read before the snapshot: a change after this point moves it and cuts the wait short.
         let seen = wake.generation();
         let pending = snapshot(&store);

@@ -78,6 +78,10 @@ pub fn reset_pairing(host: &mut dyn TgHost) {
 /// The notification tick also runs without a service. Production then has no store and returns;
 /// a test store override can still exercise enqueue decisions without a live poller.
 pub fn tick(host: &mut dyn TgHost) {
+    crate::mini_app::order_handoff::prune_order_handoffs(
+        host.state_mut(),
+        std::time::Instant::now(),
+    );
     if host
         .state()
         .retiring

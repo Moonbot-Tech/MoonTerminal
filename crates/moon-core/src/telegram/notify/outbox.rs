@@ -22,7 +22,8 @@ struct Row {
     sequence: u64,
 }
 
-/// An unbounded outbox, serialized as the original JSON array in original file order.
+/// Mandatory notifications retain FIFO order; superseded message edits can be removed losslessly.
+/// Distinct trade cards remain durable even while a chat cannot drain its backlog.
 /// Removal and lookup by id do not walk the remaining cards.
 #[derive(Clone, Debug, Default)]
 pub struct Outbox {
@@ -38,6 +39,29 @@ pub struct Outbox {
 }
 
 impl Outbox {
+    /// Keep only the latest plain edit of a chat message. A newer edit replaces the same visible
+    /// text, so its predecessors carry no information the reader still needs. Cards, photos,
+    /// rich menu redraws and edits of other messages or chats are never discarded by this rule.
+    pub(crate) fn supersede_edit(&mut self, chat: i64, message: i64) {
+        let mut slot = self.heads.get(&chat).copied();
+        let mut removed = Vec::new();
+        while let Some(id) = slot {
+            let row = &self.rows[&id];
+            slot = row.next_chat;
+            if row.value.edit == Some(message)
+                && row.value.redraw.is_none()
+                && row.value.auto.is_none()
+                && row.value.photo.is_none()
+                && row.value.card.is_none()
+            {
+                removed.push(id);
+            }
+        }
+        for id in removed {
+            self.remove_slot(id);
+        }
+    }
+
     /// Append a row at the end of both send orders, preserving even legacy duplicate ids.
     pub fn push(&mut self, value: Pending) {
         self.revision = NEXT_REVISION.fetch_add(1, Ordering::Relaxed);
