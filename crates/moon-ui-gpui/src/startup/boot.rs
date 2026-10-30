@@ -798,6 +798,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     crate::analytics::tape_autoload::tick(b);
                     // The station's order traces, once per run a minute after start.
                     crate::backend::station::pull::tick(b, cx);
+                    // Its market-list prices around trades, once per run after that.
+                    crate::backend::station::prices_pull::tick();
                     // A core removed from the session cannot answer what was asked of it; the
                     // drain edge does not fire for a removal, so the slow tick settles those.
                     // Nothing to walk while no ask is out.

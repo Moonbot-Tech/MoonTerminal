@@ -17,6 +17,7 @@ fn status(auto_update: Option<bool>) -> Status {
         auto_update,
         core_uid_high_water: None,
         cores: None,
+        prices_pull: false,
     }
 }
 

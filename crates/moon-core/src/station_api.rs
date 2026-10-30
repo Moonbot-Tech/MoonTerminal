@@ -9,8 +9,8 @@
 //!
 //! The Settings tab's share: the station's and its bot's state, a pairing code on demand, and the
 //! paired chats with their access, read and replaced. The terminal's pull (§4.9): the tape around
-//! closed trades and their order traces, what the station holds of what the terminal lacks.
-//! Nothing here deletes data.
+//! closed trades, their order traces and the market-list prices around them, what the station
+//! holds of what the terminal lacks. Nothing here deletes data.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -44,6 +44,8 @@ pub const MAX_TAPE_ITEMS: usize = 256;
 pub const MAX_TAPE_SPANS: usize = 64;
 /// Most trades one [`Request::TracesFetch`] names.
 pub const MAX_TRACE_UIDS: usize = 256;
+/// How many bytes of held stretches one [`PriceIndex`] answer lists at most, estimated as JSON.
+pub const PRICE_INDEX_BUDGET: usize = MAX_FRAME / 2;
 
 /// The station's first frame on every connection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +98,18 @@ pub enum Request {
         core_uid: u64,
         report_uids: Vec<i64>,
     },
+    /// Which stretches of market-list prices the station holds that end at or after `since_ms`,
+    /// every market, from just after `after` on. Sent only to a station whose status says it
+    /// answers it ([`Status::prices_pull`]).
+    #[serde(rename = "prices.index")]
+    PricesIndex {
+        since_ms: i64,
+        after: Option<PriceKey>,
+    },
+    /// The station's market-list prices inside these stretches of these markets, cut to them.
+    /// Sent only to a station whose status says it answers it ([`Status::prices_pull`]).
+    #[serde(rename = "prices.fetch")]
+    PricesFetch { items: Vec<TapeWant> },
 }
 
 /// What the station answers: the answer, or why there is none.
@@ -124,9 +138,12 @@ pub enum Answer {
     Access(Access),
     Tape(Tape),
     Traces(Traces),
+    PriceIndex(PriceIndex),
+    Prices(Prices),
 }
 
-/// Stretches of one market's tape a client lacks.
+/// Stretches of one market a client lacks: of its tape ([`Request::TapeFetch`]) or of its
+/// market-list prices ([`Request::PricesFetch`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TapeWant {
     /// The exchange key the tape is filed under (`"{code}:{dex:08x}"`).
@@ -165,6 +182,56 @@ pub struct Tape {
     /// station does not hold.
     pub pieces: Vec<TapePiece>,
     /// `None`: every wanted stretch was answered.
+    pub resume: Option<TapeResume>,
+}
+
+/// Where a [`PriceIndex`] answer stopped: one filed segment's key, the last one listed.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct PriceKey {
+    pub exchange: String,
+    pub market: String,
+    pub from_ms: i64,
+}
+
+/// The stretches the station holds of one market's prices.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PriceHeld {
+    /// The exchange key the prices are filed under (`"{code}:{dex:08x}"`).
+    pub exchange: String,
+    pub market: String,
+    /// Inclusive `(from_ms, to_ms)` stretches, true-UTC milliseconds, ascending; abutting
+    /// segments come as one stretch.
+    pub spans: Vec<(i64, i64)>,
+}
+
+/// The answer to [`Request::PricesIndex`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PriceIndex {
+    /// Ascending by exchange, then market. One market may continue on the next page.
+    pub markets: Vec<PriceHeld>,
+    /// `None`: everything was listed; otherwise ask again with `after` set to it.
+    pub resume: Option<PriceKey>,
+}
+
+/// One covered stretch of a wanted market's prices.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PricePiece {
+    /// Index of its [`TapeWant`] in the request.
+    pub item: u32,
+    pub from_ms: i64,
+    pub to_ms: i64,
+    /// The stretch as the price file packs a segment, in base64
+    /// (`market::price_recorder::remote::encode_piece`).
+    pub data: String,
+}
+
+/// The answer to [`Request::PricesFetch`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Prices {
+    /// Ascending by item, then by time. A wanted stretch not covered by any piece is one the
+    /// station does not hold.
+    pub pieces: Vec<PricePiece>,
+    /// `None`: every wanted stretch was answered; otherwise ask again from there.
     pub resume: Option<TapeResume>,
 }
 
@@ -300,6 +367,11 @@ pub struct Status {
     /// Absent on older stations; allocation then starts above both currently listed sets.
     #[serde(default)]
     pub core_uid_high_water: Option<u64>,
+    /// The station answers [`Request::PricesIndex`] and [`Request::PricesFetch`]. `false` from a
+    /// station older than them — an added field with a default, so neither end of version 2
+    /// misreads the other, and an older station is never sent a request it cannot parse.
+    #[serde(default)]
+    pub prices_pull: bool,
 }
 
 /// Counts and last-pass progress for the station's automatic closed-trade tape catch-up.

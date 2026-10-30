@@ -425,6 +425,7 @@ impl StationNow<'_> {
             auto_update: Some(self.auto_update.on()),
             cores: Some(self.listed.to_vec()),
             core_uid_high_water: Some(self.core_uid_high_water),
+            prices_pull: true,
         }
     }
 }
@@ -457,9 +458,10 @@ fn answer(
             Some(bot) => bot.set_access(cfg, &base, *access).map(Answer::Access),
         },
         // Answered on the API's thread (`pull::answer_directly`); never sent here.
-        Request::TapeFetch { .. } | Request::TracesFetch { .. } => {
-            Err("the pull is answered off the main loop".to_owned())
-        }
+        Request::TapeFetch { .. }
+        | Request::TracesFetch { .. }
+        | Request::PricesIndex { .. }
+        | Request::PricesFetch { .. } => Err("the pull is answered off the main loop".to_owned()),
     };
     Reply::from(answer)
 }

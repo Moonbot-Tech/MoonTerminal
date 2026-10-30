@@ -16,11 +16,14 @@ use rusqlite::{Connection, OpenFlags, params};
 
 use super::codec;
 use super::ring::Segment;
+use crate::market::trade_replay::Coverage;
 
-/// A rowid table, not one clustered by its key: segments are inserted in time order, so the
-/// oldest rows sit on the oldest pages, and deleting them by rowid frees whole pages. Clustered
-/// by `(exchange, market, from_ms)`, the oldest rows would be scattered over every market's pages
-/// and a size trim would free almost none of them.
+/// A rowid table, not one clustered by its key: the recorder inserts segments in time order, so
+/// the oldest rows sit on the oldest pages, and a size trim by end time frees whole pages.
+/// Clustered by `(exchange, market, from_ms)`, the oldest rows would be scattered over every
+/// market's pages and a size trim would free almost none of them. Segments pulled from a station
+/// are old but inserted late: they sit together on later pages, and the trim, by end time and not
+/// by rowid, takes them first all the same.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS segments (
     exchange TEXT NOT NULL,
@@ -38,6 +41,15 @@ const MAX_TRIM_ROWS: u64 = 20_000;
 /// Size passes per trim. Index pages free less readily than table pages, so a pass can fall a
 /// little short; the next one finishes, and an overshoot stays within one pass's estimate.
 const SIZE_PASSES: usize = 4;
+
+/// A segment already packed, on its way from the station to this file.
+pub(super) struct Packed {
+    pub exchange: String,
+    pub market: String,
+    pub from_ms: i64,
+    pub to_ms: i64,
+    pub data: Vec<u8>,
+}
 
 /// One segment on its way to the file.
 pub(super) struct Filed {
@@ -105,6 +117,31 @@ impl Store {
         Ok(bytes)
     }
 
+    /// File packed segments in one transaction, each only where the file holds nothing of its
+    /// market over its stretch: a reader merges segments in time order and must never meet two
+    /// that speak for the same moment, and what this host recorded itself stays. Returns the
+    /// segments filed.
+    pub(super) fn insert_packed(&mut self, segments: &[Packed]) -> rusqlite::Result<usize> {
+        if segments.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut filed = 0;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO segments (exchange, market, from_ms, to_ms, data)
+                 SELECT ?1, ?2, ?3, ?4, ?5
+                 WHERE NOT EXISTS (SELECT 1 FROM segments
+                     WHERE exchange = ?1 AND market = ?2 AND from_ms <= ?4 AND to_ms >= ?3)",
+            )?;
+            for p in segments {
+                filed += stmt.execute(params![p.exchange, p.market, p.from_ms, p.to_ms, p.data])?;
+            }
+        }
+        tx.commit()?;
+        Ok(filed)
+    }
+
     /// Delete the segments that ended before `edge_ms`, then the oldest until what the file holds
     /// fits `max_bytes`. Freed pages are reused by later writes, so the file stops growing at the
     /// ceiling rather than shrinking below it. Returns the rows deleted.
@@ -133,16 +170,104 @@ impl Store {
             let n = ((used - max_bytes) / per_row + 1)
                 .min(MAX_TRIM_ROWS)
                 .min(rows);
+            // By end time, not rowid: a station's old segments are filed after this host's new
+            // ones. Segments flushed together share an end, so a pass may take a few more.
             let cut: i64 = self.conn.query_row(
-                "SELECT rowid FROM segments ORDER BY rowid LIMIT 1 OFFSET ?1",
+                "SELECT to_ms FROM segments ORDER BY to_ms LIMIT 1 OFFSET ?1",
                 [i64::try_from(n - 1).unwrap_or(0)],
                 |r| r.get(0),
             )?;
             deleted += self
                 .conn
-                .execute("DELETE FROM segments WHERE rowid <= ?1", [cut])?;
+                .execute("DELETE FROM segments WHERE to_ms <= ?1", [cut])?;
         }
         Ok(deleted)
+    }
+
+    /// Drop of `market` on `exchange` what falls in the interior gaps of `keep` — ground the tape
+    /// keeps on both sides of, not ground before its first kept stretch, which the age trim owns:
+    /// a segment wholly inside a gap goes, one across a gap's edge is replaced by its parts
+    /// outside it ([`codec::cut`]). Each gap is one index seek, bounded below by `max_segment_ms`
+    /// (no segment is longer), so a pass costs its gaps, not the file. Returns the segments
+    /// removed or cut.
+    pub(super) fn keep_only(
+        &mut self,
+        exchange: &str,
+        market: &str,
+        keep: &Coverage,
+        max_segment_ms: i64,
+    ) -> rusqlite::Result<usize> {
+        let Some(hull) = keep.hull() else {
+            return Ok(0);
+        };
+        let gaps = Coverage::one(hull).minus(keep);
+        if gaps.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut changed = 0;
+        {
+            let mut bounds: Vec<(i64, i64, i64)> = Vec::new();
+            {
+                let mut stmt = tx.prepare_cached(
+                    "SELECT rowid, from_ms, to_ms FROM segments
+                     WHERE exchange = ?1 AND market = ?2 AND from_ms >= ?3 AND from_ms <= ?4
+                       AND to_ms >= ?5",
+                )?;
+                for &(a, b) in gaps.spans() {
+                    let rows = stmt.query_map(
+                        params![exchange, market, a.saturating_sub(max_segment_ms), b, a],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )?;
+                    for row in rows {
+                        bounds.push(row?);
+                    }
+                }
+            }
+            // A segment across two gaps is met twice; it is handled once.
+            bounds.sort_unstable();
+            bounds.dedup();
+            let mut data = tx.prepare_cached("SELECT data FROM segments WHERE rowid = ?1")?;
+            let mut delete = tx.prepare_cached("DELETE FROM segments WHERE rowid = ?1")?;
+            let mut insert = tx.prepare_cached(
+                "INSERT OR IGNORE INTO segments (exchange, market, from_ms, to_ms, data)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for (rowid, from, to) in bounds {
+                if keep.contains((from, to)) {
+                    continue;
+                }
+                let kept = Coverage::one((from, to)).clip(keep);
+                let blob: Option<Vec<u8>> = if kept.is_empty() {
+                    None
+                } else {
+                    Some(data.query_row([rowid], |r| r.get(0))?)
+                };
+                delete.execute([rowid])?;
+                changed += 1;
+                let Some(blob) = blob else {
+                    continue;
+                };
+                for &(a, b) in kept.spans() {
+                    // A part that does not decode is dropped with the segment it came from.
+                    if let Ok(Some((start, bytes))) = codec::cut(from, &blob, a, b) {
+                        insert.execute(params![exchange, market, start, b, bytes])?;
+                    }
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    /// Bytes of the file's pages, free ones included: its size on disk, the WAL aside.
+    pub(super) fn file_bytes(&self) -> rusqlite::Result<u64> {
+        let pragma = |name: &str| -> rusqlite::Result<i64> {
+            self.conn
+                .query_row(&format!("PRAGMA {name}"), [], |r| r.get(0))
+        };
+        let file = pragma("page_count")?.max(0) * pragma("page_size")?;
+        Ok(u64::try_from(file).unwrap_or(0))
     }
 
     /// Bytes of pages in use: the file minus its free list.
@@ -214,15 +339,46 @@ pub(super) fn read_at(
     from_ms: i64,
     to_ms: i64,
 ) -> rusqlite::Result<Vec<PriceSpan>> {
+    match open_read(path)? {
+        Some(conn) => read_conn(&conn, exchange_key, market, from_ms, to_ms),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// A read-only connection to the file at `path`; `None` when there is no file yet, which a read
+/// never creates.
+pub(super) fn open_read(path: &Path) -> rusqlite::Result<Option<Connection>> {
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
     let conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     conn.busy_timeout(Duration::from_secs(3))?;
-    read_conn(&conn, exchange_key, market, from_ms, to_ms)
+    Ok(Some(conn))
+}
+
+/// The bounds of the segments filed for `market` on `exchange_key` that touch
+/// `[from_ms, to_ms]`, in time order — whether they decode or not.
+pub(super) fn held_bounds(
+    conn: &Connection,
+    exchange_key: &str,
+    market: &str,
+    from_ms: i64,
+    to_ms: i64,
+) -> rusqlite::Result<Vec<(i64, i64)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT from_ms, to_ms FROM segments
+         WHERE exchange = ?1 AND market = ?2 AND from_ms <= ?4 AND to_ms >= ?3
+         ORDER BY from_ms",
+    )?;
+    let bounds = stmt
+        .query_map(params![exchange_key, market, from_ms, to_ms], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect();
+    bounds
 }
 
 /// [`read`] over an open connection.

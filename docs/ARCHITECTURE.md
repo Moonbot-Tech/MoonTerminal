@@ -684,8 +684,20 @@ station builds its clients without the periodic list and records nothing).
   key filed is not filed again by the next trade.
 - **Segments** (`store.rs`, `codec.rs`): one row per stretch the lists vouch for, flushed every
   30 seconds; a gap ends a segment and nothing is drawn across it. Values are `f64` as sent.
-  The file stops at 512 MB, oldest first; a station also drops what is past its tape's age.
+  Retention follows the tape's settings: a station drops what is past its tape's age, either host
+  drops the oldest end first only at the disk reserve, and emulator trades are recorded only while
+  the tape records them. When the emulator or tuner-only switch narrows, the station's tape
+  retention hands its keep map to the recorder on every whole pass, and the price history of the trades the tape
+  drops goes too.
   `price_recorder::read` returns the unbroken stretches of one market over a time range.
+- **From the station** (`remote.rs`, `backend/station/prices_pull.rs`): the terminal records only
+  while it runs, so once per run, a minute and a half after start, it asks its station what it
+  holds — as far back as its tape settings keep it (`prices.index`, paged) — subtracts what its own file holds, and fetches
+  the rest (`prices.fetch`, paged like `tape.fetch`): each station segment cut to the stretch,
+  opening with the state in force there. Ground younger than the recorder's ring plus a flush is
+  left for the next run, and a piece is filed only where the file holds nothing of its stretch, so
+  the terminal's own recording is never replaced. Only a station whose status carries
+  `prices_pull` is asked; an older one would refuse the requests unparsed.
 
 ## USDT valuation: two modes
 

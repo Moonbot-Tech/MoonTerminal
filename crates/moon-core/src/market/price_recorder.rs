@@ -22,8 +22,12 @@
 //!
 //! Per `(exchange, market)`, the union of its trades' windows, in segments of the stretch the lists
 //! vouch for ([`store`]). A list that stops arriving leaves an honest gap: the segment ends and the
-//! next begins when lists come again. Retention: the oldest first past [`MAX_FILE_BYTES`]; a
-//! station also drops what is older than its tape's age limit.
+//! next begins when lists come again. Retention follows the tape's settings: a station drops what
+//! is older than its tape's age limit, and either host drops the oldest first only when its disk
+//! reaches the shared reserve (`disk_reserve`), as the tape does — so the file holds as far back
+//! as the tape. Emulator trades are recorded only while the tape records them, and when a switch
+//! narrows, the tape's own retention pass hands its keep map here ([`apply_keep`]), so the price
+//! history of the trades the tape drops goes with it.
 //!
 //! # Hosts
 //!
@@ -31,9 +35,15 @@
 //! without the periodic list, so there is nothing to record and nothing here starts.
 //!
 //! One thread owns the rings, the plans and the writer; nothing here touches the GUI.
+//!
+//! # From the station
+//!
+//! A station records while the terminal is off. Once per run the terminal asks it for what its
+//! own file lacks and files the answer beside its own segments ([`remote`]).
 
 mod codec;
 mod plan;
+pub mod remote;
 mod ring;
 mod source;
 mod store;
@@ -53,7 +63,27 @@ use store::{Filed, Store};
 
 use crate::market::tape_recorder::TradeId;
 use crate::market::trade_replay::Coverage;
+use crate::market::trade_replay::trade_cache::KeepMap;
 use crate::session::CoreId;
+
+/// What the file may hold in use: its size on disk plus what the disk can still spare above the
+/// shared reserve, the tape's own rule (`disk_reserve`). Below the reserve the ceiling falls under
+/// the file's size by the shortfall, and retention frees that much, oldest end first. Freed pages
+/// stay in the file and take the next writes, so the disk figure does not move and the next pass
+/// finds nothing more to free: the file stops growing rather than emptying itself. A disk that
+/// cannot be measured imposes no ceiling.
+///
+/// Args:
+///     file: Bytes of the file's pages, free ones included.
+///     disk: `(free, total)` of the file's filesystem, when it could be measured.
+fn ceiling(file: u64, disk: Option<(u64, u64)>) -> u64 {
+    match disk {
+        Some((free, total)) if total != 0 => file
+            .saturating_add(free)
+            .saturating_sub(crate::disk_reserve::reserve(total)),
+        _ => u64::MAX,
+    }
+}
 
 /// How often the thread looks at its queues.
 const TICK: Duration = Duration::from_millis(250);
@@ -69,8 +99,7 @@ const LOOKBACK_CAP_MS: i64 = 600_000;
 const RING_SPARE_MS: i64 = 60_000;
 /// Kept past the tape's tail after an exit.
 const TAIL_EXTRA_MS: i64 = 10_000;
-/// The file's ceiling; the oldest segments go first past it.
-const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
+
 /// How often retention runs; the first pass comes a minute after start.
 const RETENTION_EVERY: Duration = Duration::from_secs(600);
 /// How often the summary line is written to the application log.
@@ -129,8 +158,17 @@ pub fn on_prices_updated(core: CoreId, included_funding: bool, client: &moonprot
 }
 
 /// A trade opened on `exchange_key`/`market` at `open_ms` (true UTC).
-pub fn trade_opened(exchange_key: &str, market: &str, trade: TradeId, open_ms: i64) {
-    if enabled() {
+///
+/// `emulator`: the row's emulator flag; an emulator trade is left out while the tape leaves it
+/// out, and an unknown one is recorded.
+pub fn trade_opened(
+    exchange_key: &str,
+    market: &str,
+    trade: TradeId,
+    open_ms: i64,
+    emulator: Option<bool>,
+) {
+    if enabled() && !excluded(emulator) {
         send(Cmd::Opened {
             key: (exchange_key.to_owned(), market.to_owned()),
             trade,
@@ -139,16 +177,43 @@ pub fn trade_opened(exchange_key: &str, market: &str, trade: TradeId, open_ms: i
     }
 }
 
-/// A trade closed on `exchange_key`/`market` (true UTC).
-pub fn trade_closed(exchange_key: &str, market: &str, trade: TradeId, open_ms: i64, close_ms: i64) {
-    if enabled() {
+/// A trade closed on `exchange_key`/`market` (true UTC). An emulator trade the tape leaves out
+/// is dropped from its key, so what is still due of it is not filed.
+pub fn trade_closed(
+    exchange_key: &str,
+    market: &str,
+    trade: TradeId,
+    open_ms: i64,
+    close_ms: i64,
+    emulator: Option<bool>,
+) {
+    if !enabled() {
+        return;
+    }
+    let key = (exchange_key.to_owned(), market.to_owned());
+    if excluded(emulator) {
+        send(Cmd::Dropped { key, trade });
+    } else {
         send(Cmd::Closed {
-            key: (exchange_key.to_owned(), market.to_owned()),
+            key,
             trade,
             open_ms,
             close_ms,
         });
     }
+}
+
+/// The station's tape retention built `keep` — per market, the ground its tape keeps — under a
+/// narrowed emulator or tuner-only switch: drop the price history of the same trades.
+pub fn apply_keep(keep: Arc<KeepMap>) {
+    if enabled() {
+        send(Cmd::Keep(keep));
+    }
+}
+
+/// Whether a trade with this emulator flag is left out, by the tape's own setting.
+fn excluded(emulator: Option<bool>) -> bool {
+    emulator == Some(true) && !crate::market::tape_recorder::catchup::record_emulator()
 }
 
 /// File what is due up to now and stop, as the process exits. Returns whether the file took it
@@ -185,6 +250,13 @@ enum Cmd {
         open_ms: i64,
         close_ms: i64,
     },
+    /// An emulator trade the tape leaves out closed: forget it.
+    Dropped {
+        key: Key,
+        trade: TradeId,
+    },
+    /// The tape's retention keep map, built under a narrowed emulator or tuner-only switch.
+    Keep(Arc<KeepMap>),
     Shutdown(Sender<()>),
 }
 
@@ -257,6 +329,10 @@ fn current_window() -> Window {
     }
 }
 
+/// The longest stretch one filed segment can speak for: a flush files ground the ring still holds,
+/// and a pulled or cut piece is a part of such a segment. Bounds the purge's index seek.
+const MAX_SEGMENT_MS: i64 = LOOKBACK_CAP_MS + RING_SPARE_MS + 2 * FLUSH_EVERY.as_millis() as i64;
+
 /// How far back the ring reaches under a margin.
 fn ring_depth_ms(margin_ms: i64) -> i64 {
     margin_ms.clamp(0, LOOKBACK_CAP_MS) + RING_SPARE_MS
@@ -305,6 +381,12 @@ fn run(events: &Receiver<Cmd>, prices: &Receiver<Batch>) {
                     open_ms,
                     close_ms,
                 } => rec.plan(key).closed(trade, open_ms, close_ms),
+                Cmd::Dropped { key, trade } => {
+                    if let Some(plan) = rec.keys.get_mut(&key) {
+                        plan.forget(trade);
+                    }
+                }
+                Cmd::Keep(keep) => rec.apply_keep(&keep),
                 Cmd::Shutdown(reply) => {
                     rec.flush(now_ms, now_ms, current_window());
                     rec.summary(true);
@@ -486,7 +568,7 @@ impl Recorder {
         }
     }
 
-    /// Age (a station's tape limit) and size retention.
+    /// Age (a station's tape limit) and disk retention.
     fn retention(&mut self, now_ms: i64) {
         let Some(store) = self.store.as_mut() else {
             return;
@@ -496,10 +578,48 @@ impl Recorder {
         } else {
             None
         };
-        match store.trim(edge, MAX_FILE_BYTES) {
+        let file = match store.file_bytes() {
+            Ok(file) => file,
+            Err(e) => {
+                log::warn!("price recorder: retention could not size the file: {e}");
+                return;
+            }
+        };
+        let disk = self
+            .path
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .and_then(crate::disk_reserve::disk_space);
+        match store.trim(edge, ceiling(file, disk)) {
             Ok(0) => {}
             Ok(rows) => log::info!("price recorder: retention removed {rows} segments"),
             Err(e) => log::warn!("price recorder: retention failed: {e}"),
+        }
+    }
+
+    /// Keep only what the tape's retention keeps (`keep`, per market), as a narrowed emulator or
+    /// tuner-only switch drops it from the tape — on every whole pass the tape makes under such a
+    /// rule, so what an emulator trade filed before its flag was known goes on the next one. Each
+    /// pass reads only the segments inside the keep map's interior gaps, not the file.
+    fn apply_keep(&mut self, keep: &KeepMap) {
+        let Some(store) = self.store.as_mut() else {
+            return;
+        };
+        let mut removed = 0;
+        for ((exchange, market), keep) in keep {
+            match store.keep_only(exchange, market, keep, MAX_SEGMENT_MS) {
+                Ok(n) => removed += n,
+                Err(e) => {
+                    log::warn!("price recorder: purge of {exchange} {market} failed: {e}");
+                    return;
+                }
+            }
+        }
+        if removed > 0 {
+            log::info!(
+                "price recorder: tape retention applied over {} market(s), {removed} segment(s) removed or cut",
+                keep.len()
+            );
         }
     }
 

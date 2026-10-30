@@ -128,3 +128,36 @@ fn zigzag_round_trips_negative_times() {
         assert_eq!(unzigzag(zigzag(v)), v);
     }
 }
+
+#[test]
+fn a_cut_opens_with_the_state_in_force_and_keeps_only_its_stretch() {
+    let seg = Segment {
+        from_ms: 10_000,
+        to_ms: 20_000,
+        points: vec![
+            point(10_000, 1.0, 2.0, 1.5),
+            point(12_000, 1.1, 2.0, 1.5),
+            point(15_000, 1.2, 2.1, 1.6),
+            point(18_000, 1.3, 2.2, 1.7),
+        ],
+        funding: vec![funding(10_000, 0.0001, 99_000)],
+    };
+    let data = encode(&seg);
+    let (start, cut_data) = cut(10_000, &data, 13_000, 15_000).unwrap().unwrap();
+    assert_eq!(start, 13_000);
+    let back = decode(13_000, &cut_data).unwrap();
+    let shape: Vec<_> = back.iter().map(|d| (d.t_ms, d.bid, d.mark)).collect();
+    // 13 000 carries what held since 12 000; 18 000 is past the stretch.
+    assert_eq!(shape, vec![(13_000, 1.1, 1.5), (15_000, 1.2, 1.6)]);
+    assert!(
+        back.iter().all(|d| d.funding == Some((0.0001, 99_000))),
+        "funding in force carries into the cut"
+    );
+    // A stretch on a change starts with that change; one before the segment starts at it.
+    let (start, _) = cut(10_000, &data, 15_000, 16_000).unwrap().unwrap();
+    assert_eq!(start, 15_000);
+    let (start, early) = cut(10_000, &data, 5_000, 11_000).unwrap().unwrap();
+    assert_eq!(start, 10_000);
+    assert_eq!(decode(10_000, &early).unwrap().len(), 1);
+    assert_eq!(cut(10_000, &[VERSION], 0, 30_000).unwrap(), None);
+}

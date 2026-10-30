@@ -63,6 +63,7 @@ fn status(host: Option<Host>) -> Status {
         last_update: None,
         auto_update: None,
         core_uid_high_water: None,
+        prices_pull: false,
         cores: None,
     }
 }

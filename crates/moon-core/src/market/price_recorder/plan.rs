@@ -95,6 +95,13 @@ impl KeyPlan {
         );
     }
 
+    /// Forget one trade: an emulator trade the tape leaves out. What it already filed stays
+    /// until the tape's next whole retention pass drops that trade's tape, and the price history
+    /// with it (`apply_keep`).
+    pub(super) fn forget(&mut self, id: TradeId) {
+        self.trades.remove(&id);
+    }
+
     /// Forget open trades whose exit never came.
     pub(super) fn expire(&mut self, now_ms: i64) {
         self.trades.retain(|_, t| {

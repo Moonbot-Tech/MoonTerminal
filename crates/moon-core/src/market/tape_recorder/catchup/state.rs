@@ -314,12 +314,15 @@ impl RecorderCatchup {
                         built.elapsed().as_secs_f64(),
                         crate::metrics::memory_now()
                     );
+                    let keep = Arc::new(keep);
+                    // The price history follows the tape's switches: once the listing is whole,
+                    // a narrowed rule drops the same trades' prices.
+                    let rule = (super::record_emulator(), super::tuner_only());
+                    if complete && (!rule.0 || rule.1) {
+                        crate::market::price_recorder::apply_keep(Arc::clone(&keep));
+                    }
                     let progress = Arc::new(TrimProgress::default());
-                    let rx = cache.trim_start(
-                        Arc::new(keep),
-                        Compact::Incremental,
-                        Some(progress.clone()),
-                    );
+                    let rx = cache.trim_start(keep, Compact::Incremental, Some(progress.clone()));
                     Phase::Trim { rx, progress }
                 }
                 Ok(Ok(_)) => Phase::Listing {
