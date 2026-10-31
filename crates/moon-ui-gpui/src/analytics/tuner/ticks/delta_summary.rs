@@ -1,6 +1,7 @@
 //! The status line's delta part: how many rows the model reads live deltas for, and — in its
 //! tooltip — how well each delta's history reproduces the core, field by field
-//! (`deltas::summarize`), with the deltas the model does not re-evaluate and why.
+//! (`deltas::summarize`), how many read the mark delta off the recorded market list, and the
+//! deltas the model does not re-evaluate and why.
 
 use rust_i18n::t;
 
@@ -46,6 +47,13 @@ pub(super) fn delta_summary<'a>(
     if covered == 0 {
         return None;
     }
+    // Rows whose mark delta the recorded market list gives (`ticks::quotes`).
+    let marked = rows
+        .clone()
+        .into_iter()
+        .filter(|r| r.tape == TapeStatus::Covered)
+        .filter(|r| r.deal.quotes.as_ref().is_some_and(|q| q.mark_live()))
+        .count();
     let tracks = rows
         .into_iter()
         .filter(|r| r.tape == TapeStatus::Covered)
@@ -61,9 +69,12 @@ pub(super) fn delta_summary<'a>(
     for field in &quality.fields {
         tip.push(field_line(field));
     }
+    tip.push(format!(
+        "dmark: {}",
+        t!("analytics.ticks.deltas_tip_mark", n = marked)
+    ));
     for missing in NotComputed::ALL {
         let reason = match missing {
-            NotComputed::MarkPrice => t!("analytics.ticks.deltas_tip_mark"),
             NotComputed::PriceBug => t!("analytics.ticks.deltas_tip_pricebug"),
             NotComputed::Market => t!("analytics.ticks.deltas_tip_market"),
         };

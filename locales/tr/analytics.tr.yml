@@ -686,7 +686,7 @@ analytics.ticks.deltas_tip_head: "Deltalar, çekirdeğin saydığı gibi işlem 
 analytics.ticks.deltas_tip_field: "%{name}: %{live} işlemde canlı · pencere %{coverage}% kaplı · damgada ≤0,1 yp: %{checked} taneden %{reproduced}, ortanca %{error} yp"
 analytics.ticks.deltas_tip_none: "%{name}: hiçbir işlemde canlı değil — raporun anlık görüntüsü"
 analytics.ticks.deltas_tip_btc_note: " (önbellekteki BTC mumlarından; beş dakikalık mumda 1m, mumun aralığıdır)"
-analytics.ticks.deltas_tip_mark: "raporun anlık görüntüsü — Mark Price geçmişi yok"
+analytics.ticks.deltas_tip_mark: "%{n} satırda kaydedilen piyasa listesinden; diğerlerinde raporun anlık görüntüsü"
 analytics.ticks.deltas_tip_pricebug: "raporun anlık görüntüsü — çekirdeğin kendi gecikme ölçüsü"
 analytics.ticks.deltas_tip_market: "raporun anlık görüntüsü — borsadaki her piyasanın ortalaması"
 analytics.ticks.trade_expand: "İşlem bölmesini göster — satıra tıklayınca burada açılır"

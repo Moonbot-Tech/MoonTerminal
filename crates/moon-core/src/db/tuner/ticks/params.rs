@@ -468,10 +468,13 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     // Entry fields the MoonShot model reads at the strategy's value but cannot answer a variant
     // of honestly, so the search never varies them. `FastShotAlgo` moves nothing in the model
     // (it folds the core's timer into the latency), yet any changed entry field swaps the fact's
-    // own fill for the model's, so a toggle would still move the score. `MShotAddMarkDelta` and
-    // `MShotAddPriceBug` read `dmark` / `pricebug`, which have no history here: the report's
-    // snapshot at the buy is applied to the order's whole life (`deltas::NotComputed`), and a
-    // search would fit the corridor to a value that did not exist before the spike.
+    // own fill for the model's, so a toggle would still move the score. `MShotAddPriceBug` reads
+    // `pricebug`, which has no history here (`deltas::NotComputed`): the report's snapshot at the
+    // buy is applied to the order's whole life, and a search would fit the corridor to a value
+    // that did not exist before the spike. `MShotAddMarkDelta` reads `dmark`, live where the
+    // market list was recorded (`ticks::quotes`) — since 2026-10-30, and only over orders that
+    // waited less than the tape's margin — and the snapshot everywhere else; a search would fit it
+    // mostly to the snapshot until the recording covers a sample of its own.
     "FastShotAlgo",
     "MShotAddMarkDelta",
     "MShotAddPriceBug",

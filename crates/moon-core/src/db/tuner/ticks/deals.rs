@@ -325,6 +325,7 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             deltas,
             // Filled by the caller that holds the tape (`deltas::track_for`).
             delta_track: None,
+            quotes: None,
             bars: None,
             tick: None,
             pre_spike_ask: None,

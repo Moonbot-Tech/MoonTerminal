@@ -37,6 +37,7 @@ pub mod gap;
 pub mod hook;
 pub mod mshot;
 pub mod params;
+pub mod quotes;
 pub mod record;
 pub mod scope;
 pub mod search;
@@ -135,8 +136,9 @@ pub fn round_to_step(level: f64, tick: f64) -> f64 {
 /// The report stamps them once — at the buy for MoonShot, at the detect and the order's
 /// placement for every other kind (FAQ :423) — while the core re-reads them live. Every field of
 /// [`deltas::DeltaField`] is re-evaluated along the window where the caller could build a
-/// [`deltas::DeltaTrack`] for the deal ([`Deal::deltas_at`]); the rest ([`deltas::NotComputed`])
-/// stay this snapshot. All values are per cent, exactly as `orders_rep` stores them.
+/// [`deltas::DeltaTrack`] for the deal ([`Deal::deltas_at`]), the mark delta wherever the market
+/// list was recorded ([`quotes`]); the rest ([`deltas::NotComputed`]) stay this snapshot. All
+/// values are per cent, exactly as `orders_rep` stores them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Deltas {
     /// The last five seconds' move (`d5s`) — read by `MShotAdd5sDelta`.
@@ -239,6 +241,11 @@ pub struct Deal {
     /// ([`deltas::track_for`]); filled by the caller that holds the tape, before the other model
     /// inputs (the stop anchor reads the stop through it). `None` keeps the snapshot everywhere.
     pub delta_track: Option<std::sync::Arc<deltas::DeltaTrack>>,
+    /// The core's ticker — BID, ASK, mark — as the market list recorded it around the trade
+    /// ([`quotes::read_for`]): the mark delta along the window where it agrees with the report at
+    /// its stamp, and the book the stops read. `None` — a trade from before the recording, a spot
+    /// market, a hole — leaves every reader on the snapshot and the prints, as before it existed.
+    pub quotes: Option<std::sync::Arc<quotes::QuoteTrack>>,
     /// The market's price bars — one-minute klines, five-minute ones where no minute bar lies —
     /// from [`deltas::PRICE_HISTORY_MS`] before the window through the tape's end
     /// ([`deltas::track_for`]): what a rule that looks back further than the tape reads, as
@@ -328,34 +335,47 @@ impl Deal {
     }
 
     /// The deltas the entry order lived through, one per refresh step of the live track
-    /// ([`deltas::STEP_MS`]) from the order's creation ([`Deal::order_open_ms`]) to the fill,
-    /// the fill's own included — the core re-places the corridor when a delta moves, so these
+    /// ([`deltas::STEP_MS`]) and one per point of the recorded list ([`quotes`]) from the order's
+    /// creation ([`Deal::order_open_ms`]) to the fill, the fill's own included — the core
+    /// re-places the corridor when a delta moves, so these
     /// are every corridor it held as the model reads them: where the track does not reach, the
-    /// report's snapshot, as `deltas_at` gives it to the replay itself. A deal without a track
-    /// has the snapshot alone, and
+    /// report's snapshot, as `deltas_at` gives it to the replay itself. A deal with neither a
+    /// track nor a recorded mark delta has the snapshot alone, and
     /// one whose order waited past [`ORDER_WAIT_CAP_MS`] the fill's alone: its early life is
     /// neither fetched nor replayed, so nothing of it is held against a variant either.
     pub fn entry_deltas(&self) -> Vec<Deltas> {
-        if self.delta_track.is_none() {
+        let mark_live = self.quotes.as_ref().is_some_and(|q| q.mark_live());
+        if self.delta_track.is_none() && !mark_live {
             return vec![self.deltas];
         }
         let to = self.buy_ms;
         let from = self.order_open_ms().unwrap_or(to);
-        let mut out: Vec<Deltas> = (from..to)
-            .step_by(deltas::STEP_MS as usize)
-            .map(|t| self.deltas_at(t))
-            .collect();
-        out.push(self.deltas_at(to));
-        out
+        let mut moments: Vec<i64> = (from..to).step_by(deltas::STEP_MS as usize).collect();
+        if let Some(q) = self.quotes.as_ref().filter(|_| mark_live) {
+            let mut at = from;
+            while let Some(point) = q.next_point(at, to) {
+                moments.push(point);
+                at = point;
+            }
+        }
+        moments.push(to);
+        moments.sort_unstable();
+        moments.dedup();
+        moments.into_iter().map(|t| self.deltas_at(t)).collect()
     }
 
     /// The deltas as the core held them at a moment: every field the live track answers for
-    /// there, where the deal has one, the report's snapshot for everything else.
+    /// there, where the deal has one, the mark delta off the recorded ticker where it answers
+    /// ([`quotes::QuoteTrack::dmark_at`]), the report's snapshot for everything else.
     pub fn deltas_at(&self, t_ms: i64) -> Deltas {
-        match &self.delta_track {
+        let mut out = match &self.delta_track {
             Some(track) => track.apply(t_ms, &self.deltas),
             None => self.deltas,
+        };
+        if let Some(dmark) = self.quotes.as_ref().and_then(|q| q.dmark_at(t_ms)) {
+            out.dmark = dmark;
         }
+        out
     }
 }
 

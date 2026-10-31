@@ -20,12 +20,13 @@
 //!   at the same moment goes first ([`super::Stops`]). The sale is a market one, so it prices at
 //!   the bid proxy for a long (the ask proxy for a short), the middle while that side is unseen.
 //!
-//! The tape carries no book, so the middle is read off the prints the way the book stop reads its
-//! BID: the last taker sell stands for the bid, the last taker buy for the ask, sampled on the
-//! ticker's clock ([`super::TICKER_PERIOD_MS`]).
+//! The middle is read the way the book stop reads its BID ([`super::ticker`]): the recorded market
+//! list where it was recorded; elsewhere the last taker sell stands for the bid and the last taker
+//! buy for the ask; sampled on the ticker's clock ([`super::TICKER_PERIOD_MS`]).
 
 use super::super::ExitParams;
 use super::super::level_off_buy;
+use super::ticker::Ticker;
 use crate::db::tuner::ticks::{Exit, ExitKind};
 use crate::feed::types::{Side as TickSide, Tick};
 
@@ -91,12 +92,14 @@ pub(super) struct Trailing {
     restarted: bool,
     peak: Option<f64>,
     last_step: i64,
-    bid: Option<f64>,
-    ask: Option<f64>,
+    /// The last taker sell and taker buy, with their moments.
+    bid: Option<(i64, f64)>,
+    ask: Option<(i64, f64)>,
     /// The last print's price, either side: with a take profit it must stand past the take too.
     last_trade: Option<f64>,
     next_sample: i64,
-    period_ms: i64,
+    /// The ticker's clock and book, shared with the stop.
+    ticker: Ticker,
 }
 
 impl Trailing {
@@ -111,6 +114,8 @@ impl Trailing {
     ///         as the book stop's is.
     ///     params: The sell parameters.
     ///     quiet_until: See the field.
+    ///     ticker: The ticker's clock and book.
+    #[allow(clippy::too_many_arguments)] // the walk's own moments, each named; a struct would only rename them
     pub(super) fn new(
         long: bool,
         buy: f64,
@@ -119,6 +124,7 @@ impl Trailing {
         first_ms: i64,
         params: &ExitParams,
         quiet_until: i64,
+        ticker: Ticker,
     ) -> Option<Self> {
         if params.trailing_pct == 0.0 {
             return None;
@@ -132,7 +138,7 @@ impl Trailing {
         let activation = params
             .trailing_take_profit_pct
             .map(|tp| level_off_buy(buy, tp + pct.abs(), long));
-        let period_ms = params.model.ticker_period_ms.max(1);
+        let period_ms = ticker.period_ms();
         let anchor = fill_ms + period_ms;
         let back = (anchor - first_ms).max(0) / period_ms;
         Some(Self {
@@ -151,8 +157,8 @@ impl Trailing {
             bid: None,
             ask: None,
             last_trade: None,
-            next_sample: anchor - back * period_ms,
-            period_ms,
+            next_sample: ticker.first(anchor - back * period_ms),
+            ticker,
         })
     }
 
@@ -161,17 +167,21 @@ impl Trailing {
         if self.long { a > b } else { a < b }
     }
 
-    /// The middle of the spread as the prints so far leave it.
-    fn middle(&self) -> Option<f64> {
-        match (self.bid, self.ask) {
+    /// The middle of the spread at the arrival `at`, off the ticker and the prints so far.
+    fn middle(&self, at: i64) -> Option<f64> {
+        match (self.ticker.bid(at, self.bid), self.ticker.ask(at, self.ask)) {
             (Some(bid), Some(ask)) => Some((bid + ask) / 2.0),
             (one, other) => one.or(other),
         }
     }
 
-    /// The side a market sale fills into: the bid proxy for a long, the ask proxy for a short.
-    fn sold_into(&self) -> Option<f64> {
-        if self.long { self.bid } else { self.ask }
+    /// The side a market sale fills into at `at`: the bid for a long, the ask for a short.
+    fn sold_into(&self, at: i64) -> Option<f64> {
+        if self.long {
+            self.ticker.bid(at, self.bid)
+        } else {
+            self.ticker.ask(at, self.ask)
+        }
     }
 
     /// The line under the peak, never lower than the take profit's level ([`trailing_level`]).
@@ -185,11 +195,11 @@ impl Trailing {
     pub(super) fn before(&mut self, until: i64) -> Option<Exit> {
         while self.next_sample < until {
             let at = self.next_sample;
-            self.next_sample += self.period_ms;
+            self.next_sample = self.ticker.next(at);
             if at <= self.fill_ms {
                 continue;
             }
-            let Some(mid) = self.middle() else {
+            let Some(mid) = self.middle(at) else {
                 continue;
             };
             if at >= self.armed_at && !self.restarted {
@@ -230,7 +240,7 @@ impl Trailing {
             if crossed && above_take && at > self.quiet_until {
                 return Some(Exit {
                     t_ms: at,
-                    price: self.sold_into().unwrap_or(mid),
+                    price: self.sold_into(at).unwrap_or(mid),
                     kind: ExitKind::Stop,
                 });
             }
@@ -241,10 +251,11 @@ impl Trailing {
     /// Read a print into the spread proxy: a taker sell prints at the bid, a taker buy at the ask.
     pub(super) fn see(&mut self, tick: &Tick) {
         let price = f64::from(tick.price);
+        let at = tick.time_ms as i64;
         self.last_trade = Some(price);
         match tick.side {
-            TickSide::Sell => self.bid = Some(price),
-            TickSide::Buy => self.ask = Some(price),
+            TickSide::Sell => self.bid = Some((at, price)),
+            TickSide::Buy => self.ask = Some((at, price)),
         }
     }
 }

@@ -684,7 +684,7 @@ analytics.ticks.deltas_tip_head: "Deltas are re-evaluated along the trade's wind
 analytics.ticks.deltas_tip_field: "%{name}: live on %{live} · window covered %{coverage}% · at the stamp ≤0.1 pp on %{reproduced} of %{checked}, median %{error} pp"
 analytics.ticks.deltas_tip_none: "%{name}: live on no trade — the report's snapshot"
 analytics.ticks.deltas_tip_btc_note: " (off BTC's cached bars; on five-minute bars 1m is a bar's range)"
-analytics.ticks.deltas_tip_mark: "the report's snapshot — there is no history of the mark price"
+analytics.ticks.deltas_tip_mark: "off the recorded market list on %{n} rows; elsewhere the report's snapshot"
 analytics.ticks.deltas_tip_pricebug: "the report's snapshot — the core's own lag measure"
 analytics.ticks.deltas_tip_market: "the report's snapshot — an average over every market of the exchange"
 analytics.ticks.trade_expand: "Show the trade pane — a click on a row shows it here"

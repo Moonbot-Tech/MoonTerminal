@@ -686,7 +686,7 @@ analytics.ticks.deltas_tip_head: "Os deltas são reavaliados ao longo da janela 
 analytics.ticks.deltas_tip_field: "%{name}: ao vivo em %{live} · janela coberta %{coverage}% · no carimbo ≤0,1 p.p. em %{reproduced} de %{checked}, mediana %{error} p.p."
 analytics.ticks.deltas_tip_none: "%{name}: ao vivo em nenhuma operação — o snapshot do relatório"
 analytics.ticks.deltas_tip_btc_note: " (pelas barras em cache do BTC; em barras de cinco minutos 1m é a faixa da barra)"
-analytics.ticks.deltas_tip_mark: "o snapshot do relatório — não há histórico do mark price"
+analytics.ticks.deltas_tip_mark: "da lista de mercados gravada em %{n} linhas; no resto, o snapshot do relatório"
 analytics.ticks.deltas_tip_pricebug: "o snapshot do relatório — a medida de atraso do próprio núcleo"
 analytics.ticks.deltas_tip_market: "o snapshot do relatório — uma média de todos os mercados da corretora"
 analytics.ticks.trade_expand: "Mostrar o painel da operação — um clique numa linha mostra aqui"

@@ -33,7 +33,7 @@ use moon_core::db::tuner::ticks::params::range::{FieldSpan, Population, field_sp
 use moon_core::db::tuner::ticks::unmodelled::watched_keys;
 use moon_core::db::tuner::ticks::{
     Deal, DealsRead, ModelSettings, OwnLines, ParamKind, TICK_PARAMS, deltas, infer_tick,
-    model_window, params, prepare_deal, required_spans, verify,
+    model_window, params, prepare_deal, quotes, required_spans, verify,
 };
 use moon_core::db::tuner::{StrategyValuesReader, strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
@@ -1456,6 +1456,7 @@ pub(super) fn replay_row_with(
     row.entry_line = lines.entry_points.clone();
     row.held = None;
     row.deal.delta_track = None;
+    row.deal.quotes = None;
     row.deal.bars = None;
     let address = row.address.clone()?;
     let Some((ticks, covered, window)) = tape else {
@@ -1531,6 +1532,11 @@ pub(super) fn replay_row_with(
         });
         row.deal.delta_track = history.track;
         row.deal.bars = history.bars;
+        // The recorded market list is the terminal's own store like the kline cache, read with it:
+        // the mark delta along the window and the book the stops read.
+        row.deal.quotes = timed!(KLINES, || {
+            quotes::read_for(&address.exchange_key, &address.market, &row.deal)
+        });
     }
     // What the core's own record fixes: the ask its take was lifted to, the take as placed,
     // where the entry order was placed, what the fact proves about the stop, the entry the

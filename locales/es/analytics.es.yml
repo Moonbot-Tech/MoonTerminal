@@ -686,7 +686,7 @@ analytics.ticks.deltas_tip_head: "Los deltas se recalculan a lo largo de la vent
 analytics.ticks.deltas_tip_field: "%{name}: viva en %{live} · ventana cubierta %{coverage}% · en la instantánea ≤0,1 pp en %{reproduced} de %{checked}, mediana %{error} pp"
 analytics.ticks.deltas_tip_none: "%{name}: no está viva en ninguna operación — la instantánea del informe"
 analytics.ticks.deltas_tip_btc_note: " (con las velas de BTC en caché; con velas de 5 minutos, 1m es el rango de una vela)"
-analytics.ticks.deltas_tip_mark: "la instantánea del informe — no hay historial del precio de marca"
+analytics.ticks.deltas_tip_mark: "de la lista de mercados grabada en %{n} filas; en el resto, la instantánea del informe"
 analytics.ticks.deltas_tip_pricebug: "la instantánea del informe — la medida propia de retraso del núcleo"
 analytics.ticks.deltas_tip_market: "la instantánea del informe — un promedio de todos los mercados del exchange"
 analytics.ticks.trade_expand: "Mostrar el panel de la operación — un clic en una fila la muestra aquí"

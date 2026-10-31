@@ -37,8 +37,9 @@
 //! median of 0.03 pp on d1h, d3h and d24h but 0.15–0.16 pp on d1m, d5m and d15m, and placed 89
 //! MoonHook takes further from the core's than the snapshot did (median 0.19 pp against 0.09).
 //!
-//! What is not re-evaluated, and stays the snapshot: the mark-price, price-bug and market-wide
-//! deltas ([`NotComputed`]).
+//! What is not re-evaluated here: the mark-price delta, which the recorded market list gives
+//! where it was recorded (`ticks::quotes`, applied by `Deal::deltas_at`), and the price-bug and
+//! market-wide deltas, which stay the snapshot ([`NotComputed`]).
 
 use std::fmt;
 use std::sync::Arc;

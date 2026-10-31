@@ -11,7 +11,8 @@
 //! narrows the run to one coin; `MOON_TICKS_KINDS=<k1,k2>` selects strategy kinds;
 //! `MOON_TICKS_PAIR_TSV=<path>` writes keyed per-deal verdicts;
 //! `MOON_TICKS_DUMP=<dir>` writes every deal and its prints for an
-//! analysis outside; `MOON_TICKS_LATENCY_MS` replays with another latency and
+//! analysis outside; `MOON_TICKS_NO_QUOTES` replays without the recorded market list
+//! (`ticks::quotes`), the before of a before/after on the same deals; `MOON_TICKS_LATENCY_MS` replays with another latency and
 //! `MOON_TICKS_LATENCY_BASE_MS` with that plus each core's archived round trip, the entry's only
 //! unless `MOON_TICKS_LATENCY_EXIT` is set; `MOON_TICKS_PATH_DEBUG` prints each order's modelled
 //! and archived path; `MOON_TICKS_VARIANT="Key=value,…"` replays each deal under those values laid
@@ -1314,6 +1315,8 @@ fn real_data_reproduction() {
     // one point per tick, not every print, and shows as its own error level.
     let mut per_core_short: HashMap<String, Vec<ShortErrors>> = HashMap::new();
     let mut no_track = 0usize;
+    // Deals with a recorded ticker, and of those the ones whose mark delta it gives.
+    let (mut with_quotes, mut mark_live) = (0usize, 0usize);
     eprintln!("PriceDown step lag per core: {core_lags:?}");
     let (mut entry_hits, mut entry_n, mut exit_hits, mut exit_n, mut with_tape) = (0, 0, 0, 0, 0);
     let mut kinds_seen: HashMap<String, usize> = HashMap::new();
@@ -1496,6 +1499,15 @@ fn real_data_reproduction() {
             }
             if !snapshot_only {
                 deal.delta_track = track;
+            }
+            // The recorded market list, as the table reads it; `MOON_TICKS_NO_QUOTES` replays the
+            // same deals without it, for the before/after on one sample.
+            if std::env::var_os("MOON_TICKS_NO_QUOTES").is_none() {
+                deal.quotes = quotes::read_for(exchange, market, &deal);
+                if let Some(q) = &deal.quotes {
+                    with_quotes += 1;
+                    mark_live += usize::from(q.mark_live());
+                }
             }
         }
         prepare_deal(
@@ -2075,6 +2087,7 @@ fn real_data_reproduction() {
         );
     }
     print_delta_quality(&tracks, no_track);
+    eprintln!("recorded ticker: {with_quotes} deals, mark delta live on {mark_live}");
     let mut cores: Vec<_> = per_core_short.into_iter().collect();
     cores.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
     for (core, errors) in cores {

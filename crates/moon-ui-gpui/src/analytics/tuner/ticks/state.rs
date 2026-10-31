@@ -240,6 +240,7 @@ impl DealRow {
         self.deal.own_entry = answer.deal.own_entry;
         self.deal.gap = answer.deal.gap;
         self.deal.delta_track = answer.deal.delta_track;
+        self.deal.quotes = answer.deal.quotes;
         self.deal.bars = answer.deal.bars;
         self.ticks = answer.ticks;
         self.entry_line = answer.entry_line;

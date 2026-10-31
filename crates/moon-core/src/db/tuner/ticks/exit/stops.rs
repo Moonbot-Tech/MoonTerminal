@@ -11,7 +11,9 @@
 //! arrivals, and the walk reads a proxy of that: the last print on that side of the book (a
 //! taker sell prints at the BID), sampled every [`TICKER_PERIOD_MS`], averaged the same way from
 //! before the fill on; at `StopLossEMA` 0 the core's price series fires it too
-//! ([`SERIES_TICK_MS`]). The exit is at the sample, at the proxy's price. Where the core's panic
+//! ([`SERIES_TICK_MS`]). Where the market list was recorded the ticker is the list itself
+//! ([`ticker`]), and the proxy only stands in for it in the holes. The exit is at the sample, at
+//! the ticker's price. Where the core's panic
 //! sell then fills is the book's business — see [`crate::db::tuner::ticks::verify`] for how the
 //! fact is judged.
 //!
@@ -19,9 +21,11 @@
 //! `UseStopLoss3`) is [`ladder`], which moves the level this stop fires at.
 
 pub mod ladder;
+pub mod ticker;
 pub mod trailing;
 
 use self::ladder::Ladder;
+use self::ticker::Ticker;
 use self::trailing::Trailing;
 use super::delta_mods::modifier_sum;
 use super::{ExitParams, Side, level_off_buy};
@@ -223,9 +227,11 @@ fn stop_average_weight(params: &ExitParams, long: bool) -> Option<f64> {
     (long && whole && matches!(n.round() as i64, 3 | 5 | 10)).then(|| 1.0 / n)
 }
 
-/// The book-watching stop's state: a ticker-price proxy — the last print on the stop's side of
-/// the book — sampled every [`TICKER_PERIOD_MS`] and, for a long at `StopLossEMA` 3, 5 or 10,
-/// averaged ([`stop_average_weight`]); at `StopLossEMA` 0 the core's price series as well.
+/// The book-watching stop's state: the ticker's price on the stop's side ([`Ticker`]) — the
+/// recorded market list where it was recorded, the last print on that side of the book elsewhere
+/// — sampled on the ticker's arrivals ([`TICKER_PERIOD_MS`] off the record) and, for a long at
+/// `StopLossEMA` 3, 5 or 10, averaged ([`stop_average_weight`]); at `StopLossEMA` 0 the core's
+/// price series as well.
 ///
 /// The core keeps the average for every market from its start, so at the fill it is warm:
 /// after a dump it still remembers the prices above, and fires later than a fresh one. The
@@ -240,11 +246,13 @@ struct BookStop {
     fill_ms: i64,
     /// The average's weight, `None` for the bare price.
     weight: Option<f64>,
-    proxy: Option<f64>,
+    /// The last print on the stop's side, with its moment — the book where the list was not
+    /// recorded, and after a recorded point once a taker traded past it.
+    proxy: Option<(i64, f64)>,
     avg: Option<f64>,
     next_sample: i64,
-    /// The ticker's period (`ModelSettings::ticker_period_ms`), at least a millisecond.
-    period_ms: i64,
+    /// The ticker's clock and book ([`Ticker`]).
+    ticker: Ticker,
     /// Up to when the fact proves this stop did not fire (`record::StopAnchor`): a sample by
     /// then is averaged but cannot fire. `i64::MIN` when the walk is not the trade's own stop.
     quiet_until: i64,
@@ -375,6 +383,8 @@ impl BookStop {
     ///         back: the ticker's clock is run back to it so the average is warm at the fill.
     ///     params: The sell parameters, for `StopLossEMA`.
     ///     quiet_until: See the field.
+    ///     ticker: The ticker's clock and book.
+    #[allow(clippy::too_many_arguments)] // the walk's own moments, each named; a struct would only rename them
     fn new(
         long: bool,
         level: f64,
@@ -383,10 +393,12 @@ impl BookStop {
         first_ms: i64,
         params: &ExitParams,
         quiet_until: i64,
+        ticker: Ticker,
     ) -> Self {
-        // One period past the fill, and back from there in whole periods: the ticker's phase
-        // is on no record, so the fill anchors it, however far back the tape reaches.
-        let period_ms = params.model.ticker_period_ms.max(1);
+        // One period past the fill, and back from there in whole periods: off the record the
+        // ticker's phase is on no record, so the fill anchors it, however far back the tape
+        // reaches; the recorded list's points move it onto the real arrivals.
+        let period_ms = ticker.period_ms();
         let anchor = fill_ms + period_ms;
         let back = (anchor - first_ms).max(0) / period_ms;
         Self {
@@ -397,8 +409,8 @@ impl BookStop {
             weight: stop_average_weight(params, long),
             proxy: None,
             avg: None,
-            next_sample: anchor - back * period_ms,
-            period_ms,
+            next_sample: ticker.first(anchor - back * period_ms),
+            ticker,
             quiet_until,
             series: (params.stop_loss_ema.abs() < 1e-9)
                 .then(|| SeriesPoint::new(first_ms, params.model.series_tick_ms)),
@@ -458,8 +470,8 @@ impl BookStop {
     /// Consume one ticker arrival, updating its average even when the stop cannot fire.
     fn sample(&mut self) -> Option<Exit> {
         let at = self.next_sample;
-        self.next_sample += self.period_ms;
-        let bid = self.proxy?;
+        self.next_sample = self.ticker.next(at);
+        let bid = self.ticker.stop_side(self.long, at, self.proxy)?;
         let avg = match (self.weight, self.avg) {
             (Some(w), Some(avg)) => w * bid + (1.0 - w) * avg,
             _ => bid,
@@ -492,7 +504,7 @@ impl BookStop {
             series.see(price);
         }
         if tick.side == stop_side(self.long) {
-            self.proxy = Some(price);
+            self.proxy = Some((tick.time_ms as i64, price));
         }
     }
 }
@@ -614,6 +626,9 @@ impl Stops {
                 .take_while(|t| (t.time_ms as i64) <= fill.t_ms)
                 .filter(|t| t.price.is_finite() && t.price > 0.0)
         };
+        // One ticker for the stop, the ladder and the trailing: the recorded list where it was
+        // recorded, the prints elsewhere.
+        let ticker = Ticker::new(deal.quotes.clone(), params.model.ticker_period_ms);
         let trailing = Trailing::new(
             side.long,
             fill.price,
@@ -622,6 +637,7 @@ impl Stops {
             first_ms,
             params,
             trailing_quiet_until,
+            ticker.clone(),
         )
         .map(|mut trailing| {
             // The spread the prints before the fill leave; they never step the peak.
@@ -664,6 +680,7 @@ impl Stops {
                 first_ms,
                 params,
                 quiet_until,
+                ticker.clone(),
             );
             for tick in before_fill() {
                 let _warm_only = book.before(tick.time_ms as i64);
@@ -682,7 +699,7 @@ impl Stops {
                     super::sell_order::armed_at(fill, params),
                     stop_from,
                     first_ms,
-                    params.model.ticker_period_ms,
+                    ticker.clone(),
                     &[params.second_stop, params.third_stop],
                 )
             })

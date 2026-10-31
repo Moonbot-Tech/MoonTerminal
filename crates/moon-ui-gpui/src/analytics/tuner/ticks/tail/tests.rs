@@ -104,6 +104,7 @@ fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
         round_trip_ms: None,
         stop_anchor: None,
         delta_track: None,
+        quotes: None,
         bars: None,
         own_entry: None,
         buy_set_ms: None,
