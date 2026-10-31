@@ -53,6 +53,7 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
+        let show_overlay = self.axis_read_overlay(show_overlay);
         if !after_report {
             self.report_busy_retries.reset();
         }

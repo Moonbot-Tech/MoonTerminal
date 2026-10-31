@@ -55,7 +55,8 @@ fn report_axis_observation_uses_writer_refresh_while_valuation_mode_reloads() {
         "a report-axis observation must request a nonblocking Writer refresh"
     );
     for required in [
-        "self.seq = self.seq.wrapping_add(1);",
+        "self.summary_seq = self.summary_seq.wrapping_add(1);",
+        "self.strategy_seq = self.strategy_seq.wrapping_add(1);",
         "self.cal_seq = self.cal_seq.wrapping_add(1);",
         "self.cancel_reads_for_axis_move();",
         "self.tuner.invalidate_for_axis();",
@@ -1259,6 +1260,7 @@ fn analytics_reopen_state_is_process_lifetime_only() {
     let startup = read_startup();
     let analytics = read_unsplit("analytics/mod.rs");
     let toolbar = fs::read_to_string(root.join("analytics").join("toolbar.rs")).unwrap();
+    let navigation = read_src("analytics/navigation.rs");
     let tuner = fs::read_to_string(root.join("analytics").join("tuner").join("mod.rs")).unwrap();
     let ui_session = fs::read_to_string(root.join("ui_session.rs")).unwrap();
     let layout = read_unsplit("../../moon-core/src/config/layout.rs");
@@ -1273,7 +1275,8 @@ fn analytics_reopen_state_is_process_lifetime_only() {
             && analytics.contains("sel_cores: session.sel_cores")
             && analytics.contains("session.strat_mode")
             && analytics.contains("b.ui_session.analytics.sel_cores = selected;")
-            && toolbar.contains("b.ui_session.analytics.tab = t;")
+            && toolbar.contains("this.activate_tab(t, window, cx);")
+            && navigation.contains("backend.ui_session.analytics.tab = tab;")
             && tuner.contains("backend.ui_session.analytics.strat_mode = mode;"),
         "Analytics construction and all reopen choices must share the Backend UI-session snapshot"
     );
@@ -1426,32 +1429,42 @@ fn automatic_analytics_refresh_keeps_the_busy_overlay_hidden() {
 
     let analytics = read_unsplit("analytics/mod.rs");
     assert!(
-        analytics.contains("this.reload_axis_after_report(this.strat_mode, show_overlay, cx);"),
-        "the Strategy base-to-axis chain must retain the original manual/background overlay policy"
+        analytics.contains("this.reload_axis_after_report(this.strat_mode, false, cx);")
+            && analytics.contains("self.reload_axis_after_report(self.strat_mode, false, cx);"),
+        "a ready Strategy base must keep navigation available while its axis loads"
     );
 }
 
-/// Summary completion must not start the compact StrategyBase read behind the user's back.
+/// Summary completion must not directly chain a second base read ahead of visible work.
 ///
-/// Plausible regression: restoring the old completion prefetch or an armed state doubles the
-/// full-period database work while Summary is visible instead of leaving Strategies lazy-loaded
-/// through its tab-entry and report-refresh routes.
+/// Neighbour preparation belongs to the bounded idle scheduler. Directly chaining a base query
+/// from the completion would bypass its foreground interlock and duplicate a promoted request.
 #[test]
-fn summary_completion_keeps_strategy_base_lazy() {
+fn summary_completion_leaves_neighbour_preparation_to_the_idle_scheduler() {
     let analytics = read_unsplit("analytics/mod.rs");
-    let code = code_only(&analytics);
     let summary_reload = code_only(braced_body(&analytics, "fn reload_summary("));
 
     assert!(
         !summary_reload.contains("reload_strategy_base(")
             && !summary_reload.contains("ReadLane::StrategyBase")
-            && !summary_reload.contains("prefetch"),
-        "Summary completion must not launch or prefetch the StrategyBase read"
+            && !summary_reload.contains("schedule_prefetch("),
+        "Summary completion must not eagerly chain the StrategyBase read"
     );
     assert!(
-        !code.contains("strategy_prefetch_armed") && !code.contains("fn prefetch_strategy_base("),
-        "Analytics must not retain an armed StrategyBase prefetch path"
+        !analytics.contains("strategy_prefetch_armed")
+            && !analytics.contains("fn prefetch_strategy_base("),
+        "the superseded eager StrategyBase prefetch path must remain absent"
     );
+    let prefetch = read_src("analytics/prefetch.rs");
+    let idle = braced_body(&prefetch, "fn schedule_prefetch(");
+    for gate in [
+        "self.prefetch.is_active()",
+        "self.db_ops > 0",
+        "self.busy_ops > 0",
+        "self.report_refresh.has_pending()",
+    ] {
+        assert!(idle.contains(gate), "idle preparation must respect {gate}");
+    }
 }
 
 /// `analytics/mod.rs:reload_strategy_base` must retain the current Strategies snapshot while an
@@ -1517,7 +1530,7 @@ fn report_catch_up_keeps_the_profit_chart_hover() {
     let before_request = chain_between(
         reload,
         "fn reload_summary(",
-        "self.seq = self.seq.wrapping_add(1);",
+        "self.summary_seq = self.summary_seq.wrapping_add(1);",
         "Summary reset path",
     );
     assert!(

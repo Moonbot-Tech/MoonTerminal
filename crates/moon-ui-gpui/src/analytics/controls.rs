@@ -10,6 +10,9 @@ impl AnalyticsView {
     ///     window: Window owning the shared date-picker states.
     ///     cx: GPUI context used to persist the choice and start the reload.
     pub(super) fn set_period(&mut self, p: Period, window: &mut Window, cx: &mut Context<Self>) {
+        if p == self.active_period() {
+            self.forget_visible_snapshot();
+        }
         // Clicking the active preset remains an immediate manual refresh, independent of the
         // load-shed automatic path. The period bar edits the ACTIVE tab's time window: Summary and
         // Tuning are independent.
@@ -37,7 +40,7 @@ impl AnalyticsView {
                 b.layout_dirty = true;
             }
         });
-        self.reload(cx);
+        self.reload_period(cx);
         cx.notify();
     }
 

@@ -52,6 +52,11 @@ pub(super) struct LatestReads {
 }
 
 impl LatestReads {
+    /// Whether a destination still owns a replaceable read that navigation can retire.
+    pub(super) fn contains(&self, lane: ReadLane) -> bool {
+        self.active.contains_key(&lane)
+    }
+
     /// Replace every listed destination with one new shared request token.
     ///
     /// A compound request may own several lanes. Replacing any one cancels its connection and
@@ -205,6 +210,7 @@ impl AnalyticsView {
         db: impl FnOnce() -> R + Send + 'static,
         store: impl FnOnce(&mut Self, R, &mut Context<Self>) + 'static,
     ) {
+        self.cancel_prefetch();
         self.db_ops += 1;
         if overlay {
             self.op_started(cx);
@@ -221,6 +227,7 @@ impl AnalyticsView {
                     // Adopt an axis move deferred while this read was a first load.
                     this.observe_report_axis(cx);
                     this.schedule_report_refresh(cx);
+                    this.schedule_prefetch(cx);
                 });
             });
         })
@@ -243,12 +250,14 @@ impl AnalyticsView {
         db: impl FnOnce() -> R + Send + 'static,
         store: impl FnOnce(&mut Self, R, &mut Context<Self>) + 'static,
     ) {
+        self.cancel_prefetch();
         let cancellation = self.latest_reads.replace(lanes);
         let lane_names = format!("{lanes:?}");
         let started = std::time::Instant::now();
         let worker_cancellation = cancellation.clone();
         self.db_ops += 1;
         if overlay {
+            self.latest_overlay_ops += 1;
             self.op_started(cx);
         }
         cx.spawn(async move |this, cx| {
@@ -265,11 +274,13 @@ impl AnalyticsView {
                     this.db_ops = this.db_ops.saturating_sub(1);
                     store(this, result, cx);
                     if overlay {
+                        this.latest_overlay_ops = this.latest_overlay_ops.saturating_sub(1);
                         this.op_finished(cx);
                     }
                     // Adopt an axis move deferred while this read was a first load.
                     this.observe_report_axis(cx);
                     this.schedule_report_refresh(cx);
+                    this.schedule_prefetch(cx);
                 });
             });
         })

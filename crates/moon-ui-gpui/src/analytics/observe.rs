@@ -53,11 +53,12 @@ impl AnalyticsView {
     /// every period bound moves. But the SCOPE (period, filters) does not, so this is a
     /// writer-driven catch-up, not a user reload: the visible snapshot stays on screen, with no
     /// blocking overlay, until the replacement lands. The observer retires EVERY in-flight read
-    /// identity for the old axis — `seq`, `cal_seq`, `cancel_reads_for_axis_move`, plus `time_tuner`,
+    /// identity for the old axis — `summary_seq`, `strategy_seq`, `cal_seq`,
+    /// `cancel_reads_for_axis_move`, plus `time_tuner`,
     /// `coins` and `coin_lists` `invalidate()` for the axes that keep their own request
     /// generations — because a cancelled read is not silently dropped: the DB layer raises a
     /// real SQLite interrupt that gets classified as a durable `Settled` failure, so a read
-    /// whose identity was not retired would pass its own `seq != req` guard and publish that
+    /// whose identity was not retired would pass its own request guard and publish that
     /// failure as if it were a real result. Retiring the tuner's read identities still clears any
     /// unsaved filter draft, matching this observer's behavior before it stopped calling
     /// `reload()` for axis changes.
@@ -100,7 +101,8 @@ impl AnalyticsView {
         }
         self.axis = (*axis).clone();
         self.last_axis_rev = revision;
-        self.seq = self.seq.wrapping_add(1);
+        self.summary_seq = self.summary_seq.wrapping_add(1);
+        self.strategy_seq = self.strategy_seq.wrapping_add(1);
         self.cal_seq = self.cal_seq.wrapping_add(1);
         self.cancel_reads_for_axis_move();
         self.tuner.invalidate_for_axis();
@@ -129,7 +131,7 @@ impl AnalyticsView {
     ///
     /// The mode is application-wide and is edited nowhere in this window, so it can change under
     /// an open Analytics window at any time.
-    /// Mirrored into a field because [`Self::query`] is called from helpers that hold no `App`,
+    /// Mirrored into a field because [`Self::query_for`] is called from helpers that hold no `App`,
     /// and synced HERE rather than at render because adopting it schedules a reload — which the
     /// Analytics render root must never do.
     ///
@@ -171,22 +173,30 @@ impl AnalyticsView {
         self.observe_report_axis(cx);
         self.observe_valuation_mode(cx);
         self.observe_core_names(cx);
-        let generation = self.current_report_generation();
+        if !self.observe_report_publication(self.current_report_generation()) {
+            return;
+        }
+        self.schedule_report_refresh(cx);
+    }
+
+    /// Mark every dependent surface before a captured publication can be acknowledged by navigation.
+    pub(super) fn observe_report_publication(&mut self, generation: u64) -> bool {
         if !self
             .report_refresh
             .observe_generation(generation, std::time::Instant::now())
         {
-            return;
+            return false;
         }
         self.report_busy_retries.observe_generation();
         self.mark_report_data_stale();
-        self.schedule_report_refresh(cx);
+        true
     }
 
     /// Mark report-derived results stale without clearing drafts or retiring snapshot progress.
     ///
     /// The method has no return value; the refresh gate later reloads the visible surface.
     pub(super) fn mark_report_data_stale(&mut self) {
+        self.cancel_prefetch();
         self.data_dirty = true;
         self.strategy_dirty = true;
         self.cal_dirty = true;
@@ -196,11 +206,32 @@ impl AnalyticsView {
         self.ticks.mark_report_stale();
     }
 
-    /// Acknowledge every committed generation visible when a refresh begins.
+    /// Observe newly covered publications before acknowledging the refresh that will read them.
+    ///
+    /// A queued user refresh can start after a commit that the observer has not processed yet.
+    /// Its hidden peers must become stale even though only the visible page is about to reload.
     pub(super) fn acknowledge_report_refresh(&mut self) {
         let generation = self.current_report_generation();
+        self.observe_report_publication(generation);
         self.report_refresh
             .refresh_started(generation, std::time::Instant::now());
+    }
+
+    /// Clear obsolete tab work while retaining a publication newer than the restored request.
+    pub(super) fn acknowledge_navigation_refresh(
+        &mut self,
+        covered_generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if self.report_refresh.navigation_settled(
+            covered_generation,
+            self.current_report_generation(),
+            std::time::Instant::now(),
+        ) {
+            self.report_busy_retries.observe_generation();
+            self.mark_report_data_stale();
+            self.schedule_report_refresh(cx);
+        }
     }
 
     /// Settle the transient retry episode and optionally schedule its next bounded attempt.
@@ -271,6 +302,11 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
+        if urgency == RefreshUrgency::User {
+            // A queued axis outranks background preparation, but a promoted visible base is
+            // foreground work already. Both retain their interlock until completion acknowledges.
+            self.yield_speculative_prefetch();
+        }
         self.report_refresh
             .request_refresh(std::time::Instant::now(), show_overlay, urgency);
         self.schedule_report_refresh(cx);
@@ -281,7 +317,7 @@ impl AnalyticsView {
     /// Args:
     ///     cx: GPUI context used to arm a timer or start database work.
     pub(super) fn schedule_report_refresh(&mut self, cx: &mut Context<Self>) {
-        let db_active = self.db_ops > 0 || self.busy_ops > 0;
+        let db_active = self.db_ops > 0 || self.busy_ops > 0 || self.prefetch.is_active();
         match self
             .report_refresh
             .plan(std::time::Instant::now(), db_active)
@@ -341,7 +377,10 @@ impl AnalyticsView {
                 self.reload_strategy_base(true, true, show_overlay, cx);
             }
             VisibleRefresh::StrategyAxis => {
-                self.reload_axis_after_report(self.strat_mode, show_overlay, cx);
+                // The queued tab entry may have outlived the axis read it was waiting for.
+                if self.axis_needs_reload(self.strat_mode) {
+                    self.reload_axis_after_report(self.strat_mode, show_overlay, cx);
+                }
             }
             VisibleRefresh::Calendar => self.reload_calendar_after_report(show_overlay, cx),
         }

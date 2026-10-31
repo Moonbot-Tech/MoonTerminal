@@ -378,7 +378,7 @@ impl AnalyticsView {
             .data()
             .and_then(|d| d.rows.iter().find(|r| r.deal.report_uid == report_uid))?;
         let address = row.address.as_ref()?;
-        let q = self.query();
+        let q = self.tuner_query_all();
         // The window's neighbours are the core's other trades of this coin over the axis's
         // period — the Query's bounds are true UTC and `to` is exclusive, as the filter's
         // `date_to` is inclusive; one second either way on the neighbours is not a trade lost.

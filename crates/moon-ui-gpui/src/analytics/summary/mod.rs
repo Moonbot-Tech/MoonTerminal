@@ -206,7 +206,8 @@ impl AnalyticsView {
         let zone = self.bound_zone();
         let ui = &self.summary_ui;
         let banner = super::refresh::summary_catchup_banner(
-            self.summary_catching_up,
+            self.summary_catching_up
+                && self.cached_refreshing[super::Tab::Summary.snapshot_index()].is_none(),
             self.data.data().is_some(),
         )
         .then(|| {

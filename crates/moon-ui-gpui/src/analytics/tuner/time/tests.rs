@@ -5,6 +5,32 @@ use moon_core::config::{Language, UiThemeMode};
 use moon_core::db::analytics::HourStat;
 use moon_ui::{MoonPalette, MoonTheme};
 
+/// The eligible draft path must not silently grow another full-profile or strategy-baseline read.
+#[test]
+fn local_schedule_rescore_reads_only_variant_kpis() {
+    let source = include_str!("mod.rs");
+    let rescore = source
+        .split_once("pub(in crate::analytics::tuner) fn rescore_time_draft")
+        .unwrap()
+        .1
+        .split_once("pub(in crate::analytics) fn reload_time_after_report")
+        .unwrap()
+        .0;
+    assert!(rescore.contains("moon_core::db::tuner::variant_stats(&query, &variants)"));
+    assert!(rescore.contains("ReadLane::Time"));
+    assert!(rescore.contains("CatchUpOutcome::of_read(&stats)"));
+    assert!(rescore.contains("settle_report_refresh_retry(stats_outcome.is_transient(), cx)"));
+    assert!(rescore.contains("this.time_tuner.stats.apply(stats)"));
+    assert!(!rescore.contains("time_tuner_data"));
+    assert!(!rescore.contains("profiles.begin()"));
+    assert!(!rescore.contains("slider.begin()"));
+    assert!(!rescore.contains("strategy_current_values_opt"));
+    let grid = include_str!("grid.rs");
+    let sliders = include_str!("sliders.rs");
+    assert!(!grid.contains(".reload_time(cx)"));
+    assert!(!sliders.contains(".reload_time(cx)"));
+}
+
 /// Exact decimals or repeated currency tickers would consume the default hour's entire slot.
 #[test]
 fn polish_hour_money_is_compact() {

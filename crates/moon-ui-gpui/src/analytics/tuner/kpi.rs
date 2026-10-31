@@ -575,6 +575,7 @@ pub(super) fn kpi_matrix_body_with(
     );
     // No empty state by design: `stats.len() == variants.len()` always, so
     // the only non-data cases are loading / not-ready / read failure.
+    let refreshing = matches!(stats, LoadState::Loading { stale: Some(_) });
     let stats = match stats.view(|_| false) {
         Ok(s) => s.clone(),
         Err(note) => {
@@ -770,6 +771,16 @@ pub(super) fn kpi_matrix_body_with(
         rows.len()
     };
     let mut body = v_flex().w_full();
+    if refreshing {
+        // Keep the settled figures visible, with local progress instead of blocking navigation.
+        body = body.child(super::super::note_el(
+            "an-tuner-kpi-refresh",
+            crate::load_state::Note::Loading,
+            8.0,
+            p,
+            cx,
+        ));
+    }
     if let Some(note) = opts.sample_note {
         body = body.child(
             div()

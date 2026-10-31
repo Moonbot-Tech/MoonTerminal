@@ -658,7 +658,7 @@ impl AnalyticsView {
 impl AnalyticsView {
     /// Calendar `[from,to)` range per mode plus the current core, side, emulator, strategy-name
     /// mask, metric, and valuation filters.
-    fn cal_query(&self) -> Query {
+    pub(super) fn cal_query(&self) -> Query {
         let (from, to) = match self.cal_mode {
             CalMode::Month => month_range(self.cal_ym, self.bound_zone()),
             CalMode::Year => all_history_range(self.bound_zone()),
@@ -690,7 +690,7 @@ impl AnalyticsView {
 
     /// Previous month's query under the same filters, including the strategy-name mask, and
     /// valuation mode, for Month KPI deltas only.
-    fn cal_query_prev(&self) -> Option<Query> {
+    pub(super) fn cal_query_prev(&self) -> Option<Query> {
         if self.cal_mode != CalMode::Month {
             return None;
         }
@@ -748,6 +748,7 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_unrelated_prefetch(super::Tab::Calendar);
         if !after_report {
             self.report_busy_retries.reset();
         }
@@ -764,30 +765,50 @@ impl AnalyticsView {
         self.cal_seq = self.cal_seq.wrapping_add(1);
         let req = self.cal_seq;
         let report_req = self.current_report_generation();
-        let q = self.cal_query();
-        let q_prev = self.cal_query_prev();
+        let request = self.snapshot_request(super::Tab::Calendar);
+        if self.restore_or_join_snapshot(&request, cx) {
+            return;
+        }
+        let q = request.q.clone();
+        let show_overlay =
+            show_overlay && self.cal_days.data().is_none() && self.cal_days.split().is_none();
+        let q_prev = request.previous.clone();
         let has_previous = q_prev.is_some();
         // "Day" loads HOURLY cells (a 24×N grid); the other modes load daily.
         let hourly = self.cal_mode == CalMode::Day;
         let refresh_cores = self.core_metadata_due(cx);
-        let replica_hidden = self.replica_hidden_core_ids(refresh_cores);
+        let replica_hidden = request.replica_hidden.clone();
         self.spawn_latest_db(
             &[super::bg::ReadLane::Calendar],
             show_overlay,
             cx,
             move || {
-                moon_core::db::analytics::calendar_data_with_replica_scope(
-                    &q,
-                    q_prev.as_ref(),
-                    hourly,
-                    refresh_cores,
-                    replica_hidden.as_deref(),
+                super::cache::CachedCalendar::from_calendar(
+                    moon_core::db::analytics::calendar_data_with_replica_scope(
+                        &q,
+                        q_prev.as_ref(),
+                        hourly,
+                        refresh_cores,
+                        replica_hidden.as_deref(),
+                    ),
                 )
             },
             move |this, data, cx| {
                 if this.cal_seq != req {
                     return; // mode/filters already changed
                 }
+                let data = match data {
+                    Ok(read) => {
+                        this.publish_snapshot(
+                            &request,
+                            super::cache::CachedResult::Calendar(std::sync::Arc::new(read)),
+                            false,
+                            cx,
+                        );
+                        return;
+                    }
+                    Err(read) => *read,
+                };
                 // Computed before `data.period` moves into the call below.
                 let period_outcome = super::refresh::CatchUpOutcome::of_scope(&data.period);
                 let cores_outcome = data
@@ -804,6 +825,9 @@ impl AnalyticsView {
                 // transient outcome with a scheduled correction left may keep the visible cells.
                 let preserve_transient = !matches!(this.cal_days, ProfitLoadState::Loading)
                     && this.keep_on_catch_up(after_report, period_outcome, report_req);
+                if !preserve_transient {
+                    this.cached_refreshing[super::Tab::Calendar.snapshot_index()] = None;
+                }
                 let read_failed = apply_calendar_results(
                     &mut this.cal_days,
                     &mut this.cal_prev,

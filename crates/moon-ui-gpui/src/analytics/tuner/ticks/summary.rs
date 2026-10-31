@@ -513,7 +513,9 @@ impl AnalyticsView {
     pub(super) fn ticks_summary_model(&self, cx: &App) -> SummaryModel {
         let human = crate::strategies::settings::human_labels(&self.backend.read(cx).layout);
         let mut model = SummaryModel::from_state(&self.ticks, self.scope_label(), human);
-        model.write_enabled = !self.selected_targets().is_empty() && self.ticks.has_changes();
+        model.write_enabled = !self.selected_targets().is_empty()
+            && self.ticks.has_changes()
+            && self.axis_write_ready(super::super::shared::TunerKind::Ticks);
         model.copy_visible = !self.is_multi();
         model.write_error = self.write_error.clone();
         if let Some(data) = self.ticks.data.data() {
@@ -592,6 +594,9 @@ impl AnalyticsView {
 
     /// Prepare inline consent and warning checks once, without opening another dialog.
     pub(super) fn ticks_begin_write(&mut self, cx: &mut Context<Self>) {
+        if !self.axis_write_ready(super::super::shared::TunerKind::Ticks) {
+            return;
+        }
         let targets = self.selected_targets();
         let changes = self.ticks.variant_changes();
         let Some(target) = targets.first() else {

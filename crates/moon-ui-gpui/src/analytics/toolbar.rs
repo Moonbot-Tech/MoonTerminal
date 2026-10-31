@@ -12,7 +12,6 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::refresh::RefreshUrgency;
 use super::{AnalyticsView, Period, ProfitLoadState, Tab};
 use crate::design;
 use crate::design::moon;
@@ -575,52 +574,7 @@ impl AnalyticsView {
                         .selected(on)
                         .label(title)
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            if this.tab != t {
-                                this.tab = t;
-                                this.backend.update(cx, |b, _| {
-                                    b.ui_session.analytics.tab = t;
-                                });
-                                // Each tab remembers its OWN time window: re-sync the
-                                // period bar and the "from"/"to" fields to the active tab.
-                                this.sync_period_pickers(window, cx);
-                                // The new tab's time window differs from the one `data`
-                                // was built for → reload, or the strategy list and the
-                                // summary would show another tab's period. reload() also
-                                // pulls the active tab's secondary data (tuner/profile).
-                                let period_changed = match t {
-                                    Tab::Summary => this.active_period() != this.data_period,
-                                    Tab::Strategies => {
-                                        this.active_period() != this.strategy_data_period
-                                    }
-                                    Tab::Calendar => false,
-                                };
-                                let base_dirty = match t {
-                                    Tab::Summary => this.data_dirty,
-                                    Tab::Strategies => this.strategy_dirty,
-                                    Tab::Calendar => false,
-                                };
-                                if period_changed {
-                                    this.reload(cx);
-                                } else if matches!(t, Tab::Summary | Tab::Strategies) && base_dirty
-                                {
-                                    // A hidden base view can lag a generation while Calendar alone
-                                    // refreshes. Catch it up on entry without destructive scope
-                                    // invalidation, which would erase tuner drafts.
-                                    this.request_report_refresh(RefreshUrgency::User, true, cx);
-                                } else {
-                                    // Tab-entry catch-up uses the report gate so it cannot overlap
-                                    // an automatic full-period scan already in flight.
-                                    if t == Tab::Strategies {
-                                        this.request_axis_if_stale(this.strat_mode, cx);
-                                    }
-                                    if t == Tab::Calendar
-                                        && (this.cal_days.data().is_none() || this.cal_dirty)
-                                    {
-                                        this.request_report_refresh(RefreshUrgency::User, true, cx);
-                                    }
-                                }
-                                cx.notify();
-                            }
+                            this.activate_tab(t, window, cx);
                         }))
                         .render(),
                 ),

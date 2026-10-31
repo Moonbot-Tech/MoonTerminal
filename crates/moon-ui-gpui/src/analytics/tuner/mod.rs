@@ -220,7 +220,7 @@ impl AnalyticsView {
         let Some((strategy_id, Some(core_uid))) = parse_strat_key(key) else {
             return;
         };
-        let query = self.query();
+        let query = self.tuner_query_all();
         let workspace_group = self
             .backend
             .read(cx)
@@ -437,10 +437,12 @@ impl AnalyticsView {
         self.write_error = None;
     }
 
-    /// The shared filters WITHOUT the strategy scope — the query for questions asked ABOUT
-    /// strategies rather than within a chosen set ("who traded this coin?").
+    /// Shared filters over the Strategies period WITHOUT the selected strategy scope.
+    ///
+    /// Hidden search completions and debounced reads still belong to this page when Summary
+    /// or Calendar is visible; the active page's period must never change their population.
     pub(in crate::analytics::tuner) fn tuner_query_all(&self) -> moon_core::db::analytics::Query {
-        self.query()
+        self.query_for(self.strat_period)
     }
 
     /// Observation channel only (`MOON_ANALYTICS_PROBE=select`): adopt the first strategy
@@ -697,11 +699,25 @@ impl AnalyticsView {
         }
     }
 
+    /// Stop the hidden axis' ordinary work before either its mode or its root tab changes.
+    pub(in crate::analytics) fn retire_hidden_tuner_reads(&mut self) {
+        retire_hidden_axis_reads(
+            self.strat_mode,
+            &mut self.latest_reads,
+            &mut self.tuner,
+            &mut self.time_tuner,
+            &mut self.coins,
+            &mut self.coin_lists,
+            &mut self.ticks,
+        );
+    }
+
     /// Change strategy mode and refresh the entered axis' data when it is stale.
     fn set_strat_mode(&mut self, mode: StratMode, cx: &mut Context<Self>) {
         if self.strat_mode == mode {
             return;
         }
+        self.retire_hidden_tuner_reads();
         self.strat_mode = mode;
         self.backend.update(cx, |backend, _| {
             backend.ui_session.analytics.strat_mode = mode;
@@ -823,6 +839,36 @@ impl AnalyticsView {
 }
 
 impl AnalyticsView {
+    /// Block only the initial strategy-list read; axis cards own subsequent loading states.
+    pub(in crate::analytics::tuner) fn axis_read_overlay(&self, requested: bool) -> bool {
+        requested && self.strategy_data.data().is_none()
+    }
+
+    /// Require a settled current baseline before preparing a new Save or Copy payload.
+    ///
+    /// Stale results remain useful on screen while cards refresh, but must not supply a
+    /// previous strategy's thresholds or coin lists to a write after selection changes.
+    pub(in crate::analytics::tuner) fn axis_write_ready(&self, kind: shared::TunerKind) -> bool {
+        if self.strategy_data.data().is_none() || self.strategy_dirty {
+            return false;
+        }
+        match kind {
+            shared::TunerKind::Filter => fresh_tuner_data(&self.tuner.stats, self.tuner.dirty),
+            shared::TunerKind::Time => {
+                fresh_tuner_data(&self.time_tuner.stats, self.time_tuner.dirty)
+            }
+            shared::TunerKind::Coins => {
+                fresh_tuner_data(&self.coins.stats, self.coins.dirty)
+                    && fresh_tuner_data(&self.coins.kpi, self.coins.dirty)
+            }
+            shared::TunerKind::Ticks => {
+                fresh_tuner_data(&self.ticks.data, self.ticks.dirty)
+                    && fresh_tuner_data(&self.ticks.kpi, self.ticks.dirty)
+                    && !self.ticks.tape_reading
+            }
+        }
+    }
+
     /// Fully reload one axis' data — the dispatch every scope change (selection, filters,
     /// period) goes through, so the "which reloads belong to which axis" list exists once.
     ///
@@ -900,6 +946,81 @@ impl AnalyticsView {
             StratMode::Coins => self.reload_coins(cx),
             StratMode::Ticks => self.reload_ticks(cx),
         }
+    }
+}
+
+/// Renderable stale data is insufficient authority for a new write while a read is pending.
+fn fresh_tuner_data<T>(state: &crate::load_state::LoadState<T>, dirty: bool) -> bool {
+    !dirty && matches!(state, crate::load_state::LoadState::Ready(_))
+}
+
+/// Retire only ordinary reads of the axis being left, preserving its edits and explicit jobs.
+///
+/// Cancellation leaves `db_ops` charged until the worker acknowledges it. The selected axis is
+/// queued through the shared refresh gate, and a rapid return still owes every retired result.
+/// Generations must move before an interrupted worker can publish its classified read failure.
+fn retire_hidden_axis_reads(
+    mode: StratMode,
+    reads: &mut super::bg::LatestReads,
+    tuner: &mut TunerState,
+    time: &mut TimeTunerState,
+    coins: &mut CoinsState,
+    lists: &mut CoinListsState,
+    ticks: &mut TicksState,
+) {
+    use super::bg::ReadLane;
+
+    let lanes: &[ReadLane] = match mode {
+        StratMode::Filters => &[ReadLane::FilterKpi, ReadLane::FilterHistogram],
+        StratMode::Time => &[ReadLane::Time],
+        StratMode::Coins => &[ReadLane::Coins, ReadLane::CoinKpi, ReadLane::CoinPicked],
+        StratMode::Ticks => &[
+            ReadLane::Ticks,
+            ReadLane::TicksReplay,
+            ReadLane::TicksVariants,
+        ],
+    };
+    let retired = reads.cancel(lanes);
+    if retired.contains(&ReadLane::FilterKpi) {
+        tuner.seq = tuner.seq.wrapping_add(1);
+        tuner.dirty = true;
+    }
+    if retired.contains(&ReadLane::FilterHistogram) {
+        tuner.hist_seq = tuner.hist_seq.wrapping_add(1);
+        tuner.hist_dirty = true;
+        tuner.hist_loading = false;
+    }
+    if retired.contains(&ReadLane::Time) {
+        time.seq = time.seq.wrapping_add(1);
+        time.dirty = true;
+    }
+    let coin_base = retired.contains(&ReadLane::Coins);
+    // Debounce fields also retain spent handles; those must not turn a settled axis dirty.
+    let coin_timer =
+        mode == StratMode::Coins && coins.kpi_task.take().is_some_and(|task| !task.is_ready());
+    if coin_base {
+        coins.seq = coins.seq.wrapping_add(1);
+        lists.seq = lists.seq.wrapping_add(1);
+    }
+    if coin_base || retired.contains(&ReadLane::CoinKpi) || coin_timer {
+        coins.kpi_seq = coins.kpi_seq.wrapping_add(1);
+        coins.dirty = true;
+    }
+    if coin_base || retired.contains(&ReadLane::CoinPicked) {
+        coins.picked_seq = coins.picked_seq.wrapping_add(1);
+        coins.dirty = true;
+    }
+    let tick_base = retired.contains(&ReadLane::Ticks) || retired.contains(&ReadLane::TicksReplay);
+    let tick_timer =
+        mode == StratMode::Ticks && ticks.var_task.take().is_some_and(|task| !task.is_ready());
+    if tick_base {
+        ticks.seq = ticks.seq.wrapping_add(1);
+        ticks.tape_seq = ticks.tape_seq.wrapping_add(1);
+        ticks.tape_reading = false;
+    }
+    if tick_base || retired.contains(&ReadLane::TicksVariants) || tick_timer {
+        ticks.var_seq = ticks.var_seq.wrapping_add(1);
+        ticks.dirty = true;
     }
 }
 

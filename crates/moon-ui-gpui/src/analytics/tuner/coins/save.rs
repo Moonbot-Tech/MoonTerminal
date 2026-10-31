@@ -61,6 +61,9 @@ impl AnalyticsView {
     /// Args:
     ///     cx: GPUI context used to read live values and open the guarded dialog.
     pub(in crate::analytics::tuner) fn coins_open_save_dialog(&mut self, cx: &mut Context<Self>) {
+        if !self.axis_write_ready(super::super::shared::TunerKind::Coins) {
+            return;
+        }
         let targets = self.selected_targets();
         if targets.is_empty() {
             return;
@@ -293,6 +296,9 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.axis_write_ready(super::super::shared::TunerKind::Coins) {
+            return;
+        }
         let Some(target) = self.selected_targets().into_iter().next() else {
             return;
         };

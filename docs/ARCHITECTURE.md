@@ -278,6 +278,33 @@ Market Sell does not send the command, shows a warning and closes the confirmati
 transfer clears the pending dialog without a command; a stale Report export writes a cancellation to the log and does not
 create a file; a purge stays in the visible failed state.
 
+Analytics retains immutable aggregate snapshots across window lifetimes in a process-owned LRU
+(12 entries, an estimated 32 MiB). Keys carry resolved periods, the report time axis, effective
+read scope, all profit/filter operands, and independent report, valuation and strategy revisions.
+Reader-state certification and the valuation attachment epoch must also match; unavailable
+certification bypasses the cache entirely, and a changed epoch invalidates retained scalar figures.
+Freshness lasts at most 60 seconds; matching older figures carry their original publication time
+while a background read replaces them. Core-selector metadata keeps its own monotonic observation
+time, so refreshing an aggregate cannot renew an old core list. Transient incomplete-valuation
+results remain on the existing bounded catch-up/retry path and never become fresh cache entries.
+Summary and Strategies period edits invalidate only their own dependencies. Tab navigation retires
+the hidden base and ordinary tuner reads before scheduling the selected page; searches and writes retain
+ownership. Tuner queries always resolve the Strategies period, including continuations completed
+while another page is visible. Navigation acknowledges only its captured publication; a newer
+commit stays owed, and hidden pages and tuner axes are marked stale before a fresh hit is restored.
+After visible work settles, one cancellable speculative read prepares the neighbouring
+page base, sharing an exact foreground request and yielding to new foreground work or publications.
+Queued user refreshes cancel unpromoted speculation before entering the shared cancellation-
+acknowledgement gate; a joined foreground base keeps its ownership.
+Speculation never starts tuner replay. A ready strategy list remains interactive while its axis
+loads; new Save/Copy actions require settled current axis data in both rendering and dispatch.
+Initial replaceable reads use page-local loading feedback, keeping tab, filter and Calendar
+navigation accessible; writes and explicit blocking operations retain the delayed modal overlay.
+Switching tuner axes retires only the hidden axis' ordinary reads and their publication identities,
+leaving searches, picks and drafts owned by their original requests. Local By-time schedule edits
+rescore only KPIs while the retained profiles have the exact certified source identity and remain
+within their original 60-second freshness window; all other cases use a complete read.
+
 Multi-target actions are not silently narrowed to the cores that remain visible. `Strategies` keeps the exact
 Start/Stop, Apply or Delete plan, and Analytics Tuner Save/Copy — the generation and the full ordered target
 set. If even one target, payload or scope changed before dispatch, the whole batch is cancelled before
