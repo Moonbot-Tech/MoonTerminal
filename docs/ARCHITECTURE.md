@@ -13,7 +13,8 @@ experimental migration plans.
   Mini App routes, pairing. The terminal and the station each host it through `TgHost`.
 - `moon-ui-gpui` — the `moonterminal` binary: GPUI shell, panels, debug-tools, chart integration.
 - `moon-station` — the headless `moon-station` binary for a Linux server: report replica, order
-  traces and the trade tape around every trade, without a window; it hosts `moon-tg` too.
+  traces, the trade tape and the market-list prices around every trade, without a window; it hosts
+  `moon-tg` too.
 - `moon-remote` — prepares a Linux server for `moon-station` over SSH, and installs a MoonBot core
   moved onto one from another machine (`core_move`): a library the terminal calls (including
   pulling data back from a station), plus a `moon-remote` command-line binary.
@@ -683,13 +684,20 @@ station builds its clients without the periodic list and records nothing).
   position as its two ends. Trades of one market from any core share one key, and ground a done
   key filed is not filed again by the next trade.
 - **Segments** (`store.rs`, `codec.rs`): one row per stretch the lists vouch for, flushed every
-  30 seconds; a gap ends a segment and nothing is drawn across it. Values are `f64` as sent.
+  30 seconds; a gap ends a segment, and the file holds nothing across it. Values are `f64` as sent.
   Retention follows the tape's settings: a station drops what is past its tape's age, either host
   drops the oldest end first only at the disk reserve, and emulator trades are recorded only while
   the tape records them. When the emulator or tuner-only switch narrows, the station's tape
   retention hands its keep map to the recorder on every whole pass, and the price history of the trades the tape
   drops goes too.
   `price_recorder::read` returns the unbroken stretches of one market over a time range.
+- **Drawn in the trade window** (`lines.rs`, `source/replay_prices.rs`): every trade-window fetch
+  reads the file for its market and window in the background (`load_lines`) and turns each stretch
+  into the Last line — the bid/ask midpoint, as the core draws it — and the Mark line. Each replay
+  read lays them over the provider's rings (`overlay_stored_price_lines`): inside a recorded
+  stretch the file replaces the ring points, held from edge to edge; outside every stretch the
+  rings keep the say. A hole between two stretches is still drawn as a straight line: the
+  price-line renderer cannot break a line on any GPU backend.
 - **From the station** (`remote.rs`, `backend/station/prices_pull.rs`): the terminal records only
   while it runs, so once per run, a minute and a half after start, it asks its station what it
   holds — as far back as its tape settings keep it (`prices.index`, paged) — subtracts what its own file holds, and fetches
