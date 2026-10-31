@@ -7,8 +7,9 @@
 //! does not hold, and files a piece only where its file still holds nothing of that stretch.
 //!
 //! Both sides read the file through a connection of their own. The terminal writes through one
-//! too, beside the recorder's writer — WAL serialises them — and never near the live edge, where
-//! the recorder may still file ([`PULL_EDGE_MS`]).
+//! too, beside the recorder's writer — WAL serialises them — and never where the recorder may
+//! still file: per exchange, before the later of [`PULL_EDGE_MS`] ago and that exchange's first
+//! stamp in this run, or just before now when it has none yet ([`pull_edge_ms`]).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -32,9 +33,10 @@ const SPAN_JSON: usize = 44;
 const MARKET_JSON: usize = 48;
 /// Rows one index query reads at most before the next.
 const INDEX_ROWS: i64 = 4_000;
-/// How close to now the terminal pulls: the recorder files nothing older than its ring
+/// How close to now the terminal pulls at least: the recorder files nothing older than its ring
 /// (`ring_depth_ms`, at most the lookback cap and its spare) plus a flush and the settle of the
-/// last list, so ground before this edge is never filed by both.
+/// last list, so ground before this edge is never filed by both. A young run pulls closer, up to
+/// its own first stamp ([`pull_edge_ms`]).
 pub const PULL_EDGE_MS: i64 = super::LOOKBACK_CAP_MS
     + super::RING_SPARE_MS
     + 2 * super::FLUSH_EVERY.as_millis() as i64
@@ -227,8 +229,8 @@ pub(super) fn fetch_conn(
     Ok(out)
 }
 
-/// What the terminal's file lacks of what the station listed, cut at [`PULL_EDGE_MS`] before
-/// `now_ms`; one want per market, its stretches ascending.
+/// What the terminal's file lacks of what the station listed, cut at [`pull_edge_ms`]; one want
+/// per market, its stretches ascending.
 ///
 /// Args:
 ///     held: The station's listing, every page; a market may come on several.
@@ -238,7 +240,7 @@ pub fn lacking(held: Vec<PriceHeld>, now_ms: i64) -> rusqlite::Result<Vec<TapeWa
     let conn = store::open_read(&path)?;
     lacking_with(
         held,
-        now_ms,
+        |exchange| pull_edge_ms(now_ms, super::recording_since_ms(exchange)),
         |exchange, market, from_ms, to_ms| match &conn {
             Some(conn) => store::held_bounds(conn, exchange, market, from_ms, to_ms),
             None => Ok(Vec::new()),
@@ -246,13 +248,32 @@ pub fn lacking(held: Vec<PriceHeld>, now_ms: i64) -> rusqlite::Result<Vec<TapeWa
     )
 }
 
-/// [`lacking`] against `local`: `(exchange, market, from_ms, to_ms)` → the bounds this file holds.
+/// The newest moment the terminal pulls one exchange up to.
+///
+/// [`PULL_EDGE_MS`] before now, or the exchange's first recorded stamp in this run when that is
+/// later: the recorder never files ground of it before that stamp, so a pull soon after start
+/// also takes the trades of the last minutes before the terminal came up — the pull runs once per
+/// run, and ground left out here stays empty until the next one. An exchange with no list yet has
+/// nothing filed, and whatever it files later is stamped after now. Either moment is backed off
+/// by a settle, for a list stamped on another thread just before it was noted.
+///
+/// Args:
+///     now_ms: Terminal wall clock, Unix ms.
+///     recording_since_ms: The exchange's first stamp this run, `None` before any.
+pub(super) fn pull_edge_ms(now_ms: i64, recording_since_ms: Option<i64>) -> i64 {
+    let since = recording_since_ms.unwrap_or(now_ms).min(now_ms);
+    now_ms
+        .saturating_sub(PULL_EDGE_MS)
+        .max(since.saturating_sub(super::SETTLE_MS))
+}
+
+/// [`lacking`] cut at `edge_ms` of each exchange, against `local`: `(exchange, market, from_ms,
+/// to_ms)` → the bounds this file holds.
 pub(super) fn lacking_with(
     held: Vec<PriceHeld>,
-    now_ms: i64,
+    edge_ms: impl Fn(&str) -> i64,
     mut local: impl FnMut(&str, &str, i64, i64) -> rusqlite::Result<Vec<(i64, i64)>>,
 ) -> rusqlite::Result<Vec<TapeWant>> {
-    let edge = Coverage::one((i64::MIN, now_ms.saturating_sub(PULL_EDGE_MS)));
     let mut wanted: BTreeMap<(String, String), Coverage> = BTreeMap::new();
     for market in held {
         let need = wanted
@@ -266,7 +287,7 @@ pub(super) fn lacking_with(
     }
     let mut wants = Vec::new();
     for ((exchange, market), need) in wanted {
-        let need = need.clip(&edge);
+        let need = need.clip(&Coverage::one((i64::MIN, edge_ms(&exchange))));
         let Some((from_ms, to_ms)) = need.hull() else {
             continue;
         };

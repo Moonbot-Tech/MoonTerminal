@@ -90,3 +90,39 @@ fn draw_runs_split_at_the_wrap_and_cover_every_segment() {
         assert_eq!(a + b, n - 1);
     }
 }
+
+/// Breakage: `PriceRing::m4` folds a gap point into its column like a price. Consequence: the gap
+/// either wins the column's low and pulls the line down to a negative price, or is dropped and
+/// the decimated line bridges the unrecorded stretch the full line breaks at.
+#[test]
+fn m4_keeps_a_gap_point_and_never_takes_it_for_a_low() {
+    let gap = PriceLinePoint {
+        time_rel_ms: 3.0,
+        price: moon_core::data::price_line::PRICE_LINE_GAP,
+    };
+    let mut line = pts(0..3);
+    line.push(gap);
+    line.extend(pts(3..6));
+    let mut r = PriceRing::new(16);
+    r.reset(&line);
+    let mut out = Vec::new();
+    // Every point in one column.
+    r.m4(0.001, &mut out);
+    let gaps: Vec<f32> = out
+        .iter()
+        .filter(|p| p.is_gap())
+        .map(|p| p.time_rel_ms)
+        .collect();
+    assert_eq!(gaps, vec![3.0], "the gap survives, once, in place");
+    let at = out.iter().position(|p| p.is_gap()).unwrap();
+    assert!(
+        out[..at]
+            .iter()
+            .all(|p| p.time_rel_ms < 3.0 && p.price > 0.0)
+    );
+    assert!(
+        out[at + 1..]
+            .iter()
+            .all(|p| p.time_rel_ms >= 3.0 && p.price > 0.0)
+    );
+}

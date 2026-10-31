@@ -188,6 +188,57 @@ fn the_terminal_never_replaces_its_own_segment_and_refuses_a_broken_piece() {
 }
 
 #[test]
+fn a_run_younger_than_the_edge_pulls_up_to_its_own_first_stamp() {
+    // Started a minute ago: the recorder holds nothing older, so a trade the station recorded
+    // eleven minutes back — inside the old edge — is asked in full, not left empty for the run.
+    let now = 1_000_000_000;
+    let started = now - 60_000;
+    let trade = (now - 660_000, now - 300_000);
+    let held = vec![PriceHeld {
+        exchange: EX.into(),
+        market: "XUSDT".into(),
+        spans: vec![(trade.0, now - 30_000)],
+    }];
+    let wants = lacking_with(
+        held,
+        |_| pull_edge_ms(now, Some(started)),
+        |_, _, _, _| Ok(Vec::new()),
+    )
+    .unwrap();
+    assert_eq!(wants.len(), 1);
+    let asked = wants[0].spans.last().unwrap().1;
+    assert!(asked >= trade.1, "the trade's exit is asked: {asked}");
+    assert!(
+        asked < started,
+        "nothing the recorder may file is asked: {asked}"
+    );
+}
+
+#[test]
+fn each_exchange_is_cut_at_its_own_start() {
+    // One exchange recording for an hour keeps the edge; one whose core has not sent a list yet
+    // has filed nothing and is asked up to now, short of the settle.
+    let now = 1_000_000_000;
+    let span = (now - PULL_EDGE_MS - 60_000, now - 5_000);
+    let held = ["1:00000000", "2:00000000"]
+        .map(|exchange| PriceHeld {
+            exchange: exchange.into(),
+            market: "XUSDT".into(),
+            spans: vec![span],
+        })
+        .to_vec();
+    let since = |exchange: &str| (exchange == "1:00000000").then_some(now - 3_600_000);
+    let wants = lacking_with(
+        held,
+        |exchange| pull_edge_ms(now, since(exchange)),
+        |_, _, _, _| Ok(Vec::new()),
+    )
+    .unwrap();
+    let ends: Vec<i64> = wants.iter().map(|w| w.spans[0].1).collect();
+    assert_eq!(ends, vec![now - PULL_EDGE_MS, now - 5_000]);
+}
+
+#[test]
 fn lacking_is_what_the_station_holds_minus_what_is_here_before_the_edge() {
     let now = 1_000_000_000;
     let edge = now - PULL_EDGE_MS;
@@ -210,12 +261,16 @@ fn lacking_is_what_the_station_holds_minus_what_is_here_before_the_edge() {
             spans: vec![(100, 199)],
         },
     ];
-    let wants = lacking_with(held, now, |_, market, _, _| {
-        Ok(match market {
-            "XUSDT" => vec![(2_000, 2_999)],
-            _ => vec![(0, 500)],
-        })
-    })
+    let wants = lacking_with(
+        held,
+        |_| pull_edge_ms(now, Some(0)),
+        |_, market, _, _| {
+            Ok(match market {
+                "XUSDT" => vec![(2_000, 2_999)],
+                _ => vec![(0, 500)],
+            })
+        },
+    )
     .unwrap();
     assert_eq!(
         wants,

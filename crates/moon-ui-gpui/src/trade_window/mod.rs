@@ -476,6 +476,10 @@ pub(crate) struct TradeWindowView {
     /// each neighbour's — so a resolver wake that changed nothing of this window's costs one
     /// compare. Stamps, not `Arc` addresses: a dropped allocation can be reused by a new answer.
     traces_sig: u64,
+    /// The recorder's exchange key and the span the last fetch read the price file over, so a
+    /// station pull that filed more can read the same stretch again; `None` before a fetch got
+    /// that far.
+    stored_prices_at: Option<(String, i64, i64)>,
     /// How many neighbours' lines the current store draws, for the rail's block.
     neighbours_drawn: usize,
     /// Revision stamped on each rebuilt archived store, so the chart sees every rebuild as new.
@@ -934,6 +938,9 @@ impl TradeWindowView {
     /// Args:
     ///     cx: View context.
     fn fetch(&mut self, cx: &mut Context<Self>) {
+        // The previous request's stretch is not this one's: a fetch that stops early below must
+        // leave no stretch for a station pull to read again.
+        self.stored_prices_at = None;
         // Resolved exactly ONCE here and carried through `apply` into `publish`, rather than
         // re-resolved in `publish`: `fetch` starts an async REST request whose result reaches
         // `publish` later, and if a core's offset were adopted or changed WHILE that request is in

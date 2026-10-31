@@ -137,6 +137,9 @@ struct Backend {
     /// backfill files answers by the hundred, and none of them is a reason to repaint a dock.
     traces: backend::traces::TraceResolver,
     traces_revision: Entity<backend::traces::TracesRevision>,
+    /// Wake channel of the station's price pull: notified when a pull filed prices, so the trade
+    /// windows already open re-read theirs — and nothing else wakes for it.
+    price_imports: Entity<backend::station::prices_pull::PriceImports>,
     /// Dedicated wake channel for shared Auto dock-topology and rail-width transitions.
     auto_workspace_layout_revision: Entity<workspace::AutoWorkspaceLayoutRevision>,
     /// Cores broadcast by the Profit Monitor's core click; empty means every core, as in a panel's

@@ -74,7 +74,7 @@ pub fn fill_liq_upload(ticks: &[Tick], epoch_ms: f64, out: &mut Vec<ChartCross>)
 }
 
 /// Fill a last or mark price-line point buffer from `PricePoint`, discarding non-finite and
-/// non-positive prices.
+/// non-positive prices; a [`PricePoint::gap`] is kept as the GPU's gap point.
 pub fn fill_price_upload(points: &[PricePoint], epoch_ms: f64, out: &mut Vec<PriceLinePoint>) {
     out.clear();
     extend_price_upload(points, epoch_ms, out);
@@ -83,8 +83,9 @@ pub fn fill_price_upload(points: &[PricePoint], epoch_ms: f64, out: &mut Vec<Pri
 /// [`fill_price_upload`] without the clear: appends the converted `points` to `out`.
 pub fn extend_price_upload(points: &[PricePoint], epoch_ms: f64, out: &mut Vec<PriceLinePoint>) {
     out.reserve(points.len());
+    // A gap passes through as one: the shaders draw nothing to it or from it.
     out.extend(points.iter().filter_map(|p| {
-        (p.price.is_finite() && p.price > 0.0).then_some(PriceLinePoint {
+        (p.is_gap() || (p.price.is_finite() && p.price > 0.0)).then_some(PriceLinePoint {
             time_rel_ms: (p.time_ms - epoch_ms) as f32,
             price: p.price,
         })

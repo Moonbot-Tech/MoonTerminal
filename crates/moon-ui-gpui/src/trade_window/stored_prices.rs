@@ -3,7 +3,9 @@
 //! The chart's price lines come from the provider's rings, which start empty on every run — so a
 //! trade closed before this run drew neither line. The price recorder files the market list's
 //! prices around every trade, and this reads them back for the window's market and span, in the
-//! background, and hands them to the chart, which lays them over the rings where they speak.
+//! background, and hands them to the chart, which lays them over the rings where they speak. The
+//! station's price pull may file more of them after the window read the file; it wakes the window,
+//! which reads the same stretch again.
 
 use gpui::*;
 use moon_core::market::price_recorder::load_lines;
@@ -32,8 +34,31 @@ impl TradeWindowView {
     ) {
         self.panel
             .update(cx, |panel, pcx| panel.attach_stored_prices(None, pcx));
+        self.stored_prices_at = Some((exchange_key, window.from_ms, window.to_ms));
+        self.load_stored_prices(sequence, cx);
+    }
+
+    /// Read this window's stretch of the price file again, after the station's pull filed more.
+    ///
+    /// The lines on screen stay until the new answer replaces them, so the re-read never blanks
+    /// them; an answer that comes back empty leaves them too. Nothing to do before a fetch named
+    /// the stretch.
+    ///
+    /// Args:
+    ///     cx: View context.
+    pub(super) fn reload_stored_prices(&mut self, cx: &mut Context<Self>) {
+        if self.stored_prices_at.is_some() {
+            self.load_stored_prices(self.sequence, cx);
+        }
+    }
+
+    /// Read [`Self::stored_prices_at`] in the background and hand a non-empty answer to the chart,
+    /// unless a later fetch has superseded `sequence` meanwhile.
+    fn load_stored_prices(&mut self, sequence: u64, cx: &mut Context<Self>) {
+        let Some((exchange_key, from_ms, to_ms)) = self.stored_prices_at.clone() else {
+            return;
+        };
         let market = self.market.clone();
-        let (from_ms, to_ms) = (window.from_ms, window.to_ms);
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let read = executor

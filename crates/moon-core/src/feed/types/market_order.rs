@@ -75,6 +75,22 @@ pub struct PricePoint {
     pub price: f32,
 }
 
+impl PricePoint {
+    /// A break in the line at `time_ms`: nothing is drawn to it or from it
+    /// ([`crate::data::price_line::PRICE_LINE_GAP`]).
+    pub fn gap(time_ms: f64) -> Self {
+        Self {
+            time_ms,
+            price: crate::data::price_line::PRICE_LINE_GAP,
+        }
+    }
+
+    /// Whether this point is a [`PricePoint::gap`] rather than a price.
+    pub fn is_gap(&self) -> bool {
+        self.price == crate::data::price_line::PRICE_LINE_GAP
+    }
+}
+
 /// Order-book level.
 #[derive(Debug, Clone, Copy)]
 pub struct Level {

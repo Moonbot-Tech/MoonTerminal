@@ -154,16 +154,25 @@ impl PriceRing {
     /// `floor(time * time_to_px)`, so a view that only scrolls reuses it: per column its first,
     /// lowest, highest and last point, in time order and without repeats, so the endpoints are kept
     /// verbatim and the drawn envelope matches the full line's. Never longer than the ring.
+    ///
+    /// A gap point is kept as it stands and ends the column before it: it is not a price, so it
+    /// must neither win the column's low nor be dropped, or the line would bridge the gap again.
     pub(crate) fn m4(&self, time_to_px: f32, out: &mut Vec<PriceLinePoint>) {
         out.clear();
         let column = |t: f32| (t * time_to_px).floor() as i64;
+        let gap = |i: usize| self.slots[self.physical(i)].is_gap();
         let mut i = 0;
         while i < self.count {
+            if gap(i) {
+                out.push(self.slots[self.physical(i)]);
+                i += 1;
+                continue;
+            }
             let c = column(self.time(i));
             let first = i;
             let (mut lowest, mut highest, mut last) = (i, i, i);
             i += 1;
-            while i < self.count && column(self.time(i)) == c {
+            while i < self.count && !gap(i) && column(self.time(i)) == c {
                 let p = self.slots[self.physical(i)].price;
                 if p < self.slots[self.physical(lowest)].price {
                     lowest = i;
