@@ -178,6 +178,14 @@ PriceLineOut price_line_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     uint i0 = ((uint)round(cv_instance_offset) + iid) % n; // ring slot of the segment's start
     PricePoint p0 = price_points[i0];
     PricePoint p1 = price_points[(i0 + 1u) % n];
+    PriceLineOut o;
+    // A negative price is a gap (`PRICE_LINE_GAP`): no segment reaches it. Every vertex of the
+    // segment lands on one point outside the clip volume, so nothing is rasterized.
+    // Keep in sync with native_price.wgsl / chart_native.metal.
+    if (p0.price < 0.0 || p1.price < 0.0) {
+        o.pos = float4(2.0, 2.0, 0.0, 1.0);
+        return o;
+    }
     float2 a = price_point_px(p0);
     float2 b = price_point_px(p1);
     float2 dir = b - a;
@@ -187,7 +195,6 @@ PriceLineOut price_line_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     float along[6] = { 0, 1, 1, 0, 1, 0 };
     float side[6]  = { -1, -1, 1, -1, 1, 1 };
     float2 px = lerp(a, b, along[vid]) + nrm * side[vid];
-    PriceLineOut o;
     o.pos = float4(px.x / cv_resolution.x * 2.0 - 1.0,
                    1.0 - px.y / cv_resolution.y * 2.0,
                    0.0,

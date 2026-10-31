@@ -76,6 +76,10 @@ impl MarketDataSource {
     }
 }
 
+/// A stretch's edge and the ring point beside it closer than this are one line: the core sends
+/// its list about every two seconds, so this is a few missed lists, not a stretch nobody recorded.
+const GAP_JOIN_MS: f64 = 10_000.0;
+
 /// Lay the price file's recorded lines over what the provider's rings gave a replay read.
 ///
 /// Inside each recorded stretch the file is the whole truth and replaces the ring points there:
@@ -87,17 +91,24 @@ impl MarketDataSource {
 ///
 /// Bounds are inclusive UTC milliseconds, the same `window` the ring read took. Returns the
 /// capacity either line needs, as [`MarketDataSource::read_replay_price_lines`] does.
+///
+/// A stretch is an island: where the point outside its edge lies further than [`GAP_JOIN_MS`]
+/// away, a [`PricePoint::gap`] goes between them, so the line is not bridged straight across
+/// ground the file holds nothing of — hours between two trades' recordings, or between a recording
+/// and what the rings hold of this run.
 pub fn overlay_stored_price_lines(
     window: (i64, i64),
     stored: &StoredPriceLines,
     out: &mut ChartHistoryBuffers,
 ) -> usize {
+    let mut edges = Vec::with_capacity(stored.spans.len());
     for span in &stored.spans {
         let lo = span.from_ms.max(window.0);
         let hi = span.to_ms.min(window.1);
         if lo > hi {
             continue;
         }
+        edges.push((lo as f64, hi as f64));
         for (points, recorded) in [
             (&mut out.last_points, &span.last),
             (&mut out.mark_points, &span.mark),
@@ -106,7 +117,49 @@ pub fn overlay_stored_price_lines(
             clip_recorded(recorded, lo, hi, points);
         }
     }
-    prepare_replay_price_lines(window, out)
+    prepare_replay_price_lines(window, out);
+    for points in [&mut out.last_points, &mut out.mark_points] {
+        break_at_edges(&edges, points);
+    }
+    out.last_points.len().max(out.mark_points.len()).max(1)
+}
+
+/// Put a gap at each stretch edge of `points` whose neighbour outside lies past [`GAP_JOIN_MS`].
+///
+/// `points` are sorted and valid ([`prepare_replay_price_lines`]); each gap takes its edge's time,
+/// so the line stays in time order.
+fn break_at_edges(edges: &[(f64, f64)], points: &mut Vec<PricePoint>) {
+    let mut breaks: Vec<(usize, f64)> = Vec::new();
+    for &(lo, hi) in edges {
+        let first = points.partition_point(|p| p.time_ms < lo);
+        if first
+            .checked_sub(1)
+            .is_some_and(|before| lo - points[before].time_ms > GAP_JOIN_MS)
+        {
+            breaks.push((first, lo));
+        }
+        let past = points.partition_point(|p| p.time_ms <= hi);
+        if points
+            .get(past)
+            .is_some_and(|after| after.time_ms - hi > GAP_JOIN_MS)
+        {
+            breaks.push((past, hi));
+        }
+    }
+    if breaks.is_empty() {
+        return;
+    }
+    breaks.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let mut merged = Vec::with_capacity(points.len() + breaks.len());
+    let mut next = breaks.iter().peekable();
+    for (i, point) in points.iter().enumerate() {
+        while let Some(&(_, time_ms)) = next.next_if(|b| b.0 == i) {
+            merged.push(PricePoint::gap(time_ms));
+        }
+        merged.push(*point);
+    }
+    merged.extend(next.map(|&(_, time_ms)| PricePoint::gap(time_ms)));
+    *points = merged;
 }
 
 /// Append the part of one recorded line that speaks for `[lo, hi]`, held at both edges.

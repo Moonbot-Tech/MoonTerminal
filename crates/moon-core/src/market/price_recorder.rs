@@ -273,6 +273,36 @@ static TX: OnceLock<Option<Tx>> = OnceLock::new();
 static DROPPED: Mutex<Vec<Arc<str>>> = Mutex::new(Vec::new());
 /// Lists a full queue dropped since the last summary line.
 static DROPPED_LISTS: AtomicU64 = AtomicU64::new(0);
+/// Per exchange, the earliest stamp of a list this process queued for its recorder.
+static RECORDING_SINCE: Mutex<Vec<(Arc<str>, i64)>> = Mutex::new(Vec::new());
+
+/// The earliest stamp this process queued for `exchange_key`, or `None` before its first list.
+///
+/// A list is stamped by the process clock when it arrives, an exchange's ring vouches only from
+/// its own first list, and a filed segment starts at one of its points or later — so nothing this
+/// process files for that exchange speaks for ground before this moment. The price pull reads it
+/// to take everything older from the station, rather than leave the stretch between its own edge
+/// and this start empty for the whole run. Per exchange: one whose core connects later starts
+/// later.
+pub fn recording_since_ms(exchange_key: &str) -> Option<i64> {
+    RECORDING_SINCE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(exchange, _)| &**exchange == exchange_key)
+        .map(|&(_, since)| since)
+}
+
+/// Note a list of `exchange` stamped `t_ms` as queued.
+fn note_recording(exchange: &Arc<str>, t_ms: i64) {
+    let mut since = RECORDING_SINCE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match since.iter_mut().find(|(e, _)| e == exchange) {
+        Some((_, first)) => *first = (*first).min(t_ms),
+        None => since.push((exchange.clone(), t_ms)),
+    }
+}
 
 /// The thread's queues, starting it on first use.
 fn tx() -> Option<&'static Tx> {
@@ -306,8 +336,10 @@ fn send_prices(mut batch: Batch) {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let marked = dropped.iter().position(|e| *e == batch.exchange);
     batch.broken = marked.is_some();
+    let (exchange, t_ms) = (batch.exchange.clone(), batch.t_ms);
     match tx.prices.try_send(batch) {
         Ok(()) => {
+            note_recording(&exchange, t_ms);
             if let Some(at) = marked {
                 dropped.swap_remove(at);
             }

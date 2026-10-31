@@ -4,11 +4,15 @@
 //! So, a while after start, the terminal asks the station for everything it holds — as far back
 //! as the station's tape settings keep it — works out what its own file lacks, and files the
 //! station's answer beside its own (`moon_core::market::price_recorder::remote`). A terminal set up
-//! fresh on another machine so takes the station's whole history. Nothing on screen reads the
-//! file yet, so nothing is redrawn.
+//! fresh on another machine so takes the station's whole history. The trade window reads the file
+//! when it opens a trade, and a pull that filed something wakes the windows already open
+//! ([`PriceImports`]) to read it again.
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+
+use gpui::Entity;
 
 use moon_core::diagnostics::PRICE_PULL_TARGET as LOG;
 use moon_core::market::price_recorder::remote;
@@ -36,6 +40,20 @@ enum Phase {
 }
 
 static PHASE: Mutex<Phase> = Mutex::new(Phase::Unstarted);
+/// Set by an attempt that filed prices, taken by the next [`tick`].
+static FILED: AtomicBool = AtomicBool::new(false);
+
+/// Wake channel of the pull: notified once a pull filed prices. Only the trade windows observe
+/// it — they read the file when they open a trade and re-read it on this — so a pull wakes nothing
+/// else.
+pub(crate) struct PriceImports;
+
+impl crate::Backend {
+    /// The pull's wake channel, for a trade window to observe.
+    pub(crate) fn price_imports(&self) -> Entity<PriceImports> {
+        self.price_imports.clone()
+    }
+}
 
 fn lock() -> std::sync::MutexGuard<'static, Phase> {
     PHASE
@@ -45,9 +63,13 @@ fn lock() -> std::sync::MutexGuard<'static, Phase> {
 
 /// The coordination tick's call: a clock compare while waiting, an attempt on its own thread once
 /// due, and after a failed one another later.
-pub(crate) fn tick() {
+///
+/// Returns:
+///     Whether an attempt filed prices since the last call — the caller wakes [`PriceImports`].
+pub(crate) fn tick() -> bool {
     let mut phase = lock();
     *phase = next(*phase, Instant::now(), spawn);
+    FILED.swap(false, Ordering::Relaxed)
 }
 
 /// The phase after `phase` at `now`; `start(n)` launches attempt `n` and says whether it did.
@@ -125,6 +147,9 @@ fn pull(target: &moon_remote::ssh::Target) -> anyhow::Result<()> {
     let finished = importer
         .finish()
         .map_err(|e| anyhow::anyhow!("file the station's prices: {e}"));
+    if importer.filed > 0 {
+        FILED.store(true, Ordering::Relaxed);
+    }
     let count = pulled?;
     finished?;
     log::info!(

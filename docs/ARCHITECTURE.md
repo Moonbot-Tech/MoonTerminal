@@ -696,14 +696,20 @@ station builds its clients without the periodic list and records nothing).
   into the Last line — the bid/ask midpoint, as the core draws it — and the Mark line. Each replay
   read lays them over the provider's rings (`overlay_stored_price_lines`): inside a recorded
   stretch the file replaces the ring points, held from edge to edge; outside every stretch the
-  rings keep the say. A hole between two stretches is still drawn as a straight line: the
-  price-line renderer cannot break a line on any GPU backend.
+  rings keep the say. A stretch is an island: where the point beside its edge lies more than 10 s
+  away, a gap point (`PricePoint::gap`, price `-1`) goes between them, M4 decimation keeps it, and
+  the price-line shader of every GPU backend skips a segment that ends on one — so hours nobody
+  recorded are not bridged by a straight line. When the station's pull below files something, it
+  wakes the open trade windows (`PriceImports`), and each reads its stretch again without first
+  blanking what it draws.
 - **From the station** (`remote.rs`, `backend/station/prices_pull.rs`): the terminal records only
   while it runs, so once per run, a minute and a half after start, it asks its station what it
   holds — as far back as its tape settings keep it (`prices.index`, paged) — subtracts what its own file holds, and fetches
   the rest (`prices.fetch`, paged like `tape.fetch`): each station segment cut to the stretch,
   opening with the state in force there. Ground younger than the recorder's ring plus a flush is
-  left for the next run, and a piece is filed only where the file holds nothing of its stretch, so
+  left for the next run — but per exchange never earlier than the first list that exchange recorded
+  in this run, so a run younger than that edge still pulls a trade closed just before it started.
+  A piece is filed only where the file holds nothing of its stretch, so
   the terminal's own recording is never replaced. Only a station whose status carries
   `prices_pull` is asked; an older one would refuse the requests unparsed.
 

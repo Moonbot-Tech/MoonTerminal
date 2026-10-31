@@ -44,8 +44,18 @@ fn price_point_px(p: PricePoint) -> vec2<f32> {
 
 @vertex
 fn price_line_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> PriceLineOut {
-    let a = price_point_px(price_points[iid]);
-    let b = price_point_px(price_points[iid + 1u]);
+    let p0 = price_points[iid];
+    let p1 = price_points[iid + 1u];
+    var out: PriceLineOut;
+    // A negative price is a gap (`PRICE_LINE_GAP`): no segment reaches it. Every vertex of the
+    // segment lands on one point outside the clip volume, so nothing is rasterized.
+    // Keep in sync with crosses.hlsl / chart_native.metal.
+    if (p0.price < 0.0 || p1.price < 0.0) {
+        out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
+        return out;
+    }
+    let a = price_point_px(p0);
+    let b = price_point_px(p1);
     var dir = b - a;
     let len = max(length(dir), 1e-4);
     dir = dir / len;
@@ -53,7 +63,6 @@ fn price_line_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) i
     let along = array<f32, 6>(0.0, 1.0, 1.0, 0.0, 1.0, 0.0);
     let side = array<f32, 6>(-1.0, -1.0, 1.0, -1.0, 1.0, 1.0);
     let px = mix(a, b, along[vid]) + nrm * side[vid];
-    var out: PriceLineOut;
     out.pos = to_clip(px, cv.resolution);
     return out;
 }

@@ -109,6 +109,47 @@ fn stored_lines_replace_the_ring_inside_their_stretch_only() {
     );
 }
 
+/// Two recordings far apart and the rings after them are three islands: a gap at every edge whose
+/// neighbour is further than a few lists, none where the rings carry on right after the stretch.
+#[test]
+fn stored_lines_break_where_nothing_was_recorded() {
+    use crate::market::price_recorder::{StoredPriceLines, StoredPriceSpan};
+    let mut out = ChartHistoryBuffers {
+        mark_points: line(&[(21_000.0, 5.0), (200_000.0, 6.0), (205_000.0, 7.0)]),
+        ..Default::default()
+    };
+    let span = |from_ms: i64, to_ms: i64, price: f32| StoredPriceSpan {
+        from_ms,
+        to_ms,
+        last: Vec::new(),
+        mark: line(&[(from_ms as f64, price)]),
+    };
+    let stored = StoredPriceLines {
+        spans: vec![span(10_000, 20_000, 1.0), span(100_000, 110_000, 2.0)],
+    };
+    let capacity = overlay_stored_price_lines((0, 300_000), &stored, &mut out);
+    let gap = PricePoint::gap(0.0).price;
+    assert_eq!(
+        pts(&out.mark_points),
+        vec![
+            (10_000.0, 1.0),
+            (20_000.0, 1.0),
+            (21_000.0, 5.0),
+            (100_000.0, gap),
+            (100_000.0, 2.0),
+            (110_000.0, 2.0),
+            (110_000.0, gap),
+            (200_000.0, 6.0),
+            (205_000.0, 7.0),
+        ]
+    );
+    assert!(
+        out.last_points.is_empty(),
+        "no last recorded, no ring: nothing to break"
+    );
+    assert_eq!(capacity, 9);
+}
+
 /// A stretch outside the window leaves the ring untouched, and an empty store changes nothing.
 #[test]
 fn stored_lines_outside_the_window_leave_the_ring_alone() {

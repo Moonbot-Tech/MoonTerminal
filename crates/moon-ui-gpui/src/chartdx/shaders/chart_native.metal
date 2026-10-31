@@ -756,8 +756,16 @@ vertex PriceOut price_line_vertex(uint vid [[vertex_id]], uint iid [[instance_id
                                   constant ChartView& cv [[buffer(0)]],
                                   const device PricePoint* points [[buffer(1)]],
                                   constant PriceStyle& ps [[buffer(2)]]) {
-    float2 a = price_point_px(cv, points[iid]);
-    float2 b = price_point_px(cv, points[iid + 1]);
+    PricePoint p0 = points[iid];
+    PricePoint p1 = points[iid + 1];
+    // A negative price is a gap (`PRICE_LINE_GAP`): no segment reaches it. Every vertex of the
+    // segment lands on one point outside the clip volume, so nothing is rasterized.
+    // Keep in sync with crosses.hlsl / native_price.wgsl.
+    if (p0.price < 0.0 || p1.price < 0.0) {
+        return { float4(2.0, 2.0, 0.0, 1.0) };
+    }
+    float2 a = price_point_px(cv, p0);
+    float2 b = price_point_px(cv, p1);
     float2 dir = b - a;
     float len = max(length(dir), 1e-4);
     dir /= len;

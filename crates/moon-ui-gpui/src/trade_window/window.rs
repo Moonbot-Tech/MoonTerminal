@@ -384,6 +384,7 @@ fn new_view(
         // Asked for below, once the observers are in place to hear the answer.
         traces: super::traces::TraceState::Pending,
         traces_sig: 0,
+        stored_prices_at: None,
         neighbours_drawn: 0,
         frozen_rev: 0,
         sequence: 0,
@@ -450,6 +451,16 @@ fn new_view(
     vcx.observe(&traces_revision, |this: &mut TradeWindowView, _rev, cx| {
         this.sync_traces(false, cx);
     })
+    .detach();
+    // ...and the station's price pull, which may file this trade's prices after the window read
+    // the file: one background read of the window's own stretch per pull that filed anything.
+    let price_imports = owner.read(vcx).price_imports();
+    vcx.observe(
+        &price_imports,
+        |this: &mut TradeWindowView, _imports, cx| {
+            this.reload_stored_prices(cx);
+        },
+    )
     .detach();
     // Captions edited from this view's own chart menu, relayed up by the panel for its OWNER to
     // store — the same observer the detached chart window runs, for the same reason: the panel
