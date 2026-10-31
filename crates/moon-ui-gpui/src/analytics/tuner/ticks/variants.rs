@@ -808,6 +808,9 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.axis_write_ready(super::super::shared::TunerKind::Ticks) {
+            return;
+        }
         let Some(target) = self.selected_targets().into_iter().next() else {
             return;
         };

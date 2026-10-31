@@ -80,13 +80,13 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Tuner query: the shared filters plus the scope of EVERY selected strategy.
+    /// Tuner query: Strategies period and shared filters over EVERY selected strategy.
     ///
     /// The whole read-visible selection, not just the anchor row: the KPI matrix, histogram, and
     /// sweep must describe the same Ctrl- or Shift-built set the user sees highlighted. Write
     /// targets are bounded separately by the Auto group's action authority.
     pub(in crate::analytics::tuner) fn tuner_query(&self) -> moon_core::db::analytics::Query {
-        let mut q = self.query();
+        let mut q = self.tuner_query_all();
         // Row keys are `strategyid@core_uid`, so the scope is per strategy AND per core.
         q.strategies = self.visible_target_keys(self.read_core_ids());
         q
@@ -175,6 +175,7 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
+        let show_overlay = self.axis_read_overlay(show_overlay);
         if !after_report {
             self.report_busy_retries.reset();
             self.tuner.mark_dialog_draft_changed();
@@ -284,6 +285,7 @@ impl AnalyticsView {
         user_edit: bool,
         cx: &mut Context<Self>,
     ) {
+        let show_overlay = self.axis_read_overlay(show_overlay);
         if user_edit {
             self.report_busy_retries.reset();
             self.tuner.mark_dialog_draft_changed();
@@ -357,6 +359,7 @@ impl AnalyticsView {
     ///     show_overlay: Whether the user-requested read needs blocking progress feedback.
     ///     cx: GPUI context used to execute and publish the histogram read.
     fn reload_hist_inner(&mut self, show_overlay: bool, cx: &mut Context<Self>) {
+        let show_overlay = self.axis_read_overlay(show_overlay);
         let retired = self
             .latest_reads
             .cancel(&[super::super::bg::ReadLane::FilterHistogram]);

@@ -4,10 +4,12 @@
 //! it lives in `grid`, the recompute in `time/mod.rs`.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use gpui::{Bounds, Entity, Pixels};
 use moon_ui::MoonInputState;
 
+use crate::analytics::cache::CacheKey;
 use crate::load_state::LoadState;
 use moon_core::db::analytics::HourStat;
 use moon_core::db::tuner::{
@@ -19,6 +21,8 @@ pub(in crate::analytics::tuner) const TIME_N_VAR: usize = 2;
 pub(in crate::analytics::tuner) const N_FIELD: usize = 3;
 /// Minutes in a week (7 days × 1440) — the maximum minute of the week + 1.
 pub(in crate::analytics::tuner) const WEEK_MIN: u16 = 7 * 1440;
+/// Revalidate time-sensitive money and strategy metadata even without a publication change.
+const PROFILE_FRESH_FOR: Duration = Duration::from_secs(60);
 
 /// State of the "By time" tuner inside `AnalyticsView`.
 pub(in crate::analytics) struct TimeTunerState {
@@ -67,6 +71,8 @@ pub(in crate::analytics) struct TimeTunerState {
     /// The Fact vs variants KPI: Fact / v1 / v2 columns for the weekly schedule
     /// from the grid, rendered in the shared matrix at the right.
     pub(in crate::analytics::tuner) stats: LoadState<Vec<VarStats>>,
+    /// Exact certified source shared by settled profiles, slider colors and strategy baseline.
+    pub(in crate::analytics::tuner) profile_basis: Option<(CacheKey, Instant)>,
     /// Reload generation — a stale completion is discarded.
     pub(in crate::analytics::tuner) seq: u64,
     /// Whether By time data is stale for the current query and strategy-selection scope,
@@ -103,6 +109,7 @@ impl TimeTunerState {
             profiles: LoadState::default(),
             slider: LoadState::default(),
             stats: LoadState::default(),
+            profile_basis: None,
             seq: 0,
             dirty: true,
             slider_track: Default::default(),
@@ -114,6 +121,29 @@ impl TimeTunerState {
     /// data is stale relative to the current query/selection scope.
     pub(in crate::analytics) fn needs_reload(&self) -> bool {
         self.profiles.data().is_none() || self.dirty
+    }
+
+    /// Permit draft-only KPI replacement while the unchanged profile source remains certified.
+    ///
+    /// KPI loading is intentionally allowed: a second edit replaces only that pending rescore.
+    pub(in crate::analytics::tuner) fn can_rescore(&self, key: &CacheKey, now: Instant) -> bool {
+        !self.dirty
+            && key.is_reusable()
+            && self
+                .profile_basis
+                .as_ref()
+                .is_some_and(|(basis, published)| {
+                    basis == key && now.duration_since(*published) <= PROFILE_FRESH_FOR
+                })
+            && matches!(self.profiles, LoadState::Ready(_))
+            && matches!(self.slider, LoadState::Ready(_))
+    }
+
+    /// Retire the previous KPI completion while keeping the certified profile observation age.
+    pub(in crate::analytics::tuner) fn begin_draft_rescore(&mut self) -> u64 {
+        self.seq = self.seq.wrapping_add(1);
+        self.stats.begin();
+        self.seq
     }
 
     /// Commit settings text only when it changes: delayed Blur must not erase a completed fit.

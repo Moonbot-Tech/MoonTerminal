@@ -53,7 +53,7 @@ impl AnalyticsView {
         } else if field == 2 {
             self.clear_field(vi, 1);
         }
-        self.reload_time(cx);
+        self.rescore_time_draft(cx);
         cx.notify();
     }
 
@@ -70,7 +70,7 @@ impl AnalyticsView {
     /// Clear field `field` of variant `vi` (the cell's ✕) + recompute.
     fn time_clear_cell(&mut self, vi: usize, field: usize, cx: &mut Context<Self>) {
         self.clear_field(vi, field);
-        self.reload_time(cx);
+        self.rescore_time_draft(cx);
         cx.notify();
     }
 
@@ -80,7 +80,7 @@ impl AnalyticsView {
             let v = self.time_tuner.bounds[1][field].clone();
             self.set_v1_cell(field, v.0, v.1);
         }
-        self.reload_time(cx);
+        self.rescore_time_draft(cx);
         cx.notify();
     }
 
@@ -160,7 +160,7 @@ impl AnalyticsView {
                         }
                         this.time_tuner.sample_snapshot =
                             super::super::freshness::SampleSnapshot::after_run(sample_end);
-                        this.reload_time(cx);
+                        this.rescore_time_draft(cx);
                         this.time_tuner.evaluation = Some(evaluation);
                     }
                     Err(e) => log::warn!("analytics: time auto-suggestion failed — {e}"),
@@ -195,7 +195,7 @@ impl AnalyticsView {
             }
             self.clear_field(vi, field);
         }
-        self.reload_time(cx);
+        self.rescore_time_draft(cx);
         cx.notify();
     }
 
@@ -216,7 +216,7 @@ impl AnalyticsView {
             self.time_tuner.inputs.remove(&format!("tt1f{field}a"));
             self.time_tuner.inputs.remove(&format!("tt1f{field}b"));
         }
-        self.reload_time(cx);
+        self.rescore_time_draft(cx);
         cx.notify();
     }
 

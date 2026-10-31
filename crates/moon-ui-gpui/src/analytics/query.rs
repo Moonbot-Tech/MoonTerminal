@@ -3,17 +3,10 @@
 use super::*;
 
 impl AnalyticsView {
-    /// Current filters in the structure shared by Summary and Tuning, using the active tab's
-    /// period (`active_period`).
-    pub(super) fn query(&self) -> Query {
-        self.query_for(self.active_period())
-    }
-
     /// Current filters over one EXPLICIT time window.
     ///
-    /// Split out from [`Self::query`] because the strategy base records
-    /// `strategy_data_period = self.strat_period`, so its read must use that same window rather
-    /// than whichever tab's period happens to be active.
+    /// A page and its hidden continuations must keep their own period rather than inherit the
+    /// active tab's period. In particular, tuner reads always resolve `strat_period`.
     ///
     /// Args:
     ///     period: Window the caller is building a result for.

@@ -352,7 +352,8 @@ impl AnalyticsView {
             } else {
                 0
             },
-            enabled: self.visible_target_count(self.action_core_ids()) > 0,
+            enabled: self.visible_target_count(self.action_core_ids()) > 0
+                && self.axis_write_ready(kind),
             // Copy is single-target only — hidden in multi-select (many addressees, no
             // per-target preview); bulk Save is the multi path.
             copy: !self.is_multi(),

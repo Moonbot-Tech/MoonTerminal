@@ -500,6 +500,9 @@ impl AnalyticsView {
     /// (d1h/d15m/d5m/d1m/Pump1H/Dump1H) go through Delta2/Delta3: first
     /// `DeltaN_Type`, then `DeltaN_Min/Max`; there are two slots — the rest go to the log.
     pub(in crate::analytics::tuner) fn open_save_dialog(&mut self, cx: &mut Context<Self>) {
+        if !self.axis_write_ready(super::super::shared::TunerKind::Filter) {
+            return;
+        }
         let targets = self.selected_targets();
         if targets.is_empty() {
             return;
@@ -536,6 +539,9 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.axis_write_ready(super::super::shared::TunerKind::Filter) {
+            return;
+        }
         // Copy is single-target only (the button is hidden in multi-select) — take the anchor.
         let Some(target) = self.selected_targets().into_iter().next() else {
             return;

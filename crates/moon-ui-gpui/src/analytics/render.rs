@@ -79,6 +79,29 @@ impl Render for AnalyticsView {
             .track_focus(&self.focus)
             .child(analytics_header(p, cx))
             .child(self.tabs_bar(p, cx))
+            .when_some(
+                self.cached_refreshing[self.tab.snapshot_index()],
+                |el, as_of| {
+                    el.child(
+                        div()
+                            .px(design::ui_px(cx, 10.0))
+                            .py(design::ui_px(cx, 4.0))
+                            .font_family(design::ui_font())
+                            .text_size(design::t_caption(cx))
+                            .text_color(moon(p.text_soft))
+                            .child(
+                                t!(
+                                    "analytics.sum.catchup",
+                                    time = super::summary::states::as_of_text(
+                                        as_of,
+                                        self.display_zone
+                                    )
+                                )
+                                .to_string(),
+                            ),
+                    )
+                },
+            )
             // Calendar has its OWN month navigation, so hide the from/to period bar there; its
             // body has a separate Previous/month/Next row.
             .when(self.tab != Tab::Calendar, |el| {
@@ -156,8 +179,8 @@ impl Render for AnalyticsView {
                     .when(body_scrolls, |el| el.overflow_y_scroll())
                     .child(body),
             )
-            // If a background operation outlasts the delay, dim the window and occlude clicks;
-            // otherwise long scans are invisible while clicks accumulate.
+            // Writes and explicit searches keep modal feedback after the delay. Replaceable reads
+            // use page-local loading states so tabs, filters, and Calendar navigation stay usable.
             .when(busy_overlay, |el| {
                 el.child(
                     div()

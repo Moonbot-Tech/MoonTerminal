@@ -22,6 +22,8 @@ mod controls;
 mod diag;
 /// Analytics load implementation.
 mod load;
+/// Tab navigation cancels obsolete base reads without disturbing tuner drafts.
+mod navigation;
 /// Analytics observe implementation.
 mod observe;
 /// Analytics query implementation.
@@ -40,9 +42,13 @@ use session::{
 
 /// The shared spawn+overlay envelope of every background DB read.
 mod bg;
+/// Bounded, process-lifetime snapshots of completed Analytics reads.
+mod cache;
 mod calendar;
 /// Period presets, window tabs and date helpers — the time axis shared by every page.
 pub(crate) mod period;
+/// One cancellable speculative read prepares the next compact page.
+mod prefetch;
 /// Typed load-state algebra for Analytics profit queries.
 mod profit_load;
 pub(crate) mod profit_monitor;
@@ -52,6 +58,8 @@ mod purge;
 mod refresh;
 /// Composes the Analytics window frame and active-tab surface.
 mod render;
+/// Cache publication and low-priority preparation of neighbouring pages.
+mod snapshots;
 mod summary;
 /// The window's top chrome: tabs, filter combos, date fields, period bar.
 mod toolbar;
@@ -273,6 +281,8 @@ pub struct AnalyticsView {
     /// Without it, long scans of a large database are invisible while filter and strategy clicks
     /// accumulate in the queue.
     busy_ops: usize,
+    /// Replaceable reads counted in busy_ops; a retired page must not dim a ready active page.
+    latest_overlay_ops: usize,
     /// Every Analytics database task, including non-overlay selection cues and debounced rescans.
     ///
     /// Automatic report refresh waits for this to reach zero so a burst cannot start a second
@@ -280,11 +290,21 @@ pub struct AnalyticsView {
     db_ops: usize,
     /// Cancellation ownership for replaceable background database destinations.
     latest_reads: bg::LatestReads,
+    /// At most one speculative page read, with attempted scopes retained until inputs change.
+    prefetch: prefetch::PrefetchState,
+    /// Original read times of cached snapshots being revalidated, retained independently per page.
+    cached_refreshing: [Option<i64>; 3],
+    /// Original successful publication time of each currently retained page allocation.
+    snapshot_as_of: [Option<i64>; 3],
+    /// Semantic identity of retained figures, including resolved civil-period bounds.
+    snapshot_keys: [Option<cache::CacheKey>; 3],
     /// Start and identity of the current operation batch. The overlay appears only after
     /// `BUSY_OVERLAY_DELAY`, so quick recomputations do not flash the dimmer.
     busy_since: Option<std::time::Instant>,
-    /// Request sequence number used to discard stale results.
-    seq: u64,
+    /// Summary request identity, independent of the Strategies period.
+    summary_seq: u64,
+    /// Strategies-base request identity, independent of the Summary period.
+    strategy_seq: u64,
     /// Bucket of the combined profit chart the crosshair and popup point at.
     pub(super) hover_profit_bucket: Option<usize>,
     /// Delayed dismissal shared by chart buckets and their scrollable popup.

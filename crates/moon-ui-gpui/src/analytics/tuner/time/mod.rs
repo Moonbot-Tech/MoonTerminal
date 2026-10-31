@@ -25,6 +25,7 @@ use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
+use super::super::cache::CacheKey;
 use super::super::refresh::CatchUpOutcome;
 use super::super::summary::{fmt_signed, sign_color};
 use super::kpi::kpi_matrix_card;
@@ -39,6 +40,66 @@ impl AnalyticsView {
     ///     cx: GPUI context used to run and publish the combined background read.
     pub(in crate::analytics) fn reload_time(&mut self, cx: &mut Context<Self>) {
         self.reload_time_inner(false, true, cx);
+    }
+
+    /// Identify the exact report, strategy and money basis of the retained time profiles.
+    fn time_profile_key(&self) -> CacheKey {
+        CacheKey::strategies(&self.tuner_query(), None, self.cache_revisions())
+    }
+
+    /// Rescore a changed schedule without rebuilding unchanged hour and slider profiles.
+    ///
+    /// A missing, stale or uncertified profile basis uses the complete existing reload. The
+    /// shared Time lane still cancels superseded KPI work, including rapid successive edits.
+    pub(in crate::analytics::tuner) fn rescore_time_draft(&mut self, cx: &mut Context<Self>) {
+        let query = self.tuner_query();
+        let basis = CacheKey::strategies(&query, None, self.cache_revisions());
+        if !self
+            .time_tuner
+            .can_rescore(&basis, std::time::Instant::now())
+        {
+            self.reload_time(cx);
+            return;
+        }
+        self.report_busy_retries.reset();
+        self.tuner.mark_dialog_draft_changed();
+        let req = self.time_tuner.begin_draft_rescore();
+        let variants = self.time_tuner.variants();
+        self.spawn_latest_db(
+            &[crate::analytics::bg::ReadLane::Time],
+            false,
+            cx,
+            move || moon_core::db::tuner::variant_stats(&query, &variants),
+            move |this, stats, cx| {
+                if this.time_tuner.seq != req {
+                    return;
+                }
+                if this.time_profile_key() != basis
+                    || !this
+                        .time_tuner
+                        .can_rescore(&basis, std::time::Instant::now())
+                {
+                    this.time_tuner.dirty = true;
+                    this.time_tuner.profile_basis = None;
+                    this.request_report_refresh(
+                        super::super::refresh::RefreshUrgency::Writer,
+                        false,
+                        cx,
+                    );
+                    cx.notify();
+                    return;
+                }
+                if stats.is_err() {
+                    this.time_tuner.dirty = true;
+                    this.time_tuner.profile_basis = None;
+                }
+                let stats_outcome = CatchUpOutcome::of_read(&stats);
+                this.time_tuner.sample_snapshot.observe(stats.as_ref().ok());
+                this.time_tuner.stats.apply(stats);
+                this.settle_report_refresh_retry(stats_outcome.is_transient(), cx);
+                cx.notify();
+            },
+        );
     }
 
     /// Recompute report-stale time data through the writer-driven catch-up path.
@@ -66,11 +127,13 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
+        let show_overlay = self.axis_read_overlay(show_overlay);
         if !after_report {
             self.report_busy_retries.reset();
             self.tuner.mark_dialog_draft_changed();
         }
         self.time_tuner.dirty = false;
+        self.time_tuner.profile_basis = None;
         self.time_tuner.seq = self.time_tuner.seq.wrapping_add(1);
         let req = self.time_tuner.seq;
         let report_req = self.current_report_generation();
@@ -78,6 +141,8 @@ impl AnalyticsView {
         self.time_tuner.slider.begin();
         self.time_tuner.stats.begin();
         let base = self.tuner_query();
+        let basis = CacheKey::strategies(&base, None, self.cache_revisions());
+        let basis_at = std::time::Instant::now();
         // The KPI variants are built by the schedule GRID, not by the profile — the two
         // queries are independent: profiles feed the heatmap, variant_stats feeds
         // "Fact vs v1/v2".
@@ -135,11 +200,18 @@ impl AnalyticsView {
                 let profiles_outcome = CatchUpOutcome::of_read(&profiles);
                 let stats_outcome = CatchUpOutcome::of_read(&stats);
                 let slider_outcome = CatchUpOutcome::of_read(&slider);
+                let basis_current = this.time_profile_key() == basis;
                 this.time_tuner.dirty = super::super::refresh::report_result_is_stale(
                     report_req,
                     this.current_report_generation(),
                     profiles.is_err() || stats.is_err() || slider.is_err() || current.is_none(),
-                );
+                ) || !basis_current;
+                let complete_basis = !this.time_tuner.dirty
+                    && basis.is_reusable()
+                    && profiles.is_ok()
+                    && slider.is_ok()
+                    && stats.is_ok()
+                    && current.is_some();
                 // The profile, slider colors, and KPI are independent load surfaces, so each
                 // retains its own classified error instead of collapsing it to "no data" — unless
                 // that outcome is transient with a scheduled correction left
@@ -156,6 +228,14 @@ impl AnalyticsView {
                 this.time_tuner.sample_snapshot.observe(stats.as_ref().ok());
                 this.time_tuner.stats.apply_or_keep(stats, keep_stats);
                 this.time_tuner.apply_current_read(current, after_report);
+                this.time_tuner.profile_basis = complete_basis.then_some((basis, basis_at));
+                if !basis_current {
+                    this.request_report_refresh(
+                        super::super::refresh::RefreshUrgency::Writer,
+                        false,
+                        cx,
+                    );
+                }
                 if after_report {
                     let transient = profiles_outcome.is_transient()
                         || stats_outcome.is_transient()

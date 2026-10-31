@@ -2,6 +2,19 @@
 
 use super::*;
 
+/// Show delayed modal feedback only for operations that navigation cannot replace.
+///
+/// Replaceable reads retain their accounting until cancellation drains, but their page-local
+/// loading states provide feedback without blocking tabs, filters, or Calendar navigation.
+fn blocking_overlay_due(
+    busy_ops: usize,
+    latest_overlay_ops: usize,
+    busy_elapsed: Option<std::time::Duration>,
+) -> bool {
+    busy_ops > latest_overlay_ops
+        && busy_elapsed.is_some_and(|elapsed| elapsed >= BUSY_OVERLAY_DELAY)
+}
+
 impl AnalyticsView {
     /// Start accounting for a blocking background operation.
     ///
@@ -58,22 +71,26 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Whether the current batch has been running long enough to show the busy overlay.
+    /// Whether a batch containing a blocking operation is old enough for the modal overlay.
     ///
     /// This remains a pure render-time read; `op_started` owns the delayed repaint.
     ///
     /// Returns:
-    ///     `true` once the open batch is older than `BUSY_OVERLAY_DELAY`.
+    ///     `true` once a blocking batch reaches `BUSY_OVERLAY_DELAY`.
     pub(super) fn busy_overlay_due(&self) -> bool {
-        self.busy_since
-            .is_some_and(|since| since.elapsed() >= BUSY_OVERLAY_DELAY)
+        blocking_overlay_due(
+            self.busy_ops,
+            self.latest_overlay_ops,
+            self.busy_since.map(|since| since.elapsed()),
+        )
     }
 
-    /// Reload Analytics after a user-controlled period or filter scope change.
+    /// Reload Analytics after a shared filter scope change.
     ///
     /// Args:
     ///     cx: GPUI context used to start all required background reads.
     pub(super) fn reload(&mut self, cx: &mut Context<Self>) {
+        self.cancel_prefetch();
         // Whatever started this read, it carries the mask AS IT STANDS NOW — `query_for` copies the
         // live text, not the debounced one. So this IS the applied value, and recording it here is
         // what keeps a still-pending debounce from starting the very same read a second time after
@@ -83,18 +100,81 @@ impl AnalyticsView {
         // Retire every request this scope change invalidates, including ones no branch below
         // restarts. On the Calendar tab neither `reload_summary` nor `reload_strategy_base` runs,
         // so without this bump a cancelled background read's completion would pass its own
-        // `seq != req` guard and publish an interrupt as a real result under the new scope.
-        self.seq = self.seq.wrapping_add(1);
+        // destination guard and publish an interrupt as a real result under the new scope.
+        self.summary_seq = self.summary_seq.wrapping_add(1);
+        self.strategy_seq = self.strategy_seq.wrapping_add(1);
         self.report_busy_retries.reset();
         self.acknowledge_report_refresh();
+        self.invalidate_strategy_scope();
+        // Calendar uses the same filters: mark it stale and recompute immediately on the active
+        // tab, or defer until entry.
+        self.cal_seq = self.cal_seq.wrapping_add(1);
+        self.cal_dirty = true;
+        if self.tab == Tab::Calendar {
+            // Start the visible Calendar only after its old shared-scope state is retired below.
+        }
+        self.data_dirty = true;
+        self.strategy_dirty = true;
+        // Shared filter changes retire every displayed scope, including hidden pages. They may
+        // restore an exact cache match, but must never expose figures from the previous filters.
+        self.data = ProfitLoadState::default();
+        self.strategy_data = ProfitLoadState::default();
+        self.cal_days = ProfitLoadState::default();
+        self.cal_prev = crate::load_state::LoadState::default();
+        self.cached_refreshing = [None; 3];
+        self.snapshot_as_of = [None; 3];
+        self.snapshot_keys = Default::default();
+        self.undated = None;
+        self.undated_error = None;
+        match self.tab {
+            Tab::Summary => self.reload_summary(false, true, cx),
+            Tab::Strategies => self.reload_strategy_base(false, true, true, cx),
+            Tab::Calendar => self.reload_calendar(cx),
+        }
+    }
+
+    /// Refresh the edited period without retiring another page's independent data or drafts.
+    ///
+    /// A pending strategy-name mask is a shared filter change, even when a period click applies
+    /// it before the debounce fires, and must still invalidate every affected page.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to read and publish the active page.
+    pub(super) fn reload_period(&mut self, cx: &mut Context<Self>) {
+        self.cancel_prefetch();
+        if StrategyQuery::parse(&self.strategy_mask_applied)
+            != StrategyQuery::parse(&self.strategy_mask)
+        {
+            self.reload(cx);
+            return;
+        }
+        self.report_busy_retries.reset();
+        self.acknowledge_report_refresh();
+        match self.tab {
+            Tab::Summary => {
+                self.latest_reads.cancel(&[bg::ReadLane::Summary]);
+                self.data_dirty = true;
+                self.reload_summary(false, true, cx);
+            }
+            Tab::Strategies => {
+                self.latest_reads.cancel(&[bg::ReadLane::StrategyBase]);
+                self.cancel_axis_reads();
+                self.invalidate_strategy_scope();
+                self.strategy_dirty = true;
+                self.reload_strategy_base(false, true, true, cx);
+            }
+            // Calendar has its own navigation and never shows the period bar.
+            Tab::Calendar => {}
+        }
+    }
+
+    /// Retire tuner results and drafts whose shared filter or Strategies period changed.
+    fn invalidate_strategy_scope(&mut self) {
         // The tuner uses the same filters: invalidate it and recompute immediately in the active
         // mode, or defer recomputation until the next entry into Filters mode.
         self.tuner.invalidate();
-        // The By time axis uses the shared filters and `strat_period`. This common reload path
-        // conservatively retires its in-flight auto-suggestion even on a Summary-only period
-        // change; otherwise a stale result could be written into v1 and become saveable.
-        // The profile is marked stale the same way, recomputed immediately below when the
-        // axis is the active one, or deferred until entry.
+        // The By time axis uses the shared filters and `strat_period`; Summary's independent
+        // period never reaches this path, so a Summary edit keeps its draft and suggestion.
         self.time_tuner.invalidate();
         // The "By coin" axis lives on the same scope (its "Fact vs v1" matrix included):
         // mark it stale. It is NOT started here, unlike the other axes: it expands its coin
@@ -106,22 +186,6 @@ impl AnalyticsView {
         // The list panels ride the same reload, so they are retired with it — otherwise a
         // reply already in flight for the previous scope lands under the new heading.
         self.coin_lists.invalidate();
-        // Calendar uses the same filters: mark it stale and recompute immediately on the active
-        // tab, or defer until entry.
-        self.cal_seq = self.cal_seq.wrapping_add(1);
-        self.cal_dirty = true;
-        if self.tab == Tab::Calendar {
-            self.reload_calendar(cx);
-        }
-        self.data_dirty = true;
-        self.strategy_dirty = true;
-        self.undated = None;
-        self.undated_error = None;
-        match self.tab {
-            Tab::Summary => self.reload_summary(false, true, cx),
-            Tab::Strategies => self.reload_strategy_base(false, true, true, cx),
-            Tab::Calendar => {}
-        }
     }
 
     /// Reload the full Summary without resetting tuner drafts.
@@ -137,6 +201,7 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_unrelated_prefetch(Tab::Summary);
         // Mark the request at its start so an error from another period cannot remain under the
         // current period label. Quote identity belongs to the request scope, so a MANUAL change
         // drops the previous figures: retaining them would render a scalar under the new
@@ -164,30 +229,50 @@ impl AnalyticsView {
             // range shifts their meaning without changing the preset enum.
             self.hover_profit_bucket = None;
         }
-        self.seq = self.seq.wrapping_add(1);
-        let req = self.seq;
+        self.summary_seq = self.summary_seq.wrapping_add(1);
+        let req = self.summary_seq;
         let report_req = self.current_report_generation();
         // Record the ACTIVE tab's time window that `data` is being computed for.
         self.data_period = self.active_period();
         self.data_range = active_range;
-        let q = self.query();
+        let request = self.snapshot_request(Tab::Summary);
+        if self.restore_or_join_snapshot(&request, cx) {
+            return;
+        }
+        let q = request.q.clone();
+        let show_overlay =
+            show_overlay && self.data.data().is_none() && self.data.split().is_none();
         let read_cores = self.core_metadata_due(cx);
-        let replica_hidden = self.replica_hidden_core_ids(read_cores);
+        let replica_hidden = request.replica_hidden.clone();
         self.spawn_latest_db(
             &[bg::ReadLane::Summary],
             show_overlay,
             cx,
             move || {
-                moon_core::db::analytics::summary_data_with_replica_scope(
-                    &q,
-                    read_cores,
-                    replica_hidden.as_deref(),
+                super::cache::CachedRead::from_analytics(
+                    moon_core::db::analytics::summary_data_with_replica_scope(
+                        &q,
+                        read_cores,
+                        replica_hidden.as_deref(),
+                    ),
                 )
             },
             move |this, result, cx| {
-                if this.seq != req {
+                if this.summary_seq != req {
                     return; // The period or filters have already changed.
                 }
+                let result = match result {
+                    Ok(read) => {
+                        this.publish_snapshot(
+                            &request,
+                            super::cache::CachedResult::Summary(Arc::new(read)),
+                            false,
+                            cx,
+                        );
+                        return;
+                    }
+                    Err(result) => *result,
+                };
                 let data = result.data;
                 let undated = result.undated;
                 let cores = result.cores;
@@ -223,6 +308,9 @@ impl AnalyticsView {
                 // Kept snapshot = a scheduled correction is still coming; a fresh publication
                 // (including an exhausted retry's) ends the catch-up.
                 this.summary_catching_up = preserve_snapshot;
+                if !preserve_snapshot {
+                    this.cached_refreshing[Tab::Summary.snapshot_index()] = None;
+                }
                 this.data_dirty = refresh::report_result_is_stale(
                     report_req,
                     this.current_report_generation(),
@@ -252,6 +340,7 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_unrelated_prefetch(Tab::Strategies);
         // Manual scope changes must not show values from the old scope. An automatic report
         // refresh keeps the current snapshot until its replacement lands, so the strategy list,
         // quote selector, and trade count do not blink through Loading after every live trade.
@@ -262,28 +351,52 @@ impl AnalyticsView {
         if !after_report {
             self.auto_picks.scope_changed();
         }
-        self.seq = self.seq.wrapping_add(1);
-        let req = self.seq;
+        self.strategy_seq = self.strategy_seq.wrapping_add(1);
+        let req = self.strategy_seq;
         let report_req = self.current_report_generation();
         self.strategy_data_period = self.strat_period;
-        let q = self.query_for(self.strat_period);
+        let request = self.snapshot_request(Tab::Strategies);
+        if self.restore_or_join_snapshot(&request, cx) {
+            if chain_visible_axis && self.strategy_data.data().is_some() && !self.strategy_dirty {
+                self.request_axis_if_stale(self.strat_mode, cx);
+            }
+            return;
+        }
+        let q = request.q.clone();
+        let show_overlay = show_overlay
+            && self.strategy_data.data().is_none()
+            && self.strategy_data.split().is_none();
         let read_cores = self.core_metadata_due(cx);
-        let replica_hidden = self.replica_hidden_core_ids(read_cores);
+        let replica_hidden = request.replica_hidden.clone();
         self.spawn_latest_db(
             &[bg::ReadLane::StrategyBase],
             show_overlay,
             cx,
             move || {
-                moon_core::db::analytics::strategy_base_data_with_replica_scope(
-                    &q,
-                    read_cores,
-                    replica_hidden.as_deref(),
+                super::cache::CachedRead::from_analytics(
+                    moon_core::db::analytics::strategy_base_data_with_replica_scope(
+                        &q,
+                        read_cores,
+                        replica_hidden.as_deref(),
+                    ),
                 )
             },
             move |this, result, cx| {
-                if this.seq != req {
+                if this.strategy_seq != req {
                     return;
                 }
+                let result = match result {
+                    Ok(read) => {
+                        this.publish_snapshot(
+                            &request,
+                            super::cache::CachedResult::Strategies(Arc::new(read)),
+                            chain_visible_axis,
+                            cx,
+                        );
+                        return;
+                    }
+                    Err(result) => *result,
+                };
                 let data = result.data;
                 let undated = result.undated;
                 let cores = result.cores;
@@ -318,6 +431,7 @@ impl AnalyticsView {
                 let preserve_snapshot = !matches!(this.strategy_data, ProfitLoadState::Loading)
                     && this.keep_on_catch_up(after_report, data_outcome, report_req);
                 if !preserve_snapshot {
+                    this.cached_refreshing[Tab::Strategies.snapshot_index()] = None;
                     this.strategy_data.apply(data);
                     // Measuring every core name is expensive, so invalidate only when its input
                     // text changed.
@@ -352,7 +466,7 @@ impl AnalyticsView {
                     && chain_visible_axis
                     && this.tab == Tab::Strategies
                 {
-                    this.reload_axis_after_report(this.strat_mode, show_overlay, cx);
+                    this.reload_axis_after_report(this.strat_mode, false, cx);
                 }
                 this.settle_report_refresh_retry(transient, cx);
                 cx.notify();
@@ -395,3 +509,6 @@ impl AnalyticsView {
     // cal_query/cal_query_prev/reload_calendar live in calendar/mod.rs — a page's
     // recomputation belongs beside that page.
 }
+
+#[cfg(test)]
+mod tests;

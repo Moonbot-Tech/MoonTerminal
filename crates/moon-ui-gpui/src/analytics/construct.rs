@@ -364,10 +364,16 @@ impl AnalyticsView {
             strat_purge: None,
             purge_seq: 0,
             busy_ops: 0,
+            latest_overlay_ops: 0,
             db_ops: 0,
             latest_reads: bg::LatestReads::default(),
+            prefetch: prefetch::PrefetchState::default(),
+            cached_refreshing: [None; 3],
+            snapshot_as_of: [None; 3],
+            snapshot_keys: Default::default(),
             busy_since: None,
-            seq: 0,
+            summary_seq: 0,
+            strategy_seq: 0,
             hover_profit_bucket: None,
             summary_popup_hover: summary::PopupHover::default(),
             // The reused layout flag now means "ranking unfolded".
@@ -449,6 +455,7 @@ impl AnalyticsView {
             focus: cx.focus_handle(),
         };
         this.reload(cx);
+        this.schedule_prefetch(cx);
         this
     }
 }

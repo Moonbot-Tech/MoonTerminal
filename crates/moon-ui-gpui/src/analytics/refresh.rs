@@ -357,6 +357,11 @@ pub(super) struct RefreshGate {
 }
 
 impl RefreshGate {
+    /// Whether foreground or writer catch-up must run before speculative page preparation.
+    pub(super) fn has_pending(&self) -> bool {
+        self.pending
+    }
+
     /// Create a clean gate aligned with the generation visible at window construction.
     ///
     /// Args:
@@ -415,6 +420,17 @@ impl RefreshGate {
         self.pending = false;
         self.pending_overlay = false;
         self.pending_user = false;
+    }
+
+    /// Retire obsolete navigation only through its covered publication, keeping a later commit owed.
+    pub(super) fn navigation_settled(
+        &mut self,
+        covered_generation: u64,
+        current_generation: u64,
+        now: Instant,
+    ) -> bool {
+        self.refresh_started(covered_generation, now);
+        self.observe_generation(current_generation, now)
     }
 
     /// Queue refresh work without requiring another writer generation.

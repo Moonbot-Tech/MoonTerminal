@@ -14,6 +14,9 @@ impl AnalyticsView {
     /// schedule is never wiped). The MoonBot field formats are unconfirmed — the strings
     /// are visible in the confirmation dialog.
     pub(in crate::analytics::tuner) fn time_open_save_dialog(&mut self, cx: &mut Context<Self>) {
+        if !self.axis_write_ready(super::super::shared::TunerKind::Time) {
+            return;
+        }
         let targets = self.selected_targets();
         if targets.is_empty() {
             return;
@@ -44,6 +47,9 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.axis_write_ready(super::super::shared::TunerKind::Time) {
+            return;
+        }
         // Copy is single-target only (button hidden in multi-select) — take the anchor.
         let Some(target) = self.selected_targets().into_iter().next() else {
             return;

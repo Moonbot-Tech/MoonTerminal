@@ -12,6 +12,53 @@ use moon_core::db::{
     FailKind, ProfitScope, ProfitUnit, QuoteBreakdown, ReadFail, ValuationCoverage,
 };
 
+/// A commit racing after snapshot capture must survive navigation's obsolete-request cleanup.
+#[test]
+fn navigation_keeps_the_publication_newer_than_its_restored_snapshot_pending() {
+    let now = Instant::now();
+    let mut gate = RefreshGate::new(10, now);
+    gate.request_refresh(now, true, RefreshUrgency::User);
+    assert!(gate.navigation_settled(10, 11, now));
+    assert!(gate.has_pending());
+    assert!(!gate.observe_generation(11, now));
+    assert!(matches!(gate.plan(now, false), RefreshPlan::After(_)));
+    gate.timer_fired();
+    assert_eq!(
+        gate.plan(now + Duration::from_secs(1), false),
+        RefreshPlan::Now {
+            show_overlay: false
+        }
+    );
+}
+
+/// A publication captured before restoring a warmed hit is observed before it can be acknowledged.
+#[test]
+fn navigation_observes_its_captured_publication_before_settling_a_current_hit() {
+    let now = Instant::now();
+    let mut gate = RefreshGate::new(10, now);
+    assert!(
+        gate.observe_generation(11, now),
+        "this edge must mark hidden pages and axes stale"
+    );
+    assert!(!gate.navigation_settled(11, 11, now));
+    assert!(
+        !gate.has_pending(),
+        "the exact restored page needs no duplicate read"
+    );
+    assert_eq!(gate.plan(now, false), RefreshPlan::Idle);
+}
+
+/// Returning A-B-A to a current page still cancels B's queued read without a new database query.
+#[test]
+fn navigation_to_current_snapshot_clears_obsolete_user_work() {
+    let now = Instant::now();
+    let mut gate = RefreshGate::new(10, now);
+    gate.request_refresh(now, true, RefreshUrgency::User);
+    assert!(!gate.navigation_settled(10, 10, now));
+    assert!(!gate.has_pending());
+    assert_eq!(gate.plan(now, false), RefreshPlan::Idle);
+}
+
 /// Construct a classified database failure without depending on display text.
 fn failure(kind: FailKind) -> ReadFail {
     ReadFail::failed(

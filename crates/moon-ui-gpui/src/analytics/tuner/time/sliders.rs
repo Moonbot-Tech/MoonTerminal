@@ -263,7 +263,7 @@ impl AnalyticsView {
             self.clear_field(0, 1);
         }
         self.tuner.mark_dialog_draft_changed();
-        // NO reload_time: while dragging we only move the fields/strip; the KPIs are
+        // While dragging we only move the fields/strip; the KPIs are
         // recomputed ONCE on release (`slider_release`) — otherwise a storm of SQL queries.
         cx.notify();
     }
@@ -271,7 +271,7 @@ impl AnalyticsView {
     /// Finish a slider drag: clear the flag and recompute the KPIs ONCE (on release).
     fn slider_release(&mut self, cx: &mut Context<Self>) {
         if self.time_tuner.slider_drag.take().is_some() {
-            self.reload_time(cx);
+            self.rescore_time_draft(cx);
             cx.notify();
         }
     }
