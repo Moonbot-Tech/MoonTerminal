@@ -31,7 +31,7 @@ feature — a row in the map, a new user word — a row in the dictionary.
   shared by the terminal and the station through `TgHost`; transport stays in
   `moon-core::telegram`.
 - `crates/moon-station` — headless server: report replication, order traces,
-  trade tape recording and optional Telegram bot/Mini App hosting.
+  trade tape and market-price recording, and optional Telegram bot/Mini App hosting.
 - `crates/moon-remote` — Linux server setup and station administration over SSH,
   used by the terminal and the `moon-remote` command-line tool.
 - `crates/moon-ui-gpui` — panels and windows: chartdx (render state, shaders
@@ -70,7 +70,8 @@ feature — a row in the map, a new user word — a row in the dictionary.
   layout on two axes, per-tab setting.
 - **«Реплей» / «окно сделки»** (“replay” / “Trade window”) — viewing a closed trade: candle context
   6h before entry / 2h after exit, tick detail around the position,
-  history from the core's archives.
+  history from the core's archives, Last and Mark lines from the market-list prices the terminal
+  (or its station) recorded around the trade.
 - **«Супер-растяжка»** (“super stretch”) — Moonbot's Ctrl+Shift+wheel zooms time down to
   3 seconds. Plain wheel and Ctrl+wheel still stop at 30 seconds. The super-zoom hotkeys
   use that same 3-second floor and are unbound by default (#493).
