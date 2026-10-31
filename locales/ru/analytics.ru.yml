@@ -686,7 +686,7 @@ analytics.ticks.deltas_tip_head: "Дельты пересчитываются в
 analytics.ticks.deltas_tip_field: "%{name}: живая у %{live} · окно покрыто на %{coverage}% · в снимке ≤0,1 п.п. у %{reproduced} из %{checked}, медиана %{error} п.п."
 analytics.ticks.deltas_tip_none: "%{name}: не живая ни у одной сделки — снимок отчёта"
 analytics.ticks.deltas_tip_btc_note: " (по свечам BTC из кеша; на 5-минутных свечах 1m — размах свечи)"
-analytics.ticks.deltas_tip_mark: "снимок отчёта — истории цены маркировки нет"
+analytics.ticks.deltas_tip_mark: "по записанному списку рынков на %{n} строках; на остальных — снимок отчёта"
 analytics.ticks.deltas_tip_pricebug: "снимок отчёта — это собственная мера лага ядра"
 analytics.ticks.deltas_tip_market: "снимок отчёта — средняя по всем рынкам биржи"
 analytics.ticks.trade_expand: "Показать окно сделки — клик по строке покажет её здесь"

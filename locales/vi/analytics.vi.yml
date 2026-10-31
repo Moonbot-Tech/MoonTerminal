@@ -686,7 +686,7 @@ analytics.ticks.deltas_tip_head: "Delta được tính lại dọc cửa sổ gi
 analytics.ticks.deltas_tip_field: "%{name}: sống trên %{live} · cửa sổ phủ %{coverage}% · tại dấu ≤0.1 pp trên %{reproduced} trong %{checked}, trung vị %{error} pp"
 analytics.ticks.deltas_tip_none: "%{name}: không sống trên giao dịch nào — ảnh chụp của báo cáo"
 analytics.ticks.deltas_tip_btc_note: " (từ nến BTC đã lưu; trên nến năm phút thì 1m là biên độ của một nến)"
-analytics.ticks.deltas_tip_mark: "ảnh chụp của báo cáo — không có lịch sử mark price"
+analytics.ticks.deltas_tip_mark: "từ danh sách thị trường đã ghi trên %{n} dòng; còn lại là ảnh chụp của báo cáo"
 analytics.ticks.deltas_tip_pricebug: "ảnh chụp của báo cáo — thước đo trễ của chính core"
 analytics.ticks.deltas_tip_market: "ảnh chụp của báo cáo — trung bình trên mọi thị trường của sàn"
 analytics.ticks.trade_expand: "Hiện khung giao dịch — nhấp một dòng để xem ở đây"

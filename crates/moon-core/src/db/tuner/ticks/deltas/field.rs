@@ -123,12 +123,10 @@ impl DeltaField {
     }
 }
 
-/// A report delta the track does not re-evaluate, and why — the summary says so beside the
-/// fields it does.
+/// A report delta nothing re-evaluates, and why — the summary says so beside the fields the track
+/// does. The mark delta is not one: the recorded market list gives it (`ticks::quotes`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NotComputed {
-    /// `dmark`: the mark price has no history here.
-    MarkPrice,
     /// `pricebug`: the core's own lag measure against its price line.
     PriceBug,
     /// `exchange1hdelta`, `exchange24hdelta`: an average over every market of the exchange.
@@ -136,12 +134,11 @@ pub enum NotComputed {
 }
 
 impl NotComputed {
-    pub const ALL: [Self; 3] = [Self::MarkPrice, Self::PriceBug, Self::Market];
+    pub const ALL: [Self; 2] = [Self::PriceBug, Self::Market];
 
     /// The report columns this entry stands for.
     pub fn columns(self) -> &'static str {
         match self {
-            Self::MarkPrice => "dmark",
             Self::PriceBug => "pricebug",
             Self::Market => "exchange1hdelta, exchange24hdelta",
         }

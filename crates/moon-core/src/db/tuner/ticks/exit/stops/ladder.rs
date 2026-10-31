@@ -24,10 +24,12 @@
 //! exactly that; and every one fired with the price back under the switch price, so a step once
 //! taken stays.
 //!
-//! The tape carries no book, so the bid is read the way the book stop reads it: the last taker
-//! sell stands for it, sampled on the ticker's clock ([`super::TICKER_PERIOD_MS`]).
+//! The bid is read the way the book stop reads it ([`super::ticker`]): the recorded market list
+//! where it was recorded, the last taker sell standing in for it elsewhere, sampled on the
+//! ticker's clock ([`super::TICKER_PERIOD_MS`]).
 
 use super::super::level_off_buy;
+use super::ticker::Ticker;
 use crate::feed::types::{Side as TickSide, Tick};
 
 /// One step of the ladder, in the strategy's own units.
@@ -56,10 +58,11 @@ struct Rung {
 pub(super) struct Ladder {
     long: bool,
     rungs: Vec<Rung>,
-    /// The bid as the prints so far leave it: the last taker sell.
-    bid: Option<f64>,
+    /// The last taker sell, with its moment.
+    bid: Option<(i64, f64)>,
     next_sample: i64,
-    period_ms: i64,
+    /// The ticker's clock and book, shared with the book stop.
+    ticker: Ticker,
     fill_ms: i64,
     /// Whether the rung taken last — the level in force — is the third stop's.
     active_third: bool,
@@ -76,7 +79,7 @@ impl Ladder {
     ///     armed_ms: The end of `StopLossDelay`: nothing is read before it.
     ///     first_ms: The first print the walk feeds; the ticker's clock is run back to it, as the
     ///         book stop's is, so both read the same arrivals.
-    ///     period_ms: The ticker's period.
+    ///     ticker: The ticker's clock and book.
     ///     steps: The second stop and the third, those switched on.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -86,7 +89,7 @@ impl Ladder {
         placed_ms: i64,
         armed_ms: i64,
         first_ms: i64,
-        period_ms: i64,
+        ticker: Ticker,
         steps: &[Option<StopStep>],
     ) -> Option<Self> {
         let rungs: Vec<Rung> = steps
@@ -107,15 +110,15 @@ impl Ladder {
         if rungs.is_empty() {
             return None;
         }
-        let period_ms = period_ms.max(1);
+        let period_ms = ticker.period_ms();
         let anchor = fill_ms + period_ms;
         let back = (anchor - first_ms).max(0) / period_ms;
         Some(Self {
             long,
             rungs,
             bid: None,
-            next_sample: anchor - back * period_ms,
-            period_ms,
+            next_sample: ticker.first(anchor - back * period_ms),
+            ticker,
             fill_ms,
             active_third: false,
         })
@@ -129,11 +132,12 @@ impl Ladder {
         let mut active_third = self.active_third;
         while self.next_sample < until {
             let at = self.next_sample;
-            self.next_sample += self.period_ms;
+            self.next_sample = self.ticker.next(at);
             if at <= self.fill_ms {
                 continue;
             }
-            let Some(bid) = self.bid else {
+            // The core reads the ticker's BID for a short too.
+            let Some(bid) = self.ticker.bid(at, self.bid) else {
                 continue;
             };
             let long = self.long;
@@ -168,7 +172,7 @@ impl Ladder {
     /// Read a print: a taker sell stands for the bid.
     pub(super) fn see(&mut self, tick: &Tick) {
         if tick.side == TickSide::Sell {
-            self.bid = Some(f64::from(tick.price));
+            self.bid = Some((tick.time_ms as i64, f64::from(tick.price)));
         }
     }
 }

@@ -138,6 +138,8 @@ pub(super) fn load_all(defaults: &HashMap<String, f64>, calibration: bool) -> Ve
             );
             deal.bars = history.bars;
             deal.delta_track = history.track;
+            // The recorded market list, as the table and the reproduction bench read it.
+            deal.quotes = crate::db::tuner::ticks::quotes::read_for(exchange, market, &deal);
         }
         prepare_deal(
             &mut deal,

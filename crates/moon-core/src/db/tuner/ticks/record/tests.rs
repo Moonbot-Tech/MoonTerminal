@@ -108,6 +108,7 @@ fn stopped() -> Deal {
         round_trip_ms: None,
         stop_anchor: None,
         delta_track: None,
+        quotes: None,
         bars: None,
         own_entry: None,
         buy_set_ms: None,

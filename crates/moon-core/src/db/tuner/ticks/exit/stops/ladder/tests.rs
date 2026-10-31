@@ -39,7 +39,7 @@ fn a_step_waits_for_its_time_and_the_bid() {
         0,
         0,
         0,
-        PERIOD,
+        Ticker::new(None, PERIOD),
         &[Some(step(5.0, 0.5, 0.4))],
     )
     .expect("a step");
@@ -64,7 +64,7 @@ fn a_bid_short_of_the_switch_price_takes_nothing() {
         0,
         0,
         0,
-        PERIOD,
+        Ticker::new(None, PERIOD),
         &[Some(step(0.0, 1.0, 0.4))],
     )
     .expect("a step");
@@ -82,7 +82,7 @@ fn a_short_step_divides_the_buy() {
         0,
         0,
         0,
-        PERIOD,
+        Ticker::new(None, PERIOD),
         &[Some(step(0.0, 0.5, 0.4))],
     )
     .expect("a step");
@@ -98,7 +98,8 @@ fn a_short_step_divides_the_buy() {
 #[test]
 fn the_third_step_moves_the_stop_again() {
     let steps = [Some(step(0.0, 0.5, 0.4)), Some(step(0.0, 2.0, 1.2))];
-    let mut ladder = Ladder::new(true, 100.0, 0, 0, 0, 0, PERIOD, &steps).expect("steps");
+    let mut ladder =
+        Ladder::new(true, 100.0, 0, 0, 0, 0, Ticker::new(None, PERIOD), &steps).expect("steps");
     ladder.see(&sell(100, 100.8));
     let second = ladder.before(3_000).expect("second");
     assert!((second - 100.4).abs() < 1e-9);
@@ -164,7 +165,7 @@ fn the_delay_holds_the_ladder() {
         0,
         6_000,
         0,
-        PERIOD,
+        Ticker::new(None, PERIOD),
         &[Some(step(1.0, 0.5, 0.4))],
     )
     .expect("a step");
@@ -189,7 +190,7 @@ fn the_time_counts_from_the_sell_rounded() {
         1_000,
         0,
         0,
-        PERIOD,
+        Ticker::new(None, PERIOD),
         &[Some(step(2.0, 0.5, 0.4))],
     )
     .expect("a step");

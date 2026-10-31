@@ -942,14 +942,15 @@ impl<'a> MshotEntry<'a> {
 
 /// The corridor's `(near, far)` bounds as the core held them while the order lived: the core
 /// moves the corridor when a delta moves ("Дельта меняется — ордер переставляется", FAQ :1289),
-/// so the bounds are re-read off the deal's live deltas ([`Deal::deltas_at`]) once per refresh
-/// step of the track ([`deltas::STEP_MS`]) — the deltas hold still inside one — and once for a
-/// deal without a track, whose deltas are the snapshot throughout.
+/// so the bounds are re-read off the deal's live deltas ([`Deal::deltas_at`]) whenever what they
+/// are read from changes: the refresh step of the track ([`deltas::STEP_MS`]) — the track holds
+/// still inside one — and the recorded list's point (`quotes`), whose mark delta moves on its own
+/// clock; once for a deal with neither, whose deltas are the snapshot throughout.
 struct LiveBounds<'a> {
     params: &'a MshotParams,
     deal: &'a Deal,
-    /// The step the bounds were last read for.
-    step: Option<i64>,
+    /// The track's step and the list's point the bounds were last read for.
+    step: Option<(i64, i64)>,
     bounds: (f64, f64),
 }
 
@@ -964,10 +965,18 @@ impl<'a> LiveBounds<'a> {
     }
 
     fn at(&mut self, t_ms: i64) -> (f64, f64) {
-        let step = match self.deal.delta_track {
+        let track_step = match self.deal.delta_track {
             Some(_) => t_ms.div_euclid(deltas::STEP_MS),
             None => 0,
         };
+        let list_point = self
+            .deal
+            .quotes
+            .as_ref()
+            .filter(|q| q.mark_live())
+            .and_then(|q| q.at(t_ms))
+            .map_or(i64::MIN, |p| p.t_ms);
+        let step = (track_step, list_point);
         if self.step != Some(step) {
             self.bounds = self.params.bounds_pct(&self.deal.deltas_at(t_ms));
             self.step = Some(step);

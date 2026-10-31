@@ -686,7 +686,7 @@ analytics.ticks.deltas_tip_head: "Дельти перераховуються в
 analytics.ticks.deltas_tip_field: "%{name}: жива в %{live} · вікно покрито на %{coverage}% · у штампі ≤0,1 в.п. у %{reproduced} із %{checked}, медіана %{error} в.п."
 analytics.ticks.deltas_tip_none: "%{name}: не жива в жодній угоді — знімок звіту"
 analytics.ticks.deltas_tip_btc_note: " (за свічками BTC з кешу; на 5-хвилинних свічках 1m є розмахом свічки)"
-analytics.ticks.deltas_tip_mark: "знімок звіту — історії маркувальної ціни немає"
+analytics.ticks.deltas_tip_mark: "за записаним списком ринків на %{n} рядках; на решті — знімок звіту"
 analytics.ticks.deltas_tip_pricebug: "знімок звіту — власна міра затримки ядра"
 analytics.ticks.deltas_tip_market: "знімок звіту — середнє по всіх ринках біржі"
 analytics.ticks.trade_expand: "Показати панель угоди — клік по рядку покаже її тут"

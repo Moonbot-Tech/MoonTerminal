@@ -731,7 +731,8 @@ fn a_series_boundary_preserves_the_tickers_print_cutoff() {
     let mut p = bare_book_stop();
     p.stop_loss_ema = 0.0;
     p.model.series_tick_ms = TICKER_PERIOD_MS;
-    let mut book = BookStop::new(true, 99.0, 0, 0, 1, &p, i64::MIN);
+    let ticker = Ticker::new(None, p.model.ticker_period_ms);
+    let mut book = BookStop::new(true, 99.0, 0, 0, 1, &p, i64::MIN, ticker);
     book.see(&sold(1, 100.0));
     assert!(book.before(TICKER_PERIOD_MS).is_none());
     book.see(&sold(TICKER_PERIOD_MS, 98.0));
@@ -775,6 +776,38 @@ fn the_book_stop_fires_on_a_sample_of_the_bid_not_on_a_print() {
         (w.exit.kind, w.exit.t_ms),
         (ExitKind::Stop, 1_000 + SERIES_TICK_MS)
     );
+}
+
+/// Where the market list was recorded the book stop reads the list's BID on the list's arrivals:
+/// a BID that fell under the level with no taker sell to show it fires the stop there — and the
+/// same trade without the record stays open, as it always did.
+#[test]
+fn the_book_stop_reads_the_recorded_bid_where_no_sell_printed() {
+    use crate::db::tuner::ticks::quotes::QuoteTrack;
+    use crate::market::price_recorder::{PriceSample, PriceSpan};
+    let mut book = bare_book_stop();
+    book.model.stop_fill = crate::db::tuner::ticks::settings::StopFill::AtCheck;
+    let ticks = vec![tick(500, 100.0), tick(6_000, 100.0)];
+    let bare = walk(&deal(false), &ticks, fill(), 101.0, &book);
+    assert_eq!(bare.exit.kind, ExitKind::OpenAtWindowEnd);
+    let sample = |t_ms: i64, bid: f64| PriceSample {
+        t_ms,
+        bid,
+        ask: bid + 0.1,
+        mark: 0.0,
+        funding: None,
+    };
+    let spans = [PriceSpan {
+        from_ms: 1_000,
+        to_ms: 10_000,
+        // Arrivals at 1 s and 4 s speak for the core at 0 s and 3 s.
+        samples: vec![sample(1_000, 100.0), sample(4_000, 98.8)],
+    }];
+    let mut recorded = deal(false);
+    recorded.quotes = QuoteTrack::new(&spans, &recorded).map(std::sync::Arc::new);
+    let w = walk(&recorded, &ticks, fill(), 101.0, &book);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 3_000));
+    assert!((w.exit.price - 98.8).abs() < 1e-9);
 }
 
 /// A sample due exactly at the tape's last print reads that print — the loop only reaches the
