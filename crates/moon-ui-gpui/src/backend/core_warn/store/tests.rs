@@ -42,6 +42,84 @@ fn database_path() -> std::path::PathBuf {
     ))
 }
 
+/// Distinguish lock contention from a migration that returned without consulting its busy policy.
+#[derive(Debug)]
+enum SeriesMigrationEvent {
+    Waiting,
+    Finished,
+}
+
+/// The busy callback cannot capture state, so its worker owns a thread-local release gate.
+struct SeriesMigrationGate {
+    events: std::sync::mpsc::Sender<SeriesMigrationEvent>,
+    released: std::sync::mpsc::Receiver<()>,
+}
+
+thread_local! {
+    static SERIES_MIGRATION_GATE: std::cell::RefCell<Option<SeriesMigrationGate>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// Pause the migration until the test releases the connection holding SQLite's writer slot.
+fn wait_for_series_migration_lock(_attempt: i32) -> bool {
+    SERIES_MIGRATION_GATE.with(|gate| {
+        let gate = gate.borrow();
+        let Some(gate) = gate.as_ref() else {
+            return false;
+        };
+        gate.events.send(SeriesMigrationEvent::Waiting).is_ok() && gate.released.recv().is_ok()
+    })
+}
+
+/// A missing index must wait for the writer before its no-op DROP can establish a read snapshot.
+#[test]
+fn mandatory_series_migration_waits_before_read_to_write_upgrade() {
+    let path = database_path();
+    let store = WarnStore::from_connection(Connection::open(&path).unwrap()).unwrap();
+    store.insert_series(1, 0, "server", 0, &[(1, 2)]).unwrap();
+    store
+        .conn
+        .execute_batch("DROP INDEX ix_warn_series_unique")
+        .unwrap();
+    let blocker = Connection::open(&path).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let (events, observed) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let worker_path = path.clone();
+    let worker = std::thread::spawn(move || {
+        let conn = Connection::open(worker_path).unwrap();
+        SERIES_MIGRATION_GATE.with(|gate| {
+            gate.replace(Some(SeriesMigrationGate {
+                events: events.clone(),
+                released,
+            }));
+        });
+        conn.busy_handler(Some(wait_for_series_migration_lock))
+            .unwrap();
+        let result = super::rebuild_series_index(&conn).map_err(|error| error.to_string());
+        let _ = events.send(SeriesMigrationEvent::Finished);
+        result
+    });
+    let first = observed.recv_timeout(std::time::Duration::from_secs(10));
+    // Release and join even when the old deferred transaction returned BUSY without a callback.
+    blocker.execute_batch("COMMIT").unwrap();
+    let _ = release.send(());
+    let result = worker.join().unwrap();
+    assert!(
+        matches!(first, Ok(SeriesMigrationEvent::Waiting)),
+        "migration must consult its busy policy before reading the schema: {first:?}; {result:?}"
+    );
+    result.unwrap();
+    assert!(store.series_index_is_current().unwrap());
+    assert_eq!(
+        store.series_for_episode(1, 0, "server").unwrap(),
+        Some(vec![(1, 2)])
+    );
+    drop((store, blocker));
+    std::fs::remove_file(path).unwrap();
+}
+
 /// Reopening a current store must not rebuild its series index or alter the schema cookie.
 #[test]
 fn ordinary_open_keeps_series_index_unchanged() {

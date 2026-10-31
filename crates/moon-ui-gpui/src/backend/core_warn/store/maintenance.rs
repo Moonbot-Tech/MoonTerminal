@@ -265,9 +265,9 @@ fn build_read_indexes(conn: &Connection) -> rusqlite::Result<()> {
     tx.commit()
 }
 
-/// Replace the legacy constraint atomically, preserving it if building the new index fails.
+/// Acquire the writer slot before schema reads, preserving the old constraint on build failure.
 pub(super) fn rebuild_series_index(conn: &Connection) -> rusqlite::Result<()> {
-    let tx = conn.unchecked_transaction()?;
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     tx.execute("DROP INDEX IF EXISTS ix_warn_series_unique", [])?;
     tx.execute_batch(SERIES_INDEX_SQL)?;
     tx.commit()
