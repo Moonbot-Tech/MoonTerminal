@@ -45,6 +45,28 @@ const STATION_JOB: &str = "station-linux";
 /// runs cargo-deny over the already-committed lock and never touches it.
 const COMPILING_JOBS: [&str; 5] = ["windows", TEST_JOB, "macos-probe", "clippy", STATION_JOB];
 
+/// The `release.yml` jobs that compile the terminal, and so must ship MoonUI at its latest master
+/// through the same lockfile contract as `build.yml`'s compiling jobs. The station jobs are left
+/// out: `moon-station` does not depend on MoonUI.
+const RELEASE_TERMINAL_JOBS: [&str; 2] = ["windows", "macos-slice"];
+
+/// Every job that must run the lockfile contract, with the workflow text it lives in: `build.yml`'s
+/// compiling jobs and `release.yml`'s terminal jobs.
+fn lockfile_contract_jobs() -> Vec<(&'static str, String, &'static str)> {
+    let build = workflow_text();
+    let release = release_workflow_text();
+    let mut jobs: Vec<(&'static str, String, &'static str)> = COMPILING_JOBS
+        .iter()
+        .map(|job| ("build.yml", build.clone(), *job))
+        .collect();
+    jobs.extend(
+        RELEASE_TERMINAL_JOBS
+            .iter()
+            .map(|job| ("release.yml", release.clone(), *job)),
+    );
+    jobs
+}
+
 /// The compiling jobs that BLOCK a merge — the Windows `.exe` release gate, the `tests` gate, the
 /// `clippy` gate and the station's Linux gate — and so must neither be silently skipped nor
 /// downgraded to a probe.
@@ -585,19 +607,20 @@ fn the_station_job_builds_tests_and_lints_for_linux() {
     }
 }
 
-/// Breakage guarded: a well-meaning reorder in `.github/workflows/build.yml`'s lockfile contract
-/// (verify -> refresh MoonUI -> assert nothing else moved), in any compiling job. `cargo fetch
-/// --locked` only proves the committed lock agrees with the manifests when it runs BEFORE
-/// anything can rewrite the lock; run after `cargo update`, it only proves the lock agrees with
-/// itself. `assert-only-moonui-moved.sh` only has a refreshed lock to inspect once `cargo
-/// update` has actually run — moved ahead of it, or deleted outright, a MoonUI refresh that
-/// drags an unaudited third-party version along goes unnoticed while the job stays green.
+/// Breakage guarded: a well-meaning reorder in the lockfile contract (verify -> refresh MoonUI ->
+/// assert nothing else moved), in any compiling job of `build.yml` or terminal job of
+/// `release.yml`. `cargo fetch --locked` only proves the committed lock agrees with the manifests
+/// when it runs BEFORE anything can rewrite the lock; run after `cargo update`, it only proves the
+/// lock agrees with itself. `assert-only-moonui-moved.sh` only has a refreshed lock to inspect once
+/// `cargo update` has actually run — moved ahead of it, or deleted outright, a MoonUI refresh that
+/// drags an unaudited third-party version along goes unnoticed while the job stays green. Dropping
+/// the refresh from a release job ships the lock's stale MoonUI pin, which the terminal was never
+/// tested against (v0.65.5 failed to compile exactly that way).
 #[test]
 fn the_lockfile_contracts_three_steps_run_in_order_in_every_compiling_job() {
-    let text = workflow_text();
-    for job in COMPILING_JOBS {
+    for (file, text, job) in lockfile_contract_jobs() {
         let body =
-            job_body(&text, job).unwrap_or_else(|| panic!("build.yml must keep a `{job}:` job"));
+            job_body(&text, job).unwrap_or_else(|| panic!("{file} must keep a `{job}:` job"));
 
         let fetch_idx = body
             .iter()
@@ -637,6 +660,59 @@ fn the_lockfile_contracts_three_steps_run_in_order_in_every_compiling_job() {
             "job `{job}` must run `assert-only-moonui-moved.sh` AFTER `cargo update` — it \
              inspects the refresh's result, so run any earlier it has nothing yet to compare"
         );
+        let compiles = |line: &&str| {
+            line.trim_start().starts_with("run:")
+                && [
+                    "cargo build",
+                    "cargo test",
+                    "cargo nextest",
+                    "cargo clippy",
+                    "cargo check",
+                ]
+                .iter()
+                .any(|cmd| line.contains(cmd))
+        };
+        assert!(
+            !body[..assert_idx].iter().any(compiles),
+            "{file} job `{job}` must not compile before `assert-only-moonui-moved.sh` — a build \
+             ahead of the refresh compiles the lock's stale MoonUI pin"
+        );
+    }
+}
+
+/// Breakage guarded: a release whose terminal jobs each refresh MoonUI to "master" on their own.
+/// A MoonUI push landing mid-run then ships the .exe and the .dmg — even the two slices `lipo`
+/// joins into one universal binary — against different MoonUI revisions, and re-running one job
+/// later picks yet another. `validate` must resolve master once and every terminal job must
+/// refresh to exactly that revision.
+#[test]
+fn a_release_builds_every_terminal_job_against_one_moonui_revision() {
+    let text = release_workflow_text();
+    let validate = job_body(&text, "validate").expect("release.yml must keep the `validate` job");
+    assert!(
+        validate
+            .iter()
+            .any(|line| line.trim() == "moonui: ${{ steps.moonui.outputs.rev }}"),
+        "release.yml:validate must output the MoonUI revision as `moonui`"
+    );
+    assert!(
+        validate.iter().any(|line| line
+            .contains("git ls-remote https://github.com/Moonbot-Tech/MoonUI refs/heads/master")),
+        "release.yml:validate must read MoonUI master once, with `git ls-remote`"
+    );
+    for job in RELEASE_TERMINAL_JOBS {
+        let body =
+            job_body(&text, job).unwrap_or_else(|| panic!("release.yml must keep a `{job}:` job"));
+        let refresh = body
+            .iter()
+            .find(|line| line.trim_start().starts_with("run:") && line.contains("cargo update"))
+            .unwrap_or_else(|| panic!("release.yml job `{job}` must refresh MoonUI"));
+        assert!(
+            refresh.contains("--precise ${{ needs.validate.outputs.moonui }}"),
+            "release.yml job `{job}` must refresh MoonUI to the revision `validate` resolved: \
+             `{}`",
+            refresh.trim()
+        );
     }
 }
 
@@ -664,13 +740,12 @@ fn dash_p_packages(command: &str) -> Vec<&str> {
 /// MoonUI itself never refreshed while still looking like the documented step ran).
 #[test]
 fn the_moonui_refresh_stays_scoped_and_never_touches_moonproto() {
-    let text = workflow_text();
     let mut expected = MOONUI_REFRESH_CRATES.to_vec();
     expected.sort_unstable();
 
-    for job in COMPILING_JOBS {
+    for (file, text, job) in lockfile_contract_jobs() {
         let body =
-            job_body(&text, job).unwrap_or_else(|| panic!("build.yml must keep a `{job}:` job"));
+            job_body(&text, job).unwrap_or_else(|| panic!("{file} must keep a `{job}:` job"));
 
         let update_lines: Vec<&str> = body
             .iter()
