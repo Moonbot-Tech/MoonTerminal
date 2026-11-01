@@ -391,6 +391,7 @@ impl Render for IntegratedPickProbe {
                     TunerKind::Coins,
                     t!("analytics.tuner.fields_title").to_string(),
                     None,
+                    None,
                     &ToolbarActs {
                         on_copy: noop.clone(),
                         on_save: noop,
@@ -742,6 +743,7 @@ impl Render for CoinsLayoutProbe {
             toolbar_el(
                 TunerKind::Coins,
                 t!("analytics.tuner.fields_title").to_string(),
+                None,
                 (face != 0).then_some(&write),
                 &toolbar_acts,
                 cx,

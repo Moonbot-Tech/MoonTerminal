@@ -295,7 +295,7 @@ pub(in crate::analytics::tuner) fn summary_card_el(
         Verdict::Apply => (MoonTag::positive(), p.green),
         Verdict::DontApply(_) => (MoonTag::warning(), p.amber),
         Verdict::Cannot(_) => (MoonTag::danger(), p.red),
-        Verdict::Idle | Verdict::Loading | Verdict::Running { .. } | Verdict::Unchecked(_) => {
+        Verdict::Idle | Verdict::Running { .. } | Verdict::Unchecked(_) => {
             (MoonTag::new(), p.text_muted)
         }
     };
@@ -373,7 +373,7 @@ pub(in crate::analytics::tuner) fn summary_card_el(
                 acts.stop.clone(),
                 cx,
             )));
-    } else if m.verdict != Verdict::Loading {
+    } else {
         if m.train.is_some() || m.holdout.is_some() {
             let unit = crate::analytics::pnl_unit_label();
             let head = if unit.is_empty() {
@@ -574,7 +574,8 @@ pub(in crate::analytics::tuner) fn parameters_header(
         changed_coins: 0,
         enabled: m.write_enabled
             && m.can_reset
-            && !matches!(m.verdict, Verdict::Running { .. } | Verdict::Loading),
+            && !m.loading
+            && !matches!(m.verdict, Verdict::Running { .. }),
         copy: m.copy_visible,
         dirty: m.can_reset,
     };
@@ -587,6 +588,7 @@ pub(in crate::analytics::tuner) fn parameters_header(
         .child(crate::analytics::tuner::shell::toolbar_el(
             crate::analytics::tuner::shared::TunerKind::Ticks,
             t!("analytics.tuner.fields_title").to_string(),
+            m.loading.then(|| t!("common.loading").to_string()),
             Some(&write),
             &handlers,
             cx,

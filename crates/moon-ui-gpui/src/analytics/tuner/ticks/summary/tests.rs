@@ -18,14 +18,34 @@ fn selected_strategy_waits_for_tape_before_refusing_the_sample() {
     state.tape_reading = true;
     state.sugg_refusal = Some("previous refusal".into());
     let loading = SummaryModel::from_state(&state, "fixture".into(), false);
-    assert_eq!(loading.verdict, Verdict::Loading);
-    assert_eq!(loading.tag, "Loading…");
-    assert_eq!(loading.sentence, "reading the tape…");
+    assert!(loading.loading);
+    assert_eq!(loading.verdict, Verdict::Idle);
     state.tape_reading = false;
-    assert!(matches!(
-        SummaryModel::from_state(&state, "fixture".into(), false).verdict,
-        Verdict::Cannot(_)
-    ));
+    let settled = SummaryModel::from_state(&state, "fixture".into(), false);
+    assert!(!settled.loading);
+    assert!(matches!(settled.verdict, Verdict::Cannot(_)));
+}
+
+/// A reload's tape read keeps the card's verdict in place instead of swapping it for a loading
+/// face and back — every row under it jumped on each read — and never carries it to another
+/// strategy.
+#[test]
+fn a_tape_read_keeps_the_scopes_last_verdict() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = TicksState::default();
+    state.data.apply(Ok(TicksData::default()));
+    state.sugg_refusal = Some("previous refusal".into());
+    let settled = SummaryModel::from_state(&state, "fixture".into(), false).verdict;
+    assert!(matches!(settled, Verdict::Cannot(_)));
+    state.tape_reading = true;
+    let reading = SummaryModel::from_state(&state, "fixture".into(), false);
+    assert!(reading.loading);
+    assert_eq!(reading.verdict, settled, "the same scope keeps its verdict");
+    assert_eq!(
+        SummaryModel::from_state(&state, "another".into(), false).verdict,
+        Verdict::Idle,
+        "another scope starts idle"
+    );
 }
 
 /// An expired startup forecast must not pin hundreds of remaining restarts to one second.

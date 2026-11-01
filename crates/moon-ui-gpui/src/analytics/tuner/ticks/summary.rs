@@ -44,8 +44,6 @@ pub(super) struct ConfirmModel {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Verdict {
     Idle,
-    /// The selected strategy's tape has not answered yet; no sample verdict is available.
-    Loading,
     Running {
         done: usize,
         total: usize,
@@ -156,7 +154,6 @@ pub(super) fn sample_verdict(verdict: Verdict, too_few: Option<usize>) -> Verdic
 pub(super) fn tag(verdict: &Verdict) -> String {
     t!(match verdict {
         Verdict::Idle => "analytics.ticks.sum.tag_idle",
-        Verdict::Loading => "common.loading",
         Verdict::Running { .. } => "analytics.ticks.sum.tag_running",
         Verdict::Cannot(_) => "analytics.ticks.sum.tag_cannot",
         Verdict::Apply => "analytics.ticks.sum.tag_apply",
@@ -188,7 +185,6 @@ pub(super) fn sentence(
 ) -> String {
     match verdict {
         Verdict::Idle => t!("analytics.ticks.sum.idle").to_string(),
-        Verdict::Loading => t!("analytics.ticks.fetch_reading").to_string(),
         Verdict::Running { .. } if hold_n == 0 => {
             t!("analytics.ticks.sum.running_whole", n = train_n).to_string()
         }
@@ -257,6 +253,9 @@ pub(super) struct ChangeRow {
 pub(super) struct SummaryModel {
     pub title: String,
     pub scope_label: String,
+    /// The selected strategy's tape is still being read: the title row says so, and the
+    /// verdict below is the last one this scope showed rather than a judgement of its sample.
+    pub loading: bool,
     pub verdict: Verdict,
     pub tag: String,
     pub sentence: String,
@@ -364,23 +363,55 @@ impl SummaryModel {
             )),
         };
         let result = state.current_result();
-        let verdict = if state.tape_reading && running.is_none() {
-            Verdict::Loading
+        // Until the tape answers the sample is not known, and a refusal of it would be false;
+        // the scope's last verdict stands meanwhile, so the card keeps its shape on every read.
+        // Its sentence stands with it: rebuilt from the unread rows' counts it would contradict
+        // the verdict it explains.
+        // A reload before its tape stage counts too: the previous rows it holds meanwhile are
+        // retired, every one "missing", and a verdict taken then reads "0 fit deals". A first
+        // load holds no rows, so it refuses nothing.
+        let loading = running.is_none()
+            && (state.tape_reading
+                || matches!(
+                    state.data,
+                    crate::load_state::LoadState::Loading { stale: Some(_) }
+                ));
+        let (verdict, shown_sentence) = if loading {
+            state
+                .shown_verdict
+                .borrow()
+                .as_ref()
+                .filter(|(scope, _, _)| *scope == scope_label)
+                .map_or((Verdict::Idle, None), |(_, verdict, sentence)| {
+                    (verdict.clone(), Some(sentence.clone()))
+                })
         } else {
-            verdict_of(
-                running,
-                state.search_too_few(),
-                state.sugg_refusal.as_deref(),
-                result,
-                state.has_changes(),
-            )
+            let verdict = sample_verdict(
+                verdict_of(
+                    running,
+                    state.search_too_few(),
+                    state.sugg_refusal.as_deref(),
+                    result,
+                    state.has_changes(),
+                ),
+                state.variant_too_few(),
+            );
+            (verdict, None)
         };
-        let verdict = sample_verdict(verdict, state.variant_too_few());
         let data = state.data.data();
         let (fit, hold) = match state.sugg {
             SuggState::Running { sample, .. } => sample,
             SuggState::Idle => (0, 0),
         };
+        let shown_sentence = shown_sentence.unwrap_or_else(|| {
+            sentence(&verdict, fit, hold, state.population().readiness.fetchable)
+        });
+        // A running search is never stood in for: it ends before the next read, and its
+        // progress and Stop would outlive it.
+        if !loading && !matches!(verdict, Verdict::Running { .. }) {
+            *state.shown_verdict.borrow_mut() =
+                Some((scope_label.clone(), verdict.clone(), shown_sentence.clone()));
+        }
         let train = result.map(|r| ProfitRow {
             label: t!("analytics.ticks.sum.train").to_string(),
             sub: if r.purged > 0 {
@@ -461,8 +492,9 @@ impl SummaryModel {
         Self {
             title: t!("analytics.ticks.sum.title").to_string(),
             scope_label,
+            loading,
             tag: tag(&verdict),
-            sentence: sentence(&verdict, fit, hold, state.population().readiness.fetchable),
+            sentence: shown_sentence,
             verdict,
             train,
             holdout,

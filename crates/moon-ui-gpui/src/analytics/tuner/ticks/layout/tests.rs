@@ -653,7 +653,8 @@ fn model(face: usize) -> SummaryModel {
             stopping: true,
         },
         8 => Verdict::Cannot(t!("analytics.ticks.sum.stopped_empty").to_string()),
-        9 => Verdict::Loading,
+        // A tape read: the title row says "Loading…", the card keeps its last verdict.
+        9 => Verdict::Idle,
         _ => Verdict::Cannot(t!("analytics.ticks.sum.too_few", n = 3, min = 20).to_string()),
     };
     let active = (2..=6).contains(&face);
@@ -690,6 +691,7 @@ fn model(face: usize) -> SummaryModel {
         }),
         title: t!("analytics.ticks.sum.title").to_string(),
         scope_label: "fixture".to_string(),
+        loading: face == 9,
         tag: tag(&verdict),
         sentence: sentence(&verdict, 31, 13, 19),
         verdict,

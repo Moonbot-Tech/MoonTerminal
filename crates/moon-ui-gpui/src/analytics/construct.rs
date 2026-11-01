@@ -201,6 +201,9 @@ impl AnalyticsView {
             ticks.restore(saved);
             tuner::ticks::model_cfg::replace(saved.model);
         }
+        // Which kinds owe their entry order's life follows the restored ticks and the method
+        // just put in force; no rows are loaded yet, so nothing is judged again.
+        ticks.adopt_entry_tape();
         backend.update(cx, |backend, cx| {
             backend.station_min_tail_sync(tuner::ticks::tail::current_s(), cx);
         });

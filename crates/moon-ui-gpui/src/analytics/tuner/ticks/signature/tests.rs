@@ -71,6 +71,7 @@ fn key(tape_rev: u64, refusal_revision: u64) -> ReloadKey {
             min_tail_s: 60,
             margin_ms: 30_000,
             long_position_ms: 3_600_000,
+            entry_tape: crate::analytics::tuner::ticks::entry_tape::ALL,
         },
         refusal_revision,
         tape_rev,

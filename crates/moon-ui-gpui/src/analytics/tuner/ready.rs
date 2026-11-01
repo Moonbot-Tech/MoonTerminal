@@ -12,9 +12,10 @@
 //!
 //! It reruns when the list's scope is reloaded by hand or the model settings change (at once),
 //! and when the report moved — at most once per [`RERUN_GAP`], and never on top of a pass still
-//! running. A tape filing, or a station refusal set or lifted, recounts only the strategies with
-//! a tapeless row on that market, and none at all when it touched none of them: leaving the tab and coming back, or picking a
-//! row (the card's own replay files its markets), keeps the finished counts.
+//! running. A tape filing recounts only the strategies with a row on that market the store does
+//! not fully hold — no tape, a short tail or a hole — and a station refusal set or lifted those
+//! with any row there; none at all when it touched none of them: leaving the tab and coming
+//! back, or picking a row (the card's own replay files its markets), keeps the finished counts.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -193,8 +194,8 @@ pub(in crate::analytics) struct ReadyKey {
     /// ([`SamplePolicy`]).
     pub(in crate::analytics) sample: SamplePolicy,
     /// The station's refusal revision: a refused or admitted row changes its verdict. Only the
-    /// strategies with a tapeless row on a market whose refusals changed go stale
-    /// ([`ReadyPass::stale_strategies`]).
+    /// strategies with a row on a market whose refusals changed go stale
+    /// ([`ReadyPass::trading_on`]).
     pub(in crate::analytics) refusal_revision: u64,
     /// The cores' catalogs: an address resolving where it did not (a core connecting, its
     /// catalog arriving) changes the groups' signatures, so the deals are read again.
@@ -237,9 +238,10 @@ pub(in crate::analytics) struct ReadyProgress {
     #[cfg(test)]
     chunks: Mutex<Vec<usize>>,
     partial: Mutex<Vec<(String, Readiness)>>,
-    /// `(strategy, (exchange key, market), tapeless)` of each replayed row: a tapeless one is
-    /// the only kind a later filing can change; any can change with the station's refusals (a
-    /// short tail admitted or not).
+    /// `(strategy, (exchange key, market), tapeless)` of each replayed row, `tapeless` meaning
+    /// the store does not fully hold it — no tape, a short tail, a hole: the only kind a later
+    /// filing can change; any can change with the station's refusals (a short tail admitted or
+    /// not).
     waiting: Mutex<Vec<(String, (String, String), bool)>>,
     /// Per counted strategy, the earliest moment the clock alone changes one of its rows'
     /// verdicts ([`verdict_deadline`]), and whether every held read behind it answered settled.
@@ -304,12 +306,13 @@ impl ReadyProgress {
         )
     }
 
-    /// Note that a replayed row of `key` on `market` was left without tape.
+    /// Note that a replayed row of `key` on `market` is not fully held — no tape, a short tail
+    /// or a hole — so a filing there can change it.
     pub(in crate::analytics) fn wait_on(&self, key: &str, market: (String, String)) {
         self.note(key, market, true);
     }
 
-    /// Note that a replayed row of `key` on `market` holds its tape.
+    /// Note that a replayed row of `key` on `market` holds its whole tape.
     pub(in crate::analytics) fn trades_on(&self, key: &str, market: (String, String)) {
         self.note(key, market, false);
     }
@@ -1317,7 +1320,18 @@ pub(in crate::analytics::tuner) fn count_strategies(
                         continue;
                     };
                     let market = (address.exchange_key.clone(), address.market.clone());
-                    if row.tape == TapeStatus::Covered {
+                    // A filing changes a row it does not fully hold: no tape, a tail short of
+                    // the floor, or a hole between the buy and the close. A covered row whose
+                    // tail a filing extends turns fit, and the card counts it at once.
+                    let held_whole = row.tape == TapeStatus::Covered
+                        && row.held.is_some_and(|(_, trail)| {
+                            moon_core::db::tuner::ticks::tail::reaches(
+                                trail,
+                                i64::from(min_tail_s) * 1_000,
+                            )
+                        })
+                        && row.deal.gap.is_none();
+                    if held_whole {
                         progress.trades_on(&key, market);
                     } else {
                         progress.wait_on(&key, market);

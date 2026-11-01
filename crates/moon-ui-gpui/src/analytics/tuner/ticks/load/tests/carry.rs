@@ -137,6 +137,7 @@ fn sample() -> SamplePolicy {
         min_tail_s: 60,
         margin_ms: 30_000,
         long_position_ms: i64::MAX,
+        entry_tape: crate::analytics::tuner::ticks::entry_tape::ALL,
     }
 }
 

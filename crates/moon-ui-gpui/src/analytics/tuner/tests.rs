@@ -409,7 +409,10 @@ fn nonblocking_tuner_reads_keep_write_entry_points_guarded() {
         include_str!("ticks/summary.rs")
             .contains("&& self.axis_write_ready(super::super::shared::TunerKind::Ticks)")
     );
-    assert!(include_str!("kpi.rs").contains("an-tuner-kpi-refresh"));
+    // The matrix's reads show local progress in its title caption, never a blocking overlay.
+    assert!(
+        include_str!("kpi.rs").contains("let caption = refreshing_caption(caption, refreshing);")
+    );
 }
 
 /// Each axis must address its OWN slot. Two axes sharing one is the copy-paste that makes

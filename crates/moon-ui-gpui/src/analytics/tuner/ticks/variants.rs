@@ -135,6 +135,15 @@ impl AnalyticsView {
     /// Arm a debounced rescore of the variant column — every edit of a cell, every row that
     /// joins the replayable set, goes through here.
     pub(in crate::analytics::tuner) fn arm_ticks_variants(&mut self, cx: &mut Context<Self>) {
+        // A В1 entry value or a landed search can move the entry requirement (`entry_tape.rs`);
+        // the rows are judged again first, and their fold arms the columns.
+        if self.ticks_sync_entry_tape(cx) {
+            // The column's score is of the previous В1 and the previous rows: dropped now, so
+            // a cleared or retyped В1 never shows it while the rows are read again.
+            self.ticks.clear_var_score();
+            self.set_ticks_plan(HashMap::new());
+            return;
+        }
         if !self.ticks.tape_reading
             && self.ticks.data.data().is_some_and(|d| d.fit() > 0)
             && probe::fire()
@@ -737,6 +746,9 @@ impl AnalyticsView {
                 if this.ticks.last_result.is_some() || candidate.is_some() {
                     this.ticks_reset_variant_inputs();
                     this.arm_ticks_variants(cx);
+                } else {
+                    // A miss arms nothing, yet a tick changed during the run waits for its end.
+                    this.ticks_sync_entry_tape(cx);
                 }
                 cx.notify();
             },

@@ -695,6 +695,20 @@ pub(in crate::analytics) struct TicksState {
     /// Whether the tape stage of a load is still reading the rows' tape off the worker: until
     /// it folds, every addressed row reads "missing" without meaning it.
     pub(in crate::analytics::tuner) tape_reading: bool,
+    /// The summary card's last verdict and its sentence outside a tape read, with the scope
+    /// label they were for: shown again while the next read runs, so the card does not lose its
+    /// rows and jump on every reload (`summary.rs`). A running search is never kept here, and a
+    /// scope change forgets it (`invalidate`).
+    pub(super) shown_verdict: std::cell::RefCell<Option<(String, super::summary::Verdict, String)>>,
+    /// The Fact-versus-variant matrix last drawn settled, with the scope label it was for:
+    /// drawn again while a load reads, so the card keeps its rows instead of folding to a
+    /// "Loading…" line and back (`mod.rs`, `ticks_kpi`). A scope change forgets it.
+    pub(super) shown_kpi: std::cell::RefCell<Option<(String, Arc<Vec<VarStats>>)>>,
+    /// The entry requirement (`entry_tape.rs`) moved since the last tape stage folded: rows a
+    /// load in flight chose to carry were judged under the other one, so the next stage reads
+    /// every row and may shrink their coverage (`load.rs`, `start_tape_stage`). Cleared by a
+    /// stage's fold, never by its start, so a superseded stage hands it on.
+    pub(in crate::analytics::tuner) entry_tape_moved: bool,
     /// The trade pane under the table (`trade_pane.rs`).
     pub(in crate::analytics::tuner) trade: super::trade_pane::TradePane,
     /// The variant's result per deal, by `ReportUID`, as `(money in the sample's unit, per cent)`
@@ -836,6 +850,9 @@ impl Default for TicksState {
             station_refusal_revision: 0,
             fetch_listening: Default::default(),
             tape_reading: false,
+            shown_verdict: Default::default(),
+            shown_kpi: Default::default(),
+            entry_tape_moved: false,
             judged_under: None,
             tape_rev: 0,
             tape_seq: 0,
@@ -933,6 +950,19 @@ impl TicksState {
         self.ranges = saved.ranges.clone();
     }
 
+    /// Which kinds these ticks and В1 owe their entry order's life, as `entry_tape.rs` bits.
+    pub(in crate::analytics::tuner) fn entry_tape_wanted(&self) -> u8 {
+        let variant = self.variant_changes();
+        super::entry_tape::wanted(&self.locked, variant.iter().map(|(key, _)| key.as_str()))
+    }
+
+    /// Put in force which kinds owe their entry order's life, as these ticks say
+    /// (`entry_tape.rs`), without judging anything again — for a window whose rows are not
+    /// loaded yet, so the strategy list's first readiness pass counts under them.
+    pub(in crate::analytics) fn adopt_entry_tape(&self) {
+        super::entry_tape::replace(self.entry_tape_wanted());
+    }
+
     /// Steps per field the automatic ranges are cut into, out of the typed box.
     pub(in crate::analytics::tuner) fn steps_per_param(&self) -> u32 {
         moon_core::db::tuner::ticks::params::range::steps_of(self.steps.trim().parse::<u32>().ok())
@@ -987,6 +1017,9 @@ impl TicksState {
         // Nor does the last search's holdout: В1's caption would print it beside a column
         // rescored over deals it never saw.
         self.last_result = None;
+        // Nor may the card's verdict stand in for the next scope's while its tape is read.
+        self.shown_verdict.replace(None);
+        self.shown_kpi.replace(None);
         self.last_search_elapsed = None;
         // A note about the previous scope's search says nothing about this one.
         self.sugg_note = None;
@@ -1215,7 +1248,17 @@ impl TicksState {
     /// Fold a batch of answered rows in by id — the tape stage's whole result — with one
     /// summary pass rather than one per row. A row not in the table (the scope moved on) is
     /// dropped.
-    pub(in crate::analytics::tuner) fn update_rows(&mut self, answers: Vec<DealRow>) {
+    ///
+    /// Args:
+    ///     answers: The stage's rows.
+    ///     rejudged: The stage judges the table under another entry requirement
+    ///         (`entry_tape.rs`): what a row must hold changed, so its coverage may shrink and
+    ///         every answer stands over the row's earlier word.
+    pub(in crate::analytics::tuner) fn update_rows(
+        &mut self,
+        answers: Vec<DealRow>,
+        rejudged: bool,
+    ) {
         let Some(data) = self.data.data_mut() else {
             return;
         };
@@ -1244,7 +1287,7 @@ impl TicksState {
                 (TapeStatus::Refused(_), TapeStatus::Missing) => true,
                 _ => false,
             };
-            if stale {
+            if stale && !rejudged {
                 continue;
             }
             slot.take_replay(answer);
