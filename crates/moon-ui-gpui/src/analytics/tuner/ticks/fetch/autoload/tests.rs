@@ -179,6 +179,7 @@ fn resolver() -> FetchResolver {
             )),
         )]),
         btc_markets: Default::default(),
+        archive: None,
     }
 }
 

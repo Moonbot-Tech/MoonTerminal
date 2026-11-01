@@ -447,6 +447,20 @@ impl MarketDataSource {
             .resolve_market(quote, self.traded_quote(core), coin)
     }
 
+    /// The unverified names a report row's `coin` would carry on `core`'s exchange, for a coin
+    /// whose catalog no longer lists it ([`super::CatalogLookup::unlisted_spellings`]).
+    ///
+    /// For a caller that confirms one against the local tape store after [`Self::resolve_market`]
+    /// answered `None`, so a trade on a market delisted since keeps the prints it was filed with.
+    ///
+    /// Returns:
+    ///     The candidates, or nothing while the core has no catalog yet.
+    pub fn unlisted_spellings(&self, core: CoreId, quote: &str, coin: &str) -> Vec<String> {
+        self.catalog_lookup(core)
+            .map(|lookup| lookup.unlisted_spellings(quote, self.traded_quote(core), coin))
+            .unwrap_or_default()
+    }
+
     /// The quote currency `core` trades in — its account currency from BaseCheck
     /// (`base_currency_name`), uppercase — for choosing among one coin's markets in several
     /// quotes ([`crate::market::pick_market_for_coin`]).

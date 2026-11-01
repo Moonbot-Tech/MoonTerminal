@@ -20,6 +20,7 @@ use super::state::{RowAddress, RowEdit, TapeStatus};
 use crate::Backend;
 use moon_core::db::tuner::ticks::{Deal, model_window};
 use moon_core::market::MarketDataSource;
+use moon_core::market::trade_replay::trade_cache::TradeCache;
 use moon_core::market::trade_replay::{long_position_ms, margin_ms};
 
 pub(crate) mod autoload;
@@ -81,11 +82,14 @@ pub(in crate::analytics::tuner) struct FetchResolver {
     addresses: HashMap<(u64, String), Option<Arc<RowAddress>>>,
     /// Per core, BTC's market on its exchange — the BTC deltas are read off it.
     btc_markets: HashMap<u64, Option<String>>,
+    /// The local tape store, which confirms the name of a market the catalog no longer lists
+    /// ([`archived_market`]); `None` when it could not start, and such a coin stays unaddressed.
+    archive: Option<TradeCache>,
 }
 
 /// Where each deal's prints live, per distinct `(core, coin)` — `resolver` asked once per
-/// distinct pair, off the UI thread. A core that is not connected, or a coin its catalog does
-/// not spell, resolves to nothing and the row says so.
+/// distinct pair, off the UI thread. A core that is not connected, or a coin neither its
+/// catalog nor the local tape store spells, resolves to nothing and the row says so.
 pub(in crate::analytics::tuner) fn resolve_in(
     resolver: &mut FetchResolver,
     deals: &[Deal],
@@ -108,12 +112,17 @@ impl FetchResolver {
                 .collect(),
             addresses: HashMap::new(),
             btc_markets: HashMap::new(),
+            archive: moon_core::market::trade_replay::trade_cache::handle(),
         }
     }
 
     /// Where a deal's prints live: the core's exchange key and the catalog-verified market. A
-    /// core that is not connected, or a coin its catalog does not spell, resolves to nothing
-    /// and the row says so ([`TapeStatus::NoAddress`]).
+    /// coin the catalog no longer lists — delisted after the trade — keeps the market its prints
+    /// were filed under, when the local tape store holds that name ([`archived_market`]): the
+    /// trade then enters the tuner like any other. A core that is not connected, or a coin
+    /// neither spells, resolves to nothing and the row says so ([`TapeStatus::NoAddress`]).
+    ///
+    /// Runs off the UI thread only: the store check is a blocking read.
     pub(in crate::analytics::tuner) fn address(&mut self, deal: &Deal) -> Option<Arc<RowAddress>> {
         let key = (deal.core_uid, deal.coin.clone());
         if let Some(address) = self.addresses.get(&key) {
@@ -137,7 +146,15 @@ impl FetchResolver {
             .and_then(|address| {
                 let market = self
                     .source
-                    .resolve_market(deal.core_uid, quote, &deal.coin)?;
+                    .resolve_market(deal.core_uid, quote, &deal.coin)
+                    .or_else(|| {
+                        archived_market(
+                            self.archive.as_ref()?,
+                            &address.exchange_key,
+                            self.source
+                                .unlisted_spellings(deal.core_uid, quote, &deal.coin),
+                        )
+                    })?;
                 Some(Arc::new(RowAddress {
                     core_uid: deal.core_uid,
                     venue: address.venue,
@@ -173,6 +190,24 @@ impl FetchResolver {
             window,
         ))
     }
+}
+
+/// The first of `spellings` the local tape store holds prints for on `exchange_key`.
+///
+/// Holding prints is the verification an unlisted spelling needs: the store files a market only
+/// under a name some catalog once listed, so a name found there is a market that existed on this
+/// exchange, never a guess. A read that fails or times out answers "not held" — the row stays
+/// unaddressed until the next load asks again, rather than taking an unconfirmed name.
+fn archived_market(
+    archive: &TradeCache,
+    exchange_key: &str,
+    spellings: Vec<String>,
+) -> Option<String> {
+    spellings.into_iter().find(|market| {
+        archive
+            .held_spans(exchange_key, market, 0, i64::MAX)
+            .is_some_and(|spans| !spans.is_empty())
+    })
 }
 
 /// Strategy-field defaults off the first core schema — what the model fills a field the

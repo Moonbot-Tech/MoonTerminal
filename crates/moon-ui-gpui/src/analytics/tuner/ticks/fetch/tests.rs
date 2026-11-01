@@ -10,6 +10,7 @@ fn unlisted_resolved_row_can_be_queued_without_a_directory_venue() {
         quotes: Default::default(),
         addresses: Default::default(),
         btc_markets: Default::default(),
+        archive: None,
     };
     let address = std::sync::Arc::new(super::RowAddress {
         core_uid: 1,
@@ -100,6 +101,7 @@ fn resolve_in_matches_the_per_deal_loop() {
         quotes: Default::default(),
         addresses: Default::default(),
         btc_markets: Default::default(),
+        archive: None,
     };
     let deal = |report_uid: i64, coin: &str| moon_core::db::tuner::ticks::Deal {
         report_uid,
@@ -120,6 +122,48 @@ fn resolve_in_matches_the_per_deal_loop() {
     };
     assert_eq!(print(&resolved), print(&expected));
     assert_eq!(resolved.len(), 2);
+}
+
+/// A coin delisted after the trade keeps the market its prints were filed under: of the
+/// unlisted spellings, the one the local store holds on THIS exchange is taken, and a name held
+/// only on another exchange, or nowhere, is not.
+#[test]
+fn an_unlisted_coin_resolves_to_the_market_its_tape_is_filed_under() {
+    use moon_core::market::trade_replay::TileSource;
+    use moon_core::market::trade_replay::trade_cache::TradeCache;
+
+    let archive = TradeCache::open_evictable(":memory:".into()).unwrap();
+    archive.insert(
+        "2:00000000",
+        "SPORTFUNUSDT",
+        1_000,
+        2_000,
+        vec![],
+        TileSource::Venue,
+    );
+    archive.insert(
+        "4:00000000",
+        "GONEUSDT",
+        1_000,
+        2_000,
+        vec![],
+        TileSource::Venue,
+    );
+    assert!(archive.sync(std::time::Duration::from_secs(10)));
+
+    let spellings = |name: &str| vec![format!("{name}_USDT"), format!("{name}USDT")];
+    assert_eq!(
+        super::archived_market(&archive, "2:00000000", spellings("SPORTFUN")),
+        Some("SPORTFUNUSDT".to_string())
+    );
+    assert_eq!(
+        super::archived_market(&archive, "2:00000000", spellings("GONE")),
+        None
+    );
+    assert_eq!(
+        super::archived_market(&archive, "2:00000000", spellings("NEVER")),
+        None
+    );
 }
 
 /// Build a synthetic report row shared by resolver and background autoload checks.
