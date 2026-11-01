@@ -46,7 +46,7 @@ fn fault() -> ConnFault {
     }
 }
 
-/// Fill the five candidate fields with one shared reported value.
+/// Fill the candidate fields and the build with shared reported values.
 fn reporting(name: &str) -> CoreStatusRow {
     let mut row = row(name, ConnStatus::Ready);
     row.time_offset.offset_secs = Some(7_200);
@@ -73,7 +73,7 @@ fn a_single_known_value_is_not_uniform() {
     assert!(uniform_columns(&rows).is_empty());
 }
 
-/// Two cores that report the same five values collapse all five, in line order, and the text
+/// Two cores that report the same candidate values collapse them in line order, and the text
 /// is the cell text. A blank third core does not count as a disagreement.
 #[test]
 fn each_candidate_is_detected_and_unknown_rows_are_ignored() {
@@ -94,12 +94,11 @@ fn each_candidate_is_detected_and_unknown_rows_are_ignored() {
             ("cpus", "2"),
             ("api_key", "45"),
             ("api_quota", "1000"),
-            ("version", "7.71 R3"),
         ]
     );
 }
 
-/// One core with a different clock brings only that column back. The other four stay on the
+/// One core with a different clock brings only that column back. The other three stay on the
 /// line, which is the whole point of comparing per column.
 #[test]
 fn a_differing_core_brings_that_column_back() {
@@ -110,7 +109,7 @@ fn a_differing_core_brings_that_column_back() {
         .into_iter()
         .map(|fact| fact.key)
         .collect();
-    assert_eq!(keys, vec!["cpus", "api_key", "api_quota", "version"]);
+    assert_eq!(keys, vec!["cpus", "api_key", "api_quota"]);
 }
 
 /// A measured zero is a real offset. Folding it into "never measured" would hide a UTC fleet
@@ -173,30 +172,34 @@ fn connecting_still_reports_and_a_ready_fault_does_not_erase_the_value() {
     assert_eq!(facts[0].text, "8");
 }
 
-/// A missing suffix and a blank suffix are the same build the cell prints. A different letter
-/// is a different build, even on the same number.
+/// Matching builds must keep their per-core column at narrow and wide widths, including bare
+/// builds and named builds. Re-adding version to the uniform candidates hides this column.
 #[test]
-fn version_agreement_follows_the_printed_build_not_a_raw_suffix() {
-    let mut bare = reporting("CORE-A1");
-    let mut blank = reporting("CORE-A2");
-    bare.server_version_suffix = None;
-    blank.server_version_suffix = Some("  ".to_string());
-    let facts = uniform_columns(&[bare, blank]);
-    let version = facts
-        .iter()
-        .find(|fact| fact.key == "version")
-        .expect("version");
-    assert_eq!(version.text, "7.71");
+fn matching_builds_keep_the_version_column() {
+    use std::collections::{HashMap, HashSet};
 
-    let mut letter = reporting("CORE-A1");
-    let mut other = reporting("CORE-A2");
-    letter.server_version_suffix = Some(" R3 ".to_string());
-    other.server_version_suffix = Some("R2".to_string());
-    assert!(
-        uniform_columns(&[letter, other])
-            .iter()
-            .all(|fact| fact.key != "version")
-    );
+    use crate::panels::core_status::table::projected_column_keys;
+
+    for suffix in [None, Some(""), Some("R3")] {
+        let mut rows = [reporting("CORE-A1"), reporting("CORE-A2")];
+        for row in &mut rows {
+            row.server_version_suffix = suffix.map(str::to_string);
+        }
+        let facts = uniform_columns(&rows);
+        let uniform: Vec<&str> = facts.iter().map(|fact| fact.key).collect();
+        assert!(!uniform.contains(&"version"));
+        for width in [300.0, 720.0, 1920.0] {
+            let keys = projected_column_keys(
+                &rows,
+                &HashSet::new(),
+                &uniform,
+                &HashMap::new(),
+                width,
+                &HashMap::new(),
+            );
+            assert!(keys.contains(&"version"), "{suffix:?} at {width}px");
+        }
+    }
 }
 
 /// One failed attempt keeps the version column, even when every core reports the same build.

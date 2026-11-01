@@ -428,7 +428,7 @@ fn card_filter_matches_name_core_and_unmasked_ip() {
     assert!(!card_matches_query(card, "other", false));
 }
 
-/// Version agreement follows the searched rows. A core the search hides cannot veto the column,
+/// CPU agreement follows the searched rows. A core the search hides cannot veto the column,
 /// and it cannot be hidden by cores the search excluded.
 #[test]
 fn projection_uniform_follows_the_search() {
@@ -437,15 +437,15 @@ fn projection_uniform_follows_the_search() {
     let mut alpha_a = sample(1, "alpha-1", ConnStatus::Ready);
     let mut alpha_b = sample(2, "alpha-2", ConnStatus::Ready);
     let mut beta = sample(3, "beta", ConnStatus::Ready);
-    alpha_a.server_version = Some(771);
-    alpha_b.server_version = Some(771);
-    beta.server_version = Some(770);
+    alpha_a.sys.logical_cpu_count = Some(2);
+    alpha_b.sys.logical_cpu_count = Some(2);
+    beta.sys.logical_cpu_count = Some(4);
     let rows = vec![alpha_a, alpha_b, beta];
     let groups = aggregate_servers(&rows, None);
     let searched = projection_uniform(&rows, &groups, None, "alpha", false);
-    assert!(searched.iter().any(|fact| fact.key == "version"));
+    assert!(searched.iter().any(|fact| fact.key == "cpus"));
     let all = projection_uniform(&rows, &groups, None, "", false);
-    assert!(all.iter().all(|fact| fact.key != "version"));
+    assert!(all.iter().all(|fact| fact.key != "cpus"));
 }
 
 /// A saved API-key sort whose column is hidden stays on attention order.

@@ -5,9 +5,7 @@
 //! out of that comparison: those cells are a dash, not a second opinion.
 
 use super::model::{ApiKeyState, CoreStatusRow};
-use super::presentation::{
-    LoadLevel, api_expiry_text, api_quota_text, build_key, status_level, update_badge, version_text,
-};
+use super::presentation::{LoadLevel, api_expiry_text, api_quota_text, status_level};
 use rust_i18n::t;
 
 use super::time_offset::{
@@ -29,18 +27,16 @@ pub(super) struct UniformFact {
 /// Candidate columns, in "same for all" line order.
 ///
 /// The strings are the Flat column ids from `table.rs::COLUMN_KEYS`.
-const UNIFORM_KEYS: [&str; 5] = ["tz_off", "cpus", "api_key", "api_quota", "version"];
+const UNIFORM_KEYS: [&str; 4] = ["tz_off", "cpus", "api_key", "api_quota"];
 
 /// Columns whose known values are identical across the visible cores.
 ///
 /// A value is known when the core is not failed or dropped (`LoadLevel::Critical`) and the
-/// field itself has been reported: a measured clock offset, a logical-CPU count, a quota, or a
-/// build number. The API key is compared on the text its cells display, so it counts every
+/// field itself has been reported: a measured clock offset, a logical-CPU count, or a quota.
+/// The API key is compared on the text its cells display, so it counts every
 /// state other than [`ApiKeyState::Unknown`] (the dash), on a dropped core too. Fewer than two known
 /// values is not agreement — the column stays in the table. Comparison uses the underlying
-/// value. The build letter is the trimmed tag [`build_key`] shares with the version bar, so a
-/// blank suffix and a missing suffix are the same build. `version` is never uniform while any
-/// row still carries an update badge: that column is the failed-attempt retry.
+/// value. MoonBot builds always stay in each core's version cell, even when every build agrees.
 ///
 /// Args:
 ///     rows: Visible core snapshots, in any order.
@@ -81,19 +77,6 @@ fn uniform_one(key: &'static str, rows: &[CoreStatusRow]) -> Option<UniformFact>
         }),
         "api_quota" => agree(rows, known_quota, key, |quota| api_quota_text(Some(quota)))
             .or_else(|| no_quota(rows, key)),
-        "version" => {
-            // The badge is the in-flight mark and the failed-attempt retry. Hiding the
-            // column removes the only control that can retry that attempt.
-            if rows
-                .iter()
-                .any(|row| update_badge(row.update.as_ref()).is_some())
-            {
-                return None;
-            }
-            agree(rows, known_version, key, |(version, tag)| {
-                version_text(Some(version), tag.as_deref())
-            })
-        }
         _ => None,
     }
 }
@@ -176,14 +159,6 @@ fn known_api(row: &CoreStatusRow) -> Option<ApiKeyState> {
 
 fn known_quota(row: &CoreStatusRow) -> Option<u64> {
     if reports(row) { row.api_quota } else { None }
-}
-
-fn known_version(row: &CoreStatusRow) -> Option<(u32, Option<String>)> {
-    if !reports(row) {
-        return None;
-    }
-    let version = row.server_version?;
-    Some(build_key(version, row.server_version_suffix.as_deref()))
 }
 
 #[cfg(test)]
