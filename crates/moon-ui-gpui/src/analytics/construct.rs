@@ -149,11 +149,8 @@ impl AnalyticsView {
             .analytics_strategy_mask
             .clone()
             .unwrap_or_default();
-        let strategy_mask_input = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .default_value(saved_strategy_mask.clone())
-                .placeholder(t!("analytics.filter.strategy_mask_ph").to_string())
-        });
+        let strategy_mask_input =
+            cx.new(|cx| MoonInputState::new(window, cx).default_value(saved_strategy_mask.clone()));
         cx.subscribe(
             &strategy_mask_input,
             |this, input, event: &MoonInputEvent, cx| match event {

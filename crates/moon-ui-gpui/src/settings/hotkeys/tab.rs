@@ -143,6 +143,7 @@ impl SettingsView {
         let search = div().w_full().max_w(design::ui_px(cx, 340.0)).child(
             MoonInput::new("hotkeys-search")
                 .state(&self.hotkeys_query)
+                .placeholder(t!("hotkeys.search.placeholder").to_string())
                 .small()
                 .cleanable(true)
                 .prefix(

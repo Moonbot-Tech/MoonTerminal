@@ -266,12 +266,14 @@ pub(super) fn field_masked(
                 .state(&state)
                 .size(design::INPUT_SIZE)
                 .disabled(!enabled)
-                .when(mixed, |input| {
-                    input
-                        .tone(MoonTone::Warning)
-                        .selected(true)
-                        .placeholder(t!("common.mixed_values").to_string())
+                // Set even when not mixed: MoonUI copies the hint into the shared state, so a
+                // conditional one would outlive the mixed selection that called for it.
+                .placeholder(if mixed {
+                    t!("common.mixed_values").to_string()
+                } else {
+                    String::new()
                 })
+                .when(mixed, |input| input.tone(MoonTone::Warning).selected(true))
                 .when(masked, |input| input.mask_toggle()),
         ),
     )

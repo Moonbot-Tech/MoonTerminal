@@ -216,8 +216,7 @@ impl LogPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let query =
-            cx.new(|cx| MoonInputState::new(window, cx).placeholder(t!("log.search").to_string()));
+        let query = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(&query, |t, _e, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
                 t.selection.clear();

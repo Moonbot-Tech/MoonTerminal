@@ -482,9 +482,7 @@ impl AnalyticsView {
         if let Some(s) = slot {
             return s.clone();
         }
-        let state = cx.new(|cx| {
-            MoonInputState::new(window, cx).placeholder(t!("analytics.coins.input_ph").to_string())
-        });
+        let state = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe_in(
             &state,
             window,

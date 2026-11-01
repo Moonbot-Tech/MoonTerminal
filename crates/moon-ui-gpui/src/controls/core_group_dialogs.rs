@@ -132,6 +132,7 @@ impl Render for SaveCoreGroup {
             .child(
                 MoonInput::new("core-group-name")
                     .state(&self.name)
+                    .placeholder(t!("common.core_pick.group_name_ph").to_string())
                     .size(design::INPUT_SIZE),
             )
     }
@@ -152,10 +153,7 @@ pub(crate) fn open_save_dialog(
 ) {
     let state = app.new(|cx| SaveCoreGroup {
         backend,
-        name: cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .placeholder(t!("common.core_pick.group_name_ph").to_string())
-        }),
+        name: cx.new(|cx| MoonInputState::new(window, cx)),
         cores,
     });
     // The dialog focuses its own handle on open and MoonInput does not self-focus, so without this

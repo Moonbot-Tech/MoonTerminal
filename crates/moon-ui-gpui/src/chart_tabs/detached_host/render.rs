@@ -95,6 +95,7 @@ impl Render for DetachedChartHost {
             .child(
                 MoonInput::new("detached-coin-search")
                     .state(&self.coin_input)
+                    .placeholder(rust_i18n::t!("chart.coin.search").to_string())
                     .cleanable(true)
                     .size(design::INPUT_SIZE),
             );

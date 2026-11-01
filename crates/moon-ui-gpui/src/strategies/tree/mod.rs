@@ -226,6 +226,7 @@ impl StrategiesView {
                                     .child(
                                         MoonInput::new("strat-search")
                                             .state(&self.search)
+                                            .placeholder(t!("strat.search").to_string())
                                             .size(design::INPUT_SIZE)
                                             .cleanable(true),
                                     ),

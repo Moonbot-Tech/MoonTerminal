@@ -790,20 +790,14 @@ impl SettingsView {
         )
         .detach();
 
-        let nav_query = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .placeholder(t!("settings.search.placeholder").to_string())
-        });
+        let nav_query = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(&nav_query, |_, _, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
                 cx.notify();
             }
         })
         .detach();
-        let hotkeys_query = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .placeholder(t!("hotkeys.search.placeholder").to_string())
-        });
+        let hotkeys_query = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(&hotkeys_query, |_, _, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
                 cx.notify();

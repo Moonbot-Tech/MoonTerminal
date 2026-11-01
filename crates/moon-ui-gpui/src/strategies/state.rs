@@ -278,7 +278,7 @@ impl StrategiesView {
             backend.ui_session.strategies_closed_at = None;
         });
         let search = cx.new(|cx| {
-            let input = MoonInputState::new(window, cx).placeholder(t!("strat.search").to_string());
+            let input = MoonInputState::new(window, cx);
             match &session {
                 Some(s) => input.default_value(s.search.clone()),
                 None => input,

@@ -841,6 +841,7 @@ impl ReportPanel {
                     .child(
                         MoonInput::new("rep-strategy-mask")
                             .state(&self.strategy_name_mask_input)
+                            .placeholder(t!("report.filter.strategy_mask_ph").to_string())
                             .size(design::INPUT_SIZE)
                             .cleanable(true),
                     )

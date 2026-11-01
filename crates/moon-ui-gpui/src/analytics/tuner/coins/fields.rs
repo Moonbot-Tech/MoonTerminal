@@ -326,6 +326,7 @@ pub(in crate::analytics::tuner) fn list_field_el(
                 .child(
                     MoonInput::new(SharedString::from(format!("an-coin-{side}-in")))
                         .state(input)
+                        .placeholder(t!("analytics.coins.input_ph").to_string())
                         .size(design::INPUT_SIZE),
                 )
                 .into_any_element(),

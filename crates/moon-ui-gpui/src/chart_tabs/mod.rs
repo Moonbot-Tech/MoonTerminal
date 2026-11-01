@@ -644,10 +644,7 @@ impl ChartTabs {
             this.sync_auto_workspace_chart(cx);
         })
         .detach();
-        let coin_input = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .placeholder(rust_i18n::t!("chart.coin.search").to_string())
-        });
+        let coin_input = cx.new(|cx| MoonInputState::new(window, cx));
         // Mirror market-input changes into `coin_query` and reopen the match list. Cyrillic input
         // indicates an accidentally active Russian keyboard layout because tickers are Latin-only;
         // convert it in place, and the resulting change event will deliver the Latin text.

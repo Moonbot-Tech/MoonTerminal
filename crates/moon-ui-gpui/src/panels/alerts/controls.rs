@@ -40,6 +40,9 @@ impl AlertsPanel {
                 div().w(px(90.0)).child(
                     MoonInput::new("alerts-coin")
                         .state(&self.coin_input)
+                        // The Report's own placeholder, not a second wording for the same field:
+                        // the two coin filters sit one panel apart and are read as one control.
+                        .placeholder(t!("report.filter.coin_ph").to_string())
                         .size(design::INPUT_SIZE)
                         // A filter with no ✕ can only be undone by holding backspace.
                         .cleanable(true),

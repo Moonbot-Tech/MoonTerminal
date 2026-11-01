@@ -285,9 +285,7 @@ impl SettingsView {
 
     /// Ask for a new group's name; the selected core moves there on confirm.
     fn ask_new_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let input = cx.new(|cx| {
-            MoonInputState::new(window, cx).placeholder(t!("conn.card.new_group_ph").to_string())
-        });
+        let input = cx.new(|cx| MoonInputState::new(window, cx));
         let weak = cx.entity().downgrade();
         window.open_unique_moon_dialog("cores-new-group", cx, move |dialog, _window, cx| {
             let p = MoonPalette::active(cx);
@@ -332,7 +330,11 @@ impl SettingsView {
                         .child(t!("conn.card.new_group_title").to_string()),
                 )
                 .content(move |content, _window, _cx| {
-                    content.child(MoonInput::new("cores-new-group-name").state(&field))
+                    content.child(
+                        MoonInput::new("cores-new-group-name")
+                            .state(&field)
+                            .placeholder(t!("conn.card.new_group_ph").to_string()),
+                    )
                 })
                 .footer(
                     h_flex()
@@ -361,10 +363,7 @@ impl SettingsView {
         };
         if let Some(row) = self.conn.get(i) {
             let key = row.key.clone();
-            let address = row.address.clone();
             key.update(cx, |st, c| st.set_value(text.clone(), window, c));
-            let placeholder = super::address_placeholder(&text);
-            address.update(cx, |st, c| st.set_placeholder(placeholder, window, c));
         }
         self.edit_selected(cx, |s| {
             apply_pasted_key(s, &text);

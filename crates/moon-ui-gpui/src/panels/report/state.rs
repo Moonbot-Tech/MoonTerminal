@@ -607,11 +607,8 @@ impl ReportPanel {
         .detach();
 
         let strategy_name_mask = String::new();
-        let strategy_name_mask_input = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .default_value(strategy_name_mask.clone())
-                .placeholder(t!("report.filter.strategy_mask_ph").to_string())
-        });
+        let strategy_name_mask_input =
+            cx.new(|cx| MoonInputState::new(window, cx).default_value(strategy_name_mask.clone()));
         let coin_query = String::new();
         // Both fields sit on the picker's whole-minute grid: the lower bound as picked, the upper
         // one floored into the range it came from.
@@ -623,11 +620,7 @@ impl ReportPanel {
             .as_ref()
             .and_then(|scope| scope.date_to)
             .map(|secs| secs.div_euclid(date_range::MINUTE) * date_range::MINUTE);
-        let coin = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .default_value(coin_query.clone())
-                .placeholder(t!("report.filter.coin_ph").to_string())
-        });
+        let coin = cx.new(|cx| MoonInputState::new(window, cx).default_value(coin_query.clone()));
         // A restored bound is read on the axis it will be COMPARED on, not on the display zone.
         let bound_zone = moon_core::db::ReportAxis::identity_core_local().zone();
         let from = cx.new(|cx| {

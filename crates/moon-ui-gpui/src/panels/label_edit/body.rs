@@ -112,6 +112,14 @@ pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyEl
     };
     // Whether the module has a name to print at all: the user's own, or the preset's.
     let named = !name_input.read(cx).value().trim().is_empty() || row.preset.is_some();
+    // A preset module shows ITS OWN name as the placeholder rather than the generic hint: the
+    // field is empty because the name comes from the dictionary, and an empty box under a chart
+    // that clearly prints "Позиция" otherwise reads as a name that got lost. Typing here overrides
+    // it; clearing the field gives the translated name back.
+    let name_hint = row
+        .title_key()
+        .map(|key| t!(key).to_string())
+        .unwrap_or_else(|| t!("chart_labels.row_name_hint").to_string());
 
     // What the module is called, and whether the chart prints that name above its figures.
     let name_row = h_flex()
@@ -128,6 +136,7 @@ pub(super) fn dialog_body(state: &Entity<LabelEditState>, cx: &mut App) -> AnyEl
             div().flex_1().child(
                 MoonInput::new("le-name")
                     .state(&name_input)
+                    .placeholder(name_hint)
                     .size(design::INPUT_SIZE),
             ),
         )

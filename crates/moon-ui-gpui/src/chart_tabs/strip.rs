@@ -426,6 +426,7 @@ impl Render for ChartTabs {
             .child(
                 MoonInput::new("tabs-coin-search")
                     .state(&self.coin_input)
+                    .placeholder(rust_i18n::t!("chart.coin.search").to_string())
                     .cleanable(true)
                     .size(design::INPUT_SIZE),
             );

@@ -663,24 +663,54 @@ fn settings_dirty_signature_covers_or_explicitly_excludes_every_config_field() {
     }
 }
 
-/// `connections/mod.rs:build_conn` must put key and bundle placeholders on their input state,
-/// while `cores.rs:core_card` keeps its state-bound inputs free of widget placeholders. Breakage:
-/// moving either placeholder back to `MoonInput` drops it silently, leaving an empty field blank.
+/// `connections/cores.rs:core_card` must draw the key, address and bundle hints on its
+/// `MoonInput` widgets, which apply them on every render. Breakage: seeding them on the input
+/// state again freezes them in the language the Settings window was opened in, and the address
+/// hint stops following the key typed or pasted into the row.
 #[test]
-fn connections_placeholders_live_on_state_not_state_bound_widgets() {
-    let connections = read_src("settings/connections/mod.rs");
-    let build_conn = code_only(braced_body(&connections, "fn build_conn("));
+fn connections_placeholders_are_drawn_by_the_card() {
     let cores = read_src("settings/connections/cores.rs");
     let card = code_only(braced_body(&cores, "pub(crate) fn core_card("));
+    for hint in ["conn.key_ph", "address_placeholder(", "conn.bundle_ph"] {
+        assert!(
+            card.contains(hint),
+            "connections/cores.rs:core_card must draw the {hint} placeholder"
+        );
+    }
+}
 
-    assert!(
-        build_conn.contains("conn.key_ph") && build_conn.contains("conn.bundle_ph"),
-        "connections/mod.rs:build_conn must seed both state-owned placeholders"
+/// No input state may be built with an inline translated placeholder. MoonUI keeps a state's
+/// placeholder exactly as it was set, so a `t!()` read once at construction stays in that language
+/// after a live locale switch; the hint belongs on the `MoonInput` that draws the state, which
+/// applies it on every render (or, for a cached state, on `sync_placeholder` at every lookup, as
+/// `analytics/tuner/shell.rs:shell_cfg_input` does). Breakage:
+/// `MoonInputState::new(window, cx).placeholder(t!("…"))` anywhere in the crate — the coin search
+/// fields kept "Монета" in an English UI exactly this way. A text scan, it sees only the inline
+/// shape: a translated hint passed in through a variable or a helper argument is not caught.
+#[test]
+fn input_states_take_no_translated_placeholder() {
+    let mut sources = Vec::new();
+    rust_sources(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut sources,
     );
-    assert!(
-        !card.contains(".placeholder("),
-        "connections/cores.rs:core_card must not put placeholders on state-bound MoonInput widgets"
-    );
+    for path in sources {
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+            .replace("\r\n", "\n");
+        let code: String = code_only(&text).split_whitespace().collect();
+        for (at, _) in code.match_indices("MoonInputState::new(") {
+            let rest = &code[at..];
+            let chain = &rest[..rest.find(';').unwrap_or(rest.len())];
+            assert!(
+                !chain.contains(".placeholder(t!(")
+                    && !chain.contains(".placeholder(rust_i18n::t!("),
+                "{} builds an input state with a translated placeholder; put it on the MoonInput \
+                 that draws the state",
+                path.display()
+            );
+        }
+    }
 }
 
 /// `connections/cores.rs:core_card` must keep the explanations of its compact controls: the

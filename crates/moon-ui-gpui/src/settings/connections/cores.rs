@@ -748,6 +748,7 @@ pub(crate) fn core_card(
                     MoonInput::new("core-card-key")
                         .state(inputs.key)
                         .mono(true)
+                        .placeholder(t!("conn.key_ph").to_string())
                         .small()
                         .mask_toggle()
                         .cleanable(true)
@@ -781,6 +782,9 @@ pub(crate) fn core_card(
                 MoonInput::new("core-card-addr")
                     .state(inputs.address)
                     .mono(true)
+                    // Empty follows the key, so the key's own endpoint is the placeholder: the
+                    // row always shows which address is in effect, and typing replaces it (#616).
+                    .placeholder(super::address_placeholder(&inputs.key.read(cx).value()))
                     .small()
                     .cleanable(true)
                     .when(card.addr_invalid, |i| {
@@ -1047,6 +1051,10 @@ pub(crate) fn core_card(
                     MoonInput::new("core-card-bundle-input")
                         .state(inputs.bundle)
                         .mono(true)
+                        // An empty bundle field is the DEFAULT, not an omission: the core then
+                        // follows the global chart setting. The hint is what says so, and without
+                        // it the field reads as a blank box nobody can interpret.
+                        .placeholder(t!("conn.bundle_ph").to_string())
                         .small(),
                 )
                 .into_any_element(),
