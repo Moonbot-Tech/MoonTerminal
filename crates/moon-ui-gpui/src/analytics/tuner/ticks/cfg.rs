@@ -710,6 +710,33 @@ impl AnalyticsView {
         }
     }
 
+    /// Put in force which kinds owe their entry order's life, as the ticks and В1 now say
+    /// (`entry_tape.rs`). Only a change of some kind's answer counts — another exit tick, or one
+    /// entry field swapped for another of the same kind, judges nothing again. A change judges
+    /// every row again and recounts the Fact column with them: none judged under the other
+    /// requirement may be carried. A running search keeps the sample it started on: the change
+    /// waits for it, and its landing asks again — an answer through `arm_ticks_variants`, a miss
+    /// directly. A load still in flight reads the new requirement when its tape stage runs.
+    ///
+    /// Returns whether a tape stage was started here, whose fold arms the variant columns.
+    pub(in crate::analytics::tuner) fn ticks_sync_entry_tape(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if matches!(self.ticks.sugg, super::state::SuggState::Running { .. })
+            || !super::entry_tape::replace(self.ticks.entry_tape_wanted())
+        {
+            return false;
+        }
+        self.ticks.judged_under = None;
+        self.ticks.reload_key = None;
+        // A load in flight may already have chosen rows to carry under the other requirement.
+        self.ticks.entry_tape_moved = true;
+        let judged_again = matches!(self.ticks.data, crate::load_state::LoadState::Ready(_));
+        self.ticks_replay_again(cx);
+        judged_again
+    }
+
     /// Every model setting back to its measured default; the entry method, a search setting,
     /// stays.
     fn ticks_reset_model(&mut self, cx: &mut Context<Self>) {
@@ -733,6 +760,8 @@ impl AnalyticsView {
         if model_cfg::replace(settings) {
             self.persist_ticks_settings(cx);
             self.arm_ticks_variants(cx);
+            // The method decides which entry fields a tick admits.
+            self.ticks_sync_entry_tape(cx);
         }
         cx.notify();
     }

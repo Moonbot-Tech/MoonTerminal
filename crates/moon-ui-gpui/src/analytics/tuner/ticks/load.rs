@@ -32,8 +32,8 @@ use moon_core::db::order_traces::{TraceEntry, read_many};
 use moon_core::db::tuner::ticks::params::range::{FieldSpan, Population, field_span};
 use moon_core::db::tuner::ticks::unmodelled::watched_keys;
 use moon_core::db::tuner::ticks::{
-    Deal, DealsRead, ModelSettings, OwnLines, ParamKind, TICK_PARAMS, deltas, infer_tick,
-    model_window, params, prepare_deal, quotes, required_spans, verify,
+    Deal, DealsRead, EntryParams, ModelSettings, OwnLines, ParamKind, TICK_PARAMS, deltas,
+    infer_tick, model_window, params, prepare_deal, quotes, required_spans, verify,
 };
 use moon_core::db::tuner::{StrategyValuesReader, strategy_current_values, strategy_values_at};
 use moon_core::feed::report_traces::ArchivedLineKind;
@@ -633,7 +633,25 @@ impl AnalyticsView {
         let model = super::model_cfg::current();
         // Rows carried under settings changed since stage B read them are not carried: the
         // stage reads and replays them too, so the table folds under `model` alone.
-        let carried = carried.filter(|(m, _)| *m == model).map(|(_, uids)| uids);
+        let mut carried = carried.filter(|(m, _)| *m == model).map(|(_, uids)| uids);
+        let mut key = key;
+        // This window's ticks are put in force before any row is judged (`entry_tape.rs`). A
+        // change makes every carried row's verdict one of the other requirement — as does one a
+        // tick put in force after this load chose its carried rows.
+        if super::entry_tape::replace(self.ticks.entry_tape_wanted()) {
+            self.ticks.entry_tape_moved = true;
+        }
+        // Then coverage may shrink, not only grow: a row held whole for its exit alone is
+        // missing once its entry is owed again (`update_rows`). Cleared only by a stage that
+        // folds: one superseded before its fold leaves the next to do it.
+        let rejudged = self.ticks.entry_tape_moved;
+        if rejudged {
+            carried = None;
+            key = key.map(|key| ReloadKey {
+                sample: SamplePolicy::current(),
+                ..key
+            });
+        }
         // This stage's own generation: a stage started after it — a changed setting re-judging
         // the table under the same load — makes its answer stale, even though a cancelled
         // stage still hands its partial rows to `store` (`spawn_latest_db`).
@@ -655,6 +673,7 @@ impl AnalyticsView {
         if targets.is_empty() {
             let line = tape_line(data);
             log_changed(&mut self.ticks.logged.1, line);
+            self.ticks.entry_tape_moved = false;
             self.ticks.tape_reading = false;
             self.ticks.judged_under = Some(model);
             self.ticks
@@ -739,6 +758,8 @@ impl AnalyticsView {
                 }
                 this.ticks.tape_reading = false;
                 this.ticks.judged_under = Some(model);
+                // This stage's rows stand under the requirement in force.
+                this.ticks.entry_tape_moved = false;
                 log_changed(&mut this.ticks.logged.0, line);
                 // Every row this stage judged has its settled miss replaced by this stage's word.
                 let settled = Arc::make_mut(&mut this.ticks.settled);
@@ -758,7 +779,7 @@ impl AnalyticsView {
                         },
                     );
                 }
-                this.ticks.update_rows(rows);
+                this.ticks.update_rows(rows, rejudged);
                 this.ticks
                     .settle_key(key, moon_core::util::time::now_unix_ms_i64());
                 if let Some(data) = this.ticks.data.data() {
@@ -1482,22 +1503,13 @@ pub(super) fn replay_row_with(
         super::tail::current_s(),
         chrono::Utc::now().timestamp_millis(),
     );
-    let required = if short_allowed {
-        super::tail::through_close(&window)
-    } else {
-        required_spans(&window)
-    };
-    if ticks.is_empty() || !covered.covers(&required) {
+    let (exit_held, entry_held) = held_sides(&covered, &window, row.deal.buy_ms, short_allowed);
+    if ticks.is_empty() || !exit_held {
         row.tape = TapeStatus::Missing;
         row.verdict = None;
         return Some(short_allowed);
     }
-    row.tape = TapeStatus::Covered;
-    // The price grid off the prints themselves, as the `real_data` bench reads it: the live
-    // catalog has no tick to give — its `price_step` is the chart's `ask / 5000`, off the grid, and
-    // rounding every level to it moved the lines off the core's on every row (2026-09-26: the
-    // axis ✓ 65 % where the bench on the same trades read 92 %).
-    row.deal.tick = infer_tick(&ticks);
+    let entry_short = !entry_held;
     let keys = params::param_keys();
     let values = timed!(STRATEGY_VALUES, || {
         let (sid, core, at) = (
@@ -1517,6 +1529,23 @@ pub(super) fn replay_row_with(
     };
     let entry = params::entry_params_for(&row.deal.kind, &sv, model);
     let exit = params::exit_params(&sv, model);
+    // An entry model walks the order from its creation; a tape that starts later cannot judge it.
+    // Owed only while the ticks admit an entry field of the deal's kind (`entry_tape.rs`): then
+    // the row waits for
+    // that stretch like any missing tape. Otherwise the fact's entry is taken and the exit is
+    // judged on the tape it has.
+    let entry_unjudgeable = entry_short && !matches!(entry, EntryParams::Fact);
+    if entry_unjudgeable && super::entry_tape::required_for(&row.deal.kind) {
+        row.tape = TapeStatus::Missing;
+        row.verdict = None;
+        return Some(short_allowed);
+    }
+    row.tape = TapeStatus::Covered;
+    // The price grid off the prints themselves, as the `real_data` bench reads it: the live
+    // catalog has no tick to give — its `price_step` is the chart's `ask / 5000`, off the grid, and
+    // rounding every level to it moved the lines off the core's on every row (2026-09-26: the
+    // axis ✓ 65 % where the bench on the same trades read 92 %).
+    row.deal.tick = infer_tick(&ticks);
     // The deltas along the window, before the record's inputs: the stop anchor reads the stop
     // through them. The bars they were read off go with the deal for SellLevel's look-back.
     if let Some(cache) = klines {
@@ -1560,13 +1589,52 @@ pub(super) fn replay_row_with(
     row.verdict = Some(verify(
         &row.deal,
         &ticks,
-        &entry,
+        if entry_unjudgeable {
+            &EntryParams::Fact
+        } else {
+            &entry
+        },
         &exit,
         lines.entry_points.as_deref(),
         lines.exit_points.as_deref(),
     ));
     row.ticks = Some(tape::PackedTape::pack(ticks));
     Some(short_allowed)
+}
+
+/// What a deal's held coverage reaches, as `(exit, entry)`: the exit model starts at the fill,
+/// so it owes the window opened there; the entry model walks the order from its creation, where
+/// the window itself opens. The station and the close-time capture both record from the fill, so
+/// an order that waited longer than the margin less the run-up holds the first and not the
+/// second.
+///
+/// Args:
+///     covered: The worker's coverage of the window.
+///     window: The deal's window (`model_window`), opened at the order's creation when known.
+///     buy_ms: The fill.
+///     short_allowed: An unfillable short tail is admitted: only the stretch through the close
+///         is owed (`tail::through_close`).
+fn held_sides(
+    covered: &Coverage,
+    window: &ReplayWindow,
+    buy_ms: i64,
+    short_allowed: bool,
+) -> (bool, bool) {
+    let required = |window: &ReplayWindow| {
+        if short_allowed {
+            super::tail::through_close(window)
+        } else {
+            required_spans(window)
+        }
+    };
+    let from_fill = ReplayWindow {
+        open_ms: window.open_ms.max(buy_ms),
+        ..*window
+    };
+    (
+        covered.covers(&required(&from_fill)),
+        covered.covers(&required(window)),
+    )
 }
 
 /// Whether a row may be judged on the tape through its close alone: its held trail is below the

@@ -59,12 +59,14 @@ pub(in crate::analytics::tuner) fn signature_of<'a>(
 
 /// The settings a row's held read and its "missing" verdict were made under, beside the model's:
 /// the shortest tail (the asked tail and the short-tail floor), the model's margin and the
-/// long-position split (the window asked for).
+/// long-position split (the window asked for), and which kinds owe their entry order's life
+/// (`entry_tape.rs`, as its bits).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::analytics) struct SamplePolicy {
     pub(in crate::analytics::tuner) min_tail_s: u32,
     pub(in crate::analytics::tuner) margin_ms: i64,
     pub(in crate::analytics::tuner) long_position_ms: i64,
+    pub(in crate::analytics::tuner) entry_tape: u8,
 }
 
 impl SamplePolicy {
@@ -74,6 +76,7 @@ impl SamplePolicy {
             min_tail_s: super::tail::effective_s(),
             margin_ms: moon_core::market::trade_replay::margin_ms(),
             long_position_ms: moon_core::market::trade_replay::long_position_ms(),
+            entry_tape: super::entry_tape::owed(),
         }
     }
 }

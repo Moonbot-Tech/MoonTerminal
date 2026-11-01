@@ -467,6 +467,7 @@ impl AnalyticsView {
             }
         }
         self.persist_ticks_settings(cx);
+        self.ticks_sync_entry_tape(cx);
         cx.notify();
     }
 
@@ -915,6 +916,7 @@ impl AnalyticsView {
                                     this.ticks.locked.insert(key.to_string());
                                 }
                                 this.persist_ticks_settings(cx);
+                                this.ticks_sync_entry_tape(cx);
                                 cx.notify();
                             });
                         }
@@ -939,6 +941,7 @@ impl AnalyticsView {
                             el.on_click(cx.listener(move |this, _, _, cx| {
                                 this.ticks.locked.insert(key.to_string());
                                 this.persist_ticks_settings(cx);
+                                this.ticks_sync_entry_tape(cx);
                                 this.ticks_set_cell(key, value.clone(), cx);
                             }))
                         },

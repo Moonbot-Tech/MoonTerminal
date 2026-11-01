@@ -179,6 +179,7 @@ impl Render for Probe {
                     .child(toolbar_el(
                         self.mode,
                         t!("analytics.tuner.fields_title").to_string(),
+                        None,
                         Some(&writes),
                         &acts,
                         cx,

@@ -273,3 +273,34 @@ fn rules_defaults_and_selection_reach_the_scope_signature() {
     )];
     assert_ne!(base, sign(&reselected, &defaults, &deps), "selection moved");
 }
+
+/// A hook order that waited 289 s before its fill, held as the station records it — from the
+/// fill back by a 300 s margin: the exit's stretch is whole, the order's life before the fill is
+/// not. Requiring the order's life for both dropped such deals from an exit search too.
+#[test]
+fn a_tape_from_the_fill_holds_the_exit_and_not_the_orders_life() {
+    use moon_core::db::tuner::ticks::model_window_at;
+    use moon_core::market::trade_replay::Coverage;
+    let buy = 1_793_511_529_850;
+    let close = buy + 29_350;
+    let margin = 300_000;
+    let window =
+        model_window_at(Some(buy - 288_802), buy, close, margin, 30 * 60_000).expect("a window");
+    let from_fill = Coverage::one((buy - margin, close + margin));
+    assert_eq!(
+        super::held_sides(&from_fill, &window, buy, false),
+        (true, false),
+        "exit held, entry order's life not"
+    );
+    let from_creation = Coverage::one((buy - 288_802 - 30_000, close + margin));
+    assert_eq!(
+        super::held_sides(&from_creation, &window, buy, false),
+        (true, true)
+    );
+    let late = Coverage::one((buy - 10_000, close + margin));
+    assert_eq!(
+        super::held_sides(&late, &window, buy, false),
+        (false, false),
+        "the exit still owes its run-up before the fill"
+    );
+}

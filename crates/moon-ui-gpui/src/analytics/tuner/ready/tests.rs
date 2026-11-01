@@ -105,6 +105,7 @@ fn key(scope_gen: u64, report_gen: u64) -> ReadyKey {
             min_tail_s: 30,
             margin_ms: 0,
             long_position_ms: 0,
+            entry_tape: crate::analytics::tuner::ticks::entry_tape::ALL,
         },
         refusal_revision: 0,
         addresses_rev: 0,
@@ -541,6 +542,52 @@ fn unlisted_readiness_fetches_and_replays_resolved_rows() {
     )
     .expect("not cancelled");
     assert_eq!(counts["200@1"].covered, 1);
+}
+
+/// A covered row whose tail is short of the floor is not fully held: a filing on its market can
+/// turn it fit, so its strategy waits on that market. One holding the floor does not. Filed as
+/// covered, the short one's strategy stayed one fit deal behind the card after the station
+/// extended its tail.
+#[test]
+fn a_covered_row_with_a_short_tail_waits_on_its_market() {
+    let groups = vec![
+        ("1@1".into(), vec![(deal(2, 1, 1), Some(address()))]),
+        ("2@1".into(), vec![(deal(4, 2, 1), Some(address()))]),
+    ];
+    let progress = ReadyProgress::default();
+    count_strategies(
+        groups,
+        fake_fetch,
+        |fetched| {
+            fake_replay(fetched)
+                .into_iter()
+                .map(|mut row| {
+                    let trail = if row.deal.report_uid == 2 {
+                        10_000
+                    } else {
+                        60_000
+                    };
+                    row.held = Some((0, trail));
+                    row
+                })
+                .collect()
+        },
+        &progress,
+        limits(64),
+        0,
+        30,
+    )
+    .expect("not cancelled");
+    let mut waiting = progress.drain_waiting();
+    waiting.sort();
+    let market = ("2:00000000".to_string(), "XALPHAUSDT".to_string());
+    assert_eq!(
+        waiting,
+        vec![
+            ("1@1".to_string(), market.clone(), true),
+            ("2@1".to_string(), market, false),
+        ]
+    );
 }
 
 /// A fake stage C read: the targets as rows, nothing asked of a worker.

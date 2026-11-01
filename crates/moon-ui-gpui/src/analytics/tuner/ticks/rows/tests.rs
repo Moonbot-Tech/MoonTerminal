@@ -202,11 +202,31 @@ fn stale_covered_answers_cannot_shorten_a_refetched_tail() {
     let mut answer = state.data.data().unwrap().rows[1].clone();
     answer.held = Some((30_000, 30_000));
     state.data.data_mut().unwrap().rows[1].held = Some((30_000, 180_000));
-    state.update_rows(vec![answer]);
+    state.update_rows(vec![answer], false);
     assert_eq!(
         state.data.data().unwrap().rows[1].held,
         Some((30_000, 180_000))
     );
+}
+
+/// A row covered for its exit alone is missing once its entry is owed again: the stage that
+/// judges under the new requirement must fold its "missing" over the old "covered", or ticking
+/// an entry field back would leave the Fact column counting deals it no longer holds.
+#[test]
+fn a_rejudged_stage_can_take_a_rows_coverage_back() {
+    let mut state = state();
+    assert_eq!(state.data.data().unwrap().rows[1].tape, TapeStatus::Covered);
+    let mut answer = state.data.data().unwrap().rows[1].clone();
+    answer.tape = TapeStatus::Missing;
+    answer.verdict = None;
+    state.update_rows(vec![answer.clone()], false);
+    assert_eq!(
+        state.data.data().unwrap().rows[1].tape,
+        TapeStatus::Covered,
+        "a read from before a walk does not undo its coverage"
+    );
+    state.update_rows(vec![answer], true);
+    assert_eq!(state.data.data().unwrap().rows[1].tape, TapeStatus::Missing);
 }
 
 /// Refills need a visible progress mark, while Stop and reload must restore held pad coverage.
@@ -242,13 +262,13 @@ fn a_stale_covered_read_cannot_reopen_a_refused_short_tail() {
     let row = &mut state.data.data_mut().unwrap().rows[1];
     row.tape = TapeStatus::Refused(TickStatus::NoTrades);
     row.held = answer.held;
-    state.update_rows(vec![answer.clone()]);
+    state.update_rows(vec![answer.clone()], false);
     assert_eq!(
         state.data.data().unwrap().rows[1].tape,
         TapeStatus::Refused(TickStatus::NoTrades)
     );
     answer.held = Some((30_000, 180_000));
-    state.update_rows(vec![answer]);
+    state.update_rows(vec![answer], false);
     assert_eq!(state.data.data().unwrap().rows[1].tape, TapeStatus::Covered);
 }
 

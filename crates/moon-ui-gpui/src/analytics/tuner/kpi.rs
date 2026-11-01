@@ -542,6 +542,25 @@ pub(super) fn kpi_matrix_body(
     )
 }
 
+/// The title caption while settled figures are refreshed: the scope, then "Loading…". Local
+/// progress that blocks no navigation, in the title row: as a line above the matrix it pushed
+/// every row down and back on each read.
+///
+/// Args:
+///     caption: The scope caption.
+///     refreshing: The figures shown are the previous read's.
+fn refreshing_caption(caption: String, refreshing: bool) -> String {
+    if !refreshing {
+        return caption;
+    }
+    let loading = t!("common.loading");
+    if caption.is_empty() {
+        loading.to_string()
+    } else {
+        format!("{caption} · {loading}")
+    }
+}
+
 /// Render the shared matrix with optional axis captions, plain rows and an unclosed estimate.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn kpi_matrix_body_with(
@@ -573,9 +592,12 @@ pub(super) fn kpi_matrix_body_with(
         p,
         move |_: &bool, window: &mut Window, app: &mut App| on_collapse(window, app),
     );
-    // No empty state by design: `stats.len() == variants.len()` always, so
-    // the only non-data cases are loading / not-ready / read failure.
+    // No empty-data note: the non-data cases are loading / not-ready / read failure. A refresh
+    // may stand in fewer columns than the headings name, down to none (the Entry/Exit axis
+    // before its first figures): a placeholder heading draws as dashes, a heading of figures
+    // not stood in waits for them (`kpi_columns`).
     let refreshing = matches!(stats, LoadState::Loading { stale: Some(_) });
+    let caption = refreshing_caption(caption, refreshing);
     let stats = match stats.view(|_| false) {
         Ok(s) => s.clone(),
         Err(note) => {
@@ -771,16 +793,6 @@ pub(super) fn kpi_matrix_body_with(
         rows.len()
     };
     let mut body = v_flex().w_full();
-    if refreshing {
-        // Keep the settled figures visible, with local progress instead of blocking navigation.
-        body = body.child(super::super::note_el(
-            "an-tuner-kpi-refresh",
-            crate::load_state::Note::Loading,
-            8.0,
-            p,
-            cx,
-        ));
-    }
     if let Some(note) = opts.sample_note {
         body = body.child(
             div()

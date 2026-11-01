@@ -118,6 +118,9 @@ pub(super) struct ToolbarActs {
 /// Args:
 ///     kind: The axis; it suffixes the element ids.
 ///     title: Card title.
+///     status: A short muted word after the title, such as "Loading…" while the card's
+///         figures are being read. In the title row, it changes no height below it: shown
+///         inside the card it pushed every row under it down and back on each read.
 ///     write: Make a copy / Save, `None` without a selected strategy.
 ///     acts: Handlers.
 ///     cx: App, for scale and text.
@@ -127,6 +130,7 @@ pub(super) struct ToolbarActs {
 pub(super) fn toolbar_el(
     kind: TunerKind,
     title: String,
+    status: Option<String>,
     write: Option<&ToolbarWrite>,
     acts: &ToolbarActs,
     cx: &App,
@@ -152,14 +156,25 @@ pub(super) fn toolbar_el(
         .debug_selector(move || format!("tun-toolbar-{k}"))
         // Let the title yield before the hosting card clips the trailing controls.
         .child(
-            div()
+            h_flex()
                 .flex_1()
                 .min_w_0()
                 .overflow_hidden()
                 .whitespace_nowrap()
+                .items_baseline()
+                .gap(design::ui_px(cx, 8.0))
                 .text_size(design::t_title(cx))
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
+                .child(title)
+                .children(status.map(|status| {
+                    div()
+                        .flex_none()
+                        .debug_selector(move || format!("tun-status-{k}"))
+                        .text_size(design::t_caption(cx))
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(moon(MoonPalette::active(cx).text_muted))
+                        .child(status)
+                })),
         );
     if let Some(write) = write {
         if write.copy {
@@ -399,7 +414,7 @@ impl AnalyticsView {
                 });
             }),
         };
-        toolbar_el(kind, title, write.as_ref(), &acts, cx)
+        toolbar_el(kind, title, None, write.as_ref(), &acts, cx)
     }
 
     /// Bind the mode option to the original draft invalidation, outside the write header.

@@ -47,6 +47,7 @@ mod accuracy;
 pub(super) mod cfg;
 pub(in crate::analytics::tuner) mod columns;
 mod delta_summary;
+pub(in crate::analytics::tuner) mod entry_tape;
 pub(in crate::analytics::tuner) mod estimate;
 pub(crate) mod fetch;
 mod grid;
@@ -519,6 +520,17 @@ impl AnalyticsView {
             }
         };
         let labels = [label];
+        let scope = self.scope_label();
+        // While a load reads, the scope's last settled matrix stands as a refreshing one: the
+        // card keeps its rows, and its title says it is loading.
+        let shown = || {
+            self.ticks
+                .shown_kpi
+                .borrow()
+                .as_ref()
+                .filter(|(label, _)| *label == scope)
+                .map(|(_, stats)| std::sync::Arc::clone(stats))
+        };
         let state = match &self.ticks.kpi {
             crate::load_state::LoadState::NotReady => crate::load_state::LoadState::NotReady,
             crate::load_state::LoadState::Failed(e) => {
@@ -529,10 +541,24 @@ impl AnalyticsView {
             // table judges it and no row is fit yet: the baseline would read as a real
             // "0 trades". A reload carries the judged rows (`load.rs`, stage B), so the numbers
             // stay on screen while it reads the rest.
+            // Without one, the empty matrix of dashes holds the card's shape until figures come.
             _ if stats.is_empty() || (self.ticks.tape_reading && fit == 0) => {
-                crate::load_state::LoadState::Loading { stale: None }
+                crate::load_state::LoadState::Loading {
+                    stale: shown().or_else(|| Some(std::sync::Arc::new(Vec::new()))),
+                }
+            }
+            crate::load_state::LoadState::Ready(_) if self.ticks.tape_reading => {
+                crate::load_state::LoadState::Loading {
+                    stale: Some(std::sync::Arc::new(stats)),
+                }
             }
             crate::load_state::LoadState::Ready(_) => {
+                // The Fact column alone: a variant column stood in would sit under whatever
+                // heading В1 has by then, cleared or retyped.
+                *self.ticks.shown_kpi.borrow_mut() = Some((
+                    scope.clone(),
+                    std::sync::Arc::new(stats.iter().take(1).cloned().collect()),
+                ));
                 crate::load_state::LoadState::Ready(std::sync::Arc::new(stats))
             }
             crate::load_state::LoadState::Loading { stale } => {
@@ -543,17 +569,14 @@ impl AnalyticsView {
         };
         kpi_matrix_card_with(
             &state,
-            self.scope_label(),
+            scope.clone(),
             &base,
             &labels,
             self.kpi_collapsed,
             p,
             cx,
             KpiOpts {
-                title: Some((
-                    t!("analytics.tuner.kpi_title").to_string(),
-                    self.scope_label(),
-                )),
+                title: Some((t!("analytics.tuner.kpi_title").to_string(), scope)),
                 sample_note: self.ticks.data.data().map(|d| {
                     let coverage = sample::caption(set_n, d.all.n, self.ticks.tape_reading);
                     match baseline
