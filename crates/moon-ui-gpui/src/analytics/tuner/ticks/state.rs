@@ -48,7 +48,7 @@ pub(in crate::analytics::tuner) enum TapeStatus {
     /// Nothing, or a hole, inside the window; a fetch may fill it.
     Missing,
     /// No way to ask: the core is not connected, or the coin resolves to no market of its
-    /// catalog. The fetch button skips such rows.
+    /// catalog and to none the local tape store holds. The fetch button skips such rows.
     NoAddress,
     /// A fetch is in flight for this row.
     Fetching,

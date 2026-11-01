@@ -106,6 +106,54 @@ impl CatalogLookup {
             .find(|market| market.eq_ignore_ascii_case(&candidate))
             .cloned()
     }
+
+    /// The names a report row's `coin` would carry on this exchange, for a coin this catalog no
+    /// longer lists — a market delisted after the trade, whose prints the terminal may still
+    /// hold under the name it was filed with.
+    ///
+    /// These are UNVERIFIED spellings: the caller must confirm one against something that only
+    /// a once-listed market can have (the local tape store), never use one as is. An empty
+    /// catalog is catalog-not-ready, not "everything delisted", and answers nothing.
+    ///
+    /// Args:
+    ///     quote: The core's quote setting (`ServerConfig::market`).
+    ///     traded_quote: The core's account currency, when it has stated one.
+    ///     coin: Historical base coin or full market value from the row.
+    ///
+    /// Returns:
+    ///     The candidate market names, most specific first; empty while the catalog is not in.
+    pub fn unlisted_spellings(
+        &self,
+        quote: &str,
+        traded_quote: Option<String>,
+        coin: &str,
+    ) -> Vec<String> {
+        if self.snapshot.markets().market_count() == 0 {
+            return Vec::new();
+        }
+        spellings_on(self.exchange, quote, traded_quote, coin)
+    }
+}
+
+/// How `coin` is spelled into a market on `exchange`, by the exchange's naming rules alone.
+///
+/// The account currency wins over the quote setting, as in [`CatalogLookup::resolve_market`]:
+/// the setting defaults to `BTCUSDT` and is not what the core trades in. A value that already
+/// is a market of that quote (or carries a HIP-3 DEX prefix) is its own only spelling.
+pub(super) fn spellings_on(
+    exchange: Exchange,
+    quote: &str,
+    traded_quote: Option<String>,
+    coin: &str,
+) -> Vec<String> {
+    let quote = traded_quote
+        .filter(|traded| !traded.is_empty())
+        .unwrap_or_else(|| crate::symbol::resolve_quote_on(quote, exchange));
+    let parsed = crate::symbol::parse::split_market(coin, exchange);
+    if quote.is_empty() || parsed.dex.is_some() || parsed.quote.eq_ignore_ascii_case(&quote) {
+        return vec![coin.to_string()];
+    }
+    crate::symbol::parse::market_names_for(coin, &quote, exchange).collect()
 }
 
 /// How `market` is named to the user, from `catalog` first and from its name otherwise.
@@ -154,3 +202,6 @@ pub(super) fn label_in(
         // not sent its list yet.
         .unwrap_or_else(|| MarketLabel::from_name(market, exchange))
 }
+
+#[cfg(test)]
+mod tests;
