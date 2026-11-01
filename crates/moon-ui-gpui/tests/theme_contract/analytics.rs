@@ -1056,9 +1056,17 @@ fn auto_report_mask_and_grouped_toolbar_stay_scope_safe() {
         "Report filter concepts must stay grouped and wrap without horizontal scrolling"
     );
 
+    // The hint is drawn by the field, not seeded on the state, so it follows a live locale switch.
+    assert!(
+        code_only(braced_body(
+            &controls,
+            "pub(super) fn strategy_name_mask_field("
+        ))
+        .contains(".placeholder(t!(\"report.filter.strategy_mask_ph\")"),
+        "the retained mask input must keep its placeholder"
+    );
     let construction = braced_body(&state, "pub(crate) fn new_with_scope(");
     for needle in [
-        "report.filter.strategy_mask_ph",
         "&strategy_name_mask_input",
         "panel.strategy_name_mask = value;",
         "panel.persist_filters(None, cx);",

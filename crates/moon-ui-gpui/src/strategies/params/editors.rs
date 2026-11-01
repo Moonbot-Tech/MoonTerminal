@@ -154,9 +154,13 @@ impl StrategiesView {
                     .tone(MoonTone::Warning)
                     .selected(dirty || differ)
                     .disabled(!active);
-                if differ {
-                    input = input.placeholder(t!("common.mixed_values").to_string());
-                }
+                // Set even when the values agree: MoonUI copies the hint into the shared state, so
+                // a conditional one would outlive the selection that called for it.
+                input = input.placeholder(if differ {
+                    t!("common.mixed_values").to_string()
+                } else {
+                    String::new()
+                });
                 h_flex()
                     .w_full()
                     .items_center()
@@ -316,9 +320,12 @@ impl StrategiesView {
                             })
                             .selected(dirty || differ)
                             .disabled(!active);
-                    if differ {
-                        input = input.placeholder(t!("common.mixed_values").to_string());
-                    }
+                    // Set even when the values agree, as in the colour arm above.
+                    input = input.placeholder(if differ {
+                        t!("common.mixed_values").to_string()
+                    } else {
+                        String::new()
+                    });
                     input.into_any_element()
                 }
             }

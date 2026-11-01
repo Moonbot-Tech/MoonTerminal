@@ -991,8 +991,13 @@ impl AnalyticsView {
             TunerKind::Ticks => self.ticks.inputs.get(id),
             TunerKind::Coins => None,
         };
-        if let Some(state) = cached {
-            return state.clone();
+        if let Some(state) = cached.cloned() {
+            // The caller translates the hint, so re-apply it: a cached field would otherwise keep
+            // the language it was created in. It redraws only when the text actually changed.
+            state.update(cx, |st, cx| {
+                st.sync_placeholder(placeholder.to_string(), cx)
+            });
+            return state;
         }
         let value = match (kind, which) {
             (TunerKind::Filter, CfgInput::MinTrades) => self.tuner.min_trades.clone(),

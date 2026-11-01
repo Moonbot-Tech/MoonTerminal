@@ -217,6 +217,7 @@ pub(super) fn nav_sidebar(
     let p = MoonPalette::active(cx);
     let search = MoonInput::new("settings-nav-search")
         .state(query)
+        .placeholder(t!("settings.search.placeholder").to_string())
         .size(nav_search_size(cx))
         .cleanable(true)
         .prefix(

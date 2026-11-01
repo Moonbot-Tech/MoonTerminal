@@ -125,15 +125,7 @@ pub(crate) fn open_label_edit(
     on_dismiss: impl Fn(&mut App) + 'static,
     on_open_arb: impl Fn(&mut Window, &mut App) + 'static,
 ) {
-    // A preset module shows ITS OWN name as the placeholder rather than the generic hint: the
-    // field is empty because the name comes from the dictionary, and an empty box under a chart
-    // that clearly prints "Позиция" otherwise reads as a name that got lost. Typing here overrides
-    // it; clearing the field gives the translated name back.
-    let hint = row
-        .title_key()
-        .map(|key| t!(key).to_string())
-        .unwrap_or_else(|| t!("chart_labels.row_name_hint").to_string());
-    let name_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder(hint));
+    let name_input = cx.new(|cx| MoonInputState::new(window, cx));
     name_input.update(cx, |st, c| st.set_value(row.name.clone(), window, c));
     let state = cx.new(|_| LabelEditState {
         row,

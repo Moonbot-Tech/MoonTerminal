@@ -64,7 +64,6 @@ use moon_ui::{
 };
 
 use moon_core::session::CoreId;
-use rust_i18n::t;
 
 use crate::design::moon;
 use crate::panels::RenderGate;
@@ -184,11 +183,7 @@ impl AlertsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // The Report's own placeholder, not a second wording for the same field: the two coin
-        // filters sit one panel apart and are read as one control.
-        let coin_input = cx.new(|cx| {
-            MoonInputState::new(window, cx).placeholder(t!("report.filter.coin_ph").to_string())
-        });
+        let coin_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(
             &coin_input,
             |this: &mut Self, input, ev: &MoonInputEvent, cx| {

@@ -239,8 +239,7 @@ impl NewsView {
         .detach();
 
         // Search input: a change only re-filters at render time, so just repaint.
-        let query =
-            cx.new(|cx| MoonInputState::new(window, cx).placeholder(t!("news.search").to_string()));
+        let query = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(&query, |_this, _e, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
                 cx.notify();
@@ -1251,6 +1250,7 @@ impl Render for NewsView {
                 div().w(design::font_w_px(cx, 150.0)).flex_none().child(
                     MoonInput::new("news-search")
                         .state(&self.query)
+                        .placeholder(t!("news.search").to_string())
                         .size(design::INPUT_SIZE)
                         .cleanable(true),
                 ),

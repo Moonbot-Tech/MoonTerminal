@@ -248,10 +248,12 @@ fn tree_op_name_input(
     id: impl Into<SharedString>,
     input: &Entity<MoonInputState>,
 ) -> impl IntoElement {
-    div()
-        .w_full()
-        .min_w_0()
-        .child(MoonInput::new(id).state(input).size(design::INPUT_SIZE))
+    div().w_full().min_w_0().child(
+        MoonInput::new(id)
+            .state(input)
+            .placeholder(t!("dialogs.name_ph").to_string())
+            .size(design::INPUT_SIZE),
+    )
 }
 
 /// Build the tree-op dialog body for the current `TreeOp`.
@@ -819,11 +821,7 @@ impl StrategiesView {
     fn ensure_op_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.op.is_some() && self.op_input.is_none() {
             let init = self.op_input_init.clone();
-            self.op_input = Some(cx.new(|cx| {
-                MoonInputState::new(window, cx)
-                    .default_value(init)
-                    .placeholder(t!("dialogs.name_ph").to_string())
-            }));
+            self.op_input = Some(cx.new(|cx| MoonInputState::new(window, cx).default_value(init)));
         }
     }
 

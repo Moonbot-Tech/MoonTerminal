@@ -415,10 +415,7 @@ impl OrdersPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // The Report's placeholder, as the Alerts coin filter uses: one control, one wording.
-        let coin_input = cx.new(|cx| {
-            MoonInputState::new(window, cx).placeholder(t!("report.filter.coin_ph").to_string())
-        });
+        let coin_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(
             &coin_input,
             |this: &mut Self, input, ev: &MoonInputEvent, cx| {

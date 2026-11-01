@@ -6,7 +6,6 @@
 
 use gpui::*;
 use moon_ui::{MoonInputEvent, MoonInputState};
-use rust_i18n::t;
 use std::time::Duration;
 
 use super::add_stack::detect_cap::resolved_max_charts_evict;
@@ -389,9 +388,7 @@ impl DetachedChartHost {
             },
         )
         .detach();
-        let coin_input = cx.new(|cx| {
-            MoonInputState::new(window, cx).placeholder(t!("chart.coin.search").to_string())
-        });
+        let coin_input = cx.new(|cx| MoonInputState::new(window, cx));
         // Transliterate Russian keyboard layout to Latin directly in the field, matching `chart_tabs::new`.
         cx.subscribe_in(
             &coin_input,

@@ -70,11 +70,7 @@ impl AnalyticsView {
             return s.clone();
         }
         let val = self.coins.search.clone();
-        let state = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .default_value(val)
-                .placeholder(t!("analytics.coins.search_ph").to_string())
-        });
+        let state = cx.new(|cx| MoonInputState::new(window, cx).default_value(val));
         cx.subscribe(&state, |this, st, ev: &MoonInputEvent, cx| {
             if matches!(
                 ev,

@@ -91,8 +91,7 @@ pub(crate) fn build_name_input(
     cx: &mut App,
 ) -> Entity<MoonInputState> {
     let input = cx.new(|cx| {
-        let state = MoonInputState::new(window, cx)
-            .placeholder(t!("core_update.menu.named_ph").to_string());
+        let state = MoonInputState::new(window, cx);
         match initial {
             Some(text) => state.default_value(text),
             None => state,
@@ -269,6 +268,7 @@ pub(crate) fn open_named_dialog(
                         .child(
                             MoonInput::new("core-update-named-input")
                                 .state(&field)
+                                .placeholder(t!("core_update.menu.named_ph").to_string())
                                 .size(design::INPUT_SIZE),
                         )
                         .child(build_name_hint(p, cx)),

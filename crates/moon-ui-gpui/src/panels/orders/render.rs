@@ -145,6 +145,9 @@ impl Render for OrdersPanel {
                 div().w(px(90.0)).min_w(px(48.0)).flex_shrink(1.0).child(
                     MoonInput::new("orders-coin")
                         .state(&self.coin_input)
+                        // The Report's placeholder, as the Alerts coin filter uses: one control,
+                        // one wording.
+                        .placeholder(t!("report.filter.coin_ph").to_string())
                         .size(design::INPUT_SIZE)
                         .cleanable(true),
                 ),

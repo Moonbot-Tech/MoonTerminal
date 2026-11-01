@@ -23,10 +23,7 @@ impl StrategiesView {
             keys,
             field,
         });
-        let input = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .placeholder(t!("strat.list_tokens_placeholder").to_string())
-        });
+        let input = cx.new(|cx| MoonInputState::new(window, cx));
         input.update(cx, |input, cx| input.focus(window, cx));
         let view = cx.entity();
         window.open_unique_moon_dialog("strat-list-edit", cx, move |dialog, _window, cx| {
@@ -61,6 +58,7 @@ impl StrategiesView {
                             .child(
                                 MoonInput::new("strat-list-tokens")
                                     .state(&content_input)
+                                    .placeholder(t!("strat.list_tokens_placeholder").to_string())
                                     .size(design::INPUT_SIZE),
                             ),
                     )

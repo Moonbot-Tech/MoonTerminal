@@ -64,7 +64,7 @@ pub(super) struct ConnRow {
     key: Entity<MoonInputState>,
     /// Hand-typed endpoint override; empty follows the key, whose endpoint is the placeholder.
     ///
-    /// See `ServerConfig::endpoint_override` and [`follow_key_placeholder`].
+    /// See `ServerConfig::endpoint_override` and [`address_placeholder`].
     address: Entity<MoonInputState>,
     group: Entity<MoonInputState>,
     /// AddToChart bundle name; empty delegates to the global setting.
@@ -92,8 +92,6 @@ pub(super) fn sync_groups_from_servers(
 ///     cx: Settings context used to subscribe to input events.
 ///     i: Draft index of the server field.
 ///     init: Initial field value.
-///     placeholder: Hint shown while the field is empty, or `None` for a field whose empty
-///         state needs no explanation.
 ///     get: Accessor for the draft field.
 ///     set: Mutator for the draft field.
 ///     sync_groups: Whether a change must synchronize draft group rows.
@@ -105,22 +103,13 @@ fn conn_input(
     cx: &mut Context<SettingsView>,
     i: usize,
     init: String,
-    placeholder: Option<String>,
     get: fn(&ServerConfig) -> String,
     set: fn(&mut ServerConfig, String),
     sync_groups: bool,
 ) -> Entity<MoonInputState> {
-    // The placeholder belongs on the STATE, never on the `MoonInput` builder: MoonUI applies
-    // `MoonInput::placeholder` only inside its `self.state.unwrap_or_else(..)` branch, so a
-    // widget handed an external `.state(..)` -- which every field here is -- drops it silently.
-    // That is why the "Charts" column rendered as an empty box with no hint at all.
-    let st = cx.new(|cx| {
-        let st = MoonInputState::new(window, cx).default_value(init);
-        match placeholder {
-            Some(ph) => st.placeholder(ph),
-            None => st,
-        }
-    });
+    // The placeholders are set where the core card draws these fields, so they follow a live
+    // locale switch and the key's endpoint without a subscription of their own.
+    let st = cx.new(|cx| MoonInputState::new(window, cx).default_value(init));
     cx.subscribe(&st, move |this, emitter, ev: &MoonInputEvent, cx| {
         if matches!(ev, MoonInputEvent::Change) {
             let val = emitter.read(cx).value().to_string();
@@ -188,16 +177,13 @@ pub(super) fn build_conn(
         .enumerate()
         .map(|(i, s)| {
             let row_key = NEXT_ROW_KEY.fetch_add(1, Ordering::Relaxed);
-            let row = ConnRow {
+            ConnRow {
                 row_key,
                 name: conn_input(
                     window,
                     cx,
                     i,
                     s.name.clone(),
-                    // No placeholder: a nameless core is not a state worth explaining, and the
-                    // user's own text is the only thing this field ever holds.
-                    None,
                     |s| s.name.clone(),
                     |s, v| s.name = v,
                     false,
@@ -210,7 +196,6 @@ pub(super) fn build_conn(
                         cx,
                         i,
                         s.key.expose().to_string(),
-                        Some(t!("conn.key_ph").to_string()),
                         |s| s.key.expose().to_string(),
                         |s, v| {
                             // Typing or Ctrl+V into the field fills a row's transport mode the
@@ -231,14 +216,11 @@ pub(super) fn build_conn(
                     st.update(cx, |st, c| st.set_masked(true, window, c));
                     st
                 },
-                // Empty follows the key, so the key's own endpoint is the placeholder: the row
-                // always shows which address is in effect, and typing replaces it (#616).
                 address: conn_input(
                     window,
                     cx,
                     i,
                     s.endpoint_override.clone(),
-                    Some(address_placeholder(s.key.expose())),
                     |s| s.endpoint_override.clone(),
                     set_endpoint_override,
                     false,
@@ -248,10 +230,9 @@ pub(super) fn build_conn(
                     cx,
                     i,
                     s.group.clone(),
-                    // No placeholder: this state is never drawn — the card picks the group from a
-                    // menu — and `move_selected_to_group` only mirrors the choice into it. An
-                    // empty value is the unnamed group of cores stored before a name was required.
-                    None,
+                    // This state is never drawn — the card picks the group from a menu — and
+                    // `move_selected_to_group` only mirrors the choice into it. An empty value is
+                    // the unnamed group of cores stored before a name was required.
                     |s| s.group.clone(),
                     |s, v| s.group = v,
                     true,
@@ -261,18 +242,12 @@ pub(super) fn build_conn(
                     cx,
                     i,
                     s.chart_bundle.clone(),
-                    // An empty bundle field is the DEFAULT, not an omission: the core then
-                    // follows the global chart setting. The hint is what says so, and without it
-                    // the column reads as a blank box nobody can interpret.
-                    Some(t!("conn.bundle_ph").to_string()),
                     |s| s.chart_bundle.clone(),
                     |s, v| s.chart_bundle = v,
                     false,
                 ),
                 color: conn_color(window, cx, i, s.color),
-            };
-            follow_key_placeholder(&row.key, &row.address, window, cx);
-            row
+            }
         })
         .collect()
 }
@@ -295,38 +270,9 @@ pub(super) fn set_endpoint_override(s: &mut ServerConfig, v: String) {
 
 /// The address field's placeholder for a row whose key is `key`: the key's own endpoint, or a hint
 /// that the address comes from the key while there is no readable key yet.
+///
+/// The core card computes it from the key field on every render, so it follows typing, the Paste
+/// glyph's `set_value` (which emits no Change) and a live locale switch alike.
 pub(super) fn address_placeholder(key: &str) -> String {
     endpoints::key_placeholder(key).unwrap_or_else(|| t!("conn.address_ph").to_string())
-}
-
-/// Keep the address field's placeholder on the key's endpoint while the key field is edited.
-///
-/// A separate subscription rather than a line in the key's `conn_input` setter: the placeholder
-/// lives on the input STATE, and `set_placeholder` needs the window the setter does not get. The
-/// Paste glyph sets the key with `set_value`, which emits no Change, so it updates the placeholder
-/// itself (the core card's Вставить, `page.rs`).
-///
-/// Args:
-///     key: The row's key input.
-///     address: The row's address input whose placeholder follows the key.
-///     window: Settings window the subscription runs in.
-///     cx: Settings context that owns the subscription.
-fn follow_key_placeholder(
-    key: &Entity<MoonInputState>,
-    address: &Entity<MoonInputState>,
-    window: &mut Window,
-    cx: &mut Context<SettingsView>,
-) {
-    let address = address.clone();
-    cx.subscribe_in(
-        key,
-        window,
-        move |_, key, ev: &MoonInputEvent, window, cx| {
-            if matches!(ev, MoonInputEvent::Change) {
-                let placeholder = address_placeholder(&key.read(cx).value());
-                address.update(cx, |st, c| st.set_placeholder(placeholder, window, c));
-            }
-        },
-    )
-    .detach();
 }

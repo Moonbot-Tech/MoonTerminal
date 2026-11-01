@@ -169,6 +169,7 @@ pub(in crate::analytics::tuner) fn filter_bar_el(
                 .child(
                     MoonInput::new("an-coin-search")
                         .state(search)
+                        .placeholder(t!("analytics.coins.search_ph").to_string())
                         .size(design::INPUT_SIZE),
                 ),
         )

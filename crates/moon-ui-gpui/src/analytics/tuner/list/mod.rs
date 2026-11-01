@@ -525,11 +525,7 @@ impl AnalyticsView {
             return s.clone();
         }
         let val = self.strat_search.clone();
-        let state = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .default_value(val)
-                .placeholder(t!("analytics.strat.search_ph").to_string())
-        });
+        let state = cx.new(|cx| MoonInputState::new(window, cx).default_value(val));
         cx.subscribe(&state, |this, st, ev: &MoonInputEvent, cx| {
             if matches!(
                 ev,
@@ -576,6 +572,7 @@ impl AnalyticsView {
                 div().flex_1().min_w(design::ui_px(cx, 120.0)).child(
                     MoonInput::new("an-strat-search")
                         .state(&search)
+                        .placeholder(t!("analytics.strat.search_ph").to_string())
                         .size(design::INPUT_SIZE),
                 ),
             )
