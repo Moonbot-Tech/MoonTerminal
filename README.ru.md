@@ -40,7 +40,7 @@ MoonTerminal — нативный десктопный торговый терм
 > **В разработке.** Это рабочее пространство активной разработки терминала: оболочка на GPUI, интеграция MoonUI, живой поток данных MoonProto, платформенный GPU-рендеринг графиков и отладочный инструментарий. Это ещё не готовый упакованный продукт.
 
 <p align="center">
-  <img src="assets/img/screenshot-main.png" alt="Главное окно MoonTerminal" width="900">
+  <img src="assets/img/screenshot-main.ru.png" alt="Главное окно MoonTerminal" width="900">
 </p>
 
 ## Возможности
