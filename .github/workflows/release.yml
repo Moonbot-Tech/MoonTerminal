@@ -9,21 +9,24 @@ name: release
 # Note it does NOT re-run those gates: publishing trusts whatever build.yml
 # reported on the commit being tagged.
 #
-# THE LOCKFILE, and the one procedure this workflow depends on. Every build below passes `--locked`,
-# so a release is exactly the committed third-party set and a lock that disagrees with the
-# manifests fails here loudly instead of being silently re-resolved. There is deliberately NO
-# `cargo update` step: build.yml refreshes MoonUI on every run, but a release must never pull a
-# MoonUI commit that appeared after the tag.
+# THE LOCKFILE. MoonUI ships at its latest master, exactly as build.yml compiles it; its revision
+# in the committed lock is never moved by hand, so the lock's MoonUI rows are stale by design and a
+# build from them would compile the terminal against a MoonUI it was never tested with. The two
+# jobs that build the terminal therefore run build.yml's lockfile contract in the same three steps:
+# `cargo fetch --locked` proves the committed lock agrees with the manifests, `cargo update` moves
+# the three MoonUI crates — and only those — to one master revision, and
+# `assert-only-moonui-moved.sh` fails the job if that refresh dragged any third-party version
+# along. The build keeps `--locked`, so nothing past that one refresh can re-resolve. The station
+# does not depend on MoonUI and builds from the committed lock as it stands.
 #
-# The consequence is a rule for whoever tags: refresh MoonUI deliberately first
-# (`cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui`), commit the lock, let build.yml
-# run on THAT commit, and tag it promptly.
+# ONE revision per run: `validate` reads MoonUI master once and every terminal job refreshes to it
+# with `--precise`. Each job refreshing to "master" on its own would let a MoonUI push landing
+# mid-run ship the .exe and the .dmg — even the two slices of one universal binary — against
+# different MoonUI revisions, and a re-run of one job days later against yet another.
 #
-# Be honest about what that buys. build.yml's compiling jobs refresh MoonUI at RUN time, so they
-# validate whatever MoonUI master was at that moment, while this workflow ships the pin recorded in
-# the commit. Refreshing right before tagging makes those the same revision; it does not make them
-# the same by construction, and a MoonUI commit landing in between reopens the gap. The THIRD-PARTY
-# set — what the freeze is actually about — is identical either way.
+# Be honest about what that buys: the release compiles the MoonUI master of the moment THIS run
+# started, which can be newer than the master build.yml validated for the tagged commit. The
+# THIRD-PARTY set — what the freeze is actually about — is the committed one either way.
 #
 # The Rust toolchain is PINNED here for the same reason as in build.yml, and the stakes
 # are higher: this workflow does not re-run the gates, so an unpinned compiler could
@@ -67,6 +70,7 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       commit: ${{ steps.release.outputs.commit }}
+      moonui: ${{ steps.moonui.outputs.rev }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -78,6 +82,18 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: bash .github/scripts/validate-release-tag.sh "$RELEASE_TAG"
+      # The one MoonUI revision every terminal job of this run builds against — see the header.
+      - id: moonui
+        name: Resolve the MoonUI master revision for this release
+        shell: bash
+        run: |
+          rev=$(git ls-remote https://github.com/Moonbot-Tech/MoonUI refs/heads/master | cut -f1)
+          if [ "${#rev}" -ne 40 ]; then
+            echo "::error::could not resolve MoonUI master: '$rev'"
+            exit 1
+          fi
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "MoonUI master for this release: $rev"
 
   windows:
     name: Windows .exe
@@ -94,6 +110,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: false
+      # The lockfile contract — see the header and build.yml. After the cache restore, which keys
+      # partly on lockfile content and must key on the COMMITTED one.
+      - name: Verify the committed lockfile agrees with the manifests
+        run: cargo fetch --locked
+      - name: Refresh MoonUI only
+        run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui --precise ${{ needs.validate.outputs.moonui }}
+      - name: Assert the refresh moved MoonUI and nothing else
+        shell: bash
+        run: bash .github/scripts/assert-only-moonui-moved.sh
       - name: Build release binary
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target x86_64-pc-windows-msvc
       - name: Stage artifact
@@ -162,6 +187,13 @@ jobs:
           # rust-cache keys on the job id, which both legs share. Naming the target keeps them
           # apart, so turning saving on later cannot make one arch restore the other's tree.
           key: ${{ matrix.target }}
+      # The lockfile contract — see the header and build.yml.
+      - name: Verify the committed lockfile agrees with the manifests
+        run: cargo fetch --locked
+      - name: Refresh MoonUI only
+        run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui --precise ${{ needs.validate.outputs.moonui }}
+      - name: Assert the refresh moved MoonUI and nothing else
+        run: bash .github/scripts/assert-only-moonui-moved.sh
       - name: Build release binary
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target ${{ matrix.target }}
       - name: Stage the slice

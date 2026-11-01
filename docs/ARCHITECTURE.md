@@ -1091,10 +1091,13 @@ Public `Cargo.toml` files keep git dependencies on `Moonbot-Tech/MoonUI` `branch
 unexpected release of someone else's crate cannot enter the build on its own. The policy in four points:
 
 1. Third-party versions move only by a deliberate commit.
-2. MoonUI stays rolling: CI on every run does a targeted
+2. MoonUI stays rolling: CI on every run, and the release on every tag, does a targeted
    `cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui`; locally that is `make update-moon-ui`.
+   Its revision in the committed lock is never moved by hand. A release resolves MoonUI master once,
+   in `validate`, and every job that builds the terminal refreshes to that revision (`--precise`).
 3. MoonProto moves ONLY by hand (`make update-moonproto`) in a separate commit; CI does not touch it.
-4. Every compiling CI job first checks the lock against the manifests (`cargo fetch --locked`),
+4. Every compiling CI job — and each release job that builds the terminal — first checks the lock
+   against the manifests (`cargo fetch --locked`),
    then updates MoonUI, then fails if that update moved anything other than MoonUI —
    a targeted `cargo update` is conservative by documentation, not surgical, and a new MoonUI may
    pull someone else's version along. That case must be a red PR and a deliberate commit.
@@ -1110,14 +1113,15 @@ Every binary writes a build stamp to the log:
 build: moonterminal=<git-sha>[+dirty] release_base=<stable-git-tag|unknown> moonui=<git-sha|local:git-sha>[+dirty]
 ```
 
-Before a release tag: move MoonUI deliberately, commit the lock, wait for the gates on THIS commit
-and only then set the next canonical stable tag `vMAJOR.MINOR.PATCH`: start a new minor line
+Before a release tag: wait for the gates on THIS commit and only then set the next canonical stable
+tag `vMAJOR.MINOR.PATCH`: start a new minor line
 at `.0`, and ship fixes by incrementing PATCH. Historical two-component tags
 like `v0.21` are read by the updater as patch zero, but new tags of that form and the equivalent alias
 `v0.21.0` are forbidden. `release.yml`
-builds the immutable commit of that tag strictly `--locked`, checks the GitHub SHA-256 of the Windows
-artifact while still in draft, and only then publishes the release as Latest. The repository must have
-release immutability enabled: publication locks the verified tag and assets; MoonUI is not updated there.
+builds the immutable commit of that tag `--locked` after refreshing MoonUI to the one master revision
+its `validate` job resolved, checks the GitHub SHA-256 of the Windows artifact while still in draft,
+and only then publishes the release as Latest. The repository must have release immutability
+enabled: publication locks the verified tag and assets.
 
 ### Windows self-update
 
