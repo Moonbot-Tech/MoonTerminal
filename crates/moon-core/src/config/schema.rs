@@ -331,12 +331,8 @@ pub struct ServerMeta {
 pub struct SettingsFile {
     #[serde(default = "default_version")]
     pub version: u32,
-    /// Interface language. Missing in older files means the system locale they were shown in; a
-    /// fresh installation, with no file at all, starts in English (`Language::default`).
-    #[serde(
-        default = "Language::from_system",
-        deserialize_with = "crate::config::lang::tolerant_language"
-    )]
+    /// Interface language. Missing in older files means the serde default, the system locale.
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub language: Language,
     /// Market-data source (deduplicated by provider or per core). Older files use the default.
     #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]

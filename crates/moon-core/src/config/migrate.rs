@@ -85,8 +85,7 @@ fn config_from_legacy_enc(plain: &[u8], uid_floor: Option<u64>) -> anyhow::Resul
     let mut config = AppConfig {
         servers,
         groups: old.groups,
-        // An installation that predates the field keeps the language it was shown in.
-        language: super::Language::from_system(),
+        language: super::Language::default(),
         ..AppConfig::blank(uid_floor)
     };
     super::ensure_server_group_configs(&config.servers, &mut config.groups);
@@ -148,8 +147,7 @@ fn config_from_legacy_toml(text: &str, uid_floor: Option<u64>) -> anyhow::Result
             total_mode: Default::default(),
         }],
         groups: Vec::new(),
-        // An installation that predates the field keeps the language it was shown in.
-        language: super::Language::from_system(),
+        language: super::Language::default(),
         ..AppConfig::blank(uid_floor)
     };
     super::ensure_server_group_configs(&config.servers, &mut config.groups);

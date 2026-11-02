@@ -294,8 +294,7 @@ pub struct AppConfig {
     /// selection bookmark and nothing else, so they are deliberately absent from
     /// [`Self::structural_sig`]: renaming one must never reconnect a core.
     pub core_groups: Vec<CoreGroup>,
-    /// Interface language (settings.toml). English on a fresh installation; the system locale for
-    /// a settings file written before the field existed.
+    /// Interface language (settings.toml). Defaults to the system locale.
     pub language: Language,
     /// Market-data source (settings.toml). Defaults to Dedup, one provider per exchange.
     pub market_mode: MarketDataMode,
