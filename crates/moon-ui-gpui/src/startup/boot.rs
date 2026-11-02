@@ -203,7 +203,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         telegram,
         station,
         core_moves: Default::default(),
-        core_move_windows: HashMap::new(),
+        wizard_move_request: None,
         core_new: None,
         connect_wizard_window: None,
         servers_changed_outside: 0,

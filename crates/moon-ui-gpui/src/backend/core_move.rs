@@ -1,5 +1,6 @@
-//! Moves of cores onto Linux servers — the window "Move to VPS…" — owned by the backend, so a
-//! move outlives its window and several run at once, one per core.
+//! Moves of cores onto Linux servers — the connect wizard's move branch, opened from a core card's
+//! "Move to VPS…" — owned by the backend, so a move outlives the wizard and several run at once,
+//! one per core.
 //!
 //! A move runs in two threads, one after the other: the host-key probe, which sends no
 //! credential, and — once the user confirmed that key and the secrets leaving the machine — the
@@ -32,7 +33,7 @@ const POLL: Duration = Duration::from_millis(250);
 /// Progress lines a move keeps; the oldest go first.
 const MAX_LINES: usize = 300;
 
-/// Where a move stands, as its window shows it.
+/// Where a move stands, as the wizard shows it.
 #[derive(Clone, Debug)]
 pub(crate) enum MovePhase {
     /// The server's host key is being read; nothing has been sent to it.
@@ -54,7 +55,7 @@ pub(crate) enum MovePhase {
 }
 
 impl MovePhase {
-    /// Whether a thread of the move is alive — the window offers no new start then.
+    /// Whether a thread of the move is alive — the wizard offers no new start then.
     pub(crate) fn busy(&self) -> bool {
         matches!(
             self,
@@ -148,7 +149,7 @@ impl Backend {
     /// Pass the user's answer to a move that waits on its old core.
     ///
     /// The phase stays the thread's to move; until the thread reports, the job is `answering`
-    /// and the window offers no answer, so a second click cannot queue one to a question not
+    /// and the wizard offers no answer, so a second click cannot queue one to a question not
     /// asked yet.
     pub(crate) fn core_move_command(&mut self, uid: u64, command: Command, cx: &mut Context<Self>) {
         let Some(job) = self.core_moves.jobs.get_mut(&uid) else {
@@ -171,7 +172,7 @@ impl Backend {
         }
     }
 
-    /// Forget a finished move, so its window starts over.
+    /// Forget a finished move, so the wizard starts it over.
     pub(crate) fn core_move_forget(&mut self, uid: u64, cx: &mut Context<Self>) {
         if self
             .core_moves

@@ -27,7 +27,6 @@ mod contrast;
 mod controls;
 mod core_color;
 mod core_expert;
-mod core_move_window;
 mod crowd;
 mod design;
 mod diag;
@@ -98,8 +97,8 @@ struct Backend {
     station: backend::station::StationJobs,
     /// Moves of cores onto Linux servers, one per core: they outlive their windows.
     core_moves: backend::core_move::CoreMoves,
-    /// The "Move to VPS…" window of each core that has one open.
-    core_move_windows: HashMap<u64, WindowHandle<Root>>,
+    /// A core card's "Move to VPS…" for the connect wizard to take: the core to move.
+    wizard_move_request: Option<u64>,
     /// The connect wizard's install of a fresh core: it outlives the wizard's window.
     core_new: Option<backend::core_new::NewJob>,
     /// The connect wizard's window, while it is open.

@@ -64,7 +64,7 @@ pub(crate) enum CoreAction {
     /// Put the clipboard's key into the selected core.
     PasteKey,
     Reconnect,
-    /// Open the selected core's "Move to VPS…" window.
+    /// Open the connect wizard on the selected core's move to a Linux server.
     MoveToVps,
     /// The delete button: asks first.
     AskDelete,

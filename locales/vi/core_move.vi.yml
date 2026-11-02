@@ -1,50 +1,8 @@
-# The "Move to VPS…" window: a core moved onto a Linux server, its form, review and progress.
+# A core moved onto a Linux server: the card button, the move's steps, warnings and outcomes.
 _version: 1
 
-core_move.window_title: "Chuyển sang VPS — %{name}"
-core_move.title: "Chuyển %{name} sang máy chủ Linux"
 core_move.card_button: "Chuyển sang VPS…"
 core_move.save_first: "Hãy lưu lõi trước: việc chuyển cần khóa đã lưu và lịch sử của nó."
-
-# --- The form ---
-core_move.form.intro: "Lõi được chuyển cùng cài đặt, chiến lược và lịch sử giao dịch. Khóa MoonProto giữ nguyên; chỉ địa chỉ thay đổi."
-core_move.form.host: "Địa chỉ máy chủ"
-core_move.form.login: "Tên đăng nhập"
-core_move.form.by_key: "Đăng nhập bằng khóa"
-core_move.form.key_path: "Tệp khóa"
-core_move.form.key_browse: "Duyệt…"
-core_move.form.passphrase: "Mật khẩu khóa"
-core_move.form.sudo_password: "Mật khẩu sudo"
-core_move.form.password: "Mật khẩu"
-core_move.form.dir: "Thư mục trên máy chủ"
-core_move.form.port: "Cổng UDP MoonProto"
-core_move.form.order: "Lõi mới được cài nhưng chưa chạy. Sau đó lõi cũ được yêu cầu dừng, và lõi mới chỉ chạy khi lõi cũ đã dừng. Rồi terminal này và trạm tự chuyển sang lõi mới."
-core_move.form.check: "Kiểm tra máy chủ"
-core_move.form.need_host: "Nhập địa chỉ máy chủ."
-core_move.form.need_login: "Nhập tên đăng nhập mà nhà cung cấp đưa cho máy chủ này."
-core_move.form.need_ipv4: "Nhập địa chỉ IPv4 của máy chủ: lõi mới được truy cập qua địa chỉ đó."
-core_move.form.need_dir: "Nhập tên thư mục không có khoảng trắng."
-core_move.form.need_port: "Nhập cổng UDP từ 1 đến 65535."
-
-# --- The server's key, before anything is sent ---
-core_move.review.fingerprint: "Máy chủ %{addr} đưa ra khóa %{fingerprint}. Hãy so sánh với khóa mà nhà cung cấp của bạn hiển thị."
-core_move.review.what: "Việc chuyển đăng nhập bằng tài khoản này, cài MoonBot cho Linux vào thư mục, tải lên cài đặt và cơ sở dữ liệu báo cáo của lõi, và mở cổng UDP trên tường lửa."
-core_move.review.secrets: "Cài đặt của lõi chứa khóa API sàn giao dịch: chúng sẽ được gửi tới máy chủ này."
-core_move.review.confirm: "Chuyển"
-
-# --- Where the move stands ---
-core_move.phase.probing: "Đang đọc khóa của máy chủ…"
-core_move.phase.running: "Đang chuyển…"
-core_move.phase.refused: "Lõi cũ vẫn chạy: số giao dịch chưa xong là %{n}."
-core_move.phase.refused_unknown: "Lõi cũ vẫn chạy."
-core_move.phase.refused_hint: "Lõi không dừng khi còn lệnh take/sell đang hoạt động. Lõi mới đã được cài và đang chờ."
-core_move.phase.waiting: "Đang chờ bạn dừng lõi cũ trong MoonBot; sau đó việc chuyển tự tiếp tục."
-core_move.phase.done: "Xong: lõi chạy tại %{address}. Terminal này đã chuyển sang nó."
-core_move.phase.cancelled: "Việc chuyển đã bị hủy; lõi mới đã được gỡ khỏi máy chủ."
-core_move.retry: "Kiểm tra lại"
-core_move.wait: "Tiếp tục khi nó dừng"
-core_move.cancel: "Hủy việc chuyển"
-core_move.start_over: "Bắt đầu lại"
 
 # --- Outcomes ---
 core_move.lost: "Việc chuyển dừng mà không có phản hồi: luồng của nó đã kết thúc."
@@ -88,3 +46,9 @@ core_move.station.not_followed: "Trạm không theo dõi lõi này."
 core_move.station.sent: "Đã gửi địa chỉ mới tới trạm."
 core_move.station.failed: "Trạm không nhận địa chỉ mới: %{reason}"
 core_move.station.none: "Chưa có trạm nào được cài từ terminal này."
+
+# --- The new core's own word after its start ---
+core_move.settled: "Lõi mới đã đăng nhập sàn và lắng nghe MoonProto."
+core_move.not_settled: "Lõi mới chưa sẵn sàng (%{state}) %{detail} — việc chuyển vẫn tiếp tục: lõi cũ đã dừng."
+core_move.status_unread: "Chưa đọc được trạng thái lõi mới: %{reason} — việc chuyển vẫn tiếp tục."
+core_move.settling: "Lõi mới: %{state}…"

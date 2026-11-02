@@ -7,11 +7,14 @@ use std::time::Duration;
 use moon_core::core_move::old_core::StopAnswer;
 use moon_remote::core_move::plan::{KeySource, Plan, Request};
 use moon_remote::core_move::{self, MoveStep};
+use moon_remote::core_new;
+use moon_remote::script::Privilege;
 use moon_remote::setup::{self, FirstAccess};
-use moon_remote::ssh::Target;
+use moon_remote::ssh::{Conn, Target};
 use rust_i18n::t;
 
 use super::{Event, text};
+use crate::backend::core_new::state_text;
 
 /// How often a move that waits on its old core looks whether it went down.
 const WATCH: Duration = Duration::from_secs(30);
@@ -196,6 +199,13 @@ fn run_move(
                         // there now is its user having stopped it.
                         Err(RecvTimeoutError::Timeout) => {
                             if plan.old_is_silent()? {
+                                // A cancel sent while the old core was being probed stands: it
+                                // was the user's last word before the move went on.
+                                if answers.try_iter().any(|c| c == Command::Cancel) {
+                                    remove(form, &dir, say)?;
+                                    *stage = Stage::Nothing;
+                                    return Ok(Event::Cancelled);
+                                }
                                 send(Event::Line(t!("core_move.old_stopped_by_hand").to_string()));
                                 send(Event::Resumed);
                                 break 'stop;
@@ -215,11 +225,40 @@ fn run_move(
     let (conn, privilege) = setup::provider_login(&form.target, &form.first, &form.pin)?;
     *stage = Stage::Started(dir.clone());
     core_move::start(&conn, &privilege, &dir, say)?;
+    settle(&conn, &privilege, &dir, &send);
     plan.carry_strategies(say)?;
     core_move::finish(&conn, &privilege, &dir, say)?;
     Ok(Event::Started {
         address: format!("{}:{}", form.public_ip, form.proto_port),
     })
+}
+
+/// Wait until the new core is logged in and listens (`mb --status`) before its strategies are
+/// carried and this terminal switches to it: a core still logging in skips MoonProto commands.
+/// Only reported: the old core is down, so the move goes on whatever the new one says.
+fn settle(conn: &Conn, privilege: &Privilege, dir: &str, send: &dyn Fn(Event)) {
+    // Every change of state is a line: the wait may take minutes, and the move shows nothing else.
+    let mut last = None;
+    let mut seen = |status: &core_new::CoreStatus| {
+        if last.as_ref() != Some(&status.state) {
+            last = Some(status.state.clone());
+            send(Event::Line(
+                t!("core_move.settling", state = state_text(&status.state)).to_string(),
+            ));
+        }
+    };
+    let line =
+        match core_new::wait_settled(conn, privilege, dir, core_new::SETTLE_TIMEOUT, &mut seen) {
+            Ok(status) if status.connectable() => t!("core_move.settled").to_string(),
+            Ok(status) => t!(
+                "core_move.not_settled",
+                state = state_text(&status.state),
+                detail = &status.login_error
+            )
+            .to_string(),
+            Err(e) => t!("core_move.status_unread", reason = format!("{e:#}")).to_string(),
+        };
+    send(Event::Line(line));
 }
 
 /// Take the new core out of the server again, over a fresh login.

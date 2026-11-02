@@ -1,50 +1,8 @@
-# The "Move to VPS…" window: a core moved onto a Linux server, its form, review and progress.
+# A core moved onto a Linux server: the card button, the move's steps, warnings and outcomes.
 _version: 1
 
-core_move.window_title: "Перенос на VPS — %{name}"
-core_move.title: "Перенос ядра %{name} на Linux-сервер"
 core_move.card_button: "Перенести на VPS…"
 core_move.save_first: "Сначала сохраните ядро: переносу нужны его сохранённый ключ и история."
-
-# --- The form ---
-core_move.form.intro: "Ядро переезжает со своими настройками, стратегиями и историей сделок. Ключ MoonProto остаётся тем же, меняется только адрес."
-core_move.form.host: "Адрес сервера"
-core_move.form.login: "Логин"
-core_move.form.by_key: "Вход по ключу"
-core_move.form.key_path: "Файл ключа"
-core_move.form.key_browse: "Обзор…"
-core_move.form.passphrase: "Пароль ключа"
-core_move.form.sudo_password: "Пароль sudo"
-core_move.form.password: "Пароль"
-core_move.form.dir: "Папка на сервере"
-core_move.form.port: "UDP-порт MoonProto"
-core_move.form.order: "Новое ядро ставится, но не запускается. Затем старое ядро просят остановиться, и новое запускается только после того, как старое встало. После этого терминал и станция сами переключаются на новое ядро."
-core_move.form.check: "Проверить сервер"
-core_move.form.need_host: "Укажите адрес сервера."
-core_move.form.need_login: "Укажите логин, который провайдер дал для этого сервера."
-core_move.form.need_ipv4: "Укажите IPv4-адрес сервера: по нему будет доступно новое ядро."
-core_move.form.need_dir: "Укажите имя папки без пробелов."
-core_move.form.need_port: "Укажите UDP-порт от 1 до 65535."
-
-# --- The server's key, before anything is sent ---
-core_move.review.fingerprint: "Сервер %{addr} предъявляет ключ %{fingerprint}. Сверьте его с ключом, который показывает провайдер."
-core_move.review.what: "Перенос войдёт с этим логином, поставит MoonBot для Linux в папку, загрузит настройки ядра и базу отчётов и откроет UDP-порт в файрволе."
-core_move.review.secrets: "В настройках ядра лежат его API-ключи биржи: они уйдут на этот сервер."
-core_move.review.confirm: "Перенести"
-
-# --- Where the move stands ---
-core_move.phase.probing: "Читаю ключ сервера…"
-core_move.phase.running: "Идёт перенос…"
-core_move.phase.refused: "Старое ядро не останавливается: незавершённых сделок — %{n}."
-core_move.phase.refused_unknown: "Старое ядро не останавливается."
-core_move.phase.refused_hint: "Ядро не останавливается, пока держит активные take/sell ордера. Новое ядро установлено и ждёт."
-core_move.phase.waiting: "Жду, пока вы остановите старое ядро в MoonBot; после этого перенос продолжится сам."
-core_move.phase.done: "Готово: ядро работает на %{address}. Терминал переключён на него."
-core_move.phase.cancelled: "Перенос отменён, новое ядро удалено с сервера."
-core_move.retry: "Проверить снова"
-core_move.wait: "Перейти, когда остановится"
-core_move.cancel: "Отменить переезд"
-core_move.start_over: "Начать заново"
 
 # --- Outcomes ---
 core_move.lost: "Перенос оборвался без ответа: его поток завершился."
@@ -88,3 +46,9 @@ core_move.station.not_followed: "Станция не ведёт это ядро.
 core_move.station.sent: "Новый адрес отправлен на станцию."
 core_move.station.failed: "Станция не приняла новый адрес: %{reason}"
 core_move.station.none: "С этого терминала станция не настроена."
+
+# --- The new core's own word after its start ---
+core_move.settled: "Новое ядро вошло на биржу и слушает MoonProto."
+core_move.not_settled: "Новое ядро пока не готово (%{state}) %{detail} — перенос продолжается: старое ядро уже остановлено."
+core_move.status_unread: "Состояние нового ядра не прочитано: %{reason} — перенос продолжается."
+core_move.settling: "Новое ядро: %{state}…"

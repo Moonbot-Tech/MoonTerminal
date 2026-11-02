@@ -14,7 +14,7 @@ use zeroize::Zeroizing;
 use super::ConnectWizardView;
 use super::render::{Screen, note};
 use super::server::{field, secret};
-use crate::backend::core_new::{NewCommand, NewPhase};
+use crate::backend::core_new::{NewCommand, NewPhase, state_text};
 use crate::design;
 
 /// Memory one core takes on its server, the measure "fits N cores" counts with (170–230 MB were
@@ -646,18 +646,10 @@ fn fact(fine: bool, text: String, cx: &App) -> impl IntoElement {
 
 /// The core's status in one line, for while it settles.
 fn status_line(status: &CoreStatus) -> String {
-    let state = match &status.state {
-        CoreState::Initializing => "initializing",
-        CoreState::Ready => "ready",
-        CoreState::NeedsKeys => "needs_keys",
-        CoreState::LoginError => "login_error",
-        CoreState::RegistrationError => "registration_error",
-        CoreState::ActionRequired => "action_required",
-        CoreState::Other(name) => name.as_str(),
-    };
+    let state = state_text(&status.state);
     t!(
         "connect_wizard.login.status",
-        state = state,
+        state = &state,
         exchange = &status.exchange_name,
         listening = if status.moonproto_listening {
             "✓"

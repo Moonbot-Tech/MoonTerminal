@@ -6,6 +6,7 @@ use moon_ui::{MoonPalette, MoonSteps, MoonWindowFrame, h_flex, rgba_from, v_flex
 use rust_i18n::t;
 
 use super::{Branch, ConnectWizardView};
+use crate::backend::core_move::MovePhase;
 use crate::backend::core_new::NewPhase;
 use crate::design;
 use crate::settings::telegram::server_bot::progress::StationProgress;
@@ -70,24 +71,34 @@ impl Screen {
 
 impl Render for ConnectWizardView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.take_move_request(cx);
+        if let Some(dir) = self.pending_dir.take() {
+            self.server.set_dir(&dir, window, cx);
+        }
         let p = MoonPalette::active(cx);
         let chrome_width = f32::from(window.viewport_size().width);
         let screen = match self.branch {
             None => self.start_screen(cx),
             Some(Branch::NewCore) => self.new_core_screen(window, cx),
             Some(Branch::ByKey) => self.by_key_screen(cx),
+            Some(Branch::Move) => self.move_screen(cx),
         };
         let (steps, current) = self.rail(cx);
         let show_rail = chrome_width >= design::ui_value(cx, RAIL_MIN_WINDOW_W);
-        let lines = if screen.log {
-            self.backend
+        let lines = match (screen.log, self.branch) {
+            (false, _) => Vec::new(),
+            (true, Some(Branch::Move)) => self
+                .move_uid
+                .and_then(|uid| self.backend.read(cx).core_moves.get(uid))
+                .map(|job| job.lines.clone())
+                .unwrap_or_default(),
+            (true, _) => self
+                .backend
                 .read(cx)
                 .core_new
                 .as_ref()
                 .map(|job| job.lines.clone())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
+                .unwrap_or_default(),
         };
         let mut main = v_flex()
             .id("cw-main")
@@ -183,6 +194,13 @@ impl ConnectWizardView {
                 t!("connect_wizard.rail.key").to_string(),
                 t!("connect_wizard.rail.done").to_string(),
             ],
+            Branch::Move => vec![
+                first,
+                t!("connect_wizard.rail.core").to_string(),
+                t!("connect_wizard.rail.server").to_string(),
+                t!("connect_wizard.rail.move").to_string(),
+                t!("connect_wizard.rail.done").to_string(),
+            ],
         };
         let current = match self.branch {
             None => 0,
@@ -210,6 +228,19 @@ impl ConnectWizardView {
                     2
                 } else {
                     1
+                }
+            }
+            Some(Branch::Move) => {
+                let phase = self
+                    .move_uid
+                    .and_then(|uid| self.backend.read(cx).core_moves.get(uid))
+                    .map(|job| job.phase.clone());
+                match phase {
+                    None if self.move_at_server => 2,
+                    None => 1,
+                    Some(MovePhase::Probing | MovePhase::Review { .. }) => 2,
+                    Some(MovePhase::Done { .. }) => 4,
+                    Some(_) => 3,
                 }
             }
         };

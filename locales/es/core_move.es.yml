@@ -1,50 +1,8 @@
-# The "Move to VPS…" window: a core moved onto a Linux server, its form, review and progress.
+# A core moved onto a Linux server: the card button, the move's steps, warnings and outcomes.
 _version: 1
 
-core_move.window_title: "Mover a VPS — %{name}"
-core_move.title: "Mover %{name} a un servidor Linux"
 core_move.card_button: "Mover a VPS…"
 core_move.save_first: "Guarda primero el núcleo: el traslado necesita su clave guardada y su historial."
-
-# --- The form ---
-core_move.form.intro: "El núcleo se traslada con sus ajustes, estrategias e historial de operaciones. Su clave MoonProto sigue siendo la misma; solo cambia la dirección."
-core_move.form.host: "Dirección del servidor"
-core_move.form.login: "Usuario"
-core_move.form.by_key: "Entrar con clave"
-core_move.form.key_path: "Archivo de clave"
-core_move.form.key_browse: "Examinar…"
-core_move.form.passphrase: "Contraseña de la clave"
-core_move.form.sudo_password: "Contraseña de sudo"
-core_move.form.password: "Contraseña"
-core_move.form.dir: "Carpeta en el servidor"
-core_move.form.port: "Puerto UDP de MoonProto"
-core_move.form.order: "El nuevo núcleo se instala pero no se inicia. Después se pide al núcleo antiguo que se detenga, y el nuevo arranca solo cuando el antiguo está parado. Luego este terminal y la estación cambian solos al nuevo núcleo."
-core_move.form.check: "Comprobar el servidor"
-core_move.form.need_host: "Indica la dirección del servidor."
-core_move.form.need_login: "Indica el usuario que tu proveedor dio para este servidor."
-core_move.form.need_ipv4: "Indica la dirección IPv4 del servidor: el nuevo núcleo se alcanza en ella."
-core_move.form.need_dir: "Indica un nombre de carpeta sin espacios."
-core_move.form.need_port: "Indica un puerto UDP de 1 a 65535."
-
-# --- The server's key, before anything is sent ---
-core_move.review.fingerprint: "El servidor %{addr} presenta la clave %{fingerprint}. Compárala con la que muestra tu proveedor."
-core_move.review.what: "El traslado entra con este usuario, instala MoonBot para Linux en la carpeta, sube los ajustes del núcleo y su base de informes y abre el puerto UDP en el cortafuegos."
-core_move.review.secrets: "Los ajustes del núcleo llevan sus claves API del exchange: van a este servidor."
-core_move.review.confirm: "Mover"
-
-# --- Where the move stands ---
-core_move.phase.probing: "Leyendo la clave del servidor…"
-core_move.phase.running: "Trasladando…"
-core_move.phase.refused: "El núcleo antiguo sigue en marcha: operaciones sin terminar: %{n}."
-core_move.phase.refused_unknown: "El núcleo antiguo sigue en marcha."
-core_move.phase.refused_hint: "Un núcleo no se detiene mientras tiene órdenes take/sell activas. El nuevo núcleo está instalado y espera."
-core_move.phase.waiting: "Esperando a que detengas el núcleo antiguo en MoonBot; luego el traslado sigue solo."
-core_move.phase.done: "Listo: el núcleo funciona en %{address}. Este terminal ya se conecta a él."
-core_move.phase.cancelled: "El traslado se canceló; el nuevo núcleo se eliminó del servidor."
-core_move.retry: "Comprobar de nuevo"
-core_move.wait: "Seguir cuando se detenga"
-core_move.cancel: "Cancelar el traslado"
-core_move.start_over: "Empezar de nuevo"
 
 # --- Outcomes ---
 core_move.lost: "El traslado se interrumpió sin respuesta: su hilo terminó."
@@ -88,3 +46,9 @@ core_move.station.not_followed: "La estación no sigue este núcleo."
 core_move.station.sent: "La nueva dirección se envió a la estación."
 core_move.station.failed: "La estación no aceptó la nueva dirección: %{reason}"
 core_move.station.none: "No hay estación configurada desde este terminal."
+
+# --- The new core's own word after its start ---
+core_move.settled: "El núcleo nuevo entró en el exchange y escucha MoonProto."
+core_move.not_settled: "El núcleo nuevo aún no está listo (%{state}) %{detail}; el traslado continúa: el núcleo antiguo ya está detenido."
+core_move.status_unread: "No se leyó el estado del núcleo nuevo: %{reason}; el traslado continúa."
+core_move.settling: "Núcleo nuevo: %{state}…"

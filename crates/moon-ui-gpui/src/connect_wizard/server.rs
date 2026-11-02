@@ -222,6 +222,13 @@ impl ServerFields {
             ))
     }
 
+    /// Offer `dir` as the instance folder.
+    pub(super) fn set_dir<V: 'static>(&self, dir: &str, window: &mut Window, cx: &mut Context<V>) {
+        let dir = dir.to_owned();
+        self.dir
+            .update(cx, |state, cx| state.set_value(dir, window, cx));
+    }
+
     /// Put a picked key file's path into its field.
     pub(super) fn set_key_path<V: 'static>(
         &self,
