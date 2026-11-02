@@ -58,6 +58,7 @@ key space — splitting into files is purely organisational, by UI area:
 | `core_update.<lang>.yml`     | the Core Status update queue, separate from `update.<lang>.yml` |
 | `core_expert.<lang>.yml`     | the Core settings — expert mode window (Moonbot tabs, page states) |
 | `core_move.<lang>.yml`       | the "Move to VPS…" window: a core moved onto a Linux server    |
+| `connect_wizard.<lang>.yml`  | the connect wizard: a new core on a server, a core by its key, MoonBot for Windows |
 | `sounds.<lang>.yml`          | own sounds: the folder block on the Trade sounds tab, the Sound not found toast, the no file mark |
 | `trade_sounds.<lang>.yml`    | the Trade sounds tab: entry and exit sounds per exchange      |
 | `station.<lang>.yml`         | the Station tab (remote server login and host-key errors)     |

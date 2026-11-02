@@ -91,22 +91,25 @@ fn terminal_secondary_tool_windows_use_tool_window_options() {
     let assets = fs::read_to_string(root.join("panels").join("assets").join("window.rs")).unwrap();
     let core_expert = fs::read_to_string(root.join("core_expert.rs")).unwrap();
     let core_move = fs::read_to_string(root.join("core_move_window").join("mod.rs")).unwrap();
+    let wizard = fs::read_to_string(root.join("connect_wizard").join("mod.rs")).unwrap();
 
     assert!(
         settings.contains("tool_window_options(")
             && strategies.contains("tool_window_options(")
             && assets.contains("tool_window_options(")
             && core_expert.contains("tool_window_options(")
-            && core_move.contains("tool_window_options("),
-        "settings, strategies, assets, the expert core-settings and the core move windows are \
-         MoonWindowFrame::tool windows and must use tool_window_options"
+            && core_move.contains("tool_window_options(")
+            && wizard.contains("tool_window_options("),
+        "settings, strategies, assets, the expert core-settings, the core move and the connect \
+         wizard windows are MoonWindowFrame::tool windows and must use tool_window_options"
     );
     assert!(
         !settings.contains("standalone_window_options(")
             && !strategies.contains("standalone_window_options(")
             && !assets.contains("standalone_window_options(")
             && !core_expert.contains("standalone_window_options(")
-            && !core_move.contains("standalone_window_options("),
+            && !core_move.contains("standalone_window_options(")
+            && !wizard.contains("standalone_window_options("),
         "tool/secondary windows must not be opened as standalone taskbar applications"
     );
 }
@@ -1284,6 +1287,7 @@ fn secondary_window_frames_expose_maximize_without_changing_login() {
         "screener/view.rs",
         "core_expert/render.rs",
         "core_move_window/render.rs",
+        "connect_wizard/render.rs",
         "diagnostics/debug_window.rs",
         "window/detached.rs",
         "trade_window/render.rs",

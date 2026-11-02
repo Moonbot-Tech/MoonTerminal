@@ -586,6 +586,11 @@ pub fn sounds_dir() -> PathBuf {
     data_dir().join("sounds")
 }
 
+/// The user's acceptance of MoonBot's user agreement (`config::eula`).
+pub fn eula_path() -> PathBuf {
+    cfg_dir().join("eula.json")
+}
+
 /// Retained per-core update-queue history, in a small portable JSON file.
 pub fn core_updates_path() -> PathBuf {
     cfg_dir().join("core_updates.json")

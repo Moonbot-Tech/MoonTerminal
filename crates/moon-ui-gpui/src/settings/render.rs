@@ -58,11 +58,12 @@ impl Render for SettingsView {
         self.chat_notify_sync(window, cx);
         // The station tape's long-position field follows the station's reads.
         self.server_tape_input_sync(window, cx);
-        // A core moved to a new server got its new address outside this window: the Connections
-        // fields are rebuilt from the draft, or one of them would write the old address back.
-        let moved = self.backend.read(cx).core_moves_switched;
-        if moved != self.core_moves_seen {
-            self.core_moves_seen = moved;
+        // A row changed outside this window (a moved core's new address, a wizard's new or
+        // removed core): the Connections fields are rebuilt from the draft, or one of them would
+        // write the old state back.
+        let moved = self.backend.read(cx).servers_changed_outside;
+        if moved != self.servers_changed_seen {
+            self.servers_changed_seen = moved;
             let selected = self.conn_selected_index();
             self.rebuild_conn(selected, None, window, cx);
         }

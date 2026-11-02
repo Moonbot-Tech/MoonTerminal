@@ -29,6 +29,7 @@ pub mod core_updates;
 pub mod crypto;
 pub mod custom_colors;
 pub mod detect_view;
+pub mod eula;
 pub mod groups;
 pub mod hotkeys;
 pub mod lang;
@@ -978,24 +979,6 @@ impl AppConfig {
     /// `AppConfig::blank` seeds the counter at 0 and a load over an empty pair raises it to
     /// `max(0, 0 + 1) == 1` (`reconcile::next_free_uid`), so 1 is "nothing has ever been issued".
     const FIRST_ISSUED_UID: u64 = 1;
-
-    /// Whether a core has EVER been configured on this installation.
-    ///
-    /// Drives the first-run hint, and it has to be STICKY: a user who added a core and later
-    /// deleted it is not a newcomer, and re-pulsing the controls at them would be noise. The uid
-    /// counter is exactly that record — uids are never reissued after deletion, and
-    /// `SettingsFile::next_uid` is documented as the only durable trace of a deleted core's
-    /// high-water mark — so no new persisted flag, no new save path and no new setting is needed
-    /// to answer the question.
-    ///
-    /// The live server list is checked first only because it is the cheap, obvious case; the
-    /// counter is what makes the answer survive a deletion.
-    ///
-    /// Returns:
-    ///     `true` once any core has been saved, now or at any point in the past.
-    pub fn core_ever_configured(&self) -> bool {
-        !self.servers.is_empty() || self.next_uid.get() > Self::FIRST_ISSUED_UID
-    }
 
     /// Chart theme for the active UI mode's colour set; Graphite uses the dark entry.
     pub fn chart_theme(&self) -> &ChartTheme {

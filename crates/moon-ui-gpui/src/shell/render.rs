@@ -410,7 +410,6 @@ impl Render for Shell {
                     self.sell_edit.clone(),
                     &self.sell_input,
                     &cx.entity(),
-                    self.settings_hint_at(),
                     metric_popup,
                     toolbar_max_order,
                     &toolbar_quote,

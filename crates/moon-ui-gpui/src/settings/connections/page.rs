@@ -414,29 +414,31 @@ impl SettingsView {
         );
     }
 
-    /// The "+ Добавить ядро" button, carrying the first-run ring while the list is empty; once a
-    /// core is added the ring moves to that core's empty key field on the card.
+    /// The "+ Добавить ядро" button: an empty row in the draft, for a key pasted by hand.
     fn add_core_button(&self, id: &'static str, cx: &mut Context<Self>) -> AnyElement {
-        let p = MoonPalette::active(cx);
-        div()
-            .relative()
-            .child(
-                MoonButton::new(id)
-                    .variant(MoonButtonVariant::Blue)
-                    .label(format!("+ {}", t!("conn.add_core_btn")))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.add_server("default".into(), window, cx)
-                    }))
-                    .render(),
+        MoonButton::new(id)
+            .label(format!("+ {}", t!("conn.add_core_btn")))
+            .on_click(
+                cx.listener(|this, _, window, cx| this.add_server("default".into(), window, cx)),
             )
-            .children(
-                self.conn_hint(cx)
-                    .filter(|_| {
-                        let b = self.backend.read(cx);
-                        b.preview.as_ref().unwrap_or(&b.config).servers.is_empty()
-                    })
-                    .and_then(|at| crate::pulse::attention_ring(p.accent, at)),
-            )
+            .render()
+            .into_any_element()
+    }
+
+    /// "Connect a core…": the connect wizard — a new core on a server, a MoonBot core by its key.
+    fn connect_core_button(&self, id: &'static str, cx: &mut Context<Self>) -> AnyElement {
+        MoonButton::new(id)
+            .variant(MoonButtonVariant::Blue)
+            .label(t!("conn.connect_core_btn").to_string())
+            .on_click(cx.listener(|this, _, window, cx| {
+                crate::connect_wizard::open(
+                    this.backend.clone(),
+                    Some(window.window_handle()),
+                    window.display(cx).map(|display| display.id()),
+                    cx,
+                );
+            }))
+            .render()
             .into_any_element()
     }
 
@@ -485,15 +487,16 @@ impl SettingsView {
         self.conn_selected = valid_selection(self.conn_selected, &keys);
 
         let add = self.add_core_button("cores-add", cx);
+        let connect = self.connect_core_button("cores-connect", cx);
         let weak = cx.entity().downgrade();
         let act: CoreAct = Rc::new(move |action, window, app| {
             let _ = weak.update(app, |this, cx| this.on_core_action(action, window, cx));
         });
 
         if servers.is_empty() {
-            let empty_add = self.add_core_button("cores-empty-add", cx);
-            let body = cores_empty(&act, empty_add, cx);
-            return self.page_parts(Tab::Cores, body, vec![add], cx);
+            let empty_connect = self.connect_core_button("cores-empty-connect", cx);
+            let body = cores_empty(&act, empty_connect, cx);
+            return self.page_parts(Tab::Cores, body, vec![connect, add], cx);
         }
 
         let rows: Vec<CoreListRow> = servers
@@ -660,7 +663,6 @@ impl SettingsView {
                 address: &row.address,
                 bundle: &row.bundle,
                 color: &row.color,
-                key_ring: self.conn_hint(cx),
             };
             let dot = dot(&sel, cx);
             let open = |key: &'static str| self.more_open.contains(key);
@@ -700,7 +702,7 @@ impl SettingsView {
                 .child(split)
                 .into_any_element()
         };
-        self.page_parts(Tab::Cores, body, vec![add], cx)
+        self.page_parts(Tab::Cores, body, vec![connect, add], cx)
     }
 
     /// Market source and core order, as two rows above the list.

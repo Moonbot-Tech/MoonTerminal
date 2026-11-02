@@ -525,15 +525,9 @@ impl Shell {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
 
-        // Armed HERE and never from `render`: a view that armed its own repaint chain while
-        // rendering would keep itself awake through its own repaints forever (`pulse::arm`).
-        let settings_hint_at =
-            (!backend.read(cx).config.core_ever_configured()).then(std::time::Instant::now);
         let served_dock_layout_reset = backend.read(cx).dock_layout_reset_generation();
         let dock_control_tooltips_locale = SharedString::from(rust_i18n::locale().to_string());
         let mut shell = Self {
-            settings_hint_at,
-            settings_hint_armed: false,
             backend,
             updater,
             group,
@@ -604,30 +598,7 @@ impl Shell {
         // Every Shell is constructed from its saved/default Classic dock first. Persisted Auto then
         // captures that local named layout and applies the process-wide topology before first frame.
         shell.apply_workspace_mode(initial_workspace_mode, window, cx);
-        // Re-stamp the hint AFTER the workspace is applied. The stamp above has to happen during
-        // construction because it reads the config, but `pulse::ATTENTION` is measured from it, and
-        // on a fresh profile the layout, fonts and dock all settle between the two — spending the
-        // window before the user's eyes reach the screen. `map` preserves the `None` decision, so
-        // the `core_ever_configured` gate is untouched and a configured user still sees nothing.
-        shell.settings_hint_at = shell.settings_hint_at.map(|_| std::time::Instant::now());
-        crate::pulse::arm(
-            &mut shell,
-            cx,
-            |s| &mut s.settings_hint_armed,
-            |s| {
-                s.settings_hint_at
-                    .is_some_and(|at| at.elapsed() < crate::pulse::ATTENTION)
-            },
-        );
         shell
-    }
-
-    /// When the first-run Settings-gear hint was armed, for the toolbar that draws it.
-    ///
-    /// Returns:
-    ///     The arming instant while a hint exists, else `None`.
-    pub(crate) fn settings_hint_at(&self) -> Option<std::time::Instant> {
-        self.settings_hint_at
     }
 
     /// Subscribe the TP/SL/leverage popup editors to guarded writes and live field updates.

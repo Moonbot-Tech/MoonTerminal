@@ -22,6 +22,7 @@ mod chart_tabs;
 mod chartdx;
 mod chrome;
 mod conn_diag;
+mod connect_wizard;
 mod contrast;
 mod controls;
 mod core_color;
@@ -99,9 +100,14 @@ struct Backend {
     core_moves: backend::core_move::CoreMoves,
     /// The "Move to VPS…" window of each core that has one open.
     core_move_windows: HashMap<u64, WindowHandle<Root>>,
-    /// How many moves pointed a core's row at its new server; an open Settings window rebuilds
+    /// The connect wizard's install of a fresh core: it outlives the wizard's window.
+    core_new: Option<backend::core_new::NewJob>,
+    /// The connect wizard's window, while it is open.
+    connect_wizard_window: Option<WindowHandle<Root>>,
+    /// How many times a core's row changed outside the Settings window — a move pointed it at
+    /// its new server, the connect wizard added or removed one; an open Settings window rebuilds
     /// its Connections fields when this moves.
-    core_moves_switched: u64,
+    servers_changed_outside: u64,
     /// Process-wide self-update state shared by every group window.
     updater: Entity<update::UpdateController>,
     session: SessionManager,

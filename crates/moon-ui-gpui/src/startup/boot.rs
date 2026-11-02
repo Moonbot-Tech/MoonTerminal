@@ -204,7 +204,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         station,
         core_moves: Default::default(),
         core_move_windows: HashMap::new(),
-        core_moves_switched: 0,
+        core_new: None,
+        connect_wizard_window: None,
+        servers_changed_outside: 0,
         updater: updater.clone(),
         session: SessionManager::start(
             &cfg,
@@ -1202,6 +1204,21 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         cx.defer(move |cx| {
             let owner = cx.active_window();
             crate::analytics::profit_monitor::restore(backend, owner, cx);
+        });
+    }
+
+    // A terminal with no core shows nothing worth looking at: the connect wizard opens by itself,
+    // on every launch until a core is added. Gated like the monitor above, so a FireTest or
+    // fixture run is never covered by it.
+    let first_run = {
+        let backend = backend.read(cx);
+        backend.persist_allowed && backend.config.servers.is_empty()
+    };
+    if first_run {
+        let backend = backend.clone();
+        cx.defer(move |cx| {
+            let owner = cx.active_window();
+            crate::connect_wizard::open(backend, owner, None, cx);
         });
     }
 }

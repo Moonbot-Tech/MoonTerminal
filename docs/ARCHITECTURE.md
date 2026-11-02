@@ -15,9 +15,11 @@ experimental migration plans.
 - `moon-station` — the headless `moon-station` binary for a Linux server: report replica, order
   traces, the trade tape and the market-list prices around every trade, without a window; it hosts
   `moon-tg` too.
-- `moon-remote` — prepares a Linux server for `moon-station` over SSH, and installs a MoonBot core
-  moved onto one from another machine (`core_move`): a library the terminal calls (including
-  pulling data back from a station), plus a `moon-remote` command-line binary.
+- `moon-remote` — prepares a Linux server for `moon-station` over SSH, and installs a Moonbot core
+  on one: moved from another machine (`core_move`), or fresh and set up through the core's own
+  command line (`core_new`). A library the terminal calls — its connect wizard
+  (`moon-ui-gpui/src/connect_wizard/`) drives a fresh install — plus a `moon-remote`
+  command-line binary.
 - `build-support` — not a crate: `git_meta.rs`, included through `#[path]` by the build scripts of
   `moon-ui-gpui` and `moon-station`, so both binaries embed the same Git revision and release base.
 - `Moonbot-Tech/MoonUI` — external git dependency: standalone GPUI runtime + Moon UI components.
