@@ -96,7 +96,7 @@ uuid = { version = "1", features = ["serde"] }
 sha2 = "0.10"
 getrandom = "0.2"
 # Excel (.xlsx) export from the Report panel's save menu (report/export.rs).
-rust_xlsxwriter = "0.96.0"
+rust_xlsxwriter = "0.100.0"
 
 # Native Windows APIs for the DX11 renderer, window integration, audio, and crash handling.
 # Application-wide time-zone conversion is cross-platform through chrono-tz above; moon-chart
