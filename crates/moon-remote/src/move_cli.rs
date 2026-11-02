@@ -228,14 +228,14 @@ fn move_core(target: Target, args: &mut Args, say: &mut dyn FnMut(MoveStep)) -> 
 }
 
 /// A required `--name value`.
-fn required(args: &mut Args, name: &str) -> anyhow::Result<String> {
+pub(super) fn required(args: &mut Args, name: &str) -> anyhow::Result<String> {
     args.value(name)?
         .ok_or_else(|| anyhow::anyhow!("{name} is required"))
 }
 
 /// Log in with `--login`/`--login-key` against the pinned or `--host-key` fingerprint, and find
 /// how that login reaches root.
-fn connect(target: &Target, args: &mut Args) -> anyhow::Result<(Conn, Privilege)> {
+pub(super) fn connect(target: &Target, args: &mut Args) -> anyhow::Result<(Conn, Privilege)> {
     let login = required(args, "--login")?;
     let key = read_key(&required(args, "--login-key")?)?;
     let pin = match args.value("--host-key")? {

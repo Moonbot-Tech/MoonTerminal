@@ -1,12 +1,18 @@
 #!/bin/sh
-# Installs a moved MoonBot core as a systemd instance, as root. Called by moon-remote's
-# core_move module, one step per call:
-#   check   <udp port>                          — the server can run MoonBot and the port is free
+# Installs a MoonBot core as a systemd instance, as root: a moved core (moon-remote's core_move)
+# or a fresh one (core_new). One step per call:
+#   check   <udp port>                          — the server can run MoonBot and the port is free;
+#                                                 CHECK_* lines tell its OS, memory and firewall
 #   install <work dir> <instance dir> <udp port> <package url>
 #                                               — package + settings and the service, not started
+#   install-fresh <instance dir> <udp port> <package url>
+#                                               — package and the service, started on the core's
+#                                                 own default settings, ready for its commands
 #   start   <instance dir>                      — start the core, wait until it took its key and
 #                                                 listens for MoonProto
 #   finish  <instance dir>                      — drop the first-start INI switch the move added
+#   mb      <instance dir> <arguments…>         — one command of the core's own CLI; stdin passes
+#                                                 through
 #   remove  <instance dir>                      — stop and delete an instance this script made
 # The work dir holds state.zip (settings archive), key (MoonProto connection packet) and, when
 # the move added it, ini-flag; install deletes it.
@@ -66,6 +72,11 @@ check)
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages >/dev/null
     fi
     ! udp_bound "$port" || { echo "UDP port $port is already in use on this server: choose another" >&2; exit 1; }
+    os=$( (. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-}") || true)
+    printf 'CHECK_OS=%s\nCHECK_GLIBC=%s\n' "$os" "$version"
+    awk '/^MemTotal:/ { printf "CHECK_MEM_TOTAL_MB=%d\n", $2 / 1024 }
+         /^MemAvailable:/ { printf "CHECK_MEM_AVAILABLE_MB=%d\n", $2 / 1024 }' /proc/meminfo
+    if ufw_active; then echo CHECK_UFW=active; else echo CHECK_UFW=off; fi
     echo CHECK_OK
     ;;
 install)
@@ -133,6 +144,90 @@ install)
     rm -rf -- "$work"
     printf 'MOVE_DIRECTORY=%s\nMOVE_SERVICE=%s\n' "$dest" "$unit"
     ;;
+install-fresh)
+    base=$1
+    port=$2
+    url=$3
+    base=$(resolve_dir "$base")
+    test "$base" != / || { echo 'Choose an instance directory, not /' >&2; exit 1; }
+    dest=$base
+    n=2
+    while test -e "$dest" || test -L "$dest"; do
+        dest="$base-$n"
+        n=$((n + 1))
+    done
+    unit=$(unit_of "$dest")
+    test ! -e "/etc/systemd/system/$unit" || { echo "The service $unit already exists" >&2; exit 1; }
+    umask 077
+    work=''
+    made=''
+    opened=''
+    started=''
+    cleanup() {
+        code=$?
+        if test "$code" != 0; then
+            if test -n "$started"; then
+                journalctl -u "$unit" -n 30 --no-pager >&2 || true
+                systemctl disable --now "$unit" >/dev/null 2>&1 || true
+            fi
+            if test -n "$opened"; then
+                ufw delete allow "$port/udp" >/dev/null 2>&1 || true
+            fi
+            if test -n "$made"; then
+                rm -rf -- "$dest"
+            fi
+        fi
+        if test -n "$work"; then
+            rm -rf -- "$work"
+        fi
+        exit "$code"
+    }
+    trap cleanup EXIT
+    work=$(mktemp -d /tmp/moonbot-move.XXXXXXXX)
+    mkdir -p -- "$(dirname -- "$dest")"
+    mkdir -- "$dest"
+    made=1
+    curl --fail --show-error --silent --location --proto '=https' --proto-redir '=https' \
+        --connect-timeout 20 --max-time 600 --output "$work/package.zip" "$url"
+    unzip -q "$work/package.zip" -d "$dest"
+    (cd "$dest" && sha256sum --quiet --check SHA256SUMS)
+    test -f "$dest/mb" || { echo 'This MoonBot package has no command line (mb): a newer package is needed' >&2; exit 1; }
+    printf '%s\n' "$port" > "$dest/$marker"
+    chmod 700 "$dest/MoonBot" "$dest/mb"
+    install -m 644 "$dest/moonbot@.service" /etc/systemd/system/moonbot@.service
+    # As in install: only an allow opened here is marked for removal.
+    if ufw_active && ! LC_ALL=C ufw status |
+        grep -q -E "^${port}/udp[[:space:]]+ALLOW([[:space:]]+IN)?[[:space:]]+Anywhere[[:space:]]*(#.*)?\$"; then
+        ufw allow "$port/udp" comment "MoonBot $dest" >/dev/null
+        opened=1
+        echo ufw >> "$dest/$marker"
+    fi
+    systemctl daemon-reload
+    started=1
+    systemctl enable --now "$unit" >/dev/null 2>&1
+    # A fresh core writes its default settings on the first start; its command channel answers
+    # once it is up.
+    # Bounded by the clock, not by passes: one hung probe takes its whole 10 s.
+    deadline=$(($(date +%s) + 90))
+    until (cd "$dest" && timeout 10 ./mb --status >/dev/null 2>&1); do
+        systemctl is-active --quiet "$unit" || { echo 'The core stopped right after its start' >&2; exit 1; }
+        test "$(date +%s)" -lt "$deadline" || { echo 'The core does not answer its commands within 90 s' >&2; exit 1; }
+        sleep 1
+    done
+    trap - EXIT
+    rm -rf -- "$work"
+    printf 'MOVE_DIRECTORY=%s\nMOVE_SERVICE=%s\n' "$dest" "$unit"
+    ;;
+mb)
+    dest=$(resolve_dir "$1")
+    shift
+    # Only an instance this script made: the commands reconfigure a running core.
+    test -f "$dest/$marker" || { echo "$dest was not installed by MoonTerminal" >&2; exit 1; }
+    # The wrapper finds its instance by the working directory and runs as root, without the
+    # service's library path: system tools it calls must not see the core's libraries.
+    cd "$dest"
+    exec ./mb "$@"
+    ;;
 start)
     dest=$(resolve_dir "$1")
     test -f "$dest/$marker" || { echo "$dest was not installed by a MoonTerminal move" >&2; exit 1; }
@@ -186,7 +281,7 @@ finish)
     ;;
 remove)
     dest=$(resolve_dir "$1")
-    test -f "$dest/$marker" || { echo "$dest was not installed by a MoonTerminal move: not removed" >&2; exit 1; }
+    test -f "$dest/$marker" || { echo "$dest was not installed by MoonTerminal: not removed" >&2; exit 1; }
     unit=$(unit_of "$dest")
     port=$(head -n 1 "$dest/$marker")
     systemctl disable --now "$unit" >/dev/null 2>&1 || true

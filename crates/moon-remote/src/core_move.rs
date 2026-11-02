@@ -21,10 +21,11 @@ use crate::ssh::Conn;
 
 /// The server-side script.
 pub const SCRIPT: &str = include_str!("../remote/moonbot-move.sh");
-/// The MoonBot Linux test package announced with 7.72; any other package URL may be given.
-pub const TEST_PACKAGE: &str = "https://api.moon-bot.com/files/linux/MoonBot-L2.zip";
-/// Download and unpack of the package together.
-const INSTALL_TIMEOUT: Duration = Duration::from_secs(1200);
+/// MoonBot's Linux test channel: it redirects to the newest test package (L6 on 2026-11-01, the
+/// first with the command line `core_new` drives). Any other package URL may be given.
+pub const TEST_PACKAGE: &str = "https://api.moon-bot.com/files/latest-linux-test.php";
+/// Download and unpack of the package together — and, for a fresh core, its first start.
+pub(crate) const INSTALL_TIMEOUT: Duration = Duration::from_secs(1200);
 /// The first start: the core takes its key (up to 60 s in the script) and listens (30 s).
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 /// Uploading the settings archive, which may carry a large report database.
@@ -126,13 +127,50 @@ pub struct Installed {
 }
 
 /// The command line running `step` of the script with `args`.
-fn command(step: &str, args: &[&str]) -> String {
+pub(crate) fn command(step: &str, args: &[&str]) -> String {
     let mut line = format!("sh -c {} moonbot-move {step}", sh_quote(SCRIPT));
     for arg in args {
         line.push(' ');
         line.push_str(&sh_quote(arg));
     }
     line
+}
+
+/// What [`check`] found on a server that can run MoonBot.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ServerCheck {
+    /// The distribution's own name (`PRETTY_NAME`), empty when it has none.
+    pub os: String,
+    /// The glibc version, e.g. `2.41`.
+    pub glibc: String,
+    pub mem_total_mb: u64,
+    /// What the kernel reckons can be taken without swapping (`MemAvailable`).
+    pub mem_available_mb: u64,
+    /// ufw is installed and active: the install opens the core's UDP port in it.
+    pub ufw_active: bool,
+}
+
+impl ServerCheck {
+    /// Read the `CHECK_*` lines of the script's `check` step. Absent lines leave their defaults:
+    /// the facts are shown to the user, the step's success alone decides.
+    pub fn parse(text: &str) -> Self {
+        let number = |key| {
+            script::value(text, key)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0)
+        };
+        Self {
+            os: script::value(text, "CHECK_OS")
+                .unwrap_or_default()
+                .to_owned(),
+            glibc: script::value(text, "CHECK_GLIBC")
+                .unwrap_or_default()
+                .to_owned(),
+            mem_total_mb: number("CHECK_MEM_TOTAL_MB"),
+            mem_available_mb: number("CHECK_MEM_AVAILABLE_MB"),
+            ufw_active: script::value(text, "CHECK_UFW") == Some("active"),
+        }
+    }
 }
 
 /// Check that the server can run MoonBot (x86_64, glibc 2.38+, systemd) and that `port` is free;
@@ -142,20 +180,21 @@ pub fn check(
     privilege: &Privilege,
     port: u16,
     say: &mut dyn FnMut(MoveStep),
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ServerCheck> {
     let out = privilege.run(
         conn,
         &command("check", &[&port.to_string()]),
         &[],
         script::APT_TIMEOUT,
     )?;
+    let text = out.stdout_text();
     anyhow::ensure!(
-        out.stdout_text().contains("CHECK_OK"),
+        text.contains("CHECK_OK"),
         "the server check did not finish: {}",
-        out.stdout_text().trim()
+        text.trim()
     );
     say(MoveStep::Checked);
-    Ok(())
+    Ok(ServerCheck::parse(&text))
 }
 
 /// Upload the settings and the connection packet and install the package and the service,
@@ -297,3 +336,6 @@ pub fn remove(
     say(MoveStep::Removed);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

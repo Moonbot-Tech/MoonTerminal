@@ -17,6 +17,8 @@
 //!             [--mini-app on|off] [--zone <IANA zone>] [--language ru|en|es|uk|tr|pt|vi])
 //! moon-remote --data <dir> core-move | core-move-start | core-move-finish | core-move-remove …
 //!                                                                             (see move_cli.rs)
+//! moon-remote --data <dir> core-new | core-new-status | core-new-exchanges | core-new-keys …
+//!                                                                              (see new_cli.rs)
 //! ```
 //!
 //! A server not set up from this machine yet needs `--host-key`: without it `setup` only prints the
@@ -39,6 +41,7 @@ use moon_remote::{app_key, hosts, keys, script, setup, station};
 use zeroize::Zeroizing;
 
 mod move_cli;
+mod new_cli;
 
 fn main() {
     if let Err(e) = run() {
@@ -59,7 +62,8 @@ fn run() -> anyhow::Result<()> {
     );
     anyhow::ensure!(
         !args.0.is_empty(),
-        "no command: setup | station-bin | station-update | cores | status | telegram | core-move"
+        "no command: setup | station-bin | station-update | cores | status | telegram | core-move | \
+         core-new"
     );
     let command = args.0.remove(0);
     let target = Target {
@@ -270,9 +274,14 @@ fn run() -> anyhow::Result<()> {
         "core-move" | "core-move-start" | "core-move-finish" | "core-move-remove" => {
             move_cli::run(&command, target, &mut args)?;
         }
+        "core-new" | "core-new-status" | "core-new-exchanges" | "core-new-keys"
+        | "core-new-retry" => {
+            new_cli::run(&command, target, &mut args)?;
+        }
         other => anyhow::bail!(
             "unknown command {other:?}: setup | station-bin | station-update | cores | status | \
-             telegram | core-move | core-move-start | core-move-finish | core-move-remove"
+             telegram | core-move | core-move-start | core-move-finish | core-move-remove | \
+             core-new | core-new-status | core-new-exchanges | core-new-keys | core-new-retry"
         ),
     }
     Ok(())
