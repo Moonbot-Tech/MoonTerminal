@@ -34,6 +34,10 @@ connect_wizard.rail.key: "Çekirdek anahtarı"
 connect_wizard.rail.done: "Tamam"
 
 # --- The start screen ---
+connect_wizard.start.language: "Dil"
+connect_wizard.start.theme: "Tema"
+connect_wizard.start.look_failed: "Dil ve tema kaydedilmedi: %{reason}"
+connect_wizard.start.look_in_settings: "Ayarlar açıkken dili ve temayı orada değiştirin."
 connect_wizard.start.first_title: "Henüz çekirdek yok — ilkini bağlayalım"
 connect_wizard.start.first_sub: "Terminal bir Moonbot çekirdeği üzerinden çalışır. Sunucunuza yenisini kurun ya da zaten sahip olduğunuz Moonbot'un çekirdeğini bağlayın."
 connect_wizard.start.title: "Ne yapalım?"

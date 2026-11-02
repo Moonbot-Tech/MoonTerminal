@@ -34,6 +34,10 @@ connect_wizard.rail.key: "Chave do núcleo"
 connect_wizard.rail.done: "Concluído"
 
 # --- The start screen ---
+connect_wizard.start.language: "Idioma"
+connect_wizard.start.theme: "Tema"
+connect_wizard.start.look_failed: "Idioma e tema não foram salvos: %{reason}"
+connect_wizard.start.look_in_settings: "Enquanto as Configurações estiverem abertas, mude o idioma e o tema lá."
 connect_wizard.start.first_title: "Ainda não há núcleos — vamos conectar o primeiro"
 connect_wizard.start.first_sub: "O terminal funciona por meio de um núcleo do Moonbot. Instale um novo no seu servidor ou conecte o núcleo do Moonbot que você já tem."
 connect_wizard.start.title: "O que vamos fazer?"

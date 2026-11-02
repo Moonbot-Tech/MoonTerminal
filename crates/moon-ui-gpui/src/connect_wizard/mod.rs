@@ -22,7 +22,11 @@ use std::time::Instant;
 
 use gpui::*;
 use moon_core::config::eula::EulaAcceptance;
-use moon_ui::{MoonBackgroundPolicy, MoonInputState, MoonSelectState, MoonTextAreaState, Root};
+use moon_core::config::{Language, UiThemeMode};
+use moon_ui::{
+    IndexPath, MoonBackgroundPolicy, MoonInputState, MoonSelectEvent, MoonSelectItem,
+    MoonSelectState, MoonTextAreaState, Root,
+};
 use rust_i18n::t;
 
 use crate::Backend;
@@ -53,6 +57,11 @@ pub(crate) struct ConnectWizardView {
     branch: Option<Branch>,
     /// The branch picked on the start screen.
     choice: Branch,
+    /// The start screen's language and theme pickers, applied and saved at once.
+    language: Entity<MoonSelectState<Language>>,
+    theme: Entity<MoonSelectState<UiThemeMode>>,
+    /// The language the theme picker's names were built in.
+    look_language: Language,
     server: ServerFields,
     /// The stored acceptance of Moonbot's agreement, read when the window opened.
     eula: Option<EulaAcceptance>,
@@ -95,6 +104,8 @@ impl ConnectWizardView {
             cx.new(|cx| MoonInputState::new(window, cx).masked(masked))
         };
         let exchange = cx.new(|cx| MoonSelectState::new(Vec::new(), None, window, cx));
+        let (language, theme) = look_pickers(&backend, window, cx);
+        let look_language = backend.read(cx).config.language;
         // A running install continues where it stands.
         let (branch, choice) = if backend.read(cx).core_new.is_some() {
             (Some(Branch::NewCore), Branch::NewCore)
@@ -126,6 +137,9 @@ impl ConnectWizardView {
             backend,
             branch,
             choice,
+            look_language,
+            language,
+            theme,
             _observe: observe,
         }
     }
@@ -137,6 +151,60 @@ impl ConnectWizardView {
             .core_new
             .as_ref()
             .map(|job| job.phase.clone())
+    }
+
+    /// Show in the pickers what the terminal runs with: a pick that was refused or not saved, or
+    /// a Settings save made meanwhile, must not leave a value on screen that is not in effect.
+    /// The theme names follow the language they are shown in.
+    fn sync_look(&mut self, cx: &mut Context<Self>) {
+        let (language, theme) = {
+            let config = &self.backend.read(cx).config;
+            (config.language, config.ui_theme_mode)
+        };
+        if self.look_language != language {
+            self.look_language = language;
+            self.theme
+                .update(cx, |state, cx| state.set_items(theme_items(), cx));
+        }
+        if self.language.read(cx).selected_value() != Some(&language) {
+            self.language
+                .update(cx, |state, _| state.set_selected_value(&language));
+        }
+        if self.theme.read(cx).selected_value() != Some(&theme) {
+            self.theme
+                .update(cx, |state, _| state.set_selected_value(&theme));
+        }
+    }
+
+    /// Apply and save the language or theme picked on the start screen.
+    fn set_look(
+        &mut self,
+        language: Option<Language>,
+        theme: Option<UiThemeMode>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.backend.read(cx).preview.is_some() {
+            self.error = Some(t!("connect_wizard.start.look_in_settings").to_string());
+            cx.notify();
+            return;
+        }
+        match self
+            .backend
+            .update(cx, |b, bcx| b.wizard_set_look(language, theme, bcx))
+        {
+            Ok(()) => self.error = None,
+            Err(e) => {
+                log::warn!("connect wizard: language/theme not saved: {e:#}");
+                self.error = Some(
+                    t!(
+                        "connect_wizard.start.look_failed",
+                        reason = format!("{e:#}")
+                    )
+                    .to_string(),
+                );
+            }
+        }
+        cx.notify();
     }
 
     /// Go into the branch picked on the start screen.
@@ -315,6 +383,68 @@ impl ConnectWizardView {
         }
         window.remove_window();
     }
+}
+
+/// The language and theme pickers, set to what the terminal shows now; a pick is applied to every
+/// window and saved at once.
+fn look_pickers(
+    backend: &Entity<Backend>,
+    window: &mut Window,
+    cx: &mut Context<ConnectWizardView>,
+) -> (
+    Entity<MoonSelectState<Language>>,
+    Entity<MoonSelectState<UiThemeMode>>,
+) {
+    let (lang_now, theme_now) = {
+        let config = &backend.read(cx).config;
+        (config.language, config.ui_theme_mode)
+    };
+    let language = cx.new(|cx| {
+        MoonSelectState::new(
+            Language::ALL
+                .iter()
+                .map(|l| MoonSelectItem::new(*l, l.label())),
+            Language::ALL
+                .iter()
+                .position(|l| *l == lang_now)
+                .map(IndexPath::new),
+            window,
+            cx,
+        )
+    });
+    let labels = crate::settings::THEME_MODE_LABELS;
+    let theme = cx.new(|cx| {
+        MoonSelectState::new(
+            theme_items(),
+            labels
+                .iter()
+                .position(|(_, mode)| *mode == theme_now)
+                .map(IndexPath::new),
+            window,
+            cx,
+        )
+    });
+    cx.subscribe(&language, |this, _, ev: &MoonSelectEvent<Language>, cx| {
+        if let MoonSelectEvent::Confirm(Some(language)) = ev {
+            this.set_look(Some(*language), None, cx);
+        }
+    })
+    .detach();
+    cx.subscribe(&theme, |this, _, ev: &MoonSelectEvent<UiThemeMode>, cx| {
+        if let MoonSelectEvent::Confirm(Some(mode)) = ev {
+            this.set_look(None, Some(*mode), cx);
+        }
+    })
+    .detach();
+    (language, theme)
+}
+
+/// The theme picker's items, named in the current language.
+fn theme_items() -> Vec<MoonSelectItem<UiThemeMode>> {
+    crate::settings::THEME_MODE_LABELS
+        .iter()
+        .map(|(key, mode)| MoonSelectItem::new(*mode, t!(*key).to_string()))
+        .collect()
 }
 
 /// Open the wizard on the move of core `uid` — a core card's "Move to VPS…" — or bring up the

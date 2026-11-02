@@ -34,6 +34,10 @@ connect_wizard.rail.key: "Ключ ядра"
 connect_wizard.rail.done: "Готово"
 
 # --- The start screen ---
+connect_wizard.start.language: "Язык"
+connect_wizard.start.theme: "Тема"
+connect_wizard.start.look_failed: "Язык и тема не сохранены: %{reason}"
+connect_wizard.start.look_in_settings: "Пока открыты Настройки, язык и тема меняются там."
 connect_wizard.start.first_title: "Ядер пока нет — давайте подключим первое"
 connect_wizard.start.first_sub: "Терминал работает через ядро Moonbot. Поставьте новое на свой сервер или подключите ядро Moonbot, который у вас уже есть."
 connect_wizard.start.title: "Что сделаем?"

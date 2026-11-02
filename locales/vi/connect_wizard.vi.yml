@@ -34,6 +34,10 @@ connect_wizard.rail.key: "Khóa lõi"
 connect_wizard.rail.done: "Xong"
 
 # --- The start screen ---
+connect_wizard.start.language: "Ngôn ngữ"
+connect_wizard.start.theme: "Giao diện"
+connect_wizard.start.look_failed: "Chưa lưu được ngôn ngữ và giao diện: %{reason}"
+connect_wizard.start.look_in_settings: "Khi Cài đặt đang mở, hãy đổi ngôn ngữ và giao diện ở đó."
 connect_wizard.start.first_title: "Chưa có lõi nào — hãy kết nối lõi đầu tiên"
 connect_wizard.start.first_sub: "Terminal hoạt động thông qua một lõi Moonbot. Cài lõi mới trên máy chủ của bạn hoặc kết nối lõi của Moonbot bạn đang có."
 connect_wizard.start.title: "Chúng ta sẽ làm gì?"

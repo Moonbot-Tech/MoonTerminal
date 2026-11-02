@@ -512,6 +512,40 @@ impl Backend {
         Ok(row.uid)
     }
 
+    /// The wizard's language or theme pick: applied at once to every window and saved, as a saved
+    /// Settings change would be. Refused while a Settings window holds a draft: the draft and its
+    /// editors keep their own copy of both, and two writers of one value disagree.
+    pub(crate) fn wizard_set_look(
+        &mut self,
+        language: Option<moon_core::config::Language>,
+        theme: Option<moon_core::config::UiThemeMode>,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.preview.is_none(),
+            "the Settings window is open: change the language and theme there"
+        );
+        let mut candidate = self.config.clone();
+        if let Some(language) = language {
+            candidate.language = language;
+        }
+        if let Some(theme) = theme {
+            candidate.ui_theme_mode = theme;
+        }
+        if candidate.language == self.config.language
+            && candidate.ui_theme_mode == self.config.ui_theme_mode
+        {
+            return Ok(());
+        }
+        candidate.save()?;
+        self.config = candidate;
+        rust_i18n::set_locale(self.config.language.code());
+        crate::install_moon_theme_for_config(&self.config, cx);
+        cx.notify();
+        cx.refresh_windows();
+        Ok(())
+    }
+
     /// Take a wizard's core row out of the saved settings and an open draft — the row of a
     /// removed install, or of a core the user gave up connecting to.
     pub(crate) fn wizard_drop_row(
