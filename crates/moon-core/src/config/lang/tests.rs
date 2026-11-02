@@ -105,3 +105,14 @@ fn all_codes_and_labels_are_unique_and_non_empty() {
 
 // The translation test (`t!`/rust_i18n) moved to the UI crate (moon-ui-gpui):
 // moon-core does not depend on rust-i18n and knows nothing about locales/.
+
+/// A fresh installation starts in English; a settings file written before the field existed keeps
+/// the language it was shown in, the system's. Breakage: `Default` falls back to the system
+/// language again, or old files silently switch to English.
+#[test]
+fn fresh_installs_start_in_english_and_old_files_keep_the_system_language() {
+    use crate::config::schema::SettingsFile;
+    assert_eq!(SettingsFile::default().language, Language::En);
+    let old: SettingsFile = toml::from_str("").expect("an empty settings file must parse");
+    assert_eq!(old.language, Language::from_system());
+}

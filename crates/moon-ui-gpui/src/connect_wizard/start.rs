@@ -1,9 +1,11 @@
 //! The start screen: what the wizard is going to do. Two variants — no core yet, where it opened
 //! by itself, and cores already there, where the user opened it.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonButton, MoonPalette, MoonSelectableCard, MoonTone, h_flex, rgba_from, v_flex,
+    MoonBadge, MoonButton, MoonPalette, MoonSelect, MoonSelectableCard, MoonTone, h_flex,
+    rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -13,6 +15,7 @@ use crate::design;
 
 impl ConnectWizardView {
     pub(super) fn start_screen(&mut self, cx: &mut Context<Self>) -> Screen {
+        self.sync_look(cx);
         let cores = self.backend.read(cx).config.servers.len();
         let first_run = cores == 0;
         let mut screen = if first_run {
@@ -23,6 +26,7 @@ impl ConnectWizardView {
                 .sub(t!("connect_wizard.start.sub", n = cores))
         };
         screen = screen
+            .child(self.look_row(cx))
             .child(self.option(
                 Branch::NewCore,
                 t!("connect_wizard.start.new_title").to_string(),
@@ -71,6 +75,41 @@ impl ConnectWizardView {
                     .on_click(cx.listener(|this, _, _, cx| this.next_from_start(cx)))
                     .render(),
             )
+    }
+
+    /// The language and theme pickers: the first screen a newcomer sees has to be readable.
+    fn look_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // An open Settings window owns both while it holds a draft.
+        let in_settings = self.backend.read(cx).preview.is_some();
+        let picker = |label: String, select: AnyElement, cx: &App| {
+            h_flex()
+                .items_center()
+                .gap(design::ui_px(cx, 6.0))
+                .child(note(label, cx))
+                .child(div().w(design::font_w_px(cx, 170.0)).child(select))
+        };
+        h_flex()
+            .flex_wrap()
+            .gap(design::ui_px(cx, 14.0))
+            .child(picker(
+                t!("connect_wizard.start.language").to_string(),
+                MoonSelect::new(&self.language)
+                    .disabled(in_settings)
+                    .menu_width(design::font_w(cx, 170.0))
+                    .into_any_element(),
+                cx,
+            ))
+            .child(picker(
+                t!("connect_wizard.start.theme").to_string(),
+                MoonSelect::new(&self.theme)
+                    .disabled(in_settings)
+                    .menu_width(design::font_w(cx, 170.0))
+                    .into_any_element(),
+                cx,
+            ))
+            .when(in_settings, |row| {
+                row.child(note(t!("connect_wizard.start.look_in_settings"), cx))
+            })
     }
 
     /// One way to connect a core, as a card the user picks.

@@ -34,6 +34,10 @@ connect_wizard.rail.key: "Core key"
 connect_wizard.rail.done: "Done"
 
 # --- The start screen ---
+connect_wizard.start.language: "Language"
+connect_wizard.start.theme: "Theme"
+connect_wizard.start.look_failed: "Language and theme were not saved: %{reason}"
+connect_wizard.start.look_in_settings: "While Settings is open, change the language and theme there."
 connect_wizard.start.first_title: "No cores yet — let's connect the first one"
 connect_wizard.start.first_sub: "The terminal works through a Moonbot core. Put a new one on your server, or connect the core of the Moonbot you already have."
 connect_wizard.start.title: "What shall we do?"
