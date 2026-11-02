@@ -1,15 +1,18 @@
 //! The connect wizard: one window for every way a core reaches this terminal — a new core on a
-//! Linux server, a core of the user's Moonbot by its key, and (on Windows) Moonbot itself.
+//! Linux server, a core moved onto one, a core of the user's Moonbot by its key, and (on
+//! Windows) Moonbot itself.
 //!
-//! It opens by itself while the terminal has no core, and from the "Connect a core" button of
-//! Settings → Cores. The window owns only its forms. A new core's install belongs to the backend
-//! (`backend::core_new`), so closing the window does not stop it, and opening the wizard again
-//! shows where it stands.
+//! It opens by itself while the terminal has no core, from the "Connect a core" button of
+//! Settings → Cores, and on the move branch from a core card's "Move to VPS…". The window owns
+//! only its forms. An install (`backend::core_new`) and a move (`backend::core_move`) belong to
+//! the backend, so closing the window stops neither, and opening the wizard again shows where
+//! they stand.
 
 mod by_key;
 mod done;
 #[cfg(windows)]
 mod download;
+mod move_core;
 mod new_core;
 mod render;
 mod server;
@@ -39,6 +42,8 @@ pub(crate) enum Branch {
     NewCore,
     /// A core of the user's Moonbot, by the key it copies.
     ByKey,
+    /// A connected core moved to a Linux server.
+    Move,
 }
 
 /// The wizard's view.
@@ -70,6 +75,11 @@ pub(crate) struct ConnectWizardView {
     /// The by-key branch's row, once added, and since when it is being connected to.
     by_key_uid: Option<u64>,
     by_key_since: Option<Instant>,
+    /// The move branch: the core picked to move, and whether the user went on to its server.
+    move_uid: Option<u64>,
+    move_at_server: bool,
+    /// A folder name for the server step, set where no window is at hand to set it.
+    pending_dir: Option<String>,
     #[cfg(windows)]
     download: download::Download,
     /// What is wrong with a form, already in the user's language.
@@ -106,6 +116,9 @@ impl ConnectWizardView {
             by_key_key: input(false, window, cx),
             by_key_uid: None,
             by_key_since: None,
+            move_uid: None,
+            move_at_server: false,
+            pending_dir: None,
             #[cfg(windows)]
             download: download::Download::default(),
             error: None,
@@ -133,9 +146,45 @@ impl ConnectWizardView {
         cx.notify();
     }
 
-    /// Back to the start screen, dropping an install that is over.
+    /// Take a card's "Move to VPS…" request: the move branch, on that core's server step — or on
+    /// its move, when one runs.
+    fn take_move_request(&mut self, cx: &mut Context<Self>) {
+        let Some(uid) = self.backend.update(cx, |b, _| b.wizard_move_request.take()) else {
+            return;
+        };
+        self.error = None;
+        self.branch = Some(Branch::Move);
+        self.choice = Branch::Move;
+        self.move_at_server = true;
+        // A host key ticked for another flow is never this core's confirmation.
+        self.server.fingerprint_ok = false;
+        if self.move_uid != Some(uid) {
+            self.move_uid = Some(uid);
+            let name = self
+                .backend
+                .read(cx)
+                .config
+                .servers
+                .iter()
+                .find(|s| s.uid == uid)
+                .map(|s| s.name.clone())
+                .unwrap_or_default();
+            self.pending_dir = Some(move_core::default_dir(&name));
+        }
+        cx.notify();
+    }
+
+    /// Back to the start screen, dropping an install that is over. From the move branch it is
+    /// always the start screen: a running install is one choice away there.
     fn back_to_start(&mut self, cx: &mut Context<Self>) {
         self.error = None;
+        self.move_uid = None;
+        self.move_at_server = false;
+        if self.branch == Some(Branch::Move) {
+            self.branch = None;
+            cx.notify();
+            return;
+        }
         if self
             .backend
             .read(cx)
@@ -265,6 +314,26 @@ impl ConnectWizardView {
             self.backend.update(cx, |b, bcx| b.core_new_forget(bcx));
         }
         window.remove_window();
+    }
+}
+
+/// Open the wizard on the move of core `uid` — a core card's "Move to VPS…" — or bring up the
+/// one that is open and switch it there.
+pub(crate) fn open_move(
+    backend: Entity<Backend>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    uid: u64,
+    cx: &mut App,
+) {
+    backend.update(cx, |b, bcx| {
+        b.wizard_move_request = Some(uid);
+        bcx.notify();
+    });
+    open(backend.clone(), owner, owner_display, cx);
+    // No window took the request: it must not surface in a later, unrelated opening.
+    if backend.read(cx).connect_wizard_window.is_none() {
+        backend.update(cx, |b, _| b.wizard_move_request = None);
     }
 }
 

@@ -199,15 +199,14 @@ impl SettingsView {
                         .map(|s| s.uid)
                         .filter(|uid| *uid != 0);
                     uid.and_then(|uid| b.config.servers.iter().find(|s| s.uid == uid))
-                        .map(|s| (s.uid, s.name.clone()))
+                        .map(|s| s.uid)
                 };
                 match saved {
-                    Some((uid, name)) => crate::core_move_window::open(
+                    Some(uid) => crate::connect_wizard::open_move(
                         self.backend.clone(),
                         Some(window.window_handle()),
                         window.display(cx).map(|display| display.id()),
                         uid,
-                        name,
                         cx,
                     ),
                     None => {

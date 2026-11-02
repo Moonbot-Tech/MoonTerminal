@@ -39,7 +39,7 @@ impl ConnectWizardView {
                 }),
                 cx,
             ))
-            .child(move_option(first_run, cx))
+            .child(self.move_option(first_run, cx))
             .child(self.option(
                 Branch::ByKey,
                 t!("connect_wizard.start.key_title").to_string(),
@@ -85,6 +85,7 @@ impl ConnectWizardView {
         let id = match branch {
             Branch::NewCore => "cw-opt-new",
             Branch::ByKey => "cw-opt-key",
+            Branch::Move => "cw-opt-move",
         };
         MoonSelectableCard::new(id)
             .selected(self.choice == branch)
@@ -94,24 +95,28 @@ impl ConnectWizardView {
             }))
             .child(option_body(title, description, badge, cx))
     }
-}
 
-/// The move card. Disabled while there is no core to move; the move itself joins the wizard in
-/// its own change, and until then it stays on the core's card in Settings → Cores.
-fn move_option(first_run: bool, cx: &App) -> impl IntoElement {
-    let badge = if first_run {
-        t!("connect_wizard.start.move_no_cores").to_string()
-    } else {
-        t!("connect_wizard.start.move_from_card").to_string()
-    };
-    MoonSelectableCard::new("cw-opt-move")
-        .disabled(true)
-        .child(option_body(
-            t!("connect_wizard.start.move_title").to_string(),
-            t!("connect_wizard.start.move_desc").to_string(),
-            Some((badge, MoonTone::Muted)),
-            cx,
-        ))
+    /// The move card: there is nothing to move while no core is connected.
+    fn move_option(&self, first_run: bool, cx: &mut Context<Self>) -> AnyElement {
+        let title = t!("connect_wizard.start.move_title").to_string();
+        let description = t!("connect_wizard.start.move_desc").to_string();
+        if first_run {
+            return MoonSelectableCard::new("cw-opt-move")
+                .disabled(true)
+                .child(option_body(
+                    title,
+                    description,
+                    Some((
+                        t!("connect_wizard.start.move_no_cores").to_string(),
+                        MoonTone::Muted,
+                    )),
+                    cx,
+                ))
+                .into_any_element();
+        }
+        self.option(Branch::Move, title, description, None, cx)
+            .into_any_element()
+    }
 }
 
 /// A card's title, its badge and its description.

@@ -1,50 +1,8 @@
-# The "Move to VPS…" window: a core moved onto a Linux server, its form, review and progress.
+# A core moved onto a Linux server: the card button, the move's steps, warnings and outcomes.
 _version: 1
 
-core_move.window_title: "Move to VPS — %{name}"
-core_move.title: "Move %{name} to a Linux server"
 core_move.card_button: "Move to VPS…"
 core_move.save_first: "Save the core first: a move needs its saved key and history."
-
-# --- The form ---
-core_move.form.intro: "The core moves with its settings, strategies and trade history. Its MoonProto key stays the same; only the address changes."
-core_move.form.host: "Server address"
-core_move.form.login: "Login"
-core_move.form.by_key: "Log in with a key"
-core_move.form.key_path: "Key file"
-core_move.form.key_browse: "Browse…"
-core_move.form.passphrase: "Key passphrase"
-core_move.form.sudo_password: "sudo password"
-core_move.form.password: "Password"
-core_move.form.dir: "Folder on the server"
-core_move.form.port: "MoonProto UDP port"
-core_move.form.order: "The new core is installed but not started. The old core is then asked to stop, and the new one starts only once the old one is down. After that this terminal and the station switch to the new core by themselves."
-core_move.form.check: "Check the server"
-core_move.form.need_host: "Enter the server's address."
-core_move.form.need_login: "Enter the login your provider gave for this server."
-core_move.form.need_ipv4: "Enter the server's IPv4 address: the new core is reached at it."
-core_move.form.need_dir: "Enter a folder name without spaces."
-core_move.form.need_port: "Enter a UDP port from 1 to 65535."
-
-# --- The server's key, before anything is sent ---
-core_move.review.fingerprint: "Server %{addr} presents the key %{fingerprint}. Compare it with the one your provider shows."
-core_move.review.what: "The move logs in with this login, installs MoonBot for Linux into the folder, uploads the core's settings and report database, and opens the UDP port in the firewall."
-core_move.review.secrets: "The core's settings carry its exchange API keys: they go to this server."
-core_move.review.confirm: "Move"
-
-# --- Where the move stands ---
-core_move.phase.probing: "Reading the server's key…"
-core_move.phase.running: "Moving…"
-core_move.phase.refused: "The old core keeps running: it has %{n} unfinished deals."
-core_move.phase.refused_unknown: "The old core keeps running."
-core_move.phase.refused_hint: "A core does not stop while it holds active take/sell orders. The new core is installed and waits."
-core_move.phase.waiting: "Waiting until you stop the old core in MoonBot; the move then goes on by itself."
-core_move.phase.done: "Done: the core runs at %{address}. This terminal switched to it."
-core_move.phase.cancelled: "The move was cancelled; the new core is removed from the server."
-core_move.retry: "Check again"
-core_move.wait: "Go on once it stops"
-core_move.cancel: "Cancel the move"
-core_move.start_over: "Start over"
 
 # --- Outcomes ---
 core_move.lost: "The move stopped without a word: its thread ended."
@@ -88,3 +46,9 @@ core_move.station.not_followed: "The station does not follow this core."
 core_move.station.sent: "The new address is sent to the station."
 core_move.station.failed: "The station did not take the new address: %{reason}"
 core_move.station.none: "No station is set up from this terminal."
+
+# --- The new core's own word after its start ---
+core_move.settled: "The new core is logged in to the exchange and listens for MoonProto."
+core_move.not_settled: "The new core is not ready yet (%{state}) %{detail} — the move goes on: the old core is already stopped."
+core_move.status_unread: "The new core's state was not read: %{reason} — the move goes on."
+core_move.settling: "New core: %{state}…"

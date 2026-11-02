@@ -23,7 +23,7 @@ use gpui::{Context, Task};
 use moon_core::diagnostics::CORE_MOVE_TARGET;
 use moon_core::feed::ConnStatus;
 use moon_remote::core_move::ServerCheck;
-use moon_remote::core_new::{CoreStatus, Exchange};
+use moon_remote::core_new::{CoreState, CoreStatus, Exchange};
 use moon_remote::ssh::Target;
 use moon_ui::MoonPalette;
 use rust_i18n::t;
@@ -535,6 +535,19 @@ impl Backend {
         self.session.reconcile(&self.config, reports);
         cx.notify();
         Ok(())
+    }
+}
+
+/// A core's `--status` state in the user's words.
+pub(crate) fn state_text(state: &CoreState) -> String {
+    match state {
+        CoreState::Initializing => t!("connect_wizard.state.initializing").to_string(),
+        CoreState::Ready => t!("connect_wizard.state.ready").to_string(),
+        CoreState::NeedsKeys => t!("connect_wizard.state.needs_keys").to_string(),
+        CoreState::LoginError => t!("connect_wizard.state.login_error").to_string(),
+        CoreState::RegistrationError => t!("connect_wizard.state.registration_error").to_string(),
+        CoreState::ActionRequired => t!("connect_wizard.state.action_required").to_string(),
+        CoreState::Other(name) => name.clone(),
     }
 }
 
