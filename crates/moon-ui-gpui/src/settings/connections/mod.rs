@@ -17,7 +17,7 @@ mod endpoints;
 mod entries;
 mod page;
 mod tab;
-mod table;
+pub(crate) mod table;
 
 #[cfg(test)]
 mod tests;
@@ -78,7 +78,7 @@ pub(super) struct ConnRow {
 ///
 /// Returns whether a row was inserted. Orphan removal stays at `AppConfig::save_impl`, so erasing
 /// and retyping a group name cannot replace its Size, TP, SL, S-slot, or stop-market settings.
-pub(super) fn sync_groups_from_servers(
+pub(crate) fn sync_groups_from_servers(
     servers: &[ServerConfig],
     groups: &mut Vec<GroupConfig>,
 ) -> bool {

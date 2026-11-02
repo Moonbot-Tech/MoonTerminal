@@ -19,9 +19,6 @@ use super::*;
 ///     sell_edit: Active sell-percentage editor text and cell index, when any.
 ///     sell_input: Shared input state for the active sell editor.
 ///     shell: Owning shell entity receiving toolbar actions.
-///     settings_hint_at: When the first-run settings hint was armed, if it still is. Passed BY
-///         VALUE rather than read off `shell`, because this row is built from inside the shell's
-///         own render -- reading that entity here panics as a re-entrant borrow.
 ///     metric_popup: Active trade metric and its popup contents, when open.
 ///     max_order: Exchange maximum-order readout for the active leverage target.
 ///     quote: Quote token displayed beside a present maximum-order value.
@@ -42,7 +39,6 @@ pub fn toolbar(
     sell_edit: Option<(String, usize)>,
     sell_input: &Entity<MoonInputState>,
     shell: &Entity<Shell>,
-    settings_hint_at: Option<std::time::Instant>,
     metric_popup: Option<(TradeMetric, AnyElement)>,
     max_order: MaxOrderReadout,
     quote: &str,
@@ -609,20 +605,6 @@ pub fn toolbar(
             .shows(launcher)
             .then(|| open_window_button(launch(launcher), backend.clone(), p, cx))
     };
-    // The first-run hint. TWO conditions, not one: the timer decides how long the ring breathes,
-    // and the saved config decides whether it is still relevant at all -- so the moment a core is
-    // saved the ring is gone on the NEXT FRAME rather than at the end of its timer. Read from
-    // `backend.config`, never from the Settings draft: an unsaved row the user is still typing
-    // into is not a configured core. It rides whichever control opens Settings right now: the
-    // Settings button, or the overflow button while Settings is folded into it.
-    let settings_hint = settings_hint_at
-        .filter(|_| !backend.read(cx).config.core_ever_configured())
-        .and_then(|at| crate::pulse::attention_ring(p.accent, at));
-    let (settings_ring, overflow_ring) = if folds.shows(Launcher::Settings) {
-        (settings_hint, None)
-    } else {
-        (None, settings_hint)
-    };
     let folded: Vec<LaunchTarget> = LAUNCHER_FOLD_ORDER[..folds.folded]
         .iter()
         .rev()
@@ -678,22 +660,12 @@ pub fn toolbar(
                 })
                 .children(button(Launcher::Settings).map(|settings| {
                     div()
-                        .relative()
                         // The UI face, as for the other labeled launchers above.
                         .font_family(design::ui_font())
                         .child(settings)
-                        // Declared AFTER the button so the ring paints on top of its chrome; it
-                        // is a pointer-transparent overlay and takes no clicks from the control
-                        // beneath.
-                        .children(settings_ring)
                 }))
                 .when(!folded.is_empty(), |section| {
-                    section.child(
-                        div()
-                            .relative()
-                            .child(overflow_button(folded, backend.clone(), p, cx))
-                            .children(overflow_ring),
-                    )
+                    section.child(overflow_button(folded, backend.clone(), p, cx))
                 }),
         );
     crate::diag::record_us(&crate::diag::TOOLBAR_LAUNCH_US, phase_us);

@@ -4,6 +4,7 @@
 
 mod alert_sound;
 pub(crate) mod core_move;
+pub(crate) mod core_new;
 pub(crate) mod core_warn;
 mod detect_sound;
 mod favorites;

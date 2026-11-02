@@ -15,7 +15,7 @@
 mod apply;
 mod badges;
 mod common;
-mod connections;
+pub(crate) mod connections;
 mod frame;
 mod general;
 mod hotkeys;
@@ -404,14 +404,6 @@ pub struct SettingsView {
     lines: Lines,
     /// Detect-type badge editor for the Badges tab; rebuilt after additions and removals.
     badges: BadgesEd,
-    /// When the first-run hint on the Connections tab was armed, if it was.
-    ///
-    /// The Settings gear got the user here; this points at the next thing to do. It targets ONE
-    /// control at a time and which one depends on the draft: with no rows yet there is no key field
-    /// to point at, so the add button carries it.
-    conn_hint_at: Option<std::time::Instant>,
-    /// Whether the hint's repaint chain is already running, so arming twice cannot stack timers.
-    conn_hint_armed: bool,
     /// Per-server editor states for the Connections tab; rebuilt after additions and removals.
     conn: Vec<ConnRow>,
     /// UI-zoom slider for the personal geometry scale in settings.toml.
@@ -453,9 +445,9 @@ pub struct SettingsView {
     /// Row key of the core whose card the Cores page shows. Re-validated by every rebuild of the
     /// core rows (`rebuild_conn`) and on every frame (`valid_selection`).
     conn_selected: Option<u64>,
-    /// The backend's count of core moves that switched a row, as the Connections fields last
-    /// showed it (`Backend::core_moves_switched`).
-    core_moves_seen: u64,
+    /// The backend's count of rows changed outside this window, as the Connections fields last
+    /// showed it (`Backend::servers_changed_outside`).
+    servers_changed_seen: u64,
     /// Signature of data consumed by Settings: draft/configuration fields plus session statuses.
     last_sig: u64,
     /// Whether the CONFIG draft differed from the saved config as of the last backend
@@ -817,7 +809,7 @@ impl SettingsView {
         .detach();
 
         let initial_sig = settings_sig(backend.read(cx));
-        let core_moves_seen = backend.read(cx).core_moves_switched;
+        let servers_changed_seen = backend.read(cx).servers_changed_outside;
         let initial_counts = nav_counts(backend.read(cx));
         let initial_dirty = backend_dirty(backend.read(cx));
         let initial_saved = SavedPageSigs::of(&backend.read(cx).config);
@@ -858,9 +850,9 @@ impl SettingsView {
                 this.dirty_pages = pages;
                 changed = true;
             }
-            // A moved core's new address reaches the draft from outside; the render that sees
+            // A moved core's address or a wizard's new row reaches the draft from outside; the render that sees
             // the count move rebuilds the Connections fields (it has the window they need).
-            changed |= b.core_moves_switched != this.core_moves_seen;
+            changed |= b.servers_changed_outside != this.servers_changed_seen;
             if changed {
                 cx.notify();
             }
@@ -886,11 +878,6 @@ impl SettingsView {
         })
         .detach();
         Self {
-            // Armed at construction, never from `render`. Read from the SAVED config: a draft row
-            // the user is halfway through typing is not a configured core.
-            conn_hint_at: (!backend.read(cx).config.core_ever_configured())
-                .then(std::time::Instant::now),
-            conn_hint_armed: false,
             backend,
             active: tab,
             nav_query,
@@ -920,7 +907,7 @@ impl SettingsView {
             icons: IconSet::discover(),
             picking: None,
             conn_selected: None,
-            core_moves_seen,
+            servers_changed_seen,
             last_sig: initial_sig,
             draft_dirty: initial_dirty,
             dirty_pages: initial_pages,
@@ -1463,10 +1450,6 @@ pub fn open_on_tab(
     match cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| SettingsView::new(b, tab, window, cx));
-        // Arm the first-run repaint chain here rather than in `new`: `pulse::arm` needs the built
-        // view, and arming from `render` would let the window keep itself awake through its own
-        // repaints.
-        view.update(cx, |this, cx| this.arm_conn_hint(cx));
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
     }) {
         Ok(handle) => {

@@ -361,7 +361,6 @@ fn body(window: &mut Window, cx: &mut App, fields: &Inputs) -> AnyElement {
             address: &fields.address,
             bundle: &fields.bundle,
             color: &fields.color,
-            key_ring: None,
         },
         plain_dot(CoreDot::Bad, cx),
         &open,

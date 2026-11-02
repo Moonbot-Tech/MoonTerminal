@@ -1,6 +1,6 @@
 //! The core rows' shared model pieces: the feed flags and their count, the field writers the
 //! core card calls (`set_core_active`, `set_for_station`, `apply_pasted_key`), the live status
-//! dot, the first-run attention hint, and the add/delete/rebuild actions behind the Cores page.
+//! dot, the shape of a new core's row, and the add/delete/rebuild actions behind the Cores page.
 
 use gpui::*;
 use moon_ui::{MoonPalette, MoonTooltipView};
@@ -65,6 +65,46 @@ pub(super) fn set_core_active(s: &mut ServerConfig, on: bool) -> bool {
     let changed = s.active != on;
     s.active = on;
     changed
+}
+
+/// A new core's row: shown everywhere, every data kind on, `key` as given (empty: pasted later).
+/// The one shape both the Cores page's add button and the connect wizard create. `uid` 0 gets
+/// its identity on the next save.
+pub(crate) fn new_server_row(
+    id: u64,
+    name: String,
+    group: String,
+    key: &str,
+    color: [u8; 3],
+) -> ServerConfig {
+    let key = key.trim();
+    ServerConfig {
+        id,
+        uid: 0,
+        name,
+        active: true,
+        feed: FeedFlags::default(),
+        key: Secret::new(key.to_string()),
+        endpoint_override: String::new(),
+        endpoint_to_station: false,
+        group,
+        market: "BTCUSDT".into(),
+        color,
+        synthetic: false,
+        chart_bundle: String::new(),
+        default_alert_strategy: 0,
+        own_trade_config: false,
+        strat_slots: None,
+        manual_strategy: None,
+        trade: None,
+        // The mode a key seeds; none while there is no key, and pasting one fills it in.
+        transport: (!key.is_empty())
+            .then(|| moon_core::config::seeded_transport(None, key))
+            .flatten(),
+        // A new core ships shown everywhere.
+        workspace_membership: WorkspaceMembership::default(),
+        total_mode: TotalMode::default(),
+    }
 }
 
 /// Put a pasted key into a draft row: the key, the transport mode it seeds while the row has none,
@@ -214,50 +254,6 @@ pub(super) fn status_dot(
 }
 
 impl SettingsView {
-    /// Start (or restart) the first-run hint's repaint chain.
-    ///
-    /// Called once when the window opens and again after a row is added, because adding a row MOVES
-    /// the hint: with no rows there is no key field to point at, so the add button carries it, and
-    /// the moment a row exists the empty key field is the thing the user actually needs.
-    ///
-    /// Args:
-    ///     cx: The Settings view context.
-    ///
-    /// Returns:
-    ///     Nothing; the chain repaints this view until the hint expires.
-    pub(in crate::settings) fn arm_conn_hint(&mut self, cx: &mut Context<Self>) {
-        if self.backend.read(cx).config.core_ever_configured() {
-            return;
-        }
-        self.conn_hint_at = Some(std::time::Instant::now());
-        crate::pulse::arm(
-            self,
-            cx,
-            |this| &mut this.conn_hint_armed,
-            |this| {
-                this.conn_hint_at
-                    .is_some_and(|at| at.elapsed() < crate::pulse::ATTENTION)
-            },
-        );
-    }
-
-    /// The live first-run hint, or `None` when there is nothing to point at.
-    ///
-    /// Two conditions, deliberately: the timer bounds how long it breathes, and the SAVED config
-    /// decides whether it is still relevant. That second half is what makes a successful Save tear
-    /// the ring down on the next frame instead of at the end of the timer, on every control that
-    /// asks -- so the teardown lives in ONE place rather than at each call site.
-    ///
-    /// Args:
-    ///     cx: Any app context that can read the backend.
-    ///
-    /// Returns:
-    ///     The arming instant while the hint is live.
-    pub(super) fn conn_hint(&self, cx: &App) -> Option<std::time::Instant> {
-        self.conn_hint_at
-            .filter(|_| !self.backend.read(cx).config.core_ever_configured())
-    }
-
     /// Add a draft server with `id = max + 1` to the given group, then rebuild editor state.
     ///
     /// Args:
@@ -277,31 +273,13 @@ impl SettingsView {
         self.backend.update(cx, |b, bcx| {
             if let Some(p) = b.preview.as_mut() {
                 let next = p.servers.iter().map(|s| s.id).max().unwrap_or(0) + 1;
-                p.servers.push(ServerConfig {
-                    id: next,
-                    uid: 0,
-                    name: format!("server {next}"),
-                    active: true,
-                    feed: FeedFlags::default(),
-                    key: Secret::new(""),
-                    endpoint_override: String::new(),
-                    endpoint_to_station: false,
+                p.servers.push(new_server_row(
+                    next,
+                    format!("server {next}"),
                     group,
-                    market: "BTCUSDT".into(),
-                    color: default_color,
-                    synthetic: false,
-                    chart_bundle: String::new(),
-                    default_alert_strategy: 0,
-                    own_trade_config: false,
-                    strat_slots: None,
-                    manual_strategy: None,
-                    trade: None,
-                    // No key yet, so no mode to seed: pasting one fills this in.
-                    transport: None,
-                    // A new core ships shown everywhere.
-                    workspace_membership: WorkspaceMembership::default(),
-                    total_mode: TotalMode::default(),
-                });
+                    "",
+                    default_color,
+                ));
                 sync_groups_from_servers(&p.servers, &mut p.groups);
                 bcx.notify();
             }
@@ -314,10 +292,6 @@ impl SettingsView {
             .as_ref()
             .map(|p| p.servers.len() - 1);
         self.rebuild_conn(last, None, window, cx);
-        // The hint MOVES with this row: it pointed at this button, and the thing the newcomer needs
-        // next is the empty key field that just appeared. Re-arming restarts the clock so the ring
-        // is at full strength on the control that now matters.
-        self.arm_conn_hint(cx);
         cx.notify();
     }
 

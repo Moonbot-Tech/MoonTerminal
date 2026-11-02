@@ -377,7 +377,7 @@ impl Backend {
         }
         let reports = self.reports.as_ref().map(|h| &h.tx);
         self.session.reconcile(&self.config, reports);
-        self.core_moves_switched = self.core_moves_switched.wrapping_add(1);
+        self.servers_changed_outside = self.servers_changed_outside.wrapping_add(1);
         Ok(())
     }
 }

@@ -555,9 +555,6 @@ pub(crate) struct CardInputs<'a> {
     pub(crate) address: &'a Entity<MoonInputState>,
     pub(crate) bundle: &'a Entity<MoonInputState>,
     pub(crate) color: &'a Entity<MoonColorPickerState>,
-    /// When the first-run hint was armed, while no core was ever configured: the key field
-    /// carries the attention ring while it is still empty.
-    pub(crate) key_ring: Option<std::time::Instant>,
 }
 
 /// Width of the card's text fields and pickers, unscaled.
@@ -732,8 +729,6 @@ pub(crate) fn core_card(
         )
     };
 
-    // Only an EMPTY key is worth pointing at: a ring around a filled field reads as an error.
-    let key_empty = inputs.key.read(cx).value().trim().is_empty();
     let key = h_flex()
         .w_full()
         .gap(design::ui_px(cx, 6.0))
@@ -753,12 +748,6 @@ pub(crate) fn core_card(
                         .mask_toggle()
                         .cleanable(true)
                         .when(card.key_bad, |i| i.tone(MoonTone::Danger).selected(true)),
-                )
-                .children(
-                    inputs
-                        .key_ring
-                        .filter(|_| key_empty)
-                        .and_then(|at| crate::pulse::attention_ring(p.accent, at)),
                 ),
         )
         .child(

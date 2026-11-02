@@ -29,6 +29,7 @@ pub mod fixture;
 pub mod hl_diag;
 pub mod market;
 pub mod metrics;
+pub mod moonbot_windows;
 pub mod order_diag;
 pub mod palette;
 pub mod session;
