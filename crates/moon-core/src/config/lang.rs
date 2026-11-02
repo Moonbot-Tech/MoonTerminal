@@ -1,9 +1,8 @@
 //! Interface language. Stored in settings.toml as a code ("ru"/"en"/"es"/"uk"/"tr"/"pt"/"vi");
 //! applied through `rust_i18n::set_locale(lang.code())`.
 //!
-//! A fresh installation starts in English. A settings file written before the field existed, and
-//! a legacy config migrated from, keep the system locale (sys-locale) they were shown in, falling
-//! back to English when the system language is not supported.
+//! The default is the system locale (sys-locale), falling back to English when the
+//! system language is not supported.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -88,20 +87,11 @@ impl Language {
 }
 
 impl Default for Language {
-    /// A fresh installation starts in English, whatever the system's language: the connect wizard
-    /// it opens with offers the switch on its first screen. A settings file written before the
-    /// field existed keeps the system language instead ([`tolerant_language`]).
+    /// Default = system language (used on first launch and as the serde default
+    /// for old settings.toml files without a `language` field).
     fn default() -> Self {
-        Language::En
+        Language::from_system()
     }
-}
-
-/// Read a stored language through the tolerant adapter: a value that is not one gets the system
-/// language — what such a file was shown in before English became the default.
-pub(crate) fn tolerant_language<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> Result<Language, D::Error> {
-    crate::config::tolerant::or_else(d, Language::from_system)
 }
 
 impl Serialize for Language {
@@ -114,7 +104,7 @@ impl<'de> Deserialize<'de> for Language {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // An unknown code does not fail file parsing; fall back to the system language.
         let s = String::deserialize(d)?;
-        Ok(Language::from_code(&s).unwrap_or_else(Language::from_system))
+        Ok(Language::from_code(&s).unwrap_or_default())
     }
 }
 
