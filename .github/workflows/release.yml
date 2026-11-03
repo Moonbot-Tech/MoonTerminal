@@ -161,9 +161,18 @@ jobs:
         include:
           - arch: arm64
             target: aarch64-apple-darwin
+            lto: "fat"
+            codegen_units: "1"
+          # The Intel slice's fat-LTO, single-unit codegen of `moonterminal` kills rustc with
+          # SIGBUS on this runner after ~55 min, reproducibly; thin LTO over parallel units
+          # keeps the cross-build inside the runner's memory.
           - arch: x86_64
             target: x86_64-apple-darwin
+            lto: "thin"
+            codegen_units: "16"
     env:
+      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.lto }}
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ matrix.codegen_units }}
       # Both slices name the same floor as the LSMinimumSystemVersion `make-dmg.sh` hardcodes in
       # the packaging job. Left at the default the Intel slice would claim 10.12 while the bundle
       # says 11.0 — the two halves of that pair now live in different jobs, so changing one means
