@@ -1,21 +1,13 @@
 #!/usr/bin/env bash
-# Package the macOS release binaries into a UNIVERSAL MoonTerminal.app and a distributable .dmg.
+# Package the staged macOS arm64 binary into MoonTerminal.app and a distributable .dmg.
 # Runs on the macos-15 runner (native tools: sips, iconutil, codesign, hdiutil, lipo).
 #
-# Expects BOTH slices to be staged already: release.yml compiles them in a per-architecture matrix
-# job and this job downloads the two artifacts into `stage/`. They are joined here so Apple Silicon
-# and Intel Macs share one download.
-#
-# Disk was the scarce resource that shaped this script: `hdiutil` failed with "No space left on
-# device" back when one job compiled both slices and then imaged them. The bundle is still
-# assembled directly inside the DMG staging root (never built beside it and copied, which held two
-# universal binaries at once) and every input is still deleted once consumed — cheap habits worth
-# keeping on a runner whose disk a release build can still exhaust, even though this job now starts
-# without a build tree.
+# release.yml compiles the binary in its arm64 matrix job and downloads its artifact into `stage/`.
+# Assemble the bundle directly inside the DMG staging root and delete inputs once consumed to keep
+# runner disk use low.
 set -euo pipefail
 
 BIN_ARM64="stage/moonterminal-arm64"
-BIN_X86_64="stage/moonterminal-x86_64"
 # The bundle IS the one that gets imaged: `dmg-root` is what `hdiutil` reads at the end.
 DMG_ROOT="dist/dmg-root"
 APP="$DMG_ROOT/MoonTerminal.app"
@@ -36,9 +28,9 @@ rm -rf dist
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 EXE="$APP/Contents/MacOS/moonterminal"
-lipo -create "$BIN_ARM64" "$BIN_X86_64" -output "$EXE"
+cp "$BIN_ARM64" "$EXE"
 chmod +x "$EXE"
-# Both slices now live inside the universal binary; keeping them costs the size of a third copy.
+# The binary now lives inside the app; the staged copy would only consume runner disk.
 rm -rf stage
 
 # Build a multi-resolution .icns from the single PNG app icon.
@@ -74,11 +66,8 @@ PLIST
 
 # Ad-hoc signature: not notarized, but seals the bundle so it launches once the user allows it
 # (see the README written below). Full Developer-ID signing + notarization needs an Apple cert in
-# secrets — still not set up.
-#
-# Deliberately NOT swallowed with `|| true` any more: Apple Silicon refuses to execute code whose
-# signature is missing or broken, while Intel does not care, so a silently failed codesign now
-# ships one download that starts on the Intel half of the audience and is killed on the other.
+# secrets — still not set up. Never swallow a signing failure: Apple silicon refuses to execute
+# code whose signature is missing or broken.
 codesign --force --deep --sign - "$APP"
 
 # Finish the Finder-friendly DMG staging root instead of imaging the bare .app: the app (already
@@ -91,7 +80,7 @@ ln -s /Applications "$DMG_ROOT/Applications"
 cat > "$DMG_ROOT/README.txt" <<'README'
 MoonTerminal — Installation
 
-Universal build: one app for both Apple Silicon and Intel Macs.
+Apple silicon only (arm64).
 Requires macOS 11 or newer.
 
 1. Drag MoonTerminal.app into the Applications folder (alias next to it).
@@ -108,23 +97,15 @@ Your cores and settings are preserved — they live OUTSIDE the app, in
 ~/Library/Application Support/com.moonbot.moonterminal/.
 README
 
-# Check the bundle that actually gets imaged — which is this one, assembled inside `dmg-root` from
-# the start rather than copied in. Both properties are the ones a user meets on first launch and
-# neither has a second chance once the .dmg is on the Releases page: every architecture present,
-# and a signature that verifies.
+# Verify the architecture and signature of the exact bundle that gets imaged.
 STAGED_APP="$APP"
 ARCHS="$(lipo -archs "$STAGED_APP/Contents/MacOS/moonterminal")"
-for want in arm64 x86_64; do
-  case " $ARCHS " in
-  *" $want "*) ;;
-  *)
-    echo "make-dmg: the imaged binary is missing the $want slice (has: $ARCHS)" >&2
-    exit 1
-    ;;
-  esac
-done
+if [ "$ARCHS" != "arm64" ]; then
+  echo "make-dmg: expected an arm64-only binary (has: $ARCHS)" >&2
+  exit 1
+fi
 codesign --verify --strict "$STAGED_APP"
-echo "Imaging a universal bundle: $ARCHS"
+echo "Imaging an Apple silicon bundle: $ARCHS"
 
 # Size the image EXPLICITLY. Left to itself, `hdiutil create -srcfolder` derives the size from
 # the source with a margin so thin that 22 KB of binary growth overflowed it: v0.32.2 failed
