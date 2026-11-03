@@ -6,8 +6,8 @@
 //! `orders_control` and `moonbot_config` sub-records, plus `auto_start_2.show_old_listing`.
 //!
 //! What stays disabled, and why. The Remote block's own identity — the bot token, its PIN and the
-//! UDP password, and the control VDS address the watchdog below it carries — is outside the
-//! safe-share subset altogether, which is why what IS live inside Remote is only the screenshot
+//! UDP password — is outside the safe-share subset altogether (#1174 moves the bot to the service
+//! API, as the watchdog below already is), which is why what IS live inside Remote is only the screenshot
 //! rules and the multi-command switch — and why the two checkboxes beside them stay dead too: "I
 //! have my own bot ID" names the identity, and "Слать отчёты о сделках" switches the reporting that
 //! identity does, neither of which the snapshot carries.
@@ -29,18 +29,13 @@
 //! connection selector is `binance_connection`. `moon_core::feed::SpecialSettings` carries the
 //! reasoning per field.
 //!
-//! In the hang watchdog, "Следить за ордерами этого бота" writes `orders_control.sign_orders` — the
-//! flag that marks this bot's orders for a watcher. It used to write `orders_control.active`, which
-//! the reference documents as a legacy mirror of a watcher-table row, so ticking it armed nothing
-//! (#1172). The compact channel carries a copy of `sign_orders` that the core does not apply, so
-//! this snapshot is its one writer. `active`, `min_price`, `max_time` and `h_pos_control` stay out:
-//! all four are legacy mirrors the watchdog API (`client.watchdogs()`) now owns, and the watcher's
-//! address and its bot table belong to that API too (#1173). The cost is stated rather than hidden:
-//! "Report to Telegram" and "AutoSell" act only while position control is on in the core, and this
-//! page cannot set it.
-//!
-//! The follower table at the bottom is drawn as an empty frame with its columns: the terminal has
-//! no rows to put in it, and inventing any would state a fleet this window has not read.
+//! The hang watchdog is not drawn from the page at all (#1173): every row of it — "Следить за
+//! ордерами этого бота", the control VDS address, the two position-control flags, the exclusion
+//! list and the observer table — is the core's observer API (`client.watchdogs()`), with an edit and
+//! an Apply of its own, and OK does not carry it. See [`watchdog`] for the section and
+//! `core_expert::watchdog` for the window's side of it.
+
+pub(super) mod watchdog;
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
@@ -54,8 +49,7 @@ use crate::shell::parse_num;
 
 use super::super::CoreExpertView;
 use super::super::widgets::{
-    action, caption, choice_live, dropdown, field, flag_dead, flag_live, hint, link, list_box, num,
-    slider, text_block,
+    action, caption, choice_live, dropdown, field, flag_dead, flag_live, hint, link, num, slider,
 };
 
 /// The writes of the rows this page draws but the snapshot does not carry.
@@ -234,17 +228,6 @@ pub(super) fn field_specs(
             }
         }),
         ("exp-sp-listen-port", String::new(), DEAD_TEXT),
-        ("exp-sp-vds-ip", String::new(), DEAD_TEXT),
-        (
-            "exp-sp-skip-balances",
-            sp.h_pos_black_list_text.clone(),
-            |d, t| {
-                // Stripped, not refused: this box holds a one-line list, and moonui's single-line
-                // paste drops a newline but keeps a lone carriage return — which would reach the
-                // core inside a ticker name.
-                d.special.h_pos_black_list_text = t.replace(['\r', '\n'], String::new().as_str());
-            },
-        ),
     ]
 }
 
@@ -343,11 +326,14 @@ fn header(
 }
 
 /// Build the page.
+///
+/// `wd` is the hang watchdog's own context, read by the window only while that section is open.
 pub(super) fn body(
     view: &Entity<CoreExpertView>,
     store: &EditorStore,
     draft: &CoreConfig,
     open: SpecialSection,
+    wd: Option<&watchdog::WatchdogCtx<'_>>,
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -991,113 +977,11 @@ pub(super) fn body(
     };
 
     // --- "Защита от зависаний" -----------------------------------------------------------------
-    let watchdog = || {
-        v_flex()
-            .w_full()
-            .gap(gap)
-            .child(caption(
-                t!("core_expert.sp_worker_bot").to_string(),
-                false,
-                p,
-                cx,
-            ))
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap(design::ui_px(cx, 10.0))
-                    .child(flag_live(
-                        "exp-sp-watch-orders",
-                        "core_expert.sp_watch_orders",
-                        sp.sign_orders,
-                        view,
-                        |d, on| d.special.sign_orders = on,
-                    ))
-                    .child(caption("Control VDS IP".to_string(), false, p, cx))
-                    .children(num(store, "exp-sp-vds-ip", 128.0, false, cx))
-                    .child(div().flex_1())
-                    .child(link(
-                        "exp-sp-watchdog-help",
-                        t!("core_expert.sp_help").to_string(),
-                        false,
-                    )),
-            )
-            .child(caption(
-                t!("core_expert.sp_follower_bot").to_string(),
-                false,
-                p,
-                cx,
-            ))
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap(design::ui_px(cx, 10.0))
-                    .child(flag_live(
-                        "exp-sp-report-tg",
-                        "core_expert.sp_report_to_telegram",
-                        sp.h_pos_report,
-                        view,
-                        |d, on| d.special.h_pos_report = on,
-                    ))
-                    .child(flag_live(
-                        "exp-sp-autosell",
-                        "core_expert.sp_autosell",
-                        sp.h_pos_auto_sell,
-                        view,
-                        |d, on| d.special.h_pos_auto_sell = on,
-                    ))
-                    .child(caption(
-                        t!("core_expert.sp_skip_balances").to_string(),
-                        true,
-                        p,
-                        cx,
-                    ))
-                    // Editable only while the value really is ONE line. Moonbot's own dialog
-                    // holds this list comma-separated on a single line and its documentation says
-                    // so, which is why this box may edit it at all — but a core that somehow holds
-                    // a newline here would have the rest of its list eaten by a control that cannot
-                    // render it, so such a value is shown and not touched.
-                    .child(div().flex_1().min_w_0().children(field(
-                        store,
-                        "exp-sp-skip-balances",
-                        !sp.h_pos_black_list_text.contains(['\r', '\n']),
-                    ))),
-            )
-            .child(text_block(
-                t!("core_expert.sp_open_udp_port").to_string(),
-                p.text_soft,
-                false,
-                cx,
-            ))
-            .child(list_box(
-                "exp-sp-followers",
-                Vec::new(),
-                t!("core_expert.sp_followers_empty").to_string(),
-                p,
-                cx,
-            ))
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(action("exp-sp-add-follower", "+".to_string(), false))
-                    .child(action("exp-sp-del-follower", "−".to_string(), false))
-                    .child(action(
-                        "exp-sp-cancel-buys",
-                        "Cancel buys".to_string(),
-                        false,
-                    ))
-                    .child(div().flex_1())
-                    .child(caption(
-                        t!("core_expert.sp_udp_server", v = NO_VALUE).to_string(),
-                        false,
-                        p,
-                        cx,
-                    ))
-                    .child(action("exp-sp-apply", "Apply".to_string(), false)),
-            )
+    // Drawn from the core's observer snapshot rather than from the page: see [`watchdog`]. Absent
+    // only on a frame built before the window read the block's context, which draws it empty.
+    let watchdog_section = || match wd {
+        Some(wd) => watchdog::body(view, wd, p, cx),
+        None => div().into_any_element(),
     };
 
     // Only the open section is BUILT, not merely hidden: Moonbot shows one at a time, and a page
@@ -1106,7 +990,7 @@ pub(super) fn body(
         SpecialSection::Engine => engine().into_any_element(),
         SpecialSection::Remote => remote().into_any_element(),
         SpecialSection::System => system().into_any_element(),
-        SpecialSection::Watchdog => watchdog().into_any_element(),
+        SpecialSection::Watchdog => watchdog_section(),
     };
     let mut open_body = Some(open_body);
 

@@ -6,6 +6,7 @@ mod core_problem;
 mod core_settings;
 mod core_status;
 mod core_telegram;
+mod core_watchdog;
 
 pub use core_folders::CoreFolders;
 pub use core_problem::{CoreProblem, CoreProblemCategory, CoreProblems};
@@ -27,6 +28,11 @@ pub use core_telegram::{
     AuthStep, CoreTelegramActiveProxy, CoreTelegramAuthDetails, CoreTelegramCodeType,
     CoreTelegramError, CoreTelegramLoginMode, CoreTelegramProxy, CoreTelegramService,
     CoreTelegramState, ResendState, TelegramCmd, auth_controls_visible, auth_step, resend_state,
+};
+pub use core_watchdog::{
+    CoreServiceResult, CoreWatchdogEntry, CoreWatchdogState, ServiceAction, ServiceDomain,
+    ServicePending, ServiceTrack, ServiceTracks, ServiceVerdict, WATCHDOG_MIN_CREDENTIAL_CHARS,
+    WatchdogCmd, WatchdogEditError, WatchdogEntryEdit, WatchdogSettingsEdit, WatchdogStatus,
 };
 
 mod client_trade;
@@ -350,6 +356,22 @@ pub enum FeedMsg {
     /// The retained Telegram snapshot is no longer current: keep showing it, muted, but treat
     /// no part of it as actionable until a real `Telegram(..)` arrives.
     TelegramStale,
+    /// An observer snapshot RECEIVED from the core, pushed or answering a request. `None` means
+    /// the library holds none — an older core, or a replaced MoonBot process.
+    Watchdog(Option<std::sync::Arc<CoreWatchdogState>>),
+    /// The retained observer snapshot belongs to a connection that dropped: keep it on screen,
+    /// muted, but treat nothing in it — row ids above all — as actionable until a new one
+    /// arrives. Also settles every pending service request as lost.
+    WatchdogStale,
+    /// A tracked service-settings request left this terminal as `Ok(request_id)`, or could not
+    /// (`Err` carries a technical token for the log). Sent by the feed BEFORE any answer to it can
+    /// be processed, so the store always knows the id it is waiting on first.
+    ServiceRequest {
+        action: ServiceAction,
+        sent: Result<u64, String>,
+    },
+    /// The core acknowledged a service-settings request — this terminal's or anyone's.
+    ServiceResult(CoreServiceResult),
     /// The core's folder tree, empty folders included, whenever it or the folders the strategies
     /// imply have changed.
     ///

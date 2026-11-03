@@ -8,10 +8,15 @@
 ///
 /// Moonbot's page has about twice this many controls, and the expert window draws all of them
 /// disabled where they are not here. The reasons are stated on the page itself, row by row; the
-/// ones that concern this block are: the Remote
-/// block and the hang watchdog carry a bot token, a UDP password and a control VDS address, which
+/// ones that concern this block are: the Remote block carries a bot token and a UDP password, which
 /// safe-share excludes outright; a few rows have no wire field at all; and the iceberg pair belongs
 /// to [`crate::feed::GeneralSettings`], which the compact popup edits — one wire field belongs to one area.
+///
+/// The hang watchdog is not here at all (#1173). Its four safe-share fields —
+/// `orders_control.sign_orders`, `h_pos_report`, `h_pos_auto_sell` and
+/// `trading.h_pos_black_list_text` — are the core's observer settings, which
+/// [`crate::feed::CoreWatchdogState`] carries and the observer API writes; projecting them here too
+/// would give the terminal two writers for one value.
 #[derive(Debug, Clone)]
 pub struct SpecialSettings {
     /// `trading.log_level` and `trading.auto_delete_logs`: how much is written, and for how long.
@@ -78,19 +83,6 @@ pub struct SpecialSettings {
     /// Turning the box off does set zero, so the level is lost that way; Moonbot's own dialog can
     /// express no more than that either.
     pub ignore_protection: i32,
-    /// `trading.orders_control.sign_orders`: mark this bot's buy orders as its own so a watcher can
-    /// tell them apart — Moonbot's "Следить за ордерами этого бота", the one switch in its
-    /// worker-bot block. It also lets the worker ping a watcher, once one is configured.
-    ///
-    /// The wire also mirrors this flag on the compact `ClientSettingsCommand`, but the core's
-    /// compact handler does not apply it (moonproto `docs/ui.md`, 9b616b9), so the safe-share
-    /// snapshot is its ONE writer and this area may carry it without two routes fighting.
-    ///
-    /// The row used to write `orders_control.active` instead, which moonproto now documents as a
-    /// legacy mirror of a watcher-table row: ticking it armed nothing (#1172). That field and its
-    /// three siblings (`min_price`, `max_time`, `h_pos_control`) are the watchdog API's business
-    /// now (`client.watchdogs()`), so none of them is projected here.
-    pub sign_orders: bool,
     /// `trading.free_position_check`: Moonbot's "Не проверять лимиты позиции" (`cbFreePositionCheck`).
     ///
     /// Ticked means `true`. Moonbot's hint for the row ("лимит позиции 5k. С этой опцией можно
@@ -132,18 +124,6 @@ pub struct SpecialSettings {
     /// `trading.moonbot_config.auto_margin_transfer`: within that borrowing, move collateral from
     /// spot to margin (and back if the borrow fails).
     pub auto_margin_transfer: bool,
-    /// `trading.orders_control.h_pos_report` and `trading.orders_control.h_pos_auto_sell`: what the
-    /// WATCHING bot does about a hanging position — report it, and sell it.
-    pub h_pos_report: bool,
-    pub h_pos_auto_sell: bool,
-    /// `trading.h_pos_black_list_text`: coins the watcher leaves alone.
-    ///
-    /// One line, comma-separated. The wire names no separator for this field, unlike its siblings
-    /// that say "one per line"; the evidence is Moonbot's own dialog, which draws it as a one-line
-    /// box holding "BTC, ETH, BNB, …", and its documentation, which calls it a comma-separated
-    /// blacklist. `trading.h_pos_black_list_add` beside it is a SECOND such list with no row on the
-    /// page, so an empty box here does not mean the watcher skips nothing.
-    pub h_pos_black_list_text: String,
     /// `trading.multi_commands`: accept batched commands.
     ///
     /// Moonbot's caption is "Мультистроковые команды" and its hint for that row says what it does:
@@ -207,16 +187,12 @@ impl PartialEq for SpecialSettings {
             liq_control,
             ignore_replacing_bug,
             ignore_protection,
-            sign_orders,
             free_position_check,
             show_old_listing,
             binance_connection,
             use_hl_fast_ioc,
             auto_margin_borrow,
             auto_margin_transfer,
-            h_pos_report,
-            h_pos_auto_sell,
-            h_pos_black_list_text,
             multi_commands,
             send_shots,
             profit_abs,
@@ -254,16 +230,12 @@ impl PartialEq for SpecialSettings {
             && *liq_control == other.liq_control
             && *ignore_replacing_bug == other.ignore_replacing_bug
             && *ignore_protection == other.ignore_protection
-            && *sign_orders == other.sign_orders
             && *free_position_check == other.free_position_check
             && *show_old_listing == other.show_old_listing
             && *binance_connection == other.binance_connection
             && *use_hl_fast_ioc == other.use_hl_fast_ioc
             && *auto_margin_borrow == other.auto_margin_borrow
             && *auto_margin_transfer == other.auto_margin_transfer
-            && *h_pos_report == other.h_pos_report
-            && *h_pos_auto_sell == other.h_pos_auto_sell
-            && *h_pos_black_list_text == other.h_pos_black_list_text
             && *multi_commands == other.multi_commands
             && *send_shots == other.send_shots
             && *profit_abs == other.profit_abs

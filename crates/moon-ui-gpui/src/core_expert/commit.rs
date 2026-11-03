@@ -234,6 +234,13 @@ impl CoreExpertView {
         // this needs the same blur `set_tab` performs: focus left on a control nothing draws takes
         // the window's dispatch path with it, the one failure `restore_root_focus` cannot repair.
         self.needs_blur |= !self.editors.is_empty();
+        // The hang watchdog asks the core afresh each time it opens, and drops its editors when it
+        // closes — they are its own, not the page's specs.
+        if section == pages::SpecialSection::Watchdog {
+            self.watchdog_opened(cx);
+        } else {
+            self.release_watchdog_inputs();
+        }
         cx.notify();
     }
 
@@ -276,6 +283,10 @@ impl CoreExpertView {
         // The boxes went with the controls; a rebuilt one starts from the page again.
         self.emptied.clear();
         self.selected_channel = None;
+        self.release_watchdog_inputs();
+        if tab == ExpertTab::Special && self.special_section == pages::SpecialSection::Watchdog {
+            self.watchdog_opened(cx);
+        }
         cx.notify();
     }
 

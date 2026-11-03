@@ -524,40 +524,11 @@ pub(super) fn stepper_live(
         })
 }
 
-/// A bordered list of plain lines — Moonbot's channel box and the other places it shows a set it
-/// owns.
+/// A bordered list of plain lines with one row pickable — Moonbot's channel box.
 ///
 /// A framed column rather than `MoonList`: that component carries a delegate, a selection model and
-/// virtualization for lists the user drives, and none of it applies to a box this window can only
-/// mirror. An empty box says so in words instead of leaving a blank frame.
-pub(super) fn list_box(
-    id: &'static str,
-    lines: Vec<String>,
-    empty_note: String,
-    p: MoonPalette,
-    cx: &App,
-) -> impl IntoElement {
-    let empty = lines.is_empty();
-    v_flex()
-        .id(id)
-        .w_full()
-        .flex_1()
-        .min_h(design::ui_px(cx, 120.0))
-        .gap(design::ui_px(cx, 2.0))
-        .p(design::ui_px(cx, 6.0))
-        .rounded(design::r_button(cx))
-        .border_1()
-        .border_color(rgb(p.border))
-        .overflow_y_scroll()
-        .when(empty, |this| this.child(hint(empty_note, p, cx)))
-        .children(lines.into_iter().map(|line| caption(line, false, p, cx)))
-}
-
-/// The same framed list, with one row pickable.
-///
-/// Still not `MoonList`, for the reason [`list_box`] gives: this is a handful of lines, not a
-/// virtualized list with a delegate. The pick lives in the WINDOW — a page is rebuilt every render
-/// — so the row hands the index straight to it.
+/// virtualization for long lists, and this is a handful of lines. The pick lives in the WINDOW — a
+/// page is rebuilt every render — so the row hands the index straight to it.
 ///
 /// `edits` names what the box and the buttons beside it change — by doing it, the way every
 /// setter here is probed — so the frame can say when the selected cores disagree on that list.

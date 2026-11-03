@@ -49,6 +49,7 @@ impl Render for CoreExpertView {
         // Before anything reads them: a row draws the control its page declared, and the pages are
         // built below in this same frame.
         self.build_editors(window, cx);
+        self.build_watchdog_inputs(window, cx);
         // Built before the tree: it needs `window` and `&mut cx`, which the builder chain below
         // cannot lend it while it is also reading `cx` for its own scaled metrics.
         let tab_strip = self.tab_strip(window, cx);
@@ -335,6 +336,25 @@ impl CoreExpertView {
                 alpha: bl_alpha,
                 error: item.error.as_deref(),
             });
+        // The hang watchdog reads the anchor's observer snapshot, not the page — and only while
+        // its section is the one drawn, since only the open section is built.
+        let watchdog = (self.tab == ExpertTab::Special
+            && self.special_section == pages::SpecialSection::Watchdog)
+            .then_some(self.seeded())
+            .flatten()
+            .map(|core| {
+                let entry = self.backend.read(cx).session.store().core(core);
+                pages::WatchdogCtx {
+                    block: &self.watchdog,
+                    snapshot: entry.and_then(|d| d.watchdog.as_deref()),
+                    live: entry.is_some_and(|d| {
+                        d.status == moon_core::feed::ConnStatus::Ready && d.watchdog_fresh
+                    }),
+                    track: entry.map(|d| &d.service.watchdog),
+                    core_name: self.roster.name(core).cloned(),
+                    selected_cores: self.roster.selected(&self.selection).count(),
+                }
+            });
         let ctx = pages::PageCtx {
             backend: &self.backend,
             seeded: self.seeded(),
@@ -344,6 +364,7 @@ impl CoreExpertView {
             view_section: self.view_section,
             selected_channel: self.selected_channel,
             bl_reveal,
+            watchdog,
         };
         let page = self
             .draft

@@ -69,6 +69,44 @@ fn classification_separates_actions_from_state() {
     assert!(!is_live_action(&CoreCmd::RefreshProblems));
 }
 
+/// An observer change or cancellation waits out no outage; a refresh may.
+///
+/// Mutation: classify every watchdog command as state. An Apply pressed during an outage then
+/// reaches the core after the reconnect with row ids from the session that went away.
+#[test]
+fn watchdog_mutations_are_live_and_refresh_is_not() {
+    use crate::feed::{WatchdogCmd, WatchdogSettingsEdit};
+    assert!(!is_live_action(&CoreCmd::Watchdog(WatchdogCmd::Refresh)));
+    assert!(is_live_action(&CoreCmd::Watchdog(WatchdogCmd::Apply(
+        WatchdogSettingsEdit::default()
+    ))));
+    assert!(is_live_action(&CoreCmd::Watchdog(WatchdogCmd::Remove(
+        "core-1".into()
+    ))));
+    assert!(is_live_action(&CoreCmd::Watchdog(WatchdogCmd::CancelBuys)));
+}
+
+/// A dropped live action is reported, so a surface waiting on its answer can stop waiting.
+///
+/// Mutation: drop without calling the hook. The expert window's Apply banner then waits for an
+/// acknowledgement of a request that never left the terminal.
+#[test]
+fn a_dropped_command_is_reported_to_the_hook() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(QueuedCmd {
+        at: Instant::now(),
+        cmd: CoreCmd::Watchdog(crate::feed::WatchdogCmd::CancelBuys),
+    })
+    .unwrap();
+    let mut dropped = Vec::new();
+    let next = recv_fresh(&rx, None, 1, &mut |cmd, reason| {
+        dropped.push((format!("{cmd:?}"), reason));
+    });
+    assert!(matches!(next, Err(TryRecvError::Empty)));
+    assert_eq!(dropped.len(), 1);
+    assert_eq!(dropped[0].1, Stale::NotReady);
+}
+
 /// A stale Start/Stop is dropped, but the checkbox edits it carried are still delivered.
 ///
 /// Mutation: drop the whole action. The strategy checkboxes the user changed then never reach the
@@ -84,7 +122,7 @@ fn stale_strategies_action_keeps_its_checks() {
         },
     })
     .unwrap();
-    match recv_fresh(&rx, None, 1) {
+    match recv_fresh(&rx, None, 1, &mut |_, _| {}) {
         Ok(CoreCmd::StrategiesAction { checks, start_stop }) => {
             assert_eq!(checks, vec![(7, true)]);
             assert_eq!(start_stop, None);
@@ -118,15 +156,15 @@ fn recv_fresh_skips_stale_live_actions_only() {
     })
     .unwrap();
     assert!(matches!(
-        recv_fresh(&rx, Some(since), 1),
+        recv_fresh(&rx, Some(since), 1, &mut |_, _| {}),
         Ok(CoreCmd::RefreshProblems)
     ));
     assert!(matches!(
-        recv_fresh(&rx, Some(since), 1),
+        recv_fresh(&rx, Some(since), 1, &mut |_, _| {}),
         Ok(CoreCmd::CancelAllOrders)
     ));
     assert!(matches!(
-        recv_fresh(&rx, Some(since), 1),
+        recv_fresh(&rx, Some(since), 1, &mut |_, _| {}),
         Err(TryRecvError::Empty)
     ));
 }

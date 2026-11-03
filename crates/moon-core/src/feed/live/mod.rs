@@ -51,13 +51,15 @@ mod temp_blacklist;
 mod tests;
 mod trace_backfill;
 mod ui_trace_asks;
+mod watchdog;
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use moonproto::state::{
-    AccountEvent, MarketHistorySizing, OrderEvent, SettingsEvent, StratEvent, StrategyEditStatus,
+    AccountEvent, MarketHistorySizing, OrderEvent, ServiceSettingsState, SettingsEvent, StratEvent,
+    StrategyEditStatus,
 };
 use moonproto::{
     ClientConfig, ConnectConfig, Event, InitConfig, InitialStrategies, LifecycleEvent, MoonClient,
@@ -464,6 +466,11 @@ pub(super) fn run(
     // Last HyperLiquid quota written to `channels.hl_limit`, so the channel reports the value the
     // snapshot HOLDS and not only the moments it changes. `None` means nothing written yet.
     let mut hl_last_logged: Option<Option<u64>> = None;
+    // Whether this core has ever sent an observer snapshot to this run. A reconnect asks for a
+    // fresh one only then: a core too old for the service API would never answer, and a core
+    // whose observer block nobody opened has no surface waiting for one — the expert window asks
+    // for itself when it opens the block.
+    let mut watchdog_seen = false;
     // The core's temporary blacklist: what the UI was last told, what the diagnostic channel last
     // wrote, and the test that tells an edit from a countdown.
     let mut temp_blacklist = temp_blacklist::TempBlacklistPublisher::new();
@@ -849,6 +856,10 @@ pub(super) fn run(
                     // moonproto drops its retained Telegram snapshot on a peer-token / ServerToken
                     // change with no event; a restart is the same hole. Nothing left to show muted.
                     let _ = tx.send(FeedMsg::Telegram(None));
+                    // Same hole for the observers (moonproto clears that snapshot on a new peer
+                    // token), and their row ids die with the process that issued them.
+                    let _ = tx.send(FeedMsg::Watchdog(None));
+                    watchdog_seen = false;
                     // Keep this snapshot alive. BaseCheck frees the old `Arc<ServerInfo>`, and the
                     // replacement can be allocated at the same address; holding the snapshot pins
                     // that allocation until its letter-publication decision is made.
@@ -894,6 +905,7 @@ pub(super) fn run(
                 }
                 LifecycleEvent::Disconnected => {
                     let _ = tx.send(FeedMsg::TelegramStale);
+                    let _ = tx.send(FeedMsg::WatchdogStale);
                     ConnStatus::Disconnected
                 }
             };
@@ -938,6 +950,18 @@ pub(super) fn run(
                             "core {} telegram refresh failed: {error}",
                             crate::feed::core_label(server.id)
                         );
+                    }
+                    // The observers' row ids belong to the session that just ended: mark the
+                    // snapshot stale first, then ask for one that carries this session's. Nothing
+                    // the user staged is replayed — the window rebuilds its edit on the new one.
+                    let _ = tx.send(FeedMsg::WatchdogStale);
+                    if watchdog_seen {
+                        if let Err(error) = client.watchdogs().refresh() {
+                            log::warn!(
+                                "core {} watchdog refresh failed: {error}",
+                                crate::feed::core_label(server.id)
+                            );
+                        }
                     }
                 }
                 // A close that happened while the link was down updated a row BELOW the catch-up
@@ -1723,10 +1747,21 @@ pub(super) fn run(
         // `TelegramUpdated`, wrapping the inner `Option` in `Some` because `None` is a real
         // answer — the library holds no snapshot — and the helper would otherwise drop it.
         // No republish flag: a user Refresh is `client.telegram().refresh()` only.
+        //
+        // A Telegram service acknowledgement counts too: moonproto folds the state it carries into
+        // the retained snapshot WITHOUT emitting `TelegramUpdated` for it, so reading on that event
+        // alone would leave the outgoing-bot answer (#1174) off screen until the next push.
         let telegram = settings_event_snapshot(
             &events,
             &client,
-            |ev| matches!(ev, &Event::Settings(SettingsEvent::TelegramUpdated)),
+            |ev| {
+                matches!(ev, &Event::Settings(SettingsEvent::TelegramUpdated))
+                    || matches!(
+                        ev,
+                        Event::Settings(SettingsEvent::ServiceSettingsApplied(result))
+                            if matches!(result.state, ServiceSettingsState::Telegram(_))
+                    )
+            },
             |state| {
                 Some(
                     state
@@ -1741,6 +1776,53 @@ pub(super) fn run(
             if tx.send(FeedMsg::Telegram(telegram)).is_err() {
                 break;
             }
+        }
+        // The core's observers. Read from the RETAINED snapshot — moonproto keeps the newest
+        // revision, so a delayed reply cannot roll it back — on a push AND on an observer
+        // acknowledgement, which carries the resulting state without a `WatchDogsUpdated` of its
+        // own (a refresh is answered that way alone). Wrapped in `Some` because `None` is a real
+        // answer: an older core holds none.
+        let watchdog = settings_event_snapshot(
+            &events,
+            &client,
+            |ev| {
+                matches!(ev, &Event::Settings(SettingsEvent::WatchDogsUpdated))
+                    || matches!(
+                        ev,
+                        Event::Settings(SettingsEvent::ServiceSettingsApplied(result))
+                            if matches!(result.state, ServiceSettingsState::Watchdog(_))
+                    )
+            },
+            |state| {
+                Some(
+                    state
+                        .settings()
+                        .watchdogs
+                        .as_ref()
+                        .map(|w| Arc::new(watchdog::watchdog_from_proto(w))),
+                )
+            },
+        );
+        if let Some(watchdog) = watchdog {
+            watchdog_seen |= watchdog.is_some();
+            if tx.send(FeedMsg::Watchdog(watchdog)).is_err() {
+                break;
+            }
+        }
+        // Every acknowledgement, for either service block, AFTER the snapshots above: a banner
+        // that settles on one must find the state it describes already in the store.
+        let mut service_sent = true;
+        for ev in &events {
+            if let Event::Settings(SettingsEvent::ServiceSettingsApplied(result)) = ev {
+                let msg = FeedMsg::ServiceResult(watchdog::service_result_from_proto(result));
+                if tx.send(msg).is_err() {
+                    service_sent = false;
+                    break;
+                }
+            }
+        }
+        if !service_sent {
+            break;
         }
         // Remaining exchange API request quota (HyperLiquid `THLRequestLimitStateCommand`). Read
         // from the RETAINED snapshot on its own event, like every settings value above: the core

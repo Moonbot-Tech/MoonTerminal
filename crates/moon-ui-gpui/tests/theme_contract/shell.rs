@@ -1996,7 +1996,30 @@ fn expert_pages_own_their_control_ids() {
                 "{page}.rs draws {id} but declares no spec for it, so the row renders empty"
             );
         }
+        // A page that outgrew one file keeps its sections in `pages/<page>/` — the Special page's
+        // hang watchdog lives in `special/watchdog.rs`. Those ids are the page's too, so they carry
+        // its prefix and join the collision check; the unit-test sibling is not a section.
         let mut unique = ids;
+        let dir = root.join(page);
+        if dir.is_dir() {
+            for entry in fs::read_dir(&dir).expect("readable page folder") {
+                let path = entry.expect("readable page section").path();
+                let is_section = path.extension().is_some_and(|ext| ext == "rs")
+                    && path.file_stem().is_some_and(|stem| stem != "tests");
+                if !is_section {
+                    continue;
+                }
+                let src = code_only(&fs::read_to_string(&path).expect("readable page section"));
+                for id in src.split('"').filter(|part| part.starts_with("exp-")) {
+                    assert!(
+                        id.starts_with(prefix),
+                        "{page}/{} declares {id}, which does not carry that page's prefix {prefix}",
+                        path.display()
+                    );
+                    unique.push(id.to_string());
+                }
+            }
+        }
         unique.sort_unstable();
         unique.dedup();
         owners.extend(unique.into_iter().map(|id| (page, id)));

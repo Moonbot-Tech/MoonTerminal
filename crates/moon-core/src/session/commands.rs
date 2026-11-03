@@ -25,7 +25,7 @@ use crate::data::OrderBookModel;
 use crate::feed::{
     ClientSettingsEdit, CoreCmd, CoreConfig, FeedWakeTx, FieldMask, NewStrategySpec,
     OrderLinePriceKind, OrderStopKind, OrderStopsForm, ResetProfitKind, TelegramCmd, UpdateTarget,
-    WalletKind,
+    WalletKind, WatchdogCmd,
 };
 use crate::market::{MarketDataMode, MarketDataSource};
 use crate::venue::{AccountMergeKey, CoreVenue};
@@ -1110,6 +1110,23 @@ impl SessionManager {
     ///     Whether the command reached the core's channel.
     pub fn telegram_cmd(&self, core: CoreId, cmd: TelegramCmd) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::Telegram(cmd), "telegram")
+    }
+
+    /// Send one action to the core's observers ("Защита от зависаний").
+    ///
+    /// A successful send means queued. The feed then reports the request id it left as
+    /// (`FeedMsg::ServiceRequest`) and the core's verdict on it (`FeedMsg::ServiceResult`), both
+    /// tracked on `CoreData::service`; the resulting state arrives as a new snapshot. Every action
+    /// but a refresh is dropped rather than delivered late across a lost link.
+    ///
+    /// Args:
+    ///     core: Core to command — one core, because a row and its keys belong to it alone.
+    ///     cmd: The typed action.
+    ///
+    /// Returns:
+    ///     Whether the command reached the core's channel.
+    pub fn watchdog_cmd(&self, core: CoreId, cmd: WatchdogCmd) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::Watchdog(cmd), "watchdog")
     }
 
     /// Turn one core's AutoDetect on or off — Moonbot's passive mode, inverted.

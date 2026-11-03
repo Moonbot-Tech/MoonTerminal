@@ -438,7 +438,13 @@ pub(super) fn drain_commands(
     let mut drained = 0usize;
     loop {
         // A live action that waited out a lost connection is dropped here, never delivered late.
-        match super::stale::recv_fresh(cmd_rx, ready_since, server.id) {
+        // An observer action dropped this way is reported, so its banner stops waiting.
+        let mut on_drop = |cmd: &CoreCmd, reason: super::stale::Stale| {
+            if let Some(msg) = super::watchdog::dropped(cmd, reason.text()) {
+                let _ = tx.send(msg);
+            }
+        };
+        match super::stale::recv_fresh(cmd_rx, ready_since, server.id, &mut on_drop) {
             Ok(CoreCmd::SetMarket { .. }) => {}
             Ok(CoreCmd::StrategiesAction { checks, start_stop }) => {
                 // 1. Synchronize checkboxes: update local `checked` on changed entries and send
@@ -1286,6 +1292,14 @@ pub(super) fn drain_commands(
                 );
             }
             Ok(CoreCmd::Telegram(cmd)) => telegram::handle(client, server.id, cmd),
+            Ok(CoreCmd::Watchdog(cmd)) => {
+                // Sent on the feed channel the moment the request is queued: its acknowledgement
+                // cannot exist before that, and travels the same channel later, so the store
+                // always learns the request id ahead of the answer.
+                if let Some(msg) = super::watchdog::handle(client, server.id, cmd) {
+                    let _ = tx.send(msg);
+                }
+            }
             Ok(CoreCmd::SetAutoDetect(on)) => {
                 // Passive mode off/on; the new value reaches the store via RuntimeStateUpdated,
                 // the same command that carries `is_started`.

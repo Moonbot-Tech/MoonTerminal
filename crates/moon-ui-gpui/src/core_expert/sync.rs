@@ -90,6 +90,8 @@ impl CoreExpertView {
             self.ask_for_page(b, core);
         }
         changed |= self.enter_state(state);
+        // After the state: the block asks for its snapshot only while the anchor's page is drawn.
+        changed |= self.sync_watchdog(b);
         changed | self.sync_diff(b)
     }
 

@@ -39,7 +39,7 @@ pub(super) enum Stale {
 
 impl Stale {
     /// Log wording of the reason.
-    fn text(self) -> &'static str {
+    pub(super) fn text(self) -> &'static str {
         match self {
             Stale::NotReady => "the core is not connected",
             Stale::BeforeReady => "it was queued before the connection came back",
@@ -89,6 +89,10 @@ pub(super) fn is_live_action(cmd: &CoreCmd) -> bool {
         | CoreCmd::ClearProblems
         // A ban's duration counts from delivery, so a late one outlasts what was asked for.
         | CoreCmd::SetTempBlacklist { .. } => true,
+        // moonproto forbids replaying an observer change or a cancellation after a reconnect, and
+        // the row ids an edit carries belong to the session that issued them. A refresh changes
+        // nothing and is right to arrive late.
+        CoreCmd::Watchdog(cmd) => cmd.tracked_action().is_some(),
         CoreCmd::SetMarket { .. }
         | CoreCmd::EditStrategyFields { .. }
         | CoreCmd::DeleteStrategy { .. }
@@ -150,6 +154,8 @@ pub(super) fn staleness(
 ///     cmd_rx: The core's command queue.
 ///     ready_since: When the current connection last became operational; `None` while it is not.
 ///     server_id: Core id, for the log.
+///     on_drop: Told about every command dropped whole, so a surface waiting on its answer can be
+///         told it will not come.
 ///
 /// Returns:
 ///     The next command, or the queue's own `Empty`/`Disconnected`.
@@ -157,6 +163,7 @@ pub(super) fn recv_fresh(
     cmd_rx: &Receiver<QueuedCmd>,
     ready_since: Option<Instant>,
     server_id: u64,
+    on_drop: &mut dyn FnMut(&CoreCmd, Stale),
 ) -> Result<CoreCmd, TryRecvError> {
     loop {
         let QueuedCmd { at, cmd } = cmd_rx.try_recv()?;
@@ -179,7 +186,7 @@ pub(super) fn recv_fresh(
                     start_stop: None,
                 });
             }
-            _ => {}
+            other => on_drop(&other, reason),
         }
     }
 }

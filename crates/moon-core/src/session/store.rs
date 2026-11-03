@@ -301,6 +301,24 @@ pub struct CoreData {
     /// CLEARED by a replacement connection: the account belongs to the MoonBot behind the
     /// endpoint, and a replacement feed may point at a different one.
     pub telegram: Option<Arc<CoreTelegramState>>,
+    /// Latest observer snapshot ("Защита от зависаний"), observed through `watchdog_rev`.
+    ///
+    /// `None` is a real answer — a core older than the service API, or one not asked yet. Cleared
+    /// by a replacement connection for the reason [`Self::telegram`] is, and because its row ids
+    /// belong to the session that issued them.
+    pub watchdog: Option<Arc<crate::feed::CoreWatchdogState>>,
+    /// False until a snapshot arrives, and again from the moment contact is lost: a stale
+    /// snapshot is drawn muted, and nothing in it may be edited.
+    pub watchdog_fresh: bool,
+    /// Bumped on every observer receipt, staleness change and service-request change — the one
+    /// counter the observer block repaints on.
+    pub watchdog_rev: u64,
+    /// Bumped whenever the snapshot stops describing the current session (stale or cleared): an
+    /// edit built on an earlier epoch carries row ids the core no longer knows and is dropped.
+    pub watchdog_epoch: u64,
+    /// The newest tracked service-settings request per block and how the previous one ended,
+    /// observed through `watchdog_rev` (and, once #1174 lands, a Telegram counter beside it).
+    pub service: crate::feed::ServiceTracks,
     /// The core's folder tree, empty folders included, observed through `folders_rev`.
     ///
     /// Its `supported` flag is what tells a caller whether an empty folder can be sent to this core
@@ -617,6 +635,11 @@ impl CoreData {
             problems_rev: 0,
             telegram_rev: 0,
             telegram_fresh: false,
+            watchdog: None,
+            watchdog_fresh: false,
+            watchdog_rev: 0,
+            watchdog_epoch: 0,
+            service: crate::feed::ServiceTracks::default(),
             folders_rev: 0,
             startup_rev: 0,
             news_rev: 0,
@@ -843,6 +866,8 @@ impl CoreData {
             self.telegram_fresh = false;
             self.telegram_rev = self.telegram_rev.wrapping_add(1);
         }
+        // The observers too, and every request waiting on the replaced process with them.
+        self.forget_watchdog(true);
         // A replacement feed may point at a different MoonBot on a different clock, so last
         // connection's estimate carries no evidence about this one.
         //
@@ -1004,6 +1029,11 @@ impl CoreData {
                 if !matches!(self.status, ConnStatus::Ready) && self.telegram_fresh {
                     self.telegram_fresh = false;
                     self.telegram_rev = self.telegram_rev.wrapping_add(1);
+                }
+                // The same latch for the observers, for the same reason; it moves their epoch and
+                // settles their pending requests only on the first such message.
+                if !matches!(self.status, ConnStatus::Ready) {
+                    self.forget_watchdog(false);
                 }
             }
             FeedMsg::Orders(mut payload) => {
@@ -1369,6 +1399,30 @@ impl CoreData {
                 self.telegram_fresh = false;
                 self.telegram_rev = self.telegram_rev.wrapping_add(1);
             }
+            FeedMsg::Watchdog(state) => {
+                // A receipt, like Telegram's: the block clears its "applying" state on the answer,
+                // and an unchanged snapshot is still an answer. A `None` (older core, replaced
+                // process) also ends the epoch, since its rows are gone with it.
+                if state.is_none() {
+                    self.forget_watchdog(true);
+                }
+                self.watchdog_fresh = state.is_some();
+                self.watchdog = state;
+                self.watchdog_rev = self.watchdog_rev.wrapping_add(1);
+            }
+            FeedMsg::WatchdogStale => {
+                self.forget_watchdog(false);
+            }
+            FeedMsg::ServiceRequest { action, sent } => {
+                if self.service.get_mut(action.domain()).note_sent(action, sent) {
+                    self.watchdog_rev = self.watchdog_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::ServiceResult(result) => {
+                if self.service.get_mut(result.domain).note_result(&result) {
+                    self.watchdog_rev = self.watchdog_rev.wrapping_add(1);
+                }
+            }
             FeedMsg::Folders(folders) => {
                 // Compared before adopting, like the diagnostics above: the tree is republished
                 // whenever the strategies move, and an unconditional revision would rebuild the
@@ -1554,6 +1608,34 @@ impl CoreData {
             | FeedMsg::TradeClosed { .. }
             // Stamped by the session, which owns the time axis (`push_tg_event`).
             | FeedMsg::TelegramEvents(_) => {}
+        }
+    }
+
+    /// The observer snapshot stops describing the current session: muted — or dropped when
+    /// `drop_snapshot` — its epoch over, and every pending service request settled as lost.
+    ///
+    /// Idempotent, so every non-Ready status may call it: a backoff of Connecting messages moves
+    /// the epoch and the revision only on the first one.
+    ///
+    /// Args:
+    ///     drop_snapshot: Whether the snapshot itself goes too (a replaced process), rather than
+    ///         staying on screen muted (a dropped link).
+    fn forget_watchdog(&mut self, drop_snapshot: bool) {
+        // Only a CURRENT snapshot ends an epoch: a stale one already ended its own when it went
+        // stale, and a replacement feed passes through a non-Ready status first, so counting the
+        // drop as well would move the epoch twice for one session change.
+        let ended = self.watchdog_fresh;
+        let mut changed = self.service.note_lost();
+        if ended {
+            self.watchdog_epoch = self.watchdog_epoch.wrapping_add(1);
+            self.watchdog_fresh = false;
+            changed = true;
+        }
+        if drop_snapshot && self.watchdog.take().is_some() {
+            changed = true;
+        }
+        if changed {
+            self.watchdog_rev = self.watchdog_rev.wrapping_add(1);
         }
     }
 }
