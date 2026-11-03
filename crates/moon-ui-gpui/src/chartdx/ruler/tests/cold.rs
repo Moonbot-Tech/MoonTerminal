@@ -75,6 +75,7 @@ const COLD_LOOKUPS: &[&str] = &[
     "chartdx::ruler::tests::the_volume_line_prefers_a_whole_split_then_the_candles",
     "chartdx::text::captions::refresh::tests::filter_core_name_follows_the_widened_owner_state",
     "chartdx::text::captions::tests::filter_header_and_lines_share_one_stack",
+    "chartdx::text::captions::tests::widened_filter_header_stays_clear_in_every_locale",
     "chartdx::text::captions::tests::mixed_filter_column_keeps_its_header_above_entries_inside_a_short_pane",
     "chartdx::text::captions::tests::overflowing_filter_cells_keep_the_header_inside_the_bottom_band",
     "chartdx::text::labels::tests::a_caption_keeps_its_prefix_beside_its_value",

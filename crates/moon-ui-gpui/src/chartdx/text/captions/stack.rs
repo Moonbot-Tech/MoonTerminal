@@ -287,23 +287,29 @@ impl RenderState {
                 // the value and spends the same budget, and measuring it through a throwaway run
                 // would re-shape it on every measure and every frame — the cost `caption_runs`
                 // exists to avoid.
-                let prefix_w =
-                    match !item.wraps && item.style.value_only && !entry.prefix.is_empty() {
-                        true => self.measure_caption_run(
-                            ctx,
-                            idx,
-                            item.row,
-                            PREFIX_PART_BASE + item.part,
-                            &entry.prefix,
-                            item.size,
-                        ),
-                        false => 0.0,
-                    };
+                let prefix_w = match item.part != FILTER_HEADER_PART
+                    && !item.wraps
+                    && item.style.value_only
+                    && !entry.prefix.is_empty()
+                {
+                    true => self.measure_caption_run(
+                        ctx,
+                        idx,
+                        item.row,
+                        PREFIX_PART_BASE + item.part,
+                        &entry.prefix,
+                        item.size,
+                    ),
+                    false => 0.0,
+                };
                 // Too little room for the pair: the caption falls back to ONE run holding both,
                 // truncated as a whole. A split that kept the full-width prefix would paint it past
                 // the band's edge, and truncating the prefix instead would leave a caption naming
                 // nothing.
-                let split = !item.wraps && prefix_w > 0.0 && budget - prefix_w >= MIN_LEGIBLE_W;
+                let split = item.part != FILTER_HEADER_PART
+                    && !item.wraps
+                    && prefix_w > 0.0
+                    && budget - prefix_w >= MIN_LEGIBLE_W;
                 let prefix_w = if split { prefix_w } else { 0.0 };
                 let fit_prefix = if split { "" } else { &entry.prefix };
                 // Prose is broken across lines instead of being cut, and every line but the
@@ -368,7 +374,7 @@ impl RenderState {
                         self.push_filter_hits(
                             idx,
                             item.row,
-                            entry.action,
+                            entry,
                             [box_left, y, w, item.line_h()],
                         );
                         if item.plate {
@@ -539,7 +545,7 @@ impl RenderState {
                     (false, true) => item_x,
                     (false, false) => item_x - w,
                 };
-                self.push_filter_hits(idx, item.row, entry.action, [box_left, y, w, item.line_h()]);
+                self.push_filter_hits(idx, item.row, entry, [box_left, y, w, item.line_h()]);
                 grow_column_band(
                     &mut self.panes[idx].column_bands,
                     item,
@@ -619,22 +625,17 @@ impl RenderState {
     /// Args:
     ///     idx: Pane index.
     ///     row: Label row the caption belongs to.
-    ///     action: The caption's action; anything but the two filter actions registers nothing.
+    ///     entry: Caption carrying the action and any untruncated widened-core name.
     ///     rect: The drawn line in window logical pixels, `[left, top, width, height]`.
-    fn push_filter_hits(
-        &mut self,
-        idx: usize,
-        row: usize,
-        action: Option<LabelAction>,
-        rect: [f32; 4],
-    ) {
-        match action {
+    fn push_filter_hits(&mut self, idx: usize, row: usize, entry: &LabelText, rect: [f32; 4]) {
+        match entry.action {
             Some(LabelAction::ToggleStrategyFilters) => {
                 self.panes[idx]
                     .filter_header_hits
                     .push(crate::chartdx::FilterHeaderHit {
                         rect,
                         row,
+                        core_name: entry.filter_core_name().map(str::to_owned),
                         cfg: self.chart_labels.clone(),
                     });
             }

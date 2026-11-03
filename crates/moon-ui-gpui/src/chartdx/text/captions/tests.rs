@@ -869,3 +869,100 @@ fn the_wrapped_draw_branch_registers_column_lines() {
             .expect("wrapped branch end");
     assert!(src[start..end].contains("grow_column_band("));
 }
+
+/// Truncating the whole widened header used to sacrifice the count and print its tail through the
+/// centred venue/all-cores caption. Every localized title, both fold states, narrow and wide panes,
+/// must instead keep the fixed head intact and cut only the core segment out of the centre's way.
+#[test]
+fn widened_filter_header_stays_clear_in_every_locale() {
+    let measure = |text: &str| text.chars().count() as f32 * 6.0;
+    let centred = "VENUE \u{b7} ALL CORES (42)";
+    let long_core = format!(" \u{b7} {}", "CORE_ALPHA_LONG_".repeat(6));
+    for locale in ["en", "es", "pt", "ru", "tr", "uk", "vi"] {
+        let _locale = crate::test_locale::force(locale);
+        let title = rust_i18n::t!("chart_labels.field.strategy_filters");
+        for marker in [">", "v"] {
+            let head = format!("{marker} {title} \u{b7} 19");
+            let mut saw_cut = false;
+            for pane_width in [600.0, 720.0, 960.0, 1400.0] {
+                let geom = CaptionGeomInput {
+                    pane_left: -16.0,
+                    pane_right: pane_width,
+                    plot_right: pane_width,
+                    ..plot_geom()
+                };
+                let corner = CaptionGeom {
+                    right_x: pane_width - 30.0,
+                    ..corner()
+                };
+                let total = super::zone::zone_width(LabelZone::ChartTop, &geom, &corner);
+                let base_left = super::zone::zone_bounds(LabelZone::ChartTop, &geom, &corner).0;
+                let (left_x, _) =
+                    super::zone::zone_anchor(LabelZone::ChartTop, LabelAlign::Left, &geom, &corner);
+                let (centre_x, _) = super::zone::zone_anchor(
+                    LabelZone::ChartTop,
+                    LabelAlign::Center,
+                    &geom,
+                    &corner,
+                );
+                let centre_w = measure(centred);
+                let mut taken = super::widths::Taken::default();
+                taken.set_extent(LabelAlign::Center, centre_w, 15.0);
+                let anchor_inset = (left_x - base_left).max(0.0);
+                let budget =
+                    super::widths::band_max_w(total, None, false, true, LabelAlign::Left, taken)
+                        - anchor_inset;
+                let (caption, width) =
+                    super::fit::fit_filter_header(&head, &long_core, budget, measure);
+                if caption.is_empty() {
+                    assert!(measure(&head) > budget, "{locale} {marker}: cut count");
+                    continue;
+                }
+                assert!(caption.starts_with(&head), "{locale} {marker}: {caption}");
+                let caption_right = left_x + width;
+                let centre_left = centre_x - centre_w * 0.5;
+                assert!(
+                    caption_right + super::model::CAPTION_GAP <= centre_left + 0.001,
+                    "{locale} {marker} pane {pane_width}: {caption_right} crosses {centre_left}"
+                );
+                if caption == head {
+                    assert!(
+                        !caption.contains("CORE_ALPHA"),
+                        "{locale} {marker}: name stub"
+                    );
+                } else {
+                    assert!(
+                        caption.ends_with('\u{2026}'),
+                        "{locale} {marker}: {caption}"
+                    );
+                    saw_cut = true;
+                }
+            }
+            assert!(saw_cut, "{locale} {marker}: no truncated-name case");
+
+            for kept_glyphs in 0..3 {
+                let stub_budget = measure(&head)
+                    + measure(" \u{b7} ")
+                    + measure("\u{2026}")
+                    + kept_glyphs as f32 * measure("C")
+                    - 0.25;
+                let (without_name, _) =
+                    super::fit::fit_filter_header(&head, &long_core, stub_budget, measure);
+                assert_eq!(
+                    without_name, head,
+                    "{locale} {marker}: {kept_glyphs}-glyph stub"
+                );
+            }
+            let three_glyph_budget = measure(&head) + measure(" \u{b7} ") + measure("COR\u{2026}");
+            let (three_glyphs, _) =
+                super::fit::fit_filter_header(&head, &long_core, three_glyph_budget, measure);
+            assert_eq!(three_glyphs, format!("{head} \u{b7} COR\u{2026}"));
+            let (short, _) =
+                super::fit::fit_filter_header(&head, " \u{b7} CORE_A", 1000.0, measure);
+            assert_eq!(short, format!("{head} \u{b7} CORE_A"));
+            let (no_count, _) =
+                super::fit::fit_filter_header(&head, &long_core, measure(&head) - 1.0, measure);
+            assert!(no_count.is_empty(), "{locale} {marker}: partial fixed head");
+        }
+    }
+}

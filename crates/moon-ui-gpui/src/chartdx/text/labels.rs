@@ -176,6 +176,13 @@ impl LabelText {
     pub fn glued(&self) -> String {
         format!("{}{}", self.prefix, self.text)
     }
+
+    /// Return the untruncated core name carried by a widened strategy-filter header.
+    pub fn filter_core_name(&self) -> Option<&str> {
+        (self.part == FILTER_HEADER_PART)
+            .then(|| self.text.strip_prefix(" \u{b7} "))
+            .flatten()
+    }
 }
 
 /// A pane's caption state: what it read, and what it formatted from it.

@@ -54,7 +54,8 @@ fn strategy_filters_collapse_to_a_counted_header() {
 }
 
 /// Omitting the widened core name would attribute one core's filters to the whole admitted set;
-/// adding it outside that state would change the existing per-core caption.
+/// adding it outside that state would change the existing per-core caption. Both fold states keep
+/// the count before the separately fittable name, whose original remains available to the overlay.
 #[test]
 fn widened_filters_name_their_own_core() {
     let _locale = crate::test_locale::force("en");
@@ -69,8 +70,21 @@ fn widened_filters_name_their_own_core() {
     };
     assert_eq!(
         texts_of(&cfg, inputs.clone()),
-        vec!["> Filters \u{b7} CORE_A \u{b7} 2"]
+        vec!["> Filters \u{b7} 2 \u{b7} CORE_A"]
     );
+    cfg.rows[0].collapsed = false;
+    assert_eq!(
+        texts_of(&cfg, inputs.clone()),
+        vec!["v Filters \u{b7} 2 \u{b7} CORE_A", "first", "second"]
+    );
+    let mut state = LabelState::default();
+    state.update(
+        &Rc::new(cfg.clone()),
+        &Rc::new(ArbViewCfg::default()),
+        inputs.clone(),
+    );
+    assert_eq!(state.texts[0].filter_core_name(), Some("CORE_A"));
+    cfg.rows[0].collapsed = true;
     assert_eq!(
         texts_of(
             &cfg,

@@ -143,9 +143,44 @@ pub(super) fn wrap_caption(
             budget,
             size: item.size,
             wraps: item.wraps,
+            rule: super::fit_memo::FitRule::Caption,
         },
         |text, size| super::super::measure_run_width(ctx, text, size),
     )
+}
+
+/// Fit a widened filter header without cutting its title or count.
+///
+/// The core segment includes its separator. It is truncated only after at least three core glyphs
+/// and an ellipsis fit; otherwise the whole segment is dropped rather than leaving a stub. If even
+/// the fixed head is too wide, the caption is omitted rather than printing a partial count.
+pub(super) fn fit_filter_header(
+    head: &str,
+    core_segment: &str,
+    budget: f32,
+    measure: impl Fn(&str) -> f32,
+) -> (String, f32) {
+    const SEPARATOR: &str = " \u{b7} ";
+    let Some(core_name) = core_segment.strip_prefix(SEPARATOR) else {
+        return crate::design::fit_text(&format!("{head}{core_segment}"), budget, measure);
+    };
+    let head_w = measure(head);
+    if head_w > budget {
+        return (String::new(), 0.0);
+    }
+    let separator_w = measure(SEPARATOR);
+    let (core, _) = crate::design::fit_text(core_name, budget - head_w - separator_w, &measure);
+    let core_head = core.strip_suffix('\u{2026}').unwrap_or(&core);
+    if core_head.trim().chars().count() < 3 && core.ends_with('\u{2026}') {
+        return (head.to_owned(), head_w);
+    }
+    let text = format!("{head}{SEPARATOR}{core}");
+    let width = measure(&text);
+    if width <= budget {
+        (text, width)
+    } else {
+        (head.to_owned(), head_w)
+    }
 }
 
 /// Truncate one caption to the width it is allowed, returning the text and its measured width.
@@ -162,6 +197,11 @@ pub(super) fn fit_caption(
     item: &Item,
     budget: f32,
 ) -> (String, f32) {
+    let rule = if item.part == FILTER_HEADER_PART && !prefix.is_empty() {
+        super::fit_memo::FitRule::FilterHeader
+    } else {
+        super::fit_memo::FitRule::Caption
+    };
     memo.lookup(
         super::fit_memo::FitInput {
             prefix,
@@ -169,6 +209,7 @@ pub(super) fn fit_caption(
             budget,
             size: item.size,
             wraps: false,
+            rule,
         },
         |text, size| super::super::measure_run_width(ctx, text, size),
     )

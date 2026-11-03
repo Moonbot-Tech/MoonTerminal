@@ -171,28 +171,33 @@ fn plain_column_line(
     }
 }
 
-/// The collapse control's title and, when folded, the number of lines the column would emit.
+/// Build the collapse control's fixed head and the core-name segment that may be truncated.
 /// Geist Mono lacks the triangular carets, so the control uses supported ASCII markers.
-/// A widened chart also names the one core whose filters these are; its corner name describes the
-/// whole admitted set and cannot identify them.
+/// A widened chart names the one core whose filters these are after the title and count; its corner
+/// name describes the whole admitted set and cannot identify them. An ordinary chart keeps the
+/// exact single-string caption it had before the widened state named its core.
 fn filter_header(
     row: &moon_core::config::ChartLabelRow,
     lines: &[String],
     core_name: &str,
-) -> String {
+) -> (String, String) {
     let title = crate::controls::row_title(row)
         .unwrap_or_else(|| t!("chart_labels.field.strategy_filters").to_string());
-    let title = if core_name.is_empty() {
-        title
-    } else {
-        format!("{title} \u{b7} {core_name}")
-    };
-    if row.collapsed {
-        let count = lines.iter().filter(|line| !line.is_empty()).count();
-        format!("> {title} \u{b7} {count}")
-    } else {
-        format!("v {title}")
+    let marker = if row.collapsed { ">" } else { "v" };
+    if core_name.is_empty() {
+        let text = if row.collapsed {
+            let count = lines.iter().filter(|line| !line.is_empty()).count();
+            format!("{marker} {title} \u{b7} {count}")
+        } else {
+            format!("{marker} {title}")
+        };
+        return (String::new(), text);
     }
+    let count = lines.iter().filter(|line| !line.is_empty()).count();
+    (
+        format!("{marker} {title} \u{b7} {count}"),
+        format!(" \u{b7} {core_name}"),
+    )
 }
 
 /// Build the strategy-filter column with its control immediately before the skip reasons.
@@ -220,11 +225,12 @@ pub(super) fn push_filter_rows(
     core_name: &str,
     first: u32,
 ) {
+    let (prefix, text) = filter_header(row, lines, core_name);
     out.push(LabelText {
         row: row_ix,
         part: FILTER_HEADER_PART,
-        text: filter_header(row, lines, core_name),
-        prefix: String::new(),
+        text,
+        prefix,
         sign: None,
         reachable: false,
         venue: None,

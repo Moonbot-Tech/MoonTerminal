@@ -13,6 +13,8 @@ pub(super) struct FilterHeaderHit {
     pub rect: [f32; 4],
     /// Row in the captured configuration.
     pub row: usize,
+    /// Untruncated widened-core name for the existing header overlay tooltip.
+    pub core_name: Option<String>,
     /// A retained handle prevents a reordered profile from reusing a stale target.
     pub cfg: Rc<ChartLabelsCfg>,
 }
@@ -225,8 +227,8 @@ impl ChartEngine {
             .map(|hit| hit.target.clone())
     }
 
-    /// Publish the last drawn header rectangles for the panel's pointing-hand cursor zones.
-    pub(crate) fn filter_header_rects(&self, pane: usize) -> Vec<(f32, f32, f32, f32)> {
+    /// Publish drawn header rectangles and their untruncated core names for the panel's overlay.
+    pub(crate) fn filter_header_draws(&self, pane: usize) -> Vec<([f32; 4], Option<String>)> {
         let data = self.data.borrow();
         let render = data.render.borrow();
         let Some(pane) = render.panes.get(pane).filter(|pane| pane.active) else {
@@ -235,10 +237,7 @@ impl ChartEngine {
         pane.filter_header_hits
             .iter()
             .filter(|hit| profile_still_current(&hit.cfg, &data.chart_labels))
-            .map(|hit| {
-                let [x, y, w, h] = hit.rect;
-                (x, y, w, h)
-            })
+            .map(|hit| (hit.rect, hit.core_name.clone()))
             .collect()
     }
 

@@ -13,6 +13,7 @@ fn header_hit_is_bounded_and_rejects_a_replaced_profile() {
     let hit = FilterHeaderHit {
         rect: [30.0, 50.0, 80.0, 20.0],
         row: 0,
+        core_name: None,
         cfg: Rc::new(cfg.clone()),
     };
     assert!(hit.contains(30.0, 50.0, &cfg));
@@ -21,6 +22,31 @@ fn header_hit_is_bounded_and_rejects_a_replaced_profile() {
     assert!(!hit.contains(50.0, 71.0, &cfg));
     cfg.rows.swap(0, 1);
     assert!(!hit.contains(50.0, 60.0, &cfg));
+}
+
+/// Publishing only the truncated caption would make a long widened-core name unreachable; the
+/// existing header overlay needs the original name retained beside its rectangle.
+#[test]
+fn header_draws_carry_the_untruncated_core_name() {
+    let engine = super::super::ChartEngine::new(0.0, moon_core::config::ChartTheme::default());
+    let cfg = Rc::new(filters_cfg());
+    {
+        let mut data = engine.data.borrow_mut();
+        data.chart_labels = Rc::clone(&cfg);
+        let mut render = data.render.borrow_mut();
+        render.panes.push(crate::chartdx::PaneRender::new());
+        render.panes[0].active = true;
+        render.panes[0].filter_header_hits.push(FilterHeaderHit {
+            rect: [10.0, 20.0, 40.0, 12.0],
+            row: 0,
+            core_name: Some("CORE_ALPHA_LONG".into()),
+            cfg,
+        });
+    }
+    assert_eq!(
+        engine.filter_header_draws(0),
+        vec![([10.0, 20.0, 40.0, 12.0], Some("CORE_ALPHA_LONG".into()))]
+    );
 }
 
 /// `ColumnBand::grow` letting a zero-sized run open or stretch a band puts the wheel zone over
