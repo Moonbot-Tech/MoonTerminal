@@ -53,6 +53,13 @@ impl RenderState {
             pr.core_name.clone()
         };
         let arb_view = self.arb_view.clone();
+        // The filter header follows the same privacy substitution as the corner name: a shared
+        // screenshot never carries the account label, even while the chart owns a widened set.
+        let widened_filter_core_name = pr
+            .all_cores_count
+            .filter(|_| !shot)
+            .map(|_| pr.core_name.clone())
+            .unwrap_or_default();
         let pr = &mut self.panes[idx];
         let changed = pr.labels.update_with(&cfg, &arb_view, |held| {
             // Exhaustive destructuring makes a new caption input require an explicit sync path.
@@ -65,6 +72,7 @@ impl RenderState {
                 detect_strategy,
                 detect_msg,
                 filter_lines,
+                filter_core_name,
                 trade,
                 last_price,
                 scale_badge,
@@ -104,6 +112,7 @@ impl RenderState {
             sync!(detect_strategy, pr.label_detect_strategy);
             sync!(detect_msg, pr.label_detect_msg);
             sync!(filter_lines, pr.filter_lines);
+            sync!(filter_core_name, widened_filter_core_name);
             // A handed trade belongs to the window, rather than any individual pane.
             sync!(trade, self.trade_labels);
             sync!(last_price, pr.cached_last_price);

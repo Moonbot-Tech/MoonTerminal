@@ -297,6 +297,11 @@ pub struct MarketFiguresReadout {
     pub leverage_x: Option<i32>,
     /// Whether margin is isolated; `None` when the venue stated no position type.
     pub isolated: Option<bool>,
+    /// Account base currency behind the core's money counters, as BaseCheck stated it.
+    ///
+    /// Carried beside the figures so an all-cores caption can refuse to add amounts from different
+    /// units. `Session` is already valued in USDT below, while `core_pnl` stays in this currency.
+    pub base_currency: Option<String>,
     /// The core's own per-coin profit counter (`b + l + s`), which MoonBot prints as `PnL`.
     ///
     /// NOT the `Session` figure beside it in MoonBot's chart header — that one is [`Self::session`].

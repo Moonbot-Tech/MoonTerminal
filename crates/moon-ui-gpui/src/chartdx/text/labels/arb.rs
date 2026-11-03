@@ -173,9 +173,20 @@ fn plain_column_line(
 
 /// The collapse control's title and, when folded, the number of lines the column would emit.
 /// Geist Mono lacks the triangular carets, so the control uses supported ASCII markers.
-fn filter_header(row: &moon_core::config::ChartLabelRow, lines: &[String]) -> String {
+/// A widened chart also names the one core whose filters these are; its corner name describes the
+/// whole admitted set and cannot identify them.
+fn filter_header(
+    row: &moon_core::config::ChartLabelRow,
+    lines: &[String],
+    core_name: &str,
+) -> String {
     let title = crate::controls::row_title(row)
         .unwrap_or_else(|| t!("chart_labels.field.strategy_filters").to_string());
+    let title = if core_name.is_empty() {
+        title
+    } else {
+        format!("{title} \u{b7} {core_name}")
+    };
     if row.collapsed {
         let count = lines.iter().filter(|line| !line.is_empty()).count();
         format!("> {title} \u{b7} {count}")
@@ -198,6 +209,7 @@ fn filter_header(row: &moon_core::config::ChartLabelRow, lines: &[String]) -> St
 ///     row_ix: Label row the column belongs to.
 ///     row: The module, including whether it is folded.
 ///     lines: Skip reasons as the core spelled them.
+///     core_name: Own core to name while the pane's history is widened, or empty.
 ///     first: First real line of the scrolled window.
 pub(super) fn push_filter_rows(
     out: &mut Vec<LabelText>,
@@ -205,12 +217,13 @@ pub(super) fn push_filter_rows(
     row_ix: usize,
     row: &moon_core::config::ChartLabelRow,
     lines: &[String],
+    core_name: &str,
     first: u32,
 ) {
     out.push(LabelText {
         row: row_ix,
         part: FILTER_HEADER_PART,
-        text: filter_header(row, lines),
+        text: filter_header(row, lines, core_name),
         prefix: String::new(),
         sign: None,
         reachable: false,

@@ -111,6 +111,36 @@ fn unchanged_refresh_reports_no_change_and_keeps_texts() {
     assert_eq!(state.panes[0].labels.texts, texts);
 }
 
+/// Using the substituted corner name, or retaining the suffix after narrowing, would misattribute
+/// the filters; only the widened owner state may name the pane's original core here.
+#[test]
+fn filter_core_name_follows_the_widened_owner_state() {
+    let _locale = crate::test_locale::force("en");
+    let engine = refresh_fixture();
+    let data = engine.data.borrow();
+    let mut state = data.render.borrow_mut();
+    state.panes[0].core_name = "CORE_A".into();
+    state.panes[0].all_cores_count = None;
+    state.refresh_pane_labels(0);
+    assert!(!state.panes[0].labels.texts[0].text.contains("CORE_A"));
+
+    state.panes[0].all_cores_count = Some(3);
+    state.refresh_pane_labels(0);
+    assert!(state.panes[0].labels.texts[0].text.contains("CORE_A"));
+
+    state.arm_shot_caption(Some(Instant::now() + std::time::Duration::from_secs(1)));
+    state.refresh_pane_labels(0);
+    assert!(
+        !state.panes[0].labels.texts[0].text.contains("CORE_A"),
+        "a shared screenshot must not expose the account label"
+    );
+    state.arm_shot_caption(None);
+
+    state.panes[0].all_cores_count = None;
+    state.refresh_pane_labels(0);
+    assert!(!state.panes[0].labels.texts[0].text.contains("CORE_A"));
+}
+
 /// Mutate each source independently so an omitted sync field leaves the generation unchanged.
 fn change_input(state: &mut crate::chartdx::RenderState, field: usize) {
     let pane = &mut state.panes[0];
@@ -232,6 +262,7 @@ fn owned_inputs(state: &crate::chartdx::RenderState) -> crate::chartdx::text::La
         detect_strategy: pr.label_detect_strategy.clone(),
         detect_msg: pr.label_detect_msg.clone(),
         filter_lines: pr.filter_lines.clone(),
+        filter_core_name: String::new(),
         trade: state.trade_labels.clone(),
         last_price: pr.cached_last_price,
         scale_badge: pr.scale_badge,

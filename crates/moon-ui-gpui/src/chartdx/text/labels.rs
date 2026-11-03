@@ -337,6 +337,7 @@ impl LabelState {
                                 row_ix,
                                 row,
                                 &self.inputs.filter_lines,
+                                &self.inputs.filter_core_name,
                                 first,
                             ),
                             _ => {}

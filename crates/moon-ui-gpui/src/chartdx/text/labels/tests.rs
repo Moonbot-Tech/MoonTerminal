@@ -53,6 +53,36 @@ fn strategy_filters_collapse_to_a_counted_header() {
     assert_eq!(state.texts.len(), 3);
 }
 
+/// Omitting the widened core name would attribute one core's filters to the whole admitted set;
+/// adding it outside that state would change the existing per-core caption.
+#[test]
+fn widened_filters_name_their_own_core() {
+    let _locale = crate::test_locale::force("en");
+    let mut cfg = ChartLabelsCfg::empty();
+    cfg.rows[0] = moon_core::config::strategy_filters_row();
+    cfg.rows[0].name = "Filters".into();
+    cfg.rows[0].collapsed = true;
+    let inputs = LabelInputs {
+        filter_lines: vec!["first".into(), "second".into()],
+        filter_core_name: "CORE_A".into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        texts_of(&cfg, inputs.clone()),
+        vec!["> Filters \u{b7} CORE_A \u{b7} 2"]
+    );
+    assert_eq!(
+        texts_of(
+            &cfg,
+            LabelInputs {
+                filter_core_name: String::new(),
+                ..inputs
+            }
+        ),
+        vec!["> Filters \u{b7} 2"]
+    );
+}
+
 /// Counting raw input instead of drawable capped rows overstates the collapsed module's contents.
 #[test]
 fn collapsed_filter_count_uses_the_column_limit_and_handles_empty_data() {
